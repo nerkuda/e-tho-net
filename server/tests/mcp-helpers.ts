@@ -305,6 +305,9 @@ export interface WriteThoughtFixture {
     kind: string;
     url?: string | null;
     file_path?: string | null;
+    /** Данные файла (задача 75c75a2f): `mime_type` + `data_base64`. */
+    mime_type?: string | null;
+    data_base64?: string | null;
     title?: string | null;
     description?: string | null;
   }>;

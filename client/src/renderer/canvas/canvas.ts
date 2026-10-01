@@ -677,6 +677,18 @@ function scheduleRender(): void {
   });
 }
 
+/**
+ * Полный пересчёт холста по внешнему требованию (realtime-путь, ошибка
+ * 4fca95c9). Нужен, когда изменение видно ТОЛЬКО в нижней зоне в режиме отбора:
+ * результат отбора не входит в {@link canvasRenderKey}, поэтому уведомление
+ * стора проходит fast-path и `render()` (а с ним и повторное исполнение отбора,
+ * `runActiveViewIfNeeded`) не запускается. Дешёвый идемпотентный вход —
+ * коалессируется микротаской, как и обычные триггеры рендера.
+ */
+export function requestCanvasRepaint(): void {
+  scheduleRender();
+}
+
 /** Renders everything from the current store state. */
 async function render(): Promise<void> {
   renderEnterCount++;

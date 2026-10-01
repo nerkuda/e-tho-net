@@ -2657,9 +2657,12 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(renamed.items[0]!.warnings.length, 0);
 
         // 3) Switching to a type with an unfilled required property MUST emit
-        //    warnings, including the `inherited` flag for ancestors.
+        //    warnings, including the `inherited` flag for ancestors. Смена типа
+        //    идёт по явному `thought_id`: гейт дублей (задача bf9f46bd)
+        //    блокирует/переиспользует только точный матч ТОГО ЖЕ типа, поэтому
+        //    апдейт по названию со сменой типа больше не «находит» мысль.
         const switched = await callWrite(handle.client, ctx.networkId, [
-          { ref: 'u2', thought: { title: 'Тип сменится', type_id: issue.id }, on_duplicate: 'update' },
+          { ref: 'u2', thought_id: id, type_id: issue.id },
         ]);
         const switchedWarnings = switched.items[0]!.warnings as Array<{
           code: string;

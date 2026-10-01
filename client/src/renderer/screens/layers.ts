@@ -11,12 +11,23 @@
  * server-side session to the active tab's layer on every tab activation.
  * Service (reserve) layers never appear in the selection list (§2.2).
  *
- * The diff dialog shows both views of «чем слой отличается» (§10.3): the
- * structural link diff (added/removed/type-changed/reparented/reordered) and
- * the textual diff of two deterministically assembled documents.
+ * The diff dialog shows «чем слой отличается» as ONE lazily paged list of the
+ * structural link changes and the overridden entities (задача 52c776f1); the
+ * line diff of a single thought opens in its own dialog on click.
  */
 
-import { BASE_LAYER_ID, type Layer, type LayerColors, type LayerDiffResult, type LayerMergeReport } from '@etn/shared';
+import {
+  BASE_LAYER_ID,
+  LAYER_DIFF_SECTIONS,
+  type Layer,
+  type LayerColors,
+  type LayerDiffCounts,
+  type LayerDiffPage,
+  type LayerDiffSection,
+  type LayerMergeReport,
+  type LayerThoughtDiff,
+  type LayerThoughtDiffFieldKey,
+} from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import { etn } from '../lib/etn.js';
@@ -31,6 +42,8 @@ import { errorDialog, showDialog } from '../lib/dialog.js';
 import { div, span } from '../lib/dom.js';
 import { colorField } from '../lib/ui/color-field.js';
 import { fieldInput, fieldRow, fieldTextarea } from '../lib/ui/field.js';
+import { emptyState, errorState, loadingState } from '../lib/ui/empty-state.js';
+import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 import {
   defaultLayerColors,
   invertThemeColor,
@@ -41,12 +54,6 @@ import { store, type Theme } from '../state.js';
 import { upsertTab } from './tabs/tab-state.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { lineDiff } from '../lib/diff.js';
-
-/** One line of the structural diff, human-readable via batch-resolved titles. */
-interface StructuralLine {
-  text: string;
-  sub?: string;
-}
 
 /**
  * Aligns the server-side session layer to the active tab's `layer_id` and
@@ -643,146 +650,363 @@ function showMergeReport(report: LayerMergeReport): void {
 }
 
 /**
- * The diff dialog: «Структура» (the link-level changes a text diff is blind
- * to) and «Содержание» (the plain text diff of two documents).
+ * The diff dialog (задача 52c776f1): one lazily paged list of the structural
+ * differences between the layer and its target. The list never pulls the whole
+ * (heavy) report nor `diff/doc`: it walks `layers.diffPage` by `next_cursor`
+ * as the user scrolls, with a loader while a page is in flight. Clicking an
+ * overridden thought opens the separate per-thought text diff dialog (the old
+ * «Содержание» tab showed the line diff of EVERY difference at once — that is
+ * gone, and with it the `diff/doc` request that froze the client on big nets).
  */
 export async function openDiffDialog(networkId: string, layerId: string): Promise<void> {
   const layer = store.state.layers.find((l) => l.id === layerId);
   const targetTitle =
     store.state.layers.find((l) => l.id === layer?.parent_id)?.title ?? 'Основа';
 
-  // Вкладки — общий механизм каркаса диалога (задача a57e7998): панели
-  // сохраняются, данные диффа наполняют свою панель по готовности.
-  const structuralHost = div('diff-content');
-  const textHost = div('diff-content');
+  // Слот состояний (загрузка/пусто/ошибка) и отдельный keyed-контейнер списка:
+  // дозагрузка обязана обновлять только новые строки, не трогая существующие
+  // (стандарт «Списки рендерятся инкрементально», `reconcileKeyed`).
+  const stateHost = div('diff-state');
+  const listHost = div('diff-list');
+  const body = div('diff-body');
+  body.append(stateHost, listHost);
 
-  let structural: LayerDiffResult | null = null;
-  let textEntries: ReturnType<typeof lineDiff> | null = null;
+  let rows: DiffRow[] = [];
+  let counts: LayerDiffCounts | null = null;
+  let cursor: string | null = null;
+  let done = false;
+  let loading = false;
+  let scrollEl: HTMLElement | null = null;
+  let scrollHandler: (() => void) | null = null;
 
-  const paintStructural = (): void => {
-    structuralHost.replaceChildren(
-      structural !== null
-        ? renderStructuralDiff(networkId, structural)
-        : span('Загрузка…', 'layer-hint'),
-    );
+  const setState = (node: HTMLElement | null): void => {
+    // Одиночный слот состояния, не коллекция списка (белый список сторожа).
+    stateHost.replaceChildren();
+    if (node !== null) stateHost.append(node);
   };
-  const paintText = (): void => {
-    textHost.replaceChildren(
-      textEntries !== null ? renderTextDiff(textEntries) : span('Загрузка…', 'layer-hint'),
-    );
+
+  const openThought = (row: DiffRow): void => {
+    if (row.thoughtId !== null) {
+      openThoughtDiffDialog(networkId, layerId, row.thoughtId, row.text);
+    }
   };
-  paintStructural();
-  paintText();
+
+  const renderRows = (): void => {
+    reconcileKeyed(listHost, buildDiffRenderItems(rows, counts), {
+      key: (item) => item.key,
+      // Строки дописываются и не меняются — `update` не нужен.
+      build: (item) =>
+        item.kind === 'header' ? diffHeaderNode(item) : diffRowNode(item.row, openThought),
+      update: () => undefined,
+    });
+  };
+
+  const maybeFill = (): void => {
+    if (scrollEl === null) return;
+    // Не измеренный контейнер (скрытое окно, момент до раскладки) не считаем
+    // «незаполненным»: иначе автодогрузка вытянула бы все страницы вслепую.
+    if (scrollEl.clientHeight === 0) return;
+    if (scrollEl.scrollHeight <= scrollEl.clientHeight + 24 && !done && !loading) {
+      void loadNext();
+    }
+  };
+
+  async function loadNext(): Promise<void> {
+    if (loading || done) return;
+    loading = true;
+    const first = rows.length === 0;
+    if (first) setState(loadingState('Загрузка списка отличий…'));
+    try {
+      const page = await etn.layers.diffPage(networkId, layerId, {
+        limit: DIFF_PAGE_LIMIT,
+        cursor,
+      });
+      counts = page.counts;
+      cursor = page.next_cursor;
+      done = !page.truncated;
+      rows = rows.concat(await pageToRows(networkId, page));
+      if (rows.length === 0 && done) {
+        setState(
+          emptyState({
+            title: 'Отличий нет',
+            hint: 'Слой не меняет основу — сравнивать нечего.',
+          }),
+        );
+      } else {
+        setState(null);
+      }
+      renderRows();
+    } catch (err) {
+      setState(
+        errorState(
+          rows.length === 0
+            ? `Не удалось загрузить отличия: ${String(err)}`
+            : `Не удалось догрузить отличия: ${String(err)}`,
+          { label: 'Повторить', onClick: () => void loadNext() },
+        ),
+      );
+    } finally {
+      loading = false;
+    }
+    maybeFill();
+  }
 
   showDialog({
     title: `Отличия «${layer?.title ?? 'слоя'}» от «${targetTitle}»`,
+    // Роль `l` + фиксированная высота (требование 13464c39): список растёт
+    // дозагрузкой, окно при этом не «дёргается», прокрутка — в теле диалога.
     size: 'l',
-    tabs: [
-      { id: 'structural', label: 'Связи', content: structuralHost },
-      { id: 'text', label: 'Содержание', content: textHost },
-    ],
+    fixedHeight: true,
+    body,
     buttons: [{ label: t('actions.close'), onClick: (close) => close() }],
-    onMount: () => {
-      void (async () => {
-        try {
-          structural = await etn.layers.diff(networkId, layerId);
-          paintStructural();
-          const docs = await etn.layers.diffDoc(networkId, layerId);
-          textEntries = lineDiff(docs.target_doc, docs.layer_doc);
-          paintText();
-        } catch (err) {
-          structuralHost.replaceChildren(span(`Не удалось загрузить дифф: ${String(err)}`));
-          textHost.replaceChildren(span(`Не удалось загрузить дифф: ${String(err)}`));
-        }
-      })();
+    onMount: (_close, box) => {
+      const el = box.querySelector<HTMLElement>('.dialog-body');
+      scrollEl = el;
+      if (el !== null) {
+        scrollHandler = () => {
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 48) void loadNext();
+        };
+        el.addEventListener('scroll', scrollHandler);
+      }
+      void loadNext();
+    },
+    onClose: () => {
+      if (scrollEl !== null && scrollHandler !== null) {
+        scrollEl.removeEventListener('scroll', scrollHandler);
+      }
     },
   });
 }
 
-/** Builds the structural diff view — each change class as a labelled group. */
-function renderStructuralDiff(networkId: string, diff: LayerDiffResult): HTMLElement {
-  const host = div('diff-structural');
-  void (async () => {
-    const lines: StructuralLine[] = [];
-    const allIds = new Set<string>();
-    for (const r of diff.links.added) {
-      allIds.add(r.source_id);
-      allIds.add(r.target_id);
-    }
-    for (const r of diff.links.removed) {
-      allIds.add(r.source_id);
-      allIds.add(r.target_id);
-    }
-    for (const r of diff.links.reparented) {
-      allIds.add(r.thought_id);
-      allIds.add(r.from_parent_id);
-      allIds.add(r.to_parent_id);
-    }
-    for (const r of diff.links.reorder_collapsed) allIds.add(r.thought_id);
+/** Page size (items) of one `layers.diffPage` request. */
+const DIFF_PAGE_LIMIT = 100;
 
-    const titles = new Map<string, string>();
-    try {
-      const refs = await etn.thoughts.resolve(networkId, [...allIds]);
-      for (const ref of refs) titles.set(ref.id, ref.title);
-    } catch {
-      // Titles degrade to raw ids — the diff itself is still shown.
-    }
-    const name = (id: string): string => titles.get(id) ?? id.slice(0, 8);
+/** Human-readable heading of every diff section (the canonical server order
+ *  is preserved; headings appear in the order the stream delivers them). */
+const DIFF_SECTION_LABELS: Record<LayerDiffSection, string> = {
+  'links.added': 'Добавленные связи',
+  'links.removed': 'Удалённые связи',
+  'links.type_changed': 'Изменённый тип связи',
+  'links.reorder_collapsed': 'Изменённый порядок связей',
+  'links.reparented': 'Сменённый родитель',
+  'overridden.thought_ids': 'Изменённые мысли',
+  'overridden.link_ids': 'Изменённые связи',
+};
 
-    for (const r of diff.links.added) {
-      lines.push({ text: `+ ${name(r.source_id)} → ${name(r.target_id)}`, sub: 'добавлена' });
-    }
-    for (const r of diff.links.removed) {
-      lines.push({ text: `− ${name(r.source_id)} → ${name(r.target_id)}`, sub: 'удалена' });
-    }
-    for (const r of diff.links.type_changed) {
-      lines.push({ text: `≈ связь ${r.id.slice(0, 8)}`, sub: 'сменился тип' });
-    }
-    for (const r of diff.links.reparented) {
-      lines.push({
-        text: `↳ ${name(r.thought_id)}: ${name(r.from_parent_id)} → ${name(r.to_parent_id)}`,
-        sub: 'сменился родитель',
-      });
-    }
-    for (const r of diff.links.reorder_collapsed) {
-      lines.push({ text: `⇅ ${name(r.thought_id)}: ${r.count} связей`, sub: 'изменён порядок' });
-    }
-
-    host.replaceChildren();
-    if (lines.length === 0) {
-      const empty = div('layer-hint layer-hint-safe');
-      empty.textContent = 'Отличий нет — слой не меняет структуру связей.';
-      host.append(empty);
-      return;
-    }
-    const groups = new Map<string, StructuralLine[]>();
-    for (const line of lines) {
-      const key = line.sub ?? '';
-      const list = groups.get(key) ?? [];
-      list.push(line);
-      groups.set(key, list);
-    }
-    for (const [label, entries] of groups) {
-      const groupTitle = div('diff-group-title');
-      groupTitle.textContent = label;
-      host.append(groupTitle);
-      for (const e of entries) {
-        const groupLine = div('diff-group-line');
-        groupLine.textContent = e.text;
-        host.append(groupLine);
-      }
-    }
-  })();
-  return host;
+/** One rendered difference: a link change or an overridden entity. */
+interface DiffRow {
+  /** `<section>:<item id>` — stable across pages (keyed reconcile). */
+  key: string;
+  section: LayerDiffSection;
+  /** Thought to open the text diff for; `null` — non-clickable row. */
+  thoughtId: string | null;
+  text: string;
 }
 
-/** Builds the textual diff view — `del`/`add`/`same` lines with colouring. */
-function renderTextDiff(entries: ReturnType<typeof lineDiff>): HTMLElement {
+/** One entry of the keyed list: a section heading or a difference row. */
+type DiffRenderItem =
+  | { kind: 'header'; key: string; label: string; count: number }
+  | { kind: 'row'; key: string; row: DiffRow };
+
+/** Section heading node — label + the total count for that section. */
+function diffHeaderNode(header: { label: string; count: number }): HTMLElement {
+  const node = div('diff-group-title');
+  node.textContent = `${header.label} · ${header.count}`;
+  return node;
+}
+
+/** Row node; overridden thoughts become keyboard/click-activated buttons that
+ *  open the per-thought text diff dialog. */
+function diffRowNode(row: DiffRow, onOpen: (row: DiffRow) => void): HTMLElement {
+  const node = div('diff-group-line diff-row');
+  node.textContent = row.text;
+  if (row.thoughtId !== null) {
+    node.classList.add('diff-row-thought');
+    node.setAttribute('role', 'button');
+    node.tabIndex = 0;
+    node.title = 'Показать построчный дифф';
+    node.addEventListener('click', () => onOpen(row));
+    node.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        onOpen(row);
+      }
+    });
+  }
+  return node;
+}
+
+/** Interleave section headings with rows in the canonical section order, keyed
+ *  so `reconcileKeyed` appends only what a new page brought. Grouping by the
+ *  section (not by arrival) keeps the list grouped even when a page boundary
+ *  splits a section and survives out-of-order appends. */
+function buildDiffRenderItems(
+  rows: readonly DiffRow[],
+  counts: LayerDiffCounts | null,
+): DiffRenderItem[] {
+  const bySection = new Map<LayerDiffSection, DiffRow[]>();
+  for (const row of rows) {
+    const list = bySection.get(row.section) ?? [];
+    list.push(row);
+    bySection.set(row.section, list);
+  }
+  const items: DiffRenderItem[] = [];
+  for (const section of LAYER_DIFF_SECTIONS) {
+    const list = bySection.get(section);
+    if (list === undefined || list.length === 0) continue;
+    items.push({
+      kind: 'header',
+      key: `hdr:${section}`,
+      label: DIFF_SECTION_LABELS[section],
+      count: counts?.[section] ?? 0,
+    });
+    for (const row of list) items.push({ kind: 'row', key: row.key, row });
+  }
+  return items;
+}
+
+/** Convert one page into rows, batch-resolving the titles of the referenced
+ *  thoughts (a title that cannot be resolved degrades to a short id — the same
+ *  fallback the old structural view used). */
+async function pageToRows(networkId: string, page: LayerDiffPage): Promise<DiffRow[]> {
+  const ids = new Set<string>();
+  for (const r of page.links.added ?? []) {
+    ids.add(r.source_id);
+    ids.add(r.target_id);
+  }
+  for (const r of page.links.removed ?? []) {
+    ids.add(r.source_id);
+    ids.add(r.target_id);
+  }
+  for (const r of page.links.reparented ?? []) {
+    ids.add(r.thought_id);
+    ids.add(r.from_parent_id);
+    ids.add(r.to_parent_id);
+  }
+  for (const r of page.links.reorder_collapsed ?? []) ids.add(r.thought_id);
+  for (const id of page.overridden.thought_ids ?? []) ids.add(id);
+
+  const titles = new Map<string, string>();
+  if (ids.size > 0) {
+    try {
+      const refs = await etn.thoughts.resolve(networkId, [...ids]);
+      for (const ref of refs) titles.set(ref.id, ref.title);
+    } catch {
+      // Заголовки деградируют к id — сам список отличий всё равно показан.
+    }
+  }
+  const name = (id: string): string => titles.get(id) ?? id.slice(0, 8);
+
+  const rows: DiffRow[] = [];
+  const push = (
+    section: LayerDiffSection,
+    key: string,
+    thoughtId: string | null,
+    text: string,
+  ): void => {
+    rows.push({ key: `${section}:${key}`, section, thoughtId, text });
+  };
+
+  for (const r of page.links.added ?? []) {
+    push('links.added', r.id, null, `+ ${name(r.source_id)} → ${name(r.target_id)}`);
+  }
+  for (const r of page.links.removed ?? []) {
+    push('links.removed', r.id, null, `− ${name(r.source_id)} → ${name(r.target_id)}`);
+  }
+  for (const r of page.links.type_changed ?? []) {
+    push('links.type_changed', r.id, null, `≈ связь ${r.id.slice(0, 8)}`);
+  }
+  for (const r of page.links.reparented ?? []) {
+    push(
+      'links.reparented',
+      r.thought_id,
+      null,
+      `↳ ${name(r.thought_id)}: ${name(r.from_parent_id)} → ${name(r.to_parent_id)}`,
+    );
+  }
+  for (const r of page.links.reorder_collapsed ?? []) {
+    push('links.reorder_collapsed', r.thought_id, null, `⇅ ${name(r.thought_id)} · ${r.count}`);
+  }
+  for (const id of page.overridden.thought_ids ?? []) {
+    push('overridden.thought_ids', id, id, name(id));
+  }
+  for (const id of page.overridden.link_ids ?? []) {
+    push('overridden.link_ids', id, null, `связь ${id.slice(0, 8)}`);
+  }
+  return rows;
+}
+
+/**
+ * Separate dialog with the line diff of ONE thought (задача 52c776f1): the
+ * server hands the field pairs of both contexts (`layers.thoughtDiff`), the
+ * client renders a `lineDiff` per changed attribute. Opened from a click on an
+ * overridden thought in the diff list.
+ */
+function openThoughtDiffDialog(
+  networkId: string,
+  layerId: string,
+  thoughtId: string,
+  title: string,
+): void {
+  const host = div('diff-thought');
+  host.append(loadingState('Загрузка текстового диффа…'));
+
+  const load = async (): Promise<void> => {
+    host.replaceChildren(loadingState('Загрузка текстового диффа…'));
+    try {
+      const diff = await etn.layers.thoughtDiff(networkId, layerId, thoughtId);
+      host.replaceChildren(renderThoughtDiff(diff));
+    } catch (err) {
+      host.replaceChildren(
+        errorState(`Не удалось загрузить текстовый дифф: ${String(err)}`, {
+          label: 'Повторить',
+          onClick: () => void load(),
+        }),
+      );
+    }
+  };
+
+  showDialog({
+    title: `Правки мысли «${title}»`,
+    size: 'l',
+    fixedHeight: true,
+    body: host,
+    buttons: [{ label: t('actions.close'), onClick: (close) => close() }],
+    onMount: () => {
+      void load();
+    },
+  });
+}
+
+/** Field label of the per-thought diff, by server field key. */
+const THOUGHT_DIFF_FIELD_LABELS: Record<LayerThoughtDiffFieldKey, string> = {
+  title: 'Название',
+  type: 'Тип',
+  synonyms: 'Синонимы',
+  active: 'Актуальность',
+  comment: 'Постоянный комментарий',
+};
+
+/** Render the per-thought diff: one labelled block per changed attribute with
+ *  the line diff of its two values; a note when nothing changed. */
+function renderThoughtDiff(diff: LayerThoughtDiff): HTMLElement {
   const host = div('diff-text');
-  for (const entry of entries) {
-    const line = div(`diff-line diff-${entry.kind}`);
-    line.textContent = entry.text === '' ? ' ' : entry.text;
-    host.append(line);
+  const changed = diff.fields.filter((f) => f.changed);
+  if (changed.length === 0) {
+    host.append(
+      emptyState({ title: 'Отличий нет', hint: 'Мысль в слое совпадает с основой.' }),
+    );
+    return host;
+  }
+  for (const field of changed) {
+    const label = div('diff-group-title');
+    label.textContent = THOUGHT_DIFF_FIELD_LABELS[field.key];
+    host.append(label);
+    for (const entry of lineDiff(field.target, field.layer)) {
+      const line = div(`diff-line diff-${entry.kind}`);
+      line.textContent = entry.text === '' ? ' ' : entry.text;
+      host.append(line);
+    }
   }
   return host;
 }

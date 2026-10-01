@@ -16,8 +16,11 @@
 import { PREF_KEY, parseStoredCanvasLinkFilter, type AnyRealtimeEvent } from '@etn/shared';
 
 import { resyncAfterLayerSwitch, scheduleRefresh } from './app.js';
-import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
-import { onThoughtTypeViewRealtime } from './canvas/focus-filter-strip.js';
+import { invalidateIndicators, invalidateRef, requestCanvasRepaint } from './canvas/canvas.js';
+import {
+  invalidateViewResultForRealtime,
+  onThoughtTypeViewRealtime,
+} from './canvas/focus-filter-strip.js';
 import { etn } from './lib/etn.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from './screens/pinned-bar.js';
@@ -93,6 +96,21 @@ export function scheduleNeighbourhoodRepaint(): void {
   scheduleRefresh();
   scheduleStructuresRefresh();
   scheduleChronicleRefresh();
+  repaintViewResultIfActive();
+}
+
+/**
+ * Перерисовать холст, если нижняя зона показывает результат ОТБОРА (ошибка
+ * 4fca95c9). Результат отбора не входит в `canvasRenderKey` (canvas.ts), поэтому
+ * событие, меняющее ТОЛЬКО строки отбора, не запускает `render()` и `views.run`
+ * не переисполняется. Так выглядит создание/правка/удаление работы версии:
+ * связь «запланировано в версию» помечена `show_on_map=false`, потому рёбра
+ * отфильтрованы из окрестности фокуса, ответ `focus()` не меняется, а работа
+ * видна только строкой отбора. В режиме «Потомки» — no-op: там нижняя зона и
+ * есть окрестность фокуса, её изменения ловит ключ перерисовки.
+ */
+function repaintViewResultIfActive(): void {
+  if (invalidateViewResultForRealtime()) requestCanvasRepaint();
 }
 
 /**
@@ -169,12 +187,19 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
         store.update({ pins: store.state.pins.filter((id) => id !== evt.data.id) });
       }
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
+      // Удалённая мысль могла быть строкой отбора, а не соседом фокуса — нижнюю
+      // зону перерисовываем отдельно (ошибка 4fca95c9).
+      repaintViewResultIfActive();
       break;
 
     case 'thought.created':
       if (inNeighbourhood(evt.data.thought.id)) scheduleRefresh();
       scheduleStructuresRefresh();
       scheduleChronicleRefresh();
+      // Новая мысль окрестности фокуса ещё не в снимке (`inNeighbourhood` её не
+      // знает), но в режиме отбора она может попасть в его результат — нижнюю
+      // зону перерисовываем отдельно (ошибка 4fca95c9).
+      repaintViewResultIfActive();
       break;
 
     case 'thought.updated':
@@ -193,6 +218,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // ленту — чипсы показывают заголовки мыслей.
       applyStructuresRealtime(evt);
       scheduleChronicleRefresh();
+      // Правка мысли, видимой только строкой отбора (заголовок/тип/актуальность)
+      // — нижняя зона перерисовывается отдельно (ошибка 4fca95c9).
+      repaintViewResultIfActive();
       break;
 
     // Свойство-СВЯЗЬ меняет рёбра на сервере (структурные «Родители»/
@@ -215,6 +243,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       scheduleRefresh();
       applyStructuresRealtime(evt);
       scheduleChronicleRefresh();
+      // Связь может быть строкообразующей для отбора (в т.ч. скрытая на карте
+      // `show_on_map=false`) — нижняя зона перерисовывается отдельно
+      // (ошибка 4fca95c9).
+      repaintViewResultIfActive();
       break;
 
     case 'comment.created':

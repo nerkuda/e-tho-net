@@ -60,6 +60,22 @@ export interface AttachmentInput {
 }
 
 /**
+ * Input of the attachment-creation entry point shared by the REST/MCP facades
+ * (`createAttachmentFromInput`, задача 75c75a2f): the ordinary metadata-only
+ * `AttachmentInput`, or — when `data_base64` carries a payload — an inline file
+ * upload equivalent to `POST …/{id}/attachments/file`.
+ *
+ * With `data_base64` set, `kind` must be `'file'` (the server stores the
+ * decoded bytes under the network's `attachments/` directory) and
+ * `url`/`file_path`/`file_size`/`position`/`description` must be omitted — the
+ * stored-file path replaces them.
+ */
+export interface AttachmentCreateInput extends AttachmentInput {
+  /** Base64 payload of a file to store server-side (≤10 MiB decoded). */
+  data_base64?: string | null;
+}
+
+/**
  * Input accepted by `POST …/{id}/attachments/file` (03-server-api.md §11): the
  * server decodes `data_base64` and stores the file under the network's
  * `attachments/` directory (next to `data.db`), returning a `kind = 'file'`

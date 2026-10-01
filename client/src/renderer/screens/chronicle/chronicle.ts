@@ -3,7 +3,7 @@
  *
  * Экран (L20, был «Хроника»): в левой панели отбора первым элементом идёт
  * календарь месяца (0.10.1, элементы 9b424548/55b07702), в центре —
- * непрокручиваемая панель с кнопкой «Добавить хроно-запись» и ниже лента
+ * непрокручиваемая панель с кнопкой «Добавить запись дневника» и ниже лента
  * дневниковых записей, сгруппированная по локальным дням наблюдателя; панель
  * отбора — общий каркас `lib/filter-form.ts` (состав — набор «Структур»).
  *
@@ -147,8 +147,8 @@ import {
   recordCollapseKey,
   type RecordGroupLabels,
 } from './record-groups.js';
-import { createRecordTitle, type RecordTitleHandle } from './record-title.js';
-import { buildSlotHead } from './slot-head.js';
+import { type RecordTitleHandle, type RecordTitleOptions } from './record-title.js';
+import { buildRecordHead } from './record-head.js';
 import { parseChronicleState } from './state.js';
 import { renderRecordView } from './record-body.js';
 
@@ -1229,7 +1229,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   // Дедупликация по id: пока слот ждал ухода фокуса, строку уже могла вставить
   // другая ветка (realtime-событие, перезагрузка/сверка). Повторная вставка даёт
   // ленте два узла с одним ключом и роняет `reconcileKeyed` (ошибка 0757cd08,
-  // круг 1: Ctrl+Enter + повторное «Добавить хроно-запись»). Строка уже в ленте —
+  // круг 1: Ctrl+Enter + повторное «Добавить запись дневника»). Строка уже в ленте —
   // вторую не вставляем, но СЛИВАЕМ свежие поля (тело/заголовок/даты): ветка,
   // вставившая строку, могла знать запись ещё до сохранения текста, и карточка
   // иначе показывала бы устаревшее содержимое. Позицию сохраняет сверка.
@@ -1366,28 +1366,17 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // класс пересчитывается (запись могла перестать быть целью перехода).
   card.classList.toggle('diary-record-target', row.id === jumpHighlightId);
 
+  // Шапка (строка полей + строка заголовка) собирается ЕДИНЫМ конструктором
+  // `buildRecordHead` — тем же, что у слота создания (0.10.3, ошибка 47c2bf05).
   // Строка 1: значение даты/периода (клик — диалог «Дата/период»), облачка
   // привязок, кнопка «+ мысль», у правого края «бутерброд» меню записи.
-  const head = div('diary-record-head');
-  head.append(
-    uiButton({
-      label: recordDateLabel(row),
-      role: 'ghost',
-      size: 's',
-      class: 'diary-record-date',
-      title: 'Период дневниковой записи',
-      onClick: () => void editRecordDates(row),
-    }),
-    buildChipsRow(row),
-    uiButton({
-      label: '+ мысль',
-      role: 'ghost',
-      size: 's',
-      class: 'diary-chip-add',
-      title: 'Добавить мысль',
-      onClick: () => void pickAndAttach(row.id),
-    }),
-    iconButton({
+  const head = buildRecordHead({
+    dayLabel: recordDateLabel(row),
+    onDateClick: () => void editRecordDates(row),
+    dateTitle: 'Период дневниковой записи',
+    chips: buildChipsRow(row),
+    onAddThought: () => void pickAndAttach(row.id),
+    trailing: iconButton({
       icon: svgIcon('menu', 16),
       title: 'Действия с дневниковой записью',
       role: 'ghost',
@@ -1395,10 +1384,13 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       class: 'diary-record-actions',
       onClick: (event) => showMenuAt(event.clientX, event.clientY, recordMenuItems(row)),
     }),
-  );
-  // Строка 2 — заголовок-группа, далее оболочка комментария. `buildRecordBody`
-  // кладёт дескриптор оболочки в `recordShells` под этот самый узел карточки.
-  card.replaceChildren(head, buildTitle(row, card), buildRecordBody(row, card));
+    title: recordTitleOptions(row, card),
+  });
+  recordTitles.set(card, head.title);
+  // Строка 2 — заголовок-группа (внутри шапки), далее оболочка комментария.
+  // `buildRecordBody` кладёт дескриптор оболочки в `recordShells` под этот самый
+  // узел карточки.
+  card.replaceChildren(head.root, buildRecordBody(row, card));
   // Свёрнутость тела записи переприменяется при keyed-обновлении карточки и
   // realtime (0.10.2, задача 41ed99ab): fillRecordCard — общая точка сборки и
   // обновления. День приходит ЯВНЫМ параметром через единый помощник
@@ -1419,19 +1411,22 @@ function recordTitleLabel(row: ChronicleRow): string {
 }
 
 /**
- * Заголовок записи — компонент «просмотр ↔ правка» (0.10.2, ошибка 36c330a3):
- * тот же `createRecordTitle`, что и в слоте создания. В ПРОСМОТРЕ это крупный
- * текст-кнопка со стрелкой-индикатором (задача 472457bf): одиночный клик
- * сворачивает/разворачивает ТОЛЬКО тело комментария, двойной клик входит в
- * правку. Пока заголовок правится, сворачивание недоступно; `Enter`/уход из
- * поля завершают правку, `Escape` — отменяет.
+ * Опции заголовка-компонента карточки записи (0.10.2, ошибка 36c330a3; 0.10.3,
+ * ошибка 47c2bf05): надписи, сворачивание тела и сохранение заголовка. Сам узел
+ * компонента создаёт единый конструктор шапки `buildRecordHead` — тот же, что у
+ * слота создания; здесь только доменные обработчики карточки.
+ *
+ * В ПРОСМОТРЕ заголовок — крупный текст-кнопка со стрелкой-индикатором (задача
+ * 472457bf): одиночный клик сворачивает/разворачивает ТОЛЬКО тело комментария,
+ * двойной клик входит в правку. Пока заголовок правится, сворачивание
+ * недоступно; `Enter`/уход из поля завершают правку, `Escape` — отменяет.
  *
  * Дескриптор кладётся в `recordTitles` под узел карточки: вход в правку по
  * клавиатуре (Enter на поле «заголовок») идёт от DOM-узла карточки.
  */
-function buildTitle(row: ChronicleRow, card: HTMLElement): HTMLElement {
+function recordTitleOptions(row: ChronicleRow, card: HTMLElement): RecordTitleOptions {
   let committed = row.title ?? '';
-  const handle = createRecordTitle({
+  return {
     value: committed,
     label: recordTitleLabel(row),
     editHint: t('diary.titleEditHint'),
@@ -1449,9 +1444,7 @@ function buildTitle(row: ChronicleRow, card: HTMLElement): HTMLElement {
       }
       return recordDisplayTitle(trimmed || null, row.snippet) || t('diary.emptyTitle');
     },
-  });
-  recordTitles.set(card, handle);
-  return handle.node();
+  };
 }
 
 /**
@@ -1856,38 +1849,46 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
     );
 
   const root = div('diary-record diary-slot');
-  // Шапка слота (дата + узел компонента-заголовка + «✕») собирается общим
-  // помощником `buildSlotHead` (0.10.2, ошибка 36c330a3): заголовок слота в
-  // шапке — ИМЕННО узел компонента `createRecordTitle`, тот же, что в карточке.
-  // Слот открывается в правке; `Enter`/уход завершают правку и возвращают
-  // заголовок в сворачиваемую группу со стрелкой, `Escape` отменяет.
+  // Шапка слота — тем же ЕДИНЫМ конструктором `buildRecordHead`, что и карточка
+  // (0.10.3, ошибка 47c2bf05; 0.10.2, ошибка 36c330a3): слот обязан показывать
+  // поля так же, как будет выглядеть итоговая запись. Строка 1: период, привязки,
+  // «+ мысль», «✕» отмены; строка 2: заголовок — узел компонента
+  // `createRecordTitle`. Слот открывается в правке; `Enter`/уход завершают правку
+  // и возвращают заголовок в сворачиваемую группу со стрелкой, `Escape` отменяет.
   let slotCollapsed = false;
-  const { root: head, title } = buildSlotHead({
+  const { root: head, title } = buildRecordHead({
     dayLabel: fmtDate(targetDay),
-    onToggle: () => {
-      slotCollapsed = !slotCollapsed;
-      applyRecordCollapsed(root, slotCollapsed, {
-        expand: t('listActions.expand'),
-        collapse: t('listActions.collapse'),
-      });
-    },
-    // Правку завершают и `Enter`, и уход из поля — оба пути сохраняют
-    // черновик одним `ensureSlot` (ошибка 0757cd08: стража гонки, без дубля).
-    onTitleCommit: (next) => void ensureSlot({ title: next }),
-    onCancel: () => cancelSlot(),
-  });
-
-  const chipsBox = div('diary-record-chips');
-  chipsBox.append(
-    uiButton({
-      label: '+ мысль',
+    chips: div('diary-record-chips'),
+    onAddThought: () => void addSlotChip(),
+    trailing: uiButton({
+      label: '✕',
       role: 'ghost',
       size: 's',
-      class: 'diary-chip-add',
-      title: 'Добавить мысль',
-      onClick: () => void addSlotChip(),
+      class: 'diary-slot-cancel',
+      title: t('diary.slotCancel'),
+      onClick: () => cancelSlot(),
     }),
-  );
+    title: {
+      value: '',
+      label: t('diary.emptyTitle'),
+      editHint: t('diary.titleEditHint'),
+      placeholder: t('diary.titlePlaceholder'),
+      onToggle: () => {
+        slotCollapsed = !slotCollapsed;
+        applyRecordCollapsed(root, slotCollapsed, {
+          expand: t('listActions.expand'),
+          collapse: t('listActions.collapse'),
+        });
+      },
+      // Правку завершают и `Enter`, и уход из поля — оба пути сохраняют
+      // черновик одним `ensureSlot` (ошибка 0757cd08: стража гонки, без дубля).
+      onCommit: (next) => {
+        void ensureSlot({ title: next });
+        return next.trim() || t('diary.emptyTitle');
+      },
+    },
+  });
+
   const body = div('diary-record-body');
   // Псевдо-запись — тоже через единую оболочку комментария (0.10.1, приёмка
   // №2); пустое тело даёт область двойного клика для входа в правку.
@@ -1916,7 +1917,7 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
   slotShell.setState({ kind: 'ready' });
   body.append(slotShell.root);
 
-  root.append(head, chipsBox, body);
+  root.append(head, body);
   const state: SlotState = {
     day: targetDay,
     commentId: null,
@@ -1961,7 +1962,7 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
 
   // Открытие слота не должно оставлять модульный `slot` в неконсистентном
   // состоянии при любой ошибке отрисовки: иначе все последующие клики уходят в
-  // раннюю ветку «слот уже есть» и кнопка «Добавить хроно-запись» перестаёт
+  // раннюю ветку «слот уже есть» и кнопка «Добавить запись дневника» перестаёт
   // работать (ошибка 0757cd08, круг 1, независимая проверка).
   try {
     renderFeed();

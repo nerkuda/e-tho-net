@@ -110,9 +110,11 @@ import type {
   Layer,
   LayerColors,
   LayerDeleteResult,
-  LayerDiffDoc,
+  LayerDiffPage,
   LayerDiffResult,
+  LayerThoughtDiff,
   LayerEcho,
+  LayerDiscardReport,
   LayerMergeReport,
   ActivityListResult,
   ActivityRollupResult,
@@ -1179,10 +1181,41 @@ export interface EtnApi {
       layerId: string,
       tables?: Record<string, string[]>,
     ): Promise<LayerMergeReport>;
+    /**
+     * Задача f5c363a3: слить ОДНУ мысль из слоя в основу с разрешением
+     * конфликта. `mode`: `overwrite` — «Полностью переписать мысль в основе»
+     * (версия слоя побеждает), `combine` — «Объединить изменения» (постоянный
+     * комментарий объединяется с основой, маркеры конфликтов; связи, свойства и
+     * синонимы переносятся версией слоя).
+     */
+    mergeThought(
+      networkId: string,
+      layerId: string,
+      thoughtId: string,
+      mode: 'overwrite' | 'combine',
+    ): Promise<LayerMergeReport>;
+    /**
+     * Задача f5c363a3: «Отказаться от изменений» — убрать из слоя все строки
+     * мысли (она вернётся к состоянию основы; созданная только в слое —
+     * исчезнет). Основа не затрагивается.
+     */
+    discardThought(networkId: string, layerId: string, thoughtId: string): Promise<LayerDiscardReport>;
     /** Structural diff + overridden ids (§10.3). */
     diff(networkId: string, layerId: string): Promise<LayerDiffResult>;
-    /** Textual diff: two deterministic markdown documents (§10.3). */
-    diffDoc(networkId: string, layerId: string): Promise<LayerDiffDoc>;
+    /**
+     * One page of the structural diff (§10.3; задача ddb67ddc) — the diff
+     * dialog walks pages by `next_cursor` instead of pulling the full report.
+     */
+    diffPage(
+      networkId: string,
+      layerId: string,
+      options?: { limit?: number; cursor?: string | null },
+    ): Promise<LayerDiffPage>;
+    /**
+     * Display-ready field pairs of ONE thought in both contexts (задача
+     * 52c776f1) — the source of the per-thought line diff dialog.
+     */
+    thoughtDiff(networkId: string, layerId: string, thoughtId: string): Promise<LayerThoughtDiff>;
   };
   system: {
     /**

@@ -7,7 +7,7 @@
  * entities); the MCP-facing parameter/result shapes live in `mcp.ts`.
  */
 
-import type { AttachmentInput, Attachment } from './attachment.js';
+import type { AttachmentCreateInput, Attachment } from './attachment.js';
 import type { Comment } from './comment.js';
 import type { Link } from './link.js';
 import type { Thought } from './thought.js';
@@ -112,11 +112,40 @@ export interface ThoughtBundleInput {
   chronicle?: ThoughtBundleChronicleItem[];
   properties?: Record<string, PropertyValueValue>;
   links?: ThoughtBundleLinkInput[];
-  attachments?: AttachmentInput[];
+  attachments?: AttachmentCreateInput[];
 }
 
 /** What {@link upsertThoughtBundle} actually did to the bundle's thought. */
 export type ThoughtBundleThoughtAction = 'created' | 'updated' | 'reused';
+
+/**
+ * Non-blocking duplicate candidate surfaced by the write gate (задача
+ * bf9f46bd-afe0-41a5-8fe9-a90290f86db7).
+ *
+ * The gate only *blocks* creation (`on_duplicate: 'fail'`) on a **blocking**
+ * match: the proposed title exactly equals (normalised) an existing same-type
+ * thought's title or a literal (non-wildcard) synonym. Everything weaker —
+ * a partial match, a wildcard-mask (`*`) synonym match, or an exact match
+ * against a thought of a different type — never blocks: the thought is
+ * created and the matches are returned here so the caller can still judge
+ * whether the new thought is redundant.
+ *
+ * A compact projection of `find_duplicates`'s `DuplicateHit`: enough to
+ * identify and disambiguate the candidate (title, match strength, type,
+ * parent) without the visual/service fields.
+ */
+export interface ThoughtDuplicateCandidate {
+  id: string;
+  title: string;
+  /** Strongest match found for this candidate. */
+  matched_on: ThoughtBundleMatchKind;
+  /** Synonym text that matched, when `matched_on === 'synonym'`. */
+  matched_synonym?: string;
+  /** The candidate's own thought type id (`null` when untyped). */
+  type_id: string | null;
+  /** Title of one parent (lexicographically first), for disambiguation. */
+  parent_title: string | null;
+}
 
 /** Result of {@link upsertThoughtBundle} — full entities (server-internal). */
 export interface ThoughtBundleResult {
@@ -125,6 +154,14 @@ export interface ThoughtBundleResult {
   /** Strongest `find_duplicates` match that led to `reused`/`updated`; `null`
    *  when the thought was freshly created or addressed by `thought_id`. */
   matched_on: ThoughtBundleMatchKind | null;
+  /**
+   * Non-blocking duplicate candidates seen while creating a NEW thought
+   * (задача bf9f46bd). Empty/absent when the thought was not created, when
+   * there were no matches at all, or when the match blocked creation (then
+   * `matched_on`/the `DUPLICATE` error carries it instead). Ordered by match
+   * strength (title → synonym → partial).
+   */
+  duplicate_candidates?: ThoughtDuplicateCandidate[];
   comment?: Comment;
   comment_action?: 'created' | 'updated';
   /** Chronicle entries appended in this bundle (task 053751b5). */

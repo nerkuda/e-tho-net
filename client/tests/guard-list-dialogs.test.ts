@@ -652,6 +652,7 @@ const DIALOG_FILES = new Set([
   'pinned/pins.ts',
   'screens/about-dialog.ts',
   'screens/activity/activity.ts',
+  'screens/layer-thought-merge.ts',
   'screens/layers.ts',
   'screens/network-stats.ts',
   'screens/networks.ts',

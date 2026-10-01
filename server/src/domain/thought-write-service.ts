@@ -391,6 +391,12 @@ export function writeThoughts(
         version: result.thought.version,
         thought_action: result.thought_action,
         matched_on: result.matched_on,
+        // Non-blocking duplicate candidates for a created thought (задача
+        // bf9f46bd): partial/wildcard/different-type matches no longer refuse
+        // creation — they tail the item result instead.
+        ...(result.duplicate_candidates !== undefined
+          ? { duplicate_candidates: result.duplicate_candidates }
+          : {}),
         ...(result.comment !== undefined
           ? {
               comment: {

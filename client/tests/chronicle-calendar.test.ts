@@ -62,7 +62,7 @@ describe('переименование «Хроника» → «Дневник»
 
   it('словарь несёт строки «Дневника» про дневниковые записи', () => {
     const ru = read('lib/locales/ru.ts');
-    assert.match(ru, /'diary\.addRecord': 'Добавить хроно-запись'/);
+    assert.match(ru, /'diary\.addRecord': 'Добавить запись дневника'/);
     assert.match(ru, /'diary\.feedEmpty': 'Дневниковых записей нет/);
   });
 

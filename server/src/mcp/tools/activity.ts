@@ -5,6 +5,10 @@
  * 0.8.3 (задача 86ef2ff4): редкие операции журнала (`activity.rollup`,
  * `activity.truncate`) сняты из постоянного набора и упакованы в `etn.ops`
  * (tools/ops.ts). Здесь остаётся только частый `etn.activity.list`.
+ *
+ * Ошибка 5f08daee: детали фильтров/пагинации вынесены в тему гайда
+ * `etn.guide { topic: "activity.list" }`; ссылка в описании — контракт,
+ * который держит сторож `guard-mcp-guide-coverage.test.ts`.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -24,7 +28,7 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
         'creation, update, delete, trash/restore of a thought, link, type, property, comment, attachment ' +
         'or layer; `entity_title` is a snapshot at the moment of the event. Captures (`edit.*`) are not ' +
         'recorded. Filters combine with AND; sorted by `occurred_at_ms DESC`; paginated (`limit` default ' +
-        '50, max 200, + `offset`).',
+        '50, max 200, + `offset`). Детали фильтров и пагинации — `etn.guide { topic: "activity.list" }`.',
       inputSchema: ActivityList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.list'],
     },

@@ -88,9 +88,33 @@
   color: var(--text, #222);
 }
 
+.layer-hint-error {
+  color: var(--danger, #c62828);
+}
+
 .layer-report-line {
   font-size: 13px;
   padding: 2px 0;
+}
+
+/* Диалог разрешения изменений мысли (задача f5c363a3): варианты — вертикально,
+ * каждый вариант = строка-переключатель + пояснение под ней. Модификатор группы
+ * поднят специфичностью над `.ui-choice-group` (грабли 36889dd6). */
+.ui-choice-group.merge-variants {
+  flex-direction: column;
+  gap: 0;
+}
+
+.merge-variant {
+  display: block;
+}
+
+.merge-variant-hint {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim, #777);
+  line-height: 1.4;
+  margin: 0 0 var(--space-3) var(--space-6);
 }
 
 /* Layer colours editor (0.6.4, 13-layers.md §2.2a): two picker rows of the
@@ -116,11 +140,36 @@
   margin-bottom: 0;
 }
 
-/* Diff dialog (S11): вкладки «Связи»/«Содержание» — общий механизм
-   `lib/ui/tabs.ts` (задача a57e7998). */
-.diff-content {
-  max-height: 55vh;
-  overflow: auto;
+/* Diff dialog (задача 52c776f1): единый лениво подгружаемый список отличий.
+   Прокрутка — в теле диалога (роль `l` + fixedHeight), поэтому собственных
+   max-height/overflow у списка нет. */
+.diff-body {
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-family: var(--mono, Consolas, monospace);
+}
+
+.diff-state {
+  padding: 4px 0;
+}
+
+.diff-row {
+  cursor: default;
+}
+
+/* Изменённая мысль — кликабельна: открывает отдельный диалог текстового диффа. */
+.diff-row-thought {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.diff-row-thought:hover,
+.diff-row-thought:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+
+.diff-thought {
   font-size: 12.5px;
   line-height: 1.5;
   font-family: var(--mono, Consolas, monospace);

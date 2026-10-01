@@ -18,6 +18,7 @@
 import { z } from 'zod';
 
 import { writeBatchHowToText } from '../how-to.js';
+import { ACTIVITY_LIMIT_DEFAULT, ACTIVITY_LIMIT_MAX } from '../../domain/activity-service.js';
 import type { OperationContract } from '../../contracts.js';
 import {
   ActivityRollup,
@@ -37,6 +38,7 @@ import {
   LayersDiff,
   LayersDiffDoc,
   LayersConflicts,
+  LayersDiscard,
   LayersMerge,
   LayersResetOverride,
   LayersUpdate,
@@ -198,21 +200,32 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'attachments.add',
     tool: 'etn.attachments.add',
     group: 'attachments',
-    when: 'прикрепить URL или файл к мысли/связи',
+    when: 'прикрепить URL, путь к файлу или загрузить данные файла (`mime_type`+`data_base64`) к мысли/связи',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'owner_type', required: true, desc: '`thought` | `link`' },
       { name: 'owner_id', required: true, desc: 'id владельца' },
-      { name: 'kind', required: true, desc: '`url` (тогда `url`) | `file` (тогда `file_path`)' },
+      {
+        name: 'kind',
+        required: true,
+        desc: '`url` (тогда `url`) | `file` (тогда `file_path` ИЛИ `mime_type`+`data_base64`)',
+      },
       { name: 'url', desc: 'URL для kind=url' },
-      { name: 'file_path', desc: 'путь к файлу для kind=file' },
+      { name: 'file_path', desc: 'путь к файлу для kind=file (машина сервера)' },
+      { name: 'mime_type', desc: 'MIME-тип данных файла — обязателен вместе с `data_base64`' },
+      {
+        name: 'data_base64',
+        desc: 'содержимое файла в base64 (kind=file, ≤10 МиБ декодированного): сервер сохраняет копию в каталоге вложений сети, `file_path` строки указывает на неё. Не сочетается с `url`/`file_path`/`description`',
+      },
       { name: 'title', desc: 'подпись' },
       { name: 'description', desc: 'описание' },
     ],
     destructive: false,
     readOnly: false,
-    effects: 'создаёт вложение, событие `attachment.created`.',
-    errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
+    effects:
+      'создаёт вложение, событие `attachment.created`. С `data_base64` файл сохраняется в каталог вложений сети (рядом с БД) — паритет с REST `POST /attachments/file`.',
+    errors:
+      '`VALIDATION_ERROR` (в т.ч. неверный/пустой base64, превышение лимита 10 МиБ, отсутствие `mime_type`, `data_base64` вне `kind=file`), `NOT_FOUND`.',
     paramsContract: AttachmentsAdd,
   },
   {
@@ -376,29 +389,50 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'layers.diff',
     tool: 'etn.layers.diff',
     group: 'layers',
-    when: 'структурное отличие слоя от родителя (ссылки: добавлено/удалено/сменён тип/переподчинено)',
+    when: 'структурное отличие слоя от родителя (ссылки: добавлено/удалено/сменён тип/переподчинено), постранично и по секциям',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'layer_id', required: true, desc: 'id слоя' },
+      {
+        name: 'sections',
+        desc:
+          'подмножество секций: `links.added`/`links.removed`/`links.type_changed`/' +
+          '`links.reorder_collapsed`/`links.reparented`/`overridden.thought_ids`/' +
+          '`overridden.link_ids` (по умолчанию — все; неизвестная секция → VALIDATION_ERROR)',
+      },
+      {
+        name: 'limit',
+        desc: 'размер страницы в элементах, 1…1000 (по умолчанию 200); байтовый бюджет может вернуть меньше',
+      },
+      { name: 'cursor', desc: '`next_cursor` предыдущей страницы (непрозрачный keyset: секция + id)' },
     ],
     destructive: false,
     readOnly: true,
-    effects: 'чтение, без записи.',
-    errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
+    effects:
+      'чтение, без записи. Ответ ВСЕГДА постраничный: `counts` — итоги по всем секциям, ' +
+      '`links`/`overridden` — только запрошенные секции со страницей элементов, ' +
+      '`truncated: true` + `reason: "has_more"` + `next_cursor` при остатке. Каждая страница ' +
+      'гарантированно укладывается в бюджет MCP (~48 КБ против `maxModelBytes = 50000`), ' +
+      'транспорт её не режет. Вызов без параметров — первая страница (дефолтный лимит).',
+    errors: '`VALIDATION_ERROR` (неизвестная секция, невалидный/чужой курсор), `NOT_FOUND`.',
     paramsContract: LayersDiff,
   },
   {
     action: 'layers.diff_doc',
     tool: 'etn.layers.diff_doc',
     group: 'layers',
-    when: 'содержательное отличие слоя — два markdown-документа для построчного сравнения',
+    when: 'содержательное отличие слоя — два markdown-документа для построчного сравнения (малые слои, точечный аудит)',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'layer_id', required: true, desc: 'id слоя' },
     ],
     destructive: false,
     readOnly: true,
-    effects: 'чтение, без записи.',
+    effects:
+      'чтение, без записи. НЕ секционируется и НЕ пагинируется: вся разница отдаётся одним ' +
+      'markdown-блоком (`layer_doc` + `target_doc`). Ориентиры: слой ~1142 перекрытые строки ' +
+      'давал ~17,5 МБ markdown — модели нечитаемо. Назначение — малые слои и точечный аудит; ' +
+      'для больших слоёв берите постраничный `layers.diff` (sections + cursor).',
     errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
     paramsContract: LayersDiffDoc,
   },
@@ -406,17 +440,45 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'layers.merge',
     tool: 'etn.layers.merge',
     group: 'layers',
-    when: 'слить слой в родителя — целиком или замкнутым подмножеством `tables`',
+    when: 'слить слой в родителя — целиком, замкнутым подмножеством `tables` или одной мыслью `thought_id`',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'layer_id', required: true, desc: 'id слоя' },
       { name: 'tables', desc: '`{ ветвимая_таблица: [id…] }` для частичного слияния' },
+      {
+        name: 'thought_id',
+        desc: 'слить одну мысль: сервер сам собирает замкнутое подмножество её строк (сама мысль, синонимы, свойства, комментарии, вложения, её рёбра)',
+      },
+      {
+        name: 'mode',
+        desc: 'с `thought_id`: `overwrite` (по умолчанию — версия слоя побеждает) | `combine` (постоянный комментарий объединяется с основой, маркеры конфликтов)',
+      },
     ],
     destructive: true,
     readOnly: false,
-    effects: 'применяет изменения слоя в родителя; при конфликте — отказ целиком; создаёт резервный слой.',
+    effects:
+      'применяет изменения слоя в родителя; при конфликте — отказ целиком (кроме слияния мысли: `base_version` расхождения по её строкам снимаются — выбранный вариант «версия слоя побеждает»); создаёт резервный слой.',
     errors: '`VALIDATION_ERROR` (`conflicts`/`missing_closure`), `NOT_FOUND`.',
     paramsContract: LayersMerge,
+  },
+  {
+    action: 'layers.discard',
+    tool: 'etn.layers.discard',
+    group: 'layers',
+    when: '«Отказаться от изменений»: убрать из слоя все правки одной мысли (мысль вернётся к состоянию основы)',
+    params: [
+      { name: 'network_id', required: true, desc: 'сеть' },
+      { name: 'layer_id', required: true, desc: 'id слоя' },
+      { name: 'thought_id', required: true, desc: 'мысль, чьи правки в слое отбрасываются' },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'физически удаляет из слоя строки мысли (сама мысль, синонимы, значения свойств, комментарии с целями, ' +
+      'вложения и её рёбра); основа не затрагивается. Мысль возвращается к состоянию основы, созданная только ' +
+      'в слое — исчезает. Журнальная строка `layer.updated`, audit-запись.',
+    errors: '`VALIDATION_ERROR` (основа/служебный слой, нет изменений мысли), `NOT_FOUND`.',
+    paramsContract: LayersDiscard,
   },
   {
     action: 'layers.conflicts',
@@ -1025,6 +1087,46 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '## Ответ',
       'Несёт справочник `thought_types` плюс опциональные эхо `resolved_types`/`resolved_properties`',
       'для входов, заданных по имени.',
+    ].join('\n'),
+  },
+  {
+    // Ошибка 5f08daee-5bb6-45c5-a7ed-53eda44c3c38: постоянный инструмент
+    // `etn.activity.list` остался без темы в реестре гайда — группа `activity`
+    // знала только `rollup`/`truncate`. Тема добавлена; правило «у каждой
+    // операции набора MCP либо полное описание в tools/list, либо тема в
+    // etn.guide» держит сторож `guard-mcp-guide-coverage.test.ts`.
+    topic: 'activity.list',
+    when: 'журнал активности сети: фильтры from_ms/to_ms/user_id/entity_type/entity_id, пагинация limit/offset, сортировка occurred_at_ms DESC',
+    body_md: [
+      '# activity.list — лента журнала активности',
+      '',
+      'Read-only лента мутирующих операций сети: одна строка на операцию участника —',
+      'создание, правка, удаление, корзина/восстановление мысли, связи, типа, свойства,',
+      'комментария, вложения или слоя. `entity_title` — снимок имени на момент события;',
+      'захваты `edit.*` (locks) в журнал не пишутся.',
+      '',
+      '## Фильтры (комбинируются по AND)',
+      '',
+      '| Фильтр | Что делает |',
+      '|---|---|',
+      '| `from_ms` / `to_ms` | диапазон `occurred_at_ms` включительно (`>=` / `<=`) |',
+      '| `user_id` | только операции указанного участника |',
+      '| `entity_type` | тип сущности, например `thought`, `link`, `comment`, `attachment`, `layer` |',
+      '| `entity_id` | id конкретной сущности (в паре с `entity_type`) |',
+      '',
+      'Пустая строка в `user_id`/`entity_type`/`entity_id` фильтр не накладывает.',
+      '',
+      '## Пагинация и сортировка',
+      '',
+      `- \`limit\` — размер страницы, 1…${ACTIVITY_LIMIT_MAX} (по умолчанию ${ACTIVITY_LIMIT_DEFAULT});`,
+      `  значения вне диапазона зажимаются к границам.`,
+      '- `offset` — смещение от начала выборки (по умолчанию 0).',
+      '- Сортировка — `occurred_at_ms DESC`, при равенстве — `id DESC` (свежие сверху).',
+      '',
+      '## Ответ',
+      '',
+      '`data[]` — строки выборки, `meta { total, offset, limit }`, где `total` — число строк',
+      'под фильтром ДО пагинации (для листания). Паритет с REST `GET /activity`.',
     ].join('\n'),
   },
   {

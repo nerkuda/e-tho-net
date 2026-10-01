@@ -54,6 +54,8 @@ import { errText } from '../lib/dom.js';
 import { showExportEtnxDialog } from '../import-export/export-dialog.js';
 import { showImportEtnxDialog } from '../import-export/import-dialog.js';
 import { openLinkDeleteDialog, openThoughtDeleteDialog } from '../trash.js';
+import { isInBaseLayer } from '../lib/layer-base.js';
+import { openThoughtMergeDialog } from '../screens/layer-thought-merge.js';
 
 /** Run an `.etnx` export for a single thought (phase P, task P7). The polling
  *  loop and save flow mirror `selection.ts:runExport`; we keep a local copy
@@ -388,6 +390,10 @@ export function buildThoughtMenuItems(
     target.siblingParentId === undefined ? focus?.parents[0]?.title : undefined;
   const canAddSibling = siblingParentId !== null;
   const inSelection = store.state.selection.includes(target.id);
+  // Задача f5c363a3: команда «слить в основу» — только для мысли, изменённой в
+  // текущем слое изменений (в основе перекрытий нет).
+  const overriddenInLayer =
+    !isInBaseLayer() && store.state.layerOverrides.thought_ids.includes(target.id);
   // Manual order is only available in the parents/children zones while the
   // active sort is «ручной» (08-ui-spec.md §2.7, docs/03-server-api.md §6.2).
   // Compute the thought's index in the zone up-front so each submenu row can
@@ -532,6 +538,15 @@ export function buildThoughtMenuItems(
         () => notice('Не удалось скопировать ID.', 'error'),
       );
     }),
+    // Задача f5c363a3: разрешение изменений мысли в слое («Отказаться» /
+    // «Переписать» / «Объединить»).
+    ...(overriddenInLayer
+      ? [
+          menuAction('Слить мысль в основу…', () =>
+            openThoughtMergeDialog(networkId, target.id, target.title),
+          ),
+        ]
+      : []),
     MENU_SEPARATOR,
     // Команды контекста (значение свойства: «Удалить связь с мыслью» /
     // «Поместить связь в корзину») — отдельным блоком перед удалением: это

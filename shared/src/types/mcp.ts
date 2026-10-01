@@ -20,6 +20,7 @@ import type {
   ThoughtBundleMatchKind,
   ThoughtBundleOnDuplicate,
   ThoughtBundleThoughtAction,
+  ThoughtDuplicateCandidate,
 } from './thought-bundle.js';
 import type { ThoughtCardWarning } from './thought-card-warning.js';
 import type { Link } from './link.js';
@@ -433,6 +434,12 @@ export interface McpThoughtWriteAttachmentSpec {
   kind: AttachmentKind;
   url?: string | null;
   file_path?: string | null;
+  /** MIME-тип загружаемого файла — обязателен вместе с `data_base64`. */
+  mime_type?: string | null;
+  /** Содержимое файла в base64 (≤10 МиБ декодированного) — `kind="file"`;
+   *  сервер сохраняет копию в каталоге вложений сети, `file_path` строки
+   *  указывает на неё. Взаимоисключим с `url`/`file_path`/`description`. */
+  data_base64?: string | null;
   title?: string | null;
   description?: string | null;
 }
@@ -528,6 +535,14 @@ export interface McpThoughtWriteItemResult {
   version: number;
   thought_action: ThoughtBundleThoughtAction;
   matched_on: ThoughtBundleMatchKind | null;
+  /**
+   * Non-blocking duplicate candidates for a created thought (задача bf9f46bd):
+   * a partial/wildcard match, or an exact match at a different type, no longer
+   * refuses creation — the match is reported here instead. Absent when the
+   * thought was created with no matches, or was reused/updated on a blocking
+   * match.
+   */
+  duplicate_candidates?: ThoughtDuplicateCandidate[];
   /** Permanent comment (create-or-update), when the batch item included one. */
   comment?: { id: string; version: number; action: 'created' | 'updated' };
   /** Chronicle entries appended in this batch. */

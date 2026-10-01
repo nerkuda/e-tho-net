@@ -46,6 +46,14 @@ interface WriteItemResult {
   version: number;
   thought_action: 'created' | 'updated' | 'reused';
   matched_on: 'title' | 'synonym' | 'partial' | null;
+  duplicate_candidates?: Array<{
+    id: string;
+    title: string;
+    matched_on: 'title' | 'synonym' | 'partial';
+    matched_synonym?: string;
+    type_id: string | null;
+    parent_title: string | null;
+  }>;
   comment?: { id: string; version: number; action: 'created' | 'updated' };
   chronicle?: Array<{ id: string; version: number }>;
   properties?: Record<string, { id: string | null; targets?: string[] }>;
@@ -605,6 +613,177 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         const data = toolJson<WriteResult>(result);
         assert.equal(data.items[0]?.thought_action, 'updated');
         assert.ok(data.items[0]?.matched_on === 'title', 'expected matched_on=title');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Задача bf9f46bd: гейт дублей блокирует создание только при точном
+  // совпадении названия/литерального синонима ТОГО ЖЕ типа; частичное и
+  // wildcard-совпадение создают мысль и возвращают кандидатов.
+  it('не блокирует создание по частичному совпадению — кандидат в duplicate_candidates', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const seed = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [{ ref: 'seed', thought: { title: 'Конкуренты 1С' } }],
+            },
+          }),
+        );
+        const seedId = seed.items[0]!.id;
+
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'new', thought: { title: 'Конкуренты' } }],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<WriteResult>(result);
+        assert.equal(data.items[0]!.thought_action, 'created');
+        assert.notEqual(data.items[0]!.id, seedId, 'новая мысль создана, старая не тронута');
+        const cand = data.items[0]!.duplicate_candidates?.[0];
+        assert.ok(cand, 'кандидат присутствует в ответе');
+        assert.equal(cand.id, seedId);
+        assert.equal(cand.matched_on, 'partial');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('блокирует точное совпадение с синонимом того же типа; reuse работает с этой мыслью', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const seed = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [
+                { ref: 'seed', thought: { title: 'Слои изменений', synonyms: ['слои'] } },
+              ],
+            },
+          }),
+        );
+        const seedId = seed.items[0]!.id;
+
+        const blocked = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'dup', thought: { title: 'слои' } }],
+          },
+        });
+        assert.equal(blocked.isError, true, 'точный синоним того же типа — блокирующий дубль');
+
+        const reused = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'reuse', thought: { title: 'слои' }, on_duplicate: 'reuse' },
+            ],
+          },
+        });
+        assert.equal(reused.isError, undefined, toolText(reused));
+        const data = toolJson<WriteResult>(reused);
+        assert.equal(data.items[0]!.id, seedId);
+        assert.equal(data.items[0]!.thought_action, 'reused');
+        assert.equal(data.items[0]!.matched_on, 'synonym');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('синоним-маска не блокирует создание (bf9f46bd)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const seed = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [
+                { ref: 'seed', thought: { title: 'Слои изменений', synonyms: ['layer*'] } },
+              ],
+            },
+          }),
+        );
+        const seedId = seed.items[0]!.id;
+
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'new', thought: { title: 'layering' } }],
+          },
+        });
+        assert.equal(result.isError, undefined, 'маска layer* не должна перехватывать ввод');
+        const data = toolJson<WriteResult>(result);
+        assert.equal(data.items[0]!.thought_action, 'created');
+        assert.notEqual(data.items[0]!.id, seedId);
+        const cand = data.items[0]!.duplicate_candidates?.find((c) => c.id === seedId);
+        assert.ok(cand, 'маска попала в кандидаты, но не заблокировала');
+        assert.equal(cand.matched_on, 'synonym');
+        assert.equal(cand.matched_synonym, 'layer*');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('явный thought_id пишется всегда, даже при коллизии названия (bf9f46bd)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [
+                { ref: 'a', thought: { title: 'Первая' } },
+                { ref: 'b', thought: { title: 'Вторая' } },
+              ],
+            },
+          }),
+        );
+        const bId = created.items[1]!.id;
+
+        const renamed = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'r', thought_id: bId, title: 'Первая' }],
+          },
+        });
+        assert.equal(renamed.isError, undefined, toolText(renamed));
+        const data = toolJson<WriteResult>(renamed);
+        assert.equal(data.items[0]!.id, bId, 'запись ушла в указанную мысль');
+        assert.equal(data.items[0]!.thought_action, 'updated');
+        assert.equal(data.items[0]!.duplicate_candidates, undefined, 'явный id — без автоподбора');
       } finally {
         await handle.close();
       }

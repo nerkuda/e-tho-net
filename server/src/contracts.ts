@@ -47,6 +47,9 @@ import {
   SORT_ORDERS,
   FOCUS_DIRS,
   ICON_KINDS,
+  LAYER_DIFF_MAX_LIMIT,
+  LAYER_DIFF_SECTIONS,
+  LAYER_THOUGHT_MERGE_MODES,
   LINK_STYLES,
   MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_VIEW_MODES,
@@ -563,12 +566,30 @@ const LayersDiffFields = z.object({
   network_id: NetworkId,
   layer_id: LayerId,
 });
+/**
+ * Структурный дифф слоя (задача ddb67ddc): к общим полям добавлены выбор
+ * секций и keyset-пагинация. В MCP вызов без параметров отдаёт первую страницу
+ * (дефолтный лимит) + counts по всем секциям. В REST отсутствие ВСЕХ трёх
+ * полей сохраняет прежний полный отчёт — текущий клиент не ломается.
+ */
 export const LayersDiff = defineContract(
   'etn.layers.diff',
-  LayersDiffFields,
+  LayersDiffFields.extend({
+    sections: z.array(z.enum(LAYER_DIFF_SECTIONS)).optional(),
+    limit: z.number().int().min(1).max(LAYER_DIFF_MAX_LIMIT).optional(),
+    cursor: z.string().min(1).optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     layer_id: { from: { kind: 'param', name: 'layerId' } },
+    // `repeatable` — `?sections=links.removed&sections=links.added`; без
+    // параметра парсер кладёт `[]` («все секции»).
+    sections: { from: { kind: 'query', repeatable: true } },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    cursor: {
+      from: { kind: 'query' },
+      parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined),
+    },
   },
 );
 export const LayersDiffDoc = defineContract(
@@ -577,6 +598,23 @@ export const LayersDiffDoc = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     layer_id: { from: { kind: 'param', name: 'layerId' } },
+  },
+);
+
+/**
+ * По-мысленный текстовый дифф слоя против родителя (задача 52c776f1):
+ * `GET /networks/:networkId/layers/:layerId/diff/thought/:thoughtId`.
+ * Сервер читает одну мысль в обоих контекстах и отдаёт пары «основа/слой»
+ * в готовом для построчного диффа виде (REST-only; MCP-паритет не нужен —
+ * сценарий обслуживает GUI-диалог).
+ */
+export const LayersDiffThought = defineContract(
+  'etn.layers.diff_thought',
+  LayersDiffFields.extend({ thought_id: ThoughtId }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    layer_id: { from: { kind: 'param', name: 'layerId' } },
+    thought_id: { from: { kind: 'param', name: 'thoughtId' } },
   },
 );
 
@@ -656,15 +694,53 @@ export const LayersSelect = defineContract(
 /** REST `POST /networks/:networkId/layers/:layerId/merge` = MCP `etn.layers.merge`. */
 export const LayersMerge = defineContract(
   'etn.layers.merge',
-  z.object({
-    network_id: NetworkId,
-    layer_id: LayerId,
-    tables: z.record(z.string(), z.array(z.string().min(1))).optional(),
-  }),
+  z
+    .object({
+      network_id: NetworkId,
+      layer_id: LayerId,
+      tables: z.record(z.string(), z.array(z.string().min(1))).optional(),
+      // Задача f5c363a3: слияние ОДНОЙ мысли — сервер сам собирает замкнутое
+      // подмножество её строк; `mode` выбирает, что делать с конфликтом.
+      thought_id: ThoughtId.optional(),
+      mode: z.enum(LAYER_THOUGHT_MERGE_MODES).optional(),
+    })
+    .refine((v) => v.mode === undefined || v.thought_id !== undefined, {
+      message: 'режим слияния (mode) задаётся только вместе с thought_id.',
+      path: ['mode'],
+    })
+    .refine((v) => v.thought_id === undefined || v.tables === undefined, {
+      message: 'thought_id и tables взаимоисключающи: либо мысль, либо набор строк.',
+      path: ['thought_id'],
+    }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     layer_id: { from: { kind: 'param', name: 'layerId' } },
     tables: { from: { kind: 'body' }, msg: 'tables должен быть объектом { таблица: [id, …] }.' },
+    thought_id: { from: { kind: 'body' } },
+    mode: { from: { kind: 'body' } },
+  },
+);
+
+/**
+ * REST `POST /networks/:networkId/layers/:layerId/discard` = MCP
+ * `etn.layers.discard` (задача f5c363a3, вариант «Отказаться от изменений»).
+ *
+ * Физически удаляет из слоя ВСЕ строки одной мысли (мысль, синонимы, значения
+ * свойств, комментарии с целями, вложения и её рёбра). Основа не затрагивается;
+ * мысль возвращается к состоянию основы, созданная только в слое — исчезает.
+ * Деструктивно, поэтому в GUI требует подтверждения.
+ */
+export const LayersDiscard = defineContract(
+  'etn.layers.discard',
+  z.object({
+    network_id: NetworkId,
+    layer_id: LayerId,
+    thought_id: ThoughtId,
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    layer_id: { from: { kind: 'param', name: 'layerId' } },
+    thought_id: { from: { kind: 'body' } },
   },
 );
 
@@ -1150,6 +1226,13 @@ export const AttachmentsAdd = defineContract(
     kind: z.enum(ATTACHMENT_KINDS),
     url: z.string().min(1).nullable().optional(),
     file_path: z.string().min(1).nullable().optional(),
+    // Загрузка данных файла (задача 75c75a2f, паритет с REST
+    // `POST …/attachments/file`): с `data_base64` сервер сохраняет копию под
+    // каталогом вложений сети, `file_path` строки указывает на неё. Требует
+    // `kind='file'`; сочетание с `url`/`file_path`/`description` отвергает
+    // домен (`createAttachmentFromInput`).
+    mime_type: z.string().min(1).nullable().optional(),
+    data_base64: z.string().min(1).nullable().optional(),
     title: z.string().nullable().optional(),
     description: z.string().nullable().optional(),
   }),

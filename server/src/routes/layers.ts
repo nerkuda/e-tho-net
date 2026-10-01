@@ -10,6 +10,8 @@
  *   POST   /networks/:networkId/layers/:layerId/merge   — merge into the parent (S8)
  *   GET    /networks/:networkId/layers/:layerId/diff     — structural diff (S11)
  *   GET    /networks/:networkId/layers/:layerId/diff/doc — textual diff (S11)
+ *   GET    /networks/:networkId/layers/:layerId/diff/thought/:thoughtId
+ *                                                        — per-thought text diff (52c776f1)
  *
  * Rights (13-layers.md §7.2): identical for every network member. The layer
  * metadata lives outside the branchable tables, so these handlers run on the
@@ -41,11 +43,14 @@ import {
   setSessionLayer,
   updateLayer,
 } from '../domain/layer-service.js';
-import { mergeLayer, type MergeSelection } from '../domain/merge-service.js';
+import { mergeLayer, mergeLayerThought, type MergeSelection } from '../domain/merge-service.js';
+import { discardLayerThought } from '../domain/merge-service.js';
 import {
   layerDiffDoc,
+  layerThoughtDiff,
   resolveDiffTarget,
   structuralLayerDiff,
+  structuralLayerDiffPage,
 } from '../domain/layer-diff-service.js';
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
 import type { BranchableTable } from '../db/layer-write.js';
@@ -55,6 +60,8 @@ import {
   LayersDelete,
   LayersDiff,
   LayersDiffDoc,
+  LayersDiffThought,
+  LayersDiscard,
   LayersList,
   LayersMerge,
   LayersSelect,
@@ -304,6 +311,58 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(LayersMerge, req);
 
+        // Задача f5c363a3: слияние одной мысли — сервер сам собирает замкнутое
+        // подмножество её строк; `tables` здесь не участвует.
+        if (input.thought_id !== undefined) {
+          const ndb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
+          const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+            const merged = mergeLayerThought(
+              ndb,
+              input.layer_id,
+              input.thought_id as string,
+              input.mode ?? 'overwrite',
+              req.auth!.user.id,
+            );
+            const report: LayerMergeReport = {
+              applied: merged.applied,
+              skipped: merged.skipped,
+              reorder_collapsed: merged.reorder_collapsed,
+              reserve_layer_id: merged.reserve_layer_id,
+              purged: merged.purged,
+              activity_rollup: merged.activity_rollup,
+              thought_merge: merged.thought_merge,
+            };
+            return {
+              result: merged,
+              events: [
+                {
+                  type: 'layer.merged',
+                  data: { ...report, layer: merged.merged_layer, target_layer: merged.target_layer },
+                  options: { layerId: merged.target_layer.id },
+                },
+                ...merged.deleted_thought_ids.map((id) => ({
+                  type: 'thought.deleted' as const,
+                  data: { id },
+                })),
+                ...merged.deleted_link_ids.map((id) => ({
+                  type: 'link.deleted' as const,
+                  data: { id },
+                })),
+              ],
+            };
+          });
+          sendSuccess(reply, {
+            applied: result.applied,
+            skipped: result.skipped,
+            reorder_collapsed: result.reorder_collapsed,
+            reserve_layer_id: result.reserve_layer_id,
+            purged: result.purged,
+            activity_rollup: result.activity_rollup,
+            thought_merge: result.thought_merge,
+          });
+          return;
+        }
+
         let selection: MergeSelection | undefined;
         if (input.tables !== undefined) {
           selection = {};
@@ -368,6 +427,53 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
+    // --- Discard ONE thought's changes (задача f5c363a3, вариант «Отказаться от
+    // изменений»): все строки мысли физически удаляются из слоя, основа не
+    // затрагивается — мысль возвращается к состоянию основы. Полный ресинк у
+    // получателей — тем же сигналом, что у слияния (`layer.merged`): видимое
+    // состояние слоя изменилось целиком.
+    app.post(
+      '/networks/:networkId/layers/:layerId/discard',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(LayersDiscard, req);
+        const ndb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
+        const result = runWrite(
+          ndb,
+          { ...restWriteFx(deps, req, input.network_id), layerId: input.layer_id },
+          () => {
+            const report = discardLayerThought(ndb, input.layer_id, input.thought_id);
+            const empty: LayerMergeReport = {
+              applied: {},
+              skipped: [],
+              reorder_collapsed: [],
+              reserve_layer_id: null,
+              purged: 0,
+              activity_rollup: { groups: 0, removed: 0 },
+            };
+            return {
+              result: report,
+              events: [
+                {
+                  type: 'layer.merged',
+                  data: { ...empty, layer: report.layer, target_layer: report.target_layer },
+                  options: { layerId: report.layer.id },
+                },
+              ],
+              activity: [{ kind: 'layer' as const, action: 'updated' as const, layer: report.layer }],
+              audit: {
+                action: 'etn.layers.discard',
+                targetType: 'layer',
+                targetId: input.layer_id,
+                details: { thought_id: input.thought_id, total: report.total },
+              },
+            };
+          },
+        );
+        sendSuccess(reply, result);
+      },
+    );
+
     // --- Structural diff (S11, 13-layers.md §10.3; 03-server-api.md §5a.7):
     // the compact link-structure list the textual diff is blind to. Reads run
     // on two connections — the layer's own context and its parent's.
@@ -380,7 +486,23 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { layer, target } = resolveDiffTarget(ndb, input.layer_id);
         const layerNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, layer.id);
         const targetNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, target.id);
-        sendSuccess(reply, structuralLayerDiff(layerNdb, targetNdb, layer, target));
+        // Без параметров пагинации — прежний полный отчёт (текущий клиент не
+        // ломается, задача 52c776f1 переведёт GUI на страницы позже); с любым
+        // из sections/limit/cursor — страница (задача ddb67ddc).
+        const paged =
+          (input.sections?.length ?? 0) > 0 ||
+          input.limit !== undefined ||
+          input.cursor !== undefined;
+        sendSuccess(
+          reply,
+          paged
+            ? structuralLayerDiffPage(layerNdb, targetNdb, layer, target, {
+                sections: input.sections,
+                limit: input.limit,
+                cursor: input.cursor,
+              })
+            : structuralLayerDiff(layerNdb, targetNdb, layer, target),
+        );
       },
     );
 
@@ -396,6 +518,25 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         const layerNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, layer.id);
         const targetNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, target.id);
         sendSuccess(reply, layerDiffDoc(layerNdb, targetNdb, layer, target));
+      },
+    );
+
+    // --- Per-thought textual diff (задача 52c776f1, §10.3): the display-ready
+    // field pairs of ONE thought as seen in the diffed layer and in its parent
+    // (base). Powers the separate text-diff dialog opened from the diff list.
+    app.get(
+      '/networks/:networkId/layers/:layerId/diff/thought/:thoughtId',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(LayersDiffThought, req);
+        const ndb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
+        const { layer, target } = resolveDiffTarget(ndb, input.layer_id);
+        const layerNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, layer.id);
+        const targetNdb = openNetworkDb(deps.dataDir, input.network_id, app.appLogger, target.id);
+        sendSuccess(
+          reply,
+          layerThoughtDiff(layerNdb, targetNdb, layer, target, input.thought_id),
+        );
       },
     );
   };

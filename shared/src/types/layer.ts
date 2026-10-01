@@ -153,8 +153,55 @@ export interface LayerMergeReport {
   /** Сводка авто-свёртки журнала активности для слоя (задача 6bcccd2b,
    * требование 1f7f789b «авто-свёртка при слиянии слоя»): сколько
    * ключевых сущностей `(entity_type, entity_id)` получили итоговую запись
-   * в основе и сколько детальных строк удалено из журнала. */
+   * и сколько детальных строк удалено из журнала. */
   activity_rollup: { groups: number; removed: number };
+  /** Присутствует только у слияния ОДНОЙ мысли (`thought_id` в запросе,
+   * задача f5c363a3): чем закончилось разрешение её изменений. */
+  thought_merge?: LayerThoughtMergeResult;
+}
+
+// ---------------------------------------------------------------------------
+// Разрешение изменений одной мысли (задача f5c363a3, «Слияние отдельных
+// мыслей в основу из GUI с разрешением конфликтов»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Режим разрешения изменений одной мысли слоя:
+ *   * `overwrite` — «Полностью переписать мысль в основе»: версия слоя
+ *     побеждает целиком (существующая семантика точечного слияния, но с
+ *     предварительным снятием расхождения `base_version` по строкам мысли);
+ *   * `combine` — «Объединить изменения»: постоянный комментарий
+ *     объединяется с маркерами конфликтов git-стиля, остальные строки
+ *     (связи, свойства, синонимы, хроно-записи) переносятся версией слоя.
+ */
+export const LAYER_THOUGHT_MERGE_MODES = ['overwrite', 'combine'] as const;
+export type LayerThoughtMergeMode = (typeof LAYER_THOUGHT_MERGE_MODES)[number];
+
+/** Итог режима `combine`: что стало с постоянным комментарием. */
+export interface LayerThoughtMergeResult {
+  thought_id: string;
+  mode: LayerThoughtMergeMode;
+  /** Комментарий был переписан объединением (режим `combine`, тексты слоя и
+   *  основы различались; для `overwrite` — `false`). */
+  comment_merged: boolean;
+  /** Сколько конфликтных блоков (`<<<<<<<`/`=======`/`>>>>>>>`) вставлено. */
+  comment_conflicts: number;
+}
+
+/**
+ * Ответ `POST /networks/{nid}/layers/{id}/discard` — «Отказаться от
+ * изменений» (задача f5c363a3): все строки слоя, принадлежащие мысли,
+ * физически удалены из слоя, мысль вернулась к состоянию основы (а если была
+ * создана в слое — исчезла). Основа не затронута.
+ */
+export interface LayerDiscardReport {
+  layer: LayerEcho;
+  target_layer: LayerEcho;
+  thought_id: string;
+  /** Сколько строк слоя удалено, по ветвимым таблицам. */
+  discarded: Record<string, number>;
+  /** Итог по всем таблицам. */
+  total: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,14 +308,86 @@ export interface LayerDiffLinks {
   reparented: LayerDiffReparented[];
 }
 
-/** Structural diff response of `GET /networks/{nid}/layers/{id}/diff`. */
+/** Ids that physically exist in the layer (shadow rows, inserts AND tombstones
+ * alike) — exactly what the canvas marks as «перекрыто». */
+export interface LayerDiffOverridden {
+  thought_ids: string[];
+  link_ids: string[];
+}
+
+/** Structural diff response of `GET /networks/{nid}/layers/{id}/diff` without
+ * pagination parameters — the full report (REST default, задача ddb67ddc). */
 export interface LayerDiffResult {
   layer: LayerEcho;
   target_layer: LayerEcho;
   links: LayerDiffLinks;
-  /** Ids that physically exist in the layer (shadow rows, inserts AND
-   * tombstones alike) — exactly what the canvas marks as «перекрыто». */
-  overridden: { thought_ids: string[]; link_ids: string[] };
+  overridden: LayerDiffOverridden;
+}
+
+/**
+ * Addressable sections of the structural diff report (задача ddb67ddc).
+ *
+ * They are exactly the leaf collections of {@link LayerDiffResult}: each link
+ * batch and each `overridden` id set. A section name is `<object>.<field>` and
+ * is the unit of both the `sections` filter and the keyset cursor.
+ */
+export const LAYER_DIFF_SECTIONS = [
+  'links.added',
+  'links.removed',
+  'links.type_changed',
+  'links.reorder_collapsed',
+  'links.reparented',
+  'overridden.thought_ids',
+  'overridden.link_ids',
+] as const;
+export type LayerDiffSection = (typeof LAYER_DIFF_SECTIONS)[number];
+
+/** Totals per section across the WHOLE report (not just the current page).
+ * Present in every paged answer so the caller can plan the audit. */
+export type LayerDiffCounts = Record<LayerDiffSection, number>;
+
+/** Default page size of `layers.diff` in the MCP contour — a first page is
+ * returned even when the caller passes no pagination parameters. */
+export const LAYER_DIFF_DEFAULT_LIMIT = 200;
+/** Hard ceiling on `limit`; the byte budget can trim a page further. */
+export const LAYER_DIFF_MAX_LIMIT = 1000;
+/**
+ * Soft byte budget of one paged answer, measured on the exact JSON text the
+ * MCP transport hands to the model (`JSON.stringify(page, null, 2)`, UTF-8).
+ * Sits below the default MCP-client `maxModelBytes = 50000` (05-mcp-server.md
+ * §4.1) so the transport never truncates a page silently — задача ddb67ddc.
+ */
+export const LAYER_DIFF_PAGE_BUDGET_BYTES = 48_000;
+
+/**
+ * One page of the structural diff report (задача ddb67ddc).
+ *
+ * `links` / `overridden` carry only the requested sections, each holding at
+ * most the page's items; `counts` always describes the whole report. The page
+ * is guaranteed to fit {@link LAYER_DIFF_PAGE_BUDGET_BYTES}; `truncated` +
+ * `next_cursor` signal that more items remain (keyset continuation, ADR
+ * 5f6cb775).
+ */
+export interface LayerDiffPage {
+  layer: LayerEcho;
+  target_layer: LayerEcho;
+  /** Sections included in this page, in the canonical order of
+   * {@link LAYER_DIFF_SECTIONS} (all of them when no filter was passed). */
+  sections: LayerDiffSection[];
+  /** Totals per section across the whole report. */
+  counts: LayerDiffCounts;
+  /** Page items, grouped by section; only requested sections are present. */
+  links: Partial<LayerDiffLinks>;
+  overridden: Partial<LayerDiffOverridden>;
+  /** Echo of the effective page size. */
+  limit: number;
+  /** True when more items remain (this is not the whole report). */
+  truncated: boolean;
+  /** Why the page is incomplete: `has_more` — items remain; `null` — complete. */
+  reason: 'has_more' | null;
+  /** Opaque keyset cursor for the next page (section + last item id); `null`
+   * when the page is the last one. */
+  next_cursor: string | null;
 }
 
 /** Textual diff response of `GET /networks/{nid}/layers/{id}/diff/doc`: two
@@ -279,4 +398,53 @@ export interface LayerDiffDoc {
   target_layer: LayerEcho;
   layer_doc: string;
   target_doc: string;
+}
+
+// ---------------------------------------------------------------------------
+// Per-thought textual diff (задача 52c776f1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Comparable attributes of a single thought, resolved in BOTH contexts (the
+ * diffed layer and its merge target) — the display-ready pairs the client
+ * feeds to the line diff.
+ *
+ * The server is the only side that can read the same thought out of the layer
+ * and out of the base at once: from inside a layer the client cannot see the
+ * base version of a shadowed thought.
+ */
+export const LAYER_THOUGHT_DIFF_FIELD_KEYS = [
+  'title',
+  'type',
+  'synonyms',
+  'active',
+  'comment',
+] as const;
+export type LayerThoughtDiffFieldKey = (typeof LAYER_THOUGHT_DIFF_FIELD_KEYS)[number];
+
+/** One attribute in two contexts; `target` — base/parent layer, `layer` —
+ *  the diffed layer. An attribute absent on one side is the empty string. */
+export interface LayerThoughtDiffField {
+  key: LayerThoughtDiffFieldKey;
+  target: string;
+  layer: string;
+  changed: boolean;
+}
+
+/** How the thought itself relates to the diffed layer:
+ * `added` — new in the layer, `removed` — deleted (tombstoned) in the layer,
+ * `changed` — present in both with at least one different attribute,
+ * `unchanged` — present in both and identical. */
+export type LayerThoughtDiffKind = 'changed' | 'added' | 'removed' | 'unchanged';
+
+/** Response of `GET /networks/{nid}/layers/{id}/diff/thought/{thoughtId}`. */
+export interface LayerThoughtDiff {
+  layer: LayerEcho;
+  target_layer: LayerEcho;
+  thought_id: string;
+  /** Best-known title (the layer's version wins when present). */
+  title: string;
+  kind: LayerThoughtDiffKind;
+  /** One entry per {@link LAYER_THOUGHT_DIFF_FIELD_KEYS}, in that order. */
+  fields: LayerThoughtDiffField[];
 }

@@ -192,10 +192,13 @@ describe(
           );
 
           // Обновление того же бандла: thought.updated + comment.updated.
+          // Тип указывается явно — гейт дублей (задача bf9f46bd) блокирует
+          // только точный матч ТОГО ЖЕ типа; без `type_id` новая мысль
+          // считалась бы другого типа и создалась бы заново.
           const updated = await callWrite(handle.client, ctx.networkId, [
             {
               ref: 'u',
-              thought: { title: 'Дюна' },
+              thought: { title: 'Дюна', type_id: typeId },
               on_duplicate: 'update',
               comment: { body_md: 'Комментарий к Дюне. Обновлён.' },
             },
