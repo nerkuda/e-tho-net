@@ -51,6 +51,15 @@ import {
 } from '../screens/publications/recipe.js';
 import * as users from '../lib/users.js';
 
+/**
+ * Тестовый шов: фабрика markdown-редактора. `createMdEditor` поднимает
+ * CodeMirror, которому нужен реальный DOM (`Range`, `getSelection`), — в
+ * DOM-шиме клиентских тестов он не исполняется (прецедент — `mdEditorInternals`
+ * в `md-editor.ts`). Тест первого открытия карточки подменяет фабрику
+ * заглушкой; в продукте значение не меняется.
+ */
+export const publicationCardInternals = { createMdEditor };
+
 /** Что редактор передаёт карточке для отрисовки. */
 export interface PublicationCardHost {
   /** Контейнер содержимого панели (`editor-scroll`). */
@@ -120,7 +129,14 @@ export function showPublicationTarget(host: PublicationCardHost, publicationId: 
     if (id !== publicationId) return;
     void refreshFromServer();
   });
-  if (publication === undefined) void refreshFromServer();
+  // Наполнение — ПОСЛЕ регистрации `instance` (ошибка ecad219b). Панели
+  // вкладок `lib/ui/tabs` строятся лениво: активная («Метаданные») собирается
+  // ещё внутри `buildCard`, когда `instance` равен `null`, поэтому `apply`,
+  // вызванный до этой строки, был бы no-op, и поля оставались пустыми до
+  // переключения вкладок. Данные пришли сразу — применяем синхронно, иначе
+  // перечитываем сервер.
+  if (publication !== undefined) apply(publication);
+  else void refreshFromServer();
 }
 
 /** Перечитывает публикацию и применяет значения к карточке. */
@@ -183,7 +199,9 @@ function buildCard(publicationId: string, publication: Publication | null): HTML
       .filter((part) => part !== '')
       .join(' · ');
   });
-  if (publication !== null) apply(publication);
+  // Здесь `apply` НЕ вызывается: `instance` ещё не зарегистрирован (это делает
+  // `showPublicationTarget` сразу после возврата `buildCard`), поэтому вызов был
+  // бы no-op (ошибка ecad219b). Наполнение выполняет вызывающий.
   return root;
 }
 
@@ -267,7 +285,7 @@ function buildMetaPane(): HTMLElement {
     coverInput.value = p.cover_url ?? '';
     assemblyInput.value = p.assembly_date === null ? '' : assemblyDateLabel(p.assembly_date);
     if (md === null) {
-      md = createMdEditor(p.summary_md ?? '', {
+      md = publicationCardInternals.createMdEditor(p.summary_md ?? '', {
         onInput: (value) => queueSave({ summary_md: emptyToNull(value) }),
       });
       summaryHost.append(md.dom);
