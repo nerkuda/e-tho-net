@@ -36,6 +36,16 @@ interface RowRef {
   table: string;
   where: string;
   params: unknown[];
+  /**
+   * Deliver even when no row for the logical id exists on the subscriber's
+   * chain (like the `.deleted` purge fallback below). Used for events that
+   * report a *disappearance* while the row itself may have been physically
+   * removed in the base layer (e.g. `publication.exclusions.changed` with
+   * `excluded: false`): the subscriber still has to learn the exclusion is
+   * gone. Over-delivery to a layer that never had the row is idempotent for
+   * appliers and matches the `.deleted` rationale.
+   */
+  visibleWhenMissing?: boolean;
 }
 
 function byId(table: string, id: unknown): RowRef | null {
@@ -121,6 +131,41 @@ function extractRowRef(event: AnyRealtimeEvent): RowRef | null {
       // счётчик «обновлено N мс назад» рядом с кнопкой отбора, чтобы не
       // путать отсутствие активности с лагом синхронизации.
       return null;
+    // Publications & shelves (0.11.1, задача c59ce742; каталог 67b8748e).
+    // Событие описывает ветвимую строку подсистемы «Публикации», поэтому
+    // видимость считается по её ближайшей строке в цепочке слоёв.
+    case 'publication.updated':
+      return byId('publications', data.id);
+    case 'publication.order.reordered':
+    case 'publication.rebuilt':
+      // Порядок и дата сборки живут в строках самой публикации — событие
+      // описывает публикацию (батч перестановок неделим на один node_key).
+      return byId('publications', data.publication_id);
+    case 'publication.exclusions.changed': {
+      // Исключение — отдельная ветвимая строка `publication_exclusions`
+      // с естественным ключом (publication_id, thought_id). Снятие исключения
+      // в ОСНОВЕ удаляет строку физически, а событийный тип не `.deleted`,
+      // поэтому при `excluded: false` отсутствие строки тоже означает
+      // видимость (иначе подписчик слоя не узнал бы о снятии).
+      const d = data as { publication_id?: unknown; thought_id?: unknown; excluded?: unknown };
+      if (typeof d.publication_id !== 'string' || typeof d.thought_id !== 'string') {
+        return null;
+      }
+      return {
+        table: 'publication_exclusions',
+        where: 't.publication_id = ? AND t.thought_id = ?',
+        params: [d.publication_id, d.thought_id],
+        visibleWhenMissing: d.excluded === false,
+      };
+    }
+    case 'publication.trashed':
+    case 'publication.restored':
+    case 'publication.purged':
+      return byId('publications', data.id);
+    case 'shelf.updated':
+      return byId('shelves', (data.shelf as { id?: unknown } | undefined)?.id);
+    case 'shelf.deleted':
+      return byId('shelves', data.id);
     default:
       // network.*, member.*, presence.*, user-scoped settings (§4.6–4.8):
       // non-branchable, layer-independent (13-layers.md §3).
@@ -168,7 +213,9 @@ export function isEventVisibleInLayer(
   // before the purge the chain resolved it, so every subscriber that still
   // caches it must drop it. Appliers ignore unknown ids idempotently, so the
   // possible over-delivery (a row created and deleted within a non-ancestor
-  // layer) is harmless. Any other event type about a row the chain never had
-  // belongs to a non-ancestor layer — nothing to deliver.
-  return event.type.endsWith('.deleted');
+  // layer) is harmless. The same reasoning covers rows whose event is a
+  // *disappearance* reported under a non-`.deleted` name
+  // (`visibleWhenMissing`). Any other event type about a row the chain never
+  // had belongs to a non-ancestor layer — nothing to deliver.
+  return ref.visibleWhenMissing === true || event.type.endsWith('.deleted');
 }

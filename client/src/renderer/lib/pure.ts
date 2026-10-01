@@ -952,6 +952,16 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'thought-type-view.updated': 'изменён отбор типа',
   'thought-type-view.deleted': 'удалён отбор типа',
   'thought-type-view.run': 'исполнен отбор',
+  // Публикации и полки (0.11.1, задача c59ce742) — только строки статус-бара.
+  'publication.updated': 'изменена публикация',
+  'publication.order.reordered': 'изменён порядок публикации',
+  'publication.exclusions.changed': 'изменены исключения публикации',
+  'publication.rebuilt': 'публикация пересобрана',
+  'publication.trashed': 'публикация в корзине',
+  'publication.restored': 'публикация восстановлена',
+  'publication.purged': 'публикация удалена',
+  'shelf.updated': 'изменена полка',
+  'shelf.deleted': 'полка удалена',
 };
 
 /**

@@ -3910,7 +3910,7 @@ export const PublicationListFields = z
   .strict();
 export type PublicationListFields = z.infer<typeof PublicationListFields>;
 
-/** Батч перестановок порядка (POST /publications/{id}/order). */
+/** Батч перестановок порядка (PUT /publications/{id}/order). */
 export const PublicationOrderFields = z
   .object({
     items: z
@@ -3945,3 +3945,316 @@ export const ShelfItemFields = z
   })
   .strict();
 export type ShelfItemFields = z.infer<typeof ShelfItemFields>;
+
+// ---------------------------------------------------------------------------
+// REST-контракты публикаций и полок (0.11.1, задача c59ce742; операции
+// 5af247e4 CRUD, 200b87be жизненный цикл, 19d80dd2 сборка, f6b242fe порядок,
+// 109061e0 исключения, f9a20c3f пересборка/кандидаты, f49c6420 использование,
+// c80951ea полки)
+//
+// Поля схем объявлены ЛИТЕРАЛЬНО (не спредом *Fields): сторож
+// guard-rest-contracts сверяет объявленность по тексту блока контракта, а
+// `parseRest` читает только поля REST-карты. Межполевые правила публикации
+// (резюме без заголовков, единственный источник обложки, непересечение
+// рецептов, диапазон нумерации) проверяет домен (`publication-service`)
+// штатными `VALIDATION_ERROR` с теми же кодами — дублировать refine здесь
+// не нужно.
+// ---------------------------------------------------------------------------
+
+/** Общие REST-источники полей тела публикации. */
+const publicationRestMap = {
+  title: { from: { kind: 'body' } },
+  subtitle: { from: { kind: 'body' } },
+  summary_md: { from: { kind: 'body' } },
+  authorship: { from: { kind: 'body' } },
+  cover_attachment_id: { from: { kind: 'body' } },
+  cover_url: { from: { kind: 'body' } },
+  title_recipe: { from: { kind: 'body' } },
+  text_sources: { from: { kind: 'body' } },
+  extra_properties: { from: { kind: 'body' } },
+  numbering_from: { from: { kind: 'body' } },
+  numbering_to: { from: { kind: 'body' } },
+} as const;
+
+/** POST /networks/:id/publications — создание. */
+export const RestPublicationCreate = defineContract(
+  'rest:publications.create',
+  z.object({
+    network_id: NetworkId,
+    title: z.string().min(1),
+    subtitle: z.string().nullable().optional(),
+    summary_md: z.string().nullable().optional(),
+    authorship: z.string().nullable().optional(),
+    cover_attachment_id: z.string().min(1).nullable().optional(),
+    cover_url: z.string().min(1).nullable().optional(),
+    title_recipe: z.record(z.string(), z.unknown()).nullable().optional(),
+    text_sources: z.array(z.string().min(1)).optional(),
+    extra_properties: z.array(z.string().min(1)).optional(),
+    numbering_from: z.number().int().nullable().optional(),
+    numbering_to: z.number().int().nullable().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    ...publicationRestMap,
+  },
+);
+
+/** GET /networks/:id/publications — список. */
+export const RestPublicationList = defineContract(
+  'rest:publications.list',
+  z.object({
+    network_id: NetworkId,
+    q: z.string().optional(),
+    shelf: z.string().min(1).optional(),
+    active: z.enum(PUBLICATION_ACTIVE_FILTERS).optional(),
+    sort: z.enum(PUBLICATION_SORTS).optional(),
+    include_trashed: z.boolean().optional(),
+    limit: z.number().int().min(1).optional(),
+    offset: z.number().int().min(0).optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    q: { from: { kind: 'query' }, parse: singleQueryValue },
+    shelf: { from: { kind: 'query' }, parse: singleQueryValue },
+    active: { from: { kind: 'query' }, parse: singleQueryValue },
+    sort: { from: { kind: 'query' }, parse: singleQueryValue },
+    include_trashed: { from: { kind: 'query', coerce: 'bool' } },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
+  },
+);
+
+/** GET /networks/:id/publications/{id} — карточка. */
+export const RestPublicationById = defineContract(
+  'rest:publications.by-id',
+  z.object({ network_id: NetworkId, publication_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** PATCH /networks/:id/publications/{id} — правка настроек. */
+export const RestPublicationUpdate = defineContract(
+  'rest:publications.update',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    title: z.string().min(1).optional(),
+    subtitle: z.string().nullable().optional(),
+    summary_md: z.string().nullable().optional(),
+    authorship: z.string().nullable().optional(),
+    cover_attachment_id: z.string().min(1).nullable().optional(),
+    cover_url: z.string().min(1).nullable().optional(),
+    title_recipe: z.record(z.string(), z.unknown()).nullable().optional(),
+    text_sources: z.array(z.string().min(1)).optional(),
+    extra_properties: z.array(z.string().min(1)).optional(),
+    numbering_from: z.number().int().nullable().optional(),
+    numbering_to: z.number().int().nullable().optional(),
+    active: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    ...publicationRestMap,
+    active: { from: { kind: 'body' } },
+  },
+);
+
+/**
+ * PUT /networks/:id/publications/{id}/order — батч локального порядка.
+ * Метод PUT (карточка f6b242fe): повторная отправка того же батча
+ * идемпотентна, тело `{ items: [{ node_key, position }] }`.
+ */
+export const RestPublicationOrder = defineContract(
+  'rest:publications.order',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    items: z
+      .array(z.object({ node_key: z.string().min(1), position: z.number() }).strict())
+      .min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    items: { from: { kind: 'body' } },
+  },
+);
+
+/** POST /networks/:id/publications/{id}/exclusions — исключить мысль. */
+export const RestPublicationExclusionAdd = defineContract(
+  'rest:publications.exclusion-add',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    thought_id: z.string().min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    thought_id: { from: { kind: 'body' }, msg: 'thought_id обязателен.' },
+  },
+);
+
+/** DELETE /networks/:id/publications/{id}/exclusions?thought_id= — снять. */
+export const RestPublicationExclusionRemove = defineContract(
+  'rest:publications.exclusion-remove',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    thought_id: z.string().min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    thought_id: { from: { kind: 'query' }, parse: singleQueryValue, msg: 'thought_id обязателен.' },
+  },
+);
+
+/** POST /networks/:id/publications/{id}/rebuild — пересборка. */
+export const RestPublicationRebuild = defineContract(
+  'rest:publications.rebuild',
+  z.object({ network_id: NetworkId, publication_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** GET /networks/:id/publications/{id}/assembly — сборка документа. */
+export const RestPublicationAssembly = defineContract(
+  'rest:publications.assembly',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    page: z.number().int().min(1).optional(),
+    include_excluded: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    page: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    include_excluded: { from: { kind: 'query', coerce: 'bool' } },
+  },
+);
+
+/** GET /networks/:id/publications/{id}/candidates — новые кандидаты. */
+export const RestPublicationCandidates = defineContract(
+  'rest:publications.candidates',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    limit: z.number().int().min(1).optional(),
+    offset: z.number().int().min(0).optional(),
+    include_excluded: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
+    include_excluded: { from: { kind: 'query', coerce: 'bool' } },
+  },
+);
+
+/** GET /networks/:id/thoughts/{id}/publications — использование мысли. */
+export const RestPublicationUsage = defineContract(
+  'rest:publications.usage',
+  z.object({
+    network_id: NetworkId,
+    thought_id: z.string().min(1),
+    limit: z.number().int().min(1).optional(),
+    offset: z.number().int().min(0).optional(),
+    publication_limit: z.number().int().min(0).optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    thought_id: { from: { kind: 'param', name: 'id' } },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
+    publication_limit: { from: { kind: 'query', coerce: 'int', min: 0 } },
+  },
+);
+
+// --- Полки библиотеки публикаций (операция c80951ea) -----------------------
+
+/** POST /networks/:id/shelves — создать полку. */
+export const RestShelfCreate = defineContract(
+  'rest:shelves.create',
+  z.object({ network_id: NetworkId, title: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    title: { from: { kind: 'body' }, msg: 'title полки обязателен.' },
+  },
+);
+
+/** GET /networks/:id/shelves — список полок с составом. */
+export const RestShelfList = defineContract(
+  'rest:shelves.list',
+  z.object({ network_id: NetworkId }),
+  { network_id: { from: { kind: 'param', name: 'networkId' } } },
+);
+
+/** PATCH /networks/:id/shelves/{id} — переименование/порядок. */
+export const RestShelfUpdate = defineContract(
+  'rest:shelves.update',
+  z.object({
+    network_id: NetworkId,
+    shelf_id: z.string().min(1),
+    title: z.string().min(1).optional(),
+    position: z.number().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+    title: { from: { kind: 'body' } },
+    position: { from: { kind: 'body' } },
+  },
+);
+
+/** DELETE /networks/:id/shelves/{id} — удалить полку. */
+export const RestShelfDelete = defineContract(
+  'rest:shelves.delete',
+  z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** POST /networks/:id/shelves/{id}/items — положить публикацию. */
+export const RestShelfItemAdd = defineContract(
+  'rest:shelves.item-add',
+  z.object({
+    network_id: NetworkId,
+    shelf_id: z.string().min(1),
+    publication_id: z.string().min(1),
+    position: z.number().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+    publication_id: { from: { kind: 'body' }, msg: 'publication_id обязателен.' },
+    position: { from: { kind: 'body' } },
+  },
+);
+
+/** DELETE /networks/:id/shelves/{id}/items?publication_id= — убрать. */
+export const RestShelfItemRemove = defineContract(
+  'rest:shelves.item-remove',
+  z.object({
+    network_id: NetworkId,
+    shelf_id: z.string().min(1),
+    publication_id: z.string().min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+    publication_id: {
+      from: { kind: 'query' },
+      parse: singleQueryValue,
+      msg: 'publication_id обязателен.',
+    },
+  },
+);

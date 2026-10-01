@@ -33,6 +33,7 @@ import type {
 import type { SavedFilter } from './structure.js';
 import type { LayerMergeReport } from './layer.js';
 import type { EffectiveThoughtTypeView, ThoughtTypeViewUpdateInput } from './thought-type-view.js';
+import type { Publication, PublicationOrderItem, Shelf } from './publication.js';
 
 // ---------------------------------------------------------------------------
 // Envelope
@@ -120,6 +121,19 @@ export const REALTIME_EVENT_TYPES = [
   'thought-type-view.updated',
   'thought-type-view.deleted',
   'thought-type-view.run',
+  // publications & shelves (0.11.1, задача c59ce742; каталог 67b8748e).
+  // Отдельного `publication.created` каталог не объявляет: создание
+  // публикации клиент узнаёт тем же `publication.updated` (список/карточка
+  // перечитываются), а «одно действие = одно событие» соблюдено.
+  'publication.updated',
+  'publication.order.reordered',
+  'publication.exclusions.changed',
+  'publication.rebuilt',
+  'publication.trashed',
+  'publication.restored',
+  'publication.purged',
+  'shelf.updated',
+  'shelf.deleted',
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 
@@ -415,6 +429,53 @@ export interface ThoughtTypeViewRunData {
   unresolved: Array<{ token: string; reason: string; message: string }>;
 }
 
+// publications & shelves (0.11.1, задача c59ce742; каталог 67b8748e).
+// Гранулярность каталога — одно действие = одно событие (не по узлу).
+
+/** `publication.updated` — создание/правка настроек или титула. */
+export interface PublicationUpdatedData {
+  id: string;
+  /** Изменённые поля; при создании — тело создания. */
+  changes: Partial<Publication>;
+  version: number;
+}
+
+/** `publication.order.reordered` — батч перестановок локального порядка. */
+export interface PublicationOrderReorderedData {
+  publication_id: string;
+  /** Новые позиции батча (порядок применения незначим). */
+  items: PublicationOrderItem[];
+}
+
+/** `publication.exclusions.changed` — мысль исключена/возвращена. */
+export interface PublicationExclusionsChangedData {
+  publication_id: string;
+  thought_id: string;
+  /** `true` — исключена, `false` — исключение снято. */
+  excluded: boolean;
+}
+
+/** `publication.rebuilt` — явная пересборка (обновлена дата сборки). */
+export interface PublicationRebuiltData {
+  publication_id: string;
+  assembly_date: string;
+}
+
+/** `publication.trashed`/`.restored`/`.purged` — корзина и удаление. */
+export interface PublicationRemovedData {
+  id: string;
+}
+
+/** `shelf.updated` — создание/переименование/порядок/состав полки. */
+export interface ShelfUpdatedData {
+  shelf: Shelf;
+}
+
+/** `shelf.deleted` — полка удалена (состав удалён, публикации целы). */
+export interface ShelfDeletedData {
+  id: string;
+}
+
 /**
  * Maps each {@link RealtimeEventType} to its `data` payload type.
  * Used by {@link RealtimeEvent} and {@link AnyRealtimeEvent}.
@@ -471,6 +532,15 @@ export interface RealtimeEventMap {
   'thought-type-view.updated': ThoughtTypeViewUpdatedData;
   'thought-type-view.deleted': ThoughtTypeViewDeletedData;
   'thought-type-view.run': ThoughtTypeViewRunData;
+  'publication.updated': PublicationUpdatedData;
+  'publication.order.reordered': PublicationOrderReorderedData;
+  'publication.exclusions.changed': PublicationExclusionsChangedData;
+  'publication.rebuilt': PublicationRebuiltData;
+  'publication.trashed': PublicationRemovedData;
+  'publication.restored': PublicationRemovedData;
+  'publication.purged': PublicationRemovedData;
+  'shelf.updated': ShelfUpdatedData;
+  'shelf.deleted': ShelfDeletedData;
 }
 
 /** Strongly-typed event envelope for a specific event name. */
@@ -565,6 +635,15 @@ export const REALTIME_EVENT_AUDIENCE = {
   'thought-type-view.updated': 'network',
   'thought-type-view.deleted': 'network',
   'thought-type-view.run': 'network',
+  'publication.updated': 'network',
+  'publication.order.reordered': 'network',
+  'publication.exclusions.changed': 'network',
+  'publication.rebuilt': 'network',
+  'publication.trashed': 'network',
+  'publication.restored': 'network',
+  'publication.purged': 'network',
+  'shelf.updated': 'network',
+  'shelf.deleted': 'network',
 } as const satisfies Record<RealtimeEventType, RealtimeAudience>;
 
 // ---------------------------------------------------------------------------

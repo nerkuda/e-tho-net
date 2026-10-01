@@ -21,6 +21,8 @@ import {
   type Link,
   type LinkType,
   type NetworkProperty,
+  type Publication,
+  type Shelf,
   type Thought,
   type ThoughtType,
 } from '@etn/shared';
@@ -109,6 +111,16 @@ export function snapshotAttachment(att: {
 /** Snapshot for a layer: «слой "<title>"». Для базы — фиксированный заголовок. */
 export function snapshotLayer(layer: Pick<Layer, 'title'>): string {
   return `слой ${quoteTitle(layer.title)}`;
+}
+
+/** Snapshot for a publication: «публикация "<title>"» (0.11.1, d4452908). */
+export function snapshotPublication(publication: Pick<Publication, 'title'>): string {
+  return `публикация ${quoteTitle(publication.title)}`;
+}
+
+/** Snapshot for a shelf: «полка "<title>"» (0.11.1, d4452908). */
+export function snapshotShelf(shelf: Pick<Shelf, 'title'>): string {
+  return `полка ${quoteTitle(shelf.title)}`;
 }
 
 /**

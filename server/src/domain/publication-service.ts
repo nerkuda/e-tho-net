@@ -514,6 +514,48 @@ export function updatePublication(
   });
 }
 
+/**
+ * Явная пересборка (POST /publications/{id}/rebuild, карточка f9a20c3f):
+ * проставляет `assembly_date` текущей датой и подчищает мёртвые строки
+ * `publication_order`. Никаких других данных не меняет.
+ *
+ * «Мёртвая» строка порядка — `node_key`, которого больше нет ни среди живых
+ * рёбер (`links_v`), ни среди живых мыслей (`thoughts_v`): позиция такого
+ * узла уже не может быть применена сборкой («узел исчез — позиция мертва»,
+ * карточка f6b242fe). Возвращается новая карточка и число удалённых строк.
+ */
+export function rebuildPublication(
+  ndb: NetworkDb,
+  id: string,
+  actorUserId: string,
+): { publication: Publication; pruned_order_rows: number } {
+  return ndb.transaction(() => {
+    getPublicationOrThrow(ndb, id);
+    const now = new Date().toISOString();
+    materializeShadow(ndb, 'publications', id);
+    ndb
+      .prepare(
+        `UPDATE publications
+            SET assembly_date = ?, version = version + 1, updated_at = ?, updated_by = ?
+          WHERE id = ? AND layer_id = ?`,
+      )
+      .run(now, now, actorUserId, id, ndb.layerId);
+
+    const dead = ndb
+      .prepare(
+        `SELECT po.id AS id FROM publication_order_v po
+          WHERE po.publication_id = ?
+            AND NOT EXISTS (SELECT 1 FROM links_v l WHERE l.id = po.node_key)
+            AND NOT EXISTS (SELECT 1 FROM thoughts_v t WHERE t.id = po.node_key)`,
+      )
+      .all(id) as { id: string }[];
+    for (const row of dead) {
+      deleteRowLayered(ndb, 'publication_order', row.id);
+    }
+    return { publication: getPublicationOrThrow(ndb, id), pruned_order_rows: dead.length };
+  });
+}
+
 /** Пометить публикацию на удаление (корзина). Доступно в любом слое. */
 export function trashPublication(ndb: NetworkDb, id: string, actorUserId: string): Publication {
   return markPublicationTrashed(ndb, id, true, actorUserId);

@@ -53,6 +53,7 @@ import { createLocksRoutes } from '../routes/locks.js';
 import { createSearchRoutes } from '../routes/search.js';
 import { createTrashRoutes } from '../routes/trash.js';
 import { createActivityRoutes } from '../routes/activity.js';
+import { createPublicationsRoutes } from '../routes/publications.js';
 import { createLayersRoutes } from '../routes/layers.js';
 import { createAdminNetworksRoutes } from '../routes/admin-networks.js';
 import { createStatisticsRoutes } from '../routes/statistics.js';
@@ -335,6 +336,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Object-lock routes (task 2031df5e, 03-server-api.md §13c):
   // acquire/release/clear/list поверх таблицы object_locks.
   await app.register(createLocksRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Publication & shelf routes (задача c59ce742, 0.11.1): карточки каталога
+  // «Публикации» — CRUD, жизненный цикл, порядок, исключения, пересборка,
+  // сборка, кандидаты, использование мысли и полки библиотеки.
+  await app.register(createPublicationsRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Activity-log routes (task f2eca5a4, 03-server-api.md §13d):
   // GET /activity — лента журнала с фильтрами и пагинацией.
