@@ -38,6 +38,7 @@ import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chr
 import { store } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
 import { invalidateWikiLinkCache } from './editor/wiki-link-resolver.js';
+import { applyPublicationsRealtime } from './screens/publications/publications.js';
 
 /**
  * Tiny wrapper so the inline call sites above stay readable. Drops the cached
@@ -343,6 +344,21 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // The user's other client changed the pinned list (audience=user) — the
       // event carries the full new order (L18, 08-ui-spec.md §16).
       store.update({ pins: evt.data.ordered_ids });
+      break;
+
+    // Публикации и полки (0.11.1, задача a3cfc018): библиотека перечитывает
+    // список с дебаунсом; карточку публикации в панели редактора обновляет её
+    // собственный подписчик (`editor/publication-card.ts`).
+    case 'publication.updated':
+    case 'publication.order.reordered':
+    case 'publication.exclusions.changed':
+    case 'publication.rebuilt':
+    case 'publication.trashed':
+    case 'publication.restored':
+    case 'publication.purged':
+    case 'shelf.updated':
+    case 'shelf.deleted':
+      applyPublicationsRealtime(evt.type);
       break;
 
     case 'thought-type.created':

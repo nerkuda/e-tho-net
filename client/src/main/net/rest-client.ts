@@ -46,7 +46,19 @@ import {
   type NetworkPropertyUpdateResult,
   type NetworkPropertyUsage,
   type NetworkPropertyWithCounters,
+  type Publication,
+  type PublicationActiveFilter,
+  type PublicationAssembly,
+  type PublicationCandidatesResult,
+  type PublicationCreateInput,
+  type PublicationExportRequest,
+  type PublicationListResult,
+  type PublicationSort,
+  type PublicationUpdateInput,
+  type PublicationUsageResult,
   type RunThoughtTypeViewResult,
+  type Shelf,
+  type ShelfInput,
   type SystemLoggingStatus,
   type ThoughtTypeViewsResult,
   type TypeOwnerType,
@@ -3052,6 +3064,305 @@ export class RestClient {
       'POST',
       `/networks/${encodeURIComponent(networkId)}/activity/truncate`,
       { body: { until_ms: untilMs }, requestOptions: opts },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Публикации и полки (0.11.1, задача a3cfc018; REST-маршруты c59ce742)
+  // -------------------------------------------------------------------------
+
+  /** `GET /networks/{nid}/publications` — список с фильтрами и пагинацией. */
+  public async listPublications(
+    networkId: string,
+    query: {
+      q?: string;
+      shelf?: string;
+      active?: PublicationActiveFilter;
+      sort?: PublicationSort;
+      include_trashed?: boolean;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PublicationListResult> {
+    const params: QueryRecord = {};
+    if (query.q !== undefined) params['q'] = query.q;
+    if (query.shelf !== undefined) params['shelf'] = query.shelf;
+    if (query.active !== undefined) params['active'] = query.active;
+    if (query.sort !== undefined) params['sort'] = query.sort;
+    if (query.include_trashed !== undefined) params['include_trashed'] = query.include_trashed;
+    if (query.limit !== undefined) params['limit'] = query.limit;
+    if (query.offset !== undefined) params['offset'] = query.offset;
+    const { data: rows, meta: envelope } = await this.requestEnvelope<Publication[]>(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/publications`,
+      { query: Object.keys(params).length ? params : undefined },
+    );
+    const meta = envelope as { total?: number } | undefined;
+    const total = typeof meta?.total === 'number' ? meta.total : rows.length;
+    return { items: rows, total };
+  }
+
+  /** `POST /networks/{nid}/publications` — создать публикацию. */
+  public async createPublication(
+    networkId: string,
+    input: PublicationCreateInput,
+    opts?: RequestOptions,
+  ): Promise<Publication> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/publications`,
+      { body: input, requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `GET /networks/{nid}/publications/{id}` — карточка публикации. */
+  public async getPublication(networkId: string, id: string): Promise<Publication> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /** `PATCH /networks/{nid}/publications/{id}` — правка настроек (last-write-wins). */
+  public async updatePublication(
+    networkId: string,
+    id: string,
+    input: PublicationUpdateInput,
+    opts?: RequestOptions,
+  ): Promise<Publication> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}`,
+      { body: input, requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `POST …/publications/{id}/trash` — пометить на удаление. */
+  public async trashPublication(
+    networkId: string,
+    id: string,
+    opts?: RequestOptions,
+  ): Promise<Publication> {
+    return this.postPublicationLifecycle(networkId, id, 'trash', opts);
+  }
+
+  /** `POST …/publications/{id}/restore` — вернуть из корзины. */
+  public async restorePublication(
+    networkId: string,
+    id: string,
+    opts?: RequestOptions,
+  ): Promise<Publication> {
+    return this.postPublicationLifecycle(networkId, id, 'restore', opts);
+  }
+
+  private async postPublicationLifecycle(
+    networkId: string,
+    id: string,
+    action: 'trash' | 'restore',
+    opts?: RequestOptions,
+  ): Promise<Publication> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/${action}`,
+      { requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/publications/{id}` — физическое удаление (основа). */
+  public async purgePublication(
+    networkId: string,
+    id: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}`,
+      { requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `POST …/publications/{id}/rebuild` — пересобрать (обновляет дату сборки). */
+  public async rebuildPublication(
+    networkId: string,
+    id: string,
+    opts?: RequestOptions,
+  ): Promise<Publication> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/rebuild`,
+      { requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `GET …/publications/{id}/assembly` — собранный документ. */
+  public async getPublicationAssembly(
+    networkId: string,
+    id: string,
+    query: { page?: number; include_excluded?: boolean } = {},
+  ): Promise<PublicationAssembly> {
+    const params: QueryRecord = {};
+    if (query.page !== undefined) params['page'] = query.page;
+    if (query.include_excluded !== undefined) params['include_excluded'] = query.include_excluded;
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/assembly`,
+      { query: Object.keys(params).length ? params : undefined },
+    );
+  }
+
+  /** `GET …/publications/{id}/candidates` — новые кандидаты (для бейджа «+N»). */
+  public async listPublicationCandidates(
+    networkId: string,
+    id: string,
+    query: { limit?: number; offset?: number; include_excluded?: boolean } = {},
+  ): Promise<PublicationCandidatesResult> {
+    const params: QueryRecord = {};
+    if (query.limit !== undefined) params['limit'] = query.limit;
+    if (query.offset !== undefined) params['offset'] = query.offset;
+    if (query.include_excluded !== undefined) params['include_excluded'] = query.include_excluded;
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/candidates`,
+      { query: Object.keys(params).length ? params : undefined },
+    );
+  }
+
+  /** `GET /networks/{nid}/thoughts/{id}/publications` — использование мысли. */
+  public async listPublicationUsage(
+    networkId: string,
+    thoughtId: string,
+    query: { limit?: number; offset?: number; publication_limit?: number } = {},
+  ): Promise<PublicationUsageResult> {
+    const params: QueryRecord = {};
+    if (query.limit !== undefined) params['limit'] = query.limit;
+    if (query.offset !== undefined) params['offset'] = query.offset;
+    if (query.publication_limit !== undefined) params['publication_limit'] = query.publication_limit;
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/publications`,
+      { query: Object.keys(params).length ? params : undefined },
+    );
+  }
+
+  /** `POST …/publications/{id}/export` — экспорт документа (асинхронная джоба). */
+  public async exportPublication(
+    networkId: string,
+    id: string,
+    request: PublicationExportRequest,
+    opts?: RequestOptions,
+  ): Promise<ExportJobStartResult> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/export`,
+      { body: request, requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `GET /networks/{nid}/shelves` — полки библиотеки с составом. */
+  public async listShelves(networkId: string): Promise<Shelf[]> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/shelves`);
+  }
+
+  /** `POST /networks/{nid}/shelves` — создать полку. */
+  public async createShelf(
+    networkId: string,
+    input: ShelfInput,
+    opts?: RequestOptions,
+  ): Promise<Shelf> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/shelves`, {
+      body: input,
+      requestOptions: opts ?? { clientRequestId: randomUUID() },
+    });
+  }
+
+  /** `PATCH /networks/{nid}/shelves/{id}` — переименовать/сменить порядок. */
+  public async updateShelf(
+    networkId: string,
+    id: string,
+    input: ShelfInput,
+    opts?: RequestOptions,
+  ): Promise<Shelf> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/shelves/${encodeURIComponent(id)}`,
+      { body: input, requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `POST …/shelves/{id}/trash` — полка в корзину. */
+  public async trashShelf(
+    networkId: string,
+    id: string,
+    opts?: RequestOptions,
+  ): Promise<Shelf> {
+    return this.postShelfLifecycle(networkId, id, 'trash', opts);
+  }
+
+  /** `POST …/shelves/{id}/restore` — полка из корзины. */
+  public async restoreShelf(
+    networkId: string,
+    id: string,
+    opts?: RequestOptions,
+  ): Promise<Shelf> {
+    return this.postShelfLifecycle(networkId, id, 'restore', opts);
+  }
+
+  private async postShelfLifecycle(
+    networkId: string,
+    id: string,
+    action: 'trash' | 'restore',
+    opts?: RequestOptions,
+  ): Promise<Shelf> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/shelves/${encodeURIComponent(id)}/${action}`,
+      { requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/shelves/{id}` — физическое удаление (основа). */
+  public async purgeShelf(
+    networkId: string,
+    id: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/shelves/${encodeURIComponent(id)}`,
+      { requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `POST …/shelves/{id}/items` — положить публикацию на полку. */
+  public async addShelfItem(
+    networkId: string,
+    shelfId: string,
+    publicationId: string,
+    position?: number,
+    opts?: RequestOptions,
+  ): Promise<Shelf> {
+    const body: { publication_id: string; position?: number } = {
+      publication_id: publicationId,
+    };
+    if (position !== undefined) body.position = position;
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/shelves/${encodeURIComponent(shelfId)}/items`,
+      { body, requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /** `DELETE …/shelves/{id}/items?publication_id=` — убрать публикацию с полки. */
+  public async removeShelfItem(
+    networkId: string,
+    shelfId: string,
+    publicationId: string,
+    opts?: RequestOptions,
+  ): Promise<Shelf> {
+    return this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/shelves/${encodeURIComponent(shelfId)}/items`,
+      { query: { publication_id: publicationId }, requestOptions: opts ?? { clientRequestId: randomUUID() } },
     );
   }
 

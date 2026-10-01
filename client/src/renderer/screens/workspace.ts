@@ -47,6 +47,7 @@ import { mountSelection } from '../selection/selection.js';
 import { mountStructures } from './structures/structures.js';
 import { mountChronicle } from './chronicle/chronicle.js';
 import { mountActivity } from './activity/activity.js';
+import { mountPublications } from './publications/publications.js';
 import { setActiveView } from './active-view.js';
 import { mountPinnedBar } from './pinned-bar.js';
 import { mountPicker } from './tabs/picker.js';
@@ -71,6 +72,8 @@ export interface WorkspaceHandles {
   structuresViewButton: HTMLButtonElement;
   chronicleViewButton: HTMLButtonElement;
   activityViewButton: HTMLButtonElement;
+  /** View switcher button of the «Публикации» view (0.11.1). */
+  publicationsViewButton: HTMLButtonElement;
   /** Pinned-thoughts panel host in the toolbar (L18). */
   pinnedHost: HTMLElement;
   /** Search row of the map view (L18): the search input, under the top bar. */
@@ -89,6 +92,8 @@ export interface WorkspaceHandles {
   chronicleHost: HTMLElement;
   /** Activity-feed view host (задача f27809d0 «События», элемент UI 8cd9ad55). */
   activityHost: HTMLElement;
+  /** Публикации view host (0.11.1, элемент интерфейса 1eecd988). */
+  publicationsHost: HTMLElement;
   /** Editor container (H8–H12). */
   editorHost: HTMLElement;
   /** Status bar cells. */
@@ -236,8 +241,17 @@ export function buildWorkspace(): HTMLElement {
     onClick: () => setActiveView('activity'),
   });
 
+  // Publications view button (0.11.1): library of publications.
+  const publicationsViewButton = iconButton({
+    icon: svgIcon('layers'),
+    title: 'Публикации',
+    role: 'ghost',
+    class: 'view-tab',
+    onClick: () => setActiveView('publications'),
+  });
+
   const viewSwitch = div('view-switch');
-  viewSwitch.append(mapViewButton, structuresViewButton, chronicleViewButton, activityViewButton);
+  viewSwitch.append(mapViewButton, structuresViewButton, chronicleViewButton, activityViewButton, publicationsViewButton);
 
   // Pinned-thoughts panel (L18, 08-ui-spec.md §16): right after the view
   // switcher, visible in both views.
@@ -298,6 +312,7 @@ export function buildWorkspace(): HTMLElement {
   const structuresHost = div('structures hidden view-host');
   const chronicleHost = div('chronicle hidden view-host');
   const activityHost = div('activity hidden view-host');
+  const publicationsHost = div('publications-host hidden view-host');
   const editorHost = div('editor hidden');
   // Draggable splitter between canvas and editor (08-ui-spec.md §6.1). Positioned
   // absolutely on the canvas/editor seam via the --editor-w/--editor-h variables.
@@ -313,6 +328,7 @@ export function buildWorkspace(): HTMLElement {
     structuresHost,
     chronicleHost,
     activityHost,
+    publicationsHost,
     editorHost,
     editorResizer,
     selectionResizer,
@@ -386,6 +402,7 @@ export function buildWorkspace(): HTMLElement {
     structuresViewButton,
     chronicleViewButton,
     activityViewButton,
+    publicationsViewButton,
     pinnedHost,
     searchRow,
     searchInput,
@@ -395,6 +412,7 @@ export function buildWorkspace(): HTMLElement {
     structuresHost,
     chronicleHost,
     activityHost,
+    publicationsHost,
     editorHost,
     historyHost,
     countsLabel,
@@ -424,6 +442,7 @@ export function buildWorkspace(): HTMLElement {
   onWorkspaceTeardown(mountStructures(structuresHost));
   onWorkspaceTeardown(mountChronicle(chronicleHost));
   onWorkspaceTeardown(mountActivity(activityHost));
+  onWorkspaceTeardown(mountPublications(publicationsHost));
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
   let lastMapActive = true;
@@ -466,14 +485,17 @@ export function buildWorkspace(): HTMLElement {
     const structuresActive = st.activeView === 'structures';
     const chronicleActive = st.activeView === 'chronicle';
     const activityActive = st.activeView === 'activity';
+    const publicationsActive = st.activeView === 'publications';
     setButtonActive(mapViewButton, mapActive);
     setButtonActive(structuresViewButton, structuresActive);
     setButtonActive(chronicleViewButton, chronicleActive);
     setButtonActive(activityViewButton, activityActive);
+    setButtonActive(publicationsViewButton, publicationsActive);
     canvasHost.classList.toggle('hidden', !mapActive);
     structuresHost.classList.toggle('hidden', !structuresActive);
     chronicleHost.classList.toggle('hidden', !chronicleActive);
     activityHost.classList.toggle('hidden', !activityActive);
+    publicationsHost.classList.toggle('hidden', !publicationsActive);
     searchRow.classList.toggle('hidden', !mapActive);
     // Leaving the map view closes the open search dropdown (it anchors to the
     // now hidden search row); returning leaves it closed.

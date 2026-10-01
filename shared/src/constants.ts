@@ -226,6 +226,12 @@ export const UI_STATE_KEY = {
    *  (L4 `ui_state`), как размеры панелей; наличие/количество записей на
    *  размер не влияют. */
   TYPE_EDITOR_PROPERTY_SPLIT: 'type_editor_property_split',
+  /** Персональные настройки вида экрана «Публикации» (0.11.1, требование
+   *  1b39206e): JSON `{ viewMode, sort, activeFilter, shelfFilter, filtersOpen }`.
+   *  Хранятся локально (L4 `ui_state`) на уровне «пользователь × сеть», со
+   *  слоями не ветвятся; полки и их порядок — общесетевые сущности, здесь не
+   *  дублируются. */
+  PUBLICATIONS_STATE: 'publications_state',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];
 

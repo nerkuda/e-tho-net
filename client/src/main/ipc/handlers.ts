@@ -710,6 +710,135 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
 
+  // --- publications & shelves (0.11.1, задача a3cfc018; маршруты c59ce742) -
+  handlers.set(
+    'publications.list',
+    bind((networkId: string, query?: Parameters<RestClient['listPublications']>[1]) =>
+      requireRest(deps).listPublications(networkId, query),
+    ),
+  );
+  handlers.set(
+    'publications.create',
+    bind(
+      (
+        networkId: string,
+        input: Parameters<RestClient['createPublication']>[1],
+      ) => requireRest(deps).createPublication(networkId, input),
+    ),
+  );
+  handlers.set(
+    'publications.get',
+    bind((networkId: string, id: string) => requireRest(deps).getPublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.update',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        input: Parameters<RestClient['updatePublication']>[2],
+        expectedVersion?: number,
+      ) =>
+        requireRest(deps).updatePublication(
+          networkId,
+          id,
+          input,
+          expectedVersion === undefined ? undefined : { expectedVersion },
+        ),
+    ),
+  );
+  handlers.set(
+    'publications.trash',
+    bind((networkId: string, id: string) => requireRest(deps).trashPublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.restore',
+    bind((networkId: string, id: string) => requireRest(deps).restorePublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.purge',
+    bind((networkId: string, id: string) => requireRest(deps).purgePublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.rebuild',
+    bind((networkId: string, id: string) => requireRest(deps).rebuildPublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.assembly',
+    bind(
+      (networkId: string, id: string, query?: Parameters<RestClient['getPublicationAssembly']>[2]) =>
+        requireRest(deps).getPublicationAssembly(networkId, id, query),
+    ),
+  );
+  handlers.set(
+    'publications.candidates',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        query?: Parameters<RestClient['listPublicationCandidates']>[2],
+      ) => requireRest(deps).listPublicationCandidates(networkId, id, query),
+    ),
+  );
+  handlers.set(
+    'publications.usage',
+    bind(
+      (networkId: string, thoughtId: string, query?: Parameters<RestClient['listPublicationUsage']>[2]) =>
+        requireRest(deps).listPublicationUsage(networkId, thoughtId, query),
+    ),
+  );
+  handlers.set(
+    'publications.export',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        request: Parameters<RestClient['exportPublication']>[2],
+      ) => requireRest(deps).exportPublication(networkId, id, request),
+    ),
+  );
+  handlers.set(
+    'publications.listShelves',
+    bind((networkId: string) => requireRest(deps).listShelves(networkId)),
+  );
+  handlers.set(
+    'publications.createShelf',
+    bind((networkId: string, input: Parameters<RestClient['createShelf']>[1]) =>
+      requireRest(deps).createShelf(networkId, input),
+    ),
+  );
+  handlers.set(
+    'publications.updateShelf',
+    bind(
+      (networkId: string, id: string, input: Parameters<RestClient['updateShelf']>[2]) =>
+        requireRest(deps).updateShelf(networkId, id, input),
+    ),
+  );
+  handlers.set(
+    'publications.trashShelf',
+    bind((networkId: string, id: string) => requireRest(deps).trashShelf(networkId, id)),
+  );
+  handlers.set(
+    'publications.restoreShelf',
+    bind((networkId: string, id: string) => requireRest(deps).restoreShelf(networkId, id)),
+  );
+  handlers.set(
+    'publications.purgeShelf',
+    bind((networkId: string, id: string) => requireRest(deps).purgeShelf(networkId, id)),
+  );
+  handlers.set(
+    'publications.addShelfItem',
+    bind((networkId: string, shelfId: string, publicationId: string, position?: number) =>
+      requireRest(deps).addShelfItem(networkId, shelfId, publicationId, position),
+    ),
+  );
+  handlers.set(
+    'publications.removeShelfItem',
+    bind((networkId: string, shelfId: string, publicationId: string) =>
+      requireRest(deps).removeShelfItem(networkId, shelfId, publicationId),
+    ),
+  );
+
   // --- layers (S11, 13-layers.md §10.3; 03-server-api.md §5a) --------------
   handlers.set(
     'layers.list',

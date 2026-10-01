@@ -655,6 +655,98 @@ export const ru = {
   'stats.row.layers': 'Слои',
   /** Итог по вложениям (подстановки — всего, файлов, размер). */
   'stats.attachments': 'Вложений: %1, файлов %2, общий размер %3',
+
+  // -- Публикации: библиотека (0.11.1, задача a3cfc018) ---------------------
+  /** Заголовок экрана и вида. */
+  'publications.title': 'Публикации',
+  /** Плейсхолдер поиска по библиотеке. */
+  'publications.search': 'Поиск по названию…',
+  /** Кнопка создания публикации. */
+  'publications.new': 'Публикация',
+  /** Кнопка создания полки. */
+  'publications.newShelf': 'Полка',
+  /** Сегмент вида «полки». */
+  'publications.view.shelves': 'Полки',
+  /** Сегмент вида «список». */
+  'publications.view.list': 'Список',
+  /** Подпись кнопки сортировки. */
+  'publications.sort': 'Сортировка',
+  'publications.sort.manual': 'Вручную',
+  'publications.sort.title': 'По названию',
+  'publications.sort.date': 'По дате сборки',
+  'publications.sort.author': 'По автору',
+  /** Кнопка панели фильтров. */
+  'publications.filters': 'Фильтры',
+  'publications.active.true': 'Актуальные',
+  'publications.active.false': 'Неактуальные',
+  'publications.active.any': 'Все',
+  /** Пункт «показать все полки». */
+  'publications.shelf.all': 'Все полки',
+  /** Полка публикаций, не входящих в полки (вид «список»/«полки»). */
+  'publications.shelf.none': 'Без полки',
+  /** Пустое состояние библиотеки. */
+  'publications.empty': 'Публикаций пока нет',
+  'publications.emptyHint': 'Создайте первую публикацию мастером.',
+  /** Пустое состояние поиска/фильтра. */
+  'publications.emptySearch': 'Ничего не найдено',
+  /** Ошибка загрузки списка. */
+  'publications.error': 'Не удалось загрузить публикации',
+  /** Бейдж «+N новых» (подстановка — число). */
+  'publications.newBadge': '+%1 новых',
+  /** Пагинация списка. */
+  'publications.prev': 'Назад',
+  'publications.next': 'Вперёд',
+  'publications.page': '%1–%2 из %3',
+  /** Контекстное меню публикации. */
+  'publications.menu.export': 'Экспорт',
+  'publications.menu.exportMd': 'Экспорт в Markdown',
+  'publications.menu.exportHtml': 'Экспорт в HTML',
+  'publications.menu.shelves': 'На полки',
+  'publications.menu.inactive': 'Неактуальна',
+  'publications.menu.active': 'Актуальна',
+  'publications.menu.settings': 'Настройки',
+  /** Контекстное меню полки. */
+  'publications.shelf.rename': 'Переименовать полку',
+  'publications.shelf.trash': 'Полку в корзину',
+  /** Мастер создания публикации. */
+  'publications.wizard.title': 'Новая публикация',
+  'publications.wizard.meta': 'Название',
+  'publications.wizard.recipe': 'Отбор заголовков',
+  'publications.wizard.texts': 'Свойства текстов',
+  'publications.wizard.create': 'Создать',
+  'publications.wizard.fTitle': 'Название',
+  'publications.wizard.fSubtitle': 'Подзаголовок',
+  'publications.wizard.fAuthor': 'Автор',
+  'publications.wizard.fTextsHint':
+    'Комментарии мыслей этих свойств образуют текст раздела. Шаг можно пропустить.',
+  'publications.wizard.titleRequired': 'Укажите название публикации.',
+
+  // -- Публикации: карточка в панели редактора (0.11.1, задача a3cfc018) ----
+  /** Заголовок панели редактора для цели publication. */
+  'publication.card.title': 'Публикация',
+  'publication.tab.meta': 'Метаданные',
+  'publication.tab.recipe': 'Рецепты',
+  'publication.tab.shelves': 'Полки и статус',
+  'publication.field.title': 'Название',
+  'publication.field.subtitle': 'Подзаголовок',
+  'publication.field.author': 'Автор',
+  'publication.field.summary': 'Резюме',
+  'publication.field.cover': 'Обложка',
+  'publication.field.assembly': 'Дата сборки',
+  'publication.field.numberingFrom': 'Нумеровать с уровня',
+  'publication.field.numberingTo': 'по уровень',
+  'publication.field.texts': 'Свойства текстов',
+  'publication.field.extras': 'Дополнительные материалы',
+  'publication.shelves': 'Полки',
+  'publication.inactive': 'Неактуальна',
+  'publication.toTrash': 'В корзину',
+  'publication.restore': 'Из корзины',
+  'publication.rebuild': 'Пересобрать',
+  'publication.save': 'Сохранить',
+  'publication.cover.none': 'Без обложки',
+  'publication.cover.url': 'URL обложки',
+  'publication.cover.pick': 'Выбрать вложение…',
+  'publication.error': 'Не удалось сохранить публикацию',
 } as const;
 
 /** Ключи исходного языка — основа типа {@link MessageKey}. */

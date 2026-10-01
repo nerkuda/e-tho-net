@@ -108,8 +108,8 @@ export interface VisitHistoryRow {
   visited_at: string;
 }
 
-/** Workspace view modes (08-ui-spec.md §15.1, задача f27809d0 «События»). */
-export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity';
+/** Workspace view modes (08-ui-spec.md §15.1, задача f27809d0 «События»; 0.11.1 — «Публикации»). */
+export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity' | 'publications';
 
 /** Row of `tabs` (07-client-electron.md §3.6, фаза Q). */
 export interface TabRow {

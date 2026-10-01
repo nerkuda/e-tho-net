@@ -1,0 +1,324 @@
+/* ---------------------------------------------------------------------------
+ * Экран «Публикации» — библиотека (0.11.1, задача a3cfc018; элемент интерфейса
+ * 1eecd988) и карточка публикации в панели редактора (c3e44cab).
+ *
+ * Только раскладка и повседневные размеры экрана; контролы, поля, таблицы,
+ * вкладки и состояния приходят из фасадов `lib/ui` (своих ролей под них нет).
+ * ------------------------------------------------------------------------- */
+
+.publications-host {
+  min-width: 0;
+  min-height: 0;
+}
+
+.publications {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pub-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.pub-search {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  max-width: 24rem;
+}
+
+.pub-spacer {
+  flex: 1 1 auto;
+}
+
+.pub-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-alt, var(--surface));
+}
+
+.pub-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.pub-shelves {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.pub-shelf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-shelf-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-dim);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-s);
+}
+
+.pub-shelf-head.pub-drop,
+.pub-row-group.pub-drop {
+  background: var(--accent-soft, var(--surface-alt, var(--surface)));
+  outline: 1px dashed var(--accent);
+}
+
+.pub-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--space-3);
+}
+
+.pub-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.pub-card:hover {
+  border-color: var(--accent);
+}
+
+.pub-card.pub-inactive,
+.pub-row.pub-inactive {
+  opacity: var(--state-disabled-opacity);
+}
+
+.pub-card.pub-dragging {
+  opacity: 0.5;
+}
+
+.pub-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pub-card-title,
+.pub-row-title {
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-card-subtitle,
+.pub-row-subtitle {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-card-author,
+.pub-card-date,
+.pub-row-author,
+.pub-row-date {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+.pub-cover {
+  overflow: hidden;
+  border-radius: var(--radius-s);
+  background: var(--surface-alt, var(--surface));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pub-cover-card {
+  aspect-ratio: 3 / 2;
+  width: 100%;
+}
+
+.pub-cover-row {
+  width: 2.5rem;
+  height: 1.75rem;
+  flex: none;
+}
+
+.pub-cover-thumb {
+  width: 3.5rem;
+  height: 2.5rem;
+  flex: none;
+}
+
+.pub-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pub-cover-ph {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pub-cover-initials {
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.05em;
+}
+
+.pub-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.pub-row-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.pub-row-group-collapsible {
+  cursor: pointer;
+}
+
+.pub-row-group-collapsed {
+  color: var(--text-dim);
+}
+
+.pub-row-group-count {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+.pub-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.pub-row:hover {
+  background: var(--surface-alt, var(--surface));
+}
+
+.pub-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.pub-count {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+/* --- Карточка публикации в панели редактора ------------------------------ */
+
+.pub-card-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.pub-card-editor-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pub-card-editor-thumb {
+  flex: none;
+}
+
+.pub-card-editor-titlebox {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pub-card-editor-title {
+  font-weight: var(--font-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-card-editor-meta {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+.pub-card-pane {
+  padding: var(--space-2) 0;
+}
+
+.pub-card-cover-buttons {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.pub-card-numbering {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.pub-card-numbering > * {
+  flex: 1 1 auto;
+}
+
+.pub-card-empty {
+  color: var(--text-dim);
+}
+
+.pub-cover-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 12rem;
+}

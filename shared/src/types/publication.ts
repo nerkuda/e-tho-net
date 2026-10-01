@@ -94,6 +94,13 @@ export interface PublicationUpdateInput {
   active?: boolean;
 }
 
+/** Результат списка публикаций: страница `items` + полное число `total`
+ * (клиентский мост читает `meta.total` ответа `GET /publications`). */
+export interface PublicationListResult {
+  items: Publication[];
+  total: number;
+}
+
 /** Параметры списка публикаций (пагинация по прецеденту списков сети). */
 export interface PublicationListQuery {
   q?: string;

@@ -146,6 +146,7 @@ import {
   releaseHeld,
   type LockHandle,
 } from '../lib/lock-guard.js';
+import { disposePublicationCard, showPublicationTarget } from './publication-card.js';
 
 /** What the editor currently edits. */
 export interface EditorContext {
@@ -415,6 +416,10 @@ export async function setThoughtEditorTarget(thought: Thought): Promise<void> {
 /** Current editor context: a picked thought/link, else the focused thought. */
 export function currentEditorContext(): EditorContext | null {
   const target = store.state.editorTarget;
+  // Третий вариант цели — публикация (0.11.1, ADR eb687eea): карточку рисует
+  // отдельный модуль `publication-card.ts`, контекст мысли/связи здесь не
+  // строится (иначе render() показал бы мысль фокуса вместо карточки).
+  if (target !== null && target.kind === 'publication') return null;
   if (target !== null && target.kind === 'link') {
     return { ownerType: 'link', ownerId: target.id, thought: null, link: target.link };
   }
@@ -463,6 +468,13 @@ let scrollBox: HTMLElement | null = null;
 let positionButton: HTMLButtonElement | null = null;
 let titleEl: HTMLElement | null = null;
 let lastSignature = '';
+/** Подпись отрисовки карточки публикации (третий EditorTarget, ADR eb687eea). */
+let lastPublicationSignature = '';
+
+/** Удаляет детей узла (без `replaceChildren`/`clear` — сторож keyed-списков). */
+function emptyChildren(node: HTMLElement): void {
+  while (node.firstChild !== null) node.removeChild(node.firstChild);
+}
 
 /**
  * Identity part of the render signature (bug 6b757336; задача 90b2256e):
@@ -656,6 +668,8 @@ export function mountEditor(editorHost: HTMLElement): void {
   stalePanes = new Set();
   lastSignature = '';
   lastIdentitySignature = '';
+  lastPublicationSignature = '';
+  disposePublicationCard();
 
   // The collapse state is global per group id (ee745368): it survives entity
   // changes and restarts, so switching to another thought does not restore
@@ -1407,7 +1421,38 @@ function retargetHeader(ctx: EditorContext): boolean {
  * kind must reuse the skeleton, not tear the panel down.
  */
 async function render(): Promise<void> {
-  if (host === null || scrollBox === null || positionButton === null) return;
+  if (host === null || scrollBox === null || positionButton === null || titleEl === null) return;
+
+  // Третий вариант цели — карточка публикации (0.11.1, ADR eb687eea). Она
+  // рисуется отдельным модулем `publication-card.ts` в том же хосте панели;
+  // канв-специфичные механики редактора (история, halo, выделение) не
+  // применяются — их отключает `currentEditorContext()` (возвращает null).
+  const pubTarget = store.state.editorTarget;
+  if (pubTarget !== null && pubTarget.kind === 'publication') {
+    const pubSignature = `publication|${pubTarget.id}|${pubTarget.publication?.version ?? ''}|${store.state.editorPosition}`;
+    if (pubSignature !== lastPublicationSignature) {
+      lastPublicationSignature = pubSignature;
+      emptyChildren(scrollBox);
+    }
+    titleEl.textContent = 'Публикация';
+    showPublicationTarget(
+      { scrollBox },
+      pubTarget.id,
+      pubTarget.publication,
+    );
+    return;
+  }
+  if (lastPublicationSignature !== '') {
+    // Уходим с карточки публикации на мысль/связь: отпустить её подписки,
+    // очистить хост и сбросить подписи, чтобы следующий render пошёл полным
+    // путём.
+    lastPublicationSignature = '';
+    lastSignature = '';
+    lastIdentitySignature = '';
+    disposePublicationCard();
+    emptyChildren(scrollBox);
+  }
+
   const ctx = currentEditorContext();
 
   const layerId = store.state.currentLayer?.id ?? '';

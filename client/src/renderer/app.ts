@@ -224,10 +224,12 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // switching tabs inside a network actually swaps the view (not just the
   // highlighted tab).
   const viewFromTab = activeTabView;
+  const knownView = (value: string | null): value is WorkspaceView =>
+    value === 'structures' || value === 'chronicle' || value === 'publications';
   const resolvedView: WorkspaceView =
-    viewFromTab === 'structures' || viewFromTab === 'chronicle'
+    knownView(viewFromTab)
       ? viewFromTab
-      : activeViewRaw === 'structures' || activeViewRaw === 'chronicle'
+      : knownView(activeViewRaw)
         ? activeViewRaw
         : 'map';
   store.update({ activeView: resolvedView });

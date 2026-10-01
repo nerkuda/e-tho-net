@@ -176,6 +176,32 @@ function buildApi(): EtnBridgeApi {
       rollup: (networkId, untilMs) => invoke('activity.rollup', networkId, untilMs),
       truncate: (networkId, untilMs) => invoke('activity.truncate', networkId, untilMs),
     },
+    publications: {
+      list: (networkId, query) => invoke('publications.list', networkId, query),
+      create: (networkId, input) => invoke('publications.create', networkId, input),
+      get: (networkId, id) => invoke('publications.get', networkId, id),
+      update: (networkId, id, input, expectedVersion) =>
+        invoke('publications.update', networkId, id, input, expectedVersion),
+      trash: (networkId, id) => invoke('publications.trash', networkId, id),
+      restore: (networkId, id) => invoke('publications.restore', networkId, id),
+      purge: (networkId, id) => invoke('publications.purge', networkId, id),
+      rebuild: (networkId, id) => invoke('publications.rebuild', networkId, id),
+      assembly: (networkId, id, query) => invoke('publications.assembly', networkId, id, query),
+      candidates: (networkId, id, query) => invoke('publications.candidates', networkId, id, query),
+      usage: (networkId, thoughtId, query) =>
+        invoke('publications.usage', networkId, thoughtId, query),
+      export: (networkId, id, request) => invoke('publications.export', networkId, id, request),
+      listShelves: (networkId) => invoke('publications.listShelves', networkId),
+      createShelf: (networkId, input) => invoke('publications.createShelf', networkId, input),
+      updateShelf: (networkId, id, input) => invoke('publications.updateShelf', networkId, id, input),
+      trashShelf: (networkId, id) => invoke('publications.trashShelf', networkId, id),
+      restoreShelf: (networkId, id) => invoke('publications.restoreShelf', networkId, id),
+      purgeShelf: (networkId, id) => invoke('publications.purgeShelf', networkId, id),
+      addShelfItem: (networkId, shelfId, publicationId, position) =>
+        invoke('publications.addShelfItem', networkId, shelfId, publicationId, position),
+      removeShelfItem: (networkId, shelfId, publicationId) =>
+        invoke('publications.removeShelfItem', networkId, shelfId, publicationId),
+    },
     types: {
       listThoughtTypes: (networkId) => invoke('types.listThoughtTypes', networkId),
       getThoughtTypeCounts: (networkId) => invoke('types.getThoughtTypeCounts', networkId),

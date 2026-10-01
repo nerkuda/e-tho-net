@@ -14,6 +14,7 @@ import { store, type WorkspaceView } from '../state.js';
 import { ensureActivityInitialised } from './activity/activity.js';
 import { ensureStructuresInitialised } from './structures/structures.js';
 import { ensureChronicleInitialised } from './chronicle/chronicle.js';
+import { ensurePublicationsInitialised } from './publications/publications.js';
 
 /** Switches the workspace view and persists the L4 `active_view` key per tab. */
 export function setActiveView(view: WorkspaceView): void {
@@ -31,6 +32,7 @@ export function setActiveView(view: WorkspaceView): void {
   if (view === 'structures') void ensureStructuresInitialised();
   if (view === 'chronicle') void ensureChronicleInitialised();
   if (view === 'activity') void ensureActivityInitialised();
+  if (view === 'publications') void ensurePublicationsInitialised();
 }
 
 /**

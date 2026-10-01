@@ -77,6 +77,18 @@ import type {
   SavedFilter,
   SavedFilterDefinition,
   PinnedThoughtEntry,
+  Publication,
+  PublicationActiveFilter,
+  PublicationAssembly,
+  PublicationCandidatesResult,
+  PublicationCreateInput,
+  PublicationExportRequest,
+  PublicationListResult,
+  PublicationSort,
+  PublicationUpdateInput,
+  PublicationUsageResult,
+  Shelf,
+  ShelfInput,
   SearchRequest,
   SearchResponse,
   StructureQueryRequest,
@@ -267,7 +279,7 @@ export interface DeleteLogsResult {
 }
 
 /** Workspace view modes (08-ui-spec.md §15.1, задача f27809d0 «События»). */
-export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity';
+export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity' | 'publications';
 
 /**
  * Public DTO of an open tab (07-client-electron.md §3.6, workplan Q2).
@@ -646,6 +658,71 @@ export interface EtnApi {
     rollup(networkId: string, untilMs: number): Promise<ActivityRollupResult>;
     /** `POST /networks/{nid}/activity/truncate` — обрезка до `untilMs`. */
     truncate(networkId: string, untilMs: number): Promise<ActivityTruncateResult>;
+  };
+  /**
+   * Клиентский мост подсистемы «Публикации» (0.11.1, задача a3cfc018;
+   * REST-маршруты c59ce742). Паритет с REST: библиотека, полки, карточка,
+   * жизненный цикл, пересборка, кандидаты, использование, экспорт.
+   */
+  publications: {
+    list(
+      networkId: string,
+      query?: {
+        q?: string;
+        shelf?: string;
+        active?: PublicationActiveFilter;
+        sort?: PublicationSort;
+        include_trashed?: boolean;
+        limit?: number;
+        offset?: number;
+      },
+    ): Promise<PublicationListResult>;
+    create(networkId: string, input: PublicationCreateInput): Promise<Publication>;
+    get(networkId: string, id: string): Promise<Publication>;
+    update(
+      networkId: string,
+      id: string,
+      input: PublicationUpdateInput,
+      expectedVersion?: number,
+    ): Promise<Publication>;
+    trash(networkId: string, id: string): Promise<Publication>;
+    restore(networkId: string, id: string): Promise<Publication>;
+    purge(networkId: string, id: string): Promise<void>;
+    rebuild(networkId: string, id: string): Promise<Publication>;
+    assembly(
+      networkId: string,
+      id: string,
+      query?: { page?: number; include_excluded?: boolean },
+    ): Promise<PublicationAssembly>;
+    candidates(
+      networkId: string,
+      id: string,
+      query?: { limit?: number; offset?: number; include_excluded?: boolean },
+    ): Promise<PublicationCandidatesResult>;
+    usage(
+      networkId: string,
+      thoughtId: string,
+      query?: { limit?: number; offset?: number; publication_limit?: number },
+    ): Promise<PublicationUsageResult>;
+    export(
+      networkId: string,
+      id: string,
+      request: PublicationExportRequest,
+    ): Promise<ExportJobStartResult>;
+    /** `GET /networks/{nid}/shelves` — полки библиотеки с составом. */
+    listShelves(networkId: string): Promise<Shelf[]>;
+    createShelf(networkId: string, input: ShelfInput): Promise<Shelf>;
+    updateShelf(networkId: string, id: string, input: ShelfInput): Promise<Shelf>;
+    trashShelf(networkId: string, id: string): Promise<Shelf>;
+    restoreShelf(networkId: string, id: string): Promise<Shelf>;
+    purgeShelf(networkId: string, id: string): Promise<void>;
+    addShelfItem(
+      networkId: string,
+      shelfId: string,
+      publicationId: string,
+      position?: number,
+    ): Promise<Shelf>;
+    removeShelfItem(networkId: string, shelfId: string, publicationId: string): Promise<Shelf>;
   };
   types: {
     listThoughtTypes(networkId: string): Promise<ThoughtType[]>;
