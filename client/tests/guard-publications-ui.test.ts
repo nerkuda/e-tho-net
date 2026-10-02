@@ -281,7 +281,9 @@ describe('guard: UI публикаций (a3cfc018)', () => {
     for (const rel of consumers) {
       const source = fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
       assert.ok(
-        source.includes('buildParentThoughtsSection'),
+        // Якорь — именно ВЫЗОВ фасада с контекстом, а не импорт: `import {
+        // buildParentThoughtsSection }` без применения сторожа не проходит.
+        /buildParentThoughtsSection\s*\(/.test(source),
         `${rel} обязан собирать «Родительские мысли» общим фасадом`,
       );
       // Маркеры прежних копий: своя карта облачков и её синхронизация.

@@ -405,6 +405,21 @@ button {
   padding: 0;
 }
 
+/* Кнопка с атрибутом `hidden` обязана исчезать. `[hidden] { display: none }` —
+   правило user-agent'а (normal-приоритет), а в бандл клиента входит таблица
+   Web Awesome, где авторское `@layer wa-native button, input[type=button], … {
+   display: inline-flex }` его перебивает (author > UA независимо от
+   специфичности). Поэтому у кнопок, которые прячутся через `el.hidden = true`
+   (`.st-f-clear-inline`, `.ui-btn--icon`/`--ghost`, `.ui-clearable-btn`,
+   `.link-value-corner-btn`, `.editor-tab`), без такого правила остаётся
+   видимый пустой квадрат 22×22 (грабля повторялась трижды: `.editor-tab`,
+   `.link-value-corner-btn`, `.st-f-clear-inline` — замечание верификатора по
+   задаче b02ef1cf). Правило НЕ в слое, поэтому бьёт и слоёные правила
+   Web Awesome, и однотипные классовые (`0-1-1` > `0-1-0`). */
+button[hidden] {
+  display: none;
+}
+
 input,
 select,
 textarea {
