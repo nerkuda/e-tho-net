@@ -60,6 +60,9 @@ export const MCP_TOOL_NAMES = [
   'etn.publications.candidates',
   'etn.publications.usage',
   'etn.shelves.list',
+  // публикации/полки: проверка удаления (0.11.1, задача 00160da1; паритет REST)
+  'etn.publications.deletionCheck',
+  'etn.shelves.deletionCheck',
   // публикации: экспорт (0.11.1, задача 8f6857f8; карточка a610c091)
   'etn.publications.export',
   'etn.publications.export_batch',
@@ -165,6 +168,10 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.publications.candidates': { readOnlyHint: true },
   'etn.publications.usage': { readOnlyHint: true },
   'etn.shelves.list': { readOnlyHint: true },
+  // Проверки удаления (0.11.1, задача 00160da1): read-only — те же блокировки,
+  // что у `delete`/purge, без удаления; паритет REST `GET …/deletion-check`.
+  'etn.publications.deletionCheck': { readOnlyHint: true },
+  'etn.shelves.deletionCheck': { readOnlyHint: true },
   'etn.publications.export': { readOnlyHint: true },
   'etn.publications.export_batch': { readOnlyHint: true },
   // Записи (карточка cab597a8). `order` — батч (PUT-семантика, идемпотентен),

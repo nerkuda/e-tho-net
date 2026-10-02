@@ -1146,7 +1146,7 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
   },
   {
     topic: 'publications',
-    when: 'модель публикации и полок, рецепты, `node_key`/порядок, кандидаты и принятое состояние (`accept`), исключения, режимы экспорта (content/artifact), жизненный цикл и слои',
+    when: 'модель публикации и полок, рецепты, `node_key`/порядок, кандидаты и принятое состояние (`accept`), исключения, режимы экспорта (content/artifact), жизненный цикл, слои и проверка удаления (`deletionCheck`)',
     body_md: [
       '# publications — публикации и полки',
       '',
@@ -1171,6 +1171,8 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '  доступна с `active: "false"`/`"any"`), корзина (`trash`/`restore`) и физическое удаление',
       '  (`delete`, purge). Purge — только в основе и блокируется живыми значениями свойств типа',
       '  «Публикация» и непомеченными изменениями в живых слоях; в рабочем слое — только `trash`.',
+      '  Предварительная проверка блокировок без удаления — `deletionCheck`',
+      '  (REST `GET /publications/{id}/deletion-check`); для полки — `shelves.deletionCheck`.',
       '',
       '## Сборка и порядок',
       '- `assembly` пагинируется по КОРНЕВЫМ разделам: `page` (1-based), размер страницы',

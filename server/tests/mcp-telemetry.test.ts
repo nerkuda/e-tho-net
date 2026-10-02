@@ -538,9 +538,15 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // Деталь контракта, а не проза-описание: вынесена в `description`
         // осознанно. Замер: +64 Б к `tools/list` (61 400 → 61 464); планка
         // поднята ровно под этот прирост (61 400 → 61 600).
+        // 0.11.1 (задача 00160da1): MCP-паритет deletion-check — 2 read-only
+        // инструмента (`etn.publications.deletionCheck`, `etn.shelves.deletionCheck`)
+        // над теми же доменными check* (требование 4cb17cb3). Прирост —
+        // `description` + `inputSchema` (контракт вызова, не режется): замер
+        // 61 464 → 62 830 Б (+1 366). Планка поднята ровно под этот прирост
+        // с малым запасом (61 600 → 63 000).
         assert.ok(
-          bytes <= 61_600,
-          `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 61600`,
+          bytes <= 63_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 63000`,
         );
         // Отдельный бюджет на «префилл» из ADR: сумма байт `description` +
         // `inputSchema`. `inputSchema` не урезается — планка ограничивает
@@ -570,9 +576,11 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // → 51 910 Б; планка 51 200 → 52 100 (см. блок выше).
         // 0.11.1 (задача 8c2660e6): строка о побочной записи в `etn.shelves.list`
         // → 52 180 Б; планка 52 100 → 52 300 (см. блок выше, обоснование там же).
+        // 0.11.1 (задача 00160da1): +2 инструмента deletionCheck → 53 135 Б;
+        // планка 52 300 → 53 300 (см. блок выше, обоснование — паритет 4cb17cb3).
         assert.ok(
-          descriptionsPlusInputSchema <= 52_300,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 52300`,
+          descriptionsPlusInputSchema <= 53_300,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 53300`,
         );
       } finally {
         await handle.close();

@@ -50,6 +50,8 @@ import {
 import {
   addPublicationExclusion,
   addShelfItem,
+  checkPublicationDeletion,
+  checkShelfDeletion,
   createPublication,
   createShelf,
   deleteShelf,
@@ -90,6 +92,7 @@ import {
   McpPublicationCandidates,
   McpPublicationCreate,
   McpPublicationDelete,
+  McpPublicationDeletionCheck,
   McpPublicationExclusions,
   McpPublicationExport,
   McpPublicationExportBatch,
@@ -104,6 +107,7 @@ import {
   McpShelfAssign,
   McpShelfCreate,
   McpShelfDelete,
+  McpShelfDeletionCheck,
   McpShelfList,
   McpShelfRestore,
   McpShelfTrash,
@@ -419,6 +423,46 @@ export function registerPublicationTools(mcp: McpServer, rt: McpRuntime): void {
           if (created !== null) shelves = listShelves(ndb);
         }
         return { data: shelves, meta: { total: shelves.length, offset: 0, limit: shelves.length } };
+      }),
+  );
+
+  // =========================================================================
+  // Проверка удаления (0.11.1, задача 00160da1; паритет REST/MCP)
+  // =========================================================================
+
+  mcp.registerTool(
+    'etn.publications.deletionCheck',
+    {
+      title: 'Проверка удаления публикации',
+      description:
+        'Blocking check before purging a publication (parity with REST GET /publications/{id}' +
+        '/deletion-check). Read-only: same check `etn.publications.delete` runs. Returns ' +
+        '`{ data }` with `blocked` and `blocking { properties, layers }`.',
+      inputSchema: McpPublicationDeletionCheck.schema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.publications.deletionCheck'],
+    },
+    (args) =>
+      runTool(() => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        return { data: checkPublicationDeletion(ndb, args.publication_id) };
+      }),
+  );
+
+  mcp.registerTool(
+    'etn.shelves.deletionCheck',
+    {
+      title: 'Проверка удаления полки',
+      description:
+        'Blocking check before purging a shelf (parity with REST GET /shelves/{id}/deletion-check). ' +
+        'Read-only. Returns `{ data }` with `blocked` (layer context only — purge is base-only) and ' +
+        '`blocking { items }` (cascade size, informational).',
+      inputSchema: McpShelfDeletionCheck.schema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.shelves.deletionCheck'],
+    },
+    (args) =>
+      runTool(() => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        return { data: checkShelfDeletion(ndb, args.shelf_id) };
       }),
   );
 

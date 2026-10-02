@@ -571,6 +571,72 @@ describe('MCP-публикации: сквозной сценарий', { skip }
     }
   });
 
+  it('deletion-check: MCP дословно повторяет REST (blocked/blocking)', async () => {
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    try {
+      const handle = await connectMcpClient(mcp, rest.adminKey);
+      try {
+        // Публикация и полка в ОДНОЙ сети: REST — эталон, MCP поверх той же.
+        const created = await rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${rest.networkId}/publications`,
+          headers: authHeaders(rest),
+          payload: { title: 'Проверка удаления' },
+        });
+        assert.equal(created.statusCode, 201);
+        const publicationId = (created.json() as { data: { id: string } }).data.id;
+
+        const shelvesRes = await rest.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${rest.networkId}/shelves`,
+          headers: authHeaders(rest),
+        });
+        assert.equal(shelvesRes.statusCode, 200);
+        const shelfId = (shelvesRes.json() as { data: Array<{ id: string }> }).data[0]!.id;
+
+        const restPub = await rest.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${rest.networkId}/publications/${publicationId}/deletion-check`,
+          headers: authHeaders(rest),
+        });
+        assert.equal(restPub.statusCode, 200);
+        const restPubData = (restPub.json() as { data: unknown }).data;
+        const mcpPub = (await call(handle.client, 'etn.publications.deletionCheck', {
+          network_id: rest.networkId,
+          publication_id: publicationId,
+        })) as { data: unknown };
+        assert.deepEqual(mcpPub.data, restPubData, 'публикация: MCP = REST (blocked/blocking)');
+
+        const restShelf = await rest.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${rest.networkId}/shelves/${shelfId}/deletion-check`,
+          headers: authHeaders(rest),
+        });
+        assert.equal(restShelf.statusCode, 200);
+        const restShelfData = (restShelf.json() as { data: unknown }).data;
+        const mcpShelf = (await call(handle.client, 'etn.shelves.deletionCheck', {
+          network_id: rest.networkId,
+          shelf_id: shelfId,
+        })) as { data: unknown };
+        assert.deepEqual(mcpShelf.data, restShelfData, 'полка: MCP = REST (blocked/blocking)');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      await closeRestContext(rest);
+    }
+  });
+
   it('публикация живёт в слое: правка в рабочем слое и эхо слоя', async () => {
     const ctx = await buildMcpContext();
     try {

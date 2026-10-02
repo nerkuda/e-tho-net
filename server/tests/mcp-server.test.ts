@@ -508,8 +508,11 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // trash, restore, shelves.trash, shelves.restore, shelves.assign = +7 → 11.
         // 0.11.1 (задача e754527d, круг 2): +`etn.publications.accept`
         // (MCP-двойник REST accept) — idempotent → +1: 46 аннотированных, 12 idempotent.
-        assert.equal(annotated, 46);
-        assert.equal(hintReadOnly, 25);
+        // 0.11.1 (задача 00160da1): +`etn.publications.deletionCheck` и
+        // `etn.shelves.deletionCheck` (MCP-паритет REST deletion-check) —
+        // оба readOnly → 48 аннотированных, readOnly 25 → 27.
+        assert.equal(annotated, 48);
+        assert.equal(hintReadOnly, 27);
         assert.equal(hintDestructive, 2);
         assert.equal(hintIdempotent, 12);
       } finally {

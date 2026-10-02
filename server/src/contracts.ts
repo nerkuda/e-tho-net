@@ -4548,6 +4548,17 @@ export const McpPublicationUsage = defineContract(
   RestPublicationUsage.rest,
 );
 
+/**
+ * MCP `etn.publications.deletionCheck` = REST
+ * `GET /publications/{id}/deletion-check` (0.11.1, задача 00160da1) — блокировки
+ * физического удаления публикации для диалога удаления (паритет REST/MCP).
+ */
+export const McpPublicationDeletionCheck = defineContract(
+  'etn.publications.deletionCheck',
+  RestPublicationDeletionCheck.schema,
+  RestPublicationDeletionCheck.rest,
+);
+
 /** MCP `etn.publications.export` = REST `POST /publications/{id}/export`. */
 export const McpPublicationExport = defineContract(
   'etn.publications.export',
@@ -4567,6 +4578,17 @@ export const McpShelfList = defineContract(
   'etn.shelves.list',
   RestShelfList.schema,
   RestShelfList.rest,
+);
+
+/**
+ * MCP `etn.shelves.deletionCheck` = REST `GET /shelves/{id}/deletion-check`
+ * (0.11.1, задача 00160da1) — блокировки физического удаления полки (только
+ * контекст слоя) для диалога удаления (паритет REST/MCP).
+ */
+export const McpShelfDeletionCheck = defineContract(
+  'etn.shelves.deletionCheck',
+  RestShelfDeletionCheck.schema,
+  RestShelfDeletionCheck.rest,
 );
 
 /** MCP `etn.shelves.create` = REST `POST /shelves`. */
