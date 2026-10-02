@@ -287,6 +287,20 @@ function issueKey(fallback: string, issue: ZodIssueLike): string {
   return fallback;
 }
 
+/**
+ * Ключ поля для пошаговой валидации REST-парсера. Путь zod-ошибки относителен
+ * значения поля, поэтому при вложенной ошибке к нему добавляется имя верхнего
+ * REST-ключа (`items` + `0.node_key` → `items.0.node_key`) — тот же полный
+ * путь, что zod даёт MCP при разборе всего входа. Для скалярного поля путь
+ * пуст, и ключ остаётся верхним.
+ */
+function restFieldIssueKey(key: string, issue: ZodIssueLike): string {
+  const parts = issue.path?.filter(
+    (p): p is string | number => typeof p === 'string' || typeof p === 'number',
+  );
+  return parts !== undefined && parts.length > 0 ? `${key}.${parts.map(String).join('.')}` : key;
+}
+
 /** Детали ошибки REST: `{ field }`, для enum — с `allowed`, для
  *  unrecognized_keys — `fields` + `allowed` (допустимые ключи). */
 function issueDetails(key: string, issue: ZodIssueLike, allowedKeys?: string[]): Record<string, unknown> {
@@ -318,39 +332,43 @@ export function messageForIssue(
   issue: ZodIssueLike,
   input?: unknown,
 ): string {
-  const specVars: Record<string, string | number | bigint> = { key: specKey };
   const vars: Record<string, string | number | bigint> = { key: pathKey };
+  // Ключ подстановки в сообщение обязан совпадать у REST и MCP. Для вложенного
+  // пути (`items.0.node_key`) берём полный путь — он информативнее верхнего
+  // REST-ключа (`items`); иначе (верхний уровень/пустой путь) — REST-ключ.
+  const keyVars: Record<string, string | number | bigint> =
+    Array.isArray(issue.path) && issue.path.length > 1 ? vars : { key: specKey };
   if (issue.code === 'custom') {
     return issue.message;
   }
   if (issue.code === 'invalid_type') {
     if (isAbsentIn(input, issue.path)) {
-      return template(spec?.msg ?? '{key} обязателен.', specVars);
+      return template(spec?.msg ?? '{key} обязателен.', keyVars);
     }
     const nulls = field !== undefined && field.safeParse(null).success;
     const suffix = nulls ? ' или null' : '';
     switch (issue.expected) {
       case 'string':
-        return template(spec?.msg ?? `{key} должен быть строкой${suffix}.`, specVars);
+        return template(spec?.msg ?? `{key} должен быть строкой${suffix}.`, keyVars);
       case 'int':
       case 'number':
-        return template(spec?.msg ?? `{key} должен быть целым числом${suffix}.`, specVars);
+        return template(spec?.msg ?? `{key} должен быть целым числом${suffix}.`, keyVars);
       case 'boolean':
-        return template(spec?.msg ?? `{key} должен быть логическим значением${suffix}.`, specVars);
+        return template(spec?.msg ?? `{key} должен быть логическим значением${suffix}.`, keyVars);
       case 'array':
-        return template(spec?.msg ?? '{key} должен быть массивом строк.', specVars);
+        return template(spec?.msg ?? '{key} должен быть массивом строк.', keyVars);
       case 'object':
-        return template(spec?.msg ?? '{key} должен быть объектом.', specVars);
+        return template(spec?.msg ?? '{key} должен быть объектом.', keyVars);
       default:
-        return template(spec?.msg ?? 'Недопустимый {key}.', specVars);
+        return template(spec?.msg ?? 'Недопустимый {key}.', keyVars);
     }
   }
   if (issue.code === 'too_small') {
     if (issue.origin === 'string') {
-      return template(spec?.msg ?? '{key} обязателен.', specVars);
+      return template(spec?.msg ?? '{key} обязателен.', keyVars);
     }
     if (issue.origin === 'array') {
-      return template(spec?.msg ?? '{key} должен быть непустым массивом.', specVars);
+      return template(spec?.msg ?? '{key} должен быть непустым массивом.', keyVars);
     }
     return template(
       spec?.msg ?? '{key} должен быть целым числом не меньше {min}.',
@@ -370,13 +388,13 @@ export function messageForIssue(
     );
   }
   if (issue.code === 'invalid_value') {
-    return template(spec?.msg ?? 'Недопустимый {key}.', specVars);
+    return template(spec?.msg ?? 'Недопустимый {key}.', keyVars);
   }
   if (issue.code === 'unrecognized_keys') {
     const keys = Array.isArray(issue.keys) ? issue.keys.map(String).join(', ') : '';
-    return template(spec?.msg ?? 'Неизвестные поля: {keys}.', { ...specVars, keys });
+    return template(spec?.msg ?? 'Неизвестные поля: {keys}.', { ...keyVars, keys });
   }
-  return template(spec?.msg ?? 'Недопустимый {key}.', specVars);
+  return template(spec?.msg ?? 'Недопустимый {key}.', keyVars);
 }
 
 /** `EtnError` канонической ошибки поля с деталями и requestId. */
@@ -509,7 +527,7 @@ export function parseRest<S extends z.ZodObject>(
       const res = field.safeParse(value);
       if (!res.success) {
         const issue = firstIssue(res.error);
-        const fieldKey = issueKey(key, issue);
+        const fieldKey = restFieldIssueKey(key, issue);
         throw fieldError(requestId, fieldKey, messageForIssue(key, fieldKey, spec, field, issue, value), issueDetails(fieldKey, issue));
       }
       value = res.data;

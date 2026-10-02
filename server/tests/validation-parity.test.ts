@@ -188,6 +188,35 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
     }
   });
 
+  // Круг 2 ошибки 8577d41d: вложенное отсутствующее поле должно давать у
+  // обоих фасадов ОДИН текст с полным путём (`items.0.node_key`), а не верхний
+  // REST-ключ (`items`).
+  it('etn.publications.order ↔ PUT /publications/{id}/order: вложенный required — полный путь у обоих фасадов', async () => {
+    const w = await pairedWorld();
+    try {
+      const restRes = await w.rest.app.inject({
+        method: 'PUT',
+        url: `/api/v1/networks/${w.rest.networkId}/publications/pub-1/order`,
+        headers: authHeaders(w.rest),
+        payload: { items: [{}] },
+      });
+      assert.equal(restRes.statusCode, 422);
+      const restErr = restRes.json() as RestError;
+
+      const mcpRes = await w.handle.client.callTool({
+        name: 'etn.publications.order',
+        arguments: { network_id: w.rest.networkId, publication_id: 'pub-1', items: [{}] },
+      });
+      assert.equal(mcpRes.isError, true);
+      const mcpErr = mcpErrorParts(toolText(mcpRes));
+      assert.equal(mcpErr.code, restErr.error.code);
+      assert.equal(mcpErr.message, 'items.0.node_key обязателен.');
+      assert.equal(mcpErr.message, restErr.error.message, 'MCP и REST дают одинаковый текст');
+    } finally {
+      await closeWorld(w);
+    }
+  });
+
   it('etn.layers.select: отсутствие layer_id — «обязателен», неверный тип — прежний текст', async () => {
     const w = await pairedWorld();
     try {
