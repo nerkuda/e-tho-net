@@ -1304,6 +1304,7 @@ const HANDLERS: Record<string, OpHandler> = {
               thoughts_reused: result.thoughts_reused,
               links_created: result.links_created,
               attachments_imported: result.attachments_imported,
+              attachments_skipped: result.attachments_skipped ?? 0,
             },
           },
         };
@@ -1320,6 +1321,7 @@ const HANDLERS: Record<string, OpHandler> = {
           chronological_comments_added: result.chronological_comments_added,
           property_values_set: result.property_values_set,
           attachments_imported: result.attachments_imported,
+          attachments_skipped: result.attachments_skipped ?? 0,
           thought_types_created: result.thought_types_created,
           thought_types_reused: result.thought_types_reused,
           link_types_created: result.link_types_created,

@@ -210,6 +210,11 @@ export interface ImportSummary {
   chronological_comments_added: number;
   property_values_set: number;
   attachments_imported: number;
+  /**
+   * Вложения, пропущенные как уже существующие в целевой сети (0.11.1,
+   * ошибка 626f4ff9). Физический файл при этом повторно не распаковывается.
+   */
+  attachments_skipped?: number;
   /** Публикации, созданные импортом (0.11.1, задача 950e0a59). */
   publications_created?: number;
   /** Публикации, обновлённые импортом по совпадению `id`. */

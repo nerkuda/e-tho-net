@@ -724,6 +724,10 @@ function insertPropertyDefinition(
  * - For existing thoughts (by id): update mutable fields from the manifest
  *   (title, type_id, active, visual flags), keep `is_root`/`is_protected` as
  *   they were in the target network.
+ *
+ * Пометка корзины (`marked_for_deletion`/`_at`/`_by`) переносится из манифеста
+ * и при создании, и при обновлении — как у публикаций и полок (0.11.1, ошибка
+ * b3e0a1ee): без неё помеченная мысль после раунд-трипа приезжала живой.
  */
 function insertOrUpdateThought(
   ndb: NetworkDb,
@@ -732,6 +736,7 @@ function insertOrUpdateThought(
   actorUserId: string,
   now: string,
 ): { id: string; action: 'created' | 'updated' | 'reused' } {
+  const marked = markedColumns(t);
   const existing = ndb.prepare('SELECT id FROM thoughts_v WHERE id = ?').get(t.id) as
     | { id: string }
     | undefined;
@@ -742,8 +747,9 @@ function insertOrUpdateThought(
            id, title, title_norm, type_id, icon, icon_kind, active,
            is_protected, is_root, fg_color, bg_color, font_bold, font_italic,
            font_underline, font_strike, font_manual, version, created_at, created_by,
-           updated_at, updated_by
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           updated_at, updated_by, marked_for_deletion, marked_for_deletion_at,
+           marked_for_deletion_by
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         t.id,
@@ -767,6 +773,9 @@ function insertOrUpdateThought(
         actorUserId,
         now,
         actorUserId,
+        marked.flag,
+        marked.at,
+        marked.by,
       );
     return { id: t.id, action: 'created' };
   }
@@ -776,6 +785,7 @@ function insertOrUpdateThought(
          title = ?, title_norm = ?, type_id = ?, icon = ?, icon_kind = ?,
          active = ?, fg_color = ?, bg_color = ?, font_bold = ?, font_italic = ?,
          font_underline = ?, font_strike = ?, font_manual = ?,
+         marked_for_deletion = ?, marked_for_deletion_at = ?, marked_for_deletion_by = ?,
          version = version + 1, updated_at = ?, updated_by = ?
        WHERE id = ?`,
     )
@@ -793,11 +803,31 @@ function insertOrUpdateThought(
       t.font_underline ? 1 : 0,
       t.font_strike ? 1 : 0,
       15, // mark the four font_* fields as manual
+      marked.flag,
+      marked.at,
+      marked.by,
       now,
       actorUserId,
       t.id,
     );
   return { id: t.id, action: 'updated' };
+}
+
+/**
+ * Пометка корзины мысли из манифеста в виде SQL-аргументов. Отсутствие полей
+ * (манифест 1.2, записанный до правки) трактуется как «не помечена» — как у
+ * полок.
+ */
+function markedColumns(t: EtnxManifest['thoughts'][number]): {
+  flag: number;
+  at: string | null;
+  by: string | null;
+} {
+  return {
+    flag: t.marked_for_deletion === true ? 1 : 0,
+    at: t.marked_for_deletion_at ?? null,
+    by: t.marked_for_deletion_by ?? null,
+  };
 }
 
 /**
@@ -812,14 +842,16 @@ function createThoughtForTitleMatch(
   now: string,
 ): { id: string } {
   const newId = randomUUID();
+  const marked = markedColumns(t);
   ndb
     .prepare(
       `INSERT INTO thoughts (
          id, title, title_norm, type_id, icon, icon_kind, active,
          is_protected, is_root, fg_color, bg_color, font_bold, font_italic,
          font_underline, font_strike, font_manual, version, created_at, created_by,
-         updated_at, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         updated_at, updated_by, marked_for_deletion, marked_for_deletion_at,
+         marked_for_deletion_by
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       newId,
@@ -843,6 +875,9 @@ function createThoughtForTitleMatch(
       actorUserId,
       now,
       actorUserId,
+      marked.flag,
+      marked.at,
+      marked.by,
     );
   return { id: newId };
 }
@@ -1099,6 +1134,21 @@ function insertAttachment(
       Number.isNaN(createdMs) ? nowMs : createdMs,
       nowMs,
     );
+}
+
+/**
+ * Есть ли в целевой сети строка вложения с этим id. `attachments.id` —
+ * первичный ключ, поэтому именно он определяет идемпотентность повторного
+ * импорта (ошибка 626f4ff9): при существующей строке физический файл заново
+ * не распаковывается. Читаем физическую таблицу: строка одна на все слои
+ * (13-layers.md §5.3), надгробие слоя её не отменяет.
+ */
+function attachmentRowExists(ndb: NetworkDb, id: string): boolean {
+  return (
+    ndb
+      .prepare('SELECT 1 FROM attachments WHERE id = ? LIMIT 1') // layers:physical-read — строка вложения одна на все слои
+      .get(id) !== undefined
+  );
 }
 
 /** Insert a `comment_targets` row for the primary owner of a chronological comment. */
@@ -1457,6 +1507,7 @@ export function applyManifest(
       chronological_comments_added: 0,
       property_values_set: 0,
       attachments_imported: 0,
+      attachments_skipped: 0,
       publications_created: 0,
       publications_updated: 0,
       shelves_created: 0,
@@ -1659,12 +1710,14 @@ export function applyManifest(
         if (existingId !== undefined) {
           thoughtIdRemap.set(t.id, existingId);
           titleMatchIds.add(normTitle);
+          const marked = markedColumns(t);
           ndb
             .prepare(
               `UPDATE thoughts SET
                  active = ?, icon = ?, icon_kind = ?, fg_color = ?, bg_color = ?,
                  font_bold = ?, font_italic = ?, font_underline = ?, font_strike = ?,
-                 font_manual = ?, version = version + 1, updated_at = ?, updated_by = ?
+                 font_manual = ?, marked_for_deletion = ?, marked_for_deletion_at = ?,
+                 marked_for_deletion_by = ?, version = version + 1, updated_at = ?, updated_by = ?
                WHERE id = ?`,
             )
             .run(
@@ -1678,6 +1731,9 @@ export function applyManifest(
               t.font_underline ? 1 : 0,
               t.font_strike ? 1 : 0,
               15, // font_manual — all four bits set
+              marked.flag,
+              marked.at,
+              marked.by,
               now,
               opts.actorUserId,
               existingId,
@@ -1867,6 +1923,14 @@ export function applyManifest(
       );
     } else
       for (const a of manifest.attachments) {
+        // Идемпотентность повторного импорта: при уже существующей строке
+        // вложения физический файл НЕ распаковывается заново (иначе остаётся
+        // файл-сирота без владельца), а счётчик честно говорит «пропущено»
+        // (ошибка 626f4ff9).
+        if (attachmentRowExists(ndb, a.id)) {
+          summary.attachments_skipped = (summary.attachments_skipped ?? 0) + 1;
+          continue;
+        }
         // Владелец вложения: мысль резолвится через remap импорта; публикация
         // (строка-вложение-обложка, owner_type='publication') сохраняет свой id
         // и должна быть импортирована этим же архивом.
