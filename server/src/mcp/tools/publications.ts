@@ -238,15 +238,23 @@ export function registerPublicationTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Карточка публикации',
       description:
         'Read one publication card (parity with REST GET /publications/{id}): title, subtitle, ' +
-        'summary, authorship, cover, recipes, numbering, active/trash flags, version. Returns ' +
-        '`{ data }`.',
+        'summary, authorship, cover, recipes, numbering, active/trash flags, version, plus full ' +
+        'metadata — `created_by`/`created_at`, `updated_by`/`updated_at` (last editor) and ' +
+        '`assembly_date`. Returns `{ data }`.',
       inputSchema: McpPublicationGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.publications.get'],
     },
     (args) =>
       runTool(() => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        return { data: publicationRef(ndb, args.publication_id) };
+        const publication = getPublication(ndb, args.publication_id);
+        if (publication === null) {
+          throw new EtnError('NOT_FOUND', `publication ${args.publication_id} not found`, {
+            entity: 'publication',
+            id: args.publication_id,
+          });
+        }
+        return { data: publication };
       }),
   );
 

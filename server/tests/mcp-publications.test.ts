@@ -133,8 +133,26 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         const card = (await call(handle.client, 'etn.publications.get', {
           network_id: ctx.networkId,
           publication_id: pubId,
-        })) as { data: { title: string } };
+        })) as {
+          data: {
+            title: string;
+            cover_kind: string;
+            created_by: string;
+            created_at: string;
+            updated_by: string;
+            updated_at: string;
+            assembly_date: string | null;
+          };
+        };
         assert.equal(card.data.title, 'Документ');
+        // Полная карточка (паритет REST GET /publications/{id}): метаданные —
+        // автор/дата создания, последний редактор/дата изменения, дата сборки.
+        assert.equal(card.data.cover_kind, 'none');
+        assert.equal(card.data.created_by, ctx.adminId);
+        assert.ok(card.data.created_at, 'created_at заполнен');
+        assert.equal(card.data.updated_by, ctx.adminId);
+        assert.ok(card.data.updated_at, 'updated_at заполнен');
+        assert.equal(card.data.assembly_date, null);
 
         // --- правка --------------------------------------------------------
         const patched = (await call(handle.client, 'etn.publications.update', {
