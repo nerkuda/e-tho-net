@@ -26,6 +26,10 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* --layer-bg (ошибка f24fbef0): полотно «Публикаций» следует фону активного
+   * слоя, как холст, «Дневник» и «События». Без правила хост был прозрачен и
+   * наследовал фон `body` — смена слоя не была видна. */
+  background: var(--layer-bg, var(--bg));
 }
 
 .pub-toolbar {

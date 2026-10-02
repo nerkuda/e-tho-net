@@ -27,7 +27,7 @@ function ruleBody(css: string, selector: string): string {
   return css.slice(open + 1, close);
 }
 
-describe('layout: хост экрана «Публикации» (fea20bd1)', () => {
+describe('layout: хост экрана «Публикации» (fea20bd1, f24fbef0)', () => {
   it('.publications-host растягивается, как прочие виды', () => {
     const body = ruleBody(CSS, '.publications-host');
     assert.match(
@@ -39,6 +39,15 @@ describe('layout: хост экрана «Публикации» (fea20bd1)', ()
       body,
       /display:\s*flex\s*;/,
       'хост обязан быть flex-контейнером, чтобы внутренний .publications заполнял его',
+    );
+  });
+
+  it('фон полотна следует активному слою (--layer-bg)', () => {
+    const body = ruleBody(CSS, '.publications');
+    assert.match(
+      body,
+      /background:\s*var\(--layer-bg,\s*var\(--bg\)\)\s*;/,
+      'полотно «Публикаций» обязано следовать фону слоя: без правила смена слоя не видна (ошибка f24fbef0)',
     );
   });
 });
