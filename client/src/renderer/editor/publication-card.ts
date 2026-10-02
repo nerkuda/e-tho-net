@@ -92,9 +92,14 @@ export function disposePublicationCard(): void {
   realtimeUnsub?.();
   realtimeUnsub = null;
   instance?.unsub();
-  instance = null;
   if (saveTimer !== null) window.clearTimeout(saveTimer);
   saveTimer = null;
+  // Не теряем отложенные правки при закрытии/смене цели: досылаем их
+  // fire-and-forget ДО обнуления `instance` (ошибка 82aada28). `flushSave`
+  // синхронно забирает `pendingChanges`, поэтому после сброса терять нечего;
+  // поздний `apply` ответа уже no-op (`instance` равен null).
+  if (instance !== null && Object.keys(pendingChanges).length > 0) void flushSave();
+  instance = null;
   pendingChanges = {};
   updaters.length = 0;
   shelvesHostRef = null;
@@ -331,7 +336,14 @@ function buildRecipePane(): HTMLElement {
   const recipeHost = div('pub-card-recipe');
   pane.append(recipeHost);
   let builder: RecipeBuilder | null = null;
-  let lastRecipeKey = '';
+  /**
+   * Любая правка формы рецепта — в отложенное сохранение (ошибка 82aada28):
+   * до этого `title_recipe` из карточки не сохранялся нигде. Колбэк читает
+   * `builder` по ссылке, поэтому назначается до создания билдера.
+   */
+  const onRecipeChange = (): void => {
+    if (builder !== null) queueSave({ title_recipe: builder.getDefinition() });
+  };
 
   const textsHost = div('pub-card-texts');
   const textsError = fieldError('');
@@ -441,10 +453,13 @@ function buildRecipePane(): HTMLElement {
     extrasField?.refresh();
     checkOverlap();
     const recipeKey = JSON.stringify(p.title_recipe ?? null);
-    if (registry !== null && (builder === null || recipeKey !== lastRecipeKey)) {
-      lastRecipeKey = recipeKey;
+    // Пересборка билдера — только при ВНЕШНЕМ изменении определения. Если
+    // пришедшее значение совпадает с состоянием билдера, это эхо собственного
+    // сохранения: пересборка стёрла бы фокус и позицию правки (ошибка 82aada28).
+    const builderKey = builder === null ? null : JSON.stringify(builder.getDefinition());
+    if (registry !== null && (builder === null || recipeKey !== builderKey)) {
       while (recipeHost.firstChild !== null) recipeHost.removeChild(recipeHost.firstChild);
-      builder = buildRecipeBuilder({ registry, initial: p.title_recipe });
+      builder = buildRecipeBuilder({ registry, initial: p.title_recipe, onChange: onRecipeChange });
       recipeHost.append(builder.root);
     }
   });
@@ -616,6 +631,11 @@ async function rebuildPublication(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || instance === null) return;
   try {
+    // Сначала досылаем отложенный отбор (дебаунс 400 мс): иначе сервер
+    // пересоберёт документ по СТАРОЙ строке публикации, а ответ затрёт поля
+    // UI прежними значениями — «нажал, ничего не произошло» (ошибка 82aada28).
+    await flushSave();
+    if (instance === null) return;
     const updated = await etn.publications.rebuild(networkId, instance.publicationId);
     apply(updated);
   } catch (err) {

@@ -106,6 +106,13 @@ export function propertyEntityOptions(rows: readonly PropertyRegistryRow[]): Ent
 export function buildRecipeBuilder(opts: {
   registry: Map<string, NetworkProperty>;
   initial: SavedFilterDefinition | null;
+  /**
+   * Любая правка формы рецепта (единая точка уведомления — `touch`, через неё
+   * проходят изменения всех секций). Карточка публикации по этому сигналу
+   * ставит `title_recipe` в отложенное сохранение; у мастера создания колбэк
+   * не задан — определение забирается вручную на шаге «Создать».
+   */
+  onChange?: () => void;
 }): RecipeBuilder {
   const state: FilterCriteriaState =
     opts.initial !== null ? parseFilterDefinition(opts.initial) : defaultFilterCriteriaState();
@@ -115,6 +122,7 @@ export function buildRecipeBuilder(opts: {
   const sections: FilterSection[] = [];
   const touch = (): void => {
     for (const section of sections) section.refresh();
+    opts.onChange?.();
   };
   const ctx: FilterFormContext = {
     networkId: store.state.networkId ?? '',
