@@ -540,11 +540,17 @@ export function tocLines(
   const counter = new Map<string, number>();
   for (const item of flat) {
     const parent = item.parentThoughtId;
-    if (parent !== null && (hidden.has(parent) || collapsed.has(parent))) {
+    const isHidden = parent !== null && (hidden.has(parent) || collapsed.has(parent));
+    // Счётчик вхождений ведём по ВСЕМ разделам/текстам дерева — до фильтра
+    // свёрнутых ветвей: иначе нумерация якорей расходится с `documentBlocks`,
+    // и видимая строка-повтор, чьё первое вхождение скрыто, получает чистый
+    // anchor и `repeatOf` на саму себя (ошибка 59a17805).
+    const occ = occurrence(counter, item.section.anchor);
+    const textOccs = item.section.texts.map((text) => occurrence(counter, text.anchor));
+    if (isHidden) {
       hidden.add(item.section.thought_id);
       continue;
     }
-    const occ = occurrence(counter, item.section.anchor);
     out.push({
       kind: 'section',
       key: occ.key,
@@ -561,7 +567,7 @@ export function tocLines(
       collapsed: collapsed.has(item.section.thought_id),
     });
     item.section.texts.forEach((text, index) => {
-      const textOcc = occurrence(counter, text.anchor);
+      const textOcc = textOccs[index]!;
       out.push({
         kind: 'text',
         key: textOcc.key,

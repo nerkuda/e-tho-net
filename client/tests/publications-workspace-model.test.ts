@@ -271,4 +271,33 @@ describe('модель рабочей области публикации: по�
     });
     assert.equal(host.children.length, lines.length);
   });
+
+  it('счётчик вхождений считается по всем ветвям — нумерация совпадает с документом (ошибка 59a17805)', () => {
+    // Ветвь A свёрнута: первое вхождение D скрыто, видимым остаётся повтор под B.
+    const asm = makeAssembly(repeatTree());
+    const lines = tocLines(asm, new Set(['A']), (i) => `Текст ${i}`);
+
+    const dRows = lines.filter(
+      (line): line is Extract<typeof line, { kind: 'section' }> =>
+        line.kind === 'section' && line.thoughtId === 'D',
+    );
+    assert.equal(dRows.length, 1, 'D под свёрнутой A скрыт, виден только повтор');
+
+    // `documentBlocks` нумерует по всем вхождениям (свёрнутость на него не влияет):
+    // D под A — чистый `pub-D`, повтор под B — `pub-D-r1`.
+    const docD = documentBlocks(asm, null)
+      .filter(
+        (block): block is Extract<typeof block, { kind: 'section' }> =>
+          block.kind === 'section' && block.thoughtId === 'D',
+      )
+      .map((block) => block.domId);
+    assert.deepEqual(docD, ['pub-D', 'pub-D-r1']);
+
+    assert.equal(dRows[0]!.anchor, docD[1], 'anchor видимого повтора совпадает с документом');
+    assert.equal(dRows[0]!.anchor, 'pub-D-r1');
+    assert.equal(dRows[0]!.repeat, true);
+    // Пометка повтора ведёт к первому вхождению, а не на саму себя.
+    assert.equal(dRows[0]!.repeatOf, 'pub-D');
+    assert.notEqual(dRows[0]!.anchor, dRows[0]!.repeatOf);
+  });
 });
