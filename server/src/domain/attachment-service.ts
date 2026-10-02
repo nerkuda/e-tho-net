@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -353,6 +353,18 @@ export function createAttachmentFile(
 }
 
 /**
+ * `true`, если путь существует и указывает на обычный файл. Каталог (и любой
+ * не-файл) здесь отвергается так же, как несуществующий путь — ошибка 6a95ba12.
+ */
+function isResolvableFile(filePath: string): boolean {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Single attachment-creation entry point for the REST/MCP facades (задача
  * 75c75a2f): ordinary metadata-only creation, or an inline file upload when
  * `data_base64` carries a payload. Both branches delegate to the existing
@@ -361,11 +373,12 @@ export function createAttachmentFile(
  *
  * Throws `VALIDATION_ERROR` (422) when `data_base64` is combined with `kind`
  * other than `'file'` or with fields that only describe a metadata attachment,
- * when a `kind='file'` `file_path` does not resolve on the server (ошибка
- * 5fcb8307 — файл должен быть доступен серверу; клиентский файл передаётся
- * через `data_base64`), plus every error of the underlying primitive (bad
- * base64, oversize, missing `mime_type`); `NOT_FOUND` (404) when the owner does
- * not exist.
+ * when a `kind='file'` `file_path` does not resolve on the server or resolves
+ * to something other than a regular file — a directory included (ошибки
+ * 5fcb8307/6a95ba12: файл должен быть доступен серверу; клиентский файл
+ * передаётся через `data_base64`), plus every error of the underlying
+ * primitive (bad base64, oversize, missing `mime_type`); `NOT_FOUND` (404)
+ * when the owner does not exist.
  */
 export function createAttachmentFromInput(
   ndb: NetworkDb,
@@ -386,6 +399,8 @@ export function createAttachmentFromInput(
     // создавал битое вложение (`mime_type`/`file_size` пусты, файл недоступен).
     // Теперь нерезолвящийся путь — явная ошибка вызова; клиентский файл
     // передаётся содержимым через `data_base64` ({@link createAttachmentFile}).
+    // Ошибка 6a95ba12: путь обязан указывать на обычный файл — каталог проходит
+    // `existsSync`, поэтому используется `isResolvableFile` (`statSync().isFile()`).
     // REST-маршрут `POST …/attachments` вызывает {@link createAttachment}
     // напрямую и сохраняет документированный контракт «ссылка на путь в ОС
     // клиента» (требование a5456b79) — его эта проверка не затрагивает.
@@ -393,13 +408,17 @@ export function createAttachmentFromInput(
       input.kind === 'file' &&
       typeof input.file_path === 'string' &&
       input.file_path.trim() !== '' &&
-      !existsSync(input.file_path)
+      !isResolvableFile(input.file_path)
     ) {
-      throw new EtnError('VALIDATION_ERROR', `файл не найден на сервере: ${input.file_path}`, {
-        field: 'file_path',
-        file_path: input.file_path,
-        hint: 'файл с машины клиента передавайте содержимым в data_base64',
-      });
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `file_path не указывает на файл на сервере: ${input.file_path}`,
+        {
+          field: 'file_path',
+          file_path: input.file_path,
+          hint: 'файл с машины клиента передавайте содержимым в data_base64',
+        },
+      );
     }
     return createAttachment(ndb, ownerType, ownerId, input, actorUserId);
   }

@@ -290,6 +290,34 @@ describe('MCP: загрузка файла в вложение (75c75a2f)', { sk
     }
   });
 
+  it('etn.ops attachments.add: каталог как file_path отвергается (6a95ba12)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // os.tmpdir() существует, но это каталог, а не файл: `existsSync` его
+        // пропускал, поэтому проверка обязана опираться на statSync().isFile().
+        const dir = os.tmpdir();
+        const res = await callOp(handle.client, 'attachments.add', {
+          network_id: ctx.networkId,
+          owner_type: 'thought',
+          owner_id: ctx.homeId,
+          kind: 'file',
+          file_path: dir,
+          mime_type: 'image/png',
+        });
+        assert.equal(res.isError, true, 'каталог должен быть отказом');
+        const text = toolText(res);
+        assert.match(text, /VALIDATION_ERROR/);
+        assert.ok(text.includes(dir), `в деталях должен быть путь: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('etn.ops attachments.add: резолвящийся file_path работает как раньше (5fcb8307)', async () => {
     const ctx = await buildMcpContext();
     const existing = path.join(os.tmpdir(), `etn-file-${randomUUID()}.png`);
