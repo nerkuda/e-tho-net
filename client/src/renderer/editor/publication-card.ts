@@ -52,13 +52,16 @@ import {
 import * as users from '../lib/users.js';
 
 /**
- * Тестовый шов: фабрика markdown-редактора. `createMdEditor` поднимает
- * CodeMirror, которому нужен реальный DOM (`Range`, `getSelection`), — в
- * DOM-шиме клиентских тестов он не исполняется (прецедент — `mdEditorInternals`
- * в `md-editor.ts`). Тест первого открытия карточки подменяет фабрику
- * заглушкой; в продукте значение не меняется.
+ * Тестовый шов: фабрика markdown-редактора и применение данных к карточке.
+ * `createMdEditor` поднимает CodeMirror, которому нужен реальный DOM (`Range`,
+ * `getSelection`), — в DOM-шиме клиентских тестов он не исполняется (прецедент —
+ * `mdEditorInternals` в `md-editor.ts`). Тест первого открытия карточки
+ * подменяет фабрику заглушкой; в продукте значение не меняется. `apply`
+ * выставлен для тестов realtime-обновления резюме: в DOM-шиме ветка «та же
+ * цель — `apply` на месте» в `showPublicationTarget` недостижима (у шима нет
+ * `parentElement`).
  */
-export const publicationCardInternals = { createMdEditor };
+export const publicationCardInternals = { createMdEditor, apply };
 
 /** Что редактор передаёт карточке для отрисовки. */
 export interface PublicationCardHost {
@@ -270,6 +273,10 @@ function buildMetaPane(): HTMLElement {
   const summaryRow = fieldRow({ label: t('publication.field.summary'), control: summaryHost, id: 'pub-card-summary' });
   pane.append(summaryRow);
   let md: MdEditor | null = null;
+  // Последнее серверное значение резюме, с которым редактор синхронизирован
+  // (baseline). Позволяет `apply` перечитывать резюме при realtime-обновлении,
+  // не затирая незавершённый пользовательский ввод (ошибка 6f013e67).
+  let summarySynced = '';
 
   // Дата сборки — readonly; меняется только «Пересобрать».
   const assemblyInput = fieldInput({ id: 'pub-card-assembly' });
@@ -284,13 +291,25 @@ function buildMetaPane(): HTMLElement {
     authorInput.value = p.authorship ?? '';
     coverInput.value = p.cover_url ?? '';
     assemblyInput.value = p.assembly_date === null ? '' : assemblyDateLabel(p.assembly_date);
+    const serverSummary = p.summary_md ?? '';
     if (md === null) {
-      md = publicationCardInternals.createMdEditor(p.summary_md ?? '', {
+      md = publicationCardInternals.createMdEditor(serverSummary, {
         onInput: (value) => queueSave({ summary_md: emptyToNull(value) }),
       });
       summaryHost.append(md.dom);
-    } else if (!suppressFieldEvents) {
-      md.setValue(p.summary_md ?? '');
+      summarySynced = serverSummary;
+    } else {
+      const current = md.getValue();
+      if (current === summarySynced) {
+        // Незавершённого ввода нет — перечитываем серверное резюме.
+        if (current !== serverSummary) md.setValue(serverSummary);
+        summarySynced = serverSummary;
+      } else if (current === serverSummary) {
+        // Ввод совпал с серверным (эхо собственного PATCH) — редактор
+        // не трогаем, но считаем состояние синхронизированным.
+        summarySynced = serverSummary;
+      }
+      // Иначе — расходящийся пользовательский ввод: оставляем его как есть.
     }
   });
   // Первичное наполнение, если данные уже пришли.

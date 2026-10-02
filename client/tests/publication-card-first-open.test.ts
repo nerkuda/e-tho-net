@@ -168,3 +168,69 @@ describe('карточка публикации: первое открытие (
     assert.equal(inputValue(scrollBox, 'pub-card-num-to'), '5', 'нумерация «по»');
   });
 });
+
+describe('карточка публикации: перечитывание резюме при apply (ошибка 6f013e67)', () => {
+  let scrollBox: ShimElement;
+
+  beforeEach(() => {
+    installShim();
+    scrollBox = new ShimElement('div');
+    store.update({ networkId: NETWORK_ID });
+  });
+
+  afterEach(async () => {
+    const mod = await cardModule();
+    mod.disposePublicationCard();
+  });
+
+  /**
+   * Открывает карточку с подменённой фабрикой и возвращает модуль вместе с
+   * захваченным экземпляром редактора резюме. Realtime-обновление применяется
+   * через тестовый шов `apply` — ветка «та же цель — apply на месте» в
+   * `showPublicationTarget` в DOM-шиме недостижима (у шима нет `parentElement`).
+   */
+  async function openCard(summary: string): Promise<{ mod: CardModule; md: MdEditor }> {
+    const mod = await cardModule();
+    let captured: MdEditor | null = null;
+    mod.publicationCardInternals.createMdEditor = (initial: string) => {
+      captured = fakeMdEditor(initial);
+      return captured as never;
+    };
+    const host = { scrollBox: scrollBox as unknown as HTMLElement };
+    mod.showPublicationTarget(host, 'pub-1', publication({ summary_md: summary }));
+    const md = captured as MdEditor | null;
+    assert.ok(md !== null, 'markdown-редактор резюме создан');
+    return { mod, md };
+  }
+
+  it('apply с изменившимся summary_md перечитывает редактор', async () => {
+    const { mod, md } = await openCard('Старое резюме');
+    assert.equal(md.getValue(), 'Старое резюме');
+
+    // Realtime-обновление той же публикации — apply без пересборки карточки.
+    mod.publicationCardInternals.apply(publication({ summary_md: 'Новое резюме' }));
+    assert.equal(md.getValue(), 'Новое резюме', 'резюме перечитано');
+  });
+
+  it('apply не затирает расходящийся пользовательский ввод', async () => {
+    const { mod, md } = await openCard('Серверное');
+
+    // Пользователь начал править резюме — сохранение ещё не прошло.
+    md.setValue('Незавершённый ввод');
+    mod.publicationCardInternals.apply(publication({ summary_md: 'Правка другой сессии' }));
+    assert.equal(md.getValue(), 'Незавершённый ввод', 'пользовательский ввод сохранён');
+  });
+
+  it('эхо собственного сохранения синхронизирует baseline, не ломая дальнейший apply', async () => {
+    const { mod, md } = await openCard('Серверное');
+
+    // Пользователь ввёл текст, PATCH вернул его же в apply (эхо).
+    md.setValue('Мой текст');
+    mod.publicationCardInternals.apply(publication({ summary_md: 'Мой текст' }));
+    assert.equal(md.getValue(), 'Мой текст', 'эхо не перезаписывает');
+
+    // Последующее реальное изменение извне снова перечитывается.
+    mod.publicationCardInternals.apply(publication({ summary_md: 'Изменено извне' }));
+    assert.equal(md.getValue(), 'Изменено извне', 'реальная правка перечитана');
+  });
+});
