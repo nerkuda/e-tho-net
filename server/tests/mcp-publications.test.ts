@@ -470,17 +470,23 @@ describe('MCP-публикации: сквозной сценарий', { skip }
       const handle = await connectMcpClient(mcp, mcp.adminKey);
       try {
         // 1. Обязательный title: оба фасада отвергают вход 422/VALIDATION_ERROR
-        //    (формулировки различаются: REST — каноническая «обязателен»,
-        //    MCP — текст zod-схемы; код и поле совпадают).
+        //    и дают ОДИН канонический текст «title обязателен.» (ошибка
+        //    8577d41d: MCP раньше отдавал текст zod-схемы «должен быть
+        //    строкой.» на отсутствующее поле).
         const restMissing = await restApi('POST', '/publications', {});
         assert.equal(restMissing.statusCode, 422);
+        const restMissingMessage = /title обязателен\./.exec(restMissing.body)?.[0];
+        assert.ok(restMissingMessage, `REST: ожидался канонический текст, факт: ${restMissing.body}`);
         const mcpMissing = await handle.client.callTool({
           name: 'etn.publications.create',
           arguments: { network_id: mcp.networkId },
         });
         assert.equal(mcpMissing.isError, true);
-        assert.match(toolText(mcpMissing), /ETN error \[VALIDATION_ERROR\].*title/s);
-        assert.match(restMissing.body, /title/);
+        assert.match(toolText(mcpMissing), /ETN error \[VALIDATION_ERROR\].*title обязателен\./s);
+        assert.ok(
+          toolText(mcpMissing).includes(restMissingMessage),
+          `MCP и REST дают одинаковый текст «${restMissingMessage}», факт: ${toolText(mcpMissing)}`,
+        );
 
         // 2. Доменное правило обложки: и REST, и MCP — `cover_conflict`.
         const bothCovers = {

@@ -157,4 +157,55 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       await closeWorld(w);
     }
   });
+
+  // Ошибка 8577d41d: MCP на ОТСУТСТВУЮЩЕЕ обязательное поле отдавал текст
+  // zod-схемы («должен быть строкой.»), а REST — каноническую «{key}
+  // обязателен.». Отсутствие поля отличается от неверного типа по сырому
+  // входу (zod 4 убрал признак `received`).
+  it('etn.publications.create ↔ POST /publications: отсутствие title — каноническое «title обязателен.»', async () => {
+    const w = await pairedWorld();
+    try {
+      const restRes = await w.rest.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${w.rest.networkId}/publications`,
+        headers: authHeaders(w.rest),
+        payload: {},
+      });
+      assert.equal(restRes.statusCode, 422);
+      const restErr = restRes.json() as RestError;
+
+      const mcpRes = await w.handle.client.callTool({
+        name: 'etn.publications.create',
+        arguments: { network_id: w.rest.networkId },
+      });
+      assert.equal(mcpRes.isError, true);
+      const mcpErr = mcpErrorParts(toolText(mcpRes));
+      assert.equal(mcpErr.code, restErr.error.code);
+      assert.equal(mcpErr.message, 'title обязателен.');
+      assert.equal(mcpErr.message, restErr.error.message, 'MCP и REST дают одинаковый текст');
+    } finally {
+      await closeWorld(w);
+    }
+  });
+
+  it('etn.layers.select: отсутствие layer_id — «обязателен», неверный тип — прежний текст', async () => {
+    const w = await pairedWorld();
+    try {
+      const missing = await w.handle.client.callTool({
+        name: 'etn.layers.select',
+        arguments: { network_id: w.rest.networkId },
+      });
+      assert.equal(missing.isError, true);
+      assert.equal(mcpErrorParts(toolText(missing)).message, 'layer_id обязателен.');
+
+      const wrongType = await w.handle.client.callTool({
+        name: 'etn.layers.select',
+        arguments: { network_id: w.rest.networkId, layer_id: 123 },
+      });
+      assert.equal(wrongType.isError, true);
+      assert.equal(mcpErrorParts(toolText(wrongType)).message, 'layer_id должен быть строкой.');
+    } finally {
+      await closeWorld(w);
+    }
+  });
 });

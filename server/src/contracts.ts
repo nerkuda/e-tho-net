@@ -246,6 +246,35 @@ function firstIssue(error: z.ZodError): ZodIssueLike {
   return issue ?? (error.issues[0] as unknown as ZodIssueLike);
 }
 
+/**
+ * Отсутствует ли значение по пути issue во входе. zod 4 больше не кладёт в
+ * issue признак `received` (в zod 3 отсутствие поля давало
+ * `received === 'undefined'`), поэтому «обязательное поле не передано»
+ * отличаем от «передан неверный тип» по сырому входу: `undefined` на любом
+ * шаге пути означает, что поля нет. `input === undefined` (вызывающий не
+ * передал вход) — не считаем отсутствием, поведение прежнее.
+ */
+function isAbsentIn(input: unknown, path: unknown): boolean {
+  if (input === undefined) return false;
+  const parts = Array.isArray(path)
+    ? path.filter((p): p is string | number => typeof p === 'string' || typeof p === 'number')
+    : [];
+  if (parts.length === 0) return false;
+  let cur: unknown = input;
+  for (const part of parts) {
+    if (cur === null || typeof cur !== 'object') return true;
+    if (Array.isArray(cur)) {
+      if (typeof part !== 'number' || part < 0 || part >= cur.length) return true;
+      cur = cur[part];
+    } else {
+      const obj = cur as Record<string, unknown>;
+      if (obj[String(part)] === undefined) return true;
+      cur = obj[String(part)];
+    }
+  }
+  return false;
+}
+
 /** Поле, к которому относится issue: путь ошибки (для вложенных — `a.b.0`),
  *  для пустого пути (union/enum) — ключ карты rest. */
 function issueKey(fallback: string, issue: ZodIssueLike): string {
@@ -277,7 +306,9 @@ function issueDetails(key: string, issue: ZodIssueLike, allowedKeys?: string[]):
  * Каноническое сообщение ошибки поля. Совпадает у обоих фасадов; по умолчанию
  * — русский wire-стиль REST-слоя, переопределяется `spec.msg` (шаблон
  * подставляется с ключом объявленного поля `specKey`, путь ошибки — для
- * значений по умолчанию и деталей).
+ * значений по умолчанию и деталей). `input` — исходное значение/объект,
+ * проверенный zod-схемой: по нему отличаем «обязательное поле отсутствует»
+ * («{key} обязателен.», как в REST) от «передан неверный тип».
  */
 export function messageForIssue(
   specKey: string,
@@ -285,6 +316,7 @@ export function messageForIssue(
   spec: RestFieldSpec | undefined,
   field: ZodType | undefined,
   issue: ZodIssueLike,
+  input?: unknown,
 ): string {
   const specVars: Record<string, string | number | bigint> = { key: specKey };
   const vars: Record<string, string | number | bigint> = { key: pathKey };
@@ -292,7 +324,7 @@ export function messageForIssue(
     return issue.message;
   }
   if (issue.code === 'invalid_type') {
-    if (issue.received === 'undefined') {
+    if (isAbsentIn(input, issue.path)) {
       return template(spec?.msg ?? '{key} обязателен.', specVars);
     }
     const nulls = field !== undefined && field.safeParse(null).success;
@@ -478,7 +510,7 @@ export function parseRest<S extends z.ZodObject>(
       if (!res.success) {
         const issue = firstIssue(res.error);
         const fieldKey = issueKey(key, issue);
-        throw fieldError(requestId, fieldKey, messageForIssue(key, fieldKey, spec, field, issue), issueDetails(fieldKey, issue));
+        throw fieldError(requestId, fieldKey, messageForIssue(key, fieldKey, spec, field, issue, value), issueDetails(fieldKey, issue));
       }
       value = res.data;
     }
@@ -522,7 +554,7 @@ export function parseRest<S extends z.ZodObject>(
       ...Object.keys(contract.schema.shape),
       ...Object.keys(contract.rest),
     ].filter((k, i, arr) => arr.indexOf(k) === i);
-    throw fieldError(requestId, fieldKey, messageForIssue(fieldKey, fieldKey, spec, undefined, issue), issueDetails(fieldKey, issue, allowedKeys));
+    throw fieldError(requestId, fieldKey, messageForIssue(fieldKey, fieldKey, spec, undefined, issue, merged), issueDetails(fieldKey, issue, allowedKeys));
   }
   // Возвращается `out`, а не `res.data`: схема отбрасывает неизвестные поля,
   // а в REST-карте бывают поля вне схемы (например, `colors` у слоёв).
@@ -548,7 +580,7 @@ export function mcpValidationError(contract: OperationContract, args: unknown): 
   const shape = contract.schema.shape as Record<string, ZodType>;
   return new EtnError(
     'VALIDATION_ERROR',
-    messageForIssue(fieldKey, fieldKey, spec, shape[fieldKey], issue),
+    messageForIssue(fieldKey, fieldKey, spec, shape[fieldKey], issue, args),
     issueDetails(fieldKey, issue),
   );
 }
