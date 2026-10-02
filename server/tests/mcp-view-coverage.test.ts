@@ -18,6 +18,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
@@ -362,11 +366,15 @@ describe('etn.attachments.add: значения kind (стандарт view-по
 }, () => {
   it('etn.attachments.add: каждое значение kind (url/file) создаёт вложение', async () => {
     const ctx = await buildMcpContext();
+    const tmpFile = path.join(os.tmpdir(), `etn-view-coverage-${randomUUID()}.pdf`);
+    writeFileSync(tmpFile, 'pdf');
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const url = 'https://example.test/view-coverage.pdf';
-        const filePath = 'C:/tmp/etn-view-coverage.pdf';
+        // Ошибка 5fcb8307: `file_path` в MCP обязан резолвиться на сервере —
+        // берём реально существующий временный файл.
+        const filePath = tmpFile;
 
         for (const value of ['url', 'file'] as const) {
           const created = toolJson<{ id: string }>(
@@ -397,6 +405,7 @@ describe('etn.attachments.add: значения kind (стандарт view-по
         await handle.close();
       }
     } finally {
+      rmSync(tmpFile, { force: true });
       await closeMcpContext(ctx);
     }
   });

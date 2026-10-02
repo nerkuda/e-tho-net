@@ -217,7 +217,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
         desc: '`url` (тогда `url`) | `file` (тогда `file_path` ИЛИ `mime_type`+`data_base64`)',
       },
       { name: 'url', desc: 'URL для kind=url' },
-      { name: 'file_path', desc: 'путь к файлу для kind=file (машина сервера)' },
+      { name: 'file_path', desc: 'путь к файлу для kind=file (машина сервера; нерезолвящийся путь — `VALIDATION_ERROR`, для файла с машины клиента передайте `data_base64`)' },
       { name: 'mime_type', desc: 'MIME-тип данных файла — обязателен вместе с `data_base64`' },
       {
         name: 'data_base64',
@@ -231,7 +231,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     effects:
       'создаёт вложение, событие `attachment.created`. С `data_base64` файл сохраняется в каталог вложений сети (рядом с БД) — паритет с REST `POST /attachments/file`.',
     errors:
-      '`VALIDATION_ERROR` (в т.ч. неверный/пустой base64, превышение лимита 10 МиБ, отсутствие `mime_type`, `data_base64` вне `kind=file`), `NOT_FOUND`.',
+      '`VALIDATION_ERROR` (в т.ч. неверный/пустой base64, превышение лимита 10 МиБ, отсутствие `mime_type`, `data_base64` вне `kind=file`, нерезолвящийся на сервере `file_path`), `NOT_FOUND`.',
     paramsContract: AttachmentsAdd,
   },
   {

@@ -361,8 +361,11 @@ export function createAttachmentFile(
  *
  * Throws `VALIDATION_ERROR` (422) when `data_base64` is combined with `kind`
  * other than `'file'` or with fields that only describe a metadata attachment,
- * plus every error of the underlying primitive (bad base64, oversize, missing
- * `mime_type`); `NOT_FOUND` (404) when the owner does not exist.
+ * when a `kind='file'` `file_path` does not resolve on the server (ошибка
+ * 5fcb8307 — файл должен быть доступен серверу; клиентский файл передаётся
+ * через `data_base64`), plus every error of the underlying primitive (bad
+ * base64, oversize, missing `mime_type`); `NOT_FOUND` (404) when the owner does
+ * not exist.
  */
 export function createAttachmentFromInput(
   ndb: NetworkDb,
@@ -376,6 +379,28 @@ export function createAttachmentFromInput(
     input.data_base64 !== null &&
     input.data_base64.trim() !== '';
   if (!hasData) {
+    // Ошибка 5fcb8307: `file_path` — путь в файловой системе СЕРВЕРА. Этот
+    // диспетчер обслуживает внешние MCP-вызовы (`etn.ops attachments.add` и
+    // `attachments[]` в `etn.thoughts.write`); агент работает с удалённым
+    // сервером, его локальный путь там не резолвится — раньше вызов молча
+    // создавал битое вложение (`mime_type`/`file_size` пусты, файл недоступен).
+    // Теперь нерезолвящийся путь — явная ошибка вызова; клиентский файл
+    // передаётся содержимым через `data_base64` ({@link createAttachmentFile}).
+    // REST-маршрут `POST …/attachments` вызывает {@link createAttachment}
+    // напрямую и сохраняет документированный контракт «ссылка на путь в ОС
+    // клиента» (требование a5456b79) — его эта проверка не затрагивает.
+    if (
+      input.kind === 'file' &&
+      typeof input.file_path === 'string' &&
+      input.file_path.trim() !== '' &&
+      !existsSync(input.file_path)
+    ) {
+      throw new EtnError('VALIDATION_ERROR', `файл не найден на сервере: ${input.file_path}`, {
+        field: 'file_path',
+        file_path: input.file_path,
+        hint: 'файл с машины клиента передавайте содержимым в data_base64',
+      });
+    }
     return createAttachment(ndb, ownerType, ownerId, input, actorUserId);
   }
   if (input.kind !== 'file') {
