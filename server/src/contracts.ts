@@ -4444,6 +4444,13 @@ export const McpPublicationCandidates = defineContract(
   RestPublicationCandidates.rest,
 );
 
+/** MCP `etn.publications.accept` = REST `POST /publications/{id}/candidates/accept`. */
+export const McpPublicationAccept = defineContract(
+  'etn.publications.accept',
+  RestPublicationCandidateAccept.schema,
+  RestPublicationCandidateAccept.rest,
+);
+
 /** MCP `etn.publications.usage` = REST `GET /thoughts/{id}/publications`. */
 export const McpPublicationUsage = defineContract(
   'etn.publications.usage',

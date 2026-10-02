@@ -31,7 +31,9 @@ import {
   buildSectionTree,
   listPublicationCandidates,
   listPublicationUsage,
+  publicationMembershipCache,
   PublicationMembershipCache,
+  resetPublicationMembershipCache,
 } from '../src/domain/publication-assembly-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
@@ -570,6 +572,26 @@ describe('publication-assembly-service: кандидаты (временная �
     }
   });
 
+  it('кандидат несёт путь в дереве (breadcrumbs) — элемент интерфейса 43ec961f', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const a = seedThought(ndb, 'A', type.id);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      // b — корень, c — вложенный в a (a принята при создании).
+      const b = seedThought(ndb, 'B', type.id);
+      const c = seedThought(ndb, 'C', type.id);
+      seedUntypedLink(ndb, a, c, 0);
+
+      const items = listPublicationCandidates(ndb, pub.id, USER).items;
+      const byId = new Map(items.map((i) => [i.thought_id, i]));
+      assert.deepEqual(byId.get(b)?.breadcrumbs, ['B']);
+      assert.deepEqual(byId.get(c)?.breadcrumbs, ['A', 'C']);
+    } finally {
+      ndb.close();
+    }
+  });
+
   it('неинициализированный срез (импорт/legacy) кандидатов не даёт', () => {
     const ndb = createInMemoryNetworkDb();
     try {
@@ -698,6 +720,56 @@ describe('publication-assembly-service: кеш членства с дебаун�
     clock += 500; // за окном — пересчёт
     assert.equal(cache.getCandidates('k', compute).total, 2);
     assert.equal(calls, 2);
+  });
+
+  it('фасад кандидатов использует кеш; мутация публикации его сбрасывает', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      resetPublicationMembershipCache();
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      const x = seedThought(ndb, 'X', type.id);
+      seedThought(ndb, 'Y', type.id);
+      const cached = (): number =>
+        listPublicationCandidates(ndb, pub.id, USER, { cache: publicationMembershipCache }).total;
+      assert.equal(cached(), 2);
+
+      // Изменение мыслей — НЕ мутация публикации: в окне кеш отдаёт прежний счётчик
+      // (ADR 7adf7778: индекс членства хуками записи мыслей не поддерживается).
+      seedThought(ndb, 'Z', type.id);
+      assert.equal(cached(), 2, 'внутри окна дебаунса — кешированный счётчик');
+      resetPublicationMembershipCache();
+      assert.equal(cached(), 3, 'после окна/сброса — свежий счётчик');
+
+      // Сохранение порядка — мутация публикации: кеш сброшен, все текущие приняты.
+      setPublicationOrder(ndb, pub.id, [{ node_key: x, position: 1 }], USER);
+      assert.equal(cached(), 0);
+    } finally {
+      resetPublicationMembershipCache();
+      ndb.close();
+    }
+  });
+
+  it('«расставить» и «скрыть» сбрасывают кеш кандидатов', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      resetPublicationMembershipCache();
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      const x = seedThought(ndb, 'X', type.id);
+      const y = seedThought(ndb, 'Y', type.id);
+      const cached = (): number =>
+        listPublicationCandidates(ndb, pub.id, USER, { cache: publicationMembershipCache }).total;
+      assert.equal(cached(), 2);
+
+      acceptPublicationCandidate(ndb, pub.id, x, USER);
+      assert.equal(cached(), 1, '«расставить» сбросил кеш');
+      addPublicationExclusion(ndb, pub.id, y, USER);
+      assert.equal(cached(), 0, '«скрыть» сбросил кеш');
+    } finally {
+      resetPublicationMembershipCache();
+      ndb.close();
+    }
   });
 });
 

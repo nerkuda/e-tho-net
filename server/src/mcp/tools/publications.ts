@@ -68,10 +68,12 @@ import {
   updateShelf,
 } from '../../domain/publication-service.js';
 import {
+  acceptPublicationCandidate,
   assemblePublication,
   buildPublicationExportDocument,
   listPublicationCandidates,
   listPublicationUsage,
+  publicationMembershipCache,
 } from '../../domain/publication-assembly-service.js';
 import {
   buildPublicationArtifact,
@@ -80,6 +82,7 @@ import {
   publicationSlug,
 } from '../../domain/publication-export-service.js';
 import {
+  McpPublicationAccept,
   McpPublicationAssembly,
   McpPublicationCandidates,
   McpPublicationCreate,
@@ -272,9 +275,11 @@ export function registerPublicationTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Новые кандидаты публикации',
       description:
         'New candidates of a publication (parity with REST GET /publications/{id}/candidates): ' +
-        'thoughts matching the title recipe but not yet in the assembled tree, with `limit`/' +
-        '`offset`. Literal domain semantics — returns exactly what the domain computes. ' +
-        'Returns `{ data }` with `items`, `total`, `limit`, `offset`, `has_more`.',
+        'recipe-matching thoughts that entered the selection AFTER the last accepted state ' +
+        '(temporal semantics, task e754527d) and are not excluded. `breadcrumbs` — the section ' +
+        'path in the assembled tree. Paginated with `limit`/`offset`; the debounced membership ' +
+        'cache is used. Returns `{ data }` with `items` (thought_id, title, type_id, breadcrumbs), ' +
+        '`total`, `limit`, `offset`, `has_more`.',
       inputSchema: McpPublicationCandidates.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.publications.candidates'],
     },
@@ -287,8 +292,59 @@ export function registerPublicationTools(mcp: McpServer, rt: McpRuntime): void {
           ...(args.include_excluded !== undefined
             ? { include_excluded: args.include_excluded }
             : {}),
+          cache: publicationMembershipCache,
         });
         return { data };
+      }),
+  );
+
+  mcp.registerTool(
+    'etn.publications.accept',
+    {
+      title: 'Расставить кандидата публикации',
+      description:
+        'Accept one publication candidate (parity with REST POST /publications/{id}' +
+        '/candidates/accept): extinguishes it individually (adds it to the accepted state, so it ' +
+        'is no longer a candidate) and appends its node at the END of the local order. Other ' +
+        'candidates stay. Idempotent. Returns `{ items }` — the updated order.',
+      inputSchema: McpPublicationAccept.schema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.publications.accept'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        const order = runWrite(ndb, fx, () => {
+          const items = acceptPublicationCandidate(
+            ndb,
+            args.publication_id,
+            args.thought_id,
+            rt.deps.auth.userId,
+          );
+          const snapshot = publicationRef(ndb, args.publication_id);
+          return {
+            result: items,
+            // Пишется строка порядка — событие то же, что у перестановки.
+            events: [
+              {
+                type: 'publication.order.reordered' as const,
+                data: { publication_id: args.publication_id, items },
+              },
+            ],
+            activity: [
+              { kind: 'publication' as const, action: 'updated' as const, publication: snapshot },
+            ],
+            audit: {
+              action: 'etn.publications.accept',
+              targetType: 'publication',
+              targetId: args.publication_id,
+              details: { thought_id: args.thought_id },
+            },
+          };
+        });
+        return { items: order, request_id: String(extra.requestId) };
       }),
   );
 
@@ -313,6 +369,7 @@ export function registerPublicationTools(mcp: McpServer, rt: McpRuntime): void {
           ...(args.publication_limit !== undefined
             ? { publication_limit: args.publication_limit }
             : {}),
+          cache: publicationMembershipCache,
         });
         return { data };
       }),

@@ -187,13 +187,39 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         })) as { exclusions: Array<{ thought_id: string }> };
         assert.deepEqual(included.exclusions, []);
 
-        // --- кандидаты (буквальная семантика домена) ----------------------
+        // --- кандидаты: временная семантика и «расставить» ----------------
+        // Новая мысль под рецепт вошла в отбор позже принятого состояния.
+        const c = seedThought(ndb, 'Раздел C', type.id, ctx.adminId);
         const candidates = (await call(handle.client, 'etn.publications.candidates', {
           network_id: ctx.networkId,
           publication_id: pubId,
-        })) as { data: { items: unknown[]; total: number; limit: number; offset: number; has_more: boolean } };
-        assert.ok(Array.isArray(candidates.data.items));
-        assert.equal(typeof candidates.data.total, 'number');
+        })) as {
+          data: {
+            items: Array<{ thought_id: string; title: string; breadcrumbs: string[] }>;
+            total: number;
+            limit: number;
+            offset: number;
+            has_more: boolean;
+          };
+        };
+        assert.equal(candidates.data.total, 1);
+        assert.equal(candidates.data.items[0]?.thought_id, c);
+        // «Путь в дереве после вставки» (элемент интерфейса 43ec961f).
+        assert.deepEqual(candidates.data.items[0]?.breadcrumbs, ['Раздел C']);
+
+        // MCP-двойник «расставить»: гасит кандидата и ставит его в конец порядка.
+        const accepted = (await call(handle.client, 'etn.publications.accept', {
+          network_id: ctx.networkId,
+          publication_id: pubId,
+          thought_id: c,
+        })) as { items: Array<{ node_key: string }> };
+        assert.equal(accepted.items[accepted.items.length - 1]?.node_key, c);
+        const afterAccept = (await call(handle.client, 'etn.publications.candidates', {
+          network_id: ctx.networkId,
+          publication_id: pubId,
+        })) as { data: { total: number } };
+        // Кеш сброшен мутацией, счётчик свежий.
+        assert.equal(afterAccept.data.total, 0);
 
         // --- использование мысли ------------------------------------------
         const usage = (await call(handle.client, 'etn.publications.usage', {

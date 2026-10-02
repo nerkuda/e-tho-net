@@ -26,6 +26,7 @@ import type { RawData } from 'ws';
 import { BASE_LAYER_ID } from '@etn/shared';
 
 import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { resetPublicationMembershipCache } from '../src/domain/publication-assembly-service.js';
 import { createLayer, setSessionLayer } from '../src/domain/layer-service.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import {
@@ -359,9 +360,12 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
       // При создании всё отобранное принято — плашки нет.
       assert.equal(await total(), 0);
 
-      // Новые мысли под отбор — кандидаты.
+      // Новые мысли под отбор — кандидаты. Изменение мыслей — не мутация
+      // публикации, кеш явно не сбрасывается (TTL по ADR 7adf7778), поэтому
+      // для проверки «появления» сбрасываем окно дебаунса вручную.
       const b = seedThought(ctx.ndb, 'Раздел B', type.id, ctx.adminId);
       const d = seedThought(ctx.ndb, 'Раздел C', type.id, ctx.adminId);
+      resetPublicationMembershipCache();
       assert.equal(await total(), 2);
 
       // «расставить» b гасит его индивидуально, d остаётся.

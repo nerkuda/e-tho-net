@@ -681,7 +681,13 @@ export function mountPublicationWorkspace(
     const list = div('pub-cand-list');
     for (const item of candidates.items) {
       const row = div('pub-cand-row');
-      row.append(span(item.title, 'pub-cand-title'));
+      const text = div('pub-cand-text');
+      text.append(span(item.title, 'pub-cand-title'));
+      // «Путь в дереве после вставки» (спека 43ec961f): заголовки разделов от корня.
+      if (item.breadcrumbs.length > 0) {
+        text.append(span(item.breadcrumbs.join(' / '), 'pub-cand-path'));
+      }
+      row.append(text);
       const place = uiButton({
         label: t('publications.ws.place'),
         role: 'ghost',

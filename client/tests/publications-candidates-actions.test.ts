@@ -46,6 +46,10 @@ describe('публикации: действия плашки кандидато
       /setExcluded\(item\.thought_id, true\)/.test(source),
       'действие «скрыть» использует существующее исключение (setExcluded)',
     );
+    assert.ok(
+      source.includes('item.breadcrumbs'),
+      'в строке кандидата отображается путь в дереве (breadcrumbs, спека 43ec961f)',
+    );
   });
 
   it('мост preload пробрасывает publications.acceptCandidate', () => {

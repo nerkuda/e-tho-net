@@ -308,6 +308,12 @@ export interface PublicationCandidate {
   thought_id: string;
   title: string;
   type_id: string | null;
+  /**
+   * Путь в дереве сборки (заголовки разделов от корня до самого кандидата) —
+   * «путь в дереве после вставки» элемента интерфейса 43ec961f. Пусто, если
+   * кандидат в дерево не попадает (недостижимый раздел).
+   */
+  breadcrumbs: string[];
 }
 
 /** Ответ `GET /publications/{id}/candidates` (лимит + усечение, не ошибка). */

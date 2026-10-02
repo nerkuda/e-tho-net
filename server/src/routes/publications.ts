@@ -80,6 +80,7 @@ import {
   assemblePublication,
   listPublicationCandidates,
   listPublicationUsage,
+  publicationMembershipCache,
 } from '../domain/publication-assembly-service.js';
 import {
   startPublicationBatchExportJob,
@@ -570,6 +571,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
             ...(input.include_excluded !== undefined
               ? { include_excluded: input.include_excluded }
               : {}),
+            cache: publicationMembershipCache,
           },
         );
         sendSuccess(reply, candidates);
@@ -624,6 +626,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           ...(input.publication_limit !== undefined
             ? { publication_limit: input.publication_limit }
             : {}),
+          cache: publicationMembershipCache,
         });
         sendSuccess(reply, usage);
       },

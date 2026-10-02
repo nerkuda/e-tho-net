@@ -48,6 +48,7 @@ import {
 } from '../db/publication-id.js';
 import { listPublicationHoldingLayers } from './holding-layers.js';
 import { removeStoredFile, storedFileInUse } from './attachment-service.js';
+import { invalidatePublicationMembershipCache } from './publication-membership-cache.js';
 import { selectRecipeIds } from './publication-recipe.js';
 import {
   numberingRangeInvalid,
@@ -517,6 +518,7 @@ export function createPublication(
         now,
         actorUserId,
       );
+    invalidatePublicationMembershipCache(id);
     return getPublicationOrThrow(ndb, id);
   });
 }
@@ -566,6 +568,7 @@ export function updatePublication(
         id,
         ndb.layerId,
       );
+    invalidatePublicationMembershipCache(id);
     return getPublicationOrThrow(ndb, id);
   });
 }
@@ -608,6 +611,7 @@ export function rebuildPublication(
     for (const row of dead) {
       deleteRowLayered(ndb, 'publication_order', row.id);
     }
+    invalidatePublicationMembershipCache(id);
     return { publication: getPublicationOrThrow(ndb, id), pruned_order_rows: dead.length };
   });
 }
@@ -652,6 +656,7 @@ function markPublicationTrashed(
         )
         .run(now, actorUserId, id, ndb.layerId);
     }
+    invalidatePublicationMembershipCache(id);
     return getPublicationOrThrow(ndb, id);
   });
 }
@@ -753,6 +758,7 @@ export function purgePublication(ndb: NetworkDb, id: string): void {
         removeStoredFile(ndb, 'file', a.file_path);
       }
     }
+    invalidatePublicationMembershipCache(id);
 
     // Строки состава полок удалены каскадом — «полки не блокируют удаление».
   });
@@ -892,6 +898,7 @@ export function setPublicationOrder(
     getPublicationOrThrow(ndb, publicationId);
     applyPublicationOrder(ndb, publicationId, items, actorUserId);
     acceptCurrentSelection(ndb, publicationId, actorUserId);
+    invalidatePublicationMembershipCache(publicationId);
     return listPublicationOrder(ndb, publicationId);
   });
 }
@@ -914,6 +921,7 @@ export function appendPublicationOrderItem(
       0,
     );
     applyPublicationOrder(ndb, publicationId, [{ node_key: nodeKey, position: maxPosition + 1 }], actorUserId);
+    invalidatePublicationMembershipCache(publicationId);
     return listPublicationOrder(ndb, publicationId);
   });
 }
@@ -960,6 +968,7 @@ export function addPublicationExclusion(
         )
         .run(id, ndb.layerId, publicationId, thoughtId, now, actorUserId);
     }
+    invalidatePublicationMembershipCache(publicationId);
     return listPublicationExclusions(ndb, publicationId);
   });
 }
@@ -979,6 +988,7 @@ export function removePublicationExclusion(
     if (visible !== undefined) {
       deleteRowLayered(ndb, 'publication_exclusions', id);
     }
+    invalidatePublicationMembershipCache(publicationId);
     return listPublicationExclusions(ndb, publicationId);
   });
 }

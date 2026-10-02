@@ -105,9 +105,6 @@ export const PUBLICATION_USAGE_MAX_LIMIT = 100;
 /** Сколько публикаций слоя просматривается для расчёта использования мысли. */
 export const PUBLICATION_USAGE_MAX_PUBLICATIONS = 100;
 
-/** Окно дебаунса серверного кеша членства (мс). */
-export const PUBLICATION_MEMBERSHIP_DEBOUNCE_MS = 400;
-
 // ---------------------------------------------------------------------------
 // Внутренние типы
 // ---------------------------------------------------------------------------
@@ -1163,10 +1160,22 @@ export function listPublicationCandidates(
     const ids = doc.candidateIds;
     const pageIds = ids.slice(offset, offset + limit);
     const meta = loadThoughtMeta(ndb, pageIds);
+    // «Путь в дереве после вставки» (элемент интерфейса 43ec961f): заголовки
+    // разделов от корня до кандидата. Кандидат живёт в дереве живой сборки;
+    // недостижимый (кольцо) пути не имеет — пустой список.
+    const pathByCandidate = new Map<string, string[]>();
+    const pathIds = new Set<string>();
+    for (const id of pageIds) {
+      const path = findSectionPath(doc.tree, id) ?? [];
+      pathByCandidate.set(id, path);
+      for (const pid of path) pathIds.add(pid);
+    }
+    const pathMeta = pathIds.size > 0 ? loadThoughtMeta(ndb, [...pathIds]) : meta;
     const items: PublicationCandidate[] = pageIds.map((id) => ({
       thought_id: id,
       title: meta.get(id)?.title ?? '',
       type_id: meta.get(id)?.type_id ?? null,
+      breadcrumbs: (pathByCandidate.get(id) ?? []).map((pid) => pathMeta.get(pid)?.title ?? ''),
     }));
     return {
       items,
@@ -1380,81 +1389,20 @@ export function listPublicationUsage(
 // Кеш членства с дебаунсом (ADR 7adf7778)
 // ---------------------------------------------------------------------------
 
-interface CacheEntry<T> {
-  value: T;
-  at: number;
-}
+// Кеш вынесен в отдельный модуль (его импортирует и CRUD публикаций ради
+// инвалидации на мутации — так разорван цикл доменов). Здесь — реэкспорт,
+// чтобы фасады/тесты по-прежнему брали его из сборки.
+import {
+  candidatesCacheKey,
+  usageCacheKey,
+  type PublicationMembershipCache,
+} from './publication-membership-cache.js';
 
-/**
- * Кеш ленивых вычислений членства (кандидаты/использование) с окном дебаунса:
- * повторный вызов для того же ключа внутри окна отдаёт прежний результат, не
- * исполняя рецепты заново. Один экземпляр на процесс; в тестах сбрасывается
- * {@link resetPublicationMembershipCache}.
- */
-export class PublicationMembershipCache {
-  private readonly candidates = new Map<string, CacheEntry<PublicationCandidatesResult>>();
-  private readonly usage = new Map<string, CacheEntry<PublicationUsageResult>>();
-
-  constructor(
-    private readonly windowMs: number = PUBLICATION_MEMBERSHIP_DEBOUNCE_MS,
-    private readonly now: () => number = () => Date.now(),
-  ) {}
-
-  /** Кандидаты с кешем (ключ — публикация + слой + параметры). */
-  getCandidates(
-    key: string,
-    compute: () => PublicationCandidatesResult,
-  ): PublicationCandidatesResult {
-    return this.through(this.candidates, key, compute);
-  }
-
-  /** Использование с кешем (ключ — мысль + слой + параметры). */
-  getUsage(key: string, compute: () => PublicationUsageResult): PublicationUsageResult {
-    return this.through(this.usage, key, compute);
-  }
-
-  private through<T>(store: Map<string, CacheEntry<T>>, key: string, compute: () => T): T {
-    const entry = store.get(key);
-    const now = this.now();
-    if (entry !== undefined && now - entry.at < this.windowMs) return entry.value;
-    const value = compute();
-    store.set(key, { value, at: now });
-    return value;
-  }
-
-  /** Полный сброс (тесты, смена слоя). */
-  clear(): void {
-    this.candidates.clear();
-    this.usage.clear();
-  }
-}
-
-/** Процессный кеш членства. */
-export const publicationMembershipCache = new PublicationMembershipCache();
-
-/** Сбросить процессный кеш членства (тесты). */
-export function resetPublicationMembershipCache(): void {
-  publicationMembershipCache.clear();
-}
-
-/** Ключ кеша кандидатов. */
-export function candidatesCacheKey(
-  publicationId: string,
-  layerId: string,
-  includeExcluded: boolean,
-  limit: number,
-  offset: number,
-): string {
-  return `candidates:${publicationId}:${layerId}:${includeExcluded ? 1 : 0}:${limit}:${offset}`;
-}
-
-/** Ключ кеша использования. */
-export function usageCacheKey(
-  thoughtId: string,
-  layerId: string,
-  limit: number,
-  offset: number,
-  pubLimit: number,
-): string {
-  return `usage:${thoughtId}:${layerId}:${limit}:${offset}:${pubLimit}`;
-}
+export {
+  candidatesCacheKey,
+  publicationMembershipCache,
+  PUBLICATION_MEMBERSHIP_DEBOUNCE_MS,
+  PublicationMembershipCache,
+  resetPublicationMembershipCache,
+  usageCacheKey,
+} from './publication-membership-cache.js';
