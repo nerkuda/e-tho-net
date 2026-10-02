@@ -665,6 +665,10 @@ export const ru = {
   'publications.new': 'Публикация',
   /** Кнопка создания полки. */
   'publications.newShelf': 'Полка',
+  /** Подсказка кнопки создания полки (задача 55ee3c85). */
+  'publications.newShelfHint': 'Создать новую полку',
+  /** Подсказка кнопки создания публикации (задача 55ee3c85). */
+  'publications.newHint': 'Создать публикацию мастером',
   /** Заголовок диалога создания полки (ошибка 87ad669a). */
   'publications.shelf.create': 'Новая полка',
   /** Подпись поля имени новой полки. */
@@ -677,6 +681,8 @@ export const ru = {
   'publications.view.list': 'Список',
   /** Подпись кнопки сортировки. */
   'publications.sort': 'Сортировка',
+  /** Подсказка сортировки: что именно сортируется (задача 55ee3c85). */
+  'publications.sort.hint': 'Сортировать публикации внутри полок; порядок самих полок — свой',
   'publications.sort.manual': 'Вручную',
   'publications.sort.title': 'По названию',
   'publications.sort.date': 'По дате сборки',
@@ -716,6 +722,8 @@ export const ru = {
   'publications.menu.delete': 'Удалить',
   /** Контекстное меню полки и inline-переименование. */
   'publications.shelf.rename': 'Переименовать полку',
+  /** Команда меню полки: создать публикацию с предвыбранной полкой (задача 55ee3c85). */
+  'publications.menu.addPublication': 'Добавить публикацию',
   /** Диалог удаления публикации/полки (задача 00160da1). */
   'publications.delete.publicationTitle': 'Удаление публикации «%1»',
   'publications.delete.shelfTitle': 'Удаление полки «%1»',
@@ -732,6 +740,8 @@ export const ru = {
   'publications.wizard.fTitle': 'Название',
   'publications.wizard.fSubtitle': 'Подзаголовок',
   'publications.wizard.fAuthor': 'Автор',
+  'publications.wizard.fShelf': 'Полка',
+  'publications.wizard.noShelf': 'Без полки',
   'publications.wizard.fTextsHint':
     'Комментарии мыслей этих свойств образуют текст раздела. Шаг можно пропустить.',
   'publications.wizard.titleRequired': 'Укажите название публикации.',

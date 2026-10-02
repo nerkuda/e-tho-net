@@ -131,16 +131,15 @@ describe('guard: UI публикаций (a3cfc018)', () => {
     );
   });
 
-  it('вид «список» построен на фасаде таблиц, а не на самодельных div-строках', () => {
+  it('вид «список» — двухстрочные строки, без таблиц с колонками', () => {
     assertGuardClean(
       RENDERER_ROOT,
       [
         {
           name: 'no-custom-list-row-classes',
           description:
-            'Списочные строки в модулях «Публикаций» собираются фасадом таблиц ' +
-            '`lib/ui/table.ts` (правило каталога lib/ui п.3/п.10, требование 93115633): ' +
-            'самодельные классы строк (`pub-row*`) запрещены.',
+            'Строки «Списка» — двухстрочные записи `.pub-entry` на keyed-сверке ' +
+            '(задача 55ee3c85); самодельные классы строк (`pub-row*`) запрещены.',
           pattern: /\bpub-row/,
           include: PUBLICATIONS_SCOPE,
           allow: (_rel, line) => isCommentLine(line),
@@ -152,9 +151,40 @@ describe('guard: UI публикаций (a3cfc018)', () => {
       'utf8',
     );
     assert.ok(
-      source.includes('createTable'),
-      'вид «список» обязан строиться фасадом createTable (lib/ui/table.ts)',
+      !source.includes('createTable'),
+      'вид «список» больше не строится таблицей с колонками (прямое требование задачи 55ee3c85)',
     );
+    assert.ok(
+      source.includes('pub-entry'),
+      'строки «Списка» — двухстрочные записи `.pub-entry`',
+    );
+  });
+
+  it('оба вида — секции-группы и общий контроллер навигации', () => {
+    const source = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'screens', 'publications', 'publications.ts'),
+      'utf8',
+    );
+    assert.ok(source.includes('LIB_GROUP_CLASS'), 'секции обоих видов несут общий класс группы');
+    assert.ok(
+      source.includes('attachLibraryNav'),
+      'клавиатурная навигация обоих видов — общий контроллер `library-nav.ts`',
+    );
+    assert.ok(source.includes('collapsedShelves'), 'свёрнутость полок — единое состояние обоих видов');
+  });
+
+  it('тулбар: у «Полки» иконка `+` и подсказки у кнопок', () => {
+    const source = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'screens', 'publications', 'publications.ts'),
+      'utf8',
+    );
+    assert.ok(
+      source.includes("newShelfButton.prepend(svgIcon('plus'"),
+      'у кнопки «Полка» иконка `+`, как у «+ Публикация»',
+    );
+    for (const key of ['publications.newShelfHint', 'publications.newHint', 'publications.sort.hint']) {
+      assert.ok(source.includes(key), `подсказка ${key} обязана быть на кнопке тулбара`);
+    }
   });
 
   it('карточку публикации импортирует только общая панель редактора (ADR eb687eea)', () => {

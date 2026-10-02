@@ -47,7 +47,6 @@ import { segmentedControl } from '../../lib/ui/segmented.js';
 import { badge, setBadgeText } from '../../lib/ui/badge.js';
 import { emptyState, errorState, loadingState } from '../../lib/ui/empty-state.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
-import { createTable, type TableHandle } from '../../lib/ui/table.js';
 import { store } from '../../state.js';
 import * as users from '../../lib/users.js';
 import { buildCover } from './cover.js';
@@ -56,12 +55,24 @@ import {
   defaultPublicationsViewState,
   displayAuthorship,
   groupByShelves,
+  isShelfCollapsed,
   nextShelfTitle,
   parsePublicationsViewState,
+  publicationMenuCommands,
   publicationsEmptyKind,
   serializePublicationsViewState,
+  shelfMenuCommands,
   type PublicationsViewState,
 } from './model.js';
+import {
+  attachLibraryNav,
+  LIB_GROUP_CLASS,
+  LIB_GROUP_COLLAPSED_CLASS,
+  LIB_HEAD_CLASS,
+  LIB_PUB_ATTR,
+  LIB_SHELF_ATTR,
+  type LibraryNavHandle,
+} from './library-nav.js';
 import { openPublicationWizard } from './wizard.js';
 import {
   mountPublicationWorkspace,
@@ -107,9 +118,13 @@ let reloadTimer: number | null = null;
 let searchTimer: number | null = null;
 let unsubStore: (() => void) | null = null;
 let draggingPublicationId: string | null = null;
-const expandedShelves = new Set<string>();
+/** Свёрнутые полки-группы (единое состояние обоих видов, задача 55ee3c85). */
+const collapsedShelves = new Set<string>();
 const badgeCounts = new Map<string, number>();
 const badgeBadges = new Map<string, HTMLElement>();
+
+/** Контроллер единой клавиатурной навигации обоих видов (задача 55ee3c85). */
+let libraryNav: LibraryNavHandle | null = null;
 
 interface Ui {
   root: HTMLElement;
@@ -156,6 +171,14 @@ export async function ensurePublicationsInitialised(): Promise<void> {
 /** Монтирует вид в хост рабочего пространства; возвращает teardown. */
 export function mountPublications(hostEl: HTMLElement): () => void {
   ui = buildUi(hostEl);
+  // Корень принимает фокус: клавиатурная навигация (↑/↓/Home/End/←/→/Enter)
+  // слушается на нём и обслуживает оба вида (задача 55ee3c85).
+  ui.root.tabIndex = 0;
+  libraryNav = attachLibraryNav(ui.root, {
+    onToggleShelf: (shelfId, collapsed) => setShelfCollapsed(shelfId, collapsed),
+    onEditShelf: (shelfId) => beginShelfRenameById(shelfId),
+    onOpenPublication: (id) => void openPublicationCard(id),
+  });
   wsHost = div('publications-host pub-ws-host hidden');
   hostEl.append(wsHost);
   workspace = mountPublicationWorkspace(wsHost, {
@@ -174,8 +197,8 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     if (searchTimer !== null) window.clearTimeout(searchTimer);
     reloadTimer = null;
     searchTimer = null;
-    for (const handle of tableHandles.values()) handle.destroy();
-    tableHandles.clear();
+    libraryNav?.destroy();
+    libraryNav = null;
     workspace?.destroy();
     workspace = null;
     wsHost = null;
@@ -283,6 +306,7 @@ function buildUi(root: HTMLElement): Ui {
     role: 'ghost',
     onClick: (ev) => openSortMenu(ev),
   });
+  setTooltip(sortButton, t('publications.sort.hint'));
   const sortLabel = span('', 'pub-btn-label');
   sortButton.append(sortLabel, svgIcon('chevron-down', 12));
 
@@ -302,11 +326,15 @@ function buildUi(root: HTMLElement): Ui {
     role: 'ghost',
     onClick: () => void createShelf(),
   });
+  // Иконка `+` — единообразно с «Публикацией» (задача 55ee3c85).
+  newShelfButton.prepend(svgIcon('plus', 14));
+  setTooltip(newShelfButton, t('publications.newShelfHint'));
   const newButton = uiButton({
     label: t('publications.new'),
     role: 'primary',
     onClick: () =>
       openPublicationWizard({
+        shelves,
         onCreated: (id) => {
           invalidatePublications();
           void openPublicationCard(id);
@@ -314,6 +342,7 @@ function buildUi(root: HTMLElement): Ui {
       }),
   });
   newButton.prepend(svgIcon('plus', 14));
+  setTooltip(newButton, t('publications.newHint'));
 
   toolbar.append(search, viewSwitch.root, sortButton, filtersButton, div('pub-spacer'), newShelfButton, newButton);
 
@@ -405,7 +434,7 @@ async function initForNetwork(force: boolean): Promise<void> {
     total = 0;
     badgeCounts.clear();
     badgeBadges.clear();
-    expandedShelves.clear();
+    collapsedShelves.clear();
   }
   initializedNetworkId = networkId;
   initPromise = (async () => {
@@ -570,6 +599,7 @@ function renderState(): void {
           label: t('publications.new'),
           onClick: () =>
             openPublicationWizard({
+              shelves,
               onCreated: (id) => {
                 invalidatePublications();
                 void openPublicationCard(id);
@@ -638,12 +668,16 @@ function renderShelves(): void {
   }
   reconcileKeyed(ui.shelvesHost, blocks, {
     key: (block) => block.shelf.id,
+    keyAttr: LIB_SHELF_ATTR,
     build: (block) => buildShelfBlock(block),
     update: (node, block) => {
       const cardsHost = cardsHosts.get(node);
       if (cardsHost !== undefined) syncCards(cardsHost, block.items);
-      const title = node.querySelector('.pub-shelf-title');
+      const title = node.querySelector('.pub-group-title');
       if (title !== null) title.textContent = block.shelf.title;
+      const count = node.querySelector('.pub-list-count');
+      if (count !== null) count.textContent = String(block.items.length);
+      applyShelfCollapsed(node, isShelfCollapsed(block.shelf.id, collapsedShelves));
       toggleShelfEmpty(node, block.items.length === 0);
     },
     equals: (a, b) =>
@@ -651,6 +685,7 @@ function renderShelves(): void {
       a.shelf.title === b.shelf.title &&
       a.items === b.items,
   });
+  libraryNav?.refresh();
 }
 
 /** Полка-плейсхолдер «Без полки» (не существует на сервере; DnD — снятие). */
@@ -670,19 +705,8 @@ const EMPTY_SHELF: Shelf = {
 };
 
 function buildShelfBlock(block: ShelfBlock): HTMLElement {
-  const section = div('pub-shelf');
-  section.dataset['shelfId'] = block.shelf.id;
-  const head = div('pub-shelf-head');
-  const title = span(block.shelf.title, 'pub-shelf-title');
-  head.append(title);
-  if (block.shelf.id !== EMPTY_SHELF.id) {
-    // Двойной клик по имени — inline-переименование (задача 00160da1).
-    title.addEventListener('dblclick', () => startShelfRename(block.shelf, title, head));
-    head.addEventListener('contextmenu', (ev) => {
-      ev.preventDefault();
-      openShelfMenu(ev, block.shelf);
-    });
-  }
+  const section = div(`pub-shelf ${LIB_GROUP_CLASS}`);
+  const head = buildGroupHead(block.shelf, section);
   wireDropTarget(head, block.shelf.id === EMPTY_SHELF.id ? null : block.shelf.id);
   const cards = div('pub-cards');
   cardsHosts.set(section, cards);
@@ -692,9 +716,83 @@ function buildShelfBlock(block: ShelfBlock): HTMLElement {
   empty.append(emptyState({ title: t('publications.shelf.empty') }));
   shelfEmptyHosts.set(section, empty);
   section.append(head, cards, empty);
+  applyShelfCollapsed(section, isShelfCollapsed(block.shelf.id, collapsedShelves));
   syncCards(cards, block.items);
   toggleShelfEmpty(section, block.items.length === 0);
   return section;
+}
+
+/**
+ * Общая шапка полки-группы для обоих видов (задача 55ee3c85): кнопка-заголовок
+ * с шевроном, клик — сворачивание, двойной клик по имени — inline-правка,
+ * контекстное меню — команды полки. `count` показывается только в «Списке».
+ */
+function buildGroupHead(shelf: Shelf, section: HTMLElement, count?: number): HTMLButtonElement {
+  const head = uiButton({
+    role: 'ghost',
+    class: LIB_HEAD_CLASS,
+    onClick: () => setShelfCollapsed(shelf.id, !isShelfCollapsed(shelf.id, collapsedShelves)),
+  });
+  const title = span(shelf.title, 'pub-group-title');
+  head.append(svgIcon('chevron-down', 14), title);
+  if (count !== undefined) head.append(span(String(count), 'pub-list-count'));
+  if (shelf.id !== EMPTY_SHELF.id) {
+    // Двойной клик по имени — inline-переименование (задача 00160da1). Поле ввода
+    // живёт в самой секции перед шапкой: вкладывать `<input>` в `<button>` нельзя.
+    title.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      startShelfRename(shelf, title, section, head);
+    });
+    head.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      openShelfMenu(ev, shelf);
+    });
+  }
+  return head;
+}
+
+/** Применить свёрнутость секции-группы (класс, CSS прячет содержимое). */
+function applyShelfCollapsed(section: HTMLElement | null, collapsed: boolean): void {
+  section?.classList.toggle(LIB_GROUP_COLLAPSED_CLASS, collapsed);
+}
+
+/**
+ * Свернуть/развернуть полку-группу. Состояние — модульный набор `collapsedShelves`
+ * (единый для обоих видов). Переключение — на месте (без полной перерисовки):
+ * так сохраняются фокус и выделение навигации.
+ */
+function setShelfCollapsed(shelfId: string, collapsed: boolean): void {
+  if (collapsed) collapsedShelves.add(shelfId);
+  else collapsedShelves.delete(shelfId);
+  const host = activeListHost();
+  const section = host?.querySelector<HTMLElement>(`[${LIB_SHELF_ATTR}="${shelfId}"]`) ?? null;
+  applyShelfCollapsed(section, collapsed);
+  libraryNav?.refresh();
+}
+
+/** Хост активного представления (полки или список). */
+function activeListHost(): HTMLElement | null {
+  if (ui === null) return null;
+  return viewState.viewMode === 'shelves' ? ui.shelvesHost : ui.listHost;
+}
+
+/** Секция активного вида по id полки. */
+function sectionOfShelf(shelfId: string): HTMLElement | null {
+  return (
+    activeListHost()?.querySelector<HTMLElement>(`[${LIB_SHELF_ATTR}="${shelfId}"]`) ?? null
+  );
+}
+
+/** Enter на полке: открыть inline-правку имени в активном виде (задача 55ee3c85). */
+function beginShelfRenameById(shelfId: string): void {
+  const shelf = shelves.find((item) => item.id === shelfId);
+  if (shelf === undefined) return;
+  const section = sectionOfShelf(shelfId);
+  if (section === null) return;
+  const head = section.querySelector<HTMLElement>(`.${LIB_HEAD_CLASS}`);
+  const title = section.querySelector<HTMLElement>('.pub-group-title');
+  if (head === null || title === null) return;
+  startShelfRename(shelf, title, section, head);
 }
 
 /** Показать/скрыть пустое состояние секции полки. */
@@ -705,6 +803,7 @@ function toggleShelfEmpty(section: HTMLElement, isEmpty: boolean): void {
 function syncCards(cardsHost: HTMLElement, items: readonly Publication[]): void {
   reconcileKeyed(cardsHost, items, {
     key: (p) => p.id,
+    keyAttr: LIB_PUB_ATTR,
     build: (p) => buildCard(p),
     update: (node, p) => updateCard(node, p),
     equals: (a, b) => a.id === b.id && a.version === b.version,
@@ -713,7 +812,6 @@ function syncCards(cardsHost: HTMLElement, items: readonly Publication[]): void 
 
 function buildCard(publication: Publication): HTMLElement {
   const card = div('pub-card');
-  card.dataset['pubId'] = publication.id;
   card.draggable = true;
   card.tabIndex = 0;
   card.append(buildCover(publication, 'card'));
@@ -735,7 +833,6 @@ function buildCard(publication: Publication): HTMLElement {
 }
 
 function updateCard(card: HTMLElement, publication: Publication): void {
-  card.dataset['pubId'] = publication.id;
   card.classList.toggle('pub-inactive', !publication.active);
   const title = card.querySelector('.pub-card-title');
   if (title !== null) title.textContent = publication.title;
@@ -752,10 +849,9 @@ function updateCard(card: HTMLElement, publication: Publication): void {
 }
 
 function wireCardEvents(card: HTMLElement, publication: Publication): void {
+  // Одиночный клик — читать публикацию (спека 1eecd988); Enter на выделенной
+  // карточке ведёт навигация и открывает её в панели редактора (задача 55ee3c85).
   card.addEventListener('click', () => void openPublicationWorkspace(publication.id));
-  card.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') void openPublicationWorkspace(publication.id);
-  });
   card.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
     openPublicationMenu(ev, publication);
@@ -775,9 +871,11 @@ function wireCardEvents(card: HTMLElement, publication: Publication): void {
 // --- Список (полки-группы на фасаде таблиц) --------------------------------
 
 /**
- * Группа списка: полка и её строки. Секция — раскрываемая (кроме «Без полки»),
- * строки внутри — таблица единого фасада `lib/ui/table.ts` (правило каталога
- * lib/ui п.3/п.10, требование 93115633). Самодельных списочных div-строк нет.
+ * Группа списка: полка и её строки (задача 55ee3c85). Полка — реально
+ * сворачиваемая группа (общий контроллер навигации и общий переключатель
+ * `collapsedShelves`), строки — двухстрочные записи `.pub-entry` на keyed-сверке.
+ * Таблиц с колонками внутри групп больше нет (прямое требование задачи;
+ * расхождение с требованием 93115633 — осознанное, зафиксировано хроно-записью).
  */
 interface ListGroup {
   id: string;
@@ -785,12 +883,20 @@ interface ListGroup {
   title: string;
   count: number;
   rows: Publication[];
-  /** Пустая полка (0 публикаций) — раскрыта всегда, чтобы было видно её состояние. */
+  /** Группа свёрнута — строки не рендерятся. */
+  collapsed: boolean;
+  /** Пустая полка (0 публикаций) — чтобы было видно её состояние. */
   empty: boolean;
 }
 
-/** Живые таблицы групп по id: переиспользуются при сверке, снимаются при уходе. */
-const tableHandles = new Map<string, TableHandle<Publication>>();
+/** Ключ группы «Без полки» (публикации без полок). */
+const UNSHELVED_ID = '__unshelved__';
+
+/** Хосты строк групп (для вложенной keyed-сверки). */
+const entriesHosts = new WeakMap<HTMLElement, HTMLElement>();
+
+/** Хосты пустого состояния пустой полки-группы (ошибка 87ad669a). */
+const listEmptyHosts = new WeakMap<HTMLElement, HTMLElement>();
 
 function renderList(): void {
   if (ui === null) return;
@@ -802,18 +908,17 @@ function renderList(): void {
     title: string,
     items: Publication[],
   ): void => {
-    const id = shelfId ?? '__unshelved__';
-    const empty = items.length === 0;
-    const expanded = shelfId === null || empty || expandedShelves.has(shelfId);
+    const id = shelfId ?? UNSHELVED_ID;
+    const collapsed = shelfId !== null && isShelfCollapsed(shelfId, collapsedShelves);
     const rows: Publication[] = [];
-    if (expanded) {
+    if (!collapsed) {
       for (const publication of items) {
         if (seen.has(publication.id)) continue;
         seen.add(publication.id);
         rows.push(publication);
       }
     }
-    groups.push({ id, shelfId, title, count: items.length, rows, empty });
+    groups.push({ id, shelfId, title, count: items.length, rows, collapsed, empty: items.length === 0 });
   };
   for (const { shelf, items } of grouped.byShelf) {
     // Пустые полки не пропускаем (ошибка 87ad669a): только что созданная полка
@@ -824,24 +929,20 @@ function renderList(): void {
   if (grouped.unshelved.length > 0) {
     pushGroup(null, t('publications.shelf.none'), grouped.unshelved);
   }
-  const liveIds = new Set(groups.map((g) => g.id));
-  for (const [id, handle] of tableHandles) {
-    if (!liveIds.has(id)) {
-      handle.destroy();
-      tableHandles.delete(id);
-    }
-  }
   reconcileKeyed(ui.listHost, groups, {
     key: (group) => group.id,
+    keyAttr: LIB_SHELF_ATTR,
     build: (group) => buildListGroup(group),
     update: (node, group) => updateListGroup(node, group),
     equals: (a, b) =>
       a.title === b.title &&
       a.count === b.count &&
+      a.collapsed === b.collapsed &&
       a.empty === b.empty &&
       a.rows.length === b.rows.length &&
       a.rows.every((row, index) => rowSignature(row) === rowSignature(b.rows[index])),
   });
+  libraryNav?.refresh();
 }
 
 /** Подпись строки для сравнения (версия + визуально значимые поля). */
@@ -851,122 +952,106 @@ function rowSignature(row: Publication | undefined): string {
 }
 
 function buildListGroup(group: ListGroup): HTMLElement {
-  const section = div('pub-list-section');
-  section.dataset['groupId'] = group.id;
-  if (group.shelfId !== null && !group.empty && !expandedShelves.has(group.shelfId)) {
-    section.classList.add('pub-list-collapsed');
-  }
-  const head = uiButton({
-    role: 'ghost',
-    class: 'pub-list-head',
-    onClick: () => {
-      if (group.shelfId === null) return;
-      if (expandedShelves.has(group.shelfId)) expandedShelves.delete(group.shelfId);
-      else expandedShelves.add(group.shelfId);
-      renderList();
-    },
-  });
-  head.append(
-    svgIcon('chevron-down', 14),
-    span(group.title, 'pub-list-title'),
-    span(String(group.count), 'pub-list-count'),
-  );
-  if (group.shelfId !== null) {
-    head.addEventListener('contextmenu', (ev) => {
-      ev.preventDefault();
-      const shelf = shelves.find((s) => s.id === group.shelfId);
-      if (shelf !== undefined) openShelfMenu(ev, shelf);
-    });
-    // Двойной клик по имени группы — inline-переименование (задача 00160da1).
-    // Поле ввода живёт в самой секции (перед шапкой), чтобы не вкладывать
-    // `<input>` в `<button>`: шапка на время правки скрывается.
-    const titleEl = head.querySelector<HTMLElement>('.pub-list-title');
-    if (titleEl !== null) {
-      titleEl.addEventListener('dblclick', (ev) => {
-        ev.stopPropagation();
-        const shelf = shelves.find((s) => s.id === group.shelfId);
-        if (shelf !== undefined) startShelfRename(shelf, titleEl, section, head);
-      });
-    }
-  }
+  const section = div(`pub-list-section ${LIB_GROUP_CLASS}`);
+  const shelf =
+    group.shelfId === null
+      ? { ...EMPTY_SHELF, title: group.title }
+      : (shelves.find((item) => item.id === group.shelfId) ?? {
+          ...EMPTY_SHELF,
+          id: group.shelfId,
+          title: group.title,
+        });
+  const head = buildGroupHead(shelf, section, group.count);
   wireDropTarget(head, group.shelfId);
-
-  const tableHost = div('pub-list-table');
-  const table = createTable<Publication>({
-    ariaLabel: group.title,
-    columns: [
-      {
-        key: 'cover',
-        header: '',
-        width: '56px',
-        render: (row) => buildCover(row, 'row'),
-      },
-      {
-        key: 'title',
-        header: t('publication.field.title'),
-        text: (row) => row.title,
-        render: (row) => span(row.title, 'pub-list-row-title'),
-      },
-      {
-        key: 'subtitle',
-        header: t('publication.field.subtitle'),
-        text: (row) => row.subtitle ?? '',
-        render: (row) => span(row.subtitle ?? '', 'muted'),
-      },
-      {
-        key: 'author',
-        header: t('publication.field.author'),
-        text: (row) => authorLine(row),
-        render: (row) => span(authorLine(row), 'muted'),
-      },
-      {
-        key: 'date',
-        header: t('publication.field.assembly'),
-        width: '110px',
-        text: (row) => assemblyDateLabel(row.assembly_date),
-        render: (row) => span(assemblyDateLabel(row.assembly_date), 'muted'),
-      },
-      {
-        key: 'badge',
-        header: '',
-        width: '90px',
-        render: (row) => {
-          const count = badgeCounts.get(row.id) ?? 0;
-          const node = badge(count > 0 ? t('publications.newBadge', count) : '', {
-            kind: 'pill',
-            tone: 'accent',
-          });
-          node.classList.toggle('hidden', count <= 0);
-          return node;
-        },
-      },
-    ],
-    rows: [],
-    rowKey: (row) => row.id,
-    emptyText:
-      group.shelfId === null ? t('publications.emptySearch') : t('publications.shelf.empty'),
-    onRowClick: (row) => void openPublicationWorkspace(row.id),
-    onActivate: (row) => void openPublicationWorkspace(row.id),
-    rowMenu: (row) => publicationMenuItems(row),
-  });
-  tableHandles.set(group.id, table);
-  tableHost.append(table.element);
-  table.setRows(group.rows);
-  section.append(head, tableHost);
+  const list = div('pub-entries');
+  entriesHosts.set(section, list);
+  // Пустая группа-полка видна и в «Списке» (ошибка 87ad669a): шапка с count 0
+  // плюс пустое состояние, иначе полку без публикаций невозможно заметить.
+  const empty = div('pub-list-empty');
+  empty.append(emptyState({ title: t('publications.shelf.empty') }));
+  listEmptyHosts.set(section, empty);
+  section.append(head, list, empty);
+  applyShelfCollapsed(section, group.collapsed);
+  syncEntries(list, group.rows);
+  toggleListEmpty(section, group.empty);
   return section;
 }
 
 function updateListGroup(node: HTMLElement, group: ListGroup): void {
-  const handle = tableHandles.get(group.id);
-  handle?.setRows(group.rows);
-  const title = node.querySelector('.pub-list-title');
+  const title = node.querySelector('.pub-group-title');
   if (title !== null) title.textContent = group.title;
   const count = node.querySelector('.pub-list-count');
   if (count !== null) count.textContent = String(group.count);
-  node.classList.toggle(
-    'pub-list-collapsed',
-    group.shelfId !== null && !group.empty && !expandedShelves.has(group.shelfId),
+  applyShelfCollapsed(node, group.collapsed);
+  const list = entriesHosts.get(node);
+  if (list !== undefined) syncEntries(list, group.rows);
+  toggleListEmpty(node, group.empty);
+}
+
+/** Показать/скрыть пустое состояние пустой полки-группы. */
+function toggleListEmpty(section: HTMLElement, isEmpty: boolean): void {
+  listEmptyHosts.get(section)?.classList.toggle('hidden', !isEmpty);
+}
+
+/** Сверка строк группы по ключу (id публикации) — инкрементально. */
+function syncEntries(host: HTMLElement, rows: readonly Publication[]): void {
+  reconcileKeyed(host, rows, {
+    key: (row) => row.id,
+    keyAttr: LIB_PUB_ATTR,
+    build: (row) => buildEntry(row),
+    update: (node, row) => updateEntry(node, row),
+    equals: (a, b) => rowSignature(a) === rowSignature(b),
+  });
+}
+
+/**
+ * Строка публикации в «Списке» — ДВЕ строки (задача 55ee3c85):
+ * (1) заголовок крупным шрифтом без переноса + автор обычным, прижат вправо;
+ * (2) подзаголовок мелким шрифтом с переносом, обрезается по высоте в две
+ * строки (CSS). Обложка-миниатюра — слева. Клик — читать, меню — контекстное.
+ */
+function buildEntry(publication: Publication): HTMLElement {
+  const entry = div('pub-entry');
+  entry.tabIndex = 0;
+  const cover = buildCover(publication, 'row');
+  const text = div('pub-entry-text');
+  const top = div('pub-entry-top');
+  const badgeNode = badge('', { kind: 'pill', tone: 'accent' });
+  badgeNode.classList.add('pub-new-badge');
+  badgeBadges.set(publication.id, badgeNode);
+  top.append(
+    span(publication.title, 'pub-entry-title'),
+    span(authorLine(publication), 'pub-entry-author'),
+    badgeNode,
   );
+  const subtitle = span(publication.subtitle ?? '', 'pub-entry-subtitle');
+  text.append(top, subtitle);
+  entry.append(cover, text);
+  updateEntry(entry, publication);
+  wireEntryEvents(entry, publication);
+  return entry;
+}
+
+function updateEntry(entry: HTMLElement, publication: Publication): void {
+  entry.classList.toggle('pub-inactive', !publication.active);
+  const title = entry.querySelector('.pub-entry-title');
+  if (title !== null) title.textContent = publication.title;
+  const author = entry.querySelector('.pub-entry-author');
+  if (author !== null) author.textContent = authorLine(publication);
+  const subtitle = entry.querySelector('.pub-entry-subtitle');
+  if (subtitle !== null) subtitle.textContent = publication.subtitle ?? '';
+  const cover = entry.querySelector('.pub-cover');
+  if (cover !== null && cover.getAttribute('data-kind') !== publication.cover_kind) {
+    cover.replaceWith(buildCover(publication, 'row'));
+  }
+}
+
+function wireEntryEvents(entry: HTMLElement, publication: Publication): void {
+  entry.addEventListener('click', () => void openPublicationWorkspace(publication.id));
+  entry.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    openPublicationMenu(ev, publication);
+  });
 }
 
 /** Отображаемая строка автора: текст авторства или создатель (через users). */
@@ -1063,44 +1148,92 @@ function openPublicationMenu(ev: MouseEvent, publication: Publication): void {
   showMenuAt(ev.clientX, ev.clientY, publicationMenuItems(publication));
 }
 
-/** Пункты контекстного меню публикации (карточки полки и строки таблицы). */
+/**
+ * Пункты контекстного меню публикации (карточки полки и строки списка) —
+ * ЕДИНЫЕ для обоих видов (задача 55ee3c85). Состав и порядок команд задаёт
+ * чистая модель `publicationMenuCommands` (покрыта тестом); здесь команды
+ * превращаются в пункты меню с подменю «Экспорт» и «На полки».
+ */
 function publicationMenuItems(publication: Publication): MenuItem[] {
-  const shelfItems = shelves.map((shelf) =>
-    menuChoice(
-      shelf.title,
-      shelf.items.some((i) => i.publication_id === publication.id),
-      () => void toggleShelf(publication.id, shelf.id),
-    ),
-  );
-  return [
-    menuAction(t('publications.menu.open'), () => void openPublicationCard(publication.id)),
-    menuAction(t('publications.menu.read'), () => void openPublicationWorkspace(publication.id)),
-    MENU_SEPARATOR,
-    menuSubmenu(t('publications.menu.export'), [
-      menuAction(t('publications.menu.exportMd'), () => void runExport(publication.id, 'md')),
-      menuAction(t('publications.menu.exportHtml'), () => void runExport(publication.id, 'html')),
-    ]),
-    MENU_SEPARATOR,
-    ...(shelfItems.length > 0 ? [menuSubmenu(t('publications.menu.shelves'), shelfItems)] : []),
-    menuAction(
-      publication.active ? t('publications.menu.inactive') : t('publications.menu.active'),
-      () => void toggleActive(publication),
-    ),
-    MENU_SEPARATOR,
-    menuAction(t('publications.menu.delete'), () => void openPublicationDeleteDialog(publication), {
-      danger: true,
-    }),
-  ];
+  const commands = publicationMenuCommands({
+    hasShelves: shelves.length > 0,
+    active: publication.active,
+  });
+  const items: MenuItem[] = [];
+  let exportItems: MenuItem[] = [];
+  for (const command of commands) {
+    switch (command) {
+      case 'open':
+        items.push(menuAction(t('publications.menu.open'), () => void openPublicationCard(publication.id)));
+        break;
+      case 'read':
+        items.push(
+          menuAction(t('publications.menu.read'), () => void openPublicationWorkspace(publication.id)),
+          MENU_SEPARATOR,
+        );
+        break;
+      case 'exportMd':
+        exportItems.push(menuAction(t('publications.menu.exportMd'), () => void runExport(publication.id, 'md')));
+        break;
+      case 'exportHtml':
+        exportItems.push(menuAction(t('publications.menu.exportHtml'), () => void runExport(publication.id, 'html')));
+        items.push(menuSubmenu(t('publications.menu.export'), exportItems), MENU_SEPARATOR);
+        exportItems = [];
+        break;
+      case 'shelfToggle': {
+        const shelfItems = shelves.map((shelf) =>
+          menuChoice(
+            shelf.title,
+            shelf.items.some((i) => i.publication_id === publication.id),
+            () => void toggleShelf(publication.id, shelf.id),
+          ),
+        );
+        items.push(menuSubmenu(t('publications.menu.shelves'), shelfItems), MENU_SEPARATOR);
+        break;
+      }
+      case 'toggleActive':
+        items.push(
+          menuAction(
+            publication.active ? t('publications.menu.inactive') : t('publications.menu.active'),
+            () => void toggleActive(publication),
+          ),
+          MENU_SEPARATOR,
+        );
+        break;
+      case 'delete':
+        items.push(
+          menuAction(t('publications.menu.delete'), () => void openPublicationDeleteDialog(publication), {
+            danger: true,
+          }),
+        );
+        break;
+    }
+  }
+  return items;
 }
 
+/**
+ * Контекстное меню полки/группы: «Добавить публикацию» (мастер с предвыбранной
+ * полкой) и «Удалить» — состав из чистой модели `shelfMenuCommands`.
+ */
 function openShelfMenu(ev: MouseEvent, shelf: Shelf): void {
-  // «Переименовать полку» из меню убрано: переименование — inline (двойной
-  // клик по имени, задача 00160da1). В меню остаётся удаление.
-  showMenuAt(ev.clientX, ev.clientY, [
-    menuAction(t('publications.menu.delete'), () => void openShelfDeleteDialog(shelf), {
-      danger: true,
-    }),
-  ]);
+  const items = shelfMenuCommands().map((command) =>
+    command === 'addPublication'
+      ? menuAction(t('publications.menu.addPublication'), () =>
+          openPublicationWizard({
+            shelves,
+            initialShelfId: shelf.id,
+            onCreated: (id) => {
+              invalidatePublications();
+              void openPublicationCard(id);
+            },
+          }),
+        )
+      : menuAction(t('publications.menu.delete'), () => void openShelfDeleteDialog(shelf), {
+          danger: true,
+        }),
+  );
+  showMenuAt(ev.clientX, ev.clientY, items);
 }
 
 /** Строки-причины, почему публикацию нельзя удалить совсем (для диалога). */

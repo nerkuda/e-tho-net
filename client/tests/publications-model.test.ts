@@ -16,12 +16,17 @@ import {
   dedupePropertyOptions,
   defaultPublicationsViewState,
   groupByShelves,
+  isShelfCollapsed,
   nextShelfTitle,
   parsePublicationsViewState,
+  publicationMenuCommands,
   publicationsEmptyKind,
   serializePublicationsViewState,
+  shelfMenuCommands,
   shelfSwapUpdates,
   sortPublications,
+  visibleLibraryEntities,
+  wizardShelfChoice,
 } from '../src/renderer/screens/publications/model.js';
 import type { EntityOption } from '../src/renderer/lib/entity-picker.js';
 
@@ -340,5 +345,60 @@ describe('публикации: варианты свойств без дубл�
       { id: 'p2', title: 'Две' },
     ];
     assert.deepEqual(dedupePropertyOptions(options).map((o) => o.id), ['p1', 'p2']);
+  });
+});
+
+// --- Единая навигация и общие меню (задача 55ee3c85) -------------------------
+
+describe('публикации: единая навигация, свёрнутость и меню (задача 55ee3c85)', () => {
+  it('видимая последовательность: полка, затем её публикации; свёрнутая — без публикаций', () => {
+    const entities = visibleLibraryEntities([
+      { shelfId: 's1', publicationIds: ['p1', 'p2'], collapsed: false },
+      { shelfId: 's2', publicationIds: ['p3'], collapsed: true },
+      { shelfId: 's3', publicationIds: [], collapsed: false },
+    ]);
+    assert.deepEqual(entities, [
+      { kind: 'shelf', key: 's1' },
+      { kind: 'publication', key: 'p1' },
+      { kind: 'publication', key: 'p2' },
+      { kind: 'shelf', key: 's2' },
+      { kind: 'shelf', key: 's3' },
+    ]);
+  });
+
+  it('свёрнутость полки решается набором; по умолчанию полка развёрнута', () => {
+    assert.equal(isShelfCollapsed('s1', new Set()), false);
+    assert.equal(isShelfCollapsed('s1', new Set(['s1'])), true);
+  });
+
+  it('состав меню публикации: порядок команд; подменю полок — только при живых полках', () => {
+    assert.deepEqual(publicationMenuCommands({ hasShelves: false, active: true }), [
+      'open',
+      'read',
+      'exportMd',
+      'exportHtml',
+      'toggleActive',
+      'delete',
+    ]);
+    assert.deepEqual(publicationMenuCommands({ hasShelves: true, active: false }), [
+      'open',
+      'read',
+      'exportMd',
+      'exportHtml',
+      'shelfToggle',
+      'toggleActive',
+      'delete',
+    ]);
+  });
+
+  it('состав меню полки: «Добавить публикацию» и «Удалить»', () => {
+    assert.deepEqual(shelfMenuCommands(), ['addPublication', 'delete']);
+  });
+
+  it('выбор полки в мастере: живая явная полка сохраняется, несуществующая — «без полки»', () => {
+    const shelves = [{ id: 's1' }, { id: 's2' }];
+    assert.equal(wizardShelfChoice(shelves, 's2'), 's2');
+    assert.equal(wizardShelfChoice(shelves, null), null);
+    assert.equal(wizardShelfChoice(shelves, 'gone'), null);
   });
 });

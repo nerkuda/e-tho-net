@@ -676,3 +676,105 @@ export function tocSignature(line: TocLine): string {
       return `x:${line.title}`;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Единая навигация представлений «Полки»/«Список» (задача 55ee3c85). Чистые
+// вычисления видимой последовательности сущностей и свёрнутости групп — ими
+// пользуется DOM-контроллер `library-nav.ts`; проверяются юнит-тестами.
+// ---------------------------------------------------------------------------
+
+/** Сущность единой навигации библиотеки: полка-группа либо публикация. */
+export type LibraryEntityKind = 'shelf' | 'publication';
+
+/** Сущность в видимой последовательности навигации. */
+export interface LibraryEntity {
+  kind: LibraryEntityKind;
+  /** Ключ: `data-shelf-key` полки либо `data-pub-key` публикации (её id). */
+  key: string;
+}
+
+/** Группа библиотеки, как её видит навигация (одна для обоих видов). */
+export interface LibraryGroupLike {
+  /** Ключ полки (`data-shelf-key` секции). */
+  shelfId: string;
+  /** Публикации группы В ПОРЯДКЕ ОТОБРАЖЕНИЯ. */
+  publicationIds: readonly string[];
+  /** Группа свёрнута — её публикации в последовательность не попадают. */
+  collapsed: boolean;
+}
+
+/**
+ * Видимая последовательность сущностей навигации: для каждой группы — сперва
+ * её заголовок (`shelf`), затем публикации, если группа не свёрнута. Это
+ * единый порядок обоих представлений (задача 55ee3c85): «Полки» и «Список»
+ * отличаются только разметкой, а ход ↑/↓/Home/End общий.
+ */
+export function visibleLibraryEntities(groups: readonly LibraryGroupLike[]): LibraryEntity[] {
+  const out: LibraryEntity[] = [];
+  for (const group of groups) {
+    out.push({ kind: 'shelf', key: group.shelfId });
+    if (group.collapsed) continue;
+    for (const publicationId of group.publicationIds) {
+      out.push({ kind: 'publication', key: publicationId });
+    }
+  }
+  return out;
+}
+
+/**
+ * Свёрнута ли полка при данном множестве свёрнутых. По умолчанию полки
+ * развёрнуты; свёрнутость — персональный рантайм-набор (переживает keyed-
+ * перерисовку, но не сохраняется в `ui_state`).
+ */
+export function isShelfCollapsed(shelfId: string, collapsed: ReadonlySet<string>): boolean {
+  return collapsed.has(shelfId);
+}
+
+/** Команда контекстного меню публикации (единая для обоих представлений). */
+export type PublicationMenuCommand =
+  | 'open'
+  | 'read'
+  | 'exportMd'
+  | 'exportHtml'
+  | 'shelfToggle'
+  | 'toggleActive'
+  | 'delete';
+
+/**
+ * Состав контекстного меню публикации: открыть, читать, экспорт (md/html),
+ * подменю «На полки» (когда полки есть), переключение актуальности, удалить.
+ * Возвращает КОМАНДЫ без сепараторов — их расставляет построитель меню, а
+ * состав и порядок закреплены тестом (задача 55ee3c85).
+ */
+export function publicationMenuCommands(opts: {
+  hasShelves: boolean;
+  active: boolean;
+}): PublicationMenuCommand[] {
+  const commands: PublicationMenuCommand[] = ['open', 'read', 'exportMd', 'exportHtml'];
+  if (opts.hasShelves) commands.push('shelfToggle');
+  commands.push('toggleActive', 'delete');
+  return commands;
+}
+
+/** Команда контекстного меню полки/группы. */
+export type ShelfMenuCommand = 'addPublication' | 'delete';
+
+/**
+ * Состав контекстного меню полки: «Добавить публикацию» (мастер с предвыбранной
+ * полкой, задача 55ee3c85) и «Удалить».
+ */
+export function shelfMenuCommands(): ShelfMenuCommand[] {
+  return ['addPublication', 'delete'];
+}
+
+/**
+ * Полка, предвыбранная в мастере: явно переданная (если она ещё жива) либо
+ * `null` — «без полки». Мастер не выбирает несуществующую полку.
+ */
+export function wizardShelfChoice(
+  shelves: readonly { id: string }[],
+  initial: string | null,
+): string | null {
+  if (initial !== null && shelves.some((shelf) => shelf.id === initial)) return initial;
+  return null;
+}
