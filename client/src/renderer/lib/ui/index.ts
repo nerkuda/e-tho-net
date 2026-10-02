@@ -259,6 +259,7 @@ export { createListNav } from './list.js';
 export type {
   ListNavAdapter,
   ListNavOptions,
+  ListNavSetOptions,
   ListNavHandle,
   ListNavKeyEvent,
   ListNavClickEvent,

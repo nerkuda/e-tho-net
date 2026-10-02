@@ -503,9 +503,13 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
       return current;
     },
     selectRecord(id: string, day: string): void {
-      nav.setCurrent({ entity: { kind: 'record', key: id }, day, el: findCardIn(day, id) });
-      // Карточка может быть ещё не в DOM (переход догружает страницы) — тогда
-      // выделение переприменит `refresh` после ближайшей перерисовки.
+      // Навигацию ВЗВОДИМ БЕЗ немедленного фокуса (`activate`): если карточка ещё
+      // не в DOM (переход догружает страницы), ближайший `refresh` вернёт фокус —
+      // иначе клавиатура после перехода «отваливается» (ошибка ab78e7b5).
+      nav.setCurrent(
+        { entity: { kind: 'record', key: id }, day, el: findCardIn(day, id) },
+        { activate: true },
+      );
       if (findCardIn(day, id) !== null) nav.focusNavigation();
     },
     destroy(): void {

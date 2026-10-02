@@ -353,3 +353,36 @@ describe('приёмка №11, п.3: группа переключается н
     assert.equal(container.scrollTop, 120, 'позиция прокрутки восстановлена');
   });
 });
+
+// ---------------------------------------------------------------------------
+// П.2 (регресс): selectRecord по ещё НЕ загруженной записи взводит навигацию
+// ---------------------------------------------------------------------------
+
+describe('регресс ab78e7b5: переход к записи взводит навигацию до её появления', () => {
+  it('selectRecord отсутствующей карточки: refresh возвращает фокус к догруженной записи', async () => {
+    const { attachFeedNav, FEED_NAV_CURRENT_CLASS } = await navModule();
+    // День есть, записи ещё нет: `loadUntilRecord` принёс страницы без неё.
+    const spec: DaySpec[] = [{ day: '2026-09-11', records: [] }];
+    const feed = buildFeed(spec);
+    await withDocument(null, async () => {
+      const handle = attachFeedNav(feed.root as unknown as HTMLElement, {
+        onSetDayCollapsed: () => undefined,
+        onEditBody: () => undefined,
+      });
+
+      handle.selectRecord('r1', '2026-09-11');
+      // Выделение поставлено сразу (карточка может появиться позже)...
+      assert.deepEqual(handle.current(), { kind: 'record', key: 'r1' });
+      assert.equal(feed.root.querySelectorAll('.diary-record').length, 0, 'карточки в DOM пока нет');
+
+      // ...запись догрузилась и попала в ленту — refresh обязан вернуть фокус.
+      spec[0]!.records.push('r1');
+      feed.render();
+      handle.refresh();
+
+      const card = feed.cardIn('2026-09-11', 'r1');
+      assert.ok(card.classList.contains(FEED_NAV_CURRENT_CLASS), 'выделение переприменено');
+      assert.equal(card.focused, true, 'фокус вернулся к текущей записи (стрелки снова двигают)');
+    });
+  });
+});

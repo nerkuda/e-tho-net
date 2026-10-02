@@ -37,6 +37,7 @@
 import {
   isEditingTarget as coreIsEditingTarget,
   listTargetIndex,
+  nextNavIndex,
   resolveNavAction,
 } from './nav-core.js';
 
@@ -96,6 +97,20 @@ export interface ListNavOptions<E> {
   onCurrentChange?(entry: E | null): void;
 }
 
+/** Настройки установки текущей сущности вне клавиатурного хода. */
+export interface ListNavSetOptions {
+  /**
+   * Взвести навигацию (`navActive = true`) БЕЗ немедленного фокуса: тогда
+   * ближайший {@link ListNavHandle.refresh} вернёт фокус (лечение регрессии
+   * фокуса после перехода к записи, которой ещё нет в DOM, — ошибка ab78e7b5).
+   */
+  activate?: boolean;
+  /** Подвести узел к видимой области (если он уже в DOM). */
+  reveal?: boolean;
+  /** Сразу дать фокус узлу (иначе фокус вернёт `refresh`, если навигация взведена). */
+  focus?: boolean;
+}
+
 /** Публичный дескриптор навигации списка. */
 export interface ListNavHandle<E> {
   /** Переприменить выделение/фокус после перерисовки списков. */
@@ -105,7 +120,7 @@ export interface ListNavHandle<E> {
   /** Текущая сущность или `null`. */
   current(): E | null;
   /** Сделать сущность текущей (без прокрутки; узел может быть ещё не в DOM). */
-  setCurrent(entry: E | null): void;
+  setCurrent(entry: E | null, options?: ListNavSetOptions): void;
   /** Ключ текущей сущности или `null`. */
   token(): string | null;
   /** Снять слушатели (размонтирование вида). */
@@ -164,8 +179,9 @@ export function createListNav<E>(
     else el?.scrollIntoView?.({ block: 'nearest' });
   };
 
-  const setCurrent = (entry: E | null, opts: { reveal?: boolean; focus?: boolean } = {}): void => {
+  const setCurrent = (entry: E | null, opts: ListNavSetOptions = {}): void => {
     current = entry;
+    if (opts.activate === true) navActive = true;
     adapter.onSelectionChange?.(entry);
     adapter.applyHighlight(entry);
     if (entry !== null && (opts.reveal === true || opts.focus === true)) {
@@ -194,14 +210,15 @@ export function createListNav<E>(
     setCurrent(entries[target] as E, { reveal: true });
   };
 
-  /** Home/End — к первой/последней видимой сущности. */
+  /** Home/End — к первой/последней видимой сущности (расчёт края — в ядре). */
   const moveToEdge = (last: boolean): void => {
     const entries = list();
-    if (entries.length === 0) {
+    const target = nextNavIndex(last ? 'end' : 'home', indexOf(entries, current), entries.length);
+    if (target < 0) {
       setCurrent(null);
       return;
     }
-    setCurrent((last ? entries[entries.length - 1] : entries[0]) as E, { reveal: true });
+    setCurrent(entries[target] as E, { reveal: true });
   };
 
   const handleKeyDown = (event: ListNavKeyEvent): void => {
@@ -294,8 +311,8 @@ export function createListNav<E>(
     current(): E | null {
       return current;
     },
-    setCurrent(entry: E | null): void {
-      setCurrent(entry);
+    setCurrent(entry: E | null, setOptions?: ListNavSetOptions): void {
+      setCurrent(entry, setOptions);
     },
     token(): string | null {
       return current === null ? null : adapter.tokenOf(current);
