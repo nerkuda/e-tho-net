@@ -55,6 +55,7 @@ import {
   displayAuthorship,
   groupByShelves,
   parsePublicationsViewState,
+  publicationsEmptyKind,
   serializePublicationsViewState,
   type PublicationsViewState,
 } from './model.js';
@@ -513,15 +514,30 @@ function renderBody(): void {
   renderState();
   renderPager();
   if (loading || loadError !== null) return;
+  // Глобальное пустое состояние (пустая библиотека или пустой результат
+  // поиска) заменяет тело: секции полок тогда не рендерятся. В сети без
+  // публикаций с живой полкой состояние НЕ глобальное — рендерятся полки
+  // (элемент интерфейса 1eecd988 v3).
+  if (publicationsEmptyKind(publications.length, shelves.length, isSearching()) !== 'none') return;
   if (shelvesView) renderShelves();
   else renderList();
+}
+
+/** Активен ли поиск/фильтр полки (пустой результат — состояние запроса). */
+function isSearching(): boolean {
+  return viewState.query.trim() !== '' || viewState.shelfFilter !== null;
 }
 
 function renderState(): void {
   if (ui === null) return;
   emptyNode(ui.stateHost);
-  ui.shelvesHost.classList.toggle('hidden', viewState.viewMode !== 'shelves' || loading || loadError !== null);
-  ui.listHost.classList.toggle('hidden', viewState.viewMode !== 'list' || loading || loadError !== null);
+  const kind =
+    loading || loadError !== null
+      ? 'none'
+      : publicationsEmptyKind(publications.length, shelves.length, isSearching());
+  const occupiesBody = loading || loadError !== null || kind !== 'none';
+  ui.shelvesHost.classList.toggle('hidden', viewState.viewMode !== 'shelves' || occupiesBody);
+  ui.listHost.classList.toggle('hidden', viewState.viewMode !== 'list' || occupiesBody);
   if (loading) {
     ui.stateHost.append(loadingState());
     return;
@@ -535,26 +551,25 @@ function renderState(): void {
     );
     return;
   }
-  if (publications.length === 0) {
-    const searching = viewState.query.trim() !== '' || viewState.shelfFilter !== null;
+  if (kind === 'noResults') {
+    ui.stateHost.append(emptyState({ title: t('publications.emptySearch') }));
+    return;
+  }
+  if (kind === 'noData') {
     ui.stateHost.append(
       emptyState({
-        title: searching ? t('publications.emptySearch') : t('publications.empty'),
-        ...(searching
-          ? {}
-          : {
-              hint: t('publications.emptyHint'),
-              action: {
-                label: t('publications.new'),
-                onClick: () =>
-                  openPublicationWizard({
-                    onCreated: (id) => {
-                      invalidatePublications();
-                      void openPublicationCard(id);
-                    },
-                  }),
+        title: t('publications.empty'),
+        hint: t('publications.emptyHint'),
+        action: {
+          label: t('publications.new'),
+          onClick: () =>
+            openPublicationWizard({
+              onCreated: (id) => {
+                invalidatePublications();
+                void openPublicationCard(id);
               },
             }),
+        },
       }),
     );
   }

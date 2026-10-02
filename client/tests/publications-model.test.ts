@@ -17,6 +17,7 @@ import {
   defaultPublicationsViewState,
   groupByShelves,
   parsePublicationsViewState,
+  publicationsEmptyKind,
   serializePublicationsViewState,
   shelfSwapUpdates,
 } from '../src/renderer/screens/publications/model.js';
@@ -258,6 +259,26 @@ describe('публикации: перестановка внутри полки
       { publication_id: 'A', position: 2 },
       { publication_id: 'B', position: 2 },
     ]);
+  });
+});
+
+// --- Пустое состояние (ошибка 28fbdb59, спека 1eecd988 v3) -------------------
+
+describe('публикации: пустое состояние (model, 1eecd988 v3)', () => {
+  it('есть публикации — глобального состояния нет', () => {
+    assert.equal(publicationsEmptyKind(3, 0, false), 'none');
+  });
+
+  it('сеть без публикаций, но с живой полкой — полки остаются (глобального состояния нет)', () => {
+    assert.equal(publicationsEmptyKind(0, 1, false), 'none');
+  });
+
+  it('нет ни публикаций, ни полок — пустая библиотека', () => {
+    assert.equal(publicationsEmptyKind(0, 0, false), 'noData');
+  });
+
+  it('поиск/фильтр без результата — состояние запроса', () => {
+    assert.equal(publicationsEmptyKind(0, 2, true), 'noResults');
   });
 });
 

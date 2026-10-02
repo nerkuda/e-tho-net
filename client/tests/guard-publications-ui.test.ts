@@ -175,3 +175,31 @@ describe('guard: UI публикаций (a3cfc018)', () => {
     );
   });
 });
+
+/**
+ * Инвариант ошибки 28fbdb59: глобальное пустое состояние экрана включается по
+ * предикату (нет ни публикаций, ни живых полок), а не по числу публикаций —
+ * иначе сеть без публикаций с дефолтной полкой показывала пустоту вместо полок.
+ */
+describe('guard: экран «Публикации» — пустое состояние (28fbdb59, 1eecd988 v3)', () => {
+  const SOURCE = fs.readFileSync(
+    path.join(RENDERER_ROOT, 'screens', 'publications', 'publications.ts'),
+    'utf8',
+  );
+  const MODEL = fs.readFileSync(
+    path.join(RENDERER_ROOT, 'screens', 'publications', 'model.ts'),
+    'utf8',
+  );
+
+  it('пустое состояние решается предикатом, а не числом публикаций', () => {
+    assert.ok(
+      !SOURCE.includes('publications.length === 0'),
+      'голое `publications.length === 0` больше не решает пустое состояние',
+    );
+    assert.ok(
+      SOURCE.includes('publicationsEmptyKind'),
+      'экран решает пустое состояние предикатом publicationsEmptyKind (полки видны при 0 публикаций)',
+    );
+    assert.ok(MODEL.includes('export function publicationsEmptyKind'));
+  });
+});

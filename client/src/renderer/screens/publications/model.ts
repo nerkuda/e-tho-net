@@ -207,6 +207,29 @@ export function groupByShelves(
   return { byShelf, unshelved, shelfIdsOf };
 }
 
+/** Вид глобального пустого состояния экрана (элемент интерфейса 1eecd988 v3). */
+export type PublicationsEmptyKind = 'none' | 'noData' | 'noResults';
+
+/**
+ * Нужно ли глобальное пустое состояние — и какое (спека 1eecd988 v3).
+ *
+ * Полки отображаются всегда, в том числе в сети без публикаций, поэтому
+ * пустая библиотека НЕ показывает глобальное состояние, пока есть живые полки:
+ * содержимым экрана становятся сами (пустые) секции полок. Глобальное пустое
+ * состояние появляется, только когда нет ни публикаций, ни живых полок.
+ * Отдельно различается состояние поиска/фильтра: когда запрос не дал ничего,
+ * показывается «Ничего не найдено» (это состояние запроса, а не библиотеки).
+ */
+export function publicationsEmptyKind(
+  publicationCount: number,
+  shelfCount: number,
+  searching: boolean,
+): PublicationsEmptyKind {
+  if (publicationCount > 0) return 'none';
+  if (searching) return 'noResults';
+  return shelfCount > 0 ? 'none' : 'noData';
+}
+
 /** Строковое представление «даты сборки» публикации (ISO → локальная дата). */
 export function assemblyDateLabel(iso: string | null): string {
   if (iso === null || iso === '') return '';
