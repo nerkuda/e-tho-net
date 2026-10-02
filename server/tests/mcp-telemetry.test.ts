@@ -532,9 +532,15 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // временной семантике с `breadcrumbs`. Замер: 47 / 60 204 Б →
         // 48 / 61 194 Б; D+I 51 134 → 51 910 Б. Планки подняты ровно под этот
         // прирост с малым запасом (обоснование — паритет REST/MCP по ADR 4cb17cb3).
+        // 0.11.1 (задача 8c2660e6): в описание `etn.shelves.list` добавлена
+        // строка о побочной записи (при отсутствии живых полок список создаёт
+        // дефолтную «Полку» в основе) — агент обязан знать о записи ДО вызова.
+        // Деталь контракта, а не проза-описание: вынесена в `description`
+        // осознанно. Замер: +64 Б к `tools/list` (61 400 → 61 464); планка
+        // поднята ровно под этот прирост (61 400 → 61 600).
         assert.ok(
-          bytes <= 61_400,
-          `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 61400`,
+          bytes <= 61_600,
+          `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 61600`,
         );
         // Отдельный бюджет на «префилл» из ADR: сумма байт `description` +
         // `inputSchema`. `inputSchema` не урезается — планка ограничивает
@@ -562,9 +568,11 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 0.11.1 (задача e754527d, круг 2): +`etn.publications.accept` и
         // обновлённое описание `candidates` (временная семантика, breadcrumbs)
         // → 51 910 Б; планка 51 200 → 52 100 (см. блок выше).
+        // 0.11.1 (задача 8c2660e6): строка о побочной записи в `etn.shelves.list`
+        // → 52 180 Б; планка 52 100 → 52 300 (см. блок выше, обоснование там же).
         assert.ok(
-          descriptionsPlusInputSchema <= 52_100,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 52100`,
+          descriptionsPlusInputSchema <= 52_300,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 52300`,
         );
       } finally {
         await handle.close();

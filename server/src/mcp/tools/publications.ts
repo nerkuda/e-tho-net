@@ -385,7 +385,8 @@ export function registerPublicationTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'List library shelves with their contents (parity with REST GET /shelves). A shelf is a ' +
         'named, manually ordered group of publications shared by network participants; trashed ' +
-        'shelves are hidden. Returns `{ data, meta }`.',
+        'shelves are hidden. Returns `{ data, meta }`. Если живых полок нет, список создаёт ' +
+        'дефолтную «Полку» в основе (побочная запись).',
       inputSchema: McpShelfList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.shelves.list'],
     },
