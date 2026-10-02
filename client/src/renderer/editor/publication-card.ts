@@ -269,10 +269,18 @@ function authorLine(publication: Publication): string {
  * Видимая обратная связь пересборки (ошибка c2dec45c): пока идёт запрос —
  * кнопка заблокирована, рядом показан прелоадер. Без этого повторное нажатие
  * и «ничего не произошло» неразличимы.
+ *
+ * Элементы передаются ЯВНО (а не берутся из module-level refs): при смене цели
+ * во время запроса refs уже указывают на новую карточку, и прелоадер «залипал»
+ * бы на ней (блокер приёмки c2dec45c). Вызывающий показывает/снимает состояние
+ * строго у ВЛАДЕЛЬЦА пересборки — по образцу `flushSave` (ошибка 82aada28).
  */
-function setRebuilding(busy: boolean): void {
-  if (rebuildButtonRef !== null) rebuildButtonRef.disabled = busy;
-  const feedback = rebuildFeedbackRef;
+function setRebuildingOn(
+  button: HTMLButtonElement | null,
+  feedback: HTMLElement | null,
+  busy: boolean,
+): void {
+  if (button !== null) button.disabled = busy;
   if (feedback === null) return;
   while (feedback.firstChild !== null) feedback.removeChild(feedback.firstChild);
   feedback.classList.toggle('hidden', !busy);
@@ -699,27 +707,39 @@ async function flushSave(): Promise<boolean> {
 async function rebuildPublication(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || instance === null) return;
-  const publicationId = instance.publicationId;
+  // Владелец пересборки — карточка на момент клика (образец `flushSave`,
+  // ошибка 82aada28). Элементы обратной связи захватываем синхронно, ДО любого
+  // await: при смене цели module-level refs уже указывают на новую карточку, и
+  // прелоадер «залипал» бы на ней (блокер приёмки c2dec45c).
+  const owner = instance;
+  const publicationId = owner.publicationId;
+  const ownerButton = rebuildButtonRef;
+  const ownerFeedback = rebuildFeedbackRef;
   // Сначала досылаем отложенный отбор (дебаунс 400 мс): иначе сервер
   // пересоберёт документ по СТАРОЙ строке публикации, а ответ затрёт поля
   // UI прежними значениями — «нажал, ничего не произошло» (ошибка 82aada28).
   // Конфликт сохранения НЕ пропускаем молча (ошибка c2dec45c): `flushSave`
   // уже показал ошибку — пересборку по устаревшему состоянию не запускаем.
   if (!(await flushSave())) return;
-  if (instance === null) return;
-  setRebuilding(true);
+  setRebuildingOn(ownerButton, ownerFeedback, true);
   try {
     const updated = await etn.publications.rebuild(networkId, publicationId);
-    if (instance !== null && instance.publicationId === publicationId) apply(updated);
+    // Применяем ответ и подтверждение ТОЛЬКО владельцу: если цель успела
+    // смениться, чужая карточка их получать не должна (блокер c2dec45c).
+    if (instance === owner) {
+      apply(updated);
+      notice(t('publication.rebuilt.ready'), 'success');
+    }
     // Своё realtime-эхо `publication.rebuilt` до этого клиента не доходит
     // (подавление на сервере, ошибка c2dec45c) — рабочую область и списки
-    // уведомляем локально.
+    // уведомляем локально (привязка к publicationId, а не к карточке).
     notifyPublicationRebuilt({ id: publicationId, source: 'card' });
-    notice(t('publication.rebuilt.ready'), 'success');
   } catch (err) {
     errorDialog(t('publication.rebuild'), err);
   } finally {
-    if (instance !== null && instance.publicationId === publicationId) setRebuilding(false);
+    // Снимаем прелоадер ВСЕГДА с элементов владельца (даже detached), новую
+    // карточку не трогаем — иначе её кнопка остаётся disabled навсегда.
+    setRebuildingOn(ownerButton, ownerFeedback, false);
   }
 }
 

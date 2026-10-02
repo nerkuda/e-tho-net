@@ -55,6 +55,9 @@ const db = new Map<string, Publication>();
 let bodyEl: ShimElement;
 /** Разрешение отложенной пересборки (для проверки прелоадера в полёте). */
 let pendingRebuild: ((assemblyDate: string) => void) | null = null;
+/** Отложенный PATCH — для гонки «смена цели во время пересборки». */
+let deferUpdate = false;
+let pendingUpdate: (() => void) | null = null;
 
 function publication(overrides: Partial<Publication> = {}): Publication {
   return {
@@ -90,6 +93,8 @@ function installShim(seed: Publication[]): void {
   db.clear();
   for (const pub of seed) db.set(pub.id, pub);
   pendingRebuild = null;
+  deferUpdate = false;
+  pendingUpdate = null;
 
   Object.defineProperty(ShimElement.prototype, 'parentElement', {
     configurable: true,
@@ -131,6 +136,15 @@ function installShim(seed: Publication[]): void {
           throw new Error('VERSION_CONFLICT');
         }
         calls.updates.push({ id, changes, version });
+        if (deferUpdate) {
+          return await new Promise<Publication>((resolve) => {
+            pendingUpdate = () => {
+              const next: Publication = { ...cur, ...changes, version: cur.version + 1 };
+              db.set(id, next);
+              resolve(next);
+            };
+          });
+        }
         const next: Publication = { ...cur, ...changes, version: cur.version + 1 };
         db.set(id, next);
         return next;
@@ -290,6 +304,39 @@ describe('пересборка публикации из карточки (ош�
     assert.deepEqual(calls.rebuilds, [], 'пересборка по устаревшему состоянию не запущена');
     assert.equal(button.disabled, false, 'прелоадер не показан — пересборки не было');
   });
+
+  it('смена цели во время пересборки не оставляет прелоадер на новой карточке', async () => {
+    const mod = await cardModule();
+    const box1 = new ShimElement('div');
+    const box2 = new ShimElement('div');
+    db.set('pub-2', publication({ id: 'pub-2', title: 'Вторая' }));
+
+    // Отложенный PATCH: смену цели делаем, пока он «летит».
+    deferUpdate = true;
+    openCard(mod, box1, db.get('pub-1') as Publication);
+    editTitle(box1, 'Правка');
+    const ownerButton = rebuildButton(box1);
+    ownerButton.click();
+    await wait(10);
+    assert.ok(pendingUpdate !== null, 'PATCH владельца отправлен');
+
+    // Переключаемся на другую публикацию до ответа PATCH.
+    openCard(mod, box2, db.get('pub-2') as Publication);
+    pendingUpdate!();
+    await wait(10);
+    assert.ok(pendingRebuild !== null, 'пересборка владельца всё равно отправлена');
+    pendingRebuild!(ASSEMBLY);
+    await wait(20);
+
+    const newButton = rebuildButton(box2);
+    assert.equal(newButton.disabled, false, 'кнопка новой карточки не заблокирована');
+    assert.equal(
+      box2.querySelector('.ui-state-loading'),
+      null,
+      'прелоадер не залип на новой карточке',
+    );
+    assert.equal(ownerButton.disabled, false, 'у карточки-владельца прелоадер снят');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -300,20 +347,34 @@ const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const RENDERER = path.join(CLIENT_ROOT, 'src', 'renderer');
 const read = (rel: string): string => fs.readFileSync(path.join(RENDERER, rel), 'utf8');
 
+/** Тело функции: от подписи до первого top-level `\n}` (вложенные закрыты с отступом). */
+function functionBlock(source: string, signature: string): string {
+  const start = source.indexOf(signature);
+  assert.ok(start >= 0, `не найдена функция ${signature}`);
+  const end = source.indexOf('\n}', start);
+  return end < 0 ? source.slice(start) : source.slice(start, end + 2);
+}
+
 describe('проводка локальной перечитки после пересборки (ошибка c2dec45c)', () => {
   it('карточка шлёт канал после успешной пересборки', () => {
     const source = read('editor/publication-card.ts');
-    const start = source.indexOf('async function rebuildPublication(');
-    assert.ok(start >= 0, 'не найдена rebuildPublication');
-    const block = source.slice(start, start + 1400);
+    const block = functionBlock(source, 'async function rebuildPublication(');
     assert.ok(
       block.includes("notifyPublicationRebuilt({ id: publicationId, source: 'card' })"),
       'карточка уведомляет локально о пересборке',
     );
-    assert.ok(block.includes('setRebuilding(true)'), 'карточка показывает прелоадер');
+    assert.ok(block.includes('setRebuildingOn(ownerButton, ownerFeedback, true)'), 'карточка показывает прелоадер');
     assert.ok(
       source.includes("t('publication.rebuilding')"),
       'прелоадер берёт строку из словаря',
+    );
+    assert.ok(
+      block.includes('setRebuildingOn(ownerButton, ownerFeedback, false)'),
+      'прелоадер снимается у владельца',
+    );
+    assert.ok(
+      block.includes('const owner = instance'),
+      'владелец пересборки захвачен до первого await (защита от смены цели)',
     );
     assert.ok(block.includes('flushSave()'), 'карточка досылает отложенное сохранение');
     assert.ok(
@@ -332,14 +393,16 @@ describe('проводка локальной перечитки после пе
 
   it('рабочая область шлёт канал после пересборки из шапки', () => {
     const source = read('screens/publications/workspace.ts');
-    const start = source.indexOf('async function rebuild(');
-    assert.ok(start >= 0, 'не найдена rebuild');
-    const block = source.slice(start, start + 900);
+    const block = functionBlock(source, 'async function rebuild(');
     assert.ok(
       block.includes("notifyPublicationRebuilt({ id: publicationId, source: 'workspace' })"),
       'шапка уведомляет локально о пересборке',
     );
     assert.ok(block.includes('reload()'), 'шапка перечитывает документ');
+    assert.ok(
+      block.includes("t('publication.rebuilding')"),
+      'шапка показывает прелоадер на время запроса',
+    );
   });
 
   it('экран «Публикации» перечитывает документ и списки по локальному каналу', () => {

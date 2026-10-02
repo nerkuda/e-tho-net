@@ -278,15 +278,18 @@ export function mountPublicationWorkspace(
   async function rebuild(): Promise<void> {
     const networkId = store.state.networkId;
     if (networkId === null || publicationId === null) return;
-    // Прелоадер кнопки на время запроса (спека 2ebacd12), плюс `reload()`
-    // ниже показывает состояние загрузки документа.
+    // Видимый прелоадер НА ВРЕМЯ ЗАПРОСА (спека 2ebacd12): подпись кнопки
+    // сменяется на «Пересборка…», кнопка блокируется. Прелоадер документа из
+    // `reload()` приходит с дебаунсом 200 мс и на медленном сервере запаздывал.
     rebuildButton.disabled = true;
+    rebuildButton.textContent = t('publication.rebuilding');
     try {
       await etn.publications.rebuild(networkId, publicationId);
     } catch (err) {
       errorDialog(t('publications.ws.rebuild'), err);
       return;
     } finally {
+      rebuildButton.textContent = t('publications.ws.rebuild');
       rebuildButton.disabled = false;
     }
     // Своё realtime-эхо подавлено, карточке публикации документ не обновится
