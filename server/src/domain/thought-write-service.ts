@@ -17,13 +17,13 @@
  *   2. **Write thoughts** — для каждого элемента создаётся (или
  *      переиспользуется/обновляется) мысль через {@link upsertThoughtBundle}
  *      с её собственным постоянным комментарием, хронологией, свойствами
- *      и вложениями. `ref` мапится на полученный `id`. Свойства-связи,
- *      значение которых — локальный `ref` батча, откладываются до фазы 2.5
- *      (цель может быть ещё не создана).
- *   2.5. **Deferred link properties** — значения свойств-связей, равные
- *      объявленным `ref`, резолвятся в реальные id и пишутся здесь, когда все
- *      мысли батча уже имеют id (ошибка 93bc46bb) — та же фаза, что и
- *      `links[].target_ref`.
+ *      и вложениями. `ref` мапится на полученный `id`. Значения свойств,
+ *      называющие локальный `ref` батча, откладываются до фазы 2.5 (цель
+ *      может быть ещё не создана).
+ *   2.5. **Deferred ref property values** — значения, равные объявленным `ref`,
+ *      резолвятся в реальные id и пишутся здесь, когда все мысли батча уже
+ *      имеют id (ошибка 93bc46bb). Свойство признаётся связью по тем же
+ *      семантикам имён, что и фаза 2 (`resolveDefinition`).
  *   3. **Write links** — все связи с `target_id` (существующая) или
  *      `target_ref` (только что созданная) разрешаются в реальные id и
  *      пишутся пакетом.
@@ -56,8 +56,8 @@ import { createLink } from './link-service.js';
 import { listComments } from './comment-service.js';
 import {
   computeThoughtCardWarnings,
-  getNetworkPropertyByName,
   getPropertyValues,
+  resolveDefinition,
   setPropertyValue,
 } from './property-service.js';
 
@@ -299,16 +299,21 @@ function resolveRefValue(
 
 /**
  * Split each item's `properties` into those written on phase 2 (as before) and
- * link-valued properties whose value names a batch `ref` — the latter are
- * deferred to a dedicated pass after every thought has a real id, so the same
- * `ref` resolution as `links[].target_ref` applies (ошибка 93bc46bb). Only
- * `value_type: 'link'` properties are considered: a scalar whose text happens
- * to equal a ref name is a legitimate value and must not be rewritten.
- * A property key absent from the registry is left untouched — phase 2 raises
- * the usual `NOT_FOUND`.
+ * those whose value names a batch `ref` — the latter cannot be written before
+ * the referenced thought exists, so they are deferred to phase 2.5, once every
+ * thought has a real id (ошибка 93bc46bb).
+ *
+ * The split deliberately does NOT decide whether a property is a link property:
+ * phase 2 accepts a link property by canonical registry name AND by the display
+ * name of EITHER side of its binding (paths 1 and 3 of `resolveDefinition`),
+ * and that resolution needs the owner — which does not exist yet. So any value
+ * naming a declared ref is deferred; phase 2.5 then asks `resolveDefinition`
+ * the same question phase 2 would and resolves the ref only for
+ * `value_type: 'link'` (a scalar whose text equals a ref name is written
+ * verbatim). A key unknown to the registry stays deferred too and raises the
+ * usual `NOT_FOUND` from `setPropertyValue` in phase 2.5.
  */
-function splitLinkPropertyRefs(
-  ndb: NetworkDb,
+function splitRefPropertyValues(
   input: ThoughtWriteInput,
   declaredRefs: Set<string>,
 ): {
@@ -326,12 +331,7 @@ function splitLinkPropertyRefs(
     let keptHere: Record<string, PropertyValueValue> | undefined;
     let deferredHere: Record<string, PropertyValueValue> | undefined;
     for (const [key, value] of Object.entries(item.properties)) {
-      const prop = getNetworkPropertyByName(ndb, key);
-      if (
-        prop !== null &&
-        prop.value_type === 'link' &&
-        valueReferencesDeclaredRef(value, declaredRefs)
-      ) {
+      if (valueReferencesDeclaredRef(value, declaredRefs)) {
         deferredHere ??= {};
         deferredHere[key] = value;
         continue;
@@ -405,9 +405,9 @@ function validateLinkTargets(input: ThoughtWriteInput, refToId: Map<string, stri
  *   2. **Thoughts** — для каждого элемента создаём/обновляем/переиспользуем
  *      мысль через {@link upsertThoughtBundle} БЕЗ связей (комментарий,
  *      хронология, свойства, вложения — идут в комплекте). `ref → id`
- *      собирается параллельно. Свойства-связи со значением-`ref` отложены.
- *   2.5. **Deferred link properties** — значения свойств-связей, равные
- *      объявленным `ref`, резолвятся в id и пишутся (все мысли уже созданы).
+ *      собирается параллельно. Значения свойств, называющие `ref`, отложены.
+ *   2.5. **Deferred ref property values** — значения, равные объявленным
+ *      `ref`, резолвятся в id и пишутся (все мысли уже созданы).
  *   3. **Links** — резолвим `target_ref` в реальные id (все мысли уже
  *      имеют id к этому моменту, циклы корректны), создаём связи
  *      пакетом. Знание на связи (`links[].properties`, `links[].comment`)
@@ -436,11 +436,11 @@ export function writeThoughts(
   const refToId = resolveExistingThoughtIds(resolved);
   const declaredRefs = collectDeclaredRefs(resolved);
   validateLinkTargets(resolved, refToId);
-  // Link-valued properties whose value names a batch `ref` cannot be written on
-  // phase 2 (the target may not exist yet) — they join the link phase, where
-  // every thought already has a real id (ошибка 93bc46bb).
-  const { kept: keptProperties, deferred: deferredProperties } = splitLinkPropertyRefs(
-    ndb,
+  // Property values that name a batch `ref` cannot be written on phase 2 (the
+  // target may not exist yet) — they join phase 2.5, once every thought has a
+  // real id. Whether such a value IS a link property is decided there by the
+  // same `resolveDefinition` semantics phase 2 uses (ошибка 93bc46bb).
+  const { kept: keptProperties, deferred: deferredProperties } = splitRefPropertyValues(
     resolved,
     declaredRefs,
   );
@@ -570,23 +570,27 @@ export function writeThoughts(
       });
     }
 
-    // ---- phase 2.5: deferred link properties (ref → real id) --------------
-    // Every thought now has a real id, so a link property whose value named a
-    // batch `ref` resolves exactly like `links[].target_ref`. Writing it here
-    // (instead of phase 2) is what makes «каталог + сущность с Родителями→ref
-    // каталога» work in one transaction (ошибка 93bc46bb); cycles and forward
-    // refs are covered because all thoughts exist by now.
+    // ---- phase 2.5: deferred ref property values ---------------------------
+    // Every thought now has a real id, so a property addressed by ANY name the
+    // read side shows (canonical registry name, or the display name of either
+    // side of a link property — same `resolveDefinition` semantics as phase 2)
+    // can be recognised and, when it is a link property, have its `ref` values
+    // resolved exactly like `links[].target_ref` (ошибка 93bc46bb). A scalar
+    // whose text merely equals a ref name is written verbatim.
     for (const [index, deferred] of deferredProperties.entries()) {
       if (deferred === undefined) continue;
       const itemResult = items[index];
       if (itemResult === undefined) continue;
       for (const [key, rawValue] of Object.entries(deferred)) {
+        const def = resolveDefinition(ndb, 'thought', itemResult.id, key);
+        const value =
+          def?.value_type === 'link' ? resolveRefValue(rawValue, refToId) : rawValue;
         const pv = setPropertyValue(
           ndb,
           'thought',
           itemResult.id,
           key,
-          resolveRefValue(rawValue, refToId),
+          value,
           actorUserId,
           crossNetworkAccess,
         );

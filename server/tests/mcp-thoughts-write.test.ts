@@ -1432,6 +1432,117 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('properties: display-имя стороны свойства-связи + ref (93bc46bb, круг 2)', async () => {
+    // Блокер круга 1: резолв ref признавал свойство-связь только по каноническому
+    // имени реестра, а фаза 2 принимает её и по display-имени стороны привязки
+    // (`resolveDefinition`, пути 1/3) — так ключи и отдают карточки. Значение под
+    // display-ключом ref'ом не признавалось → исходный симптом.
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const ontology = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [{ ref: 'bearer', name: 'TEST 93bc46bb2 — носитель' }],
+            properties: [
+              {
+                ref: 'relT',
+                name: 'TEST 93bc46bb2-T',
+                value_type: 'link',
+                name_forward: 'TEST 93bc46bb2-T вперед',
+                name_reverse: 'TEST 93bc46bb2-T назад',
+              },
+              {
+                ref: 'relS',
+                name: 'TEST 93bc46bb2-S',
+                value_type: 'link',
+                name_forward: 'TEST 93bc46bb2-S вперед',
+                name_reverse: 'TEST 93bc46bb2-S назад',
+              },
+              { ref: 'scalar', name: 'TEST 93bc46bb2 — метка', value_type: 'text' },
+            ],
+            type_properties: [
+              { owner: 'thought_type', type_ref: 'bearer', property_ref: 'relT', side: 'target' },
+              { owner: 'thought_type', type_ref: 'bearer', property_ref: 'relS', side: 'source' },
+              { owner: 'thought_type', type_ref: 'bearer', property_ref: 'scalar' },
+            ],
+          },
+        });
+        assert.equal(ontology.isError, undefined, toolText(ontology));
+
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'src', thought: { title: 'TEST 93bc46bb2 — источник' } },
+              { ref: 'dst', thought: { title: 'TEST 93bc46bb2 — приёмник' } },
+              { ref: 'label-ref', thought: { title: 'TEST 93bc46bb2 — цель метки' } },
+              {
+                ref: 'b',
+                thought: { title: 'TEST 93bc46bb2 — носитель', type: 'TEST 93bc46bb2 — носитель' },
+                properties: {
+                  // side target → направление in → display-ключ = name_reverse.
+                  'TEST 93bc46bb2-T назад': 'src',
+                  // side source → направление out → display-ключ = name_forward.
+                  'TEST 93bc46bb2-S вперед': 'dst',
+                  // Скаляр, текст которого совпал с именем ref, — НЕ переписывается.
+                  'TEST 93bc46bb2 — метка': 'label-ref',
+                },
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<WriteResult>(result);
+        const srcId = data.items[0]!.id;
+        const dstId = data.items[1]!.id;
+        const bearerId = data.items[3]!.id;
+        const bearerProps = data.items[3]!.properties ?? {};
+        assert.deepEqual(
+          bearerProps['TEST 93bc46bb2-T назад']?.targets,
+          [srcId],
+          `target-side display key must resolve the ref: ${JSON.stringify(bearerProps)}`,
+        );
+        assert.deepEqual(
+          bearerProps['TEST 93bc46bb2-S вперед']?.targets,
+          [dstId],
+          `source-side display key must resolve the ref: ${JSON.stringify(bearerProps)}`,
+        );
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        // Оба ребра созданы (направление: relT — in, relS — out; проверяем пару концов).
+        for (const [a, b] of [
+          [srcId, bearerId],
+          [dstId, bearerId],
+        ] as Array<[string, string]>) {
+          const c = ndb
+            .prepare(
+              `SELECT COUNT(*) AS c FROM links_v
+                WHERE (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)`,
+            )
+            .get(a, b, b, a) as { c: number };
+          assert.equal(c.c, 1, `edge between ${a} and ${b} must exist`);
+        }
+        // Скаляр остался текстом, а не id'ом.
+        const stored = ndb
+          .prepare(
+            `SELECT pv.value_text AS v FROM property_values_v pv
+               JOIN properties_v p ON p.id = pv.property_id
+              WHERE pv.owner_id = ? AND p.name = ?`,
+          )
+          .get(bearerId, 'TEST 93bc46bb2 — метка') as { v: string } | undefined;
+        assert.equal(stored?.v, 'label-ref', 'scalar text equal to a ref name must stay verbatim');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('links[].target_ref резолвится и для существующей мысли; нерезолвимый ref — явная ошибка (2a3be0f3)', async () => {
     // Симптом (не подтвердился на текущем коде — закрепляем контракт): элемент
     // с `thought_id` + `links[].target_ref` на ref новой мысли батча не должен
