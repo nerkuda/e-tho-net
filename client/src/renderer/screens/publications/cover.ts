@@ -26,8 +26,9 @@ const SIZE_CLASS: Record<CoverSize, string> = {
 /**
  * Строит узел обложки. Для `cover_kind === 'attachment'` источник —
  * `etnimg://attachment/<id>`: main-процесс резолвит id в `file_path` вложения
- * и отдаёт файл локально либо копией с сервера (ошибка 280a322b, ADR «Форма
- * attachment/<id> протокола etnimg»); для `url` — сам URL; иначе заглушка.
+ * и отдаёт файл локально либо копией с сервера (ошибка 280a322b, ADR «Формы
+ * адреса схемы etnimg: файл по пути и вложение по id»); для `url` — сам URL;
+ * иначе заглушка.
  */
 export function buildCover(publication: Publication, size: CoverSize): HTMLElement {
   const root = div(`pub-cover ${SIZE_CLASS[size]}`);
