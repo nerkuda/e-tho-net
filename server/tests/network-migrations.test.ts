@@ -19,57 +19,18 @@ import { registerMigrationHelpers } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { propertyValueId } from '../src/db/property-value-id.js';
 import { networkMigrationsDir } from '../src/paths.js';
+import { networkMigrationFiles, networkMigrationFilesFrom } from './migration-files.js';
 
-const EXPECTED_FILES = [
-  '001_thoughts.sql',
-  '002_thought_synonyms.sql',
-  '003_thought_types.sql',
-  '004_link_types.sql',
-  '005_type_properties.sql',
-  '006_property_values.sql',
-  '007_links.sql',
-  '008_comments.sql',
-  '009_attachments.sql',
-  '010_user_state.sql',
-  '011_fts.sql',
-  '012_embeddings.sql',
-  '013_thought_style_inheritance.sql',
-  '014_link_style_override.sql',
-  '015_attachments_icon.sql',
-  '016_saved_filters.sql',
-  '016_thought_icon_attachment.sql',
-  '017_type_name_keys.sql',
-  '018_pinned_thoughts.sql',
-  '019_comment_targets.sql',
-  '020_saved_filters_view.sql',
-  '021_type_hierarchy.sql',
-  '022_thought_types_comment_template.sql',
-  '023_thought_read_metrics.sql',
-  '024_marked_for_deletion.sql',
-  '025_layers.sql',
-  '026_fts_layer_tombstones.sql',
-  '027_session_layers.sql',
-  '028_session_layers_switch_seq.sql',
-  '029_links_triple_live.sql',
-  '030_type_property_description.sql',
-  '031_layer_colors.sql',
-  '032_properties_registry.sql',
-  '033_authorship_columns.sql',
-  '034_object_locks.sql',
-  '035_activity_log.sql',
-  '036_property_values_deterministic_id.sql',
-  '037_thought_type_views.sql',
-  '038_search_trigram.sql',
-  '039_structural_link_properties.sql',
-  '040_thought_ref_to_link_properties.sql',
-  '041_type_property_side.sql',
-  '042_unified_property_link_registry.sql',
-  '043_type_properties_canonical_unique.sql',
-  '044_cross_network_ref.sql',
-  '045_links_covering_indexes.sql',
-  '046_comments_time.sql',
-  '047_publications.sql',
-];
+/**
+ * Ожидаемый перечень миграций вычисляется из каталога (задача 8816c01f,
+ * 0.11.1), а не переписывается вручную: новая миграция попадает в ожидание
+ * сама, без правки этого файла. Смысловые якоря версий («состояние до 032»)
+ * остаются явными именами файлов внутри соответствующих тестов.
+ */
+const MIGRATION_FILES = networkMigrationFiles();
+
+/** Последняя миграция каталога (применяется последней). */
+const LAST_MIGRATION = MIGRATION_FILES[MIGRATION_FILES.length - 1]!;
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
 const EXPECTED_TABLES = [
@@ -117,11 +78,15 @@ function nativeAvailable(): boolean {
 }
 
 describe('network migrations (filesystem)', () => {
-  it('ships all expected migration files in sorted order', () => {
-    const files = readdirSync(networkMigrationsDir())
-      .filter((f) => f.endsWith('.sql'))
-      .sort();
-    assert.deepEqual(files, EXPECTED_FILES);
+  it('ships a non-empty, well-named migration catalog', () => {
+    const all = readdirSync(networkMigrationsDir()).sort();
+    // В каталоге лежат только сами миграции (сравнение с отфильтрованным по
+    // `.sql` перечнем ловит посторонний файл, который migrator молча пропустит).
+    assert.deepEqual(all, MIGRATION_FILES, 'в каталоге миграций только *.sql-файлы');
+    assert.ok(all.length > 0, 'каталог миграций не пуст');
+    for (const f of all) {
+      assert.match(f, /^\d{3}_[a-z0-9_]+\.sql$/, `имя миграции вне шаблона NNN_name.sql: ${f}`);
+    }
   });
 });
 
@@ -136,7 +101,7 @@ describe(
       try {
         const res = runMigrations(db, networkMigrationsDir());
         assert.equal(res.skipped.length, 0);
-        assert.equal(res.applied.length, EXPECTED_FILES.length);
+        assert.deepEqual(res.applied, MIGRATION_FILES);
 
         const tables = (
           db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as {
@@ -168,7 +133,7 @@ describe(
         // Re-running is idempotent.
         const res2 = runMigrations(db, networkMigrationsDir());
         assert.equal(res2.applied.length, 0);
-        assert.equal(res2.skipped.length, EXPECTED_FILES.length);
+        assert.equal(res2.skipped.length, MIGRATION_FILES.length);
 
         // 013 style-inheritance columns: thoughts.font_manual bitmap and
         // thought_types.icon_kind (02-data-model.md §3.1.1, §3.3).
@@ -606,24 +571,9 @@ describe(
         ).run();
 
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, [
-          '032_properties_registry.sql',
-          '033_authorship_columns.sql',
-          '034_object_locks.sql',
-          '035_activity_log.sql',
-          '036_property_values_deterministic_id.sql',
-          '037_thought_type_views.sql',
-          '038_search_trigram.sql',
-          '039_structural_link_properties.sql',
-          '040_thought_ref_to_link_properties.sql',
-          '041_type_property_side.sql',
-          '042_unified_property_link_registry.sql',
-          '043_type_properties_canonical_unique.sql',
-          '044_cross_network_ref.sql',
-          '045_links_covering_indexes.sql',
-          '046_comments_time.sql',
-          '047_publications.sql',
-        ]);
+        // База доведена до 031 (pre032Db) — прогон применяет каталог начиная
+        // с 032 (задача 8816c01f: ожидание вычисляется, не перечисляется).
+        assert.deepEqual(res.applied, networkMigrationFilesFrom('032_properties_registry.sql'));
 
         // 18 definitions became 15 properties: three groups merged
         // («Плановый срок» d5+d9, «слой» d8+d18, «путь»/«Путь» d12+d15),
@@ -907,20 +857,11 @@ describe(
         seedPv(db, '11111111-2222-4333-8444-555555555555', '22222222-2222-4222-8222-222222222222', owner, prop, 'в работе (А)', 1);
 
         const applied = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(applied.applied, [
-          '036_property_values_deterministic_id.sql',
-          '037_thought_type_views.sql',
-          '038_search_trigram.sql',
-          '039_structural_link_properties.sql',
-          '040_thought_ref_to_link_properties.sql',
-          '041_type_property_side.sql',
-          '042_unified_property_link_registry.sql',
-          '043_type_properties_canonical_unique.sql',
-          '044_cross_network_ref.sql',
-          '045_links_covering_indexes.sql',
-          '046_comments_time.sql',
-          '047_publications.sql',
-        ]);
+        // База доведена до 035 (pre036Db) — применяется каталог с 036.
+        assert.deepEqual(
+          applied.applied,
+          networkMigrationFilesFrom('036_property_values_deterministic_id.sql'),
+        );
 
         const expectedId = propertyValueId('thought', owner, prop);
         const rows = db
@@ -986,7 +927,7 @@ describe(
       registerMigrationHelpers(db);
       try {
         const res = runMigrations(db, networkMigrationsDir());
-        assert.equal(res.applied[res.applied.length - 1], '047_publications.sql');
+        assert.equal(res.applied[res.applied.length - 1], LAST_MIGRATION);
         // 040 уже применён в прогоне — откатываем запись, сеем данные
         // thought_ref-эпохи и применяем повторно (как апгрейд живой сети).
         // 041 (DDL — добавление колонки `side`) и 042 (DML — снятие direction,
@@ -1428,14 +1369,11 @@ describe(
         );
 
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, [
-          '042_unified_property_link_registry.sql',
-          '043_type_properties_canonical_unique.sql',
-          '044_cross_network_ref.sql',
-          '045_links_covering_indexes.sql',
-          '046_comments_time.sql',
-          '047_publications.sql',
-        ]);
+        // База доведена до 041 (pre042Db) — применяется каталог с 042.
+        assert.deepEqual(
+          res.applied,
+          networkMigrationFilesFrom('042_unified_property_link_registry.sql'),
+        );
 
         // Сценарий 1: p-backward удалён, его привязки перенесены на
         // p-forward с side='target'. У p-forward осталась своя привязка
