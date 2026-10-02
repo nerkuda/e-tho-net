@@ -482,14 +482,19 @@
 }
 
 .pub-ws-titlebox {
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
+/* Заголовок публикации — кнопка-фасад (задача b51dbca4): клик/Enter открывает
+   карточку в панели редактора; отдельной кнопки «Настройки» больше нет. */
 .pub-ws-title {
-  margin: 0;
+  justify-content: flex-start;
+  max-width: 100%;
+  min-width: 0;
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
   overflow: hidden;
@@ -536,6 +541,20 @@
 
 .pub-ws.pub-toc-collapsed .pub-toc {
   width: 2.25rem;
+}
+
+/* Свёрнутая панель оглавления: символ разворота делаем заметным (задача
+   b51dbca4) — центрируем кнопку-переключатель и подкрашиваем акцентом, вместо
+   прежней «неразличимой точки». */
+.pub-ws.pub-toc-collapsed .pub-toc-head {
+  justify-content: center;
+}
+
+/* Акцент поверх словарного `.ui-btn--ghost.ui-btn--icon` (равная специфичность
+   решается порядком бандла, а он не контракт — грабли 36889dd6): поднимаем
+   специфичностью через `.pub-toc-head`. */
+.pub-ws.pub-toc-collapsed .pub-toc-head .pub-toc-toggle {
+  color: var(--accent);
 }
 
 .pub-ws.pub-toc-collapsed .pub-toc-title,
@@ -682,7 +701,32 @@
 }
 
 .pub-doc-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   cursor: pointer;
+}
+
+/* Каретка-экспандер раздела (задача b51dbca4): слева в заголовке; у свёрнутого
+   раздела повёрнута вправо, как у полок и оглавления. */
+.pub-doc-caret {
+  flex: none;
+}
+
+.pub-doc-section.pub-doc-collapsed .pub-doc-caret .icon {
+  transform: rotate(-90deg);
+}
+
+/* Текущий блок клавиатурной навигации тела документа (общий компонент
+   `lib/ui/list.ts` поверх `nav-core.ts`). */
+.pub-doc-current {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-s);
+}
+
+.pub-doc:focus {
+  outline: none;
 }
 
 .pub-doc-heading.pub-doc-repeat::after {

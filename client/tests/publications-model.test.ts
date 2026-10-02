@@ -371,24 +371,8 @@ describe('публикации: единая навигация, свёрнут�
     assert.equal(isShelfCollapsed('s1', new Set(['s1'])), true);
   });
 
-  it('состав меню публикации: порядок команд; подменю полок — только при живых полках', () => {
-    assert.deepEqual(publicationMenuCommands({ hasShelves: false, active: true }), [
-      'open',
-      'read',
-      'exportMd',
-      'exportHtml',
-      'toggleActive',
-      'delete',
-    ]);
-    assert.deepEqual(publicationMenuCommands({ hasShelves: true, active: false }), [
-      'open',
-      'read',
-      'exportMd',
-      'exportHtml',
-      'shelfToggle',
-      'toggleActive',
-      'delete',
-    ]);
+  it('состав меню публикации: открыть/удалить/читать/экспортировать (b51dbca4)', () => {
+    assert.deepEqual(publicationMenuCommands(), ['open', 'delete', 'read', 'exportMd', 'exportHtml']);
   });
 
   it('состав меню полки: «Добавить публикацию» и «Удалить»', () => {

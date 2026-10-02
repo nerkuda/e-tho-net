@@ -710,13 +710,11 @@ export const ru = {
   'publications.next': 'Вперёд',
   'publications.page': '%1–%2 из %3',
   /** Контекстное меню публикации. */
-  'publications.menu.export': 'Экспорт',
+  'publications.menu.export': 'Экспортировать',
   'publications.menu.exportMd': 'Экспорт в Markdown',
   'publications.menu.exportHtml': 'Экспорт в HTML',
-  'publications.menu.shelves': 'На полки',
-  'publications.menu.inactive': 'Неактуальна',
-  'publications.menu.active': 'Актуальна',
-  /** Пункты контекстного меню публикации (задача 00160da1). */
+  /** Пункты контекстного меню публикации (задачи 00160da1, b51dbca4):
+   *  открыть карточку, удалить, читать, экспортировать. */
   'publications.menu.open': 'Открыть',
   'publications.menu.read': 'Читать',
   'publications.menu.delete': 'Удалить',
@@ -749,9 +747,16 @@ export const ru = {
   // -- Публикации: рабочая область открытой публикации (0.11.1, задача 4f03b9d5) --
   /** Кнопка возврата в библиотеку (шапка рабочей области). */
   'publications.ws.back': 'Назад',
-  'publications.ws.settings': 'Настройки',
   'publications.ws.rebuild': 'Пересобрать',
   'publications.ws.export': 'Экспорт',
+  /** Кликабельный заголовок публикации (задача b51dbca4). */
+  'publications.ws.openCard': 'Открыть карточку публикации',
+  /** Кнопки тулбара «Свернуть все»/«Развернуть все» по разделам. */
+  'publications.ws.collapseAll': 'Свернуть все',
+  'publications.ws.expandAll': 'Развернуть все',
+  /** Каретка-экспандер раздела в теле документа. */
+  'publications.ws.sectionCollapse': 'Свернуть раздел',
+  'publications.ws.sectionExpand': 'Развернуть раздел',
   /** Оглавление документа. */
   'publications.ws.toc': 'Оглавление',
   'publications.ws.tocCollapse': 'Свернуть оглавление',

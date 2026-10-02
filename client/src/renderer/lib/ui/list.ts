@@ -45,6 +45,7 @@ import {
 export interface ListNavKeyEvent {
   key?: string;
   shiftKey?: boolean;
+  ctrlKey?: boolean;
   target?: unknown | null;
   preventDefault?: () => void;
   stopPropagation?: () => void;

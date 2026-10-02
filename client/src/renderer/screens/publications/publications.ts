@@ -181,12 +181,13 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     onToggleShelf: (shelfId, collapsed) => setShelfCollapsed(shelfId, collapsed),
     onEditShelf: (shelfId) => beginShelfRenameById(shelfId),
     onOpenPublication: (id) => void openPublicationCard(id),
+    onReadPublication: (id) => void openPublicationWorkspace(id),
   });
   wsHost = div('publications-host pub-ws-host hidden');
   hostEl.append(wsHost);
   workspace = mountPublicationWorkspace(wsHost, {
     onClose: () => closePublicationWorkspace(),
-    onSettings: (id) => void openPublicationCard(id),
+    onOpenCard: (id) => void openPublicationCard(id),
     onExport: (id, ev) => openWorkspaceExportMenu(id, ev),
   });
   // Локальная пересборка (из карточки панели редактора или из шапки рабочей
@@ -860,9 +861,11 @@ function updateCard(card: HTMLElement, publication: Publication): void {
 }
 
 function wireCardEvents(card: HTMLElement, publication: Publication): void {
-  // Одиночный клик — читать публикацию (спека 1eecd988); Enter на выделенной
-  // карточке ведёт навигация и открывает её в панели редактора (задача 55ee3c85).
-  card.addEventListener('click', () => void openPublicationWorkspace(publication.id));
+  // Одиночный клик — то же, что Enter: карточка публикации в панели редактора;
+  // двойной клик — режим чтения (задача b51dbca4). Ctrl+Enter (навигация)
+  // делает то же, что двойной клик.
+  card.addEventListener('click', () => void openPublicationCard(publication.id));
+  card.addEventListener('dblclick', () => void openPublicationWorkspace(publication.id));
   card.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
     openPublicationMenu(ev, publication);
@@ -1058,7 +1061,9 @@ function updateEntry(entry: HTMLElement, publication: Publication): void {
 }
 
 function wireEntryEvents(entry: HTMLElement, publication: Publication): void {
-  entry.addEventListener('click', () => void openPublicationWorkspace(publication.id));
+  // Одиночный клик — карточка в редакторе, двойной — чтение (задача b51dbca4).
+  entry.addEventListener('click', () => void openPublicationCard(publication.id));
+  entry.addEventListener('dblclick', () => void openPublicationWorkspace(publication.id));
   entry.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
     openPublicationMenu(ev, publication);
@@ -1161,15 +1166,12 @@ function openPublicationMenu(ev: MouseEvent, publication: Publication): void {
 
 /**
  * Пункты контекстного меню публикации (карточки полки и строки списка) —
- * ЕДИНЫЕ для обоих видов (задача 55ee3c85). Состав и порядок команд задаёт
- * чистая модель `publicationMenuCommands` (покрыта тестом); здесь команды
- * превращаются в пункты меню с подменю «Экспорт» и «На полки».
+ * ЕДИНЫЕ для обоих видов и обеих задач (55ee3c85, b51dbca4). Состав задаёт
+ * чистая модель `publicationMenuCommands` (покрыта тестом): «Открыть»,
+ * «Удалить», «Читать» и «Экспортировать» (подменю md/html).
  */
 function publicationMenuItems(publication: Publication): MenuItem[] {
-  const commands = publicationMenuCommands({
-    hasShelves: shelves.length > 0,
-    active: publication.active,
-  });
+  const commands = publicationMenuCommands();
   const items: MenuItem[] = [];
   let exportItems: MenuItem[] = [];
   for (const command of commands) {
@@ -1190,26 +1192,6 @@ function publicationMenuItems(publication: Publication): MenuItem[] {
         exportItems.push(menuAction(t('publications.menu.exportHtml'), () => void runExport(publication.id, 'html')));
         items.push(menuSubmenu(t('publications.menu.export'), exportItems), MENU_SEPARATOR);
         exportItems = [];
-        break;
-      case 'shelfToggle': {
-        const shelfItems = shelves.map((shelf) =>
-          menuChoice(
-            shelf.title,
-            shelf.items.some((i) => i.publication_id === publication.id),
-            () => void toggleShelf(publication.id, shelf.id),
-          ),
-        );
-        items.push(menuSubmenu(t('publications.menu.shelves'), shelfItems), MENU_SEPARATOR);
-        break;
-      }
-      case 'toggleActive':
-        items.push(
-          menuAction(
-            publication.active ? t('publications.menu.inactive') : t('publications.menu.active'),
-            () => void toggleActive(publication),
-          ),
-          MENU_SEPARATOR,
-        );
         break;
       case 'delete':
         items.push(
@@ -1412,36 +1394,6 @@ async function commitShelfRename(shelf: Shelf, title: string): Promise<void> {
   if (networkId === null) return;
   try {
     await etn.publications.updateShelf(networkId, shelf.id, { title });
-  } catch (err) {
-    errorDialog(t('publications.title'), err);
-  }
-  invalidatePublications();
-}
-
-async function toggleShelf(publicationId: string, shelfId: string): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const shelf = shelves.find((s) => s.id === shelfId);
-  const on = shelf?.items.some((i) => i.publication_id === publicationId) ?? false;
-  try {
-    if (on) await etn.publications.removeShelfItem(networkId, shelfId, publicationId);
-    else await etn.publications.addShelfItem(networkId, shelfId, publicationId);
-  } catch (err) {
-    errorDialog(t('publications.title'), err);
-  }
-  invalidatePublications();
-}
-
-async function toggleActive(publication: Publication): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  try {
-    await etn.publications.update(
-      networkId,
-      publication.id,
-      { active: !publication.active },
-      publication.version,
-    );
   } catch (err) {
     errorDialog(t('publications.title'), err);
   }

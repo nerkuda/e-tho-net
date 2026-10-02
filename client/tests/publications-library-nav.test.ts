@@ -22,9 +22,10 @@ import {
 import { ShimElement } from './dom-shim.js';
 
 /** Вызов клавиши на корне библиотеки. */
-function press(root: ShimElement, key: string, target?: ShimElement): void {
+function press(root: ShimElement, key: string, target?: ShimElement, ctrlKey = false): void {
   root.emit('keydown', {
     key,
+    ctrlKey,
     target: target ?? root,
     preventDefault: (): void => undefined,
   });
@@ -52,16 +53,18 @@ interface NavSpy {
   toggled: Array<{ shelfId: string; collapsed: boolean }>;
   edited: string[];
   opened: string[];
+  read: string[];
 }
 
 function mount(sections: ShimElement[]): { root: ShimElement; nav: ReturnType<typeof attachLibraryNav>; spy: NavSpy } {
   const root = new ShimElement('div', 'publications');
   for (const section of sections) root.append(section);
-  const spy: NavSpy = { toggled: [], edited: [], opened: [] };
+  const spy: NavSpy = { toggled: [], edited: [], opened: [], read: [] };
   const nav = attachLibraryNav(root as unknown as HTMLElement, {
     onToggleShelf: (shelfId, collapsed) => spy.toggled.push({ shelfId, collapsed }),
     onEditShelf: (shelfId) => spy.edited.push(shelfId),
     onOpenPublication: (id) => spy.opened.push(id),
+    onReadPublication: (id) => spy.read.push(id),
   });
   return { root, nav, spy };
 }
@@ -147,6 +150,16 @@ describe('навигация библиотеки: ←/→ и Enter (55ee3c85)',
     press(root, 'ArrowDown');
     press(root, 'Enter');
     assert.deepEqual(spy.opened, ['p1']);
+    nav.destroy();
+  });
+
+  it('Ctrl+Enter на публикации — режим чтения (задача b51dbca4)', () => {
+    const { root, nav, spy } = mount([group('s1', ['p1'])]);
+    press(root, 'ArrowDown');
+    press(root, 'ArrowDown');
+    press(root, 'Enter', undefined, true);
+    assert.deepEqual(spy.read, ['p1'], 'Ctrl+Enter открывает рабочую область чтения');
+    assert.deepEqual(spy.opened, [], 'обычная карточка не открывается');
     nav.destroy();
   });
 

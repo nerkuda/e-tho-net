@@ -15,6 +15,7 @@ import type {
 
 import {
   blockSignature,
+  collapsibleSectionIds,
   documentBlocks,
   flattenSections,
   positionsFor,
@@ -299,5 +300,75 @@ describe('модель рабочей области публикации: по�
     // Пометка повтора ведёт к первому вхождению, а не на саму себя.
     assert.equal(dRows[0]!.repeatOf, 'pub-D');
     assert.notEqual(dRows[0]!.anchor, dRows[0]!.repeatOf);
+  });
+});
+
+describe('модель рабочей области: сворачивание разделов (b51dbca4)', () => {
+  const text = (
+    id: string,
+  ): PublicationAssemblySection['texts'][number] => ({
+    thought_id: id,
+    anchor: `pub-${id}`,
+    edge_id: `e:${id}`,
+    body_html: `<p>${id}</p>`,
+  });
+
+  /** A (предисловие + текст) → B (текст); C — пустой корневой раздел. */
+  const withText = (
+    id: string,
+    children: PublicationAssemblySection[] = [],
+  ): PublicationAssemblySection => ({ ...section(id, children, id), texts: [text(`t${id}`)] });
+  const tree = (): PublicationAssemblySection[] => [
+    {
+      ...section('A', [withText('B')], 'A'),
+      preamble_html: '<p>preA</p>',
+      texts: [text('tA')],
+    },
+    section('C', [], 'C'),
+  ];
+
+  const isSection = (
+    block: ReturnType<typeof documentBlocks>[number],
+  ): block is Extract<ReturnType<typeof documentBlocks>[number], { kind: 'section' }> =>
+    block.kind === 'section';
+
+  it('свёрнутый раздел прячет свои тексты, предисловие и подразделы', () => {
+    const asm = makeAssembly(tree());
+    const full = documentBlocks(asm, null);
+    const folded = documentBlocks(asm, null, new Set(['A']));
+    assert.ok(full.some((b) => b.kind === 'text' && b.thoughtId === 'tA'), 'в развёрнутом тексте текст виден');
+    assert.ok(!folded.some((b) => b.kind === 'text' && b.thoughtId === 'tA'), 'текст свёрнутого скрыт');
+    assert.ok(!folded.some((b) => isSection(b) && b.thoughtId === 'B'), 'подраздел скрыт');
+    const a = folded.find((b) => isSection(b) && b.thoughtId === 'A');
+    assert.ok(a !== undefined && isSection(a));
+    assert.equal(a.collapsed, true);
+    assert.equal(a.collapsible, true);
+    assert.ok(folded.some((b) => isSection(b) && b.thoughtId === 'C'), 'соседний корневой раздел виден');
+  });
+
+  it('нумерация якорей не сбивается при сворачивании (совпадает с полным деревом)', () => {
+    const asm = makeAssembly(tree());
+    const full = documentBlocks(asm, null);
+    const folded = documentBlocks(asm, null, new Set(['A']));
+    const domOf = (blocks: ReturnType<typeof documentBlocks>, id: string): string | undefined => {
+      const found = blocks.find((b) => isSection(b) && b.thoughtId === id);
+      return found !== undefined && isSection(found) ? found.domId : undefined;
+    };
+    assert.equal(domOf(folded, 'C'), domOf(full, 'C'));
+    assert.equal(domOf(folded, 'A'), domOf(full, 'A'));
+  });
+
+  it('tocLines прячет тексты свёрнутого раздела и даёт каретку разделу с текстами', () => {
+    const asm = makeAssembly(tree());
+    const lines = tocLines(asm, new Set(['A']), (i) => `Текст ${i}`);
+    assert.ok(!lines.some((l) => l.kind === 'text' && l.thoughtId === 'tA'), 'текст свёрнутого скрыт');
+    const a = lines.find((l) => l.kind === 'section' && l.thoughtId === 'A');
+    assert.ok(a !== undefined && a.kind === 'section');
+    assert.equal(a.hasChildren, true, 'раздел с текстом получает каретку');
+    assert.equal(a.collapsed, true);
+  });
+
+  it('collapsibleSectionIds — разделы с содержимым (текст/предисловие/подраздел)', () => {
+    assert.deepEqual(collapsibleSectionIds(makeAssembly(tree())).sort(), ['A', 'B']);
   });
 });

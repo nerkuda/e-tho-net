@@ -36,7 +36,7 @@ import {
 } from '../../lib/dom.js';
 import { t } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
-import { svgIcon } from '../../lib/icons.js';
+import { svgIcon, type IconName } from '../../lib/icons.js';
 import { errorDialog, isInsideDialog } from '../../lib/dialog.js';
 import { notice } from '../../lib/notice.js';
 import {
@@ -49,10 +49,13 @@ import { uiButton, iconButton } from '../../lib/ui/button.js';
 import { emptyState, errorState, loadingState } from '../../lib/ui/empty-state.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
+import { createListNav, type ListNavAdapter } from '../../lib/ui/list.js';
+import { isEditingTarget } from '../../lib/ui/nav-core.js';
 import { buildCover } from './cover.js';
 import {
   assemblyDateLabel,
   blockSignature,
+  collapsibleSectionIds,
   displayAuthorship,
   documentBlocks,
   flattenSections,
@@ -76,8 +79,8 @@ import { store } from '../../state.js';
 export interface PublicationWorkspaceOptions {
   /** Закрыть рабочую область и вернуться в библиотеку. */
   onClose: () => void;
-  /** Открыть карточку публикации в панели редактора. */
-  onSettings: (publicationId: string) => void;
+  /** Открыть карточку публикации в панели редактора (клик/Enter по заголовку). */
+  onOpenCard: (publicationId: string) => void;
   /** Экспортировать документ (меню формата → джоба) — механика библиотеки. */
   onExport: (publicationId: string, ev: MouseEvent) => void;
 }
@@ -106,6 +109,17 @@ export interface PublicationOpenTarget {
   page?: number;
   /** Якорь блока (`pub-<shortid>`): прокрутка к первому вхождению. */
   anchor?: string;
+}
+
+/** Сущность клавиатурной навигации тела документа (задача b51dbca4). */
+interface DocNavEntry {
+  /** Ключ блока (`data-block-key`) — стабилен между перерисовками. */
+  key: string;
+  /** Мысль блока: активация открывает её в панели редактора. */
+  thoughtId: string;
+  kind: 'section' | 'text';
+  /** Раздел сворачиваем — ←/→ переключают его состояние. */
+  collapsible: boolean;
 }
 
 /**
@@ -175,51 +189,138 @@ export function mountPublicationWorkspace(
   });
   const coverBox = div('pub-ws-cover');
   const titleBox = div('pub-ws-titlebox');
-  const titleText = el('h1', 'pub-ws-title');
-  const subtitleText = div('pub-ws-subtitle');
-  const metaText = div('pub-ws-meta');
-  titleBox.append(titleText, subtitleText, metaText);
-  const actions = div('pub-ws-actions');
-  const settingsButton = uiButton({
-    label: t('publications.ws.settings'),
+  // Заголовок — кнопка-фасад (задача b51dbca4): клик/Enter открывает карточку
+  // публикации в панели редактора; отдельной кнопки «Настройки» больше нет.
+  const titleButton = uiButton({
     role: 'ghost',
+    class: 'pub-ws-title',
+    title: t('publications.ws.openCard'),
     onClick: () => {
-      if (publicationId !== null) opts.onSettings(publicationId);
+      if (publicationId !== null) opts.onOpenCard(publicationId);
     },
   });
-  const rebuildButton = uiButton({
-    label: t('publications.ws.rebuild'),
+  const subtitleText = div('pub-ws-subtitle');
+  const metaText = div('pub-ws-meta');
+  titleBox.append(titleButton, subtitleText, metaText);
+  const actions = div('pub-ws-actions');
+  const collapseAllButton = iconButton({
+    icon: svgIcon('chevrons-up'),
+    title: t('publications.ws.collapseAll'),
+    role: 'ghost',
+    onClick: () => setAllCollapsed(true),
+  });
+  const expandAllButton = iconButton({
+    icon: svgIcon('chevrons-down'),
+    title: t('publications.ws.expandAll'),
+    role: 'ghost',
+    onClick: () => setAllCollapsed(false),
+  });
+  const rebuildButton = iconButton({
+    icon: svgIcon('rotate-ccw'),
+    title: t('publications.ws.rebuild'),
     role: 'ghost',
     onClick: () => void rebuild(),
   });
-  const exportButton = uiButton({
-    label: t('publications.ws.export'),
+  const exportButton = iconButton({
+    icon: svgIcon('download'),
+    title: t('publications.ws.export'),
     role: 'ghost',
     onClick: (ev) => {
       if (publicationId !== null) opts.onExport(publicationId, ev);
     },
   });
-  actions.append(settingsButton, rebuildButton, exportButton);
+  actions.append(collapseAllButton, expandAllButton, rebuildButton, exportButton);
   header.append(backButton, coverBox, titleBox, div('pub-spacer'), actions);
 
   // --- Оглавление ----------------------------------------------------------
 
   const tocHead = div('pub-toc-head');
   const tocToggle = iconButton({
-    icon: svgIcon('chevron-down'),
-    title: t('publications.ws.toc'),
+    icon: svgIcon('panel-left-close'),
+    title: t('publications.ws.tocCollapse'),
     role: 'ghost',
+    class: 'pub-toc-toggle',
     onClick: () => {
       tocCollapsed.value = !tocCollapsed.value;
       root.classList.toggle('pub-toc-collapsed', tocCollapsed.value);
-      tocToggle.title = tocCollapsed.value
+      setButtonIcon(tocToggle, tocCollapsed.value ? 'panel-left-open' : 'panel-left-close');
+      const title = tocCollapsed.value
         ? t('publications.ws.tocExpand')
         : t('publications.ws.tocCollapse');
+      tocToggle.title = title;
+      tocToggle.setAttribute('aria-label', title);
     },
   });
   tocHead.append(tocToggle, span(t('publications.ws.toc'), 'pub-toc-title'));
   const tocList = div('pub-toc-list');
   toc.append(tocHead, tocList);
+
+  // --- Навигация тела документа --------------------------------------------
+
+  // Тело документа — плоская последовательность блоков (заголовок раздела /
+  // строка текста) поверх общего компонента списка `lib/ui/list.ts` и ядра
+  // `lib/ui/nav-core.ts` (задача b51dbca4; ADR fadf99e0). Собственный обработчик
+  // стрелок здесь запрещён сторожем `guard-list-nav`.
+  docHost.tabIndex = 0;
+  let navBlocks: DocBlock[] = [];
+
+  const docEntries = (): DocNavEntry[] => {
+    const out: DocNavEntry[] = [];
+    for (const block of navBlocks) {
+      if (block.kind === 'section') {
+        out.push({
+          key: block.key,
+          thoughtId: block.thoughtId,
+          kind: 'section',
+          collapsible: block.collapsible,
+        });
+      } else if (block.kind === 'text') {
+        out.push({ key: block.key, thoughtId: block.thoughtId, kind: 'text', collapsible: false });
+      }
+    }
+    return out;
+  };
+
+  const blockNode = (key: string): HTMLElement | null => {
+    for (const child of Array.from(docHost.children)) {
+      const node = child as HTMLElement;
+      if (node.dataset?.['blockKey'] === key) return node;
+    }
+    return null;
+  };
+
+  const entryForTarget = (target: HTMLElement): DocNavEntry | null => {
+    if ((target.closest?.('a') ?? null) !== null) return null;
+    let cursor: HTMLElement | null = target;
+    while (cursor !== null && cursor !== docHost) {
+      const key = cursor.dataset?.['blockKey'];
+      if (key !== undefined) return docEntries().find((entry) => entry.key === key) ?? null;
+      cursor = cursor.parentElement;
+    }
+    return null;
+  };
+
+  const docNav = createListNav<DocNavEntry>(docHost, {
+    entries: () => docEntries(),
+    tokenOf: (entry) => entry.key,
+    elementOf: (entry) => blockNode(entry.key),
+    applyHighlight: (entry) => {
+      for (const node of Array.from(docHost.querySelectorAll<HTMLElement>('.pub-doc-current'))) {
+        node.classList.remove('pub-doc-current');
+      }
+      if (entry !== null) blockNode(entry.key)?.classList.add('pub-doc-current');
+    },
+    onCollapse: (entry, isCollapsed) => {
+      if (entry.kind === 'section' && entry.collapsible) setSectionCollapsed(entry.thoughtId, isCollapsed);
+    },
+    onActivate: (entry) => openThought(entry.thoughtId),
+    onClick: (target) => {
+      const entry = entryForTarget(target);
+      if (entry === null) return;
+      docNav.setCurrent(entry);
+      docHost.focus();
+    },
+  } satisfies ListNavAdapter<DocNavEntry>);
 
   // --- Слушатели -----------------------------------------------------------
 
@@ -227,10 +328,13 @@ export function mountPublicationWorkspace(
     updateCurrentSection();
   };
   const onKeydown = (ev: KeyboardEvent): void => {
-    if (ev.key !== 'Escape') return;
+    // Esc просмотр НЕ закрывает (задача b51dbca4): возврат — «Назад» или
+    // Ctrl+Backspace, когда никакие поля не редактируются.
+    if (ev.key !== 'Backspace' || ev.ctrlKey !== true) return;
     if (publicationId === null) return;
-    // Открытый диалог перехватывает Esc сам (каркас lib/dialog закрывается).
     if (isInsideDialog(document.activeElement)) return;
+    if (isEditingTarget(document.activeElement)) return;
+    ev.preventDefault();
     opts.onClose();
   };
   docHost.addEventListener('scroll', onDocScroll);
@@ -278,18 +382,18 @@ export function mountPublicationWorkspace(
   async function rebuild(): Promise<void> {
     const networkId = store.state.networkId;
     if (networkId === null || publicationId === null) return;
-    // Видимый прелоадер НА ВРЕМЯ ЗАПРОСА (спека 2ebacd12): подпись кнопки
-    // сменяется на «Пересборка…», кнопка блокируется. Прелоадер документа из
+    // Видимый прелоадер НА ВРЕМЯ ЗАПРОСА (спека 2ebacd12): иконочная кнопка
+    // блокируется, подсказка меняется на «Пересборка…». Прелоадер документа из
     // `reload()` приходит с дебаунсом 200 мс и на медленном сервере запаздывал.
     rebuildButton.disabled = true;
-    rebuildButton.textContent = t('publication.rebuilding');
+    setButtonTitle(rebuildButton, t('publication.rebuilding'));
     try {
       await etn.publications.rebuild(networkId, publicationId);
     } catch (err) {
       errorDialog(t('publications.ws.rebuild'), err);
       return;
     } finally {
-      rebuildButton.textContent = t('publications.ws.rebuild');
+      setButtonTitle(rebuildButton, t('publications.ws.rebuild'));
       rebuildButton.disabled = false;
     }
     // Своё realtime-эхо подавлено, карточке публикации документ не обновится
@@ -302,7 +406,7 @@ export function mountPublicationWorkspace(
 
   function renderHeader(): void {
     if (publication === null) return;
-    titleText.textContent = publication.title;
+    titleButton.textContent = publication.title;
     subtitleText.textContent = publication.subtitle ?? '';
     const author = displayAuthorship(publication, users.resolveUserName(publication.created_by));
     metaText.textContent = [author, assemblyDateLabel(publication.assembly_date)]
@@ -425,10 +529,30 @@ export function mountPublicationWorkspace(
     node.classList.toggle('pub-toc-current', line.kind !== 'excluded' && line.anchor === currentAnchor);
   }
 
-  function toggleCollapsed(thoughtId: string): void {
-    if (collapsed.has(thoughtId)) collapsed.delete(thoughtId);
-    else collapsed.add(thoughtId);
+  /**
+   * Свернуть/развернуть раздел (по id мысли). Состояние — набор `collapsed`,
+   * общий для оглавления и тела документа (задача b51dbca4): перерисовываются
+   * оба, чтобы свёрнутый раздел одинаково прятал свои тексты и подразделы.
+   */
+  function setSectionCollapsed(thoughtId: string, isCollapsed: boolean): void {
+    if (isCollapsed) collapsed.add(thoughtId);
+    else collapsed.delete(thoughtId);
     renderToc();
+    renderDocument();
+  }
+
+  function toggleCollapsed(thoughtId: string): void {
+    setSectionCollapsed(thoughtId, !collapsed.has(thoughtId));
+  }
+
+  /** Тулбар «Свернуть все»/«Развернуть все» — по разделам с содержимым. */
+  function setAllCollapsed(isCollapsed: boolean): void {
+    collapsed.clear();
+    if (isCollapsed) {
+      for (const thoughtId of collapsibleSectionIds(assembly)) collapsed.add(thoughtId);
+    }
+    renderToc();
+    renderDocument();
   }
 
   function wireTocSection(node: HTMLElement, line: TocLine): void {
@@ -512,7 +636,8 @@ export function mountPublicationWorkspace(
   // --- Документ ------------------------------------------------------------
 
   function renderDocument(): void {
-    const blocks = documentBlocks(assembly, publication);
+    const blocks = documentBlocks(assembly, publication, collapsed);
+    navBlocks = blocks;
     preserveScroll(docHost, () => {
       reconcileKeyed<DocBlock>(docHost, blocks, {
         key: (block) => block.key,
@@ -521,6 +646,7 @@ export function mountPublicationWorkspace(
         equals: (a, b) => blockSignature(a) === blockSignature(b),
       });
     });
+    docNav.refresh();
     updateCurrentSection();
   }
 
@@ -530,12 +656,33 @@ export function mountPublicationWorkspace(
       const node = div('pub-doc-section');
       node.id = block.domId;
       node.dataset['thoughtId'] = block.thoughtId;
+      node.dataset['blockKey'] = block.key;
+      node.tabIndex = -1;
+      node.classList.toggle('pub-doc-collapsed', block.collapsed);
       const heading = el(headingTag(block.level), 'pub-doc-heading');
-      heading.textContent = block.heading;
       heading.dataset['thoughtId'] = block.thoughtId;
       if (block.repeat) heading.classList.add('pub-doc-repeat');
+      if (block.collapsible) {
+        // Каретка-экспандер: сворачивает/разворачивает раздел, не открывая мысль
+        // (задача b51dbca4) — поэтому клик по ней не всплывает к разделу.
+        heading.append(
+          iconButton({
+            icon: svgIcon('chevron-down'),
+            title: block.collapsed
+              ? t('publications.ws.sectionExpand')
+              : t('publications.ws.sectionCollapse'),
+            role: 'ghost',
+            class: 'pub-doc-caret',
+            onClick: (ev) => {
+              ev.stopPropagation();
+              setSectionCollapsed(block.thoughtId, !block.collapsed);
+            },
+          }),
+        );
+      }
+      heading.append(block.heading);
       node.append(heading);
-      if (block.preambleHtml !== '') {
+      if (!block.collapsed && block.preambleHtml !== '') {
         const preamble = div('pub-doc-preamble');
         preamble.dataset['thoughtId'] = block.thoughtId;
         renderHtml(preamble, block.preambleHtml);
@@ -548,6 +695,8 @@ export function mountPublicationWorkspace(
       const node = div('pub-doc-text');
       node.id = block.domId;
       node.dataset['thoughtId'] = block.thoughtId;
+      node.dataset['blockKey'] = block.key;
+      node.tabIndex = -1;
       renderHtml(node, block.html);
       node.addEventListener('click', (ev) => selectBlock(ev, block.thoughtId));
       return node;
@@ -574,12 +723,16 @@ export function mountPublicationWorkspace(
    * Точечная сверка неполна для блоков с изменчивой структурой (появление/
    * исчезновение предисловия, титул, «доп. материалы»), поэтому содержимое
    * блока пересобирается целиком в его же узле — identity узла сохраняется,
-   * слушатели на самом узле (выделение раздела) остаются.
+   * слушатели на самом узле (выделение раздела) остаются. Класс свёрнутости
+   * раздела живёт на самом узле (не в детях), поэтому синхронизируется здесь.
    */
   function updateBlock(node: HTMLElement, block: DocBlock): void {
     const fresh = buildBlock(block);
     emptyNode(node);
     while (fresh.firstChild !== null) node.append(fresh.firstChild);
+    if (block.kind === 'section') {
+      node.classList.toggle('pub-doc-collapsed', block.collapsed);
+    }
   }
 
   function buildTitleBlock(): HTMLElement {
@@ -950,6 +1103,7 @@ export function mountPublicationWorkspace(
     if (reloadTimer !== null) window.clearTimeout(reloadTimer);
     docHost.removeEventListener('scroll', onDocScroll);
     document.removeEventListener('keydown', onKeydown);
+    docNav.destroy();
     publicationId = null;
     publication = null;
     assembly = null;
@@ -965,6 +1119,18 @@ export function mountPublicationWorkspace(
 /** Удаляет всех детей узла (полная пересборка не-списковых слотов разрешена). */
 function emptyNode(node: HTMLElement): void {
   while (node.firstChild !== null) node.removeChild(node.firstChild);
+}
+
+/** Заменяет иконку кнопки-фасада (переключатель панели оглавления). */
+function setButtonIcon(button: HTMLButtonElement, name: IconName): void {
+  const icon = button.querySelector('svg');
+  if (icon !== null) icon.replaceWith(svgIcon(name));
+}
+
+/** Меняет подсказку и `aria-label` иконочной кнопки (прелоадер пересборки). */
+function setButtonTitle(button: HTMLButtonElement, title: string): void {
+  button.title = title;
+  button.setAttribute('aria-label', title);
 }
 
 /** Тег заголовка раздела: уровень сборки 1 → `h2` (титул занимает `h1`). */

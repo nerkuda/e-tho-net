@@ -27,6 +27,7 @@
  */
 
 import { createListNav, type ListNavAdapter } from '../../lib/ui/list.js';
+import { isEditingTarget } from '../../lib/ui/nav-core.js';
 import { visibleLibraryEntities, type LibraryEntity, type LibraryGroupLike } from './model.js';
 
 /** Класс секции группы (полки) — общий для обоих видов. */
@@ -48,8 +49,10 @@ export interface LibraryNavOptions {
   onToggleShelf: (shelfId: string, collapsed: boolean) => void;
   /** Enter на полке — inline-правка имени. */
   onEditShelf: (shelfId: string) => void;
-  /** Enter на публикации — открыть в панели редактора. */
+  /** Enter (одиночный клик) на публикации — открыть в панели редактора. */
   onOpenPublication: (publicationId: string) => void;
+  /** Ctrl+Enter на публикации — открыть в режиме чтения (рабочая область). */
+  onReadPublication: (publicationId: string) => void;
 }
 
 /** Публичный дескриптор контроллера. */
@@ -176,6 +179,16 @@ export function attachLibraryNav(root: HTMLElement, opts: LibraryNavOptions): Li
     onActivate: (entry) => {
       if (entry.entity.kind === 'shelf') opts.onEditShelf(entry.entity.key);
       else opts.onOpenPublication(entry.entity.key);
+    },
+    onKey: (key, event) => {
+      // Ctrl+Enter на публикации — чтение (задача b51dbca4); обычный Enter
+      // отдан базовым правилам ядра (открыть карточку в панели редактора).
+      if (key !== 'Enter' || event.ctrlKey !== true) return false;
+      if (isEditingTarget(event.target ?? null)) return false;
+      if (current === null || current.kind !== 'publication') return false;
+      event.preventDefault?.();
+      opts.onReadPublication(current.key);
+      return true;
     },
     onClick: (target) => {
       let cursor: HTMLElement | null = target;

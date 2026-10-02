@@ -449,6 +449,19 @@ export function positionsFor(ids: readonly string[]): PublicationOrderItem[] {
 // живут здесь — их проверяют юнит-тесты (в т.ч. realtime-пересборка).
 // ---------------------------------------------------------------------------
 
+/**
+ * Есть ли у раздела сворачиваемое содержимое (тексты, предисловие или
+ * дочерние разделы). Только такие разделы получают каретку-экспандер и
+ * попадают под «Свернуть все» (задача b51dbca4).
+ */
+export function sectionHasContent(section: PublicationAssemblySection): boolean {
+  return (
+    section.children.length > 0 ||
+    section.texts.length > 0 ||
+    section.preamble_html !== ''
+  );
+}
+
 /** Блок документа — плоская единица keyed-сверки. */
 export type DocBlock =
   | { kind: 'title'; key: 'title'; sig: string }
@@ -463,6 +476,10 @@ export type DocBlock =
       preambleHtml: string;
       repeat: boolean;
       cycle: boolean;
+      /** У раздела есть сворачиваемое содержимое (каретка-экспандер). */
+      collapsible: boolean;
+      /** Раздел свёрнут: тексты/предисловие/подразделы скрыты. */
+      collapsed: boolean;
     }
   | {
       kind: 'text';
@@ -509,19 +526,33 @@ function titleSignature(publication: Publication | null, summaryHtml: string): s
  * Титульный блок несёт подпись, зависящую от карточки публикации и резюме
  * сборки, — иначе правка настроек не пересобирала бы титул (realtime).
  * Ключи и `domId` блоков уникальны на вхождение (см. {@link occurrence}).
+ *
+ * `collapsed` — свёрнутые разделы (по id мысли, задача b51dbca4): тексты,
+ * предисловие и подразделы свёрнутого раздела не попадают в блоки вовсе —
+ * значит, скрыты и в разметке, и в навигации. Счётчик вхождений при этом
+ * прокручивается по ВСЕМ разделам/текстам дерева (как в {@link tocLines}) —
+ * иначе нумерация якорей разошлась бы с оглавлением и повторы получили бы
+ * чужой `domId`.
  */
 export function documentBlocks(
   assembly: PublicationAssembly | null,
   publication: Publication | null,
+  collapsed: ReadonlySet<string> = new Set(),
 ): DocBlock[] {
   if (assembly === null) return [];
   const out: DocBlock[] = [
     { kind: 'title', key: 'title', sig: titleSignature(publication, assembly.publication.summary_html) },
   ];
   const counter = new Map<string, number>();
-  const walk = (sections: readonly PublicationAssemblySection[]): void => {
+  const walk = (sections: readonly PublicationAssemblySection[], hidden: boolean): void => {
     for (const section of sections) {
       const occ = occurrence(counter, section.anchor);
+      const textOccs = section.texts.map((text) => occurrence(counter, text.anchor));
+      if (hidden) {
+        walk(section.children, true);
+        continue;
+      }
+      const selfCollapsed = collapsed.has(section.thought_id);
       out.push({
         kind: 'section',
         key: occ.key,
@@ -532,24 +563,28 @@ export function documentBlocks(
         preambleHtml: section.preamble_html,
         repeat: section.flags.repeat_of !== null,
         cycle: section.flags.cycle_cut,
+        collapsible: sectionHasContent(section),
+        collapsed: selfCollapsed,
       });
-      for (const text of section.texts) {
-        const textOcc = occurrence(counter, text.anchor);
-        out.push({
-          kind: 'text',
-          key: textOcc.key,
-          domId: textOcc.domId,
-          thoughtId: text.thought_id,
-          html: text.body_html,
+      if (!selfCollapsed) {
+        section.texts.forEach((text, index) => {
+          const textOcc = textOccs[index]!;
+          out.push({
+            kind: 'text',
+            key: textOcc.key,
+            domId: textOcc.domId,
+            thoughtId: text.thought_id,
+            html: text.body_html,
+          });
         });
+        if (section.extra.length > 0) {
+          out.push({ kind: 'extra', key: `${occ.key}#extra`, groups: section.extra });
+        }
       }
-      if (section.extra.length > 0) {
-        out.push({ kind: 'extra', key: `${occ.key}#extra`, groups: section.extra });
-      }
-      walk(section.children);
+      walk(section.children, selfCollapsed);
     }
   };
-  walk(assembly.sections);
+  walk(assembly.sections, false);
   return out;
 }
 
@@ -559,7 +594,7 @@ export function blockSignature(block: DocBlock): string {
     case 'title':
       return block.sig;
     case 'section':
-      return `s:${block.heading}:${block.level}:${block.preambleHtml}:${block.repeat}:${block.cycle}`;
+      return `s:${block.heading}:${block.level}:${block.preambleHtml}:${block.repeat}:${block.cycle}:${block.collapsible}:${block.collapsed}`;
     case 'text':
       return `t:${block.html}`;
     case 'extra':
@@ -570,6 +605,19 @@ export function blockSignature(block: DocBlock): string {
         )
         .join('|')}`;
   }
+}
+
+/**
+ * id мыслей всех разделов сборки, которые можно свернуть (есть содержимое).
+ * Для тулбара «Свернуть все» (задача b51dbca4).
+ */
+export function collapsibleSectionIds(assembly: PublicationAssembly | null): string[] {
+  if (assembly === null) return [];
+  const ids = new Set<string>();
+  for (const item of flattenSections(assembly.sections)) {
+    if (sectionHasContent(item.section)) ids.add(item.section.thought_id);
+  }
+  return [...ids];
 }
 
 // ---------------------------------------------------------------------------
@@ -603,6 +651,11 @@ export type TocLine =
  * Строит плоский список строк оглавления (разделы/тексты/исключённые).
  * `textLabel(index)` — подпись строки текста (нумерация в разделе); вынесена
  * параметром, чтобы модель оставалась без зависимости от словаря строк.
+ *
+ * Свёрнутый раздел (`collapsed`) прячет СВОИ тексты и всё поддерево — та же
+ * семантика, что у тела документа (`documentBlocks`, задача b51dbca4), иначе
+ * оглавление и документ расходились бы при сворачивании. Счётчик вхождений
+ * ведётся по всем ветвям дерева (см. ошибку 59a17805).
  */
 export function tocLines(
   assembly: PublicationAssembly | null,
@@ -627,6 +680,7 @@ export function tocLines(
       hidden.add(item.section.thought_id);
       continue;
     }
+    const selfCollapsed = collapsed.has(item.section.thought_id);
     out.push({
       kind: 'section',
       key: occ.key,
@@ -639,20 +693,22 @@ export function tocLines(
       repeat: item.section.flags.repeat_of !== null,
       repeatOf: item.section.flags.repeat_of,
       cycle: item.section.flags.cycle_cut,
-      hasChildren: item.section.children.length > 0,
-      collapsed: collapsed.has(item.section.thought_id),
+      hasChildren: sectionHasContent(item.section),
+      collapsed: selfCollapsed,
     });
-    item.section.texts.forEach((text, index) => {
-      const textOcc = textOccs[index]!;
-      out.push({
-        kind: 'text',
-        key: textOcc.key,
-        anchor: textOcc.domId,
-        thoughtId: text.thought_id,
-        depth: item.depth + 1,
-        label: textLabel(index + 1),
+    if (!selfCollapsed) {
+      item.section.texts.forEach((text, index) => {
+        const textOcc = textOccs[index]!;
+        out.push({
+          kind: 'text',
+          key: textOcc.key,
+          anchor: textOcc.domId,
+          thoughtId: text.thought_id,
+          depth: item.depth + 1,
+          label: textLabel(index + 1),
+        });
       });
-    });
+    }
   }
   for (const excluded of assembly.excluded) {
     out.push({
@@ -733,27 +789,22 @@ export function isShelfCollapsed(shelfId: string, collapsed: ReadonlySet<string>
 /** Команда контекстного меню публикации (единая для обоих представлений). */
 export type PublicationMenuCommand =
   | 'open'
+  | 'delete'
   | 'read'
   | 'exportMd'
-  | 'exportHtml'
-  | 'shelfToggle'
-  | 'toggleActive'
-  | 'delete';
+  | 'exportHtml';
 
 /**
- * Состав контекстного меню публикации: открыть, читать, экспорт (md/html),
- * подменю «На полки» (когда полки есть), переключение актуальности, удалить.
- * Возвращает КОМАНДЫ без сепараторов — их расставляет построитель меню, а
- * состав и порядок закреплены тестом (задача 55ee3c85).
+ * Состав контекстного меню публикации (задачи 55ee3c85, b51dbca4): «Открыть»
+ * (карточка в панели редактора), «Удалить», «Читать» (рабочая область) и
+ * «Экспортировать» (подменю md/html). Управление полками переехало в настройки
+ * публикации, актуальность — признак в редакторе, поэтому пунктов «На полки» и
+ * «Неактуальна/Актуальна» здесь больше нет. Возвращает КОМАНДЫ без
+ * сепараторов — их расставляет построитель меню, а состав и порядок закреплены
+ * тестом.
  */
-export function publicationMenuCommands(opts: {
-  hasShelves: boolean;
-  active: boolean;
-}): PublicationMenuCommand[] {
-  const commands: PublicationMenuCommand[] = ['open', 'read', 'exportMd', 'exportHtml'];
-  if (opts.hasShelves) commands.push('shelfToggle');
-  commands.push('toggleActive', 'delete');
-  return commands;
+export function publicationMenuCommands(): PublicationMenuCommand[] {
+  return ['open', 'delete', 'read', 'exportMd', 'exportHtml'];
 }
 
 /** Команда контекстного меню полки/группы. */

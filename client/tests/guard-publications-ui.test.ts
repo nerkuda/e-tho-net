@@ -260,22 +260,112 @@ describe('guard: экран «Публикации» — пустое состо
     );
   });
 
-  it('состав контекстного меню публикации: открыть/читать/удалить/экспорт + сохранённые пункты', () => {
+  it('состав контекстного меню публикации: открыть/удалить/читать/экспортировать (b51dbca4)', () => {
     const menu = slice('function publicationMenuItems', 'function openShelfMenu');
     for (const key of [
       'publications.menu.open',
-      'publications.menu.read',
       'publications.menu.delete',
+      'publications.menu.read',
       'publications.menu.export',
-      'publications.menu.shelves',
-      'publications.menu.inactive',
     ]) {
       assert.ok(menu.includes(key), `в меню публикации обязан быть пункт ${key}`);
     }
+    // Управление полками переехало в настройки публикации, актуальность — в
+    // редактор: пунктов «На полки» и «Неактуальна/Актуальна» в меню больше нет.
+    for (const gone of [
+      'publications.menu.shelves',
+      'publications.menu.inactive',
+      'publications.menu.active',
+      'shelfToggle',
+      'toggleActive',
+    ]) {
+      assert.ok(!menu.includes(gone), `из меню публикации убран пункт ${gone}`);
+    }
+  });
+
+  it('клики по публикации: одиночный — карточка, двойной/Ctrl+Enter — чтение (b51dbca4)', () => {
+    const cards = slice('function wireCardEvents', 'function wireEntryEvents');
+    const entries = slice('function wireEntryEvents', 'function authorLine');
+    for (const [name, body] of [
+      ['карточка', cards],
+      ['строка списка', entries],
+    ] as const) {
+      assert.match(body, /addEventListener\(['"]click['"],\s*\(\)\s*=>\s*void openPublicationCard/, `${name}: одиночный клик открывает карточку`);
+      assert.match(body, /addEventListener\(['"]dblclick['"],\s*\(\)\s*=>\s*void openPublicationWorkspace/, `${name}: двойной клик открывает чтение`);
+    }
+    // Ctrl+Enter в навигации библиотеки ведёт в режим чтения.
+    const nav = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'screens', 'publications', 'library-nav.ts'),
+      'utf8',
+    );
+    assert.ok(nav.includes('onReadPublication'), 'библиотека умеет открывать публикацию на чтение');
+    assert.ok(nav.includes('ctrlKey'), 'Ctrl+Enter обрабатывается в контроллере библиотеки');
   });
 
   it('сортировка передаётся в группировку в обоих видах', () => {
     const calls = SOURCE.match(/groupByShelves\(publications, shelves, viewState\.sort\)/g) ?? [];
     assert.ok(calls.length >= 2, 'оба вида (полки и список) сортируют публикации внутри полок');
+  });
+});
+
+/**
+ * Поведенческие инварианты рабочей области чтения, введённые задачей b51dbca4
+ * (заголовок-кнопка, иконочный тулбар, сворачиваемые разделы, навигация тела
+ * через общее ядро, Esc не закрывает). Проверяются по исходнику: это связка
+ * нескольких модулей, а полноценный DOM-прогон дорог.
+ */
+describe('guard: рабочая область публикации — шапка, навигация, возврат (b51dbca4)', () => {
+  const WS = fs.readFileSync(
+    path.join(RENDERER_ROOT, 'screens', 'publications', 'workspace.ts'),
+    'utf8',
+  );
+
+  it('шапка: иконочный тулбар и кликабельный заголовок, кнопки «Настройки» нет', () => {
+    for (const key of [
+      'publications.ws.collapseAll',
+      'publications.ws.expandAll',
+      'publications.ws.rebuild',
+      'publications.ws.export',
+      'publications.ws.openCard',
+    ]) {
+      assert.ok(WS.includes(key), `шапка использует строку ${key}`);
+    }
+    assert.ok(!WS.includes('publications.ws.settings'), 'кнопка «Настройки» из шапки убрана');
+    assert.ok(
+      /iconButton\(\{[\s\S]*?publications\.ws\.rebuild/.test(WS),
+      '«Пересобрать» — иконочная кнопка с подсказкой',
+    );
+    assert.ok(
+      /class: 'pub-ws-title'[\s\S]*?opts\.onOpenCard/.test(WS),
+      'заголовок-кнопка открывает карточку публикации в панели редактора',
+    );
+  });
+
+  it('разделы тела сворачиваются, набор свёрнутых общий с оглавлением', () => {
+    assert.ok(WS.includes('setSectionCollapsed'), 'есть переключение свёрнутости раздела');
+    assert.ok(WS.includes('setAllCollapsed'), 'тулбар сворачивает/разворачивает все разделы');
+    assert.ok(
+      WS.includes('documentBlocks(assembly, publication, collapsed)'),
+      'тело документа учитывает свёрнутые разделы',
+    );
+    assert.ok(WS.includes('pub-doc-caret'), 'в заголовке раздела есть каретка-экспандер');
+    assert.ok(WS.includes('pub-doc-collapsed'), 'свёрнутый раздел помечается классом');
+  });
+
+  it('навигация тела документа — через общий компонент списка, а не свой обработчик', () => {
+    assert.match(
+      WS,
+      /from '\.\.\/\.\.\/lib\/ui\/list\.js'/,
+      'тело документа использует общий компонент списка',
+    );
+    assert.ok(WS.includes('createListNav'), 'навигация тела строится на createListNav');
+    assert.ok(!WS.includes("'ArrowUp'") && !WS.includes("'ArrowDown'"), 'своей карты стрелок в модуле нет');
+  });
+
+  it('Esc просмотр не закрывает; возврат — Ctrl+Backspace (когда поля не правятся)', () => {
+    const keydown = WS.slice(WS.indexOf('const onKeydown'), WS.indexOf('docHost.addEventListener'));
+    assert.ok(!keydown.includes('Escape'), 'Esc больше не закрывает просмотр');
+    assert.ok(keydown.includes("'Backspace'") && keydown.includes('ctrlKey'), 'Ctrl+Backspace закрывает');
+    assert.ok(keydown.includes('isEditingTarget'), 'Ctrl+Backspace молчит, когда правится поле');
   });
 });
