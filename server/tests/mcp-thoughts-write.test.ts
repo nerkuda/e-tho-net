@@ -1356,6 +1356,150 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('значение свойства-связи в `properties` принимает `ref` батча (93bc46bb)', async () => {
+    // Симптом: «каталог + сущность с Родителями→ref каталога» одним вызовом
+    // отвергался `referenced thought cat-pub does not exist` — резолв локальных
+    // ref был только у `links[].target_ref`, а значения `properties` трактовались
+    // как готовые id. Теперь значение свойства-связи, равное объявленному ref,
+    // резолвится на той же фазе, что и `target_ref`.
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // 1) Каталог объявлен первым, сущность ссылается на его ref.
+        const catFirst = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'cat-pub', thought: { title: 'TEST 93bc46bb — каталог публикаций' } },
+              {
+                ref: 'ent-publications',
+                thought: { title: 'TEST 93bc46bb — сущность' },
+                properties: { 'Родители': 'cat-pub' },
+              },
+            ],
+          },
+        });
+        assert.equal(catFirst.isError, undefined, toolText(catFirst));
+        const data = toolJson<WriteResult>(catFirst);
+        const catId = data.items[0]!.id;
+        const entId = data.items[1]!.id;
+        assert.deepEqual(
+          data.items[1]!.properties?.['Родители']?.targets,
+          [catId],
+          `link property must echo the resolved catalog id: ${JSON.stringify(data.items[1]!.properties)}`,
+        );
+
+        // 2) Обратный порядок: сущность объявлена раньше каталога (forward ref).
+        const entFirst = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              {
+                ref: 'ent-fwd',
+                thought: { title: 'TEST 93bc46bb — сущность fwd' },
+                properties: { 'Родители': 'cat-fwd' },
+              },
+              { ref: 'cat-fwd', thought: { title: 'TEST 93bc46bb — каталог fwd' } },
+            ],
+          },
+        });
+        assert.equal(entFirst.isError, undefined, toolText(entFirst));
+        const fwd = toolJson<WriteResult>(entFirst);
+        const catFwdId = fwd.items[1]!.id;
+        assert.deepEqual(
+          fwd.items[0]!.properties?.['Родители']?.targets,
+          [catFwdId],
+          `forward-ref link property must resolve too: ${JSON.stringify(fwd.items[0]!.properties)}`,
+        );
+
+        // Ребро «Родители» действительно создано (структурная связь, любой конец).
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const edge = ndb
+          .prepare(
+            `SELECT COUNT(*) AS c FROM links_v
+              WHERE (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)`,
+          )
+          .get(catId, entId, entId, catId) as { c: number };
+        assert.equal(edge.c, 1, 'the «Родители» edge must exist');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('links[].target_ref резолвится и для существующей мысли; нерезолвимый ref — явная ошибка (2a3be0f3)', async () => {
+    // Симптом (не подтвердился на текущем коде — закрепляем контракт): элемент
+    // с `thought_id` + `links[].target_ref` на ref новой мысли батча не должен
+    // молча терять ребро; нерезолвимый ref — явная ошибка, не молчание.
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const seed = toolJson<WriteResult>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [{ ref: 'src', thought: { title: 'TEST 2a3be0f3 — существующий источник' } }],
+            },
+          }),
+        );
+        const existingId = seed.items[0]!.id;
+
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              // Источник — СУЩЕСТВУЮЩАЯ мысль, цель — ref новой мысли батча.
+              {
+                thought_id: existingId,
+                links: [{ direction: 'child', target_ref: 'new-one' }],
+              },
+              { ref: 'new-one', thought: { title: 'TEST 2a3be0f3 — новая цель' } },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<WriteResult>(result);
+        assert.equal(data.items[0]!.id, existingId);
+        assert.equal(data.items[0]!.links?.length, 1, 'the link must be created, not silently dropped');
+        const newId = data.items[1]!.id;
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const edge = ndb
+          .prepare(
+            `SELECT COUNT(*) AS c FROM links_v
+              WHERE (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)`,
+          )
+          .get(existingId, newId, newId, existingId) as { c: number };
+        assert.equal(edge.c, 1, 'the edge from the existing thought must exist');
+
+        // Нерезолвимый ref на элементе-правке — явная ошибка вызова.
+        const ghost = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { thought_id: existingId, links: [{ direction: 'child', target_ref: 'ghost' }] },
+            ],
+          },
+        });
+        assert.equal(ghost.isError, true, 'an unresolvable ref must fail loudly');
+        assert.match(toolText(ghost), /ghost/, 'the error must name the offending ref');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('обязательное свойство-связь, заполненное links[] того же вызова, не даёт ложного REQUIRED_PROPERTY_MISSING (6f5812a3)', async () => {
     // Симптом: warnings считались в фазе 2 (upsertThoughtBundle), ДО записи
     // верхнеуровневых links[] фазы 3, поэтому обязательное свойство-связь,
