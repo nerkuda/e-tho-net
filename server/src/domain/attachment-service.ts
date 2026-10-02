@@ -222,22 +222,21 @@ function resolveOwnerTitles(
 export function listAttachmentUsage(ndb: NetworkDb, attachmentId: string): AttachmentUsage {
   const source = getAttachmentOrThrow(ndb, attachmentId);
   // Общий носитель: для kind='url' — тот же url, для kind='file' — тот же
-  // file_path. NULL-ветка выбирается по kind, поэтому nullable-колонка не
-  // «склеивает» между собой вложения без адреса.
+  // file_path. Ветка выбирается по НЕпустой колонке носителя, поэтому
+  // nullable-колонка не «склеивает» между собой вложения без адреса.
+  // (Раньше вторая ветка ошибочно проверяла `file_path IS NULL` и для
+  // файловых вложений не находила ни строки — блокер приёмки 46cf4bcb.)
   const rows = ndb
     .prepare(
       `SELECT owner_type, owner_id FROM attachments_v
         WHERE kind = ?
-          AND ((? IS NOT NULL AND url = ?) OR (? IS NULL AND file_path = ?))
+          AND ((url IS NOT NULL AND url = ?) OR (file_path IS NOT NULL AND file_path = ?))
         ORDER BY owner_type ASC, owner_id ASC`,
     )
-    .all(
-      source.kind,
-      source.url,
-      source.url,
-      source.file_path,
-      source.file_path,
-    ) as { owner_type: string; owner_id: string }[];
+    .all(source.kind, source.url, source.file_path) as {
+    owner_type: string;
+    owner_id: string;
+  }[];
 
   const seen = new Set<string>();
   const refs: { owner_type: AttachmentOwnerType; owner_id: string }[] = [];
@@ -616,20 +615,22 @@ export function copyAttachment(
       }
     }
     // Detect duplicates in one pass: same owner + same kind + same url/file_path.
-    // The url/file_path leg is split by kind to keep NULL-handling clean in SQL.
+    // The leg is chosen by the NON-null carrier column, so a file attachment
+    // (url IS NULL) is matched by file_path and vice versa. (Раньше вторая
+    // ветка ошибочно проверяла `file_path IS NULL`: повторное копирование
+    // файлового вложения создавало дубль строки вместо `skipped` — общий
+    // корень с блокером usage, приёмка 46cf4bcb.)
     const dupRows = ndb
       .prepare(
         `SELECT owner_id FROM attachments_v
          WHERE owner_type = ? AND kind = ? AND owner_id IN (${placeholders})
-           AND ((? IS NOT NULL AND url = ?) OR (? IS NULL AND file_path = ?))`,
+           AND ((url IS NOT NULL AND url = ?) OR (file_path IS NOT NULL AND file_path = ?))`,
       )
       .all(
         targetOwnerType,
         source.kind,
         ...targetIds,
         source.url,
-        source.url,
-        source.file_path,
         source.file_path,
       ) as { owner_id: string }[];
     const duplicateIds = new Set(dupRows.map((r) => r.owner_id));

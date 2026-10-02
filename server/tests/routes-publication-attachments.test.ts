@@ -202,6 +202,98 @@ describe('вложения публикаций: REST (46cf4bcb)', { skip }, () 
       await closeRestContext(ctx);
     }
   });
+
+  // Блокер приёмки 46cf4bcb: usage файлового вложения всегда отдавал owners:[]
+  // (обе ветки WHERE были ложны для kind=file); общий корень — тот же
+  // перепутанный паттерн в copyAttachment создавал дубль строки вместо skipped.
+  it('usage для kind=file и идемпотентность copy (file и url)', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const pub = await createPublication(ctx, 'Файловый документ');
+      const upload = await api(ctx, 'POST', `/publications/${pub.id}/attachments/file`, {
+        payload: { mime_type: 'image/png', data_base64: PNG_BASE64, title: 'Файл' },
+      });
+      assert.equal(upload.statusCode, 201, upload.body);
+      const fileAtt = upload.json().data as { id: string; kind: string };
+
+      // usage по файловой строке: ровно один владелец — публикация.
+      const usage1 = await api(ctx, 'GET', `/attachments/${fileAtt.id}/usage`);
+      assert.equal(usage1.statusCode, 200, usage1.body);
+      assert.deepEqual(
+        (usage1.json().data as { owners: Array<{ owner_type: string }> }).owners.map(
+          (o) => o.owner_type,
+        ),
+        ['publication'],
+        'usage файлового вложения обязан находить владельца (блокер)',
+      );
+
+      // Копия файла на мысль — создаётся; повтор — skipped, без дубля строки
+      // (общий корень с блокером: старый паттерн создавал дубль).
+      const thought = await createThought(ctx, 'Хозяин файла');
+      const copy1 = await api(ctx, 'POST', `/attachments/${fileAtt.id}/copy`, {
+        payload: { target_owner_type: 'thought', target_owner_ids: [thought] },
+      });
+      assert.equal(copy1.statusCode, 200, copy1.body);
+      const copy1data = copy1.json().data as { created: unknown[]; skipped: string[] };
+      assert.equal(copy1data.created.length, 1);
+      assert.deepEqual(copy1data.skipped, []);
+
+      const copy2 = await api(ctx, 'POST', `/attachments/${fileAtt.id}/copy`, {
+        payload: { target_owner_type: 'thought', target_owner_ids: [thought] },
+      });
+      assert.equal(copy2.statusCode, 200, copy2.body);
+      const copy2data = copy2.json().data as { created: unknown[]; skipped: string[] };
+      assert.equal(copy2data.created.length, 0, 'повторное копирование файла не создаёт дубль');
+      assert.deepEqual(copy2data.skipped, [thought]);
+
+      // Копия на СВОЕГО же владельца (публикацию) тоже skipped — дубль не растёт.
+      const copySameOwner = await api(ctx, 'POST', `/attachments/${fileAtt.id}/copy`, {
+        payload: { target_owner_type: 'publication', target_owner_ids: [pub.id] },
+      });
+      assert.equal(
+        (copySameOwner.json().data as { created: unknown[] }).created.length,
+        0,
+        'копия файла на уже владеющего — skipped',
+      );
+      const list = await api(ctx, 'GET', `/publications/${pub.id}/attachments`);
+      assert.equal((list.json().data as unknown[]).length, 1, 'дубль строки не создан');
+
+      // Агрегированное использование файла: мысль и публикация.
+      const usage2 = await api(ctx, 'GET', `/attachments/${fileAtt.id}/usage`);
+      const owners2 = (usage2.json().data as { owners: Array<{ owner_type: string; title: string | null }> })
+        .owners;
+      assert.deepEqual(
+        owners2.map((o) => o.owner_type),
+        ['thought', 'publication'],
+      );
+      assert.equal(owners2[0]!.title, 'Хозяин файла');
+
+      // URL-вложение: идемпотентность копии тоже обязана работать.
+      const urlAtt = (
+        await api(ctx, 'POST', `/publications/${pub.id}/attachments`, {
+          payload: { kind: 'url', url: 'https://example.com/idem.png' },
+        })
+      ).json().data as { id: string };
+      const urlCopy1 = await api(ctx, 'POST', `/attachments/${urlAtt.id}/copy`, {
+        payload: { target_owner_type: 'thought', target_owner_ids: [thought] },
+      });
+      assert.equal(
+        (urlCopy1.json().data as { created: unknown[] }).created.length,
+        1,
+        'первая копия url создаётся',
+      );
+      const urlCopy2 = await api(ctx, 'POST', `/attachments/${urlAtt.id}/copy`, {
+        payload: { target_owner_type: 'thought', target_owner_ids: [thought] },
+      });
+      assert.equal(
+        (urlCopy2.json().data as { created: unknown[] }).created.length,
+        0,
+        'повторная копия url — skipped',
+      );
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
 });
 
 describe('вложения публикаций: MCP-паритет (46cf4bcb)', { skip: !mcpNativeAvailable() }, () => {
@@ -242,6 +334,32 @@ describe('вложения публикаций: MCP-паритет (46cf4bcb)',
         assert.deepEqual(usageJson.owners, [
           { owner_type: 'publication', owner_id: pubId, title: 'MCP-документ' },
         ]);
+
+        // kind=file (блокер приёмки): usage по файловой строке обязан найти
+        // владельца, а не вернуть пустой список.
+        const fileAdded = toolJson<{ id: string }>(
+          await callOp(handle.client, 'attachments.add', {
+            network_id: ctx.networkId,
+            owner_type: 'publication',
+            owner_id: pubId,
+            kind: 'file',
+            mime_type: 'image/png',
+            data_base64: PNG_BASE64,
+            title: 'MCP-файл',
+          }),
+        );
+        const fileUsage = toolJson<{
+          owners: Array<{ owner_type: string; owner_id: string; title: string | null }>;
+        }>(
+          await callOp(handle.client, 'attachments.usage', {
+            network_id: ctx.networkId,
+            attachment_id: fileAdded.id,
+          }),
+        );
+        assert.deepEqual(
+          fileUsage.owners,
+          [{ owner_type: 'publication', owner_id: pubId, title: 'MCP-документ' }],
+        );
       } finally {
         await handle.close();
       }
