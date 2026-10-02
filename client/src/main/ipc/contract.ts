@@ -719,6 +719,8 @@ export interface EtnApi {
       id: string,
       query?: { limit?: number; offset?: number; include_excluded?: boolean },
     ): Promise<PublicationCandidatesResult>;
+    /** `POST …/publications/{id}/candidates/accept` — «расставить» кандидата. */
+    acceptCandidate(networkId: string, id: string, thoughtId: string): Promise<void>;
     usage(
       networkId: string,
       thoughtId: string,

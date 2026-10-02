@@ -215,7 +215,10 @@ export interface PublicationAssemblyTitle {
   /** Резюме, отрендеренное в HTML (без заголовков). */
   summary_html: string;
   cover: PublicationAssemblyCover;
-  /** Число новых кандидатов (мыслей под отбор, не попавших в дерево). */
+  /**
+   * Число новых кандидатов — мыслей, вошедших в отбор позже принятого
+   * состояния публикации (временная семантика, задача e754527d; спека f9a20c3f).
+   */
   new_candidates: number;
 }
 
@@ -297,7 +300,10 @@ export interface PublicationAssemblyQuery {
   include_excluded?: boolean;
 }
 
-/** Кандидат — мысль под рецепт заголовков, не входящая в сборку. */
+/**
+ * Кандидат — мысль, вошедшая в отбор заголовков позже принятого состояния
+ * публикации (временная семантика, задача e754527d; спека f9a20c3f).
+ */
 export interface PublicationCandidate {
   thought_id: string;
   title: string;

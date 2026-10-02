@@ -3283,6 +3283,27 @@ export class RestClient {
     );
   }
 
+  /**
+   * `POST …/publications/{id}/candidates/accept` — «расставить» кандидата
+   * (задача e754527d): гасит его индивидуально и фиксирует позицию в конец.
+   * Сервер отвечает `{ items }` с порядком; клиент перечитывает assembly.
+   */
+  public async acceptPublicationCandidate(
+    networkId: string,
+    id: string,
+    thoughtId: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/candidates/accept`,
+      {
+        body: { thought_id: thoughtId },
+        requestOptions: opts ?? { clientRequestId: randomUUID() },
+      },
+    );
+  }
+
   /** `GET /networks/{nid}/thoughts/{id}/publications` — использование мысли. */
   public async listPublicationUsage(
     networkId: string,

@@ -159,7 +159,7 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
         [b],
       );
 
-      // --- кандидаты (буквальная трактовка «дифф отбора с деревом») ----------
+      // --- кандидаты (временная семантика: всё отобранное при создании принято) --
       const candidates = await api(ctx, 'GET', `/publications/${pub.id}/candidates`);
       assert.equal(candidates.statusCode, 200, candidates.body);
       assert.equal((candidates.json().data as { total: number }).total, 0);
@@ -330,6 +330,65 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
       const shelfRows = shelfActivity.json().data as Array<{ action: string }>;
       assert.ok(shelfRows.some((r) => r.action === 'created'));
       assert.ok(shelfRows.some((r) => r.action === 'deleted'));
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('временная семантика кандидатов: новая мысль → кандидат, «расставить»/«скрыть»', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const type = createThoughtType(ctx.ndb, { name: 'Doc' }, ctx.adminId);
+      seedThought(ctx.ndb, 'Раздел A', type.id, ctx.adminId);
+      const created = await api(ctx, 'POST', '/publications', {
+        payload: {
+          title: 'Док',
+          title_recipe: { type_ids: [type.id], sort: 'alpha', order: 'asc' },
+        },
+      });
+      assert.equal(created.statusCode, 201, created.body);
+      const pub = created.json().data as { id: string };
+
+      const total = async (): Promise<number> =>
+        (
+          (await api(ctx, 'GET', `/publications/${pub.id}/candidates`)).json().data as {
+            total: number;
+          }
+        ).total;
+
+      // При создании всё отобранное принято — плашки нет.
+      assert.equal(await total(), 0);
+
+      // Новые мысли под отбор — кандидаты.
+      const b = seedThought(ctx.ndb, 'Раздел B', type.id, ctx.adminId);
+      const d = seedThought(ctx.ndb, 'Раздел C', type.id, ctx.adminId);
+      assert.equal(await total(), 2);
+
+      // «расставить» b гасит его индивидуально, d остаётся.
+      const accepted = await api(ctx, 'POST', `/publications/${pub.id}/candidates/accept`, {
+        payload: { thought_id: b },
+      });
+      assert.equal(accepted.statusCode, 200, accepted.body);
+      assert.equal(await total(), 1);
+      assert.deepEqual(
+        (accepted.json().data as { items: Array<{ node_key: string }> }).items.map(
+          (i) => i.node_key,
+        ),
+        [b],
+      );
+
+      // «скрыть» d — исключение, кандидатов не остаётся.
+      const hidden = await api(ctx, 'POST', `/publications/${pub.id}/exclusions`, {
+        payload: { thought_id: d },
+      });
+      assert.equal(hidden.statusCode, 200, hidden.body);
+      assert.equal(await total(), 0);
+      const assembly = await api(ctx, 'GET', `/publications/${pub.id}/assembly`);
+      assert.equal(
+        (assembly.json().data as { publication: { new_candidates: number } }).publication
+          .new_candidates,
+        0,
+      );
     } finally {
       await closeRestContext(ctx);
     }

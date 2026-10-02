@@ -682,20 +682,42 @@ export function mountPublicationWorkspace(
     for (const item of candidates.items) {
       const row = div('pub-cand-row');
       row.append(span(item.title, 'pub-cand-title'));
+      const place = uiButton({
+        label: t('publications.ws.place'),
+        role: 'ghost',
+        onClick: () => void placeCandidate(item.thought_id),
+      });
       const open = uiButton({
         label: t('publications.ws.openThought'),
         role: 'ghost',
         onClick: () => openThought(item.thought_id),
       });
       const hide = uiButton({
-        label: t('publications.ws.exclude'),
+        label: t('publications.ws.hide'),
         role: 'ghost',
         onClick: () => void setExcluded(item.thought_id, true),
       });
-      row.append(open, hide);
+      row.append(place, open, hide);
       list.append(row);
     }
     candHost.append(list);
+  }
+
+  /**
+   * «Расставить (в конец)» кандидата (задача e754527d; элемент интерфейса
+   * 43ec961f): сервер гасит его индивидуально и фиксирует позицию в конец;
+   * клиент семантику не реплицирует — только перечитывает документ.
+   */
+  async function placeCandidate(thoughtId: string): Promise<void> {
+    const networkId = store.state.networkId;
+    if (networkId === null || publicationId === null) return;
+    try {
+      await etn.publications.acceptCandidate(networkId, publicationId, thoughtId);
+    } catch (err) {
+      errorDialog(t('publications.ws.place'), err);
+      return;
+    }
+    reload();
   }
 
   async function toggleCandidates(): Promise<void> {

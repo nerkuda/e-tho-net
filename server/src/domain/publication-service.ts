@@ -48,6 +48,7 @@ import {
 } from '../db/publication-id.js';
 import { listPublicationHoldingLayers } from './holding-layers.js';
 import { removeStoredFile, storedFileInUse } from './attachment-service.js';
+import { selectRecipeIds } from './publication-recipe.js';
 import {
   numberingRangeInvalid,
   recipeOverlap,
@@ -170,6 +171,53 @@ function getPublicationOrThrow(ndb: NetworkDb, id: string): Publication {
     });
   }
   return publication;
+}
+
+// ---------------------------------------------------------------------------
+// Принятый срез (временная семантика кандидатов, задача e754527d; спека f9a20c3f)
+// ---------------------------------------------------------------------------
+
+/**
+ * Принятый срез публикации — JSON-массив id вошедших в отбор мыслей; `null` —
+ * срез не инициализирован (импорт/legacy) и кандидатов нет. Хранится в строке
+ * `publications` (см. комментарий колонки `accepted_ids` в миграции 047), а не в
+ * отдельной ветвимой таблице: новый раздел .etnx и правка экспорта запрещены
+ * границами задачи, а колонка строки проезжает слои штатной материализацией.
+ */
+export function getPublicationAcceptedIds(ndb: NetworkDb, id: string): string[] | null {
+  const row = ndb
+    .prepare('SELECT accepted_ids FROM publications_v WHERE id = ? LIMIT 1')
+    .get(id) as { accepted_ids: string | null } | undefined;
+  if (row === undefined || row.accepted_ids === null) return null;
+  return parseStringArray(row.accepted_ids);
+}
+
+/**
+ * Зафиксировать принятый срез. Специально НЕ трогает `version`/`updated_at`:
+ * принятие кандидата — не правка настроек публикации, и не должно уводить
+ * открытый у пользователя `If-Match` в конфликт (как и запись порядка). Строка
+ * материализуется в текущем слое штатным механизмом теневых строк.
+ */
+export function setPublicationAcceptedIds(ndb: NetworkDb, id: string, ids: readonly string[]): void {
+  if (!materializeShadow(ndb, 'publications', id)) return;
+  ndb
+    .prepare('UPDATE publications SET accepted_ids = ? WHERE id = ? AND layer_id = ?')
+    .run(JSON.stringify(ids), id, ndb.layerId);
+}
+
+/**
+ * Принять всё текущее состояние отбора: исполнить рецепт заголовков и записать
+ * результат в срез. Вызывается при создании публикации и сохранении порядка
+ * (`PUT …/order`) — «все текущие узлы считаются принятыми» (DoD задачи e754527d).
+ */
+function acceptCurrentSelection(ndb: NetworkDb, id: string, actorUserId: string): void {
+  const row = ndb
+    .prepare('SELECT title_recipe FROM publications_v WHERE id = ? LIMIT 1')
+    .get(id) as { title_recipe: string | null } | undefined;
+  const recipe = parseRecipe(row?.title_recipe ?? null);
+  const warnings: string[] = [];
+  const ids = recipe === null ? [] : selectRecipeIds(ndb, actorUserId, recipe, warnings);
+  setPublicationAcceptedIds(ndb, id, ids);
 }
 
 /**
@@ -433,15 +481,21 @@ export function createPublication(
   return ndb.transaction(() => {
     const id = randomUUID();
     const fields = resolvePublicationFields(ndb, id, null, input);
+    // Принятый срез на момент создания: всё, что уже подходит под рецепт,
+    // принято; кандидатами станут только вошедшие в отбор позже (задача e754527d).
+    const recipe = parseRecipe(fields.title_recipe);
+    const warnings: string[] = [];
+    const acceptedIds =
+      recipe === null ? [] : selectRecipeIds(ndb, actorUserId, recipe, warnings);
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
     ndb
       .prepare(
         `INSERT INTO publications (id, layer_id, title, subtitle, summary_md, authorship,
                                    cover_attachment_id, cover_url, title_recipe, text_sources,
-                                   extra_properties, numbering_from, numbering_to,
+                                   extra_properties, numbering_from, numbering_to, accepted_ids,
                                    active, version, created_at, created_by, updated_at, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -457,6 +511,7 @@ export function createPublication(
         fields.extra_properties,
         fields.numbering_from,
         fields.numbering_to,
+        JSON.stringify(acceptedIds),
         now,
         actorUserId,
         now,
@@ -783,9 +838,49 @@ export function listAllPublications(ndb: NetworkDb): Publication[] {
 // Локальный порядок и исключения
 // ---------------------------------------------------------------------------
 
+/** Upsert поузловых строк порядка (без семантики принятого среза). */
+function applyPublicationOrder(
+  ndb: NetworkDb,
+  publicationId: string,
+  items: readonly PublicationOrderItem[],
+  actorUserId: string,
+): void {
+  const now = new Date().toISOString();
+  for (const item of items) {
+    if (typeof item.node_key !== 'string' || item.node_key === '') continue;
+    const id = publicationOrderId(publicationId, item.node_key);
+    const materialized = materializeShadow(ndb, 'publication_order', id);
+    if (materialized) {
+      // `deleted = 0` — надгробие той же поузловой строки (детерминированный
+      // id) при повторной перестановке оживляется, иначе позиция молча
+      // терялась бы (та же семантика, что у исключений и состава полок).
+      ndb
+        .prepare(
+          `UPDATE publication_order
+              SET position = ?, deleted = 0, updated_at = ?, updated_by = ?
+            WHERE id = ? AND layer_id = ?`,
+        )
+        .run(item.position, now, actorUserId, id, ndb.layerId);
+    } else {
+      ndb
+        .prepare(
+          `INSERT INTO publication_order (id, layer_id, publication_id, node_key, position,
+                                          updated_at, updated_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, ndb.layerId, publicationId, item.node_key, item.position, now, actorUserId);
+    }
+  }
+}
+
 /**
  * Батч перестановок порядка: одна транзакция, upsert поузловых строк.
  * Неизвестные/лишние узлы не проверяются — позиция мертва, если узел исчез.
+ *
+ * **Принятие (задача e754527d).** Сохранение порядка — явное действие
+ * расстановки: после него ВСЁ текущее состояние отбора считается принятым
+ * (спека f9a20c3f, DoD «после сохранения порядка все текущие узлы приняты»),
+ * поэтому срез пересчитывается исполнением рецепта.
  */
 export function setPublicationOrder(
   ndb: NetworkDb,
@@ -795,32 +890,30 @@ export function setPublicationOrder(
 ): PublicationOrderItem[] {
   return ndb.transaction(() => {
     getPublicationOrThrow(ndb, publicationId);
-    const now = new Date().toISOString();
-    for (const item of items) {
-      if (typeof item.node_key !== 'string' || item.node_key === '') continue;
-      const id = publicationOrderId(publicationId, item.node_key);
-      const materialized = materializeShadow(ndb, 'publication_order', id);
-      if (materialized) {
-        // `deleted = 0` — надгробие той же поузловой строки (детерминированный
-        // id) при повторной перестановке оживляется, иначе позиция молча
-        // терялась бы (та же семантика, что у исключений и состава полок).
-        ndb
-          .prepare(
-            `UPDATE publication_order
-                SET position = ?, deleted = 0, updated_at = ?, updated_by = ?
-              WHERE id = ? AND layer_id = ?`,
-          )
-          .run(item.position, now, actorUserId, id, ndb.layerId);
-      } else {
-        ndb
-          .prepare(
-            `INSERT INTO publication_order (id, layer_id, publication_id, node_key, position,
-                                            updated_at, updated_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(id, ndb.layerId, publicationId, item.node_key, item.position, now, actorUserId);
-      }
-    }
+    applyPublicationOrder(ndb, publicationId, items, actorUserId);
+    acceptCurrentSelection(ndb, publicationId, actorUserId);
+    return listPublicationOrder(ndb, publicationId);
+  });
+}
+
+/**
+ * Дописать узел в конец локального порядка, НЕ трогая принятый срез
+ * (внутренняя операция действия «расставить» из плашки, задача e754527d:
+ * кандидат гасится индивидуально, другие кандидаты остаются).
+ */
+export function appendPublicationOrderItem(
+  ndb: NetworkDb,
+  publicationId: string,
+  nodeKey: string,
+  actorUserId: string,
+): PublicationOrderItem[] {
+  return ndb.transaction(() => {
+    getPublicationOrThrow(ndb, publicationId);
+    const maxPosition = listPublicationOrder(ndb, publicationId).reduce(
+      (max, item) => Math.max(max, item.position),
+      0,
+    );
+    applyPublicationOrder(ndb, publicationId, [{ node_key: nodeKey, position: maxPosition + 1 }], actorUserId);
     return listPublicationOrder(ndb, publicationId);
   });
 }

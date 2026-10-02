@@ -20,10 +20,13 @@ import { createTypeProperty, setPropertyValue } from '../src/domain/property-ser
 import {
   addPublicationExclusion,
   createPublication,
+  listPublicationOrder,
+  removePublicationExclusion,
   setPublicationOrder,
   updatePublication,
 } from '../src/domain/publication-service.js';
 import {
+  acceptPublicationCandidate,
   assemblePublication,
   buildSectionTree,
   listPublicationCandidates,
@@ -421,44 +424,126 @@ describe('publication-assembly-service: тексты и исключения', {
   });
 });
 
-describe('publication-assembly-service: кандидаты', { skip }, () => {
-  it('показывает недостижимое кольцо отбора как кандидатов (дифф с деревом)', () => {
+describe('publication-assembly-service: кандидаты (временная семантика)', { skip }, () => {
+  it('новая мысль под отбор становится кандидатом; при создании кандидатов нет', () => {
     const ndb = createInMemoryNetworkDb();
     try {
       const type = createThoughtType(ndb, { name: 'Doc' }, USER);
       const a = seedThought(ndb, 'A', type.id);
-      const b = seedThought(ndb, 'B', type.id);
+      // a подошла под рецепт ДО создания — принята, кандидатов нет.
       const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
-      // Кольцо без точки входа: ни один узел не корень → дерево пусто.
-      seedUntypedLink(ndb, a, b, 0);
-      seedUntypedLink(ndb, b, a, 0);
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
+      assert.equal(assemblePublication(ndb, pub.id, USER).publication.new_candidates, 0);
 
-      const doc = assemblePublication(ndb, pub.id, USER);
-      assert.deepEqual(sectionIds(doc.sections), []);
-      const result = listPublicationCandidates(ndb, pub.id, USER);
-      assert.deepEqual(result.items.map((c) => c.thought_id).sort(), [a, b].sort());
-      assert.equal(result.total, 2);
-      assert.equal(result.has_more, false);
+      // Новая мысль вошла в отбор позже принятого состояния — кандидат.
+      const b = seedThought(ndb, 'B', type.id);
+      const grown = listPublicationCandidates(ndb, pub.id, USER);
+      assert.deepEqual(grown.items.map((c) => c.thought_id), [b]);
+      assert.equal(grown.total, 1);
+      // Живая сборка показывает и принятую, и нового кандидата в дереве.
+      assert.deepEqual(sectionIds(assemblePublication(ndb, pub.id, USER).sections), [a, b]);
+      // Плашка «+N» считается тем же вызовом.
+      assert.equal(assemblePublication(ndb, pub.id, USER).publication.new_candidates, 1);
     } finally {
       ndb.close();
     }
   });
 
-  it('обновляет кандидатов при подросшем отборе', () => {
+  it('расширение рецепта на существующие мысли даёт кандидата (впервые подошли)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const docType = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const noteType = createThoughtType(ndb, { name: 'Note' }, USER);
+      seedThought(ndb, 'A', docType.id);
+      const b = seedThought(ndb, 'B', noteType.id);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(docType.id) },
+        USER,
+      );
+      // b существует давно, но под рецепт не подходила — не кандидат (её нет в отборе).
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
+
+      // Рецепт расширен на тип Note: b впервые вошла в отбор — кандидат.
+      updatePublication(
+        ndb,
+        pub.id,
+        { title_recipe: { type_ids: [docType.id, noteType.id], sort: 'alpha', order: 'asc' } },
+        USER,
+      );
+      const grown = listPublicationCandidates(ndb, pub.id, USER);
+      // a принята при создании и остаётся принятой; кандидат — только b.
+      assert.deepEqual(grown.items.map((c) => c.thought_id), [b]);
+      assert.equal(grown.total, 1);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('«расставить» гасит одного кандидата (другие остаются) и фиксирует позицию в конец', () => {
     const ndb = createInMemoryNetworkDb();
     try {
       const type = createThoughtType(ndb, { name: 'Doc' }, USER);
-      const a = seedThought(ndb, 'A', type.id);
       const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
-      // Пока A — единственная отобранная и она корень: кандидатов нет.
+      const x = seedThought(ndb, 'X', type.id);
+      const y = seedThought(ndb, 'Y', type.id);
+      assert.deepEqual(
+        listPublicationCandidates(ndb, pub.id, USER).items.map((c) => c.thought_id).sort(),
+        [x, y].sort(),
+      );
+
+      const order = acceptPublicationCandidate(ndb, pub.id, x, USER);
+      // x погашен индивидуально, y остаётся кандидатом.
+      assert.deepEqual(listPublicationCandidates(ndb, pub.id, USER).items.map((c) => c.thought_id), [y]);
+      // Позиция x зафиксирована в конец порядка.
+      assert.equal(order[order.length - 1]!.node_key, x);
+      assert.deepEqual(listPublicationOrder(ndb, pub.id).map((i) => i.node_key), [x]);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('«скрыть» (исключение) убирает кандидата; снятие исключения возвращает', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      const x = seedThought(ndb, 'X', type.id);
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 1);
+
+      addPublicationExclusion(ndb, pub.id, x, USER);
       assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
 
-      const b = seedThought(ndb, 'B', type.id);
-      seedUntypedLink(ndb, a, b, 0);
-      seedUntypedLink(ndb, b, a, 0);
-      const grown = listPublicationCandidates(ndb, pub.id, USER);
-      assert.equal(grown.total, 2);
-      assert.deepEqual(grown.items.map((c) => c.thought_id).sort(), [a, b].sort());
+      removePublicationExclusion(ndb, pub.id, x);
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 1);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('сохранение порядка принимает все текущие узлы (плашка уходит)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      const x = seedThought(ndb, 'X', type.id);
+      const y = seedThought(ndb, 'Y', type.id);
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 2);
+
+      setPublicationOrder(
+        ndb,
+        pub.id,
+        [
+          { node_key: x, position: 1 },
+          { node_key: y, position: 2 },
+        ],
+        USER,
+      );
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
+
+      // Новая мысль после сохранения снова кандидат.
+      seedThought(ndb, 'Z', type.id);
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 1);
     } finally {
       ndb.close();
     }
@@ -468,14 +553,10 @@ describe('publication-assembly-service: кандидаты', { skip }, () => {
     const ndb = createInMemoryNetworkDb();
     try {
       const type = createThoughtType(ndb, { name: 'Doc' }, USER);
-      const a = seedThought(ndb, 'A', type.id);
-      const b = seedThought(ndb, 'B', type.id);
-      const c = seedThought(ndb, 'C', type.id);
-      // Чистое кольцо A→B→C→A: все три недостижимы.
-      seedUntypedLink(ndb, a, b, 0);
-      seedUntypedLink(ndb, b, c, 0);
-      seedUntypedLink(ndb, c, a, 0);
       const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      seedThought(ndb, 'A', type.id);
+      seedThought(ndb, 'B', type.id);
+      seedThought(ndb, 'C', type.id);
 
       const first = listPublicationCandidates(ndb, pub.id, USER, { limit: 2 });
       assert.equal(first.items.length, 2);
@@ -484,6 +565,21 @@ describe('publication-assembly-service: кандидаты', { skip }, () => {
       const second = listPublicationCandidates(ndb, pub.id, USER, { limit: 2, offset: 2 });
       assert.equal(second.items.length, 1);
       assert.equal(second.has_more, false);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('неинициализированный срез (импорт/legacy) кандидатов не даёт', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      seedThought(ndb, 'B', type.id);
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 1);
+
+      ndb.prepare('UPDATE publications SET accepted_ids = NULL WHERE id = ?').run(pub.id);
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
     } finally {
       ndb.close();
     }

@@ -17,6 +17,7 @@
  *   POST   /networks/:networkId/publications/:id/export          — экспорт документа (zip)
  *   POST   /networks/:networkId/publications/export-batch        — пакетный экспорт
  *   GET    /networks/:networkId/publications/:id/candidates      — новые кандидаты
+ *   POST   /networks/:networkId/publications/:id/candidates/accept — «расставить» кандидата
  *   GET    /networks/:networkId/thoughts/:id/publications        — использование мысли
  *   POST   /networks/:networkId/shelves                          — создать полку
  *   GET    /networks/:networkId/shelves                          — список полок
@@ -75,6 +76,7 @@ import {
   updateShelf,
 } from '../domain/publication-service.js';
 import {
+  acceptPublicationCandidate,
   assemblePublication,
   listPublicationCandidates,
   listPublicationUsage,
@@ -87,6 +89,7 @@ import {
   parseRest,
   RestPublicationAssembly,
   RestPublicationById,
+  RestPublicationCandidateAccept,
   RestPublicationCandidates,
   RestPublicationCreate,
   RestPublicationExclusionAdd,
@@ -570,6 +573,42 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           },
         );
         sendSuccess(reply, candidates);
+      },
+    );
+
+    /**
+     * «Расставить» кандидата из плашки (задача e754527d; элемент интерфейса
+     * 43ec961f): гасит его индивидуально и фиксирует позицию в конец порядка.
+     * Пишет строку порядка, поэтому событие — то же, что у перестановки.
+     */
+    app.post(
+      '/networks/:networkId/publications/:id/candidates/accept',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestPublicationCandidateAccept, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const order = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const items = acceptPublicationCandidate(
+            ndb,
+            input.publication_id,
+            input.thought_id,
+            req.auth!.user.id,
+          );
+          const snapshot = publicationRef(ndb, input.publication_id);
+          return {
+            result: items,
+            events: [
+              {
+                type: 'publication.order.reordered' as const,
+                data: { publication_id: input.publication_id, items },
+              },
+            ],
+            activity: [
+              { kind: 'publication' as const, action: 'updated' as const, publication: snapshot },
+            ],
+          };
+        });
+        sendSuccess(reply, { items: order }, { request_id: req.id });
       },
     );
 

@@ -193,6 +193,8 @@ function buildApi(): EtnBridgeApi {
         invoke('publications.removeExclusion', networkId, id, thoughtId),
       assembly: (networkId, id, query) => invoke('publications.assembly', networkId, id, query),
       candidates: (networkId, id, query) => invoke('publications.candidates', networkId, id, query),
+      acceptCandidate: (networkId, id, thoughtId) =>
+        invoke('publications.acceptCandidate', networkId, id, thoughtId),
       usage: (networkId, thoughtId, query) =>
         invoke('publications.usage', networkId, thoughtId, query),
       export: (networkId, id, request) => invoke('publications.export', networkId, id, request),

@@ -799,6 +799,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'publications.acceptCandidate',
+    bind((networkId: string, id: string, thoughtId: string) =>
+      requireRest(deps).acceptPublicationCandidate(networkId, id, thoughtId),
+    ),
+  );
+  handlers.set(
     'publications.usage',
     bind(
       (networkId: string, thoughtId: string, query?: Parameters<RestClient['listPublicationUsage']>[2]) =>

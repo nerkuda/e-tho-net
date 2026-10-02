@@ -4199,6 +4199,25 @@ export const RestPublicationCandidates = defineContract(
   },
 );
 
+/**
+ * POST /networks/:id/publications/{id}/candidates/accept — «расставить»
+ * кандидата из плашки (задача e754527d; элемент интерфейса 43ec961f): гасит
+ * его индивидуально и фиксирует позицию в конец порядка.
+ */
+export const RestPublicationCandidateAccept = defineContract(
+  'rest:publications.candidate-accept',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    thought_id: z.string().min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    thought_id: { from: { kind: 'body' }, msg: 'thought_id обязателен.' },
+  },
+);
+
 /** GET /networks/:id/thoughts/{id}/publications — использование мысли. */
 export const RestPublicationUsage = defineContract(
   'rest:publications.usage',

@@ -12,14 +12,14 @@
  * требование 6e8bc3f0): клиент семантику отбора не реплицирует. Вызовы
  * ленивые, с лимитами и серверным кешем с дебаунсом.
  *
- * **Переиспользование.** Отбор заголовков исполняется существующим движком
- * выборки мыслей (`parseStructureFilter` + `structureRequestToQuery` +
- * `queryThoughtIds`) — формат рецепта тот же, что у панели «Структуры мыслей»;
- * локальных реализаций SQL-отбора здесь нет. Чтение рёбер свойств-связей идёт
- * существующим резолвом направления (`resolveOwnerBindingSide`,
- * `linkPropertyDirection`, `linkPropertyLinkTypeId`). Строение документа
- * рендерится единым markdown-рендерером, поэтому превью и экспорт не расходятся
- * (требование [[#9969e586]]).
+ * **Переиспользование.** Отбор заголовков исполняется движком выборки мыслей
+ * (`selectRecipeIds`, domain/publication-recipe.ts) — формат рецепта тот же,
+ * что у панели «Структуры мыслей»; локальных реализаций SQL-отбора здесь нет.
+ * Чтение рёбер свойств-связей идёт существующим резолвом направления
+ * (`resolveOwnerBindingSide`, `linkPropertyDirection`,
+ * `linkPropertyLinkTypeId`). Строение документа рендерится единым
+ * markdown-рендерером, поэтому превью и экспорт не расходятся (требование
+ * [[#9969e586]]).
  *
  * **Детерминизм.** Обход всегда даёт одно дерево на одном графе: рёбра
  * сортируются `links.position ASC, id ASC`, локальный порядок публикации
@@ -27,12 +27,16 @@
  * выводятся из id мысли и не зависят от пагинации (стабильны между страницами).
  * Построение дерева итеративное — глубина алгоритмически не ограничена.
  *
- * **Семантика «кандидата».** Кандидат — мысль, подошедшая под рецепт
- * заголовков, но не попавшая в дерево сборки ([[#f9a20c3f]]: «сервер исполняет
- * отбор и диффицирует с деревом»), за вычетом исключений. При живой сборке в
- * дерево попадают все достижимые отобранные разделы (правило «нет отобранных
- * предков → корень»), поэтому кандидатами становятся недостижимые разделы —
- * например, чистое кольцо отбора без точки входа.
+ * **Семантика «кандидата» (временная, задача e754527d; спека f9a20c3f).**
+ * Кандидат — мысль, подошедшая под рецепт заголовков и вошедшая в отбор ПОЗЖЕ
+ * последнего принятого состояния публикации, за вычетом исключений. Принятое
+ * состояние — срез id (`publications.accepted_ids`), фиксируемый созданием
+ * публикации и каждым явным действием расстановки (`PUT …/order` принимает все
+ * текущие узлы; `POST …/candidates/accept` гасит одного кандидата и фиксирует
+ * его позицию в конец). Срез не инициализирован (`NULL`) — кандидатов нет.
+ * Отличается от прежней буквальной трактовки «дифф отбора с деревом»: при
+ * живой сборке в дерево попадают все достижимые отобранные разделы, поэтому
+ * буквальный дифф почти всегда пуст и плашка «+N новых» не появлялась.
  */
 
 import {
@@ -48,13 +52,10 @@ import {
   type PublicationCandidate,
   type PublicationCandidatesResult,
   type PublicationListQuery,
+  type PublicationOrderItem,
   type PublicationSectionFlags,
   type PublicationUsageItem,
   type PublicationUsageResult,
-  type SavedFilterDefinition,
-  type SortOrder,
-  type StructureFilter,
-  type StructureSort,
 } from '@etn/shared';
 import {
   formatSectionNumber,
@@ -66,8 +67,7 @@ import {
 } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { queryThoughtIds, structureRequestToQuery } from './query-service.js';
-import { parseStructureFilter } from './structure-service.js';
+import { selectRecipeIds } from './publication-recipe.js';
 import {
   isStructuralLinkProperty,
   linkPropertyDirection,
@@ -77,11 +77,14 @@ import {
 } from './property-service.js';
 import { resolveThoughts } from './thought-service.js';
 import {
+  appendPublicationOrderItem,
   getPublication,
+  getPublicationAcceptedIds,
   listPublicationExclusions,
   listPublicationOrder,
   listPublications,
   resolvePublicationRefs,
+  setPublicationAcceptedIds,
 } from './publication-service.js';
 
 // ---------------------------------------------------------------------------
@@ -101,13 +104,6 @@ export const PUBLICATION_USAGE_MAX_LIMIT = 100;
 
 /** Сколько публикаций слоя просматривается для расчёта использования мысли. */
 export const PUBLICATION_USAGE_MAX_PUBLICATIONS = 100;
-
-/**
- * Потолок числа разделов, извлекаемых из рецепта за одну сборку. Защита от
- * неограниченного отбора; превышение — предупреждение в `warnings`, а не
- * ошибка (требование 6e8bc3f0: усечение, не отказ).
- */
-export const PUBLICATION_RECIPE_MAX_NODES = 20000;
 
 /** Окно дебаунса серверного кеша членства (мс). */
 export const PUBLICATION_MEMBERSHIP_DEBOUNCE_MS = 400;
@@ -186,7 +182,7 @@ interface BuiltDocument {
   contentIds: Set<string>;
   /** id мыслей-текстов, попавших в документ. */
   textIds: Set<string>;
-  /** Кандидаты: отбор минус дерево минус исключения. */
+  /** Кандидаты: отбор минус принятый срез минус исключения (временная семантика). */
   candidateIds: string[];
   /** Тексты по каждому содержательному разделу. */
   textsBySection: Map<string, SectionText[]>;
@@ -265,18 +261,6 @@ function parseStringArray(text: string | null): string[] {
   } catch {
     return [];
   }
-}
-
-/** Валидный `StructureSort` или `null`. */
-function asStructureSort(value: unknown): StructureSort | null {
-  return value === 'alpha' || value === 'created' || value === 'viewed' || value === 'updated'
-    ? value
-    : null;
-}
-
-/** Валидный `SortOrder` или `null`. */
-function asSortOrder(value: unknown): SortOrder | null {
-  return value === 'asc' || value === 'desc' ? value : null;
 }
 
 /** Прочитать реестровое свойство по id в контексте слоя. */
@@ -432,61 +416,6 @@ function loadPermanentComments(ndb: NetworkDb, ids: readonly string[]): Map<stri
     for (const r of rows) out.set(r.owner_id, r.body_md);
   }
   return out;
-}
-
-// ---------------------------------------------------------------------------
-// Отбор заголовков (рецепт)
-// ---------------------------------------------------------------------------
-
-/**
- * Исполнить рецепт заголовков существующим движком выборки и вернуть id всех
- * совпавших мыслей в детерминированном порядке. Пагинация — keyset-курсором
- * (единый движок), с потолком {@link PUBLICATION_RECIPE_MAX_NODES}.
- */
-function selectRecipeIds(
-  ndb: NetworkDb,
-  userId: string,
-  recipe: SavedFilterDefinition,
-  warnings: string[],
-): string[] {
-  const raw = recipe as unknown as Record<string, unknown>;
-  let filter: StructureFilter;
-  try {
-    filter = parseStructureFilter(raw);
-  } catch (err) {
-    if (err instanceof EtnError) {
-      warnings.push(`рецепт заголовков не исполнен: ${err.message}`);
-      return [];
-    }
-    throw err;
-  }
-  const sort = asStructureSort(raw['sort']) ?? 'alpha';
-  const order = asSortOrder(raw['order']) ?? 'asc';
-
-  const ids: string[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const query = structureRequestToQuery({
-      ...filter,
-      sort,
-      order,
-      limit: PUBLICATION_ASSEMBLY_PAGE_SIZE,
-      offset: 0,
-      cursor,
-    });
-    const page = queryThoughtIds(ndb, userId, query, {
-      emptyFilterMode: 'all',
-      maxLimit: PUBLICATION_ASSEMBLY_PAGE_SIZE,
-    });
-    ids.push(...page.ids);
-    if (!page.has_more || page.next_cursor === null) break;
-    cursor = page.next_cursor;
-    if (ids.length >= PUBLICATION_RECIPE_MAX_NODES) {
-      warnings.push('отбор заголовков усечён по потолку узлов сборки');
-      break;
-    }
-  }
-  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -796,9 +725,17 @@ function buildDocument(
     textsBySection.set(section.thoughtId, texts);
   }
 
-  const candidateIds = selectedIds.filter(
-    (id) => !shownIds.has(id) && !excluded.set.has(id),
-  );
+  // Временная семантика (задача e754527d): кандидат — отобранная мысль, которой
+  // нет в принятом срезе. `NULL`-срез (импорт/legacy) — кандидатов нет: считаем
+  // принятым всё текущее состояние. `shownIds` в отборе кандидатов больше не
+  // участвует: живые отобранные разделы все попадают в дерево, но «новыми» от
+  // этого быть не перестают.
+  const acceptedIds = getPublicationAcceptedIds(ndb, pub.id);
+  const accepted = acceptedIds === null ? null : new Set(acceptedIds);
+  const candidateIds =
+    accepted === null
+      ? []
+      : selectedIds.filter((id) => !accepted.has(id) && !excluded.set.has(id));
 
   return {
     selectedIds,
@@ -1197,8 +1134,9 @@ export function buildPublicationExportDocument(
 }
 
 /**
- * Новые кандидаты публикации (`GET /publications/{id}/candidates`): отбор
- * минус дерево минус исключения, с лимитом и пагинацией (усечение — не ошибка).
+ * Новые кандидаты публикации (`GET /publications/{id}/candidates`): отбор минус
+ * принятый срез минус исключения (временная семантика, задача e754527d), с
+ * лимитом и пагинацией (усечение — не ошибка).
  */
 export function listPublicationCandidates(
   ndb: NetworkDb,
@@ -1244,6 +1182,48 @@ export function listPublicationCandidates(
         candidatesCacheKey(publicationId, ndb.layerId, includeExcluded, limit, offset),
         compute,
       );
+}
+
+/**
+ * «Расставить» кандидата (задача e754527d; элемент интерфейса 43ec961f):
+ * погасить его индивидуально — добавить id в принятый срез (другие кандидаты
+ * остаются) и зафиксировать позицию в конец локального порядка.
+ *
+ * Узел локального порядка — id ребра первого вхождения (родительского ребра)
+ * либо id мысли для корня: та же адресация, что у сборки (`placementKeyOf` в
+ * `buildSectionTree`) и у `PUT …/order`. Срез `NULL` (импорт) инициализируется
+ * текущим отбором, чтобы «расставить» не превращал остальные узлы в кандидатов.
+ */
+export function acceptPublicationCandidate(
+  ndb: NetworkDb,
+  publicationId: string,
+  thoughtId: string,
+  actorUserId: string,
+): PublicationOrderItem[] {
+  return ndb.transaction(() => {
+    const pub = getPublicationOrThrow(ndb, publicationId);
+    const visible = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ? LIMIT 1').get(thoughtId);
+    if (visible === undefined) {
+      throw new EtnError('NOT_FOUND', `Мысль ${thoughtId} не найдена.`, {
+        entity: 'thought',
+        id: thoughtId,
+      });
+    }
+
+    const current = getPublicationAcceptedIds(ndb, publicationId);
+    const accepted = new Set<string>(current ?? []);
+    if (current === null && pub.title_recipe !== null) {
+      const warnings: string[] = [];
+      for (const id of selectRecipeIds(ndb, actorUserId, pub.title_recipe, warnings)) {
+        accepted.add(id);
+      }
+    }
+    accepted.add(thoughtId);
+    setPublicationAcceptedIds(ndb, publicationId, [...accepted]);
+
+    const nodeKey = untypedParents(ndb, thoughtId)[0]?.edgeId ?? thoughtId;
+    return appendPublicationOrderItem(ndb, publicationId, nodeKey, actorUserId);
+  });
 }
 
 /** Прочитать прямые значения свойств типа «Публикация» у мысли. */
