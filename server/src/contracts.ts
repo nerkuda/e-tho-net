@@ -333,11 +333,13 @@ export function messageForIssue(
   input?: unknown,
 ): string {
   const vars: Record<string, string | number | bigint> = { key: pathKey };
-  // Ключ подстановки в сообщение обязан совпадать у REST и MCP. Для вложенного
-  // пути (`items.0.node_key`) берём полный путь — он информативнее верхнего
-  // REST-ключа (`items`); иначе (верхний уровень/пустой путь) — REST-ключ.
+  // Ключ подстановки в сообщение обязан совпадать у REST и MCP. Путь zod-ошибки
+  // REST относителен значению поля, поэтому непустой путь (даже длиной 1, как у
+  // record-поля: `tables` + `t1`) — это вложенная ошибка, и берём полный путь
+  // `pathKey` (`tables.t1`), как его видит MCP при разборе всего входа; только
+  // пустой путь (ошибка на самом поле) остаётся верхним REST-ключом `specKey`.
   const keyVars: Record<string, string | number | bigint> =
-    Array.isArray(issue.path) && issue.path.length > 1 ? vars : { key: specKey };
+    Array.isArray(issue.path) && issue.path.length > 0 ? vars : { key: specKey };
   if (issue.code === 'custom') {
     return issue.message;
   }
@@ -528,7 +530,16 @@ export function parseRest<S extends z.ZodObject>(
       if (!res.success) {
         const issue = firstIssue(res.error);
         const fieldKey = restFieldIssueKey(key, issue);
-        throw fieldError(requestId, fieldKey, messageForIssue(key, fieldKey, spec, field, issue, value), issueDetails(fieldKey, issue));
+        // Путь zod-ошибки REST относителен значению поля: при вложенной ошибке
+        // (`fieldKey !== key`) заблуждение не о самом поле, а о его элементе —
+        // сообщение и тип строятся по полному пути и объявленной спецификации
+        // ЭТОГО пути, а не верхнего ключа (`contract.rest` объявляет только
+        // верхние ключи, так что для вложенного пути spec/field не находятся —
+        // ровно как у MCP). Иначе (ошибка на самом поле) — его spec и тип.
+        const nested = fieldKey !== key;
+        const issueSpec = nested ? contract.rest[fieldKey] : spec;
+        const issueField = nested ? undefined : field;
+        throw fieldError(requestId, fieldKey, messageForIssue(key, fieldKey, issueSpec, issueField, issue, value), issueDetails(fieldKey, issue));
       }
       value = res.data;
     }

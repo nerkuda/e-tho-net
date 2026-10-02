@@ -217,6 +217,44 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
     }
   });
 
+  // Ошибка 9918e23b: record-поле с одиночной вложенностью (`tables`) — путь
+  // zod-ошибки REST относителен значению поля (длина 1), поэтому REST отдавал
+  // фиксированный spec.msg верхнего ключа, а MCP — полный путь с дефолтным
+  // текстом. Теперь оба фасада дают дословно один текст с полным путём.
+  it('etn.layers.merge ↔ POST /layers/{id}/merge: record tables — полный путь у обоих фасадов', async () => {
+    const w = await pairedWorld();
+    try {
+      const cases: Array<{ tables: Record<string, unknown>; message: string }> = [
+        { tables: { t1: 123 }, message: 'tables.t1 должен быть массивом строк.' },
+        { tables: { t1: [123] }, message: 'tables.t1.0 должен быть строкой.' },
+      ];
+      for (const { tables, message } of cases) {
+        const restRes = await w.rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${w.rest.networkId}/layers/L/merge`,
+          headers: authHeaders(w.rest),
+          payload: { tables },
+        });
+        assert.equal(restRes.statusCode, 422);
+        const restErr = restRes.json() as RestError;
+        assert.equal(restErr.error.code, 'VALIDATION_ERROR');
+        assert.equal(restErr.error.message, message);
+
+        const mcpRes = await callOp(
+          w.handle.client, 'layers.merge',
+          { network_id: w.rest.networkId, layer_id: 'L', tables },
+          true,
+        );
+        assert.equal(mcpRes.isError, true);
+        const mcpErr = mcpErrorParts(toolText(mcpRes));
+        assert.equal(mcpErr.code, restErr.error.code);
+        assert.equal(mcpErr.message, restErr.error.message, 'MCP и REST дают одинаковый текст');
+      }
+    } finally {
+      await closeWorld(w);
+    }
+  });
+
   it('etn.layers.select: отсутствие layer_id — «обязателен», неверный тип — прежний текст', async () => {
     const w = await pairedWorld();
     try {
