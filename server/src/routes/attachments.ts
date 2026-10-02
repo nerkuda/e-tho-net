@@ -3,7 +3,9 @@
  *
  *   GET/POST /networks/:networkId/thoughts/:id/attachments — list/create on a thought
  *   GET/POST /networks/:networkId/links/:id/attachments    — list/create on a link
+ *   GET/POST /networks/:networkId/publications/:id/attachments — list/create on a publication
  *   GET      /networks/:networkId/attachments/raw?path=…    — raw bytes of a stored file
+ *   GET      /networks/:networkId/attachments/:id/usage     — owners of the shared file
  *   PATCH    /networks/:networkId/attachments/:id          — update (last-write-wins)
  *   DELETE   /networks/:networkId/attachments/:id          — delete
  *
@@ -45,6 +47,7 @@ import {
   getAttachmentContent,
   getAttachmentRawByPath,
   listAttachments,
+  listAttachmentUsage,
   searchAttachments,
   updateAttachment,
   updateAttachmentContent,
@@ -60,6 +63,7 @@ import {
   RestAttachmentRaw,
   RestAttachmentSearch,
   RestAttachmentUpdate,
+  RestAttachmentUsage,
 } from '../contracts.js';
 
 /** `/api/v1/networks*` attachment routes plugin factory. */
@@ -155,6 +159,9 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
 
     registerOwnerRoutes('/networks/:networkId/thoughts/:id', 'thought');
     registerOwnerRoutes('/networks/:networkId/links/:id', 'link');
+    // Публикации — третий вид владельца (0.11.1, задача 46cf4bcb; ADR 73cfcf64):
+    // список/добавление/загрузка файла для публикации, паритет с мыслями.
+    registerOwnerRoutes('/networks/:networkId/publications/:id', 'publication');
 
     // Network-wide attachment search (03-server-api.md §11, workplan L25).
     // Must be registered before the `:id` routes to keep the URL space clear;
@@ -259,6 +266,20 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           );
         }
         sendSuccess(reply, attachment);
+      },
+    );
+
+    // `GET /attachments/:id/usage` — использование вложения (0.11.1, задача
+    // 46cf4bcb): владельцы (мысли, связи, публикации), которые держат тот же
+    // физический носитель. Нужно «облачкам» в диалоге выбора обложки
+    // публикации. Статический сегмент `usage` не конфликтует с `:id`.
+    app.get(
+      '/networks/:networkId/attachments/:id/usage',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestAttachmentUsage, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        sendSuccess(reply, listAttachmentUsage(ndb, input.attachment_id));
       },
     );
 

@@ -34,6 +34,7 @@ import {
   AttachmentsDelete,
   AttachmentsSearch,
   AttachmentsUpdate,
+  AttachmentsUsage,
   ChangesList,
   CommentsDelete,
   ExportSubgraph,
@@ -206,10 +207,10 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'attachments.add',
     tool: 'etn.attachments.add',
     group: 'attachments',
-    when: 'прикрепить URL, путь к файлу или загрузить данные файла (`mime_type`+`data_base64`) к мысли/связи',
+    when: 'прикрепить URL, путь к файлу или загрузить данные файла (`mime_type`+`data_base64`) к мысли/связи/публикации',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
-      { name: 'owner_type', required: true, desc: '`thought` | `link`' },
+      { name: 'owner_type', required: true, desc: '`thought` | `link` | `publication`' },
       { name: 'owner_id', required: true, desc: 'id владельца' },
       {
         name: 'kind',
@@ -242,7 +243,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'attachment_id', required: true, desc: 'id вложения-источника' },
-      { name: 'target_owner_type', required: true, desc: '`thought` | `link`' },
+      { name: 'target_owner_type', required: true, desc: '`thought` | `link` | `publication`' },
       { name: 'target_owner_ids', required: true, desc: 'массив id владельцев' },
     ],
     destructive: false,
@@ -270,6 +271,22 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     effects: 'чтение, без записи.',
     errors: '`VALIDATION_ERROR`.',
     paramsContract: AttachmentsSearch,
+  },
+  {
+    action: 'attachments.usage',
+    tool: 'etn.attachments.usage',
+    group: 'attachments',
+    when: 'узнать, кто держит вложение — владельцы (мысли, связи, публикации) общего файла/URL',
+    params: [
+      { name: 'network_id', required: true, desc: 'сеть' },
+      { name: 'attachment_id', required: true, desc: 'id строки вложения' },
+    ],
+    destructive: false,
+    readOnly: true,
+    effects:
+      'чтение, без записи. Возвращает владельцев ВСЕХ живых строк с тем же носителем (kind + url/file_path), без дублей: `{ attachment_id, owners: [{ owner_type, owner_id, title }] }` (у связи `title` — null).',
+    errors: '`NOT_FOUND`.',
+    paramsContract: AttachmentsUsage,
   },
   {
     action: 'attachments.update',

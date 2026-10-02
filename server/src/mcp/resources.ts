@@ -31,6 +31,7 @@ import { getLink } from '../domain/link-service.js';
 import { listTrash } from '../domain/trash-service.js';
 import { listComments } from '../domain/comment-service.js';
 import { listAttachments } from '../domain/attachment-service.js';
+import { getPublication } from '../domain/publication-service.js';
 import { getThoughtType, listThoughtTypes } from '../domain/thought-type-service.js';
 import { getLinkType, listLinkTypes } from '../domain/link-type-service.js';
 import {
@@ -302,6 +303,30 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetwork(rt, networkId);
         getThoughtOrThrow(ndb, thoughtId);
         return jsonContents(uri.href, listAttachments(ndb, 'thought', thoughtId));
+      }),
+  );
+
+  // Вложения публикации (0.11.1, задача 46cf4bcb) — паритет REST
+  // `GET /publications/{id}/attachments` и с ресурсом вложений мысли.
+  mcp.registerResource(
+    'etn.publication.attachments',
+    new ResourceTemplate('etn://networks/{network_id}/publications/{publication_id}/attachments', {
+      list: undefined,
+    }),
+    {
+      title: 'Вложения публикации',
+      description: 'Список вложений (url/file) публикации.',
+      mimeType: JSON_MIME,
+    },
+    (uri, vars) =>
+      guarded(() => {
+        const networkId = requireVar(vars, 'network_id');
+        const publicationId = requireVar(vars, 'publication_id');
+        const ndb = openMemberNetwork(rt, networkId);
+        if (getPublication(ndb, publicationId) === null) {
+          throw new Error(`ETN error [NOT_FOUND]: publication ${publicationId} not found`);
+        }
+        return jsonContents(uri.href, listAttachments(ndb, 'publication', publicationId));
       }),
   );
 

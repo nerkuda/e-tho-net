@@ -135,7 +135,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('lists the 13 etn:// resources (1 static + 12 templated)', async () => {
+  it('lists the 14 etn:// resources (1 static + 13 templated)', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -147,13 +147,17 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
           ...listed.resources.map((r) => r.uri),
           ...templates.resourceTemplates.map((r) => r.uriTemplate),
         ].sort();
-        assert.equal(uris.length, 13);
+        assert.equal(uris.length, 14);
         assert.ok(uris.includes('etn://networks'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}/usage'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}/backlinks'));
         assert.ok(uris.includes('etn://networks/{network_id}/thought-types/{type_id}'));
         assert.ok(uris.includes('etn://networks/{network_id}/trash'));
+        // 0.11.1 (задача 46cf4bcb): вложения публикации — паритет REST.
+        assert.ok(
+          uris.includes('etn://networks/{network_id}/publications/{publication_id}/attachments'),
+        );
       } finally {
         await handle.close();
       }

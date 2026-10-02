@@ -1347,6 +1347,17 @@ export const AttachmentsUpdate = defineContract(
   {},
 );
 
+/**
+ * `etn.attachments.usage` — использование вложения (0.11.1, задача 46cf4bcb;
+ * паритет REST `GET /attachments/{id}/usage`). Владельцы (мысли, связи,
+ * публикации), которые держат тот же физический носитель.
+ */
+export const AttachmentsUsage = defineContract(
+  'etn.attachments.usage',
+  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
+  {},
+);
+
 export const AttachmentsDelete = defineContract(
   'etn.attachments.delete',
   z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
@@ -2446,6 +2457,20 @@ export const RestAttachmentCopy = defineContract(
 
 export const RestAttachmentById = defineContract(
   'rest:attachments.by-id',
+  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    attachment_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/**
+ * `GET /attachments/{id}/usage` — использование вложения (0.11.1, задача
+ * 46cf4bcb): владельцы (мысли, связи, публикации), которые держат этот
+ * носитель. Нужно «облачкам» в диалоге выбора обложки публикации.
+ */
+export const RestAttachmentUsage = defineContract(
+  'rest:attachments.usage',
   z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },

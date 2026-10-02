@@ -138,7 +138,7 @@ export interface AttachmentContentUpdateResult {
  * same `url`/`file_path` as the source — the underlying file is not duplicated.
  */
 export interface AttachmentCopyInput {
-  /** Target owner kind. Currently only `'thought'` is supported. */
+  /** Target owner kind: `thought` | `link` | `publication`. */
   target_owner_type: AttachmentOwnerType;
   /** Ids of the target owners. All must exist; duplicates are skipped silently. */
   target_owner_ids: string[];
@@ -171,4 +171,34 @@ export interface AttachmentSearchQuery {
   limit?: number;
   /** Offset for pagination. */
   offset?: number;
+}
+
+/**
+ * Ссылка на владельца вложения в ответе «использование вложения»
+ * (0.11.1, задача 46cf4bcb). `title` — название мысли или публикации;
+ * у связи собственного названия нет, поэтому `null`.
+ */
+export interface AttachmentOwnerRef {
+  owner_type: AttachmentOwnerType;
+  owner_id: string;
+  title: string | null;
+}
+
+/**
+ * Ответ «использование вложения» (0.11.1, задача 46cf4bcb): все владельцы
+ * (мысли, связи, публикации), которые держат ЭТО вложение.
+ *
+ * Одна строка вложения имеет ровно одного владельца, но общий физический
+ * носитель (файл/URL) может быть привязан несколькими строками — прежде всего
+ * при копировании вложения на другого владельца (ADR 73cfcf64). Поэтому в
+ * ответ попадают владельцы всех живых строк с тем же `kind` и тем же
+ * `url`/`file_path` — это и есть «облачка» мыслей и публикаций в диалоге
+ * выбора обложки. Порядок детерминирован: владельцы группы `thought`, затем
+ * `publication`, затем `link`; внутри группы — по id владельца.
+ */
+export interface AttachmentUsage {
+  /** Строка вложения, для которой запрошено использование (её id). */
+  attachment_id: string;
+  /** Владельцы общего носителя, без дублей. */
+  owners: AttachmentOwnerRef[];
 }

@@ -33,9 +33,11 @@ import {
   type AttachmentFileInput,
   type AttachmentInput,
   type AttachmentKind,
+  type AttachmentOwnerRef,
   type AttachmentOwnerType,
   type AttachmentSearchQuery,
   type AttachmentUpdateInput,
+  type AttachmentUsage,
 } from '@etn/shared';
 
 import { renderMarkdown } from '@etn/markdown';
@@ -176,6 +178,106 @@ export function listAttachments(
     )
     .all(ownerType, ownerId) as AttachmentRow[];
   return rows.map(rowToAttachment);
+}
+
+/** Порядок групп владельцев в ответе «использование вложения». */
+const OWNER_TYPE_RANK: Record<AttachmentOwnerType, number> = {
+  thought: 0,
+  publication: 1,
+  link: 2,
+};
+
+/** Батч-резолв названий владельцев из `thoughts_v`/`publications_v`. */
+function resolveOwnerTitles(
+  ndb: NetworkDb,
+  ids: readonly string[],
+  table: 'thoughts_v' | 'publications_v',
+): Map<string, string> {
+  if (ids.length === 0) return new Map();
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ndb
+    .prepare(`SELECT id, title FROM ${table} WHERE id IN (${placeholders})`)
+    .all(...ids) as { id: string; title: string }[];
+  return new Map(rows.map((r) => [r.id, r.title]));
+}
+
+/**
+ * Использование вложения (0.11.1, задача 46cf4bcb): все владельцы, которые
+ * держат это вложение — мысли, связи и публикации. Нужно диалогу выбора
+ * обложки публикации: в строке вложения показываются «облачка» мыслей и
+ * публикаций, к которым относится картинка.
+ *
+ * У строки вложения ровно один владелец, но общий физический носитель
+ * (файл/URL) может быть привязан несколькими строками — прежде всего
+ * копированием на другого владельца (ADR 73cfcf64). Поэтому берутся владельцы
+ * ВСЕХ живых строк с тем же `kind` и тем же `url`/`file_path`, что у указанной
+ * строки; дубли по `(owner_type, owner_id)` схлопываются.
+ *
+ * Названия мыслей и публикаций подставляются из `*_v`; у связи названия нет
+ * (`title: null`). Порядок детерминирован (`thought` → `publication` → `link`,
+ * внутри группы — по id владельца).
+ *
+ * Throws `NOT_FOUND` (404), если строка вложения не видна в текущем слое.
+ */
+export function listAttachmentUsage(ndb: NetworkDb, attachmentId: string): AttachmentUsage {
+  const source = getAttachmentOrThrow(ndb, attachmentId);
+  // Общий носитель: для kind='url' — тот же url, для kind='file' — тот же
+  // file_path. NULL-ветка выбирается по kind, поэтому nullable-колонка не
+  // «склеивает» между собой вложения без адреса.
+  const rows = ndb
+    .prepare(
+      `SELECT owner_type, owner_id FROM attachments_v
+        WHERE kind = ?
+          AND ((? IS NOT NULL AND url = ?) OR (? IS NULL AND file_path = ?))
+        ORDER BY owner_type ASC, owner_id ASC`,
+    )
+    .all(
+      source.kind,
+      source.url,
+      source.url,
+      source.file_path,
+      source.file_path,
+    ) as { owner_type: string; owner_id: string }[];
+
+  const seen = new Set<string>();
+  const refs: { owner_type: AttachmentOwnerType; owner_id: string }[] = [];
+  for (const row of rows) {
+    const type = row.owner_type as AttachmentOwnerType;
+    const key = `${type}\u0000${row.owner_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({ owner_type: type, owner_id: row.owner_id });
+  }
+
+  const thoughtTitles = resolveOwnerTitles(
+    ndb,
+    refs.filter((r) => r.owner_type === 'thought').map((r) => r.owner_id),
+    'thoughts_v',
+  );
+  const publicationTitles = resolveOwnerTitles(
+    ndb,
+    refs.filter((r) => r.owner_type === 'publication').map((r) => r.owner_id),
+    'publications_v',
+  );
+
+  const owners: AttachmentOwnerRef[] = refs
+    .map((r) => ({
+      owner_type: r.owner_type,
+      owner_id: r.owner_id,
+      title:
+        r.owner_type === 'thought'
+          ? (thoughtTitles.get(r.owner_id) ?? null)
+          : r.owner_type === 'publication'
+            ? (publicationTitles.get(r.owner_id) ?? null)
+            : null,
+    }))
+    .sort(
+      (a, b) =>
+        OWNER_TYPE_RANK[a.owner_type] - OWNER_TYPE_RANK[b.owner_type] ||
+        (a.owner_id < b.owner_id ? -1 : a.owner_id > b.owner_id ? 1 : 0),
+    );
+
+  return { attachment_id: source.id, owners };
 }
 
 /**

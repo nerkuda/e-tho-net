@@ -38,6 +38,7 @@ import {
   AttachmentsDelete,
   AttachmentsSearch,
   AttachmentsUpdate,
+  AttachmentsUsage,
   ChangesList,
   CommentsDelete,
   ExportSubgraph,
@@ -88,6 +89,7 @@ import {
   createAttachmentFromInput,
   deleteAttachment,
   getAttachment,
+  listAttachmentUsage,
   searchAttachments,
   updateAttachment,
 } from '../../domain/attachment-service.js';
@@ -388,6 +390,13 @@ const HANDLERS: Record<string, OpHandler> = {
         offset: a.offset,
       });
       return items;
+    });
+  },
+  'attachments.usage': (rt, p) => {
+    const a = p as unknown as z.infer<typeof AttachmentsUsage.schema>;
+    return runTool(() => {
+      const ndb = openMemberNetwork(rt, a.network_id);
+      return listAttachmentUsage(ndb, a.attachment_id);
     });
   },
   'attachments.update': (rt, p, extra) => {
