@@ -308,6 +308,7 @@ function buildApi(): EtnBridgeApi {
       copy: (networkId, attachmentId, input) =>
         invoke('attachments.copy', networkId, attachmentId, input),
       search: (networkId, query) => invoke('attachments.search', networkId, query),
+      getUsage: (networkId, id) => invoke('attachments.getUsage', networkId, id),
     },
     admin: {
       listUsers: () => invoke('admin.listUsers'),

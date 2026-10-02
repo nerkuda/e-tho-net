@@ -63,6 +63,8 @@ export interface LibraryNavHandle {
   focusNavigation(): void;
   /** Текущая сущность или `null`. */
   current(): LibraryEntity | null;
+  /** Сделать публикацию текущей и подвести её к видимой области (интеграция). */
+  revealPublication(publicationId: string): void;
   /** Снять слушатели (размонтирование вида). */
   destroy(): void;
 }
@@ -222,6 +224,16 @@ export function attachLibraryNav(root: HTMLElement, opts: LibraryNavOptions): Li
     },
     current(): LibraryEntity | null {
       return current;
+    },
+    revealPublication(publicationId: string): void {
+      // Ищем публикацию в видимой последовательности (учёт свёрнутых полок);
+      // если она не видна (скрыта фильтром/свёрнутой полкой) — всё равно
+      // делаем её текущей, узел подсветится, когда станет видимым.
+      const visible = visibleLibraryEntities(readGroups());
+      const entry =
+        visible.find((e) => e.kind === 'publication' && e.key === publicationId) ??
+        ({ kind: 'publication', key: publicationId } as LibraryEntity);
+      nav.setCurrent({ entity: entry, el: null }, { reveal: true, focus: true });
     },
     destroy(): void {
       nav.destroy();

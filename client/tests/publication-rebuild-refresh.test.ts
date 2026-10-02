@@ -201,11 +201,25 @@ function openCard(mod: CardModule, scrollBox: ShimElement, pub: Publication): vo
 }
 
 function rebuildButton(scrollBox: ShimElement): ShimElement {
+  // После переработки (b02ef1cf) «Пересобрать» — пункт меню «Действия»;
+  // прелоадер вешается на кнопку «Действия».
   const button = scrollBox
     .findAll((el) => el.tagName === 'button')
-    .find((el) => el.textContent === 'Пересобрать');
-  assert.ok(button !== undefined, 'кнопка «Пересобрать» есть');
+    .find((el) => el.flatText().includes('Действия'));
+  assert.ok(button !== undefined, 'кнопка/пункт «Действия» есть');
   return button;
+}
+
+/** Запускает пересборку через тестовый шов (пункт меню в шиме не кликается). */
+function triggerRebuild(mod: CardModule): void {
+  mod.publicationCardInternals.rebuild();
+}
+
+/** Текст даты сборки на вкладке «Метаданные» (ленивая — активируем вкладку). */
+function assemblyText(mod: CardModule, scrollBox: ShimElement): string {
+  mod.publicationCardInternals.activateTab('meta');
+  const value = scrollBox.querySelector('#pub-card-assembly');
+  return value?.textContent ?? '<нет>';
 }
 
 function editTitle(scrollBox: ShimElement, value: string): void {
@@ -238,7 +252,7 @@ describe('пересборка публикации из карточки (ош�
     const off = onPublicationRebuilt((event) => events.push(event));
     try {
       const button = rebuildButton(scrollBox);
-      button.click();
+      triggerRebuild(mod);
       await wait(10);
 
       assert.equal(button.disabled, true, 'кнопка заблокирована на время пересборки');
@@ -262,8 +276,11 @@ describe('пересборка публикации из карточки (ош�
         bodyEl.findAll('notice').some((n) => n.flatText().includes('Документ пересобран')),
         'видно подтверждение пересборки',
       );
-      const assembly = scrollBox.querySelector('#pub-card-assembly') as ShimElement;
-      assert.equal(assembly.value, assemblyDateLabel(ASSEMBLY), 'дата сборки обновилась');
+      assert.equal(
+        assemblyText(mod, scrollBox),
+        assemblyDateLabel(ASSEMBLY),
+        'дата сборки обновилась',
+      );
     } finally {
       off();
     }
@@ -272,8 +289,7 @@ describe('пересборка публикации из карточки (ош�
   it('пересборка из шапки рабочей области перечитывает карточку', async () => {
     const mod = await cardModule();
     openCard(mod, scrollBox, db.get('pub-1') as Publication);
-    const assemblyField = scrollBox.querySelector('#pub-card-assembly') as ShimElement;
-    assert.equal(assemblyField.value, '', 'до пересборки дата сборки пуста');
+    assert.equal(assemblyText(mod, scrollBox), '—', 'до пересборки дата сборки пуста');
 
     // Шапка рабочей области сообщает о своей пересборке (source: 'workspace').
     db.set('pub-1', { ...(db.get('pub-1') as Publication), assembly_date: ASSEMBLY });
@@ -283,7 +299,7 @@ describe('пересборка публикации из карточки (ош�
 
     assert.ok(calls.gets.length > before, 'карточка перечитала публикацию с сервера');
     assert.equal(
-      assemblyField.value,
+      assemblyText(mod, scrollBox),
       assemblyDateLabel(ASSEMBLY),
       'карточка показала новую дату сборки',
     );
@@ -297,7 +313,7 @@ describe('пересборка публикации из карточки (ош�
     db.set('pub-1', { ...(db.get('pub-1') as Publication), version: 99 });
 
     const button = rebuildButton(scrollBox);
-    button.click();
+    triggerRebuild(mod);
     await wait(30);
 
     assert.equal(calls.conflicts.length, 1, 'конфликт сохранения обнаружен');
@@ -316,7 +332,7 @@ describe('пересборка публикации из карточки (ош�
     openCard(mod, box1, db.get('pub-1') as Publication);
     editTitle(box1, 'Правка');
     const ownerButton = rebuildButton(box1);
-    ownerButton.click();
+    triggerRebuild(mod);
     await wait(10);
     assert.ok(pendingUpdate !== null, 'PATCH владельца отправлен');
 

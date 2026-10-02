@@ -1388,11 +1388,11 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   // --- attachments ----------------------------------------------------------
   handlers.set(
     'attachments.list',
-    bind((networkId: string, ownerType: 'thought' | 'link', ownerId: string) => {
+    bind((networkId: string, ownerType: 'thought' | 'link' | 'publication', ownerId: string) => {
       const rest = requireRest(deps);
-      return ownerType === 'thought'
-        ? rest.listThoughtAttachments(networkId, ownerId)
-        : rest.listLinkAttachments(networkId, ownerId);
+      if (ownerType === 'thought') return rest.listThoughtAttachments(networkId, ownerId);
+      if (ownerType === 'link') return rest.listLinkAttachments(networkId, ownerId);
+      return rest.listPublicationAttachments(networkId, ownerId);
     }),
   );
   handlers.set(
@@ -1406,14 +1406,14 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind(
       (
         networkId: string,
-        ownerType: 'thought' | 'link',
+        ownerType: 'thought' | 'link' | 'publication',
         ownerId: string,
         input: Parameters<RestClient['createThoughtAttachment']>[2],
       ) => {
         const rest = requireRest(deps);
-        return ownerType === 'thought'
-          ? rest.createThoughtAttachment(networkId, ownerId, input)
-          : rest.createLinkAttachment(networkId, ownerId, input);
+        if (ownerType === 'thought') return rest.createThoughtAttachment(networkId, ownerId, input);
+        if (ownerType === 'link') return rest.createLinkAttachment(networkId, ownerId, input);
+        return rest.createPublicationAttachment(networkId, ownerId, input);
       },
     ),
   );
@@ -1422,16 +1422,20 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind(
       (
         networkId: string,
-        ownerType: 'thought' | 'link',
+        ownerType: 'thought' | 'link' | 'publication',
         ownerId: string,
         input: Parameters<RestClient['uploadThoughtAttachmentFile']>[2],
       ) => {
         const rest = requireRest(deps);
-        return ownerType === 'thought'
-          ? rest.uploadThoughtAttachmentFile(networkId, ownerId, input)
-          : rest.uploadLinkAttachmentFile(networkId, ownerId, input);
+        if (ownerType === 'thought') return rest.uploadThoughtAttachmentFile(networkId, ownerId, input);
+        if (ownerType === 'link') return rest.uploadLinkAttachmentFile(networkId, ownerId, input);
+        return rest.uploadPublicationAttachmentFile(networkId, ownerId, input);
       },
     ),
+  );
+  handlers.set(
+    'attachments.getUsage',
+    bind((networkId: string, id: string) => requireRest(deps).getAttachmentUsage(networkId, id)),
   );
   handlers.set(
     'attachments.update',

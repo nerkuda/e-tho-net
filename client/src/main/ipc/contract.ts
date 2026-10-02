@@ -23,8 +23,10 @@ import type {
   AttachmentCopyResult,
   AttachmentFileInput,
   AttachmentInput,
+  AttachmentOwnerType,
   AttachmentSearchQuery,
   AttachmentUpdateInput,
+  AttachmentUsage,
   ChronicleFilterDefinition,
   ChronicleQueryRequest,
   ChronicleQueryResponse,
@@ -1023,12 +1025,12 @@ export interface EtnApi {
     ): Promise<Comment>;
   };
   attachments: {
-    list(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<Attachment[]>;
+    list(networkId: string, ownerType: AttachmentOwnerType, ownerId: string): Promise<Attachment[]>;
     /** `GET /attachments/{id}` — одна запись с владельцем (для резолва кликов по activity). */
     get(networkId: string, id: string): Promise<Attachment>;
     add(
       networkId: string,
-      ownerType: 'thought' | 'link',
+      ownerType: AttachmentOwnerType,
       ownerId: string,
       input: AttachmentInput,
     ): Promise<Attachment>;
@@ -1039,12 +1041,18 @@ export interface EtnApi {
      */
     uploadFile(
       networkId: string,
-      ownerType: 'thought' | 'link',
+      ownerType: AttachmentOwnerType,
       ownerId: string,
       input: AttachmentFileInput,
     ): Promise<Attachment>;
     update(networkId: string, id: string, input: AttachmentUpdateInput): Promise<Attachment>;
     remove(networkId: string, id: string): Promise<void>;
+    /**
+     * `GET /attachments/{id}/usage` — владельцы (мысли, публикации, связи),
+     * держащие тот же физический носитель; «облачка» в диалоге выбора обложки
+     * (0.11.1, задача 46cf4bcb).
+     */
+    getUsage(networkId: string, id: string): Promise<AttachmentUsage>;
     /** `GET /attachments/{id}/content` — text (+ rendered html) of a text-like file (L7). */
     getContent(networkId: string, id: string): Promise<AttachmentContent>;
     /** `PUT /attachments/{id}/content` — overwrites a text-like file (L7). */

@@ -40,9 +40,9 @@ import {
   zoomByWheel,
 } from './md-zoom.js';
 
-/** Owner entity for pasted-image attachments ('thought' | 'link'). */
+/** Owner entity for pasted-image attachments ('thought' | 'link' | 'publication'). */
 export interface AttachmentsOwner {
-  ownerType: 'thought' | 'link';
+  ownerType: 'thought' | 'link' | 'publication';
   ownerId: string;
 }
 

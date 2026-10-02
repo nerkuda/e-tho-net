@@ -1,14 +1,13 @@
 /**
- * Первое открытие карточки публикации: активная вкладка наполняется сразу
- * (ошибка ecad219b, 0.11.1).
+ * Первое открытие карточки публикации: данные применяются сразу, ленивые
+ * вкладки наполняются тем же механизмом (ошибка ecad219b, 0.11.1, задача
+ * b02ef1cf).
  *
- * Дефект: вкладки `lib/ui/tabs` строят содержимое ЛЕНИВО, и активная
- * («Метаданные») собирается ещё внутри `buildCard`, пока `instance` равен
- * `null`; поэтому `apply`, вызванный до регистрации `instance`, был no-op, и
- * поля оставались пустыми до переключения вкладок (риск перезаписи реального
- * «Названия» пустым значением). Здесь проверяется, что после `showPublicationTarget`
- * с уже пришедшими данными поля заполнены СИНХРОННО, без переключения вкладок,
- * и что лениво открытая позже вкладка наполняется тем же механизмом.
+ * После переработки шапка карточки — три строки (заголовок/подзаголовок в
+ * полях ввода), а первой активной вкладкой стала «Резюме» (markdown-редактор).
+ * Здесь проверяется, что после `showPublicationTarget` с уже пришедшими данными
+ * шапка и активная вкладка заполнены СИНХРОННО, без переключения вкладок, а
+ * лениво открытая вкладка «Метаданные» наполняется тем же механизмом.
  *
  * DOM-шим — общий (`dom-shim.ts`); CodeMirror в шиме не поднимается, поэтому
  * фабрика markdown-редактора подменяется заглушкой через тестовый шов
@@ -111,12 +110,12 @@ async function cardModule(): Promise<CardModule> {
   return import('../src/renderer/editor/publication-card.js');
 }
 
-/** Значение поля контрола по id (панель Meta строится полем-фасадом). */
+/** Значение поля контрола по id. */
 function inputValue(root: ShimElement, id: string): string {
   return root.querySelector(`#${id}`)?.value ?? '<нет поля>';
 }
 
-describe('карточка публикации: первое открытие (ошибка ecad219b)', () => {
+describe('карточка публикации: первое открытие (ошибка ecad219b, b02ef1cf)', () => {
   let scrollBox: ShimElement;
 
   beforeEach(() => {
@@ -130,36 +129,47 @@ describe('карточка публикации: первое открытие (
     mod.disposePublicationCard();
   });
 
-  it('поля вкладки «Метаданные» заполнены сразу после открытия, без переключения вкладок', async () => {
+  it('шапка и активная вкладка «Резюме» заполнены сразу после открытия', async () => {
     const mod = await cardModule();
-    mod.publicationCardInternals.createMdEditor = (initial: string) => fakeMdEditor(initial) as never;
+    let md: MdEditor | null = null;
+    mod.publicationCardInternals.createMdEditor = (initial: string) => {
+      md = fakeMdEditor(initial);
+      return md as never;
+    };
 
     const pub = publication();
     mod.showPublicationTarget({ scrollBox: scrollBox as unknown as HTMLElement }, pub.id, pub);
 
     // Анимации/промисов не ждём: данные уже пришли вместе с целью.
-    assert.equal(inputValue(scrollBox, 'pub-card-title'), 'Руководство КТ4', 'название');
+    assert.equal(inputValue(scrollBox, 'pub-card-title'), 'Руководство КТ4', 'заголовок');
     assert.equal(inputValue(scrollBox, 'pub-card-subtitle'), 'Подзаголовок', 'подзаголовок');
-    assert.equal(inputValue(scrollBox, 'pub-card-author'), 'Ирина', 'автор');
-    assert.equal(inputValue(scrollBox, 'pub-card-cover-url'), 'https://example.test/cover.png', 'обложка');
-    assert.notEqual(inputValue(scrollBox, 'pub-card-assembly'), '', 'дата сборки');
-
-    const head = scrollBox.querySelector('.pub-card-editor-title');
-    assert.equal(head?.textContent, 'Руководство КТ4', 'заголовок карточки');
+    assert.equal(md!.getValue(), 'Резюме', 'активная вкладка «Резюме» наполнена');
   });
 
-  it('лениво открытая позже вкладка «Рецепты» тоже наполняется данными', async () => {
+  it('лениво открытая вкладка «Метаданные» тоже наполняется данными', async () => {
     const mod = await cardModule();
     mod.publicationCardInternals.createMdEditor = (initial: string) => fakeMdEditor(initial) as never;
 
     const pub = publication();
     mod.showPublicationTarget({ scrollBox: scrollBox as unknown as HTMLElement }, pub.id, pub);
 
-    // Вкладка «Рецепты» не строилась при открытии — открываем её кликом.
-    const recipeTab = scrollBox.findAll(
-      (el) => el.className.includes('ui-tab') && el.textContent !== '',
-    ).find((el) => el.textContent === 'Рецепты');
-    assert.ok(recipeTab !== undefined, 'вкладка «Рецепты» есть в полосе вкладок');
+    // Вкладка «Метаданные» не строилась при открытии — открываем её.
+    mod.publicationCardInternals.activateTab('meta');
+    const text = scrollBox.findAll((el) => el.className.includes('metadata')).map((n) => n.flatText()).join('\n');
+    assert.ok(text.includes('pub-1'), 'ID публикации показан');
+  });
+
+  it('лениво открытая позже вкладка «Рецепт» наполняется данными', async () => {
+    const mod = await cardModule();
+    mod.publicationCardInternals.createMdEditor = (initial: string) => fakeMdEditor(initial) as never;
+
+    const pub = publication();
+    mod.showPublicationTarget({ scrollBox: scrollBox as unknown as HTMLElement }, pub.id, pub);
+
+    const recipeTab = scrollBox
+      .findAll((el) => el.className.includes('ui-tab') && el.textContent !== '')
+      .find((el) => el.textContent === 'Рецепт');
+    assert.ok(recipeTab !== undefined, 'вкладка «Рецепт» есть в полосе вкладок');
     recipeTab.click();
     // Дать осесть асинхронной загрузке реестра свойств (пикер текстов).
     await new Promise((resolve) => setImmediate(resolve));
@@ -207,7 +217,6 @@ describe('карточка публикации: перечитывание ре
     const { mod, md } = await openCard('Старое резюме');
     assert.equal(md.getValue(), 'Старое резюме');
 
-    // Realtime-обновление той же публикации — apply без пересборки карточки.
     mod.publicationCardInternals.apply(publication({ summary_md: 'Новое резюме' }));
     assert.equal(md.getValue(), 'Новое резюме', 'резюме перечитано');
   });
@@ -215,7 +224,6 @@ describe('карточка публикации: перечитывание ре
   it('apply не затирает расходящийся пользовательский ввод', async () => {
     const { mod, md } = await openCard('Серверное');
 
-    // Пользователь начал править резюме — сохранение ещё не прошло.
     md.setValue('Незавершённый ввод');
     mod.publicationCardInternals.apply(publication({ summary_md: 'Правка другой сессии' }));
     assert.equal(md.getValue(), 'Незавершённый ввод', 'пользовательский ввод сохранён');
@@ -224,12 +232,10 @@ describe('карточка публикации: перечитывание ре
   it('эхо собственного сохранения синхронизирует baseline, не ломая дальнейший apply', async () => {
     const { mod, md } = await openCard('Серверное');
 
-    // Пользователь ввёл текст, PATCH вернул его же в apply (эхо).
     md.setValue('Мой текст');
     mod.publicationCardInternals.apply(publication({ summary_md: 'Мой текст' }));
     assert.equal(md.getValue(), 'Мой текст', 'эхо не перезаписывает');
 
-    // Последующее реальное изменение извне снова перечитывается.
     mod.publicationCardInternals.apply(publication({ summary_md: 'Изменено извне' }));
     assert.equal(md.getValue(), 'Изменено извне', 'реальная правка перечитана');
   });

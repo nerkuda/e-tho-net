@@ -29,6 +29,7 @@ import {
   buildExtrasSection,
   buildFilterForm,
   buildKeywordsSection,
+  buildParentThoughtsSection,
   type FilterFormContext,
   type FilterSection,
 } from '../../lib/filter-form.js';
@@ -132,6 +133,13 @@ export function buildRecipeBuilder(opts: {
   };
 
   sections.push(
+    // «Родительские мысли» — ПЕРВЫМ: основное средство структурирования
+    // публикации (дополнение C к задаче b02ef1cf). Их поддеревья дают разделы;
+    // остальные условия только уточняют состав. Рецепты без `parent_ids`
+    // работают как раньше — ограничения нет.
+    buildParentThoughtsSection(ctx, {
+      tooltip: t('publication.recipe.parentsTooltip'),
+    }),
     buildKeywordsSection(ctx, {
       placeholder: t('publication.recipe.keywordsPlaceholder'),
       tooltip: t('publication.recipe.keywordsTooltip'),

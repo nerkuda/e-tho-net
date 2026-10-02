@@ -16,7 +16,7 @@
  * tab title is refreshed after every change.
  */
 
-import type { Attachment, Thought, ThoughtUpdateInput } from '@etn/shared';
+import type { Attachment, AttachmentOwnerType, Thought, ThoughtUpdateInput } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import { invalidateIndicators } from '../canvas/canvas.js';
@@ -173,7 +173,7 @@ const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
  */
 async function uploadLocalFile(
   networkId: string,
-  ownerType: 'thought' | 'link',
+  ownerType: AttachmentOwnerType,
   ownerId: string,
   filePath: string,
   title: string | null,
@@ -213,8 +213,41 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** Builds the whole attachments tab pane content for the entity. */
+/** Параметры построения панели вложений для любого вида владельца. */
+export interface AttachmentsPaneOptions {
+  ownerType: AttachmentOwnerType;
+  ownerId: string;
+  /** Мысль-владелец (пункт «Назначить иконкой мысли»); у публикации — null. */
+  thought?: Thought | null;
+  /** Дополнительные пункты контекстного меню (напр. «Сделать обложкой публикации»). */
+  extraMenuItems?: (attachment: Attachment) => MenuItem[];
+  /** Уведомление о смене числа вложений (бейдж вкладки панели мысли). */
+  onCountChange?: () => void;
+}
+
+/** Вкладка «Вложения» панели мысли: общая панель над владельцем-мыслью/связью. */
 function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
+  return buildAttachmentsPane({
+    ownerType: ctx.ownerType,
+    ownerId: ctx.ownerId,
+    thought: ctx.thought,
+    onCountChange: () => refreshTabCount('attachments'),
+  });
+}
+
+/**
+ * Строит панель «Вложения» для ЛЮБОГО вида владельца (мысль / связь /
+ * публикация, 0.11.1, задача b02ef1cf): общий список, drag&drop, диалог
+ * добавления и встроенный просмотрщик. Мысле-специфичные пункты меню
+ * («Назначить иконкой мысли») показываются только для владельца-мысли;
+ * дополнительные пункты даёт вызывающий (`extraMenuItems`).
+ */
+export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement {
+  const ownerType = opts.ownerType;
+  const ownerId = opts.ownerId;
+  const thought = opts.thought ?? null;
+  const extraMenuItems = opts.extraMenuItems;
+  const onCountChange = opts.onCountChange;
   const networkId = requireNetworkId();
   const root = div('attachments-tab');
 
@@ -257,7 +290,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       return;
     }
     const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
-    if (detail?.ownerType === ctx.ownerType && detail?.ownerId === ctx.ownerId) {
+    if (detail?.ownerType === ownerType && detail?.ownerId === ownerId) {
       void reload();
     }
   };
@@ -293,7 +326,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     for (const url of urls) {
       if (!isHttpUrl(url)) continue;
       try {
-        await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, { kind: 'url', url });
+        await etn.attachments.add(networkId, ownerType, ownerId, { kind: 'url', url });
         added++;
       } catch {
         notice('Не удалось добавить вложение.', 'error');
@@ -304,7 +337,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         // Electron exposes the OS path on dropped File objects (Electron ≤31).
         const path = (file as File & { path?: string }).path ?? file.name;
         try {
-          await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
+          await etn.attachments.add(networkId, ownerType, ownerId, {
             kind: 'file',
             file_path: path,
             file_size: file.size,
@@ -318,7 +351,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       }
     }
     if (added > 0) {
-      invalidateIndicators(ctx.ownerId);
+      invalidateIndicators(ownerId);
       await reload();
       return;
     }
@@ -334,7 +367,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     list.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let attachments: Attachment[];
     try {
-      attachments = await etn.attachments.list(networkId, ctx.ownerType, ctx.ownerId);
+      attachments = await etn.attachments.list(networkId, ownerType, ownerId);
     } catch (err) {
       list.replaceChildren(operationError(err));
       return;
@@ -342,7 +375,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     // Показанный список — источник индекса владельцев для realtime-событий
     // (ошибка abd25adb): `attachment.updated`/`deleted` несут только id.
     rememberShownAttachments(attachments);
-    refreshTabCount('attachments');
+    onCountChange?.();
     list.replaceChildren();
     rowById.clear();
     if (attachments.length === 0) {
@@ -544,7 +577,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     const widget = createMarkdownField({
       md: content.text,
       html: viewHtml(content.text, content.html),
-      attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
+      attachmentsOwner: { ownerType: ownerType, ownerId: ownerId },
       onSave: async (md) => {
         const result = await etn.attachments.updateContent(networkId, attachment.id, {
           data_base64: utf8ToBase64(md),
@@ -569,7 +602,6 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
    * иконку с вложением — Ctrl-hover показывает полную картинку.
    */
   async function assignAsThoughtIcon(attachment: Attachment): Promise<void> {
-    const thought = ctx.thought;
     if (thought === null) return;
 
     // url-вложение с favicon: источник готов, ссылку на вложение не ставим —
@@ -703,7 +735,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         menuAction(t('attachments.menu.openDefault'), () => void openDefault(attachment)),
       );
     }
-    if (ctx.ownerType === 'thought' && canAssignAsThoughtIcon(attachment)) {
+    // Дополнительные пункты владельца (напр. «Сделать обложкой публикации»):
+    // их состав задаёт вызывающий, общий список команд здесь не расширяется.
+    if (extraMenuItems !== undefined) {
+      items.push(...extraMenuItems(attachment));
+    }
+    if (ownerType === 'thought' && canAssignAsThoughtIcon(attachment)) {
       items.push(
         menuAction(t('attachments.menu.assignIcon'), () => void assignAsThoughtIcon(attachment)),
       );
@@ -816,8 +853,8 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       try {
         const hits = await etn.attachments.search(networkId, {
           q,
-          exclude_owner_type: ctx.ownerType,
-          exclude_owner_id: ctx.ownerId,
+          exclude_owner_type: ownerType,
+          exclude_owner_id: ownerId,
         });
         if (seq !== searchSeq) return;
         renderSearchResults(hits);
@@ -848,7 +885,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
      */
     async function reuseAttachment(attachment: Attachment): Promise<void> {
       try {
-        await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
+        await etn.attachments.add(networkId, ownerType, ownerId, {
           kind: attachment.kind,
           url: attachment.kind === 'url' ? attachment.url : null,
           file_path: attachment.kind === 'file' ? attachment.file_path : null,
@@ -857,7 +894,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
           title: attachment.title,
           description: attachment.description,
         });
-        invalidateIndicators(ctx.ownerId);
+        invalidateIndicators(ownerId);
         closeDialog();
         await reload();
       } catch (err) {
@@ -904,21 +941,21 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
           const name = location.split(/[\\/]/).pop() ?? location;
           await uploadLocalFile(
             networkId,
-            ctx.ownerType,
-            ctx.ownerId,
+            ownerType,
+            ownerId,
             location,
             titleInput.value.trim() || name,
             descInput.value.trim() || null,
           );
         } else {
-          await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
+          await etn.attachments.add(networkId, ownerType, ownerId, {
             kind,
             url: location,
             title: titleInput.value.trim() || null,
             description: descInput.value.trim() || null,
           });
         }
-        invalidateIndicators(ctx.ownerId);
+        invalidateIndicators(ownerId);
         close();
         await reload();
       } catch (err) {

@@ -287,6 +287,21 @@ export async function openPublicationCard(id: string): Promise<void> {
   }
 }
 
+/**
+ * «Найти на полке» из карточки публикации (задача b02ef1cf): активизирует
+ * экран «Публикации», показывает библиотеку (а не рабочую область чтения) и
+ * делает публикацию текущей в навигации библиотеки. Точка интеграции карточки
+ * с принятым экраном библиотеки — собственных контроллеров здесь нет.
+ */
+export async function revealPublicationInLibrary(id: string): Promise<void> {
+  // Ленивый импорт: статический замкнул бы цикл publications → active-view.
+  const { setActiveView } = await import('../active-view.js');
+  setActiveView('publications');
+  await ensurePublicationsInitialised();
+  closePublicationWorkspace();
+  libraryNav?.revealPublication(id);
+}
+
 // ---------------------------------------------------------------------------
 // Разметка: панель, тело, футер
 // ---------------------------------------------------------------------------

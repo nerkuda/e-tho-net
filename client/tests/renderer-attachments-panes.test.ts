@@ -294,12 +294,17 @@ describe('проводка обновления списка вложений (�
       ),
       'удаление вложения перечитывает список',
     );
-    // Список и счётчик неразделимы: reload() обновляет и бейдж.
+    // Список и счётчик неразделимы: reload() обновляет и бейдж (через колбэк
+    // владельца панели; для вкладки мысли это refreshTabCount('attachments')).
     assert.ok(
-      /async function reload\(\): Promise<void> \{[\s\S]{0,600}?refreshTabCount\('attachments'\)/.test(
+      /async function reload\(\): Promise<void> \{[\s\S]{0,900}?onCountChange\?\.\(\)/.test(
         attachments,
       ),
       'reload() обновляет счётчик вкладки',
+    );
+    assert.ok(
+      /onCountChange: \(\) => refreshTabCount\('attachments'\)/.test(attachments),
+      'вкладка мысли подключает к панели обновление бейджа',
     );
     // Слушатель события для скрытой вкладки самоотписывается (защита от
     // утечки) — поэтому кэш скрытой вкладки сбрасывает редактор.

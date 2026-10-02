@@ -1874,6 +1874,60 @@ export class RestClient {
     );
   }
 
+  /** `GET /networks/{nid}/publications/{id}/attachments` (0.11.1, задача 46cf4bcb). */
+  public async listPublicationAttachments(
+    networkId: string,
+    publicationId: string,
+  ): Promise<import('@etn/shared').Attachment[]> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(publicationId)}/attachments`,
+    );
+  }
+
+  /** `POST /networks/{nid}/publications/{id}/attachments`. */
+  public async createPublicationAttachment(
+    networkId: string,
+    publicationId: string,
+    input: import('@etn/shared').AttachmentInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Attachment> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(publicationId)}/attachments`,
+      { body: input, requestOptions: opts },
+    );
+  }
+
+  /** `POST /networks/{nid}/publications/{id}/attachments/file`. */
+  public async uploadPublicationAttachmentFile(
+    networkId: string,
+    publicationId: string,
+    input: import('@etn/shared').AttachmentFileInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Attachment> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(publicationId)}/attachments/file`,
+      { body: input, requestOptions: opts },
+    );
+  }
+
+  /**
+   * `GET /networks/{nid}/attachments/{id}/usage` — владельцы общего физического
+   * носителя вложения (мысли, публикации, связи) для «облачков» в диалоге
+   * выбора обложки (0.11.1, задача 46cf4bcb).
+   */
+  public async getAttachmentUsage(
+    networkId: string,
+    id: string,
+  ): Promise<import('@etn/shared').AttachmentUsage> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(id)}/usage`,
+    );
+  }
+
   /** `GET /networks/{nid}/attachments/{id}` — одно вложение с владельцем (задача 59119797). */
   public async getAttachment(
     networkId: string,

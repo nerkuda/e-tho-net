@@ -204,6 +204,35 @@ describe('guard: UI публикаций (a3cfc018)', () => {
       ],
     );
   });
+
+  /**
+   * Требования задачи b02ef1cf: список вложений в диалоге обложки — ТОЛЬКО
+   * общий компонент списка (ADR fadf99e0), рецепт строит «Родительские мысли»
+   * первым (дополнение C), а стройных «своих» обработчиков стрелок в карточке
+   * нет (сторож guard-list-nav).
+   */
+  it('диалог обложки: список — общий компонент, рецепт — родительские мысли первыми', () => {
+    const card = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'editor', 'publication-card.ts'),
+      'utf8',
+    );
+    assert.ok(card.includes('createListNav'), 'список вложений диалога обложки — общий компонент списка');
+    assert.ok(card.includes('reconcileKeyed'), 'строки списка рисуются keyed-сверкой');
+    assert.ok(!card.includes("'ArrowUp'") && !card.includes("'ArrowDown'"), 'своей карты стрелок в карточке нет');
+
+    const recipe = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'screens', 'publications', 'recipe.ts'),
+      'utf8',
+    );
+    assert.ok(
+      recipe.includes('buildParentThoughtsSection'),
+      'рецепт использует общий фасад «Родительские мысли»',
+    );
+    assert.ok(
+      recipe.indexOf('buildParentThoughtsSection(ctx') < recipe.indexOf('buildKeywordsSection(ctx'),
+      '«Родительские мысли» — первое поле группы «ОТБОР РАЗДЕЛОВ»',
+    );
+  });
 });
 
 /**

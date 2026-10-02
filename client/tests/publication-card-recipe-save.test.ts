@@ -178,8 +178,8 @@ async function openRecipeTab(scrollBox: ShimElement, pub: Publication): Promise<
   mod.showPublicationTarget({ scrollBox: scrollBox as unknown as HTMLElement }, pub.id, pub);
   const recipeTab = scrollBox
     .findAll((el) => el.className.includes('ui-tab') && el.textContent !== '')
-    .find((el) => el.textContent === 'Рецепты');
-  assert.ok(recipeTab !== undefined, 'вкладка «Рецепты» есть в полосе вкладок');
+    .find((el) => el.textContent === 'Рецепт');
+  assert.ok(recipeTab !== undefined, 'вкладка «Рецепт» есть в полосе вкладок');
   recipeTab.click();
   await new Promise((resolve) => setImmediate(resolve));
   return mod;
@@ -233,15 +233,11 @@ describe('карточка публикации: сохранение рецеп
   });
 
   it('«Пересобрать» сначала досылает отложенный отбор, затем пересобирает', async () => {
-    await openRecipeTab(scrollBox, publication());
+    const mod = await openRecipeTab(scrollBox, publication());
 
     editRecipeKeywords(scrollBox, 'порядок');
-    // Не ждём дебаунс — жмём «Пересобрать» сразу.
-    const rebuildButton = scrollBox
-      .findAll((el) => el.tagName === 'button')
-      .find((el) => el.textContent === 'Пересобрать');
-    assert.ok(rebuildButton !== undefined, 'кнопка «Пересобрать» есть');
-    rebuildButton.click();
+    // Не ждём дебаунс — запускаем «Пересобрать» сразу (пункт меню «Действия»).
+    mod.publicationCardInternals.rebuild();
     await new Promise((resolve) => setImmediate(resolve));
     await wait(20);
 
@@ -265,7 +261,7 @@ describe('карточка публикации: сохранение рецеп
     mod.showPublicationTarget({ scrollBox: reopened as unknown as HTMLElement }, saved.id, saved);
     const recipeTab = reopened
       .findAll((el) => el.className.includes('ui-tab') && el.textContent !== '')
-      .find((el) => el.textContent === 'Рецепты');
+      .find((el) => el.textContent === 'Рецепт');
     assert.ok(recipeTab !== undefined);
     recipeTab.click();
     await new Promise((resolve) => setImmediate(resolve));

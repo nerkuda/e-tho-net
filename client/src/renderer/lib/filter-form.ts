@@ -40,7 +40,8 @@ import { t } from './i18n.js';
 import { buildValueEditor } from '../editor/value-editor.js';
 import { emptyState } from './ui/empty-state.js';
 import { clear, div, el, setTooltip, span } from './dom.js';
-import { buildEntityChipField, type EntityOption } from './entity-picker.js';
+import { buildEntityChipField, thoughtEntityOption, type EntityOption } from './entity-picker.js';
+import { etn } from './etn.js';
 import { collapsibleSection } from './ui/collapsible.js';
 import { DPD_DEFAULT_TIME, openDatePeriodDialog } from './date-period-dialog.js';
 import {
@@ -380,6 +381,71 @@ export function buildEntityChipSection(ctx: FilterFormContext, opts: EntityChipS
   if (opts.tooltip !== undefined) setTooltip(field.root, opts.tooltip);
   section.body.append(field.root);
   return { ...section, fieldRefresh: field.refresh };
+}
+
+/**
+ * Группа «Родительские мысли» — выбранные корни поддеревьев (`parent_ids`).
+ * Общий фасад: и панель «Структур мыслей», и рецепт публикации берут ОДИН и
+ * тот же чип-лист сущностей (`buildEntityChipSection`), живую подсказку по
+ * мыслям и догрузку «облачков» уже выбранных корней. Своего контрола здесь
+ * нет — только сборка фасада под роль «выбор корней поддерева».
+ *
+ * Облачка резолвятся лениво: выбранные id, которых нет в карте, догружаются
+ * `etn.thoughts.resolve`; живой поиск кладёт найденные облачка в ту же карту.
+ */
+export interface ParentThoughtsSectionOptions {
+  /** Заголовок группы (по умолчанию «Родительские мысли»). */
+  title?: string;
+  /** Подсказка поля. */
+  tooltip?: string;
+}
+
+export function buildParentThoughtsSection(
+  ctx: FilterFormContext,
+  opts: ParentThoughtsSectionOptions = {},
+): EntityChipSection {
+  const clouds = new Map<string, ThoughtCloudInput>();
+  let sectionRef: EntityChipSection | null = null;
+  const resolveClouds = (): void => {
+    const missing = ctx.getState().parentIds.filter((id) => !clouds.has(id) && !id.startsWith('$'));
+    if (ctx.networkId === '' || missing.length === 0) return;
+    void etn.thoughts
+      .resolve(ctx.networkId, missing)
+      .then((refs) => {
+        for (const ref of refs) clouds.set(ref.id, { ...ref });
+        sectionRef?.fieldRefresh();
+      })
+      .catch(() => undefined);
+  };
+  const section = buildEntityChipSection(ctx, {
+    title: opts.title ?? 'Родительские мысли',
+    getValues: () => ctx.getState().parentIds,
+    setValues: (values) => {
+      ctx.getState().parentIds = values;
+      resolveClouds();
+    },
+    loadOptions: async (query) => {
+      const needle = query.trim();
+      if (needle === '') return [];
+      try {
+        const hits = await etn.thoughts.findDuplicates(ctx.networkId, needle, [], []);
+        return hits.map((hit): EntityOption => {
+          clouds.set(hit.id, { ...hit });
+          return thoughtEntityOption(hit);
+        });
+      } catch {
+        return [];
+      }
+    },
+    optionsHeader: 'Мысли',
+    cloudOf: (id) => (id.startsWith('$') ? null : (clouds.get(id) ?? null)),
+    placeholder: 'Название мысли…',
+    addPlaceholder: '+ ещё одну мысль',
+    ...(opts.tooltip !== undefined ? { tooltip: opts.tooltip } : {}),
+  });
+  sectionRef = section;
+  resolveClouds();
+  return section;
 }
 
 // ---------------------------------------------------------------------------
