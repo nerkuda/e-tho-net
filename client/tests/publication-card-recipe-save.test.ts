@@ -1,18 +1,23 @@
 /**
- * Карточка публикации: отбор («Рецепты») сохраняется, «Пересобрать» ждёт
- * отложенного автосейва (ошибка 82aada28, 0.11.1).
+ * Карточка публикации: сохранение отбора и устойчивость автосейва
+ * (ошибка 82aada28, 0.11.1).
  *
  * Дефект: конструктор рецепта не уведомлял карточку о правках, поэтому
  * `title_recipe` не сохранялся никогда; `rebuildPublication` не дожидался
  * дебаунса `queueSave` (400 мс) и пересобирал документ по старой строке, а
- * ответ затирал поля UI. Здесь проверяется:
+ * ответ затирал поля UI. Позже приёмка выявила два регресса того же дефекта,
+ * закреплённые здесь:
  *
- *  1. правка формы рецепта кладёт `title_recipe` в PATCH публикации;
- *  2. «Пересобрать» сначала досылает отложенный отбор, затем вызывает rebuild.
+ *  1. смена цели карточки в окне дебаунса — ответ старого PATCH применялся к
+ *     новой карточке, и правка уходила в чужую публикацию;
+ *  2. устаревший снимок публикации в store на любом тике откатывал поля и давал
+ *     `CONFLICT` на втором сохранении (старая `version`).
  *
  * DOM-шим — общий (`dom-shim.ts`); фабрика markdown-редактора подменяется
  * заглушкой через тестовый шов `publicationCardInternals` (CodeMirror в шиме
- * не исполняется).
+ * не исполняется). Шим не имеет `parentElement`, а ветка «та же цель — apply на
+ * месте» без него недостижима; тесты добавляют прототипу геттер `parentElement`
+ * (в процессе этого файла), чтобы воспроизвести реальный путь обновления.
  */
 
 import assert from 'node:assert/strict';
@@ -29,12 +34,15 @@ import { store } from '../src/renderer/state.js';
 const NETWORK_ID = 'net-1';
 
 interface Calls {
-  updates: Array<{ id: string; changes: PublicationUpdateInput }>;
+  updates: Array<{ id: string; changes: PublicationUpdateInput; version: number }>;
   rebuilds: string[];
   order: string[];
+  conflicts: Array<{ id: string; sent: number; server: number }>;
 }
 
 let calls: Calls;
+/** Серверная «база» публикаций: id → строка. */
+const db = new Map<string, Publication>();
 
 function publication(overrides: Partial<Publication> = {}): Publication {
   return {
@@ -65,11 +73,21 @@ function publication(overrides: Partial<Publication> = {}): Publication {
   };
 }
 
-let current: Publication;
+function installShim(seed: Publication[]): void {
+  calls = { updates: [], rebuilds: [], order: [], conflicts: [] };
+  db.clear();
+  for (const pub of seed) db.set(pub.id, pub);
 
-function installShim(): void {
-  calls = { updates: [], rebuilds: [], order: [] };
-  current = publication();
+  // `parentElement` реального DOM (в шиме есть только `parent`) — без него
+  // ветка «та же цель — apply на месте» недостижима, а именно она отдаёт
+  // устаревший снимок store в карточку.
+  Object.defineProperty(ShimElement.prototype, 'parentElement', {
+    configurable: true,
+    get(this: ShimElement): ShimElement | null {
+      return this.parent;
+    },
+  });
+
   const body = new ShimElement('body');
   (globalThis as any).HTMLElement = ShimElement;
   (globalThis as any).document = {
@@ -89,18 +107,33 @@ function installShim(): void {
     ui: { getState: async () => null, setState: async () => undefined },
     publications: {
       listShelves: async () => [],
-      get: async () => current,
-      update: async (_n: string, id: string, changes: PublicationUpdateInput) => {
-        calls.updates.push({ id, changes });
+      get: async (_n: string, id: string) => {
+        const pub = db.get(id);
+        if (pub === undefined) throw new Error('NOT_FOUND');
+        return pub;
+      },
+      update: async (_n: string, id: string, changes: PublicationUpdateInput, version: number) => {
+        const cur = db.get(id);
+        if (cur === undefined) throw new Error('NOT_FOUND');
+        if (version !== cur.version) {
+          calls.conflicts.push({ id, sent: version, server: cur.version });
+          throw new Error('VERSION_CONFLICT');
+        }
+        calls.updates.push({ id, changes, version });
         calls.order.push('update');
-        current = { ...current, ...changes, version: current.version + 1 };
-        return current;
+        const next: Publication = { ...cur, ...changes, version: cur.version + 1 };
+        db.set(id, next);
+        return next;
       },
       rebuild: async (_n: string, id: string) => {
         calls.rebuilds.push(id);
         calls.order.push('rebuild');
-        current = { ...current, assembly_date: '2026-10-02T00:00:00.000Z' };
-        return current;
+        const next: Publication = {
+          ...(db.get(id) as Publication),
+          assembly_date: '2026-10-02T00:00:00.000Z',
+        };
+        db.set(id, next);
+        return next;
       },
     },
     propertyRegistry: { list: async () => [] },
@@ -133,19 +166,21 @@ function fakeMdEditor(initial: string): MdEditor {
 
 type CardModule = typeof import('../src/renderer/editor/publication-card.js');
 
-async function openRecipeTab(scrollBox: ShimElement): Promise<CardModule> {
+async function cardModule(): Promise<CardModule> {
   const mod = await import('../src/renderer/editor/publication-card.js');
   mod.publicationCardInternals.createMdEditor = (initial: string) => fakeMdEditor(initial) as never;
-  const pub = publication();
-  current = pub;
-  mod.showPublicationTarget({ scrollBox: scrollBox as unknown as HTMLElement }, pub.id, pub);
+  return mod;
+}
 
+/** Открывает карточку и вкладку «Рецепты», дожидаясь загрузки реестра. */
+async function openRecipeTab(scrollBox: ShimElement, pub: Publication): Promise<CardModule> {
+  const mod = await cardModule();
+  mod.showPublicationTarget({ scrollBox: scrollBox as unknown as HTMLElement }, pub.id, pub);
   const recipeTab = scrollBox
     .findAll((el) => el.className.includes('ui-tab') && el.textContent !== '')
     .find((el) => el.textContent === 'Рецепты');
   assert.ok(recipeTab !== undefined, 'вкладка «Рецепты» есть в полосе вкладок');
   recipeTab.click();
-  // Асинхронная загрузка реестра свойств (пикер текстов) + построение рецепта.
   await new Promise((resolve) => setImmediate(resolve));
   return mod;
 }
@@ -158,13 +193,24 @@ function editRecipeKeywords(scrollBox: ShimElement, value: string): void {
   keywords.emit('input');
 }
 
+/** Правка поля «Название» вкладки «Метаданные». */
+function editTitle(scrollBox: ShimElement, value: string): ShimElement {
+  const input = scrollBox.querySelector('#pub-card-title') as ShimElement | null;
+  assert.ok(input !== null, 'поле «Название» построено');
+  input.value = value;
+  input.emit('input');
+  return input;
+}
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 describe('карточка публикации: сохранение рецепта (ошибка 82aada28)', () => {
   let scrollBox: ShimElement;
 
   beforeEach(() => {
-    installShim();
+    installShim([publication()]);
     scrollBox = new ShimElement('div');
-    store.update({ networkId: NETWORK_ID });
+    store.update({ networkId: NETWORK_ID, editorTarget: null });
   });
 
   afterEach(async () => {
@@ -173,21 +219,21 @@ describe('карточка публикации: сохранение рецеп
   });
 
   it('правка рецепта сохраняется PATCH-ом в title_recipe', async () => {
-    const mod = await openRecipeTab(scrollBox);
-    mod.publicationCardInternals.createMdEditor = (initial: string) => fakeMdEditor(initial) as never;
+    await openRecipeTab(scrollBox, publication());
 
     editRecipeKeywords(scrollBox, 'тест');
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await wait(450);
 
     assert.equal(calls.updates.length, 1, 'PATCH публикации выполнен один раз');
     const changes = calls.updates[0]!.changes;
     assert.ok('title_recipe' in changes, 'PATCH несёт title_recipe');
     assert.match(JSON.stringify(changes.title_recipe), /тест/, 'отбор содержит правку');
     assert.equal(calls.updates[0]!.id, 'pub-1');
+    assert.equal(calls.conflicts.length, 0);
   });
 
   it('«Пересобрать» сначала досылает отложенный отбор, затем пересобирает', async () => {
-    await openRecipeTab(scrollBox);
+    await openRecipeTab(scrollBox, publication());
 
     editRecipeKeywords(scrollBox, 'порядок');
     // Не ждём дебаунс — жмём «Пересобрать» сразу.
@@ -197,7 +243,7 @@ describe('карточка публикации: сохранение рецеп
     assert.ok(rebuildButton !== undefined, 'кнопка «Пересобрать» есть');
     rebuildButton.click();
     await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await wait(20);
 
     assert.deepEqual(calls.order, ['update', 'rebuild'], 'сначала сохранение, затем пересборка');
     assert.match(JSON.stringify(calls.updates[0]!.changes.title_recipe), /порядок/);
@@ -205,12 +251,12 @@ describe('карточка публикации: сохранение рецеп
   });
 
   it('переоткрытие карточки показывает сохранённый отбор (сценарий бага)', async () => {
-    const mod = await openRecipeTab(scrollBox);
+    const mod = await openRecipeTab(scrollBox, publication());
 
     editRecipeKeywords(scrollBox, 'сохранённый');
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await wait(450);
     assert.equal(calls.updates.length, 1, 'отбор сохранён в публикацию');
-    const saved = current;
+    const saved = db.get('pub-1') as Publication;
     assert.match(JSON.stringify(saved.title_recipe), /сохранённый/);
 
     // Переоткрытие: сброс и повторный показ карточки с серверными данными.
@@ -227,5 +273,82 @@ describe('карточка публикации: сохранение рецеп
     const keywords = reopened.querySelector('.st-f-keywords') as ShimElement | null;
     assert.ok(keywords !== null, 'поле рецепта построено после переоткрытия');
     assert.equal(keywords.value, 'сохранённый', 'отбор восстановлен из сохранённой публикации');
+  });
+});
+
+describe('карточка публикации: автосейв при смене цели и тиках store (ошибка 82aada28)', () => {
+  beforeEach(() => {
+    installShim([
+      publication(),
+      publication({ id: 'pub-2', title: 'НАЗВАНИЕ-pub-2' }),
+    ]);
+    store.update({ networkId: NETWORK_ID, editorTarget: null });
+  });
+
+  afterEach(async () => {
+    const mod = await import('../src/renderer/editor/publication-card.js');
+    mod.disposePublicationCard();
+  });
+
+  it('смена цели в окне дебаунса не уводит правку в чужую публикацию', async () => {
+    const mod = await cardModule();
+    const hostA = new ShimElement('div');
+    const hostB = new ShimElement('div');
+    const a = db.get('pub-1') as Publication;
+    const b = db.get('pub-2') as Publication;
+
+    mod.showPublicationTarget({ scrollBox: hostA as unknown as HTMLElement }, a.id, a);
+    editTitle(hostA, 'правка-A');
+    // Переключаемся на B, не дожидаясь дебаунса 400 мс.
+    mod.showPublicationTarget({ scrollBox: hostB as unknown as HTMLElement }, b.id, b);
+    editTitle(hostB, 'правка-B');
+    await wait(450);
+
+    assert.deepEqual(
+      calls.updates.map((u) => u.id),
+      ['pub-1', 'pub-2'],
+      'каждая правка ушла в свою публикацию',
+    );
+    assert.equal(calls.updates[0]!.changes.title, 'правка-A');
+    assert.equal(calls.updates[1]!.changes.title, 'правка-B');
+    assert.equal((db.get('pub-1') as Publication).title, 'правка-A');
+    assert.equal((db.get('pub-2') as Publication).title, 'правка-B');
+    assert.deepEqual(calls.conflicts, [], 'никто не откатил карточку');
+  });
+
+  it('тик store после сохранения не откатывает поля и не даёт CONFLICT', async () => {
+    const mod = await cardModule();
+    const host = new ShimElement('div');
+    const a = db.get('pub-1') as Publication;
+    store.update({ editorTarget: { kind: 'publication', id: a.id, publication: a } });
+
+    mod.showPublicationTarget({ scrollBox: host as unknown as HTMLElement }, a.id, a);
+    const title = editTitle(host, 'Новое');
+    await wait(450);
+    assert.equal(calls.updates.length, 1, 'первое сохранение выполнено');
+    assert.equal((db.get('pub-1') as Publication).version, 2);
+    const liveTarget = store.state.editorTarget;
+    assert.ok(liveTarget !== null && liveTarget.kind === 'publication');
+    assert.equal(liveTarget.publication?.version, 2, 'снимок store синхронизирован');
+
+    // Имитация тика store: editor.render отдаёт снимок store той же цели.
+    mod.showPublicationTarget(
+      { scrollBox: host as unknown as HTMLElement },
+      a.id,
+      liveTarget.publication,
+    );
+    assert.equal(
+      (host.querySelector('#pub-card-title') as ShimElement).value,
+      'Новое',
+      'поле не откатилось устаревшим снимком',
+    );
+    assert.equal(title.value, 'Новое', 'инпут тот же — карточка не пересобрана');
+
+    // Вторая правка обязана уйти с актуальной version (иначе CONFLICT).
+    editTitle(host, 'Ещё');
+    await wait(450);
+    assert.deepEqual(calls.conflicts, [], 'CONFLICT не возник');
+    assert.equal(calls.updates.length, 2, 'вторая правка сохранена');
+    assert.equal(calls.updates[1]!.version, 2, 'вторая правка ушла с актуальной version');
   });
 });

@@ -162,6 +162,10 @@ async function refreshFromServer(): Promise<void> {
 /** Применяет данные публикации к построенным панелям. */
 function apply(publication: Publication): void {
   if (instance === null) return;
+  // Чужая публикация не должна трогать карточку (ошибка 82aada28): ответ
+  // отложенного PATCH или устаревший снимок store при смене цели иначе
+  // применялся бы к новой карточке и уводил следующие правки в чужой id.
+  if (publication.id !== instance.publicationId) return;
   instance.publication = publication;
   suppressFieldEvents = true;
   try {
@@ -170,6 +174,21 @@ function apply(publication: Publication): void {
     suppressFieldEvents = false;
   }
   renderCoverPreview(publication);
+  syncStorePublication(publication);
+}
+
+/**
+ * Синхронизирует снимок публикации в store (ошибка 82aada28). Без этого
+ * следующий тик store отдаёт устаревшее значение через ветку «та же цель»,
+ * поля откатываются, а сохранение уходит со старой `version` → CONFLICT.
+ * `version` не участвует в подписи редактора (`editor.ts`), поэтому запись не
+ * пересобирает карточку и не теряет фокус.
+ */
+function syncStorePublication(publication: Publication): void {
+  const target = store.state.editorTarget;
+  if (target === null || target.kind !== 'publication' || target.id !== publication.id) return;
+  if (target.publication?.version === publication.version) return;
+  store.update({ editorTarget: { kind: 'publication', id: publication.id, publication } });
 }
 
 // ---------------------------------------------------------------------------
@@ -614,16 +633,20 @@ function queueSave(changes: PublicationUpdateInput): void {
 
 async function flushSave(): Promise<void> {
   const networkId = store.state.networkId;
-  const current = instance?.publication ?? null;
-  if (networkId === null || current === null || Object.keys(pendingChanges).length === 0) return;
+  // Владелец правок — карточка на момент постановки запроса. Смена цели за
+  // время запроса не должна привести к применению ответа к новой карточке
+  // (ошибка 82aada28).
+  const owner = instance;
+  const current = owner?.publication ?? null;
+  if (networkId === null || owner === null || current === null || Object.keys(pendingChanges).length === 0) return;
   const changes = pendingChanges;
   pendingChanges = {};
   try {
     const updated = await etn.publications.update(networkId, current.id, changes, current.version);
-    apply(updated);
+    if (instance === owner) apply(updated);
   } catch (err) {
     errorDialog(t('publication.error'), err);
-    void refreshFromServer();
+    if (instance === owner) void refreshFromServer();
   }
 }
 

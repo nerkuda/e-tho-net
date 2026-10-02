@@ -1430,7 +1430,10 @@ async function render(): Promise<void> {
   // применяются — их отключает `currentEditorContext()` (возвращает null).
   const pubTarget = store.state.editorTarget;
   if (pubTarget !== null && pubTarget.kind === 'publication') {
-    const pubSignature = `publication|${pubTarget.id}|${pubTarget.publication?.version ?? ''}|${store.state.editorPosition}`;
+    // Версия публикации в подписи НЕ участвует (ошибка 82aada28): карточка
+    // хранит актуальный снимок сама и обновляется на месте, а смена версии на
+    // каждом сохранении пересобирала бы панель и теряла фокус.
+    const pubSignature = `publication|${pubTarget.id}|${store.state.editorPosition}`;
     if (pubSignature !== lastPublicationSignature) {
       lastPublicationSignature = pubSignature;
       emptyChildren(scrollBox);
