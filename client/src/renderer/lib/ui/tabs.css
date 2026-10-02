@@ -73,6 +73,19 @@
   cursor: not-allowed;
 }
 
+/* Счётчик `(N)` у подписи вкладки — тот же вид, что `.editor-tab-count`
+   панели мысли (бледный, обычного начертания даже на активной вкладке). */
+.ui-tab-count {
+  margin-left: var(--space-2);
+  color: var(--text-faint);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--font-weight-normal);
+}
+
+.ui-tab-count.hidden {
+  display: none;
+}
+
 .ui-tabpanels {
   display: flex;
   flex-direction: column;

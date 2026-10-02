@@ -62,6 +62,13 @@ import {
   type EntityOption,
 } from '../lib/entity-picker.js';
 import { buildMetadataBlock } from '../lib/metadata.js';
+import {
+  attachmentChangeFacts,
+  isAttachmentEventType,
+  rememberShownAttachments,
+  shownAttachmentOwner,
+  type AttachmentEventType,
+} from '../lib/attachment-events.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { store } from '../state.js';
 import { buildCover } from '../screens/publications/cover.js';
@@ -99,6 +106,8 @@ export const publicationCardInternals = {
   rebuild: (): void => void rebuildPublication(),
   /** Тестовый шов: активировать вкладку карточки (ленивые панели). */
   activateTab: (id: string): void => tabsHandleRef?.setActive(id),
+  /** Тестовый шов: открыть диалог выбора обложки (поведение списка/навигации). */
+  openCoverDialog: (): void => void openCoverDialog(),
 };
 
 /** Что редактор передаёт карточке для отрисовки. */
@@ -119,6 +128,8 @@ let instance: CardInstance | null = null;
 let realtimeUnsub: (() => void) | null = null;
 /** Подписка на локальные пересборки рабочей области (ошибка c2dec45c). */
 let localUnsub: (() => void) | null = null;
+/** Снятие документного слушателя канала вложений (пакет А приёмки b02ef1cf). */
+let attachmentsChannelUnsub: (() => void) | null = null;
 let saveTimer: number | null = null;
 let pendingChanges: PublicationUpdateInput = {};
 let suppressFieldEvents = false;
@@ -139,6 +150,8 @@ export function disposePublicationCard(): void {
   realtimeUnsub = null;
   localUnsub?.();
   localUnsub = null;
+  attachmentsChannelUnsub?.();
+  attachmentsChannelUnsub = null;
   instance?.unsub();
   if (saveTimer !== null) window.clearTimeout(saveTimer);
   saveTimer = null;
@@ -185,6 +198,16 @@ export function showPublicationTarget(
   };
   realtimeUnsub = onRealtimeEvent((evt) => {
     if (evt.network_id !== store.state.networkId) return;
+    // Набор вложений публикации (другой клиент или MCP): ПЕРЕиспускаем тем же
+    // локальным каналом, что и свои правки, — одна точка применения. Слушатель
+    // канала обновляет счётчик вкладки, а панель «Вложения» перечитывает список
+    // (как в панели мысли, `editor.ts`, ошибка abd25adb).
+    if (isAttachmentEventType(evt.type)) {
+      if (attachmentTouchesPublication(evt.type, evt.data, publicationId)) {
+        notifyPublicationAttachmentsChanged(publicationId);
+      }
+      return;
+    }
     if (
       evt.type !== 'publication.updated' &&
       evt.type !== 'publication.rebuilt' &&
@@ -197,6 +220,18 @@ export function showPublicationTarget(
     if (id !== publicationId) return;
     void refreshFromServer();
   });
+  // Локальный канал вложений (пакет А): своё realtime-эхо подавлено, поэтому
+  // добавление вложения в диалоге обложки уведомляет этим событием. Слушатель
+  // нужен и когда вкладка «Вложения» ещё не построена (панель ленивая и своего
+  // слушателя тогда не имеет) — поэтому он на уровне карточки.
+  const onAttachmentsChanged = (event: Event): void => {
+    const detail = (event as CustomEvent<{ ownerType?: string; ownerId?: string }>).detail;
+    if (detail?.ownerType !== 'publication' || detail?.ownerId !== publicationId) return;
+    void refreshAttachmentsCount();
+  };
+  document.addEventListener('etn:attachments-changed', onAttachmentsChanged);
+  attachmentsChannelUnsub = () =>
+    document.removeEventListener('etn:attachments-changed', onAttachmentsChanged);
   // Пересборка ИЗ ШАПКИ рабочей области не вернёт карточке realtime-событие
   // (эхо подавлено, ошибка c2dec45c) — рабочая область уведомляет локально.
   localUnsub = onPublicationRebuilt((event) => {
@@ -210,6 +245,44 @@ export function showPublicationTarget(
   // Данные пришли сразу — применяем синхронно, иначе перечитываем сервер.
   if (publication !== undefined) apply(publication);
   else void refreshFromServer();
+  // Счётчик вкладки «Вложения» — сразу при показе карточки (бейдж, как у
+  // панели мысли): вкладка ленивая, поэтому число берём отдельным запросом.
+  void refreshAttachmentsCount();
+}
+
+/**
+ * Перечитывает число вложений публикации и обновляет бейдж `(N)` вкладки
+ * «Вложения». Индекс показанных вложений пополняется тем же вызовом — он нужен,
+ * чтобы отнести к публикации realtime-события `attachment.updated/deleted`,
+ * которые несут только id (тот же приём, что у счётчика панели мысли,
+ * `editor/attachments.ts`).
+ */
+async function refreshAttachmentsCount(): Promise<void> {
+  const networkId = store.state.networkId;
+  const publicationId = instance?.publicationId ?? null;
+  if (networkId === null || publicationId === null) return;
+  try {
+    const items = await etn.attachments.list(networkId, 'publication', publicationId);
+    // Цель могла смениться, пока ответ был в пути.
+    if (instance?.publicationId !== publicationId || tabsHandleRef === null) return;
+    rememberShownAttachments(items);
+    tabsHandleRef.setCount('attachments', items.length);
+  } catch {
+    tabsHandleRef?.setCount('attachments', undefined);
+  }
+}
+
+/** Относится ли realtime-изменение вложения к публикации `publicationId`. */
+function attachmentTouchesPublication(
+  type: AttachmentEventType,
+  data: unknown,
+  publicationId: string,
+): boolean {
+  const facts = attachmentChangeFacts(type, data);
+  if (facts.ownerType === 'publication' && facts.ownerId === publicationId) return true;
+  if (facts.attachmentId === null) return false;
+  const shown = shownAttachmentOwner(facts.attachmentId);
+  return shown?.ownerType === 'publication' && shown.ownerId === publicationId;
 }
 
 /** Перечитывает публикацию и применяет значения к карточке. */
@@ -704,6 +777,9 @@ function buildAttachmentsTabPane(): HTMLElement {
       ownerType: 'publication',
       ownerId,
       thought: null,
+      // Панель после перезагрузки списка уведомляет — обновляем бейдж вкладки
+      // тем же путём, что и панель мысли (`onCountChange`).
+      onCountChange: () => void refreshAttachmentsCount(),
       // На картинках-вложениях публикации — «Сделать обложкой публикации»
       // (элемент интерфейса c3e44cab). Файл уже принадлежит публикации, поэтому
       // достаточно назначить его обложкой.
@@ -1117,6 +1193,17 @@ async function openCoverDialog(): Promise<void> {
           el.classList.toggle('pub-cover-item-current', a !== null && id === a.id);
         }
       },
+      // Единый источник текущего выбора: стрелки/Home/End, клик, dblclick и сброс
+      // после перерисовки идут через `setCurrent`, который зовёт этот колбэк.
+      // Без него `selected` оставался прежним при подсветке стрелками, и
+      // Ctrl+Enter/«Применить и закрыть» применяли устаревшую строку (блокер
+      // приёмки b02ef1cf). Держим `selected`, препросмотр и доступность кнопки
+      // синхронными текущей позиции навигации.
+      onSelectionChange: (a) => {
+        selected = a;
+        renderPreview(a);
+        refreshApply();
+      },
       onActivate: (a) => selectAttachment(a),
       // Ctrl+Enter в списке — «выбрать и применить, закрыв диалог» (замечание В
       // приёмки b02ef1cf). Ядро навигации трактует Enter (в т.ч. с Ctrl) как
@@ -1229,17 +1316,22 @@ async function openCoverDialog(): Promise<void> {
       }
     }
 
-    /** Выбирает вложение и показывает его препросмотр. */
+    /**
+     * Делает вложение текущим. Всё производное состояние (выбор, препросмотр,
+     * доступность кнопки) синхронизирует `onSelectionChange` навигации —
+     * отдельного присваивания здесь нет, иначе источник выбора раздвоился бы.
+     */
     function selectAttachment(a: Attachment): void {
-      selected = a;
       nav.setCurrent(a);
-      renderPreview(a);
-      refreshApply();
     }
 
-    /** Препросмотр выбранной картинки. */
-    function renderPreview(a: Attachment): void {
+    /** Препросмотр выбранной картинки; `null` — подсказка вместо неё. */
+    function renderPreview(a: Attachment | null): void {
       while (previewHost.firstChild !== null) previewHost.removeChild(previewHost.firstChild);
+      if (a === null) {
+        previewHost.append(span(t('publication.cover.previewHint'), 'muted'));
+        return;
+      }
       const img = document.createElement('img');
       img.className = 'pub-cover-preview-img';
       img.alt = '';
