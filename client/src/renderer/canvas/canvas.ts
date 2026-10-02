@@ -1345,6 +1345,17 @@ async function reconcileZoneTotals(focus: FocusResponse): Promise<void> {
   let neighbourhoodChanged = zoneNeighbourhoodSignature !== null
     && zoneNeighbourhoodSignature !== signature;
   zoneNeighbourhoodSignature = signature;
+  // Свежий ответ ТОГО ЖЕ фокуса обновляет состав первой порции секторов, а
+  // `zoneVisibleIds` был посеян только при смене фокуса. Синхронизируем набор
+  // (вместе с уже подгруженными порциями), иначе догрузка может повторно
+  // принять мысль, уже показанную ответом фокуса (ошибка 31ed1d43).
+  zoneVisibleIds = new Set<string>([
+    focus.focused.id,
+    ...focus.parents.map((n) => n.id),
+    ...focus.children.map((n) => n.id),
+    ...focus.siblings.map((n) => n.id),
+    ...[...zoneAppended.values()].flatMap((list) => list.map((n) => n.id)),
+  ]);
   // Количества читаются параллельно: сверка едет на каждом свежем ответе
   // фокуса, три последовательных запроса вместо одного круга — лишняя задержка.
   const totals = await Promise.all(
@@ -1355,7 +1366,9 @@ async function reconcileZoneTotals(focus: FocusResponse): Promise<void> {
     const total = totals[index];
     if (total === null || total === undefined) return;
     const counters = zonePaging.get(dir);
-    const plan = planZoneReconcile(counters ?? createZonePaging(), total);
+    // Длина свежей первой порции ответа фокуса — строки уже показаны, префикс
+    // «израсходованного» не может быть меньше (ошибка 31ed1d43).
+    const plan = planZoneReconcile(counters ?? createZonePaging(), total, undefined, focus[dir].length);
     if (counters !== undefined && plan.counters.total !== counters.total) {
       neighbourhoodChanged = true;
     }
