@@ -28,6 +28,12 @@ import { fieldInput, fieldRow } from '../lib/ui/field.js';
 import { fieldError } from '../lib/ui/messages.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
 import { createTable } from '../lib/ui/table.js';
+import { loadingState } from '../lib/ui/empty-state.js';
+import { notice } from '../lib/notice.js';
+import {
+  notifyPublicationRebuilt,
+  onPublicationRebuilt,
+} from '../lib/publication-events.js';
 import {
   buildEntityChipField,
   filterEntityOptions,
@@ -79,10 +85,16 @@ interface CardInstance {
 
 let instance: CardInstance | null = null;
 let realtimeUnsub: (() => void) | null = null;
+/** Подписка на локальные пересборки рабочей области (ошибка c2dec45c). */
+let localUnsub: (() => void) | null = null;
 let saveTimer: number | null = null;
 let pendingChanges: PublicationUpdateInput = {};
 let suppressFieldEvents = false;
 let coverPreview: HTMLElement | null = null;
+/** Кнопка «Пересобрать» текущей карточки (прелоадер, ошибка c2dec45c). */
+let rebuildButtonRef: HTMLButtonElement | null = null;
+/** Хост прелоадера пересборки текущей карточки (ошибка c2dec45c). */
+let rebuildFeedbackRef: HTMLElement | null = null;
 /** Хост чекбоксов полок текущей карточки (для перерисовки после перестановки). */
 let shelvesHostRef: HTMLElement | null = null;
 const updaters: Array<(publication: Publication) => void> = [];
@@ -91,6 +103,8 @@ const updaters: Array<(publication: Publication) => void> = [];
 export function disposePublicationCard(): void {
   realtimeUnsub?.();
   realtimeUnsub = null;
+  localUnsub?.();
+  localUnsub = null;
   instance?.unsub();
   if (saveTimer !== null) window.clearTimeout(saveTimer);
   saveTimer = null;
@@ -103,6 +117,8 @@ export function disposePublicationCard(): void {
   pendingChanges = {};
   updaters.length = 0;
   shelvesHostRef = null;
+  rebuildButtonRef = null;
+  rebuildFeedbackRef = null;
 }
 
 /**
@@ -135,6 +151,13 @@ export function showPublicationTarget(host: PublicationCardHost, publicationId: 
     const data = evt.data as { id?: string; publication_id?: string };
     const id = data.id ?? data.publication_id ?? '';
     if (id !== publicationId) return;
+    void refreshFromServer();
+  });
+  // Пересборка ИЗ ШАПКИ рабочей области не вернёт карточке realtime-событие
+  // (эхо подавлено, ошибка c2dec45c) — рабочая область уведомляет локально.
+  localUnsub = onPublicationRebuilt((event) => {
+    if (event.source === 'card') return;
+    if (instance === null || event.id !== instance.publicationId) return;
     void refreshFromServer();
   });
   // Наполнение — ПОСЛЕ регистрации `instance` (ошибка ecad219b). Панели
@@ -209,7 +232,13 @@ function buildCard(publicationId: string, publication: Publication | null): HTML
     role: 'ghost',
     onClick: () => void rebuildPublication(),
   });
-  head.append(thumbHost, titleBox, rebuild);
+  rebuildButtonRef = rebuild;
+  // Прелоадер пересборки (спека 2ebacd12, ошибка c2dec45c): без него нажатие
+  // «Пересобрать» визуально ничем не отличается — дата сборки в метке одна и
+  // та же в пределах дня.
+  const rebuildFeedback = div('pub-card-rebuild-state hidden');
+  rebuildFeedbackRef = rebuildFeedback;
+  head.append(thumbHost, titleBox, rebuild, rebuildFeedback);
 
   const tabs = uiTabs({
     tabs: [
@@ -234,6 +263,20 @@ function buildCard(publicationId: string, publication: Publication | null): HTML
 
 function authorLine(publication: Publication): string {
   return displayAuthorship(publication, users.resolveUserName(publication.created_by));
+}
+
+/**
+ * Видимая обратная связь пересборки (ошибка c2dec45c): пока идёт запрос —
+ * кнопка заблокирована, рядом показан прелоадер. Без этого повторное нажатие
+ * и «ничего не произошло» неразличимы.
+ */
+function setRebuilding(busy: boolean): void {
+  if (rebuildButtonRef !== null) rebuildButtonRef.disabled = busy;
+  const feedback = rebuildFeedbackRef;
+  if (feedback === null) return;
+  while (feedback.firstChild !== null) feedback.removeChild(feedback.firstChild);
+  feedback.classList.toggle('hidden', !busy);
+  if (busy) feedback.append(loadingState(t('publication.rebuilding')));
 }
 
 function renderCoverPreview(publication: Publication): void {
@@ -631,38 +674,52 @@ function queueSave(changes: PublicationUpdateInput): void {
   }, 400);
 }
 
-async function flushSave(): Promise<void> {
+async function flushSave(): Promise<boolean> {
   const networkId = store.state.networkId;
   // Владелец правок — карточка на момент постановки запроса. Смена цели за
   // время запроса не должна привести к применению ответа к новой карточке
   // (ошибка 82aada28).
   const owner = instance;
   const current = owner?.publication ?? null;
-  if (networkId === null || owner === null || current === null || Object.keys(pendingChanges).length === 0) return;
+  if (networkId === null || owner === null || current === null) return true;
+  if (Object.keys(pendingChanges).length === 0) return true;
   const changes = pendingChanges;
   pendingChanges = {};
   try {
     const updated = await etn.publications.update(networkId, current.id, changes, current.version);
     if (instance === owner) apply(updated);
+    return true;
   } catch (err) {
     errorDialog(t('publication.error'), err);
     if (instance === owner) void refreshFromServer();
+    return false;
   }
 }
 
 async function rebuildPublication(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || instance === null) return;
+  const publicationId = instance.publicationId;
+  // Сначала досылаем отложенный отбор (дебаунс 400 мс): иначе сервер
+  // пересоберёт документ по СТАРОЙ строке публикации, а ответ затрёт поля
+  // UI прежними значениями — «нажал, ничего не произошло» (ошибка 82aada28).
+  // Конфликт сохранения НЕ пропускаем молча (ошибка c2dec45c): `flushSave`
+  // уже показал ошибку — пересборку по устаревшему состоянию не запускаем.
+  if (!(await flushSave())) return;
+  if (instance === null) return;
+  setRebuilding(true);
   try {
-    // Сначала досылаем отложенный отбор (дебаунс 400 мс): иначе сервер
-    // пересоберёт документ по СТАРОЙ строке публикации, а ответ затрёт поля
-    // UI прежними значениями — «нажал, ничего не произошло» (ошибка 82aada28).
-    await flushSave();
-    if (instance === null) return;
-    const updated = await etn.publications.rebuild(networkId, instance.publicationId);
-    apply(updated);
+    const updated = await etn.publications.rebuild(networkId, publicationId);
+    if (instance !== null && instance.publicationId === publicationId) apply(updated);
+    // Своё realtime-эхо `publication.rebuilt` до этого клиента не доходит
+    // (подавление на сервере, ошибка c2dec45c) — рабочую область и списки
+    // уведомляем локально.
+    notifyPublicationRebuilt({ id: publicationId, source: 'card' });
+    notice(t('publication.rebuilt.ready'), 'success');
   } catch (err) {
     errorDialog(t('publication.rebuild'), err);
+  } finally {
+    if (instance !== null && instance.publicationId === publicationId) setRebuilding(false);
   }
 }
 

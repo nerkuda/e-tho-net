@@ -68,6 +68,7 @@ import { loadPropertyRows } from './recipe.js';
 import { buildPropertyListRows } from '../../lib/property-list.js';
 import { ensureLink, throwOnFailures } from '../../lib/link-ops.js';
 import { parseFilterDefinition } from '../../lib/filter-builder.js';
+import { notifyPublicationRebuilt } from '../../lib/publication-events.js';
 import * as users from '../../lib/users.js';
 import { store } from '../../state.js';
 
@@ -277,12 +278,20 @@ export function mountPublicationWorkspace(
   async function rebuild(): Promise<void> {
     const networkId = store.state.networkId;
     if (networkId === null || publicationId === null) return;
+    // Прелоадер кнопки на время запроса (спека 2ebacd12), плюс `reload()`
+    // ниже показывает состояние загрузки документа.
+    rebuildButton.disabled = true;
     try {
       await etn.publications.rebuild(networkId, publicationId);
     } catch (err) {
       errorDialog(t('publications.ws.rebuild'), err);
       return;
+    } finally {
+      rebuildButton.disabled = false;
     }
+    // Своё realtime-эхо подавлено, карточке публикации документ не обновится
+    // (ошибка c2dec45c) — сообщаем локально, затем перечитываем документ.
+    notifyPublicationRebuilt({ id: publicationId, source: 'workspace' });
     reload();
   }
 

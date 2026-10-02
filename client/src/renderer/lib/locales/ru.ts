@@ -820,6 +820,10 @@ export const ru = {
   'publication.toTrash': 'В корзину',
   'publication.restore': 'Из корзины',
   'publication.rebuild': 'Пересобрать',
+  /** Прелоадер пересборки в карточке (ошибка c2dec45c). */
+  'publication.rebuilding': 'Пересборка…',
+  /** Подтверждение успешной пересборки (ошибка c2dec45c). */
+  'publication.rebuilt.ready': 'Документ пересобран',
   'publication.save': 'Сохранить',
   'publication.cover.none': 'Без обложки',
   'publication.cover.url': 'URL обложки',
