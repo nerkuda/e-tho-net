@@ -18,6 +18,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
+import { BASE_LAYER_ID } from '@etn/shared';
+
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
@@ -443,6 +445,43 @@ describe('MCP-публикации: сквозной сценарий', { skip }
           publication_id: pub.id,
         })) as { data: { id: string } };
         assert.equal(pubStillAlive.data.id, pub.id, 'публикация не тронута удалением полки');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.shelves.list лениво создаёт дефолтную «Полку» в основе (8c2660e6)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const initial = (await call(handle.client, 'etn.shelves.list', {
+          network_id: ctx.networkId,
+        })) as { data: Array<{ id: string; title: string }> };
+        assert.equal(initial.data.length, 1);
+        assert.equal(initial.data[0]?.title, 'Полка', 'новая сеть создана с «Полкой»');
+
+        // Убираем полку физически — следующий список обязан создать её заново
+        // (паритет с REST GET /shelves, карточка c80951ea v2).
+        const deleted = (await call(handle.client, 'etn.shelves.delete', {
+          network_id: ctx.networkId,
+          shelf_id: initial.data[0]!.id,
+        })) as { deleted: boolean };
+        assert.equal(deleted.deleted, true);
+
+        const recreated = (await call(handle.client, 'etn.shelves.list', {
+          network_id: ctx.networkId,
+        })) as { data: Array<{ id: string; title: string }> };
+        assert.equal(recreated.data.length, 1, 'дефолтная полка создана заново');
+        assert.equal(recreated.data[0]?.title, 'Полка');
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const row = ndb
+          .prepare('SELECT layer_id FROM shelves WHERE id = ?')
+          .get(recreated.data[0]!.id) as { layer_id: string } | undefined;
+        assert.equal(row?.layer_id, BASE_LAYER_ID, 'полка создана в основе');
       } finally {
         await handle.close();
       }

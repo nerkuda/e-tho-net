@@ -23,6 +23,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import {
+  BASE_LAYER_ID,
   EtnError,
   MCP_TOOL_ANNOTATIONS,
   type Publication,
@@ -39,6 +40,7 @@ import type { McpRuntime } from '../context.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
+  openMemberNetworkBase,
   requireWritable,
   requireWriteBudget,
   runTool,
@@ -51,6 +53,7 @@ import {
   createPublication,
   createShelf,
   deleteShelf,
+  ensureDefaultShelf,
   getPublication,
   getShelf,
   listPublications,
@@ -389,7 +392,31 @@ export function registerPublicationTools(mcp: McpServer, rt: McpRuntime): void {
     (args) =>
       runTool(() => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        const shelves = listShelves(ndb);
+        let shelves = listShelves(ndb);
+        // Ленивое создание дефолтной полки «Полка» — паритет с REST GET
+        // /shelves (0.11.1, задача 8c2660e6; карточка c80951ea v2): сеть без
+        // живых полок получает её при первом запросе списка — В ОСНОВЕ. Запись
+        // идёт через `runWrite` (ADR 162d8e7a), событие атрибутировано основе.
+        if (shelves.length === 0) {
+          const baseNdb = openMemberNetworkBase(rt, args.network_id);
+          const created = runWrite(baseNdb, mcpWriteFx(rt, args.network_id), () => {
+            const shelf = ensureDefaultShelf(baseNdb, rt.deps.auth.userId);
+            return {
+              result: shelf,
+              events:
+                shelf === null
+                  ? []
+                  : [
+                      {
+                        type: 'shelf.updated' as const,
+                        data: { shelf },
+                        options: { layerId: BASE_LAYER_ID },
+                      },
+                    ],
+            };
+          });
+          if (created !== null) shelves = listShelves(ndb);
+        }
         return { data: shelves, meta: { total: shelves.length, offset: 0, limit: shelves.length } };
       }),
   );
