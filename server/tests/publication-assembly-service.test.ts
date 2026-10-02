@@ -500,6 +500,11 @@ describe('publication-assembly-service: кандидаты (временная �
       // Позиция x зафиксирована в конец порядка.
       assert.equal(order[order.length - 1]!.node_key, x);
       assert.deepEqual(listPublicationOrder(ndb, pub.id).map((i) => i.node_key), [x]);
+
+      // Идемпотентность: повторный accept не двигает позицию (no-op).
+      const repeat = acceptPublicationCandidate(ndb, pub.id, x, USER);
+      assert.deepEqual(repeat.map((i) => i.node_key), [x]);
+      assert.equal(repeat[0]!.position, order[0]!.position, 'позиция не дрейфует');
     } finally {
       ndb.close();
     }

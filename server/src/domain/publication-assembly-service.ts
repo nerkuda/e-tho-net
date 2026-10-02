@@ -1202,6 +1202,8 @@ export function listPublicationCandidates(
  * либо id мысли для корня: та же адресация, что у сборки (`placementKeyOf` в
  * `buildSectionTree`) и у `PUT …/order`. Срез `NULL` (импорт) инициализируется
  * текущим отбором, чтобы «расставить» не превращал остальные узлы в кандидатов.
+ * Операция идемпотентна: повторный вызов для уже расставленного узла позицию не
+ * двигает (`appendPublicationOrderItem` — no-op, если ключ есть в порядке).
  */
 export function acceptPublicationCandidate(
   ndb: NetworkDb,

@@ -907,6 +907,10 @@ export function setPublicationOrder(
  * Дописать узел в конец локального порядка, НЕ трогая принятый срез
  * (внутренняя операция действия «расставить» из плашки, задача e754527d:
  * кандидат гасится индивидуально, другие кандидаты остаются).
+ *
+ * **Идемпотентность.** Если `nodeKey` уже есть в локальном порядке, позиция не
+ * трогается (повторный accept — no-op): иначе каждый вызов дописывал бы узел в
+ * конец (maxPosition + 1) и «идемпотентная» операция дрейфовала бы.
  */
 export function appendPublicationOrderItem(
   ndb: NetworkDb,
@@ -916,10 +920,12 @@ export function appendPublicationOrderItem(
 ): PublicationOrderItem[] {
   return ndb.transaction(() => {
     getPublicationOrThrow(ndb, publicationId);
-    const maxPosition = listPublicationOrder(ndb, publicationId).reduce(
-      (max, item) => Math.max(max, item.position),
-      0,
-    );
+    const order = listPublicationOrder(ndb, publicationId);
+    if (order.some((item) => item.node_key === nodeKey)) {
+      invalidatePublicationMembershipCache(publicationId);
+      return order;
+    }
+    const maxPosition = order.reduce((max, item) => Math.max(max, item.position), 0);
     applyPublicationOrder(ndb, publicationId, [{ node_key: nodeKey, position: maxPosition + 1 }], actorUserId);
     invalidatePublicationMembershipCache(publicationId);
     return listPublicationOrder(ndb, publicationId);

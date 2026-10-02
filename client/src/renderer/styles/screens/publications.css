@@ -637,9 +637,23 @@
   gap: var(--space-2);
 }
 
-.pub-cand-title {
+.pub-cand-text {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.pub-cand-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-cand-path {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
