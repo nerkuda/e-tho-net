@@ -10,8 +10,9 @@
  * лениво открытая вкладка «Метаданные» наполняется тем же механизмом.
  *
  * DOM-шим — общий (`dom-shim.ts`); CodeMirror в шиме не поднимается, поэтому
- * фабрика markdown-редактора подменяется заглушкой через тестовый шов
- * `publicationCardInternals` (прецедент — `mdEditorInternals` в `md-editor.ts`).
+ * фабрика поля резюме и запись в него подменяются заглушками через тестовые швы
+ * `publicationCardInternals.createSummaryField`/`setSummaryField` (прецедент —
+ * `mdEditorInternals` в `md-editor.ts`).
  */
 
 import assert from 'node:assert/strict';
@@ -20,7 +21,6 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { Publication } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
-import type { MdEditor } from '../src/renderer/editor/md-editor.js';
 import { store } from '../src/renderer/state.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -38,6 +38,7 @@ function installShim(): ShimElement {
     activeElement: body,
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
+    dispatchEvent: () => undefined,
   };
   const win = ((globalThis as any).window ?? ((globalThis as any).window = {})) as Record<
     string,
@@ -58,21 +59,31 @@ function installShim(): ShimElement {
   return body;
 }
 
-/** Заглушка markdown-редактора: CodeMirror в DOM-шиме не исполняется. */
-function fakeMdEditor(initial: string): MdEditor {
-  let value = initial;
-  return {
-    dom: new ShimElement('div') as unknown as HTMLElement,
-    getValue: () => value,
-    setValue: (md: string) => {
-      value = md;
-    },
-    insertAtCaret: () => undefined,
-    focus: () => undefined,
-    focusToEnd: () => undefined,
-    blur: () => undefined,
-    destroy: () => undefined,
-  };
+/** Опции, с которыми карточка построила поле резюме (для проверок режима). */
+interface SummaryFieldProbe {
+  md: string;
+  root: HTMLElement;
+  options: { onEditChange?: (editing: boolean) => void } | null;
+}
+
+/**
+ * Подменяет фабрику/запись поля резюме заглушками: CodeMirror в DOM-шиме не
+ * исполняется, а нам нужно видеть, какое значение карточка положила в поле.
+ */
+function stubSummaryField(mod: CardModule): SummaryFieldProbe {
+  const probe: SummaryFieldProbe = { md: '', root: new ShimElement('div') as unknown as HTMLElement, options: null };
+  mod.publicationCardInternals.createSummaryField = ((opts: {
+    md: string;
+    onEditChange?: (editing: boolean) => void;
+  }) => {
+    probe.md = opts.md;
+    probe.options = opts;
+    return probe.root;
+  }) as never;
+  mod.publicationCardInternals.setSummaryField = ((_field: HTMLElement, md: string) => {
+    probe.md = md;
+  }) as never;
+  return probe;
 }
 
 function publication(overrides: Partial<Publication> = {}): Publication {
@@ -131,11 +142,7 @@ describe('карточка публикации: первое открытие (
 
   it('шапка и активная вкладка «Резюме» заполнены сразу после открытия', async () => {
     const mod = await cardModule();
-    let md: MdEditor | null = null;
-    mod.publicationCardInternals.createMdEditor = (initial: string) => {
-      md = fakeMdEditor(initial);
-      return md as never;
-    };
+    const summary = stubSummaryField(mod);
 
     const pub = publication();
     mod.showPublicationTarget({ scrollBox: scrollBox as unknown as HTMLElement }, pub.id, pub);
@@ -143,12 +150,12 @@ describe('карточка публикации: первое открытие (
     // Анимации/промисов не ждём: данные уже пришли вместе с целью.
     assert.equal(inputValue(scrollBox, 'pub-card-title'), 'Руководство КТ4', 'заголовок');
     assert.equal(inputValue(scrollBox, 'pub-card-subtitle'), 'Подзаголовок', 'подзаголовок');
-    assert.equal(md!.getValue(), 'Резюме', 'активная вкладка «Резюме» наполнена');
+    assert.equal(summary.md, 'Резюме', 'активная вкладка «Резюме» наполнена');
   });
 
   it('лениво открытая вкладка «Метаданные» тоже наполняется данными', async () => {
     const mod = await cardModule();
-    mod.publicationCardInternals.createMdEditor = (initial: string) => fakeMdEditor(initial) as never;
+    stubSummaryField(mod);
 
     const pub = publication();
     mod.showPublicationTarget({ scrollBox: scrollBox as unknown as HTMLElement }, pub.id, pub);
@@ -161,7 +168,7 @@ describe('карточка публикации: первое открытие (
 
   it('лениво открытая позже вкладка «Рецепт» наполняется данными', async () => {
     const mod = await cardModule();
-    mod.publicationCardInternals.createMdEditor = (initial: string) => fakeMdEditor(initial) as never;
+    stubSummaryField(mod);
 
     const pub = publication();
     mod.showPublicationTarget({ scrollBox: scrollBox as unknown as HTMLElement }, pub.id, pub);
@@ -194,49 +201,51 @@ describe('карточка публикации: перечитывание ре
   });
 
   /**
-   * Открывает карточку с подменённой фабрикой и возвращает модуль вместе с
-   * захваченным экземпляром редактора резюме. Realtime-обновление применяется
-   * через тестовый шов `apply` — ветка «та же цель — apply на месте» в
-   * `showPublicationTarget` в DOM-шиме недостижима (у шима нет `parentElement`).
+   * Открывает карточку с подменённым полем резюме и возвращает модуль вместе с
+   * зондом поля. Realtime-обновление применяется через тестовый шов `apply` —
+   * ветка «та же цель — apply на месте» в `showPublicationTarget` в DOM-шиме
+   * недостижима (у шима нет `parentElement`).
    */
-  async function openCard(summary: string): Promise<{ mod: CardModule; md: MdEditor }> {
+  async function openCard(summary: string): Promise<{ mod: CardModule; probe: SummaryFieldProbe }> {
     const mod = await cardModule();
-    let captured: MdEditor | null = null;
-    mod.publicationCardInternals.createMdEditor = (initial: string) => {
-      captured = fakeMdEditor(initial);
-      return captured as never;
-    };
+    const probe = stubSummaryField(mod);
     const host = { scrollBox: scrollBox as unknown as HTMLElement };
     mod.showPublicationTarget(host, 'pub-1', publication({ summary_md: summary }));
-    const md = captured as MdEditor | null;
-    assert.ok(md !== null, 'markdown-редактор резюме создан');
-    return { mod, md };
+    assert.ok(probe.options !== null, 'поле резюме построено');
+    return { mod, probe };
   }
 
-  it('apply с изменившимся summary_md перечитывает редактор', async () => {
-    const { mod, md } = await openCard('Старое резюме');
-    assert.equal(md.getValue(), 'Старое резюме');
+  it('apply с изменившимся summary_md перечитывает поле', async () => {
+    const { mod, probe } = await openCard('Старое резюме');
+    assert.equal(probe.md, 'Старое резюме');
 
     mod.publicationCardInternals.apply(publication({ summary_md: 'Новое резюме' }));
-    assert.equal(md.getValue(), 'Новое резюме', 'резюме перечитано');
+    assert.equal(probe.md, 'Новое резюме', 'резюме перечитано');
   });
 
   it('apply не затирает расходящийся пользовательский ввод', async () => {
-    const { mod, md } = await openCard('Серверное');
+    const { mod, probe } = await openCard('Серверное');
 
-    md.setValue('Незавершённый ввод');
+    // Вход в правку: незавершённый ввод (ошибка 6f013e67).
+    probe.options!.onEditChange?.(true);
+    probe.md = 'Незавершённый ввод';
     mod.publicationCardInternals.apply(publication({ summary_md: 'Правка другой сессии' }));
-    assert.equal(md.getValue(), 'Незавершённый ввод', 'пользовательский ввод сохранён');
+    assert.equal(probe.md, 'Незавершённый ввод', 'пользовательский ввод сохранён');
+
+    probe.options!.onEditChange?.(false);
+    mod.publicationCardInternals.apply(publication({ summary_md: 'Правка другой сессии' }));
+    assert.equal(probe.md, 'Правка другой сессии', 'после выхода из правки перечитано');
   });
 
   it('эхо собственного сохранения синхронизирует baseline, не ломая дальнейший apply', async () => {
-    const { mod, md } = await openCard('Серверное');
+    const { mod, probe } = await openCard('Серверное');
 
-    md.setValue('Мой текст');
+    probe.options!.onEditChange?.(true);
+    probe.options!.onEditChange?.(false);
     mod.publicationCardInternals.apply(publication({ summary_md: 'Мой текст' }));
-    assert.equal(md.getValue(), 'Мой текст', 'эхо не перезаписывает');
+    assert.equal(probe.md, 'Мой текст', 'эхо не перезаписывает расходящееся');
 
     mod.publicationCardInternals.apply(publication({ summary_md: 'Изменено извне' }));
-    assert.equal(md.getValue(), 'Изменено извне', 'реальная правка перечитана');
+    assert.equal(probe.md, 'Изменено извне', 'реальная правка перечитана');
   });
 });

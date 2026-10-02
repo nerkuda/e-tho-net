@@ -49,7 +49,7 @@ import { emptyState, errorState, loadingState } from '../../lib/ui/empty-state.j
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { store } from '../../state.js';
 import * as users from '../../lib/users.js';
-import { onPublicationRebuilt } from '../../lib/publication-events.js';
+import { onPublicationChanged, onPublicationRebuilt } from '../../lib/publication-events.js';
 import { buildCover } from './cover.js';
 import {
   assemblyDateLabel,
@@ -120,6 +120,8 @@ let searchTimer: number | null = null;
 let unsubStore: (() => void) | null = null;
 /** Подписка на локальные пересборки публикаций (ошибка c2dec45c). */
 let publicationEventsUnsub: (() => void) | null = null;
+/** Подписка на локальные правки публикаций (замечание А приёмки b02ef1cf). */
+let publicationChangedUnsub: (() => void) | null = null;
 let draggingPublicationId: string | null = null;
 /** Свёрнутые полки-группы (единое состояние обоих видов, задача 55ee3c85). */
 const collapsedShelves = new Set<string>();
@@ -196,6 +198,12 @@ export function mountPublications(hostEl: HTMLElement): () => void {
   publicationEventsUnsub = onPublicationRebuilt(() => {
     applyPublicationsRealtime('publication.rebuilt');
   });
+  // Локальная правка публикации в карточке редактора (титул/подзаголовок/
+  // обложка) тоже не приходит эхом — обновляем карточку/строку и полки
+  // ТОЧЕЧНО, без перечитывания списка (замечание А приёмки b02ef1cf).
+  publicationChangedUnsub = onPublicationChanged((event) => {
+    applyPublicationChanged(event.publication);
+  });
   unsubStore = store.subscribe(() => {
     if (hostEl.isConnected !== true) return;
     if (store.state.activeView === 'publications') void initForNetwork(false);
@@ -205,6 +213,8 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     unsubStore = null;
     publicationEventsUnsub?.();
     publicationEventsUnsub = null;
+    publicationChangedUnsub?.();
+    publicationChangedUnsub = null;
     if (reloadTimer !== null) window.clearTimeout(reloadTimer);
     if (searchTimer !== null) window.clearTimeout(searchTimer);
     reloadTimer = null;
@@ -241,6 +251,27 @@ export function closePublicationWorkspace(): void {
 /** Realtime-событие правки контента: открытая рабочая область перечитывается. */
 export function applyPublicationDocumentRealtime(): void {
   if (workspace?.isOpen() === true) workspace.reload();
+}
+
+/**
+ * Локальная правка публикации (замечание А приёмки b02ef1cf): снимок из карточки
+ * редактора применяется ТОЧЕЧНО — библиотека обновляет только изменившийся
+ * элемент (`reconcileKeyed` по `version`), рабочая область — только шапку и
+ * титульный блок. Своего realtime-эха (`publication.updated`) у правки из этого
+ * же клиента нет, поэтому источник зовёт этот путь напрямую.
+ */
+export function applyPublicationChanged(publication: Publication): void {
+  const index = publications.findIndex((p) => p.id === publication.id);
+  if (index !== -1) {
+    const next = publications.slice();
+    next[index] = publication;
+    publications = next;
+    if (ui !== null) {
+      renderBody();
+      void loadBadges();
+    }
+  }
+  if (workspace?.isOpen(publication.id) === true) workspace.applyPublication(publication);
 }
 
 /** Инвалидирует список (перечитать из сервера с дебаунсом). */

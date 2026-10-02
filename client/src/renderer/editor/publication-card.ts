@@ -28,9 +28,12 @@ import type {
   Shelf,
 } from '@etn/shared';
 
-import { createMdEditor, type MdEditor } from './md-editor.js';
+import { createMdEditor } from './md-editor.js';
 import { buildAttachmentsPane } from './attachments.js';
-import { etnimgUrl } from './markdown-field.js';
+import { createMarkdownField, etnimgUrl, setMarkdownField } from './markdown-field.js';
+import { commentShell } from '../lib/ui/comment.js';
+import { createThoughtCloud } from '../lib/thought-cloud.js';
+import { renderMarkdown } from '@etn/markdown';
 import { div, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { svgIcon } from '../lib/icons.js';
@@ -48,6 +51,7 @@ import { createListNav } from '../lib/ui/list.js';
 import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 import { notice } from '../lib/notice.js';
 import {
+  notifyPublicationChanged,
   notifyPublicationRebuilt,
   onPublicationRebuilt,
 } from '../lib/publication-events.js';
@@ -74,15 +78,22 @@ import {
 } from '../screens/publications/recipe.js';
 
 /**
- * Тестовый шов: фабрика markdown-редактора и применение данных к карточке.
- * `createMdEditor` поднимает CodeMirror, которому нужен реальный DOM (`Range`,
- * `getSelection`), — в DOM-шиме клиентских тестов он не исполняется (прецедент —
- * `mdEditorInternals` в `md-editor.ts`). `apply` выставлен для тестов
- * realtime-обновления резюме: в DOM-шиме ветка «та же цель — `apply` на месте»
- * в `showPublicationTarget` недостижима (у шима нет `parentElement`).
+ * Тестовый шов: фабрика markdown-редактора, фабрика/запись поля резюме и
+ * применение данных к карточке. `createMdEditor` и поле резюме поднимают
+ * CodeMirror, которому нужен реальный DOM (`Range`, `getSelection`), — в
+ * DOM-шиме клиентских тестов он не исполняется (прецедент — `mdEditorInternals`
+ * в `md-editor.ts`). `apply` выставлен для тестов realtime-обновления резюме:
+ * в DOM-шиме ветка «та же цель — `apply` на месте» в `showPublicationTarget`
+ * недостижима (у шима нет `parentElement`).
  */
 export const publicationCardInternals = {
   createMdEditor,
+  /** Тестовый шов: фабрика поля резюме (общая `createMarkdownField`). */
+  createSummaryField: (opts: Parameters<typeof createMarkdownField>[0]): HTMLElement =>
+    createMarkdownField(opts),
+  /** Тестовый шов: запись markdown в поле резюме (общий `setMarkdownField`). */
+  setSummaryField: (field: HTMLElement, md: string, html: string): void =>
+    setMarkdownField(field, md, html),
   apply,
   /** Тестовый шов: пересборка — теперь пункт меню «Действия», не кнопка. */
   rebuild: (): void => void rebuildPublication(),
@@ -456,37 +467,63 @@ async function copyPublicationId(): Promise<void> {
 // Вкладка «Резюме»
 // ---------------------------------------------------------------------------
 
+/**
+ * Вкладка «Резюме»: общая оболочка комментария (`commentShell`) с полем
+ * markdown — просмотр/правка, двойной клик входит в правку, blur и Ctrl+Enter
+ * сохраняют и возвращают в просмотр, Esc отменяет (замечание Б приёмки
+ * b02ef1cf). Своё «голое» поле нарушало роль дизайн-системы и не давало
+ * режима просмотра — правку легко было затереть.
+ */
 function buildSummaryPane(): HTMLElement {
   const pane = div('pub-card-pane pub-card-summary-pane');
-  const summaryHost = div('pub-card-summary');
-  pane.append(summaryHost);
-  let md: MdEditor | null = null;
-  // Последнее серверное значение резюме, с которым редактор синхронизирован
-  // (baseline). Позволяет `apply` перечитывать резюме при realtime-обновлении,
-  // не затирая незавершённый пользовательский ввод (ошибка 6f013e67).
+  const shell = commentShell({ variant: 'plain' });
+  pane.append(shell.root);
+  let field: HTMLElement | null = null;
+  let editing = false;
+  // Последнее значение резюме, с которым поле синхронизировано (baseline).
+  // Позволяет `apply` перечитывать резюме при realtime-обновлении, не затирая
+  // незавершённый пользовательский ввод (ошибка 6f013e67).
   let summarySynced = '';
+
+  /** Немедленное сохранение резюме (Ctrl+Enter/blur) и HTML для просмотра. */
+  const saveSummary = async (value: string): Promise<string> => {
+    pendingChanges = { ...pendingChanges, summary_md: emptyToNull(value) };
+    if (saveTimer !== null) {
+      window.clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    await flushSave();
+    summarySynced = value;
+    return renderMarkdown(value);
+  };
+
+  const buildField = (): void => {
+    const ownerId = instance?.publicationId ?? currentPublicationId() ?? '';
+    field = publicationCardInternals.createSummaryField({
+      md: summarySynced,
+      html: renderMarkdown(summarySynced),
+      placeholder: t('publication.summary.placeholder'),
+      attachmentsOwner: { ownerType: 'publication', ownerId },
+      onSave: saveSummary,
+      onEditChange: (next) => {
+        editing = next;
+        shell.setMode(next ? 'edit' : 'view');
+      },
+    });
+    shell.setField(field);
+  };
 
   updaters.push((p) => {
     const serverSummary = p.summary_md ?? '';
-    if (md === null) {
-      md = publicationCardInternals.createMdEditor(serverSummary, {
-        onInput: (value) => queueSave({ summary_md: emptyToNull(value) }),
-      });
-      summaryHost.append(md.dom);
+    if (field === null) {
       summarySynced = serverSummary;
+      buildField();
       return;
     }
-    const current = md.getValue();
-    if (current === summarySynced) {
-      // Незавершённого ввода нет — перечитываем серверное резюме.
-      if (current !== serverSummary) md.setValue(serverSummary);
-      summarySynced = serverSummary;
-    } else if (current === serverSummary) {
-      // Ввод совпал с серверным (эхо собственного PATCH) — редактор
-      // не трогаем, но считаем состояние синхронизированным.
-      summarySynced = serverSummary;
-    }
-    // Иначе — расходящийся пользовательский ввод: оставляем его как есть.
+    // Незавершённый ввод не затираем (ошибка 6f013e67).
+    if (editing || serverSummary === summarySynced) return;
+    summarySynced = serverSummary;
+    publicationCardInternals.setSummaryField(field, serverSummary, renderMarkdown(serverSummary));
   });
   if (instance?.publication != null) apply(instance.publication);
   return pane;
@@ -916,12 +953,29 @@ async function flushSave(): Promise<boolean> {
   try {
     const updated = await etn.publications.update(networkId, current.id, changes, current.version);
     if (instance === owner) apply(updated);
+    // Своё realtime-эхо `publication.updated` подавлено — библиотеку, полки и
+    // рабочую область уведомляем локально и точечно (замечание А приёмки).
+    notifyPublicationChanged({ publication: updated, source: 'card' });
     return true;
   } catch (err) {
     errorDialog(t('publication.error'), err);
     if (instance === owner) void refreshFromServer();
     return false;
   }
+}
+
+/**
+ * Локальный канал вложений редактора: набор вложений публикации изменился
+ * ЛОКАЛЬНО (диалог обложки создал вложение). Своё realtime-эхо подавлено, и без
+ * этого вкладка «Вложения» со счётчиком не перечиталась бы (замечание А приёмки
+ * b02ef1cf). Формат detail — как у прочих производителей (`markdown-field.ts`).
+ */
+function notifyPublicationAttachmentsChanged(publicationId: string): void {
+  document.dispatchEvent(
+    new CustomEvent('etn:attachments-changed', {
+      detail: { ownerType: 'publication', ownerId: publicationId },
+    }),
+  );
 }
 
 /**
@@ -993,6 +1047,8 @@ async function openCoverDialog(): Promise<void> {
   let urlValue = '';
   let urlValid: string | null = null;
   let applyButton: HTMLButtonElement | null = null;
+  /** Закрытие диалога — для dblclick/Ctrl+Enter в списке (замечание В приёмки). */
+  let closeDialog: (() => void) | null = null;
 
   /** Доступность нижней «Применить и закрыть» по активной вкладке. */
   function refreshApply(): void {
@@ -1018,6 +1074,9 @@ async function openCoverDialog(): Promise<void> {
     const split = div('pub-cover-split');
     const listBox = div('pub-cover-list-box');
     const listHost = div('pub-cover-list');
+    // Корень навигации принимает программный фокус: без него стрелки и
+    // Home/End ядра навигации не доходят (замечание В приёмки b02ef1cf).
+    listHost.tabIndex = 0;
     const emptyHint = span(t('publication.cover.empty'), 'muted pub-cover-empty hidden');
     listBox.append(listHost, emptyHint);
     const previewHost = div('pub-cover-preview');
@@ -1046,6 +1105,8 @@ async function openCoverDialog(): Promise<void> {
     let rows: Attachment[] = [];
     const rowEls = new Map<string, HTMLElement>();
     const usageCache = new Map<string, AttachmentOwnerRef[]>();
+    /** Фокус и первая текущая строка отдаются списку один раз — при первом показе. */
+    let initialFocusDone = false;
 
     const nav = createListNav<Attachment>(listHost, {
       entries: () => rows,
@@ -1057,6 +1118,16 @@ async function openCoverDialog(): Promise<void> {
         }
       },
       onActivate: (a) => selectAttachment(a),
+      // Ctrl+Enter в списке — «выбрать и применить, закрыв диалог» (замечание В
+      // приёмки b02ef1cf). Ядро навигации трактует Enter (в т.ч. с Ctrl) как
+      // активацию и гасит событие, поэтому перехватываем ДО базовых правил.
+      onKey: (key, event) => {
+        if (key !== 'Enter' || event.ctrlKey !== true) return false;
+        if (selected === null || closeDialog === null) return true;
+        event.preventDefault?.();
+        void applySelection(closeDialog);
+        return true;
+      },
       onClick: (target) => {
         const row = closestRow(target);
         const id = row?.getAttribute('data-key') ?? '';
@@ -1080,8 +1151,15 @@ async function openCoverDialog(): Promise<void> {
       const render = (owners: AttachmentOwnerRef[]): void => {
         while (clouds.firstChild !== null) clouds.removeChild(clouds.firstChild);
         for (const owner of owners) {
-          const label = `${owner.title ?? owner.owner_id} · ${ownerKindLabel(owner.owner_type)}`;
-          clouds.append(span(label, 'pub-cover-cloud'));
+          // Облачко-чип сущности — общая фабрика `lib/thought-cloud.ts` (как в
+          // полях и списках мысли); вид владельца — бледной подписью рядом.
+          clouds.append(
+            createThoughtCloud(
+              { id: owner.owner_id, title: owner.title ?? owner.owner_id },
+              { profile: 'chip', width: 'container' },
+            ),
+            span(ownerKindLabel(owner.owner_type), 'pub-cover-cloud-kind'),
+          );
         }
       };
       const cached = usageCache.get(attachment.id);
@@ -1108,6 +1186,11 @@ async function openCoverDialog(): Promise<void> {
       const clouds = div('pub-cover-clouds');
       row.append(clouds);
       fillClouds(clouds, a);
+      // Двойной клик — выбрать и применить, закрыв диалог (замечание В приёмки).
+      row.addEventListener('dblclick', () => {
+        selectAttachment(a);
+        if (closeDialog !== null) void applySelection(closeDialog);
+      });
       return row;
     }
 
@@ -1136,6 +1219,14 @@ async function openCoverDialog(): Promise<void> {
       const hits = await etn.attachments.search(netId, { q }).catch(() => []);
       rows = hits.filter(isImageAttachment);
       renderRows();
+      // Первый показ списка: делаем первую строку текущей и отдаём списку фокус,
+      // чтобы стрелки/Home/End работали без лишнего клика (замечание В приёмки).
+      const first = rows[0];
+      if (!initialFocusDone && first !== undefined) {
+        initialFocusDone = true;
+        selectAttachment(first);
+        nav.focusNavigation();
+      }
     }
 
     /** Выбирает вложение и показывает его препросмотр. */
@@ -1179,6 +1270,7 @@ async function openCoverDialog(): Promise<void> {
           mime_type: blob.type !== '' ? blob.type : 'application/octet-stream',
           data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1),
         });
+        notifyPublicationAttachmentsChanged(pubId);
         await runSearch();
         selectAttachment(created);
       } catch (err) {
@@ -1262,6 +1354,7 @@ async function openCoverDialog(): Promise<void> {
           title: attachment.title,
           description: attachment.description,
         });
+        notifyPublicationAttachmentsChanged(pubId);
         queueSave({ cover_attachment_id: created.id, cover_url: null });
       } catch (err) {
         errorDialog(t('publication.error'), err);
@@ -1272,7 +1365,7 @@ async function openCoverDialog(): Promise<void> {
     close();
   }
 
-  showDialog({
+  closeDialog = showDialog({
     title: t('publication.cover.title'),
     size: 'l',
     activeTab: tab,

@@ -97,6 +97,12 @@ export interface PublicationWorkspaceHandle {
   close(): void;
   /** Перечитать сборку и карточку (realtime/локальные правки). */
   reload(): void;
+  /**
+   * Применить свежий снимок публикации БЕЗ перечитывания сборки: обновляет
+   * шапку и титульный блок (локальная правка титула/подзаголовка/обложки,
+   * замечание А приёмки b02ef1cf).
+   */
+  applyPublication(publication: Publication): void;
   /** Открыта ли рабочая область (опционально — именно эта публикация). */
   isOpen(publicationId?: string): boolean;
   /** Разобрать узел и снять слушатели. */
@@ -377,6 +383,20 @@ export function mountPublicationWorkspace(
       reloadTimer = null;
       void load();
     }, 200);
+  }
+
+  /**
+   * Точечно применяет свежий снимок публикации: шапка и титульный блок берут
+   * титул/подзаголовок/обложку из него. Сборку (разделы) не трогаем —
+   * `reload()` для этого остаётся. Нужно для локальной правки из карточки
+   * редактора, чьё realtime-эхо подавлено (замечание А приёмки b02ef1cf).
+   */
+  function applyPublication(next: Publication): void {
+    if (publicationId === null || next.id !== publicationId) return;
+    publication = next;
+    renderHeader();
+    const titleBlock = docHost.querySelector<HTMLElement>('.pub-doc-titleblock');
+    if (titleBlock !== null) titleBlock.replaceWith(buildTitleBlock());
   }
 
   async function rebuild(): Promise<void> {
@@ -1113,7 +1133,7 @@ export function mountPublicationWorkspace(
   // Начальное состояние: контейнеры пусты, документ скрыт до открытия.
   renderState();
 
-  return { open, close, reload, isOpen, destroy };
+  return { open, close, reload, applyPublication, isOpen, destroy };
 }
 
 /** Удаляет всех детей узла (полная пересборка не-списковых слотов разрешена). */

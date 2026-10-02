@@ -862,6 +862,7 @@ export const ru = {
   'publication.recipe.pickThoughts': 'Выбрать мысли…',
   'publication.recipe.pickTypes': 'Выбрать типы…',
   'publication.field.summary': 'Резюме',
+  'publication.summary.placeholder': 'Резюме публикации… (двойной клик — правка, Ctrl+Enter — сохранить)',
   'publication.field.cover': 'Обложка',
   'publication.field.assembly': 'Дата сборки',
   'publication.field.numberingFrom': 'Нумеровать с уровня',

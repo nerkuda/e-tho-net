@@ -20,7 +20,13 @@
  * Подписчики здесь — модули рендерера, а не DOM-узлы (ср. `attachment-events.ts`,
  * где подписчики — элементы; там потому и DOM-событие). Набор не тянет глобалы
  * и одинаково работает в юнит-тестах без DOM.
+ *
+ * Тот же канал несёт и локальную правку публикации
+ * ({@link onPublicationChanged}): у неё та же причина — подавленное эхо
+ * `publication.updated` (замечание А приёмки задачи b02ef1cf).
  */
+
+import type { Publication } from '@etn/shared';
 
 /** Источник пересборки: карточка панели редактора или шапка рабочей области. */
 export type PublicationRebuiltSource = 'card' | 'workspace';
@@ -53,4 +59,43 @@ export function onPublicationRebuilt(
 export function notifyPublicationRebuilt(event: PublicationRebuiltEvent): void {
   // Копия набора: подписчик вправе отписаться прямо в обработчике.
   for (const listener of [...listeners]) listener(event);
+}
+
+// ---------------------------------------------------------------------------
+// Локальный канал «публикация изменена» (замечание А приёмки b02ef1cf)
+// ---------------------------------------------------------------------------
+
+/**
+ * Факт локальной правки публикации (титул/подзаголовок/обложка/настройки) или
+ * её вложений. Несёт СВЕЖИЙ снимок публикации: подписчики (библиотека, рабочая
+ * область) применяют его точечно, без перечитывания всего списка.
+ */
+export interface PublicationChangedEvent {
+  /** Свежий снимок публикации после правки. */
+  publication: Publication;
+  /** Кто инициировал правку — чтобы источник знал, что изменение уже применено. */
+  source: 'card' | 'cover';
+}
+
+/** Подписчики локального канала правок. */
+const changedListeners = new Set<(event: PublicationChangedEvent) => void>();
+
+/** Подписывается на локальные правки публикации; возвращает функцию отписки. */
+export function onPublicationChanged(
+  listener: (event: PublicationChangedEvent) => void,
+): () => void {
+  changedListeners.add(listener);
+  return () => {
+    changedListeners.delete(listener);
+  };
+}
+
+/**
+ * Сообщает, что публикация изменена локально. Зовёт карточка редактора после
+ * успешного PATCH: своё realtime-эхо `publication.updated` до этого же клиента
+ * не доходит, и библиотека с рабочей областью обновились бы только после
+ * переоткрытия.
+ */
+export function notifyPublicationChanged(event: PublicationChangedEvent): void {
+  for (const listener of [...changedListeners]) listener(event);
 }
