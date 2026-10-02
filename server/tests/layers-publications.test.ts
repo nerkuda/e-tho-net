@@ -19,10 +19,13 @@ import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js
 import { mergeLayer } from '../src/domain/merge-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import {
+  checkPublicationDeletion,
   createPublication,
   getPublication,
   listPublicationOrder,
+  purgePublication,
   setPublicationOrder,
+  trashPublication,
   updatePublication,
 } from '../src/domain/publication-service.js';
 import {
@@ -123,6 +126,47 @@ describe(
           listPublicationOrder(ndb, p.id).map((i) => i.node_key),
           ['a', 'b'],
         );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('резерв слияния не удерживает публикацию: purge проходит при живом резерве (ошибка 1d0620a8)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // Публикация в основе → правка и пометка в слое → слияние перезаписывает
+        // строку основы и создаёт резервный служебный слой.
+        const p = createPublication(ndb, { title: 'Основа' }, 'u');
+        const layerId = seedLayer(ndb);
+        ndb.useLayer(layerId);
+        updatePublication(ndb, p.id, { title: 'Слой' }, 'u');
+        trashPublication(ndb, p.id, 'u');
+
+        ndb.useLayer(BASE_LAYER_ID);
+        const report = mergeLayer(ndb, layerId, undefined, 'u');
+        // Резерв создан (перезапись живой строки основы) и жив…
+        assert.notEqual(report.reserve_layer_id, null);
+        const reserveLive = (
+          ndb.prepare('SELECT COUNT(*) AS c FROM layers WHERE id = ?').get(report.reserve_layer_id) as {
+            c: number;
+          }
+        ).c;
+        assert.equal(reserveLive, 1);
+        // …но не удерживает: §8.4-автоочистка слияния физически удаляет
+        // помеченную публикацию сразу, не дожидаясь удаления резерва.
+        assert.equal(report.purged, 1);
+        assert.equal(getPublication(ndb, p.id), null);
+
+        // Проверка удаления согласована с purge: живой резерв не блокирует.
+        const p2 = createPublication(ndb, { title: 'Вторая' }, 'u');
+        const layer2 = seedLayer(ndb);
+        ndb.useLayer(layer2);
+        updatePublication(ndb, p2.id, { title: 'Вторая-слой' }, 'u');
+        ndb.useLayer(BASE_LAYER_ID);
+        mergeLayer(ndb, layer2, undefined, 'u');
+        assert.equal(checkPublicationDeletion(ndb, p2.id).blocked, false);
+        purgePublication(ndb, p2.id);
+        assert.equal(getPublication(ndb, p2.id), null);
       } finally {
         ndb.close();
       }
