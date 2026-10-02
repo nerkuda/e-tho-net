@@ -754,9 +754,13 @@ body.cloud-dragging * {
 .cloud-icon img {
   /* Definite height (not %) — during intrinsic sizing the box height is
    * content-driven, so a `max-height: 100%` never clamps and a large PNG
-   * blew the cloud up to its natural size. Keep the image within the emoji
-   * glyph size; wide images clamp to the box width without distortion. */
-  height: calc(var(--cloud-font) * 1.45);
+   * blew the cloud up to its natural size. `1em` ties the image to the band's
+   * own font-size (inherited from `.cloud-icon`), so the picture is exactly as
+   * tall as the emoji glyph; a hard-coded `calc(var(--cloud-font) * 1.45)`
+   * ignored the `.cloud.focus-cloud .cloud-icon` font-size bump (1.9) and the
+   * image stayed small in the enlarged focus band (ошибка c1b57533). Wide
+   * images clamp to the box width without distortion. */
+  height: 1em;
   width: auto;
   max-width: 100%;
   object-fit: contain;
