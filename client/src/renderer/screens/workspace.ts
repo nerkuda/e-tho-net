@@ -241,17 +241,21 @@ export function buildWorkspace(): HTMLElement {
     onClick: () => setActiveView('activity'),
   });
 
-  // Publications view button (0.11.1): library of publications.
+  // Publications view button (0.11.1): library of publications. Иконка — не
+  // «слои» (дублировала меню слоёв, ошибка af076f53): «раскрытая книга»
+  // (`value-publication`, lucide book-open) — тот же смысл «публикации/документ».
   const publicationsViewButton = iconButton({
-    icon: svgIcon('layers'),
+    icon: svgIcon('value-publication'),
     title: 'Публикации',
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('publications'),
   });
 
+  // Порядок закладок экранов (ошибка af076f53): «Публикации» — между
+  // «Дневником» и «Действиями» (Событиями), а не последней.
   const viewSwitch = div('view-switch');
-  viewSwitch.append(mapViewButton, structuresViewButton, chronicleViewButton, activityViewButton, publicationsViewButton);
+  viewSwitch.append(mapViewButton, structuresViewButton, chronicleViewButton, publicationsViewButton, activityViewButton);
 
   // Pinned-thoughts panel (L18, 08-ui-spec.md §16): right after the view
   // switcher, visible in both views.

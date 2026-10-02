@@ -121,4 +121,34 @@ describe('guard: закладки-переключатели экранов (3e5
       'кнопка «Хроника» обязана нести иконку календарика месяца',
     );
   });
+
+  it('закладка «Публикации»: иконка-книга (не дубликат слоёв), между «Дневником» и «Событиями» (af076f53)', () => {
+    const workspace = source('screens/workspace.ts');
+    const start = workspace.indexOf('const publicationsViewButton = iconButton({');
+    assert.ok(start >= 0, 'не найдена кнопка экрана «Публикации»');
+    const block = workspace.slice(start, workspace.indexOf('});', start));
+    assert.ok(
+      block.includes("svgIcon('value-publication')"),
+      'иконка «Публикации» — раскрытая книга (`value-publication`)',
+    );
+    assert.ok(
+      !block.includes("svgIcon('layers')"),
+      'иконка «Публикации» не должна дублировать иконку меню слоёв (`layers`)',
+    );
+    const appendAt = workspace.indexOf('viewSwitch.append(');
+    assert.ok(appendAt >= 0, 'не найден порядок закладок экранов');
+    const orderLine = workspace.slice(appendAt, workspace.indexOf(');', appendAt));
+    const order = [...orderLine.matchAll(/(\w+ViewButton)/g)].map((m) => m[1]);
+    assert.deepEqual(
+      order,
+      [
+        'mapViewButton',
+        'structuresViewButton',
+        'chronicleViewButton',
+        'publicationsViewButton',
+        'activityViewButton',
+      ],
+      '«Публикации» обязаны стоять между «Дневником» и «Событиями»',
+    );
+  });
 });
