@@ -41,7 +41,8 @@ import { refreshSearchIfVisible } from './search/search.js';
 import { scheduleStructuresRefresh } from './screens/structures/structures.js';
 import { refreshSelectionPanel } from './selection/selection.js';
 import { patchFocusEdge, store } from './state.js';
-import { errorDialog, showDialog, type DialogButton } from './lib/dialog.js';
+import { errorDialog, showDialog } from './lib/dialog.js';
+import { openEntityDeleteDialog } from './lib/delete-dialog.js';
 import { div, el, setTooltip, span } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { notice } from './lib/notice.js';
@@ -228,75 +229,17 @@ export async function openThoughtDeleteDialog(
   }
 
   const alreadyMarked = thought.marked_for_deletion;
-  const body = div('form-stack');
+  const lines: string[] = [];
   if (check.blocked) {
     for (const reason of blockingReasons('мысль', check.blocking)) {
-      body.append(el('p', 'dialog-text', `Нельзя удалить совсем — ${reason}.`));
+      lines.push(`Нельзя удалить совсем — ${reason}.`);
     }
   }
   if (check.orphaned_children > 0) {
-    body.append(
-      el(
-        'p',
-        'dialog-text',
-        `${check.orphaned_children} потомк${check.orphaned_children === 1 ? '' : 'ов'} останется без родителей.`,
-      ),
+    lines.push(
+      `${check.orphaned_children} потомк${check.orphaned_children === 1 ? '' : 'ов'} останется без родителей.`,
     );
   }
-
-  let deleteBtn: HTMLButtonElement | null = null;
-  const buttons: DialogButton[] = [
-    {
-      label: t('actions.deleteForever'),
-      danger: true,
-      ref: (btn) => {
-        deleteBtn = btn;
-        btn.disabled = check.blocked;
-      },
-      keepOpen: true,
-      onClick: async (close) => {
-        try {
-          await etn.thoughts.remove(
-            networkId,
-            target.id,
-            await thoughtVersion(networkId, target.id),
-          );
-          close();
-          await onThoughtDeleted(target.id);
-          onDeleted?.();
-        } catch (err) {
-          errorDialog('Удалить мысль', err);
-        }
-      },
-    },
-    {
-      label: alreadyMarked ? t('actions.restore') : t('actions.toTrash'),
-      keepOpen: true,
-      onClick: async (close) => {
-        try {
-          const updated = await etn.thoughts.update(
-            networkId,
-            target.id,
-            { marked_for_deletion: !alreadyMarked },
-            await thoughtVersion(networkId, target.id),
-          );
-          close();
-          // The actor gets no realtime echo (04-realtime.md §5) — reflect the
-          // fresh entity everywhere it may be shown: the focus cloud (store
-          // patch), the zone clouds (invalidateRef + refresh re-resolve the
-          // cached ref, so the badge and the dim style appear at once, not
-          // after a focus round-trip), the editor (target passenger / focus
-          // follower — trash marker in the header, struck-through title),
-          // the structures list, pinned and history bars.
-          reflectThoughtUpdate(updated);
-          notice(alreadyMarked ? 'Мысль возвращена из корзины.' : 'Мысль помещена в корзину.');
-        } catch (err) {
-          errorDialog(alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину', err);
-        }
-      },
-    },
-    { label: t('actions.cancel') },
-  ];
 
   // Auto-acquire the thought lock for the lifetime of the delete dialog (task
   // 4f141756). Acquired BEFORE showDialog so the helper's BLOCKED toast
@@ -306,12 +249,47 @@ export async function openThoughtDeleteDialog(
     handle = lockHandleFromOutcome('thought', target.id, outcome);
   });
 
-  showDialog({
+  openEntityDeleteDialog({
     title: `Удаление мысли «${target.title}»`,
-    size: 's',
-    body,
-    buttons,
-    onMount: () => deleteBtn?.focus(),
+    lines,
+    blocked: check.blocked,
+    alreadyMarked,
+    onPurge: async (close) => {
+      try {
+        await etn.thoughts.remove(
+          networkId,
+          target.id,
+          await thoughtVersion(networkId, target.id),
+        );
+        close();
+        await onThoughtDeleted(target.id);
+        onDeleted?.();
+      } catch (err) {
+        errorDialog('Удалить мысль', err);
+      }
+    },
+    onTrash: async (close) => {
+      try {
+        const updated = await etn.thoughts.update(
+          networkId,
+          target.id,
+          { marked_for_deletion: !alreadyMarked },
+          await thoughtVersion(networkId, target.id),
+        );
+        close();
+        // The actor gets no realtime echo (04-realtime.md §5) — reflect the
+        // fresh entity everywhere it may be shown: the focus cloud (store
+        // patch), the zone clouds (invalidateRef + refresh re-resolve the
+        // cached ref, so the badge and the dim style appear at once, not
+        // after a focus round-trip), the editor (target passenger / focus
+        // follower — trash marker in the header, struck-through title),
+        // the structures list, pinned and history bars.
+        reflectThoughtUpdate(updated);
+        notice(alreadyMarked ? 'Мысль возвращена из корзины.' : 'Мысль помещена в корзину.');
+      } catch (err) {
+        errorDialog(alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину', err);
+      }
+    },
     onClose: () => void releaseHeld(handle),
   });
 }
@@ -354,13 +332,9 @@ export async function openLinkDeleteDialog(
   }
 
   const alreadyMarked = link.marked_for_deletion;
-  const body = div('form-stack');
-  body.append(el('p', 'dialog-text link-caption', caption));
-  if (blocked) {
-    for (const reason of blockingReasons('связь', blocking)) {
-      body.append(el('p', 'dialog-text', `Нельзя удалить совсем — ${reason}.`));
-    }
-  }
+  const lines = blocked
+    ? blockingReasons('связь', blocking).map((reason) => `Нельзя удалить совсем — ${reason}.`)
+    : [];
 
   // Auto-acquire the link lock for the lifetime of the delete dialog (task
   // 4f141756) — see `openThoughtDeleteDialog` for the rationale.
@@ -369,61 +343,48 @@ export async function openLinkDeleteDialog(
     handle = lockHandleFromOutcome('link', linkId, outcome);
   });
 
-  showDialog({
+  openEntityDeleteDialog({
     title: 'Удаление связи',
-    size: 's',
-    body,
-    buttons: [
-      {
-        label: t('actions.deleteForever'),
-        danger: true,
-        ref: (btn) => {
-          btn.disabled = blocked;
-        },
-        keepOpen: true,
-        onClick: async (close) => {
-          try {
-            const purged = await purgeLinkCompletely(networkId, linkId, link.marked_for_deletion);
-            if (!purged) {
-              // Race with a layer/deletion-check change — same picture the
-              // disabled button would have shown.
-              notice('Связь не удалена: теперь заблокирована (удерживающий слой).', 'error');
-              return;
-            }
-            patchFocusEdge({ ...link, active: false });
-            const target = store.state.editorTarget;
-            if (target !== null && target.kind === 'link' && target.id === linkId) {
-              store.update({ editorTarget: null, selectedLinkId: null });
-            }
-            close();
-            scheduleRefresh();
-            onDeleted?.();
-          } catch (err) {
-            errorDialog('Удалить связь', err);
-          }
-        },
-      },
-      {
-        label: alreadyMarked ? t('actions.restore') : t('actions.toTrash'),
-        keepOpen: true,
-        onClick: async (close) => {
-          try {
-            await etn.links.update(
-              networkId,
-              linkId,
-              { marked_for_deletion: !alreadyMarked },
-              await linkVersion(networkId, linkId),
-            );
-            close();
-            scheduleRefresh();
-            notice(alreadyMarked ? 'Связь возвращена из корзины.' : 'Связь помещена в корзину.');
-          } catch (err) {
-            errorDialog(alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину', err);
-          }
-        },
-      },
-      { label: t('actions.cancel') },
-    ],
+    caption,
+    lines,
+    blocked,
+    alreadyMarked,
+    onPurge: async (close) => {
+      try {
+        const purged = await purgeLinkCompletely(networkId, linkId, link.marked_for_deletion);
+        if (!purged) {
+          // Race with a layer/deletion-check change — same picture the
+          // disabled button would have shown.
+          notice('Связь не удалена: теперь заблокирована (удерживающий слой).', 'error');
+          return;
+        }
+        patchFocusEdge({ ...link, active: false });
+        const target = store.state.editorTarget;
+        if (target !== null && target.kind === 'link' && target.id === linkId) {
+          store.update({ editorTarget: null, selectedLinkId: null });
+        }
+        close();
+        scheduleRefresh();
+        onDeleted?.();
+      } catch (err) {
+        errorDialog('Удалить связь', err);
+      }
+    },
+    onTrash: async (close) => {
+      try {
+        await etn.links.update(
+          networkId,
+          linkId,
+          { marked_for_deletion: !alreadyMarked },
+          await linkVersion(networkId, linkId),
+        );
+        close();
+        scheduleRefresh();
+        notice(alreadyMarked ? 'Связь возвращена из корзины.' : 'Связь помещена в корзину.');
+      } catch (err) {
+        errorDialog(alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину', err);
+      }
+    },
     onClose: () => void releaseHeld(handle),
   });
 }

@@ -57,6 +57,8 @@ import { openRouteNetworkDb, openRouteNetworkDbBase, restWriteFx, runWrite, type
 import {
   addPublicationExclusion,
   addShelfItem,
+  checkPublicationDeletion,
+  checkShelfDeletion,
   createPublication,
   createShelf,
   deleteShelf,
@@ -95,6 +97,7 @@ import {
   RestPublicationCandidateAccept,
   RestPublicationCandidates,
   RestPublicationCreate,
+  RestPublicationDeletionCheck,
   RestPublicationExclusionAdd,
   RestPublicationExclusionRemove,
   RestPublicationExport,
@@ -106,6 +109,7 @@ import {
   RestPublicationUsage,
   RestShelfCreate,
   RestShelfDelete,
+  RestShelfDeletionCheck,
   RestShelfItemAdd,
   RestShelfItemRemove,
   RestShelfList,
@@ -225,6 +229,19 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           );
         }
         sendSuccess(reply, publication);
+      },
+    );
+
+    // Проверка физического удаления публикации (аналог deletion-check мысли,
+    // 03-server-api.md §6.5a). Диалог удаления решает по ней, доступна ли
+    // кнопка «Удалить совсем» (задача 00160da1).
+    app.get(
+      '/networks/:networkId/publications/:id/deletion-check',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestPublicationDeletionCheck, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        sendSuccess(reply, checkPublicationDeletion(ndb, input.publication_id));
       },
     );
 
@@ -746,6 +763,19 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           };
         });
         reply.code(204).send();
+      },
+    );
+
+    // Проверка физического удаления полки (только контекст слоя; состав сносится
+    // каскадом). Диалог удаления решает по ней, доступна ли кнопка «Удалить
+    // совсем» (задача 00160da1).
+    app.get(
+      '/networks/:networkId/shelves/:id/deletion-check',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestShelfDeletionCheck, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        sendSuccess(reply, checkShelfDeletion(ndb, input.shelf_id));
       },
     );
 

@@ -710,10 +710,19 @@ export const ru = {
   'publications.menu.shelves': 'На полки',
   'publications.menu.inactive': 'Неактуальна',
   'publications.menu.active': 'Актуальна',
-  'publications.menu.settings': 'Настройки',
-  /** Контекстное меню полки. */
+  /** Пункты контекстного меню публикации (задача 00160da1). */
+  'publications.menu.open': 'Открыть',
+  'publications.menu.read': 'Читать',
+  'publications.menu.delete': 'Удалить',
+  /** Контекстное меню полки и inline-переименование. */
   'publications.shelf.rename': 'Переименовать полку',
-  'publications.shelf.trash': 'Полку в корзину',
+  /** Диалог удаления публикации/полки (задача 00160da1). */
+  'publications.delete.publicationTitle': 'Удаление публикации «%1»',
+  'publications.delete.shelfTitle': 'Удаление полки «%1»',
+  'publications.delete.reasonProperties': 'Нельзя удалить совсем — публикация используется в свойствах (%1).',
+  'publications.delete.reasonBase': 'Нельзя удалить совсем — публикация существует в основе: в слое её можно только поместить в корзину.',
+  'publications.delete.reasonLayers': 'Нельзя удалить совсем — публикация изменена в слоях: %1.',
+  'publications.delete.reasonShelfBase': 'Нельзя удалить совсем — полка существует в основе: в слое её можно только поместить в корзину.',
   /** Мастер создания публикации. */
   'publications.wizard.title': 'Новая публикация',
   'publications.wizard.meta': 'Название',

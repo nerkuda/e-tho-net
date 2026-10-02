@@ -177,11 +177,12 @@ describe('guard: UI публикаций (a3cfc018)', () => {
 });
 
 /**
- * Инвариант ошибки 28fbdb59: глобальное пустое состояние экрана включается по
- * предикату (нет ни публикаций, ни живых полок), а не по числу публикаций —
- * иначе сеть без публикаций с дефолтной полкой показывала пустоту вместо полок.
+ * Поведенческие инварианты экрана, введённые ошибкой 28fbdb59 и задачей
+ * 00160da1. Проверяются по исходнику: они связывают несколько модулей
+ * (`model.ts` + `publications.ts` + общий фасад диалога) и легко откатываются
+ * при рефакторинге, а полноценный DOM-прогон этих мест дорог.
  */
-describe('guard: экран «Публикации» — пустое состояние (28fbdb59, 1eecd988 v3)', () => {
+describe('guard: экран «Публикации» — пустое состояние, inline-rename, меню (28fbdb59, 00160da1)', () => {
   const SOURCE = fs.readFileSync(
     path.join(RENDERER_ROOT, 'screens', 'publications', 'publications.ts'),
     'utf8',
@@ -190,8 +191,10 @@ describe('guard: экран «Публикации» — пустое состо
     path.join(RENDERER_ROOT, 'screens', 'publications', 'model.ts'),
     'utf8',
   );
+  const slice = (from: string, to: string): string =>
+    SOURCE.slice(SOURCE.indexOf(from), SOURCE.indexOf(to));
 
-  it('пустое состояние решается предикатом, а не числом публикаций', () => {
+  it('глобальное пустое состояние — по предикату, а не по числу публикаций', () => {
     assert.ok(
       !SOURCE.includes('publications.length === 0'),
       'голое `publications.length === 0` больше не решает пустое состояние',
@@ -201,5 +204,48 @@ describe('guard: экран «Публикации» — пустое состо
       'экран решает пустое состояние предикатом publicationsEmptyKind (полки видны при 0 публикаций)',
     );
     assert.ok(MODEL.includes('export function publicationsEmptyKind'));
+  });
+
+  it('inline-переименование полки: двойной клик, PATCH, без пункта меню «Переименовать»', () => {
+    assert.ok(SOURCE.includes('dblclick'), 'имя полки открывает inline-правку по двойному клику');
+    assert.ok(SOURCE.includes('nextShelfTitle'), 'итог rename нормализует nextShelfTitle');
+    assert.ok(SOURCE.includes('updateShelf'), 'сохранение имени — PATCH updateShelf');
+    const menu = slice('function openShelfMenu', 'function publicationBlockedLines');
+    assert.ok(
+      !menu.includes('publications.shelf.rename'),
+      'из контекстного меню полки пункт «Переименовать полку» убран',
+    );
+  });
+
+  it('удаление публикации и полки — общий фасад диалога + deletion-check', () => {
+    assert.ok(SOURCE.includes('openEntityDeleteDialog'), 'удаление переиспользует общий диалог');
+    assert.ok(!SOURCE.includes('confirmDialog'), 'своих confirm-окон удаления у экрана нет');
+    assert.ok(
+      SOURCE.includes('publications.deletionCheck') && SOURCE.includes('shelfDeletionCheck'),
+      '«Удалить совсем» решается серверным deletion-check',
+    );
+    assert.ok(
+      SOURCE.includes('etn.publications.purge') && SOURCE.includes('purgeShelf'),
+      'есть физическое удаление публикации и полки',
+    );
+  });
+
+  it('состав контекстного меню публикации: открыть/читать/удалить/экспорт + сохранённые пункты', () => {
+    const menu = slice('function publicationMenuItems', 'function openShelfMenu');
+    for (const key of [
+      'publications.menu.open',
+      'publications.menu.read',
+      'publications.menu.delete',
+      'publications.menu.export',
+      'publications.menu.shelves',
+      'publications.menu.inactive',
+    ]) {
+      assert.ok(menu.includes(key), `в меню публикации обязан быть пункт ${key}`);
+    }
+  });
+
+  it('сортировка передаётся в группировку в обоих видах', () => {
+    const calls = SOURCE.match(/groupByShelves\(publications, shelves, viewState\.sort\)/g) ?? [];
+    assert.ok(calls.length >= 2, 'оба вида (полки и список) сортируют публикации внутри полок');
   });
 });

@@ -4100,6 +4100,21 @@ export const RestPublicationById = defineContract(
   },
 );
 
+/**
+ * GET /networks/:id/publications/{id}/deletion-check — блокировки физического
+ * удаления публикации (аналог `deletion-check` мысли, 03-server-api.md §6.5a).
+ * Диалог удаления публикации решает по нему, доступно ли «Удалить совсем»
+ * (задача 00160da1).
+ */
+export const RestPublicationDeletionCheck = defineContract(
+  'rest:publications.deletion-check',
+  z.object({ network_id: NetworkId, publication_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
 /** PATCH /networks/:id/publications/{id} — правка настроек. */
 export const RestPublicationUpdate = defineContract(
   'rest:publications.update',
@@ -4337,6 +4352,20 @@ export const RestShelfUpdate = defineContract(
 /** DELETE /networks/:id/shelves/{id} — удалить полку (purge). */
 export const RestShelfDelete = defineContract(
   'rest:shelves.delete',
+  z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/**
+ * GET /networks/:id/shelves/{id}/deletion-check — блокировки физического удаления
+ * полки (только контекст слоя; состав сносится каскадом). Диалог удаления полки
+ * решает по нему, доступно ли «Удалить совсем» (задача 00160da1).
+ */
+export const RestShelfDeletionCheck = defineContract(
+  'rest:shelves.deletion-check',
   z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },

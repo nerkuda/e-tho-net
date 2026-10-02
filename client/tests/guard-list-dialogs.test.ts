@@ -648,6 +648,9 @@ const DIALOG_FILES = new Set([
   'import-export/export-dialog.ts',
   'import-export/import-dialog.ts',
   'lib/date-period-dialog.ts',
+  // Общий диалог удаления сущности «Удалить совсем / В корзину» (задача
+  // 00160da1): фасад для мыслей, связей, публикаций и полок.
+  'lib/delete-dialog.ts',
   'lib/entity-picker.ts',
   'lib/saved-filter-bar.ts',
   'pinned/pins.ts',

@@ -82,6 +82,7 @@ import type {
   PublicationAssembly,
   PublicationCandidatesResult,
   PublicationCreateInput,
+  PublicationDeletionCheckResult,
   PublicationExportRequest,
   PublicationListResult,
   PublicationOrderItem,
@@ -89,6 +90,7 @@ import type {
   PublicationUpdateInput,
   PublicationUsageResult,
   Shelf,
+  ShelfDeletionCheckResult,
   ShelfInput,
   SearchRequest,
   SearchResponse,
@@ -689,6 +691,12 @@ export interface EtnApi {
     ): Promise<PublicationListResult>;
     create(networkId: string, input: PublicationCreateInput): Promise<Publication>;
     get(networkId: string, id: string): Promise<Publication>;
+    /**
+     * `GET …/publications/{id}/deletion-check` — блокировки физического
+     * удаления (аналог `deletion-check` мысли). Диалог удаления решает по нему,
+     * доступна ли кнопка «Удалить совсем» (задача 00160da1).
+     */
+    deletionCheck(networkId: string, id: string): Promise<PublicationDeletionCheckResult>;
     update(
       networkId: string,
       id: string,
@@ -738,6 +746,12 @@ export interface EtnApi {
     trashShelf(networkId: string, id: string): Promise<Shelf>;
     restoreShelf(networkId: string, id: string): Promise<Shelf>;
     purgeShelf(networkId: string, id: string): Promise<void>;
+    /**
+     * `GET …/shelves/{id}/deletion-check` — блокировки физического удаления
+     * полки (только контекст слоя; состав сносится каскадом). Диалог удаления
+     * решает по нему, доступна ли кнопка «Удалить совсем» (задача 00160da1).
+     */
+    shelfDeletionCheck(networkId: string, id: string): Promise<ShelfDeletionCheckResult>;
     addShelfItem(
       networkId: string,
       shelfId: string,

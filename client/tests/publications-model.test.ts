@@ -16,10 +16,12 @@ import {
   dedupePropertyOptions,
   defaultPublicationsViewState,
   groupByShelves,
+  nextShelfTitle,
   parsePublicationsViewState,
   publicationsEmptyKind,
   serializePublicationsViewState,
   shelfSwapUpdates,
+  sortPublications,
 } from '../src/renderer/screens/publications/model.js';
 import type { EntityOption } from '../src/renderer/lib/entity-picker.js';
 
@@ -262,7 +264,7 @@ describe('публикации: перестановка внутри полки
   });
 });
 
-// --- Пустое состояние (ошибка 28fbdb59, спека 1eecd988 v3) -------------------
+// --- Пустое состояние, сортировка, inline-имя (ошибка 28fbdb59, задача 00160da1) ---
 
 describe('публикации: пустое состояние (model, 1eecd988 v3)', () => {
   it('есть публикации — глобального состояния нет', () => {
@@ -279,6 +281,41 @@ describe('публикации: пустое состояние (model, 1eecd988
 
   it('поиск/фильтр без результата — состояние запроса', () => {
     assert.equal(publicationsEmptyKind(0, 2, true), 'noResults');
+  });
+});
+
+describe('публикации: сортировка внутри полок/групп (model, задача 00160da1)', () => {
+  const pubs = [
+    publication('p1', { title: 'Б', created_at: '2026-01-02T00:00:00.000Z', authorship: 'Я' }),
+    publication('p2', { title: 'А', created_at: '2026-01-03T00:00:00.000Z', authorship: 'А' }),
+    publication('p3', { title: 'В', created_at: '2026-01-01T00:00:00.000Z', authorship: 'Б' }),
+  ];
+
+  it('manual — исходный порядок; title/date/author — как сервер', () => {
+    assert.deepEqual(sortPublications(pubs, 'manual').map((p) => p.id), ['p1', 'p2', 'p3']);
+    assert.deepEqual(sortPublications(pubs, 'title').map((p) => p.id), ['p2', 'p1', 'p3']);
+    assert.deepEqual(sortPublications(pubs, 'date').map((p) => p.id), ['p2', 'p1', 'p3']);
+    assert.deepEqual(sortPublications(pubs, 'author').map((p) => p.id), ['p2', 'p3', 'p1']);
+  });
+
+  it('groupByShelves применяет сортировку внутри полок и остатка', () => {
+    const publications = [publication('p1', { title: 'Б' }), publication('p2', { title: 'А' })];
+    const grouped = groupByShelves(publications, [shelf('s1', ['p1', 'p2'])], 'title');
+    assert.deepEqual(grouped.byShelf[0]?.items.map((p) => p.id), ['p2', 'p1']);
+  });
+
+  it('manual не меняет порядок состава полки (позиции)', () => {
+    const publications = [publication('p1', { title: 'Б' }), publication('p2', { title: 'А' })];
+    const grouped = groupByShelves(publications, [shelf('s1', ['p1', 'p2'])], 'manual');
+    assert.deepEqual(grouped.byShelf[0]?.items.map((p) => p.id), ['p1', 'p2']);
+  });
+});
+
+describe('публикации: inline-переименование полки (model, задача 00160da1)', () => {
+  it('обрезка пробелов; пусто и без изменений — сохранять нечего', () => {
+    assert.equal(nextShelfTitle('Полка', '  Новая  '), 'Новая');
+    assert.equal(nextShelfTitle('Полка', '   '), null);
+    assert.equal(nextShelfTitle('Полка', 'Полка'), null);
   });
 });
 

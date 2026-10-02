@@ -731,6 +731,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string, id: string) => requireRest(deps).getPublication(networkId, id)),
   );
   handlers.set(
+    'publications.deletionCheck',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).checkPublicationDeletion(networkId, id),
+    ),
+  );
+  handlers.set(
     'publications.update',
     bind(
       (
@@ -849,6 +855,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'publications.purgeShelf',
     bind((networkId: string, id: string) => requireRest(deps).purgeShelf(networkId, id)),
+  );
+  handlers.set(
+    'publications.shelfDeletionCheck',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).checkShelfDeletion(networkId, id),
+    ),
   );
   handlers.set(
     'publications.addShelfItem',

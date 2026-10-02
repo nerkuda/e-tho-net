@@ -185,6 +185,7 @@ function buildApi(): EtnBridgeApi {
       trash: (networkId, id) => invoke('publications.trash', networkId, id),
       restore: (networkId, id) => invoke('publications.restore', networkId, id),
       purge: (networkId, id) => invoke('publications.purge', networkId, id),
+      deletionCheck: (networkId, id) => invoke('publications.deletionCheck', networkId, id),
       rebuild: (networkId, id) => invoke('publications.rebuild', networkId, id),
       setOrder: (networkId, id, items) => invoke('publications.setOrder', networkId, id, items),
       addExclusion: (networkId, id, thoughtId) =>
@@ -204,6 +205,8 @@ function buildApi(): EtnBridgeApi {
       trashShelf: (networkId, id) => invoke('publications.trashShelf', networkId, id),
       restoreShelf: (networkId, id) => invoke('publications.restoreShelf', networkId, id),
       purgeShelf: (networkId, id) => invoke('publications.purgeShelf', networkId, id),
+      shelfDeletionCheck: (networkId, id) =>
+        invoke('publications.shelfDeletionCheck', networkId, id),
       addShelfItem: (networkId, shelfId, publicationId, position) =>
         invoke('publications.addShelfItem', networkId, shelfId, publicationId, position),
       removeShelfItem: (networkId, shelfId, publicationId) =>

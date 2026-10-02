@@ -5,8 +5,8 @@
  *  * диалог СОЗДАНИЯ полки берёт заголовок/подпись из ключей создания
  *    (`publications.shelf.create` / `publications.shelf.name`), а не из ключа
  *    переименования;
- *  * переименование через контекстное меню остаётся на своём ключе
- *    (`publications.shelf.rename`) и не задето;
+ *  * переименование полки — inline по двойному клику (задача 00160da1), а не
+ *    пункт контекстного меню;
  *  * только что созданная пустая полка видна в обоих видах: секция полки с
  *    пустым состоянием (`publications.shelf.empty`) в виде «полки» и группа в
  *    виде «список» (пустые полки не пропускаются).
@@ -52,10 +52,19 @@ describe('публикации: создание полки и пустая по
     );
   });
 
-  it('переименование в контекстном меню остаётся на своём ключе', () => {
+  it('переименование полки — inline по двойному клику, а не пункт меню', () => {
+    assert.ok(source.includes('startShelfRename'), 'переименование реализовано inline');
+    assert.ok(source.includes('dblclick'), 'двойной клик по имени открывает inline-правку');
     assert.ok(
-      source.includes("menuAction(t('publications.shelf.rename')"),
-      'контекстное меню переименования полки сохраняет ключ publications.shelf.rename',
+      source.includes("t('publications.shelf.rename')"),
+      'ключ переименования остаётся (подпись поля ввода)',
+    );
+    const menuStart = source.indexOf('function openShelfMenu');
+    assert.ok(menuStart >= 0, 'не найдена функция openShelfMenu');
+    const menu = source.slice(menuStart, source.indexOf('function publicationBlockedLines'));
+    assert.ok(
+      !menu.includes("menuAction(t('publications.shelf.rename')"),
+      'из контекстного меню пункт переименования убран (задача 00160da1)',
     );
   });
 

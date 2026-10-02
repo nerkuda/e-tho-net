@@ -3182,6 +3182,21 @@ export class RestClient {
     );
   }
 
+  /**
+   * `GET /networks/{nid}/publications/{id}/deletion-check` — блокировки
+   * физического удаления (аналог deletion-check мысли). Диалог удаления решает
+   * по нему, доступна ли кнопка «Удалить совсем» (задача 00160da1).
+   */
+  public async checkPublicationDeletion(
+    networkId: string,
+    id: string,
+  ): Promise<import('@etn/shared').PublicationDeletionCheckResult> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/deletion-check`,
+    );
+  }
+
   /** `POST …/publications/{id}/rebuild` — пересобрать (обновляет дату сборки). */
   public async rebuildPublication(
     networkId: string,
@@ -3407,6 +3422,21 @@ export class RestClient {
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/shelves/${encodeURIComponent(id)}`,
       { requestOptions: opts ?? { clientRequestId: randomUUID() } },
+    );
+  }
+
+  /**
+   * `GET /networks/{nid}/shelves/{id}/deletion-check` — блокировки физического
+   * удаления полки (только контекст слоя). Диалог удаления решает по нему,
+   * доступна ли кнопка «Удалить совсем» (задача 00160da1).
+   */
+  public async checkShelfDeletion(
+    networkId: string,
+    id: string,
+  ): Promise<import('@etn/shared').ShelfDeletionCheckResult> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/shelves/${encodeURIComponent(id)}/deletion-check`,
     );
   }
 

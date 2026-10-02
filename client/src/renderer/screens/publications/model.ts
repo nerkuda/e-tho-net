@@ -178,10 +178,18 @@ export interface PublicationWithShelves {
  *  - `unshelved` — публикации, не входящие ни в одну полку (порядок — входной,
  *    то есть порядок ответа списка: `manual` — серверный порядок, иначе сортировка);
  *  - `shelfIdsOf` — карта «публикация → полки» для бейджей и меню.
+ *
+ * `sort` сортирует публикации ВНУТРИ полок и остатка (элемент интерфейса
+ * 1eecd988 v3: «сортировка сортирует публикации внутри полок/групп; порядок
+ * самих полок — своим порядком»). `manual` сохраняет порядок состава полки
+ * (позиции) — это серверный порядок отображения; остальные ключи совпадают с
+ * серверной сортировкой списка публикаций, чтобы оба вида показывали один и
+ * тот же порядок внутри полок/групп.
  */
 export function groupByShelves(
   publications: readonly Publication[],
   shelves: readonly Shelf[],
+  sort: PublicationSort = 'manual',
 ): {
   byShelf: Array<{ shelf: Shelf; items: Publication[] }>;
   unshelved: Publication[];
@@ -201,10 +209,44 @@ export function groupByShelves(
       list.push(shelf.id);
       shelfIdsOf.set(publication.id, list);
     }
-    return { shelf, items };
+    return { shelf, items: sortPublications(items, sort) };
   });
-  const unshelved = publications.filter((p) => !assigned.has(p.id));
+  const unshelved = sortPublications(
+    publications.filter((p) => !assigned.has(p.id)),
+    sort,
+  );
   return { byShelf, unshelved, shelfIdsOf };
+}
+
+/**
+ * Порядок публикаций внутри полки/группы по выбранной сортировке. Повторяет
+ * семантику серверной сортировки списка публикаций
+ * (`publication-service.ts#listPublications`): `title` — по названию (без учёта
+ * регистра), `date` — по дате создания (убывание), `author` — по
+ * `authorship`, иначе по создателю. `manual` — исходный порядок (позиции
+ * состава полки / серверный порядок остатка) без изменений.
+ */
+export function sortPublications(
+  items: readonly Publication[],
+  sort: PublicationSort,
+): Publication[] {
+  if (sort === 'manual') return [...items];
+  const copy = [...items];
+  if (sort === 'title') {
+    copy.sort((a, b) => compareText(a.title, b.title));
+  } else if (sort === 'date') {
+    copy.sort((a, b) => compareText(b.created_at, a.created_at));
+  } else {
+    copy.sort((a, b) =>
+      compareText(a.authorship ?? a.created_by, b.authorship ?? b.created_by),
+    );
+  }
+  return copy;
+}
+
+/** Сравнение строк без учёта регистра (локаль `ru`), стабильное при равенстве. */
+function compareText(a: string, b: string): number {
+  return a.localeCompare(b, 'ru', { sensitivity: 'base' });
 }
 
 /** Вид глобального пустого состояния экрана (элемент интерфейса 1eecd988 v3). */
@@ -228,6 +270,17 @@ export function publicationsEmptyKind(
   if (publicationCount > 0) return 'none';
   if (searching) return 'noResults';
   return shelfCount > 0 ? 'none' : 'noData';
+}
+
+/**
+ * Итог inline-переименования полки (задача 00160da1): нормализованное новое
+ * имя или `null`, когда сохранять нечего — пустая строка (обрезка пробелов)
+ * либо имя не изменилось. Пустой результат оставляет прежнее имя.
+ */
+export function nextShelfTitle(current: string, raw: string): string | null {
+  const title = raw.trim();
+  if (title === '' || title === current) return null;
+  return title;
 }
 
 /** Строковое представление «даты сборки» публикации (ISO → локальная дата). */

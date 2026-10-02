@@ -17,10 +17,11 @@
 import type {
   Publication,
   PublicationActiveFilter,
+  PublicationDeletionBlocking,
   PublicationSort,
   Shelf,
 } from '@etn/shared';
-import { UI_STATE_KEY } from '@etn/shared';
+import { BASE_LAYER_ID, UI_STATE_KEY } from '@etn/shared';
 
 import {
   div,
@@ -30,7 +31,8 @@ import {
 import { t, type MessageKey } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
 import { svgIcon } from '../../lib/icons.js';
-import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
+import { errorDialog, promptDialog } from '../../lib/dialog.js';
+import { openEntityDeleteDialog } from '../../lib/delete-dialog.js';
 import {
   MENU_SEPARATOR,
   menuAction,
@@ -54,6 +56,7 @@ import {
   defaultPublicationsViewState,
   displayAuthorship,
   groupByShelves,
+  nextShelfTitle,
   parsePublicationsViewState,
   publicationsEmptyKind,
   serializePublicationsViewState,
@@ -137,6 +140,9 @@ const cardsHosts = new WeakMap<HTMLElement, HTMLElement>();
 
 /** Хост пустого состояния внутри секции полки (ошибка 87ad669a). */
 const shelfEmptyHosts = new WeakMap<HTMLElement, HTMLElement>();
+
+/** Идёт ли сейчас inline-переименование полки (задача 00160da1). */
+let renamingShelfId: string | null = null;
 
 // ---------------------------------------------------------------------------
 // Публичный вход
@@ -617,7 +623,7 @@ interface ShelfBlock {
 
 function renderShelves(): void {
   if (ui === null) return;
-  const grouped = groupByShelves(publications, shelves);
+  const grouped = groupByShelves(publications, shelves, viewState.sort);
   const blocks: ShelfBlock[] = grouped.byShelf.map(({ shelf, items }) => ({
     kind: 'shelf' as const,
     shelf,
@@ -670,6 +676,8 @@ function buildShelfBlock(block: ShelfBlock): HTMLElement {
   const title = span(block.shelf.title, 'pub-shelf-title');
   head.append(title);
   if (block.shelf.id !== EMPTY_SHELF.id) {
+    // Двойной клик по имени — inline-переименование (задача 00160da1).
+    title.addEventListener('dblclick', () => startShelfRename(block.shelf, title, head));
     head.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       openShelfMenu(ev, block.shelf);
@@ -786,7 +794,7 @@ const tableHandles = new Map<string, TableHandle<Publication>>();
 
 function renderList(): void {
   if (ui === null) return;
-  const grouped = groupByShelves(publications, shelves);
+  const grouped = groupByShelves(publications, shelves, viewState.sort);
   const groups: ListGroup[] = [];
   const seen = new Set<string>();
   const pushGroup = (
@@ -869,6 +877,17 @@ function buildListGroup(group: ListGroup): HTMLElement {
       const shelf = shelves.find((s) => s.id === group.shelfId);
       if (shelf !== undefined) openShelfMenu(ev, shelf);
     });
+    // Двойной клик по имени группы — inline-переименование (задача 00160da1).
+    // Поле ввода живёт в самой секции (перед шапкой), чтобы не вкладывать
+    // `<input>` в `<button>`: шапка на время правки скрывается.
+    const titleEl = head.querySelector<HTMLElement>('.pub-list-title');
+    if (titleEl !== null) {
+      titleEl.addEventListener('dblclick', (ev) => {
+        ev.stopPropagation();
+        const shelf = shelves.find((s) => s.id === group.shelfId);
+        if (shelf !== undefined) startShelfRename(shelf, titleEl, section, head);
+      });
+    }
   }
   wireDropTarget(head, group.shelfId);
 
@@ -1054,7 +1073,9 @@ function publicationMenuItems(publication: Publication): MenuItem[] {
     ),
   );
   return [
-    menuAction(t('publications.menu.settings'), () => void openPublicationCard(publication.id)),
+    menuAction(t('publications.menu.open'), () => void openPublicationCard(publication.id)),
+    menuAction(t('publications.menu.read'), () => void openPublicationWorkspace(publication.id)),
+    MENU_SEPARATOR,
     menuSubmenu(t('publications.menu.export'), [
       menuAction(t('publications.menu.exportMd'), () => void runExport(publication.id, 'md')),
       menuAction(t('publications.menu.exportHtml'), () => void runExport(publication.id, 'html')),
@@ -1065,15 +1086,192 @@ function publicationMenuItems(publication: Publication): MenuItem[] {
       publication.active ? t('publications.menu.inactive') : t('publications.menu.active'),
       () => void toggleActive(publication),
     ),
-    menuAction(t('actions.toTrash'), () => void trash(publication.id), { danger: true }),
+    MENU_SEPARATOR,
+    menuAction(t('publications.menu.delete'), () => void openPublicationDeleteDialog(publication), {
+      danger: true,
+    }),
   ];
 }
 
 function openShelfMenu(ev: MouseEvent, shelf: Shelf): void {
+  // «Переименовать полку» из меню убрано: переименование — inline (двойной
+  // клик по имени, задача 00160da1). В меню остаётся удаление.
   showMenuAt(ev.clientX, ev.clientY, [
-    menuAction(t('publications.shelf.rename'), () => void renameShelf(shelf)),
-    menuAction(t('publications.shelf.trash'), () => void trashShelf(shelf), { danger: true }),
+    menuAction(t('publications.menu.delete'), () => void openShelfDeleteDialog(shelf), {
+      danger: true,
+    }),
   ]);
+}
+
+/** Строки-причины, почему публикацию нельзя удалить совсем (для диалога). */
+function publicationBlockedLines(blocking: PublicationDeletionBlocking): string[] {
+  const lines: string[] = [];
+  if (blocking.properties > 0) {
+    lines.push(t('publications.delete.reasonProperties', blocking.properties));
+  }
+  if (blocking.layers.some((layer) => layer.id === BASE_LAYER_ID)) {
+    lines.push(t('publications.delete.reasonBase'));
+  }
+  const others = blocking.layers.filter((layer) => layer.id !== BASE_LAYER_ID);
+  if (others.length > 0) {
+    lines.push(
+      t('publications.delete.reasonLayers', others.map((layer) => `«${layer.title}»`).join(', ')),
+    );
+  }
+  return lines;
+}
+
+/** Диалог удаления публикации: «Удалить совсем» (если возможно) / «В корзину». */
+async function openPublicationDeleteDialog(publication: Publication): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  let check: { blocked: boolean; blocking: PublicationDeletionBlocking };
+  try {
+    check = await etn.publications.deletionCheck(networkId, publication.id);
+  } catch (err) {
+    errorDialog(t('publications.title'), err);
+    return;
+  }
+  const alreadyMarked = publication.marked_for_deletion;
+  openEntityDeleteDialog({
+    title: t('publications.delete.publicationTitle', publication.title),
+    lines: publicationBlockedLines(check.blocking),
+    blocked: check.blocked,
+    alreadyMarked,
+    onPurge: async (close) => {
+      try {
+        await etn.publications.purge(networkId, publication.id);
+        close();
+      } catch (err) {
+        errorDialog(t('publications.delete.publicationTitle', publication.title), err);
+      }
+      invalidatePublications();
+    },
+    onTrash: async (close) => {
+      try {
+        if (alreadyMarked) await etn.publications.restore(networkId, publication.id);
+        else await etn.publications.trash(networkId, publication.id);
+        close();
+      } catch (err) {
+        errorDialog(t('publications.title'), err);
+      }
+      invalidatePublications();
+    },
+  });
+}
+
+/** Диалог удаления полки: «Удалить совсем» (только в основе) / «В корзину». */
+async function openShelfDeleteDialog(shelf: Shelf): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  let check: { blocked: boolean };
+  try {
+    check = await etn.publications.shelfDeletionCheck(networkId, shelf.id);
+  } catch (err) {
+    errorDialog(t('publications.title'), err);
+    return;
+  }
+  const alreadyMarked = shelf.marked_for_deletion;
+  openEntityDeleteDialog({
+    title: t('publications.delete.shelfTitle', shelf.title),
+    lines: check.blocked ? [t('publications.delete.reasonShelfBase')] : [],
+    blocked: check.blocked,
+    alreadyMarked,
+    onPurge: async (close) => {
+      try {
+        await etn.publications.purgeShelf(networkId, shelf.id);
+        close();
+      } catch (err) {
+        errorDialog(t('publications.delete.shelfTitle', shelf.title), err);
+      }
+      dropShelfFilter(shelf.id);
+      invalidatePublications();
+    },
+    onTrash: async (close) => {
+      try {
+        if (alreadyMarked) await etn.publications.restoreShelf(networkId, shelf.id);
+        else await etn.publications.trashShelf(networkId, shelf.id);
+        close();
+      } catch (err) {
+        errorDialog(t('publications.title'), err);
+      }
+      dropShelfFilter(shelf.id);
+      invalidatePublications();
+    },
+  });
+}
+
+/** Сбросить фильтр полки, если удалили именно её. */
+function dropShelfFilter(shelfId: string): void {
+  if (viewState.shelfFilter !== shelfId) return;
+  viewState = { ...viewState, shelfFilter: null };
+  persist();
+}
+
+// ---------------------------------------------------------------------------
+// Inline-переименование полки (задача 00160da1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Двойной клик по имени полки/группы: заголовок заменяется полем ввода с
+ * текущим именем. Enter или потеря фокуса — сохранить (PATCH), Esc — отменить
+ * и вернуть прежнее значение. Поле — фасад `fieldInput` (правило lib/ui).
+ *
+ * `inputHost` — куда вставить поле; `hideEl` — что скрыть на время правки
+ * (у вида «список» шапка — `<button>`, вкладывать в неё `<input>` нельзя,
+ * поэтому поле живёт в секции перед шапкой).
+ */
+function startShelfRename(
+  shelf: Shelf,
+  titleEl: HTMLElement,
+  inputHost: HTMLElement,
+  hideEl: HTMLElement = titleEl,
+): void {
+  if (renamingShelfId !== null) return;
+  renamingShelfId = shelf.id;
+  const input = fieldInput({ extraClass: 'pub-shelf-rename', bare: true });
+  input.value = shelf.title;
+  input.setAttribute('aria-label', t('publications.shelf.rename'));
+  hideEl.classList.add('hidden');
+  inputHost.insertBefore(input, hideEl);
+  input.focus();
+  input.select();
+
+  let finished = false;
+  const finish = (save: boolean): void => {
+    if (finished) return;
+    finished = true;
+    renamingShelfId = null;
+    const title = save ? nextShelfTitle(shelf.title, input.value) : null;
+    input.remove();
+    hideEl.classList.remove('hidden');
+    if (title === null) return;
+    titleEl.textContent = title;
+    void commitShelfRename(shelf, title);
+  };
+
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      finish(true);
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+/** PATCH имени полки после inline-правки; перечитать список. */
+async function commitShelfRename(shelf: Shelf, title: string): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  try {
+    await etn.publications.updateShelf(networkId, shelf.id, { title });
+  } catch (err) {
+    errorDialog(t('publications.title'), err);
+  }
+  invalidatePublications();
 }
 
 async function toggleShelf(publicationId: string, shelfId: string): Promise<void> {
@@ -1106,25 +1304,12 @@ async function toggleActive(publication: Publication): Promise<void> {
   invalidatePublications();
 }
 
-async function trash(publicationId: string): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const ok = await confirmDialog(t('actions.toTrash'), t('actions.toTrash'), true);
-  if (!ok) return;
-  try {
-    await etn.publications.trash(networkId, publicationId);
-  } catch (err) {
-    errorDialog(t('publications.title'), err);
-  }
-  invalidatePublications();
-}
-
 async function createShelf(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   // Контракт диалога СОЗДАНИЯ (ошибка 87ad669a): заголовок «Новая полка»,
-  // подпись «Название полки», пустое поле. Переименование — отдельный путь
-  // (контекстное меню полки, ключ `publications.shelf.rename`).
+  // подпись «Название полки», пустое поле. Переименование — inline, двойным
+  // кликом по имени полки (задача 00160da1).
   const title = await promptDialog(t('publications.shelf.create'), t('publications.shelf.name'), '');
   if (title === null || title.trim() === '') return;
   try {
@@ -1132,33 +1317,6 @@ async function createShelf(): Promise<void> {
   } catch (err) {
     errorDialog(t('publications.title'), err);
   }
-  invalidatePublications();
-}
-
-async function renameShelf(shelf: Shelf): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const title = await promptDialog(t('publications.shelf.rename'), t('publications.shelf.rename'), shelf.title);
-  if (title === null || title.trim() === '' || title.trim() === shelf.title) return;
-  try {
-    await etn.publications.updateShelf(networkId, shelf.id, { title: title.trim() });
-  } catch (err) {
-    errorDialog(t('publications.title'), err);
-  }
-  invalidatePublications();
-}
-
-async function trashShelf(shelf: Shelf): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const ok = await confirmDialog(t('publications.shelf.trash'), shelf.title, true);
-  if (!ok) return;
-  try {
-    await etn.publications.trashShelf(networkId, shelf.id);
-  } catch (err) {
-    errorDialog(t('publications.title'), err);
-  }
-  if (viewState.shelfFilter === shelf.id) viewState = { ...viewState, shelfFilter: null };
   invalidatePublications();
 }
 
