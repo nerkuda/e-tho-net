@@ -1,0 +1,139 @@
+/**
+ * Ядро клавиатурной навигации `lib/ui` — ОДНИ правила для таблиц и списков
+ * (ADR «Списки и таблицы: два компонента над общим ядром навигации» fadf99e0,
+ * требование 93115633, задача 7893e429).
+ *
+ * **Зачем.** Навигация стрелками была продублирована по модулям по-разному:
+ * таблица `table.ts` считала индексы сама, а списки «Дневника» и «Публикаций»
+ * держали два независимых рукописных контроллера с одинаковым ядром. Здесь
+ * собраны САМИ ПРАВИЛА — какие клавиши обрабатываются, как находится целевой
+ * индекс (границы, Home/End, PgUp/PgDn, поведение без выделения), как отсекать
+ * поля ввода, — без DOM-специфики представления. Изменение правила делается
+ * здесь и применяется сразу ко всем таблицам и спискам.
+ *
+ * **Что не здесь.** Применение выделения, поиск узла по ключу, прокрутка,
+ * фокус, отрисовка строк — это адаптер представления: у таблицы — над Vaadin
+ * Grid (`table.ts`), у списка — общий компонент `list.ts`. Ядро лишь отдаёт
+ * адаптеру решение «какой индекс/сущность становится текущей».
+ *
+ * Модуль чистый: ни DOM-узлов, ни слушателей, ни побочных эффектов (кроме
+ * безопасного чтения свойств узла в {@link isEditingTarget}).
+ */
+
+/** Действие навигации, в которое раскладывается клавиша. */
+export type NavAction =
+  | 'up'
+  | 'down'
+  | 'home'
+  | 'end'
+  | 'pageUp'
+  | 'pageDown'
+  | 'collapse'
+  | 'expand'
+  | 'activate';
+
+/**
+ * Карта «клавиша → действие» — единая для таблиц и списков (правило
+ * навигации живёт здесь). Клавиши, которых нет в карте (Tab, Escape, Ctrl+C,
+ * Space и пр.), ядро не перехватывает: ими распоряжается представление.
+ */
+export const NAV_KEY_ACTIONS: Readonly<Record<string, NavAction>> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  Home: 'home',
+  End: 'end',
+  PageUp: 'pageUp',
+  PageDown: 'pageDown',
+  ArrowLeft: 'collapse',
+  ArrowRight: 'expand',
+  Enter: 'activate',
+};
+
+/** Действие клавиши или `null`, если клавиша навигацией не управляет. */
+export function resolveNavAction(key: string): NavAction | null {
+  const action = NAV_KEY_ACTIONS[key];
+  return action ?? null;
+}
+
+/** Настройки расчёта целевого индекса строки. */
+export interface NavIndexOptions {
+  /** Шаг PgUp/PgDn в строках (по умолчанию 10). */
+  pageStep?: number;
+  /**
+   * Куда встаёт курсор БЕЗ текущего выделения:
+   * • `'first'` (по умолчанию) — первая строка (End/PageDown — к своему краю);
+   * • `'direction'` — по направлению: `up` — последняя, `down` — первая
+   *   (правило списков «Дневника»/«Публикаций»).
+   */
+  emptyTarget?: 'first' | 'direction';
+}
+
+/**
+ * Целевой индекс строки для действия навигации. Возвращает `-1`, если строк
+ * нет (или для действий, не двигающих курсор, — текущий индекс).
+ *
+ * Границы НЕ заворачиваются: у края списка `up`/`down` остаются на месте.
+ * Без текущей строки (`current < 0`) поведение задаёт {@link NavIndexOptions.emptyTarget}.
+ */
+export function nextNavIndex(
+  action: NavAction,
+  current: number,
+  count: number,
+  options: NavIndexOptions = {},
+): number {
+  if (count <= 0) return -1;
+  const last = count - 1;
+  const step = (options.pageStep ?? 10) >= 1 ? (options.pageStep ?? 10) : 1;
+  if (current < 0) {
+    if (action === 'end') return last;
+    if (action === 'pageDown') return Math.min(last, step - 1);
+    if (options.emptyTarget === 'direction' && action === 'up') return last;
+    return 0;
+  }
+  switch (action) {
+    case 'up':
+      return Math.max(0, current - 1);
+    case 'down':
+      return Math.min(last, current + 1);
+    case 'home':
+      return 0;
+    case 'end':
+      return last;
+    case 'pageDown':
+      return Math.min(last, current + step);
+    case 'pageUp':
+      return Math.max(0, current - step);
+    case 'collapse':
+    case 'expand':
+    case 'activate':
+      return current;
+  }
+}
+
+/**
+ * Целевой индекс для одношагового перемещения по списку (`delta = ±1`).
+ * Без выделения (`current < 0`) встаёт на первую строку при движении вниз и на
+ * последнюю при движении вверх. У границы возвращает `-1` — движение не
+ * меняет выделение. Правило границ списков живёт здесь, а не в адаптере.
+ */
+export function listTargetIndex(current: number, count: number, delta: number): number {
+  if (count <= 0) return -1;
+  if (current < 0) return delta > 0 ? 0 : count - 1;
+  const next = current + delta;
+  return next < 0 || next >= count ? -1 : next;
+}
+
+/**
+ * Фокус в поле правки текста? Тогда стрелки/Tab/Enter принадлежат редактору и
+ * навигация обязана молчать (общее правило таблиц и списков). Адаптер может
+ * дополнить проверку (например, CM6-редактор в ленте «Дневника»).
+ */
+export function isEditingTarget(target: unknown | null): boolean {
+  if (target === null || target === undefined) return false;
+  const el = target as HTMLElement;
+  const tag = (el.tagName ?? '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  if ((el as unknown as { isContentEditable?: boolean }).isContentEditable === true) return true;
+  const attr = el.getAttribute?.('contenteditable');
+  return attr !== null && attr !== undefined;
+}

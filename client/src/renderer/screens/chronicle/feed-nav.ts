@@ -1,6 +1,16 @@
 /**
- * Клавиатурная навигация ленты «Дневника» (0.10.1, итерации приёмки №9–№10,
- * требование 165323a7; элемент «Лента дневных записей» e01f383a).
+ * Клавиатурная навигация ленты «Дневника» — адаптер общего компонента списка
+ * `lib/ui/list.ts` к разметке ленты (0.10.1–0.10.2, требования 165323a7;
+ * ADR «Списки и таблицы: два компонента над общим ядром навигации» fadf99e0,
+ * задача 7893e429).
+ *
+ * Правил навигации здесь БОЛЬШЕ НЕТ: какие клавиши, границы, Home/End,
+ * разворот/сворачивание группы, активация, отсечка полей ввода — в ядре
+ * `lib/ui/nav-core.ts`; связывание с DOM и хранение выделения по ключу —
+ * в компоненте `lib/ui/list.ts`. Этот модуль — представление: он собирает
+ * видимую последовательность из разметки ленты, отдаёт узлы, рисует классы
+ * выделения и сообщает экрану о сворачивании/активации. Режим полей записи —
+ * расширение ядра (клавиши Tab/Escape в {@link ListNavAdapter.onKey}).
  *
  * Контроллер выделяет «текущую группу дат» и «текущее вхождение записи»,
  * перемещает выделение стрелками вверх/вниз по ВИДИМОМУ порядку (заголовок
@@ -18,30 +28,18 @@
  *
  * ИДЕНТИЧНОСТЬ ТЕКУЩЕЙ ЗАПИСИ — ПО ВХОЖДЕНИЮ «день + запись» (приёмка №10,
  * задача 197b3b05): длительная запись видна в каждой группе дня, и каждая её
- * копия — отдельная сущность навигации и клика. Номер дня хранится рядом с
- * ключом-записью (`currentDay`); наружу {@link FeedNavHandle.current} отдаёт
- * прежнюю форму `{ kind, key }`.
+ * копия — отдельная сущность навигации и клика. День вхождения входит в ключ
+ * компонента (`tokenOf`); наружу {@link FeedNavHandle.current} отдаёт прежнюю
+ * форму `{ kind, key }`.
  *
  * Модуль вынесен отдельно от экрана (`chronicle.ts`) сознательно: он не тянет
  * Electron/сеть и проверяется DOM-тестами на шиме
  * (`tests/chronicle-acceptance-iter9.test.ts`,
  * `tests/chronicle-acceptance-iter10.test.ts`) — интеракционная симуляция
  * keydown/кликов, как требует протокол приёмки.
- *
- * Режим правки текста: пока фокус в поле ввода/редакторе (заголовок,
- * комментарий), стрелки, Tab и Enter работают как редактирование — навигация
- * ленты НЕ срабатывает (прямое требование пользователя). Выход из правки — Esc
- * (обрабатывается здесь для полей ввода) или клик вне; фокус возвращается в
- * навигацию ленты, выделение записи и текущего поля сохраняются.
- *
- * Выделение хранится КЛЮЧОМ сущности (день группы либо вхождение «день+запись»),
- * а не ссылкой на узел: после перерисовки ленты (real-time, дозагрузка «+50»,
- * локальная вставка) {@link FeedNavHandle.refresh} переприменяет выделение, если
- * сущность ещё видима, и сбрасывает его, если она пропала/скрыта. Там же
- * возвращается фокус: пересборка узлов теряла фокус, и стрелки переставали
- * двигать выделение (итерация приёмки №11, ошибка ab78e7b5). Фокус не трогается,
- * пока активна правка текста или навигация погашена кликом вне ленты.
  */
+
+import { createListNav, type ListNavAdapter } from '../../lib/ui/list.js';
 
 /** Класс выделения текущей сущности (группа или запись). */
 export const FEED_NAV_CURRENT_CLASS = 'diary-nav-current';
@@ -142,7 +140,8 @@ function isContentEditable(el: HTMLElement): boolean {
 
 /**
  * Фокус в поле правки текста (заголовок/комментарий)? Тогда навигация ленты
- * обязана молчать: стрелки, Tab и Enter принадлежат редактору.
+ * обязана молчать: стрелки, Tab и Enter принадлежат редактору. Расширяет
+ * общее правило ядра (`nav-core.isEditingTarget`) классами CM6-редактора.
  */
 function isEditingTarget(target: HTMLElement | null): boolean {
   if (target === null) return false;
@@ -175,51 +174,23 @@ export function isFeedRecordEditorTarget(target: HTMLElement | null): boolean {
   return isEditingTarget(target);
 }
 
-/**
- * Может ли узел принять программный фокус. Реальный `div` без `tabindex` — нет
- * (тогда фокус ставится на контейнер ленты), а кнопка/поле — да.
- */
-function canReceiveFocus(el: HTMLElement): boolean {
-  const tag = (el.tagName ?? '').toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button' || tag === 'a') {
-    return true;
-  }
-  const tabIndex = el.tabIndex;
-  return typeof tabIndex === 'number' && tabIndex >= 0;
-}
-
-/** Loose view of `KeyboardEvent` fields used by the handler (test-friendly). */
-interface FeedKeyEvent {
-  key?: string;
-  shiftKey?: boolean;
-  target?: unknown | null;
-  preventDefault?: () => void;
-  stopPropagation?: () => void;
-}
-
-/** Запись видимого списка: сущность, её DOM-узел и группа дня. */
-interface VisibleEntity {
+/** Сущность видимого списка: сама сущность, её DOM-узел и группа дня. */
+interface FeedEntry {
   entity: FeedEntity;
-  el: HTMLElement;
-  /** Локальный день группы (для вхождения записи — ключ вхождения). */
+  /** День группы (для вхождения записи — часть ключа; для группы — её день). */
   day: string;
+  /** DOM-узел сущности; `null`, если узел сейчас не в ленте. */
+  el: HTMLElement | null;
 }
 
 /** Подключить контроллер навигации к контейнеру ленты. */
 export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavHandle {
+  /** Текущая сущность (зеркало состояния компонента списка). */
   let current: FeedEntity | null = null;
   /** День текущего вхождения записи (для группы — `null`). */
   let currentDay: string | null = null;
   /** Индекс текущего поля внутри записи (-1 — режим полей не активен). */
   let elementCursor = -1;
-  /**
-   * Навигация ленты «активна»: пользователь уже ходил стрелками либо кликал по
-   * ленте и не уводил фокус наружу. Нужна, чтобы после перерисовки (refresh)
-   * вернуть фокус в ленту (требование 165323a7, «Устойчивость», ошибка ab78e7b5)
-   * и при этом не украсть его у правки текста или другой панели.
-   */
-  let navActive = false;
-  const ownerDocument = (globalThis as { document?: Document }).document;
 
   /** Секции дней ленты в DOM-порядке. */
   function daySections(): HTMLElement[] {
@@ -243,44 +214,35 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
   }
 
   /** Видимые сущности в порядке: заголовок дня, затем его несвёрнутые записи. */
-  function visibleEntities(): VisibleEntity[] {
-    const out: VisibleEntity[] = [];
+  function visibleEntities(): FeedEntry[] {
+    const out: FeedEntry[] = [];
     for (const section of daySections()) {
       const day = section.dataset?.['day'] ?? section.getAttribute?.('data-day') ?? '';
       if (day === '') continue;
       const collapsed = section.classList.contains('is-collapsed');
       const head = section.querySelector<HTMLElement>('.diary-day-head');
-      if (head !== null) out.push({ entity: { kind: 'day', key: day }, el: head, day });
+      if (head !== null) out.push({ entity: { kind: 'day', key: day }, day, el: head });
       if (collapsed) continue;
       for (const card of recordsOf(section)) {
         const key = card.getAttribute?.('data-row-key') ?? '';
         if (key === '') continue;
-        out.push({ entity: { kind: 'record', key }, el: card, day });
+        out.push({ entity: { kind: 'record', key }, day, el: card });
       }
     }
     return out;
   }
 
-  /**
-   * Совпадает ли сущность списка с искомой. Для записи дополнительно сверяется
-   * день-вхождение: копии одной записи в разных днях неразличимы по id.
-   */
-  function matches(entity: FeedEntity, day: string | null, item: VisibleEntity): boolean {
-    if (item.entity.kind !== entity.kind || item.entity.key !== entity.key) return false;
-    if (entity.kind === 'record') return day === item.day;
-    return true;
-  }
-
-  /** Индекс сущности в видимом списке (-1 — не видна). */
-  function indexOfEntity(entity: FeedEntity | null, day: string | null): number {
-    if (entity === null) return -1;
-    return visibleEntities().findIndex((item) => matches(entity, day, item));
+  /** Ключ сущности: вхождение «день + запись» различимо, группы — по дню. */
+  function tokenOf(entry: FeedEntry): string {
+    const dayPart = entry.entity.kind === 'record' ? entry.day : '';
+    return `${entry.entity.kind}\u0000${dayPart}\u0000${entry.entity.key}`;
   }
 
   /** Элемент DOM текущей сущности (null — сущность не видна). */
   function findEntityEl(entity: FeedEntity | null, day: string | null): HTMLElement | null {
     if (entity === null) return null;
-    const found = visibleEntities().find((item) => matches(entity, day, item));
+    const wanted = tokenOf({ entity, day: day ?? '', el: null });
+    const found = visibleEntities().find((item) => tokenOf(item) === wanted);
     return found?.el ?? null;
   }
 
@@ -338,7 +300,7 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
   }
 
   /** Перерисовать выделение по текущему состоянию. */
-  function applyHighlight(): void {
+  function renderHighlight(): void {
     clearHighlight();
     const el = findEntityEl(current, currentDay);
     if (el === null) return;
@@ -348,39 +310,6 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
       const target = elements[elementCursor];
       if (target !== undefined) target.el.classList.add(FEED_NAV_ELEMENT_CLASS);
     }
-  }
-
-  /** Сделать сущность текущей; `day` — день-вхождение записи. */
-  function setCurrent(entity: FeedEntity | null, day: string | null = null): void {
-    current = entity;
-    currentDay = entity !== null && entity.kind === 'record' ? day : null;
-    elementCursor = -1;
-    applyHighlight();
-  }
-
-  /** Фокус на элементе навигации (иначе — на контейнере ленты). */
-  function focusNav(): void {
-    navActive = true;
-    const el = findEntityEl(current, currentDay);
-    const candidate = el !== null && canReceiveFocus(el) ? el : root;
-    candidate.focus?.();
-  }
-
-  /** Переместить выделение на `delta` видимых сущностей. */
-  function move(delta: number): void {
-    const list = visibleEntities();
-    if (list.length === 0) {
-      setCurrent(null);
-      return;
-    }
-    const index = indexOfEntity(current, currentDay);
-    let next: number;
-    if (index < 0) next = delta > 0 ? 0 : list.length - 1;
-    else next = index + delta;
-    if (next < 0 || next >= list.length) return; // граница ленты — ничего не меняем
-    const item = list[next]!;
-    setCurrent(item.entity, item.day);
-    item.el.scrollIntoView?.({ block: 'nearest' });
   }
 
   /** Свернуть/развернуть группу относительно её текущего состояния. */
@@ -399,8 +328,7 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     if (current?.kind !== 'record' || currentDay === null) return;
     const id = current.key;
     opts.onSetRecordCollapsed?.(currentDay, id, collapsed);
-    navActive = true;
-    applyHighlight();
+    renderHighlight();
     const card = findCardIn(currentDay, id);
     const title = card?.querySelector<HTMLElement>('.diary-record-title') ?? null;
     (title ?? card)?.focus?.();
@@ -425,14 +353,14 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     if (elements.length === 0) return;
     if (elementCursor < 0) elementCursor = delta > 0 ? 0 : elements.length - 1;
     else elementCursor = (elementCursor + delta + elements.length) % elements.length;
-    applyHighlight();
+    renderHighlight();
   }
 
   /** Выход из режима полей: запись снова «единая строка», выделение записи цело. */
   function exitFieldMode(): void {
     if (current?.kind !== 'record' || elementCursor < 0) return;
     elementCursor = -1;
-    applyHighlight();
+    renderHighlight();
   }
 
   /** Enter на текущем поле — действие поля. */
@@ -456,26 +384,6 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
     }
   }
 
-  /** Enter на текущей сущности: группа — свернуть/развернуть; запись — поля. */
-  function handleEnter(): void {
-    if (current === null) return;
-    if (current.kind === 'day') {
-      const section = findSection(current.key);
-      const collapsed = section?.classList.contains('is-collapsed') ?? false;
-      opts.onSetDayCollapsed(current.key, !collapsed);
-      return;
-    }
-    const card = findCardIn(currentDay, current.key);
-    if (card === null) return;
-    if (elementCursor < 0) {
-      // Вход в режим полей: первое поле — дата/период.
-      elementCursor = 0;
-      applyHighlight();
-      return;
-    }
-    activateField();
-  }
-
   /**
    * Реагируют ли ←/→ на текущую ЗАПИСЬ (0.10.2, задача 9cdede6b)? Сворачивание
    * тела доступно, когда режим полей НЕ активен — запись выделена целиком
@@ -491,158 +399,118 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
   /** Выход из правки по Esc: снять фокус и вернуть его в навигацию. */
   function exitEditing(target: HTMLElement): void {
     (target as unknown as { blur?: () => void }).blur?.();
-    focusNav();
+    handle.focusNavigation();
   }
 
-  function onKeyDown(event: FeedKeyEvent): void {
-    const key = event.key ?? '';
-    const target = (event.target ?? null) as HTMLElement | null;
-    if (isEditingTarget(target)) {
-      // Правка текста: стрелки/Tab/Enter — редактору; Esc — выход и возврат фокуса.
-      if (key === 'Escape' && target !== null) exitEditing(target);
-      return;
-    }
-    // Нажатие клавиши навигации в ленте «оживляет» её: после перерисовки фокус
-    // вернётся к текущей сущности (требование 165323a7, «Устойчивость»).
-    navActive = true;
-    switch (key) {
-      case 'ArrowDown':
-        event.preventDefault?.();
-        move(1);
-        break;
-      case 'ArrowUp':
-        event.preventDefault?.();
-        move(-1);
-        break;
-      case 'ArrowLeft': {
-        // Группа дня — свернуть; запись целиком (режим полей не активен) либо
-        // поле «заголовок» в просмотре — свернуть тело (0.10.2, задачи 41ed99ab,
-        // 9cdede6b). В правке заголовка сюда не доходим: isEditingTarget выше
-        // отдаёт стрелки полю ввода.
-        const field = currentField();
-        if (current?.kind === 'day') {
-          event.preventDefault?.();
-          setDayCollapsed(current.key, true);
-        } else if (arrowsToggleRecord(field)) {
-          event.preventDefault?.();
-          toggleRecordCollapsed(true);
-        }
-        break;
+  const nav = createListNav<FeedEntry>(root, {
+    entries: () => visibleEntities(),
+    tokenOf,
+    elementOf: (entry) => findEntityEl(entry.entity, entry.entity.kind === 'record' ? entry.day : null),
+    applyHighlight: () => renderHighlight(),
+    onSelectionChange: (entry) => {
+      current = entry?.entity ?? null;
+      currentDay = entry !== null && entry.entity.kind === 'record' ? entry.day : null;
+      elementCursor = -1;
+    },
+    isEditingTarget: (target) => isEditingTarget(target as HTMLElement | null),
+    onCollapse: (entry, collapsed) => {
+      if (entry.entity.kind === 'day') {
+        setDayCollapsed(entry.entity.key, collapsed);
+        return;
       }
-      case 'ArrowRight': {
-        const field = currentField();
-        if (current?.kind === 'day') {
-          event.preventDefault?.();
-          setDayCollapsed(current.key, false);
-        } else if (arrowsToggleRecord(field)) {
-          event.preventDefault?.();
-          toggleRecordCollapsed(false);
-        }
-        break;
+      const field = currentField();
+      if (arrowsToggleRecord(field)) toggleRecordCollapsed(collapsed);
+    },
+    onActivate: (entry) => {
+      if (entry.entity.kind === 'day') {
+        const section = findSection(entry.entity.key);
+        const collapsed = section?.classList.contains('is-collapsed') ?? false;
+        opts.onSetDayCollapsed(entry.entity.key, !collapsed);
+        return;
       }
-      case 'Tab':
-        // Tab/Shift+Tab ходят по полям только в режиме полей: вне его — обычная
-        // навигация фокуса браузера.
-        if (current?.kind === 'record' && elementCursor >= 0) {
-          event.preventDefault?.();
-          moveField(event.shiftKey === true ? -1 : 1);
+      const card = findCardIn(entry.day, entry.entity.key);
+      if (card === null) return;
+      if (elementCursor < 0) {
+        // Вход в режим полей: первое поле — дата/период.
+        elementCursor = 0;
+        renderHighlight();
+        return;
+      }
+      activateField();
+    },
+    onKey: (key, event) => {
+      const target = (event.target ?? null) as HTMLElement | null;
+      if (isEditingTarget(target)) {
+        // Правка текста: стрелки/Tab/Enter — редактору; Esc — выход и возврат фокуса.
+        if (key === 'Escape' && target !== null) {
+          exitEditing(target);
+          return true;
         }
-        break;
-      case 'Enter':
+        return false;
+      }
+      // Tab/Shift+Tab ходят по полям только в режиме полей: вне его — обычная
+      // навигация фокуса браузера.
+      if (key === 'Tab' && current?.kind === 'record' && elementCursor >= 0) {
         event.preventDefault?.();
-        handleEnter();
-        break;
-      case 'Escape':
-        if (current?.kind === 'record' && elementCursor >= 0) {
-          event.preventDefault?.();
-          exitFieldMode();
-        }
-        break;
-      default:
-        break;
-    }
-  }
+        moveField(event.shiftKey === true ? -1 : 1);
+        return true;
+      }
+      if (key === 'Escape' && current?.kind === 'record' && elementCursor >= 0) {
+        event.preventDefault?.();
+        exitFieldMode();
+        return true;
+      }
+      return false;
+    },
+    onClick: (target) => {
+      const card = closestWithClass(target, 'diary-record');
+      const section = closestWithClass(target, 'diary-day');
+      const day =
+        section === null
+          ? ''
+          : (section.dataset?.['day'] ?? section.getAttribute?.('data-day') ?? '');
+      if (card !== null && (card.getAttribute?.('data-row-key') ?? '') !== '' && day !== '') {
+        if (target.classList?.contains('diary-slot')) return;
+        const key = card.getAttribute('data-row-key') ?? '';
+        // Клик внутри ТЕКУЩЕЙ записи (по её полям, чипсам, кнопкам) режим полей не
+        // сбрасывает: выделение записи и текущего поля сохраняются.
+        if (current?.kind === 'record' && current.key === key && currentDay === day) return;
+        nav.setCurrent({ entity: { kind: 'record', key }, day, el: card });
+        return;
+      }
+      if (section !== null && day !== '') {
+        nav.setCurrent({ entity: { kind: 'day', key: day }, day, el: null });
+        return;
+      }
+      // Клик внутри ленты, но вне записи/группы — выход из режима полей.
+      exitFieldMode();
+    },
+    onOutsideClick: () => {
+      // Клик вне ленты (календарь, панель отбора) — выход из режима полей.
+      exitFieldMode();
+    },
+  } satisfies ListNavAdapter<FeedEntry>);
 
-  function onClick(event: { target?: unknown | null }): void {
-    const target = (event.target ?? null) as HTMLElement | null;
-    if (target === null) return;
-    navActive = true;
-    const card = closestWithClass(target, 'diary-record');
-    const section = closestWithClass(target, 'diary-day');
-    const day =
-      section === null
-        ? ''
-        : (section.dataset?.['day'] ?? section.getAttribute?.('data-day') ?? '');
-    if (card !== null && (card.getAttribute?.('data-row-key') ?? '') !== '' && day !== '') {
-      if (target.classList?.contains('diary-slot')) return;
-      const key = card.getAttribute('data-row-key') ?? '';
-      // Клик внутри ТЕКУЩЕЙ записи (по её полям, чипсам, кнопкам) режим полей не
-      // сбрасывает: выделение записи и текущего поля сохраняются.
-      if (current?.kind === 'record' && current.key === key && currentDay === day) return;
-      setCurrent({ kind: 'record', key }, day);
-      return;
-    }
-    if (section !== null && day !== '') {
-      setCurrent({ kind: 'day', key: day });
-      return;
-    }
-    // Клик внутри ленты, но вне записи/группы — выход из режима полей.
-    exitFieldMode();
-  }
-
-  /**
-   * Клик вне ленты (календарь, панель отбора, остальной интерфейс) — тоже выход
-   * из режима полей (требование 165323a7). Слушатель на документе в фазе
-   * перехвата: клики по самой ленте обрабатывает её собственный {@link onClick},
-   * здесь они пропускаются. Документ может отсутствовать в DOM-тестах — тогда
-   * режим полей снимается только внутри ленты.
-   */
-  function onDocumentClick(event: { target?: unknown | null }): void {
-    const target = (event.target ?? null) as HTMLElement | null;
-    if (target !== null && root.contains?.(target) === true) return;
-    // Клик вне ленты гасит навигацию: перерисовка не должна тянуть фокус назад.
-    navActive = false;
-    exitFieldMode();
-  }
-
-  root.addEventListener('keydown', onKeyDown as EventListener);
-  root.addEventListener('click', onClick as EventListener);
-  ownerDocument?.addEventListener('click', onDocumentClick as EventListener, true);
-
-  return {
+  // `handle` объявлен после `nav` (нужен для взаимной ссылки в `exitEditing`).
+  const handle: FeedNavHandle = {
     refresh(): void {
-      if (current !== null && indexOfEntity(current, currentDay) < 0) {
-        current = null;
-        currentDay = null;
-        elementCursor = -1;
-      }
-      applyHighlight();
-      // После перерисовки узлы ленты заменены — прежний фокус потерян, и
-      // клавиатура «отваливается» (требование 165323a7, «Устойчивость», ошибка
-      // ab78e7b5). Возвращаем фокус в ленту, если навигация была активна и
-      // пользователь не правит текст (иначе украли бы фокус у редактора).
-      const active = (ownerDocument?.activeElement ?? null) as HTMLElement | null;
-      if (current !== null && navActive && !isEditingTarget(active)) {
-        focusNav();
-      }
+      nav.refresh();
     },
     focusNavigation(): void {
-      focusNav();
+      nav.focusNavigation();
     },
     current(): FeedEntity | null {
       return current;
     },
     selectRecord(id: string, day: string): void {
-      setCurrent({ kind: 'record', key: id }, day);
-      navActive = true;
+      nav.setCurrent({ entity: { kind: 'record', key: id }, day, el: findCardIn(day, id) });
       // Карточка может быть ещё не в DOM (переход догружает страницы) — тогда
       // выделение переприменит `refresh` после ближайшей перерисовки.
-      if (findCardIn(day, id) !== null) focusNav();
+      if (findCardIn(day, id) !== null) nav.focusNavigation();
     },
     destroy(): void {
-      root.removeEventListener('keydown', onKeyDown as EventListener);
-      root.removeEventListener('click', onClick as EventListener);
-      ownerDocument?.removeEventListener('click', onDocumentClick as EventListener, true);
+      nav.destroy();
     },
   };
+  return handle;
 }

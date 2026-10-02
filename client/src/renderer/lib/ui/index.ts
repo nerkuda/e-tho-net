@@ -238,6 +238,32 @@ export type {
 export { vaadinGridAdapter } from './table-grid.js';
 export type { GridColumnSpec, GridTableAdapter, GridPoint } from './table-grid.js';
 
+// Общее ЯДРО клавиатурной навигации таблиц и списков (ADR fadf99e0,
+// требование 93115633, задача 7893e429): какие клавиши, границы, Home/End,
+// PgUp/PgDn, поведение без выделения, отсечка полей ввода. Правила живут
+// только здесь — применяются сразу ко всем таблицам и спискам.
+export {
+  NAV_KEY_ACTIONS,
+  resolveNavAction,
+  nextNavIndex,
+  listTargetIndex,
+  isEditingTarget,
+} from './nav-core.js';
+export type { NavAction, NavIndexOptions } from './nav-core.js';
+
+// Общий КОМПОНЕНТ СПИСКА (ADR fadf99e0, требование 93115633, задача 7893e429):
+// навигация списков (лента «Дневника», библиотека «Публикаций») через общее
+// ядро. Разметку caller рисует keyed-сверкой; компонент отдаёт адаптеру
+// выделение по ключу, прокрутку и фокус.
+export { createListNav } from './list.js';
+export type {
+  ListNavAdapter,
+  ListNavOptions,
+  ListNavHandle,
+  ListNavKeyEvent,
+  ListNavClickEvent,
+} from './list.js';
+
 // Единое дерево списков — общий рендер строк над типом-деревом данных
 // (задача d1c15a2d, требование 0086037c, компонент 24a05c95). Единственный
 // разрешённый способ сборки деревьев типов в рендерере (сторож guard-ui-tree).

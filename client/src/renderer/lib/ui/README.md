@@ -18,9 +18,10 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
    `@awesome.me/webawesome` / `@vaadin/*` допускаются только внутри
    `lib/ui/**` (сторож `guard-ui-facades`).
 3. **Один вид на все случаи.** Кнопки — словарь `BUTTON_CLASS`/`uiButton`,
-   строки ошибок — `messages.ts`, поля — `field.ts`, списки — `table.ts`,
-   деревья — `tree.ts`, «пусто/грузлю/ошибка» — `empty-state.ts`. Своих
-   дублирующих классов под эти роли не заводим.
+   строки ошибок — `messages.ts`, поля — `field.ts`, списки — компонент
+   `list.ts` (навигация) и `table.ts` (таблица), деревья — `tree.ts`,
+   «пусто/грузлю/ошибка» — `empty-state.ts`. Своих дублирующих классов под
+   эти роли не заводим.
 4. **Прикладные правила — поверх словаря по специфичности.** При равной
    специфичности исход решает порядок в бандле, а он не контракт
    (грабли `36889dd6`): модификатор поверх словарного класса поднимай
@@ -45,6 +46,14 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
     дерево `tree.ts`. Строки `table.ts` живут в вендорском Vaadin Grid
     (набор — через `items`, свой keyed-механизм); фасад лишь не пере-назначает
     набор при смене выделения (`syncSelection`).
+11. **Навигация списков — только через общее ядро.** Правила клавиатурной
+    навигации (клавиши, границы, Home/End, разворот/сворачивание группы,
+    активация, сохранение выделения по ключу, отсечка полей ввода) живут в
+    `nav-core.ts` и используются ОБОИМИ видами — таблицей `table.ts` и списком
+    `list.ts`. Свой обработчик стрелок у списочного экрана запрещён (сторож
+    `guard-list-nav`, ADR `fadf99e0`). Адаптеры ленты «Дневника»
+    (`screens/chronicle/feed-nav.ts`) и библиотеки «Публикаций»
+    (`screens/publications/library-nav.ts`) отдают ядру лишь разметку и реакции.
 
 ## Каталог компонентов
 
@@ -65,9 +74,11 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `comment.ts` / `comment.css` | `commentShell`, классы `COMMENT_*` | Каркас просмотра/правки комментария: рамка, панель действий, состояния, режим `data-mode` | задача `9cb87c42`, требование `24ca6770` |
 | `splitter.ts` / `splitter.css` | `uiSplitter`, `wireSplitter`, `splitterElement`, `SPLITTER_CLASS` | Разделитель/ресайзер: pointer-drag и гриф; ось/знак/min/max задаёт владелец | задача `50f57b82` |
 | `state.ts` | `select`, `selectMany`, `deepEqual` | Реактивные селекторы поверх store (основа списков) | задача `60fcc702`, требование `628d33ee` |
+| `nav-core.ts` | `NAV_KEY_ACTIONS`, `resolveNavAction`, `nextNavIndex`, `listTargetIndex`, `isEditingTarget` | **Общее ядро клавиатурной навигации** таблиц и списков: клавиши, границы, Home/End, PgUp/PgDn, отсутствие выделения, отсечка полей ввода | ADR `fadf99e0`, требование `93115633`, задача `7893e429` |
+| `list.ts` | `createListNav` | **Общий компонент списка**: навигация списков (лента «Дневника», библиотека «Публикаций») через ядро; разметку caller рисует keyed-сверкой | ADR `fadf99e0`, требование `93115633`, задача `7893e429` |
 | `keyed-list.ts` | `reconcileKeyed`, `DEFAULT_KEY_ATTR` | Инкрементальная сверка списка по ключу (identity неизменных узлов) | задача `6952c619`, ADR keyed-обновления |
 | `scroll-anchor.ts` | `preserveScroll` | Возврат позиции прокрутки при легитимной полной пересборке | задача `3bfef1f7` |
-| `table.ts` / `table.css` | `createTable`, классы `TABLE_*`, `cycleSort`, `sortRows`, `cellText`, `rowsToTsv` | Единственный способ сборки списков (модель таблицы); строки — вендорский Grid, выделение синхронизируется точечно | задача `dad2b029`, требование `93115633`, задача `d59fdfb9` |
+| `table.ts` / `table.css` | `createTable`, классы `TABLE_*`, `cycleSort`, `sortRows`, `cellText`, `rowsToTsv` | Единственный способ сборки списков (модель таблицы); строки — вендорский Grid, выделение синхронизируется точечно; навигация — из общего ядра `nav-core.ts` | задача `dad2b029`, требование `93115633`, задача `d59fdfb9`, задача `7893e429` |
 | `table-grid.ts` | `vaadinGridAdapter` | Адаптер модели таблицы к Vaadin Grid | задача `dad2b029` |
 | `tree.ts` / `tree.css` | `createTree`, классы `TREE_*`, `treeVisibleIds`, `treeFilterKeepIds` | Единое дерево списков (типы, категории); коллекция строк — на keyed-сверке | задача `d1c15a2d`, требование `0086037c`, задача `d59fdfb9` |
 | `chip-list.ts` / `chip-list.css` | `chipList`, классы `CHIP_*` | Чипы выбранных значений с крестиком и полем добавления | требование `d1cd2095` |
@@ -126,4 +137,4 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 `guard-ui-tree`, `guard-ui-empty-state`, `guard-ui-states`,
 `guard-ui-discoverability`, `guard-ui-hit-area`, `guard-ui-container`,
 `guard-ui-tokens`, `guard-ui-user-tokens`, `guard-ui-i18n`,
-`guard-ui-licenses`, `guard-ui-dialog`, `guard-keyed-lists`.
+`guard-ui-licenses`, `guard-ui-dialog`, `guard-keyed-lists`, `guard-list-nav`.
