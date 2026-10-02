@@ -852,12 +852,15 @@ export const ru = {
   'publication.orderUp': 'Переместить выше',
   'publication.orderDown': 'Переместить ниже',
   /** Рецепт заголовков: ключевые слова. */
-  'publication.recipe.keywordsPlaceholder': 'счет* -вод*',
+  'publication.recipe.keywordsPlaceholder': 'Ключевые слова…',
   'publication.recipe.keywordsTooltip':
-    'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
+    'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. Пример: счет* -вод*',
   'publication.recipe.types': 'Типы мыслей',
   'publication.recipe.typesPlaceholder': 'Название типа…',
   'publication.recipe.parentsTooltip': 'Ограничить отбор мыслями, подчинёнными указанным',
+  'publication.recipe.parentsTitle': 'Родительские мысли',
+  'publication.recipe.pickThoughts': 'Выбрать мысли…',
+  'publication.recipe.pickTypes': 'Выбрать типы…',
   'publication.field.summary': 'Резюме',
   'publication.field.cover': 'Обложка',
   'publication.field.assembly': 'Дата сборки',

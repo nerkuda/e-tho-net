@@ -36,9 +36,11 @@ import {
 import {
   filterEntityOptions,
   linkPropertyEntityOptions,
+  pickEntitiesModal,
   thoughtTypeEntityOptions,
   type EntityOption,
 } from '../../lib/entity-picker.js';
+import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import {
   buildPropertyListRows,
   ensurePropertyLinkTypes,
@@ -139,6 +141,22 @@ export function buildRecipeBuilder(opts: {
     // работают как раньше — ограничения нет.
     buildParentThoughtsSection(ctx, {
       tooltip: t('publication.recipe.parentsTooltip'),
+      // Явный триггер выбора корней поддерева — тот же фасад, что в «Структурах
+      // мыслей» (диалог выбора мыслей с предвыбранными корнями).
+      picker: {
+        label: t('publication.recipe.pickThoughts'),
+        open: async () => {
+          const result = await pickThoughtsDialog({
+            networkId: store.state.networkId ?? '',
+            allowCreate: false,
+            allowLinkType: false,
+            selectedIds: state.parentIds,
+            title: t('publication.recipe.parentsTitle'),
+            applyLabel: t('actions.apply'),
+          });
+          return result === null ? null : pickedThoughtIds(result);
+        },
+      },
     }),
     buildKeywordsSection(ctx, {
       placeholder: t('publication.recipe.keywordsPlaceholder'),
@@ -157,13 +175,30 @@ export function buildRecipeBuilder(opts: {
         filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
       optionsHeader: t('publication.recipe.types'),
       placeholder: t('publication.recipe.typesPlaceholder'),
+      // Триггер выбора типов — модальный список типов, как в фильтрах «Структур».
+      picker: {
+        label: t('publication.recipe.pickTypes'),
+        open: () =>
+          pickEntitiesModal({
+            networkId: store.state.networkId ?? '',
+            kind: 'thought-types',
+            title: t('publication.recipe.types'),
+            currentIds: state.typeIds,
+          }),
+      },
     }),
   );
   sections.push(
-    buildConditionsSection(ctx, { get: () => propsCollapsed, set: (v) => (propsCollapsed = v) }, {}),
+    buildConditionsSection(
+      ctx,
+      { get: () => propsCollapsed, set: (v) => (propsCollapsed = v) },
+      { caretKind: 'chevron' },
+    ),
   );
   sections.push(
-    buildExtrasSection(ctx, { get: () => extrasCollapsed, set: (v) => (extrasCollapsed = v) }),
+    buildExtrasSection(ctx, { get: () => extrasCollapsed, set: (v) => (extrasCollapsed = v) }, {
+      caretKind: 'chevron',
+    }),
   );
 
   const form = buildFilterForm({ sections, className: 'pub-recipe-form' });

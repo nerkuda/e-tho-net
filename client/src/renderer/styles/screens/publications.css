@@ -368,40 +368,47 @@
 
 /* --- Карточка публикации в панели редактора ------------------------------ */
 
+/* Корень карточки — тот же каркас, что у панели мысли: шапку отбивает
+   фасад `.editor-fields`, панели вкладок — `.tab-pane-root`. Своего паддинга
+   и зазора у корня нет — иначе они удваивались бы с фасадом (замечание
+   пользователя: «сделать по образцу, а не похоже»). */
 .pub-card-editor {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3);
+  min-height: 0;
 }
 
-.pub-card-editor-head {
+/* Обложка в слоте иконки: слот-фасад `.editor-icon-box` держит 40×40,
+   картинка заполняет его по обрезке. */
+.pub-card-editor-thumb {
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-}
-
-.pub-card-editor-thumb {
-  flex: none;
-}
-
-.pub-card-editor-titlebox {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.pub-card-editor-title {
-  font-weight: var(--font-weight-semibold);
+  justify-content: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.pub-card-editor-meta {
-  color: var(--text-dim);
-  font-size: var(--font-size-3xs);
+.pub-card-editor-thumb .pub-cover,
+.pub-card-editor-thumb .pub-cover-thumb {
+  width: 100%;
+  height: 100%;
+  flex: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.pub-card-editor-thumb .pub-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Подзаголовок — вторая строка шапки, та же роль, что `.synonyms-input`
+   у панели мысли (полная ширина, отступ до третьей строки). */
+.pub-card-editor-subtitle {
+  width: 100%;
+  margin-bottom: 10px;
 }
 
 .pub-card-pane {
@@ -414,13 +421,92 @@
   margin-top: var(--space-2);
 }
 
+/* Нумерация уровней — подблок группы «Отбор разделов»: подпись + пара полей
+   «с уровня / по уровень». Подписи полей обязательны (замечание пользователя). */
 .pub-card-numbering {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+.pub-card-numbering-title {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.pub-card-numbering-row {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.pub-card-numbering-row > .ui-field {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+/* --- Вкладка «Рецепт»: крупные группы с воздухом между ними -------------- */
+
+.pub-card-recipe-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.pub-card-recipe-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-card-recipe-group-title {
+  font-size: var(--font-size-s);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.pub-card-recipe-group-hint {
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+  margin-bottom: var(--space-2);
+}
+
+.pub-card-recipe-group-body {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
 }
 
-.pub-card-numbering > * {
-  flex: 1 1 auto;
+/* Внутренние уточняющие аккордеоны («Свойства», «Дополнительно») — бледные
+   вложенные карточки с рамкой: их заголовки не должны читаться как заголовки
+   крупных групп рецепта (замечание пользователя). */
+.pub-card-recipe-group .st-f-block:has(.st-f-collapsible-title) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+}
+
+.pub-card-recipe-group .st-f-block:has(.st-f-collapsible-title) .st-f-title {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-normal);
+}
+
+/* Каретка вложенного аккордеона — шеврон (замечание пользователя): свёрнутая
+   группа указывает вправо. У общей разметки `filter-form` SVG не вращается —
+   там треугольник подменялся текстом. */
+.pub-card-recipe-group .st-f-caret svg {
+  transition: transform var(--transition-hover, 0.15s) ease;
+}
+
+.pub-card-recipe-group .st-f-caret.collapsed svg {
+  transform: rotate(-90deg);
 }
 
 .pub-card-empty {
@@ -444,6 +530,171 @@
   flex-direction: column;
   gap: var(--space-2);
   min-height: 12rem;
+}
+
+/* --- Вкладки карточки: резюме, свойства текстов/доп. материалы, метаданные,
+       состояние пересборки -------------------------------------------------- */
+
+.pub-card-summary,
+.pub-card-texts,
+.pub-card-extras {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-card-meta-assembly {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+/* Прелоадер пересборки рядом с «Действия» (ошибка c2dec45c). */
+.pub-card-rebuild-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-size-2xs);
+  color: var(--text-dim);
+}
+
+/* Настройки (шестерёнка): подпись + содержимое строки. */
+.pub-card-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.pub-card-settings-shelves {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* --- Диалог обложки: список слева, препросмотр справа (горизонтальный
+       сплиттер ширины) ----------------------------------------------------- */
+
+.pub-cover-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 18rem;
+}
+
+.pub-cover-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pub-cover-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pub-cover-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* Шов сплиттера ширины: размер и курсор задаёт владелец (общий гриф — в
+   `lib/ui/splitter.css`). Горизонтальный шов — `col-resize`. */
+.pub-cover-splitter {
+  flex: 0 0 10px;
+  width: 10px;
+  cursor: col-resize;
+}
+
+.pub-cover-list-box {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-cover-list {
+  overflow-y: auto;
+}
+
+/* Строка списка диалога обложки. Класс СВОЙ (`pub-cover-item`), а не
+   `.pub-cover-row`: последний занят миниатюрой обложки в списках
+   (`cover.ts`, 2.5rem×1.75rem) и сжимал строку до этой рамки. */
+.pub-cover-item {
+  width: 100%;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.pub-cover-item:hover {
+  background: var(--bg-hover);
+}
+
+.pub-cover-item-current {
+  background: var(--accent-soft);
+}
+
+.pub-cover-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-cover-clouds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.pub-cover-cloud {
+  padding: 1px var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+  white-space: nowrap;
+}
+
+.pub-cover-preview {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.pub-cover-preview-url {
+  min-height: 12rem;
+}
+
+.pub-cover-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.pub-cover-url {
+  width: 100%;
 }
 
 /* --- Рабочая область открытой публикации (0.11.1, задача 4f03b9d5) ------- */

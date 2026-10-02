@@ -1293,6 +1293,9 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     input.placeholder = empty
       ? (opts.placeholder ?? 'Добавить значение…')
       : (opts.addPlaceholder ?? opts.placeholder ?? 'Добавить значение…');
+    // Крестик очистки — только у ЗАПОЛНЕННОГО поля: у пустого значения
+    // очищать нечего, а лишняя «×» рядом с приглашением читается как ошибка.
+    clearBtn.hidden = empty;
     // Перерисовку может затеять и вызывающий (асинхронная догрузка каталога) —
     // его фокус не перехватываем, возвращаем только потерянный здесь.
     restoreKeyboardFocus(input, hadFocus, false);

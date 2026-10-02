@@ -210,15 +210,46 @@ describe('guard: UI публикаций (a3cfc018)', () => {
    * общий компонент списка (ADR fadf99e0), рецепт строит «Родительские мысли»
    * первым (дополнение C), а стройных «своих» обработчиков стрелок в карточке
    * нет (сторож guard-list-nav).
+   *
+   * Проверка — не по подстрокам «где-то в файле», а по ФАКТИЧЕСКОМУ
+   * использованию в теле `openCoverDialog`: список создаётся фасадом
+   * `createListNav` с контрактными аргументами (`entries`/`tokenOf`/`onActivate`)
+   * и перерисовывается `reconcileKeyed` по ключу; рукописной обработки стрелок
+   * в диалоге нет.
    */
   it('диалог обложки: список — общий компонент, рецепт — родительские мысли первыми', () => {
     const card = fs.readFileSync(
       path.join(RENDERER_ROOT, 'editor', 'publication-card.ts'),
       'utf8',
     );
-    assert.ok(card.includes('createListNav'), 'список вложений диалога обложки — общий компонент списка');
-    assert.ok(card.includes('reconcileKeyed'), 'строки списка рисуются keyed-сверкой');
-    assert.ok(!card.includes("'ArrowUp'") && !card.includes("'ArrowDown'"), 'своей карты стрелок в карточке нет');
+    const dialog = card.slice(
+      card.indexOf('async function openCoverDialog'),
+      card.indexOf('function ownerKindLabel'),
+    );
+    assert.ok(dialog.length > 0, 'тело openCoverDialog найдено');
+    // Список создаётся фасадом с контрактными аргументами.
+    assert.match(
+      dialog,
+      /createListNav<Attachment>\(listHost,\s*\{[\s\S]*?entries:\s*\(\)\s*=>\s*rows[\s\S]*?tokenOf:\s*\(a\)\s*=>\s*a\.id[\s\S]*?onActivate:/,
+      'список вложений строится общим фасадом createListNav с entries/tokenOf/onActivate',
+    );
+    // Строки рисуются keyed-сверкой по id, а не пересборкой.
+    assert.match(
+      dialog,
+      /reconcileKeyed\(listHost,\s*rows,\s*\{[\s\S]*?key:\s*\(a\)\s*=>\s*a\.id/,
+      'строки списка рисуются keyed-сверкой reconcileKeyed по id',
+    );
+    // Никакой рукописной карты стрелок и клавиатуры в диалоге.
+    for (const gone of ["'ArrowUp'", "'ArrowDown'", "'ArrowLeft'", "'ArrowRight'"]) {
+      assert.ok(!dialog.includes(gone), `в диалоге обложки нет рукописной обработки ${gone}`);
+    }
+    assert.ok(
+      !/addEventListener\(\s*['"]keydown['"]/.test(dialog),
+      'навигацию списка ведёт фасад, а не собственный keydown-обработчик',
+    );
+    // Диалог — через общий каркас (lib/dialog.ts), вкладки — через его API.
+    assert.ok(dialog.includes('showDialog('), 'диалог обложки — общий каркас showDialog');
+    assert.ok(dialog.includes('tabs:'), 'вкладки диалога обложки заданы API каркаса');
 
     const recipe = fs.readFileSync(
       path.join(RENDERER_ROOT, 'screens', 'publications', 'recipe.ts'),
@@ -232,6 +263,37 @@ describe('guard: UI публикаций (a3cfc018)', () => {
       recipe.indexOf('buildParentThoughtsSection(ctx') < recipe.indexOf('buildKeywordsSection(ctx'),
       '«Родительские мысли» — первое поле группы «ОТБОР РАЗДЕЛОВ»',
     );
+  });
+
+  /**
+   * Дополнение к задаче b02ef1cf (замечание координатора): у роли
+   * «Родительские мысли» — ОДНА реализация (`buildParentThoughtsSection` в
+   * `lib/filter-form.ts`). Экраны, применявшие конструктор, обязаны брать
+   * фасад, а не держать собственную копию синхронизации облачков/поиска.
+   */
+  it('роль «Родительские мысли» — одна реализация на всех потребителей', () => {
+    const consumers = [
+      'screens/structures/filter-panel.ts',
+      'screens/chronicle/filter-panel.ts',
+      'screens/thought-type/filter-dialog.ts',
+      'screens/publications/recipe.ts',
+    ] as const;
+    for (const rel of consumers) {
+      const source = fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
+      assert.ok(
+        source.includes('buildParentThoughtsSection'),
+        `${rel} обязан собирать «Родительские мысли» общим фасадом`,
+      );
+      // Маркеры прежних копий: своя карта облачков и её синхронизация.
+      assert.ok(
+        !source.includes('parentThoughtOptions'),
+        `${rel}: своей копии живого поиска «Родительских мыслей» быть не должно`,
+      );
+      assert.ok(
+        !source.includes('syncParentChips'),
+        `${rel}: своей копии синхронизации облачков «Родительских мыслей» быть не должно`,
+      );
+    }
   });
 });
 

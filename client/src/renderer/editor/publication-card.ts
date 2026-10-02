@@ -40,7 +40,7 @@ import { menuAction, showMenuAt } from '../lib/menu.js';
 import { uiButton, iconButton } from '../lib/ui/button.js';
 import { uiTabs, type TabsHandle } from '../lib/ui/tabs.js';
 import { uiSplitter } from '../lib/ui/splitter.js';
-import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { fieldInput, fieldRow, fieldTextarea } from '../lib/ui/field.js';
 import { fieldError } from '../lib/ui/messages.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
 import { loadingState } from '../lib/ui/empty-state.js';
@@ -257,13 +257,17 @@ function currentPublicationId(): string | null {
 
 function buildCard(): HTMLElement {
   const root = div('pub-card-editor');
-  const head = div('pub-card-editor-head');
+  // Шапка — тот же каркас, что у панели мысли (коммит-фикс по замечанию
+  // пользователя): `editor-fields` > `editor-top-row` / `editor-header-row`.
+  // Так карточка наследует готовые отступы, высоты и поведение строк без
+  // собственного CSS под роли.
+  const head = div('editor-fields');
 
   // --- Строка 1: иконка-обложка · заголовок · ⚙ (Настройки) ----------------
-  const topRow = div('pub-card-editor-top');
+  const topRow = div('editor-top-row');
   const thumbButton = document.createElement('button');
   thumbButton.type = 'button';
-  thumbButton.className = 'pub-card-editor-icon';
+  thumbButton.className = 'editor-icon-box';
   thumbButton.title = t('publication.action.changeCover');
   thumbButton.setAttribute('aria-label', t('publication.action.changeCover'));
   const thumbHost = div('pub-card-editor-thumb');
@@ -271,23 +275,36 @@ function buildCard(): HTMLElement {
   thumbButton.append(thumbHost);
   thumbButton.addEventListener('click', () => void openCoverDialog());
 
-  const titleInput = fieldInput({
+  const titleArea = fieldTextarea({
     id: 'pub-card-title',
-    extraClass: 'pub-card-editor-title',
+    extraClass: 'editor-title-input',
+    bare: true,
     placeholder: t('publication.field.titlePlaceholder'),
+  }) as HTMLTextAreaElement;
+  titleArea.rows = 1;
+  const resizeTitle = (): void => {
+    titleArea.style.height = 'auto';
+    titleArea.style.height = `${titleArea.scrollHeight}px`;
+  };
+  titleArea.addEventListener('input', () => {
+    resizeTitle();
+    queueSave({ title: titleArea.value });
   });
-  titleInput.addEventListener('input', () => queueSave({ title: titleInput.value }));
+  titleArea.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      titleArea.blur();
+    }
+  });
 
   const settingsButton = iconButton({
     icon: svgIcon('settings', 14),
     title: t('publication.settings'),
-    role: 'ghost',
     onClick: () => openSettingsDialog(),
   });
-  topRow.append(thumbButton, titleInput, settingsButton);
+  topRow.append(thumbButton, titleArea, settingsButton);
 
-  // --- Строка 2: подзаголовок ----------------------------------------------
-  const subRow = div('pub-card-editor-subrow');
+  // --- Строка 2: подзаголовок на всю ширину --------------------------------
   const subtitleInput = fieldInput({
     id: 'pub-card-subtitle',
     extraClass: 'pub-card-editor-subtitle',
@@ -296,10 +313,9 @@ function buildCard(): HTMLElement {
   subtitleInput.addEventListener('input', () =>
     queueSave({ subtitle: emptyToNull(subtitleInput.value) }),
   );
-  subRow.append(subtitleInput);
 
-  // --- Строка 3: «актуально» · меню «Действия» -----------------------------
-  const actionsRow = div('pub-card-editor-actions');
+  // --- Строка 3: «актуально» · меню «Действия» (одна строка) ---------------
+  const row3 = div('editor-header-row');
   const activeRow = checkboxRow({ label: t('publication.status.active') });
   activeRow.input.addEventListener('change', () => queueSave({ active: activeRow.input.checked }));
   const actionsButton = uiButton({
@@ -312,9 +328,9 @@ function buildCard(): HTMLElement {
   rebuildButtonRef = actionsButton;
   const rebuildFeedback = div('pub-card-rebuild-state hidden');
   rebuildFeedbackRef = rebuildFeedback;
-  actionsRow.append(activeRow.row, actionsButton, rebuildFeedback);
+  row3.append(activeRow.row, actionsButton, rebuildFeedback);
 
-  head.append(topRow, subRow, actionsRow);
+  head.append(topRow, subtitleInput, row3);
 
   const tabs = uiTabs({
     tabs: [
@@ -333,11 +349,13 @@ function buildCard(): HTMLElement {
   root.append(head, tabs.root);
 
   updaters.push((p) => {
-    titleInput.value = p.title;
+    titleArea.value = p.title;
+    resizeTitle();
     subtitleInput.value = p.subtitle ?? '';
     activeRow.input.checked = p.active;
     renderCoverPreview(p);
   });
+  queueMicrotask(resizeTitle);
   // Здесь `apply` НЕ вызывается: `instance` ещё не зарегистрирован (это делает
   // `showPublicationTarget` сразу после возврата `buildCard`). Наполнение
   // выполняет вызывающий.
@@ -500,7 +518,11 @@ function buildRecipePane(): HTMLElement {
     t('publication.recipe.group.selectHint'),
   );
   const recipeHost = div('pub-card-recipe');
-  const numberRow = div('pub-card-numbering');
+  const numberingBlock = div('pub-card-numbering');
+  numberingBlock.append(
+    span(t('publication.recipe.group.numbering'), 'pub-card-numbering-title'),
+  );
+  const numberRow = div('pub-card-numbering-row');
   const fromInput = fieldInput({ type: 'number', min: 1, id: 'pub-card-num-from' });
   const toInput = fieldInput({ type: 'number', min: 1, id: 'pub-card-num-to' });
   const onNumber = (): void => {
@@ -516,7 +538,8 @@ function buildRecipePane(): HTMLElement {
     fieldRow({ label: t('publication.field.numberingFrom'), control: fromInput, id: 'pub-card-num-from' }),
     fieldRow({ label: t('publication.field.numberingTo'), control: toInput, id: 'pub-card-num-to' }),
   );
-  selectGroup.body.append(recipeHost, numberRow);
+  numberingBlock.append(numberRow);
+  selectGroup.body.append(recipeHost, numberingBlock);
   pane.append(selectGroup.root);
 
   // 2. СВОЙСТВА С СОДЕРЖИМЫМ РАЗДЕЛОВ (text_sources) и
@@ -1030,7 +1053,7 @@ async function openCoverDialog(): Promise<void> {
       elementOf: (a) => rowEls.get(a.id) ?? null,
       applyHighlight: (a) => {
         for (const [id, el] of rowEls) {
-          el.classList.toggle('pub-cover-row-current', a !== null && id === a.id);
+          el.classList.toggle('pub-cover-item-current', a !== null && id === a.id);
         }
       },
       onActivate: (a) => selectAttachment(a),
@@ -1077,8 +1100,11 @@ async function openCoverDialog(): Promise<void> {
 
     /** Строит строку вложения (название + облачки). */
     function buildRow(a: Attachment): HTMLElement {
-      const row = div('pub-cover-row');
-      row.append(span(a.title ?? a.url ?? a.file_path ?? a.id, 'pub-cover-row-title'));
+      // Класс строки СПИСКА диалога — свой (`pub-cover-item`): `.pub-cover-row`
+      // занят миниатюрой обложки в списках (`screens/publications/cover.ts`,
+      // 2.5rem×1.75rem) и сжимал бы строку до этой рамки.
+      const row = div('pub-cover-item');
+      row.append(span(a.title ?? a.url ?? a.file_path ?? a.id, 'pub-cover-item-title'));
       const clouds = div('pub-cover-clouds');
       row.append(clouds);
       fillClouds(clouds, a);
