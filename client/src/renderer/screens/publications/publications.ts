@@ -134,6 +134,9 @@ let workspace: PublicationWorkspaceHandle | null = null;
 /** Хост карточек внутри секции полки (для вложенной keyed-сверки). */
 const cardsHosts = new WeakMap<HTMLElement, HTMLElement>();
 
+/** Хост пустого состояния внутри секции полки (ошибка 87ad669a). */
+const shelfEmptyHosts = new WeakMap<HTMLElement, HTMLElement>();
+
 // ---------------------------------------------------------------------------
 // Публичный вход
 // ---------------------------------------------------------------------------
@@ -620,6 +623,7 @@ function renderShelves(): void {
       if (cardsHost !== undefined) syncCards(cardsHost, block.items);
       const title = node.querySelector('.pub-shelf-title');
       if (title !== null) title.textContent = block.shelf.title;
+      toggleShelfEmpty(node, block.items.length === 0);
     },
     equals: (a, b) =>
       a.shelf.id === b.shelf.id &&
@@ -659,9 +663,20 @@ function buildShelfBlock(block: ShelfBlock): HTMLElement {
   wireDropTarget(head, block.shelf.id === EMPTY_SHELF.id ? null : block.shelf.id);
   const cards = div('pub-cards');
   cardsHosts.set(section, cards);
-  section.append(head, cards);
+  // Пустое состояние полки (ошибка 87ad669a): без него только что созданная
+  // полка без публикаций — это шапка высотой ~29px, которую легко не заметить.
+  const empty = div('pub-shelf-empty');
+  empty.append(emptyState({ title: t('publications.shelf.empty') }));
+  shelfEmptyHosts.set(section, empty);
+  section.append(head, cards, empty);
   syncCards(cards, block.items);
+  toggleShelfEmpty(section, block.items.length === 0);
   return section;
+}
+
+/** Показать/скрыть пустое состояние секции полки. */
+function toggleShelfEmpty(section: HTMLElement, isEmpty: boolean): void {
+  shelfEmptyHosts.get(section)?.classList.toggle('hidden', !isEmpty);
 }
 
 function syncCards(cardsHost: HTMLElement, items: readonly Publication[]): void {
@@ -747,6 +762,8 @@ interface ListGroup {
   title: string;
   count: number;
   rows: Publication[];
+  /** Пустая полка (0 публикаций) — раскрыта всегда, чтобы было видно её состояние. */
+  empty: boolean;
 }
 
 /** Живые таблицы групп по id: переиспользуются при сверке, снимаются при уходе. */
@@ -763,7 +780,8 @@ function renderList(): void {
     items: Publication[],
   ): void => {
     const id = shelfId ?? '__unshelved__';
-    const expanded = shelfId === null || expandedShelves.has(shelfId);
+    const empty = items.length === 0;
+    const expanded = shelfId === null || empty || expandedShelves.has(shelfId);
     const rows: Publication[] = [];
     if (expanded) {
       for (const publication of items) {
@@ -772,10 +790,12 @@ function renderList(): void {
         rows.push(publication);
       }
     }
-    groups.push({ id, shelfId, title, count: items.length, rows });
+    groups.push({ id, shelfId, title, count: items.length, rows, empty });
   };
   for (const { shelf, items } of grouped.byShelf) {
-    if (items.length === 0) continue;
+    // Пустые полки не пропускаем (ошибка 87ad669a): только что созданная полка
+    // без публикаций обязана быть видна и в виде «список» — группой с пустым
+    // состоянием.
     pushGroup(shelf.id, shelf.title, items);
   }
   if (grouped.unshelved.length > 0) {
@@ -795,6 +815,7 @@ function renderList(): void {
     equals: (a, b) =>
       a.title === b.title &&
       a.count === b.count &&
+      a.empty === b.empty &&
       a.rows.length === b.rows.length &&
       a.rows.every((row, index) => rowSignature(row) === rowSignature(b.rows[index])),
   });
@@ -809,7 +830,7 @@ function rowSignature(row: Publication | undefined): string {
 function buildListGroup(group: ListGroup): HTMLElement {
   const section = div('pub-list-section');
   section.dataset['groupId'] = group.id;
-  if (group.shelfId !== null && !expandedShelves.has(group.shelfId)) {
+  if (group.shelfId !== null && !group.empty && !expandedShelves.has(group.shelfId)) {
     section.classList.add('pub-list-collapsed');
   }
   const head = uiButton({
@@ -888,7 +909,8 @@ function buildListGroup(group: ListGroup): HTMLElement {
     ],
     rows: [],
     rowKey: (row) => row.id,
-    emptyText: t('publications.emptySearch'),
+    emptyText:
+      group.shelfId === null ? t('publications.emptySearch') : t('publications.shelf.empty'),
     onRowClick: (row) => void openPublicationWorkspace(row.id),
     onActivate: (row) => void openPublicationWorkspace(row.id),
     rowMenu: (row) => publicationMenuItems(row),
@@ -909,7 +931,7 @@ function updateListGroup(node: HTMLElement, group: ListGroup): void {
   if (count !== null) count.textContent = String(group.count);
   node.classList.toggle(
     'pub-list-collapsed',
-    group.shelfId !== null && !expandedShelves.has(group.shelfId),
+    group.shelfId !== null && !group.empty && !expandedShelves.has(group.shelfId),
   );
 }
 
@@ -1085,7 +1107,10 @@ async function trash(publicationId: string): Promise<void> {
 async function createShelf(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const title = await promptDialog(t('publications.newShelf'), t('publications.shelf.rename'), '');
+  // Контракт диалога СОЗДАНИЯ (ошибка 87ad669a): заголовок «Новая полка»,
+  // подпись «Название полки», пустое поле. Переименование — отдельный путь
+  // (контекстное меню полки, ключ `publications.shelf.rename`).
+  const title = await promptDialog(t('publications.shelf.create'), t('publications.shelf.name'), '');
   if (title === null || title.trim() === '') return;
   try {
     await etn.publications.createShelf(networkId, { title: title.trim() });

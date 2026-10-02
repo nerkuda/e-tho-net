@@ -78,6 +78,12 @@
   gap: var(--space-2);
 }
 
+/* Пустое состояние полки без публикаций (ошибка 87ad669a): делает только что
+   созданную пустую полку заметной, а не шапкой в 29px. */
+.pub-shelf-empty {
+  padding: var(--space-2) var(--space-2);
+}
+
 .pub-shelf-head {
   display: flex;
   align-items: center;
