@@ -388,9 +388,11 @@ describe('MCP-публикации: сквозной сценарий', { skip }
 
         const list = (await call(handle.client, 'etn.shelves.list', {
           network_id: ctx.networkId,
-        })) as { data: Array<{ id: string }>; meta: { total: number } };
-        assert.equal(list.meta.total, 1);
-        assert.equal(list.data[0]?.id, shelf.id);
+        })) as { data: Array<{ id: string; title: string }>; meta: { total: number } };
+        // Сеть создаётся с дефолтной полкой «Полка» (0.11.1, задача 8c2660e6).
+        assert.equal(list.meta.total, 2);
+        assert.ok(list.data.some((s) => s.title === 'Полка'), 'есть дефолтная полка');
+        assert.ok(list.data.some((s) => s.id === shelf.id), 'есть созданная полка');
 
         const renamed = (await call(handle.client, 'etn.shelves.update', {
           network_id: ctx.networkId,
@@ -424,7 +426,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         const hidden = (await call(handle.client, 'etn.shelves.list', {
           network_id: ctx.networkId,
         })) as { data: unknown[] };
-        assert.equal(hidden.data.length, 0, 'помеченная полка скрыта из списка');
+        assert.equal(hidden.data.length, 1, 'помеченная полка скрыта, дефолтная «Полка» остаётся');
         const restoredShelf = (await call(handle.client, 'etn.shelves.restore', {
           network_id: ctx.networkId,
           shelf_id: shelf.id,

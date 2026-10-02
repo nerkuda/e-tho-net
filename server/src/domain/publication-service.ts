@@ -60,6 +60,24 @@ import { normalizeTitle } from './thought-service.js';
 /** Cap длины названия — по образцу мыслей (защита от мусора). */
 const TITLE_MAX = 500;
 
+/**
+ * Имя дефолтной полки (0.11.1, задача 8c2660e6, карточка c80951ea v2). В сети
+ * всегда есть хотя бы одна живая полка; при её отсутствии создаётся полка с
+ * этим именем (см. {@link ensureDefaultShelf}).
+ */
+export const DEFAULT_SHELF_TITLE = 'Полка';
+
+/**
+ * Детерминированный id дефолтной полки (0.11.1, задача 8c2660e6). Один и тот
+ * же во ВСЕХ сетях: так при переносе `.etnx` (`import-service.upsertShelf`
+ * ищет строку по id) дефолтные полки двух сетей сходятся в одну и импорт
+ * сливает их, а не падает `SQLITE_CONSTRAINT_UNIQUE` на частичном индексе имени
+ * `idx_shelves_title_key_live`. Не менять: смена id сломает слияние уже
+ * перенесённых сетей. Id уникален в пределах одной `data.db`; совпадение id
+ * между разными сетями безопасно — строки живут в разных файлах.
+ */
+export const DEFAULT_SHELF_ID = '5e1f0000-0000-4000-8000-000000000001';
+
 /** Строка `publications_v` (без вычисляемых полей). */
 interface PublicationRow {
   id: string;
@@ -1142,27 +1160,47 @@ function asShelfTitleConflict<T>(fn: () => T): T {
   }
 }
 
+/** Следующая позиция полки (MAX(position) + 1). */
+function nextShelfPosition(ndb: NetworkDb): number {
+  return (
+    (ndb.prepare('SELECT COALESCE(MAX(position), 0) AS p FROM shelves_v').get() as { p: number })
+      .p + 1
+  );
+}
+
+/**
+ * INSERT строки полки с заданным id (общая часть {@link createShelf} и
+ * {@link ensureDefaultShelf}). Нарушение уникальности имени превращается в
+ * штатную `VALIDATION_ERROR` (`asShelfTitleConflict`).
+ */
+function insertShelfRow(
+  ndb: NetworkDb,
+  id: string,
+  title: string,
+  position: number,
+  actorUserId: string,
+): Shelf {
+  const now = new Date().toISOString();
+  asShelfTitleConflict(() =>
+    ndb
+      .prepare(
+        `INSERT INTO shelves (id, layer_id, title, title_key, position, version,
+                              created_at, created_by, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+      )
+      .run(id, ndb.layerId, title, normalizeTitle(title), position, now, actorUserId, now, actorUserId),
+  );
+  return getShelfOrThrow(ndb, id);
+}
+
 /** Создать полку. */
 export function createShelf(ndb: NetworkDb, input: ShelfInput, actorUserId: string): Shelf {
   return ndb.transaction(() => {
     const title = validateShelfTitle(ndb, input.title);
     const id = randomUUID();
-    const now = new Date().toISOString();
     const position =
-      typeof input.position === 'number'
-        ? Math.trunc(input.position)
-        : ((ndb.prepare('SELECT COALESCE(MAX(position), 0) AS p FROM shelves_v').get() as { p: number })
-            .p + 1);
-    asShelfTitleConflict(() =>
-      ndb
-        .prepare(
-          `INSERT INTO shelves (id, layer_id, title, title_key, position, version,
-                                created_at, created_by, updated_at, updated_by)
-           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-        )
-        .run(id, ndb.layerId, title, normalizeTitle(title), position, now, actorUserId, now, actorUserId),
-    );
-    return getShelfOrThrow(ndb, id);
+      typeof input.position === 'number' ? Math.trunc(input.position) : nextShelfPosition(ndb);
+    return insertShelfRow(ndb, id, title, position, actorUserId);
   });
 }
 
@@ -1225,6 +1263,37 @@ export function trashShelf(ndb: NetworkDb, id: string, actorUserId: string): She
 /** Снять пометку на удаление. */
 export function restoreShelf(ndb: NetworkDb, id: string, actorUserId: string): Shelf {
   return markShelfTrashed(ndb, id, false, actorUserId);
+}
+
+/**
+ * Гарантировать живую дефолтную полку «Полка» (0.11.1, задача 8c2660e6;
+ * карточка c80951ea v2). Когда в текущем контексте слоя живых полок нет,
+ * возвращает созданную или восстановленную полку, иначе — `null` (живая полка
+ * уже есть, ничего не делаем).
+ *
+ * Почему восстановление, а не только создание: имя помеченной в корзину полки
+ * удерживается частичным уникальным индексом `idx_shelves_title_key_live`
+ * (миграция 047) — повторный `createShelf` с тем же именем упал бы
+ * `shelf_title_taken`. Поэтому одноимённая полка в корзине оживляется; нет
+ * такой — создаётся новая.
+ *
+ * Вызывать в контексте ОСНОВЫ: дефолтная полка сети живёт в основе и видна
+ * всем слоям (карточка c80951ea v2: «в основе, не в рабочем слое»).
+ */
+export function ensureDefaultShelf(ndb: NetworkDb, actorUserId: string): Shelf | null {
+  if (listShelves(ndb).length > 0) return null;
+  // Дефолтная полка с детерминированным id уже существует, но в корзине, —
+  // оживляем её (INSERT с тем же id столкнулся бы с первичным ключом).
+  const byId = ndb
+    .prepare('SELECT id FROM shelves_v WHERE id = ? LIMIT 1')
+    .get(DEFAULT_SHELF_ID) as { id: string } | undefined;
+  if (byId !== undefined) return restoreShelf(ndb, byId.id, actorUserId);
+  // Иначе — одноимённая полка в корзине (имя удержано, см. выше).
+  const byName = ndb
+    .prepare('SELECT id FROM shelves_v WHERE title_key = ? LIMIT 1')
+    .get(normalizeTitle(DEFAULT_SHELF_TITLE)) as { id: string } | undefined;
+  if (byName !== undefined) return restoreShelf(ndb, byName.id, actorUserId);
+  return insertShelfRow(ndb, DEFAULT_SHELF_ID, DEFAULT_SHELF_TITLE, nextShelfPosition(ndb), actorUserId);
 }
 
 /** Общая реализация пометки/снятия пометки корзины полки. */

@@ -40,6 +40,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import {
+  BASE_LAYER_ID,
   EtnError,
   type ExportJobStartResult,
   type Publication,
@@ -52,13 +53,14 @@ import {
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, openRouteNetworkDbBase, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
 import {
   addPublicationExclusion,
   addShelfItem,
   createPublication,
   createShelf,
   deleteShelf,
+  ensureDefaultShelf,
   getPublication,
   getShelf,
   listPublications,
@@ -641,7 +643,32 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestShelfList, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const shelves = listShelves(ndb);
+        let shelves = listShelves(ndb);
+        // Ленивое создание дефолтной полки «Полка» (0.11.1, задача 8c2660e6;
+        // карточка c80951ea v2): сеть без живых полок получает её при первом
+        // запросе списка — В ОСНОВЕ (не в рабочем слое сессии), чтобы полка
+        // была видна всем слоям. Запись идёт через обёртку `runWrite` (ADR
+        // 162d8e7a), событие атрибутируется основе.
+        if (shelves.length === 0) {
+          const baseNdb = openRouteNetworkDbBase(deps, input.network_id, app.appLogger);
+          const created = runWrite(baseNdb, restWriteFx(deps, req, input.network_id), () => {
+            const shelf = ensureDefaultShelf(baseNdb, req.auth!.user.id);
+            return {
+              result: shelf,
+              events:
+                shelf === null
+                  ? []
+                  : [
+                      {
+                        type: 'shelf.updated' as const,
+                        data: { shelf },
+                        options: { layerId: BASE_LAYER_ID },
+                      },
+                    ],
+            };
+          });
+          if (created !== null) shelves = listShelves(ndb);
+        }
         sendList(reply, shelves, shelves.length, 0, shelves.length);
       },
     );

@@ -152,10 +152,10 @@ describe(
         assert.equal(manifestA.publications.length, 1);
         assert.equal(manifestA.publication_order.length, 1);
         assert.equal(manifestA.publication_exclusions.length, 1);
-        assert.equal(manifestA.shelves.length, 1);
+        assert.equal(manifestA.shelves.length, 2, 'дефолтная «Полка» + своя полка');
         assert.equal(manifestA.shelf_items.length, 1);
         assert.equal(
-          manifestA.shelves[0]?.marked_for_deletion,
+          manifestA.shelves.find((s) => s.title === 'Полка RT')?.marked_for_deletion,
           true,
           'пометка корзины полки уехала в манифест',
         );
@@ -178,7 +178,18 @@ describe(
         const manifestB = await readManifestFromBuffer(readFileSync(outB), logger);
 
         assert.deepEqual(manifestB.publications, manifestA.publications, 'публикации идентичны');
-        assert.deepEqual(manifestB.shelves, manifestA.shelves, 'полки идентичны');
+        // Дефолтная полка «Полка» имеет детерминированный id (8c2660e6) и при
+        // импорте сливается с дефолтной полкой цели (обновление той же строки),
+        // поэтому `created_at`/`created_by` у неё — от сети-цели, а не от
+        // источника; остальные поля совпадают.
+        const normShelf = (
+          s: (typeof manifestA.shelves)[number],
+        ): Record<string, unknown> => ({ ...s, created_at: null, created_by: null });
+        assert.deepEqual(
+          manifestB.shelves.map(normShelf),
+          manifestA.shelves.map(normShelf),
+          'полки идентичны (кроме происхождения дефолтной)',
+        );
         assert.deepEqual(manifestB.shelf_items, manifestA.shelf_items, 'состав полок идентичен');
         // Ссылки на мысль следуют за remap импорта (мысли получают новый id),
         // остальные поля строк идентичны.

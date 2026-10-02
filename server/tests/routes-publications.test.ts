@@ -238,11 +238,18 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
       assert.ok(after.version > before.version);
 
       // --- полки -------------------------------------------------------------
-      const shelfCreated = await api(ctx, 'POST', '/shelves', { payload: { title: 'Полка' } });
+      // Сеть создаётся с дефолтной полкой «Полка» (0.11.1, задача 8c2660e6).
+      const initialShelves = await api(ctx, 'GET', '/shelves');
+      assert.equal(initialShelves.json().meta.total, 1, initialShelves.body);
+      assert.equal(
+        (initialShelves.json().data as Array<{ title: string }>)[0]?.title,
+        'Полка',
+      );
+      const shelfCreated = await api(ctx, 'POST', '/shelves', { payload: { title: 'Избранное' } });
       assert.equal(shelfCreated.statusCode, 201, shelfCreated.body);
       const shelfId = (shelfCreated.json().data as { id: string }).id;
       const shelves = await api(ctx, 'GET', '/shelves');
-      assert.equal(shelves.json().meta.total, 1);
+      assert.equal(shelves.json().meta.total, 2);
       const put = await api(ctx, 'POST', `/shelves/${shelfId}/items`, {
         payload: { publication_id: pub.id, position: 1 },
       });
@@ -432,8 +439,9 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
       assert.equal((await api(ctx, 'POST', `/publications/${pubFree.id}/trash`)).statusCode, 200);
       assert.equal((await api(ctx, 'POST', `/publications/${pubHeld.id}/trash`)).statusCode, 200);
       assert.equal((await api(ctx, 'POST', `/shelves/${shelf.id}/trash`)).statusCode, 200);
-      // Помеченная полка исчезает из библиотеки.
-      assert.equal((await api(ctx, 'GET', '/shelves')).json().meta.total, 0);
+      // Помеченная полка исчезает из библиотеки; дефолтная «Полка» остаётся
+      // (0.11.1, задача 8c2660e6) — ленивое создание не срабатывает.
+      assert.equal((await api(ctx, 'GET', '/shelves')).json().meta.total, 1);
 
       // GET /trash показывает оба раздела и честный blocked.
       const trash = (await api(ctx, 'GET', '/trash')).json().data as {
@@ -477,12 +485,12 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
       const restoredShelf = (await api(ctx, 'POST', '/shelves', { payload: { title: 'Возврат' } }))
         .json().data as { id: string };
       assert.equal((await api(ctx, 'POST', `/shelves/${restoredShelf.id}/trash`)).statusCode, 200);
-      assert.equal((await api(ctx, 'GET', '/shelves')).json().meta.total, 0);
+      assert.equal((await api(ctx, 'GET', '/shelves')).json().meta.total, 1);
       assert.equal(
         (await api(ctx, 'POST', `/shelves/${restoredShelf.id}/restore`)).statusCode,
         200,
       );
-      assert.equal((await api(ctx, 'GET', '/shelves')).json().meta.total, 1);
+      assert.equal((await api(ctx, 'GET', '/shelves')).json().meta.total, 2);
 
       // Журнал: purge публикаций и полок оставил строки.
       const pubActivity = (await api(ctx, 'GET', '/activity?entity_type=publication&limit=200'))
@@ -654,6 +662,121 @@ describe('routes-publications: real-time и видимость слоёв', { sk
       assert.equal(shelf.statusCode, 201, shelf.body);
       const shelfEvent = await nextEvent(base, (m) => m.type === 'shelf.updated', 5000);
       assert.ok(shelfEvent !== null, 'подписчик не получил событие полки');
+    } finally {
+      for (const ws of sockets.splice(0)) ws.close();
+      await closeRestContext(ctx);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Дефолтная полка «Полка» (0.11.1, задача 8c2660e6; карточка c80951ea v2)
+// ---------------------------------------------------------------------------
+
+describe('routes-publications: дефолтная полка «Полка» (8c2660e6)', { skip }, () => {
+  const sockets: WebSocket[] = [];
+  afterEach(() => {
+    for (const ws of sockets.splice(0)) ws.close();
+  });
+
+  it('новая сеть создаётся с полкой «Полка» в основе', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const res = await api(ctx, 'GET', '/shelves');
+      assert.equal(res.statusCode, 200, res.body);
+      const rows = res.json().data as Array<{ id: string; title: string }>;
+      assert.equal(rows.length, 1, res.body);
+      assert.equal(rows[0]?.title, 'Полка');
+      const row = ctx.ndb
+        .prepare('SELECT layer_id FROM shelves WHERE id = ?')
+        .get(rows[0]!.id) as { layer_id: string } | undefined;
+      assert.equal(row?.layer_id, BASE_LAYER_ID, 'дефолтная полка живёт в основе');
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('сеть без живых полок: GET создаёт «Полку»; удаление последней → пересоздание', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const first = (await api(ctx, 'GET', '/shelves')).json().data as Array<{
+        id: string;
+        title: string;
+      }>;
+      const firstId = first[0]!.id;
+      assert.equal((await api(ctx, 'DELETE', `/shelves/${firstId}`)).statusCode, 204);
+      const after = (await api(ctx, 'GET', '/shelves')).json().data as Array<{
+        id: string;
+        title: string;
+      }>;
+      assert.equal(after.length, 1, 'дефолтная полка создана заново');
+      assert.equal(after[0]?.title, 'Полка');
+      // id дефолтной полки детерминирован (8c2660e6): пересоздание даёт тот же
+      // id; важно, что строка снова живая и доступна.
+      assert.equal(after[0]?.id, firstId, 'пересоздана с детерминированным id');
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('одноимённая полка в корзине оживляется, а не дублируется', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const first = (await api(ctx, 'GET', '/shelves')).json().data as Array<{ id: string }>;
+      const id = first[0]!.id;
+      assert.equal((await api(ctx, 'POST', `/shelves/${id}/trash`)).statusCode, 200);
+      const after = (await api(ctx, 'GET', '/shelves')).json().data as Array<{
+        id: string;
+        title: string;
+        marked_for_deletion: boolean;
+      }>;
+      assert.equal(after.length, 1, after as unknown as string);
+      assert.equal(after[0]?.id, id, 'имя удержано корзиной — полка восстановлена');
+      assert.equal(after[0]?.marked_for_deletion, false);
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('ленивое создание идёт в основу даже когда сессия в рабочем слое', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const first = (await api(ctx, 'GET', '/shelves')).json().data as Array<{ id: string }>;
+      await api(ctx, 'DELETE', `/shelves/${first[0]!.id}`);
+      const layer = createLayer(ctx.ndb, {
+        parentId: BASE_LAYER_ID,
+        title: 'Слой полки',
+        createdBy: ctx.adminId,
+      });
+      setSessionLayer(ctx.ndb, ctx.adminId, 'lay', layer.id, 0);
+      const res = await api(ctx, 'GET', '/shelves', { headers: { 'client-id': 'lay' } });
+      const rows = res.json().data as Array<{ id: string; title: string }>;
+      assert.equal(rows.length, 1, res.body);
+      assert.equal(rows[0]?.title, 'Полка');
+      const row = ctx.ndb
+        .prepare('SELECT layer_id FROM shelves WHERE id = ?')
+        .get(rows[0]!.id) as { layer_id: string } | undefined;
+      assert.equal(row?.layer_id, BASE_LAYER_ID, 'создана в основе, не в рабочем слое');
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('ленивое создание шлёт подписчику событие shelf.updated', async () => {
+    const ctx = await buildRestContext();
+    let port = 0;
+    try {
+      await ctx.app.listen({ port: 0, host: '127.0.0.1' });
+      port = (ctx.app.server.address() as AddressInfo).port;
+      const first = (await api(ctx, 'GET', '/shelves')).json().data as Array<{ id: string }>;
+      assert.equal((await api(ctx, 'DELETE', `/shelves/${first[0]!.id}`)).statusCode, 204);
+
+      const ws = await connectWs(ctx, port, 'sub-default');
+      sockets.push(ws);
+      const res = await api(ctx, 'GET', '/shelves', { headers: { 'client-id': 'lazy-requester' } });
+      assert.equal(res.statusCode, 200, res.body);
+      const event = await nextEvent(ws, (m) => m.type === 'shelf.updated', 5000);
+      assert.ok(event !== null, 'подписчик не получил событие создания дефолтной полки');
     } finally {
       for (const ws of sockets.splice(0)) ws.close();
       await closeRestContext(ctx);
