@@ -491,14 +491,17 @@ export function mountPublicationWorkspace(
   }
 
   /**
-   * Состояние подсветки «Пересобрать»: устаревание по фактам realtime
-   * (`staleRebuild`) либо непринятые новые кандидаты в текущей сборке.
+   * Состояние подсветки «Пересобрать»: живой текст устарел по фактам realtime
+   * (`staleRebuild`). Новые кандидаты — отдельная плашка, в подсветку не
+   * входят: пересборка включает их в документ, и подсветка обязана сняться
+   * (замечание А2 приёмки b02ef1cf).
    */
   function updateRebuildStale(): void {
-    const hasCandidates = (assembly?.publication.new_candidates ?? 0) > 0;
-    const stale = staleRebuild || hasCandidates;
-    rebuildButton.classList.toggle('pub-ws-rebuild-stale', stale);
-    setButtonTitle(rebuildButton, stale ? t('publications.ws.rebuildStale') : t('publications.ws.rebuild'));
+    rebuildButton.classList.toggle('pub-ws-rebuild-stale', staleRebuild);
+    setButtonTitle(
+      rebuildButton,
+      staleRebuild ? t('publications.ws.rebuildStale') : t('publications.ws.rebuild'),
+    );
   }
 
   function markRebuildStale(): void {
