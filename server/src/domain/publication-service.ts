@@ -1167,10 +1167,21 @@ export function addPublicationExclusion(
 }
 
 /**
- * Снять исключение мысли. Симметричная валидация (ошибка 3882bd46): мысль
- * обязана существовать и входить в публикацию. Состав публикации от
- * пользователя не зависит (userId влияет лишь на сортировку рецепта), поэтому
- * он не передаётся.
+ * Снять исключение мысли.
+ *
+ * **Осиротевшая строка (3882bd46, дожим).** Если строка исключения физически
+ * существует (в т.ч. мысль уже выпала из публикации после смены рецепта),
+ * снятие разрешено и чистит её — иначе осиротевшая строка молча подавила бы
+ * мысль при возврате в отбор, а снять её было бы нечем. Симметричная валидация
+ * (мысль существует и входит в публикацию) применяется только когда строки
+ * нет: тогда снятие — no-op либо ошибка, но не «молчаливое» состояние.
+ *
+ * Чистку осиротевших строк в `rebuild` сознательно НЕ делаем: спека f9a20c3f
+ * ограничивает пересборку «assembly_date + мёртвые строки publication_order,
+ * никаких других данных».
+ *
+ * Состав публикации от пользователя не зависит (userId влияет лишь на
+ * сортировку рецепта), поэтому он не передаётся.
  */
 export function removePublicationExclusion(
   ndb: NetworkDb,
@@ -1179,8 +1190,15 @@ export function removePublicationExclusion(
 ): PublicationExclusion[] {
   return ndb.transaction(() => {
     const pub = getPublicationOrThrow(ndb, publicationId);
-    assertThoughtInPublication(ndb, publicationId, pub, thoughtId, '');
     const id = publicationExclusionId(publicationId, thoughtId);
+    // Физическая строка (включая другие слои и надгробия) — признак того, что
+    // исключение ставилось: снятие обязано её подчистить.
+    const physical = ndb
+      .prepare('SELECT 1 FROM publication_exclusions WHERE id = ? LIMIT 1') // layers:physical-read
+      .get(id);
+    if (physical === undefined) {
+      assertThoughtInPublication(ndb, publicationId, pub, thoughtId, '');
+    }
     const visible = ndb
       .prepare('SELECT 1 FROM publication_exclusions_v WHERE id = ? LIMIT 1')
       .get(id);

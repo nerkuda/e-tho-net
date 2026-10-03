@@ -71,7 +71,8 @@ function seedThought(ndb: NetworkDb, title: string, typeId: string): string {
 }
 
 /** Id существующего свойства-связи для рецепта (создаётся прямым SQL). */
-function seedProperty(ndb: NetworkDb, valueType = 'link'): string {  const id = randomUUID();
+function seedProperty(ndb: NetworkDb, valueType = 'link'): string {
+  const id = randomUUID();
   const now = new Date().toISOString();
   ndb
     .prepare(

@@ -22,6 +22,7 @@ import {
   addPublicationExclusion,
   createPublication,
   getPublicationAcceptedIds,
+  listPublicationExclusions,
   listPublicationOrder,
   removePublicationExclusion,
   setPublicationOrder,
@@ -487,6 +488,41 @@ describe('publication-assembly-service: тексты и исключения', {
         () => addPublicationExclusion(ndb, pub.id, stranger, USER),
         (e) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
       );
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('снятие исключения чистит осиротевшую строку, когда мысль выпала из отбора (3882bd46)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const plain = createThoughtType(ndb, { name: 'Plain' }, USER);
+      const other = createThoughtType(ndb, { name: 'Other' }, USER);
+      const section = seedThought(ndb, 'Section', type.id);
+      const text = seedThought(ndb, 'Text', plain.id);
+      const prop = seedTextProperty(ndb, type.id);
+      const lt = ndb.prepare('SELECT config FROM properties_v WHERE id = ?').get(prop) as {
+        config: string;
+      };
+      const linkTypeId = (JSON.parse(lt.config) as { link_type_id: string }).link_type_id;
+      seedLink(ndb, section, text, linkTypeId, 0);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(type.id), text_sources: [prop] },
+        USER,
+      );
+      // Текст — член публикации (содержимое раздела): исключение проходит.
+      assert.equal(addPublicationExclusion(ndb, pub.id, text, USER).length, 1);
+
+      // Рецепт перестал выбирать раздел, срез пересчитан → текст выпал из публикации.
+      updatePublication(ndb, pub.id, { title_recipe: recipeForType(other.id) }, USER);
+      setPublicationOrder(ndb, pub.id, [], USER);
+
+      // Снятие исключения разрешено (строка физически есть) и подчищает её:
+      // осиротевшая строка не подавит мысль при возврате в отбор.
+      assert.equal(removePublicationExclusion(ndb, pub.id, text).length, 0);
+      assert.equal(listPublicationExclusions(ndb, pub.id).length, 0);
     } finally {
       ndb.close();
     }
