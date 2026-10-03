@@ -1,0 +1,52 @@
+/* Ползунок — вид фасада `lib/ui/slider.ts` (задача ea1b5f14).
+
+   Нативный `<input type="range">` под классом `.ui-slider`: дорожка — приглушённый
+   фон, бегунок — акцент темы. Размеры — только токенами шкалы `styles.css`
+   (сторож `guard-ui-tokens`): магических px/rem/em здесь нет. Ползунок компактен
+   и живёт в шапке рабочей области публикации над рядом кнопок. */
+
+.ui-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: calc(var(--space-8) * 5);
+  height: var(--space-8);
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.ui-slider::-webkit-slider-runnable-track {
+  height: var(--space-2);
+  border-radius: var(--radius-s);
+  background: var(--border-strong, var(--border));
+}
+
+.ui-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--space-6);
+  height: var(--space-6);
+  margin-top: calc(var(--space-2) * -1);
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ui-slider::-moz-range-track {
+  height: var(--space-2);
+  border-radius: var(--radius-s);
+  background: var(--border-strong, var(--border));
+}
+
+.ui-slider::-moz-range-thumb {
+  width: var(--space-6);
+  height: var(--space-6);
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ui-slider:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: var(--space-1);
+}

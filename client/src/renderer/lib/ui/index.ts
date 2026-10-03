@@ -252,6 +252,13 @@ export {
 } from './nav-core.js';
 export type { NavAction, NavKeyModifiers, NavIndexOptions } from './nav-core.js';
 
+// Диапазонный ползунок — единый фасад (задача ea1b5f14): владелец задаёт
+// границы/шаг/начальное значение и обработчики, фасад владеет разметкой, ARIA
+// и показом текущего значения. Своих `<input type="range">` в экранах нет —
+// за этим следит сторож `guard-ui-slider`.
+export { SLIDER_CLASS, uiSlider } from './slider.js';
+export type { SliderOptions, SliderHandle } from './slider.js';
+
 // Общий КОМПОНЕНТ СПИСКА (ADR fadf99e0, требование 93115633, задача 7893e429):
 // навигация списков (лента «Дневника», библиотека «Публикаций») через общее
 // ядро. Разметку caller рисует keyed-сверкой; компонент отдаёт адаптеру
