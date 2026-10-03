@@ -72,11 +72,16 @@ function createEntry<T>(key: string, fetcher: QueryFetcher<T> | null): QueryEntr
   return entry;
 }
 
-/** Найти запись или создать; при наличии — обновить fetcher. */
+/**
+ * Найти запись или создать. При наличии записи fetcher обновляется ТОЛЬКО
+ * непустым значением (блокер 1 верификатора: `setQueryData`/`refetchQuery` без
+ * явного fetcher не должны обнулять загрузчик живой записи — иначе её ключ
+ * больше никогда не перезапросится).
+ */
 function ensureEntry<T>(key: string, fetcher: QueryFetcher<T> | null): QueryEntry<T> {
   const existing = getEntry(key);
   if (existing === undefined) return createEntry<T>(key, fetcher);
-  existing.fetcher = fetcher as unknown as QueryFetcher<unknown> | null;
+  if (fetcher !== null) existing.fetcher = fetcher as unknown as QueryFetcher<unknown>;
   return asEntry<T>(existing);
 }
 
@@ -146,6 +151,10 @@ function startFetch<T>(entry: QueryEntry<T>): Promise<void> {
   if (fetcher === null || entry.promise !== null) return entry.promise ?? Promise.resolve();
   entry.state = { ...entry.state, status: 'loading' };
   entry.version += 1;
+  // Токен запуска (блокер 2 верификатора): если за время полёта запись
+  // получила свежие данные (мутация через setQueryData или другое событие),
+  // version изменится, и устаревший ответ не затрёт свежее состояние.
+  const startVersion = entry.version;
   notify(entry);
   const promise = fetcher()
     .then((data) => {
@@ -153,7 +162,7 @@ function startFetch<T>(entry: QueryEntry<T>): Promise<void> {
       const live = getEntry(entry.key);
       if (live === undefined) return;
       const liveEntry = asEntry<T>(live);
-      liveEntry.promise = null;
+      if (liveEntry.version !== startVersion) return; // устаревший ответ — отбросить
       liveEntry.state = { status: 'fresh', data, error: null };
       liveEntry.version += 1;
       notify(liveEntry);
@@ -162,7 +171,7 @@ function startFetch<T>(entry: QueryEntry<T>): Promise<void> {
       const live = getEntry(entry.key);
       if (live === undefined) return;
       const liveEntry = asEntry<T>(live);
-      liveEntry.promise = null;
+      if (liveEntry.version !== startVersion) return; // устаревшая ошибка — отбросить
       // Данные не теряем: статус снова stale, ошибка — рядом.
       liveEntry.state = { ...liveEntry.state, status: 'stale', error };
       liveEntry.version += 1;

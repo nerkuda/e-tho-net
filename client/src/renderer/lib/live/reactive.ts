@@ -47,6 +47,9 @@ interface Sub<T> {
  * значение. Один микротаск — одна доставка на подписчика.
  */
 const pendingStores = new Set<{ flush(): void }>();
+
+/** Производные, ждущие пересчёта в текущем батче. */
+const pendingDerived = new Set<{ flushDerived(): void }>();
 let flushScheduled = false;
 
 function scheduleFlush(): void {
@@ -54,9 +57,15 @@ function scheduleFlush(): void {
   flushScheduled = true;
   queueMicrotask(() => {
     flushScheduled = false;
-    const batch = [...pendingStores];
+    // Сначала значения: их подписчики (в т.ч. производные) пополнят очередь на
+    // пересчёт. Затем производные — один пересчёт/доставка на тик даже при
+    // изменении нескольких источников (замечание 7 верификатора).
+    const stores = [...pendingStores];
     pendingStores.clear();
-    for (const store of batch) store.flush();
+    for (const store of stores) store.flush();
+    const derived = [...pendingDerived];
+    pendingDerived.clear();
+    for (const item of derived) item.flushDerived();
   });
 }
 
@@ -171,9 +180,9 @@ class Derived<S, T> implements Readable<T> {
       source.subscribe((value) => this.onSource(index, value)),
     );
     this.started = true;
-    // Источники при подписке отдали текущие значения синхронно — пересчёт
-    // нужен один раз, после того как заполнены все lastVals.
-    this.recompute();
+    // Источники при подписке отдали текущие значения синхронно — считаем срез
+    // сразу, не откладывая (нужен для немедленной доставки в subscribe).
+    this.computeNow();
   }
 
   private stop(): void {
@@ -184,10 +193,24 @@ class Derived<S, T> implements Readable<T> {
 
   private onSource(index: number, value: S): void {
     this.lastVals[index] = value;
-    if (this.started) this.recompute();
+    if (!this.started) return;
+    // Пересчёт — батчем в микротаске: несколько источников за тик дают одну
+    // доставку (замечание 7 верификатора).
+    pendingDerived.add(this);
+    scheduleFlush();
   }
 
-  private recompute(): void {
+  /** Посчитать срез без уведомления подписчиков. */
+  private computeNow(): void {
+    const next = this.fn(this.lastVals as S[]);
+    if (!this.hasValue || !Object.is(this.value, next)) {
+      this.value = next;
+      this.hasValue = true;
+    }
+  }
+
+  /** Пересчёт и доставка (зовёт микротаск-планировщик). */
+  public flushDerived(): void {
     const next = this.fn(this.lastVals as S[]);
     if (this.hasValue && Object.is(this.value, next)) return;
     this.value = next;

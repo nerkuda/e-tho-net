@@ -24,7 +24,7 @@ import type { AnyRealtimeEvent, RealtimeEvent, RealtimeEventType } from '@etn/sh
 
 import { patchEntity, putEntity, removeEntity, type EntityKind } from './entities.js';
 import { queryKeys } from './query-keys.js';
-import { invalidateQueries, setQueryData } from './query-registry.js';
+import { hasQuery, invalidateQueries, setQueryData } from './query-registry.js';
 
 /** Правило маршрутизации одного события. */
 export interface RouteRule {
@@ -47,8 +47,8 @@ export interface RouteContext {
 export interface RouteResult {
   /** Событие обработано таблицей и прошло дедуп. */
   routed: boolean;
-  /** Почему не обработано: опоздавшее, неизвестный тип, чужая сеть. */
-  reason?: 'stale' | 'unknown' | 'foreign';
+  /** Почему не обработано: опоздавшее, намеренно игнорируемое, неизвестный тип, чужая сеть. */
+  reason?: 'stale' | 'ignored' | 'unknown' | 'foreign';
   /** Инвалидированные ключи (отсортированы, без дублей). */
   invalidated: string[];
   /** Затронутые записи нормализованного кэша. */
@@ -79,8 +79,20 @@ function asPatch(value: unknown): Record<string, unknown> {
   return (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
 }
 
+/**
+ * Синхронизировать запись-проекцию `entity:@kind:@id` с нормализованным кэшем
+ * (замечание 3 верификатора): mutator пишет в эту запись, роутер обязан делать
+ * то же — иначе подписчик проекции остаётся со старым снимком. Обновляем только
+ * уже существующую запись (подписант), чтобы не плодить пустых ключей.
+ */
+function syncProjection(kind: EntityKind, id: string, entity: unknown): void {
+  const key = queryKeys.entity(kind, id);
+  if (hasQuery(key)) setQueryData(key, entity);
+}
+
 function put(kind: EntityKind, id: string, entity: unknown, evt: AnyRealtimeEvent): string[] {
-  putEntity(kind, id, entity, { seq: evt.seq });
+  const record = putEntity(kind, id, entity, { seq: evt.seq });
+  syncProjection(kind, id, record.entity);
   return [`${kind}:${id}`];
 }
 
@@ -91,12 +103,14 @@ function patch(
   evt: AnyRealtimeEvent,
   version?: number,
 ): string[] {
-  patchEntity(kind, id, asPatch(changes), { seq: evt.seq, version });
+  const record = patchEntity(kind, id, asPatch(changes), { seq: evt.seq, version });
+  syncProjection(kind, id, record?.entity);
   return [`${kind}:${id}`];
 }
 
 function drop(kind: EntityKind, id: string): string[] {
   removeEntity(kind, id);
+  syncProjection(kind, id, undefined);
   return [`${kind}:${id}`];
 }
 
@@ -469,6 +483,39 @@ export const realtimeRoutes: RouteTable = {
   ],
 };
 
+/**
+ * Типы событий, НАМЕРЕННО не влияющие на кэш слоя (замечание 4 верификатора).
+ * Полнота таблицы относительно `REALTIME_EVENT_TYPES` проверяется сторожем
+ * `guard-reactive-layer.test.ts`: каждый тип обязан быть либо в
+ * {@link realtimeRoutes}, либо здесь.
+ *
+ * Почему игнорируются:
+ *  - `network.deleted`, `member.*` — смена доступа/членства ведёт сессией вне
+ *    слоя данных (закрытие вкладки/сети в `realtime.ts` и app-контроллере);
+ *  - `presence.*` — присутствие не хранится в нормализованном кэше;
+ *  - `thought-view.updated` — журнал «просмотрено», не данные экранов;
+ *  - `edit.*` — мягкие захваты объекта, живут в `lib/lock-cache.ts`;
+ *  - `thought-type-view.run` — аудит исполнения отбора, клиент переисполняет
+ *    отборы сам при смене режима.
+ */
+export const IGNORED_REALTIME_EVENT_TYPES: readonly RealtimeEventType[] = [
+  'network.deleted',
+  'member.added',
+  'member.removed',
+  'member.role_changed',
+  'presence.joined',
+  'presence.left',
+  'presence.focus_changed',
+  'thought-view.updated',
+  'edit.acquired',
+  'edit.released',
+  'edit.cleared',
+  'thought-type-view.run',
+];
+
+/** Быстрый поиск по {@link IGNORED_REALTIME_EVENT_TYPES}. */
+const IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set(IGNORED_REALTIME_EVENT_TYPES);
+
 // ---------------------------------------------------------------------------
 // Маршрутизация
 // ---------------------------------------------------------------------------
@@ -492,7 +539,12 @@ export function routeRealtimeEvent(evt: AnyRealtimeEvent, ctx: RouteContext = {}
   }
   const rules = realtimeRoutes[evt.type];
   if (rules === undefined) {
-    return { routed: false, reason: 'unknown', invalidated: [], patched: [] };
+    return {
+      routed: false,
+      reason: IGNORED_EVENT_TYPES.has(evt.type) ? 'ignored' : 'unknown',
+      invalidated: [],
+      patched: [],
+    };
   }
   const last = lastSeqByNetwork.get(evt.network_id);
   if (last !== undefined && evt.seq <= last) {

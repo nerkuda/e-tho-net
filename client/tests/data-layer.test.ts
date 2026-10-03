@@ -195,6 +195,51 @@ describe('реестр запросов', () => {
     assert.deepEqual(seen.at(-1), ['a', 'b']);
     unsub();
   });
+
+  it('блокер 1: setQueryData не обнуляет fetcher — инвалидация перезапрашивает', async () => {
+    let calls = 0;
+    const fetcher = async (): Promise<{ n: number }> => {
+      calls += 1;
+      return { n: calls };
+    };
+    const key = 'blk1:key';
+    const unsub = subscribeQuery(key, fetcher, () => undefined);
+    await settle();
+    assert.equal(calls, 1, 'подписка запустила запрос');
+
+    setQueryData(key, { n: 100 });
+    assert.equal(getQueryState<{ n: number }>(key).status, 'fresh');
+
+    invalidateQueries(key);
+    await settle();
+    assert.equal(calls, 2, 'fetcher жив: ключ перезапрашивается после мутации');
+    assert.equal(getQueryState<{ n: number }>(key).data?.n, 2);
+    unsub();
+  });
+
+  it('блокер 2: устаревший фетч не затирает результат мутации', async () => {
+    let resolveFetch: ((value: string) => void) | undefined;
+    const fetcher = (): Promise<string> =>
+      new Promise<string>((resolve) => {
+        resolveFetch = resolve;
+      });
+    const key = 'blk2:key';
+    const unsub = subscribeQuery(key, fetcher, () => undefined); // запрос в полёте
+
+    // Пока фетч в полёте, пришла свежая мутация.
+    setQueryData(key, 'MUTATION');
+    assert.equal(getQueryState<string>(key).data, 'MUTATION');
+
+    // Старый ответ приходит после — он обязан быть отброшен по версии записи.
+    resolveFetch?.('STALE_FETCH');
+    await settle();
+    assert.equal(
+      getQueryState<string>(key).data,
+      'MUTATION',
+      'поздний фетч не должен затирать свежий результат мутации',
+    );
+    unsub();
+  });
 });
 
 describe('роутер событий', () => {
@@ -248,10 +293,28 @@ describe('роутер событий', () => {
     assert.equal(res.reason, 'foreign');
   });
 
-  it('неизвестный тип не считается маршрутизированным', () => {
+  it('намеренно игнорируемый тип даёт reason «ignored»', () => {
     const res = routeRealtimeEvent(mkEvent('presence.joined', { user_id: 'u' }, 4), { networkId: NET });
     assert.equal(res.routed, false);
-    assert.equal(res.reason, 'unknown');
+    assert.equal(res.reason, 'ignored');
+  });
+
+  it('патч кэша синхронизирует запись реестра entity:@kind:@id (замечание 3)', async () => {
+    const key = queryKeys.entity('thought', 't1');
+    const unsub = subscribeQuery(key, async () => ({ id: 't1', title: 'old', version: 1 }), () => undefined);
+    await settle();
+    assert.equal(asRecord(getQueryState<Record<string, unknown>>(key).data)['title'], 'old');
+
+    routeRealtimeEvent(
+      mkEvent('thought.updated', { id: 't1', changes: { title: 'new' }, version: 2 }, 1),
+      { networkId: NET },
+    );
+    assert.equal(
+      asRecord(getQueryState<Record<string, unknown>>(key).data)['title'],
+      'new',
+      'роутер обязан обновить запись-проекцию, а не только нормализованный кэш',
+    );
+    unsub();
   });
 });
 
@@ -382,5 +445,99 @@ describe('паритет: поток событий сети гасит ровн
       ['chronicle-feed', `indicators:@${focusId}`, 'pub-assembly:@p1'].sort(),
     );
     assert.deepEqual(comment.patched, ['comment:c1']);
+  });
+
+  it('публикации/полки/вложения/свойства/слои (замечание 6)', () => {
+    const P1 = 'p1';
+    registerLive([
+      queryKeys.focus('t1'),
+      queryKeys.focus('other'),
+      queryKeys.structuresPageAll(),
+      queryKeys.chronicleFeedAll(),
+      queryKeys.publicationsListAll(),
+      queryKeys.shelves(),
+      queryKeys.publicationCard(P1),
+      queryKeys.publicationAssembly(P1),
+      queryKeys.indicators('t1'),
+      queryKeys.indicators('other'),
+      queryKeys.attachments('thought', 't1'),
+      queryKeys.layerOverrides(),
+    ]);
+
+    // publication.updated — патч публикации + список/карточка/документ.
+    const pubUpdated = routeRealtimeEvent(
+      mkEvent('publication.updated', { id: P1, changes: { title: 'X' }, version: 2 }, 1),
+      { networkId: NET },
+    );
+    assert.deepEqual(pubUpdated.patched, [`publication:${P1}`]);
+    assert.deepEqual(
+      pubUpdated.invalidated,
+      ['publications-list', `pub-card:@${P1}`, `pub-assembly:@${P1}`].sort(),
+    );
+
+    // publication.purged — удаление сущности + те же ключи.
+    const pubPurged = routeRealtimeEvent(mkEvent('publication.purged', { id: P1 }, 2), { networkId: NET });
+    assert.deepEqual(pubPurged.patched, [`publication:${P1}`]);
+    assert.deepEqual(
+      pubPurged.invalidated,
+      ['publications-list', `pub-card:@${P1}`, `pub-assembly:@${P1}`].sort(),
+    );
+
+    // shelf.updated — патч полки + список полок/библиотеки.
+    const shelf = routeRealtimeEvent(
+      mkEvent('shelf.updated', { shelf: { id: 's1', title: 'S' } }, 3),
+      { networkId: NET },
+    );
+    assert.deepEqual(shelf.patched, ['shelf:s1']);
+    assert.deepEqual(shelf.invalidated, ['publications-list', 'shelves'].sort());
+
+    // attachment.created — владелец известен: адресные ключи.
+    const attCreated = routeRealtimeEvent(
+      mkEvent('attachment.created', { attachment: { id: 'a1', owner_type: 'thought', owner_id: 't1' } }, 4),
+      { networkId: NET },
+    );
+    assert.deepEqual(attCreated.patched, ['attachment:a1']);
+    assert.deepEqual(
+      attCreated.invalidated,
+      ['focus:@t1', 'indicators:@t1', 'attachments:@thought:@t1'].sort(),
+    );
+
+    // attachment.deleted — владельца в payload нет: сброс всех наборов (broad).
+    const attDeleted = routeRealtimeEvent(mkEvent('attachment.deleted', { id: 'a1' }, 5), { networkId: NET });
+    assert.deepEqual(attDeleted.patched, ['attachment:a1']);
+    assert.deepEqual(
+      attDeleted.invalidated,
+      ['indicators:@t1', 'indicators:@other', 'attachments:@thought:@t1'].sort(),
+    );
+
+    // property-value.set — окрестность владельца-мысли.
+    const propSet = routeRealtimeEvent(
+      mkEvent('property-value.set', { owner_type: 'thought', owner_id: 't1', property_id: 'pp', value: 'v' }, 6),
+      { networkId: NET },
+    );
+    assert.deepEqual(propSet.patched, []);
+    assert.deepEqual(
+      propSet.invalidated,
+      [
+        'chronicle-feed',
+        'focus:@t1',
+        'focus:@other',
+        'publications-list',
+        'structures-page',
+      ].sort(),
+    );
+
+    // layer.merged — полный ре-синк видимого состояния.
+    const layer = routeRealtimeEvent(mkEvent('layer.merged', {}, 7), { networkId: NET });
+    assert.deepEqual(
+      layer.invalidated,
+      [
+        'chronicle-feed',
+        'focus:@t1',
+        'focus:@other',
+        'layer-overrides',
+        'structures-page',
+      ].sort(),
+    );
   });
 });

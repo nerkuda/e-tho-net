@@ -23,6 +23,9 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { REALTIME_EVENT_TYPES } from '@etn/shared';
+
+import { IGNORED_REALTIME_EVENT_TYPES, realtimeRoutes } from '../src/renderer/lib/live/event-router.js';
 import { assertGuardClean } from './guard-helpers.js';
 
 const RENDERER_ROOT = path.resolve(
@@ -37,14 +40,13 @@ const RENDERER_ROOT = path.resolve(
  *
  * TODO G5 — редактор (комментарии/свойства/упоминания/менеджер свойств/типы).
  * TODO G4 — публикации (карточка).
- * TODO G6 — старый switch и легаси-леера.
+ * TODO G6 — старый switch (`realtime-ui.ts`), легаси-леера (`layers.ts`) и мост
+ * `app.ts` (регистрация `applyRealtimeToUi`, app.ts:612).
  * `lib/lock-cache.ts` — инфраструктура замков, прямой подписчик допустим.
  */
 const ON_REALTIME_WHITELIST = new Set<string>([
   // инфраструктура слоя
   'realtime.ts',
-  'app.ts',
-  'realtime-ui.ts',
   'lib/lock-cache.ts',
   // G4 — публикации
   'editor/publication-card.ts',
@@ -55,7 +57,9 @@ const ON_REALTIME_WHITELIST = new Set<string>([
   'editor/mentions-annotate.ts',
   'screens/property-manager.ts',
   'screens/thought-type/views-tab.ts',
-  // G6 — легаси-леера
+  // G6 — легаси-мост, switch и легаси-леера
+  'app.ts',
+  'realtime-ui.ts',
   'screens/layers.ts',
 ].map((p) => p.replace(/\\/g, '/')));
 
@@ -73,6 +77,31 @@ const LOCAL_CHANNEL_IMPORT_PATTERN =
   /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"][^'"]*(?:publication-events|attachment-events)(?:\.js)?['"]/;
 
 describe('guard: реактивный слой данных (269016e2, G1)', () => {
+  it('таблица маршрутов полна: каждый тип либо в таблице, либо в ignore-списке', () => {
+    // Замечание 4 верификатора: типы, не влияющие на кэш слоя, обязаны быть
+    // перечислены ЯВНО (IGNORED_REALTIME_EVENT_TYPES), а не выпадать из таблицы
+    // молча. Новый тип в REALTIME_EVENT_TYPES заставит осознанно отнести его
+    // к маршрутам или к игнорируемым.
+    const ignored = new Set<string>(IGNORED_REALTIME_EVENT_TYPES);
+    const missing = REALTIME_EVENT_TYPES.filter(
+      (type) => realtimeRoutes[type] === undefined && !ignored.has(type),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `Типы realtime-событий без маршрута и без ignore-списка (${missing.length}):\n` +
+          missing.map((t) => `  • ${t}`).join('\n') +
+          '\nДобавь маршрут в realtimeRoutes или запись в IGNORED_REALTIME_EVENT_TYPES (event-router.ts).',
+      );
+    }
+    // Обратная сторона: игнорируемый тип не должен одновременно иметь маршрут.
+    const both = IGNORED_REALTIME_EVENT_TYPES.filter((type) => realtimeRoutes[type] !== undefined);
+    if (both.length > 0) {
+      throw new Error(
+        `Типы одновременно и в таблице, и в ignore-списке: ${both.join(', ')}`,
+      );
+    }
+  });
+
   it('прямые подписки onRealtimeEvent только у замороженного whitelist', () => {
     assertGuardClean(RENDERER_ROOT, [
       {
