@@ -143,16 +143,35 @@ export const realtimeRoutes: RouteTable = {
   'thought.updated': [
     ruleFor<'thought.updated'>({
       patch: (evt) => patch('thought', evt.data.id, evt.data.changes, evt, evt.data.version),
-      invalidate: (evt) => [
-        queryKeys.focus(evt.data.id),
-        queryKeys.structuresPageAll(),
-        // Лента «Дневника» зависит от правки мысли ТОЛЬКО если мысль видна её
-        // чипсом — гасим адресный ключ мысли (замечание G3): невидимая правка
-        // ленте не адресуется (экран сверяет id со своими чипсами).
-        queryKeys.chronicleThought(evt.data.id),
-        queryKeys.pins(),
-        queryKeys.publicationAssemblyAll(),
-      ],
+      invalidate: (evt) => {
+        const changes = evt.data.changes as Record<string, unknown>;
+        const keys = [
+          queryKeys.focus(evt.data.id),
+          queryKeys.structuresPageAll(),
+          // Лента «Дневника» зависит от правки мысли ТОЛЬКО если мысль видна её
+          // чипсом — гасим адресный ключ мысли (замечание G3): невидимая правка
+          // ленте не адресуется (экран сверяет id со своими чипсами).
+          queryKeys.chronicleThought(evt.data.id),
+          queryKeys.pins(),
+          queryKeys.publicationAssemblyAll(),
+        ];
+        // Состав активного отбора холста (блокер G3): смена типа/актуальности/
+        // пометки на удаление может ВВЕСТИ мысль в отбор — холст переисполняет
+        // `views.run` независимо от видимости старого результата.
+        if (
+          changes['type_id'] !== undefined ||
+          changes['active'] !== undefined ||
+          changes['marked_for_deletion'] !== undefined
+        ) {
+          keys.push(queryKeys.viewComposition());
+        }
+        // Поля, по которым отбор может искать ключевыми словами: холст реагирует
+        // только если определение его активного отбора использует `keywords`.
+        if (changes['title'] !== undefined || changes['synonyms'] !== undefined) {
+          keys.push(queryKeys.viewCompositionKeywords());
+        }
+        return keys;
+      },
     }),
   ],
   'thought.deleted': [

@@ -102,9 +102,9 @@ describe('лента «Дневника»: refresh сохраняет загру
 
     // 1) Отложенный перезапрос по инвалидации слоя (G3) — тот же помощник.
     assert.match(
-      bodyOf('function scheduleChronicleFeedRefresh('),
-      /reloadKeepingDepth\(\)/,
-      'scheduleChronicleFeedRefresh сохраняет глубину через помощник',
+      bodyOf('async function refreshFeedAndCalendar('),
+      /await reloadKeepingDepth\(\)/,
+      'refreshFeedAndCalendar сохраняет глубину через помощник',
     );
     // 2) Удаление записи.
     assert.match(

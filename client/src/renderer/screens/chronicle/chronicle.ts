@@ -458,6 +458,7 @@ export async function ensureChronicleInitialised(): Promise<void> {
   total = 0;
   slot = null;
   month = null;
+  fullRefreshPending = false;
   collapsedDaysLoaded = false;
   collapsedDays.clear();
   collapsedRecordsLoaded = false;
@@ -654,6 +655,12 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     ) {
       void ensureChronicleInitialised();
     }
+    // Показ скрытого вида снимает отложенную пометку одним перезапросом
+    // (ошибка 8e702d8c) — событий копилось сколько угодно, запрос один.
+    if (store.state.activeView === 'chronicle' && fullRefreshPending) {
+      fullRefreshPending = false;
+      void refreshFeedAndCalendar();
+    }
   });
 
   return () => {
@@ -795,6 +802,11 @@ let chronicleSnapshotSeq = 0;
 /** Окно дебаунса перезапроса ленты: одна пачка событий → один перезапрос. */
 const CHRONICLE_REFRESH_WINDOW_MS = 250;
 let feedRefreshTimer: number | null = null;
+/**
+ * Скрытый экран получил событие (ошибка 8e702d8c): снимок грязный, перезапрос
+ * отложен до показа вида «Дневник».
+ */
+let fullRefreshPending = false;
 
 /** Зарегистрировать ключ снимка ленты в реестре (инвалидации его видят). */
 function retargetChronicleFeed(): void {
@@ -837,18 +849,30 @@ function bindChronicleFeed(): void {
  * Отложенный перезапрос ленты по инвалидации слоя. Глубину ленты сохраняем
  * (`reloadKeepingDepth`) — дозагруженные «+50» не теряются, прокрутка не
  * прыгает (ошибка f5809943); календарь и его счётчики синхронизируются следом.
+ *
+ * Скрытый экран (активен другой вид) сетевых перезагрузок вхолостую не гоняет —
+ * по образцу «Структур» (ошибка 8e702d8c): помечаем снимок «грязным», перезапрос
+ * идёт при показе вида (см. store-подписчик в `mountChronicle`).
  */
 function scheduleChronicleFeedRefresh(): void {
   if (host === null) return;
+  if (store.state.activeView !== 'chronicle') {
+    fullRefreshPending = true;
+    return;
+  }
   if (feedRefreshTimer !== null) window.clearTimeout(feedRefreshTimer);
   feedRefreshTimer = window.setTimeout(() => {
     feedRefreshTimer = null;
     if (host === null) return;
-    void reloadKeepingDepth().then(() => {
-      syncCalendar();
-      void refreshCalendarCounts();
-    });
+    void refreshFeedAndCalendar();
   }, CHRONICLE_REFRESH_WINDOW_MS);
+}
+
+/** Перезапрос ленты до глубины + синхронизация календаря и счётчиков. */
+async function refreshFeedAndCalendar(): Promise<void> {
+  await reloadKeepingDepth();
+  syncCalendar();
+  void refreshCalendarCounts();
 }
 
 /** Опубликовать снимок ленты в кэш слоя (наблюдатели/диагностика). */

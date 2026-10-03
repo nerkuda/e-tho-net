@@ -359,11 +359,13 @@ describe('realtime-обновление нижней зоны в режиме о
     dispose();
   });
 
-  it('thought.updated видимой строки отбора переисполняет отбор; невидимой — нет (замечание G2)', async () => {
+  it('вход в отбор и видимая строка переисполняют отбор; невидимая правка без полей-признаков — нет', async () => {
     const dispose = await mountWithView();
     assert.ok(viewRunCount >= 1, 'отбор по умолчанию исполнился');
 
-    // Мысль ВНЕ окрестности и ВНЕ результата отбора: правка не повод гонять views.run.
+    // 1) Мысль ВНЕ окрестности и ВНЕ результата отбора, правка без полей,
+    //    влияющих на состав отбора (заголовок, но отбор не использует keywords):
+    //    views.run НЕ переисполняется.
     const invisibleId = '00000000-0000-4000-8000-000000000999';
     const beforeRun = viewRunCount;
     const invisibleEvt = {
@@ -377,23 +379,44 @@ describe('realtime-обновление нижней зоны в режиме о
     eventRouter.routeRealtimeEvent(invisibleEvt, { networkId: NETWORK_ID });
     realtimeUi.applyRealtimeToUi(invisibleEvt);
     await settle();
-    assert.equal(viewRunCount, beforeRun, 'правка невидимой мысли не переисполняет отбор');
+    assert.equal(viewRunCount, beforeRun, 'правка без полей-признаков отбор не переисполняет');
 
-    // Мысль, УЖЕ видимая строкой отбора: её строка могла измениться — отбор
-    // обязан переисполниться.
+    // 2) «Вход» в отбор (блокер G3): смена типа/актуальности у НЕвидимой мысли
+    //    может ввести её в отбор — views.run обязан переисполниться, даже если
+    //    старое видимое множество не содержит записи.
+    const afterInvisible = viewRunCount;
+    const entryEvt = {
+      ...foreignEvent('thought.updated', {
+        id: invisibleId,
+        changes: { type_id: TYPE_ID, active: true },
+        version: 3,
+      }),
+      seq: 3,
+    } as any;
+    eventRouter.routeRealtimeEvent(entryEvt, { networkId: NETWORK_ID });
+    realtimeUi.applyRealtimeToUi(entryEvt);
+    await settle();
+    assert.ok(
+      viewRunCount > afterInvisible,
+      'смена типа/актуальности переисполняет отбор (мысль могла войти)',
+    );
+
+    // 3) Мысль, УЖЕ видимая строкой отбора: её строка могла измениться — отбор
+    //    обязан переисполниться (направление «выход»/обновление строки).
     const visibleId = 'existing';
+    const beforeVisible = viewRunCount;
     const visibleEvt = {
       ...foreignEvent('thought.updated', {
         id: visibleId,
         changes: { title: 'Видимая правка' },
         version: 2,
       }),
-      seq: 3,
+      seq: 4,
     } as any;
     eventRouter.routeRealtimeEvent(visibleEvt, { networkId: NETWORK_ID });
     realtimeUi.applyRealtimeToUi(visibleEvt);
     await settle();
-    assert.ok(viewRunCount > beforeRun, 'правка видимой строки отбора переисполняет отбор');
+    assert.ok(viewRunCount > beforeVisible, 'правка видимой строки отбора переисполняет отбор');
     dispose();
   });
 });

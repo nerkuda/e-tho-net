@@ -275,6 +275,46 @@ describe('роутер событий', () => {
     ].sort());
   });
 
+  it('thought.updated с type_id/active сигналит состав отбора; прочие поля — нет (блокер G3)', () => {
+    registerLive([
+      queryKeys.viewComposition(),
+      queryKeys.viewCompositionKeywords(),
+    ]);
+
+    const typeChanged = routeRealtimeEvent(
+      mkEvent('thought.updated', { id: 't1', changes: { type_id: 'ty1' }, version: 2 }, 1),
+      { networkId: NET },
+    );
+    assert.ok(
+      typeChanged.invalidated.includes(queryKeys.viewComposition()),
+      'смена типа — сигнал «мысль могла войти в отбор»',
+    );
+    assert.ok(!typeChanged.invalidated.includes(queryKeys.viewCompositionKeywords()));
+
+    const activeChanged = routeRealtimeEvent(
+      mkEvent('thought.updated', { id: 't1', changes: { active: false }, version: 3 }, 2),
+      { networkId: NET },
+    );
+    assert.ok(activeChanged.invalidated.includes(queryKeys.viewComposition()));
+
+    const titleChanged = routeRealtimeEvent(
+      mkEvent('thought.updated', { id: 't1', changes: { title: 'new' }, version: 4 }, 3),
+      { networkId: NET },
+    );
+    assert.ok(
+      titleChanged.invalidated.includes(queryKeys.viewCompositionKeywords()),
+      'заголовок — сигнал keywords-поля (холст решит по определению отбора)',
+    );
+    assert.ok(!titleChanged.invalidated.includes(queryKeys.viewComposition()));
+
+    const decoration = routeRealtimeEvent(
+      mkEvent('thought.updated', { id: 't1', changes: { bg_color: '#fff' }, version: 5 }, 4),
+      { networkId: NET },
+    );
+    assert.ok(!decoration.invalidated.includes(queryKeys.viewComposition()));
+    assert.ok(!decoration.invalidated.includes(queryKeys.viewCompositionKeywords()));
+  });
+
   it('дедуп по seq: повтор и опоздавшее событие игнорируются', () => {
     const first = routeRealtimeEvent(mkEvent('thought.deleted', { id: 't9' }, 7), { networkId: NET });
     assert.equal(first.routed, true);

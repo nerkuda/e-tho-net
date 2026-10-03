@@ -100,6 +100,7 @@ import { initKbdNav, resetCanvasCursor, setCursor, syncCanvasCursor } from './kb
 import { mountZoneSplitters } from './zone-splitters.js';
 import { splitterElement } from '../lib/ui/splitter.js';
 import {
+  activeViewUsesKeywords,
   getActiveMode as getStripActiveMode,
   invalidateViewResultForRealtime,
   isThoughtInViewResult,
@@ -110,7 +111,7 @@ import {
   runActiveViewIfNeeded,
   type ViewResult,
 } from './focus-filter-strip.js';
-import { matchesKeyPrefix, queryKeys } from '../lib/live/query-keys.js';
+import { queryKeys } from '../lib/live/query-keys.js';
 import { onQueryInvalidated } from '../lib/live/query-registry.js';
 import { openThoughtDeleteDialog } from '../trash.js';
 
@@ -416,19 +417,24 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
   // (ошибка 4fca95c9). В режиме «Потомки» `invalidateViewResultForRealtime`
   // вернёт `false` — там изменения ловит ключ перерисовки.
   //
-  // Сужение (замечание G2 65286909): отбор переисполняется не на ЛЮБУЮ
-  // `focus`-префиксную инвалидацию, а только когда она касается самого холста:
+  // Сужение (замечание G2 65286909) + блокер G3: отбор переисполняется, когда
+  // инвалидация касается холста:
   //  - широкая `focus` (`focusAll`) — состав/порядок мог измениться целиком;
   //  - свой ключ `focus:@<текущий фокус>` — правка фокусной мысли;
-  //  - ключ мысли, УЖЕ видимой строкой отбора, — её строка могла измениться.
-  // Правка мысли вне окрестности И вне отбора (например, `focus:@<чужой id>`)
-  // лишний `views.run` не запускает.
+  //  - ключ мысли, УЖЕ видимой строкой отбора, — её строка могла измениться;
+  //  - сигнал `view-composition` — правка могла ВВЕСТИ мысль в отбор
+  //    (тип/актуальность/корзина), независимо от видимости старого результата;
+  //  - сигнал `view-composition-keywords` — поля keywords-критерия (заголовок/
+  //    синонимы), но только если активный отбор реально использует `keywords`.
+  // Правка мысли вне окрестности, вне отбора и без этих полей лишний
+  // `views.run` не запускает.
   const invalidationUnsubscribe = onQueryInvalidated((prefix) => {
     if (host?.isConnected !== true) return;
-    if (!matchesKeyPrefix(prefix, 'focus')) return;
     const ownFocusId = store.state.focus?.focused.id;
     const touchesCanvas =
       prefix === 'focus' ||
+      prefix === queryKeys.viewComposition() ||
+      (prefix === queryKeys.viewCompositionKeywords() && activeViewUsesKeywords()) ||
       (ownFocusId !== undefined && prefix === queryKeys.focus(ownFocusId)) ||
       (prefix.startsWith('focus:@') && isThoughtInViewResult(prefix.slice('focus:@'.length)));
     if (!touchesCanvas) return;

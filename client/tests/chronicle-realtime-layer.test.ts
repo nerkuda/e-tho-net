@@ -224,4 +224,17 @@ describe('chronicle G3: проводка экрана и шины', () => {
     assert.ok(!realtimeUi.includes('scheduleChronicleRefresh'));
     assert.ok(!realtimeUi.includes('screens/chronicle/chronicle.js'), 'нет импорта экрана в шину');
   });
+
+  it('скрытый экран откладывает перезапрос до показа (8e702d8c)', () => {
+    assert.match(
+      chronicle,
+      /if \(store\.state\.activeView !== 'chronicle'\) \{\s*fullRefreshPending = true;/,
+      'скрытый вид только помечает снимок грязным',
+    );
+    assert.match(
+      chronicle,
+      /store\.state\.activeView === 'chronicle' && fullRefreshPending[\s\S]{0,160}?refreshFeedAndCalendar\(\)/,
+      'показ вида снимает пометку одним перезапросом',
+    );
+  });
 });
