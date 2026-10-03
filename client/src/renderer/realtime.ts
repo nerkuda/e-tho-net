@@ -17,6 +17,7 @@
 import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { etn } from './lib/etn.js';
+import { routeRealtimeEvent } from './lib/live/event-router.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
 import { store, type RtStatus } from './state.js';
 import { markTabDirty } from './screens/tabs/tab-state.js';
@@ -162,6 +163,12 @@ export function initRealtime(): void {
     if (evt.type === 'member.removed' && store.state.me?.id === evt.data.user_id) {
       effects.onNetworkLost();
     }
+    // Реактивный слой данных (G1 техпроекта 269016e2): событие идёт ДВУМЯ
+    // путями параллельно — старый switch через eventListeners (мигрирует в
+    // G2–G6) и новый декларативный роутер, который патчит нормализованный кэш
+    // и гасит ключи запросов. Пока никто не подписан на новые запросы, роутер
+    // не меняет поведение UI; границу сети уважает переданный networkId.
+    routeRealtimeEvent(evt, { networkId: store.state.networkId });
     for (const listener of eventListeners) listener(evt);
   });
 }
