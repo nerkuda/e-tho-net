@@ -75,6 +75,7 @@ import {
   type LibraryNavHandle,
 } from './library-nav.js';
 import { openPublicationWizard } from './wizard.js';
+import { routePublicationUpdate } from './update-routing.js';
 import {
   mountPublicationWorkspace,
   type PublicationOpenTarget,
@@ -248,17 +249,26 @@ export function closePublicationWorkspace(): void {
   invalidatePublications();
 }
 
-/** Realtime-событие правки КОНТЕНТА мысли в документе (комментарий раздела/текста). */
-export function applyPublicationDocumentRealtime(thoughtId?: string): void {
-  if (workspace?.isOpen() === true) workspace.reloadDocument(thoughtId);
+/**
+ * Realtime-событие правки КОНТЕНТА мысли в документе (постоянный комментарий
+ * раздела/текста). `bodyMd` — свежий текст из payload: пока живой текст устарел,
+ * блок правится из него БЕЗ чтения сборки (замечание-блокер 1 приёмки b02ef1cf).
+ */
+export function applyPublicationDocumentRealtime(ownerId?: string, bodyMd?: unknown): void {
+  if (workspace?.isOpen() === true) workspace.applyCommentRealtime(ownerId, bodyMd);
 }
 
 /**
  * Realtime-изменение мысли: в документе — точечное обновление её блока и
  * пометка устаревания, вне документа — ничего (замечание 2 приёмки b02ef1cf).
+ * `changes` пробрасывается для точечной правки заголовка, когда живой текст уже
+ * устарел (замечание-блокер 1 приёмки b02ef1cf).
  */
-export function applyPublicationThoughtRealtime(thoughtId: string): void {
-  if (workspace?.isOpen() === true) workspace.applyThoughtRealtime(thoughtId);
+export function applyPublicationThoughtRealtime(
+  thoughtId: string,
+  changes?: { title?: unknown },
+): void {
+  if (workspace?.isOpen() === true) workspace.applyThoughtRealtime(thoughtId, changes);
 }
 
 /**
@@ -273,30 +283,10 @@ export function applyPublicationCompositionRealtime(): void {
 
 /**
  * Поля `publication.updated`, меняющие СОСТАВ документа (рецепт и его
- * источники/нумерация). Их внешняя правка НЕ перечитывает сборку — только
- * помечает текст устаревшим (замечание 1 приёмки b02ef1cf).
+ * источники/нумерация), и контентные поля — вынесены в чистый модуль
+ * `./update-routing.ts` вместе с решением о маршруте (замечание-блокер 2
+ * приёмки b02ef1cf: смешанный PATCH применяет обе ветки).
  */
-const PUBLICATION_COMPOSITION_FIELDS: readonly string[] = [
-  'title_recipe',
-  'text_sources',
-  'extra_properties',
-  'numbering_from',
-  'numbering_to',
-];
-
-/**
- * Поля `publication.updated`, отображаемые в карточке/шапке/титульном блоке и
- * обновляемые точечно (правка другого клиента, пакет А).
- */
-const PUBLICATION_CONTENT_FIELDS: readonly string[] = [
-  'title',
-  'subtitle',
-  'summary_md',
-  'authorship',
-  'cover_attachment_id',
-  'cover_url',
-  'active',
-];
 
 /**
  * Локальная правка публикации (замечание А приёмки b02ef1cf): снимок из карточки
@@ -346,14 +336,12 @@ export function applyPublicationsRealtime(eventType: string, data?: unknown): vo
         workspace.reload();
         return;
       }
-      if (PUBLICATION_COMPOSITION_FIELDS.some((field) => field in changes)) {
-        workspace.markRebuildStale();
-        return;
-      }
-      if (PUBLICATION_CONTENT_FIELDS.some((field) => field in changes)) {
-        workspace.applyPublicationPatch(changes);
-        return;
-      }
+      // Состав помечает текст устаревшим, контент применяется точечно; обе
+      // ветки независимы — смешанный PATCH `{title, title_recipe}` даёт и
+      // подсветку, и новый заголовок (замечание-блокер 2 приёмки b02ef1cf).
+      const routing = routePublicationUpdate(changes);
+      if (routing.markStale) workspace.markRebuildStale();
+      if (routing.patch !== null) workspace.applyPublicationPatch(routing.patch);
       return;
     }
     // Порядок/исключения/пересборка/корзина — перечитывание (элемент 2ebacd12).

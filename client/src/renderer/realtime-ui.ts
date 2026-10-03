@@ -212,7 +212,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // Мысль В текущей сборке — точечное обновление её блока + пометка
       // устаревания (заголовок влияет на отбор); вне — ничего (замечание 2
       // приёмки b02ef1cf).
-      applyPublicationThoughtRealtime(evt.data.id);
+      applyPublicationThoughtRealtime(evt.data.id, evt.data.changes);
       invalidateRef(evt.data.id);
       // A pinned chip mirrors the thought's title/icon/styles — refresh it.
       if (store.state.pins.includes(evt.data.id)) {
@@ -276,7 +276,12 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // already invalidated by `invalidateIndicators`.
       invalidateIndicators(evt.data.comment.owner_id);
       applyChronicleRealtime(evt);
-      applyPublicationDocumentRealtime(evt.data.comment.owner_id);
+      // В документе публикации блок — это ПОСТОЯННЫЙ комментарий мысли; текст
+      // хроно-комментария блока не образует, поэтому его не пробрасываем.
+      applyPublicationDocumentRealtime(
+        evt.data.comment.owner_id,
+        evt.data.comment.kind === 'permanent' ? evt.data.comment.body_md : undefined,
+      );
       break;
 
     case 'comment.deleted':
@@ -295,8 +300,11 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // and updates it in place via its own `onRealtimeEvent` hook.
       invalidateIndicators(null);
       applyChronicleRealtime(evt);
-      // Событие несёт владельца — документ перечитываем только если он в сборке.
-      applyPublicationDocumentRealtime(evt.data.owner_id);
+      // Событие несёт владельца — документ обновляем только если владелец в
+      // сборке. `changes.body_md` — свежий текст постоянного комментария; payload
+      // не несёт `kind`, поэтому при активном stale правка идёт из него (см.
+      // оговорку о хроно-комментариях в хроно задачи b02ef1cf).
+      applyPublicationDocumentRealtime(evt.data.owner_id, evt.data.changes.body_md);
       break;
 
     case 'attachment.created':

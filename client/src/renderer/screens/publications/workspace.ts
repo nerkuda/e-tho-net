@@ -102,20 +102,23 @@ export interface PublicationWorkspaceHandle {
   /** Перечитать сборку и карточку (realtime/локальные правки). */
   reload(): void;
   /**
-   * Точечно перечитать документ при изменении КОНТЕНТА мысли (комментарий
-   * раздела/текста, заголовок). `thoughtId` — изменённая мысль: если её нет в
-   * текущей сборке, перечитывания не будет (замечание А2 приёмки b02ef1cf).
-   * Без `thoughtId` перечитывает безусловно.
+   * Realtime-изменение комментария мысли в документе (`comment.*`): если мысль
+   * ЕСТЬ в текущей сборке — обновить её блок. Пока живой текст устарел
+   * (`staleRebuild`), точечная правка берётся из `bodyMd` события, без чтения
+   * сборки (иначе материализуется отложенный рецепт, замечание-блокер 1 приёмки
+   * b02ef1cf). `bodyMd` не задан (удаление, хроно-комментарий) — блок не
+   * трогаем до пересборки. Мысль вне документа — ничего.
    */
-  reloadDocument(thoughtId?: string): void;
+  applyCommentRealtime(ownerId?: string, bodyMd?: unknown): void;
   /**
    * Realtime-изменение мысли (`thought.updated`): если мысль ЕСТЬ в текущей
-   * сборке — точечно обновить её блок (заголовок/контент) и пометить текст
-   * устаревшим (заголовок влияет на отбор по ключевым словам). Мысль вне
-   * документа — ничего (новые кандидаты показывает плашка «+N новых», замечание
-   * 2 приёмки b02ef1cf).
+   * сборке — точечно обновить её блок и пометить текст устаревшим (заголовок
+   * влияет на отбор по ключевым словам). Пока текст уже устарел, заголовок
+   * правится из `changes.title` без чтения сборки (замечание-блокер 1 приёмки
+   * b02ef1cf). Мысль вне документа — ничего (новые кандидаты показывает плашка
+   * «+N новых», замечание 2 приёмки b02ef1cf).
    */
-  applyThoughtRealtime(thoughtId: string): void;
+  applyThoughtRealtime(thoughtId: string, changes?: { title?: unknown }): void;
   /**
    * Точечно применить внешнюю правку полей публикации (`publication.updated` с
    * контентными полями): заголовок/подзаголовок/обложка/резюме — без чтения
@@ -428,28 +431,90 @@ export function mountPublicationWorkspace(
     }, 200);
   }
 
+  /** Узлы блоков документа по id мысли (раздел и/или тексты; повторы — все). */
+  function blockNodesForThought(thoughtId: string): HTMLElement[] {
+    const out: HTMLElement[] = [];
+    for (const node of Array.from(docHost.querySelectorAll<HTMLElement>('.pub-doc-section'))) {
+      if (node.dataset?.['thoughtId'] === thoughtId) out.push(node);
+    }
+    for (const node of Array.from(docHost.querySelectorAll<HTMLElement>('.pub-doc-text'))) {
+      if (node.dataset?.['thoughtId'] === thoughtId) out.push(node);
+    }
+    return out;
+  }
+
   /**
-   * Перечитать документ при изменении КОНТЕНТА мысли: если `thoughtId` задан и
-   * его нет в текущей сборке — перечитывания нет (событие не про этот документ,
-   * замечание А2 приёмки b02ef1cf). Композиция сборки при этом не фиксируется:
-   * события состава обрабатываются отдельно (`markRebuildStale`).
+   * Точечно заменяет КОНТЕНТ блоков мысли по готовому HTML (без чтения сборки):
+   * у раздела — предисловие, у текста — сам блок. Используется при активном
+   * `staleRebuild`, когда тянуть полную сборку нельзя (иначе материализуется
+   * отложенный рецепт и порядок разделов сдвигается, замечание-блокер 1 приёмки
+   * b02ef1cf).
+   *
+   * Компромисс: HTML собирается общим клиентским `renderMarkdown`, а не
+   * серверным `renderPublicationFragment` (сервер умеет сдвиг уровней заголовков,
+   * якоря и подстановку wiki-ссылок). Для предисловия/текста это несущественно;
+   * расхождение снимет ближайшая пересборка.
    */
-  function reloadDocument(thoughtId?: string): void {
-    if (publicationId === null) return;
-    if (thoughtId !== undefined && assembly !== null && !assemblyHasThought(assembly, thoughtId)) {
+  function patchBlockText(thoughtId: string, html: string): void {
+    for (const node of blockNodesForThought(thoughtId)) {
+      const target = node.classList.contains('pub-doc-section')
+        ? node.querySelector<HTMLElement>('.pub-doc-preamble')
+        : node;
+      if (target !== null) renderHtml(target, html);
+    }
+  }
+
+  /**
+   * Точечно меняет ЗАГОЛОВОК разделов мысли по новому названию (без чтения
+   * сборки). Компромисс: при включённой нумерации номер раздела в заголовке до
+   * ближайшей пересборки теряется — заголовок с номером пересобирает сервер.
+   */
+  function patchBlockHeading(thoughtId: string, title: string): void {
+    for (const node of blockNodesForThought(thoughtId)) {
+      if (!node.classList.contains('pub-doc-section')) continue;
+      const text = node.querySelector<HTMLElement>('.pub-doc-heading-text');
+      if (text !== null) text.textContent = title;
+    }
+  }
+
+  /**
+   * Realtime-изменение мысли: в документе — точечное обновление блока +
+   * пометка устаревания; вне документа — ничего (замечание 2 приёмки b02ef1cf).
+   * Пока текст УЖЕ устарел (`staleRebuild`), сборку НЕ перечитываем — иначе
+   * материализуется отложенный рецепт и порядок разделов меняется до
+   * «Пересобрать» (замечание-блокер 1): правим заголовок из payload события.
+   */
+  function applyThoughtRealtime(thoughtId: string, changes?: { title?: unknown }): void {
+    if (publicationId === null || assembly === null) return;
+    if (!assemblyHasThought(assembly, thoughtId)) return;
+    const wasStale = staleRebuild;
+    markRebuildStale();
+    if (wasStale) {
+      if (typeof changes?.title === 'string') patchBlockHeading(thoughtId, changes.title);
       return;
     }
     reload();
   }
 
   /**
-   * Realtime-изменение мысли: в документе — точечное обновление блока + пометка
-   * устаревания; вне документа — ничего.
+   * Realtime-изменение комментария мысли в документе (предисловие раздела/текст
+   * блока = постоянный комментарий мысли): обновляет блок. Пока текст устарел
+   * (`staleRebuild`) — только точечная правка из payload (`body_md`), без чтения
+   * сборки (замечание-блокер 1 приёмки b02ef1cf). Владелец вне документа —
+   * ничего; при stale без `body_md` (удаление, хроно-комментарий) — без
+   * изменений (см. компромисс в хроно задачи).
    */
-  function applyThoughtRealtime(thoughtId: string): void {
-    if (publicationId === null || assembly === null) return;
-    if (!assemblyHasThought(assembly, thoughtId)) return;
-    markRebuildStale();
+  function applyCommentRealtime(ownerId?: string, bodyMd?: unknown): void {
+    if (publicationId === null) return;
+    if (ownerId !== undefined && assembly !== null && !assemblyHasThought(assembly, ownerId)) {
+      return;
+    }
+    if (staleRebuild) {
+      if (ownerId !== undefined && typeof bodyMd === 'string') {
+        patchBlockText(ownerId, renderMarkdown(bodyMd));
+      }
+      return;
+    }
     reload();
   }
 
@@ -838,7 +903,7 @@ export function mountPublicationWorkspace(
           }),
         );
       }
-      heading.append(block.heading);
+      heading.append(span(block.heading, 'pub-doc-heading-text'));
       node.append(heading);
       if (!block.collapsed && block.preambleHtml !== '') {
         const preamble = div('pub-doc-preamble');
@@ -1284,7 +1349,7 @@ export function mountPublicationWorkspace(
     open,
     close,
     reload,
-    reloadDocument,
+    applyCommentRealtime,
     applyThoughtRealtime,
     applyPublicationPatch,
     markRebuildStale,

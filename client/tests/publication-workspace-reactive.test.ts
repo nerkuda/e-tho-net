@@ -5,8 +5,14 @@
  * stale БЕЗ перечитывания состава; контентная правка обновляет шапку/титул без
  * чтения сборки.
  *
+ * Дожим (замечания-блокеры 1/2 приёмки b02ef1cf): пока текст устарел, правка
+ * раздела правит блок из payload события, НЕ перечитывая сборку (иначе
+ * материализуется отложенный рецепт и порядок разделов сдвигается); смешанный
+ * PATCH `{title, title_recipe}` применяет обе ветки.
+ *
  * Живая рабочая область в DOM-шиме с подставным `window.etn` (считаем запросы
- * `publications.assembly`).
+ * `publications.assembly`; при флаге `nextRecipe` сборка отдаёт разделы в
+ * «новом» порядке — так наблюдается материализация отложенного рецепта).
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -18,6 +24,7 @@ import type { Publication, PublicationAssembly } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
 import { store } from '../src/renderer/state.js';
+import { routePublicationUpdate } from '../src/renderer/screens/publications/update-routing.js';
 
 const NETWORK_ID = 'net-1';
 
@@ -50,7 +57,30 @@ function publication(overrides: Partial<Publication> = {}): Publication {
   };
 }
 
+function section(
+  thoughtId: string,
+  heading: string,
+  preambleHtml: string,
+): PublicationAssembly['sections'][number] {
+  return {
+    thought_id: thoughtId,
+    node_key: thoughtId,
+    anchor: `pub-${thoughtId}`,
+    level: 1,
+    heading,
+    preamble_html: preambleHtml,
+    texts: [],
+    extra: [],
+    flags: { repeat_of: null, cycle_cut: false },
+    children: [],
+  };
+}
+
+/** Флаг «на сервере уже новый рецепт»: меняет порядок разделов в сборке. */
+let nextRecipe = false;
+
 function assembly(): PublicationAssembly {
+  const sections = [section('sec-1', 'Раздел', '<p>Начало</p>'), section('sec-2', 'Второй', '<p>Ещё</p>')];
   return {
     publication: {
       title: 'Документ',
@@ -61,23 +91,10 @@ function assembly(): PublicationAssembly {
       cover: { kind: 'placeholder', ref: null },
       new_candidates: 0,
     },
-    sections: [
-      {
-        thought_id: 'sec-1',
-        node_key: 'sec-1',
-        anchor: 'pub-sec1',
-        level: 1,
-        heading: 'Раздел',
-        preamble_html: '<p>Начало</p>',
-        texts: [],
-        extra: [],
-        flags: { repeat_of: null, cycle_cut: false },
-        children: [],
-      },
-    ],
+    sections: nextRecipe ? [...sections].reverse() : sections,
     excluded: [],
     warnings: [],
-    meta: { page: 1, per_page: 20, total_roots: 1, has_more: false },
+    meta: { page: 1, per_page: 20, total_roots: 2, has_more: false },
   };
 }
 
@@ -85,6 +102,7 @@ let assemblyFetches = 0;
 
 function installShim(): void {
   assemblyFetches = 0;
+  nextRecipe = false;
   const body = new ShimElement('body');
   const docListeners = new Map<string, Array<(event: any) => void>>();
   (globalThis as any).document = {
@@ -154,6 +172,18 @@ const stale = (root: ShimElement): boolean =>
 const headerTitle = (root: ShimElement): string | null =>
   root.querySelector('.pub-ws-title')?.textContent ?? null;
 
+/** Порядок разделов в документе (id мыслей в DOM-порядке). */
+const sectionIds = (root: ShimElement): string[] =>
+  root
+    .findAll((el) => el.classList.contains('pub-doc-section'))
+    .map((el) => el.dataset['thoughtId'] ?? '');
+
+/** Узел блока раздела по id мысли. */
+const sectionNode = (root: ShimElement, thoughtId: string): ShimElement | undefined =>
+  root
+    .findAll((el) => el.classList.contains('pub-doc-section'))
+    .find((el) => el.dataset['thoughtId'] === thoughtId);
+
 describe('рабочая область публикации: реактивность состава и контента (b02ef1cf)', () => {
   let active: { destroy(): void } | null = null;
   afterEach(() => {
@@ -196,5 +226,79 @@ describe('рабочая область публикации: реактивно
     assert.equal(headerTitle(root), 'Новое имя', 'шапка обновлена точечно');
     assert.equal(stale(root), false, 'контентная правка не зажигает stale');
     assert.equal(assemblyFetches, before, 'контентная правка не читает сборку');
+  });
+
+  // --- Дожим: блокеры 1 и 2 приёмки b02ef1cf -------------------------------
+
+  it('при active stale правка раздела обновляет блок БЕЗ чтения сборки и не меняет порядок', async () => {
+    const { handle, root } = await mount();
+    active = handle;
+    assert.deepEqual(sectionIds(root), ['sec-1', 'sec-2'], 'исходный порядок разделов');
+
+    // Рецепт уже изменён на сервере, но документ заморожен (stale).
+    handle.markRebuildStale();
+    nextRecipe = true;
+    const before = assemblyFetches;
+
+    handle.applyCommentRealtime('sec-1', 'Обновлённый текст');
+
+    assert.equal(assemblyFetches, before, 'под stale сборка НЕ перечитывается');
+    assert.deepEqual(
+      sectionIds(root),
+      ['sec-1', 'sec-2'],
+      'порядок разделов не изменился (отложенный рецепт не материализовался)',
+    );
+    assert.ok(
+      sectionNode(root, 'sec-1')?.querySelector('.pub-doc-preamble')?.innerHTML.includes('Обновлённый текст'),
+      'текст блока обновлён из payload события',
+    );
+    assert.equal(stale(root), true, 'подсветка «Пересобрать» остаётся');
+  });
+
+  it('при active stale заголовок раздела правится из payload, без чтения сборки', async () => {
+    const { handle, root } = await mount();
+    active = handle;
+    handle.markRebuildStale();
+    const before = assemblyFetches;
+
+    handle.applyThoughtRealtime('sec-1', { title: 'Новое имя раздела' });
+
+    assert.equal(assemblyFetches, before, 'под stale сборка не перечитывается');
+    assert.equal(
+      sectionNode(root, 'sec-1')?.querySelector('.pub-doc-heading-text')?.textContent,
+      'Новое имя раздела',
+      'заголовок раздела обновлён из payload события',
+    );
+    assert.equal(stale(root), true, 'подсветка остаётся');
+  });
+
+  it('смешанный PATCH: подсветка stale И контентное поле применяются вместе', async () => {
+    const recipe = {
+      parent_ids: ['x'],
+      sort: 'updated',
+      order: 'asc',
+    } satisfies NonNullable<Publication['title_recipe']>;
+    const changes: Partial<Publication> = { title: 'Смешанный заголовок', title_recipe: recipe };
+    const routing = routePublicationUpdate(changes);
+    assert.equal(routing.markStale, true, 'ветка состава помечает stale');
+    assert.equal(routing.patch?.title, 'Смешанный заголовок', 'контентное поле не теряется');
+
+    // Одиночные ветки.
+    assert.deepEqual(
+      routePublicationUpdate({ title_recipe: recipe }),
+      { markStale: true, patch: null },
+      'только состав — только пометка',
+    );
+    assert.deepEqual(
+      routePublicationUpdate({ title: 'Т' }),
+      { markStale: false, patch: { title: 'Т' } },
+      'только контент — только точечная правка',
+    );
+
+    const { handle, root } = await mount();
+    active = handle;
+    handle.applyPublicationPatch(changes);
+    assert.equal(stale(root), true, 'рабочая область подсвечивает stale');
+    assert.equal(headerTitle(root), 'Смешанный заголовок', 'и применяет заголовок');
   });
 });
