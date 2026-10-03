@@ -505,9 +505,10 @@ export function requireNetworkId(): string {
 }
 
 /**
- * Actor-side cleanup after deleting a thought (workplan L4). The server never
- * echoes `thought.deleted` to the acting client (04-realtime.md §5), so the
- * deleting client mirrors the applier's handling locally:
+ * Actor-side cleanup after deleting a thought (workplan L4). B1 техпроекта
+ * 269016e2: the server delivers `thought.deleted` to the acting client too
+ * (asynchronously), so this local mirror only makes the effect immediate — the
+ * arriving event is idempotent afterwards.
  *
  *   * the thought leaves the local focus history (after the rotation that
  *     `setFocus` performs), caches and the selection;

@@ -106,10 +106,9 @@ interface CacheEntry {
  *  - realtime `thought.created/updated/deleted` clears the cache — the
  *    candidate set (titles, synonyms, active flags) changed;
  *  - a network switch clears it ({@link noteNetwork});
- *  - entries expire after {@link SCAN_CACHE_TTL_MS}: the applier drops
- *    own-client realtime echoes (04-realtime.md §5), so a title/synonym edit
- *    made in THIS client produces no event the renderer could hear — the TTL
- *    bounds how long annotations may lag behind such own edits.
+ *  - entries expire after {@link SCAN_CACHE_TTL_MS}: B1 техпроекта 269016e2
+ *    доставляет и собственные события, но асинхронно — TTL ограничивает, как
+ *    долго аннотации могут отставать от правки, применённой только локально.
  *
  * Bounded: at {@link SCAN_CACHE_MAX_ENTRIES} entries the map is cleared
  * wholesale — scan results are cheap to rebuild, LRU bookkeeping is not worth
@@ -382,7 +381,7 @@ function wireCacheInvalidation(): void {
       evt.type === 'thought.deleted'
     ) {
       // The mention candidate set (titles/synonyms/active flags) changed.
-      // Own-client echoes never arrive here (dropped by the applier,
+      // Own-client events arrive asynchronously (B1),
       // 04-realtime.md §5) — that half is covered by the cache TTL.
       scanCache.clear();
     }

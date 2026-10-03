@@ -324,9 +324,9 @@ export const store = new Store();
 
 /**
  * Applies an updated link to the focus edges so the canvas repaints the line
- * instantly. The server never echoes realtime events to the acting client
- * (04-realtime.md §5) — the REST response is the only immediate feedback, so
- * without this the old colour/width would stay until the next focus fetch.
+ * instantly. B1 техпроекта 269016e2: сервер шлёт событие и автору, поэтому
+ * правка доедет и realtime-путём — этот локальный патч остаётся ускорителем
+ * (мгновенный отклик без ожидания события/REST-круга).
  *
  * The canvas shows the active-only neighbourhood (focus is requested without
  * `show_inactive`): a deactivated link loses its edge, a reactivated one gains

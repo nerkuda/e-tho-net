@@ -1171,10 +1171,10 @@ export interface EtnApi {
       }) => void,
     ): () => void;
     /**
-     * Own-mutation flag (S11, 08-ui-spec.md §2.2): main suppressed the event
-     * as this client's echo, but the write may have created a layer shadow
-     * row — the renderer refreshes the canvas override marking. Payload:
-     * `{networkId}`.
+     * Own-mutation flag (S11, 08-ui-spec.md §2.2): the write may have created
+     * a layer shadow row — the renderer refreshes the canvas override marking
+     * right away (B1: the realtime event also arrives, but asynchronously).
+     * Payload: `{networkId}`.
      */
     onSelfMutated(cb: (payload: { networkId: string }) => void): () => void;
     /**
@@ -1238,9 +1238,8 @@ export interface EtnApi {
     /**
      * Drops a thought from the visit history of the active profile/network —
      * the actor-side companion of the applier's prune on `thought.deleted`
-     * (the server sends no realtime echo to the deleting client, L4). `tabId`
-     * scopes the removal to one tab; `null` clears across all tabs of the
-     * network (server-side deletion cleanup).
+     * (L4). `tabId` scopes the removal to one tab; `null` clears across all
+     * tabs of the network (server-side deletion cleanup).
      */
     remove(thoughtId: string, tabId?: string | null): Promise<void>;
     /** Clears the whole visit history of the active profile/network. `tabId`

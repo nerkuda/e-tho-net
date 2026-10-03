@@ -377,9 +377,9 @@ function buildApi(): EtnBridgeApi {
         ipcRenderer.on('realtime:layer', listener);
         return () => ipcRenderer.removeListener('realtime:layer', listener);
       },
-      /** Own-mutation flag (S11, 08-ui-spec.md §2.2): the event was suppressed
-       * as this client's echo, but the write may have created a layer shadow
-       * row — the renderer refreshes the override marking. */
+      /** Own-mutation flag (S11, 08-ui-spec.md §2.2): the write may have
+       * created a layer shadow row — the renderer refreshes the override
+       * marking right away (B1: the realtime event also arrives, but later). */
       onSelfMutated(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
           cb(payload as { networkId: string });

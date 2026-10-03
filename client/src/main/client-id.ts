@@ -6,7 +6,9 @@
  * `client_meta.client_id` (level L5 — per installation, never synced). It is
  * unrelated to `user_id` and to the API-key, and is sent to the server on every
  * REST request (`Client-Id` header) and WebSocket connection purely as an
- * installation tag for echo suppression and per-client `last_seq` bookkeeping.
+ * installation tag for per-client `last_seq` bookkeeping and layer resolution.
+ * (B1 техпроекта 269016e2 снял эхо-подавление сервера — тег больше НЕ решает,
+ * доставлять ли событие автору.)
  */
 import { randomUUID } from 'node:crypto';
 import { CLIENT_META_KEY } from '@etn/shared';

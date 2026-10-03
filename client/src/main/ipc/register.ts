@@ -62,7 +62,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   let profile: ServerProfileRow | null = null;
   let currentNetworkId: string | null = null;
   let currentUser: CurrentUser | null = null;
-  /** G8 applier state: in-memory thought/link cache + echo suppression. */
+  /** G8 applier state: in-memory thought/link cache. */
   const rtState = new RealtimeState();
   /**
    * Отменяемые вызовы `etn:invoke` (требование ebed4980): `requestId` →
@@ -289,10 +289,10 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         duration_ms: durationMs,
       });
     }
-    // Own network mutation (08-ui-spec.md §2.2): the server suppresses own
-    // echoes (04-realtime.md §5), so the renderer never hears about the write
-    // over the realtime socket — flag it so the canvas layer-override marking
-    // refreshes right away instead of on the next layer/tab switch.
+    // Own network mutation (08-ui-spec.md §2.2): B1 техпроекта 269016e2 —
+    // сервер теперь шлёт событие и автору (broadcast-to-all), но событие о
+    // правке слоя/переопределений приходит асинхронно; флаг ускоряет
+    // обновление метки переопределений на холсте сразу после ответа REST.
     const mutatedNetwork = selfMutationNetwork(payload.method, payload.args ?? []);
     if (mutatedNetwork !== null) {
       broadcast('realtime:selfmut', { networkId: mutatedNetwork });

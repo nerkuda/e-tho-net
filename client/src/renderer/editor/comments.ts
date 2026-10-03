@@ -316,7 +316,7 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
         await clearDraftsFor(networkId, 'comment-new', ctx.ownerId);
         invalidateQueries(queryKeys.indicators(ctx.ownerId));
         // Своя правка постоянного комментария: открытый документ публикации
-        // обязан обновить блок мысли — сигнал слоя (до B1; эхо своё не приходит).
+        // обязан обновить блок мысли — сигнал слоя (ускоритель; с B1 приходит и своё событие).
         signalPermanentCommentSaved(ctx.ownerId, md);
         return html;
       },

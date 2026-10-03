@@ -320,7 +320,7 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
       const result = await etn.propertyRegistry.remove(networkId, property.id);
       // Свойство реестра исчезло (ошибка 98aa0889): открытый редактор мысли
       // обязан перечитать набор — свойство могло быть привязано к типу или
-      // покрывать его зеркалом. Своё realtime-эхо до рендерера не доходит
+      // покрывать его зеркалом. Своё realtime-эхо приходит асинхронно (B1)
       // (G8 applier), поэтому уведомляем локально.
       notifyPropertyRegistryChanged(property.id);
       // Свойство-связь уносит и связанный тип связи (единый жизненный цикл
@@ -1743,7 +1743,7 @@ export function openPropertyManagerEditor(
         // `link_type`, а родителя — `syncLinkTypeParent` строкой выше. Открытый
         // редактор показанной СВЯЗИ этого типа обязан перерисовать шапку —
         // ошибка 7dfad7d4 (симметрично правке самого типа, 5d41589). Своё
-        // realtime-эхо до рендерера не доходит (G8 applier), поэтому уведомляем
+        // realtime-эхо приходит асинхронно (B1) (G8 applier), поэтому уведомляем
         // локально, а каталог типов перечитываем ДО уведомления: шапка
         // резолвит подпись и вид линии из него.
         const linkTypeFields = linkTypeFieldsFromPropertyChanges(changes);
@@ -1805,7 +1805,7 @@ export function openPropertyManagerEditor(
     if (draft.typeRows.length === 0 && removed.length === 0) return;
     // Типы, чей набор свойств правится этим проходом (снятые и черновые
     // строки) — после записи они обязаны уведомить открытый редактор
-    // (ошибка 74b94c26): свой realtime-эхо до рендерера не доходит.
+    // (ошибка 74b94c26): свой realtime-эхо приходит асинхронно (B1).
     const touchedTypeIds = new Set<string>();
     for (const snap of removed) touchedTypeIds.add(snap.thoughtTypeId);
     for (const row of draft.typeRows) touchedTypeIds.add(row.thoughtTypeId);

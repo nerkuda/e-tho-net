@@ -725,7 +725,7 @@ export function mountEditor(editorHost: HTMLElement): void {
     //    `property-definition.*` (привязка свойства у типа) и
     //    `property-registry.*` (само свойство реестра);
     //  * локальный — правка в редакторе типа / менеджере свойств: своё
-    //    realtime-эхо до рендерера не доходит (главный процесс его
+    //    realtime-эхо приходит асинхронно (B1) (главный процесс его
     //    отбрасывает, G8 applier), поэтому производители уведомляют сами —
     //    владельцем (типом) либо id реестрового свойства.
     // Гейт по цепочке типов показанной сущности — в lib/type-definitions.ts.
@@ -1908,7 +1908,7 @@ function isVersionConflict(err: unknown): boolean {
  * Reflects a successfully updated thought in every place it may currently be
  * shown: the canvas focus cloud / zone clouds, the editor (the focus follower
  * or a picked target), the structures results list, the pinned bar and the
- * history bar. The server never echoes realtime events to the acting client
+ * history bar. B1: the acting client receives its own events too, asynchronously
  * (04-realtime.md §5), so the REST response is the only immediate feedback —
  * without this the old icon/title/style would stay until the next focus fetch.
  *
@@ -1926,7 +1926,7 @@ export function reflectThoughtUpdate(updated: Thought): void {
     } else if (inNeighbourhood(id)) {
       // The thought is visible on the canvas as a focus neighbour — refetch
       // the focus so its icon/type/colours repaint right away. The actor gets
-      // no realtime echo, so the stale cached ref must go first.
+      // own event arrives asynchronously, so the stale cached ref must go first.
       invalidateRef(id);
       scheduleRefresh();
     }
@@ -1984,7 +1984,7 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
       await applyCommentTemplateIfEmpty(networkId, ctx.ownerId, patch.type_id);
     }
     // Reflect the change wherever the entity is shown (see the helper) — the
-    // actor gets no realtime echo, so the stores are patched from the save
+    // actor's own event arrives asynchronously, so the stores are patched from the save
     // response.
     reflectThoughtUpdate(updated);
     // Своя правка полей мысли: открытый документ публикации помечает живой
@@ -2017,7 +2017,7 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<boolean> {
   const networkId = requireNetworkId();
   try {
     const updated = await etn.links.update(networkId, link.id, patch, link.version);
-    // Repaint the line at once — the actor gets no realtime echo
+    // Repaint the line at once — the actor's own event arrives asynchronously
     // (04-realtime.md §5), so the focus edges are patched from the response.
     patchFocusEdge(updated);
     if (patch.active !== undefined) {
@@ -2029,7 +2029,7 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<boolean> {
       store.update({ editorTarget: { kind: 'link', id: updated.id, link: updated } });
     }
     // The structures results list is server-rendered; reload it so the saved
-    // link type/style show up right away (the actor gets no realtime echo).
+    // link type/style show up right away (the actor's own event arrives later).
     scheduleStructuresRefresh();
     return true;
   } catch (err) {

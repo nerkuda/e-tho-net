@@ -277,7 +277,7 @@ export async function openThoughtDeleteDialog(
           await thoughtVersion(networkId, target.id),
         );
         close();
-        // The actor gets no realtime echo (04-realtime.md §5) — reflect the
+        // B1: the actor's own event arrives asynchronously — reflect the
         // fresh entity everywhere it may be shown: the focus cloud (store
         // patch), the zone clouds (invalidateRef + refresh re-resolve the
         // cached ref, so the badge and the dim style appear at once, not
@@ -627,7 +627,7 @@ export async function openThoughtGroupDeleteDialog(
               const markedIds = trashIds.filter((id) => !failed.has(id));
               // The batch response carries no entities — drop the cached refs
               // of the marked ids so the refreshed focus re-resolves them and
-              // the trash badges / dim style appear at once (no realtime echo
+              // the trash badges / dim style appear at once (B1: own event also arrives, later
               // to the actor, 04-realtime.md §5). Then fetch the fresh rows
               // and reflect each one everywhere it may be shown: the focus
               // cloud, the zones, the editor (trash mark + struck-through
@@ -933,8 +933,8 @@ export async function openTrashDialog(networkId: string): Promise<void> {
         await thoughtVersion(networkId, id),
       );
       // Reflect the restore everywhere the thought may be shown (canvas badge
-      // and dim style, editor, structures, pinned/history bars) — no realtime
-      // echo to the actor, so the response entity is the only feedback.
+      // and dim style, editor, structures, pinned/history bars) — B1: the own
+      // event also arrives, but the response entity gives instant feedback.
       reflectThoughtUpdate(updated);
       await render();
     } catch (err) {

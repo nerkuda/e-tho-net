@@ -34,6 +34,7 @@ import {
   routeRealtimeEvent,
   runOptimistic,
   setQueryData,
+  signalPublicationCompositionChanged,
   subscribeQuery,
   writable,
   derived,
@@ -117,6 +118,93 @@ describe('кэш сущностей', () => {
     putEntity('thought', 't1', { id: 't1', title: 'A' });
     await settle();
     assert.deepEqual(seen, [undefined, 'A']);
+    unsub();
+  });
+});
+
+describe('B1: дедуп собственных событий и гонка «событие ↔ REST-ответ»', () => {
+  it('событие шины с версией ≤ кэшированной не откатывает состояние (событие позже)', () => {
+    // REST-ответ (v3) уже лёг в кэш; пришедшее следом СВОЁ событие той же
+    // версии не должно откатить (broadcast-to-all приносит эхо автору).
+    putEntity('thought', 't1', { id: 't1', title: 'rest', version: 3 });
+    routeRealtimeEvent(
+      mkEvent('thought.updated', { id: 't1', changes: { title: 'event' }, version: 3 }, 1),
+    );
+    assert.equal(asRecord(getEntity('thought', 't1'))['title'], 'rest', 'эхо не откатывает');
+  });
+
+  it('REST-ответ с версией ≤ кэшированной не откатывает состояние (REST позже)', () => {
+    // Событие шины (v3) опередило REST-ответ; ответ с той же версией — игнор.
+    routeRealtimeEvent(
+      mkEvent('thought.updated', { id: 't1', changes: { title: 'event' }, version: 3 }, 2),
+    );
+    putEntity('thought', 't1', { id: 't1', title: 'stale-rest', version: 3 });
+    putEntity('thought', 't1', { id: 't1', title: 'stale-rest-2', version: 2 });
+    assert.equal(asRecord(getEntity('thought', 't1'))['title'], 'event', 'старый REST не откатывает');
+  });
+
+  it('более новая версия применяется с обеих сторон', () => {
+    putEntity('thought', 't1', { id: 't1', title: 'v1', version: 1 });
+    routeRealtimeEvent(
+      mkEvent('thought.updated', { id: 't1', changes: { title: 'v2-ws' }, version: 2 }, 3),
+    );
+    assert.equal(asRecord(getEntity('thought', 't1'))['title'], 'v2-ws');
+    putEntity('thought', 't1', { id: 't1', title: 'v3-rest', version: 3 });
+    assert.equal(asRecord(getEntity('thought', 't1'))['title'], 'v3-rest');
+  });
+
+  it('optimistic-мутация в полёте буферизует событие своей сущности до REST-ответа', async () => {
+    putEntity('thought', 't1', { id: 't1', title: 'old', version: 1 });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = optimisticEntityPatch('thought', 't1', { title: 'optimistic' }, async () => {
+      await gate;
+      // Истина — REST-ответ: кладём полный снимок с новой версией.
+      putEntity('thought', 't1', { id: 't1', title: 'server', version: 2 });
+      return undefined;
+    });
+    // Своё событие прилетело, пока мутация в полёте — не применяем.
+    routeRealtimeEvent(
+      mkEvent('thought.updated', { id: 't1', changes: { title: 'event-during' }, version: 2 }, 4),
+    );
+    assert.equal(
+      asRecord(getEntity('thought', 't1'))['title'],
+      'optimistic',
+      'событие в полёте буферизовано',
+    );
+    release();
+    await pending;
+    assert.equal(
+      asRecord(getEntity('thought', 't1'))['title'],
+      'server',
+      'после подтверждения истина — REST-ответ',
+    );
+  });
+
+  it('дубль «локальный сигнал + своё событие» схлопывается в один перезапрос', async () => {
+    let fetches = 0;
+    const key = queryKeys.publicationAssembly('p1');
+    const unsub = subscribeQuery(
+      key,
+      async () => {
+        fetches += 1;
+        return { seq: fetches };
+      },
+      () => undefined,
+    );
+    await settle();
+    const base = fetches;
+    assert.ok(base >= 1, 'подписка сразу читает сборку');
+    // Локальный сигнал G4 (ускоритель) и СВОЁ событие B1 гасят тот же ключ в
+    // одном тике — реестр обязан сходить в сеть один раз (коалессция).
+    signalPublicationCompositionChanged(['t1']);
+    routeRealtimeEvent(
+      mkEvent('publication.updated', { id: 'p1', changes: { title: 'X' }, version: 2 }, 9),
+    );
+    await settle();
+    assert.equal(fetches, base + 1, 'двойная инвалидация → один перезапрос');
     unsub();
   });
 });

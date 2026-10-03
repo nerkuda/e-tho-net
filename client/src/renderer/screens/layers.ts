@@ -237,7 +237,7 @@ async function refreshLayerOverrides(): Promise<void> {
 /**
  * Schedules an override refresh after something may have changed the current
  * layer's rows (08-ui-spec.md §2.2): own mutations (flagged by main as
- * `realtime:selfmut` — the server echo is suppressed for the applier) and
+ * `realtime:selfmut` — the event arrives asynchronously (B1)) and
  * foreign realtime events. The badge must appear the moment a thought gains
  * a layer version, not on the next layer/tab switch.
  */

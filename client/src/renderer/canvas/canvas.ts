@@ -499,7 +499,7 @@ export function getRef(id: string): ThoughtRef | null {
 /**
  * Drops the cached metadata for a thought so the next render re-resolves it
  * (icon/type/colors). Called on realtime `thought.updated`/`thought.deleted`
- * and by local producers (`reflectThoughtUpdate`) that got no realtime echo.
+ * and by local producers (`reflectThoughtUpdate`) for an immediate repaint.
  *
  * Evicting a ref that IS rendered bumps {@link refEpoch}: the focus response
  * carries no icon/colors of a neighbour, so a re-fetch of the same focus is
@@ -2078,7 +2078,7 @@ function buildCloud(
   const ref = entry.ref;
   // The live neighbour carries a fresh `active` flag in every focus response —
   // prefer it over the cached ref, which can lag after a local toggle until the
-  // ref is re-resolved (no realtime echo to the actor, 04-realtime.md §5).
+  // ref is re-resolved (B1: its own event also arrives, but asynchronously).
   // `marked_for_deletion` lives only on the ref (FocusNeighbor does not carry
   // it) — the factory reads it from the ref and paints the trash badge itself.
   const isInactive = (entry.links[0]?.active ?? ref?.active) === false;
@@ -2628,7 +2628,7 @@ async function createLinkFromDrop(
       return;
     }
     throwOnFailures(await ensureLink(networkId, sourceId, targetId));
-    // The acting client gets no realtime echo (04-realtime.md §5) — refresh
+    // The acting client's own event arrives asynchronously (B1) — refresh
     // explicitly so the new edge, the zone move and the editor's «Связи»
     // update, and animate the thought flowing into its new zone.
     requestZoneAnimation();

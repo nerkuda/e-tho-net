@@ -862,7 +862,7 @@ async function applyStyleToAll(patch: ThoughtStylePatch): Promise<boolean> {
     }),
   );
   const failed = results.filter((r) => r.status === 'rejected').length;
-  // No realtime echo to the actor (04-realtime.md §5) — drop the cached refs so
+  // Own event arrives asynchronously (B1) — drop the cached refs so
   // the refreshed zones re-resolve the thoughts and repaint their style.
   for (const id of ids) invalidateRef(id);
   scheduleRefresh();

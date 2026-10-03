@@ -223,7 +223,7 @@ async function toggleLinkActive(networkId: string, linkId: string): Promise<void
       { active: !link.active },
       link.version,
     );
-    // Repaint at once (no realtime echo to the actor, 04-realtime.md §5);
+    // Repaint at once (B1: own event arrives asynchronously);
     // the debounced refresh reconciles the neighbour zones.
     patchFocusEdge(updated);
     scheduleRefresh();
@@ -246,7 +246,7 @@ async function invertLink(networkId: string, linkId: string): Promise<void> {
       { source_id: link.target_id, target_id: link.source_id },
       link.version,
     );
-    // No realtime echo to the actor (04-realtime.md §5) — patch locally. Both
+    // Own event arrives asynchronously (B1) — patch locally for instant feedback. Both
     // store updates render synchronously BEFORE the animation flag is armed,
     // so the flag is consumed by the debounced zone-reconciling refresh only.
     patchFocusEdge(updated);
@@ -605,7 +605,7 @@ async function toggleActive(networkId: string, id: string): Promise<void> {
       return;
     }
     await etn.thoughts.update(networkId, id, { active: !thought.active }, thought.version);
-    // No realtime echo to the actor (04-realtime.md §5) — drop the cached ref
+    // Own event arrives asynchronously (B1) — drop the cached ref
     // so the refreshed zones re-resolve the thought and repaint the dim state.
     invalidateRef(id);
     scheduleRefresh();

@@ -453,6 +453,14 @@ describe('рабочая область публикации: свой путь 
     assert.equal(stale(root), true, 'мысль в сборке зажигает stale');
   });
 
+  it('передача G6/B1: mayChangeComposition зажигает stale даже для мысли ВНЕ сборки (вход в рецепт)', async () => {
+    const { root } = await mount();
+    // Значение свойства-критерия рецепта может ВВЕСТИ постороннюю мысль в
+    // сборку — проверки членства недостаточно, stale зажигается безусловно.
+    signalPublicationCompositionChanged(['stranger'], { mayChangeComposition: true });
+    assert.equal(stale(root), true, 'правка свойства-критерия зажигает «Пересобрать»');
+  });
+
   it('публикационная инвалидация без причины безопасно перечитывает документ', async () => {
     const { root } = await mount();
     const before = assemblyFetches;

@@ -620,7 +620,7 @@ export function mountPublicationWorkspace(
    * Точечно применяет свежий снимок публикации: шапка и титульный блок берут
    * титул/подзаголовок/обложку из него. Сборку (разделы) не трогаем —
    * `reload()` для этого остаётся. Нужно для локальной правки из карточки
-   * редактора, чьё realtime-эхо подавлено (замечание А приёмки b02ef1cf).
+   * редактора, чей путь — слой (замечание А приёмки b02ef1cf).
    */
   function applyPublication(next: Publication): void {
     if (publicationId === null || next.id !== publicationId) return;

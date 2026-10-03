@@ -1007,7 +1007,7 @@ async function flushSave(): Promise<boolean> {
   try {
     const updated = await etn.publications.update(networkId, current.id, changes, current.version);
     if (instance === owner) apply(updated);
-    // Своё realtime-эхо `publication.updated` подавлено — свежий полный снимок
+    // Своё событие `publication.updated` приходит асинхронно (B1) — свежий полный снимок
     // кладём в кэш слоя и инвалидируем ключи: библиотека, полки и рабочая
     // область обновятся единым кэш-путём (замечание А приёмки b02ef1cf).
     commitEntity('publication', updated.id, updated);
@@ -1074,9 +1074,8 @@ async function rebuildPublication(): Promise<void> {
       apply(updated);
       notice(t('publication.rebuilt.ready'), 'success');
     }
-    // Своё realtime-эхо `publication.rebuilt` до этого клиента не доходит
-    // (подавление на сервере, ошибка c2dec45c). Кладём снимок в кэш слоя и
-    // инвалидируем ключи: рабочая область по сигналу `publication-rebuilt`
+    // Своё событие `publication.rebuilt` приходит асинхронно (B1) — кладём
+    // снимок в кэш слоя сразу и инвалидируем ключи: рабочая область по сигналу `publication-rebuilt`
     // снимает подсветку и перечитывает документ, библиотека — список.
     commitEntity('publication', publicationId, updated);
     invalidateAfterMutation(

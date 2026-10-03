@@ -222,7 +222,6 @@ describe('смена типа мысли — отражение в облачк�
     const result = applyRealtimeEvent(
       state,
       {
-        getClientId: () => 'me',
         getCurrentUserId: () => 'u1',
         removeFromFocusHistoryEverywhere: () => undefined,
         getCurrentFocusId: () => null,

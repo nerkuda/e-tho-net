@@ -379,7 +379,7 @@ function refreshOnActivation(): void {
 /**
  * Re-runs the search when the panel is already visible and the query is live —
  * called after a deletion so the deleted thought leaves the visible list at
- * once (the actor gets no realtime echo, 04-realtime.md §5).
+ * once (B1: the actor's own event arrives asynchronously).
  */
 export function refreshSearchIfVisible(): void {
   if (chrome === null || chrome.host.classList.contains('hidden')) return;

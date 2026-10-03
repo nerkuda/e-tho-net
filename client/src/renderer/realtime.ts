@@ -10,8 +10,10 @@
  *  - derived effects: `focus-lost` (focused thought deleted) and
  *    `network-lost` (network deleted or self removed from members).
  *
- * The main process already drops own-client echoes (G8 applier), so every event
- * reaching here is a change from another client or a server-side action.
+ * B1 техпроекта 269016e2: сервер шлёт событие и автору (broadcast-to-all),
+ * main-forward'ит все принятые события — сюда доходят и СОБСТВЕННЫЕ правки.
+ * Идемпотентность держит слой (`lib/live`): дедуп по seq/версии сущности и
+ * буферизация событий сущности с optimistic-мутацией в полёте.
  */
 
 import type { AnyRealtimeEvent } from '@etn/shared';

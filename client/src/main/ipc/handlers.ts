@@ -2279,10 +2279,9 @@ async function openExternalShell(target: string): Promise<string> {
  * IPC channels whose successful call mutates branchable network data
  * (13-layers.md §3): the write may have created a layer shadow row. The
  * invoke dispatcher flags these to the renderer as `realtime:selfmut`
- * (08-ui-spec.md §2.2) — the SERVER suppresses own echoes (04-realtime.md §5:
- * a `deliver` with `actor.client_id === conn.clientId` never sends), so no WS
- * event arrives for them and the canvas override marking would refresh only
- * on the next layer/tab switch.
+ * (08-ui-spec.md §2.2). B1 техпроекта 269016e2 снял эхо-подавление сервера
+ * (событие доставляется и автору), но приходит асинхронно — флаг ускоряет
+ * обновление метки переопределений слоя на холсте сразу после ответа REST.
  *
  * Excluded on purpose: local-only channels (tabs/ui/meta/pins/savedFilters),
  * user-scoped preferences and orders (non-branchable tables), the type

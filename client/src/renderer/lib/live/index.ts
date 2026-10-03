@@ -17,7 +17,10 @@
  */
 
 export {
+  beginEntityMutation,
   clearEntities,
+  clearPendingMutations,
+  endEntityMutation,
   entitiesRevision,
   entitiesSize,
   entitiesSnapshot,
@@ -25,6 +28,7 @@ export {
   entityStore,
   getEntity,
   getRecord,
+  isEntityMutationPending,
   patchEntity,
   putEntity,
   removeEntity,

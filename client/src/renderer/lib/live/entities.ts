@@ -59,6 +59,37 @@ export function entityKey(kind: EntityKind, id: string): EntityKey {
 
 const records = new Map<EntityKey, EntityRecord>();
 
+/**
+ * Сущности с optimistic-мутацией В ПОЛЁТЕ (B1 техпроекта 269016e2). Пока
+ * REST-ответ не подтвердил мутацию, события шины по этой сущности к кэшу НЕ
+ * применяются (broadcast-to-all приносит своё событие и автору — оно могло бы
+ * перетереть оптимистичное значение раньше подтверждения). После подтверждения
+ * истина — REST-ответ (`commitEntity` пишет без `seq` и проходит).
+ *
+ * Ключ набора — {@link entityKey}.
+ */
+const pendingMutations = new Set<EntityKey>();
+
+/** Пометить оптимистичную мутацию сущности как начатую. */
+export function beginEntityMutation(kind: EntityKind, id: string): void {
+  pendingMutations.add(entityKey(kind, id));
+}
+
+/** Снять пометку оптимистичной мутации (подтверждена или откатана). */
+export function endEntityMutation(kind: EntityKind, id: string): void {
+  pendingMutations.delete(entityKey(kind, id));
+}
+
+/** Идёт ли по сущности оптимистичная мутация (события шины буферизуются). */
+export function isEntityMutationPending(kind: EntityKind, id: string): boolean {
+  return pendingMutations.has(entityKey(kind, id));
+}
+
+/** Снять все пометки (смена сети/разбор сессии, тесты). */
+export function clearPendingMutations(): void {
+  pendingMutations.clear();
+}
+
 /** Ревизия кэша — тикает на каждой фактической правке (для реактивных срезов). */
 const revision = writable(0);
 
@@ -111,6 +142,36 @@ function readVersion(entity: unknown, fallback: number | undefined): number {
 }
 
 /**
+ * Версия входящей записи, если её можно определить (`undefined` — у сущности
+ * нет поля `version` и явная версия не передана). Нужна для дедупа B1: правило
+ * «версия ≤ кэшированной → игнор» применяется ТОЛЬКО к версионируемым
+ * сущностям, иначе патчи сущностей без версии (вложения и т.п.) не проходили бы.
+ */
+function readVersionMaybe(entity: unknown, explicit: number | undefined): number | undefined {
+  if (explicit !== undefined) return explicit;
+  if (typeof entity === 'object' && entity !== null && 'version' in entity) {
+    const v = (entity as { version?: unknown }).version;
+    if (typeof v === 'number') return v;
+  }
+  return undefined;
+}
+
+/**
+ * Устарела ли входящая версия (≤ уже лежащей). Дедуп B1 по версии сущности:
+ * событие шины или REST-ответ со версией не новее кэшированной не откатывает
+ * состояние (гонка «событие ↔ REST-ответ»). Срабатывает, только когда ОБЕ
+ * версии известны и положительны.
+ */
+function isStaleVersion(incoming: number | undefined, cached: number): boolean {
+  return incoming !== undefined && incoming > 0 && cached > 0 && incoming <= cached;
+}
+
+/** Идёт ли пометка optimistic-мутации для записи (события шины буферизуем). */
+function isBusEvent(opts: PutEntityOptions): boolean {
+  return opts.seq !== undefined && opts.seq !== -1;
+}
+
+/**
  * Положить сущность целиком (ответ REST-мутации, полный снимок события).
  * Если новая сущность поверхностно равна прежней — прежняя ссылка
  * переиспользуется (structural sharing).
@@ -120,8 +181,14 @@ export function putEntity(kind: EntityKind, id: string, entity: unknown, opts: P
   const prev = records.get(key);
   const seq = opts.seq ?? -1;
   if (prev !== undefined && seq !== -1 && seq < prev.seq) return prev;
+  // B1: событие шины по сущности с optimistic-мутацией в полёте не применяем —
+  // истину даст REST-ответ (пишет без seq).
+  if (prev !== undefined && isBusEvent(opts) && isEntityMutationPending(kind, id)) return prev;
 
   const version = readVersion(entity, opts.version);
+  if (prev !== undefined && isStaleVersion(readVersionMaybe(entity, opts.version), prev.version)) {
+    return prev;
+  }
   if (prev !== undefined && shallowEqual(prev.entity, entity)) {
     // Тело не изменилось — обновляем только метаданные, ссылку сохраняем.
     if (prev.seq === seq && prev.version === version) return prev;
@@ -149,10 +216,20 @@ export function patchEntity(
   const prev = records.get(key);
   const seq = opts.seq ?? -1;
   if (prev !== undefined && seq !== -1 && seq < prev.seq) return prev;
+  // B1: событие шины по сущности с optimistic-мутацией в полёте — буферизуем
+  // (не применяем), истину даст REST-ответ.
+  if (prev !== undefined && isBusEvent(opts) && isEntityMutationPending(kind, id)) return prev;
   if (prev === undefined) {
     // Патчить нечего — кладём патч как сущность (частичная запись).
     return putEntity(kind, id, { id, ...patch }, opts);
   }
+  // Дедуп B1 по версии: патч не новее кэшированного не откатывает состояние.
+  // Версия берётся ТОЛЬКО явная — `opts.version` (роутер событий) или поле
+  // `version` самого патча. Слитое значение для этого не годится: оно несёт
+  // СТАРУЮ версию, и патчи без версии (оформление и т.п.) отбраковывались бы.
+  const incomingPatchVersion =
+    opts.version ?? (typeof patch['version'] === 'number' ? (patch['version'] as number) : undefined);
+  if (isStaleVersion(incomingPatchVersion, prev.version)) return prev;
   const merged = mergeShallow(prev.entity, patch);
   const version = opts.version ?? readVersion(merged, prev.version);
   if (merged === prev.entity && prev.seq === seq && prev.version === version) return prev;
@@ -185,6 +262,7 @@ export function restoreRecord(kind: EntityKind, id: string, snapshot: EntityReco
 
 /** Полностью очистить кэш (смена сети/разбор сессии). */
 export function clearEntities(): void {
+  pendingMutations.clear();
   if (records.size === 0) return;
   records.clear();
   bump();

@@ -3,9 +3,9 @@
  *
  * Обёртки клиентских мутаций кладут REST-ответ в тот же нормализованный кэш,
  * куда роутер событий кладёт чужие изменения. За счёт этого «своя правка» и
- * «чужая правка» сходятся в одной точке данных — эхо-подавление сервера
- * (`gateway.ts`: сокет того же client_id не получает своё событие) перестаёт
- * быть проблемой экранов.
+ * «чужая правка» сходятся в одной точке данных. С B1 сервер шлёт событие и
+ * автору (broadcast-to-all): кэш самовосстанавливается даже при забытом
+ * mutator-вызове, а локальные обёртки и сигналы остаются ускорителями.
  *
  * Здесь же — стандартизованный optimistic-хелпер `snapshot → apply → rollback`:
  * интерфейс меняется мгновенно, при ошибке мутации состояние откатывается к
@@ -13,6 +13,8 @@
  */
 
 import {
+  beginEntityMutation,
+  endEntityMutation,
   getRecord,
   patchEntity,
   putEntity,
@@ -194,6 +196,10 @@ export async function optimisticEntityPatch<T>(
   execute: () => Promise<T>,
 ): Promise<T> {
   const snapshot: EntityRecord | null = getRecord(kind, id) ?? null;
+  // B1: пока мутация в полёте, события шины по этой сущности буферизуются —
+  // broadcast-to-all приносит и своё событие автору, оно не должно перетереть
+  // оптимистичное значение раньше подтверждения. Истина — REST-ответ.
+  beginEntityMutation(kind, id);
   return runOptimistic<EntityRecord | null, T>({
     snapshot: () => snapshot,
     apply: () => {
@@ -203,5 +209,7 @@ export async function optimisticEntityPatch<T>(
       restoreRecord(kind, id, snap);
     },
     execute,
+  }).finally(() => {
+    endEntityMutation(kind, id);
   });
 }

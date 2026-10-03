@@ -2,9 +2,12 @@
  * Realtime event applier (task G8, docs/04-realtime.md §7,
  * docs/11-settings-and-state.md §1.4).
  *
+ * B1 техпроекта 269016e2: **эхо-подавление снято** — сервер шлёт событие и
+ * автору (broadcast-to-all), поэтому main-forward'ит в рендерер ВСЕ принятые
+ * события, включая собственные. Идемпотентность обеспечивает слой рендерера
+ * (дедуп по seq/версии сущности, `renderer/lib/live`).
+ *
  * Rules implemented here:
- *   * echo suppression — events with `actor.client_id === myClientId` are
- *     dropped (the originating REST call already applied them);
  *   * `thought.created/updated/deleted` maintain a lightweight in-memory cache
  *     of thought/link records so already-visible entities update in place;
  *   * `thought.updated` is ignored when the event version is not newer than the
@@ -23,8 +26,6 @@ import type { AnyRealtimeEvent, Link, Thought } from '@etn/shared';
 
 /** Callbacks the applier needs from the main process (test-friendly). */
 export interface ApplierHooks {
-  /** Installation Client-Id used for echo suppression. */
-  getClientId: () => string;
   /** Current user id (for self `member.removed` detection). */
   getCurrentUserId: () => string | null;
   /** Remove a thought from every profile's focus history (L4 cleanup). */
@@ -35,7 +36,7 @@ export interface ApplierHooks {
 
 /** What the applier did with a single event. */
 export interface ApplyResult {
-  /** True when the event was accepted (not an echo, not stale). */
+  /** True when the event was accepted (not stale) and must reach the renderer. */
   applied: boolean;
   /** 'none' | 'focus-lost' | 'network-lost' — renderer-level side effects. */
   effect: 'none' | 'focus-lost' | 'network-lost';
@@ -81,16 +82,10 @@ export function applyRealtimeEvent(
   event: AnyRealtimeEvent,
 ): ApplyResult {
   // A deleted thought must leave the local focus history no matter who removed
-  // it — including this client's own echoes (echo suppression below skips the
-  // rest of the handling for own writes, but the history prune is a local
-  // sync, not a cache mutation).
+  // it — including this client's own write (B1: the event now arrives for the
+  // author too; the history prune is a local sync, not a cache mutation).
   if (event.type === 'thought.deleted') {
     hooks.removeFromFocusHistoryEverywhere(event.data.id);
-  }
-
-  // Echo suppression (11-settings-and-state.md §1.4): never re-apply own writes.
-  if (event.actor.client_id && event.actor.client_id === hooks.getClientId()) {
-    return { applied: false, effect: 'none' };
   }
 
   switch (event.type) {
@@ -109,7 +104,7 @@ export function applyRealtimeEvent(
       return { applied: true, effect: 'none' };
     }
     case 'thought.deleted': {
-      // Focus-history prune already ran above (it must run for own echoes too).
+      // Focus-history prune already ran above.
       state.deleteThought(event.data.id);
       const effect =
         hooks.getCurrentFocusId(event.network_id) === event.data.id ? 'focus-lost' : 'none';
