@@ -109,10 +109,10 @@ import { reloadTypeCatalogues } from '../lib/type-catalogues.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { invalidateAfterMutation } from '../lib/live/mutator.js';
 import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
-// Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
-// доходит, G8 applier): изменение набора свойств типа (ошибка 74b94c26),
-// правка/удаление самого реестрового свойства (98aa0889) и правка/удаление
-// СВЯЗАННОГО ТИПА СВЯЗИ единым жизненным циклом свойства-связи (7dfad7d4).
+// Локальные уведомления открытого редактора (своё событие приходит асинхронно,
+// B1 — уведомление даёт мгновенный отклик): изменение набора свойств типа
+// (ошибка 74b94c26), правка/удаление самого реестрового свойства (98aa0889) и
+// правка/удаление СВЯЗАННОГО ТИПА СВЯЗИ единым жизненным циклом (7dfad7d4).
 import {
   linkTypeFieldsFromPropertyChanges,
   notifyPropertyRegistryChanged,

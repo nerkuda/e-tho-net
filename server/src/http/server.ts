@@ -477,7 +477,7 @@ const BASE_ECHO = { id: BASE_LAYER_ID, title: 'Основа' } as const;
  * bodies, and the {@link LAYER_ECHO_HEADER}/{@link LAYER_ECHO_TITLE_HEADER}
  * headers on bodiless 204 replies (a 204 has no meta to extend; the headers
  * are the additive way to keep the DELETE contract unchanged). Responses to
- * reads carry no echo by design (§7.1) — the read is already implicitly bound
+ * reads carry no layer echo by design (§7.1) — the read is already implicitly bound
  * to the session layer.
  */
 /**
@@ -487,7 +487,7 @@ const BASE_ECHO = { id: BASE_LAYER_ID, title: 'Основа' } as const;
  * bodies, and the {@link LAYER_ECHO_HEADER}/{@link LAYER_ECHO_TITLE_HEADER}
  * headers on bodiless 204 replies (a 204 has no meta to extend; the headers
  * are the additive way to keep the DELETE contract unchanged). Responses to
- * reads carry no echo by design (§7.1) — the read is already implicitly bound
+ * reads carry no layer echo by design (§7.1) — the read is already implicitly bound
  * to the session layer.
  *
  * Deliberately a **synchronous done-style** hook: an extra async onSend hook

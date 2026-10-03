@@ -390,7 +390,7 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
   const state = getFilterState();
   const seq = ++querySeq;
   // Быстрая смена фильтра: гасим предыдущий запрос (требование ebed4980) —
-  // его fetch в main прерывается, ответ не приходит вовсе.
+  // его fetch в main прерывается, ответа нет вовсе.
   inflightQuery?.abort();
   const controller = new AbortController();
   inflightQuery = controller;

@@ -40,7 +40,11 @@ import type { Publication, PublicationOrderItem, Shelf } from './publication.js'
 // Envelope
 // ---------------------------------------------------------------------------
 
-/** Actor of a real-time event; used for echo suppression (04-realtime.md §3). */
+/**
+ * Actor of a real-time event (04-realtime.md §3). `client_id` is an installation
+ * tag (per-client `last_seq`, session-layer resolution); since B1 it plays no
+ * part in delivery — the author receives its own events (broadcast-to-all).
+ */
 export interface RealtimeActor {
   user_id: string;
   client_id: string;
