@@ -112,10 +112,15 @@ export interface NumberingRange {
 
 /**
  * Section number label for a section identified by its 1-based sibling
- * counters down the tree (`[1]` → "1", `[1,2,3]` → "1.2.3"). Only the section's
- * own level must fall inside `[from .. to]`; ancestors always contribute to the
- * label (сквозная нумерация, [[#a33f7b0e]]). Returns null when the section is
- * not numbered (level outside the range, empty range, or empty counters).
+ * counters down the tree. Numbering STARTS AT 1 ON LEVEL `from` (задача
+ * 7cfaba7c, п.6): counters of the levels ABOVE `from` are dropped, while the
+ * counter of level `from` and deeper ones build the label. So level-1 sections
+ * are unnumbered, level-`from` sections read «1», «2», … and their nested
+ * sections «1.1», regardless of the absolute position of the ancestry
+ * (`[2,1]` with `from: 2` → "1", not "2.1"; a single level `from === to`
+ * behaves the same). `from === null` starts from level 1. Returns null when
+ * the section is not numbered (level outside the range, empty range, or empty
+ * counters).
  */
 export function formatSectionNumber(
   counters: readonly number[],
@@ -128,7 +133,8 @@ export function formatSectionNumber(
   if (level === 0) return null;
   if (from !== null && level < from) return null;
   if (to !== null && level > to) return null;
-  return counters.join('.');
+  const start = (from ?? 1) - 1;
+  return counters.slice(start).join('.');
 }
 
 /**

@@ -299,6 +299,12 @@ export interface ThoughtMenuOptions {
   openLabel?: string;
   /** Спрятать команду открытия: мысль уже открыта в редакторе. */
   hideOpenCommand?: boolean;
+  /**
+   * Спрятать подменю «Добавить» (вверх/вниз/налево): на экране публикации
+   * структурой разделов управляют собственные команды «В публикации», а не
+   * общие команды мыслей (задача 7cfaba7c, п.4).
+   */
+  hideAddCommand?: boolean;
   /** Вставить команду «В фокус» рядом с открытием (контексты редактора). */
   focusHandler?: () => void;
   /** Команды конкретного контекста (значение свойства) — блоком перед «Удалить». */
@@ -438,27 +444,31 @@ export function buildThoughtMenuItems(
         ];
 
   return [
-    menuSubmenu('Добавить', [
-      menuAction('вверх (родитель)', () =>
-        openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'parent' }),
-      ),
-      menuAction('вниз (ребёнок)', () =>
-        openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'child' }),
-      ),
-      menuAction(
-        'налево (родственник)',
-        () => {
-          if (siblingParentId !== null) {
-            openAddDialog({
-              anchorId: siblingParentId,
-              anchorTitle: siblingParentTitle,
-              direction: 'child',
-            });
-          }
-        },
-        { disabled: !canAddSibling },
-      ),
-    ]),
+    ...(opts.hideAddCommand === true
+      ? []
+      : [
+          menuSubmenu('Добавить', [
+            menuAction('вверх (родитель)', () =>
+              openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'parent' }),
+            ),
+            menuAction('вниз (ребёнок)', () =>
+              openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'child' }),
+            ),
+            menuAction(
+              'налево (родственник)',
+              () => {
+                if (siblingParentId !== null) {
+                  openAddDialog({
+                    anchorId: siblingParentId,
+                    anchorTitle: siblingParentTitle,
+                    direction: 'child',
+                  });
+                }
+              },
+              { disabled: !canAddSibling },
+            ),
+          ]),
+        ]),
     menuAction('Изменить актуальность', () => void toggleActive(networkId, target.id)),
     // Submenu is enabled only while the zone is sorted «ручной» (08-ui-spec.md
     // §2.7). Siblings never accept manual order (§6.2); for parents/children

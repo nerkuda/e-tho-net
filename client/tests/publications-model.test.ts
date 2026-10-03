@@ -14,7 +14,6 @@ import {
   coverInitials,
   coverTone,
   COVER_TONES,
-  dedupePropertyOptions,
   defaultPublicationsViewState,
   groupByShelves,
   isShelfCollapsed,
@@ -32,7 +31,6 @@ import {
   visibleLibraryEntities,
   wizardShelfChoice,
 } from '../src/renderer/screens/publications/model.js';
-import type { EntityOption } from '../src/renderer/lib/entity-picker.js';
 
 function publication(id: string, overrides: Partial<Publication> = {}): Publication {
   return {
@@ -351,30 +349,6 @@ describe('публикации: inline-переименование полки (
     assert.equal(nextShelfTitle('Полка', '  Новая  '), 'Новая');
     assert.equal(nextShelfTitle('Полка', '   '), null);
     assert.equal(nextShelfTitle('Полка', 'Полка'), null);
-  });
-});
-
-// --- Варианты свойств-связей без дублей -------------------------------------
-
-describe('публикации: варианты свойств без дублей (model)', () => {
-  it('две стороны одной связи сводятся к одному id, предпочитается source', () => {
-    const options: EntityOption[] = [
-      { id: 'p1:target', title: 'Обратное имя', linkProperty: { propertyId: 'p1', side: 'target', key: 'x' } },
-      { id: 'p1:source', title: 'Прямое имя', linkProperty: { propertyId: 'p1', side: 'source', key: 'x' } },
-      { id: 'p2:source', title: 'Другая связь', linkProperty: { propertyId: 'p2', side: 'source', key: 'y' } },
-    ];
-    const deduped = dedupePropertyOptions(options);
-    assert.deepEqual(deduped.map((o) => o.id), ['p1', 'p2']);
-    assert.equal(deduped[0]?.title, 'Прямое имя');
-  });
-
-  it('одиночные свойства и структурные (без linkProperty) не дублируются', () => {
-    const options: EntityOption[] = [
-      { id: 'p1', title: 'Одна' },
-      { id: 'p1', title: 'Одна повторно' },
-      { id: 'p2', title: 'Две' },
-    ];
-    assert.deepEqual(dedupePropertyOptions(options).map((o) => o.id), ['p1', 'p2']);
   });
 });
 

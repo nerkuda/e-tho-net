@@ -164,13 +164,27 @@ test('buildToc: заголовок без предшественника ста�
 test('нумерация: уровень в диапазоне нумеруется, вне — нет', () => {
   assert.equal(formatSectionNumber([1], { from: 1, to: 3 }), '1');
   assert.equal(formatSectionNumber([1, 2], { from: 1, to: 3 }), '1.2');
-  assert.equal(formatSectionNumber([1, 2, 3], { from: 2, to: 3 }), '1.2.3');
+  // Задача 7cfaba7c, п.6: диапазон стартует с уровня `from` — счётчики уровней
+  // выше отбрасываются, а не идут префиксом.
+  assert.equal(formatSectionNumber([1, 2, 3], { from: 2, to: 3 }), '2.3');
+  assert.equal(formatSectionNumber([2, 1], { from: 2, to: 5 }), '1');
   assert.equal(formatSectionNumber([1, 2], { from: 3, to: 4 }), null);
+  assert.equal(formatSectionNumber([1, 2, 3, 4], { from: 2, to: 3 }), null);
+});
+
+test('нумерация: одиночный уровень и отсчёт с 1', () => {
+  // Диапазон 2–2: разделы уровня 2 нумеруются «1», «2», … по позиции среди
+  // братьев; вложенные (уровень 3) выпадают из диапазона.
+  assert.equal(formatSectionNumber([1, 1], { from: 2, to: 2 }), '1');
+  assert.equal(formatSectionNumber([1, 2], { from: 2, to: 2 }), '2');
+  assert.equal(formatSectionNumber([1, 2, 1], { from: 2, to: 2 }), null);
+  // Диапазон 2–5: вложенные разделы уровня 3 дают «1.1».
+  assert.equal(formatSectionNumber([2, 1, 3], { from: 2, to: 5 }), '1.3');
 });
 
 test('нумерация: открытый диапазон и оба NULL', () => {
   assert.equal(formatSectionNumber([1, 2], { from: null, to: 2 }), '1.2');
-  assert.equal(formatSectionNumber([1, 2], { from: 2, to: null }), '1.2');
+  assert.equal(formatSectionNumber([1, 2], { from: 2, to: null }), '2');
   assert.equal(formatSectionNumber([1, 2], { from: null, to: null }), null);
   assert.equal(formatSectionNumber([1, 2], undefined), null);
   assert.equal(formatSectionNumber([], { from: 1, to: 3 }), null);

@@ -132,7 +132,7 @@ describe('5de0332d п.5: Ctrl+Shift+↑/↓ сдвигает блок докум
   });
 });
 
-describe('5de0332d п.6: титульный лист', () => {
+describe('5de0332d п.6 + 7cfaba7c п.5: титульный лист', () => {
   it('заголовок в 2 раза крупнее и по центру', () => {
     assert.match(
       CSS,
@@ -141,11 +141,24 @@ describe('5de0332d п.6: титульный лист', () => {
     );
   });
 
-  it('подзаголовок в 2 раза крупнее, на 3 строки ниже, по правому краю', () => {
+  it('подзаголовок −30% (×1.4), по центру, на 2 строки ниже', () => {
     assert.match(
       CSS,
-      /\.pub-doc\.comment-view \.pub-doc-subtitle\s*\{[^}]*font-size:\s*calc\(var\(--font-size-l\) \* 2\)[^}]*text-align:\s*right[^}]*margin-top:\s*calc\(3 /s,
-      'подзаголовок ×2, вправо, на 3 строки ниже',
+      /\.pub-doc\.comment-view \.pub-doc-subtitle\s*\{[^}]*font-size:\s*calc\(var\(--font-size-l\) \* 1\.4\)[^}]*text-align:\s*center[^}]*margin-top:\s*calc\(2 /s,
+      'подзаголовок ×1.4, по центру, на 2 строки ниже (задача 7cfaba7c, п.5)',
+    );
+  });
+
+  it('автор/дата — в правом нижнем углу титула, жирным', () => {
+    assert.match(
+      CSS,
+      /\.pub-doc-titlepage\s*\{[^}]*position:\s*relative/s,
+      'титульная часть — якорь угловой метки',
+    );
+    assert.match(
+      CSS,
+      /\.pub-doc-meta\s*\{[^}]*position:\s*absolute[^}]*right:\s*0[^}]*bottom:\s*0[^}]*font-weight:\s*var\(--font-weight-bold\)/s,
+      'автор/дата прижаты к правому нижнему углу и выделены жирным',
     );
   });
 });

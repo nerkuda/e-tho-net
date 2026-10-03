@@ -22,8 +22,6 @@ import {
   type ShelfItem,
 } from '@etn/shared';
 
-import type { EntityOption } from '../../lib/entity-picker.js';
-
 /** Вид библиотеки: горизонтальные полки или плоский список (полки — группы). */
 export type PublicationsViewMode = 'shelves' | 'list';
 
@@ -372,34 +370,6 @@ export function shelfSwapUpdates(
 
 // ---------------------------------------------------------------------------
 // Варианты свойств-связей для пикера (без дублей)
-// ---------------------------------------------------------------------------
-
-/**
- * Сводит варианты свойств-связей к ОДНОМУ на реестровое свойство.
- *
- * `linkPropertyEntityOptions` даёт строку на каждую сторону связи
- * (`prop:source`, `prop:target`), а источники текстов публикации адресуются
- * id реестрового свойства — поэтому варианты дедуплицируются по `propertyId`.
- * При двух сторонах выбирается сторона `source` (прямое имя свойства — та же
- * семантика, что у прежнего выбора по реестру). Порядок первых вхождений
- * сохраняется.
- */
-export function dedupePropertyOptions(options: readonly EntityOption[]): EntityOption[] {
-  const byProperty = new Map<string, EntityOption>();
-  for (const option of options) {
-    const propertyId = option.linkProperty?.propertyId ?? option.id;
-    const existing = byProperty.get(propertyId);
-    if (existing === undefined) {
-      byProperty.set(propertyId, { ...option, id: propertyId });
-      continue;
-    }
-    if (existing.linkProperty?.side !== 'source' && option.linkProperty?.side === 'source') {
-      byProperty.set(propertyId, { ...option, id: propertyId });
-    }
-  }
-  return [...byProperty.values()];
-}
-
 // ---------------------------------------------------------------------------
 // Рабочая область открытой публикации (0.11.1, задача 4f03b9d5; элемент
 // интерфейса 2ebacd12). Чистые преобразования дерева сборки и порядка узлов —

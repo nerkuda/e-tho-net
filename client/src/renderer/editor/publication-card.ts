@@ -33,7 +33,7 @@ import { createMdEditor } from './md-editor.js';
 import { buildAttachmentsPane } from './attachments.js';
 import { createMarkdownField, etnimgUrl, setMarkdownField } from './markdown-field.js';
 import { commentShell } from '../lib/ui/comment.js';
-import { createThoughtCloud } from '../lib/thought-cloud.js';
+import { createThoughtCloud, type ThoughtCloudInput } from '../lib/thought-cloud.js';
 import { createPublicationCloud } from '../lib/ui/publication-cloud.js';
 import { renderMarkdown } from '@etn/markdown';
 import { div, span } from '../lib/dom.js';
@@ -83,6 +83,7 @@ import {
   buildRecipeBuilder,
   loadPropertyRegistry,
   loadPropertyRows,
+  propertyChipTitles,
   propertyEntityOptions,
   type RecipeBuilder,
 } from '../screens/publications/recipe.js';
@@ -719,6 +720,13 @@ function buildRecipePane(): HTMLElement {
       ([rows, loadedRegistry]) => {
         registry = loadedRegistry;
         const choices: EntityOption[] = propertyEntityOptions(rows);
+        // Облачко чипа показывает КАНОНИЧЕСКОЕ (прямое) имя свойства, хотя в
+        // выпадашке каждая сторона — отдельная строка (задача 7cfaba7c, п.3).
+        const chipTitles = propertyChipTitles(choices);
+        const cloudOf = (value: string): ThoughtCloudInput => ({
+          id: value,
+          title: chipTitles.get(value) ?? value,
+        });
         textsField = buildEntityChipField({
           getValues: () => textSources,
           onChange: (values) => {
@@ -728,6 +736,7 @@ function buildRecipePane(): HTMLElement {
           },
           loadOptions: (query) => filterEntityOptions(choices, query),
           initialOptions: choices,
+          cloudOf,
           optionsHeader: t('publication.field.texts'),
           placeholder: t('typeEditor.addProperty'),
           addPlaceholder: t('typeEditor.addProperty'),
@@ -742,6 +751,7 @@ function buildRecipePane(): HTMLElement {
           },
           loadOptions: (query) => filterEntityOptions(choices, query),
           initialOptions: choices,
+          cloudOf,
           optionsHeader: t('publication.field.extras'),
           placeholder: t('typeEditor.addProperty'),
           addPlaceholder: t('typeEditor.addProperty'),

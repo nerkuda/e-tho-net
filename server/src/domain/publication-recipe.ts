@@ -14,6 +14,7 @@
 
 import {
   EtnError,
+  PUBLICATION_EMPTY_RECIPE_WARNING,
   type SavedFilterDefinition,
   type SortOrder,
   type StructureFilter,
@@ -119,7 +120,7 @@ export function selectRecipeIds(
   // публикация без настроенного отбора выводила бы содержимое всей мыслесети
   // (задача 7cfaba7c, п.2, решение пользователя 2026-10-03).
   if (isStructureFilterEmpty(filter)) {
-    warnings.push('отбор заголовков не задан');
+    warnings.push(PUBLICATION_EMPTY_RECIPE_WARNING);
     return [];
   }
 

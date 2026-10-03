@@ -44,12 +44,12 @@ import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js
 import {
   buildPropertyListRows,
   ensurePropertyLinkTypes,
+  linkEndIconSpec,
   type PropertyRegistryRow,
 } from '../../lib/property-list.js';
 import { etn } from '../../lib/etn.js';
 import { t } from '../../lib/i18n.js';
 import { store } from '../../state.js';
-import { dedupePropertyOptions } from './model.js';
 
 /** Построитель рецепта заголовков. */
 export interface RecipeBuilder {
@@ -82,15 +82,23 @@ export async function loadPropertyRegistry(
 }
 
 /**
- * Варианты свойств-связей для чип-поля: общий конструктор вариантов
- * (`linkPropertyEntityOptions`), приведённый к id реестрового свойства и
- * ДЕДУПЛИЦИРОВАННЫЙ по нему (`dedupePropertyOptions` — у связи две стороны,
- * а сервер адресует источники текстов id свойства), плюс системные
- * «Родители»/«Потомки» (они пропускаются общим конструктором как структурные).
+ * Варианты свойств-связей для чип-поля — по ОДНОЙ строке на КАЖДУЮ СТОРОНУ
+ * (`linkPropertyEntityOptions`): пользователь видит имя стороны и значок её
+ * направления, как в поле «Свойство связи» диалога добавления мысли (задача
+ * 7cfaba7c, п.3). Плюс системные «Родители»/«Потомки» (общий конструктор
+ * пропускает их как структурные).
+ *
+ * Значение варианта — id РЕЕСТРОВОГО свойства (`linkProperty.propertyId`), а не
+ * строка стороны: источники текстов и доп. материалы адресуются id свойства,
+ * поэтому обе стороны одной связи дают один и тот же id значения. Отображаемое
+ * имя чипа держит {@link propertyChipTitles} (каноническая — прямая — сторона).
  */
 export function propertyEntityOptions(rows: readonly PropertyRegistryRow[]): EntityOption[] {
   const listRows = buildPropertyListRows(rows, store.state.linkTypes);
-  const options = dedupePropertyOptions(linkPropertyEntityOptions(listRows));
+  const options: EntityOption[] = linkPropertyEntityOptions(listRows).map((option) => ({
+    ...option,
+    id: option.linkProperty?.propertyId ?? option.id,
+  }));
   const seen = new Set(options.map((option) => option.id));
   for (const row of listRows) {
     if (!row.structural || row.valueType !== 'link' || seen.has(row.propertyId)) continue;
@@ -99,10 +107,26 @@ export function propertyEntityOptions(rows: readonly PropertyRegistryRow[]): Ent
       id: row.propertyId,
       title: row.name,
       selectable: true,
+      linkEnd: linkEndIconSpec(row.side ?? 'source', row.visual),
       linkProperty: { propertyId: row.propertyId, side: row.side ?? 'source', key: row.name },
     });
   }
   return options;
+}
+
+/**
+ * Каноническое (прямое) имя свойства для облачка чипа: `propertyId → имя`.
+ * У связи две стороны-варианта с общим id значения, и без этой карты чип
+ * показывал бы имя стороны, оказавшейся в каталоге последней (задача 7cfaba7c,
+ * п.3). Чистая — юнит-тест.
+ */
+export function propertyChipTitles(options: readonly EntityOption[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const option of options) {
+    const id = option.linkProperty?.propertyId ?? option.id;
+    if (option.linkProperty?.side === 'source' || !map.has(id)) map.set(id, option.title);
+  }
+  return map;
 }
 
 /** Строит форму рецепта заголовков по сохранённому определению (или пустую). */
