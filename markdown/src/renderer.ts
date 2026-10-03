@@ -42,7 +42,12 @@ export function getRenderer(): MarkdownIt {
     html: false,
     linkify: false,
     typographer: false,
-    breaks: false,
+    // Паритет с режимом редактирования (замечание пользователя 2026-10-03,
+    // задача 5de0332d, п. 3): в просмотре каждый перевод строки — разрыв, как
+    // в редакторе; абзац не требует ПУСТОЙ строки. `breaks: true` рендерит
+    // мягкий перенос (`softbreak`) как `<br>`, оставляя абзацы по пустой
+    // строке — межстрочные/межабзацные расстояния совпадают с редактором.
+    breaks: true,
     highlight: (code, lang) => highlightFence(code, lang),
   });
   // The single hook is shared by links and images, so it is configured with

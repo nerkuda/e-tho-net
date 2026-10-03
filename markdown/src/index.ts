@@ -66,8 +66,12 @@ export type {
  * is byte-for-byte unchanged (every publication rule is gated on the per-render
  * `env`), but the pinning invariant of the export determinism ADR
  * ([[#06874c5d]]) requires the version to move with the pipeline.
+ *
+ * `markdown-it/7`: `breaks: true` — a single newline renders as `<br>` so the
+ * view matches the editor (задача 5de0332d, п. 3). Cached `body_html` must
+ * re-render.
  */
-export const MD_RENDER_VERSION = 'markdown-it/6';
+export const MD_RENDER_VERSION = 'markdown-it/7';
 
 /** Options for {@link renderMarkdown}. */
 export interface RenderOptions {
