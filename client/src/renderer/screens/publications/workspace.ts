@@ -1571,6 +1571,10 @@ export function mountPublicationWorkspace(
   function applyTextWidth(value: number): void {
     const clamped = Math.min(TEXT_WIDTH_MAX, Math.max(TEXT_WIDTH_MIN, Math.round(value)));
     docHost.style.setProperty('--pub-doc-width', `${clamped}%`);
+    // Синхронизируем положение бегунка: настройка могла прийти из L4 ПОСЛЕ
+    // постройки фасада (шапка монтируется раньше загрузки ui_state) — без этого
+    // ширина применялась бы, а ползунок показывал прежнее значение (ea1b5f14).
+    widthSlider.setValue(clamped);
   }
 
   /**
@@ -1785,6 +1789,12 @@ export function mountPublicationWorkspace(
       else break;
     }
     current ??= headings[0]?.id ?? null;
+    // Дно документа: заголовок последнего раздела может не дойти до порога
+    // (документ кончился) — подсвечиваем его явно, иначе последний раздел
+    // никогда не становится текущим при прокрутке (пункт 2 ea1b5f14).
+    if (docHost.scrollTop + docHost.clientHeight >= docHost.scrollHeight - 2) {
+      current = headings[headings.length - 1]?.id ?? current;
+    }
     if (current === currentAnchor) return;
     currentAnchor = current;
     for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
@@ -1950,6 +1960,10 @@ export function mountPublicationWorkspace(
     const { pickThoughtsDialog } = await import('../../canvas/add-dialog.js');
     const recipeTypes = publicationTypeIds();
     let linkProperty: { rows: ReturnType<typeof buildPropertyListRows> } | undefined;
+    // Первое свойство-источник текстов: выбранная/созданная мысль добавляется
+    // в его значение, даже если в диалоге свойство не подтвердили (карточка
+    // ea1b5f14, пункт 3). Пользователь может выбрать другое свойство явно.
+    let textDefaultPick: { propertyId: string; key: string } | null = null;
     if (kind === 'text') {
       const sources = publication?.text_sources ?? [];
       if (sources.length === 0) {
@@ -1965,6 +1979,10 @@ export function mountPublicationWorkspace(
         return;
       }
       linkProperty = { rows: listRows };
+      // Берём сторону-ИСТОЧНИК (раздел — владелец текста): у свойства-связи
+      // две строки сторон, и только source-строка добавляет ребро от раздела.
+      const first = listRows.find((row) => row.side === 'source') ?? listRows[0];
+      if (first !== undefined) textDefaultPick = { propertyId: first.propertyId, key: first.name };
     }
     const result = await pickThoughtsDialog({
       networkId,
@@ -1972,12 +1990,18 @@ export function mountPublicationWorkspace(
       allowCreate: true,
       allowLinkType: false,
       ...(linkProperty !== undefined ? { linkProperty } : {}),
-      defaultNewThoughtTypeId: recipeTypes[0] ?? null,
+      // Тип раздела предзаполняется из рецепта (мысль обязана удовлетворять
+      // отбору разделов). Для ТЕКСТА тип не подставляем: иначе текст получил бы
+      // тип раздела и сам попал в разделы публикации (ea1b5f14, пункт 3).
+      defaultNewThoughtTypeId: kind === 'section' ? (recipeTypes[0] ?? null) : null,
       title: kind === 'section' ? t('publications.ws.createSection') : t('publications.ws.createText'),
       applyLabel:
         kind === 'section' ? t('publications.ws.createSection') : t('publications.ws.createText'),
     });
     if (result === null) return;
+    // Для текста свойство-источник берём из выбора в диалоге, а если его не
+    // подтвердили — первое свойство текстов публикации (карточка ea1b5f14).
+    const effectivePick = kind === 'text' ? (result.linkProperty ?? textDefaultPick) : result.linkProperty;
     const createdIds: string[] = [];
     try {
       for (const item of result.items) {
@@ -2006,8 +2030,8 @@ export function mountPublicationWorkspace(
               await ensureLink(networkId, sectionThoughtId, thoughtId, result.linkTypeId),
             );
           }
-        } else if (result.linkProperty !== null) {
-          await addPropertyValue(networkId, sectionThoughtId, result.linkProperty, thoughtId);
+        } else if (effectivePick !== null) {
+          await addPropertyValue(networkId, sectionThoughtId, effectivePick, thoughtId);
         }
         createdIds.push(thoughtId);
       }
