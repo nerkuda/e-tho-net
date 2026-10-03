@@ -1118,6 +1118,10 @@ function entityEntry(opt: EntityOption): SuggestEntry {
   if (opt.cloud !== undefined) entry.thought = opt.cloud;
   if (opt.depth !== undefined) entry.indent = typeRowIndentSteps(opt.depth);
   if (opt.line != null) entry.swatch = opt.line;
+  // Сторона свойства-связи (задача 7cfaba7c, п.3): значок направления и пара имён
+  // «(прямое -> обратное)» — как в поле «Свойство связи» диалога добавления мысли.
+  if (opt.linkEnd != null) entry.linkEnd = opt.linkEnd;
+  if (opt.note !== undefined) entry.note = opt.note;
   return entry;
 }
 
