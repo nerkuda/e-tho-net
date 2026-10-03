@@ -53,6 +53,11 @@ import { createListNav } from '../lib/ui/list.js';
 import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 import { notice } from '../lib/notice.js';
 import {
+  createResourcePicker,
+  urlSourceTab,
+  type ResourceSourceContext,
+} from './resource-picker.js';
+import {
   commitEntity,
   getEntity,
   invalidateAfterMutation,
@@ -1147,23 +1152,20 @@ async function openCoverDialog(): Promise<void> {
   const netId: string = rawNetId;
   const pubId: string = publicationId;
 
-  let tab: 'attachments' | 'url' = 'attachments';
+  /**
+   * Выбор строки списка — общее состояние вкладки «Вложения»: его синхронизирует
+   * навигация, а нижняя «Применить и закрыть» берёт отсюда.
+   */
   let selected: CoverRow | null = null;
-  let urlValue = '';
-  let urlValid: string | null = null;
-  let applyButton: HTMLButtonElement | null = null;
-  /** Закрытие диалога — для dblclick/Ctrl+Enter в списке (замечание В приёмки). */
-  let closeDialog: (() => void) | null = null;
-
-  /** Доступность нижней «Применить и закрыть» по активной вкладке. */
-  function refreshApply(): void {
-    if (applyButton === null) return;
-    const enabled = tab === 'url' ? urlValid !== null : selected !== null;
-    applyButton.disabled = !enabled;
-  }
+  /**
+   * Применение выбранного вложения. Рождается в сборке панели (нужны строки
+   * списка), а каркасу нужно заранее — читаем через холдер, как у источников
+   * `urlSourceTab`/`fileImageSourceTab`.
+   */
+  let applyAttachments: ((ctx: ResourceSourceContext) => void | Promise<void>) | null = null;
 
   // --- Вкладка «Вложения» --------------------------------------------------
-  function buildAttachmentsTab(): HTMLElement {
+  function buildAttachmentsTab(ctx: ResourceSourceContext): HTMLElement {
     const box = div('pub-cover-pane');
     const top = div('pub-cover-top');
     const search = fieldInput({ extraClass: 'pub-cover-search' });
@@ -1232,7 +1234,7 @@ async function openCoverDialog(): Promise<void> {
       onSelectionChange: (row) => {
         selected = row;
         renderPreview(row);
-        refreshApply();
+        ctx.setReady(row !== null);
       },
       onActivate: (row) => selectRow(row),
       // Ctrl+Enter в списке — «выбрать и применить, закрыв диалог» (замечание В
@@ -1240,9 +1242,9 @@ async function openCoverDialog(): Promise<void> {
       // активацию и гасит событие, поэтому перехватываем ДО базовых правил.
       onKey: (key, event) => {
         if (key !== 'Enter' || event.ctrlKey !== true) return false;
-        if (selected === null || closeDialog === null) return true;
+        if (selected === null || applyAttachments === null) return true;
         event.preventDefault?.();
-        void applySelection(closeDialog);
+        void applyAttachments(ctx);
         return true;
       },
       onClick: (target) => {
@@ -1431,7 +1433,7 @@ async function openCoverDialog(): Promise<void> {
       // Двойной клик — выбрать и применить, закрыв диалог (замечание В приёмки).
       node.addEventListener('dblclick', () => {
         selectRow(row);
-        if (closeDialog !== null) void applySelection(closeDialog);
+        if (applyAttachments !== null) void applyAttachments(ctx);
       });
       return node;
     }
@@ -1542,134 +1544,76 @@ async function openCoverDialog(): Promise<void> {
       }
     }
 
+    /**
+     * Применение выбранного вложения (нижняя «Применить и закрыть», двойной
+     * клик, Ctrl+Enter): «своё» вложение публикации назначается напрямую,
+     * «чужое» сначала привязывается к публикации (сервер отвечает 422 на
+     * `cover_attachment_id` чужого владельца), затем назначается обложкой.
+     */
+    applyAttachments = async (c) => {
+      if (selected === null) return;
+      const attachment = coverRepresentative(selected, pubId);
+      if (attachment === null) return;
+      if (attachment.owner_type === 'publication' && attachment.owner_id === pubId) {
+        queueSave({ cover_attachment_id: attachment.id, cover_url: null });
+      } else {
+        try {
+          const created = await etn.attachments.add(netId, 'publication', pubId, {
+            kind: attachment.kind,
+            url: attachment.kind === 'url' ? attachment.url : null,
+            file_path: attachment.kind === 'file' ? attachment.file_path : null,
+            file_size: attachment.file_size,
+            mime_type: attachment.mime_type,
+            title: attachment.title,
+            description: attachment.description,
+          });
+          invalidatePublicationAttachments(pubId);
+          queueSave({ cover_attachment_id: created.id, cover_url: null });
+        } catch (err) {
+          errorDialog(t('publication.error'), err);
+          return;
+        }
+      }
+      notice(t('publication.cover.setDone'), 'success');
+      c.close();
+    };
+
     search.addEventListener('input', () => void runSearch());
     void runSearch();
     return box;
   }
 
-  // --- Вкладка «URL» (как в диалоге иконки мысли) --------------------------
-  function buildUrlTab(): HTMLElement {
-    const box = div('pub-cover-pane');
-    const input = fieldInput({ extraClass: 'pub-cover-url' });
-    input.placeholder = t('publication.cover.urlPlaceholder');
-    input.value = urlValue;
-    const preview = div('pub-cover-preview pub-cover-preview-url');
-    const paintHint = (): void => {
-      while (preview.firstChild !== null) preview.removeChild(preview.firstChild);
-      preview.append(span(t('publication.cover.previewHint'), 'muted'));
-    };
-    const validate = (value: string): void => {
-      urlValid = null;
-      refreshApply();
-      while (preview.firstChild !== null) preview.removeChild(preview.firstChild);
-      const v = value.trim();
-      if (v === '') {
-        paintHint();
-        return;
-      }
-      const img = document.createElement('img');
-      img.className = 'pub-cover-preview-img';
-      img.alt = '';
-      img.addEventListener('load', () => {
-        if (input.value.trim() === v) {
-          urlValid = v;
-          refreshApply();
-        }
-      });
-      img.addEventListener('error', () => {
-        if (input.value.trim() === v) paintHint();
-      });
-      img.src = v;
-      preview.append(img);
-    };
-    input.addEventListener('input', () => {
-      urlValue = input.value;
-      validate(urlValue);
-    });
-    box.append(input, preview);
-    if (urlValue.trim() !== '') validate(urlValue);
-    else paintHint();
-    return box;
-  }
-
-  // --- Применение выбора ----------------------------------------------------
-  async function applySelection(close: () => void): Promise<void> {
-    if (tab === 'url') {
-      if (urlValid === null) return;
-      queueSave({ cover_url: urlValid, cover_attachment_id: null });
-      notice(t('publication.cover.setDone'), 'success');
-      close();
-      return;
-    }
-    if (selected === null) return;
-    const attachment = coverRepresentative(selected, pubId);
-    if (attachment === null) return;
-    if (attachment.owner_type === 'publication' && attachment.owner_id === pubId) {
-      queueSave({ cover_attachment_id: attachment.id, cover_url: null });
-    } else {
-      // ⌘ «Чужое» вложение сначала привязываем к публикации, затем назначаем
-      // обложкой (сервер отвечает 422 на cover_attachment_id чужого владельца).
-      try {
-        const created = await etn.attachments.add(netId, 'publication', pubId, {
-          kind: attachment.kind,
-          url: attachment.kind === 'url' ? attachment.url : null,
-          file_path: attachment.kind === 'file' ? attachment.file_path : null,
-          file_size: attachment.file_size,
-          mime_type: attachment.mime_type,
-          title: attachment.title,
-          description: attachment.description,
-        });
-        invalidatePublicationAttachments(pubId);
-        queueSave({ cover_attachment_id: created.id, cover_url: null });
-      } catch (err) {
-        errorDialog(t('publication.error'), err);
-        return;
-      }
-    }
-    notice(t('publication.cover.setDone'), 'success');
-    close();
-  }
-
-  closeDialog = showDialog({
+  // Каркас диалога — универсальный выбор ресурса (задача d1a56d76): вкладка
+  // «Вложения» — источник-панель публикации, «URL» — общий источник каркаса.
+  createResourcePicker({
     title: t('publication.cover.title'),
     size: 'l',
-    activeTab: tab,
-    onTabChange: (id) => {
-      tab = id === 'url' ? 'url' : 'attachments';
-      refreshApply();
+    applyLabel: t('publication.cover.apply'),
+    noneLabel: t('publication.cover.none'),
+    noneDanger: true,
+    onNone: (close) => {
+      queueSave({ cover_attachment_id: null, cover_url: null });
+      notice(t('publication.cover.cleared'));
+      close();
     },
     tabs: [
       {
         id: 'attachments',
         label: t('publication.cover.tab.attachments'),
-        content: () => buildAttachmentsTab(),
+        build: (ctx) => buildAttachmentsTab(ctx),
+        apply: (ctx) => applyAttachments?.(ctx),
       },
-      { id: 'url', label: t('publication.cover.tab.url'), content: () => buildUrlTab() },
-    ],
-    buttons: [
-      { label: t('actions.cancel') },
-      {
-        label: t('publication.cover.none'),
-        danger: true,
-        keepOpen: true,
-        onClick: (close) => {
-          queueSave({ cover_attachment_id: null, cover_url: null });
-          notice(t('publication.cover.cleared'));
-          close();
+      urlSourceTab({
+        placeholder: t('publication.cover.urlPlaceholder'),
+        previewHint: t('publication.cover.previewHint'),
+        onApply: (url, ctx) => {
+          queueSave({ cover_url: url, cover_attachment_id: null });
+          notice(t('publication.cover.setDone'), 'success');
+          ctx.close();
         },
-      },
-      {
-        label: t('publication.cover.apply'),
-        primary: true,
-        keepOpen: true,
-        ref: (el) => {
-          applyButton = el;
-        },
-        onClick: (close) => void applySelection(close),
-      },
+      }),
     ],
   });
-  refreshApply();
 }
 
 /** Читает Blob в `data:` URL (FileReader — в рендерере нет Buffer). */

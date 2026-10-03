@@ -148,7 +148,10 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
     'поля-наборы значений (текст/чипы ссылок): пересборка чипов поля при смене ' +
       'набора — тот же приём, что у chip-list в lib/ui',
   ],
-  ['editor/icon-dialog.ts', 'одиночные слоты превью иконки (файл/URL)'],
+  [
+    'editor/resource-picker.ts',
+    'одиночные слоты превью источников ресурса (файл/URL); списки не рисует',
+  ],
   ['editor/graph-tab.ts', 'разовое монтирование тела вкладки графа'],
   ['editor/markdown-field.ts', 'одиночные слоты: превью и контейнер markdown-редактора'],
 ]);

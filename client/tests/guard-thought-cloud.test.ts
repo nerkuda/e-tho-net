@@ -81,6 +81,9 @@ const VISUAL_FIELD_READERS = new Set([
   'lib/type-tree.ts',
   'editor/style-dialog.ts',
   'editor/icon-dialog.ts',
+  // Универсальный диалог выбора ресурса (задача d1a56d76): источник «Иконки
+  // мыслей» читает иконку/вид типа для сетки быстрого выбора.
+  'editor/resource-picker.ts',
   'editor/editor.ts',
   'canvas/clipboard.ts',
   'canvas/add-dialog.ts',

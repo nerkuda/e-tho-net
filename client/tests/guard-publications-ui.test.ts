@@ -247,9 +247,16 @@ describe('guard: UI публикаций (a3cfc018)', () => {
       !/addEventListener\(\s*['"]keydown['"]/.test(dialog),
       'навигацию списка ведёт фасад, а не собственный keydown-обработчик',
     );
-    // Диалог — через общий каркас (lib/dialog.ts), вкладки — через его API.
-    assert.ok(dialog.includes('showDialog('), 'диалог обложки — общий каркас showDialog');
-    assert.ok(dialog.includes('tabs:'), 'вкладки диалога обложки заданы API каркаса');
+    // Диалог — через универсальный каркас выбора ресурса (задача d1a56d76),
+    // который сам открывается общим `showDialog`; вкладки задаются его API.
+    assert.ok(
+      dialog.includes('createResourcePicker('),
+      'диалог обложки — общий каркас выбора ресурса (createResourcePicker)',
+    );
+    assert.ok(
+      dialog.includes('tabs:'),
+      'вкладки диалога обложки заданы API каркаса выбора ресурса',
+    );
     // Облачка владельцев — общие КОМПОНЕНТЫ (замечание Б2 приёмки b02ef1cf):
     // мысль — общий облачок мысли (тип/оформление), публикация — lib/ui.
     assert.ok(

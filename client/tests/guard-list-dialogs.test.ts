@@ -641,8 +641,11 @@ const DIALOG_FILES = new Set([
   'admin/admin.ts',
   'canvas/add-dialog.ts',
   'editor/attachments.ts',
-  'editor/icon-dialog.ts',
   'editor/publication-card.ts',
+  // Универсальный диалог выбора ресурса (задача d1a56d76): единый каркас
+  // вкладок-источников, на котором собраны пикер иконки (icon-dialog, теперь
+  // адаптер без своего showDialog) и диалог обложки публикации.
+  'editor/resource-picker.ts',
   'editor/style-dialog.ts',
   'editor/wiki-link.ts',
   'import-export/export-dialog.ts',

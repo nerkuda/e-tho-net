@@ -175,15 +175,18 @@ describe('диалог обложки: якоря поведения (замеч
   });
 
   it('dblclick и Ctrl+Enter выбирают и применяют с закрытием', () => {
+    // Применение выбора живёт в источнике «Вложения» универсального диалога
+    // выбора ресурса (задача d1a56d76) — холдер `applyAttachments`, а не
+    // прежняя локальная `applySelection`.
     assert.ok(
-      /\.addEventListener\('dblclick',[\s\S]*?applySelection\(closeDialog\)/.test(source),
+      /\.addEventListener\('dblclick',[\s\S]*?applyAttachments\(ctx\)/.test(source),
       'двойной клик по строке применяет выбор',
     );
     const navInit = functionBlock(source, 'const nav = createListNav<CoverRow>(');
     assert.ok(navInit.includes('onKey'), 'Ctrl+Enter перехватывается до базовых правил ядра');
     assert.ok(
       /key !== 'Enter' \|\| event\.ctrlKey !== true/.test(navInit) &&
-        navInit.includes('applySelection(closeDialog)'),
+        navInit.includes('applyAttachments(ctx)'),
       'Ctrl+Enter применяет выбор',
     );
   });
