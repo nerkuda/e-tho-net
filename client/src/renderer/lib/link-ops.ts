@@ -26,8 +26,9 @@ export async function ensureLink(
     op: 'link_parents',
     args: { parent_ids: [sourceId], link_type_id: linkTypeId },
   });
-  // Своё ребро меняет состав публикации: сигнал слоя (до B1).
-  signalPublicationCompositionChanged();
+  // Своё ребро меняет состав публикации: сигнал слоя (до B1) с концами ребра —
+  // рабочая область не зажжёт stale, если ни один из них не в её сборке.
+  signalPublicationCompositionChanged([sourceId, targetId]);
   return result;
 }
 
@@ -42,7 +43,7 @@ export async function unlinkParents(
     op: 'unlink_parents',
     args: { parent_ids: parentIds },
   });
-  signalPublicationCompositionChanged();
+  signalPublicationCompositionChanged([id, ...parentIds]);
   return result;
 }
 
@@ -57,7 +58,7 @@ export async function unlinkChildren(
     op: 'unlink_children',
     args: { child_ids: childIds },
   });
-  signalPublicationCompositionChanged();
+  signalPublicationCompositionChanged([id, ...childIds]);
   return result;
 }
 
@@ -77,7 +78,7 @@ export async function setOnlyParents(
     op: 'set_only_parents',
     args: { parent_ids: parentIds, link_type_id: linkTypeId },
   });
-  signalPublicationCompositionChanged();
+  signalPublicationCompositionChanged([id, ...parentIds]);
   return result;
 }
 

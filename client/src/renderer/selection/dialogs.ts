@@ -186,6 +186,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     }
     let applied = 0;
     let failed = 0;
+    const appliedIds: string[] = [];
     for (const row of filled) {
       for (const ref of selectedRefs) {
         const defs = ref.type_id === null ? undefined : defsByType.get(ref.type_id);
@@ -193,12 +194,15 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
         try {
           await etn.properties.set(networkId, 'thought', ref.id, row.def.key, row.value);
           applied += 1;
+          appliedIds.push(ref.id);
         } catch {
           failed += 1;
         }
       }
     }
-    if (applied > 0) signalPublicationCompositionChanged();
+    // Изменённые мысли — чтобы рабочая область публикации не зажгла stale от
+    // значения посторонней сборке мысли (ужесточение G4, задача 8a039ea3).
+    if (applied > 0) signalPublicationCompositionChanged(appliedIds);
     if (applied > 0) notice(`Значения применены (${applied}).`, 'success');
     if (failed > 0) notice(`Не удалось применить: ${failed}.`, 'error');
     // Своя запись значения (в т.ч. свойства-связи) не поднимает версию мысли, а

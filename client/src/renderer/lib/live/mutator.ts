@@ -95,10 +95,21 @@ export function invalidateAfterMutation(
  * Сигнал «состав публикации мог измениться»: своё ребро (link-ops) или значение
  * свойства-связи (properties.ts). Рабочая область пометит живой текст устаревшим
  * («Остаётся + подсветка»), сборку НЕ перечитывая.
+ *
+ * `thoughtIds` — мысли, которых коснулась правка (владелец значения свойства,
+ * концы изменённого ребра). Передача из G4 (задача 8a039ea3): рабочая область
+ * сверяет их с текущей сборкой (`assemblyHasThought`) и НЕ зажигает stale, если
+ * ни одна из них в сборку не входит, — правка постороннего свойства/связи не
+ * должна помечать документ устаревшим. Без списка (владелец-связь или
+ * неизвестный случай) поведение прежнее — консервативный stale.
  */
-export function signalPublicationCompositionChanged(): void {
+export function signalPublicationCompositionChanged(thoughtIds?: readonly string[]): void {
   invalidateQueries(queryKeys.publicationAssemblyAll(), {
     local: 'publication-composition',
+    data:
+      thoughtIds === undefined || thoughtIds.length === 0
+        ? {}
+        : { thought_ids: [...thoughtIds] },
   } satisfies LocalMutationSignal);
 }
 

@@ -796,9 +796,23 @@ export function mountPublicationWorkspace(
           );
           return;
         }
-        case 'publication-composition':
+        case 'publication-composition': {
+          // Ужесточение (передача из G4, задача 8a039ea3): правка постороннего
+          // свойства/связи не должна зажигать ложный stale. Если изменённые
+          // мысли известны и НИ ОДНОЙ нет в текущей сборке — состав не затронут.
+          const ids = local.data?.['thought_ids'];
+          const asm = assembly;
+          if (
+            asm !== null &&
+            Array.isArray(ids) &&
+            ids.length > 0 &&
+            !ids.some((id) => typeof id === 'string' && assemblyHasThought(asm, id))
+          ) {
+            return;
+          }
           markRebuildStale();
           return;
+        }
         default:
           reload();
           return;

@@ -441,6 +441,18 @@ describe('рабочая область публикации: свой путь 
     assert.equal(stale(root), false, 'посторонняя мысль stale не зажигает');
   });
 
+  it('ужесточение G5 (8a039ea3): сигнал состава с мыслью ВНЕ сборки stale не зажигает', async () => {
+    const { root } = await mount();
+    // Посторонняя мысль: ни раздела, ни текста в сборке — состав не затронут.
+    signalPublicationCompositionChanged(['stranger']);
+    assert.equal(stale(root), false, 'постороннее свойство/связь не зажигают stale');
+    // Мысль раздела — зажигает (контрольная половина).
+    const ids = sectionIds(root);
+    assert.ok(ids.length > 0, 'в сборке есть раздел');
+    signalPublicationCompositionChanged([ids[0]!]);
+    assert.equal(stale(root), true, 'мысль в сборке зажигает stale');
+  });
+
   it('публикационная инвалидация без причины безопасно перечитывает документ', async () => {
     const { root } = await mount();
     const before = assemblyFetches;
