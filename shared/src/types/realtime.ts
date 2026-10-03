@@ -237,6 +237,13 @@ export interface CommentCreatedData {
 }
 export interface CommentUpdatedData {
   id: string;
+  /**
+   * Владелец комментария — нужен подписчикам для точечной адресации (напр.
+   * обновление блока открытого документа публикации без перечитывания сборки,
+   * замечание 6 приёмки b02ef1cf). Для `permanent`-комментария это владелец
+   * мысли/связи.
+   */
+  owner_id: string;
   changes: Partial<Comment>;
   version: number;
 }

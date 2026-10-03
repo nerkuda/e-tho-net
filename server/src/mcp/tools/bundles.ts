@@ -300,15 +300,16 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
                   activity.push({ kind: 'comment', action: 'created', comment: c });
                 }
               } else {
+                const c = getComment(ndb, item.comment.id);
                 events.push({
                   type: 'comment.updated',
                   data: {
                     id: item.comment.id,
+                    owner_id: c?.owner_id ?? '',
                     version: item.comment.version,
                     changes: { body_md: '' },
                   },
                 });
-                const c = getComment(ndb, item.comment.id);
                 if (c !== null) {
                   activity.push({ kind: 'comment', action: 'updated', comment: c });
                 }

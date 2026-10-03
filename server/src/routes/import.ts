@@ -110,6 +110,7 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
               type: 'comment.updated',
               data: {
                 id: comment.id,
+                owner_id: comment.owner_id,
                 changes: {
                   body_md: comment.body_md,
                   body_html: comment.body_html,

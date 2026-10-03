@@ -188,7 +188,12 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             events: [
               {
                 type: 'comment.updated',
-                data: { id: input.comment_id, changes, version: updated.version },
+                data: {
+                  id: input.comment_id,
+                  owner_id: updated.owner_id,
+                  changes,
+                  version: updated.version,
+                },
               },
             ],
             activity: [{ kind: 'comment', action: 'updated', comment: updated }],
@@ -260,6 +265,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
                 type: 'comment.updated',
                 data: {
                   id: input.comment_id,
+                  owner_id: updated.owner_id,
                   changes: { targets: updated.targets },
                   version: updated.version,
                 },
@@ -298,6 +304,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
                 type: 'comment.updated',
                 data: {
                   id: input.comment_id,
+                  owner_id: updated.owner_id,
                   changes: { targets: updated.targets },
                   version: updated.version,
                 },
