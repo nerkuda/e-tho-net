@@ -8,7 +8,7 @@
  * Путь (G2): окрестность фокуса гасит роутер слоя (`focusAll`), активная
  * подписка перечитывает её; `store.update({ showTrash })` и легаси-обновление
  * «Структур» — рядом. Проверяется реальный конвейер `routeRealtimeEvent` +
- * `applyRealtimeToUi` под DOM-шимом: значение флага, перезапрос фокуса и игнор
+ * `applyDerivedRealtime` (G6; прежний `applyRealtimeToUi` снесён) под DOM-шимом: значение флага, перезапрос фокуса и игнор
  * чужих ключей/чужих сетей.
  */
 
@@ -115,7 +115,7 @@ describe('realtime show_trash: настройка другого клиента 
       },
     };
     const { store } = await import('../src/renderer/state.js');
-    const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
+    const { applyDerivedRealtime } = await import('../src/renderer/realtime-effects.js');
     const { activateFocusQuery, deactivateFocusQuery } =
       await import('../src/renderer/lib/layer-resync.js');
     const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
@@ -139,7 +139,7 @@ describe('realtime show_trash: настройка другого клиента 
     /** Реальный конвейер: роутер слоя, затем легаси-применение. */
     const deliver = (evt: Record<string, unknown>): void => {
       routeRealtimeEvent(evt as any, { networkId: 'n1' });
-      applyRealtimeToUi(evt as any);
+      applyDerivedRealtime(evt as any);
     };
 
     // Чужая сеть — событие соседней вкладки общий store не трогает.

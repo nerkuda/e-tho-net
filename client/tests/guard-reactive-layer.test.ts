@@ -36,29 +36,18 @@ const RENDERER_ROOT = path.resolve(
 );
 
 /**
- * Легаси-подписчики `onRealtimeEvent`, замороженные до миграции.
+ * Легаси-подписчики `onRealtimeEvent` — НАБОР ПУСТ (G6 техпроекта 269016e2:
+ * старый switch `realtime-ui.ts` снесён, мост `app.ts` переведён на
+ * `setRealtimeEffects({ onEventApplied })`).
  *
- * TODO G6 — старый switch (`realtime-ui.ts`), легаси-леера (`layers.ts`) и мост
- * `app.ts` (регистрация `applyRealtimeToUi`).
- * `lib/lock-cache.ts` — инфраструктура замков, прямой подписчик допустим.
- *
- * G4 (публикации) снят с whitelist: карточка публикации читает живые данные
- * через слой (`lib/live`).
- *
- * G5 (редактор/индикаторы/пины/wiki) снят: `editor/editor.ts`,
- * `editor/comments.ts`, `editor/properties.ts`, `editor/mentions-annotate.ts`,
- * `screens/property-manager.ts`, `screens/thought-type/views-tab.ts` читают
- * живые данные через слой (подписка на инвалидации ключей, причина — событие).
+ * Прямых подписок на шину экранов больше нет: данные идут через роутер +
+ * реестр запросов, побочные эффекты — через `onQueryInvalidated`
+ * (`saved-filter`, `views`, `pins`), `onRoutedRealtimeEvent`
+ * (`screens/layers.ts` — переопределения слоя; `lib/lock-cache.ts` — `edit.*`).
+ * `realtime.ts` оставлен в whitelist как владелец шины (правило
+ * `etn.realtime.onEvent`), самой функции `onRealtimeEvent` в дереве уже нет.
  */
-const ON_REALTIME_WHITELIST = new Set<string>([
-  // инфраструктура слоя
-  'realtime.ts',
-  'lib/lock-cache.ts',
-  // G6 — легаси-мост, switch и легаси-леера
-  'app.ts',
-  'realtime-ui.ts',
-  'screens/layers.ts',
-].map((p) => p.replace(/\\/g, '/')));
+const ON_REALTIME_WHITELIST = new Set<string>(['realtime.ts'].map((p) => p.replace(/\\/g, '/')));
 
 /**
  * Импортёры локальных каналов обновления. Оба модуля
@@ -96,17 +85,25 @@ describe('guard: реактивный слой данных (269016e2, G1)', () 
     }
   });
 
-  it('прямые подписки onRealtimeEvent только у замороженного whitelist', () => {
+  it('прямых подписок onRealtimeEvent нет (G6: старый путь снесён)', () => {
     assertGuardClean(RENDERER_ROOT, [
       {
         name: 'no-direct-onrealtimeevent',
         description:
           'Экраны и модули читают живые данные через слой lib/live (роутер событий + ' +
-          'реестр запросов), а не подписываются на onRealtimeEvent напрямую. ' +
-          'Whitelist — легаси-подписчики до миграции G2–G6; новый файл надо ' +
-          'перевести на queryStore/мутатор слоя.',
+          'реестр запросов), а не подписываются на шину напрямую. Побочные эффекты ' +
+          'без ключа запроса — через onRoutedRealtimeEvent/onQueryInvalidated.',
         pattern: /\bonRealtimeEvent\s*\(/,
         allow: (rel) => ON_REALTIME_WHITELIST.has(rel),
+      },
+      {
+        name: 'no-direct-normalized-cache-writes',
+        description:
+          'Нормализованный кэш слоя пишется только мутатором (commitEntity / ' +
+          'putMutationResult) и роутером событий. Прямые putEntity/patchEntity/' +
+          'removeEntity вне lib/live запрещены (G6 269016e2).',
+        pattern: /\b(?:putEntity|patchEntity|removeEntity)\s*\(/,
+        allow: (rel) => rel.startsWith('lib/live/'),
       },
     ]);
   });

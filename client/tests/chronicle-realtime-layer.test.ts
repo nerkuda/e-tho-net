@@ -195,7 +195,7 @@ describe('chronicle G3: контракт слоя (поведенчески)', (
 
 describe('chronicle G3: проводка экрана и шины', () => {
   const chronicle = read('screens/chronicle/chronicle.ts');
-  const realtimeUi = read('realtime-ui.ts');
+  const effects = read('realtime-effects.ts');
 
   it('лента зарегистрирована под ключом chronicle-feed и подписана на его инвалидации', () => {
     assert.match(chronicle, /function bindChronicleFeed\(\): void \{/);
@@ -218,11 +218,11 @@ describe('chronicle G3: проводка экрана и шины', () => {
     );
   });
 
-  it('шина больше не дёргает ленту вручную', () => {
-    assert.ok(!realtimeUi.includes('applyChronicleRealtime'));
-    assert.ok(!realtimeUi.includes('invalidateChronicleThought'));
-    assert.ok(!realtimeUi.includes('scheduleChronicleRefresh'));
-    assert.ok(!realtimeUi.includes('screens/chronicle/chronicle.js'), 'нет импорта экрана в шину');
+  it('мост производных эффектов больше не дёргает ленту вручную', () => {
+    assert.ok(!effects.includes('applyChronicleRealtime'));
+    assert.ok(!effects.includes('invalidateChronicleThought'));
+    assert.ok(!effects.includes('scheduleChronicleRefresh'));
+    assert.ok(!effects.includes('screens/chronicle/chronicle.js'), 'нет импорта экрана в мост');
   });
 
   it('скрытый экран откладывает перезапрос до показа (8e702d8c)', () => {

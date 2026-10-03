@@ -51,17 +51,19 @@ describe('chronicle HOME: attachToRecord показывает перемещён
     );
   });
 
-  it('перемещённая вниз запись показывается после reload, обычные правки не трогаются', () => {
+  it('перемещённая вниз запись показывается после обновления ленты, обычные правки не трогаются', () => {
     const fn = functionBody(CHRONICLE, 'async function attachToRecord(');
-    // Показ записи — ПОСЛЕ перезагрузки и только когда запись сменила блок.
+    // G6: локальная мутация гасит ключ слоя и ДОЖИДАЕТСЯ свежего DOM
+    // (`refreshFeedAndCalendar` — тот же путь, что у отложенного перезапроса),
+    // и только потом прокручивает ленту при смене блока.
     assert.match(
       fn,
-      /await reload\(\);[\s\S]*?if \(firstBinding\) revealRecord\(rowId\);/,
-      'прокрутка к записи/сброс — после reload и только для перемещения',
+      /invalidateQueries\(queryKeys\.chronicleFeedAll\(\)\);[\s\S]*?await refreshFeedAndCalendar\(\);[\s\S]*?if \(firstBinding\) revealRecord\(rowId\);/,
+      'прокрутка к записи — после обновления ленты и только для перемещения',
     );
     assert.ok(
-      !/revealRecord\(rowId\);[\s\S]*?await reload\(\)/.test(fn),
-      'revealRecord не вызывается до reload',
+      !/revealRecord\(rowId\);[\s\S]*?await refreshFeedAndCalendar\(\)/.test(fn),
+      'revealRecord не вызывается до обновления ленты',
     );
   });
 

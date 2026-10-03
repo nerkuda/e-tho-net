@@ -3,9 +3,10 @@
  * требование 628d33ee, компонент ebe5e19f).
  *
  * Ключевой сценарий требования: realtime-событие сети обновляет данные списка
- * БЕЗ ручного `invalidate`-хука вызывающего. Проверяется на реальном
- * `applyRealtimeToUi` под DOM-шимом: подписчик селектора на срез store
- * срабатывает от события, потому что ветка realtime-канала фан-аутит его через
+ * БЕЗ ручного `invalidate`-хука вызывающего. Проверяется на мосте производных
+ * эффектов `applyDerivedRealtime` (G6 техпроекта 269016e2 — прежний
+ * `applyRealtimeToUi` снесён) под DOM-шимом: подписчик селектора на срез store
+ * срабатывает от события, потому что производный эффект фан-аутит его через
  * `store.update` (а не зовёт точечную инвалидацию, которую вызывающий обязан
  * помнить). jsdom не нужен — среда та же, что у прочих realtime-тестов рендерера.
  */
@@ -63,7 +64,7 @@ describe('realtime → селектор: список обновляется с�
       thoughts: { focus: async () => null },
     };
     const { store } = await import('../src/renderer/state.js');
-    const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
+    const { applyDerivedRealtime } = await import('../src/renderer/realtime-effects.js');
     const { select } = await import('../src/renderer/lib/ui/state.js');
 
     store.update({ networkId: 'n1', pins: [], showInactive: false } as any);
@@ -84,27 +85,27 @@ describe('realtime → селектор: список обновляется с�
       assert.deepEqual(inactiveCalls, [false]);
 
       // Событие другой сети игнорируется целиком (граница сети).
-      applyRealtimeToUi(
+      applyDerivedRealtime(
         foreignEvent('pinned-thoughts.updated', 'n2', { ordered_ids: ['x'] }) as any,
       );
       assert.deepEqual(pinCalls, [[]], 'чужую сеть селектор не видит');
 
       // Своя сеть: список пинов обновлён другим клиентом — без invalidate
       // вызывающего подписчик селектора получает новые данные.
-      applyRealtimeToUi(
+      applyDerivedRealtime(
         foreignEvent('pinned-thoughts.updated', 'n1', { ordered_ids: ['a', 'b'] }) as any,
       );
       assert.deepEqual(pinCalls, [[], ['a', 'b']], 'список обновился от realtime-события');
 
       // Повтор того же значения в другом контейнере — молчание (структурное
       // сравнение среза).
-      applyRealtimeToUi(
+      applyDerivedRealtime(
         foreignEvent('pinned-thoughts.updated', 'n1', { ordered_ids: ['a', 'b'] }) as any,
       );
       assert.equal(pinCalls.length, 2);
 
       // Ветка user-preference: show_inactive обновляет store напрямую.
-      applyRealtimeToUi(
+      applyDerivedRealtime(
         foreignEvent('user-preference.updated', 'n1', { key: 'show_inactive', value: true }) as any,
       );
       assert.deepEqual(inactiveCalls, [false, true], 'булев срез пришёл от события');

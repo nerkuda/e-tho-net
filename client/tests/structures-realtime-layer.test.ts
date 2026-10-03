@@ -92,11 +92,11 @@ describe('structures G2: слой определяет обновление сн
     assert.ok(!structures.includes('refreshDirections'), 'нет точечного додара directions');
   });
 
-  it('шина больше не дёргает «Структуры» вручную', () => {
-    const realtimeUi = read('realtime-ui.ts');
-    assert.ok(!realtimeUi.includes('applyStructuresRealtime'), 'нет applyStructuresRealtime');
-    assert.ok(!realtimeUi.includes('scheduleStructuresRefresh'), 'нет scheduleStructuresRefresh');
-    assert.ok(!realtimeUi.includes('structures/structures.js'), 'нет импорта структур в шину');
+  it('мост производных эффектов больше не дёргает «Структуры» вручную', () => {
+    const effects = read('realtime-effects.ts');
+    assert.ok(!effects.includes('applyStructuresRealtime'), 'нет applyStructuresRealtime');
+    assert.ok(!effects.includes('scheduleStructuresRefresh'), 'нет scheduleStructuresRefresh');
+    assert.ok(!effects.includes('structures/structures.js'), 'нет импорта структур в мост');
   });
 
   it('модуль realtime-apply.ts снесён', () => {

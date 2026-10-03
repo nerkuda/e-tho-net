@@ -277,8 +277,8 @@ describe('изменение типа связи перерисовывает р
 
     const { mountEditor, editorInternals } = await import('../src/renderer/editor/editor.js');
     const { store } = await import('../src/renderer/state.js');
-    const { initRealtime, onRealtimeEvent } = await import('../src/renderer/realtime.js');
-    const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
+    const { initRealtime, setRealtimeEffects } = await import('../src/renderer/realtime.js');
+    const { applyDerivedRealtime } = await import('../src/renderer/realtime-effects.js');
     const { isTypeDeleted } = await import('../src/renderer/lib/type-definitions.js');
 
     // Показана связь типа «la» (цепочка la → root); в каталоге есть чужой «lb».
@@ -291,9 +291,9 @@ describe('изменение типа связи перерисовывает р
     } as any);
 
     initRealtime();
-    // Как в приложении: общий UI-обработчик зарегистрирован раньше редактора и
-    // первым запускает перечитывание каталогов типов.
-    onRealtimeEvent(applyRealtimeToUi);
+    // Как в приложении (G6): производные эффекты — единственный мост события,
+    // он зарегистрирован раньше редактора и первым перечитывает каталоги типов.
+    setRealtimeEffects({ onEventApplied: (evt) => applyDerivedRealtime(evt) });
     const host = new ShimElement('div');
     mountEditor(host as any);
     await flush();
@@ -471,9 +471,9 @@ describe('проводка реакции редактора на изменен
       ),
       'шапка перерисовывается после обновления каталога типов',
     );
-    const realtimeUi = read('realtime-ui.ts');
+    const typeCatalogues = read('lib/type-catalogues.ts');
     assert.ok(
-      /let typeCataloguesReload: Promise<void> \| null = null;/.test(realtimeUi),
+      /let typeCataloguesReload: Promise<void> \| null = null;/.test(typeCatalogues),
       'перезапрос каталогов делится между параллельными потребителями',
     );
     // Вкладки «Свойства» у редактора связи нет — общий путь инвалидации

@@ -33,11 +33,11 @@ import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 
 type CanvasModule = typeof import('../src/renderer/canvas/canvas.js');
-type RealtimeUiModule = typeof import('../src/renderer/realtime-ui.js');
+type RealtimeEffectsModule = typeof import('../src/renderer/realtime-effects.js');
 type EventRouterModule = typeof import('../src/renderer/lib/live/event-router.js');
 
 let canvas: CanvasModule;
-let realtimeUi: RealtimeUiModule;
+let realtimeEffects: RealtimeEffectsModule;
 let eventRouter: EventRouterModule;
 
 // ---------------------------------------------------------------------------
@@ -114,6 +114,9 @@ function metaViewRow(id: string, name: string, isDefault: boolean): Record<strin
   };
 }
 
+/** Определение активного отбора — тест подменяет его (в т.ч. на keywords). */
+let viewDefinition = JSON.stringify({ criteria: [] });
+
 function fullView(id: string, name: string, isDefault: boolean): Record<string, unknown> {
   return {
     id,
@@ -121,7 +124,7 @@ function fullView(id: string, name: string, isDefault: boolean): Record<string, 
     name,
     name_key: id,
     description: null,
-    definition: JSON.stringify({ criteria: [] }),
+    definition: viewDefinition,
     position: 0,
     is_default: isDefault,
     version: 1,
@@ -288,18 +291,24 @@ before(async () => {
   installGlobals();
   installEtn();
   canvas = await import('../src/renderer/canvas/canvas.js');
-  realtimeUi = await import('../src/renderer/realtime-ui.js');
+  realtimeEffects = await import('../src/renderer/realtime-effects.js');
   eventRouter = await import('../src/renderer/lib/live/event-router.js');
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   installEtn();
   // Дедуп роутера по seq — состояние процесса: сбрасываем между тестами,
   // иначе второе событие с тем же seq будет отброшено как опоздавшее.
   eventRouter.resetEventRouter();
   viewRows = [{ id: 'existing', title: 'Старая работа', type_id: TYPE_ID, active: true, marked_for_deletion: false }];
+  viewDefinition = JSON.stringify({ criteria: [] });
   viewRunCount = 0;
   store.update({ networkId: NETWORK_ID, focus: null, canvasZoom: 1, cloudWidth: 180 });
+  // Сброс удержанного полосой фокуса: `dispose()` не зовёт `renderStrip(null)`,
+  // и следующий тест с тем же FOCUS_ID считался бы «фокус не менялся» — кэш
+  // определения отбора (в т.ч. признак `keywords`) не перечитывался бы.
+  const strip = await import('../src/renderer/canvas/focus-filter-strip.js');
+  await strip.renderStrip(null);
 });
 
 describe('realtime-обновление нижней зоны в режиме отбора (ошибка 4fca95c9)', () => {
@@ -314,11 +323,11 @@ describe('realtime-обновление нижней зоны в режиме о
     viewRows.push({ id: WORK_ID, title: 'Новая задача', type_id: TYPE_ID, active: true, marked_for_deletion: false });
     // ...окрестность фокуса при этом не меняется (ребро отфильтровано).
     // G2: реальный конвейер — роутер слоя гасит `focus`-ключи, подписка холста
-    // на инвалидации перерисовывает нижнюю зону (ошибка 4fca95c9); легаси-путь
-    // `applyRealtimeToUi` идёт следом (realtime.ts).
+    // на инвалидации перерисовывает нижнюю зону (ошибка 4fca95c9); мост производных
+    // эффектов `applyDerivedRealtime` идёт следом (realtime.ts).
     const evt = foreignEvent('thought.created', { thought: thought(WORK_ID, 'Новая задача') }) as any;
     eventRouter.routeRealtimeEvent(evt, { networkId: NETWORK_ID });
-    realtimeUi.applyRealtimeToUi(evt);
+    realtimeEffects.applyDerivedRealtime(evt);
     await settle();
 
     assert.ok(
@@ -347,7 +356,7 @@ describe('realtime-обновление нижней зоны в режиме о
       link: { id: 'l-work', source_id: WORK_ID, target_id: FOCUS_ID, type_id: null, active: true, version: 1 },
     }) as any;
     eventRouter.routeRealtimeEvent(evt, { networkId: NETWORK_ID });
-    realtimeUi.applyRealtimeToUi(evt);
+    realtimeEffects.applyDerivedRealtime(evt);
     await settle();
 
     assert.ok(viewRunCount > beforeRun, 'link.created обязан переисполнить активный отбор');
@@ -377,7 +386,7 @@ describe('realtime-обновление нижней зоны в режиме о
       seq: 2,
     } as any;
     eventRouter.routeRealtimeEvent(invisibleEvt, { networkId: NETWORK_ID });
-    realtimeUi.applyRealtimeToUi(invisibleEvt);
+    realtimeEffects.applyDerivedRealtime(invisibleEvt);
     await settle();
     assert.equal(viewRunCount, beforeRun, 'правка без полей-признаков отбор не переисполняет');
 
@@ -394,7 +403,7 @@ describe('realtime-обновление нижней зоны в режиме о
       seq: 3,
     } as any;
     eventRouter.routeRealtimeEvent(entryEvt, { networkId: NETWORK_ID });
-    realtimeUi.applyRealtimeToUi(entryEvt);
+    realtimeEffects.applyDerivedRealtime(entryEvt);
     await settle();
     assert.ok(
       viewRunCount > afterInvisible,
@@ -414,9 +423,56 @@ describe('realtime-обновление нижней зоны в режиме о
       seq: 4,
     } as any;
     eventRouter.routeRealtimeEvent(visibleEvt, { networkId: NETWORK_ID });
-    realtimeUi.applyRealtimeToUi(visibleEvt);
+    realtimeEffects.applyDerivedRealtime(visibleEvt);
     await settle();
     assert.ok(viewRunCount > beforeVisible, 'правка видимой строки отбора переисполняет отбор');
+    dispose();
+  });
+
+  it('keywords-положительный: заголовок невидимой мысли при keywords-отборе переисполняет отбор, оформление — нет', async () => {
+    // Активный отбор использует критерий `keywords` — заголовок/синонимы
+    // входят в состав отбора. Мысль ВНЕ видимого результата: её новое имя
+    // может ВВЕСТИ её в отбор (симметрично «входу» при смене типа).
+    viewDefinition = JSON.stringify({ criteria: [], keywords: 'работа' });
+    const dispose = await mountWithView();
+    assert.ok(viewRunCount >= 1, 'keywords-отбор исполнился при отрисовке');
+    const strip = await import('../src/renderer/canvas/focus-filter-strip.js');
+    // Переисполняем активный отбор — полоса читает определение и запоминает
+    // признак `keywords` (как при показе результата в UI).
+    await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(strip.activeViewUsesKeywords(), true, 'keywords-отбор распознан полосой');
+    const invisibleId = '00000000-0000-4000-8000-000000000998';
+
+    const beforeTitle = viewRunCount;
+    const titleEvt = {
+      ...foreignEvent('thought.updated', {
+        id: invisibleId,
+        changes: { title: 'Работа новая' },
+        version: 2,
+      }),
+      seq: 10,
+    } as any;
+    eventRouter.routeRealtimeEvent(titleEvt, { networkId: NETWORK_ID });
+    realtimeEffects.applyDerivedRealtime(titleEvt);
+    await settle();
+    assert.ok(
+      viewRunCount > beforeTitle,
+      'правка заголовка при keywords-отборе переисполняет отбор',
+    );
+
+    const afterTitle = viewRunCount;
+    const decoEvt = {
+      ...foreignEvent('thought.updated', {
+        id: invisibleId,
+        changes: { bg_color: '#ffffff' },
+        version: 3,
+      }),
+      seq: 11,
+    } as any;
+    eventRouter.routeRealtimeEvent(decoEvt, { networkId: NETWORK_ID });
+    realtimeEffects.applyDerivedRealtime(decoEvt);
+    await settle();
+    assert.equal(afterTitle, viewRunCount, 'оформление keywords-отбор не переисполняет');
     dispose();
   });
 });

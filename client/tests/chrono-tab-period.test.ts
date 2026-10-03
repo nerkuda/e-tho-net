@@ -114,7 +114,10 @@ describe('вкладка «Дневник»: диалог даты/период�
   it('правка дат — полные UTC-инстансы, время суток сохраняет общий помощник', () => {
     const src = read(SRC.tab);
     assert.match(src, /resolveDatePeriodInstants\(/, 'значение диалога переводится в инстансы');
-    const create = src.slice(src.indexOf('etn.comments.create('), src.indexOf('invalidateIndicators(ctx.ownerId);', src.indexOf('etn.comments.create(')));
+    const create = src.slice(
+      src.indexOf('etn.comments.create('),
+      src.indexOf('invalidateQueries(queryKeys.indicators(ctx.ownerId));', src.indexOf('etn.comments.create(')),
+    );
     assert.ok(create.includes('valid_from: fromInstant'), 'create: полный инстанс начала');
     assert.ok(create.includes('valid_to: toInstant'), 'create: полный инстанс конца');
     assert.ok(!/valid_to:\s*(?:null|['"]['"])/.test(src), 'valid_to не бывает пустым');

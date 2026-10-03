@@ -16,7 +16,8 @@
  * перечитывал.
  *
  * Здесь проверяется:
- *  1) реальный путь ЧУЖОГО события через `applyRealtimeToUi` под DOM-шимом:
+ *  1) реальный путь ЧУЖОГО события через `routeRealtimeEvent` + производные
+ *     эффекты `applyDerivedRealtime` (G6) под DOM-шимом:
  *     `property-value.set` и `link.created` из активной сети перечитывают
  *     окрестность фокуса (холст), событие чужой сети — игнорируется;
  *  2) чистый гейт локального производителя `inFocusNeighbourhood`: фокус и его
@@ -174,7 +175,7 @@ describe('realtime-значение свойства-связи перечиты
     const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
     const { resetEventRouter, routeRealtimeEvent } =
       await import('../src/renderer/lib/live/event-router.js');
-    const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
+    const { applyDerivedRealtime } = await import('../src/renderer/realtime-effects.js');
 
     resetQueryRegistry();
     resetEventRouter();
@@ -200,7 +201,7 @@ describe('realtime-значение свойства-связи перечиты
       value: ['x'],
     }) as any;
     routeRealtimeEvent(foreign, { networkId: 'n1' });
-    applyRealtimeToUi(foreign);
+    applyDerivedRealtime(foreign);
     await wait(100);
     assert.equal(focusFetches, baseline, 'событие чужой сети окрестность не перечитывает');
 
@@ -213,7 +214,7 @@ describe('realtime-значение свойства-связи перечиты
       2,
     ) as any;
     routeRealtimeEvent(ownField, { networkId: 'n1' });
-    applyRealtimeToUi(ownField);
+    applyDerivedRealtime(ownField);
     await wait(100);
     assert.equal(
       focusFetches,
@@ -231,7 +232,7 @@ describe('realtime-значение свойства-связи перечиты
       3,
     ) as any;
     routeRealtimeEvent(link, { networkId: 'n1' });
-    applyRealtimeToUi(link);
+    applyDerivedRealtime(link);
     await wait(100);
     assert.equal(focusFetches, baseline + 2, 'чужой `link.created` перечитывает фокус через слой');
 
@@ -253,7 +254,7 @@ describe('гейт локальной записи значения свойст
       thoughts: { focus: async () => makeFocusResponse() },
     };
     const { store } = await import('../src/renderer/state.js');
-    const { inFocusNeighbourhood } = await import('../src/renderer/realtime-ui.js');
+    const { inFocusNeighbourhood } = await import('../src/renderer/lib/focus-neighbourhood.js');
 
     store.update({ networkId: 'n1', focus: makeFocusResponse() } as any);
     // Мысль-владелец: фокус и его соседи — видимы.
@@ -310,39 +311,38 @@ describe('проводка пересчёта окрестности из ред
   const read = (rel: string): string =>
     readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
 
-  it('пересчёт окрестности задан слоем — ручных помощников в realtime-ui нет', () => {
-    const realtimeUi = read('realtime-ui.ts');
-    // G2: решение «когда обновлять» ушло в слой; ручные помощники снесены.
+  it('пересчёт окрестности задан слоем — ручных помощников в мосте нет', () => {
+    const effects = read('realtime-effects.ts');
+    // G2/G6: решение «когда обновлять» ушло в слой; ручные помощники снесены.
     assert.ok(
-      !realtimeUi.includes('scheduleNeighbourhoodRepaint'),
+      !effects.includes('scheduleNeighbourhoodRepaint'),
       'scheduleNeighbourhoodRepaint снесён (G2)',
     );
-    assert.ok(!realtimeUi.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
-    // Realtime-ветка значения свойства (G2/G3): окрестность, «Структуры» и
-    // «Дневник» гасит роутер слоя — ручных вызовов в шине нет.
-    const branch = realtimeUi.slice(realtimeUi.indexOf("case 'property-value.set':"));
-    const end = branch.indexOf('break;');
+    assert.ok(!effects.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
+    // Ветки значения свойства в мосте больше нет вовсе (G6: только производные
+    // эффекты store/кэшей): окрестность гасит роутер слоя.
     assert.ok(
-      !branch.slice(0, end).includes('scheduleRefresh'),
-      'realtime-ветка не дёргает холст вручную (роутер слоя)',
+      !effects.includes("case 'property-value.set':"),
+      'у значения свойства нет собственной ветки (роутер слоя)',
     );
     assert.ok(
-      !branch.slice(0, end).includes('scheduleStructuresRefresh'),
-      'realtime-ветка не дёргает «Структуры» вручную (роутер слоя)',
+      !effects.includes('scheduleStructuresRefresh'),
+      'мост не дёргает «Структуры» вручную (роутер слоя)',
     );
     assert.ok(
-      !branch.slice(0, end).includes('scheduleChronicleRefresh'),
-      'realtime-ветка не дёргает «Дневник» вручную (роутер слоя, G3)',
+      !effects.includes('scheduleChronicleRefresh'),
+      'мост не дёргает «Дневник» вручную (роутер слоя, G3)',
     );
   });
 
   it('запись значения свойства-связи идёт mutator-путём под гейтом видимости', () => {
     const properties = read('editor/properties.ts');
 
-    // Гейт видимости — из realtime-ui; пересчёт — mutator-слой (`invalidateAfterMutation`).
+    // Гейт видимости — из lib/focus-neighbourhood; пересчёт — mutator-слой
+    // (`invalidateAfterMutation`).
     assert.ok(
-      /import \{ inFocusNeighbourhood \} from '\.\.\/realtime-ui\.js';/.test(properties),
-      'редактор свойств берёт гейт видимости из realtime-ui',
+      /import \{ inFocusNeighbourhood \} from '\.\.\/lib\/focus-neighbourhood\.js';/.test(properties),
+      'редактор свойств берёт гейт видимости из lib/focus-neighbourhood',
     );
     assert.ok(
       /import \{ invalidateAfterMutation \} from '\.\.\/lib\/live\/mutator\.js';/.test(properties),

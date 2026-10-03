@@ -466,7 +466,7 @@ describe('локальная правка типа связи пересчиты
       },
     };
     const { store } = await import('../src/renderer/state.js');
-    const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
+    const { applyDerivedRealtime } = await import('../src/renderer/realtime-effects.js');
     const { activateFocusQuery, deactivateFocusQuery } =
       await import('../src/renderer/lib/layer-resync.js');
     const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
@@ -512,7 +512,7 @@ describe('локальная правка типа связи пересчиты
       meta: { version: 1 },
     } as any;
     routeRealtimeEvent(evt, { networkId: 'n1' });
-    applyRealtimeToUi(evt);
+    applyDerivedRealtime(evt);
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(
       focusFetches,
@@ -527,23 +527,23 @@ describe('локальная правка типа связи пересчиты
   it('решение «когда обновлять» принято слоем — ручных помощников нет', () => {
     const read = (rel: string): string =>
       readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
-    const realtimeUi = read('realtime-ui.ts');
+    const effects = read('realtime-effects.ts');
 
-    // G2/G3: `scheduleNeighbourhoodRepaint`/`scheduleTypeRepaint` снесены.
-    // Realtime-ветка типа: каталог перечитывается отдельно, окрестность,
+    // G2/G3/G6: `scheduleNeighbourhoodRepaint`/`scheduleTypeRepaint` снесены.
+    // Ветка типа: каталог перечитывается производным эффектом, окрестность,
     // «Структуры» и «Дневник» гасит роутер слоя — ручных вызовов нет.
     assert.ok(
-      !realtimeUi.includes('scheduleNeighbourhoodRepaint'),
+      !effects.includes('scheduleNeighbourhoodRepaint'),
       'scheduleNeighbourhoodRepaint снесён (G2)',
     );
-    assert.ok(!realtimeUi.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
+    assert.ok(!effects.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
     assert.ok(
-      /case 'link-type\.deleted':[\s\S]{0,700}?void reloadTypeCatalogues\(\);/.test(realtimeUi),
-      'realtime-ветка типа перечитывает каталог (фокус/«Структуры»/«Дневник» — роутер)',
+      /case 'link-type\.deleted':[\s\S]{0,700}?void reloadTypeCatalogues\(\);/.test(effects),
+      'эффект типа перечитывает каталог (фокус/«Структуры»/«Дневник» — роутер)',
     );
     assert.ok(
-      !realtimeUi.includes('scheduleChronicleRefresh'),
-      'realtime-ветка не дёргает «Дневник» вручную (роутер слоя, G3)',
+      !effects.includes('scheduleChronicleRefresh'),
+      'эффект не дёргает «Дневник» вручную (роутер слоя, G3)',
     );
   });
 

@@ -7,21 +7,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  __testing,
-  invalidateWikiLinkCache,
-} from '../src/renderer/editor/wiki-link-resolver.js';
+import { __testing } from '../src/renderer/editor/wiki-link-resolver.js';
 import { clearEntities, commitEntity } from '../src/renderer/lib/live/index.js';
 
 const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const ID_B = '11111111-2222-3333-4444-555555555555';
 const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
 
-test('invalidateWikiLinkCache снимает отрицательный ответ (missingIds)', () => {
+test('G6: заголовок из слоя важнее устаревшего отрицательного ответа', () => {
+  // Легаси-фасад `invalidateWikiLinkCache` снесён (G6): заголовок — производная
+  // нормализованного кэша слоя, и `getCached`/`isKnown` читают его РАНЬШЕ
+  // отрицательного кэша. Появление мысли в кэше (роутер/`commitEntity`) делает
+  // прежний «отсутствует» неактуальным без отдельного сброса.
+  clearEntities();
   __testing.missingIds.clear();
   __testing.missingIds.add(ID_A);
-  invalidateWikiLinkCache(ID_A);
-  assert.equal(__testing.missingIds.has(ID_A), false, 'id должен перерезолвиться');
+  commitEntity('thought', ID_A, { id: ID_A, title: 'Появилась', active: true });
+  assert.deepEqual(__testing.getCached('net-a', ID_A), { title: 'Появилась', exists: true });
+  assert.equal(__testing.isKnown('net-a', ID_A), true);
 });
 
 test('getCached читает заголовок из нормализованного кэша слоя', () => {
