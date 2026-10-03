@@ -1024,11 +1024,15 @@
   max-height: none;
 }
 
-/* Титульный лист (пункт 7 ea1b5f14): название крупнее H1. */
+/* Титульный лист (пункт 7 ea1b5f14; уточнение 5de0332d п.6): название в 2 раза
+   крупнее прежнего (--font-size-3xl), по центру; подзаголовок в 2 раза крупнее
+   прежнего (--font-size-lg), на 3 строки ниже заголовка, по правому краю. Обе
+   величины заданы множителем от прежнего токена — «в 2 раза» видно из кода. */
 .pub-doc.comment-view .pub-doc-title {
-  font-size: var(--font-size-3xl);
+  font-size: calc(var(--font-size-3xl) * 2);
   line-height: 1.15;
   margin: 0;
+  text-align: center;
 }
 
 .pub-doc-titleblock {
@@ -1076,10 +1080,19 @@
   flex-direction: column;
 }
 
+/* Подзаголовок титула (5de0332d п.6): в 2 раза крупнее прежнего, по правому
+   краю, на 3 строки ниже заголовка (3 × межстрочный шаг названия). Размер —
+   `--font-size-l` (крупная шкала; токена `--font-size-lg` в теме нет, прежняя
+   запись с ним молча давала наследуемые 13px). Цвет НЕ задаём здесь: в
+   титуле-герое его перекрывает белый цвет оверлея. */
+.pub-doc.comment-view .pub-doc-subtitle {
+  font-size: calc(var(--font-size-l) * 2);
+  text-align: right;
+  margin-top: calc(3 * 1.15 * var(--font-size-3xl) * 2);
+}
+
 .pub-doc-subtitle {
   color: var(--text-dim);
-  font-size: var(--font-size-lg);
-  margin-top: var(--space-1);
 }
 
 .pub-doc-meta {
@@ -1092,17 +1105,49 @@
   scroll-margin-top: var(--space-5);
 }
 
+/* Заголовок раздела документа (замечание 4 приёмки 5de0332d): ВСЕ заголовки
+   выровнены по одному левому краю независимо от наличия каретки. Грип и
+   каретка вынесены в абсолютный жёлоб слева и не участвуют в потоке — текст
+   начинается с постоянного отступа у всех уровней. Уровни различаются
+   шрифтом (размер задаёт `.comment-view h1..h6`), а не сдвигом. */
 .pub-doc-heading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
+  position: relative;
+  display: block;
   cursor: pointer;
+  /* Жёлоб: место грипа (слева) + компактной каретки. */
+  padding-left: calc(var(--control-w-m) + var(--space-5));
 }
 
-/* Каретка-экспандер раздела (задача b51dbca4): слева в заголовке; у свёрнутого
-   раздела повёрнута вправо, как у полок и оглавления. */
-.pub-doc-caret {
-  flex: none;
+.pub-doc-heading > .ui-drag-handle {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.pub-doc-heading > .pub-doc-caret {
+  position: absolute;
+  left: var(--space-5);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Компактная каретка: ghost-иконка в жёлобе не должна выталкивать текст и
+   расширяться паддингами тулбара. */
+.pub-doc-heading > .pub-doc-caret.ui-btn {
+  width: var(--control-w-m);
+  height: var(--control-w-m);
+  padding: 0;
+}
+
+.pub-doc-heading > .pub-doc-caret-empty {
+  width: var(--control-w-m);
+  height: var(--control-w-m);
+  pointer-events: none;
+}
+
+.pub-doc-heading-text {
+  display: inline;
 }
 
 .pub-doc-section.pub-doc-collapsed .pub-doc-caret .icon {

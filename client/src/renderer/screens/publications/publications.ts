@@ -710,10 +710,41 @@ interface ShelfBlock {
   kind: 'shelf';
   shelf: Shelf;
   items: Publication[];
+  /**
+   * Плоский блок выбранной полки (фильтр по конкретной полке, замечание 8
+   * приёмки 5de0332d): без шапки-названия и пустого состояния — только
+   * содержимое, без группировки. `undefined` — обычный блок-полка.
+   */
+  flat?: boolean;
 }
 
 function renderShelves(): void {
   if (ui === null) return;
+  // Фильтр по конкретной полке: сервер уже вернул только её публикации —
+  // показываем их плоско, БЕЗ названий остальных полок и их пустых состояний
+  // (замечание 8 приёмки 5de0332d). `shelves` при этом содержит все полки,
+  // поэтому группировка по ним рисовала бы пустые секции.
+  if (viewState.shelfFilter !== null) {
+    const block: ShelfBlock = {
+      kind: 'shelf',
+      shelf: { ...EMPTY_SHELF, id: viewState.shelfFilter, title: '' },
+      items: [...publications],
+      flat: true,
+    };
+    reconcileKeyed(ui.shelvesHost, [block], {
+      key: (b) => b.shelf.id,
+      keyAttr: LIB_SHELF_ATTR,
+      build: (b) => buildShelfBlock(b),
+      update: (node, b) => updateShelfBlock(node, b),
+      // Переход «все полки → конкретная» обязан ПЕРЕСОБРАТЬ узел: раньше он мог
+      // быть построен обычным блоком с шапкой, а плоский вид шапки не имеет
+      // (замечание 8 приёмки 5de0332d). Сверка подписей этого не видит, поэтому
+      // всегда перестраиваем.
+      equals: () => false,
+    });
+    libraryNav?.refresh();
+    return;
+  }
   const grouped = groupByShelves(publications, shelves, viewState.sort);
   const blocks: ShelfBlock[] = grouped.byShelf.map(({ shelf, items }) => ({
     kind: 'shelf' as const,
@@ -731,22 +762,27 @@ function renderShelves(): void {
     key: (block) => block.shelf.id,
     keyAttr: LIB_SHELF_ATTR,
     build: (block) => buildShelfBlock(block),
-    update: (node, block) => {
-      const cardsHost = cardsHosts.get(node);
-      if (cardsHost !== undefined) syncCards(cardsHost, block.items);
-      const title = node.querySelector('.pub-group-title');
-      if (title !== null) title.textContent = block.shelf.title;
-      const count = node.querySelector('.pub-list-count');
-      if (count !== null) count.textContent = String(block.items.length);
-      applyShelfCollapsed(node, isShelfCollapsed(block.shelf.id, collapsedShelves));
-      toggleShelfEmpty(node, block.items.length === 0);
-    },
+    update: (node, block) => updateShelfBlock(node, block),
     equals: (a, b) =>
+      a.flat === b.flat &&
       a.shelf.id === b.shelf.id &&
       a.shelf.title === b.shelf.title &&
       a.items === b.items,
   });
   libraryNav?.refresh();
+}
+
+/** Обновление блока-полки на месте (плоский и обычный варианты). */
+function updateShelfBlock(node: HTMLElement, block: ShelfBlock): void {
+  const cardsHost = cardsHosts.get(node);
+  if (cardsHost !== undefined) syncCards(cardsHost, block.items);
+  const title = node.querySelector('.pub-group-title');
+  if (title !== null) title.textContent = block.shelf.title;
+  const count = node.querySelector('.pub-list-count');
+  if (count !== null) count.textContent = String(block.items.length);
+  if (block.flat === true) return;
+  applyShelfCollapsed(node, isShelfCollapsed(block.shelf.id, collapsedShelves));
+  toggleShelfEmpty(node, block.items.length === 0);
 }
 
 /** Полка-плейсхолдер «Без полки» (не существует на сервере; DnD — снятие). */
@@ -767,10 +803,18 @@ const EMPTY_SHELF: Shelf = {
 
 function buildShelfBlock(block: ShelfBlock): HTMLElement {
   const section = div(`pub-shelf ${LIB_GROUP_CLASS}`);
-  const head = buildGroupHead(block.shelf, section);
-  wireDropTarget(head, block.shelf.id === EMPTY_SHELF.id ? null : block.shelf.id);
   const cards = div('pub-cards');
   cardsHosts.set(section, cards);
+  if (block.flat === true) {
+    // Плоский вид выбранной полки: ни шапки с названием, ни пустого состояния
+    // (замечание 8 приёмки 5de0332d) — только карточки содержимого.
+    section.classList.add('pub-shelf-flat');
+    section.append(cards);
+    syncCards(cards, block.items);
+    return section;
+  }
+  const head = buildGroupHead(block.shelf, section);
+  wireDropTarget(head, block.shelf.id === EMPTY_SHELF.id ? null : block.shelf.id);
   // Пустое состояние полки (ошибка 87ad669a): без него только что созданная
   // полка без публикаций — это шапка высотой ~29px, которую легко не заметить.
   const empty = div('pub-shelf-empty');
@@ -950,6 +994,8 @@ interface ListGroup {
   collapsed: boolean;
   /** Пустая полка (0 публикаций) — чтобы было видно её состояние. */
   empty: boolean;
+  /** Плоский вид выбранной полки (фильтр): без шапки и пустого состояния. */
+  flat?: boolean;
 }
 
 /** Ключ группы «Без полки» (публикации без полок). */
@@ -963,6 +1009,30 @@ const listEmptyHosts = new WeakMap<HTMLElement, HTMLElement>();
 
 function renderList(): void {
   if (ui === null) return;
+  // Фильтр по конкретной полке: плоско, без названий остальных полок и их
+  // пустых состояний (замечание 8 приёмки 5de0332d) — как и в виде «полки».
+  if (viewState.shelfFilter !== null) {
+    const group: ListGroup = {
+      id: viewState.shelfFilter,
+      shelfId: viewState.shelfFilter,
+      title: '',
+      count: publications.length,
+      rows: [...publications],
+      collapsed: false,
+      empty: false,
+      flat: true,
+    };
+    reconcileKeyed(ui.listHost, [group], {
+      key: (g) => g.id,
+      keyAttr: LIB_SHELF_ATTR,
+      build: (g) => buildListGroup(g),
+      update: (node, g) => updateListGroup(node, g),
+      // См. renderShelves: переход к плоскому виду требует пересборки узла.
+      equals: () => false,
+    });
+    libraryNav?.refresh();
+    return;
+  }
   const grouped = groupByShelves(publications, shelves, viewState.sort);
   const groups: ListGroup[] = [];
   const seen = new Set<string>();
@@ -998,6 +1068,7 @@ function renderList(): void {
     build: (group) => buildListGroup(group),
     update: (node, group) => updateListGroup(node, group),
     equals: (a, b) =>
+      a.flat === b.flat &&
       a.title === b.title &&
       a.count === b.count &&
       a.collapsed === b.collapsed &&
@@ -1016,6 +1087,16 @@ function rowSignature(row: Publication | undefined): string {
 
 function buildListGroup(group: ListGroup): HTMLElement {
   const section = div(`pub-list-section ${LIB_GROUP_CLASS}`);
+  const list = div('pub-entries');
+  entriesHosts.set(section, list);
+  if (group.flat === true) {
+    // Плоский вид выбранной полки в «Списке»: без шапки-названия и пустого
+    // состояния (замечание 8 приёмки 5de0332d).
+    section.classList.add('pub-list-section-flat');
+    section.append(list);
+    syncEntries(list, group.rows);
+    return section;
+  }
   const shelf =
     group.shelfId === null
       ? { ...EMPTY_SHELF, title: group.title }
@@ -1026,8 +1107,6 @@ function buildListGroup(group: ListGroup): HTMLElement {
         });
   const head = buildGroupHead(shelf, section, group.count);
   wireDropTarget(head, group.shelfId);
-  const list = div('pub-entries');
-  entriesHosts.set(section, list);
   // Пустая группа-полка видна и в «Списке» (ошибка 87ad669a): шапка с count 0
   // плюс пустое состояние, иначе полку без публикаций невозможно заметить.
   const empty = div('pub-list-empty');

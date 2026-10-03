@@ -95,8 +95,8 @@ describe('ea1b5f14: рабочая область публикации — пу�
     assert.match(CSS, /\.pub-doc-hero-overlay[\s\S]*?text-shadow/, 'окантовка/тень для читаемости');
     assert.match(
       CSS,
-      /\.pub-doc\.comment-view \.pub-doc-title\s*\{[^}]*font-size:\s*var\(--font-size-3xl/s,
-      'название крупнее H1',
+      /\.pub-doc\.comment-view \.pub-doc-title\s*\{[^}]*font-size:\s*calc\(var\(--font-size-3xl\) \* 2\)/s,
+      'название в 2 раза крупнее прежнего (5de0332d, п.6)',
     );
   });
 

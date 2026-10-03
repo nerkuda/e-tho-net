@@ -1367,8 +1367,21 @@ async function render(): Promise<void> {
     // каждом сохранении пересобирала бы панель и теряла фокус.
     const pubSignature = `publication|${pubTarget.id}|${store.state.editorPosition}`;
     if (pubSignature !== lastPublicationSignature) {
+      // Хост очищаем только при ВХОДЕ в карточку публикации. Переключение
+      // публикация→публикация идёт переадресацией внутри уже стоящего узла
+      // (`showPublicationTarget` → `retargetPublicationCard`), панель не мигает
+      // (замечание 7 приёмки 5de0332d).
+      const entering = lastPublicationSignature === '';
       lastPublicationSignature = pubSignature;
-      emptyChildren(scrollBox);
+      if (entering) emptyChildren(scrollBox);
+      // Карточка публикации рисуется отдельным модулем и НЕ является контекстом
+      // мысли/связи: гасим кэш последней отрисованной сущности и `renderCtx`.
+      // Иначе при переходе от карточки к мысли дешёвый гейт store-подписки
+      // (`liveRenderedKey`) может счесть мысль «уже отрисованной» и пропустить
+      // перерисовку — панель остаётся карточкой, а `focusEditorComment`
+      // навсегда ждёт поле комментария (замечание 2 приёмки 5de0332d).
+      liveRenderedKey = null;
+      renderCtx = null;
     }
     titleEl.textContent = t('publication.card.title');
     showPublicationTarget(

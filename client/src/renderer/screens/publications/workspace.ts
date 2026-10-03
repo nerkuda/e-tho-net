@@ -625,8 +625,53 @@ export function mountPublicationWorkspace(
 
   // --- Слушатели -----------------------------------------------------------
 
+  /**
+   * Программная прокрутка к якорю (клик по оглавлению) идёт с блокировкой
+   * scroll-sync: события прокрутки, прилетающие во время перевода scrollTop к
+   * цели, не должны перебивать `currentAnchor` промежуточными разделами
+   * (замечание 1 приёмки 5de0332d). Пока флаг взведён, первый scroll само
+   * себя снимает и current не пересчитывается; страховочный таймер снимает
+   * флаг, если события прокрутки не случилось вовсе.
+   */
+  let scrollSyncLocked = false;
+  let scrollSyncTimer: number | null = null;
+  const lockScrollSync = (): void => {
+    scrollSyncLocked = true;
+    if (scrollSyncTimer !== null) window.clearTimeout(scrollSyncTimer);
+    scrollSyncTimer = window.setTimeout(() => {
+      scrollSyncLocked = false;
+      scrollSyncTimer = null;
+    }, 200);
+  };
   const onDocScroll = (): void => {
+    if (scrollSyncLocked) {
+      // Промежуточное/завершающее событие программной прокрутки — current уже
+      // назначен целью перехода, scroll-sync его не трогает.
+      scrollSyncLocked = false;
+      if (scrollSyncTimer !== null) {
+        window.clearTimeout(scrollSyncTimer);
+        scrollSyncTimer = null;
+      }
+      return;
+    }
     updateCurrentSection();
+  };
+  /**
+   * Ctrl+Shift+↑/↓ — сдвиг текущего блока документа на слот вверх/вниз в
+   * группе соседей (пункт 5 требования, по аналогии с упорядочиванием карты
+   * мыслей). Слушатель — в фазе перехвата: ядро навигации списка трактует
+   * `ArrowUp/Down` независимо от модификаторов и иначе увело бы курсор.
+   */
+  const onDocKeydown = (ev: KeyboardEvent): void => {
+    if (!ev.ctrlKey || !ev.shiftKey) return;
+    if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
+    const entry = docNav.current();
+    if (entry === null || (entry.kind !== 'section' && entry.kind !== 'text')) return;
+    const block = navBlocks.find((candidate) => candidate.key === entry.key);
+    if (block === undefined) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    void moveBlock(block, ev.key === 'ArrowUp' ? -1 : 1);
   };
   const onKeydown = (ev: KeyboardEvent): void => {
     // Esc просмотр НЕ закрывает (задача b51dbca4): возврат — «Назад» или
@@ -639,6 +684,7 @@ export function mountPublicationWorkspace(
     opts.onClose();
   };
   docHost.addEventListener('scroll', onDocScroll);
+  docHost.addEventListener('keydown', onDocKeydown, { capture: true });
   document.addEventListener('keydown', onKeydown);
 
   // --- Загрузка ------------------------------------------------------------
@@ -1649,6 +1695,15 @@ export function mountPublicationWorkspace(
             },
           }),
         );
+      } else {
+        // Раздел без содержимого каретки не имеет, но жёлоб выравнивания обязан
+        // быть одинаковым у всех заголовков — иначе текст листовых разделов
+        // «уезжал» влево относительно родительских (замечание 4 приёмки
+        // 5de0332d). Плейсхолдер занимает ту же позицию, что каретка, и в
+        // раскладке не участвует (каретка и грип — абсолютные, см. CSS).
+        const caretPlaceholder = span('', 'pub-doc-caret pub-doc-caret-empty');
+        caretPlaceholder.setAttribute('aria-hidden', 'true');
+        heading.append(caretPlaceholder);
       }
       heading.append(span(block.heading, 'pub-doc-heading-text'));
       node.append(heading);
@@ -1824,6 +1879,9 @@ export function mountPublicationWorkspace(
   function scrollToAnchor(anchor: string): void {
     const node = docHost.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`);
     if (node === null) return;
+    // Программная прокрутка: взводим блокировку ДО изменения scrollTop, чтобы
+    // прилетевшее событие прокрутки не пересчитало current (замечание 1).
+    lockScrollSync();
     docHost.scrollTop = Math.max(0, topWithinDoc(node) - 8);
     currentAnchor = anchor;
     for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
@@ -2160,8 +2218,10 @@ export function mountPublicationWorkspace(
 
   function destroy(): void {
     if (reloadTimer !== null) window.clearTimeout(reloadTimer);
+    if (scrollSyncTimer !== null) window.clearTimeout(scrollSyncTimer);
     workspaceLayerUnsub();
     docHost.removeEventListener('scroll', onDocScroll);
+    docHost.removeEventListener('keydown', onDocKeydown, { capture: true });
     document.removeEventListener('keydown', onKeydown);
     docNav.destroy();
     docDrag.destroy();

@@ -511,7 +511,16 @@ describe('guard: рабочая область публикации — шапк
       'тело документа использует общий компонент списка',
     );
     assert.ok(WS.includes('createListNav'), 'навигация тела строится на createListNav');
-    assert.ok(!WS.includes("'ArrowUp'") && !WS.includes("'ArrowDown'"), 'своей карты стрелок в модуле нет');
+    // Своей КАРТЫ навигации стрелками в модуле нет: стрелки появляются только
+    // как модификаторный хоткей сдвига блока Ctrl+Shift+↑/↓ (замечание 5
+    // приёмки 5de0332d, по аналогии с упорядочиванием карты мыслей).
+    const reorder = WS.slice(WS.indexOf('const onDocKeydown'), WS.indexOf('docHost.addEventListener'));
+    assert.ok(reorder.includes("'ArrowUp'") && reorder.includes("'ArrowDown'"), 'хоткей сдвига — на стрелках');
+    assert.ok(reorder.includes('ev.ctrlKey') && reorder.includes('ev.shiftKey'), 'стрелки только под Ctrl+Shift');
+    assert.ok(
+      !WS.slice(0, WS.indexOf('const onDocKeydown')).includes("'ArrowUp'"),
+      'до хоткея собственной карты стрелок в модуле нет',
+    );
   });
 
   it('Esc просмотр не закрывает; возврат — Ctrl+Backspace (когда поля не правятся)', () => {

@@ -182,20 +182,23 @@ export function disposePublicationCard(): void {
 }
 
 /**
- * Показывает публикацию в панели редактора. Повторный вызов для той же
- * публикации обновляет значения на месте, для другой — пересобирает карточку.
+ * Показывает публикацию в панели редактора. Та же публикация — обновление
+ * значений на месте; ДРУГАЯ — переадресация БЕЗ пересоздания узла карточки:
+ * содержимое перестраивается внутри уже стоящего в панели корня (замечание 7
+ * приёмки 5de0332d — убрать «дёргание» при переключении публикаций, как это
+ * сделано для переключения мыслей в `editor.ts`).
  */
 export function showPublicationTarget(
   host: PublicationCardHost,
   publicationId: string,
   publication: Publication | undefined,
 ): void {
-  if (
-    instance !== null &&
-    instance.publicationId === publicationId &&
-    instance.root.parentElement === host.scrollBox
-  ) {
+  if (instance !== null && instance.root.parentElement === host.scrollBox) {
+    if (instance.publicationId !== publicationId) {
+      retargetPublicationCard(publicationId);
+    }
     if (publication !== undefined) apply(publication);
+    else if (instance.publication === null) void refreshFromServer();
     return;
   }
   disposePublicationCard();
@@ -207,10 +210,50 @@ export function showPublicationTarget(
     publication: publication ?? null,
     unsub: () => undefined,
   };
-  // Слой данных (G4 тех.проекта 269016e2): карточка живёт на ключах
-  // `pub-card:@id` и `attachments:@publication:@id`. Чужие события роутер гасит
-  // этими ключами; свои правки (PATCH/пересборка/вложение) кладут результат в
-  // нормализованный кэш и инвалидируют ключи — подписчик один и тот же.
+  bindCardSubscriptions(publicationId);
+  // Наполнение — ПОСЛЕ регистрации `instance` (ошибка ecad219b). Панели вкладок
+  // строятся лениво, активная («Резюме») собирается ещё внутри `buildCard`,
+  // когда `instance` равен `null`, поэтому `apply` до этой строки был бы no-op.
+  // Данные пришли сразу — применяем синхронно, иначе перечитываем сервер.
+  if (publication !== undefined) apply(publication);
+  else void refreshFromServer();
+  // Счётчик вкладки «Вложения» — сразу при показе карточки (бейдж, как у
+  // панели мысли): вкладка ленивая, поэтому число берём отдельным запросом.
+  void refreshAttachmentsCount();
+}
+
+/**
+ * Переадресация на другую публикацию в ТОМ ЖЕ узле карточки: узел не
+ * пересоздаётся (нет мигания панели), а его содержимое собирается заново под
+ * новый id. Вынесено из {@link showPublicationTarget} ради единой точки
+ * смены владельца карточки.
+ */
+function retargetPublicationCard(publicationId: string): void {
+  const root = instance?.root ?? null;
+  if (root === null) return;
+  // Отпускаем подписки/состояние прежней публикации (недоотправленные правки
+  // досылаются), но НЕ трогаем сам узел `root`.
+  disposePublicationCard();
+  const fresh = buildCard();
+  while (root.firstChild !== null) root.removeChild(root.firstChild);
+  while (fresh.firstChild !== null) root.append(fresh.firstChild);
+  instance = {
+    root,
+    publicationId,
+    publication: null,
+    unsub: () => undefined,
+  };
+  bindCardSubscriptions(publicationId);
+  void refreshAttachmentsCount();
+}
+
+/**
+ * Слой данных (G4 тех.проекта 269016e2): карточка живёт на ключах
+ * `pub-card:@id` и `attachments:@publication:@id`. Чужие события роутер гасит
+ * этими ключами; свои правки (PATCH/пересборка/вложение) кладут результат в
+ * нормализованный кэш и инвалидируют ключи — подписчик один и тот же.
+ */
+function bindCardSubscriptions(publicationId: string): void {
   registerQuery(queryKeys.publicationCard(publicationId), null);
   registerQuery(queryKeys.attachments('publication', publicationId), null);
   layerUnsub = onQueryInvalidated((prefix) => {
@@ -228,15 +271,6 @@ export function showPublicationTarget(
       void refreshAttachmentsCount();
     }
   });
-  // Наполнение — ПОСЛЕ регистрации `instance` (ошибка ecad219b). Панели вкладок
-  // строятся лениво, активная («Резюме») собирается ещё внутри `buildCard`,
-  // когда `instance` равен `null`, поэтому `apply` до этой строки был бы no-op.
-  // Данные пришли сразу — применяем синхронно, иначе перечитываем сервер.
-  if (publication !== undefined) apply(publication);
-  else void refreshFromServer();
-  // Счётчик вкладки «Вложения» — сразу при показе карточки (бейдж, как у
-  // панели мысли): вкладка ленивая, поэтому число берём отдельным запросом.
-  void refreshAttachmentsCount();
 }
 
 /**
