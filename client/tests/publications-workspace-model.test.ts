@@ -230,6 +230,52 @@ describe('модель рабочей области: применение ло�
     assert.equal(applyPublicationOrder(null, positionsFor(['A'])), null);
   });
 
+  /**
+   * Блокер верификатора d13fd645: узел без локальной позиции НЕ уезжает в
+   * конец. Серверный компаратор берёт для него сетевое/ветковое место
+   * (`localOf ?? branchPosition / selectionIndex`,
+   * `server/src/domain/publication-assembly-service.ts:475,495,505,511-534`),
+   * то есть он остаётся на своём текущем месте. Детерминированный кейс:
+   * порядок [C,A,B], позиции только A=1,B=2 → C сохраняет первое место.
+   */
+  it('узел без позиции сохраняет место: [C,A,B] + {A:1,B:2} → [C,A,B]', () => {
+    const asm = makeAssembly([section('C'), section('A'), section('B')]);
+    assert.deepEqual(
+      asm.sections.map((s) => s.thought_id),
+      ['C', 'A', 'B'],
+    );
+    const ordered = applyPublicationOrder(asm, [
+      { node_key: 'e:A', position: 1 },
+      { node_key: 'e:B', position: 2 },
+    ])!;
+    assert.deepEqual(ordered.sections.map((s) => s.thought_id), ['C', 'A', 'B']);
+  });
+
+  it('группа без позиций не пересортировывается при применении чужого порядка', () => {
+    // Корни без позиций; items адресуют только вложенную группу — корни обязаны
+    // остаться на месте (нетронутая группа).
+    const asm = makeAssembly([
+      section('A', [nested('A1'), nested('A2')]),
+      section('B'),
+      section('C'),
+    ]);
+    const ordered = applyPublicationOrder(asm, positionsFor(['e:A2', 'e:A1']))!;
+    assert.deepEqual(ordered.sections.map((s) => s.thought_id), ['A', 'B', 'C']);
+    assert.deepEqual(ordered.sections[0]!.children.map((c) => c.thought_id), ['A2', 'A1']);
+  });
+
+  it('позиционированные узлы не перескакивают слоты неупорядоченных соседей', () => {
+    // Текущий порядок [A,C,B], у C=2, B=1, A — без позиции. Неупорядоченный A
+    // держит нулевой слот; позиционированные B,C заполняют слоты 1..2 по
+    // позициям (B=1,C=2) → [A,B,C]. A не вытесняется в конец.
+    const asm = makeAssembly([section('A'), section('C'), section('B')]);
+    const ordered = applyPublicationOrder(asm, [
+      { node_key: 'e:C', position: 2 },
+      { node_key: 'e:B', position: 1 },
+    ])!;
+    assert.deepEqual(ordered.sections.map((s) => s.thought_id), ['A', 'B', 'C']);
+  });
+
   it('блоки документа несут node_key и группу соседей (вход drag-фасада)', () => {
     const asm = makeAssembly([{ ...section('A', [nested('B')], 'A'), texts: [text('tA')] }]);
     const blocks = documentBlocks(asm, null);

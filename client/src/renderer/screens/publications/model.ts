@@ -448,11 +448,18 @@ export function positionsFor(ids: readonly string[]): PublicationOrderItem[] {
  *
  * Сервер сортирует соседей одного родителя и тексты одного раздела по позиции
  * своего `node_key` (раздел — id мысли/ребра, текст — id ребра-источника;
- * операция f6b242fe). Здесь тот же порядок переносится на модель: разделы —
- * среди детей своего родителя, тексты — внутри своего раздела. Позиции
- * сравниваются ТОЛЬКО внутри группы (как и на сервере), поэтому батч может
- * назначать позиции 1..N на группу. Узел без позиции сохраняет исходное место
- * (стабильная сортировка по индексу), а позиционированные поднимаются выше.
+ * операция f6b242fe), но узел БЕЗ локальной позиции НЕ уезжает в конец: у него
+ * берётся сетевое/ветковое место — `localOf(key) ?? branchPosition` (детей) и
+ * `localOf(id) ?? position входящего ребра / порядок отбора` (корней), см.
+ * `server/src/domain/publication-assembly-service.ts` (компаратор узлов).
+ *
+ * Здесь та же семантика воспроизведена без знания `branchPosition`: текущий
+ * порядок модели — это и есть последний серверный порядок, поэтому узел без
+ * позиции СОХРАНЯЕТ своё текущее место (свой индекс), а позиционированные
+ * заполняют СОБСТВЕННЫЕ текущие слоты в порядке своих позиций. Если в группе ни
+ * у кого нет позиции — группа не трогается вовсе. Так полный список из ответа
+ * PUT/события применяется безопасно: нетронутые группы не пересортировываются,
+ * и UI не расходится с `GET /assembly`.
  *
  * `items` — либо батч клиента, либо ПОЛНЫЙ список порядка из события
  * `publication.order.reordered`; повторное применение идемпотентно.
@@ -463,14 +470,28 @@ export function applyPublicationOrder(
 ): PublicationAssembly | null {
   if (assembly === null || items.length === 0) return assembly;
   const position = new Map(items.map((item) => [item.node_key, item.position]));
+
+  /**
+   * Переставить ТОЛЬКО позиционированные узлы, сохранив неупорядоченные на их
+   * текущих слотах. Компаратор сервера для позиционированных — по `position`,
+   * при равенстве по порядку отбора (стабильно по исходному индексу).
+   */
   const orderByKey = <T>(list: readonly T[], keyOf: (item: T) => string): T[] => {
-    const indexed = list.map((value, index) => ({ value, index, pos: position.get(keyOf(value)) }));
-    indexed.sort((a, b) => {
-      const pa = a.pos ?? Number.POSITIVE_INFINITY;
-      const pb = b.pos ?? Number.POSITIVE_INFINITY;
-      return pa === pb ? a.index - b.index : pa - pb;
+    const slots: number[] = [];
+    const ranked: Array<{ value: T; index: number; pos: number }> = [];
+    list.forEach((value, index) => {
+      const pos = position.get(keyOf(value));
+      if (pos === undefined) return;
+      slots.push(index);
+      ranked.push({ value, index, pos });
     });
-    return indexed.map((entry) => entry.value);
+    if (slots.length === 0) return [...list];
+    ranked.sort((a, b) => (a.pos === b.pos ? a.index - b.index : a.pos - b.pos));
+    const out = [...list];
+    slots.forEach((slot, order) => {
+      out[slot] = ranked[order]!.value;
+    });
+    return out;
   };
   const walk = (
     sections: readonly PublicationAssemblySection[],

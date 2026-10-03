@@ -257,6 +257,40 @@ describe('publication-assembly-service: дерево разделов', { skip }
     }
   });
 
+  /**
+   * Контроль серверной семантики для блокера d13fd645: узел БЕЗ локальной
+   * позиции не уезжает в конец — компаратор берёт сетевое/ветковое место
+   * (`localOf(key) ?? branchPosition`, корни — `?? selectionIndex`). Порядок
+   * рецепта alpha даёт отбору [A,B,C] (индексы 0,1,2); позиции только A и B
+   * выше индекса C — C сохраняет первое место. Клиент обязан повторять это
+   * (`applyPublicationOrder`, слоты неупорядоченных узлов).
+   */
+  it('узел без локальной позиции сохраняет своё место (не уезжает в конец)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const a = seedThought(ndb, 'A', type.id);
+      const b = seedThought(ndb, 'B', type.id);
+      const c = seedThought(ndb, 'C', type.id);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      // Отбор alpha → [A,B,C]; позиции заданы только A и B (выше индекса C).
+      setPublicationOrder(
+        ndb,
+        pub.id,
+        [
+          { node_key: a, position: 5 },
+          { node_key: b, position: 6 },
+        ],
+        USER,
+      );
+
+      const doc = assemblePublication(ndb, pub.id, USER);
+      assert.deepEqual(sectionIds(doc.sections), [c, a, b]);
+    } finally {
+      ndb.close();
+    }
+  });
+
   it('отдаёт node_key раздела и применяет по нему локальный порядок вложенных', () => {
     const ndb = createInMemoryNetworkDb();
     try {
