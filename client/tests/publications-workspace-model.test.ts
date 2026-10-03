@@ -489,6 +489,24 @@ describe('модель рабочей области: сворачивание �
     assert.equal(a.collapsed, true);
   });
 
+  it('оглавление содержит только разделы — строк текстов нет (ea1b5f14, п. 2)', () => {
+    const asm = makeAssembly(tree());
+    const lines = tocLines(asm, new Set(), (i) => `Текст ${i}`);
+    assert.ok(!lines.some((line) => line.kind === 'text'), 'строк-текстов в оглавлении нет');
+    assert.ok(lines.some((line) => line.kind === 'section'), 'разделы остаются');
+
+    // Якоря разделов совпадают с документом: счётчик вхождений не смещён.
+    const tocAnchors = lines
+      .filter((line): line is Extract<(typeof lines)[number], { kind: 'section' }> =>
+        line.kind === 'section',
+      )
+      .map((line) => line.anchor);
+    const docAnchors = documentBlocks(asm, null)
+      .filter(isSection)
+      .map((block) => block.domId);
+    assert.deepEqual(tocAnchors, docAnchors);
+  });
+
   it('collapsibleSectionIds — разделы с содержимым (текст/предисловие/подраздел)', () => {
     assert.deepEqual(collapsibleSectionIds(makeAssembly(tree())).sort(), ['A', 'B']);
   });

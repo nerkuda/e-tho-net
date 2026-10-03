@@ -97,6 +97,7 @@
   --font-size-l: 16px;
   --font-size-xl: 18px;
   --font-size-2xl: 20px;
+  --font-size-3xl: 24px; /* крупный заголовок-титул публикации (ea1b5f14, п. 7) */
 
   /* Шкала насыщенности шрифта. */
   --font-weight-normal: 400;

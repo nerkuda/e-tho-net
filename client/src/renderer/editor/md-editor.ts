@@ -41,6 +41,12 @@ export interface MdEditor {
   setValue(md: string): void;
   /** Inserts markdown at the caret (newline-separated when mid-line). */
   insertAtCaret(text: string): void;
+  /**
+   * Ставит каретку на позицию (клампится по длине документа), фокусирует
+   * редактор и прокручивает к курсору. Нужно двойному клику по тексту
+   * публикации: курсор в месте клика/начале абзаца (задача ea1b5f14).
+   */
+  setCaret(position: number): void;
   focus(): void;
   focusToEnd(): void;
   blur(): void;
@@ -275,6 +281,11 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       view.focus();
     },
     focus: () => view.focus(),
+    setCaret: (position: number) => {
+      const anchor = Math.max(0, Math.min(view.state.doc.length, Math.trunc(position)));
+      view.focus();
+      view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    },
     focusToEnd: () => {
       view.focus();
       // `scrollIntoView` (замечание проверки f4f99e3f): без него при входе в

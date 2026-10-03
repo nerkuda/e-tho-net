@@ -58,6 +58,7 @@ import {
 import { buildCover } from './cover.js';
 import {
   assemblyDateLabel,
+  clampTextWidth,
   defaultPublicationsViewState,
   displayAuthorship,
   groupByShelves,
@@ -199,6 +200,16 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     onClose: () => closePublicationWorkspace(),
     onOpenCard: (id) => void openPublicationCard(id),
     onExport: (id, ev) => openWorkspaceExportMenu(id, ev),
+    // Ширина текста документа — персональная настройка вида (ea1b5f14, п. 5):
+    // живое движение меняет состояние, завершение — сохраняет в L4.
+    getTextWidth: () => viewState.textWidth,
+    onTextWidthInput: (value) => {
+      viewState = { ...viewState, textWidth: clampTextWidth(value) };
+    },
+    onTextWidthChange: (value) => {
+      viewState = { ...viewState, textWidth: clampTextWidth(value) };
+      persist();
+    },
   });
   // Реактивность библиотеки — через слой данных (G4 тех.проекта 269016e2):
   // список и полки живут под ключами запросов, роутер/мутации их гасят, экран

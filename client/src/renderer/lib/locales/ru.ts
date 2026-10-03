@@ -794,6 +794,21 @@ export const ru = {
   'publications.ws.retry': 'Повторить',
   'publications.ws.noTextSources': 'У публикации не заданы свойства текстов.',
   'publications.ws.createMiss': 'Мысль создана, но в отбор публикации не попала.',
+  /** Ширина колонки текста документа — подсказка ползунка (ea1b5f14, п. 5). */
+  'publications.ws.textWidth': 'Ширина текста',
+  /** Контекстное меню блока документа (ea1b5f14, п. 3). */
+  'publications.block.menu': 'В публикации',
+  'publications.block.moveUp': 'Сдвинуть вверх',
+  'publications.block.moveDown': 'Сдвинуть вниз',
+  'publications.block.moveToSection': 'Переместить в раздел…',
+  'publications.block.addSection': 'Добавить раздел…',
+  'publications.block.addText': 'Добавить текст раздела…',
+  'publications.block.exclude': 'Исключить из публикации',
+  'publications.block.include': 'Включить',
+  'publications.block.open': 'Открыть мысль в редакторе',
+  'publications.block.moveToSectionTitle': 'Переместить в раздел',
+  'publications.block.moveToSectionEmpty': 'В публикации нет других разделов',
+  'publications.block.moveFailed': 'Не удалось определить свойство текста для переноса.',
 
   // -- Публикации: карточка в панели редактора (0.11.1, задача a3cfc018) ----
   /** Заголовок панели редактора для цели publication. */

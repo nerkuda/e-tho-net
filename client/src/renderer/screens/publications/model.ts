@@ -40,6 +40,23 @@ export interface PublicationsViewState {
   query: string;
   /** Развёрнута ли панель дополнительных фильтров. */
   filtersOpen: boolean;
+  /**
+   * Ширина колонки текста документа, % доступного пространства (50–100;
+   * дополнение пользователя 2026-10-02, ползунок в шапке рабочей области).
+   */
+  textWidth: number;
+}
+
+/** Границы ползунка ширины текста документа (%, дополнение 2026-10-02). */
+export const TEXT_WIDTH_MIN = 50;
+export const TEXT_WIDTH_MAX = 100;
+/** Ширина по умолчанию: документ занимает доступное пространство целиком. */
+export const TEXT_WIDTH_DEFAULT = 100;
+
+/** Приводит значение ширины к допустимому диапазону (мусор → умолчание). */
+export function clampTextWidth(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return TEXT_WIDTH_DEFAULT;
+  return Math.min(TEXT_WIDTH_MAX, Math.max(TEXT_WIDTH_MIN, Math.round(value)));
 }
 
 /** Значения по умолчанию. */
@@ -51,6 +68,7 @@ export function defaultPublicationsViewState(): PublicationsViewState {
     shelfFilter: null,
     query: '',
     filtersOpen: false,
+    textWidth: TEXT_WIDTH_DEFAULT,
   };
 }
 
@@ -93,6 +111,7 @@ export function parsePublicationsViewState(raw: unknown): PublicationsViewState 
     shelfFilter,
     query: asString(obj['query']) ?? fallback.query,
     filtersOpen: obj['filtersOpen'] === true,
+    textWidth: clampTextWidth(obj['textWidth']),
   };
 }
 
@@ -105,6 +124,7 @@ export function serializePublicationsViewState(state: PublicationsViewState): st
     shelfFilter: state.shelfFilter,
     query: state.query,
     filtersOpen: state.filtersOpen,
+    textWidth: clampTextWidth(state.textWidth),
   });
 }
 
@@ -725,19 +745,21 @@ export type TocLine =
   | { kind: 'excluded'; key: string; thoughtId: string; title: string };
 
 /**
- * Строит плоский список строк оглавления (разделы/тексты/исключённые).
- * `textLabel(index)` — подпись строки текста (нумерация в разделе); вынесена
- * параметром, чтобы модель оставалась без зависимости от словаря строк.
+ * Строит плоский список строк оглавления (разделы/исключённые). Тексты в
+ * оглавление НЕ попадают (дополнение пользователя 2026-10-02, пункт 2): строки
+ * «Текст N» замусоривали панель; в холсте документа тексты остаются. Счётчик
+ * вхождений по-прежнему прокручивается и по текстам — иначе нумерация якорей
+ * разошлась бы с `documentBlocks` при совпадении id раздела и текста.
  *
- * Свёрнутый раздел (`collapsed`) прячет СВОИ тексты и всё поддерево — та же
- * семантика, что у тела документа (`documentBlocks`, задача b51dbca4), иначе
- * оглавление и документ расходились бы при сворачивании. Счётчик вхождений
- * ведётся по всем ветвям дерева (см. ошибку 59a17805).
+ * Свёрнутый раздел (`collapsed`) прячет всё своё поддерево — та же семантика,
+ * что у тела документа (`documentBlocks`, задача b51dbca4), иначе оглавление и
+ * документ расходились бы при сворачивании. Счётчик вхождений ведётся по всем
+ * ветвям дерева (см. ошибку 59a17805).
  */
 export function tocLines(
   assembly: PublicationAssembly | null,
   collapsed: ReadonlySet<string>,
-  textLabel: (index: number) => string,
+  _textLabel: (index: number) => string,
 ): TocLine[] {
   if (assembly === null) return [];
   const out: TocLine[] = [];
@@ -752,7 +774,10 @@ export function tocLines(
     // и видимая строка-повтор, чьё первое вхождение скрыто, получает чистый
     // anchor и `repeatOf` на саму себя (ошибка 59a17805).
     const occ = occurrence(counter, item.section.anchor);
-    const textOccs = item.section.texts.map((text) => occurrence(counter, text.anchor));
+    // Прокручиваем счётчик и по текстам, хотя в оглавление они не выводятся:
+    // при совпадении id раздела и текста общий счётчик якорей иначе разошёлся
+    // бы с `documentBlocks`.
+    for (const text of item.section.texts) occurrence(counter, text.anchor);
     if (isHidden) {
       hidden.add(item.section.thought_id);
       continue;
@@ -774,17 +799,9 @@ export function tocLines(
       collapsed: selfCollapsed,
     });
     if (!selfCollapsed) {
-      item.section.texts.forEach((text, index) => {
-        const textOcc = textOccs[index]!;
-        out.push({
-          kind: 'text',
-          key: textOcc.key,
-          anchor: textOcc.domId,
-          thoughtId: text.thought_id,
-          depth: item.depth + 1,
-          label: textLabel(index + 1),
-        });
-      });
+      // Тексты в оглавление не выводятся (п. 2 дополнения 2026-10-02): счётчик
+      // вхождений уже прокручен выше (`textOccs`) — якоря разделов совпадают
+      // с `documentBlocks`, а панель остаётся списком разделов.
     }
   }
   for (const excluded of assembly.excluded) {

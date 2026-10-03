@@ -128,7 +128,7 @@ import {
   type StripElements,
 } from '../screens/tabs/tab-overflow.js';
 import { showIconDialog, type IconPickResult } from './icon-dialog.js';
-import { editMarkdownField } from './markdown-field.js';
+import { editMarkdownField, focusMarkdownFieldAt } from './markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 import { showThoughtTypeEditor } from '../screens/type-manager.js';
 import { openPropertyManagerEditor } from '../screens/property-manager.js';
@@ -1812,7 +1812,7 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
  * switches it into edit mode — CodeMirror mounts focused with the caret at
  * the end.
  */
-function focusEditorComment(): void {
+function focusEditorComment(findText?: string): void {
   if (scrollBox === null) return;
   if (shownTab !== 'main') {
     // The first tab button is «Комментарий» — click reuses the regular lazy
@@ -1837,9 +1837,24 @@ function focusEditorComment(): void {
       if (Date.now() < deadline) window.setTimeout(tick, 50);
       return;
     }
-    editMarkdownField(field);
+    // С офсетом — `focusMarkdownFieldAt` сам включает правку и ставит каретку;
+    // без офсета — обычный вход в правку (каретка в конец).
+    if (findText !== undefined && findText !== '') focusMarkdownFieldAt(field, findText);
+    else editMarkdownField(field);
   };
   window.setTimeout(tick, 0);
+}
+
+/**
+ * Открывает мысль в редакторе, активирует вкладку «Комментарий», включает режим
+ * правки постоянного комментария и ставит курсор: по вхождению `findText` в
+ * исходнике комментария, иначе — в начало. Точка входа двойного клика по тексту
+ * публикации (задача ea1b5f14, пункт 4): точный офсет рендер-узла к markdown
+ * недостижим — курсор идёт к началу абзаца, ошибок не бросаем.
+ */
+export function openThoughtCommentEditor(id: string, findText?: string): void {
+  openThoughtInEditor(id);
+  focusEditorComment(findText);
 }
 
 // ---------------------------------------------------------------------------

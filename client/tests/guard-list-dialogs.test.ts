@@ -661,6 +661,10 @@ const DIALOG_FILES = new Set([
   'screens/network-stats.ts',
   'screens/networks.ts',
   'screens/publications/wizard.ts',
+  // Диалог «Переместить в раздел…» рабочей области публикации (ea1b5f14,
+  // пункт 3): дерево разделов внутри общей оболочки `showDialog`; не
+  // список-диалог — раскладку держит `createTree`.
+  'screens/publications/workspace.ts',
   'screens/property-manager.ts',
   'screens/settings.ts',
   'screens/tabs/picker.ts',

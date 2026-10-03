@@ -742,6 +742,35 @@
   background: var(--surface);
 }
 
+/* Единая кликабельная карточка шапки (пункт 1 карточки ea1b5f14): обложка +
+   заголовок + подзаголовок + автор/дата — один контейнер; hover-подсветка,
+   клик в любом месте открывает панель редактора публикации. Кнопки-значки —
+   вне карточки, в `.pub-ws-right`. */
+.pub-ws-card {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  margin-left: calc(var(--space-2) * -1);
+  border-radius: var(--radius-m);
+  cursor: pointer;
+}
+
+.pub-ws-card:hover {
+  background: var(--surface-alt, var(--surface));
+}
+
+/* Правая группа шапки: ползунок ширины текста над рядом кнопок, прижато вправо
+   (пункт 5 карточки ea1b5f14). */
+.pub-ws-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+
 .pub-ws-cover {
   flex: none;
   width: 4.5rem;
@@ -979,10 +1008,27 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-5) var(--space-6);
-  max-width: 48rem;
-  width: 100%;
+  /* Ширина колонки текста — доля доступного пространства (пункт 5 ea1b5f14):
+     50–100% через `--pub-doc-width`; на 100% от краёв остаётся не меньше
+     ~20px (внутренние отступы + внешний зазор). */
+  width: var(--pub-doc-width, 100%);
+  max-width: none;
   margin: 0 auto;
+  box-sizing: border-box;
+  padding: var(--space-5) max(var(--space-5), 20px);
+}
+
+/* Документ использует типографику markdown-просмотра комментария
+   (`.comment-view`, пункт 6 ea1b5f14), но прокрутку и высоту задаёт сам. */
+.pub-doc.comment-view {
+  max-height: none;
+}
+
+/* Титульный лист (пункт 7 ea1b5f14): название крупнее H1. */
+.pub-doc.comment-view .pub-doc-title {
+  font-size: var(--font-size-3xl);
+  line-height: 1.15;
+  margin: 0;
 }
 
 .pub-doc-titleblock {
@@ -994,20 +1040,45 @@
   margin-bottom: var(--space-5);
 }
 
-.pub-doc-titlehead {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
+/* С обложкой: обложка во всю ширину, заголовок и подзаголовок — поверх неё с
+   белой окантовкой/тенью, чтобы читались на любом фоне. */
+.pub-doc-hero {
+  position: relative;
+  border-radius: var(--radius-m);
+  overflow: hidden;
 }
 
-.pub-doc-title {
+.pub-doc-hero-overlay {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: var(--space-5) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  background: linear-gradient(to top, rgb(0 0 0 / 55%), transparent);
+}
+
+.pub-doc-hero-overlay .pub-doc-title {
   margin: 0;
-  font-size: var(--font-size-2xl);
-  font-weight: var(--font-weight-bold);
+}
+
+.pub-doc-hero-overlay .pub-doc-title,
+.pub-doc-hero-overlay .pub-doc-subtitle {
+  color: #fff;
+  text-shadow:
+    0 1px 3px rgb(0 0 0 / 85%),
+    0 0 2px rgb(0 0 0 / 90%);
+  -webkit-text-stroke: 0.4px rgb(255 255 255 / 65%);
+}
+
+.pub-doc-titlebox {
+  display: flex;
+  flex-direction: column;
 }
 
 .pub-doc-subtitle {
   color: var(--text-dim);
+  font-size: var(--font-size-lg);
   margin-top: var(--space-1);
 }
 
@@ -1060,6 +1131,24 @@
 .pub-doc-preamble,
 .pub-doc-text {
   cursor: pointer;
+  /* Отступ между текстами разных мыслей (пункт 6 ea1b5f14) — тем же ритмом,
+     что у блоков markdown-просмотра комментария. В оглавлении отступов нет:
+     правило привязано к `.pub-doc`, а не к панели. */
+  margin-block: var(--space-3);
+}
+
+/* Внутренние абзацы одной мысли сохраняют собственные отступы (`1em`), а
+   крайние — не удваивают блочный отступ между мыслями. */
+.pub-doc-text > :first-child,
+.pub-doc-preamble > :first-child,
+.pub-doc-summary > :first-child {
+  margin-top: 0;
+}
+
+.pub-doc-text > :last-child,
+.pub-doc-preamble > :last-child,
+.pub-doc-summary > :last-child {
+  margin-bottom: 0;
 }
 
 .pub-doc-preamble:hover,
@@ -1141,6 +1230,19 @@
 .pub-cand-path {
   color: var(--text-dim);
   font-size: var(--font-size-3xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Диалог «Переместить в раздел…» (ea1b5f14, пункт 3) ------------------ */
+
+.pub-move-body {
+  min-height: 18rem;
+  padding: var(--space-2);
+}
+
+.pub-move-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

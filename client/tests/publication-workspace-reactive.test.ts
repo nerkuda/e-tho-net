@@ -185,6 +185,9 @@ async function mount(): Promise<{
     onClose: () => undefined,
     onOpenCard: () => undefined,
     onExport: () => undefined,
+    getTextWidth: () => 100,
+    onTextWidthInput: () => undefined,
+    onTextWidthChange: () => undefined,
   });
   await handle.open('pub-1');
   return { mod, handle, root: host };

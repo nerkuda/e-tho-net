@@ -40,15 +40,19 @@ import {
 import { t } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
 import { svgIcon, type IconName } from '../../lib/icons.js';
-import { errorDialog, isInsideDialog } from '../../lib/dialog.js';
+import { errorDialog, isInsideDialog, showDialog } from '../../lib/dialog.js';
 import { notice } from '../../lib/notice.js';
 import {
   MENU_SEPARATOR,
   menuAction,
+  menuSubmenu,
   showMenuAt,
   type MenuItem,
 } from '../../lib/menu.js';
+import { buildThoughtMenuItems } from '../../canvas/context-menu.js';
 import { uiButton, iconButton } from '../../lib/ui/button.js';
+import { uiSlider } from '../../lib/ui/slider.js';
+import { createTree, type TreeItem } from '../../lib/ui/tree.js';
 import { emptyState, errorState, loadingState } from '../../lib/ui/empty-state.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
@@ -71,6 +75,8 @@ import {
   documentBlocks,
   flattenSections,
   positionsFor,
+  TEXT_WIDTH_MAX,
+  TEXT_WIDTH_MIN,
   tocLines,
   tocSignature,
   type DocBlock,
@@ -78,7 +84,7 @@ import {
 } from './model.js';
 import { loadPropertyRows } from './recipe.js';
 import { buildPropertyListRows } from '../../lib/property-list.js';
-import { ensureLink, throwOnFailures } from '../../lib/link-ops.js';
+import { ensureLink, setOnlyParents, throwOnFailures } from '../../lib/link-ops.js';
 import { parseFilterDefinition } from '../../lib/filter-builder.js';
 import {
   commitEntity,
@@ -104,6 +110,12 @@ export interface PublicationWorkspaceOptions {
   onOpenCard: (publicationId: string) => void;
   /** Экспортировать документ (меню формата → джоба) — механика библиотеки. */
   onExport: (publicationId: string, ev: MouseEvent) => void;
+  /** Текущая ширина колонки текста документа (%, 50–100) — персональная настройка. */
+  getTextWidth: () => number;
+  /** Живое изменение ширины ползунком (без записи в настройки). */
+  onTextWidthInput: (value: number) => void;
+  /** Завершённое изменение ширины — сохранить в персональных настройках. */
+  onTextWidthChange: (value: number) => void;
 }
 
 /** Публичный дескриптор рабочей области. */
@@ -187,6 +199,12 @@ interface DocNavEntry {
   collapsible: boolean;
 }
 
+/** Узел дерева разделов публикации (диалог «Переместить в раздел…»). */
+interface SectionTreeItem extends TreeItem {
+  /** Заголовок раздела — подпись строки дерева. */
+  title: string;
+}
+
 /**
  * Модель выбора страницы при открытии (чистая — юнит-тест): ЛЮБОЙ явно
  * заданный `target.page` побеждает (в т.ч. `1` — переход к вхождению на
@@ -249,7 +267,10 @@ export function mountPublicationWorkspace(
   const toc = div('pub-toc');
   const content = div('pub-ws-content');
   const candHost = div('pub-cand');
-  const docHost = div('pub-doc');
+  // Класс `comment-view` — та же типографика markdown-просмотра, что у
+  // комментария мысли (пункт 6 карточки ea1b5f14): отступы заголовков и блоков
+  // едины. Документ даёт свои правила поверх (ширина колонки, отступы блоков).
+  const docHost = div('pub-doc comment-view');
   const pagerHost = div('pub-ws-pager');
   const stateHost = div('pub-ws-state');
   content.append(candHost, docHost, pagerHost, stateHost);
@@ -269,19 +290,46 @@ export function mountPublicationWorkspace(
   const coverBox = div('pub-ws-cover');
   const titleBox = div('pub-ws-titlebox');
   // Заголовок — кнопка-фасад (задача b51dbca4): клик/Enter открывает карточку
-  // публикации в панели редактора; отдельной кнопки «Настройки» больше нет.
+  // публикации в панели редактора. Пункт 1 карточки ea1b5f14: кликабельна ВСЯ
+  // карточка (обложка + заголовок + подзаголовок + автор/дата) — поэтому
+  // кнопка не всплывает кликом второй раз (stopPropagation).
   const titleButton = uiButton({
     role: 'ghost',
     class: 'pub-ws-title',
     title: t('publications.ws.openCard'),
-    onClick: () => {
+    onClick: (ev) => {
+      ev.stopPropagation();
       if (publicationId !== null) opts.onOpenCard(publicationId);
     },
   });
   const subtitleText = div('pub-ws-subtitle');
   const metaText = div('pub-ws-meta');
   titleBox.append(titleButton, subtitleText, metaText);
+  const card = div('pub-ws-card');
+  card.append(coverBox, titleBox);
+  card.addEventListener('click', () => {
+    if (publicationId !== null) opts.onOpenCard(publicationId);
+  });
   const actions = div('pub-ws-actions');
+  // Ползунок ширины текста документа — прямо над рядом кнопок, прижато вправо
+  // (дополнение пользователя 2026-10-02, пункт 5). Текущее значение — в
+  // подсказке, подписи в тулбаре нет. Живое движение применяет ширину, а
+  // завершение — сохраняет настройку.
+  const widthSlider = uiSlider({
+    min: TEXT_WIDTH_MIN,
+    max: TEXT_WIDTH_MAX,
+    value: opts.getTextWidth(),
+    ariaLabel: t('publications.ws.textWidth'),
+    formatValue: (value) => `${value}%`,
+    onInput: (value) => {
+      applyTextWidth(value);
+      opts.onTextWidthInput(value);
+    },
+    onChange: (value) => {
+      applyTextWidth(value);
+      opts.onTextWidthChange(value);
+    },
+  });
   const collapseAllButton = iconButton({
     icon: svgIcon('chevrons-up'),
     title: t('publications.ws.collapseAll'),
@@ -313,7 +361,9 @@ export function mountPublicationWorkspace(
     },
   });
   actions.append(collapseAllButton, expandAllButton, rebuildButton, exportButton);
-  header.append(backButton, coverBox, titleBox, div('pub-spacer'), actions);
+  const headerRight = div('pub-ws-right');
+  headerRight.append(widthSlider.root, actions);
+  header.append(backButton, card, div('pub-spacer'), headerRight);
 
   // --- Оглавление ----------------------------------------------------------
 
@@ -1176,14 +1226,7 @@ export function mountPublicationWorkspace(
       node.append(marks);
       node.classList.toggle('pub-toc-folded', line.collapsed);
       wireTocSection(node, line);
-    } else if (line.kind === 'text') {
-      node.dataset['anchor'] = line.anchor;
-      node.dataset['thoughtId'] = line.thoughtId;
-      node.style.paddingLeft = `${line.depth}rem`;
-      node.classList.add('pub-toc-text');
-      node.append(span(line.label, 'pub-toc-label'));
-      wireTocSection(node, line);
-    } else {
+    } else if (line.kind === 'excluded') {
       node.dataset['thoughtId'] = line.thoughtId;
       node.classList.add('pub-toc-excluded');
       node.append(span(line.title, 'pub-toc-label'));
@@ -1270,7 +1313,265 @@ export function mountPublicationWorkspace(
     ];
   }
 
+  // --- Контекстное меню блока документа (карточка ea1b5f14, пункт 3) --------
+  //
+  // На разделах и текстах документа — то же меню, что у облачка мысли (общие
+  // команды из `buildThoughtMenuItems`, без дублирования словаря), а ВВЕРХУ —
+  // подменю «В публикации» с командами просмотра. Позицию/порядок правит тот же
+  // `commitOrder` (задача d13fd645), исключения — `setExcluded`.
+
+  /** Мысль-владелец текстов блока: у текста — его раздел, у раздела — он сам. */
+  function textOwnerId(block: DocBlock): string {
+    if (block.kind === 'text') return block.parentThoughtId;
+    if (block.kind === 'section') return block.thoughtId;
+    return '';
+  }
+
+  /** Мысль блока исключена из публикации (список `excluded` сборки). */
+  function isExcluded(thoughtId: string): boolean {
+    return assembly?.excluded.some((entry) => entry.thought_id === thoughtId) ?? false;
+  }
+
+  /** Ключи `node_key` соседей блока в его группе (разделы/тексты одного уровня). */
+  function groupKeysForBlock(block: DocBlock): string[] {
+    if (block.kind !== 'section' && block.kind !== 'text') return [];
+    const target =
+      block.kind === 'section'
+        ? sectionGroupKey(block.parentThoughtId)
+        : textGroupKey(block.parentThoughtId);
+    const keys: string[] = [];
+    for (const candidate of navBlocks) {
+      if (candidate.kind !== 'section' && candidate.kind !== 'text') continue;
+      const group =
+        candidate.kind === 'section'
+          ? sectionGroupKey(candidate.parentThoughtId)
+          : textGroupKey(candidate.parentThoughtId);
+      if (group === target) keys.push(candidate.nodeKey);
+    }
+    return keys;
+  }
+
+  /** Сдвинуть блок на один слот внутри группы соседей (общий `commitOrder`). */
+  async function moveBlock(block: DocBlock, delta: number): Promise<void> {
+    if (block.kind !== 'section' && block.kind !== 'text') return;
+    const keys = groupKeysForBlock(block);
+    const index = keys.indexOf(block.nodeKey);
+    const next = index + delta;
+    if (index < 0 || next < 0 || next >= keys.length) return;
+    const reordered = keys.slice();
+    const [moved] = reordered.splice(index, 1);
+    if (moved === undefined) return;
+    reordered.splice(next, 0, moved);
+    await commitOrder(reordered);
+  }
+
+  /** Команды подменю «В публикации» для блока (состав зависит от вида блока). */
+  function publicationBlockCommands(block: DocBlock): MenuItem[] {
+    if (block.kind !== 'section' && block.kind !== 'text') return [];
+    const keys = groupKeysForBlock(block);
+    const index = keys.indexOf(block.nodeKey);
+    const items: MenuItem[] = [
+      menuAction(t('publications.block.moveUp'), () => void moveBlock(block, -1), {
+        disabled: index <= 0,
+      }),
+      menuAction(t('publications.block.moveDown'), () => void moveBlock(block, 1), {
+        disabled: index < 0 || index >= keys.length - 1,
+      }),
+      menuAction(t('publications.block.moveToSection'), () => openMoveToSectionDialog(block)),
+    ];
+    // «Добавить раздел» осмысленно только у раздела (текст не родитель);
+    // «Добавить текст раздела» — у обоих (владелец — раздел блока).
+    if (block.kind === 'section') {
+      items.push(
+        menuAction(t('publications.block.addSection'), () => void createChild(block.thoughtId, 'section')),
+      );
+    }
+    items.push(
+      menuAction(t('publications.block.addText'), () => void createChild(textOwnerId(block), 'text')),
+      MENU_SEPARATOR,
+    );
+    const excluded = isExcluded(block.thoughtId);
+    items.push(
+      menuAction(
+        excluded ? t('publications.block.include') : t('publications.block.exclude'),
+        () => void setExcluded(block.thoughtId, !excluded),
+        { danger: !excluded },
+      ),
+      menuAction(t('publications.block.open'), () => openThought(block.thoughtId)),
+    );
+    return items;
+  }
+
+  /** Открывает меню блока: подменю «В публикации» + общие команды мысли. */
+  function openBlockMenu(ev: MouseEvent, block: DocBlock): void {
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    if (block.kind !== 'section' && block.kind !== 'text') return;
+    const title =
+      block.kind === 'section'
+        ? block.heading
+        : (blockNode(block.key)?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const commands = publicationBlockCommands(block);
+    showMenuAt(ev.clientX, ev.clientY, [
+      ...(commands.length > 0
+        ? [menuSubmenu(t('publications.block.menu'), commands), MENU_SEPARATOR]
+        : []),
+      ...buildThoughtMenuItems(
+        networkId,
+        { id: block.thoughtId, title, dir: 'children' },
+        { hideOpenCommand: true, hideSelectionCommand: true },
+      ),
+    ]);
+  }
+
+  /** Плоский список разделов публикации для дерева выбора (дедуп по мысли). */
+  function sectionTreeItems(): SectionTreeItem[] {
+    if (assembly === null) return [];
+    const out: SectionTreeItem[] = [];
+    const seen = new Set<string>();
+    for (const item of flattenSections(assembly.sections)) {
+      const id = item.section.thought_id;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, parentId: item.parentThoughtId, title: item.section.heading });
+    }
+    return out;
+  }
+
+  /** Диалог «Переместить в раздел…»: дерево разделов публикации. */
+  function openMoveToSectionDialog(block: DocBlock): void {
+    if (block.kind !== 'section' && block.kind !== 'text') return;
+    // Себя из дерева исключаем: перенос раздела в себя — цикл.
+    const items = sectionTreeItems().filter((item) => item.id !== block.thoughtId);
+    const body = div('pub-move-body');
+    let close = (): void => undefined;
+    const tree = createTree<SectionTreeItem>({
+      items,
+      renderContent: (item) => span(item.title, 'pub-move-label'),
+      emptyText: t('publications.block.moveToSectionEmpty'),
+      onActivate: (item) => {
+        close();
+        void moveBlockToSection(block, item.id);
+      },
+    });
+    body.append(tree.root);
+    close = showDialog({
+      title: t('publications.block.moveToSectionTitle'),
+      body,
+      size: 'm',
+      buttons: [{ label: t('actions.cancel') }],
+    });
+  }
+
+  /** Переносит блок: текст — значением свойства-источника, раздел — родителем. */
+  async function moveBlockToSection(block: DocBlock, targetSectionId: string): Promise<void> {
+    if (block.kind === 'text') await moveTextToSection(block, targetSectionId);
+    else if (block.kind === 'section') await moveSectionToSection(block, targetSectionId);
+  }
+
+  /**
+   * Перенос раздела под другой раздел — смена единственного структурного
+   * родителя (общая пакетная операция `set_only_parents`). Состав публикации
+   * меняется только после пересборки — помечаем живой текст устаревшим.
+   */
+  async function moveSectionToSection(block: DocBlock, targetSectionId: string): Promise<void> {
+    const networkId = store.state.networkId;
+    if (networkId === null || block.kind !== 'section') return;
+    if (block.parentThoughtId === targetSectionId) return;
+    try {
+      throwOnFailures(await setOnlyParents(networkId, block.thoughtId, [targetSectionId], null));
+    } catch (err) {
+      errorDialog(t('publications.block.moveToSectionTitle'), err);
+      return;
+    }
+    markRebuildStale();
+    reload();
+  }
+
+  /**
+   * Перенос текста в другой раздел: значение свойства-источника переносится с
+   * прежнего владельца на целевой раздел. Сначала добавляем в целевой раздел,
+   * затем убираем из прежнего — сбой второй операции значение не теряет.
+   */
+  async function moveTextToSection(block: DocBlock, targetSectionId: string): Promise<void> {
+    const networkId = store.state.networkId;
+    if (networkId === null || block.kind !== 'text') return;
+    const oldOwner = block.parentThoughtId;
+    if (oldOwner === targetSectionId) return;
+    const sources = publication?.text_sources ?? [];
+    if (sources.length === 0) {
+      notice(t('publications.ws.noTextSources'), 'error');
+      return;
+    }
+    try {
+      const rows = await loadPropertyRows(networkId);
+      const listRows = buildPropertyListRows(rows, store.state.linkTypes).filter(
+        (row) => !row.structural && row.valueType === 'link' && sources.includes(row.propertyId),
+      );
+      const values = await etn.properties.get(networkId, 'thought', oldOwner);
+      let row: (typeof listRows)[number] | null = null;
+      let entry: (typeof values)[number] | null = null;
+      for (const value of values) {
+        if (!('values' in value)) continue;
+        if (!listRows.some((candidate) => candidate.propertyId === value.property_id)) continue;
+        if (!value.values.some((item) => item.target_id === block.thoughtId)) continue;
+        row = listRows.find((candidate) => candidate.propertyId === value.property_id) ?? null;
+        entry = value;
+        break;
+      }
+      if (row === null || entry === null || !('values' in entry)) {
+        notice(t('publications.block.moveFailed'), 'error');
+        return;
+      }
+      const propertyId = row.propertyId;
+      // Ключ записи `properties.set` — display-имя выбранной стороны (см.
+      // `LinkPropertyPick.key`); у строки списка это `name`.
+      const propertyKey = row.name;
+      await addPropertyValue(
+        networkId,
+        targetSectionId,
+        { propertyId, key: propertyKey },
+        block.thoughtId,
+      );
+      const remaining = entry.values
+        .map((item) => item.target_id)
+        .filter((id) => id !== block.thoughtId);
+      await etn.properties.set(networkId, 'thought', oldOwner, propertyKey, remaining);
+    } catch (err) {
+      errorDialog(t('publications.block.moveToSectionTitle'), err);
+      return;
+    }
+    markRebuildStale();
+    reload();
+  }
+
+  /**
+   * Двойной клик по тексту (пункт 4): мысль открывается в редакторе на вкладке
+   * «Комментарий» в режиме правки, курсор — по началу кликнутого абзаца
+   * (точный офсет рендера к markdown недостижим; нет вхождения — начало).
+   */
+  function openTextCommentEdit(ev: MouseEvent, block: DocBlock): void {
+    if (block.kind !== 'text') return;
+    const target = ev.target as HTMLElement | null;
+    const paragraph = target?.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6') ?? null;
+    const text = (paragraph?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    void import('../../editor/editor.js').then((mod) =>
+      mod.openThoughtCommentEditor(block.thoughtId, text === '' ? undefined : text),
+    );
+  }
+
   // --- Документ ------------------------------------------------------------
+
+  /**
+   * Ширина колонки текста документа — доля доступного пространства (50–100%,
+   * пункт 5 карточки ea1b5f14). Значение кладём CSS-переменной на холст
+   * документа; раскладку (центровку и отступ от краёв) держит
+   * `publications.css`.
+   */
+  function applyTextWidth(value: number): void {
+    const clamped = Math.min(TEXT_WIDTH_MAX, Math.max(TEXT_WIDTH_MIN, Math.round(value)));
+    docHost.style.setProperty('--pub-doc-width', `${clamped}%`);
+  }
 
   /**
    * Рендер документа. `force` отключает сверку по подписям: при выходе из stale
@@ -1335,6 +1636,10 @@ export function mountPublicationWorkspace(
         node.append(preamble);
       }
       node.addEventListener('click', (ev) => selectBlock(ev, block.thoughtId));
+      node.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        openBlockMenu(ev, block);
+      });
       return node;
     }
     if (block.kind === 'text') {
@@ -1348,6 +1653,11 @@ export function mountPublicationWorkspace(
       setTooltip(node, t('publications.ws.dragKeyboardHint'));
       node.prepend(makeGrip(t('publications.ws.dragHandle')));
       node.addEventListener('click', (ev) => selectBlock(ev, block.thoughtId));
+      node.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        openBlockMenu(ev, block);
+      });
+      node.addEventListener('dblclick', (ev) => openTextCommentEdit(ev, block));
       return node;
     }
     const node = div('pub-doc-extra');
@@ -1384,18 +1694,36 @@ export function mountPublicationWorkspace(
     }
   }
 
+  /**
+   * Титульный лист (пункт 7 карточки ea1b5f14): с обложкой — обложка с крупным
+   * заголовком ПОВЕРХ (окантовка/тень, чтобы читался на любом фоне), скромный
+   * подзаголовок; без обложки — название крупнее H1 и подзаголовок вторым
+   * уровнем. Автор/дата и резюме — общие для обоих видов.
+   */
   function buildTitleBlock(): HTMLElement {
     const node = div('pub-doc-titleblock');
-    const head = div('pub-doc-titlehead');
-    if (publication !== null) head.append(buildCover(publication, 'thumb'));
-    const box = div('pub-doc-titlebox');
-    box.append(el('h1', 'pub-doc-title', publication?.title ?? ''));
-    if ((publication?.subtitle ?? '') !== '') {
-      box.append(el('div', 'pub-doc-subtitle', publication?.subtitle ?? ''));
+    const coverKind = publication?.cover_kind ?? 'none';
+    if (publication !== null && coverKind !== 'none') {
+      const hero = div('pub-doc-hero');
+      hero.append(buildCover(publication, 'card'));
+      const overlay = div('pub-doc-hero-overlay');
+      overlay.append(el('h1', 'pub-doc-title', publication.title));
+      if ((publication.subtitle ?? '') !== '') {
+        overlay.append(el('div', 'pub-doc-subtitle', publication.subtitle ?? ''));
+      }
+      hero.append(overlay);
+      node.append(hero);
+    } else {
+      const box = div('pub-doc-titlebox');
+      box.append(el('h1', 'pub-doc-title', publication?.title ?? ''));
+      if ((publication?.subtitle ?? '') !== '') {
+        box.append(el('div', 'pub-doc-subtitle', publication?.subtitle ?? ''));
+      }
+      node.append(box);
     }
     if (publication !== null) {
       const author = displayAuthorship(publication, users.resolveUserName(publication.created_by));
-      box.append(
+      node.append(
         el(
           'div',
           'pub-doc-meta',
@@ -1405,8 +1733,6 @@ export function mountPublicationWorkspace(
         ),
       );
     }
-    head.append(box);
-    node.append(head);
     // Резюме — из СВЕЖЕГО снимка публикации (а не из `assembly.publication`),
     // чтобы правка резюме в карточке редактора отражалась в титульном блоке без
     // перечитывания сборки (замечание А2 приёмки b02ef1cf). Рендер — тем же
@@ -1699,13 +2025,37 @@ export function mountPublicationWorkspace(
         for (const text of item.section.texts) known.add(text.thought_id);
       }
     }
-    if (createdIds.some((id) => !known.has(id))) notice(t('publications.ws.createMiss'), 'error');
+    const missed = createdIds.filter((id) => !known.has(id));
+    if (missed.length === 0) return;
+    // Соответствовать отбору своими свойствами не вышло — созданную мысль
+    // привязываем под «Родительскую мысль» отбора, чтобы она вошла в разделы
+    // (карточка ea1b5f14, пункт 3). Промах, который так не закрыть, —
+    // предупреждение, не ошибка.
+    const recipeParents = publicationParentIds();
+    if (kind === 'section' && recipeParents.length > 0) {
+      try {
+        for (const id of missed) {
+          throwOnFailures(await setOnlyParents(networkId, id, [recipeParents[0]!], null));
+        }
+        await load();
+        return;
+      } catch (err) {
+        errorDialog(t('publications.ws.createSection'), err);
+      }
+    }
+    notice(t('publications.ws.createMiss'), 'error');
   }
 
   /** Типы мыслей из рецепта заголовков публикации (для предзаполнения). */
   function publicationTypeIds(): string[] {
     if (publication?.title_recipe == null) return [];
     return parseFilterDefinition(publication.title_recipe).typeIds;
+  }
+
+  /** Корневые мысли отбора разделов (`parent_ids`) — «Родительская мысль». */
+  function publicationParentIds(): string[] {
+    if (publication?.title_recipe == null) return [];
+    return parseFilterDefinition(publication.title_recipe).parentIds;
   }
 
   /** Добавляет мысль значением свойства-связи владельца (аддитивно). */
@@ -1744,6 +2094,8 @@ export function mountPublicationWorkspace(
     publicationId = id;
     retargetWorkspaceKeys();
     root.classList.remove('hidden');
+    // Ширина текста — из персональных настроек при каждом открытии (пункт 5).
+    applyTextWidth(opts.getTextWidth());
     await load();
     if (target?.anchor !== undefined) scrollToAnchor(target.anchor);
   }

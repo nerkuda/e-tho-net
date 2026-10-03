@@ -10,6 +10,7 @@ import type { Publication, Shelf } from '@etn/shared';
 
 import {
   assemblyDateLabel,
+  clampTextWidth,
   coverInitials,
   coverTone,
   COVER_TONES,
@@ -25,6 +26,9 @@ import {
   shelfMenuCommands,
   shelfSwapUpdates,
   sortPublications,
+  TEXT_WIDTH_DEFAULT,
+  TEXT_WIDTH_MAX,
+  TEXT_WIDTH_MIN,
   visibleLibraryEntities,
   wizardShelfChoice,
 } from '../src/renderer/screens/publications/model.js';
@@ -89,6 +93,7 @@ describe('публикации: настройки вида (model)', () => {
       shelfFilter: null,
       query: '',
       filtersOpen: false,
+      textWidth: 100,
     });
   });
 
@@ -117,6 +122,7 @@ describe('публикации: настройки вида (model)', () => {
       shelfFilter: 'shelf-1',
       query: 'живые',
       filtersOpen: true,
+      textWidth: 100,
     });
     const bad = parsePublicationsViewState(
       JSON.stringify({ viewMode: 'grid', sort: 'size', activeFilter: 'maybe', filtersOpen: 'yes' }),
@@ -135,8 +141,32 @@ describe('публикации: настройки вида (model)', () => {
       shelfFilter: null,
       query: '',
       filtersOpen: true,
+      textWidth: 75,
     };
     assert.deepEqual(parsePublicationsViewState(serializePublicationsViewState(state)), state);
+  });
+
+  it('ширина текста клампится в границы и переживает сериализацию', () => {
+    assert.equal(TEXT_WIDTH_MIN, 50);
+    assert.equal(TEXT_WIDTH_MAX, 100);
+    assert.equal(TEXT_WIDTH_DEFAULT, 100);
+    assert.equal(clampTextWidth(undefined), TEXT_WIDTH_DEFAULT);
+    assert.equal(clampTextWidth('70'), TEXT_WIDTH_DEFAULT, 'строка — мусор');
+    assert.equal(clampTextWidth(10), TEXT_WIDTH_MIN);
+    assert.equal(clampTextWidth(1000), TEXT_WIDTH_MAX);
+    assert.equal(clampTextWidth(63.6), 64);
+    const parsed = parsePublicationsViewState(JSON.stringify({ textWidth: 55 }));
+    assert.equal(parsed.textWidth, 55);
+    assert.equal(
+      parsePublicationsViewState(JSON.stringify({ textWidth: 5 })).textWidth,
+      TEXT_WIDTH_MIN,
+      'ниже границы — минимум',
+    );
+    assert.equal(
+      JSON.parse(serializePublicationsViewState({ ...defaultPublicationsViewState(), textWidth: 70 }))
+        .textWidth,
+      70,
+    );
   });
 });
 

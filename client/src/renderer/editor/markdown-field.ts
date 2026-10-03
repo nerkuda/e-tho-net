@@ -50,6 +50,13 @@ export interface AttachmentsOwner {
 interface MarkdownFieldHandle {
   showEdit(md?: string): void;
   set(md: string, html: string): void;
+  /**
+   * Переключает поле в правку и ставит каретку: по вхождению `findText` в
+   * исходнике markdown, а если его нет — в начало документа. Нужно двойному
+   * клику по тексту публикации (задача ea1b5f14, пункт 4): точный офсет
+   * рендер-узла к markdown недостижим, поэтому курсор — к началу абзаца.
+   */
+  focusAt(findText?: string): void;
 }
 
 const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
@@ -371,6 +378,14 @@ export function createMarkdownField(opts: {
         editor.setValue(md);
       }
     },
+    focusAt: (findText) => {
+      showEdit();
+      if (editor === null) return;
+      const source = editor.getValue();
+      const position =
+        findText !== undefined && findText !== '' ? source.indexOf(findText) : -1;
+      editor.setCaret(position >= 0 ? position : 0);
+    },
   });
 
   // Комментарийный контекст (карточка ETN 34ffbd75): после замены legacy-ссылок
@@ -396,6 +411,15 @@ export function createMarkdownField(opts: {
 /** Switches an already-built field into edit mode (e.g. to restore a draft). */
 export function editMarkdownField(root: HTMLElement, md?: string): void {
   handles.get(root)?.showEdit(md);
+}
+
+/**
+ * Переключает поле в правку и ставит каретку по вхождению `findText` в
+ * исходнике markdown (нет вхождения — начало документа). Точка входа
+ * двойного клика по тексту публикации (задача ea1b5f14, пункт 4).
+ */
+export function focusMarkdownFieldAt(root: HTMLElement, findText?: string): void {
+  handles.get(root)?.focusAt(findText);
 }
 
 /** Updates an already-built field's content (e.g. after an external change). */
