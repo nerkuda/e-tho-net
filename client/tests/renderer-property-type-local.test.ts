@@ -529,19 +529,21 @@ describe('локальная правка типа связи пересчиты
       readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
     const realtimeUi = read('realtime-ui.ts');
 
-    // G2: `scheduleNeighbourhoodRepaint`/`scheduleTypeRepaint` снесены. Realtime-
-    // ветка типа (G2): каталог перечитывается отдельно, окрестность и
-    // «Структуры» гасит роутер слоя; здесь остаётся только «Хроника» (G3).
+    // G2/G3: `scheduleNeighbourhoodRepaint`/`scheduleTypeRepaint` снесены.
+    // Realtime-ветка типа: каталог перечитывается отдельно, окрестность,
+    // «Структуры» и «Дневник» гасит роутер слоя — ручных вызовов нет.
     assert.ok(
       !realtimeUi.includes('scheduleNeighbourhoodRepaint'),
       'scheduleNeighbourhoodRepaint снесён (G2)',
     );
     assert.ok(!realtimeUi.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
     assert.ok(
-      /case 'link-type\.deleted':[\s\S]{0,700}?void reloadTypeCatalogues\(\);[\s\S]{0,200}?scheduleChronicleRefresh\(\);/.test(
-        realtimeUi,
-      ),
-      'realtime-ветка типа перечитывает каталог, обновляет «Хронику» (фокус/«Структуры» — роутер)',
+      /case 'link-type\.deleted':[\s\S]{0,700}?void reloadTypeCatalogues\(\);/.test(realtimeUi),
+      'realtime-ветка типа перечитывает каталог (фокус/«Структуры»/«Дневник» — роутер)',
+    );
+    assert.ok(
+      !realtimeUi.includes('scheduleChronicleRefresh'),
+      'realtime-ветка не дёргает «Дневник» вручную (роутер слоя, G3)',
     );
   });
 
@@ -557,19 +559,20 @@ describe('локальная правка типа связи пересчиты
       ),
       'менеджер свойств гасит ключи mutator-слоем',
     );
-    // Правка типа связи: каталог перечитан ДО, затем — инвалидация слоя.
+    // Правка типа связи: каталог перечитан ДО, затем — инвалидация слоя
+    // (focus + «Структуры» + лента «Дневника», G3).
     assert.ok(
-      /await reloadTypeCatalogues\(\);[\s\S]{0,400}?notifyTypeChanged\([\s\S]{0,300}?typeUpdateFacts\(\{ ownerType: 'link_type'[\s\S]{0,900}?invalidateAfterMutation\(\[queryKeys\.focusAll\(\), queryKeys\.structuresPageAll\(\)\]\);/.test(
+      /await reloadTypeCatalogues\(\);[\s\S]{0,400}?notifyTypeChanged\([\s\S]{0,300}?typeUpdateFacts\(\{ ownerType: 'link_type'[\s\S]{0,900}?invalidateAfterMutation\(\[[\s\S]{0,200}?queryKeys\.focusAll\(\),[\s\S]{0,200}?queryKeys\.structuresPageAll\(\),[\s\S]{0,200}?queryKeys\.chronicleFeedAll\(\),?[\s\S]{0,50}?\]\);/.test(
         propertyManager,
       ),
-      'правка типа связи гасит focus-/structures-ключи',
+      'правка типа связи гасит focus-/structures-/chronicle-ключи',
     );
     // Удаление типа связи вместе со свойством — тем же путём.
     assert.ok(
-      /notifyTypeChanged\(typeDeletedFacts\(\{ ownerType: 'link_type'[\s\S]{0,600}?invalidateAfterMutation\(\[queryKeys\.focusAll\(\), queryKeys\.structuresPageAll\(\)\]\);/.test(
+      /notifyTypeChanged\(typeDeletedFacts\(\{ ownerType: 'link_type'[\s\S]{0,600}?invalidateAfterMutation\(\[[\s\S]{0,200}?queryKeys\.focusAll\(\),[\s\S]{0,200}?queryKeys\.structuresPageAll\(\),[\s\S]{0,200}?queryKeys\.chronicleFeedAll\(\),?[\s\S]{0,50}?\]\);/.test(
         propertyManager,
       ),
-      'удаление типа связи гасит focus-/structures-ключи',
+      'удаление типа связи гасит focus-/structures-/chronicle-ключи',
     );
   });
 });

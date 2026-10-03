@@ -35,7 +35,6 @@ import {
   CHRONICLE_QUERY_MAX_LIMIT,
   STRUCTURE_KEYWORD_SCOPES,
   UI_STATE_KEY,
-  type AnyRealtimeEvent,
   type ChronicleRow,
   type ChronicleTarget,
   type ChronicleTargetLink,
@@ -87,16 +86,14 @@ import { TABLE_ROW_KEY_ATTR } from '../../lib/ui/table.js';
 import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.js';
 import { store } from '../../state.js';
 import { t } from '../../lib/i18n.js';
-import { parseChronicleCriteria, defaultChronicleCriteriaState, hasAnyFilterCriteria } from '../../lib/filter-builder.js';
-import { createRealtimeBatch } from '../../lib/realtime-batch.js';
+import { parseChronicleCriteria, defaultChronicleCriteriaState } from '../../lib/filter-builder.js';
+import { matchesKeyPrefix, queryKeys } from '../../lib/live/query-keys.js';
 import {
-  chronicleAllowsIncremental,
-  commentUpdateNeedsReload,
-  hasDiaryAttachment,
-  mergeCommentChanges,
-  rowVisibleInPeriod,
-  type ChronicleCriteriaSnapshot,
-} from './realtime-apply.js';
+  invalidateQueries,
+  onQueryInvalidated,
+  registerQuery,
+  setQueryData,
+} from '../../lib/live/query-registry.js';
 import { buildMonthCalendar, type MonthCalendarHandle } from '../../lib/month-calendar.js';
 import {
   applyPeriodToFilter,
@@ -636,6 +633,9 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   main.append(addBar, feedWrap);
   void refreshCalendarCounts();
 
+  // Лента — запрос слоя: подписка на инвалидации ключа `chronicle-feed` (G3).
+  bindChronicleFeed();
+
   wireChronicleApplyShortcut(hostEl);
   registerDropActions({
     chronicleAttach: (thoughtId, rowId) => void attachToRecord(rowId, [thoughtId]),
@@ -695,6 +695,9 @@ async function applyFilter(): Promise<void> {
 async function reload(preserveDepth = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || feedList === null) return;
+  // Отбор — часть ключа запроса слоя: смена критериев/периода переносит снимок
+  // на новый ключ (инвалидации роутера адресуют актуальный ключ).
+  retargetChronicleFeed();
   const seq = ++querySeq;
   renderStatus('loading');
   try {
@@ -709,6 +712,7 @@ async function reload(preserveDepth = false): Promise<void> {
     total = result.total;
     pendingReconcile = false;
     renderFeed();
+    publishChronicleSnapshot();
   } catch (err) {
     if (seq !== querySeq) return;
     renderStatus('error', err);
@@ -751,6 +755,7 @@ async function loadMore(): Promise<void> {
     total = result.total;
     // Дозагрузка «+50» дописывает страницу — прокрутка не должна прыгать вверх.
     renderFeed();
+    publishChronicleSnapshot();
   } catch {
     // A failed page keeps what is already shown; the next scroll retries.
   } finally {
@@ -764,264 +769,93 @@ function maybeLoadMore(): void {
   if (shouldLoadMore(counters, feedWrap)) void loadMore();
 }
 
-/**
- * Realtime-путь «Дневника» (задача afcfb144, уровень 3 тех.проекта `1d48df6d`).
- *
- * **Таблица «событие → действие».**
- *
- * | Событие | Инкрементально | Fallback (полный перезапрос) |
- * |---|---|---|
- * | `comment.created` | хроно-запись хотя бы с одной привязкой, отбор — только период/порядок: точечный доар не-HOME целей + вставка одной строки в свой день | прочие критерии в отборе (текст/цели/автор); сборка строки/доар не удалась; привязок нет или вне периода — игнор |
- * | `comment.updated` | строка в ленте: слияние полей, доар `body_html` при неполном payload, переразрешение `targets`, перестановка по дате; строки нет — додар полного комментария и вставка, если запись попала в период; выход из периода — удаление строки | при доп. критериях изменение текста/заголовка/привязок, а также событие по записи вне ленты (вхождение в отбор без сервера не проверить) |
- * | `comment.deleted` | строка в ленте → удаление одной строки | нет строки или владелец не мысль — игнор |
- * | прочее (в т.ч. `thought.deleted` по чипсам) | — | `scheduleChronicleRefresh` (полный перезапрос) |
- *
- * Очередь событий за окно дебаунса применяется ОДНИМ батчем → один `renderFeed`
- * на окно; fallback-событие в окне отменяет батч и зовёт {@link reloadAndSync}.
- */
-type ChronicleRealtimeOp =
-  | { kind: 'created'; comment: Comment }
-  | { kind: 'updated'; id: string; changes: Partial<Comment> }
-  | { kind: 'deleted'; id: string };
+// ---------------------------------------------------------------------------
+// Лента «Дневника» на слое данных (G3 тех.проекта 269016e2)
+// ---------------------------------------------------------------------------
+//
+// Лента — производный запрос слоя под ключом `chronicle-feed:@<filter>`. На
+// чужие изменения (комментарии/мысли/связи/типы/предпочтения) ключ гасит
+// роутер (`event-router.ts`), на локальные мутации — их же инвалидация
+// (`invalidateQueries`, mutator-путь). Экран применяет ОДИН путь — отложенный
+// полный перезапрос ленты ДО уже загруженной глубины (окно дебаунса 250 мс
+// сохранено, ошибка f5809943), после чего публикует снимок в кэш слоя.
+// Прежний bespoke-инкремент (`realtime-apply.ts`, `applyChronicleRealtime`,
+// `applyChronicleOps`, `invalidateChronicleThought`) снесён: классификация
+// события вне слоя запрещена, решение «когда обновлять» принято слоем.
 
-const realtimeBatch = createRealtimeBatch<ChronicleRealtimeOp>({
-  windowMs: 250,
-  applyBatch: (ops) => {
-    void applyChronicleOps(ops);
-  },
-  applyFull: () => {
-    void reloadAndSync();
-  },
-});
-
-/**
- * Полный путь realtime: перезапрос ленты + пересчёт календаря. Глубину ленты
- * сохраняем (`reloadKeepingDepth`) — этот путь обслуживает и локальные правки
- * (`scheduleChronicleRefresh`), которые не должны терять дозагруженные «+50»
- * (ошибка f5809943).
- */
-async function reloadAndSync(): Promise<void> {
-  await reloadKeepingDepth();
-  syncCalendar();
-  void refreshCalendarCounts();
+/** Ключ кэша-снимка ленты по ТЕКУЩЕМУ отбору (запрос слоя). */
+function chronicleFilterKey(): string {
+  return JSON.stringify(chronicleQueryDefinition());
 }
 
-/** Критерии, при которых новую/изменённую запись нельзя признать входящей в отбор. */
-function chronicleCriteriaSnapshot(): ChronicleCriteriaSnapshot {
-  const f = getFilterState();
-  const hasAuthor =
-    f.authorOp !== 'eq' ||
-    f.authorId !== '' ||
-    f.authorIds.length > 0 ||
-    f.editorOp !== 'eq' ||
-    f.editorId !== '' ||
-    f.editorIds.length > 0;
-  return {
-    keywords: f.keywords,
-    hasTargetCriteria: hasAnyFilterCriteria(f.targets),
-    hasAuthorCriteria: hasAuthor,
-  };
+let chronicleQueryKey: string | null = null;
+let chronicleInvalidationUnsub: (() => void) | null = null;
+let chronicleSnapshotSeq = 0;
+
+/** Окно дебаунса перезапроса ленты: одна пачка событий → один перезапрос. */
+const CHRONICLE_REFRESH_WINDOW_MS = 250;
+let feedRefreshTimer: number | null = null;
+
+/** Зарегистрировать ключ снимка ленты в реестре (инвалидации его видят). */
+function retargetChronicleFeed(): void {
+  const key = queryKeys.chronicleFeed(chronicleFilterKey());
+  if (key === chronicleQueryKey) return;
+  chronicleQueryKey = key;
+  registerQuery(key, null);
+}
+
+/** Подписать ленту на инвалидации своих ключей слоя (один раз). */
+function bindChronicleFeed(): void {
+  retargetChronicleFeed();
+  if (chronicleInvalidationUnsub !== null) return;
+  chronicleInvalidationUnsub = onQueryInvalidated((prefix) => {
+    // Содержимое ленты (записи): роутер гасит `chronicle-feed`.
+    if (matchesKeyPrefix(prefix, 'chronicle-feed')) {
+      scheduleChronicleFeedRefresh();
+      return;
+    }
+    // Правка/удаление мысли адресна: перечитываем ленту ТОЛЬКО если мысль видна
+    // чипсом загруженной записи (замечание G3: невидимая правка не тратит запрос).
+    if (prefix.startsWith('chronicle-thought:@')) {
+      const id = prefix.slice('chronicle-thought:@'.length);
+      if (rows.some((row) => row.targets.some((t) => t.kind === 'thought' && t.thought.id === id))) {
+        scheduleChronicleFeedRefresh();
+      }
+      return;
+    }
+    // Связь-чипс — симметрично.
+    if (prefix.startsWith('chronicle-link:@')) {
+      const id = prefix.slice('chronicle-link:@'.length);
+      if (rows.some((row) => row.targets.some((t) => t.kind === 'link' && t.link.id === id))) {
+        scheduleChronicleFeedRefresh();
+      }
+    }
+  });
 }
 
 /**
- * Дебounced refresh (real-time comment/target events) — полный путь. Локальные
- * производители зовут его сами; чужое realtime-эхо до рендерера не доходит.
- * Внутри окна дебаунса батч инкрементальных событий отменяется: полный путь
- * важнее экономии.
+ * Отложенный перезапрос ленты по инвалидации слоя. Глубину ленты сохраняем
+ * (`reloadKeepingDepth`) — дозагруженные «+50» не теряются, прокрутка не
+ * прыгает (ошибка f5809943); календарь и его счётчики синхронизируются следом.
  */
-export function scheduleChronicleRefresh(): void {
+function scheduleChronicleFeedRefresh(): void {
   if (host === null) return;
-  realtimeBatch.markFull();
+  if (feedRefreshTimer !== null) window.clearTimeout(feedRefreshTimer);
+  feedRefreshTimer = window.setTimeout(() => {
+    feedRefreshTimer = null;
+    if (host === null) return;
+    void reloadKeepingDepth().then(() => {
+      syncCalendar();
+      void refreshCalendarCounts();
+    });
+  }, CHRONICLE_REFRESH_WINDOW_MS);
 }
 
-/**
- * Принять чужое хроно-событие: классифицировать и положить в очередь окна или
- * пометить окно как fallback. Событие по записи, которой нет в ленте,
- * игнорируется.
- */
-export function applyChronicleRealtime(evt: AnyRealtimeEvent): void {
-  if (host === null) return;
-  switch (evt.type) {
-    case 'comment.created': {
-      const comment = evt.data.comment;
-      if (comment.kind !== 'chronological') return;
-      if (!chronicleAllowsIncremental(chronicleCriteriaSnapshot())) {
-        realtimeBatch.markFull();
-        return;
-      }
-      realtimeBatch.push({ kind: 'created', comment });
-      return;
-    }
-    case 'comment.updated': {
-      const { id, changes } = evt.data;
-      // Запись не в загруженной странице: перенос даты в видимый период обязан
-      // показать её (замечание проверки уровня 3) — идём тем же инкрементальным
-      // путём с точечным додаром полного комментария. Но только при отборе без
-      // доп. критериев: иначе вхождение в отбор без сервера не проверить.
-      if (!rows.some((r) => r.id === id)) {
-        if (!chronicleAllowsIncremental(chronicleCriteriaSnapshot())) {
-          realtimeBatch.markFull();
-          return;
-        }
-        realtimeBatch.push({ kind: 'updated', id, changes });
-        return;
-      }
-      if (commentUpdateNeedsReload(changes, chronicleCriteriaSnapshot())) {
-        realtimeBatch.markFull();
-        return;
-      }
-      realtimeBatch.push({ kind: 'updated', id, changes });
-      return;
-    }
-    case 'comment.deleted': {
-      const { id, owner_type } = evt.data;
-      if (owner_type !== 'thought') return;
-      if (!rows.some((r) => r.id === id)) return;
-      realtimeBatch.push({ kind: 'deleted', id });
-      return;
-    }
-    default:
-      return;
-  }
-}
-
-/**
- * Применить накопленный батч к снимку ленты и ОДИН раз пересобрать её. Любая
- * неуверенность (не собралась локальная строка, не удался доар) откатывает
- * окно на полный перезапрос — данные важнее экономии запроса.
- */
-async function applyChronicleOps(ops: readonly ChronicleRealtimeOp[]): Promise<void> {
-  const { from, to } = currentFromTo();
-  const order = getFilterState().order;
-  let changed = false;
-  for (const op of ops) {
-    if (op.kind === 'deleted') {
-      if (rows.some((r) => r.id === op.id)) {
-        rows = rows.filter((r) => r.id !== op.id);
-        total = Math.max(0, total - 1);
-        changed = true;
-      }
-      continue;
-    }
-    if (op.kind === 'created') {
-      if (!hasDiaryAttachment(op.comment.targets)) continue;
-      const home = homeId ?? (await getHome().catch(() => null));
-      if (home === null) {
-        await reloadAndSync();
-        return;
-      }
-      const built = await localRowFromComment(op.comment, home);
-      if (built === null) {
-        await reloadAndSync();
-        return;
-      }
-      if (!rowVisibleInPeriod(built, from, to)) continue;
-      if (rows.some((r) => r.id === built.id)) continue;
-      rows = insertRowByDay(rows, built, order, home);
-      total += 1;
-      // Локальная вставка сдвигает страницу — следующий «+50» идёт полной
-      // перезагрузкой, а не offset-пагинацией (иначе дубль/пропуск).
-      pendingReconcile = true;
-      changed = true;
-      continue;
-    }
-    // updated
-    const idx = rows.findIndex((r) => r.id === op.id);
-    if (idx < 0) {
-      // Записи нет в загруженной странице: додар полного комментария и вставка
-      // строки, если она попадает в применённый период (замечание проверки).
-      const home = homeId ?? (await getHome().catch(() => null));
-      if (home === null) {
-        await reloadAndSync();
-        return;
-      }
-      let comment: Comment;
-      try {
-        comment = await etn.comments.get(requireNetworkId(), op.id);
-      } catch {
-        // Вхождение записи в отбор/период без додара не проверить — полный
-        // путь, а не глушение: иначе перенос даты в видимый период не покажется
-        // до постороннего обновления (ошибка 820608e4).
-        await reloadAndSync();
-        return;
-      }
-      if (comment.kind !== 'chronological' || !hasDiaryAttachment(comment.targets)) continue;
-      const built = await localRowFromComment(comment, home);
-      if (built === null) {
-        await reloadAndSync();
-        return;
-      }
-      if (!rowVisibleInPeriod(built, from, to) || rows.some((r) => r.id === built.id)) continue;
-      rows = insertRowByDay(rows, built, order, home);
-      total += 1;
-      pendingReconcile = true;
-      changed = true;
-      continue;
-    }
-    let row = rows[idx]!;
-    let changes = op.changes;
-    if (changes.body_md !== undefined && changes.body_html === undefined) {
-      try {
-        const fresh = await etn.comments.get(requireNetworkId(), op.id);
-        changes = { ...changes, body_html: fresh.body_html };
-      } catch {
-        continue; // доар не удался — строку не трогаем, следующий перезапрос поправит
-      }
-    }
-    row = mergeCommentChanges(row, changes);
-    if (changes.targets !== undefined) {
-      const home = homeId ?? (await getHome().catch(() => null));
-      if (home === null) {
-        await reloadAndSync();
-        return;
-      }
-      const targets = await resolveRowTargets(changes.targets, home);
-      if (targets === null) {
-        await reloadAndSync();
-        return;
-      }
-      row = { ...row, targets };
-    }
-    if (!rowVisibleInPeriod(row, from, to)) {
-      rows = rows.filter((r) => r.id !== op.id);
-      total = Math.max(0, total - 1);
-      changed = true;
-      continue;
-    }
-    // Переставить на место по тому же порядку, что серверный: правка даты
-    // сдвигает запись в ленте, а не только её содержимое. Класс записи считается
-    // по РАЗРЕШЁННОМУ HOME: при `homeId === null` `recordClass` даёт 1 всем
-    // строкам и позиция разойдётся с серверной — недоступный HOME уводит в
-    // полный путь (ошибка 89409d57).
-    const homeForOrder = homeId ?? (await getHome().catch(() => null));
-    if (homeForOrder === null) {
-      await reloadAndSync();
-      return;
-    }
-    rows = insertRowByDay(
-      rows.filter((r) => r.id !== op.id),
-      row,
-      order,
-      homeForOrder,
-    );
-    changed = true;
-  }
-  if (changed) {
-    renderFeed();
-    syncCalendar();
-    void refreshCalendarCounts();
-  }
-}
-
-/**
- * The thought disappeared — refresh the feed if it is an attachment of any
- * loaded record.
- */
-export function invalidateChronicleThought(id: string): void {
-  if (host === null) return;
-  if (rows.some((row) => row.targets.some((t) => t.kind === 'thought' && t.thought.id === id))) {
-    scheduleChronicleRefresh();
-  }
+/** Опубликовать снимок ленты в кэш слоя (наблюдатели/диагностика). */
+export function publishChronicleSnapshot(): void {
+  retargetChronicleFeed();
+  if (chronicleQueryKey === null) return;
+  setQueryData(chronicleQueryKey, { seq: ++chronicleSnapshotSeq, rows, total });
 }
 
 function renderStatus(kind: 'loading' | 'error', err?: unknown): void {
@@ -1238,6 +1072,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
     slotRoot?.remove();
     pendingReconcile = true;
     renderFeed();
+    publishChronicleSnapshot();
     feedNav?.refresh();
     return;
   }
@@ -1249,6 +1084,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   pendingReconcile = true;
   if (inPlace) updateMoreLine();
   else renderFeed();
+  publishChronicleSnapshot();
   feedNav?.refresh();
 }
 /** Свернуть/развернуть все показанные группы дат И тела записей (кнопки панели). */
@@ -1531,7 +1367,9 @@ async function openBodyEditor(
       onSave: async (md) => {
         const fresh = await etn.comments.get(networkId, row.id);
         const updated = await etn.comments.update(networkId, row.id, { body_md: md }, fresh.version);
-        scheduleChronicleRefresh();
+        // Локальная мутация — тем же путём, что чужая: гасим ключ слоя, лента
+        // перечитается отложенно (единственный путь обновления, G3).
+        invalidateQueries(queryKeys.chronicleFeedAll());
         return updated.body_html;
       },
       onEditChange: (editing) => {
@@ -1601,7 +1439,9 @@ async function saveRecordDates(
       { valid_from: from, valid_to: to, use_time: value.hasTime === true },
       fresh.version,
     );
-    scheduleChronicleRefresh();
+    // Локальная мутация — тем же путём, что чужая: гасим ключ слоя, лента
+    // перечитается отложенно (единственный путь обновления, G3).
+    invalidateQueries(queryKeys.chronicleFeedAll());
   } catch (err) {
     notice(t('diary.saveFailed', [errText(err)]), 'error');
   }
@@ -1613,7 +1453,9 @@ async function patchRecord(id: string, patch: Record<string, unknown>): Promise<
   try {
     const fresh = await etn.comments.get(networkId, id);
     await etn.comments.update(networkId, id, patch, fresh.version);
-    scheduleChronicleRefresh();
+    // Локальная мутация — тем же путём, что чужая: гасим ключ слоя, лента
+    // перечитается отложенно (единственный путь обновления, G3).
+    invalidateQueries(queryKeys.chronicleFeedAll());
   } catch (err) {
     notice(t('diary.saveFailed', [errText(err)]), 'error');
   }

@@ -249,7 +249,7 @@ describe('роутер событий', () => {
       queryKeys.focus('t1'),
       queryKeys.focus('other'),
       queryKeys.structuresPageAll(),
-      queryKeys.chronicleFeedAll(),
+      queryKeys.chronicleThought('t1'),
       queryKeys.pins(),
       queryKeys.publicationAssembly('p1'),
       queryKeys.indicators('t1'),
@@ -264,9 +264,10 @@ describe('роутер событий', () => {
     assert.deepEqual(res.patched, ['thought:t1']);
     assert.equal(asRecord(getEntity('thought', 't1'))['title'], 'new');
     // Чужие ключи (focus:@other, indicators:@t1, publications-list, history)
-    // НЕ задеты — маршрут адресный.
+    // НЕ задеты — маршрут адресный. Лента «Дневника» гасится адресно ключом
+    // мысли (G3): невидимая правка `focus:@other`-подобных ключей не трогает.
     assert.deepEqual(res.invalidated, [
-      queryKeys.chronicleFeedAll(),
+      queryKeys.chronicleThought('t1'),
       queryKeys.focus('t1'),
       queryKeys.pins(),
       queryKeys.publicationAssembly('p1'),
@@ -397,6 +398,7 @@ describe('паритет: поток событий сети гасит ровн
       queryKeys.focus('other'),
       queryKeys.structuresPageAll(),
       queryKeys.chronicleFeedAll(),
+      queryKeys.chronicleThought(focusId),
       queryKeys.publicationsListAll(),
       queryKeys.indicators(focusId),
       queryKeys.indicators('other'),
@@ -428,7 +430,7 @@ describe('паритет: поток событий сети гасит ровн
     assert.deepEqual(
       updated.invalidated,
       [
-        'chronicle-feed',
+        `chronicle-thought:@${focusId}`,
         `focus:@${focusId}`,
         'pins',
         'pub-assembly:@p1',

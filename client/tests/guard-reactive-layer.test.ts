@@ -117,20 +117,23 @@ describe('guard: реактивный слой данных (269016e2, G1)', () 
     ]);
   });
 
-  it('мигрированные модули G2 не подписываются на realtime напрямую', () => {
-    // холст и «Структуры» переведены на слой (G2): данные и перерисовку ведут
-    // реестр запросов и роутер, а не прямой `onRealtimeEvent`. `properties.ts`
-    // остаётся в whitelist до G5 — у него легаси-хук открытого редактора.
+  it('мигрированные модули G2/G3 не подписываются на realtime напрямую', () => {
+    // холст и «Структуры» переведены на слой (G2), лента «Дневника» — на слой
+    // (G3): данные и перерисовку ведут реестр запросов и роутер, а не прямой
+    // `onRealtimeEvent`. `properties.ts` остаётся в whitelist до G5 — у него
+    // легаси-хук открытого редактора.
     assertGuardClean(RENDERER_ROOT, [
       {
-        name: 'g2-migrated-no-direct-subscription',
+        name: 'g2-g3-migrated-no-direct-subscription',
         description:
-          'canvas и «Структуры» (G2 65286909) читают живые данные через слой ' +
-          '(focus:@id / structures-page): прямых подписок onRealtimeEvent быть не должно.',
+          'canvas, «Структуры» (G2 65286909) и «Дневник» (G3 40fa8118) читают ' +
+          'живые данные через слой (focus:@id / structures-page / chronicle-feed): ' +
+          'прямых подписок onRealtimeEvent быть не должно.',
         pattern: /\bonRealtimeEvent\s*\(/,
         include: (rel) =>
           /(?:^|\/)canvas\/canvas\.ts$/.test(rel) ||
-          /(?:^|\/)screens\/structures\/structures\.ts$/.test(rel),
+          /(?:^|\/)screens\/structures\/structures\.ts$/.test(rel) ||
+          /(?:^|\/)screens\/chronicle\/chronicle\.ts$/.test(rel),
         allow: () => false,
       },
     ]);

@@ -32,7 +32,6 @@ import { onRealtimeEvent } from '../realtime.js';
 import { inFocusNeighbourhood } from '../realtime-ui.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { invalidateAfterMutation } from '../lib/live/mutator.js';
-import { scheduleChronicleRefresh } from '../screens/chronicle/chronicle.js';
 import {
   div,
   el,
@@ -103,11 +102,14 @@ let wired = false;
  */
 function repaintAfterLinkValueWrite(ownerType: 'thought' | 'link', ownerId: string): void {
   if (!inFocusNeighbourhood(ownerType, ownerId)) return;
-  // Слой данных (G2): гасим focus- и structures-ключи — активная окрестность и
-  // открытые «Структуры» перечитаются слоем (роутер/инвалидация), без ручных
-  // `scheduleNeighbourhoodRepaint`. «Хроника» — легаси-путь до G3.
-  invalidateAfterMutation([queryKeys.focusAll(), queryKeys.structuresPageAll()]);
-  scheduleChronicleRefresh();
+  // Слой данных (G2/G3): гасим focus-, structures- и chronicle-ключи —
+  // активная окрестность, «Структуры» и лента «Дневника» перечитаются слоем
+  // (роутер/инвалидация), без ручных `scheduleNeighbourhoodRepaint`.
+  invalidateAfterMutation([
+    queryKeys.focusAll(),
+    queryKeys.structuresPageAll(),
+    queryKeys.chronicleFeedAll(),
+  ]);
 }
 
 /**

@@ -318,8 +318,8 @@ describe('проводка пересчёта окрестности из ред
       'scheduleNeighbourhoodRepaint снесён (G2)',
     );
     assert.ok(!realtimeUi.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
-    // Realtime-ветка значения свойства (G2): окрестность и «Структуры» гасит
-    // роутер слоя, здесь остаётся только «Хроника» (G3).
+    // Realtime-ветка значения свойства (G2/G3): окрестность, «Структуры» и
+    // «Дневник» гасит роутер слоя — ручных вызовов в шине нет.
     const branch = realtimeUi.slice(realtimeUi.indexOf("case 'property-value.set':"));
     const end = branch.indexOf('break;');
     assert.ok(
@@ -330,7 +330,10 @@ describe('проводка пересчёта окрестности из ред
       !branch.slice(0, end).includes('scheduleStructuresRefresh'),
       'realtime-ветка не дёргает «Структуры» вручную (роутер слоя)',
     );
-    assert.match(branch.slice(0, end), /scheduleChronicleRefresh\(\);/, 'обновляет «Хронику»');
+    assert.ok(
+      !branch.slice(0, end).includes('scheduleChronicleRefresh'),
+      'realtime-ветка не дёргает «Дневник» вручную (роутер слоя, G3)',
+    );
   });
 
   it('запись значения свойства-связи идёт mutator-путём под гейтом видимости', () => {
@@ -345,9 +348,10 @@ describe('проводка пересчёта окрестности из ред
       /import \{ invalidateAfterMutation \} from '\.\.\/lib\/live\/mutator\.js';/.test(properties),
       'редактор свойств гасит ключи mutator-слоем',
     );
-    // Сам помощник: пересчёт только для видимого владельца, через слой.
+    // Сам помощник: пересчёт только для видимого владельца, через слой
+    // (focus + «Структуры» + лента «Дневника», G3).
     assert.ok(
-      /function repaintAfterLinkValueWrite\(ownerType: 'thought' \| 'link', ownerId: string\): void \{\s*if \(!inFocusNeighbourhood\(ownerType, ownerId\)\) return;[\s\S]{0,400}?invalidateAfterMutation\(\[queryKeys\.focusAll\(\), queryKeys\.structuresPageAll\(\)\]\);/.test(
+      /function repaintAfterLinkValueWrite\(ownerType: 'thought' \| 'link', ownerId: string\): void \{\s*if \(!inFocusNeighbourhood\(ownerType, ownerId\)\) return;[\s\S]{0,500}?invalidateAfterMutation\(\[[\s\S]{0,200}?queryKeys\.focusAll\(\),[\s\S]{0,200}?queryKeys\.structuresPageAll\(\),[\s\S]{0,200}?queryKeys\.chronicleFeedAll\(\),?[\s\S]{0,50}?\]\);/.test(
         properties,
       ),
       'пересчёт окрестности выполняется только для владельца, видимого на карте',

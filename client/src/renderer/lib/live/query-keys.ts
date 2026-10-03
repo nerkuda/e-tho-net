@@ -44,6 +44,19 @@ export const queryKeys = {
   publicationsList: (filterKey = 'all') => keyOf('publications-list', ref(filterKey)),
   publicationsListAll: () => 'publications-list',
 
+  /**
+   * Инвалидация ленты «Дневника» по КОНКРЕТНОЙ мысли-чипсу
+   * (`chronicle-thought:@<id>`). Роутер гасит её на правку/удаление мысли, а
+   * экран ленты перечитывает её, только если эта мысль видна чипсом загруженной
+   * записи (замечание G3: правка невидимой мысли ленту не трогает).
+   */
+  chronicleThought: (id: string) => keyOf('chronicle-thought', ref(id)),
+  chronicleThoughtAll: () => 'chronicle-thought',
+
+  /** Инвалидация ленты по конкретной связи-чипсу (`chronicle-link:@<id>`). */
+  chronicleLink: (id: string) => keyOf('chronicle-link', ref(id)),
+  chronicleLinkAll: () => 'chronicle-link',
+
   /** Полки библиотеки. */
   shelves: () => 'shelves',
 

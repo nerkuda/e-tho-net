@@ -100,11 +100,11 @@ describe('лента «Дневника»: refresh сохраняет загру
       'помощник сохранения глубины перезапрашивает ленту до rows.length',
     );
 
-    // 1) Полный refresh (правка записи / realtime fallback).
+    // 1) Отложенный перезапрос по инвалидации слоя (G3) — тот же помощник.
     assert.match(
-      bodyOf('async function reloadAndSync('),
-      /await reloadKeepingDepth\(\)/,
-      'reloadAndSync сохраняет глубину через помощник',
+      bodyOf('function scheduleChronicleFeedRefresh('),
+      /reloadKeepingDepth\(\)/,
+      'scheduleChronicleFeedRefresh сохраняет глубину через помощник',
     );
     // 2) Удаление записи.
     assert.match(

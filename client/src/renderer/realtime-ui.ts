@@ -22,11 +22,6 @@ import { etn } from './lib/etn.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from './screens/pinned-bar.js';
 import { invalidateSavedFilters } from './screens/structures/filter-panel.js';
-import {
-  applyChronicleRealtime,
-  invalidateChronicleThought,
-  scheduleChronicleRefresh,
-} from './screens/chronicle/chronicle.js';
 import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chronicle/filter-panel.js';
 import { store } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
@@ -119,10 +114,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       invalidateIndicators(evt.data.id);
       invalidateRef(evt.data.id);
       invalidateHistoryBar();
-      // «Структуры» гасят свой ключ `structures-page` роутером (G2) и убирают
-      // строку полным перезапросом; «Дневник» перезапрашивает ленту, если
-      // мысль была чипсом загруженной записи.
-      invalidateChronicleThought(evt.data.id);
+      // «Структуры» и «Дневник» гасят свои ключи (`structures-page` /
+      // `chronicle-feed`) роутером (G2/G3) — ручных вызовов здесь нет.
       // R7: drop cached wiki-link titles for the deleted thought so any
       // visible ID-based link switches to the «deleted» muted style.
       invalidateWikiLinkCacheById(evt.data.id);
@@ -140,11 +133,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'thought.created':
       // Новая мысль может войти в отбор — состав не трогаем, помечаем пересборку.
       applyPublicationCompositionRealtime();
-      // Слой данных (G2): окрестность фокуса перечитывается по инвалидации
-      // роутера (`focusAll`), нижняя зона — подписчиком холста на инвалидации
-      // (`onQueryInvalidated`), «Структуры» — подпиской на `structures-page`.
-      // Ручных вызовов пересчёта здесь больше нет — всё решает слой.
-      scheduleChronicleRefresh();
+      // Слой данных (G2/G3): окрестность фокуса и «Структуры»/«Дневник»
+      // перечитываются по инвалидации роутера (`focus` / `structures-page` /
+      // `chronicle-feed`), нижняя зона — подписчиком холста на инвалидации
+      // (`onQueryInvalidated`). Ручных вызовов пересчёта здесь больше нет.
       break;
 
     case 'thought.updated':
@@ -162,13 +154,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // existing ID-based links in view-mode re-render with the new title.
       invalidateWikiLinkCacheById(evt.data.id);
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
-      // «Структуры» обновляют снимок полным перезапросом по инвалидации
-      // роутера (G2), «Дневник» перезапрашивает ленту — чипсы показывают
-      // заголовки мыслей.
-      scheduleChronicleRefresh();
-      // Правка мысли, видимой только строкой отбора (заголовок/тип/актуальность)
-      // — нижнюю зону перерисовывает подписчик холста на инвалидациях слоя
-      // (ошибка 4fca95c9, G2).
+      // «Структуры» и «Дневник» обновляют снимки по инвалидации роутера
+      // (G2/G3); правка мысли, видимой только строкой отбора — нижнюю зону
+      // перерисовывает подписчик холста на инвалидациях слоя (ошибка 4fca95c9).
       break;
 
     // Свойство-СВЯЗЬ меняет рёбра на сервере (структурные «Родители»/
@@ -181,10 +169,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'property-value.deleted':
       // Состав публикации: пометка пересборки (замечание А2 приёмки b02ef1cf).
       applyPublicationCompositionRealtime();
-      // Слой данных (G2): окрестность фокуса гасит роутер (`focusAll`), нижняя
-      // зона — подписчик холста на инвалидации, «Структуры» — подписка на
-      // `structures-page`. Здесь остаётся обновление «Хроники».
-      scheduleChronicleRefresh();
+      // Слой данных (G2/G3): окрестность фокуса гасит роутер (`focus`),
+      // нижняя зона — подписчик холста, «Структуры»/«Дневник» — свои ключи.
       break;
 
     // Ребро уже нарисовано на «Структурах» — правка оформления применяется
@@ -195,10 +181,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'link.deleted':
       // Ребро может быть строкообразующим для состава публикации — пометка.
       applyPublicationCompositionRealtime();
-      // Слой данных (G2): окрестность фокуса перечитывает роутер (`focusAll`),
-      // «Структуры» — подписка на `structures-page`; «Дневник» перезапрашивает
-      // ленту.
-      scheduleChronicleRefresh();
+      // Слой данных (G2/G3): окрестность фокуса перечитывает роутер (`focus`),
+      // «Структуры»/«Дневник» — свои ключи слоя.
       break;
 
     case 'comment.created':
@@ -213,7 +197,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // comment view in place; the canvas indicator below the cloud was
       // already invalidated by `invalidateIndicators`.
       invalidateIndicators(evt.data.comment.owner_id);
-      applyChronicleRealtime(evt);
+      // «Дневник» гасит `chronicle-feed` роутером (G3) — ручного вызова нет.
       // Блок документа публикации образует ТОЛЬКО постоянный комментарий мысли;
       // хроно-записи документ не меняют — игнорируем их (блокер приёмки
       // b02ef1cf: правка хроно-комментария подменяла текст блока).
@@ -227,7 +211,6 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // comment events. The canvas indicator cache is invalidated above; the
       // editor's comment view is patched by its own listener.
       invalidateIndicators(evt.data.owner_id);
-      applyChronicleRealtime(evt);
       applyPublicationDocumentRealtime(evt.data.owner_id);
       break;
 
@@ -237,7 +220,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // neighbourhood. The editor owns the comment view for its open entity
       // and updates it in place via its own `onRealtimeEvent` hook.
       invalidateIndicators(null);
-      applyChronicleRealtime(evt);
+      // «Дневник» гасит `chronicle-feed` роутером (G3).
       // Только постоянный комментарий образует блок документа; `kind` пришёл в
       // payload (блокер приёмки b02ef1cf) — правку хроно-записи игнорируем,
       // чтобы не подменить текст блока.
@@ -332,11 +315,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // Another client changed the type catalogues (L21): reload both lists
       // and repaint everything that renders type styles/names. Типы и
       // определения свойств входят в условия отбора — та же пометка пересборки.
-      // Слой данных (G2): окрестность фокуса и «Структуры» гасит роутер
-      // (`focusAll` / `structures-page`), «Хроника» — рядом.
+      // Слой данных (G2/G3): окрестность фокуса, «Структуры» и «Дневник»
+      // гасит роутер (`focus` / `structures-page` / `chronicle-feed`).
       applyPublicationCompositionRealtime();
       void reloadTypeCatalogues();
-      scheduleChronicleRefresh();
       break;
 
     case 'thought-type-view.created':
@@ -374,7 +356,6 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       if (networkId !== null) {
         void syncLayersForTab(networkId, store.state.currentLayer?.id ?? null).then(() => {
           void resyncAfterLayerSwitch();
-          scheduleChronicleRefresh();
         });
       }
       break;

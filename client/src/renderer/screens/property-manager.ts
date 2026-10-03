@@ -110,7 +110,6 @@ import { onRealtimeEvent } from '../realtime.js';
 import { reloadTypeCatalogues } from '../realtime-ui.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { invalidateAfterMutation } from '../lib/live/mutator.js';
-import { scheduleChronicleRefresh } from './chronicle/chronicle.js';
 // Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
 // доходит, G8 applier): изменение набора свойств типа (ошибка 74b94c26),
 // правка/удаление самого реестрового свойства (98aa0889) и правка/удаление
@@ -343,11 +342,13 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
         notifyTypeChanged(typeDeletedFacts({ ownerType: 'link_type', ownerId: linkTypeId }));
         // Исчезнувший тип связи: отвязанные рёбра на холсте перерисовываются
         // только по свежему фокусу (сервер обнулил их `type_id`, отдельного
-        // события о связи не шлёт), а «Структуры» держат собственный снимок.
-        // Слой данных (G2): гасим focus- и structures-ключи — холст и
-        // «Структуры» перечитаются слоем (роутер/инвалидация); «Хроника» — рядом.
-        invalidateAfterMutation([queryKeys.focusAll(), queryKeys.structuresPageAll()]);
-        scheduleChronicleRefresh();
+        // события о связи не шлёт), а «Структуры» и «Дневник» держат снимки.
+        // Слой данных (G2/G3): гасим focus-, structures- и chronicle-ключи.
+        invalidateAfterMutation([
+          queryKeys.focusAll(),
+          queryKeys.structuresPageAll(),
+          queryKeys.chronicleFeedAll(),
+        ]);
       }
       cachedRows = null;
       // Сервер возвращает точный счётчик ставших структурными рёбер (или null
@@ -1760,12 +1761,15 @@ export function openPropertyManagerEditor(
           notifyTypeChanged(
             typeUpdateFacts({ ownerType: 'link_type', ownerId: linkTypeId }, linkTypeFields),
           );
-          // Холст и панели («Структуры», «Хроника») рисуют подпись и вид линии
+          // Холст и панели («Структуры», «Дневник») рисуют подпись и вид линии
           // ребра из каталога типов, а свои страницы держат в собственных
           // снимках — локальная правка типа связи доводится до них. Слой данных
-          // (G2): гасим focus- и structures-ключи; «Хроника» (G3) — рядом.
-          invalidateAfterMutation([queryKeys.focusAll(), queryKeys.structuresPageAll()]);
-          scheduleChronicleRefresh();
+          // (G2/G3): гасим focus-, structures- и chronicle-ключи.
+          invalidateAfterMutation([
+            queryKeys.focusAll(),
+            queryKeys.structuresPageAll(),
+            queryKeys.chronicleFeedAll(),
+          ]);
         }
         // Применим привязки к типам мыслей.
         await applyTypeRows(current.id);

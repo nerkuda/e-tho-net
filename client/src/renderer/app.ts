@@ -52,7 +52,6 @@ import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache } from './lib/lock-cache.js';
-import { scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
 import { invalidateAllRefs, invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
@@ -446,7 +445,8 @@ export async function resyncAfterLayerSwitch(): Promise<void> {
     structuresActiveThought: null,
   });
   scheduleStructuresRefresh();
-  scheduleChronicleRefresh();
+  // «Дневник» (G3) — тем же слоем: гасим ключ ленты, экран перечитает её сам.
+  invalidateQueries(queryKeys.chronicleFeedAll());
 }
 
 /** Returns to the network list (e.g. after `network-lost`). */

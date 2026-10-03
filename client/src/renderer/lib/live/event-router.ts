@@ -146,7 +146,10 @@ export const realtimeRoutes: RouteTable = {
       invalidate: (evt) => [
         queryKeys.focus(evt.data.id),
         queryKeys.structuresPageAll(),
-        queryKeys.chronicleFeedAll(),
+        // Лента «Дневника» зависит от правки мысли ТОЛЬКО если мысль видна её
+        // чипсом — гасим адресный ключ мысли (замечание G3): невидимая правка
+        // ленте не адресуется (экран сверяет id со своими чипсами).
+        queryKeys.chronicleThought(evt.data.id),
         queryKeys.pins(),
         queryKeys.publicationAssemblyAll(),
       ],
@@ -158,7 +161,7 @@ export const realtimeRoutes: RouteTable = {
       invalidate: (evt) => [
         queryKeys.focus(evt.data.id),
         queryKeys.structuresPageAll(),
-        queryKeys.chronicleFeedAll(),
+        queryKeys.chronicleThought(evt.data.id),
         queryKeys.history(),
         queryKeys.pins(),
         queryKeys.indicators(evt.data.id),
