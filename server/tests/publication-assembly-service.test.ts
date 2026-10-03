@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import DatabaseConstructor from 'better-sqlite3';
 
 import { publicationAnchor } from '@etn/markdown';
+import { EtnError } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
@@ -20,6 +21,7 @@ import { createTypeProperty, setPropertyValue } from '../src/domain/property-ser
 import {
   addPublicationExclusion,
   createPublication,
+  getPublicationAcceptedIds,
   listPublicationOrder,
   removePublicationExclusion,
   setPublicationOrder,

@@ -1204,6 +1204,10 @@ export function listPublicationCandidates(
  * текущим отбором, чтобы «расставить» не превращал остальные узлы в кандидатов.
  * Операция идемпотентна: повторный вызов для уже расставленного узла позицию не
  * двигает (`appendPublicationOrderItem` — no-op, если ключ есть в порядке).
+ *
+ * Не-кандидат (мысль, не входящая в текущий отбор, либо исключённая) отвергается
+ * `VALIDATION_ERROR` (`code: not_a_candidate`) без изменения среза и порядка
+ * (ошибка 2d33ef90).
  */
 export function acceptPublicationCandidate(
   ndb: NetworkDb,
@@ -1222,17 +1226,40 @@ export function acceptPublicationCandidate(
     }
 
     const current = getPublicationAcceptedIds(ndb, publicationId);
+    const nodeKey = untypedParents(ndb, thoughtId)[0]?.edgeId ?? thoughtId;
+
+    // Идемпотентность (спека f9a20c3f): повторный accept уже принятой мысли —
+    // no-op, позиция в локальном порядке не дрейфует.
+    if (current !== null && current.includes(thoughtId)) {
+      return appendPublicationOrderItem(ndb, publicationId, nodeKey, actorUserId);
+    }
+
+    // Кандидат — мысль текущего отбора заголовков, не исключённая. Отвергаем
+    // всё остальное ДО любой записи: `accepted_ids` и порядок не меняются
+    // (ошибка 2d33ef90). Ветка инициализации среза (`accepted_ids === null`)
+    // легитимна: срез инициализируется текущим отбором, а принимаемая мысль
+    // обязана быть его частью — кандидаты считаются до сравнения.
+    const warnings: string[] = [];
+    const selectedIds =
+      pub.title_recipe === null ? [] : selectRecipeIds(ndb, actorUserId, pub.title_recipe, warnings);
+    const excluded = new Set(
+      listPublicationExclusions(ndb, publicationId).map((e) => e.thought_id),
+    );
+    if (!selectedIds.includes(thoughtId) || excluded.has(thoughtId)) {
+      throw new EtnError('VALIDATION_ERROR', `Мысль ${thoughtId} не является кандидатом публикации.`, {
+        entity: 'thought',
+        id: thoughtId,
+        code: 'not_a_candidate',
+      });
+    }
+
     const accepted = new Set<string>(current ?? []);
-    if (current === null && pub.title_recipe !== null) {
-      const warnings: string[] = [];
-      for (const id of selectRecipeIds(ndb, actorUserId, pub.title_recipe, warnings)) {
-        accepted.add(id);
-      }
+    if (current === null) {
+      for (const id of selectedIds) accepted.add(id);
     }
     accepted.add(thoughtId);
     setPublicationAcceptedIds(ndb, publicationId, [...accepted]);
 
-    const nodeKey = untypedParents(ndb, thoughtId)[0]?.edgeId ?? thoughtId;
     return appendPublicationOrderItem(ndb, publicationId, nodeKey, actorUserId);
   });
 }
