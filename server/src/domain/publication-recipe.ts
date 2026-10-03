@@ -49,6 +49,47 @@ function asSortOrder(value: unknown): SortOrder | null {
   return value === 'asc' || value === 'desc' ? value : null;
 }
 
+/** Непустая строка (после `trim`). */
+function nonEmptyString(value: unknown): boolean {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/** Непустой массив. */
+function nonEmptyArray(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+/**
+ * «Пустой рецепт» — ни одного условия отбора (задача 7cfaba7c, п.2). Перечислены
+ * все поля {@link StructureFilter}, сужающие набор мыслей; `sort`/`order` и
+ * `keyword_scope` — модификаторы, а `show_inactive` — переключатель показа, не
+ * условие. Такой рецепт больше НЕ исполняется с `emptyFilterMode: 'all'`
+ * (раньше он отдавал всю сеть) — сборка пустая с предупреждением.
+ */
+export function isStructureFilterEmpty(filter: StructureFilter): boolean {
+  const authorPresent = (value: string | string[] | undefined): boolean =>
+    nonEmptyString(value) || nonEmptyArray(value);
+  return (
+    !nonEmptyString(filter.keywords) &&
+    !nonEmptyArray(filter.parent_ids) &&
+    !nonEmptyArray(filter.type_ids) &&
+    !nonEmptyArray(filter.link_type_ids) &&
+    !nonEmptyArray(filter.properties) &&
+    filter.has_properties === undefined &&
+    filter.has_comment === undefined &&
+    filter.has_attachments === undefined &&
+    filter.has_chronology === undefined &&
+    filter.active === undefined &&
+    filter.trashed !== true &&
+    !authorPresent(filter.created_by) &&
+    !authorPresent(filter.updated_by) &&
+    !nonEmptyString(filter.created_after) &&
+    !nonEmptyString(filter.created_before) &&
+    !nonEmptyString(filter.updated_after) &&
+    !nonEmptyString(filter.updated_before)
+  );
+}
+
 /**
  * Исполнить рецепт заголовков существующим движком выборки и вернуть id всех
  * совпавших мыслей в детерминированном порядке. Пагинация — keyset-курсором
@@ -73,6 +114,14 @@ export function selectRecipeIds(
   }
   const sort = asStructureSort(raw['sort']) ?? 'alpha';
   const order = asSortOrder(raw['order']) ?? 'asc';
+
+  // Пустой рецепт (ни одного условия) → пустая сборка, а не вся сеть: иначе
+  // публикация без настроенного отбора выводила бы содержимое всей мыслесети
+  // (задача 7cfaba7c, п.2, решение пользователя 2026-10-03).
+  if (isStructureFilterEmpty(filter)) {
+    warnings.push('отбор заголовков не задан');
+    return [];
+  }
 
   const ids: string[] = [];
   let cursor: string | undefined;

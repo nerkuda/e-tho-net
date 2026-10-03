@@ -678,6 +678,83 @@ describe('publication-assembly-service: кандидаты (временная �
       ndb.close();
     }
   });
+
+  it('accept отвергает не-кандидата, не меняя срез и порядок (ошибка 2d33ef90)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const docType = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const otherType = createThoughtType(ndb, { name: 'Other' }, USER);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(docType.id) },
+        USER,
+      );
+      const candidate = seedThought(ndb, 'X', docType.id);
+      const outsider = seedThought(ndb, 'O', otherType.id);
+
+      const acceptedBefore = getPublicationAcceptedIds(ndb, pub.id);
+      const orderBefore = listPublicationOrder(ndb, pub.id);
+
+      assert.throws(
+        () => acceptPublicationCandidate(ndb, pub.id, outsider, USER),
+        (e) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+      // Срез и порядок не изменились.
+      assert.deepEqual(getPublicationAcceptedIds(ndb, pub.id), acceptedBefore);
+      assert.deepEqual(listPublicationOrder(ndb, pub.id), orderBefore);
+
+      // Кандидат принимается, идемпотентный повтор — успех.
+      acceptPublicationCandidate(ndb, pub.id, candidate, USER);
+      assert.deepEqual(listPublicationOrder(ndb, pub.id).map((i) => i.node_key), [candidate]);
+      acceptPublicationCandidate(ndb, pub.id, candidate, USER);
+      assert.deepEqual(listPublicationOrder(ndb, pub.id).map((i) => i.node_key), [candidate]);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('accept отвергает исключённую мысль (она не кандидат)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      const x = seedThought(ndb, 'X', type.id);
+      addPublicationExclusion(ndb, pub.id, x, USER);
+      assert.throws(
+        () => acceptPublicationCandidate(ndb, pub.id, x, USER),
+        (e) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+      assert.deepEqual(listPublicationOrder(ndb, pub.id), []);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('пустой рецепт даёт пустую сборку и предупреждение (задача 7cfaba7c)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      seedThought(ndb, 'A', type.id);
+      seedThought(ndb, 'B', type.id);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: { sort: 'alpha', order: 'asc' } },
+        USER,
+      );
+      // Никакие мысли не «приняты»: отбор пуст.
+      assert.deepEqual(getPublicationAcceptedIds(ndb, pub.id), []);
+      const doc = assemblePublication(ndb, pub.id, USER);
+      assert.equal(doc.sections.length, 0);
+      assert.equal(doc.publication.new_candidates, 0);
+      assert.ok(
+        doc.warnings.some((w) => w.includes('отбор заголовков не задан')),
+        `warnings: ${JSON.stringify(doc.warnings)}`,
+      );
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
+    } finally {
+      ndb.close();
+    }
+  });
 });
 
 describe('publication-assembly-service: использование мысли', { skip }, () => {
