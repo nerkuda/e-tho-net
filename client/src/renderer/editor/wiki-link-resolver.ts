@@ -404,26 +404,6 @@ export async function resolveWikiLinksInDom(root: HTMLElement, networkId: string
   paintPubSpans(root, networkId);
 }
 
-/**
- * Легаси-фасад G6 (`realtime-ui.ts`): заголовки — производные нормализованного
- * кэша слоя (роутер патчит `entity:@thought:@id`), отдельного кэша нет. Снимаем
- * только отрицательный ответ, чтобы создать/пересоздать цель перерезолвилась.
- */
-export function invalidateWikiLinkCache(thoughtId: string): void {
-  missingIds.delete(thoughtId);
-}
-
-/**
- * Легаси-фасад G6 (`realtime-ui.ts`): метаданные ведёт слой — прямой заголовок
- * из realtime-события больше не пишем. Оставлено для совместимости сигнатуры.
- */
-export function refreshWikiLinkCache(thoughtId: string, title: string, active: boolean): void {
-  void thoughtId;
-  void title;
-  void active;
-  /* данные слоя актуальны */
-}
-
 // ---------------------------------------------------------------------------
 // Legacy name-target lookup (shared by navigation and hover preview)
 // ---------------------------------------------------------------------------

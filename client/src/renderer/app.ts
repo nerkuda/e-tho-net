@@ -46,8 +46,8 @@ import {
 } from './lib/pure.js';
 import { initListClamps } from './editor/list-heights.js';
 import { noteThoughtRemoved, noteThoughtWillOpen } from './history.js';
-import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
-import { applyRealtimeToUi } from './realtime-ui.js';
+import { initRealtime, setRealtimeEffects } from './realtime.js';
+import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
 import { initLayerTheme } from './lib/layer-colors.js';
@@ -628,8 +628,11 @@ export async function boot(): Promise<void> {
         resyncAfterLayerSwitch(),
       );
     },
+    // G6: единственная точка производных эффектов события (store-срезы,
+    // бесхитростные кэши UI, каталоги типов). Прежний мост `onRealtimeEvent`
+    // снесён вместе со старым switch — прямых подписок на шину нет.
+    onEventApplied: (evt) => applyDerivedRealtime(evt),
   });
-  onRealtimeEvent(applyRealtimeToUi);
 
   const profiles = await etn.server.listProfiles();
   const active = profiles.find((p) => p.isActive);

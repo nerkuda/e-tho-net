@@ -80,7 +80,6 @@ import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-
 import { store } from '../state.js';
 import {
   getQueryState,
-  invalidateQueries,
   subscribeQuery,
 } from '../lib/live/index.js';
 import {
@@ -577,16 +576,6 @@ export function getZoneEntries(dir: ZoneDir): ZoneEntry[] {
  */
 export function setAddDialogOpener(opener: ((ctx: AddDialogContext) => void) | null): void {
   addDialogOpener = opener;
-}
-
-/**
- * Инвалидирует счётчики-индикаторы сущности: сброс ключа слоя `indicators:@id`
- * (`null` — все), перезапрос идёт активным подписчикам. Оставлено как фасад
- * легаси-пути G6 (`realtime-ui.ts`); мигрированные производители гасят ключ
- * напрямую (`invalidateQueries(queryKeys.indicators(...))`).
- */
-export function invalidateIndicators(id: string | null): void {
-  invalidateQueries(id === null ? queryKeys.indicatorsAll() : queryKeys.indicators(id));
 }
 
 // ---------------------------------------------------------------------------

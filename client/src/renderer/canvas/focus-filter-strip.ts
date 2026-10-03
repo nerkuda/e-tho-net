@@ -37,6 +37,7 @@ import { isFilterSort, isSortOrder, sortValueLabel } from '../lib/filter-builder
 import { svgIcon } from '../lib/icons.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
+import { onQueryInvalidated } from '../lib/live/index.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 
@@ -1095,6 +1096,13 @@ async function refreshStripFromRealtime(
     notifyModeChange();
   }
 }
+
+// Слой (G6): `thought-type-view.*` роутер гасит ключ `views:@<typeId>` — полоса
+// перестраивается из подписки на инвалидацию, без прямого realtime-хука.
+onQueryInvalidated((prefix) => {
+  if (!prefix.startsWith('views:@')) return;
+  onThoughtTypeViewRealtime({ thought_type_id: prefix.slice('views:@'.length) });
+});
 
 /** Re-renders the strip when the focused thought changes. The canvas
  *  invokes this after a focus switch so the strip resets to the new

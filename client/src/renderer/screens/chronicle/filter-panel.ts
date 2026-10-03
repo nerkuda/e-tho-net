@@ -70,6 +70,7 @@ import {
   type SavedFilterEntry,
   type SavedFilterStore,
 } from '../../lib/saved-filter-bar.js';
+import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
 import { store } from '../../state.js';
 import {
   SEARCH_DEBOUNCE_MS,
@@ -515,10 +516,23 @@ export function mountChronicleFilterPanel(
   panel = div('chron-filter');
   host.append(panel);
   renderPanel();
+  wireSavedFiltersToLayer();
   void reloadSavedFilters();
   // Реестр свойств нужен условиям целей — рисуем панель ещё раз, когда он есть.
   void loadPropertyDefs().then(() => renderPanel());
   return panel;
+}
+
+/** Слой (G6): `saved-filter.*` роутер гасит ключ `saved-filters` — панель
+ *  перечитывает список сохранённых отборов сама, без прямого realtime-хука. */
+let savedFiltersWired = false;
+function wireSavedFiltersToLayer(): void {
+  if (savedFiltersWired) return;
+  savedFiltersWired = true;
+  onQueryInvalidated((prefix) => {
+    if (!matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) return;
+    void reloadSavedFilters();
+  });
 }
 
 /** Перерисовывает панель из текущего состояния (общий каркас). */

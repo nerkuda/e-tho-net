@@ -28,7 +28,7 @@ import type {
   ThoughtRef,
 } from '@etn/shared';
 
-import { inFocusNeighbourhood } from '../realtime-ui.js';
+import { inFocusNeighbourhood } from '../lib/focus-neighbourhood.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { invalidateAfterMutation } from '../lib/live/mutator.js';
 import {
@@ -117,13 +117,18 @@ function repaintAfterLinkValueWrite(ownerType: 'thought' | 'link', ownerId: stri
 }
 
 /**
- * Сигнал «состав публикации мог измениться» для владельца значения. У
- * владельца-МЫСЛИ передаём её id — рабочая область не зажжёт stale, если мысли
- * нет в сборке (ужесточение G4, задача 8a039ea3). У владельца-СВЯЗИ концы
- * (мысли) неизвестны — консервативный stale без списка.
+ * Сигнал «состав публикации мог измениться» для владельца значения.
+ *
+ * Значение свойства — критерий рецепта (`extra_properties`): его запись может
+ * ВВЕСТИ мысль в сборку, которой там ещё нет. Поэтому кроме id владельца
+ * передаём признак `mayChangeComposition` (передача G5→G6, симметрично «входу»
+ * в отбор G3): рабочая область зажигает stale безусловно. У владельца-СВЯЗИ
+ * концы (мысли) неизвестны — консервативный stale без списка.
  */
 function signalCompositionForOwner(ownerType: 'thought' | 'link', ownerId: string): void {
-  signalPublicationCompositionChanged(ownerType === 'thought' ? [ownerId] : undefined);
+  signalPublicationCompositionChanged(ownerType === 'thought' ? [ownerId] : undefined, {
+    mayChangeComposition: true,
+  });
 }
 
 /**

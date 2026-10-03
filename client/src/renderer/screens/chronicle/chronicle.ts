@@ -868,8 +868,18 @@ function scheduleChronicleFeedRefresh(): void {
   }, CHRONICLE_REFRESH_WINDOW_MS);
 }
 
-/** Перезапрос ленты до глубины + синхронизация календаря и счётчиков. */
+/**
+ * Перезапрос ленты до глубины + синхронизация календаря и счётчиков.
+ *
+ * Снимает отложенный перезапрос окна дебаунса: локальная мутация, которой
+ * нужен свежий DOM сразу (например, прокрутка к перемещённой записи), зовёт
+ * этот путь напрямую — второй сетевой заход не планируется.
+ */
 async function refreshFeedAndCalendar(): Promise<void> {
+  if (feedRefreshTimer !== null) {
+    window.clearTimeout(feedRefreshTimer);
+    feedRefreshTimer = null;
+  }
   await reloadKeepingDepth();
   syncCalendar();
   void refreshCalendarCounts();
@@ -1492,9 +1502,10 @@ async function removeRecord(id: string): Promise<void> {
   try {
     const fresh = await etn.comments.get(networkId, id);
     await etn.comments.remove(networkId, id, fresh.version);
-    // Удаление записи — refresh текущего вида: дозагруженные «+50» не теряем,
-    // прокрутка не прыгает в начало (тот же класс, что f5809943).
-    await reloadKeepingDepth();
+    // Локальная мутация — тем же путём, что чужая: гасим ключ слоя, лента
+    // перечитается отложенно до уже загруженной глубины (дозагруженные «+50»
+    // не теряем, прокрутка не прыгает — f5809943).
+    invalidateQueries(queryKeys.chronicleFeedAll());
   } catch (err) {
     notice(t('diary.deleteFailed', [errText(err)]), 'error');
   }
@@ -1521,7 +1532,8 @@ async function copyRecord(id: string): Promise<void> {
       valid_to: to,
       use_time: false,
     });
-    await reload();
+    // Локальная мутация — через слой: гасим ключ ленты (единственный путь, G3).
+    invalidateQueries(queryKeys.chronicleFeedAll());
   } catch (err) {
     notice(t('diary.copyFailed', [errText(err)]), 'error');
   }
@@ -1636,8 +1648,10 @@ async function detachChip(rowId: string, target: ChronicleTarget): Promise<void>
     const ownerId = target.kind === 'thought' ? target.thought.id : target.link.id;
     await etn.comments.removeTarget(networkId, rowId, ownerType, ownerId, fresh.version);
     // Снятие последнего чипса оставляет запись (сервер сам возвращает её в HOME
-    // и поднимает в верхний блок) — лента перезагружается целиком.
-    await reload();
+    // и поднимает в верхний блок) — гасим ключ ленты и дожидаемся свежего DOM
+    // тем же путём, что отложенный перезапрос (сняв его таймер).
+    invalidateQueries(queryKeys.chronicleFeedAll());
+    await refreshFeedAndCalendar();
     // Перемещение записи в другой блок меняет состав верхней части ленты:
     // keyed-сверка держит позицию прокрутки, поэтому перемещённая запись может
     // остаться вне вида. Показываем ленту с начала (ошибка 368747a6).
@@ -1678,7 +1692,11 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
       attached++;
     }
     if (attached === 0) notice(t('diary.alreadyAttached'), 'info');
-    await reload();
+    // Локальная мутация — через слой: гасим ключ ленты и ДОЖИДАЕМСЯ свежего DOM
+    // (снятый отложенный перезапрос — `refreshFeedAndCalendar`), иначе прокрутка
+    // к перемещённой записи смотрела бы на старую ленту.
+    invalidateQueries(queryKeys.chronicleFeedAll());
+    await refreshFeedAndCalendar();
     // Перемещённая вниз запись должна быть видна: прокручиваем к её карточке, а
     // если день записи ниже загруженной страницы — показываем ленту с начала
     // (ошибка 810520c5, симметрично 368747a6).
@@ -1876,8 +1894,11 @@ function cancelSlot(): void {
       if (slot === state) {
         slot = null;
         slotFocusInside = false;
+        // Слот — локальная псевдо-запись: убираем её из DOM сразу, затем гасим
+        // ключ ленты (единственный путь обновления, G3).
+        renderFeed();
       }
-      await reload();
+      invalidateQueries(queryKeys.chronicleFeedAll());
     } catch (err) {
       notice(t('diary.deleteFailed', [errText(err)]), 'error');
     } finally {

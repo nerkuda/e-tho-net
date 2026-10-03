@@ -103,13 +103,23 @@ export function invalidateAfterMutation(
  * должна помечать документ устаревшим. Без списка (владелец-связь или
  * неизвестный случай) поведение прежнее — консервативный stale.
  */
-export function signalPublicationCompositionChanged(thoughtIds?: readonly string[]): void {
+export function signalPublicationCompositionChanged(
+  thoughtIds?: readonly string[],
+  opts: { mayChangeComposition?: boolean } = {},
+): void {
   invalidateQueries(queryKeys.publicationAssemblyAll(), {
     local: 'publication-composition',
-    data:
-      thoughtIds === undefined || thoughtIds.length === 0
+    data: {
+      ...(thoughtIds === undefined || thoughtIds.length === 0
         ? {}
-        : { thought_ids: [...thoughtIds] },
+        : { thought_ids: [...thoughtIds] }),
+      // Признак «правка может изменить состав отбора публикации, даже если
+      // изменённой сущности в текущей сборке НЕТ» (передача G5→G6, симметрично
+      // «входу» в отбор G3). Нужен для свойств-критериев рецепта: значение
+      // свойства может ВВЕСТИ мысль в сборку, поэтому проверка «есть ли мысль в
+      // сборке» недостаточна и stale зажигается безусловно.
+      ...(opts.mayChangeComposition === true ? { may_change_composition: true } : {}),
+    },
   } satisfies LocalMutationSignal);
 }
 

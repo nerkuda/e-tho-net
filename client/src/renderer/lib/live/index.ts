@@ -87,6 +87,7 @@ export {
 
 export {
   IGNORED_REALTIME_EVENT_TYPES,
+  onRoutedRealtimeEvent,
   realtimeRoutes,
   resetEventRouter,
   routeRealtimeEvent,

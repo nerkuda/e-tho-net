@@ -33,7 +33,7 @@ import type {
 
 import { etn } from './etn.js';
 import { requireNetworkId } from '../app.js';
-import { onRealtimeEvent } from '../realtime.js';
+import { onRoutedRealtimeEvent } from './live/index.js';
 import { store } from '../state.js';
 import { resolve as resolveCachedUserName } from './users.js';
 
@@ -242,7 +242,10 @@ export function initLockCache(): void {
   listeners.add(syncToStore);
   syncToStore();
 
-  onRealtimeEvent((evt) => {
+  // Слой (G6): мягкие захваты `edit.*` намеренно игнорируются таблицей
+  // запросов (эфемерные, без ключа) и приходят через `onRoutedRealtimeEvent`.
+  onRoutedRealtimeEvent((evt) => {
+    if (evt.network_id !== store.state.networkId) return;
     if (evt.type === 'edit.acquired') handleAcquired(evt.data);
     else if (evt.type === 'edit.released') handleReleased(evt.data);
     else if (evt.type === 'edit.cleared') handleCleared(evt.data);

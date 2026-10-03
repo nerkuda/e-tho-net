@@ -585,6 +585,34 @@ const IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set(IGNORED_REALTIME_EVENT_
 // Маршрутизация
 // ---------------------------------------------------------------------------
 
+/**
+ * Слушатели просмотренных событий слоя (G6 техпроекта 269016e2).
+ *
+ * Единственный санкционированный канал для потребителей, которым нужен
+ * ПОБОЧНЫЙ эффект события, не выражаемый ключом запроса: переопределения
+ * объектов текущим слоем (`screens/layers.ts`) и эфемерный кэш мягких
+ * захватов `edit.*` (`lib/lock-cache.ts`). Живут ЗА роутером: прямые подписки
+ * `onRealtimeEvent` экранам запрещены сторожем (`guard-reactive-layer.test.ts`).
+ *
+ * Уведомляются только принятые события: прошедшие дедуп по seq либо намеренно
+ * игнорируемые таблицей (`IGNORED_REALTIME_EVENT_TYPES`); чужие сети и
+ * опоздавшие — нет.
+ */
+const routedListeners = new Set<(evt: AnyRealtimeEvent) => void>();
+
+/** Подписаться на просмотренные роутером события; возвращает отписку. */
+export function onRoutedRealtimeEvent(listener: (evt: AnyRealtimeEvent) => void): () => void {
+  routedListeners.add(listener);
+  return () => {
+    routedListeners.delete(listener);
+  };
+}
+
+/** Оповестить слушателей о принятом событии. */
+function notifyRouted(evt: AnyRealtimeEvent): void {
+  for (const listener of [...routedListeners]) listener(evt);
+}
+
 /** Последний обработанный seq по сети (дедуп опоздавших событий). */
 const lastSeqByNetwork = new Map<string, number>();
 
@@ -604,12 +632,11 @@ export function routeRealtimeEvent(evt: AnyRealtimeEvent, ctx: RouteContext = {}
   }
   const rules = realtimeRoutes[evt.type];
   if (rules === undefined) {
-    return {
-      routed: false,
-      reason: IGNORED_EVENT_TYPES.has(evt.type) ? 'ignored' : 'unknown',
-      invalidated: [],
-      patched: [],
-    };
+    const reason = IGNORED_EVENT_TYPES.has(evt.type) ? 'ignored' : 'unknown';
+    // Намеренно игнорируемые типы (например, `edit.*` замков) всё равно
+    // доходят до слушателей слоя: у них есть побочные эффекты без ключей.
+    if (reason === 'ignored') notifyRouted(evt);
+    return { routed: false, reason, invalidated: [], patched: [] };
   }
   const last = lastSeqByNetwork.get(evt.network_id);
   if (last !== undefined && evt.seq <= last) {
@@ -628,6 +655,7 @@ export function routeRealtimeEvent(evt: AnyRealtimeEvent, ctx: RouteContext = {}
     }
   }
 
+  notifyRouted(evt);
   return {
     routed: true,
     invalidated: [...new Set(invalidated)].sort(),

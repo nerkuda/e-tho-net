@@ -48,7 +48,7 @@ import {
   defaultLayerColors,
   invertThemeColor,
 } from '../lib/layer-colors.js';
-import { onRealtimeEvent } from '../realtime.js';
+import { onRoutedRealtimeEvent } from '../lib/live/index.js';
 import { resyncAfterLayerSwitch } from '../app.js';
 import { store, type Theme } from '../state.js';
 import { upsertTab } from './tabs/tab-state.js';
@@ -283,7 +283,10 @@ export function initLayerOverridesTracking(): void {
   etn.realtime.onSelfMutated((payload) => {
     if (payload.networkId === store.state.networkId) scheduleLayerOverridesRefresh();
   });
-  onRealtimeEvent((evt) => {
+  // Чужие изменения — через СЛОЙ (G6): подписка на события, прошедшие роутер
+  // (`onRoutedRealtimeEvent`), а не на шину напрямую. Побочный эффект
+  // (переопределения объектов текущим слоем) не выражается ключом запроса.
+  onRoutedRealtimeEvent((evt) => {
     if (evt.network_id !== store.state.networkId) return;
     if (OVERRIDE_RELEVANT_EVENTS.has(evt.type)) scheduleLayerOverridesRefresh();
   });

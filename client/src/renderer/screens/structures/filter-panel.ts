@@ -56,6 +56,7 @@ import {
   type SavedFilterStore,
 } from '../../lib/saved-filter-bar.js';
 import type { SuggestSource } from '../../lib/suggest-dropdown.js';
+import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
 import { store } from '../../state.js';
 import { requireNetworkId } from '../../app.js';
 import { checkboxRow } from '../../lib/ui/choice-row.js';
@@ -275,9 +276,16 @@ export function buildTraversalFilter(): LinkTypeFilterInput | undefined {
   return out;
 }
 
-/** Reloads the saved-filter list (called on `saved-filter.*` realtime events). */
-export function invalidateSavedFilters(): void {
-  void savedBar?.reload();
+/** Слой (G6): `saved-filter.*` роутер гасит ключ `saved-filters` — панель
+ *  перечитывает свой список отборов сама, без прямого realtime-хука. */
+let savedFiltersWired = false;
+function wireSavedFiltersToLayer(): void {
+  if (savedFiltersWired) return;
+  savedFiltersWired = true;
+  onQueryInvalidated((prefix) => {
+    if (!matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) return;
+    void savedBar?.reload();
+  });
 }
 
 /** Признаки «Дополнительно» заполнены («Корзина» — независимый флаг, но
@@ -301,6 +309,7 @@ function extrasActive(s: FilterCriteriaState): boolean {
 export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallbacks): void {
   host = panelHost;
   callbacks = cb;
+  wireSavedFiltersToLayer();
   renderPanel();
 
   store.subscribe(() => {

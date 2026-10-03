@@ -105,7 +105,7 @@ import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
-import { reloadTypeCatalogues } from '../realtime-ui.js';
+import { reloadTypeCatalogues } from '../lib/type-catalogues.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { invalidateAfterMutation } from '../lib/live/mutator.js';
 import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
