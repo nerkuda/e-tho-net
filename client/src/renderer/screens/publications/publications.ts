@@ -248,9 +248,17 @@ export function closePublicationWorkspace(): void {
   invalidatePublications();
 }
 
-/** Realtime-событие правки КОНТЕНТА: открытая рабочая область перечитывается. */
+/** Realtime-событие правки КОНТЕНТА мысли в документе (комментарий раздела/текста). */
 export function applyPublicationDocumentRealtime(thoughtId?: string): void {
   if (workspace?.isOpen() === true) workspace.reloadDocument(thoughtId);
+}
+
+/**
+ * Realtime-изменение мысли: в документе — точечное обновление её блока и
+ * пометка устаревания, вне документа — ничего (замечание 2 приёмки b02ef1cf).
+ */
+export function applyPublicationThoughtRealtime(thoughtId: string): void {
+  if (workspace?.isOpen() === true) workspace.applyThoughtRealtime(thoughtId);
 }
 
 /**
@@ -262,6 +270,33 @@ export function applyPublicationDocumentRealtime(thoughtId?: string): void {
 export function applyPublicationCompositionRealtime(): void {
   if (workspace?.isOpen() === true) workspace.markRebuildStale();
 }
+
+/**
+ * Поля `publication.updated`, меняющие СОСТАВ документа (рецепт и его
+ * источники/нумерация). Их внешняя правка НЕ перечитывает сборку — только
+ * помечает текст устаревшим (замечание 1 приёмки b02ef1cf).
+ */
+const PUBLICATION_COMPOSITION_FIELDS: readonly string[] = [
+  'title_recipe',
+  'text_sources',
+  'extra_properties',
+  'numbering_from',
+  'numbering_to',
+];
+
+/**
+ * Поля `publication.updated`, отображаемые в карточке/шапке/титульном блоке и
+ * обновляемые точечно (правка другого клиента, пакет А).
+ */
+const PUBLICATION_CONTENT_FIELDS: readonly string[] = [
+  'title',
+  'subtitle',
+  'summary_md',
+  'authorship',
+  'cover_attachment_id',
+  'cover_url',
+  'active',
+];
 
 /**
  * Локальная правка публикации (замечание А приёмки b02ef1cf): снимок из карточки
@@ -294,17 +329,44 @@ export function invalidatePublications(): void {
 }
 
 /** Realtime-ветка экрана: публикации и полки перечитываются. */
-export function applyPublicationsRealtime(eventType: string): void {
+export function applyPublicationsRealtime(eventType: string, data?: unknown): void {
   if (
     eventType.startsWith('publication.') ||
     eventType === 'shelf.updated' ||
     eventType === 'shelf.deleted'
   ) {
     if (store.state.activeView === 'publications') invalidatePublications();
-    // Открытая рабочая область перечитывает документ (в т.ч. порядок,
-    // исключения, пересборку) — элемент интерфейса 2ebacd12.
-    if (workspace?.isOpen() === true) workspace.reload();
+    if (workspace?.isOpen() !== true) return;
+    // Правка полей публикации другим клиентом (пакет А) и рецепта (замечание 1
+    // приёмки b02ef1cf) маршрутизируется по ПОЛЯМ, а не перечитыванием сборки:
+    // контент — точечно в карточку/шапку/титул, состав — только пометка.
+    if (eventType === 'publication.updated') {
+      const changes = asPublicationChanges(data);
+      if (changes === null) {
+        workspace.reload();
+        return;
+      }
+      if (PUBLICATION_COMPOSITION_FIELDS.some((field) => field in changes)) {
+        workspace.markRebuildStale();
+        return;
+      }
+      if (PUBLICATION_CONTENT_FIELDS.some((field) => field in changes)) {
+        workspace.applyPublicationPatch(changes);
+        return;
+      }
+      return;
+    }
+    // Порядок/исключения/пересборка/корзина — перечитывание (элемент 2ebacd12).
+    workspace.reload();
   }
+}
+
+/** Изменённые поля события `publication.updated` (или `null`, если их нет). */
+function asPublicationChanges(data: unknown): Partial<Publication> | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const changes = (data as { changes?: unknown }).changes;
+  if (typeof changes !== 'object' || changes === null) return null;
+  return changes as Partial<Publication>;
 }
 
 /** Открывает карточку публикации в панели редактора (ADR eb687eea). */

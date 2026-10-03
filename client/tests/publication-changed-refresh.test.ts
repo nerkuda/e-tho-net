@@ -121,9 +121,11 @@ describe('публикация: локальный канал правок (за
     const source = read('screens/publications/workspace.ts');
     assert.ok(source.includes('applyPublication(publication: Publication): void'));
     const apply = functionBody(source, 'function applyPublication(next: Publication): void');
-    assert.ok(apply.includes('renderHeader()'), 'шапка обновляется');
+    assert.ok(apply.includes('renderPublicationChrome()'), 'шапка и титул обновляются');
+    const chrome = functionBody(source, 'function renderPublicationChrome(): void');
+    assert.ok(chrome.includes('renderHeader()'), 'шапка обновляется');
     assert.ok(
-      apply.includes("'.pub-doc-titleblock'") && apply.includes('buildTitleBlock()'),
+      chrome.includes("'.pub-doc-titleblock'") && chrome.includes('buildTitleBlock()'),
       'титульный блок чтения заменяется свежим',
     );
     assert.ok(!apply.includes('reload()'), 'сборка не перечитывается');
@@ -137,15 +139,15 @@ describe('диалог обложки: якоря поведения (замеч
     assert.ok(source.includes('listHost.tabIndex = 0'), 'корень навигации принимает фокус');
     const search = functionBlock(source, 'async function runSearch(');
     assert.ok(search.includes('nav.focusNavigation()'), 'фокус отдаётся списку');
-    assert.ok(search.includes('selectAttachment(first)'), 'первая строка становится текущей');
+    assert.ok(search.includes('selectRow(first)'), 'первая строка становится текущей');
   });
 
   it('dblclick и Ctrl+Enter выбирают и применяют с закрытием', () => {
     assert.ok(
-      /row\.addEventListener\('dblclick',[\s\S]*?applySelection\(closeDialog\)/.test(source),
+      /\.addEventListener\('dblclick',[\s\S]*?applySelection\(closeDialog\)/.test(source),
       'двойной клик по строке применяет выбор',
     );
-    const navInit = functionBlock(source, 'const nav = createListNav<Attachment>(');
+    const navInit = functionBlock(source, 'const nav = createListNav<CoverRow>(');
     assert.ok(navInit.includes('onKey'), 'Ctrl+Enter перехватывается до базовых правил ядра');
     assert.ok(
       /key !== 'Enter' \|\| event\.ctrlKey !== true/.test(navInit) &&

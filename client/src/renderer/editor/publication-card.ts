@@ -1128,6 +1128,47 @@ async function rebuildPublication(): Promise<void> {
 // Диалог выбора обложки
 // ---------------------------------------------------------------------------
 
+/**
+ * Строка списка вложений диалога обложки: один ФИЗИЧЕСКИЙ носитель (файл/URL),
+ * который могут держать несколько строк-владельцев. Схлопывание по носителю —
+ * требование замечания 3 приёмки b02ef1cf: «Общая картинка.png» с тремя
+ * владельцами — ОДНА строка с тремя облачками, а не три одинаковые.
+ */
+interface CoverRow {
+  /** Ключ носителя (kind + путь/url). */
+  key: string;
+  /** Строки-владельцы этого носителя (по одной на владельца). */
+  attachments: Attachment[];
+  title: string;
+}
+
+/** Ключ носителя вложения (схлопывание строк диалога). */
+function coverCarrierKey(a: Attachment): string {
+  return `${a.kind}\u0000${a.file_path ?? a.url ?? a.id}`;
+}
+
+/** Название строки-носителя: заголовок предпочтительной строки или путь. */
+function coverRowTitle(attachments: readonly Attachment[]): string {
+  const first = attachments[0];
+  if (first === undefined) return '';
+  return first.title ?? first.file_path ?? first.url ?? first.id;
+}
+
+/**
+ * Представитель носителя для препросмотра/применения: предпочтительна строка,
+ * уже принадлежащая этой публикации (обложка ставится без копирования), иначе
+ * первая.
+ */
+function coverRepresentative(row: CoverRow, publicationId: string): Attachment | null {
+  return (
+    row.attachments.find(
+      (a) => a.owner_type === 'publication' && a.owner_id === publicationId,
+    ) ??
+    row.attachments[0] ??
+    null
+  );
+}
+
 /** Открывает диалог выбора обложки: вкладки «Вложения» и «URL». */
 async function openCoverDialog(): Promise<void> {
   const rawNetId = store.state.networkId;
@@ -1138,7 +1179,7 @@ async function openCoverDialog(): Promise<void> {
   const pubId: string = publicationId;
 
   let tab: 'attachments' | 'url' = 'attachments';
-  let selected: Attachment | null = null;
+  let selected: CoverRow | null = null;
   let urlValue = '';
   let urlValid: string | null = null;
   let applyButton: HTMLButtonElement | null = null;
@@ -1197,19 +1238,20 @@ async function openCoverDialog(): Promise<void> {
     split.append(listBox, splitter, previewHost);
     box.append(top, split);
 
-    let rows: Attachment[] = [];
+    let rows: CoverRow[] = [];
     const rowEls = new Map<string, HTMLElement>();
+    /** Владельцы носителя, по ключу строки (единый кеш — замечание 3). */
     const usageCache = new Map<string, AttachmentOwnerRef[]>();
     /** Фокус и первая текущая строка отдаются списку один раз — при первом показе. */
     let initialFocusDone = false;
 
-    const nav = createListNav<Attachment>(listHost, {
+    const nav = createListNav<CoverRow>(listHost, {
       entries: () => rows,
-      tokenOf: (a) => a.id,
-      elementOf: (a) => rowEls.get(a.id) ?? null,
-      applyHighlight: (a) => {
-        for (const [id, el] of rowEls) {
-          el.classList.toggle('pub-cover-item-current', a !== null && id === a.id);
+      tokenOf: (row) => row.key,
+      elementOf: (row) => rowEls.get(row.key) ?? null,
+      applyHighlight: (row) => {
+        for (const [key, el] of rowEls) {
+          el.classList.toggle('pub-cover-item-current', row !== null && key === row.key);
         }
       },
       // Единый источник текущего выбора: стрелки/Home/End, клик, dblclick и сброс
@@ -1218,12 +1260,12 @@ async function openCoverDialog(): Promise<void> {
       // Ctrl+Enter/«Применить и закрыть» применяли устаревшую строку (блокер
       // приёмки b02ef1cf). Держим `selected`, препросмотр и доступность кнопки
       // синхронными текущей позиции навигации.
-      onSelectionChange: (a) => {
-        selected = a;
-        renderPreview(a);
+      onSelectionChange: (row) => {
+        selected = row;
+        renderPreview(row);
         refreshApply();
       },
-      onActivate: (a) => selectAttachment(a),
+      onActivate: (row) => selectRow(row),
       // Ctrl+Enter в списке — «выбрать и применить, закрыв диалог» (замечание В
       // приёмки b02ef1cf). Ядро навигации трактует Enter (в т.ч. с Ctrl) как
       // активацию и гасит событие, поэтому перехватываем ДО базовых правил.
@@ -1236,9 +1278,9 @@ async function openCoverDialog(): Promise<void> {
       },
       onClick: (target) => {
         const row = closestRow(target);
-        const id = row?.getAttribute('data-key') ?? '';
-        const found = rows.find((r) => r.id === id);
-        if (found !== undefined) selectAttachment(found);
+        const key = row?.getAttribute('data-key') ?? '';
+        const found = rows.find((r) => r.key === key);
+        if (found !== undefined) selectRow(found);
       },
     });
 
@@ -1269,22 +1311,37 @@ async function openCoverDialog(): Promise<void> {
       }
     }
 
+    /**
+     * Представитель носителя для препросмотра/применения: предпочтительна
+     * строка, уже принадлежащая этой публикации (тогда обложка ставится без
+     * копирования), иначе первая.
+     */
+    function representative(row: CoverRow): Attachment | null {
+      return coverRepresentative(row, pubId);
+    }
+
     /** Заполняет строку облачками владельцев (мысли/публикации/связи). */
-    function fillClouds(clouds: HTMLElement, attachment: Attachment): void {
+    function fillClouds(clouds: HTMLElement, row: CoverRow): void {
       const draw = (): void => {
-        const owners = usageCache.get(attachment.id) ?? [];
+        const owners = usageCache.get(row.key) ?? [];
         while (clouds.firstChild !== null) clouds.removeChild(clouds.firstChild);
-        for (const owner of owners) clouds.append(buildOwnerCloud(owner, attachment));
+        for (const owner of owners) clouds.append(buildOwnerCloud(owner, row));
       };
-      const cached = usageCache.get(attachment.id);
+      const cached = usageCache.get(row.key);
       if (cached !== undefined) {
         void ensureRefs(cached).then(draw);
         return;
       }
+      // Владельцы общие для всего носителя — запрашиваем один раз по представителю.
+      const sample = representative(row);
+      if (sample === null) {
+        draw();
+        return;
+      }
       void etn.attachments
-        .getUsage(netId, attachment.id)
+        .getUsage(netId, sample.id)
         .then(async (usage) => {
-          usageCache.set(attachment.id, usage.owners);
+          usageCache.set(row.key, usage.owners);
           await ensureRefs(usage.owners);
           draw();
         })
@@ -1297,7 +1354,7 @@ async function openCoverDialog(): Promise<void> {
      * со значком связи. У каждого — крестик снятия владельца (замечание Б2
      * приёмки b02ef1cf).
      */
-    function buildOwnerCloud(owner: AttachmentOwnerRef, attachment: Attachment): HTMLElement {
+    function buildOwnerCloud(owner: AttachmentOwnerRef, row: CoverRow): HTMLElement {
       if (owner.owner_type === 'publication') {
         return createPublicationCloud(
           { id: owner.owner_id, title: owner.title ?? owner.owner_id },
@@ -1325,7 +1382,7 @@ async function openCoverDialog(): Promise<void> {
                   m.revealPublicationInLibrary(id),
                 );
               },
-              onRemove: (_id, event) => void removeOwner(attachment, owner, event),
+              onRemove: () => void removeOwner(row, owner),
             },
           },
         );
@@ -1343,27 +1400,28 @@ async function openCoverDialog(): Promise<void> {
       return createThoughtCloud(input, {
         profile: 'chip',
         width: 'container',
-        actions: { onRemove: (_id, event) => void removeOwner(attachment, owner, event) },
+        actions: { onRemove: () => void removeOwner(row, owner) },
       });
     }
 
     /**
-     * Снимает владельца вложения: удаляет ЕГО строку вложения (общий носитель
-     * держат несколько строк-копий). Если владелец последний — сначала общий
-     * диалог подтверждения (замечание Б2 приёмки b02ef1cf).
+     * Снимает владельца носителя: удаляет ЕГО строку вложения (носитель держат
+     * несколько строк-владельцев). Если владелец последний — сначала общий
+     * диалог подтверждения (замечание Б2 приёмки b02ef1cf). Инвалидируется
+     * единый кеш владельцев носителя, поэтому облачка схлопнутых строк
+     * обновляются все разом (замечание 3).
      */
-    async function removeOwner(
-      attachment: Attachment,
-      owner: AttachmentOwnerRef,
-      _event?: MouseEvent,
-    ): Promise<void> {
-      let owners = usageCache.get(attachment.id) ?? [];
+    async function removeOwner(row: CoverRow, owner: AttachmentOwnerRef): Promise<void> {
+      let owners = usageCache.get(row.key) ?? [];
       if (owners.length === 0) {
-        try {
-          owners = (await etn.attachments.getUsage(netId, attachment.id)).owners;
-          usageCache.set(attachment.id, owners);
-        } catch {
-          owners = [];
+        const sample = representative(row);
+        if (sample !== null) {
+          try {
+            owners = (await etn.attachments.getUsage(netId, sample.id)).owners;
+            usageCache.set(row.key, owners);
+          } catch {
+            owners = [];
+          }
         }
       }
       if (owners.length <= 1) {
@@ -1375,49 +1433,48 @@ async function openCoverDialog(): Promise<void> {
         );
         if (!confirmed) return;
       }
+      // Строка-владелец уже есть в сгруппированных данных — берём её id напрямую.
+      const target = row.attachments.find(
+        (a) => a.owner_type === owner.owner_type && a.owner_id === owner.owner_id,
+      );
+      if (target === undefined) return;
       try {
-        const list = await etn.attachments.list(netId, owner.owner_type, owner.owner_id);
-        const carrier = attachment.file_path ?? attachment.url ?? '';
-        const match = list.find(
-          (a) => a.kind === attachment.kind && (a.file_path ?? a.url ?? '') === carrier,
-        );
-        if (match === undefined) return;
-        await etn.attachments.remove(netId, match.id);
+        await etn.attachments.remove(netId, target.id);
       } catch (err) {
         errorDialog(t('publication.cover.removeOwner'), err);
         return;
       }
       notifyPublicationAttachmentsChanged(pubId);
-      usageCache.delete(attachment.id);
+      usageCache.delete(row.key);
       await runSearch();
     }
 
-    /** Строит строку вложения (название + облачки). */
-    function buildRow(a: Attachment): HTMLElement {
+    /** Строит строку носителя (название + облачки владельцев). */
+    function buildRow(row: CoverRow): HTMLElement {
       // Класс строки СПИСКА диалога — свой (`pub-cover-item`): `.pub-cover-row`
       // занят миниатюрой обложки в списках (`screens/publications/cover.ts`,
       // 2.5rem×1.75rem) и сжимал бы строку до этой рамки.
-      const row = div('pub-cover-item');
-      row.append(span(a.title ?? a.url ?? a.file_path ?? a.id, 'pub-cover-item-title'));
+      const node = div('pub-cover-item');
+      node.append(span(row.title, 'pub-cover-item-title'));
       const clouds = div('pub-cover-clouds');
-      row.append(clouds);
-      fillClouds(clouds, a);
+      node.append(clouds);
+      fillClouds(clouds, row);
       // Двойной клик — выбрать и применить, закрыв диалог (замечание В приёмки).
-      row.addEventListener('dblclick', () => {
-        selectAttachment(a);
+      node.addEventListener('dblclick', () => {
+        selectRow(row);
         if (closeDialog !== null) void applySelection(closeDialog);
       });
-      return row;
+      return node;
     }
 
-    /** Перерисовывает список вложений-картинок (keyed-сверка). */
+    /** Перерисовывает список носителей-картинок (keyed-сверка по носителю). */
     function renderRows(): void {
       reconcileKeyed(listHost, rows, {
-        key: (a) => a.id,
-        build: (a) => buildRow(a),
-        update: (el, a) => {
+        key: (row) => row.key,
+        build: (row) => buildRow(row),
+        update: (el, row) => {
           const clouds = el.querySelector<HTMLElement>('.pub-cover-clouds');
-          if (clouds !== null) fillClouds(clouds, a);
+          if (clouds !== null) fillClouds(clouds, row);
         },
       });
       rowEls.clear();
@@ -1429,33 +1486,48 @@ async function openCoverDialog(): Promise<void> {
       nav.refresh();
     }
 
+    /** Схлопывает строки-вложения по физическому носителю (замечание 3). */
+    function groupByCarrier(attachments: readonly Attachment[]): CoverRow[] {
+      const groups = new Map<string, Attachment[]>();
+      for (const a of attachments) {
+        const key = coverCarrierKey(a);
+        const list = groups.get(key);
+        if (list === undefined) groups.set(key, [a]);
+        else list.push(a);
+      }
+      const out: CoverRow[] = [];
+      for (const [key, list] of groups) out.push({ key, attachments: list, title: coverRowTitle(list) });
+      return out;
+    }
+
     /** Ищет вложения-картинки сети (пустой запрос — все: `*`). */
     async function runSearch(): Promise<void> {
       const q = search.value.trim() === '' ? '*' : search.value.trim();
       const hits = await etn.attachments.search(netId, { q }).catch(() => []);
-      rows = hits.filter(isImageAttachment);
+      rows = groupByCarrier(hits.filter(isImageAttachment));
       renderRows();
       // Первый показ списка: делаем первую строку текущей и отдаём списку фокус,
       // чтобы стрелки/Home/End работали без лишнего клика (замечание В приёмки).
       const first = rows[0];
       if (!initialFocusDone && first !== undefined) {
         initialFocusDone = true;
-        selectAttachment(first);
+        selectRow(first);
         nav.focusNavigation();
       }
     }
 
     /**
-     * Делает вложение текущим. Всё производное состояние (выбор, препросмотр,
-     * доступность кнопки) синхронизирует `onSelectionChange` навигации —
-     * отдельного присваивания здесь нет, иначе источник выбора раздвоился бы.
+     * Делает строку носителя текущей. Всё производное состояние (выбор,
+     * препросмотр, доступность кнопки) синхронизирует `onSelectionChange`
+     * навигации — отдельного присваивания здесь нет.
      */
-    function selectAttachment(a: Attachment): void {
-      nav.setCurrent(a);
+    function selectRow(row: CoverRow): void {
+      nav.setCurrent(row);
     }
 
-    /** Препросмотр выбранной картинки; `null` — подсказка вместо неё. */
-    function renderPreview(a: Attachment | null): void {
+    /** Препросмотр картинки строки; `null` — подсказка вместо неё. */
+    function renderPreview(row: CoverRow | null): void {
+      const a = row === null ? null : representative(row);
       while (previewHost.firstChild !== null) previewHost.removeChild(previewHost.firstChild);
       if (a === null) {
         previewHost.append(span(t('publication.cover.previewHint'), 'muted'));
@@ -1493,7 +1565,9 @@ async function openCoverDialog(): Promise<void> {
         });
         notifyPublicationAttachmentsChanged(pubId);
         await runSearch();
-        selectAttachment(created);
+        // Текущей делаем строку носителя только что созданного вложения.
+        const createdRow = rows.find((r) => r.attachments.some((a) => a.id === created.id));
+        if (createdRow !== undefined) selectRow(createdRow);
       } catch (err) {
         errorDialog(t('publication.cover.upload'), err);
       }
@@ -1559,7 +1633,8 @@ async function openCoverDialog(): Promise<void> {
       return;
     }
     if (selected === null) return;
-    const attachment = selected;
+    const attachment = coverRepresentative(selected, pubId);
+    if (attachment === null) return;
     if (attachment.owner_type === 'publication' && attachment.owner_id === pubId) {
       queueSave({ cover_attachment_id: attachment.id, cover_url: null });
     } else {

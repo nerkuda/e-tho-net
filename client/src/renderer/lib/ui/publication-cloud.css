@@ -37,6 +37,7 @@
 
 .ui-pub-cloud-remove {
   flex: none;
+  position: relative;
   appearance: none;
   border: none;
   background: transparent;
@@ -45,6 +46,19 @@
   line-height: 1;
   padding: 0;
   cursor: pointer;
+}
+
+/* Невидимая зона нажатия крестика — не меньше токена тач-таргета (требование
+   5677bc3d, как у `.ui-chip-remove`): визуальный «×» компактен, попадать можно
+   с запасом. */
+.ui-pub-cloud-remove::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area-min));
+  block-size: max(100%, var(--hit-area-min));
+  transform: translate(-50%, -50%);
 }
 
 .ui-pub-cloud-remove:hover {

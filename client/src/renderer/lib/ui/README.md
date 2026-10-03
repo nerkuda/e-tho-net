@@ -82,6 +82,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `table-grid.ts` | `vaadinGridAdapter` | Адаптер модели таблицы к Vaadin Grid | задача `dad2b029` |
 | `tree.ts` / `tree.css` | `createTree`, классы `TREE_*`, `treeVisibleIds`, `treeFilterKeepIds` | Единое дерево списков (типы, категории); коллекция строк — на keyed-сверке | задача `d1c15a2d`, требование `0086037c`, задача `d59fdfb9` |
 | `chip-list.ts` / `chip-list.css` | `chipList`, классы `CHIP_*` | Чипы выбранных значений с крестиком и полем добавления | требование `d1cd2095` |
+| `publication-cloud.ts` / `publication-cloud.css` | `createPublicationCloud`, классы `PUBLICATION_CLOUD_*` | Облачко публикации: прямые углы, значок-книга, контекстное меню (Открыть/Читать/Найти на полке) и крестик снятия владельца; единственное место показа облачка публикации | замечание Б2 приёмки задачи `b02ef1cf` |
 | `empty-state.ts` / `empty-state.css` | `emptyState`, `loadingState`, `errorState`, классы `EMPTY_STATE_*`/`LOADING_STATE_CLASS`/`ERROR_STATE_CLASS` | «Пусто/грузлю/ошибка» с подсказкой и точкой входа к действию | задача `d7b7c367`, требование `e514768f` |
 | `register.ts` | (side-effect импорт) | Регистрация вендора и подключение CSS в правильном порядке | задача `95dd50b9` |
 

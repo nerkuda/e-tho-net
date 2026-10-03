@@ -38,7 +38,7 @@ import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chr
 import { store } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
 import { invalidateWikiLinkCache } from './editor/wiki-link-resolver.js';
-import { applyPublicationsRealtime, applyPublicationDocumentRealtime, applyPublicationCompositionRealtime } from './screens/publications/publications.js';
+import { applyPublicationsRealtime, applyPublicationDocumentRealtime, applyPublicationThoughtRealtime, applyPublicationCompositionRealtime } from './screens/publications/publications.js';
 
 /**
  * Tiny wrapper so the inline call sites above stay readable. Drops the cached
@@ -209,10 +209,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'thought.updated':
-      // Заголовок/оформление видимой мысли — точечное обновление её блока; смена
-      // типа/актуальности влияет на состав — та же пометка пересборки.
-      applyPublicationDocumentRealtime(evt.data.id);
-      applyPublicationCompositionRealtime();
+      // Мысль В текущей сборке — точечное обновление её блока + пометка
+      // устаревания (заголовок влияет на отбор); вне — ничего (замечание 2
+      // приёмки b02ef1cf).
+      applyPublicationThoughtRealtime(evt.data.id);
       invalidateRef(evt.data.id);
       // A pinned chip mirrors the thought's title/icon/styles — refresh it.
       if (store.state.pins.includes(evt.data.id)) {
@@ -295,9 +295,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // and updates it in place via its own `onRealtimeEvent` hook.
       invalidateIndicators(null);
       applyChronicleRealtime(evt);
-      // Событие не несёт владельца — документ перечитываем безусловно (дебаунс
-      // в рабочей области гасит поток).
-      applyPublicationDocumentRealtime();
+      // Событие несёт владельца — документ перечитываем только если он в сборке.
+      applyPublicationDocumentRealtime(evt.data.owner_id);
       break;
 
     case 'attachment.created':
@@ -376,7 +375,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'publication.purged':
     case 'shelf.updated':
     case 'shelf.deleted':
-      applyPublicationsRealtime(evt.type);
+      applyPublicationsRealtime(evt.type, evt.data);
       break;
 
     case 'thought-type.created':

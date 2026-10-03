@@ -189,7 +189,9 @@ async function openDialog(): Promise<{
     const row = list
       .querySelectorAll('.pub-cover-item')
       .find((el) => el.classList.contains('pub-cover-item-current'));
-    return row?.getAttribute('data-key') ?? null;
+    // Ключ строки — носитель (kind+путь), заголовок строки — title вложения,
+    // которым в фикстурах служит id ('att-1'/'att-2').
+    return row?.querySelector('.pub-cover-item-title')?.textContent ?? null;
   };
   return { mod, list, currentKey };
 }

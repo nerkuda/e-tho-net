@@ -230,13 +230,13 @@ describe('guard: UI публикаций (a3cfc018)', () => {
     // Список создаётся фасадом с контрактными аргументами.
     assert.match(
       dialog,
-      /createListNav<Attachment>\(listHost,\s*\{[\s\S]*?entries:\s*\(\)\s*=>\s*rows[\s\S]*?tokenOf:\s*\(a\)\s*=>\s*a\.id[\s\S]*?onActivate:/,
+      /createListNav<CoverRow>\(listHost,\s*\{[\s\S]*?entries:\s*\(\)\s*=>\s*rows[\s\S]*?tokenOf:\s*\(row\)\s*=>\s*row\.key[\s\S]*?onActivate:/,
       'список вложений строится общим фасадом createListNav с entries/tokenOf/onActivate',
     );
     // Строки рисуются keyed-сверкой по id, а не пересборкой.
     assert.match(
       dialog,
-      /reconcileKeyed\(listHost,\s*rows,\s*\{[\s\S]*?key:\s*\(a\)\s*=>\s*a\.id/,
+      /reconcileKeyed\(listHost,\s*rows,\s*\{[\s\S]*?key:\s*\(row\)\s*=>\s*row\.key/,
       'строки списка рисуются keyed-сверкой reconcileKeyed по id',
     );
     // Никакой рукописной карты стрелок и клавиатуры в диалоге.

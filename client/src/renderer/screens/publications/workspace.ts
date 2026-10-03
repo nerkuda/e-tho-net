@@ -109,6 +109,21 @@ export interface PublicationWorkspaceHandle {
    */
   reloadDocument(thoughtId?: string): void;
   /**
+   * Realtime-изменение мысли (`thought.updated`): если мысль ЕСТЬ в текущей
+   * сборке — точечно обновить её блок (заголовок/контент) и пометить текст
+   * устаревшим (заголовок влияет на отбор по ключевым словам). Мысль вне
+   * документа — ничего (новые кандидаты показывает плашка «+N новых», замечание
+   * 2 приёмки b02ef1cf).
+   */
+  applyThoughtRealtime(thoughtId: string): void;
+  /**
+   * Точечно применить внешнюю правку полей публикации (`publication.updated` с
+   * контентными полями): заголовок/подзаголовок/обложка/резюме — без чтения
+   * сборки (замечание 1 приёмки b02ef1cf). Поля рецепта здесь не применяются —
+   * их обрабатывает `markRebuildStale`.
+   */
+  applyPublicationPatch(changes: Partial<Publication>): void;
+  /**
    * Пометить живой текст устаревшим (изменение состава/рецепта): кнопка
    * «Пересобрать» подсвечивается до пересборки (замечание А2 приёмки b02ef1cf).
    */
@@ -428,6 +443,64 @@ export function mountPublicationWorkspace(
   }
 
   /**
+   * Realtime-изменение мысли: в документе — точечное обновление блока + пометка
+   * устаревания; вне документа — ничего.
+   */
+  function applyThoughtRealtime(thoughtId: string): void {
+    if (publicationId === null || assembly === null) return;
+    if (!assemblyHasThought(assembly, thoughtId)) return;
+    markRebuildStale();
+    reload();
+  }
+
+  /** Смена рецепта/источников/нумерации (состав) — по паре снимков. */
+  function compositionFieldsChanged(a: Publication | null, b: Partial<Publication>): boolean {
+    if (a === null) return false;
+    if (b.title_recipe !== undefined) {
+      if (JSON.stringify(a.title_recipe ?? null) !== JSON.stringify(b.title_recipe ?? null)) return true;
+    }
+    if (b.text_sources !== undefined && a.text_sources.join(',') !== b.text_sources.join(',')) return true;
+    if (
+      b.extra_properties !== undefined &&
+      a.extra_properties.join(',') !== b.extra_properties.join(',')
+    ) {
+      return true;
+    }
+    if (b.numbering_from !== undefined && a.numbering_from !== b.numbering_from) return true;
+    if (b.numbering_to !== undefined && a.numbering_to !== b.numbering_to) return true;
+    return false;
+  }
+
+  /** Перерисовывает шапку и титульный блок из текущего снимка публикации. */
+  function renderPublicationChrome(): void {
+    renderHeader();
+    const titleBlock = docHost.querySelector<HTMLElement>('.pub-doc-titleblock');
+    if (titleBlock !== null) titleBlock.replaceWith(buildTitleBlock());
+  }
+
+  /**
+   * Внешняя правка полей публикации: слияние в снимок, перерисовка шапки и
+   * титульного блока БЕЗ чтения сборки. Поля рецепта помечают текст устаревшим
+   * (замечание 1 приёмки b02ef1cf).
+   */
+  function applyPublicationPatch(changes: Partial<Publication>): void {
+    if (publicationId === null || publication === null) return;
+    if (compositionFieldsChanged(publication, changes)) markRebuildStale();
+    const merged: Publication = { ...publication, ...changes, id: publicationId };
+    // `cover_kind` — вычисляемое поле: при правке обложки его нет в `changes`.
+    if (changes.cover_attachment_id !== undefined || changes.cover_url !== undefined) {
+      merged.cover_kind =
+        merged.cover_attachment_id !== null
+          ? 'attachment'
+          : (merged.cover_url ?? '') !== ''
+            ? 'url'
+            : 'none';
+    }
+    publication = merged;
+    renderPublicationChrome();
+  }
+
+  /**
    * Точечно применяет свежий снимок публикации: шапка и титульный блок берут
    * титул/подзаголовок/обложку из него. Сборку (разделы) не трогаем —
    * `reload()` для этого остаётся. Нужно для локальной правки из карточки
@@ -437,18 +510,9 @@ export function mountPublicationWorkspace(
     if (publicationId === null || next.id !== publicationId) return;
     // Смена рецепта/источников/нумерации влияет на СОСТАВ: живой текст остаётся,
     // но помечается устаревшим до пересборки (замечание А2 приёмки b02ef1cf).
-    const recipeChanged =
-      publication !== null &&
-      (JSON.stringify(publication.title_recipe ?? null) !== JSON.stringify(next.title_recipe ?? null) ||
-        publication.text_sources.join(',') !== next.text_sources.join(',') ||
-        publication.extra_properties.join(',') !== next.extra_properties.join(',') ||
-        publication.numbering_from !== next.numbering_from ||
-        publication.numbering_to !== next.numbering_to);
+    if (compositionFieldsChanged(publication, next)) markRebuildStale();
     publication = next;
-    renderHeader();
-    const titleBlock = docHost.querySelector<HTMLElement>('.pub-doc-titleblock');
-    if (titleBlock !== null) titleBlock.replaceWith(buildTitleBlock());
-    if (recipeChanged) markRebuildStale();
+    renderPublicationChrome();
   }
 
   async function rebuild(): Promise<void> {
@@ -1221,6 +1285,8 @@ export function mountPublicationWorkspace(
     close,
     reload,
     reloadDocument,
+    applyThoughtRealtime,
+    applyPublicationPatch,
     markRebuildStale,
     applyPublication,
     isOpen,
