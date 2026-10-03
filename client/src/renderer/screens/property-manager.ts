@@ -107,7 +107,10 @@ import { store } from '../state.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
 import { onRealtimeEvent } from '../realtime.js';
-import { reloadTypeCatalogues, scheduleTypeRepaint } from '../realtime-ui.js';
+import { reloadTypeCatalogues } from '../realtime-ui.js';
+import { queryKeys } from '../lib/live/query-keys.js';
+import { invalidateAfterMutation } from '../lib/live/mutator.js';
+import { scheduleChronicleRefresh } from './chronicle/chronicle.js';
 // Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
 // доходит, G8 applier): изменение набора свойств типа (ошибка 74b94c26),
 // правка/удаление самого реестрового свойства (98aa0889) и правка/удаление
@@ -340,9 +343,11 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
         notifyTypeChanged(typeDeletedFacts({ ownerType: 'link_type', ownerId: linkTypeId }));
         // Исчезнувший тип связи: отвязанные рёбра на холсте перерисовываются
         // только по свежему фокусу (сервер обнулил их `type_id`, отдельного
-        // события о связи не шлёт), а «Структуры»/«Хроника» держат собственные
-        // снимки — тот же набор пересчёта, что и realtime-эхо (270b8454).
-        scheduleTypeRepaint();
+        // события о связи не шлёт), а «Структуры» держат собственный снимок.
+        // Слой данных (G2): гасим focus- и structures-ключи — холст и
+        // «Структуры» перечитаются слоем (роутер/инвалидация); «Хроника» — рядом.
+        invalidateAfterMutation([queryKeys.focusAll(), queryKeys.structuresPageAll()]);
+        scheduleChronicleRefresh();
       }
       cachedRows = null;
       // Сервер возвращает точный счётчик ставших структурными рёбер (или null
@@ -1757,11 +1762,10 @@ export function openPropertyManagerEditor(
           );
           // Холст и панели («Структуры», «Хроника») рисуют подпись и вид линии
           // ребра из каталога типов, а свои страницы держат в собственных
-          // снимках — локальная правка типа связи доводится до них ТЕМ ЖЕ
-          // набором пересчёта, что и realtime-эхо (ошибка 270b8454). Каталог уже
-          // перечитан строкой выше, поэтому пересчёт не перезапрашивает его
-          // повторно.
-          scheduleTypeRepaint();
+          // снимках — локальная правка типа связи доводится до них. Слой данных
+          // (G2): гасим focus- и structures-ключи; «Хроника» (G3) — рядом.
+          invalidateAfterMutation([queryKeys.focusAll(), queryKeys.structuresPageAll()]);
+          scheduleChronicleRefresh();
         }
         // Применим привязки к типам мыслей.
         await applyTypeRows(current.id);

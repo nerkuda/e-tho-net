@@ -466,11 +466,12 @@ describe('локальная правка типа связи пересчиты
       },
     };
     const { store } = await import('../src/renderer/state.js');
-    const { scheduleTypeRepaint, applyRealtimeToUi } =
-      await import('../src/renderer/realtime-ui.js');
+    const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
     const { activateFocusQuery, deactivateFocusQuery } =
       await import('../src/renderer/lib/layer-resync.js');
     const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
+    const { invalidateAfterMutation } = await import('../src/renderer/lib/live/mutator.js');
+    const { queryKeys } = await import('../src/renderer/lib/live/query-keys.js');
     const { resetEventRouter, routeRealtimeEvent } =
       await import('../src/renderer/lib/live/event-router.js');
 
@@ -487,11 +488,10 @@ describe('локальная правка типа связи пересчиты
     await new Promise((resolve) => setTimeout(resolve, 100));
     const baseline = focusFetches;
 
-    // Локальный производитель (менеджер свойств) уже перечитал каталог и зовёт
-    // общий пересчёт: холст обязан перечитаться (фокус), «Структуры» и
-    // «Хроника» — перестроиться (их разбудит тот же набор, см. проводку ниже).
-    scheduleTypeRepaint();
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // Локальный производитель (менеджер свойств) уже перечитал каталог и гасит
+    // focus-/structures-ключи слоя: холст обязан перечитаться (фокус).
+    invalidateAfterMutation([queryKeys.focusAll(), queryKeys.structuresPageAll()]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(
       focusFetches,
       baseline + 1,
@@ -524,66 +524,52 @@ describe('локальная правка типа связи пересчиты
     resetEventRouter();
   });
 
-  it('набор пересчёта задан одним помощником и зовётся обоими путями', () => {
+  it('решение «когда обновлять» принято слоем — ручных помощников нет', () => {
     const read = (rel: string): string =>
       readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
     const realtimeUi = read('realtime-ui.ts');
 
-    // Набор «холст + Структуры + Хроника» задан одним помощником
-    // `scheduleNeighbourhoodRepaint` (0.8.2, ошибка f0b959dd вынесла его сюда
-    // для правок рёбер); пересчёт типов делегирует ему — набор остаётся в
-    // одном месте.
+    // G2: `scheduleNeighbourhoodRepaint`/`scheduleTypeRepaint` снесены. Realtime-
+    // ветка типа (G2): каталог перечитывается отдельно, окрестность и
+    // «Структуры» гасит роутер слоя; здесь остаётся только «Хроника» (G3).
     assert.ok(
-      /export function scheduleNeighbourhoodRepaint\(\): void \{[\s\S]{0,120}?scheduleRefresh\(\);[\s\S]{0,80}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
-        realtimeUi,
-      ),
-      'scheduleNeighbourhoodRepaint пересчитывает холст, «Структуры» и «Хронику»',
+      !realtimeUi.includes('scheduleNeighbourhoodRepaint'),
+      'scheduleNeighbourhoodRepaint снесён (G2)',
     );
+    assert.ok(!realtimeUi.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
     assert.ok(
-      /export function scheduleTypeRepaint\(\): void \{\s*scheduleNeighbourhoodRepaint\(\);\s*\}/.test(
+      /case 'link-type\.deleted':[\s\S]{0,700}?void reloadTypeCatalogues\(\);[\s\S]{0,200}?scheduleChronicleRefresh\(\);/.test(
         realtimeUi,
       ),
-      'scheduleTypeRepaint делегирует общий пересчёт окрестности',
-    );
-    // Каталог перечитывается отдельно и ДО пересчёта: повторного перезапроса
-    // каталога из пересчёта нет (прецедент in-flight дележа).
-    assert.ok(
-      !/export function scheduleTypeRepaint\(\): void \{[\s\S]{0,400}?reloadTypeCatalogues\(\)/.test(
-        realtimeUi,
-      ),
-      'пересчёт не перезапрашивает каталог типов повторно',
-    );
-    // Realtime-ветка типа (G2): каталог перечитывается отдельно, окрестность
-    // гасит роутер слоя (`focusAll`), а «Структуры»/«Хроника» обновляются
-    // легаси-путём экрана.
-    assert.ok(
-      /case 'link-type\.deleted':[\s\S]{0,700}?void reloadTypeCatalogues\(\);[\s\S]{0,160}?scheduleStructuresRefresh\(\);/.test(
-        realtimeUi,
-      ),
-      'realtime-ветка типа перечитывает каталог и обновляет «Структуры» (фокус — роутер слоя)',
+      'realtime-ветка типа перечитывает каталог, обновляет «Хронику» (фокус/«Структуры» — роутер)',
     );
   });
 
-  it('менеджер свойств доводит локальную правку и удаление типа связи до холста и панелей', () => {
+  it('менеджер свойств доводит локальную правку типа связи до слоя', () => {
     const read = (rel: string): string =>
       readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
     const propertyManager = read('screens/property-manager.ts');
 
-    // Правка свойства-связи: каталог перечитан ДО уведомления редактора —
-    // затем уведомление и пересчёт холста/панелей.
+    // Импорт mutator-слоя и ключей.
     assert.ok(
-      /await reloadTypeCatalogues\(\);[\s\S]{0,400}?notifyTypeChanged\([\s\S]{0,300}?typeUpdateFacts\(\{ ownerType: 'link_type'[\s\S]{0,800}?scheduleTypeRepaint\(\);/.test(
+      /import \{ invalidateAfterMutation \} from '\.\.\/lib\/live\/mutator\.js';/.test(
         propertyManager,
       ),
-      'правка типа связи в редакторе свойства пересчитывает холст и панели',
+      'менеджер свойств гасит ключи mutator-слоем',
     );
-    // Удаление свойства-связи вместе с типом связи: пометка типа удалённым →
-    // пересчёт (отвязанные рёбра получают свежий фокус, панели — свежие данные).
+    // Правка типа связи: каталог перечитан ДО, затем — инвалидация слоя.
     assert.ok(
-      /notifyTypeChanged\(typeDeletedFacts\(\{ ownerType: 'link_type'[\s\S]{0,500}?scheduleTypeRepaint\(\);/.test(
+      /await reloadTypeCatalogues\(\);[\s\S]{0,400}?notifyTypeChanged\([\s\S]{0,300}?typeUpdateFacts\(\{ ownerType: 'link_type'[\s\S]{0,900}?invalidateAfterMutation\(\[queryKeys\.focusAll\(\), queryKeys\.structuresPageAll\(\)\]\);/.test(
         propertyManager,
       ),
-      'удаление типа связи вместе со свойством пересчитывает холст и панели',
+      'правка типа связи гасит focus-/structures-ключи',
+    );
+    // Удаление типа связи вместе со свойством — тем же путём.
+    assert.ok(
+      /notifyTypeChanged\(typeDeletedFacts\(\{ ownerType: 'link_type'[\s\S]{0,600}?invalidateAfterMutation\(\[queryKeys\.focusAll\(\), queryKeys\.structuresPageAll\(\)\]\);/.test(
+        propertyManager,
+      ),
+      'удаление типа связи гасит focus-/structures-ключи',
     );
   });
 });

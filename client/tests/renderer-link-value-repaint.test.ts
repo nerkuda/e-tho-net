@@ -271,18 +271,34 @@ describe('гейт локальной записи значения свойст
     store.update({ focus: null } as any);
     assert.equal(inFocusNeighbourhood('thought', 't1'), false, 'без фокуса — игнор');
 
-    // Локальный производитель фокус-мысли: гейт пропускает → пересчёт
-    // планируется и реально перечитывает фокус (холст/секторы/линии).
+    // Локальный производитель фокус-мысли: гейт пропускает → слой гасит
+    // focus-ключи, активная подписка перечитывает окрестность (холст/секторы).
     store.update({ focus: makeFocusResponse() } as any);
     let focusFetches = 0;
     (globalThis as any).window.etn.thoughts.focus = async () => {
       focusFetches++;
       return makeFocusResponse();
     };
-    const { scheduleNeighbourhoodRepaint } = await import('../src/renderer/realtime-ui.js');
-    if (inFocusNeighbourhood('thought', 't1')) scheduleNeighbourhoodRepaint();
-    await wait(260);
-    assert.equal(focusFetches, 1, 'запись значения свойства-связи фокус-мысли перечитывает окрестность');
+    const { activateFocusQuery, deactivateFocusQuery } =
+      await import('../src/renderer/lib/layer-resync.js');
+    const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
+    const { invalidateAfterMutation } = await import('../src/renderer/lib/live/mutator.js');
+    const { queryKeys } = await import('../src/renderer/lib/live/query-keys.js');
+    resetQueryRegistry();
+    activateFocusQuery('n1', 't1');
+    await wait(100);
+    const base = focusFetches;
+    if (inFocusNeighbourhood('thought', 't1')) {
+      invalidateAfterMutation([queryKeys.focusAll()]);
+    }
+    await wait(100);
+    assert.equal(
+      focusFetches,
+      base + 1,
+      'запись значения свойства-связи фокус-мысли перечитывает окрестность через слой',
+    );
+    deactivateFocusQuery();
+    resetQueryRegistry();
   });
 });
 
@@ -294,41 +310,44 @@ describe('проводка пересчёта окрестности из ред
   const read = (rel: string): string =>
     readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
 
-  it('помощник пересчёта делегирует общий набор окрестности', () => {
+  it('пересчёт окрестности задан слоем — ручных помощников в realtime-ui нет', () => {
     const realtimeUi = read('realtime-ui.ts');
-    // Набор «холст + Структуры + Хроника» задан один раз, в
-    // `scheduleNeighbourhoodRepaint`; холст идёт через слой (`scheduleRefresh`
-    // гасит `focus`-ключи, G2), «Структуры»/«Хроника» — легаси-путь.
+    // G2: решение «когда обновлять» ушло в слой; ручные помощники снесены.
     assert.ok(
-      /export function scheduleNeighbourhoodRepaint\(\): void \{[\s\S]{0,120}?scheduleRefresh\(\);[\s\S]{0,80}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
-        realtimeUi,
-      ),
-      'scheduleNeighbourhoodRepaint пересчитывает холст, «Структуры» и «Хронику»',
+      !realtimeUi.includes('scheduleNeighbourhoodRepaint'),
+      'scheduleNeighbourhoodRepaint снесён (G2)',
     );
-    // Realtime-ветка значения свойства (G2): окрестность гасит роутер слоя
-    // (`focusAll`), здесь остаётся легаси-обновление «Структур»/«Хроники».
+    assert.ok(!realtimeUi.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
+    // Realtime-ветка значения свойства (G2): окрестность и «Структуры» гасит
+    // роутер слоя, здесь остаётся только «Хроника» (G3).
+    const branch = realtimeUi.slice(realtimeUi.indexOf("case 'property-value.set':"));
+    const end = branch.indexOf('break;');
     assert.ok(
-      /case 'property-value\.set':[\s\S]{0,900}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
-        realtimeUi,
-      ),
-      'realtime-ветка значения свойства обновляет «Структуры»/«Хронику» (фокус — роутер слоя)',
+      !branch.slice(0, end).includes('scheduleRefresh'),
+      'realtime-ветка не дёргает холст вручную (роутер слоя)',
     );
+    assert.ok(
+      !branch.slice(0, end).includes('scheduleStructuresRefresh'),
+      'realtime-ветка не дёргает «Структуры» вручную (роутер слоя)',
+    );
+    assert.match(branch.slice(0, end), /scheduleChronicleRefresh\(\);/, 'обновляет «Хронику»');
   });
 
-  it('запись значения свойства-связи зовёт пересчёт под гейтом видимости', () => {
+  it('запись значения свойства-связи идёт mutator-путём под гейтом видимости', () => {
     const properties = read('editor/properties.ts');
 
-    // Импорт общего набора и гейта из realtime-ui (локальный путь — тот же
-    // набор, что у чужого realtime-события).
+    // Гейт видимости — из realtime-ui; пересчёт — mutator-слой (`invalidateAfterMutation`).
     assert.ok(
-      /import \{ inFocusNeighbourhood, scheduleNeighbourhoodRepaint \} from '\.\.\/realtime-ui\.js';/.test(
-        properties,
-      ),
-      'редактор свойств берёт набор и гейт из realtime-ui',
+      /import \{ inFocusNeighbourhood \} from '\.\.\/realtime-ui\.js';/.test(properties),
+      'редактор свойств берёт гейт видимости из realtime-ui',
     );
-    // Сам помощник: пересчёт только для видимого владельца.
     assert.ok(
-      /function repaintAfterLinkValueWrite\(ownerType: 'thought' \| 'link', ownerId: string\): void \{\s*if \(inFocusNeighbourhood\(ownerType, ownerId\)\) scheduleNeighbourhoodRepaint\(\);/.test(
+      /import \{ invalidateAfterMutation \} from '\.\.\/lib\/live\/mutator\.js';/.test(properties),
+      'редактор свойств гасит ключи mutator-слоем',
+    );
+    // Сам помощник: пересчёт только для видимого владельца, через слой.
+    assert.ok(
+      /function repaintAfterLinkValueWrite\(ownerType: 'thought' \| 'link', ownerId: string\): void \{\s*if \(!inFocusNeighbourhood\(ownerType, ownerId\)\) return;[\s\S]{0,400}?invalidateAfterMutation\(\[queryKeys\.focusAll\(\), queryKeys\.structuresPageAll\(\)\]\);/.test(
         properties,
       ),
       'пересчёт окрестности выполняется только для владельца, видимого на карте',

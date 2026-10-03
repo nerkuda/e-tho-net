@@ -71,10 +71,10 @@ const THOUGHT_CLOUD_TS = path.join(RENDERER_ROOT, 'lib', 'thought-cloud.ts');
  *  - `canvas/canvas.ts` — перенос полей в форму `FocusNeighbor` для отбора;
  *  - `screens/type-manager.ts` — редактор ТИПОВ (не мыслей);
  *  - `selection/selection.ts` — сид диалога стиля выделения;
- *  - `screens/structures/realtime-apply.ts` — слияние частичных изменений
- *    (`thought.updated`) в кэшированный `ThoughtRef` и подпись изменения строки
- *    (сериализация DTO для keyed-сверки, не представление мысли — облачко
- *    по-прежнему собирает только `lib/thought-cloud.ts`).
+ *  - `screens/structures/structures.ts` — сериализация `ThoughtRef` для
+ *    keyed-сверки строк дерева (`rowRenderSignature`; перенесена из снесённого
+ *    `realtime-apply.ts` в G2): читает поля оформления, но облачко по-прежнему
+ *    собирает только `lib/thought-cloud.ts`.
  */
 const VISUAL_FIELD_READERS = new Set([
   'lib/thought-cloud.ts',
@@ -88,7 +88,7 @@ const VISUAL_FIELD_READERS = new Set([
   'canvas/canvas.ts',
   'screens/type-manager.ts',
   'selection/selection.ts',
-  'screens/structures/realtime-apply.ts',
+  'screens/structures/structures.ts',
 ]);
 
 /**
