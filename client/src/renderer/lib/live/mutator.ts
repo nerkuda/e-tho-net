@@ -23,6 +23,7 @@ import {
   type PutEntityOptions,
 } from './entities.js';
 import { queryKeys } from './query-keys.js';
+import type { LocalMutationSignal } from './query-registry.js';
 import { invalidateQueries, setQueryData } from './query-registry.js';
 
 /**
@@ -76,6 +77,62 @@ export function invalidateAfterMutation(
   const touched: string[] = [];
   for (const prefix of prefixes) touched.push(...invalidateQueries(prefix, cause));
   return touched;
+}
+
+// ---------------------------------------------------------------------------
+// Локальные сигналы публикаций (свои правки до B1)
+// ---------------------------------------------------------------------------
+//
+// Эхо-подавление сервера ещё включено (отменяется в B1 тех.проекта 269016e2):
+// чужие изменения приходят роутером, но СВОИ производители обязаны уведомить
+// открытую сборку публикации сами. Инвалидируем префикс `pub-assembly` целиком:
+// рефетч идёт только активным наблюдателям (открытых сборок обычно 1–2), а
+// решение «перечитать / пометить stale / править блок» принимает подписчик
+// рабочей области по причине-сигналу. Точность «какая именно публикация» —
+// после B1/G5.
+
+/**
+ * Сигнал «состав публикации мог измениться»: своё ребро (link-ops) или значение
+ * свойства-связи (properties.ts). Рабочая область пометит живой текст устаревшим
+ * («Остаётся + подсветка»), сборку НЕ перечитывая.
+ */
+export function signalPublicationCompositionChanged(): void {
+  invalidateQueries(queryKeys.publicationAssemblyAll(), {
+    local: 'publication-composition',
+  } satisfies LocalMutationSignal);
+}
+
+/**
+ * Сигнал «сохранён ПОСТОЯННЫЙ комментарий мысли/связи» (своя правка из
+ * редактора). `bodyMd` едет в сигнале, чтобы под stale рабочая область правила
+ * блок точечно, без перечитывания сборки.
+ */
+export function signalPermanentCommentSaved(
+  ownerId: string,
+  bodyMd: string,
+  kind = 'permanent',
+): void {
+  invalidateQueries(queryKeys.publicationAssemblyAll(), {
+    local: 'comment-saved',
+    id: ownerId,
+    data: { body_md: bodyMd, kind },
+  } satisfies LocalMutationSignal);
+}
+
+/**
+ * Сигнал «сохранены поля мысли» (заголовок/синонимы/тип/активность): мысль в
+ * текущей сборке помечает живой текст устаревшим (заголовок влияет на отбор),
+ * вне сборки — ничего.
+ */
+export function signalThoughtSaved(
+  thoughtId: string,
+  changes: Record<string, unknown>,
+): void {
+  invalidateQueries(queryKeys.publicationAssemblyAll(), {
+    local: 'thought-saved',
+    id: thoughtId,
+    data: { changes },
+  } satisfies LocalMutationSignal);
 }
 
 /** Опции optimistic-обёртки. */

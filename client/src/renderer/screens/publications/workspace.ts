@@ -81,6 +81,7 @@ import {
   onQueryInvalidated,
   queryKeys,
   registerQuery,
+  type LocalMutationSignal,
 } from '../../lib/live/index.js';
 import { routePublicationUpdate } from './update-routing.js';
 import { renderMarkdown } from '@etn/markdown';
@@ -729,13 +730,11 @@ export function mountPublicationWorkspace(
     registerQuery(queryKeys.publicationAssembly(publicationId), null);
   }
 
-  /** Локальный сигнал пересборки мутации-источника (не realtime-событие). */
-  function isRebuildSignal(cause: unknown): boolean {
-    return (
-      typeof cause === 'object' &&
-      cause !== null &&
-      (cause as { local?: unknown }).local === 'publication-rebuilt'
-    );
+  /** Локальный сигнал мутации-источника (не realtime-событие). */
+  function asLocalSignal(cause: unknown): LocalMutationSignal | null {
+    if (typeof cause !== 'object' || cause === null) return null;
+    const c = cause as { local?: unknown };
+    return typeof c.local === 'string' ? (cause as LocalMutationSignal) : null;
   }
 
   /** Realtime-событие из причины инвалидации (или `null`, если причина локальная). */
@@ -760,7 +759,7 @@ export function mountPublicationWorkspace(
    */
   function onCardInvalidated(cause: unknown): void {
     if (publicationId === null) return;
-    if (asRealtimeEvent(cause) !== null || isRebuildSignal(cause)) return;
+    if (asRealtimeEvent(cause) !== null || asLocalSignal(cause) !== null) return;
     const cached = getEntity<Publication>('publication', publicationId);
     if (cached !== undefined && cached !== null) applyPublication(cached);
     else reload();
@@ -770,13 +769,40 @@ export function mountPublicationWorkspace(
    * Инвалидация сборки (`pub-assembly`): маршрутизация по ПРИЧИНЕ. Состав
    * помечает живой текст устаревшим без перечитывания (замечание А2 приёмки
    * b02ef1cf), контент правит блок точечно из payload, пересборка снимает
-   * устаревание и перечитывает документ.
+   * устаревание и перечитывает документ. Причина — realtime-событие роутера
+   * либо локальный сигнал СВОЕЙ правки (`signal*` из `lib/live/mutator`).
    */
   function onAssemblyInvalidated(cause: unknown): void {
     if (publicationId === null) return;
-    if (isRebuildSignal(cause)) {
-      applyRebuildRealtime();
-      return;
+    const local = asLocalSignal(cause);
+    if (local !== null) {
+      switch (local.local) {
+        case 'publication-rebuilt':
+          applyRebuildRealtime();
+          return;
+        case 'comment-saved': {
+          const body = local.data?.['body_md'];
+          const kind = local.data?.['kind'];
+          applyCommentRealtime(local.id, body, typeof kind === 'string' ? kind : undefined);
+          return;
+        }
+        case 'thought-saved': {
+          const changes = local.data?.['changes'];
+          applyThoughtRealtime(
+            local.id ?? '',
+            typeof changes === 'object' && changes !== null
+              ? (changes as { title?: unknown })
+              : undefined,
+          );
+          return;
+        }
+        case 'publication-composition':
+          markRebuildStale();
+          return;
+        default:
+          reload();
+          return;
+      }
     }
     const evt = asRealtimeEvent(cause);
     if (evt === null) {

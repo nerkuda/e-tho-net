@@ -89,6 +89,7 @@ import {
   invalidateQueries,
   onQueryInvalidated,
   queryKeys,
+  signalThoughtSaved,
 } from '../lib/live/index.js';
 // Набор свойств показанной сущности зависит от определений свойств её типа
 // (ошибка 74b94c26): realtime-события `property-definition.*` и локальные
@@ -977,17 +978,17 @@ function invalidateDefinitionDependentPanes(): void {
  * (ошибка 05bd8809: вставка картинки в комментарий увеличивала счётчик вкладки,
  * но её список оставался прежним до переоткрытия мысли).
  *
- * Событие `etn:attachments-changed` шлют все производители вложений редактора:
- * вставка файла из буфера в поле markdown (markdown-field.ts — постоянный
- * комментарий и текст вложения) и «Назначить иконкой мысли» из файла
- * (editor.ts). Гейт по владельцу у вызывающего: событие адресуется сущности, а
- * не вкладке, поэтому вкладки другой сущности не трогаются.
+ * Изменение набора приходит кэш-путём слоя (G4 тех.проекта 269016e2): роутер
+ * гасит ключ `attachments:@ownerType:@ownerId` на чужие события `attachment.*`,
+ * локальные производители (вставка файла в поле markdown, «Назначить иконкой
+ * мысли» из файла) зовут `invalidateQueries` того же ключа. Гейт по владельцу —
+ * по префиксу ключа (см. подписку на инвалидации в `registerAllTabs`).
  *
  * Почему именно сброс кэша:
  *  * вкладка кэшируется в `builtPanes` и переживает переход на «Комментарий»;
- *    её собственный слушатель события при отключении от DOM самоотписывается
- *    (защита от утечки, attachments.ts) и список не перечитывает — именно так
- *    появлялся устаревший список;
+ *    её собственный слушатель инвалидаций при отключении от DOM
+ *    самоотписывается (защита от утечки, attachments.ts) и список не
+ *    перечитывает — именно так появлялся устаревший список;
  *  * следующая активация собирает вкладку заново и читает список с сервера —
  *    вложение из вставки в комментарий видно сразу, без переоткрытия мысли.
  *
@@ -1979,6 +1980,10 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
     // actor gets no realtime echo, so the stores are patched from the save
     // response.
     reflectThoughtUpdate(updated);
+    // Своя правка полей мысли: открытый документ публикации помечает живой
+    // текст устаревшим (заголовок влияет на отбор) / правит заголовок блока —
+    // сигнал слоя, своего realtime-эха нет (до B1).
+    signalThoughtSaved(ctx.ownerId, patch as Record<string, unknown>);
     // A type change re-skins the focus cloud (type icon/colours) — reconcile
     // the whole focus from the server so nothing lags behind the patch.
     if (patch.type_id !== undefined) {

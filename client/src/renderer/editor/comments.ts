@@ -15,6 +15,7 @@
 import type { Comment } from '@etn/shared';
 
 import { invalidateIndicators } from '../canvas/canvas.js';
+import { signalPermanentCommentSaved } from '../lib/live/index.js';
 import {
   clearDraft,
   clearDraftsFor,
@@ -302,6 +303,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
         await clearDraftsFor(networkId, 'comment', permanent?.id ?? ctx.ownerId);
         await clearDraftsFor(networkId, 'comment-new', ctx.ownerId);
         invalidateIndicators(ctx.ownerId);
+        // Своя правка постоянного комментария: открытый документ публикации
+        // обязан обновить блок мысли — сигнал слоя (до B1; эхо своё не приходит).
+        signalPermanentCommentSaved(ctx.ownerId, md);
         return html;
       },
       onCancel: () => {

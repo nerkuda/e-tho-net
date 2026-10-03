@@ -32,6 +32,7 @@ import { onRealtimeEvent } from '../realtime.js';
 import { inFocusNeighbourhood } from '../realtime-ui.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { invalidateAfterMutation } from '../lib/live/mutator.js';
+import { signalPublicationCompositionChanged } from '../lib/live/index.js';
 import {
   div,
   el,
@@ -562,6 +563,10 @@ function buildOutsideLinkCell(
           remaining.length > 0 ? remaining : null,
         );
         repaintAfterLinkValueWrite(ownerType, ownerId);
+        // Своё значение свойства-связи меняет состав публикации: сигнал слоя
+        // (до B1; гейт `repaintAfterLinkValueWrite` по фокусу здесь не годится —
+        // публикация может быть открыта и без фокуса на владельце).
+        signalPublicationCompositionChanged();
         onRemove();
         return true;
       } catch (err) {
@@ -602,6 +607,7 @@ function buildOutsideLinkCell(
           // Внетиповое свойство-связь меняет рёбра так же, как типовое, —
           // окрестность фокуса перечитываем сразу (ошибка f0b959dd).
           repaintAfterLinkValueWrite(ownerType, ownerId);
+          signalPublicationCompositionChanged();
           onRemove();
           return true;
         } catch (err) {
@@ -742,6 +748,7 @@ function buildOutsideValueCell(
         if (!ok) return;
         try {
           await etn.properties.remove(networkId, ownerType, ownerId, value.property_name);
+          signalPublicationCompositionChanged();
           onRemove();
         } catch (err) {
           notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
@@ -1023,6 +1030,10 @@ function buildEditorCell(opts: {
           // для связей — no-op (в property_values ничего не хранится).
           await etn.properties.set(networkId, ownerType, ownerId, definition.key, value);
         }
+        // Своя запись значения свойства меняет состав публикации: сигнал слоя
+        // (до B1). Скаляр — как в realtime `property-value.set` — тоже помечает
+        // живой текст устаревшим.
+        signalPublicationCompositionChanged();
         // Свойство-связь создало/убрало РЕБРО серверной записью (ошибка
         // f0b959dd): своего realtime-эха у клиента нет — окрестность фокуса
         // перечитываем сразу после успешного сохранения.

@@ -15,6 +15,7 @@ import type { EffectiveTypeProperty, ThoughtRef } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
+import { signalPublicationCompositionChanged } from '../lib/live/index.js';
 import { buildValueEditor } from '../editor/value-editor.js';
 import { div, el } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
@@ -197,6 +198,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
         }
       }
     }
+    if (applied > 0) signalPublicationCompositionChanged();
     if (applied > 0) notice(`Значения применены (${applied}).`, 'success');
     if (failed > 0) notice(`Не удалось применить: ${failed}.`, 'error');
     // Своя запись значения (в т.ч. свойства-связи) не поднимает версию мысли, а

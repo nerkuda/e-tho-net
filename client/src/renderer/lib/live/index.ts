@@ -77,6 +77,9 @@ export {
   optimisticEntityPatch,
   putMutationResult,
   runOptimistic,
+  signalPermanentCommentSaved,
+  signalPublicationCompositionChanged,
+  signalThoughtSaved,
   type OptimisticOptions,
 } from './mutator.js';
 

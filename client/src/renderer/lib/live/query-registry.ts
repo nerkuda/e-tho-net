@@ -75,6 +75,13 @@ export interface LocalMutationSignal {
   local: string;
   /** id затронутой сущности (если сигнал адресный). */
   id?: string;
+  /**
+   * Данные для точечного применения — как payload realtime-события. Например,
+   * сохранённый текст постоянного комментария (`body_md`) или изменённые поля
+   * мысли (`changes`): под stale рабочая область правит блок из них, не читая
+   * сборку.
+   */
+  data?: Record<string, unknown>;
 }
 
 type InvalidationListener = (

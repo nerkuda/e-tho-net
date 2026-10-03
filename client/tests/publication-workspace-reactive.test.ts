@@ -25,6 +25,13 @@ import type { Publication, PublicationAssembly } from '@etn/shared';
 import { ShimElement } from './dom-shim.js';
 import { store } from '../src/renderer/state.js';
 import { routePublicationUpdate } from '../src/renderer/screens/publications/update-routing.js';
+import {
+  invalidateQueries,
+  queryKeys,
+  signalPermanentCommentSaved,
+  signalPublicationCompositionChanged,
+  signalThoughtSaved,
+} from '../src/renderer/lib/live/index.js';
 
 const NETWORK_ID = 'net-1';
 
@@ -355,5 +362,91 @@ describe('рабочая область публикации: реактивно
       '<p>Начало</p>',
       'принудительный рендер после stale вернул серверный текст',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Own-путь (блокер G4): свои правки из редактора идут сигналами слоя
+// ---------------------------------------------------------------------------
+
+describe('рабочая область публикации: свой путь (блокер G4, до B1)', () => {
+  let active: { destroy(): void } | null = null;
+  afterEach(() => {
+    active?.destroy();
+    active = null;
+  });
+
+  it('своя правка комментария раздела под stale правит блок из сигнала, без GET сборки', async () => {
+    const { handle, root } = await mount();
+    active = handle;
+    handle.markRebuildStale();
+    const before = assemblyFetches;
+
+    signalPermanentCommentSaved('sec-1', 'СВОЙ ТЕКСТ БЛОКА');
+
+    assert.equal(assemblyFetches, before, 'под stale сборка НЕ перечитывается');
+    assert.ok(
+      sectionNode(root, 'sec-1')?.querySelector('.pub-doc-preamble')?.innerHTML.includes('СВОЙ ТЕКСТ БЛОКА'),
+      'блок обновлён из сигнала своей правки',
+    );
+    assert.equal(stale(root), true, 'подсветка остаётся');
+  });
+
+  it('своя правка комментария раздела на свежем тексте перечитывает документ', async () => {
+    const { root } = await mount();
+    // `handle` сохраняем для teardown.
+    const before = assemblyFetches;
+    signalPermanentCommentSaved('sec-1', 'НОВЫЙ ТЕКСТ');
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    assert.ok(assemblyFetches > before, 'свежий текст перечитывает сборку (сигнал дошёл)');
+    assert.equal(stale(root), false, 'контентная правка комментария stale не зажигает');
+  });
+
+  it('своя правка заголовка мысли зажигает stale; под stale — точечно, без GET', async () => {
+    const { handle, root } = await mount();
+    active = handle;
+    const before = assemblyFetches;
+
+    signalThoughtSaved('sec-1', { title: 'СВОЙ ЗАГОЛОВОК' });
+    assert.equal(stale(root), true, 'своя правка заголовка зажигает stale');
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    assert.ok(assemblyFetches > before, 'на свежем тексте документ перечитан');
+
+    // Под stale заголовок правится из сигнала, сборка не читается.
+    const beforeStale = assemblyFetches;
+    signalThoughtSaved('sec-1', { title: 'ЕЩЁ ЗАГОЛОВОК' });
+    assert.equal(assemblyFetches, beforeStale, 'под stale сборка не перечитывается');
+    assert.equal(
+      sectionNode(root, 'sec-1')?.querySelector('.pub-doc-heading-text')?.textContent,
+      'ЕЩЁ ЗАГОЛОВОК',
+      'заголовок блока обновлён из сигнала',
+    );
+  });
+
+  it('своя правка состава (связь/свойство) зажигает stale БЕЗ чтения сборки', async () => {
+    const { root } = await mount();
+    const before = assemblyFetches;
+    const ids = sectionIds(root);
+
+    signalPublicationCompositionChanged();
+
+    assert.equal(stale(root), true, 'своё изменение состава зажигает «Пересобрать»');
+    assert.equal(assemblyFetches, before, 'состав не перечитывается на лету');
+    assert.deepEqual(sectionIds(root), ids, 'состав документа не изменился');
+  });
+
+  it('сигнал с чужим владельцем не зажигает stale (мысль вне сборки)', async () => {
+    const { root } = await mount();
+    signalThoughtSaved('stranger', { title: 'X' });
+    assert.equal(stale(root), false, 'посторонняя мысль stale не зажигает');
+  });
+
+  it('публикационная инвалидация без причины безопасно перечитывает документ', async () => {
+    const { root } = await mount();
+    const before = assemblyFetches;
+    invalidateQueries(queryKeys.publicationAssembly('pub-1'));
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    assert.ok(assemblyFetches > before, 'неизвестная причина → перечитывание');
+    assert.equal(stale(root), false, 'stale не зажигается');
   });
 });

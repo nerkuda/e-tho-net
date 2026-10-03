@@ -12,6 +12,7 @@
 import type { ThoughtBatchResult } from '@etn/shared';
 
 import { etn } from './etn.js';
+import { signalPublicationCompositionChanged } from './live/index.js';
 
 /** Создать ребро source→target (тип null — нетипизированное). */
 export async function ensureLink(
@@ -20,37 +21,44 @@ export async function ensureLink(
   targetId: string,
   linkTypeId: string | null = null,
 ): Promise<ThoughtBatchResult> {
-  return etn.thoughts.batch(networkId, {
+  const result = await etn.thoughts.batch(networkId, {
     ids: [targetId],
     op: 'link_parents',
     args: { parent_ids: [sourceId], link_type_id: linkTypeId },
   });
+  // Своё ребро меняет состав публикации: сигнал слоя (до B1).
+  signalPublicationCompositionChanged();
+  return result;
 }
 
 /** Удалить все рёбра parent→id для перечисленных родителей (любого типа). */
-export function unlinkParents(
+export async function unlinkParents(
   networkId: string,
   id: string,
   parentIds: string[],
 ): Promise<ThoughtBatchResult> {
-  return etn.thoughts.batch(networkId, {
+  const result = await etn.thoughts.batch(networkId, {
     ids: [id],
     op: 'unlink_parents',
     args: { parent_ids: parentIds },
   });
+  signalPublicationCompositionChanged();
+  return result;
 }
 
 /** Удалить все рёбра id→child для перечисленных детей (любого типа). */
-export function unlinkChildren(
+export async function unlinkChildren(
   networkId: string,
   id: string,
   childIds: string[],
 ): Promise<ThoughtBatchResult> {
-  return etn.thoughts.batch(networkId, {
+  const result = await etn.thoughts.batch(networkId, {
     ids: [id],
     op: 'unlink_children',
     args: { child_ids: childIds },
   });
+  signalPublicationCompositionChanged();
+  return result;
 }
 
 /**
@@ -58,17 +66,19 @@ export function unlinkChildren(
  * удаляются, недостающие создаются с `linkTypeId` (существующая связь
  * родителя не меняет тип — перенос типа отдельной операцией PATCH).
  */
-export function setOnlyParents(
+export async function setOnlyParents(
   networkId: string,
   id: string,
   parentIds: string[],
   linkTypeId: string | null = null,
 ): Promise<ThoughtBatchResult> {
-  return etn.thoughts.batch(networkId, {
+  const result = await etn.thoughts.batch(networkId, {
     ids: [id],
     op: 'set_only_parents',
     args: { parent_ids: parentIds, link_type_id: linkTypeId },
   });
+  signalPublicationCompositionChanged();
+  return result;
 }
 
 /** Бросает первую ошибку из `failures` — для потоков с try/catch. */
