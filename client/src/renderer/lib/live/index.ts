@@ -49,6 +49,8 @@ export {
   resetQueryRegistry,
   setQueryData,
   subscribeQuery,
+  type InvalidationCause,
+  type LocalMutationSignal,
   type QueryFetcher,
   type QueryListener,
   type QueryState,

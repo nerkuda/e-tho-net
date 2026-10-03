@@ -53,10 +53,14 @@ import { createListNav } from '../lib/ui/list.js';
 import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 import { notice } from '../lib/notice.js';
 import {
-  notifyPublicationChanged,
-  notifyPublicationRebuilt,
-  onPublicationRebuilt,
-} from '../lib/publication-events.js';
+  commitEntity,
+  getEntity,
+  invalidateAfterMutation,
+  invalidateQueries,
+  onQueryInvalidated,
+  queryKeys,
+  registerQuery,
+} from '../lib/live/index.js';
 import {
   buildEntityChipField,
   filterEntityOptions,
@@ -64,14 +68,6 @@ import {
   type EntityOption,
 } from '../lib/entity-picker.js';
 import { buildMetadataBlock } from '../lib/metadata.js';
-import {
-  attachmentChangeFacts,
-  isAttachmentEventType,
-  rememberShownAttachments,
-  shownAttachmentOwner,
-  type AttachmentEventType,
-} from '../lib/attachment-events.js';
-import { onRealtimeEvent } from '../realtime.js';
 import { store } from '../state.js';
 import { buildCover } from '../screens/publications/cover.js';
 import {
@@ -131,11 +127,13 @@ interface CardInstance {
 }
 
 let instance: CardInstance | null = null;
-let realtimeUnsub: (() => void) | null = null;
-/** Подписка на локальные пересборки рабочей области (ошибка c2dec45c). */
-let localUnsub: (() => void) | null = null;
-/** Снятие документного слушателя канала вложений (пакет А приёмки b02ef1cf). */
-let attachmentsChannelUnsub: (() => void) | null = null;
+/**
+ * Подписка карточки на слой данных (G4 тех.проекта 269016e2): снимок
+ * `pub-card:@id` и список вложений `attachments:@publication:@id`. Чужие
+ * события роутер гасит этими ключами, свои правки кладут результат в кэш
+ * (`commitEntity`) и инвалидируют их — один путь для своих и чужих изменений.
+ */
+let layerUnsub: (() => void) | null = null;
 let saveTimer: number | null = null;
 let pendingChanges: PublicationUpdateInput = {};
 let suppressFieldEvents = false;
@@ -158,12 +156,8 @@ const updaters: Array<(publication: Publication) => void> = [];
 
 /** Сброс карточки при смене цели/пересборке рабочего пространства. */
 export function disposePublicationCard(): void {
-  realtimeUnsub?.();
-  realtimeUnsub = null;
-  localUnsub?.();
-  localUnsub = null;
-  attachmentsChannelUnsub?.();
-  attachmentsChannelUnsub = null;
+  layerUnsub?.();
+  layerUnsub = null;
   instance?.unsub();
   if (saveTimer !== null) window.clearTimeout(saveTimer);
   saveTimer = null;
@@ -208,48 +202,26 @@ export function showPublicationTarget(
     publication: publication ?? null,
     unsub: () => undefined,
   };
-  realtimeUnsub = onRealtimeEvent((evt) => {
-    if (evt.network_id !== store.state.networkId) return;
-    // Набор вложений публикации (другой клиент или MCP): ПЕРЕиспускаем тем же
-    // локальным каналом, что и свои правки, — одна точка применения. Слушатель
-    // канала обновляет счётчик вкладки, а панель «Вложения» перечитывает список
-    // (как в панели мысли, `editor.ts`, ошибка abd25adb).
-    if (isAttachmentEventType(evt.type)) {
-      if (attachmentTouchesPublication(evt.type, evt.data, publicationId)) {
-        notifyPublicationAttachmentsChanged(publicationId);
-      }
+  // Слой данных (G4 тех.проекта 269016e2): карточка живёт на ключах
+  // `pub-card:@id` и `attachments:@publication:@id`. Чужие события роутер гасит
+  // этими ключами; свои правки (PATCH/пересборка/вложение) кладут результат в
+  // нормализованный кэш и инвалидируют ключи — подписчик один и тот же.
+  registerQuery(queryKeys.publicationCard(publicationId), null);
+  registerQuery(queryKeys.attachments('publication', publicationId), null);
+  layerUnsub = onQueryInvalidated((prefix) => {
+    if (instance === null) return;
+    const id = instance.publicationId;
+    if (prefix === queryKeys.publicationCard(id)) {
+      // Свежий ПОЛНЫЙ снимок из кэша (его кладут карточка/рабочая область через
+      // `commitEntity`); нет записи — перечитываем сервер.
+      const cached = getEntity<Publication>('publication', id);
+      if (cached !== undefined && cached !== null) apply(cached);
+      else void refreshFromServer();
       return;
     }
-    if (
-      evt.type !== 'publication.updated' &&
-      evt.type !== 'publication.rebuilt' &&
-      evt.type !== 'publication.restored'
-    ) {
-      return;
+    if (prefix === queryKeys.attachmentsAll() || prefix === queryKeys.attachments('publication', id)) {
+      void refreshAttachmentsCount();
     }
-    const data = evt.data as { id?: string; publication_id?: string };
-    const id = data.id ?? data.publication_id ?? '';
-    if (id !== publicationId) return;
-    void refreshFromServer();
-  });
-  // Локальный канал вложений (пакет А): своё realtime-эхо подавлено, поэтому
-  // добавление вложения в диалоге обложки уведомляет этим событием. Слушатель
-  // нужен и когда вкладка «Вложения» ещё не построена (панель ленивая и своего
-  // слушателя тогда не имеет) — поэтому он на уровне карточки.
-  const onAttachmentsChanged = (event: Event): void => {
-    const detail = (event as CustomEvent<{ ownerType?: string; ownerId?: string }>).detail;
-    if (detail?.ownerType !== 'publication' || detail?.ownerId !== publicationId) return;
-    void refreshAttachmentsCount();
-  };
-  document.addEventListener('etn:attachments-changed', onAttachmentsChanged);
-  attachmentsChannelUnsub = () =>
-    document.removeEventListener('etn:attachments-changed', onAttachmentsChanged);
-  // Пересборка ИЗ ШАПКИ рабочей области не вернёт карточке realtime-событие
-  // (эхо подавлено, ошибка c2dec45c) — рабочая область уведомляет локально.
-  localUnsub = onPublicationRebuilt((event) => {
-    if (event.source === 'card') return;
-    if (instance === null || event.id !== instance.publicationId) return;
-    void refreshFromServer();
   });
   // Наполнение — ПОСЛЕ регистрации `instance` (ошибка ecad219b). Панели вкладок
   // строятся лениво, активная («Резюме») собирается ещё внутри `buildCard`,
@@ -264,10 +236,9 @@ export function showPublicationTarget(
 
 /**
  * Перечитывает число вложений публикации и обновляет бейдж `(N)` вкладки
- * «Вложения». Индекс показанных вложений пополняется тем же вызовом — он нужен,
- * чтобы отнести к публикации realtime-события `attachment.updated/deleted`,
- * которые несут только id (тот же приём, что у счётчика панели мысли,
- * `editor/attachments.ts`).
+ * «Вложения». Записи вложений кладём в нормализованный кэш слоя — по ним
+ * роутер разрешает владельца событий `attachment.updated/deleted`, несущих
+ * только id (тот же приём, что у счётчика панели мысли, `editor/attachments.ts`).
  */
 async function refreshAttachmentsCount(): Promise<void> {
   const networkId = store.state.networkId;
@@ -277,24 +248,11 @@ async function refreshAttachmentsCount(): Promise<void> {
     const items = await etn.attachments.list(networkId, 'publication', publicationId);
     // Цель могла смениться, пока ответ был в пути.
     if (instance?.publicationId !== publicationId || tabsHandleRef === null) return;
-    rememberShownAttachments(items);
+    for (const item of items) commitEntity('attachment', item.id, item);
     tabsHandleRef.setCount('attachments', items.length);
   } catch {
     tabsHandleRef?.setCount('attachments', undefined);
   }
-}
-
-/** Относится ли realtime-изменение вложения к публикации `publicationId`. */
-function attachmentTouchesPublication(
-  type: AttachmentEventType,
-  data: unknown,
-  publicationId: string,
-): boolean {
-  const facts = attachmentChangeFacts(type, data);
-  if (facts.ownerType === 'publication' && facts.ownerId === publicationId) return true;
-  if (facts.attachmentId === null) return false;
-  const shown = shownAttachmentOwner(facts.attachmentId);
-  return shown?.ownerType === 'publication' && shown.ownerId === publicationId;
 }
 
 /** Перечитывает публикацию и применяет значения к карточке. */
@@ -303,6 +261,7 @@ async function refreshFromServer(): Promise<void> {
   if (networkId === null || instance === null) return;
   try {
     const publication = await etn.publications.get(networkId, instance.publicationId);
+    commitEntity('publication', publication.id, publication);
     apply(publication);
   } catch {
     // Публикация могла быть удалена — карточка остаётся как есть.
@@ -1048,9 +1007,14 @@ async function flushSave(): Promise<boolean> {
   try {
     const updated = await etn.publications.update(networkId, current.id, changes, current.version);
     if (instance === owner) apply(updated);
-    // Своё realtime-эхо `publication.updated` подавлено — библиотеку, полки и
-    // рабочую область уведомляем локально и точечно (замечание А приёмки).
-    notifyPublicationChanged({ publication: updated, source: 'card' });
+    // Своё realtime-эхо `publication.updated` подавлено — свежий полный снимок
+    // кладём в кэш слоя и инвалидируем ключи: библиотека, полки и рабочая
+    // область обновятся единым кэш-путём (замечание А приёмки b02ef1cf).
+    commitEntity('publication', updated.id, updated);
+    invalidateAfterMutation([
+      queryKeys.publicationCard(updated.id),
+      queryKeys.publicationsListAll(),
+    ]);
     return true;
   } catch (err) {
     errorDialog(t('publication.error'), err);
@@ -1060,17 +1024,14 @@ async function flushSave(): Promise<boolean> {
 }
 
 /**
- * Локальный канал вложений редактора: набор вложений публикации изменился
- * ЛОКАЛЬНО (диалог обложки создал вложение). Своё realtime-эхо подавлено, и без
- * этого вкладка «Вложения» со счётчиком не перечиталась бы (замечание А приёмки
- * b02ef1cf). Формат detail — как у прочих производителей (`markdown-field.ts`).
+ * Локальное изменение набора вложений публикации (диалог обложки создал/снял
+ * вложение): инвалидируем ключ списка вложений владельца и счётчик — счётчик
+ * вкладки и панель «Вложения» перечитают список кэш-путём (замечание А приёмки
+ * b02ef1cf). Своего realtime-эха у правки из этого же клиента нет.
  */
-function notifyPublicationAttachmentsChanged(publicationId: string): void {
-  document.dispatchEvent(
-    new CustomEvent('etn:attachments-changed', {
-      detail: { ownerType: 'publication', ownerId: publicationId },
-    }),
-  );
+function invalidatePublicationAttachments(publicationId: string): void {
+  invalidateQueries(queryKeys.attachments('publication', publicationId));
+  invalidateQueries(queryKeys.indicators(publicationId));
 }
 
 /**
@@ -1114,9 +1075,18 @@ async function rebuildPublication(): Promise<void> {
       notice(t('publication.rebuilt.ready'), 'success');
     }
     // Своё realtime-эхо `publication.rebuilt` до этого клиента не доходит
-    // (подавление на сервере, ошибка c2dec45c) — рабочую область и списки
-    // уведомляем локально (привязка к publicationId, а не к карточке).
-    notifyPublicationRebuilt({ id: publicationId, source: 'card' });
+    // (подавление на сервере, ошибка c2dec45c). Кладём снимок в кэш слоя и
+    // инвалидируем ключи: рабочая область по сигналу `publication-rebuilt`
+    // снимает подсветку и перечитывает документ, библиотека — список.
+    commitEntity('publication', publicationId, updated);
+    invalidateAfterMutation(
+      [
+        queryKeys.publicationAssembly(publicationId),
+        queryKeys.publicationCard(publicationId),
+        queryKeys.publicationsListAll(),
+      ],
+      { local: 'publication-rebuilt', id: publicationId },
+    );
   } catch (err) {
     errorDialog(t('publication.rebuild'), err);
   } finally {
@@ -1444,7 +1414,7 @@ async function openCoverDialog(): Promise<void> {
         errorDialog(t('publication.cover.removeOwner'), err);
         return;
       }
-      notifyPublicationAttachmentsChanged(pubId);
+      invalidatePublicationAttachments(pubId);
       usageCache.delete(row.key);
       await runSearch();
     }
@@ -1563,7 +1533,7 @@ async function openCoverDialog(): Promise<void> {
           mime_type: blob.type !== '' ? blob.type : 'application/octet-stream',
           data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1),
         });
-        notifyPublicationAttachmentsChanged(pubId);
+        invalidatePublicationAttachments(pubId);
         await runSearch();
         // Текущей делаем строку носителя только что созданного вложения.
         const createdRow = rows.find((r) => r.attachments.some((a) => a.id === created.id));
@@ -1650,7 +1620,7 @@ async function openCoverDialog(): Promise<void> {
           title: attachment.title,
           description: attachment.description,
         });
-        notifyPublicationAttachmentsChanged(pubId);
+        invalidatePublicationAttachments(pubId);
         queueSave({ cover_attachment_id: created.id, cover_url: null });
       } catch (err) {
         errorDialog(t('publication.error'), err);

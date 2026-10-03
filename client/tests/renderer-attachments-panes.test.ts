@@ -28,6 +28,7 @@ import { describe, it } from 'node:test';
 
 import type { Attachment, Thought } from '@etn/shared';
 import { ShimElement } from './dom-shim.js';
+import { invalidateQueries, queryKeys } from '../src/renderer/lib/live/index.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -219,11 +220,9 @@ describe('вложения открытого редактора (ошибка 0
     );
 
     const notify = (ownerId: string): void => {
-      (globalThis as any).document.dispatchEvent(
-        new (globalThis as any).CustomEvent('etn:attachments-changed', {
-          detail: { ownerType: 'thought', ownerId },
-        }),
-      );
+      // Кэш-путь слоя (G4): инвалидация ключа списка вложений владельца —
+      // тот же сигнал, что гасят и локальные производители, и роутер.
+      invalidateQueries(queryKeys.attachments('thought', ownerId));
     };
 
     // 1. Вставка картинки в комментарий, вкладка «Вложения» видна: список
@@ -280,22 +279,26 @@ describe('вложения открытого редактора (ошибка 0
 // Проводка путей вложения: добавление и удаление обновляют список и счётчик
 // ---------------------------------------------------------------------------
 
-describe('проводка обновления списка вложений (ошибка 05bd8809)', () => {
+describe('проводка обновления списка вложений (ошибка 05bd8809, G4)', () => {
   const read = (rel: string): string =>
     readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
 
-  it('удаление/перенос на вкладке и перечитывание списка обновляют счётчик', () => {
+  it('правки на вкладке гасят ключ слоя, reload() обновляет счётчик', () => {
     const attachments = read('editor/attachments.ts');
     // Удаление на вкладке: строка убирается, 📎-индикатор холста сбрасывается,
-    // список и счётчик перечитываются тем же reload().
+    // ключ списка вложений гасится — подписчики перечитывают набор.
     assert.ok(
-      /await etn\.attachments\.remove\(networkId, attachment\.id\);[\s\S]{0,400}?invalidateIndicators\(attachment\.owner_id\);[\s\S]{0,400}?await reload\(\)/.test(
+      /await etn\.attachments\.remove\(networkId, attachment\.id\);[\s\S]{0,400}?invalidateIndicators\(attachment\.owner_id\);[\s\S]{0,400}?refreshAttachments\(\)/.test(
         attachments,
       ),
-      'удаление вложения перечитывает список',
+      'удаление вложения гасит ключ списка',
     );
-    // Список и счётчик неразделимы: reload() обновляет и бейдж (через колбэк
-    // владельца панели; для вкладки мысли это refreshTabCount('attachments')).
+    assert.ok(
+      /const refreshAttachments = \(\): void => \{[\s\S]{0,200}?invalidateQueries\(queryKeys\.attachments\(ownerType, ownerId\)\)/.test(
+        attachments,
+      ),
+      'refreshAttachments гасит ключ слоя владельца',
+    );
     assert.ok(
       /async function reload\(\): Promise<void> \{[\s\S]{0,900}?onCountChange\?\.\(\)/.test(
         attachments,
@@ -306,12 +309,9 @@ describe('проводка обновления списка вложений (�
       /onCountChange: \(\) => refreshTabCount\('attachments'\)/.test(attachments),
       'вкладка мысли подключает к панели обновление бейджа',
     );
-    // Слушатель события для скрытой вкладки самоотписывается (защита от
-    // утечки) — поэтому кэш скрытой вкладки сбрасывает редактор.
+    // Слушатель инвалидаций самоотписывается, когда вкладка отключена от DOM.
     assert.ok(
-      /if \(!root\.isConnected\) \{\s*document\.removeEventListener\('etn:attachments-changed', onExternalChange\);/.test(
-        attachments,
-      ),
+      /if \(!root\.isConnected\) \{\s*layerUnsub\(\);/.test(attachments),
       'слушатель вкладки самоотписывается, список скрытой вкладки живёт в кэше',
     );
   });
@@ -326,7 +326,7 @@ describe('проводка обновления списка вложений (�
     );
     assert.ok(
       /refreshTabCount\('attachments'\);\s*invalidateAttachmentsPanes\(\);/.test(editor),
-      'событие обновляет и счётчик, и список',
+      'инвалидация обновляет и счётчик, и список',
     );
   });
 });

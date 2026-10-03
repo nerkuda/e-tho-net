@@ -20,7 +20,13 @@ import type { Attachment, AttachmentOwnerType, Thought, ThoughtUpdateInput } fro
 import { t } from '../lib/i18n.js';
 
 import { invalidateIndicators } from '../canvas/canvas.js';
-import { rememberShownAttachments } from '../lib/attachment-events.js';
+import {
+  commitEntity,
+  invalidateQueries,
+  onQueryInvalidated,
+  queryKeys,
+  registerQuery,
+} from '../lib/live/index.js';
 import { closeDialog, confirmDialog, showDialog } from '../lib/dialog.js';
 import { div, el, errText, isHttpUrl, span } from '../lib/dom.js';
 import { radioRow } from '../lib/ui/choice-row.js';
@@ -54,9 +60,10 @@ export function registerAttachmentsTab(): void {
         ctx.ownerType,
         ctx.ownerId,
       );
-      // Индекс показанных вложений: по нему realtime-события `updated`/`deleted`
-      // (у них в событии только id) находят показанную сущность — ошибка abd25adb.
-      rememberShownAttachments(items);
+      // Записи вложений — в нормализованный кэш слоя: по ним роутер разрешает
+      // владельца для событий `attachment.updated/deleted`, несущих только id.
+      for (const item of items) commitEntity('attachment', item.id, item);
+      registerQuery(queryKeys.attachments(ctx.ownerType, ctx.ownerId), null);
       return items.length;
     } catch {
       return undefined;
@@ -250,6 +257,14 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
   const onCountChange = opts.onCountChange;
   const networkId = requireNetworkId();
   const root = div('attachments-tab');
+  /**
+   * Гаснет ключ списка вложений владельца (кэш-путь слоя, G4): подписчики —
+   * эта панель и бейдж вкладки — перечитывают набор. Своего realtime-эха у
+   * локальной правки нет, поэтому инвалидация — единственный сигнал.
+   */
+  const refreshAttachments = (): void => {
+    invalidateQueries(queryKeys.attachments(ownerType, ownerId));
+  };
 
   const top = div('attachments-top');
   const drop = div('attachments-drop');
@@ -281,20 +296,21 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
   showViewerHint('Выберите вложение для просмотра.');
   void reload();
 
-  // Pastes from OTHER markdown fields (e.g. the permanent comment on the
-  // «Комментарий» tab) add attachments behind this list's back — reload when the
-  // owner matches. The listener self-unregisters once the pane is gone.
-  const onExternalChange = (event: Event): void => {
+  // Набор вложений владельца живёт под ключом слоя `attachments:@owner`:
+  // роутер гасит его на чужие события `attachment.*`, производители (вставка в
+  // markdown, правки на вкладке) — через `invalidateQueries`. Оба источника
+  // сходятся сюда: пока вкладка подключена — перечитываем список на месте,
+  // отключённую (скрытую) отпускает редактор (`editor.ts`).
+  registerQuery(queryKeys.attachments(ownerType, ownerId), null);
+  const layerUnsub = onQueryInvalidated((prefix) => {
     if (!root.isConnected) {
-      document.removeEventListener('etn:attachments-changed', onExternalChange);
+      layerUnsub();
       return;
     }
-    const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
-    if (detail?.ownerType === ownerType && detail?.ownerId === ownerId) {
+    if (prefix === queryKeys.attachmentsAll() || prefix === queryKeys.attachments(ownerType, ownerId)) {
       void reload();
     }
-  };
-  document.addEventListener('etn:attachments-changed', onExternalChange);
+  });
 
   // --- drag & drop ----------------------------------------------------------
   drop.addEventListener('dragover', (event) => {
@@ -352,7 +368,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     }
     if (added > 0) {
       invalidateIndicators(ownerId);
-      await reload();
+      refreshAttachments();
       return;
     }
     // Nothing was recognised — say so instead of failing silently.
@@ -372,9 +388,9 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       list.replaceChildren(operationError(err));
       return;
     }
-    // Показанный список — источник индекса владельцев для realtime-событий
-    // (ошибка abd25adb): `attachment.updated`/`deleted` несут только id.
-    rememberShownAttachments(attachments);
+    // Записи вложений — в нормализованный кэш слоя: по ним роутер разрешает
+    // владельца событий `attachment.updated/deleted`, несущих только id.
+    for (const attachment of attachments) commitEntity('attachment', attachment.id, attachment);
     onCountChange?.();
     list.replaceChildren();
     rowById.clear();
@@ -660,7 +676,10 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         selectedId = null;
         showViewerHint('Выберите вложение для просмотра.');
       }
-      await reload();
+      // Вложение ушло из показанного владельца и прибыло к целевому: гасим оба
+      // списка — подписчики перечитают набор.
+      refreshAttachments();
+      invalidateQueries(queryKeys.attachments('thought', targetId));
     } catch (err) {
       notice(`Не удалось перенести: ${errText(err)}`, 'error');
     }
@@ -718,7 +737,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         selectedId = null;
         showViewerHint('Выберите вложение для просмотра.');
       }
-      await reload();
+      refreshAttachments();
     } catch (err) {
       notice(`Не удалось удалить: ${errText(err)}`, 'error');
     }
@@ -896,7 +915,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         });
         invalidateIndicators(ownerId);
         closeDialog();
-        await reload();
+        refreshAttachments();
       } catch (err) {
         searchError.textContent = errText(err);
       }
@@ -957,7 +976,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         }
         invalidateIndicators(ownerId);
         close();
-        await reload();
+        refreshAttachments();
       } catch (err) {
         errorLine.show(errText(err));
       }

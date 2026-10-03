@@ -1,9 +1,16 @@
 /**
  * Реактивность публикации и поведение диалога обложки после замечаний приёмки
- * b02ef1cf (А/В). Здесь — дешёвые и устойчивые проверки: локальный канал правок
- * публикации (своё realtime-эхо подавлено) и ЯКОРЯ проводки в исходниках;
- * поведение (фокус списка, клавиши, dblclick, точечное обновление DOM)
- * проверяется живой пробой на стенде и в отчёте карточки.
+ * b02ef1cf (А/В) — в терминах реактивного слоя данных (G4 тех.проекта 269016e2).
+ *
+ * Прежний локальный канал `lib/publication-events` снесён: своё realtime-эхо
+ * подавлено, поэтому источник (карточка редактора) после REST-ответа кладёт
+ * снимок в нормализованный кэш (`commitEntity`) и гасит ключи слоя
+ * (`invalidateAfterMutation`). Подписчики — библиотека (`publications-list`) и
+ * рабочая область (`pub-card`/`pub-assembly`) — реагируют единым кэш-путём.
+ *
+ * Здесь — дешёвые и устойчивые проверки: слой оповещает подписчиков о правке
+ * публикации и ЯКОРЯ проводки в исходниках; поведение (точечное обновление DOM,
+ * диалог обложки) проверяется живой пробой на стенде и в отчёте карточки.
  */
 
 import assert from 'node:assert/strict';
@@ -15,9 +22,13 @@ import { fileURLToPath } from 'node:url';
 import type { Publication } from '@etn/shared';
 
 import {
-  notifyPublicationChanged,
-  onPublicationChanged,
-} from '../src/renderer/lib/publication-events.js';
+  commitEntity,
+  getEntity,
+  invalidateAfterMutation,
+  onQueryInvalidated,
+  queryKeys,
+  resetQueryRegistry,
+} from '../src/renderer/lib/live/index.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
@@ -77,44 +88,65 @@ const publication: Publication = {
   updated_by: 'u',
 };
 
-describe('публикация: локальный канал правок (замечание А приёмки b02ef1cf)', () => {
-  it('подписчик получает снимок правки, отписка работает', () => {
-    const seen: string[] = [];
-    const off = onPublicationChanged((event) => seen.push(event.publication.title));
-    notifyPublicationChanged({ publication, source: 'card' });
+describe('публикация: правка через кэш слоя (замечание А приёмки b02ef1cf)', () => {
+  it('мутация кладёт снимок в кэш и гасит ключи слоя, подписчик получает оба', () => {
+    resetQueryRegistry();
+    const prefixes: string[] = [];
+    const off = onQueryInvalidated((prefix) => prefixes.push(prefix));
+
+    commitEntity('publication', publication.id, publication);
+    invalidateAfterMutation([
+      queryKeys.publicationCard(publication.id),
+      queryKeys.publicationsListAll(),
+    ]);
+
     off();
-    notifyPublicationChanged({ publication: { ...publication, title: 'Позже' }, source: 'cover' });
-    assert.deepEqual(seen, ['Заголовок'], 'после отписки событий нет');
+    assert.deepEqual(
+      getEntity<Publication>('publication', publication.id)?.title,
+      'Заголовок',
+      'снимок правки лёг в нормализованный кэш',
+    );
+    assert.ok(
+      prefixes.includes(queryKeys.publicationCard(publication.id)),
+      'карточка (pub-card) оповещена',
+    );
+    assert.ok(
+      prefixes.includes(queryKeys.publicationsListAll()),
+      'библиотека (publications-list) оповещена',
+    );
   });
 
-  it('карточка шлёт канал после успешного PATCH и канал вложений после загрузки файла', () => {
+  it('карточка кладёт снимок в кэш после PATCH и гасит ключи вложений после загрузки', () => {
     const source = read('editor/publication-card.ts');
     const save = functionBlock(source, 'async function flushSave(');
     assert.ok(
-      save.includes('notifyPublicationChanged({ publication: updated'),
-      'карточка уведомляет библиотеку/рабочую область после PATCH',
+      save.includes("commitEntity('publication', updated.id, updated)"),
+      'карточка кладёт снимок публикации в кэш слоя после PATCH',
+    );
+    assert.ok(
+      save.includes('invalidateAfterMutation(') &&
+        save.includes('queryKeys.publicationsListAll()'),
+      'карточка гасит ключ библиотеки (кэш-путь)',
     );
     const upload = functionBlock(source, 'async function uploadFromFile(');
     assert.ok(
-      upload.includes('notifyPublicationAttachmentsChanged(pubId)'),
-      'вложение из диалога обложки уведомляет вкладку «Вложения» локально',
+      upload.includes('invalidatePublicationAttachments(pubId)'),
+      'вложение из диалога обложки гасит ключ списка вложений',
     );
   });
 
-  it('экран «Публикации» подписан и обновляет элемент точечно', () => {
+  it('экран «Публикации» подписан на слой и перечитывает список', () => {
     const source = read('screens/publications/publications.ts');
-    assert.ok(source.includes('onPublicationChanged'), 'экран подписан на локальный канал');
+    assert.ok(source.includes('onQueryInvalidated'), 'экран подписан на инвалидации слоя');
     assert.ok(
-      source.includes('applyPublicationChanged(event.publication)'),
-      'правка применяется снимком',
+      source.includes('queryKeys.publicationsListAll()') && source.includes('queryKeys.shelves()'),
+      'экран слушает ключи библиотеки и полок',
     );
-    const apply = functionBlock(source, 'export function applyPublicationChanged(');
+    const listener = functionBlock(source, 'layerUnsub = onQueryInvalidated(');
     assert.ok(
-      apply.includes('next[index] = publication') && apply.includes('publications = next'),
-      'список обновляется точечно (элемент по индексу), без перечитывания',
+      listener.includes('invalidatePublications()'),
+      'инвалидация ключа библиотеки перечитывает снимок',
     );
-    assert.ok(apply.includes('renderBody()'), 'вид перерисовывается (reconcileKeyed обновит один ключ)');
-    assert.ok(apply.includes('workspace.applyPublication(publication)'), 'рабочая область обновляется точечно');
   });
 
   it('рабочая область умеет применить снимок, не перечитывая сборку', () => {

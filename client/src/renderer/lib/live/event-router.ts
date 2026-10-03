@@ -22,7 +22,7 @@
 
 import type { AnyRealtimeEvent, RealtimeEvent, RealtimeEventType } from '@etn/shared';
 
-import { patchEntity, putEntity, removeEntity, type EntityKind } from './entities.js';
+import { getEntity, patchEntity, putEntity, removeEntity, type EntityKind } from './entities.js';
 import { queryKeys } from './query-keys.js';
 import { hasQuery, invalidateQueries, setQueryData } from './query-registry.js';
 
@@ -125,6 +125,34 @@ const NEIGHBOURHOOD_KEYS = (): string[] => [
   queryKeys.publicationsListAll(),
 ];
 
+/**
+ * Ключи состава публикации: изменение, способное ввести/вывести мысль из отбора
+ * (связи, тип, свойства-значения, определения типов/свойств, создание/удаление/
+ * порядок мыслей). Открытый документ такой ключ гасит и помечает живой текст
+ * устаревшим («Остаётся + подсветка», замечание А2 приёмки b02ef1cf) — сборку
+ * при этом НЕ перечитывает.
+ */
+const PUBLICATION_COMPOSITION_KEYS = (): string[] => [queryKeys.publicationAssemblyAll()];
+
+/** Владелец вложения из нормализованного кэша (для точной инвалидации). */
+function attachmentOwnerKeyFromCache(attachmentId: string): string | null {
+  const entity = getEntity<{ owner_type?: unknown; owner_id?: unknown }>(
+    'attachment',
+    attachmentId,
+  );
+  const ownerType = entity?.owner_type;
+  const ownerId = entity?.owner_id;
+  if (typeof ownerType === 'string' && typeof ownerId === 'string' && ownerId !== '') {
+    return queryKeys.attachments(ownerType, ownerId);
+  }
+  return null;
+}
+
+/** Инвалидация списков вложений после изменения: точный ключ владельца или все. */
+function attachmentListKeys(attachmentId: string): string[] {
+  return [attachmentOwnerKeyFromCache(attachmentId) ?? queryKeys.attachmentsAll()];
+}
+
 /** Декларативная таблица «событие → правила». */
 export const realtimeRoutes: RouteTable = {
   'thought.created': [
@@ -136,6 +164,7 @@ export const realtimeRoutes: RouteTable = {
       invalidate: (evt) => [
         queryKeys.focus(evt.data.thought.id),
         ...NEIGHBOURHOOD_KEYS(),
+        ...PUBLICATION_COMPOSITION_KEYS(),
         queryKeys.indicators(evt.data.thought.id),
       ],
     }),
@@ -185,12 +214,17 @@ export const realtimeRoutes: RouteTable = {
         queryKeys.pins(),
         queryKeys.indicators(evt.data.id),
         queryKeys.publicationsListAll(),
+        ...PUBLICATION_COMPOSITION_KEYS(),
       ],
     }),
   ],
   'thought.reordered': [
     ruleFor<'thought.reordered'>({
-      invalidate: (evt) => [queryKeys.focus(evt.data.owner_thought_id), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: (evt) => [
+        queryKeys.focus(evt.data.owner_thought_id),
+        ...NEIGHBOURHOOD_KEYS(),
+        ...PUBLICATION_COMPOSITION_KEYS(),
+      ],
     }),
   ],
   'link.created': [
@@ -200,19 +234,20 @@ export const realtimeRoutes: RouteTable = {
         queryKeys.focus(evt.data.link.source_id),
         queryKeys.focus(evt.data.link.target_id),
         ...NEIGHBOURHOOD_KEYS(),
+        ...PUBLICATION_COMPOSITION_KEYS(),
       ],
     }),
   ],
   'link.updated': [
     ruleFor<'link.updated'>({
       patch: (evt) => patch('link', evt.data.id, evt.data.changes, evt, evt.data.version),
-      invalidate: () => NEIGHBOURHOOD_KEYS(),
+      invalidate: () => [...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'link.deleted': [
     ruleFor<'link.deleted'>({
       patch: (evt) => drop('link', evt.data.id),
-      invalidate: () => NEIGHBOURHOOD_KEYS(),
+      invalidate: () => [...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'comment.created': [
@@ -259,14 +294,20 @@ export const realtimeRoutes: RouteTable = {
   'attachment.updated': [
     ruleFor<'attachment.updated'>({
       patch: (evt) => patch('attachment', evt.data.id, evt.data.changes, evt),
-      // Владелец в payload не гарантирован — сбрасываем все списки вложений.
-      invalidate: () => [queryKeys.indicatorsAll(), queryKeys.attachmentsAll()],
+      // Владелец события не гарантирован: после патча он берётся из
+      // нормализованного кэша (списки вложений кладут туда записи), иначе —
+      // широковещательно по всем спискам вложений.
+      invalidate: (evt) => [queryKeys.indicatorsAll(), ...attachmentListKeys(evt.data.id)],
     }),
   ],
   'attachment.deleted': [
+    // Порядок правил важен: сперва инвалидация по владельцу ИЗ КЭША (запись
+    // ещё жива), затем удаление записи. Иначе владельца взять негде.
+    ruleFor<'attachment.deleted'>({
+      invalidate: (evt) => [queryKeys.indicatorsAll(), ...attachmentListKeys(evt.data.id)],
+    }),
     ruleFor<'attachment.deleted'>({
       patch: (evt) => drop('attachment', evt.data.id),
-      invalidate: () => [queryKeys.indicatorsAll(), queryKeys.attachmentsAll()],
     }),
   ],
   'property-value.set': [
@@ -274,6 +315,7 @@ export const realtimeRoutes: RouteTable = {
       invalidate: (evt) => [
         evt.data.owner_type === 'thought' ? queryKeys.focus(evt.data.owner_id) : queryKeys.focusAll(),
         ...NEIGHBOURHOOD_KEYS(),
+        ...PUBLICATION_COMPOSITION_KEYS(),
       ],
     }),
   ],
@@ -282,6 +324,7 @@ export const realtimeRoutes: RouteTable = {
       invalidate: (evt) => [
         evt.data.owner_type === 'thought' ? queryKeys.focus(evt.data.owner_id) : queryKeys.focusAll(),
         ...NEIGHBOURHOOD_KEYS(),
+        ...PUBLICATION_COMPOSITION_KEYS(),
       ],
     }),
   ],
@@ -344,73 +387,73 @@ export const realtimeRoutes: RouteTable = {
   'thought-type.created': [
     ruleFor<'thought-type.created'>({
       patch: (evt) => put('thought-type', evt.data.type.id, evt.data.type, evt),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'thought-type.updated': [
     ruleFor<'thought-type.updated'>({
       patch: (evt) => patch('thought-type', evt.data.id, evt.data.changes, evt, evt.data.version),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'thought-type.deleted': [
     ruleFor<'thought-type.deleted'>({
       patch: (evt) => drop('thought-type', evt.data.id),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'link-type.created': [
     ruleFor<'link-type.created'>({
       patch: (evt) => put('link-type', evt.data.type.id, evt.data.type, evt),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'link-type.updated': [
     ruleFor<'link-type.updated'>({
       patch: (evt) => patch('link-type', evt.data.id, evt.data.changes, evt, evt.data.version),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'link-type.deleted': [
     ruleFor<'link-type.deleted'>({
       patch: (evt) => drop('link-type', evt.data.id),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'property-definition.created': [
     ruleFor<'property-definition.created'>({
       patch: (evt) => put('property-definition', evt.data.definition.id, evt.data.definition, evt),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'property-definition.updated': [
     ruleFor<'property-definition.updated'>({
       patch: (evt) => patch('property-definition', evt.data.id, evt.data.changes, evt),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'property-definition.deleted': [
     ruleFor<'property-definition.deleted'>({
       patch: (evt) => drop('property-definition', evt.data.id),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'property-registry.created': [
     ruleFor<'property-registry.created'>({
       patch: (evt) => put('property-registry', evt.data.property.id, evt.data.property, evt),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'property-registry.updated': [
     ruleFor<'property-registry.updated'>({
       patch: (evt) => patch('property-registry', evt.data.id, evt.data.changes, evt),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'property-registry.deleted': [
     ruleFor<'property-registry.deleted'>({
       patch: (evt) => drop('property-registry', evt.data.id),
-      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS()],
+      invalidate: () => [queryKeys.typesCatalog(), ...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'thought-type-view.created': [
@@ -579,7 +622,9 @@ export function routeRealtimeEvent(evt: AnyRealtimeEvent, ctx: RouteContext = {}
   for (const rule of rules) {
     if (rule.patch !== undefined) patched.push(...rule.patch(evt));
     if (rule.invalidate !== undefined) {
-      for (const prefix of rule.invalidate(evt)) invalidated.push(...invalidateQueries(prefix));
+      // Причина инвалидации — само событие: наблюдатели (открытый документ
+      // публикации) по ней решают, точечная это правка блока или смена состава.
+      for (const prefix of rule.invalidate(evt)) invalidated.push(...invalidateQueries(prefix, evt));
     }
   }
 

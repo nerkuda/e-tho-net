@@ -74,7 +74,15 @@ import { loadPropertyRows } from './recipe.js';
 import { buildPropertyListRows } from '../../lib/property-list.js';
 import { ensureLink, throwOnFailures } from '../../lib/link-ops.js';
 import { parseFilterDefinition } from '../../lib/filter-builder.js';
-import { notifyPublicationRebuilt } from '../../lib/publication-events.js';
+import {
+  commitEntity,
+  getEntity,
+  invalidateAfterMutation,
+  onQueryInvalidated,
+  queryKeys,
+  registerQuery,
+} from '../../lib/live/index.js';
+import { routePublicationUpdate } from './update-routing.js';
 import { renderMarkdown } from '@etn/markdown';
 import * as users from '../../lib/users.js';
 import { store } from '../../state.js';
@@ -421,6 +429,9 @@ export function mountPublicationWorkspace(
       ]);
       publication = card;
       assembly = doc;
+      // Полный снимок публикации — в нормализованный кэш слоя: точечные патчи
+      // роутера ложатся поверх полной записи, а не создают частичную.
+      commitEntity('publication', card.id, card);
       loading = false;
       candidates = null;
       candidatesOpen = false;
@@ -627,8 +638,9 @@ export function mountPublicationWorkspace(
     // `reload()` приходит с дебаунсом 200 мс и на медленном сервере запаздывал.
     rebuildButton.disabled = true;
     setButtonTitle(rebuildButton, t('publication.rebuilding'));
+    let updated: Publication;
     try {
-      await etn.publications.rebuild(networkId, publicationId);
+      updated = await etn.publications.rebuild(networkId, publicationId);
     } catch (err) {
       errorDialog(t('publications.ws.rebuild'), err);
       return;
@@ -641,9 +653,14 @@ export function mountPublicationWorkspace(
     // Документ перерисовываем принудительно: точечные правки DOM под stale не
     // должны пережить сборку (блокер приёмки b02ef1cf).
     forceDocumentRender = true;
-    // Своё realtime-эхо подавлено, карточке публикации документ не обновится
-    // (ошибка c2dec45c) — сообщаем локально, затем перечитываем документ.
-    notifyPublicationRebuilt({ id: publicationId, source: 'workspace' });
+    // Своего realtime-эха у пересборки нет (ошибка c2dec45c): свежий снимок
+    // публикации кладём в кэш слоя, карточку и библиотеку будим инвалидацией
+    // их ключей. Рабочая область уже сняла устаревание и перечитает документ.
+    commitEntity('publication', publicationId, updated);
+    invalidateAfterMutation([
+      queryKeys.publicationCard(publicationId),
+      queryKeys.publicationsListAll(),
+    ]);
     reload();
   }
 
@@ -695,6 +712,159 @@ export function mountPublicationWorkspace(
     forceDocumentRender = true;
     reload();
   }
+
+  // --- Привязка к слою данных (G4 тех.проекта 269016e2) ---------------------
+  //
+  // Снимки рабочей области живут под ключами слоя `pub-card:@id` и
+  // `pub-assembly:@id`. Роутер гасит их на чужие события, мутации источников —
+  // через `invalidateQueries`; решение «что делать» принимает этот подписчик:
+  // контентная правка обновляет шапку/титул/блок точечно, состав помечает живой
+  // текст устаревшим, пересборка снимает устаревание и перечитывает документ.
+  // Локальные каналы (`lib/publication-events`) снесены — единственный путь.
+
+  /** Зарегистрировать ключи открытой публикации в реестре слоя. */
+  function retargetWorkspaceKeys(): void {
+    if (publicationId === null) return;
+    registerQuery(queryKeys.publicationCard(publicationId), null);
+    registerQuery(queryKeys.publicationAssembly(publicationId), null);
+  }
+
+  /** Локальный сигнал пересборки мутации-источника (не realtime-событие). */
+  function isRebuildSignal(cause: unknown): boolean {
+    return (
+      typeof cause === 'object' &&
+      cause !== null &&
+      (cause as { local?: unknown }).local === 'publication-rebuilt'
+    );
+  }
+
+  /** Realtime-событие из причины инвалидации (или `null`, если причина локальная). */
+  function asRealtimeEvent(
+    cause: unknown,
+  ): { type: string; data: Record<string, unknown> } | null {
+    if (typeof cause !== 'object' || cause === null) return null;
+    const c = cause as { type?: unknown; data?: unknown };
+    if (typeof c.type !== 'string') return null;
+    const data =
+      typeof c.data === 'object' && c.data !== null
+        ? (c.data as Record<string, unknown>)
+        : {};
+    return { type: c.type, data };
+  }
+
+  /**
+   * Инвалидация снимка публикации (`pub-card`). Локальная правка контента
+   * приходит без события — берём свежий полный снимок из нормализованного кэша
+   * (его положила карточка через `commitEntity`). Realtime-путь обрабатывает
+   * инвалидация сборки — здесь не дублируем.
+   */
+  function onCardInvalidated(cause: unknown): void {
+    if (publicationId === null) return;
+    if (asRealtimeEvent(cause) !== null || isRebuildSignal(cause)) return;
+    const cached = getEntity<Publication>('publication', publicationId);
+    if (cached !== undefined && cached !== null) applyPublication(cached);
+    else reload();
+  }
+
+  /**
+   * Инвалидация сборки (`pub-assembly`): маршрутизация по ПРИЧИНЕ. Состав
+   * помечает живой текст устаревшим без перечитывания (замечание А2 приёмки
+   * b02ef1cf), контент правит блок точечно из payload, пересборка снимает
+   * устаревание и перечитывает документ.
+   */
+  function onAssemblyInvalidated(cause: unknown): void {
+    if (publicationId === null) return;
+    if (isRebuildSignal(cause)) {
+      applyRebuildRealtime();
+      return;
+    }
+    const evt = asRealtimeEvent(cause);
+    if (evt === null) {
+      // Локальная/неизвестная инвалидация — безопасное перечитывание.
+      reload();
+      return;
+    }
+    const type = evt.type;
+    if (type.startsWith('publication.')) {
+      const id = evt.data['id'] ?? evt.data['publication_id'];
+      if (typeof id === 'string' && id !== publicationId) return; // чужая публикация
+      if (type === 'publication.rebuilt') {
+        applyRebuildRealtime();
+        return;
+      }
+      if (type === 'publication.updated') {
+        const changes = evt.data['changes'];
+        if (typeof changes !== 'object' || changes === null) {
+          reload();
+          return;
+        }
+        // Обе ветки независимы: смешанный PATCH `{title, title_recipe}` даёт и
+        // подсветку состава, и новый заголовок (замечание-блокер 2 b02ef1cf).
+        const routing = routePublicationUpdate(changes as Partial<Publication>);
+        if (routing.markStale) markRebuildStale();
+        if (routing.patch !== null) applyPublicationPatch(routing.patch);
+        return;
+      }
+      // Порядок/исключения/корзина — состав меняется, перечитываем.
+      reload();
+      return;
+    }
+    if (type === 'comment.created' || type === 'comment.updated') {
+      const comment = evt.data['comment'] as Record<string, unknown> | undefined;
+      const changes = evt.data['changes'] as Record<string, unknown> | undefined;
+      const kind = comment?.['kind'] ?? evt.data['kind'];
+      // Блок документа образует только постоянный комментарий.
+      if (kind !== 'permanent') return;
+      const ownerId = comment?.['owner_id'] ?? evt.data['owner_id'];
+      const bodyMd = comment?.['body_md'] ?? changes?.['body_md'];
+      applyCommentRealtime(typeof ownerId === 'string' ? ownerId : undefined, bodyMd, 'permanent');
+      return;
+    }
+    if (type === 'comment.deleted') {
+      const ownerId = evt.data['owner_id'];
+      applyCommentRealtime(typeof ownerId === 'string' ? ownerId : undefined);
+      return;
+    }
+    if (type === 'thought.updated') {
+      const id = evt.data['id'];
+      applyThoughtRealtime(
+        typeof id === 'string' ? id : '',
+        evt.data['changes'] as { title?: unknown } | undefined,
+      );
+      return;
+    }
+    // Состав: связи/свойства/типы, создание/удаление/порядок мыслей — состав
+    // документа на лету не меняется, «Пересобрать» подсвечивается.
+    if (
+      type === 'thought.created' ||
+      type === 'thought.deleted' ||
+      type === 'thought.reordered' ||
+      type.startsWith('link.') ||
+      type.startsWith('property-value.') ||
+      type.startsWith('thought-type.') ||
+      type.startsWith('link-type.') ||
+      type.startsWith('property-definition.') ||
+      type.startsWith('property-registry.')
+    ) {
+      markRebuildStale();
+      return;
+    }
+    reload();
+  }
+
+  const workspaceLayerUnsub = onQueryInvalidated((prefix, _keys, cause) => {
+    if (publicationId === null) return;
+    if (prefix === queryKeys.publicationCard(publicationId)) {
+      onCardInvalidated(cause);
+      return;
+    }
+    if (
+      prefix === queryKeys.publicationAssemblyAll() ||
+      prefix === queryKeys.publicationAssembly(publicationId)
+    ) {
+      onAssemblyInvalidated(cause);
+    }
+  });
 
   // --- Рендер состояний ----------------------------------------------------
 
@@ -1378,6 +1548,7 @@ export function mountPublicationWorkspace(
     staleRebuild = false;
     page = resolveOpenPage(page, samePublication, target);
     publicationId = id;
+    retargetWorkspaceKeys();
     root.classList.remove('hidden');
     await load();
     if (target?.anchor !== undefined) scrollToAnchor(target.anchor);
@@ -1395,6 +1566,7 @@ export function mountPublicationWorkspace(
 
   function destroy(): void {
     if (reloadTimer !== null) window.clearTimeout(reloadTimer);
+    workspaceLayerUnsub();
     docHost.removeEventListener('scroll', onDocScroll);
     document.removeEventListener('keydown', onKeydown);
     docNav.destroy();

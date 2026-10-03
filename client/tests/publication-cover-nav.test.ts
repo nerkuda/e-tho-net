@@ -21,6 +21,7 @@ import type { Attachment, Publication } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
 import { store } from '../src/renderer/state.js';
+import { invalidateQueries, queryKeys } from '../src/renderer/lib/live/index.js';
 
 const NETWORK_ID = 'net-1';
 
@@ -261,18 +262,16 @@ describe('счётчик вкладки «Вложения» публикаци�
     mod = opened.mod;
     assert.equal(attachmentsBadge(opened.scrollBox), '(2)', 'бейдж по числу вложений (2)');
 
-    // Локальный канал (пакет А): диалог обложки создал третье вложение.
+    // Кэш-путь слоя (G4): диалог обложки создал третье вложение — сервер отдаёт
+    // три записи, источник гасит ключ списка вложений публикации; бейдж
+    // перечитывается подписчиком слоя.
     (globalThis as any).window.etn.attachments.list = async () => [
       ...ATTACHMENTS,
       attachment('att-3', 'C:/pics/third.png'),
     ];
-    doc().dispatchEvent(
-      new (globalThis as any).CustomEvent('etn:attachments-changed', {
-        detail: { ownerType: 'publication', ownerId: 'pub-1' },
-      }),
-    );
+    invalidateQueries(queryKeys.attachments('publication', 'pub-1'));
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(attachmentsBadge(opened.scrollBox), '(3)', 'бейдж перечитан локальным каналом');
+    assert.equal(attachmentsBadge(opened.scrollBox), '(3)', 'бейдж перечитан инвалидацией слоя');
   });
 });
 

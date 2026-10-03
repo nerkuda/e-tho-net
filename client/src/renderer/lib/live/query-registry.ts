@@ -57,7 +57,31 @@ const entries = new Map<string, QueryEntry<unknown>>();
  * перерисовывает нижнюю зону-отбор, когда окрестность фокуса перечитана, но её
  * содержимое не изменилось (`canvasRenderKey` не ломается — ошибка 4fca95c9).
  */
-type InvalidationListener = (prefix: string, keys: readonly string[]) => void;
+/**
+ * Причина инвалидации (этап G4 тех.проекта `269016e2`). Роутер передаёт
+ * realtime-событие, локальная мутация — свой сигнал (см. `LocalMutationSignal`).
+ * Наблюдателю причина нужна там, где реакция на ключ зависит от того, ЧТО
+ * именно изменилось: открытый документ публикации под stale правит блок из
+ * payload события, а не перечитывает сборку.
+ */
+export type InvalidationCause = unknown;
+
+/**
+ * Локальный сигнал мутации-источника (не realtime-событие). Позволяет экрану
+ * отличить свою пересборку от прочих инвалидаций того же ключа.
+ */
+export interface LocalMutationSignal {
+  /** `publication-rebuilt` — публикацию пересобрали; живой текст снова свеж. */
+  local: string;
+  /** id затронутой сущности (если сигнал адресный). */
+  id?: string;
+}
+
+type InvalidationListener = (
+  prefix: string,
+  keys: readonly string[],
+  cause?: InvalidationCause,
+) => void;
 const invalidationListeners = new Set<InvalidationListener>();
 
 /** Подписаться на инвалидации ключей реестра; возвращает отписку. */
@@ -68,8 +92,12 @@ export function onQueryInvalidated(listener: InvalidationListener): () => void {
   };
 }
 
-function notifyInvalidated(prefix: string, keys: readonly string[]): void {
-  for (const listener of [...invalidationListeners]) listener(prefix, keys);
+function notifyInvalidated(
+  prefix: string,
+  keys: readonly string[],
+  cause?: InvalidationCause,
+): void {
+  for (const listener of [...invalidationListeners]) listener(prefix, keys, cause);
 }
 
 /**
@@ -316,8 +344,10 @@ export function queryStore<T>(key: string, fetcher: QueryFetcher<T>): Readable<Q
 /**
  * Инвалидировать все записи под префиксом. Возвращает список затронутых ключей
  * (для тестов паритета роутера). Рефетч — только у записей с наблюдателями.
+ * `cause` — событие шины или локальный сигнал мутации: наблюдатель узнаёт,
+ * ПОЧЕМУ ключ погашен (нужно документу публикации для stale-механики).
  */
-export function invalidateQueries(prefix: string): string[] {
+export function invalidateQueries(prefix: string, cause?: InvalidationCause): string[] {
   const touched: string[] = [];
   for (const entry of entries.values()) {
     if (!matchesKeyPrefix(entry.key, prefix)) continue;
@@ -335,7 +365,7 @@ export function invalidateQueries(prefix: string): string[] {
   // Уведомляем наблюдателей ДАЖЕ при пустом `touched`: экран мог ещё не
   // зарегистрировать свой ключ (переходный период G2–G6), но обязан узнать,
   // что событие его класса пришло (нижняя зона холста — ошибка 4fca95c9).
-  notifyInvalidated(prefix, touched);
+  notifyInvalidated(prefix, touched, cause);
   return touched;
 }
 

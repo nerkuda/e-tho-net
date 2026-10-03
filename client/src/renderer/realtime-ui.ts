@@ -26,7 +26,6 @@ import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chr
 import { store } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
 import { invalidateWikiLinkCache } from './editor/wiki-link-resolver.js';
-import { applyPublicationsRealtime, applyPublicationDocumentRealtime, applyPublicationThoughtRealtime, applyPublicationCompositionRealtime } from './screens/publications/publications.js';
 
 /**
  * Tiny wrapper so the inline call sites above stay readable. Drops the cached
@@ -108,9 +107,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
   if (evt.network_id !== store.state.networkId) return;
   switch (evt.type) {
     case 'thought.deleted':
-      // Открытый документ публикации: состав не меняем на лету — помечаем
-      // «Пересобрать» устаревшим (замечание А2 приёмки b02ef1cf).
-      applyPublicationCompositionRealtime();
+      // Открытый документ публикации: состав не меняем на лету — «Пересобрать»
+      // подсвечивает подписчик рабочей области по инвалидации `pub-assembly`
+      // роутера (G4 тех.проекта 269016e2). Ручного вызова здесь больше нет.
       invalidateIndicators(evt.data.id);
       invalidateRef(evt.data.id);
       invalidateHistoryBar();
@@ -131,8 +130,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'thought.created':
-      // Новая мысль может войти в отбор — состав не трогаем, помечаем пересборку.
-      applyPublicationCompositionRealtime();
+      // Новая мысль может войти в отбор — открытый документ публикации
+      // подсветит «Пересобрать» подписчик рабочей области по инвалидации
+      // `pub-assembly` роутера (G4). Ручного вызова здесь больше нет.
       // Слой данных (G2/G3): окрестность фокуса и «Структуры»/«Дневник»
       // перечитываются по инвалидации роутера (`focus` / `structures-page` /
       // `chronicle-feed`), нижняя зона — подписчиком холста на инвалидации
@@ -141,9 +141,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
 
     case 'thought.updated':
       // Мысль В текущей сборке — точечное обновление её блока + пометка
-      // устаревания (заголовок влияет на отбор); вне — ничего (замечание 2
-      // приёмки b02ef1cf).
-      applyPublicationThoughtRealtime(evt.data.id, evt.data.changes);
+      // устаревания; вне — ничего. Открытый документ публикации обновляет
+      // подписчик рабочей области по инвалидации `pub-assembly` роутера (G4).
       invalidateRef(evt.data.id);
       // A pinned chip mirrors the thought's title/icon/styles — refresh it.
       if (store.state.pins.includes(evt.data.id)) {
@@ -167,8 +166,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'link.created':
     case 'property-value.set':
     case 'property-value.deleted':
-      // Состав публикации: пометка пересборки (замечание А2 приёмки b02ef1cf).
-      applyPublicationCompositionRealtime();
+      // Состав публикации: подписчик рабочей области подсветит «Пересобрать»
+      // по инвалидации `pub-assembly` роутера (G4 тех.проекта 269016e2).
       // Слой данных (G2/G3): окрестность фокуса гасит роутер (`focus`),
       // нижняя зона — подписчик холста, «Структуры»/«Дневник» — свои ключи.
       break;
@@ -179,10 +178,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     // «Дневник» перезапрашивает ленту (чипсы связей показывают их подписи).
     case 'link.updated':
     case 'link.deleted':
-      // Ребро может быть строкообразующим для состава публикации — пометка.
-      applyPublicationCompositionRealtime();
-      // Слой данных (G2/G3): окрестность фокуса перечитывает роутер (`focus`),
-      // «Структуры»/«Дневник» — свои ключи слоя.
+      // Ребро может быть строкообразующим для состава публикации — подписчик
+      // рабочей области подсветит «Пересобрать» по инвалидации `pub-assembly`
+      // роутера (G4). Слой данных (G2/G3): окрестность фокуса перечитывает
+      // роутер (`focus`), «Структуры»/«Дневник» — свои ключи слоя.
       break;
 
     case 'comment.created':
@@ -198,12 +197,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // already invalidated by `invalidateIndicators`.
       invalidateIndicators(evt.data.comment.owner_id);
       // «Дневник» гасит `chronicle-feed` роутером (G3) — ручного вызова нет.
-      // Блок документа публикации образует ТОЛЬКО постоянный комментарий мысли;
-      // хроно-записи документ не меняют — игнорируем их (блокер приёмки
-      // b02ef1cf: правка хроно-комментария подменяла текст блока).
-      if (evt.data.comment.kind === 'permanent') {
-        applyPublicationDocumentRealtime(evt.data.comment.owner_id, evt.data.comment.body_md, 'permanent');
-      }
+      // Блок документа публикации образует ТОЛЬКО постоянный комментарий мысли:
+      // подписчик рабочей области правит блок по payload по инвалидации
+      // `pub-assembly` роутера (G4); хроно-записи документ не меняют.
       break;
 
     case 'comment.deleted':
@@ -211,7 +207,6 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // comment events. The canvas indicator cache is invalidated above; the
       // editor's comment view is patched by its own listener.
       invalidateIndicators(evt.data.owner_id);
-      applyPublicationDocumentRealtime(evt.data.owner_id);
       break;
 
     case 'comment.updated':
@@ -221,12 +216,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // and updates it in place via its own `onRealtimeEvent` hook.
       invalidateIndicators(null);
       // «Дневник» гасит `chronicle-feed` роутером (G3).
-      // Только постоянный комментарий образует блок документа; `kind` пришёл в
-      // payload (блокер приёмки b02ef1cf) — правку хроно-записи игнорируем,
-      // чтобы не подменить текст блока.
-      if (evt.data.kind === 'permanent') {
-        applyPublicationDocumentRealtime(evt.data.owner_id, evt.data.changes.body_md, 'permanent');
-      }
+      // Блок документа публикации правит подписчик рабочей области по
+      // инвалидации `pub-assembly` роутера (G4): только постоянный комментарий
+      // образует блок, `kind` пришёл в payload.
       break;
 
     case 'attachment.created':
@@ -288,9 +280,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       store.update({ pins: evt.data.ordered_ids });
       break;
 
-    // Публикации и полки (0.11.1, задача a3cfc018): библиотека перечитывает
-    // список с дебаунсом; карточку публикации в панели редактора обновляет её
-    // собственный подписчик (`editor/publication-card.ts`).
+    // Публикации и полки (0.11.1): библиотека, рабочая область и карточка
+    // читают живые данные через слой (G4 тех.проекта 269016e2) — кэш-путь
+    // роутера гасит `publications-list` / `shelves` / `pub-card` / `pub-assembly`,
+    // ручных вызовов здесь больше нет.
     case 'publication.updated':
     case 'publication.order.reordered':
     case 'publication.exclusions.changed':
@@ -300,7 +293,6 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'publication.purged':
     case 'shelf.updated':
     case 'shelf.deleted':
-      applyPublicationsRealtime(evt.type, evt.data);
       break;
 
     case 'thought-type.created':
@@ -314,10 +306,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'property-definition.deleted':
       // Another client changed the type catalogues (L21): reload both lists
       // and repaint everything that renders type styles/names. Типы и
-      // определения свойств входят в условия отбора — та же пометка пересборки.
-      // Слой данных (G2/G3): окрестность фокуса, «Структуры» и «Дневник»
+      // определения свойств входят в условия отбора — подписчик рабочей
+      // области подсветит «Пересобрать» по инвалидации `pub-assembly` роутера
+      // (G4). Слой данных (G2/G3): окрестность фокуса, «Структуры» и «Дневник»
       // гасит роутер (`focus` / `structures-page` / `chronicle-feed`).
-      applyPublicationCompositionRealtime();
       void reloadTypeCatalogues();
       break;
 

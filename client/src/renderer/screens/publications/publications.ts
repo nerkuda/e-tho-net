@@ -49,7 +49,12 @@ import { emptyState, errorState, loadingState } from '../../lib/ui/empty-state.j
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { store } from '../../state.js';
 import * as users from '../../lib/users.js';
-import { onPublicationChanged, onPublicationRebuilt } from '../../lib/publication-events.js';
+import {
+  commitEntity,
+  onQueryInvalidated,
+  queryKeys,
+  registerQuery,
+} from '../../lib/live/index.js';
 import { buildCover } from './cover.js';
 import {
   assemblyDateLabel,
@@ -75,7 +80,6 @@ import {
   type LibraryNavHandle,
 } from './library-nav.js';
 import { openPublicationWizard } from './wizard.js';
-import { routePublicationUpdate } from './update-routing.js';
 import {
   mountPublicationWorkspace,
   type PublicationOpenTarget,
@@ -119,10 +123,13 @@ let initPromise: Promise<void> | null = null;
 let reloadTimer: number | null = null;
 let searchTimer: number | null = null;
 let unsubStore: (() => void) | null = null;
-/** Подписка на локальные пересборки публикаций (ошибка c2dec45c). */
-let publicationEventsUnsub: (() => void) | null = null;
-/** Подписка на локальные правки публикаций (замечание А приёмки b02ef1cf). */
-let publicationChangedUnsub: (() => void) | null = null;
+/**
+ * Подписка экрана на инвалидации слоя данных (G4 тех.проекта 269016e2):
+ * список библиотеки и полки — запросы слоя `publications-list` / `shelves`.
+ * Роутер гасит их на чужие события, мутации — через `invalidateQueries`; экран
+ * перечитывает снимок (reconcileKeyed обновляет только изменившиеся строки).
+ */
+let layerUnsub: (() => void) | null = null;
 let draggingPublicationId: string | null = null;
 /** Свёрнутые полки-группы (единое состояние обоих видов, задача 55ee3c85). */
 const collapsedShelves = new Set<string>();
@@ -193,17 +200,14 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     onOpenCard: (id) => void openPublicationCard(id),
     onExport: (id, ev) => openWorkspaceExportMenu(id, ev),
   });
-  // Локальная пересборка (из карточки панели редактора или из шапки рабочей
-  // области) не возвращается realtime-эхом (ошибка c2dec45c): документ и
-  // списки перечитываем тем же путём, что и обработчик `publication.rebuilt`.
-  publicationEventsUnsub = onPublicationRebuilt(() => {
-    applyPublicationsRealtime('publication.rebuilt');
-  });
-  // Локальная правка публикации в карточке редактора (титул/подзаголовок/
-  // обложка) тоже не приходит эхом — обновляем карточку/строку и полки
-  // ТОЧЕЧНО, без перечитывания списка (замечание А приёмки b02ef1cf).
-  publicationChangedUnsub = onPublicationChanged((event) => {
-    applyPublicationChanged(event.publication);
+  // Реактивность библиотеки — через слой данных (G4 тех.проекта 269016e2):
+  // список и полки живут под ключами запросов, роутер/мутации их гасят, экран
+  // перечитывает снимок. Локальные каналы (`lib/publication-events`) снесены.
+  retargetPublicationsQuery();
+  layerUnsub = onQueryInvalidated((prefix) => {
+    if (prefix === queryKeys.publicationsListAll() || prefix === queryKeys.shelves()) {
+      invalidatePublications();
+    }
   });
   unsubStore = store.subscribe(() => {
     if (hostEl.isConnected !== true) return;
@@ -212,10 +216,8 @@ export function mountPublications(hostEl: HTMLElement): () => void {
   return () => {
     unsubStore?.();
     unsubStore = null;
-    publicationEventsUnsub?.();
-    publicationEventsUnsub = null;
-    publicationChangedUnsub?.();
-    publicationChangedUnsub = null;
+    layerUnsub?.();
+    layerUnsub = null;
     if (reloadTimer !== null) window.clearTimeout(reloadTimer);
     if (searchTimer !== null) window.clearTimeout(searchTimer);
     reloadTimer = null;
@@ -250,69 +252,24 @@ export function closePublicationWorkspace(): void {
 }
 
 /**
- * Realtime-событие правки КОНТЕНТА мысли в документе (постоянный комментарий
- * раздела/текста). `bodyMd` — свежий текст из payload, `kind` — вид комментария:
- * блок документа образует только `permanent`, поэтому под stale точечная правка
- * идёт из payload БЕЗ чтения сборки, а хроно-записи игнорируются (замечание-
- * блокер приёмки b02ef1cf).
+ * Ключ запроса-снимка библиотеки по текущим условиям (поиск/полка/активность/
+ * сортировка/страница). Реестр адресуется строками; префикс `publications-list`
+ * гасит все страницы разом.
  */
-export function applyPublicationDocumentRealtime(
-  ownerId?: string,
-  bodyMd?: unknown,
-  kind?: string,
-): void {
-  if (workspace?.isOpen() === true) workspace.applyCommentRealtime(ownerId, bodyMd, kind);
+function publicationsFilterKey(): string {
+  return [
+    viewState.query.trim(),
+    viewState.shelfFilter ?? '',
+    viewState.activeFilter,
+    viewState.sort,
+    String(offset),
+  ].join('|');
 }
 
-/**
- * Realtime-изменение мысли: в документе — точечное обновление её блока и
- * пометка устаревания, вне документа — ничего (замечание 2 приёмки b02ef1cf).
- * `changes` пробрасывается для точечной правки заголовка, когда живой текст уже
- * устарел (замечание-блокер 1 приёмки b02ef1cf).
- */
-export function applyPublicationThoughtRealtime(
-  thoughtId: string,
-  changes?: { title?: unknown },
-): void {
-  if (workspace?.isOpen() === true) workspace.applyThoughtRealtime(thoughtId, changes);
-}
-
-/**
- * Realtime-событие, влияющее на СОСТАВ (связи/тип/свойства мыслей, рецепт,
- * создание/удаление): состав открытого документа на лету НЕ меняется — кнопка
- * «Пересобрать» подсвечивается как «живой текст устарел» (замечание А2 приёмки
- * b02ef1cf). Запросов сборки здесь нет — только локальная пометка.
- */
-export function applyPublicationCompositionRealtime(): void {
-  if (workspace?.isOpen() === true) workspace.markRebuildStale();
-}
-
-/**
- * Поля `publication.updated`, меняющие СОСТАВ документа (рецепт и его
- * источники/нумерация), и контентные поля — вынесены в чистый модуль
- * `./update-routing.ts` вместе с решением о маршруте (замечание-блокер 2
- * приёмки b02ef1cf: смешанный PATCH применяет обе ветки).
- */
-
-/**
- * Локальная правка публикации (замечание А приёмки b02ef1cf): снимок из карточки
- * редактора применяется ТОЧЕЧНО — библиотека обновляет только изменившийся
- * элемент (`reconcileKeyed` по `version`), рабочая область — только шапку и
- * титульный блок. Своего realtime-эха (`publication.updated`) у правки из этого
- * же клиента нет, поэтому источник зовёт этот путь напрямую.
- */
-export function applyPublicationChanged(publication: Publication): void {
-  const index = publications.findIndex((p) => p.id === publication.id);
-  if (index !== -1) {
-    const next = publications.slice();
-    next[index] = publication;
-    publications = next;
-    if (ui !== null) {
-      renderBody();
-      void loadBadges();
-    }
-  }
-  if (workspace?.isOpen(publication.id) === true) workspace.applyPublication(publication);
+/** Зарегистрировать ключи снимка библиотеки в реестре (инвалидации их видят). */
+function retargetPublicationsQuery(): void {
+  registerQuery(queryKeys.publicationsList(publicationsFilterKey()), null);
+  registerQuery(queryKeys.shelves(), null);
 }
 
 /** Инвалидирует список (перечитать из сервера с дебаунсом). */
@@ -322,52 +279,6 @@ export function invalidatePublications(): void {
     reloadTimer = null;
     void load();
   }, 150);
-}
-
-/** Realtime-ветка экрана: публикации и полки перечитываются. */
-export function applyPublicationsRealtime(eventType: string, data?: unknown): void {
-  if (
-    eventType.startsWith('publication.') ||
-    eventType === 'shelf.updated' ||
-    eventType === 'shelf.deleted'
-  ) {
-    if (store.state.activeView === 'publications') invalidatePublications();
-    if (workspace?.isOpen() !== true) return;
-    // Правка полей публикации другим клиентом (пакет А) и рецепта (замечание 1
-    // приёмки b02ef1cf) маршрутизируется по ПОЛЯМ, а не перечитыванием сборки:
-    // контент — точечно в карточку/шапку/титул, состав — только пометка.
-    if (eventType === 'publication.updated') {
-      const changes = asPublicationChanges(data);
-      if (changes === null) {
-        workspace.reload();
-        return;
-      }
-      // Состав помечает текст устаревшим, контент применяется точечно; обе
-      // ветки независимы — смешанный PATCH `{title, title_recipe}` даёт и
-      // подсветку, и новый заголовок (замечание-блокер 2 приёмки b02ef1cf).
-      const routing = routePublicationUpdate(changes);
-      if (routing.markStale) workspace.markRebuildStale();
-      if (routing.patch !== null) workspace.applyPublicationPatch(routing.patch);
-      return;
-    }
-    // Пересборка (в т.ч. внешняя, от другого клиента) делает живой текст
-    // актуальным: подсветка «Пересобрать» гаснет, документ перечитывается
-    // (ошибка 29fd0587).
-    if (eventType === 'publication.rebuilt') {
-      workspace.applyRebuildRealtime();
-      return;
-    }
-    // Порядок/исключения/корзина — перечитывание (элемент 2ebacd12).
-    workspace.reload();
-  }
-}
-
-/** Изменённые поля события `publication.updated` (или `null`, если их нет). */
-function asPublicationChanges(data: unknown): Partial<Publication> | null {
-  if (typeof data !== 'object' || data === null) return null;
-  const changes = (data as { changes?: unknown }).changes;
-  if (typeof changes !== 'object' || changes === null) return null;
-  return changes as Partial<Publication>;
 }
 
 /** Открывает карточку публикации в панели редактора (ADR eb687eea). */
@@ -381,6 +292,7 @@ export async function openPublicationCard(id: string): Promise<void> {
   store.update({ editorTarget: { kind: 'publication', id } });
   try {
     const publication = await etn.publications.get(networkId, id);
+    commitEntity('publication', id, publication);
     const live = store.state.editorTarget;
     if (live?.kind === 'publication' && live.id === id) {
       store.update({ editorTarget: { kind: 'publication', id, publication } });
@@ -598,6 +510,9 @@ function persist(): void {
 async function load(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || ui === null) return;
+  // Ключ снимка следует за условиями (поиск/полка/страница) — инвалидации слоя
+  // попадают ровно в активный запрос.
+  retargetPublicationsQuery();
   loading = true;
   loadError = null;
   renderState();
@@ -616,6 +531,10 @@ async function load(): Promise<void> {
     publications = list.items;
     total = list.total;
     shelves = shelfList;
+    // Полные снимки — в нормализованный кэш слоя (точечные патчи роутера лягут
+    // поверх полных записей, а не создадут частичные).
+    for (const item of list.items) commitEntity('publication', item.id, item);
+    for (const shelf of shelfList) commitEntity('shelf', shelf.id, shelf);
     loading = false;
     renderAll();
     void loadBadges();

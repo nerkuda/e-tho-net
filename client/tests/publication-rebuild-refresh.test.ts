@@ -1,24 +1,27 @@
 /**
- * Пересборка публикации: видимая реакция и локальная перечитка (ошибка c2dec45c,
- * 0.11.1).
+ * Пересборка публикации: видимая реакция и перечитка через слой
+ * (ошибка c2dec45c, 0.11.1; миграция G4 тех.проекта 269016e2).
  *
  * Дефект: кнопка «Пересобрать» исправна, но realtime-событие `publication.rebuilt`
  * не доходит до клиента-источника (сервер подавляет эхо), а перечитка документа,
  * списков и карточки висела только на realtime. Итог — «нажал, ничего не
- * произошло»: документ рабочей области не обновлялся, карточка не получала
- * обратной связи (ни прелоадера, ни подтверждения), а конфликт `flushSave` молча
- * пропускал пересборку по устаревшему состоянию.
+ * произошло».
+ *
+ * Прежний локальный канал `lib/publication-events` снесён. Теперь источник
+ * (карточка/шапка) кладёт снимок публикации в нормализованный кэш и гасит ключи
+ * слоя: `pub-assembly` с локальным сигналом `publication-rebuilt` (рабочая
+ * область снимает stale и перечитывает документ), `pub-card` (карточка берёт
+ * свежий снимок из кэша), `publications-list` (библиотека).
  *
  * Здесь закреплено поведение источника-карточки (функционально, на DOM-шиме):
  *  - во время пересборки кнопка заблокирована и показан прелоадер;
- *  - после успеха канал `lib/publication-events` шлёт `{ id, source: 'card' }`
- *    (им рабочую область и списки перечитывает `publications.ts`);
+ *  - после успеха снимок лёг в кэш, ключи `pub-card`/`publications-list` погашены;
  *  - приходит краткое подтверждение;
- *  - пересборка из шапки (`source: 'workspace'`) перечитывает карточку;
+ *  - пересборка из шапки обновляет карточку через кэш слоя;
  *  - конфликт отложенного сохранения НЕ запускает пересборку.
  *
  * Проводка потребителей (карточка → рабочая область/списки, шапка → карточка)
- * проверяется по исходникам модулей — как принято сторожам `guard-*`.
+ * проверяется по исходникам модулей — как принято сторожами `guard-*`.
  */
 
 import assert from 'node:assert/strict';
@@ -33,9 +36,11 @@ import { ShimElement } from './dom-shim.js';
 import type { MdEditor } from '../src/renderer/editor/md-editor.js';
 import { store } from '../src/renderer/state.js';
 import {
-  notifyPublicationRebuilt,
-  onPublicationRebuilt,
-} from '../src/renderer/lib/publication-events.js';
+  commitEntity,
+  invalidateQueries,
+  onQueryInvalidated,
+  queryKeys,
+} from '../src/renderer/lib/live/index.js';
 import { assemblyDateLabel } from '../src/renderer/screens/publications/model.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -245,11 +250,11 @@ describe('пересборка публикации из карточки (ош�
     mod.disposePublicationCard();
   });
 
-  it('во время пересборки есть прелоадер, после — канал и подтверждение', async () => {
+  it('во время пересборки есть прелоадер, после — кэш слоя и подтверждение', async () => {
     const mod = await cardModule();
     openCard(mod, scrollBox, db.get('pub-1') as Publication);
-    const events: Array<{ id: string; source: string }> = [];
-    const off = onPublicationRebuilt((event) => events.push(event));
+    const prefixes: string[] = [];
+    const off = onQueryInvalidated((prefix) => prefixes.push(prefix));
     try {
       const button = rebuildButton(scrollBox);
       triggerRebuild(mod);
@@ -271,7 +276,14 @@ describe('пересборка публикации из карточки (ош�
         null,
         'прелоадер убран после пересборки',
       );
-      assert.deepEqual(events, [{ id: 'pub-1', source: 'card' }], 'карточка уведомила локально');
+      assert.ok(
+        prefixes.includes(queryKeys.publicationCard('pub-1')),
+        'карточка погасила свой ключ слоя (pub-card)',
+      );
+      assert.ok(
+        prefixes.includes(queryKeys.publicationAssembly('pub-1')),
+        'рабочая область оповещена ключом сборки (pub-assembly)',
+      );
       assert.ok(
         bodyEl.findAll('notice').some((n) => n.flatText().includes('Документ пересобран')),
         'видно подтверждение пересборки',
@@ -286,22 +298,22 @@ describe('пересборка публикации из карточки (ош�
     }
   });
 
-  it('пересборка из шапки рабочей области перечитывает карточку', async () => {
+  it('пересборка из шапки обновляет карточку через кэш слоя', async () => {
     const mod = await cardModule();
     openCard(mod, scrollBox, db.get('pub-1') as Publication);
     assert.equal(assemblyText(mod, scrollBox), '—', 'до пересборки дата сборки пуста');
 
-    // Шапка рабочей области сообщает о своей пересборке (source: 'workspace').
-    db.set('pub-1', { ...(db.get('pub-1') as Publication), assembly_date: ASSEMBLY });
-    const before = calls.gets.length;
-    notifyPublicationRebuilt({ id: 'pub-1', source: 'workspace' });
+    // Шапка рабочей области положила свежий снимок в кэш и погасила ключ карточки.
+    const updated = { ...(db.get('pub-1') as Publication), assembly_date: ASSEMBLY };
+    db.set('pub-1', updated);
+    commitEntity('publication', 'pub-1', updated);
+    invalidateQueries(queryKeys.publicationCard('pub-1'));
     await wait(10);
 
-    assert.ok(calls.gets.length > before, 'карточка перечитала публикацию с сервера');
     assert.equal(
       assemblyText(mod, scrollBox),
       assemblyDateLabel(ASSEMBLY),
-      'карточка показала новую дату сборки',
+      'карточка показала новую дату сборки из кэша слоя',
     );
   });
 
@@ -371,18 +383,21 @@ function functionBlock(source: string, signature: string): string {
   return end < 0 ? source.slice(start) : source.slice(start, end + 2);
 }
 
-describe('проводка локальной перечитки после пересборки (ошибка c2dec45c)', () => {
-  it('карточка шлёт канал после успешной пересборки', () => {
+describe('проводка перечитки после пересборки (ошибка c2dec45c, G4)', () => {
+  it('карточка кладёт снимок в кэш и гасит ключ сборки с локальным сигналом', () => {
     const source = read('editor/publication-card.ts');
     const block = functionBlock(source, 'async function rebuildPublication(');
     assert.ok(
-      block.includes("notifyPublicationRebuilt({ id: publicationId, source: 'card' })"),
-      'карточка уведомляет локально о пересборке',
+      block.includes("commitEntity('publication', publicationId, updated)"),
+      'карточка кладёт снимок пересборки в кэш слоя',
     );
-    assert.ok(block.includes('setRebuildingOn(ownerButton, ownerFeedback, true)'), 'карточка показывает прелоадер');
     assert.ok(
-      source.includes("t('publication.rebuilding')"),
-      'прелоадер берёт строку из словаря',
+      block.includes("local: 'publication-rebuilt'"),
+      'рабочая область оповещается локальным сигналом пересборки',
+    );
+    assert.ok(
+      block.includes('setRebuildingOn(ownerButton, ownerFeedback, true)'),
+      'карточка показывает прелоадер',
     );
     assert.ok(
       block.includes('setRebuildingOn(ownerButton, ownerFeedback, false)'),
@@ -392,28 +407,20 @@ describe('проводка локальной перечитки после пе
       block.includes('const owner = instance'),
       'владелец пересборки захвачен до первого await (защита от смены цели)',
     );
-    assert.ok(block.includes('flushSave()'), 'карточка досылает отложенное сохранение');
     assert.ok(
       /if \(!\(await flushSave\(\)\)\) return;/.test(block),
       'конфликт сохранения прерывает пересборку, а не пропускается молча',
     );
   });
 
-  it('карточка перечитывается на пересборку из шапки (source: workspace)', () => {
-    const source = read('editor/publication-card.ts');
-    assert.ok(
-      source.includes('onPublicationRebuilt') && source.includes("event.source === 'card'"),
-      'карточка игнорирует собственную эмиссию и слушает пересборку из шапки',
-    );
-  });
-
-  it('рабочая область шлёт канал после пересборки из шапки', () => {
+  it('рабочая область шлёт кэш-путь после пересборки из шапки', () => {
     const source = read('screens/publications/workspace.ts');
     const block = functionBlock(source, 'async function rebuild(');
     assert.ok(
-      block.includes("notifyPublicationRebuilt({ id: publicationId, source: 'workspace' })"),
-      'шапка уведомляет локально о пересборке',
+      block.includes("commitEntity('publication', publicationId, updated)"),
+      'шапка кладёт снимок в кэш слоя',
     );
+    assert.ok(block.includes('invalidateAfterMutation('), 'шапка гасит ключи слоя');
     assert.ok(block.includes('reload()'), 'шапка перечитывает документ');
     assert.ok(
       block.includes("t('publication.rebuilding')"),
@@ -421,12 +428,12 @@ describe('проводка локальной перечитки после пе
     );
   });
 
-  it('экран «Публикации» перечитывает документ и списки по локальному каналу', () => {
+  it('экран «Публикации» подписан на слой и перечитывает список', () => {
     const source = read('screens/publications/publications.ts');
-    assert.ok(source.includes('onPublicationRebuilt'), 'экран подписан на локальный канал');
+    assert.ok(source.includes('onQueryInvalidated'), 'экран подписан на инвалидации слоя');
     assert.ok(
-      source.includes("applyPublicationsRealtime('publication.rebuilt')"),
-      'локальный канал идёт тем же путём, что и обработчик realtime publication.rebuilt',
+      source.includes('queryKeys.publicationsListAll()'),
+      'библиотека гасится ключом слоя',
     );
   });
 });

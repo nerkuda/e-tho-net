@@ -14,6 +14,7 @@ import type { MentionsScanThought } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
+import { invalidateQueries, queryKeys } from '../lib/live/index.js';
 import { div, el, errText, renderHtml } from '../lib/dom.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { t } from '../lib/i18n.js';
@@ -435,12 +436,9 @@ async function insertClipboardFiles(
     // Tell the editor chrome the owner's attachment set changed: the
     // «Вложения» tab (if built) reloads its list, the tab badge re-counts —
     // without this a paste from the comment field left a stale empty list
-    // until the editor target changed.
-    document.dispatchEvent(
-      new CustomEvent('etn:attachments-changed', {
-        detail: { ownerType: owner.ownerType, ownerId: owner.ownerId },
-      }),
-    );
+    // until the editor target changed. Кэш-путь слоя (G4): ключ списка вложений
+    // владельца гасится, подписчики (вкладка/бейдж) перечитывают список.
+    invalidateQueries(queryKeys.attachments(owner.ownerType, owner.ownerId));
     const filePath = attachment.file_path;
     if (filePath === null || filePath === '') continue;
     const url = etnimgUrl(filePath);

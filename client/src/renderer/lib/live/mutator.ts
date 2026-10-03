@@ -69,9 +69,12 @@ export function commitEntityPatch(
 }
 
 /** Инвалидировать перечисленные префиксы ключей после мутации. */
-export function invalidateAfterMutation(prefixes: readonly string[]): string[] {
+export function invalidateAfterMutation(
+  prefixes: readonly string[],
+  cause?: unknown,
+): string[] {
   const touched: string[] = [];
-  for (const prefix of prefixes) touched.push(...invalidateQueries(prefix));
+  for (const prefix of prefixes) touched.push(...invalidateQueries(prefix, cause));
   return touched;
 }
 

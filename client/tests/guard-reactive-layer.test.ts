@@ -39,17 +39,17 @@ const RENDERER_ROOT = path.resolve(
  * Легаси-подписчики `onRealtimeEvent`, замороженные до миграции.
  *
  * TODO G5 — редактор (комментарии/свойства/упоминания/менеджер свойств/типы).
- * TODO G4 — публикации (карточка).
  * TODO G6 — старый switch (`realtime-ui.ts`), легаси-леера (`layers.ts`) и мост
  * `app.ts` (регистрация `applyRealtimeToUi`, app.ts:612).
  * `lib/lock-cache.ts` — инфраструктура замков, прямой подписчик допустим.
+ *
+ * G4 (публикации) снят с whitelist: карточка публикации читает живые данные
+ * через слой (`lib/live`).
  */
 const ON_REALTIME_WHITELIST = new Set<string>([
   // инфраструктура слоя
   'realtime.ts',
   'lib/lock-cache.ts',
-  // G4 — публикации
-  'editor/publication-card.ts',
   // G5 — редактор
   'editor/editor.ts',
   'editor/comments.ts',
@@ -63,15 +63,12 @@ const ON_REALTIME_WHITELIST = new Set<string>([
   'screens/layers.ts',
 ].map((p) => p.replace(/\\/g, '/')));
 
-/** Текущие импортёры локальных каналов — заморожены, новых быть не должно. */
-const LOCAL_CHANNEL_IMPORTERS = new Set<string>([
-  'lib/publication-events.ts',
-  'editor/publication-card.ts',
-  'editor/attachments.ts',
-  'editor/editor.ts',
-  'screens/publications/workspace.ts',
-  'screens/publications/publications.ts',
-]);
+/**
+ * Импортёры локальных каналов обновления. Оба модуля
+ * (`lib/publication-events.ts`, `lib/attachment-events.ts`) СНЕСЕНЫ на G4 —
+ * набор пуст: любой импорт по этому шаблону теперь красный (файлов нет).
+ */
+const LOCAL_CHANNEL_IMPORTERS = new Set<string>([]);
 
 const LOCAL_CHANNEL_IMPORT_PATTERN =
   /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"][^'"]*(?:publication-events|attachment-events)(?:\.js)?['"]/;
@@ -117,23 +114,28 @@ describe('guard: реактивный слой данных (269016e2, G1)', () 
     ]);
   });
 
-  it('мигрированные модули G2/G3 не подписываются на realtime напрямую', () => {
+  it('мигрированные модули G2/G3/G4 не подписываются на realtime напрямую', () => {
     // холст и «Структуры» переведены на слой (G2), лента «Дневника» — на слой
-    // (G3): данные и перерисовку ведут реестр запросов и роутер, а не прямой
+    // (G3), публикации (библиотека, рабочая область, карточка) — на слой (G4):
+    // данные и перерисовку ведут реестр запросов и роутер, а не прямой
     // `onRealtimeEvent`. `properties.ts` остаётся в whitelist до G5 — у него
     // легаси-хук открытого редактора.
     assertGuardClean(RENDERER_ROOT, [
       {
-        name: 'g2-g3-migrated-no-direct-subscription',
+        name: 'g2-g3-g4-migrated-no-direct-subscription',
         description:
-          'canvas, «Структуры» (G2 65286909) и «Дневник» (G3 40fa8118) читают ' +
-          'живые данные через слой (focus:@id / structures-page / chronicle-feed): ' +
-          'прямых подписок onRealtimeEvent быть не должно.',
+          'canvas, «Структуры» (G2 65286909), «Дневник» (G3 40fa8118) и публикации ' +
+          '(G4 461bb279: publications.ts, workspace.ts, editor/publication-card.ts) ' +
+          'читают живые данные через слой: прямых подписок onRealtimeEvent быть ' +
+          'не должно.',
         pattern: /\bonRealtimeEvent\s*\(/,
         include: (rel) =>
           /(?:^|\/)canvas\/canvas\.ts$/.test(rel) ||
           /(?:^|\/)screens\/structures\/structures\.ts$/.test(rel) ||
-          /(?:^|\/)screens\/chronicle\/chronicle\.ts$/.test(rel),
+          /(?:^|\/)screens\/chronicle\/chronicle\.ts$/.test(rel) ||
+          /(?:^|\/)screens\/publications\/publications\.ts$/.test(rel) ||
+          /(?:^|\/)screens\/publications\/workspace\.ts$/.test(rel) ||
+          /(?:^|\/)editor\/publication-card\.ts$/.test(rel),
         allow: () => false,
       },
     ]);
