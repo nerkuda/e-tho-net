@@ -46,7 +46,7 @@ describe('модульное состояние строки поиска сбр
     );
   });
 
-  it('сброс обнуляет настройки, флаг восстановления, таймеры и карты подкорней', () => {
+  it('сброс обнуляет настройки, флаг восстановления, карты подкорней — но НЕ отложенную запись', () => {
     const search = readText(SEARCH_TS);
     const body = search.match(/function resetSearchState\(\): void \{([\s\S]*?)\n\}/)?.[1] ?? '';
     assert.ok(body !== '', 'функция сброса объявлена');
@@ -62,9 +62,27 @@ describe('модульное состояние строки поиска сбр
     assert.match(body, /cursor = null;/, 'клавиатурный курсор сброшен');
     assert.match(body, /subrootClouds\.clear\(\);/, 'облачка подкорней прошлой сети сняты');
     assert.match(body, /subrootCloudsRequested\.clear\(\);/, 'реестр догрузки подкорней снят');
-    // Отложенный `persistState` сети A не должен «утечь» в сеть B после смены.
-    const timerClears = body.match(/window\.clearTimeout\((searchTimer|persistTimer)\)/g) ?? [];
-    assert.equal(timerClears.length, 2, 'сняты оба отложенных таймера (поиска и сохранения)');
+    assert.match(body, /window\.clearTimeout\(searchTimer\)/, 'таймер поиска снят');
+    // Ключевое (замечание верификатора): отложенную запись сохранения сброс НЕ
+    // отменяет — она досылает настройку в свою (старую) сеть.
+    assert.ok(
+      !body.includes('persistTimer') && !body.includes('persistWriter'),
+      'сброс не трогает отложенную запись — иначе «изменил и сразу ушёл» теряет настройку',
+    );
+  });
+
+  it('сохранение идёт через отложенную запись, фиксирующую сеть и payload при планировании', () => {
+    const search = readText(SEARCH_TS);
+    assert.match(
+      search,
+      /createDebouncedWriter\(\(networkId, payload\)/,
+      'используется общий помощник отложенной записи (сеть/payload фиксируются сразу)',
+    );
+    assert.match(
+      search,
+      /persistWriter\.schedule\(\s*networkId,/,
+      'планирование привязано к id сети',
+    );
   });
 });
 

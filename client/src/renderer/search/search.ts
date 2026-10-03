@@ -82,6 +82,7 @@ import {
   type SearchCriteriaState,
 } from '../lib/filter-builder.js';
 import { buildUserSelectWidget } from '../lib/users.js';
+import { createDebouncedWriter } from '../lib/debounced-writer.js';
 import {
   UI_STATE_KEY,
   type SearchResponse,
@@ -161,8 +162,11 @@ const subrootCloudsRequested = new Set<string>();
  * по-прежнему per-network: ключ L4 `ui_state` уже включает `network_id` — сеть
  * без своей записи получает дефолт, а не чужие настройки.
  *
- * Отложенный таймер сохранения тоже снимается: настройка, изменённая в сети A,
- * не должна «утечь» в только что открытую сеть B через 300 мс.
+ * Отложенную запись настройки (`persistWriter`) сброс НЕ снимает: сеть и
+ * payload зафиксированы в момент планирования (см.
+ * {@link createDebouncedWriter}), поэтому та запись досылает настройку в СВОЮ
+ * (старую) сеть и после перемонтирования — иначе правка, сделанная меньше чем
+ * за 300 мс до ухода из сети, терялась бы.
  */
 function resetSearchState(): void {
   options = defaultSearchCriteriaState();
@@ -176,10 +180,6 @@ function resetSearchState(): void {
   if (searchTimer !== null) {
     window.clearTimeout(searchTimer);
     searchTimer = null;
-  }
-  if (persistTimer !== null) {
-    window.clearTimeout(persistTimer);
-    persistTimer = null;
   }
 }
 
@@ -553,25 +553,23 @@ async function restoreState(): Promise<void> {
 /**
  * Persists the current query + options (debounced).
  *
- * Сеть и полезная нагрузка фиксируются В МОМЕНТ планирования записи, а не при
- * срабатывании таймера: иначе отложенная запись, пережившая смену сети,
- * прочитала бы `store.state.networkId` уже новой сети и уехала бы не туда
- * (ошибка 438092f6). Набор сохраняемых ключей — конвертер конструктора
- * (совместим с записанным до 0.8.2: те же имена полей).
+ * Сеть и полезная нагрузка фиксируются в момент планирования (см. общий
+ * {@link createDebouncedWriter}): отложенная запись, пережившая смену сети
+ * (перемонтирование), досылается в СВОЮ сеть, а `resetSearchState` её не
+ * отменяет — иначе правка, сделанная перед уходом из сети, терялась бы
+ * (ошибка 438092f6, замечание верификатора). Набор сохраняемых ключей —
+ * конвертер конструктора (совместим с записанным до 0.8.2: те же имена полей).
  */
-let persistTimer: number | null = null;
+const persistWriter = createDebouncedWriter((networkId, payload) => {
+  void etn.ui.setState(networkId, UI_STATE_KEY.SEARCH_STATE, payload).catch(() => undefined);
+});
 function persistState(): void {
   const networkId = store.state.networkId;
   if (networkId === null || chrome === null) return;
-  const payload = JSON.stringify({
-    q: chrome.input.value,
-    options: searchCriteriaToStored(options),
-  });
-  if (persistTimer !== null) window.clearTimeout(persistTimer);
-  persistTimer = window.setTimeout(() => {
-    persistTimer = null;
-    void etn.ui.setState(networkId, UI_STATE_KEY.SEARCH_STATE, payload).catch(() => undefined);
-  }, 300);
+  persistWriter.schedule(
+    networkId,
+    JSON.stringify({ q: chrome.input.value, options: searchCriteriaToStored(options) }),
+  );
 }
 
 /** Resolves the effective scopes for the current option set. */
