@@ -19,10 +19,12 @@ import {
   collapsibleSectionIds,
   documentBlocks,
   flattenSections,
+  linkEntryMatchesPick,
   positionsFor,
   reorderIds,
   sectionNodeKey,
   siblingNodeKeys,
+  subtreeIds,
   tocLines,
 } from '../src/renderer/screens/publications/model.js';
 import { reconcileKeyed } from '../src/renderer/lib/ui/keyed-list.js';
@@ -509,5 +511,54 @@ describe('модель рабочей области: сворачивание �
 
   it('collapsibleSectionIds — разделы с содержимым (текст/предисловие/подраздел)', () => {
     assert.deepEqual(collapsibleSectionIds(makeAssembly(tree())).sort(), ['A', 'B']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Блокеры верификации ea1b5f14: предикаты операций над блоками.
+// ---------------------------------------------------------------------------
+
+describe('модель рабочей области: операции с блоками (ea1b5f14, блокеры 1–3)', () => {
+  it('subtreeIds покрывает потомков — перенос раздела в потомка отвергается (блокер 1)', () => {
+    const items = [
+      { id: 'A', parentId: null },
+      { id: 'A1', parentId: 'A' },
+      { id: 'A1a', parentId: 'A1' },
+      { id: 'B', parentId: null },
+      { id: 'B1', parentId: 'B' },
+    ];
+    const sub = subtreeIds('A', items);
+    assert.deepEqual([...sub].sort(), ['A', 'A1', 'A1a'], 'сам и всё поддерево');
+    assert.ok(sub.has('A1'), 'собственный потомок в запрете — диалог его не предложит');
+    assert.ok(sub.has('A1a'), 'глубже одного уровня тоже');
+    assert.ok(!sub.has('B1'), 'чужие ветви не задеты');
+    // Диалог «Переместить в раздел…»: список = все минус поддерево.
+    const offered = items.filter((item) => !subtreeIds('A', items).has(item.id)).map((i) => i.id);
+    assert.deepEqual(offered, ['B', 'B1'], 'себя и потомков в дереве нет');
+  });
+
+  it('linkEntryMatchesPick находит свойство-связь вне типа (property_id пуст) — блокеры 2 и 3', () => {
+    const pick = { propertyId: 'pid-1', key: 'Содержит' };
+    // Сервер отдаёт внетиповое значение с пустым id, но именем стороны.
+    const outsideType = { property_id: '', property_name: 'Содержит' };
+    assert.equal(
+      linkEntryMatchesPick(outsideType, pick),
+      true,
+      'совпадение по имени стороны при пустом property_id',
+    );
+    // Обычная привязка — по id.
+    assert.equal(linkEntryMatchesPick({ property_id: 'pid-1', property_name: 'иначе' }, pick), true);
+    // Чужое свойство не совпадает (иначе затронули бы чужой список).
+    assert.equal(linkEntryMatchesPick({ property_id: '', property_name: 'Другое' }, pick), false);
+  });
+
+  it('аддитивное добавление к найденному внетиповому значению сохраняет прежние цели (блокер 2)', () => {
+    const pick = { propertyId: 'pid-1', key: 'Содержит' };
+    const entry = { property_id: '', property_name: 'Содержит', values: [{ target_id: 'text-a' }] };
+    // Логика addPropertyValue: найти запись предикатом и взять её цели.
+    const found = linkEntryMatchesPick(entry, pick) ? entry.values.map((v) => v.target_id) : [];
+    const target = 'text-b';
+    const merged = found.includes(target) ? found : [...found, target];
+    assert.deepEqual(merged, ['text-a', 'text-b'], 'оба текста остаются');
   });
 });

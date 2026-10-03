@@ -24,6 +24,7 @@
  */
 
 import type {
+  LinkPropertyValues,
   Publication,
   PublicationAssembly,
   PublicationCandidatesResult,
@@ -74,7 +75,9 @@ import {
   displayAuthorship,
   documentBlocks,
   flattenSections,
+  linkEntryMatchesPick,
   positionsFor,
+  subtreeIds,
   TEXT_WIDTH_MAX,
   TEXT_WIDTH_MIN,
   tocLines,
@@ -1441,8 +1444,11 @@ export function mountPublicationWorkspace(
   /** Диалог «Переместить в раздел…»: дерево разделов публикации. */
   function openMoveToSectionDialog(block: DocBlock): void {
     if (block.kind !== 'section' && block.kind !== 'text') return;
-    // Себя из дерева исключаем: перенос раздела в себя — цикл.
-    const items = sectionTreeItems().filter((item) => item.id !== block.thoughtId);
+    const all = sectionTreeItems();
+    // Исключаем САМ блок и (для раздела) всё его поддерево: перенос в потомка
+    // создаёт цикл родителей (блокер 1 верификации ea1b5f14).
+    const excluded = subtreeIds(block.thoughtId, all);
+    const items = all.filter((item) => !excluded.has(item.id));
     const body = div('pub-move-body');
     let close = (): void => undefined;
     const tree = createTree<SectionTreeItem>({
@@ -1478,6 +1484,12 @@ export function mountPublicationWorkspace(
     const networkId = store.state.networkId;
     if (networkId === null || block.kind !== 'section') return;
     if (block.parentThoughtId === targetSectionId) return;
+    // Защита от цикла: даже если диалог обойдён, перенос в собственного потомка
+    // (или в себя) отвергается — иначе REST neighbors возвращает A↔A1.
+    if (subtreeIds(block.thoughtId, sectionTreeItems()).has(targetSectionId)) {
+      notice(t('publications.block.moveCycle'), 'error');
+      return;
+    }
     try {
       throwOnFailures(await setOnlyParents(networkId, block.thoughtId, [targetSectionId], null));
     } catch (err) {
@@ -1513,9 +1525,16 @@ export function mountPublicationWorkspace(
       let entry: (typeof values)[number] | null = null;
       for (const value of values) {
         if (!('values' in value)) continue;
-        if (!listRows.some((candidate) => candidate.propertyId === value.property_id)) continue;
         if (!value.values.some((item) => item.target_id === block.thoughtId)) continue;
-        row = listRows.find((candidate) => candidate.propertyId === value.property_id) ?? null;
+        // Свойство-связь вне цепочки типа приходит с `property_id: ''` —
+        // сверяем по имени стороны (`linkEntryMatchesPick`), иначе перенос
+        // не находит свойство (блокер 3 верификации ea1b5f14).
+        const candidate =
+          listRows.find((item) =>
+            linkEntryMatchesPick(value, { propertyId: item.propertyId, key: item.name }),
+          ) ?? null;
+        if (candidate === null) continue;
+        row = candidate;
         entry = value;
         break;
       }
@@ -2092,8 +2111,13 @@ export function mountPublicationWorkspace(
     let existing: string[] = [];
     try {
       const values = await etn.properties.get(networkId, 'thought', ownerId);
-      const entry = values.find((v) => 'values' in v && v.property_id === pick.propertyId);
-      if (entry !== undefined && 'values' in entry) {
+      // Свойство-связь вне цепочки типа отдаётся с `property_id: ''` — сверяем
+      // по id И по имени стороны, иначе существующие значения теряются при
+      // добавлении (блокер 2 верификации ea1b5f14).
+      const entry = values.find(
+        (v): v is LinkPropertyValues => 'values' in v && linkEntryMatchesPick(v, pick),
+      );
+      if (entry !== undefined) {
         existing = entry.values.map((it) => it.target_id);
       }
     } catch {

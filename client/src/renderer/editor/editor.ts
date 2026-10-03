@@ -129,6 +129,7 @@ import {
 } from '../screens/tabs/tab-overflow.js';
 import { showIconDialog, type IconPickResult } from './icon-dialog.js';
 import { editMarkdownField, focusMarkdownFieldAt } from './markdown-field.js';
+import { commentFocusStep } from './comment-focus.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 import { showThoughtTypeEditor } from '../screens/type-manager.js';
 import { openPropertyManagerEditor } from '../screens/property-manager.js';
@@ -1812,35 +1813,57 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
  * switches it into edit mode — CodeMirror mounts focused with the caret at
  * the end.
  */
-function focusEditorComment(findText?: string): void {
-  if (scrollBox === null) return;
-  if (shownTab !== 'main') {
-    // The first tab button is «Комментарий» — click reuses the regular lazy
-    // pane activation instead of duplicating it here (synchronous: by the
-    // next line the main pane is the active one).
-    const tab = scrollBox.querySelector<HTMLButtonElement>('.editor-tab');
-    if (tab === null) return;
-    tab.click();
-  }
-  // The comment group is the bottom section of the tab; when the user has it
-  // collapsed, expand it (a click on the header toggles — only click when
-  // the persisted state says it is collapsed).
-  if (store.state.collapsedGroups['permanent'] === true) {
-    scrollBox.querySelector<HTMLElement>('.main-bottom .group > .group-header')?.click();
-  }
-  const deadline = Date.now() + 5000;
+/** id мысли, открытой в редакторе (override редактора, иначе фокус). */
+function shownThoughtId(): string {
+  const target = store.state.editorTarget;
+  if (target !== null && target.kind === 'thought') return target.id;
+  return store.state.focus?.focused.id ?? '';
+}
+
+function focusEditorComment(thoughtId: string, findText?: string): void {
+  const deadline = Date.now() + 8000;
+  let activated = false;
   const tick = (): void => {
-    // Каркас комментария — оболочка `lib/ui/comment.ts` (задача 9cb87c42).
-    const field = scrollBox?.querySelector<HTMLElement>('.ui-comment .md-field') ?? null;
-    if (field === null || field.isConnected === false) {
-      // Still loading (or a rebuild raced us) — keep waiting a bit.
+    if (scrollBox === null) return;
+    // Владелец ОТРИСОВАННОЙ панели (не `editorTarget`): при холодной смене
+    // мысли панель держит предыдущую сущность, пока грузится новая, и поле
+    // старой мысли не должно приниматься за целевое (блокер 4 ea1b5f14).
+    const renderedOwnerId =
+      renderCtx !== null && renderCtx.ownerType === 'thought' ? renderCtx.ownerId : null;
+    const field =
+      scrollBox?.querySelector<HTMLElement>('.ui-comment .md-field') ?? null;
+    const step = commentFocusStep({
+      renderedOwnerId,
+      thoughtId,
+      hasField: field !== null && field.isConnected !== false,
+      activated,
+    });
+    if (step === 'wait') {
       if (Date.now() < deadline) window.setTimeout(tick, 50);
       return;
     }
+    if (step === 'activate') {
+      activated = true;
+      if (shownTab !== 'main') {
+        // The first tab button is «Комментарий» — click reuses the regular lazy
+        // pane activation instead of duplicating it here.
+        scrollBox.querySelector<HTMLButtonElement>('.editor-tab')?.click();
+      }
+      // The comment group is the bottom section of the tab; when collapsed,
+      // expand it (a click toggles — click only when persisted state says so).
+      if (store.state.collapsedGroups['permanent'] === true) {
+        scrollBox.querySelector<HTMLElement>('.main-bottom .group > .group-header')?.click();
+      }
+      // Активация вкладки/группы могла пересобрать панель — даём тик и
+      // перезапрашиваем поле уже у подтверждённой мысли.
+      window.setTimeout(tick, 0);
+      return;
+    }
+    // step === 'focus': поле нужной мысли смонтировано.
     // С офсетом — `focusMarkdownFieldAt` сам включает правку и ставит каретку;
     // без офсета — обычный вход в правку (каретка в конец).
-    if (findText !== undefined && findText !== '') focusMarkdownFieldAt(field, findText);
-    else editMarkdownField(field);
+    if (findText !== undefined && findText !== '') focusMarkdownFieldAt(field!, findText);
+    else editMarkdownField(field!);
   };
   window.setTimeout(tick, 0);
 }
@@ -1854,7 +1877,7 @@ function focusEditorComment(findText?: string): void {
  */
 export function openThoughtCommentEditor(id: string, findText?: string): void {
   openThoughtInEditor(id);
-  focusEditorComment(findText);
+  focusEditorComment(id, findText);
 }
 
 // ---------------------------------------------------------------------------
@@ -2271,7 +2294,7 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
       void saveThought({ type_id: typeId }).then((ok) => {
         const focusComment = focusCommentAfterTypeSave;
         focusCommentAfterTypeSave = false;
-        if (ok && focusComment) focusEditorComment();
+        if (ok && focusComment) focusEditorComment(shownThoughtId());
       });
     },
     onCreateNew: async (query) => {
@@ -2551,7 +2574,7 @@ function buildLinkHeader(initial: Link): HTMLElement {
       void saveLink(link, { type_id: typeId }).then((ok) => {
         const focusComment = focusCommentAfterTypeSave;
         focusCommentAfterTypeSave = false;
-        if (ok && focusComment) focusEditorComment();
+        if (ok && focusComment) focusEditorComment(shownThoughtId());
       });
     },
     onCreateNew: async (_query) => {

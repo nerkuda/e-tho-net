@@ -809,6 +809,7 @@ export const ru = {
   'publications.block.moveToSectionTitle': 'Переместить в раздел',
   'publications.block.moveToSectionEmpty': 'В публикации нет других разделов',
   'publications.block.moveFailed': 'Не удалось определить свойство текста для переноса.',
+  'publications.block.moveCycle': 'Нельзя переместить раздел в собственный подраздел.',
 
   // -- Публикации: карточка в панели редактора (0.11.1, задача a3cfc018) ----
   /** Заголовок панели редактора для цели publication. */

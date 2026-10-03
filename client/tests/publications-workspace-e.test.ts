@@ -99,4 +99,29 @@ describe('ea1b5f14: рабочая область публикации — пу�
       'название крупнее H1',
     );
   });
+
+  it('блокеры верификации: поддерево/сопоставление свойства/владелец панели', () => {
+    // Блокер 1: диалог переноса и защита от цикла используют поддерево.
+    assert.match(WS, /subtreeIds\(/, 'поддерево считается общим предикатом');
+    assert.match(WS, /const excluded = subtreeIds\(block\.thoughtId, all\)/, 'диалог исключает поддерево');
+    assert.match(WS, /subtreeIds\(block\.thoughtId, sectionTreeItems\(\)\)\.has\(targetSectionId\)/, 'защита от цикла при переносе');
+    assert.match(WS, /publications\.block\.moveCycle/, 'понятное сообщение об отказе');
+    // Блокеры 2–3: сопоставление значения-связи с выбранным свойством.
+    assert.match(WS, /linkEntryMatchesPick\(/, 'сверка по id И по имени стороны');
+    assert.match(
+      WS,
+      /'values' in v && linkEntryMatchesPick\(v, pick\)/,
+      'аддитивное добавление находит внетиповое значение (блокер 2)',
+    );
+    assert.match(
+      WS,
+      /linkEntryMatchesPick\(value, \{ propertyId: item\.propertyId, key: item\.name \}\)/,
+      'перенос текста находит внетиповое значение (блокер 3)',
+    );
+    // Блокер 4: ожидание поля сверяет владельца отрисованной панели.
+    const editor = fs.readFileSync(path.join(ROOT, 'editor', 'editor.ts'), 'utf8');
+    assert.match(editor, /from '\.\/comment-focus\.js'/, 'ядро ожидания вынесено');
+    assert.match(editor, /commentFocusStep\(\{/, 'шаг ожидания через предикат');
+    assert.match(editor, /renderCtx\.ownerType === 'thought' \? renderCtx\.ownerId : null/, 'владелец панели сверяется с id');
+  });
 });

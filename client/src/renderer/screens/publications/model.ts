@@ -798,11 +798,6 @@ export function tocLines(
       hasChildren: sectionHasContent(item.section),
       collapsed: selfCollapsed,
     });
-    if (!selfCollapsed) {
-      // Тексты в оглавление не выводятся (п. 2 дополнения 2026-10-02): счётчик
-      // вхождений уже прокручен выше (`textOccs`) — якоря разделов совпадают
-      // с `documentBlocks`, а панель остаётся списком разделов.
-    }
   }
   for (const excluded of assembly.excluded) {
     out.push({
@@ -825,6 +820,52 @@ export function tocSignature(line: TocLine): string {
     case 'excluded':
       return `x:${line.title}`;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Операции с блоками документа (блокеры верификации ea1b5f14). Чистые
+// предикаты вынесены сюда: их проверяют юнит-тесты без DOM.
+// ---------------------------------------------------------------------------
+
+/**
+ * Совпадает ли запись значения-связи с выбранным свойством-строкой.
+ *
+ * Для свойства-связи ВНЕ цепочки типа владельца серверная проекция «ребро →
+ * свойство» отдаёт `property_id: ''` (см. `listThoughtLinkProperties`): по
+ * одному id такое значение не находится, и аддитивное добавление затирало
+ * список (блокер 2/3 верификации ea1b5f14). Поэтому сверяем и по
+ * отображаемому имени стороны — оно же `key` записи `properties.set`.
+ */
+export function linkEntryMatchesPick(
+  entry: { property_id: string; property_name: string },
+  pick: { propertyId: string; key: string },
+): boolean {
+  if (entry.property_id !== '' && entry.property_id === pick.propertyId) return true;
+  return entry.property_name === pick.key;
+}
+
+/**
+ * Поддерево id: сам корень и все его потомки по `parentId` (замыкание).
+ * Нужно, чтобы «Переместить в раздел…» не предлагал и не принимал
+ * собственного потомка — иначе `set_only_parents` создаёт цикл (блокер 1
+ * верификации ea1b5f14).
+ */
+export function subtreeIds(
+  rootId: string,
+  items: readonly { id: string; parentId?: string | null }[],
+): Set<string> {
+  const out = new Set<string>([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const item of items) {
+      if (item.parentId != null && out.has(item.parentId) && !out.has(item.id)) {
+        out.add(item.id);
+        changed = true;
+      }
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
