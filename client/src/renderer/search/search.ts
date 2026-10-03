@@ -150,11 +150,48 @@ const subrootClouds = new Map<string, ThoughtCloudInput>();
 const subrootCloudsRequested = new Set<string>();
 
 /**
+ * Сбрасывает модульное состояние строки поиска перед новым монтированием.
+ *
+ * Рабочее пространство (а с ним и строка поиска) пересобирается при КАЖДОМ
+ * открытии мыслесети (`showScreen('workspace')` → `mountSearch`), но переменные
+ * модуля живут между монтированиями. Без сброса настройки одной сети («лейка»,
+ * «Ограничивать потомками мыслей» + мысль, места поиска, ограничения) остаются
+ * в памяти и показываются в другой сети, а флаг `restored` глушит чтение
+ * сохранённого состояния новой сети (ошибка 438092f6). Хранится состояние
+ * по-прежнему per-network: ключ L4 `ui_state` уже включает `network_id` — сеть
+ * без своей записи получает дефолт, а не чужие настройки.
+ *
+ * Отложенный таймер сохранения тоже снимается: настройка, изменённая в сети A,
+ * не должна «утечь» в только что открытую сеть B через 300 мс.
+ */
+function resetSearchState(): void {
+  options = defaultSearchCriteriaState();
+  settingsOpen = false;
+  restored = false;
+  lastResults = null;
+  lastSelectedKey = null;
+  cursor = null;
+  subrootClouds.clear();
+  subrootCloudsRequested.clear();
+  if (searchTimer !== null) {
+    window.clearTimeout(searchTimer);
+    searchTimer = null;
+  }
+  if (persistTimer !== null) {
+    window.clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+}
+
+/**
  * Mounts the search panel (called from the workspace builder). The panel holds
  * the results zone plus the toggleable settings zone; the funnel toggle sits in
  * the panel's top corner (the old toolbar gear is gone, задача a3247f84).
  */
 export function mountSearch(next: SearchChrome): () => void {
+  // Своё состояние на каждую мыслесеть: панель только что собрана заново под
+  // текущую сеть — прежние настройки не должны её пережить (ошибка 438092f6).
+  resetSearchState();
   chrome = next;
 
   const { host, input } = next;
@@ -513,23 +550,27 @@ async function restoreState(): Promise<void> {
   }
 }
 
-/** Persists the current query + options (debounced). */
+/**
+ * Persists the current query + options (debounced).
+ *
+ * Сеть и полезная нагрузка фиксируются В МОМЕНТ планирования записи, а не при
+ * срабатывании таймера: иначе отложенная запись, пережившая смену сети,
+ * прочитала бы `store.state.networkId` уже новой сети и уехала бы не туда
+ * (ошибка 438092f6). Набор сохраняемых ключей — конвертер конструктора
+ * (совместим с записанным до 0.8.2: те же имена полей).
+ */
 let persistTimer: number | null = null;
 function persistState(): void {
+  const networkId = store.state.networkId;
+  if (networkId === null || chrome === null) return;
+  const payload = JSON.stringify({
+    q: chrome.input.value,
+    options: searchCriteriaToStored(options),
+  });
   if (persistTimer !== null) window.clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
     persistTimer = null;
-    const networkId = store.state.networkId;
-    if (networkId === null || chrome === null) return;
-    void etn.ui
-      .setState(
-        networkId,
-        UI_STATE_KEY.SEARCH_STATE,
-        // Набор сохраняемых ключей — конвертер конструктора (совместим с
-        // записанным до 0.8.2: те же имена полей).
-        JSON.stringify({ q: chrome.input.value, options: searchCriteriaToStored(options) }),
-      )
-      .catch(() => undefined);
+    void etn.ui.setState(networkId, UI_STATE_KEY.SEARCH_STATE, payload).catch(() => undefined);
   }, 300);
 }
 
