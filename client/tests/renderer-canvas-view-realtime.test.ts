@@ -475,4 +475,52 @@ describe('realtime-обновление нижней зоны в режиме о
     assert.equal(afterTitle, viewRunCount, 'оформление keywords-отбор не переисполняет');
     dispose();
   });
+
+  /**
+   * Ошибка 4b3d1940: «Перестали обновляться мысли на карте, когда изменяю её
+   * заголовок». Мысль — строка нижней зоны (активного отбора), НЕ сосед фокуса.
+   * Локальная правка из редактора обязана идти ОБЩИМ путём слоя
+   * (`reflectThoughtUpdate` → `signalThoughtUpdated` → те же ключи, что роутер на
+   * `thought.updated`), а не только через окрестность фокуса. Без фикса
+   * `invalidateRef`/`scheduleRefresh` для строки отбора не срабатывают
+   * (`inNeighbourhood` ложно) — ни `views.run`, ни перерисовка, заголовок облачка
+   * остаётся старым до собственного realtime-эха. Тест краснел до фикса.
+   */
+  it('своя правка заголовка строки отбора перерисовывает карту без realtime-эха (4b3d1940)', async () => {
+    const dispose = await mountWithView();
+    assert.ok(viewRunCount >= 1, 'отбор по умолчанию исполнился при отрисовке');
+    const beforeRun = viewRunCount;
+    const beforeRender = renderCount();
+    assert.equal(
+      canvas.getZoneEntries('children').find((e) => e.id === 'existing')?.links[0]?.title,
+      'Старая работа',
+    );
+
+    // REST-ответ редактора уже несёт новое имя; realtime-эхо (B1) придёт позже —
+    // UI обязан обновиться сразу общим путём слоя.
+    viewRows = [
+      { id: 'existing', title: 'Локально новое', type_id: TYPE_ID, active: true, marked_for_deletion: false },
+    ];
+    const { reflectThoughtUpdate } = await import('../src/renderer/editor/editor.js');
+    reflectThoughtUpdate(
+      { ...thought('existing', 'Локально новое'), version: 2 },
+      { title: 'Локально новое' },
+    );
+    await settle();
+
+    assert.ok(
+      viewRunCount > beforeRun,
+      `своя правка строки отбора обязана переисполнить отбор; вызовов было ${viewRunCount - beforeRun}`,
+    );
+    assert.ok(
+      renderCount() > beforeRender,
+      `своя правка строки отбора обязана перерисовать холст; рендеров было ${renderCount() - beforeRender}`,
+    );
+    assert.equal(
+      canvas.getZoneEntries('children').find((e) => e.id === 'existing')?.links[0]?.title,
+      'Локально новое',
+      'заголовок облачка на карте обновился локальной правкой',
+    );
+    dispose();
+  });
 });

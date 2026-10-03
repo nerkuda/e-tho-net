@@ -87,11 +87,11 @@ import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
 // `etn:attachments-changed` и индекс показанных вложений снесены (G4).
 import {
   asRealtimeCause,
-  commitEntity,
   invalidateQueries,
   onQueryInvalidated,
   queryKeys,
   signalThoughtSaved,
+  signalThoughtUpdated,
 } from '../lib/live/index.js';
 // Набор свойств показанной сущности зависит от определений свойств её типа
 // (ошибка 74b94c26): realtime-события `property-definition.*` и локальные
@@ -1916,8 +1916,17 @@ function isVersionConflict(err: unknown): boolean {
  * «Назначить иконкой мысли» (attachments.ts) — both mutate the same visual
  * fields of a thought the actor may see in several views at once.
  */
-export function reflectThoughtUpdate(updated: Thought): void {
+export function reflectThoughtUpdate(
+  updated: Thought,
+  changes: Record<string, unknown> = {},
+): void {
   const id = updated.id;
+  // Общий путь слоя (ошибка 4b3d1940): REST-ответ кладём в нормализованный кэш
+  // и гасим те же слой-ключи, что роутер на `thought.updated` — прежде всего
+  // `focus:@id`. Без этого мысль, видимая строкой отбора холста «не в фокусе»
+  // (не сосед фокуса), не перерисовывалась до собственного realtime-эха, а
+  // кэш-потребители (закреплённые, wiki-заголовки) не видели свежую сущность.
+  signalThoughtUpdated(updated, changes);
   const focus = store.state.focus;
   if (focus !== null) {
     if (focus.focused.id === id) {
@@ -1948,12 +1957,8 @@ export function reflectThoughtUpdate(updated: Thought): void {
   // icon/title/type appear right away.
   scheduleStructuresRefresh();
   // Панель закреплённых читает метаданные чипа из нормализованного кэша слоя
-  // (G5): кладём свежую мысль в `entity:@thought:@id` и гасим срез `pins`,
-  // чтобы панель перерисовала чип (своего realtime-эха у автора нет).
-  if (store.state.pins.includes(id)) {
-    commitEntity('thought', id, updated);
-    invalidateQueries(queryKeys.pins());
-  }
+  // (G5): свежая сущность и срез `pins` уже погашены общим путём
+  // (`signalThoughtUpdated`) — отдельного вызова здесь не нужно.
   invalidateHistoryBar();
   // Панель выделенных держит свой кэш строк и подписана лишь на состав
   // выделения: переименование/смена оформления выделенной мысли обновляет её
@@ -1985,8 +1990,8 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
     }
     // Reflect the change wherever the entity is shown (see the helper) — the
     // actor's own event arrives asynchronously, so the stores are patched from the save
-    // response.
-    reflectThoughtUpdate(updated);
+    // response. `patch` уточняет условные ключи слоя (вход/выход из отбора).
+    reflectThoughtUpdate(updated, patch as Record<string, unknown>);
     // Своя правка полей мысли: открытый документ публикации помечает живой
     // текст устаревшим (заголовок влияет на отбор) / правит заголовок блока —
     // сигнал слоя, своего realtime-эха нет (до B1).

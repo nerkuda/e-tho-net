@@ -113,7 +113,7 @@ export async function assignDataIconToThought(
   const patch: ThoughtUpdateInput = { icon, icon_kind: 'image' };
   if (iconAttachmentId !== null) patch.icon_attachment_id = iconAttachmentId;
   const updated = await etn.thoughts.update(networkId, thought.id, patch, thought.version);
-  reflectThoughtUpdate(updated);
+  reflectThoughtUpdate(updated, patch as Record<string, unknown>);
   return updated;
 }
 

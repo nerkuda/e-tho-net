@@ -24,6 +24,7 @@ import {
   type EntityRecord,
   type PutEntityOptions,
 } from './entities.js';
+import { thoughtUpdateKeys } from './event-router.js';
 import { queryKeys } from './query-keys.js';
 import type { LocalMutationSignal } from './query-registry.js';
 import { invalidateQueries, setQueryData } from './query-registry.js';
@@ -154,6 +155,29 @@ export function signalThoughtSaved(
   invalidateQueries(queryKeys.publicationAssemblyAll(), {
     local: 'thought-saved',
     id: thoughtId,
+    data: { changes },
+  } satisfies LocalMutationSignal);
+}
+
+/**
+ * Общий путь СВОЕЙ правки мысли (REST-ответ редактора, холста, корзины):
+ * кладёт свежую сущность в нормализованный кэш и гасит те же слой-ключи, что
+ * роутер на `thought.updated` (`thoughtUpdateKeys`). Так своя правка и чужая
+ * применяются ОДНИМ путём (техпроект 269016e2) — без этого мысль, видимая
+ * строкой отбора холста «не в фокусе», не перерисовывалась, пока не придёт
+ * собственное realtime-эхо (ошибка 4b3d1940).
+ *
+ * `changes` — поля PATCH-а: от них зависят условные ключи (вход/выход из отбора
+ * по типу/активности, keywords по заголовку/синонимам).
+ */
+export function signalThoughtUpdated(
+  updated: { id: string },
+  changes: Record<string, unknown> = {},
+): void {
+  commitEntity('thought', updated.id, updated);
+  invalidateAfterMutation(thoughtUpdateKeys(updated.id, changes), {
+    local: 'thought-saved',
+    id: updated.id,
     data: { changes },
   } satisfies LocalMutationSignal);
 }

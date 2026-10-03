@@ -270,10 +270,11 @@ export async function openThoughtDeleteDialog(
     },
     onTrash: async (close) => {
       try {
+        const patch = { marked_for_deletion: !alreadyMarked };
         const updated = await etn.thoughts.update(
           networkId,
           target.id,
-          { marked_for_deletion: !alreadyMarked },
+          patch,
           await thoughtVersion(networkId, target.id),
         );
         close();
@@ -284,7 +285,7 @@ export async function openThoughtDeleteDialog(
         // after a focus round-trip), the editor (target passenger / focus
         // follower — trash marker in the header, struck-through title),
         // the structures list, pinned and history bars.
-        reflectThoughtUpdate(updated);
+        reflectThoughtUpdate(updated, patch);
         notice(alreadyMarked ? 'Мысль возвращена из корзины.' : 'Мысль помещена в корзину.');
       } catch (err) {
         errorDialog(alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину', err);
@@ -637,7 +638,7 @@ export async function openThoughtGroupDeleteDialog(
                 markedIds.map((id) => etn.thoughts.get(networkId, id).catch(() => null)),
               );
               for (const thought of fresh) {
-                if (thought !== null) reflectThoughtUpdate(thought);
+                if (thought !== null) reflectThoughtUpdate(thought, { marked_for_deletion: true });
               }
               // The selection panel keeps working with the marked thoughts —
               // repaint its rows so the trash marks show up there too.
@@ -935,7 +936,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       // Reflect the restore everywhere the thought may be shown (canvas badge
       // and dim style, editor, structures, pinned/history bars) — B1: the own
       // event also arrives, but the response entity gives instant feedback.
-      reflectThoughtUpdate(updated);
+      reflectThoughtUpdate(updated, { marked_for_deletion: false });
       await render();
     } catch (err) {
       errorDialog('Вернуть из корзины', err);

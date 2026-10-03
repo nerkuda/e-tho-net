@@ -641,17 +641,13 @@ async function changeIcon(networkId: string, id: string): Promise<void> {
   if (value === null) return;
   try {
     const thought = await etn.thoughts.get(networkId, id);
-    const updated = await etn.thoughts.update(
-      networkId,
-      id,
-      { icon: value.trim() === '' ? null : value.trim(), icon_kind: 'emoji' },
-      thought.version,
-    );
+    const patch = { icon: value.trim() === '' ? null : value.trim(), icon_kind: 'emoji' as const };
+    const updated = await etn.thoughts.update(networkId, id, patch, thought.version);
     // The menu is reachable from every thought representation (canvas clouds,
     // pinned chips, structures clouds, selection rows) — reflect the new icon
     // in all of them at once, not just on the canvas (fixes/045, same class
     // as the attachments-tab «Назначить иконкой мысли» command).
-    reflectThoughtUpdate(updated);
+    reflectThoughtUpdate(updated, patch as Record<string, unknown>);
   } catch (err) {
     errorDialog('Изменить иконку', err);
   }

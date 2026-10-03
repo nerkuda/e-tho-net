@@ -86,6 +86,7 @@ export {
   signalPermanentCommentSaved,
   signalPublicationCompositionChanged,
   signalThoughtSaved,
+  signalThoughtUpdated,
   type OptimisticOptions,
 } from './mutator.js';
 
@@ -95,6 +96,7 @@ export {
   realtimeRoutes,
   resetEventRouter,
   routeRealtimeEvent,
+  thoughtUpdateKeys,
   type RouteContext,
   type RouteResult,
   type RouteRule,
