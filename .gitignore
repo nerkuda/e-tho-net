@@ -53,3 +53,4 @@ coverage/
 
 # Local scratch / migration test beds
 .tmp/
+tmp/
