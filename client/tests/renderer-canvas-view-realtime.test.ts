@@ -358,4 +358,42 @@ describe('realtime-обновление нижней зоны в режиме о
     );
     dispose();
   });
+
+  it('thought.updated видимой строки отбора переисполняет отбор; невидимой — нет (замечание G2)', async () => {
+    const dispose = await mountWithView();
+    assert.ok(viewRunCount >= 1, 'отбор по умолчанию исполнился');
+
+    // Мысль ВНЕ окрестности и ВНЕ результата отбора: правка не повод гонять views.run.
+    const invisibleId = '00000000-0000-4000-8000-000000000999';
+    const beforeRun = viewRunCount;
+    const invisibleEvt = {
+      ...foreignEvent('thought.updated', {
+        id: invisibleId,
+        changes: { title: 'Невидимая правка' },
+        version: 2,
+      }),
+      seq: 2,
+    } as any;
+    eventRouter.routeRealtimeEvent(invisibleEvt, { networkId: NETWORK_ID });
+    realtimeUi.applyRealtimeToUi(invisibleEvt);
+    await settle();
+    assert.equal(viewRunCount, beforeRun, 'правка невидимой мысли не переисполняет отбор');
+
+    // Мысль, УЖЕ видимая строкой отбора: её строка могла измениться — отбор
+    // обязан переисполниться.
+    const visibleId = 'existing';
+    const visibleEvt = {
+      ...foreignEvent('thought.updated', {
+        id: visibleId,
+        changes: { title: 'Видимая правка' },
+        version: 2,
+      }),
+      seq: 3,
+    } as any;
+    eventRouter.routeRealtimeEvent(visibleEvt, { networkId: NETWORK_ID });
+    realtimeUi.applyRealtimeToUi(visibleEvt);
+    await settle();
+    assert.ok(viewRunCount > beforeRun, 'правка видимой строки отбора переисполняет отбор');
+    dispose();
+  });
 });

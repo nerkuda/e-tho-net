@@ -102,6 +102,7 @@ import { splitterElement } from '../lib/ui/splitter.js';
 import {
   getActiveMode as getStripActiveMode,
   invalidateViewResultForRealtime,
+  isThoughtInViewResult,
   loadPersistedStrip,
   mountFilterStrip,
   onModeChange as onStripModeChange,
@@ -109,7 +110,7 @@ import {
   runActiveViewIfNeeded,
   type ViewResult,
 } from './focus-filter-strip.js';
-import { matchesKeyPrefix } from '../lib/live/query-keys.js';
+import { matchesKeyPrefix, queryKeys } from '../lib/live/query-keys.js';
 import { onQueryInvalidated } from '../lib/live/query-registry.js';
 import { openThoughtDeleteDialog } from '../trash.js';
 
@@ -414,9 +415,23 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
   // слоя — когда роутер событий или локальная мутация гасят `focus`-ключи
   // (ошибка 4fca95c9). В режиме «Потомки» `invalidateViewResultForRealtime`
   // вернёт `false` — там изменения ловит ключ перерисовки.
+  //
+  // Сужение (замечание G2 65286909): отбор переисполняется не на ЛЮБУЮ
+  // `focus`-префиксную инвалидацию, а только когда она касается самого холста:
+  //  - широкая `focus` (`focusAll`) — состав/порядок мог измениться целиком;
+  //  - свой ключ `focus:@<текущий фокус>` — правка фокусной мысли;
+  //  - ключ мысли, УЖЕ видимой строкой отбора, — её строка могла измениться.
+  // Правка мысли вне окрестности И вне отбора (например, `focus:@<чужой id>`)
+  // лишний `views.run` не запускает.
   const invalidationUnsubscribe = onQueryInvalidated((prefix) => {
     if (host?.isConnected !== true) return;
     if (!matchesKeyPrefix(prefix, 'focus')) return;
+    const ownFocusId = store.state.focus?.focused.id;
+    const touchesCanvas =
+      prefix === 'focus' ||
+      (ownFocusId !== undefined && prefix === queryKeys.focus(ownFocusId)) ||
+      (prefix.startsWith('focus:@') && isThoughtInViewResult(prefix.slice('focus:@'.length)));
+    if (!touchesCanvas) return;
     if (invalidateViewResultForRealtime()) requestCanvasRepaint();
   });
   // The focus band follows the focus row, whose position depends on the zone

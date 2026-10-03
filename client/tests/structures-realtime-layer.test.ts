@@ -17,16 +17,40 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import type { AnyRealtimeEvent, RealtimeEventType } from '@etn/shared';
+
 import {
+  getQueryState,
   invalidateQueries,
   onQueryInvalidated,
   registerQuery,
   resetQueryRegistry,
+  subscribeQuery,
 } from '../src/renderer/lib/live/query-registry.js';
+import { resetEventRouter, routeRealtimeEvent } from '../src/renderer/lib/live/event-router.js';
 import { queryKeys } from '../src/renderer/lib/live/query-keys.js';
 
 const RENDERER_ROOT = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
 const read = (rel: string): string => fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
+
+const NET = '00000000-0000-4000-8000-0000000000aa';
+
+function mkEvent(type: RealtimeEventType, data: unknown, seq: number): AnyRealtimeEvent {
+  return {
+    type,
+    seq,
+    ts: '2026-10-03T00:00:00.000Z',
+    actor: { user_id: 'u1', client_id: 'c1' },
+    network_id: NET,
+    audience: 'network',
+    data,
+    layer_id: '00000000-0000-0000-0000-000000000000',
+  } as unknown as AnyRealtimeEvent;
+}
+
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 describe('structures G2: слой определяет обновление снимка', () => {
   const structures = read('screens/structures/structures.ts');
@@ -95,6 +119,58 @@ describe('structures G2: контракт слоя (реестр + инвали�
     const touched = invalidateQueries(queryKeys.structuresPageAll());
     assert.deepEqual(touched, [key]);
     assert.deepEqual(seen, [key], 'наблюдатель слоя получил ключ снимка');
+    assert.equal(getQueryState(key).status, 'stale');
+    unsub();
+    resetQueryRegistry();
+  });
+
+  it('роутер гасит ключ structures-page на событие о мыслях и уведомляет экран', () => {
+    resetQueryRegistry();
+    resetEventRouter();
+    const key = queryKeys.structuresPage('applied');
+    registerQuery(key, null);
+    const seen: string[] = [];
+    const unsub = onQueryInvalidated((prefix, keys) => {
+      if (prefix.startsWith('structures-page')) seen.push(...keys);
+    });
+    const res = routeRealtimeEvent(mkEvent('thought.deleted', { id: 't9' }, 1));
+    assert.equal(res.routed, true);
+    assert.ok(res.invalidated.includes(key), 'роутер погасил снимок «Структур»');
+    assert.deepEqual(seen, [key]);
+    unsub();
+    resetQueryRegistry();
+    resetEventRouter();
+  });
+
+  it('префиксная изоляция: focus-инвалидация и сосед по строке снимок не трогают', () => {
+    resetQueryRegistry();
+    const key = queryKeys.structuresPage('active');
+    const focus = queryKeys.focus('t1');
+    registerQuery(key, null);
+    registerQuery(focus, null);
+    registerQuery('structures-page-x:y', null);
+    const touched = invalidateQueries(queryKeys.focusAll());
+    assert.deepEqual(touched, [focus]);
+    const touched2 = invalidateQueries(queryKeys.structuresPageAll());
+    assert.deepEqual(touched2, [key], 'ложного матча по подстроке нет');
+    resetQueryRegistry();
+  });
+
+  it('коалессия: повторные инвалидации снимка в одной пачке дают ОДИН перезапрос', async () => {
+    resetQueryRegistry();
+    const key = queryKeys.structuresPage('coalesce');
+    let calls = 0;
+    const fetcher = async (): Promise<number> => {
+      calls += 1;
+      return calls;
+    };
+    const unsub = subscribeQuery(key, fetcher, () => undefined);
+    await settle();
+    assert.equal(calls, 1, 'подписка запустила первый запрос');
+    invalidateQueries(queryKeys.structuresPageAll());
+    invalidateQueries(queryKeys.structuresPageAll());
+    await settle();
+    assert.equal(calls, 2, 'повторные инвалидации схлопнуты');
     unsub();
     resetQueryRegistry();
   });

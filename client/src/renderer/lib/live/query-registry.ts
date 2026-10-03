@@ -72,6 +72,37 @@ function notifyInvalidated(prefix: string, keys: readonly string[]): void {
   for (const listener of [...invalidationListeners]) listener(prefix, keys);
 }
 
+/**
+ * Коалессия инвалидаций (замечание G2 65286909): перезапрос записи запускается
+ * НЕ в момент инвалидации, а в микротаске. Несколько инвалидаций одного ключа
+ * за одну пачку событий (например, пара `thought.created` + `link.created`
+ * роутера или несколько префиксов одного события, попавших в тот же ключ) дают
+ * ОДИН перезапрос вместо одного на каждое событие. Состояние `stale` и
+ * уведомление подписчиков при этом выставляются синхронно — наблюдатель
+ * инвалидаций (`onQueryInvalidated`) и тесты паритета видят ключи сразу.
+ */
+const scheduledRefetches = new Set<string>();
+let refetchFlushScheduled = false;
+
+function scheduleRefetch(key: string): void {
+  scheduledRefetches.add(key);
+  if (refetchFlushScheduled) return;
+  refetchFlushScheduled = true;
+  queueMicrotask(flushScheduledRefetches);
+}
+
+function flushScheduledRefetches(): void {
+  refetchFlushScheduled = false;
+  const keys = [...scheduledRefetches];
+  scheduledRefetches.clear();
+  for (const key of keys) {
+    const entry = getEntry(key);
+    if (entry === undefined) continue;
+    // Рефетч — только активным наблюдателям и пока не идёт другой запрос.
+    if (entry.subscribers.size > 0 && entry.promise === null) void startFetch(asEntry(entry));
+  }
+}
+
 function asEntry<T>(entry: QueryEntry<unknown>): QueryEntry<T> {
   return entry as unknown as QueryEntry<T>;
 }
@@ -296,10 +327,9 @@ export function invalidateQueries(prefix: string): string[] {
       entry.version += 1;
       notify(entry);
     }
-    // Рефетч — только активным наблюдателям.
-    if (entry.subscribers.size > 0 && entry.promise === null) {
-      void startFetch(asEntry(entry));
-    }
+    // Рефетч — только активным наблюдателям; запуск отложен на микротаск и
+    // схлопывает повторные инвалидации ключа в один запрос (замечание G2).
+    if (entry.subscribers.size > 0 && entry.promise === null) scheduleRefetch(entry.key);
   }
   touched.sort();
   // Уведомляем наблюдателей ДАЖЕ при пустом `touched`: экран мог ещё не
@@ -312,4 +342,5 @@ export function invalidateQueries(prefix: string): string[] {
 /** Полный сброс реестра (смена сети, тесты). */
 export function resetQueryRegistry(): void {
   entries.clear();
+  scheduledRefetches.clear();
 }
