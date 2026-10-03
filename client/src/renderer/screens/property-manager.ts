@@ -67,7 +67,6 @@
  */
 
 import type {
-  AnyRealtimeEvent,
   EffectiveTypeProperty,
   LinkPropertyValueItem,
   LinkType,
@@ -106,10 +105,10 @@ import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
-import { onRealtimeEvent } from '../realtime.js';
 import { reloadTypeCatalogues } from '../realtime-ui.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { invalidateAfterMutation } from '../lib/live/mutator.js';
+import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
 // Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
 // доходит, G8 applier): изменение набора свойств типа (ошибка 74b94c26),
 // правка/удаление самого реестрового свойства (98aa0889) и правка/удаление
@@ -370,12 +369,15 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
     }
   }
 
-  // Realtime: `property-registry.*` инвалидирует кеш; `link-type.*` тоже —
-  // имена сторон (`name_forward` / `name_reverse`) в строке свойства-связи
-  // и предварительная оценка числа рёбер зависят от каталога типов связей.
-  const unsubscribe = etn.realtime.onEvent((raw: unknown) => {
-    if (!isPropertyRegistryOrLinkTypeEvent(raw)) return;
-    if (raw.networkId !== networkId) return;
+  // Realtime через слой (G5): роутер гасит `types-catalog` на
+  // `property-registry.*`/`link-type.*`; причина — само событие. Имена сторон
+  // свойства-связи и оценка числа рёбер зависят от каталога типов связей.
+  const unsubscribe = onQueryInvalidated((prefix, _keys, cause) => {
+    if (prefix !== queryKeys.typesCatalog()) return;
+    const evt = asRealtimeCause(cause);
+    if (evt === null) return;
+    if (evt.network_id !== networkId) return;
+    if (!isRegistryOrLinkTypeEventType(evt.type)) return;
     cachedRows = null;
     void reload();
   });
@@ -393,24 +395,19 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
 }
 
 /**
- * True when `raw` is an event that invalidates the cached property list:
- * `property-registry.*` (a row changed) or `link-type.*` (a link-type row
- * appeared/disappeared/renamed — the link-rows of the flat list show both
- * side names). Other events pass through.
+ * Тип события, инвалидирующего кэш списка свойств: `property-registry.*`
+ * (строка изменилась) или `link-type.*` (строка типа связи
+ * появилась/исчезла/переименовалась — плоский список показывает имена обеих
+ * сторон). Гейт по типу причины-события слоя (G5).
  */
-function isPropertyRegistryOrLinkTypeEvent(
-  raw: unknown,
-): raw is AnyRealtimeEvent & { networkId: string } {
-  if (typeof raw !== 'object' || raw === null) return false;
-  const evt = raw as { type?: unknown; networkId?: unknown };
+function isRegistryOrLinkTypeEventType(type: string): boolean {
   return (
-    typeof evt.networkId === 'string' &&
-    (evt.type === 'property-registry.created' ||
-      evt.type === 'property-registry.updated' ||
-      evt.type === 'property-registry.deleted' ||
-      evt.type === 'link-type.created' ||
-      evt.type === 'link-type.updated' ||
-      evt.type === 'link-type.deleted')
+    type === 'property-registry.created' ||
+    type === 'property-registry.updated' ||
+    type === 'property-registry.deleted' ||
+    type === 'link-type.created' ||
+    type === 'link-type.updated' ||
+    type === 'link-type.deleted'
   );
 }
 
@@ -2776,12 +2773,15 @@ export function buildLinkTypesPanel(): CataloguePanel {
     tree.setFilter(searchQuery);
   });
 
-  // Realtime: `link-type.*` инвалидирует кеш; `property-registry.*` тоже —
-  // клик открывает свойство, и его название/тип значения должны быть
-  // актуальны в момент клика.
-  const unsubscribe = onRealtimeEvent((raw: unknown) => {
-    if (!isPropertyRegistryOrLinkTypeEvent(raw)) return;
-    if (raw.networkId !== networkId) return;
+  // Realtime через слой (G5): `link-type.*`/`property-registry.*` гасят
+  // `types-catalog` (роутер), причина — само событие. Клик открывает свойство,
+  // и его название/тип значения должны быть актуальны в момент клика.
+  const unsubscribe = onQueryInvalidated((prefix, _keys, cause) => {
+    if (prefix !== queryKeys.typesCatalog()) return;
+    const evt = asRealtimeCause(cause);
+    if (evt === null) return;
+    if (evt.network_id !== networkId) return;
+    if (!isRegistryOrLinkTypeEventType(evt.type)) return;
     cachedTypes = null;
     cachedRows = null;
     cachedCounts = null;

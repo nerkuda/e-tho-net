@@ -36,6 +36,7 @@ export {
 } from './entities.js';
 
 export {
+  asRealtimeCause,
   getQueryState,
   hasQuery,
   invalidateQueries,
@@ -55,6 +56,7 @@ export {
   type QueryListener,
   type QueryState,
   type QueryStatus,
+  type RealtimeCause,
 } from './query-registry.js';
 
 export {

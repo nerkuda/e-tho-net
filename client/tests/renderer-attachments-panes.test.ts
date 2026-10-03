@@ -288,10 +288,10 @@ describe('проводка обновления списка вложений (�
     // Удаление на вкладке: строка убирается, 📎-индикатор холста сбрасывается,
     // ключ списка вложений гасится — подписчики перечитывают набор.
     assert.ok(
-      /await etn\.attachments\.remove\(networkId, attachment\.id\);[\s\S]{0,400}?invalidateIndicators\(attachment\.owner_id\);[\s\S]{0,400}?refreshAttachments\(\)/.test(
+      /await etn\.attachments\.remove\(networkId, attachment\.id\);[\s\S]{0,400}?invalidateQueries\(queryKeys\.indicators\(attachment\.owner_id\)\);[\s\S]{0,400}?refreshAttachments\(\)/.test(
         attachments,
       ),
-      'удаление вложения гасит ключ списка',
+      'удаление вложения гасит ключ списка и индикатор слоя',
     );
     assert.ok(
       /const refreshAttachments = \(\): void => \{[\s\S]{0,200}?invalidateQueries\(queryKeys\.attachments\(ownerType, ownerId\)\)/.test(

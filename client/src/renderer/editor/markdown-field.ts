@@ -13,7 +13,6 @@
 import type { MentionsScanThought } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
-import { invalidateIndicators } from '../canvas/canvas.js';
 import { invalidateQueries, queryKeys } from '../lib/live/index.js';
 import { div, el, errText, renderHtml } from '../lib/dom.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
@@ -432,7 +431,7 @@ async function insertClipboardFiles(
       notice('Не удалось добавить вложение.', 'error');
       continue;
     }
-    invalidateIndicators(owner.ownerId);
+    invalidateQueries(queryKeys.indicators(owner.ownerId));
     // Tell the editor chrome the owner's attachment set changed: the
     // «Вложения» tab (if built) reloads its list, the tab badge re-counts —
     // without this a paste from the comment field left a stale empty list

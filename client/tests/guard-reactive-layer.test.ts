@@ -38,25 +38,22 @@ const RENDERER_ROOT = path.resolve(
 /**
  * Легаси-подписчики `onRealtimeEvent`, замороженные до миграции.
  *
- * TODO G5 — редактор (комментарии/свойства/упоминания/менеджер свойств/типы).
  * TODO G6 — старый switch (`realtime-ui.ts`), легаси-леера (`layers.ts`) и мост
- * `app.ts` (регистрация `applyRealtimeToUi`, app.ts:612).
+ * `app.ts` (регистрация `applyRealtimeToUi`).
  * `lib/lock-cache.ts` — инфраструктура замков, прямой подписчик допустим.
  *
  * G4 (публикации) снят с whitelist: карточка публикации читает живые данные
  * через слой (`lib/live`).
+ *
+ * G5 (редактор/индикаторы/пины/wiki) снят: `editor/editor.ts`,
+ * `editor/comments.ts`, `editor/properties.ts`, `editor/mentions-annotate.ts`,
+ * `screens/property-manager.ts`, `screens/thought-type/views-tab.ts` читают
+ * живые данные через слой (подписка на инвалидации ключей, причина — событие).
  */
 const ON_REALTIME_WHITELIST = new Set<string>([
   // инфраструктура слоя
   'realtime.ts',
   'lib/lock-cache.ts',
-  // G5 — редактор
-  'editor/editor.ts',
-  'editor/comments.ts',
-  'editor/properties.ts',
-  'editor/mentions-annotate.ts',
-  'screens/property-manager.ts',
-  'screens/thought-type/views-tab.ts',
   // G6 — легаси-мост, switch и легаси-леера
   'app.ts',
   'realtime-ui.ts',
@@ -137,6 +134,37 @@ describe('guard: реактивный слой данных (269016e2, G1)', () 
           /(?:^|\/)screens\/publications\/workspace\.ts$/.test(rel) ||
           /(?:^|\/)editor\/publication-card\.ts$/.test(rel),
         allow: () => false,
+      },
+    ]);
+  });
+
+  it('G5-мигрированные модули не подписываются на realtime напрямую', () => {
+    assertGuardClean(RENDERER_ROOT, [
+      {
+        name: 'g5-migrated-no-direct-realtime',
+        description:
+          'Редактор (editor.ts, comments.ts, properties.ts, mentions-annotate.ts), ' +
+          'менеджер свойств и вкладка отборов читают живые данные через слой ' +
+          '(подписка на инвалидации ключей, причина — событие), не через ' +
+          'onRealtimeEvent. G5 задачи 8a039ea3.',
+        pattern: /\bonRealtimeEvent\s*\(/,
+        include: (rel) =>
+          /(?:^|\/)editor\/editor\.ts$/.test(rel) ||
+          /(?:^|\/)editor\/comments\.ts$/.test(rel) ||
+          /(?:^|\/)editor\/properties\.ts$/.test(rel) ||
+          /(?:^|\/)editor\/mentions-annotate\.ts$/.test(rel) ||
+          /(?:^|\/)screens\/property-manager\.ts$/.test(rel) ||
+          /(?:^|\/)screens\/thought-type\/views-tab\.ts$/.test(rel),
+        allow: () => false,
+      },
+      {
+        name: 'no-direct-realtime-onEvent',
+        description:
+          'Низкоуровневая подписка `etn.realtime.onEvent` запрещена вне моста ' +
+          'realtime.ts: события проходят через роутер слоя (event-router), а ' +
+          'экраны читают данные ключей. G5 задачи 8a039ea3.',
+        pattern: /etn\.realtime\.onEvent\s*\(/,
+        allow: (rel) => rel === 'realtime.ts',
       },
     ]);
   });

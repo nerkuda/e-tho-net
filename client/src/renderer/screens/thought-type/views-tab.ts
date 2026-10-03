@@ -26,7 +26,7 @@
  * станет живой при следующем открытии редактора.
  */
 
-import type { ThoughtTypeView } from '@etn/shared';
+import type { AnyRealtimeEvent, ThoughtTypeView } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { confirmDialog, errorDialog } from '../../lib/dialog.js';
@@ -35,7 +35,7 @@ import { errorLine as panelErrorLine, operationError } from '../../lib/ui/messag
 import { etn } from '../../lib/etn.js';
 import { isInBaseLayer } from '../../lib/layer-base.js';
 import { notice } from '../../lib/notice.js';
-import { onRealtimeEvent } from '../../realtime.js';
+import { asRealtimeCause, onQueryInvalidated } from '../../lib/live/index.js';
 
 import { openViewEditorDialog } from './filter-dialog.js';
 import { renderNewTypeHint } from '../../lib/type-editor-hints.js';
@@ -161,7 +161,12 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
    *  (регрессия a62190d1). */
   const pendingPatches = new Set<string>();
 
-  const unsubscribeRealtime = onRealtimeEvent((evt) => {
+  const unsubscribeRealtime = onQueryInvalidated((prefix, _keys, cause) => {
+    // Роутер гасит `views:@<typeId>` на `thought-type-view.*`, причина — само
+    // событие (G5): своего `onRealtimeEvent` у вкладки больше нет.
+    if (!prefix.startsWith('views:@')) return;
+    const evt = asRealtimeCause(cause) as unknown as AnyRealtimeEvent | null;
+    if (evt === null) return;
     if (
       evt.type !== 'thought-type-view.created' &&
       evt.type !== 'thought-type-view.updated' &&

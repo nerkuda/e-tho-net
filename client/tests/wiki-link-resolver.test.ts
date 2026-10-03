@@ -11,50 +11,47 @@ import {
   __testing,
   invalidateWikiLinkCache,
 } from '../src/renderer/editor/wiki-link-resolver.js';
+import { clearEntities, commitEntity } from '../src/renderer/lib/live/index.js';
 
 const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const ID_B = '11111111-2222-3333-4444-555555555555';
 const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
 
-test('cache invalidation: invalidateWikiLinkCache удаляет запись для id', () => {
-  __testing.cache.clear();
-  // Прямое наполнение кеша (имитация успешного resolve).
-  __testing.cache.set(`net-a:${ID_A}`, { title: 'Цель A', exists: true });
-  assert.ok(__testing.cache.has(`net-a:${ID_A}`), 'cache должен содержать запись перед invalidate');
+test('invalidateWikiLinkCache снимает отрицательный ответ (missingIds)', () => {
+  __testing.missingIds.clear();
+  __testing.missingIds.add(ID_A);
   invalidateWikiLinkCache(ID_A);
-  assert.equal(__testing.cache.has(`net-a:${ID_A}`), false, 'запись должна быть удалена');
+  assert.equal(__testing.missingIds.has(ID_A), false, 'id должен перерезолвиться');
 });
 
-test('invalidateWikiLinkCache удаляет записи для ВСЕХ сетей', () => {
-  __testing.cache.clear();
-  __testing.cache.set(`net-a:${ID_A}`, { title: 'A', exists: true });
-  __testing.cache.set(`net-b:${ID_A}`, { title: 'B', exists: true });
-  __testing.cache.set(`net-a:${ID_B}`, { title: 'C', exists: true });
-  invalidateWikiLinkCache(ID_A);
-  assert.equal(__testing.cache.has(`net-a:${ID_A}`), false);
-  assert.equal(__testing.cache.has(`net-b:${ID_A}`), false);
-  assert.equal(__testing.cache.has(`net-a:${ID_B}`), true, 'B не должен быть удалён');
+test('getCached читает заголовок из нормализованного кэша слоя', () => {
+  clearEntities();
+  __testing.missingIds.clear();
+  commitEntity('thought', ID_A, { id: ID_A, title: 'Цель A', active: true });
+  assert.deepEqual(__testing.getCached('net-a', ID_A), { title: 'Цель A', exists: true });
+  assert.equal(__testing.isKnown('net-a', ID_A), true);
 });
 
-test('invalidateWikiLinkCache на отсутствующий id — без побочных эффектов', () => {
-  __testing.cache.clear();
-  __testing.cache.set(`net-a:${ID_A}`, { title: 'A', exists: true });
-  invalidateWikiLinkCache('not-in-cache');
-  assert.equal(__testing.cache.has(`net-a:${ID_A}`), true, 'старые записи не должны пострадать');
+test('getCached: неактуальная мысль — exists=false, заголовок сохранён', () => {
+  clearEntities();
+  __testing.missingIds.clear();
+  commitEntity('thought', ID_A, { id: ID_A, title: 'Архивная', active: false });
+  assert.deepEqual(__testing.getCached('net-a', ID_A), { title: 'Архивная', exists: false });
 });
 
-test('cache isolation: разные ключи независимы', () => {
-  __testing.cache.clear();
-  __testing.cache.set(`net-a:${ID_A}`, { title: 'A', exists: true });
-  __testing.cache.set(`net-a:${ID_B}`, { title: 'B', exists: true });
-  __testing.cache.set(`net-b:${ID_A}`, { title: 'A2', exists: true });
-  assert.equal(__testing.cache.size, 3);
+test('getCached: отсутствующий id (missingIds) — пустой заголовок, exists=false', () => {
+  clearEntities();
+  __testing.missingIds.clear();
+  __testing.missingIds.add(ID_A);
+  assert.deepEqual(__testing.getCached('net-a', ID_A), { title: '', exists: false });
+  assert.equal(__testing.isKnown('net-b', ID_A), true, 'отрицательный ответ не сегментирован по сети');
 });
 
-test('cache помечает удалённые мысли как exists=false', () => {
-  __testing.cache.clear();
-  __testing.cache.set(`net-a:${ID_A}`, { title: 'Архивная', exists: false });
-  assert.equal(__testing.cache.get(`net-a:${ID_A}`)?.exists, false);
+test('getCached: неизвестный id — undefined (нет ни в кэше, ни в missing)', () => {
+  clearEntities();
+  __testing.missingIds.clear();
+  assert.equal(__testing.getCached('net-a', ID_B), undefined);
+  assert.equal(__testing.isKnown('net-a', ID_B), false);
 });
 
 // ---------------------------------------------------------------------------

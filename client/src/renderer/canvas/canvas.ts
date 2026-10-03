@@ -79,6 +79,11 @@ import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js
 import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
 import { store } from '../state.js';
 import {
+  getQueryState,
+  invalidateQueries,
+  subscribeQuery,
+} from '../lib/live/index.js';
+import {
   initLinksOverlay,
   drawLinksNow,
   setEllipseHover,
@@ -155,8 +160,6 @@ const OVERSCAN_ROWS = 2;
  *  anchored inside the zone's CONTENT box, so the padding is discounted on both
  *  axes when the anchor offset is computed. */
 const ZONE_PADDING_PX = 12;
-/** How many indicator fetches may run concurrently. */
-const INDICATOR_CONCURRENCY = 3;
 /** Minimum mouse travel before a press becomes a drag, px. */
 export const DRAG_THRESHOLD_PX = 4;
 /** `etn.thoughts.neighbors` limit for the Ctrl-hover ellipse preview list —
@@ -241,10 +244,23 @@ const refCache = new Map<string, ThoughtRef>();
  * a neighbour's new icon never reached its cloud (ошибка 1ea2d05a).
  */
 let refEpoch = 0;
-/** Indicator cache (id → counts), invalidated on comment/attachment events. */
-const indicatorCache = new Map<string, IndicatorInfo>();
-const indicatorQueue: string[] = [];
-let indicatorRunning = 0;
+/**
+ * Подписки на запросы индикаторов слоя (`indicators:@id`). Данные счётчиков
+ * (комментарии/вложения) живут в реестре запросов реактивного слоя (G5
+ * техпроекта 269016e2): подписка на видимую мысль «зажигает» запрос, инвалидация
+ * ключа (роутер на `comment.*`/`attachment.*`, производители — на свою правку)
+ * перезапрашивает его, а слушатель перерисовывает ячейки. Своей кэш-россыпи у
+ * холста больше нет. Подписки сбрасываются при смене сети и размонтировании.
+ */
+const indicatorSubscriptions = new Map<string, () => void>();
+let indicatorNetworkId: string | null = null;
+
+/** Снимает все подписки индикаторов (смена сети/размонтирование холста). */
+function resetIndicatorSubscriptions(): void {
+  for (const unsubscribe of indicatorSubscriptions.values()) unsubscribe();
+  indicatorSubscriptions.clear();
+  indicatorNetworkId = null;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -462,6 +478,8 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     resizeObserver.disconnect();
     linksOverlay.dispose();
     disposeZoneSplitters();
+    // Подписки индикаторов слоя — снять вместе с холстом.
+    resetIndicatorSubscriptions();
     // Detach the DOM handles so no late async render paints into a dead host.
     host = null;
     zones = null;
@@ -562,18 +580,13 @@ export function setAddDialogOpener(opener: ((ctx: AddDialogContext) => void) | n
 }
 
 /**
- * Invalidates cached indicator counts and re-fetches them, patching the
- * rendered clouds (called after comment/attachment changes and realtime events).
+ * Инвалидирует счётчики-индикаторы сущности: сброс ключа слоя `indicators:@id`
+ * (`null` — все), перезапрос идёт активным подписчикам. Оставлено как фасад
+ * легаси-пути G6 (`realtime-ui.ts`); мигрированные производители гасят ключ
+ * напрямую (`invalidateQueries(queryKeys.indicators(...))`).
  */
 export function invalidateIndicators(id: string | null): void {
-  if (id === null) {
-    const ids = [...indicatorCache.keys()];
-    indicatorCache.clear();
-    for (const known of ids) queueIndicatorLoad(known);
-  } else {
-    indicatorCache.delete(id);
-    queueIndicatorLoad(id);
-  }
+  invalidateQueries(id === null ? queryKeys.indicatorsAll() : queryKeys.indicators(id));
 }
 
 // ---------------------------------------------------------------------------
@@ -821,7 +834,6 @@ async function render(): Promise<void> {
   // `syncZoneTotalsWithFreshFocus` from the store subscriber.
   if (focusChanged) void ensureZoneTotals(focus);
   paintZoneIndicators();
-  scheduleIndicatorLoads();
   if (snapshot !== null) {
     playFocusTransition(host, snapshot, drawLinksNow, externalOrigin);
   } else {
@@ -1513,7 +1525,6 @@ async function appendNextZonePage(
     if (appendedAny) {
       renderZone(dir, groupByThought(zoneNeighbors(dir, focus)));
       paintZoneIndicators();
-      scheduleIndicatorLoads();
       // Colours/icon of the appended clouds come from the ref cache, which
       // the focus response only seeded for the first page — resolve the new
       // ids and repaint the zone when they arrive (best effort).
@@ -2319,55 +2330,51 @@ registerHoverPreviewResolver('neighbors', resolveNeighborsPreview);
 // ---------------------------------------------------------------------------
 
 /**
- * Enqueues an indicator fetch for a thought (deduplicated, cached). Exported
- * so the structures tree can share the same cache/queue for its clouds (L15,
- * 08-ui-spec.md §15.4: clouds match the canvas 1-to-1, indicators included).
+ * Enqueues an indicator load for a thought: подписывает холст на запрос слоя
+ * `indicators:@id` (deduplicated). Exported so the structures tree can share the
+ * same query/layer data for its clouds (L15, 08-ui-spec.md §15.4: clouds match
+ * the canvas 1-to-1, indicators included).
  */
 export function queueIndicatorLoad(id: string): void {
-  // Clouds are rebuilt on scroll/resize (virtualized zones); a cached value
-  // must be re-applied to the fresh DOM instead of being skipped.
-  const cached = indicatorCache.get(id);
-  if (cached !== undefined) {
-    applyIndicators(id, cached);
-    return;
-  }
-  if (indicatorQueue.includes(id)) return;
-  indicatorQueue.push(id);
-  scheduleIndicatorLoads();
-}
-
-/** Drains the indicator queue with bounded concurrency. */
-function scheduleIndicatorLoads(): void {
-  while (indicatorRunning < INDICATOR_CONCURRENCY && indicatorQueue.length > 0) {
-    const id = indicatorQueue.shift();
-    if (id === undefined) break;
-    indicatorRunning++;
-    void loadIndicators(id).finally(() => {
-      indicatorRunning--;
-      scheduleIndicatorLoads();
-    });
-  }
-}
-
-/** Fetches comment/attachment counts for a thought and patches its clouds. */
-async function loadIndicators(id: string): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  try {
-    const [comments, attachments] = await Promise.all([
-      etn.comments.list(networkId, 'thought', id),
-      etn.attachments.list(networkId, 'thought', id),
-    ]);
-    const info: IndicatorInfo = {
-      permanent: comments.some((c) => c.kind === 'permanent'),
-      chrono: comments.filter((c) => c.kind === 'chronological').length,
-      attachments: attachments.length,
-    };
-    indicatorCache.set(id, info);
-    applyIndicators(id, info);
-  } catch {
-    // Counts stay unknown — the indicators remain grey.
+  // Смена сети обнуляет реестр запросов — старые подписки «повисают» на
+  // удалённых записях. Пересоздаём их в контексте новой сети.
+  if (indicatorNetworkId !== networkId) {
+    resetIndicatorSubscriptions();
+    indicatorNetworkId = networkId;
   }
+  // Clouds are rebuilt on scroll/resize (virtualized zones); a value already in
+  // the layer must be re-applied to the fresh DOM instead of being skipped.
+  const existing = indicatorSubscriptions.get(id);
+  if (existing !== undefined) {
+    const state = getQueryState<IndicatorInfo>(queryKeys.indicators(id));
+    if (state.data !== undefined) applyIndicators(id, state.data);
+    return;
+  }
+  const unsubscribe = subscribeQuery<IndicatorInfo>(
+    queryKeys.indicators(id),
+    () => fetchIndicatorCounts(id),
+    (state) => {
+      if (state.data !== undefined) applyIndicators(id, state.data);
+    },
+  );
+  indicatorSubscriptions.set(id, unsubscribe);
+}
+
+/** Fetches comment/attachment counts for one thought (fetcher слоя). */
+async function fetchIndicatorCounts(id: string): Promise<IndicatorInfo> {
+  const networkId = store.state.networkId;
+  if (networkId === null) throw new Error('network is not open');
+  const [comments, attachments] = await Promise.all([
+    etn.comments.list(networkId, 'thought', id),
+    etn.attachments.list(networkId, 'thought', id),
+  ]);
+  return {
+    permanent: comments.some((c) => c.kind === 'permanent'),
+    chrono: comments.filter((c) => c.kind === 'chronological').length,
+    attachments: attachments.length,
+  };
 }
 
 /**
@@ -2410,7 +2417,6 @@ export const canvasInternals = {
   groupByThought,
   viewResultToZoneEntries,
   refCache,
-  indicatorCache,
   canvasRenderKey,
   selectionKey,
   deferSingleClick,

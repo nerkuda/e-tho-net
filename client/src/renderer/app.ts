@@ -26,7 +26,7 @@ import {
 } from './lib/layer-resync.js';
 import { closeMenu } from './lib/menu.js';
 import { queryKeys } from './lib/live/query-keys.js';
-import { invalidateQueries } from './lib/live/query-registry.js';
+import { invalidateQueries, setQueryData } from './lib/live/query-registry.js';
 import { notice } from './lib/notice.js';
 import { logUiEvent } from './lib/ui-log.js';
 import { UI_STATE_KEY, PREF_KEY, parseStoredCanvasLinkFilter } from '@etn/shared';
@@ -52,7 +52,7 @@ import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache } from './lib/lock-cache.js';
-import { invalidateAllRefs, invalidateIndicators, invalidateRef } from './canvas/canvas.js';
+import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
 import { refreshSearchIfVisible } from './search/search.js';
@@ -178,6 +178,8 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     structuresActiveThought: null,
     pins: (pinsRaw ?? []).map((p) => p.thought_id),
   });
+  // Срез слоя `pins` (G5): порядок закреплённых для панели — из ответа сети.
+  setQueryData(queryKeys.pins(), (pinsRaw ?? []).map((p) => p.thought_id));
 
   // Q3: refresh tab list and activate the right entry. When the caller
   // supplies `tabId` (the picker / tab activation), that exact tab wins —
@@ -422,7 +424,7 @@ export async function resyncAfterLayerSwitch(): Promise<void> {
   // A stale trash badge here is exactly bug 0.5.4: a mark lifted in a layer
   // kept hiding on the base cloud after switching back.
   invalidateAllRefs();
-  invalidateIndicators(null);
+  invalidateQueries(queryKeys.indicatorsAll());
   // Re-read the focus FIRST: the editor follows it once the cached snapshots
   // are dropped below, and this way it renders straight into the new layer's
   // data instead of flashing the old layer's focus for a frame.
@@ -550,7 +552,7 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
   // is never resurrected as "the previous thought" on the next transition.
   noteThoughtRemoved(deletedId);
   await etn.history.remove(deletedId, store.state.activeTabId).catch(() => undefined);
-  invalidateIndicators(deletedId);
+  invalidateQueries(queryKeys.indicators(deletedId));
   invalidateRef(deletedId);
   invalidateHistoryBar();
   invalidateStructuresThought(deletedId);

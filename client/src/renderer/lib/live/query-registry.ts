@@ -67,6 +67,27 @@ const entries = new Map<string, QueryEntry<unknown>>();
 export type InvalidationCause = unknown;
 
 /**
+ * Realtime-событие как ПРИЧИНА инвалидации: роутер передаёт его в
+ * `invalidateQueries(prefix, evt)`. Наблюдателю, которому нужны детали события
+ * (тип, payload), а не только ключ, достаточно `asRealtimeCause(cause)` —
+ * подписываться на `onRealtimeEvent` напрямую запрещено (см. G5 техпроекта).
+ */
+export interface RealtimeCause {
+  type: string;
+  network_id: string;
+  seq: number;
+  data: Record<string, unknown>;
+}
+
+/** Причина-событие шины; `null` — локальный сигнал/иная причина. */
+export function asRealtimeCause(cause: unknown): RealtimeCause | null {
+  if (typeof cause !== 'object' || cause === null) return null;
+  const c = cause as { type?: unknown; data?: unknown };
+  if (typeof c.type !== 'string') return null;
+  return cause as RealtimeCause;
+}
+
+/**
  * Локальный сигнал мутации-источника (не realtime-событие). Позволяет экрану
  * отличить свою пересборку от прочих инвалидаций того же ключа.
  */

@@ -28,7 +28,7 @@ import { type MenuItem, showMenuAt } from '../lib/menu.js';
 import { etn } from '../lib/etn.js';
 import { errText } from '../lib/dom.js';
 import { notice } from '../lib/notice.js';
-import { onRealtimeEvent } from '../realtime.js';
+import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
 import { store } from '../state.js';
 import { openThoughtByRef } from './wiki-link.js';
 
@@ -373,7 +373,9 @@ let invalidationWired = false;
 function wireCacheInvalidation(): void {
   if (invalidationWired) return;
   invalidationWired = true;
-  onRealtimeEvent((evt) => {
+  onQueryInvalidated((_prefix, _keys, cause) => {
+    const evt = asRealtimeCause(cause);
+    if (evt === null) return;
     if (
       evt.type === 'thought.created' ||
       evt.type === 'thought.updated' ||

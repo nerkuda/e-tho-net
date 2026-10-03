@@ -12,7 +12,7 @@
  * позже вручную).
  */
 
-import { invalidateIndicators } from '../canvas/canvas.js';
+import { invalidateQueries, queryKeys } from './live/index.js';
 import { store } from '../state.js';
 import { etn } from './etn.js';
 
@@ -46,7 +46,7 @@ export async function applyCommentTemplateIfEmpty(
     // не получает realtime-эхо своих операций (04-realtime.md §5), поэтому
     // кэш индикаторов сбрасываем явно — как это делает ручное сохранение
     // комментария в редакторе (comments.ts).
-    invalidateIndicators(thoughtId);
+    invalidateQueries(queryKeys.indicators(thoughtId));
   } catch {
     // Побочный эффект: ошибки не должны блокировать основной поток
     // (создание/обновление мысли). Шаблон можно применить вручную.

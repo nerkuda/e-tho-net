@@ -21,6 +21,7 @@ import type { ThoughtRef } from '@etn/shared';
 import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_TARGET_ATTR } from '@etn/markdown';
 
 import { etn } from '../lib/etn.js';
+import { commitEntity, getEntity } from '../lib/live/index.js';
 import { t } from '../lib/i18n.js';
 import { store } from '../state.js';
 
@@ -58,10 +59,36 @@ export function publicationIdFromTarget(target: string): string | null {
   return match === null ? null : match[1]!.toLowerCase();
 }
 
-/** Per-session cache, keyed by `${networkId}:${thoughtId}`. */
-const cache = new Map<string, { title: string; exists: boolean }>();
+/**
+ * Резолв wiki-ссылок — ПРОИЗВОДНЫЕ данные слоя (G5 техпроекта 269016e2):
+ * заголовок/актуальность цели читаются из нормализованного кэша
+ * (`entity:@thought:@id`), который роутер патчит на `thought.updated/deleted`,
+ * а `thoughts.resolve` кладёт туда найденные ссылки через `commitEntity`.
+ * Собственного кэша-дубля у резолвера больше нет; отдельно храним только
+ * ОТРИЦАТЕЛЬНЫЙ ответ (id, которых нет), чтобы не долбить сеть на ре-рендерах.
+ */
+const missingIds = new Set<string>();
 
 const RESOLVE_BATCH = 100;
+
+/**
+ * Готов ли ответ по id: мысль уже в нормализованном кэше слоя либо id признан
+ * отсутствующим. `networkId` в подписи — для совместимости с прежними ключами
+ * (id мыслей уникальны, кэш слоя не сегментирован по сети).
+ */
+function isKnown(_networkId: string, thoughtId: string): boolean {
+  return getEntity('thought', thoughtId) !== undefined || missingIds.has(thoughtId);
+}
+
+/** Read resolved entry; returns undefined on miss. */
+function getCached(_networkId: string, thoughtId: string): { title: string; exists: boolean } | undefined {
+  const entity = getEntity<{ title?: unknown; active?: unknown }>('thought', thoughtId);
+  if (entity !== undefined && entity !== null && typeof entity.title === 'string') {
+    return { title: entity.title, exists: entity.active !== false };
+  }
+  if (missingIds.has(thoughtId)) return { title: '', exists: false };
+  return undefined;
+}
 
 /**
  * Matches ID-form wiki-links inside an HTML-escaped server snippet (the
@@ -82,20 +109,6 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function cacheKey(networkId: string, thoughtId: string): string {
-  return `${networkId}:${thoughtId}`;
-}
-
-/** Read cached entry; returns undefined on miss. */
-function getCached(networkId: string, thoughtId: string): { title: string; exists: boolean } | undefined {
-  return cache.get(cacheKey(networkId, thoughtId));
-}
-
-/** Store a freshly resolved entry. */
-function setCached(networkId: string, thoughtId: string, title: string, exists: boolean): void {
-  cache.set(cacheKey(networkId, thoughtId), { title, exists });
-}
-
 /**
  * Split a span into a per-network map of unresolved thought ids. Cross-network
  * spans (with `data-wiki-network`) are routed to that network bucket; the
@@ -111,8 +124,7 @@ function collectUnresolved(
     const id = span.getAttribute(WIKI_LINK_ID_ATTR);
     if (id === null || id === '') continue;
     const networkId = span.getAttribute('data-wiki-network') ?? defaultNetworkId;
-    const key = cacheKey(networkId, id);
-    if (cache.has(key)) continue;
+    if (isKnown(networkId, id)) continue;
     let bucket = out.get(networkId);
     if (bucket === undefined) {
       bucket = new Set();
@@ -187,9 +199,10 @@ async function resolveBatch(networkId: string, ids: string[]): Promise<void> {
     for (const id of ids.slice(0, RESOLVE_BATCH)) {
       const ref = refs.find((r) => r.id === id);
       if (ref === undefined) {
-        setCached(networkId, id, '', false);
+        missingIds.add(id);
       } else {
-        setCached(networkId, id, ref.title, ref.active);
+        // Кладём в нормализованный кэш слоя — источник истины для резолвера.
+        commitEntity('thought', id, ref);
       }
     }
   } catch {
@@ -338,7 +351,7 @@ function collectSnippetIds(snippet: string, defaultNetworkId: string): Map<strin
   while ((m = re.exec(snippet)) !== null) {
     const id = m[3]!.toLowerCase();
     const networkId = m[1]?.toLowerCase() ?? defaultNetworkId;
-    if (cache.has(cacheKey(networkId, id))) continue;
+    if (isKnown(networkId, id)) continue;
     let bucket = out.get(networkId);
     if (bucket === undefined) {
       bucket = new Set();
@@ -392,25 +405,23 @@ export async function resolveWikiLinksInDom(root: HTMLElement, networkId: string
 }
 
 /**
- * Drop cached entries for one thought id (all networks). Called from the
- * realtime handler for `thought.deleted` to invalidate stale titles.
+ * Легаси-фасад G6 (`realtime-ui.ts`): заголовки — производные нормализованного
+ * кэша слоя (роутер патчит `entity:@thought:@id`), отдельного кэша нет. Снимаем
+ * только отрицательный ответ, чтобы создать/пересоздать цель перерезолвилась.
  */
 export function invalidateWikiLinkCache(thoughtId: string): void {
-  for (const key of [...cache.keys()]) {
-    if (key.endsWith(`:${thoughtId}`)) cache.delete(key);
-  }
+  missingIds.delete(thoughtId);
 }
 
 /**
- * Update cached entries for one thought id (all networks). Called from the
- * realtime handler for `thought.updated` to refresh titles without a refetch.
+ * Легаси-фасад G6 (`realtime-ui.ts`): метаданные ведёт слой — прямой заголовок
+ * из realtime-события больше не пишем. Оставлено для совместимости сигнатуры.
  */
 export function refreshWikiLinkCache(thoughtId: string, title: string, active: boolean): void {
-  for (const [key] of cache) {
-    if (key.endsWith(`:${thoughtId}`)) {
-      cache.set(key, { title, exists: active });
-    }
-  }
+  void thoughtId;
+  void title;
+  void active;
+  /* данные слоя актуальны */
 }
 
 // ---------------------------------------------------------------------------
@@ -446,8 +457,10 @@ export async function searchLegacyWikiTarget(
 
 /** Test-only hook. */
 export const __testing = {
-  cache,
+  missingIds,
   pubCache,
+  getCached,
+  isKnown,
   RESOLVE_BATCH,
   substituteWikiIdsInSnippet,
   collectSnippetIds,

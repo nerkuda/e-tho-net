@@ -52,7 +52,7 @@ import {
 } from '@etn/shared';
 
 import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
-import { invalidateIndicators, invalidateRef } from '../canvas/canvas.js';
+import { invalidateRef } from '../canvas/canvas.js';
 // Канон значка и стиля мысли живёт в общей фабрике облачка: иконка-кнопка
 // заголовка редактора рисуется им же, а сид диалога настроек читает
 // разрешённый стиль через resolveCloudStyle (редактор полей, не представление).
@@ -62,7 +62,6 @@ import { setLinkEditorOpener } from '../canvas/links.js';
 import { noteThoughtWillOpen } from '../history.js';
 import { inNeighbourhood, reloadTypeCatalogues } from '../realtime-ui.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
-import { invalidatePinnedBar, invalidatePinnedRef } from '../screens/pinned-bar.js';
 import { invalidateSelectionThought } from '../selection/selection.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
 import {
@@ -86,6 +85,8 @@ import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
 // производители зовут `invalidateQueries` того же ключа. Локальный канал
 // `etn:attachments-changed` и индекс показанных вложений снесены (G4).
 import {
+  asRealtimeCause,
+  commitEntity,
   invalidateQueries,
   onQueryInvalidated,
   queryKeys,
@@ -110,7 +111,6 @@ import {
   type ShownTypeChain,
   type TypeChangeFacts,
 } from '../lib/type-definitions.js';
-import { onRealtimeEvent } from '../realtime.js';
 import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
@@ -728,7 +728,14 @@ export function mountEditor(editorHost: HTMLElement): void {
     //    отбрасывает, G8 applier), поэтому производители уведомляют сами —
     //    владельцем (типом) либо id реестрового свойства.
     // Гейт по цепочке типов показанной сущности — в lib/type-definitions.ts.
-    onRealtimeEvent((evt) => {
+    // Чужой путь идёт через СЛОЙ (G5): роутер гасит `types-catalog` на
+    // `property-definition.*`/`property-registry.*`/`thought-type.*`/`link-type.*`,
+    // причина инвалидации — само realtime-событие. Своего `onRealtimeEvent` у
+    // редактора больше нет.
+    onQueryInvalidated((prefix, _keys, cause) => {
+      if (prefix !== queryKeys.typesCatalog()) return;
+      const evt = asRealtimeCause(cause);
+      if (evt === null) return;
       // Чужие сети: событие приходит на открытый сокет соседней вкладки, но к
       // показанной сущности этой сети не относится.
       if (evt.network_id !== store.state.networkId) return;
@@ -1939,13 +1946,12 @@ export function reflectThoughtUpdate(updated: Thought): void {
   // The structures results list is server-rendered; reload it so the saved
   // icon/title/type appear right away.
   scheduleStructuresRefresh();
-  // The pinned bar and the history bar render the thought from their own
-  // cached/last-signature state and don't pick up a store patch alone (the
-  // actor gets no realtime echo — same reasoning as above). Force both to
-  // refetch so a changed icon/colour/title shows up there too.
+  // Панель закреплённых читает метаданные чипа из нормализованного кэша слоя
+  // (G5): кладём свежую мысль в `entity:@thought:@id` и гасим срез `pins`,
+  // чтобы панель перерисовала чип (своего realtime-эха у автора нет).
   if (store.state.pins.includes(id)) {
-    invalidatePinnedRef(id);
-    invalidatePinnedBar();
+    commitEntity('thought', id, updated);
+    invalidateQueries(queryKeys.pins());
   }
   invalidateHistoryBar();
   // Панель выделенных держит свой кэш строк и подписана лишь на состав
@@ -2423,7 +2429,7 @@ async function savePickedIcon(thought: Thought, result: IconPickResult): Promise
     }
     // The attachments tab (if built) reloads and the 📎 indicator repaints —
     // same notification path as a paste from the comment field.
-    invalidateIndicators(thought.id);
+    invalidateQueries(queryKeys.indicators(thought.id));
     invalidateQueries(queryKeys.attachments('thought', thought.id));
   }
   // `icon_attachment_id: null` clears a stale link on emoji/URL/clear picks.

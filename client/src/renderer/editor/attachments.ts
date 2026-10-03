@@ -19,7 +19,6 @@
 import type { Attachment, AttachmentOwnerType, Thought, ThoughtUpdateInput } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
-import { invalidateIndicators } from '../canvas/canvas.js';
 import {
   commitEntity,
   invalidateQueries,
@@ -367,7 +366,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       }
     }
     if (added > 0) {
-      invalidateIndicators(ownerId);
+      invalidateQueries(queryKeys.indicators(ownerId));
       refreshAttachments();
       return;
     }
@@ -670,8 +669,8 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         owner_type: 'thought',
         owner_id: targetId,
       });
-      invalidateIndicators(attachment.owner_id);
-      invalidateIndicators(targetId);
+      invalidateQueries(queryKeys.indicators(attachment.owner_id));
+      invalidateQueries(queryKeys.indicators(targetId));
       if (selectedId === attachment.id) {
         selectedId = null;
         showViewerHint('Выберите вложение для просмотра.');
@@ -705,7 +704,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         target_owner_ids: targetIds,
       });
       for (const created of copyResult.created) {
-        invalidateIndicators(created.owner_id);
+        invalidateQueries(queryKeys.indicators(created.owner_id));
       }
       const created = copyResult.created.length;
       const skipped = copyResult.skipped.length;
@@ -732,7 +731,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     if (!ok) return;
     try {
       await etn.attachments.remove(networkId, attachment.id);
-      invalidateIndicators(attachment.owner_id);
+      invalidateQueries(queryKeys.indicators(attachment.owner_id));
       if (selectedId === attachment.id) {
         selectedId = null;
         showViewerHint('Выберите вложение для просмотра.');
@@ -913,7 +912,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
           title: attachment.title,
           description: attachment.description,
         });
-        invalidateIndicators(ownerId);
+        invalidateQueries(queryKeys.indicators(ownerId));
         closeDialog();
         refreshAttachments();
       } catch (err) {
@@ -974,7 +973,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
             description: descInput.value.trim() || null,
           });
         }
-        invalidateIndicators(ownerId);
+        invalidateQueries(queryKeys.indicators(ownerId));
         close();
         refreshAttachments();
       } catch (err) {

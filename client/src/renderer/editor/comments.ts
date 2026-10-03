@@ -12,10 +12,8 @@
  * comments live in the «Дневник» tab (chrono-tab.ts).
  */
 
-import type { Comment } from '@etn/shared';
+import type { AnyRealtimeEvent, Comment } from '@etn/shared';
 
-import { invalidateIndicators } from '../canvas/canvas.js';
-import { signalPermanentCommentSaved } from '../lib/live/index.js';
 import {
   clearDraft,
   clearDraftsFor,
@@ -25,10 +23,16 @@ import {
 } from '../drafts.js';
 import { commentShell } from '../lib/ui/comment.js';
 import { etn } from '../lib/etn.js';
+import {
+  asRealtimeCause,
+  invalidateQueries,
+  onQueryInvalidated,
+  queryKeys,
+  signalPermanentCommentSaved,
+} from '../lib/live/index.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
-import { onRealtimeEvent } from '../realtime.js';
 import { store } from '../state.js';
 import { registerMainSection, type EditorContext } from './editor.js';
 import { createMarkdownField, setMarkdownField } from './markdown-field.js';
@@ -54,7 +58,15 @@ let realtimeWired = false;
 function wireCommentRealtime(): void {
   if (realtimeWired) return;
   realtimeWired = true;
-  onRealtimeEvent((evt) => {
+  onQueryInvalidated((prefix, _keys, cause) => {
+    // Гейт по ключу индикаторов (роутер гасит `indicators:@owner` на
+    // `comment.created/deleted`, `indicators` — на `comment.updated`), причина —
+    // само realtime-событие. Свой `onRealtimeEvent` снесён (G5): чужой
+    // комментарий приходит кэш-путём слоя, инвариант 206e33a1 (не сбрасывать
+    // незавершённую правку) сохранён в теле ниже.
+    if (prefix !== queryKeys.indicatorsAll() && !prefix.startsWith('indicators:@')) return;
+    const evt = asRealtimeCause(cause) as unknown as AnyRealtimeEvent | null;
+    if (evt === null) return;
     if (evt.type === 'comment.created') {
       const ref = mountedPermanent;
       if (ref === null) return;
@@ -302,7 +314,7 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
         // otherwise leave a row behind (its id never reached `draftId`).
         await clearDraftsFor(networkId, 'comment', permanent?.id ?? ctx.ownerId);
         await clearDraftsFor(networkId, 'comment-new', ctx.ownerId);
-        invalidateIndicators(ctx.ownerId);
+        invalidateQueries(queryKeys.indicators(ctx.ownerId));
         // Своя правка постоянного комментария: открытый документ публикации
         // обязан обновить блок мысли — сигнал слоя (до B1; эхо своё не приходит).
         signalPermanentCommentSaved(ctx.ownerId, md);
