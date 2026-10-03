@@ -19,9 +19,16 @@ describe('editor/comment-focus: порядок фокусировки комме
       'wait',
       'владелец панели не совпал — не трогаем поле',
     );
-    // Как только панель дорендерилась до Y, но поля ещё нет — тоже ждём.
+    // Панель дорендерилась до Y, но вкладка ещё не активирована: активируем её
+    // ПЕРВОЙ — поля без активации нет (77cce0ba, п.3).
     assert.equal(
       commentFocusStep({ renderedOwnerId: 'Y', thoughtId: 'Y', hasField: false, activated: false }),
+      'activate',
+      'активация вкладки идёт до ожидания поля',
+    );
+    // Вкладка активирована, поле ещё монтируется — ждём.
+    assert.equal(
+      commentFocusStep({ renderedOwnerId: 'Y', thoughtId: 'Y', hasField: false, activated: true }),
       'wait',
       'поля целевой мысли ещё нет',
     );
@@ -44,6 +51,16 @@ describe('editor/comment-focus: порядок фокусировки комме
     assert.equal(
       commentFocusStep({ renderedOwnerId: 'Y', thoughtId: 'Y', hasField: true, activated: true }),
       'focus',
+    );
+  });
+
+  it('мысль уже открыта с активной вкладкой «Свойства» — вкладка переключается (77cce0ba, п.3)', () => {
+    // Владелец панели совпал, но поле Комментария не смонтировано (активна
+    // «Свойства»): шаг обязан быть 'activate', иначе вкладка не переключится.
+    assert.equal(
+      commentFocusStep({ renderedOwnerId: 'Y', thoughtId: 'Y', hasField: false, activated: false }),
+      'activate',
+      'активация вкладки не должна зависеть от наличия поля',
     );
   });
 });

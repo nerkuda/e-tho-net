@@ -25,11 +25,13 @@ import { BASE_LAYER_ID, UI_STATE_KEY } from '@etn/shared';
 
 import {
   div,
+  errText,
   span,
   setTooltip,
 } from '../../lib/dom.js';
 import { t, type MessageKey } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
+import { notice } from '../../lib/notice.js';
 import { svgIcon } from '../../lib/icons.js';
 import { errorDialog, promptDialog } from '../../lib/dialog.js';
 import { openEntityDeleteDialog } from '../../lib/delete-dialog.js';
@@ -1567,9 +1569,21 @@ async function runExport(publicationId: string, format: 'md' | 'html'): Promise<
       await new Promise((resolve) => window.setTimeout(resolve, 250));
       job = await etn.system.getJob(job_id);
     }
-    if (job.status !== 'done') throw new Error(t('publications.error'));
-    await etn.system.downloadExport(job_id, job.filename ?? `publication.${format}.zip`);
+    if (job.status !== 'done') {
+      notice(t('publications.export.failed'), 'error');
+      return;
+    }
+    // Тишина после выбора места (задача 77cce0ba, п.4): сообщаем о результате —
+    // успех с путём сохранения либо причина сбоя. Отмена диалога — не событие.
+    const name = job.filename ?? `publication.${format}.zip`;
+    const result = await etn.system.downloadExport(job_id, name);
+    if (result.cancelled) return;
+    if (result.error !== undefined && result.error !== '') {
+      notice(t('publications.export.saveFailed', result.error), 'error');
+      return;
+    }
+    notice(t('publications.export.saved', result.saved_path ?? name), 'success');
   } catch (err) {
-    errorDialog(t('publications.menu.export'), err);
+    notice(t('publications.export.failedReason', errText(err)), 'error');
   }
 }

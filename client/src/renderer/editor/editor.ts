@@ -1856,15 +1856,23 @@ function focusEditorComment(thoughtId: string, findText?: string): void {
       return;
     }
     if (step === 'activate') {
-      activated = true;
       if (shownTab !== 'main') {
         // The first tab button is «Комментарий» — click reuses the regular lazy
-        // pane activation instead of duplicating it here.
-        scrollBox.querySelector<HTMLButtonElement>('.editor-tab')?.click();
+        // pane activation instead of duplicating it here. Пока панель занята
+        // карточкой публикации, кнопок вкладок нет — НЕ помечаем активацию
+        // выполненной, чтобы повторить попытку после отрисовки мысли (иначе
+        // вкладка «Свойства» не переключилась бы, задача 77cce0ba, п.3).
+        const commentTab = scrollBox.querySelector<HTMLButtonElement>('.editor-tab');
+        if (commentTab !== null) {
+          activated = true;
+          commentTab.click();
+        }
+      } else {
+        activated = true;
       }
       // The comment group is the bottom section of the tab; when collapsed,
       // expand it (a click toggles — click only when persisted state says so).
-      if (store.state.collapsedGroups['permanent'] === true) {
+      if (activated && store.state.collapsedGroups['permanent'] === true) {
         scrollBox.querySelector<HTMLElement>('.main-bottom .group > .group-header')?.click();
       }
       // Активация вкладки/группы могла пересобрать панель — даём тик и

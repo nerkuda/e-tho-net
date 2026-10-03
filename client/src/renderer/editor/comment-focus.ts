@@ -27,12 +27,15 @@ export interface CommentFocusState {
 
 /**
  * Шаг ожидания. Владелец панели не совпал с запрошенной мыслью — ждём, даже
- * если поле существует (это поле старой мысли). Поля нет — ждём. Вкладка не
- * активирована — активируем. Всё готово — ставим каретку.
+ * если поле существует (это поле старой мысли). Далее АКТИВИРУЕМ вкладку
+ * «Комментарий» — поле появляется только после этого, поэтому проверять его
+ * наличие до активации нельзя: иначе при открытой вкладке «Свойства» шаг
+ * навсегда застревал в `wait` и вкладка не переключалась (задача 77cce0ba, п.3).
+ * Когда вкладка активирована и поле смонтировано — ставим каретку.
  */
 export function commentFocusStep(state: CommentFocusState): CommentFocusStep {
   if (state.renderedOwnerId !== state.thoughtId) return 'wait';
-  if (!state.hasField) return 'wait';
   if (!state.activated) return 'activate';
+  if (!state.hasField) return 'wait';
   return 'focus';
 }

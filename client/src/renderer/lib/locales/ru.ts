@@ -713,6 +713,12 @@ export const ru = {
   'publications.menu.export': 'Экспортировать',
   'publications.menu.exportMd': 'Экспорт в Markdown',
   'publications.menu.exportHtml': 'Экспорт в HTML',
+  // Тост-уведомления экспорта (задача 77cce0ba, п.4): успех с путём и сбой с
+  // причиной — по образцу прочих тостов клиента.
+  'publications.export.saved': 'Публикация сохранена: %1',
+  'publications.export.saveFailed': 'Не удалось сохранить файл: %1',
+  'publications.export.failed': 'Экспорт завершился с ошибкой.',
+  'publications.export.failedReason': 'Экспорт не удался: %1',
   /** Пункты контекстного меню публикации (задачи 00160da1, b51dbca4):
    *  открыть карточку, удалить, читать, экспортировать. */
   'publications.menu.open': 'Открыть',
@@ -793,6 +799,10 @@ export const ru = {
   'publications.ws.loadError': 'Не удалось загрузить документ',
   'publications.ws.retry': 'Повторить',
   'publications.ws.noTextSources': 'У публикации не заданы свойства текстов.',
+  // Пустой отбор заголовков (задача 7cfaba7c, п.2): сервер отдаёт пустую сборку
+  // с предупреждением — документ показывает это состояние, а не пустую страницу.
+  'publications.ws.emptyRecipe':
+    'В рецепте не задано ни одного условия — добавьте условия отбора в рецепте.',
   'publications.ws.createMiss': 'Мысль создана, но в отбор публикации не попала.',
   /** Ширина колонки текста документа — подсказка ползунка (ea1b5f14, п. 5). */
   'publications.ws.textWidth': 'Ширина текста',
@@ -801,7 +811,10 @@ export const ru = {
   'publications.block.moveUp': 'Сдвинуть вверх',
   'publications.block.moveDown': 'Сдвинуть вниз',
   'publications.block.moveToSection': 'Переместить в раздел…',
-  'publications.block.addSection': 'Добавить раздел…',
+  // Раздельные команды добавления раздела (задача 7cfaba7c, п.4): родитель
+  // подставляется по команде — родитель блока либо сам блок.
+  'publications.block.addSectionSibling': 'Добавить раздел на этом уровне…',
+  'publications.block.addSectionChild': 'Добавить подчинённый раздел…',
   'publications.block.addText': 'Добавить текст раздела…',
   'publications.block.exclude': 'Исключить из публикации',
   'publications.block.include': 'Включить',

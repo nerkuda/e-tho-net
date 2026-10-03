@@ -30,6 +30,7 @@ import type {
   PublicationCandidatesResult,
   PublicationOrderItem,
 } from '@etn/shared';
+import { PUBLICATION_EMPTY_RECIPE_WARNING } from '@etn/shared';
 
 import {
   el,
@@ -746,6 +747,26 @@ export function mountPublicationWorkspace(
   }
 
   /**
+   * Подсветка мысли, ОТКРЫТОЙ в редакторе, сплошной рамкой цвета фокуса (задача
+   * 77cce0ba, п.2; как `.cloud.halo` на карте мыслей). Идёт от текущей цели
+   * редактора и реагирует на её смену в обе стороны (открыли/закрыли): подписка
+   * на store ниже. Текущий блок навигации (`.pub-doc-current`) — пунктирный.
+   */
+  function paintEditorHighlight(): void {
+    const target = store.state.editorTarget;
+    const haloId = target !== null && target.kind === 'thought' ? target.id : null;
+    for (const node of Array.from(
+      docHost.querySelectorAll<HTMLElement>('.pub-doc-section, .pub-doc-text'),
+    )) {
+      node.classList.toggle(
+        'pub-doc-editor',
+        haloId !== null && node.dataset['thoughtId'] === haloId,
+      );
+    }
+  }
+  const editorHighlightUnsub = store.subscribe(paintEditorHighlight);
+
+  /**
    * Точечно заменяет КОНТЕНТ блоков мысли по готовому HTML (без чтения сборки):
    * у раздела — предисловие, у текста — сам блок. Используется при активном
    * `staleRebuild`, когда тянуть полную сборку нельзя (иначе материализуется
@@ -1200,8 +1221,15 @@ export function mountPublicationWorkspace(
 
   function renderState(): void {
     emptyNode(stateHost);
-    stateHost.classList.toggle('hidden', !loading && loadError === null);
-    docHost.classList.toggle('hidden', loading || loadError !== null);
+    // Пустой отбор заголовков (задача 7cfaba7c, п.2): сервер отдаёт пустую сборку
+    // с предупреждением-маркером — показываем подсказку вместо пустой страницы.
+    const emptyRecipe =
+      !loading &&
+      loadError === null &&
+      assembly !== null &&
+      assembly.warnings.includes(PUBLICATION_EMPTY_RECIPE_WARNING);
+    stateHost.classList.toggle('hidden', !loading && loadError === null && !emptyRecipe);
+    docHost.classList.toggle('hidden', loading || loadError !== null || emptyRecipe);
     if (loading) {
       stateHost.append(loadingState());
       return;
@@ -1213,6 +1241,10 @@ export function mountPublicationWorkspace(
           onClick: () => void load(),
         }),
       );
+      return;
+    }
+    if (emptyRecipe) {
+      stateHost.append(emptyState({ title: t('publications.ws.emptyRecipe') }));
     }
   }
 
@@ -1428,11 +1460,17 @@ export function mountPublicationWorkspace(
       }),
       menuAction(t('publications.block.moveToSection'), () => openMoveToSectionDialog(block)),
     ];
-    // «Добавить раздел» осмысленно только у раздела (текст не родитель);
-    // «Добавить текст раздела» — у обоих (владелец — раздел блока).
+    // Разделы: отдельные команды «на этом уровне» (родитель — родитель блока)
+    // и «подчинённый» (родитель — сам блок) с автозаполнением родителя (задача
+    // 7cfaba7c, п.4). «Добавить текст раздела» — у обоих (владелец — раздел).
     if (block.kind === 'section') {
       items.push(
-        menuAction(t('publications.block.addSection'), () => void createChild(block.thoughtId, 'section')),
+        menuAction(t('publications.block.addSectionSibling'), () =>
+          void createChild(block.parentThoughtId, 'section'),
+        ),
+        menuAction(t('publications.block.addSectionChild'), () =>
+          void createChild(block.thoughtId, 'section'),
+        ),
       );
     }
     items.push(
@@ -1468,7 +1506,7 @@ export function mountPublicationWorkspace(
       ...buildThoughtMenuItems(
         networkId,
         { id: block.thoughtId, title, dir: 'children' },
-        { hideOpenCommand: true, hideSelectionCommand: true },
+        { hideOpenCommand: true, hideSelectionCommand: true, hideAddCommand: true },
       ),
     ]);
   }
@@ -1661,6 +1699,9 @@ export function mountPublicationWorkspace(
     docNav.refresh();
     docDrag.refresh();
     updateCurrentSection();
+    // Перерисовка снесла классы подсветки — восстанавливаем рамку открытой в
+    // редакторе мысли (задача 77cce0ba, п.2).
+    paintEditorHighlight();
   }
 
   function buildBlock(block: DocBlock): HTMLElement {
@@ -1776,10 +1817,14 @@ export function mountPublicationWorkspace(
    * Титульный лист (пункт 7 карточки ea1b5f14): с обложкой — обложка с крупным
    * заголовком ПОВЕРХ (окантовка/тень, чтобы читался на любом фоне), скромный
    * подзаголовок; без обложки — название крупнее H1 и подзаголовок вторым
-   * уровнем. Автор/дата и резюме — общие для обоих видов.
+   * уровнем. Автор/дата — в ПРАВОМ НИЖНЕМ углу титульной части (задача 7cfaba7c,
+   * п.5), резюме — ниже всей титульной части.
    */
   function buildTitleBlock(): HTMLElement {
     const node = div('pub-doc-titleblock');
+    // Титульная часть — обложка/заголовок + автор-дата: угловая метка
+    // позиционируется относительно неё, а не всего блока (резюме ниже).
+    const titlePage = div('pub-doc-titlepage');
     const coverKind = publication?.cover_kind ?? 'none';
     if (publication !== null && coverKind !== 'none') {
       const hero = div('pub-doc-hero');
@@ -1790,18 +1835,18 @@ export function mountPublicationWorkspace(
         overlay.append(el('div', 'pub-doc-subtitle', publication.subtitle ?? ''));
       }
       hero.append(overlay);
-      node.append(hero);
+      titlePage.append(hero);
     } else {
       const box = div('pub-doc-titlebox');
       box.append(el('h1', 'pub-doc-title', publication?.title ?? ''));
       if ((publication?.subtitle ?? '') !== '') {
         box.append(el('div', 'pub-doc-subtitle', publication?.subtitle ?? ''));
       }
-      node.append(box);
+      titlePage.append(box);
     }
     if (publication !== null) {
       const author = displayAuthorship(publication, users.resolveUserName(publication.created_by));
-      node.append(
+      titlePage.append(
         el(
           'div',
           'pub-doc-meta',
@@ -1811,6 +1856,7 @@ export function mountPublicationWorkspace(
         ),
       );
     }
+    node.append(titlePage);
     // Резюме — из СВЕЖЕГО снимка публикации (а не из `assembly.publication`),
     // чтобы правка резюме в карточке редактора отражалась в титульном блоке без
     // перечитывания сборки (замечание А2 приёмки b02ef1cf). Рендер — тем же
@@ -2026,12 +2072,16 @@ export function mountPublicationWorkspace(
   // --- Создание раздела/текста --------------------------------------------
 
   /**
-   * Создать раздел (структурный потомок) или текст (значение свойства-источника)
-   * у раздела. Тип новой мысли предзаполняется первым типом рецепта заголовков,
-   * связь — из рецепта текстов; после записи проверяется вхождение мысли в
-   * сборку (промах — предупреждение, не ошибка).
+   * Создать раздел (структурный потомок якоря) или текст (значение свойства-
+   * источника) у раздела. `anchorId` — мысль-родитель: для «подчинённого
+   * раздела» — сам блок, для «раздела на этом уровне» — родитель блока
+   * (может быть `null` у корневого раздела — тогда мысль создаётся без связи,
+   * а промах по сборке закрывается привязкой к «Родительской мысли» отбора).
+   * Тип новой мысли предзаполняется первым типом рецепта заголовков, связь — из
+   * рецепта текстов; после записи проверяется вхождение мысли в сборку (промах —
+   * предупреждение, не ошибка).
    */
-  async function createChild(sectionThoughtId: string, kind: 'section' | 'text'): Promise<void> {
+  async function createChild(anchorId: string | null, kind: 'section' | 'text'): Promise<void> {
     const networkId = store.state.networkId;
     if (networkId === null || publicationId === null) return;
     const { pickThoughtsDialog } = await import('../../canvas/add-dialog.js');
@@ -2063,7 +2113,9 @@ export function mountPublicationWorkspace(
     }
     const result = await pickThoughtsDialog({
       networkId,
-      anchor: { id: sectionThoughtId, direction: 'child' },
+      ...(anchorId !== null
+        ? { anchor: { id: anchorId, direction: 'child' as const } }
+        : {}),
       allowCreate: true,
       allowLinkType: false,
       ...(linkProperty !== undefined ? { linkProperty } : {}),
@@ -2090,11 +2142,11 @@ export function mountPublicationWorkspace(
                   title: item.title,
                   synonyms: item.synonyms,
                   type_id: result.thoughtTypeId,
-                  ...(kind === 'section' && result.linkProperty === null
+                  ...(kind === 'section' && anchorId !== null && result.linkProperty === null
                     ? {
                         create_link: {
                           direction: 'parent' as const,
-                          target_thought_id: sectionThoughtId,
+                          target_thought_id: anchorId,
                           type_id: result.linkTypeId,
                         },
                       }
@@ -2102,13 +2154,13 @@ export function mountPublicationWorkspace(
                 })
               ).id;
         if (kind === 'section') {
-          if (item.kind === 'existing' && result.linkProperty === null) {
+          if (item.kind === 'existing' && anchorId !== null && result.linkProperty === null) {
             throwOnFailures(
-              await ensureLink(networkId, sectionThoughtId, thoughtId, result.linkTypeId),
+              await ensureLink(networkId, anchorId, thoughtId, result.linkTypeId),
             );
           }
-        } else if (effectivePick !== null) {
-          await addPropertyValue(networkId, sectionThoughtId, effectivePick, thoughtId);
+        } else if (effectivePick !== null && anchorId !== null) {
+          await addPropertyValue(networkId, anchorId, effectivePick, thoughtId);
         }
         createdIds.push(thoughtId);
       }
@@ -2220,6 +2272,7 @@ export function mountPublicationWorkspace(
     if (reloadTimer !== null) window.clearTimeout(reloadTimer);
     if (scrollSyncTimer !== null) window.clearTimeout(scrollSyncTimer);
     workspaceLayerUnsub();
+    editorHighlightUnsub();
     docHost.removeEventListener('scroll', onDocScroll);
     docHost.removeEventListener('keydown', onDocKeydown, { capture: true });
     document.removeEventListener('keydown', onKeydown);
