@@ -28,12 +28,29 @@ import { routePublicationUpdate } from '../src/renderer/screens/publications/upd
 import {
   invalidateQueries,
   queryKeys,
+  resetEventRouter,
+  routeRealtimeEvent,
   signalPermanentCommentSaved,
   signalPublicationCompositionChanged,
   signalThoughtSaved,
 } from '../src/renderer/lib/live/index.js';
 
 const NETWORK_ID = 'net-1';
+
+/** Realtime-событие публикации через РЕАЛЬНЫЙ роутер слоя (не прямой вызов). */
+function publicationEvent(type: string, data: Record<string, unknown>, seq: number): any {
+  return {
+    type,
+    seq,
+    ts: '2026-10-03T00:00:00.000Z',
+    actor: { user_id: 'u2', client_id: 'c2' },
+    audience: 'network',
+    network_id: NETWORK_ID,
+    layer_id: 'base',
+    data,
+    meta: { version: 1 },
+  };
+}
 
 function publication(overrides: Partial<Publication> = {}): Publication {
   return {
@@ -325,6 +342,50 @@ describe('рабочая область публикации: реактивно
       sectionIds(root),
       ['sec-2', 'sec-1'],
       'документ перечитан по новой сборке',
+    );
+  });
+
+  it('РЕАЛЬНЫЙ путь: external publication.rebuilt через роутер гасит stale (29fd0587)', async () => {
+    // Регресс к переписыванию G4: событие идёт не прямым вызовом
+    // applyRebuildRealtime, а таблицей роутера (`publication.rebuilt` →
+    // `pub-assembly:@id`) — если маршрут или ключ разойдутся, подсветка
+    // «Пересобрать» останется гореть (симптом карточки).
+    resetEventRouter();
+    const { handle, root } = await mount();
+    active = handle;
+
+    // Шаг 1 (как в карточке): внешний PATCH рецепта зажигает «Пересобрать».
+    routeRealtimeEvent(
+      publicationEvent(
+        'publication.updated',
+        {
+          id: 'pub-1',
+          changes: { title_recipe: { parent_ids: ['x'], sort: 'updated', order: 'asc' } },
+          version: 2,
+        },
+        9000,
+      ),
+      { networkId: NETWORK_ID },
+    );
+    assert.equal(stale(root), true, 'внешний PATCH рецепта зажёг подсветку');
+
+    // Шаг 2 (как в карточке): внешний rebuild снимает подсветку и перечитывает.
+    nextRecipe = true;
+    routeRealtimeEvent(
+      publicationEvent(
+        'publication.rebuilt',
+        { publication_id: 'pub-1', assembly_date: '2026-10-03T00:00:00.000Z' },
+        9001,
+      ),
+      { networkId: NETWORK_ID },
+    );
+
+    assert.equal(stale(root), false, 'роутер publication.rebuilt гасит подсветку сразу');
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    assert.deepEqual(
+      sectionIds(root),
+      ['sec-2', 'sec-1'],
+      'документ перечитан по новой сборке через реальный маршрут',
     );
   });
 
