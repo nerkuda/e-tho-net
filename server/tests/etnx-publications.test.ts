@@ -127,6 +127,10 @@ describe(
             summary_md: 'Резюме без заголовков',
             authorship: 'Автор',
             cover_url: 'https://example.com/cover.png',
+            // Рецепт по ключевому слову делает созданную мысль членом
+            // публикации — иначе порядок и исключение по ней отвергаются
+            // (ошибки 5f23f57d/3882bd46).
+            title_recipe: { keywords: 'Раздел публикации RT', sort: 'alpha', order: 'asc' },
             text_sources: [],
             extra_properties: [],
             numbering_from: 1,

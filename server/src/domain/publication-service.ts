@@ -50,6 +50,7 @@ import { listPublicationHoldingLayers } from './holding-layers.js';
 import { removeStoredFile, storedFileInUse } from './attachment-service.js';
 import { invalidatePublicationMembershipCache } from './publication-membership-cache.js';
 import { selectRecipeIds } from './publication-recipe.js';
+import { linkPropertyLinkTypeId } from './property-service.js';
 import {
   numberingRangeInvalid,
   recipeOverlap,
@@ -1022,6 +1023,114 @@ export function listPublicationOrder(
   ).map((r) => ({ node_key: r.node_key, position: r.position }));
 }
 
+/** Размер порции `IN (…)` — не упираться в лимит переменных SQLite. */
+const IN_CHUNK = 400;
+
+/** Разбить список на порции для `IN (…)`. */
+function chunk(values: readonly string[]): string[][] {
+  if (values.length <= IN_CHUNK) return [values as string[]];
+  const out: string[][] = [];
+  for (let i = 0; i < values.length; i += IN_CHUNK) out.push(values.slice(i, i + IN_CHUNK));
+  return out;
+}
+
+/**
+ * Мысли, входящие в публикацию: узлы текущего отбора заголовков и принятого
+ * среза. Плюс содержимое — цели рёбер-источников текстов и «доп. материалов»
+ * от узлов публикации; направление/сторона свойства не различаются (берём оба
+ * конца ребра), поэтому резолв стороны не нужен, а тип связи свойства сужает
+ * выборку. База проверки принадлежности мыслей исключений (ошибка 3882bd46).
+ */
+function publicationMemberThoughtIds(
+  ndb: NetworkDb,
+  publicationId: string,
+  pub: Publication,
+  actorUserId: string,
+): Set<string> {
+  const ids = new Set<string>([
+    ...selectCurrentSelection(ndb, publicationId, actorUserId),
+    ...(getPublicationAcceptedIds(ndb, publicationId) ?? []),
+  ]);
+  const contentProps = [...pub.text_sources, ...pub.extra_properties];
+  if (contentProps.length === 0 || ids.size === 0) return ids;
+  const linkTypes = new Set<string | null>();
+  for (const propId of contentProps) {
+    const row = ndb
+      .prepare('SELECT value_type, config FROM properties_v WHERE id = ? LIMIT 1')
+      .get(propId) as { value_type: string; config: string | null } | undefined;
+    if (row === undefined || row.value_type !== 'link') continue;
+    let config: unknown = null;
+    if (row.config !== null && row.config !== '') {
+      try {
+        config = JSON.parse(row.config) as unknown;
+      } catch {
+        config = null;
+      }
+    }
+    linkTypes.add(
+      linkPropertyLinkTypeId(
+        (config !== null && typeof config === 'object' ? config : null) as Parameters<
+          typeof linkPropertyLinkTypeId
+        >[0],
+      ),
+    );
+  }
+  if (linkTypes.size === 0) return ids;
+  const base = new Set(ids);
+  const added = new Set<string>();
+  for (const linkTypeId of linkTypes) {
+    const typeClause = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
+    for (const part of chunk([...base])) {
+      const placeholders = part.map(() => '?').join(', ');
+      const params = linkTypeId === null ? [...part, ...part] : [linkTypeId, ...part, ...part];
+      const rows = ndb
+        .prepare(
+          `SELECT l.source_id AS source_id, l.target_id AS target_id
+             FROM links_v l
+            WHERE ${typeClause} AND l.active = 1 AND l.marked_for_deletion = 0
+              AND (l.source_id IN (${placeholders}) OR l.target_id IN (${placeholders}))`,
+        )
+        .all(...params) as Array<{ source_id: string; target_id: string }>;
+      for (const r of rows) {
+        if (base.has(r.source_id)) added.add(r.target_id);
+        else if (base.has(r.target_id)) added.add(r.source_id);
+      }
+    }
+  }
+  for (const id of added) ids.add(id);
+  return ids;
+}
+
+/** Мысль существует и видна (иначе `NOT_FOUND`). */
+function assertThoughtVisible(ndb: NetworkDb, thoughtId: string): void {
+  const row = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ? LIMIT 1').get(thoughtId);
+  if (row === undefined) {
+    throw new EtnError('NOT_FOUND', `Мысль ${thoughtId} не найдена.`, {
+      entity: 'thought',
+      id: thoughtId,
+    });
+  }
+}
+
+/** Мысль входит в публикацию (иначе `VALIDATION_ERROR`). */
+function assertThoughtInPublication(
+  ndb: NetworkDb,
+  publicationId: string,
+  pub: Publication,
+  thoughtId: string,
+  actorUserId: string,
+): void {
+  assertThoughtVisible(ndb, thoughtId);
+  const members = publicationMemberThoughtIds(ndb, publicationId, pub, actorUserId);
+  if (!members.has(thoughtId)) {
+    throw new EtnError('VALIDATION_ERROR', `Мысль ${thoughtId} не входит в публикацию.`, {
+      entity: 'thought',
+      id: thoughtId,
+      code: 'thought_not_in_publication',
+    });
+  }
+}
+
 /** Исключить мысль из публикации (все её вхождения). */
 export function addPublicationExclusion(
   ndb: NetworkDb,
@@ -1030,7 +1139,10 @@ export function addPublicationExclusion(
   actorUserId: string,
 ): PublicationExclusion[] {
   return ndb.transaction(() => {
-    getPublicationOrThrow(ndb, publicationId);
+    const pub = getPublicationOrThrow(ndb, publicationId);
+    // Мысль обязана существовать и входить в публикацию (ошибка 3882bd46):
+    // посторонний id отвергается, а не молча попадает в список исключений.
+    assertThoughtInPublication(ndb, publicationId, pub, thoughtId, actorUserId);
     const id = publicationExclusionId(publicationId, thoughtId);
     const materialized = materializeShadow(ndb, 'publication_exclusions', id);
     if (materialized) {
@@ -1054,14 +1166,20 @@ export function addPublicationExclusion(
   });
 }
 
-/** Снять исключение мысли. */
+/**
+ * Снять исключение мысли. Симметричная валидация (ошибка 3882bd46): мысль
+ * обязана существовать и входить в публикацию. Состав публикации от
+ * пользователя не зависит (userId влияет лишь на сортировку рецепта), поэтому
+ * он не передаётся.
+ */
 export function removePublicationExclusion(
   ndb: NetworkDb,
   publicationId: string,
   thoughtId: string,
 ): PublicationExclusion[] {
   return ndb.transaction(() => {
-    getPublicationOrThrow(ndb, publicationId);
+    const pub = getPublicationOrThrow(ndb, publicationId);
+    assertThoughtInPublication(ndb, publicationId, pub, thoughtId, '');
     const id = publicationExclusionId(publicationId, thoughtId);
     const visible = ndb
       .prepare('SELECT 1 FROM publication_exclusions_v WHERE id = ? LIMIT 1')

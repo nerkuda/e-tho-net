@@ -15,7 +15,8 @@ import DatabaseConstructor from 'better-sqlite3';
 import { EtnError } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
-import { publicationOrderId } from '../src/db/publication-id.js';
+import { publicationExclusionId, publicationOrderId } from '../src/db/publication-id.js';
+import { createThoughtType } from '../src/domain/thought-type-service.js';
 import {
   addPublicationExclusion,
   addShelfItem,
@@ -55,9 +56,22 @@ function codeOf(err: unknown): string | undefined {
   return err instanceof EtnError ? err.code : undefined;
 }
 
-/** Id существующего свойства-связи для рецепта (создаётся прямым SQL). */
-function seedProperty(ndb: NetworkDb, valueType = 'link'): string {
+/** Seed a typed thought directly and return its id. */
+function seedThought(ndb: NetworkDb, title: string, typeId: string): string {
   const id = randomUUID();
+  const now = new Date().toISOString();
+  ndb
+    .prepare(
+      `INSERT INTO thoughts (id, layer_id, title, title_norm, type_id, active, is_protected, is_root,
+                             version, created_at, created_by, updated_at, updated_by)
+       VALUES (?, ?, ?, ?, ?, 1, 0, 0, 1, ?, 'u', ?, 'u')`,
+    )
+    .run(id, ndb.layerId, title, title.toLowerCase(), typeId, now, now);
+  return id;
+}
+
+/** Id существующего свойства-связи для рецепта (создаётся прямым SQL). */
+function seedProperty(ndb: NetworkDb, valueType = 'link'): string {  const id = randomUUID();
   const now = new Date().toISOString();
   ndb
     .prepare(
@@ -264,8 +278,24 @@ describe(
       try {
         const p = createPublication(ndb, { title: 'X' }, 'u');
         const shelf = createShelf(ndb, { title: 'Полка' }, 'u');
-        setPublicationOrder(ndb, p.id, [{ node_key: 'n1', position: 1 }], 'u');
-        addPublicationExclusion(ndb, p.id, randomUUID(), 'u');
+        // Строки-детали пишутся напрямую: тест про каскад purge, а не про
+        // валидацию принадлежности узлов/мыслей (ошибки 5f23f57d/3882bd46).
+        const now = new Date().toISOString();
+        ndb
+          .prepare(
+            `INSERT INTO publication_order (id, layer_id, publication_id, node_key, position,
+                                            updated_at, updated_by)
+             VALUES (?, ?, ?, 'n1', 1, ?, 'u')`,
+          )
+          .run(publicationOrderId(p.id, 'n1'), ndb.layerId, p.id, now);
+        const thought = randomUUID();
+        ndb
+          .prepare(
+            `INSERT INTO publication_exclusions (id, layer_id, publication_id, thought_id,
+                                                 created_at, created_by)
+             VALUES (?, ?, ?, ?, ?, 'u')`,
+          )
+          .run(publicationExclusionId(p.id, thought), ndb.layerId, p.id, thought, now);
         addShelfItem(ndb, shelf.id, p.id, 1, 'u');
 
         purgePublication(ndb, p.id);
@@ -325,37 +355,76 @@ describe(
   'publication-service: порядок, исключения, полки',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
-    it('порядок сохраняется и сортируется, неизвестные узлы допустимы', () => {
+    it('порядок принимает узлы отбора и отвергает произвольный узел', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        const p = createPublication(ndb, { title: 'X' }, 'u');
+        const type = createThoughtType(ndb, { name: 'Doc' }, 'u');
+        const a = seedThought(ndb, 'A', type.id);
+        const b = seedThought(ndb, 'B', type.id);
+        const p = createPublication(
+          ndb,
+          { title: 'X', title_recipe: { type_ids: [type.id], sort: 'alpha', order: 'asc' } },
+          'u',
+        );
         setPublicationOrder(
           ndb,
           p.id,
           [
-            { node_key: 'b', position: 2 },
-            { node_key: 'a', position: 1 },
+            { node_key: a, position: 2 },
+            { node_key: b, position: 1 },
           ],
           'u',
         );
         assert.deepEqual(
           listPublicationOrder(ndb, p.id).map((i) => i.node_key),
-          ['a', 'b'],
+          [b, a],
+        );
+        // Произвольный ключ, никогда не существовавший у публикации, отвергается
+        // (ошибка 5f23f57d), позиция не пишется.
+        assert.throws(
+          () => setPublicationOrder(ndb, p.id, [{ node_key: randomUUID(), position: 0 }], 'u'),
+          (e) => codeOf(e) === 'VALIDATION_ERROR',
+        );
+        assert.deepEqual(
+          listPublicationOrder(ndb, p.id).map((i) => i.node_key),
+          [b, a],
         );
       } finally {
         ndb.close();
       }
     });
 
-    it('исключения добавляются и снимаются', () => {
+    it('исключения: член публикации принимается, посторонний отвергается', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        const p = createPublication(ndb, { title: 'X' }, 'u');
-        const t = randomUUID();
-        assert.equal(addPublicationExclusion(ndb, p.id, t, 'u').length, 1);
+        const type = createThoughtType(ndb, { name: 'Doc' }, 'u');
+        const other = createThoughtType(ndb, { name: 'Other' }, 'u');
+        const a = seedThought(ndb, 'A', type.id);
+        const p = createPublication(
+          ndb,
+          { title: 'X', title_recipe: { type_ids: [type.id], sort: 'alpha', order: 'asc' } },
+          'u',
+        );
+        assert.equal(addPublicationExclusion(ndb, p.id, a, 'u').length, 1);
         // Повторное добавление идемпотентно.
-        assert.equal(addPublicationExclusion(ndb, p.id, t, 'u').length, 1);
-        assert.equal(removePublicationExclusion(ndb, p.id, t).length, 0);
+        assert.equal(addPublicationExclusion(ndb, p.id, a, 'u').length, 1);
+        assert.equal(removePublicationExclusion(ndb, p.id, a).length, 0);
+
+        // Мысль сети, не входящая в публикацию → VALIDATION_ERROR.
+        const outsider = seedThought(ndb, 'Z', other.id);
+        assert.throws(
+          () => addPublicationExclusion(ndb, p.id, outsider, 'u'),
+          (e) => codeOf(e) === 'VALIDATION_ERROR',
+        );
+        assert.throws(
+          () => removePublicationExclusion(ndb, p.id, outsider),
+          (e) => codeOf(e) === 'VALIDATION_ERROR',
+        );
+        // Несуществующий id → NOT_FOUND.
+        assert.throws(
+          () => addPublicationExclusion(ndb, p.id, randomUUID(), 'u'),
+          (e) => codeOf(e) === 'NOT_FOUND',
+        );
       } finally {
         ndb.close();
       }

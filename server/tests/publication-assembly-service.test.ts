@@ -460,6 +460,37 @@ describe('publication-assembly-service: тексты и исключения', {
       ndb.close();
     }
   });
+
+  it('исключение принимает мысль-текст публикации и отвергает постороннюю (3882bd46)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const plain = createThoughtType(ndb, { name: 'Plain' }, USER);
+      const section = seedThought(ndb, 'Section', type.id);
+      const text = seedThought(ndb, 'Text', plain.id);
+      const prop = seedTextProperty(ndb, type.id);
+      const lt = ndb.prepare('SELECT config FROM properties_v WHERE id = ?').get(prop) as {
+        config: string;
+      };
+      const linkTypeId = (JSON.parse(lt.config) as { link_type_id: string }).link_type_id;
+      seedLink(ndb, section, text, linkTypeId, 0);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(type.id), text_sources: [prop] },
+        USER,
+      );
+      // Текст входит в публикацию как содержимое раздела — исключение проходит.
+      assert.equal(addPublicationExclusion(ndb, pub.id, text, USER).length, 1);
+      // Мысль того же типа, но не связанная с разделом, — посторонняя.
+      const stranger = seedThought(ndb, 'Stranger', plain.id);
+      assert.throws(
+        () => addPublicationExclusion(ndb, pub.id, stranger, USER),
+        (e) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
 });
 
 describe('publication-assembly-service: кандидаты (временная семантика)', { skip }, () => {

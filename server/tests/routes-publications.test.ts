@@ -583,6 +583,10 @@ describe('routes-publications: real-time и видимость слоёв', { sk
         title: 'Слой публикаций',
         createdBy: ctx.adminId,
       });
+      // Мысль-член публикации основы: цель исключения обязана входить в
+      // публикацию (ошибка 3882bd46), поэтому публикация ниже получает рецепт.
+      const evtType = createThoughtType(ctx.ndb, { name: 'EvtDoc' }, ctx.adminId);
+      const evtThought = seedThought(ctx.ndb, 'Событийный раздел', evtType.id, ctx.adminId);
       // Subscriber B sits in the layer; the writing session of B's layer uses a
       // different client id so echo suppression does not hide its own event.
       setSessionLayer(ctx.ndb, ctx.adminId, 'b', layer.id, 0);
@@ -609,7 +613,10 @@ describe('routes-publications: real-time и видимость слоёв', { sk
 
       // --- запись в ОСНОВЕ (сессия без слоя, чужой client id) ----------------
       const inBase = await api(ctx, 'POST', '/publications', {
-        payload: { title: 'Основная' },
+        payload: {
+          title: 'Основная',
+          title_recipe: { type_ids: [evtType.id], sort: 'alpha', order: 'asc' },
+        },
         headers: { 'client-id': 'a2' },
       });
       assert.equal(inBase.statusCode, 201, inBase.body);
@@ -626,7 +633,7 @@ describe('routes-publications: real-time и видимость слоёв', { sk
       // --- исключения: снятие в ОСНОВЕ физически удаляет строку, подписчик
       // слоя обязан узнать об этом (fallback visibleWhenMissing) ------------
       const added = await api(ctx, 'POST', `/publications/${basePubId}/exclusions`, {
-        payload: { thought_id: ctx.homeId },
+        payload: { thought_id: evtThought },
         headers: { 'client-id': 'a2' },
       });
       assert.equal(added.statusCode, 200, added.body);
@@ -641,7 +648,7 @@ describe('routes-publications: real-time и видимость слоёв', { sk
       const removed = await api(
         ctx,
         'DELETE',
-        `/publications/${basePubId}/exclusions?thought_id=${ctx.homeId}`,
+        `/publications/${basePubId}/exclusions?thought_id=${evtThought}`,
         { headers: { 'client-id': 'a2' } },
       );
       assert.equal(removed.statusCode, 200, removed.body);
