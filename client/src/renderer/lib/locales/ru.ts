@@ -768,6 +768,9 @@ export const ru = {
   /** Пометки раздела. */
   'publications.ws.repeat': 'Повторное вхождение',
   'publications.ws.cycle': 'Обрыв кольца',
+  /** Ручной порядок: ручка-аффорданс и подсказка про клавиатуру (d13fd645). */
+  'publications.ws.dragHandle': 'Перетащите, чтобы изменить порядок',
+  'publications.ws.dragKeyboardHint': 'Перетащите мышью или сдвиньте Alt+↑/↓',
   /** Контекстное меню раздела/текста. */
   'publications.ws.openThought': 'Открыть мысль',
   'publications.ws.exclude': 'Исключить',

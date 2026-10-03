@@ -30,7 +30,20 @@ export type NavAction =
   | 'pageDown'
   | 'collapse'
   | 'expand'
-  | 'activate';
+  | 'activate'
+  /** Alt+↑ — сдвинуть текущую сущность на соседа вверх (порядок, не курсор). */
+  | 'moveUp'
+  /** Alt+↓ — сдвинуть текущую сущность на соседа вниз. */
+  | 'moveDown';
+
+/** Модификаторы клавиатурного события, влияющие на разбор действия. */
+export interface NavKeyModifiers {
+  /**
+   * Удерживается Alt. Переводит ↑/↓ из «движения курсора» в «сдвиг порядка»
+   * (жадный перебор соседей в группе) и глушит прочие стрелки навигации.
+   */
+  altKey?: boolean;
+}
 
 /**
  * Карта «клавиша → действие» — единая для таблиц и списков (правило
@@ -49,10 +62,26 @@ export const NAV_KEY_ACTIONS: Readonly<Record<string, NavAction>> = {
   Enter: 'activate',
 };
 
-/** Действие клавиши или `null`, если клавиша навигацией не управляет. */
-export function resolveNavAction(key: string): NavAction | null {
+/**
+ * Действие клавиши или `null`, если клавиша навигацией не управляет.
+ *
+ * С Alt карта меняется: `Alt+↑/↓` — это «сдвинуть порядок» (действия
+ * `moveUp`/`moveDown`), а не перемещение курсора, поэтому обычная навигация
+ * по стрелкам с Alt молчит. Прочие стрелки с Alt навигацией не управляют.
+ */
+export function resolveNavAction(key: string, modifiers: NavKeyModifiers = {}): NavAction | null {
+  if (modifiers.altKey === true) {
+    if (key === 'ArrowUp') return 'moveUp';
+    if (key === 'ArrowDown') return 'moveDown';
+    return null;
+  }
   const action = NAV_KEY_ACTIONS[key];
   return action ?? null;
+}
+
+/** Действие перестановки порядка (Alt+↑/↓) — `null` для прочих действий. */
+export function isReorderAction(action: NavAction | null): action is 'moveUp' | 'moveDown' {
+  return action === 'moveUp' || action === 'moveDown';
 }
 
 /** Настройки расчёта целевого индекса строки. */
@@ -106,6 +135,9 @@ export function nextNavIndex(
     case 'collapse':
     case 'expand':
     case 'activate':
+    case 'moveUp':
+    case 'moveDown':
+      // Перестановка порядка не двигает курсор — им распоряжается потребитель.
       return current;
   }
 }

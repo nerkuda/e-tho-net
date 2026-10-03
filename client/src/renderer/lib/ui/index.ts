@@ -245,11 +245,12 @@ export type { GridColumnSpec, GridTableAdapter, GridPoint } from './table-grid.j
 export {
   NAV_KEY_ACTIONS,
   resolveNavAction,
+  isReorderAction,
   nextNavIndex,
   listTargetIndex,
   isEditingTarget,
 } from './nav-core.js';
-export type { NavAction, NavIndexOptions } from './nav-core.js';
+export type { NavAction, NavKeyModifiers, NavIndexOptions } from './nav-core.js';
 
 // Общий КОМПОНЕНТ СПИСКА (ADR fadf99e0, требование 93115633, задача 7893e429):
 // навигация списков (лента «Дневника», библиотека «Публикаций») через общее
@@ -264,6 +265,32 @@ export type {
   ListNavKeyEvent,
   ListNavClickEvent,
 } from './list.js';
+
+// Сортируемый список (задача d13fd645): общий drag-фасад ручного порядка над
+// компонентом списка — pointer-драг, клон-призрак, линии вставки, авто-скролл
+// и клавиатурный сдвиг Alt+↑/↓. Drag-логика живёт только здесь (сторож
+// guard-drag-list), а не в экранах.
+export {
+  DRAG_HANDLE_CLASS,
+  DRAG_ITEM_CLASS,
+  DRAG_ACTIVE_CLASS,
+  DRAG_OVER_BEFORE_CLASS,
+  DRAG_OVER_AFTER_CLASS,
+  DRAG_GHOST_CLASS,
+  DRAG_HANDLE_GLYPH,
+  DRAG_THRESHOLD,
+  AUTO_SCROLL_STEP,
+  AUTO_SCROLL_EDGE,
+  dragHandle,
+  createDragList,
+} from './drag-list.js';
+export type {
+  DragListItem,
+  DragListAdapter,
+  DragListNav,
+  DragListOptions,
+  DragListHandle,
+} from './drag-list.js';
 
 // Единое дерево списков — общий рендер строк над типом-деревом данных
 // (задача d1c15a2d, требование 0086037c, компонент 24a05c95). Единственный

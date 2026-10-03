@@ -3266,16 +3266,16 @@ export class RestClient {
 
   /**
    * `PUT …/publications/{id}/order` — батч локального порядка узлов.
-   * Сервер отвечает `{ items }` с сохранённым порядком; клиенту он не нужен
-   * (перечитывание assembly даёт истину), поэтому метод возвращает `void`.
+   * Сервер отвечает `{ items }` с сохранённым порядком: он ложится в слой
+   * данных точечно (задача d13fd645), без перечитывания `assembly`.
    */
   public async setPublicationOrder(
     networkId: string,
     id: string,
     items: readonly PublicationOrderItem[],
     opts?: RequestOptions,
-  ): Promise<void> {
-    await this.request(
+  ): Promise<PublicationOrderItem[]> {
+    const response = await this.request<{ items: PublicationOrderItem[] }>(
       'PUT',
       `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/order`,
       {
@@ -3283,6 +3283,7 @@ export class RestClient {
         requestOptions: opts ?? { clientRequestId: randomUUID() },
       },
     );
+    return response.items;
   }
 
   /** `POST …/publications/{id}/exclusions` — исключить мысль из публикации. */

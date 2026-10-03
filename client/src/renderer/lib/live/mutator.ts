@@ -24,6 +24,8 @@ import {
   type EntityRecord,
   type PutEntityOptions,
 } from './entities.js';
+import type { PublicationOrderItem } from '@etn/shared';
+
 import { thoughtUpdateKeys } from './event-router.js';
 import { queryKeys } from './query-keys.js';
 import type { LocalMutationSignal } from './query-registry.js';
@@ -123,6 +125,25 @@ export function signalPublicationCompositionChanged(
       // сборке» недостаточна и stale зажигается безусловно.
       ...(opts.mayChangeComposition === true ? { may_change_composition: true } : {}),
     },
+  } satisfies LocalMutationSignal);
+}
+
+/**
+ * Сигнал «сохранён локальный порядок узлов публикации» (своя правка PUT order,
+ * задача d13fd645). `items` — сохранённые позиции (ответ сервера или батч
+ * клиента): рабочая область применяет их к модели сборки ТОЧЕЧНО, без
+ * перечитывания `assembly` (симметрично реальному событию
+ * `publication.order.reordered` роутера). Инвалидация — адресный ключ
+ * публикации; наблюдатели другой публикации не трогаются.
+ */
+export function signalPublicationOrderChanged(
+  publicationId: string,
+  items: readonly PublicationOrderItem[],
+): void {
+  invalidateQueries(queryKeys.publicationAssembly(publicationId), {
+    local: 'publication-order',
+    id: publicationId,
+    data: { items: items.map((item) => ({ node_key: item.node_key, position: item.position })) },
   } satisfies LocalMutationSignal);
 }
 

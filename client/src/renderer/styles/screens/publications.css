@@ -900,6 +900,29 @@
   color: var(--accent);
 }
 
+/* Выбранная клавиатурой строка оглавления (общий компонент списка): ручка
+   ручного порядка видна всегда, не только на hover (задача d13fd645). */
+.pub-toc-line.pub-toc-selected {
+  background: var(--surface-alt, var(--surface));
+  color: var(--accent);
+}
+
+.pub-toc-line.pub-toc-selected .ui-drag-handle,
+.pub-doc-current .ui-drag-handle {
+  opacity: 1;
+}
+
+/* Ручка раздела/текста в оглавлении — перед кареткой, компактна. */
+.pub-toc-line .ui-drag-handle {
+  margin-right: var(--space-1);
+}
+
+.pub-doc-heading .ui-drag-handle,
+.pub-doc-text .ui-drag-handle {
+  margin-right: var(--space-1);
+}
+
+/* Устаревшая подсветка drop (native HTML5 DnD) больше не используется. */
 .pub-toc-line.pub-toc-drop {
   outline: 1px dashed var(--accent);
 }

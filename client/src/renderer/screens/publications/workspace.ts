@@ -54,8 +54,16 @@ import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { createListNav, type ListNavAdapter } from '../../lib/ui/list.js';
 import { isEditingTarget } from '../../lib/ui/nav-core.js';
+import {
+  createDragList,
+  dragHandle,
+  DRAG_HANDLE_CLASS,
+  type DragListAdapter,
+  type DragListItem,
+} from '../../lib/ui/drag-list.js';
 import { buildCover } from './cover.js';
 import {
+  applyPublicationOrder,
   assemblyDateLabel,
   blockSignature,
   collapsibleSectionIds,
@@ -63,8 +71,6 @@ import {
   documentBlocks,
   flattenSections,
   positionsFor,
-  reorderIds,
-  siblingNodeKeys,
   tocLines,
   tocSignature,
   type DocBlock,
@@ -81,6 +87,8 @@ import {
   onQueryInvalidated,
   queryKeys,
   registerQuery,
+  runOptimistic,
+  signalPublicationOrderChanged,
   type LocalMutationSignal,
 } from '../../lib/live/index.js';
 import { routePublicationUpdate } from './update-routing.js';
@@ -219,8 +227,8 @@ export function mountPublicationWorkspace(
   const tocCollapsed = { value: false };
   let currentAnchor: string | null = null;
   let reloadTimer: number | null = null;
-  let draggingKey: string | null = null;
-  let draggingParent: string | null = null;
+  /** Строки оглавления последнего рендера — вход ключевой навигации и drag. */
+  let tocLineItems: TocLine[] = [];
   /**
    * Живой текст документа устарел: изменился состав/рецепт, но пересборки не
    * было (решение пользователя «Остаётся + подсветка», замечание А2 приёмки
@@ -396,6 +404,171 @@ export function mountPublicationWorkspace(
       docHost.focus();
     },
   } satisfies ListNavAdapter<DocNavEntry>);
+
+  // --- Оглавление: выделение и ручной порядок (задача d13fd645) ------------
+
+  /** Группа соседей раздела: по id мысли-родителя (`''` — корни). */
+  function sectionGroupKey(parentThoughtId: string | null): string {
+    return `s:${parentThoughtId ?? ''}`;
+  }
+
+  /** Группа соседей текста: тексты одного раздела. */
+  function textGroupKey(sectionThoughtId: string): string {
+    return `t:${sectionThoughtId}`;
+  }
+
+  /** Строка оглавления по ключу вхождения (`data-key`). */
+  function tocLineNode(key: string): HTMLElement | null {
+    for (const child of Array.from(tocList.children)) {
+      const node = child as HTMLElement;
+      if (node.dataset?.['key'] === key) return node;
+    }
+    return null;
+  }
+
+  /** Грип-аффорданс с подсказкой; клик по нему не активирует строку/блок. */
+  function makeGrip(label: string): HTMLElement {
+    const grip = dragHandle(label);
+    grip.addEventListener('click', (ev) => ev.stopPropagation());
+    return grip;
+  }
+
+  const tocNav = createListNav<TocLine>(tocList, {
+    entries: () => tocLineItems,
+    tokenOf: (line) => line.key,
+    elementOf: (line) => tocLineNode(line.key),
+    applyHighlight: (line) => {
+      for (const node of Array.from(tocList.querySelectorAll<HTMLElement>('.pub-toc-line'))) {
+        node.classList.remove('pub-toc-selected');
+      }
+      if (line !== null) tocLineNode(line.key)?.classList.add('pub-toc-selected');
+    },
+    onActivate: (line) => {
+      if (line.kind !== 'excluded') scrollToAnchor(line.anchor);
+    },
+    onClick: (target) => {
+      let cursor: HTMLElement | null = target;
+      while (cursor !== null && cursor !== tocList) {
+        const key = cursor.dataset?.['key'];
+        if (key !== undefined) {
+          const line = tocLineItems.find((candidate) => candidate.key === key) ?? null;
+          if (line !== null) tocNav.setCurrent(line);
+          return;
+        }
+        cursor = cursor.parentElement;
+      }
+    },
+  } satisfies ListNavAdapter<TocLine>);
+
+  /** Сортируемые строки оглавления — только разделы (своя группа на родителя). */
+  function tocDragItems(): DragListItem<TocLine>[] {
+    const out: DragListItem<TocLine>[] = [];
+    for (const line of tocLineItems) {
+      if (line.kind !== 'section') continue;
+      const node = tocLineNode(line.key);
+      const handle = node?.querySelector<HTMLElement>(`.${DRAG_HANDLE_CLASS}`) ?? null;
+      if (node === null || handle === null) continue;
+      out.push({
+        entry: line,
+        key: line.key,
+        orderKey: line.nodeKey,
+        groupKey: sectionGroupKey(line.parentThoughtId),
+        element: node,
+        handle,
+      });
+    }
+    return out;
+  }
+
+  const tocDrag = createDragList<TocLine>(tocList, tocNav, {
+    items: () => tocDragItems(),
+    onReorder: (_groupKey, orderedKeys) => void commitOrder(orderedKeys),
+  } satisfies DragListAdapter<TocLine>);
+
+  /** Сортируемые блоки документа: разделы (по родителю) и тексты (по разделу). */
+  function docDragItems(): DragListItem<DocBlock>[] {
+    const out: DragListItem<DocBlock>[] = [];
+    for (const block of navBlocks) {
+      if (block.kind !== 'section' && block.kind !== 'text') continue;
+      const node = blockNode(block.key);
+      const handle = node?.querySelector<HTMLElement>(`.${DRAG_HANDLE_CLASS}`) ?? null;
+      if (node === null || handle === null) continue;
+      out.push({
+        entry: block,
+        key: block.key,
+        orderKey: block.nodeKey,
+        groupKey:
+          block.kind === 'section'
+            ? sectionGroupKey(block.parentThoughtId)
+            : textGroupKey(block.parentThoughtId),
+        element: node,
+        handle,
+      });
+    }
+    return out;
+  }
+
+  const docDrag = createDragList<DocBlock>(
+    docHost,
+    docNav,
+    {
+      items: () => docDragItems(),
+      onReorder: (_groupKey, orderedKeys) => void commitOrder(orderedKeys),
+    } satisfies DragListAdapter<DocBlock>,
+    { scrollHost: () => docHost },
+  );
+
+  /**
+   * Сохранить новый порядок ОДНОЙ группы соседей (очередь `node_key` из
+   * drag-list). Оптимистично: модель и разметка обновляются сразу; ответ
+   * сервера ложится в слой локальным сигналом, без перечитывания сборки
+   * (задача d13fd645). При ошибке — откат к снимку и общий диалог ошибки.
+   */
+  async function commitOrder(orderedKeys: readonly string[]): Promise<void> {
+    const networkId = store.state.networkId;
+    const pubId = publicationId;
+    if (networkId === null || pubId === null || assembly === null) return;
+    const items: PublicationOrderItem[] = positionsFor(orderedKeys);
+    const snapshot = assembly;
+    let saved: PublicationOrderItem[];
+    try {
+      saved = await runOptimistic<PublicationAssembly | null, PublicationOrderItem[]>({
+        snapshot: () => snapshot,
+        apply: () => {
+          assembly = applyPublicationOrder(assembly, items);
+          renderToc();
+          renderDocument();
+        },
+        rollback: (previous) => {
+          assembly = previous;
+          renderToc();
+          renderDocument();
+        },
+        execute: () => etn.publications.setOrder(networkId, pubId, items),
+      });
+    } catch (err) {
+      errorDialog(t('publications.ws.toc'), err);
+      return;
+    }
+    signalPublicationOrderChanged(pubId, saved.length > 0 ? saved : items);
+  }
+
+  /** Точечно применить порядок из payload (сигнал/событие), без чтения сборки. */
+  function applyOrderItems(raw: unknown): void {
+    if (!Array.isArray(raw)) return;
+    const items: PublicationOrderItem[] = [];
+    for (const entry of raw) {
+      if (typeof entry !== 'object' || entry === null) continue;
+      const record = entry as { node_key?: unknown; position?: unknown };
+      if (typeof record.node_key === 'string' && typeof record.position === 'number') {
+        items.push({ node_key: record.node_key, position: record.position });
+      }
+    }
+    if (items.length === 0) return;
+    assembly = applyPublicationOrder(assembly, items);
+    renderToc();
+    renderDocument();
+  }
 
   // --- Слушатели -----------------------------------------------------------
 
@@ -796,6 +969,11 @@ export function mountPublicationWorkspace(
           );
           return;
         }
+        case 'publication-order':
+          // Свой PUT order: порядок уже применён оптимистично; сигнал несёт
+          // сохранённые позиции — точечное (идемпотентное) применение.
+          applyOrderItems(local.data?.['items']);
+          return;
         case 'publication-composition': {
           // Признак «правка может изменить состав, даже если сущности в сборке
           // нет» (передача G5→G6): значения свойств-критериев рецепта могут
@@ -852,7 +1030,13 @@ export function mountPublicationWorkspace(
         if (routing.patch !== null) applyPublicationPatch(routing.patch);
         return;
       }
-      // Порядок/исключения/корзина — состав меняется, перечитываем.
+      if (type === 'publication.order.reordered') {
+        // Порядок узлов — точечное применение позиции, без перечитывания
+        // сборки: документ и оглавление обновляются живьём (задача d13fd645).
+        applyOrderItems(evt.data['items']);
+        return;
+      }
+      // Исключения/корзина — состав меняется, перечитываем.
       reload();
       return;
     }
@@ -937,12 +1121,15 @@ export function mountPublicationWorkspace(
 
   function renderToc(): void {
     const lines = tocLines(assembly, collapsed, (index) => t('publications.ws.text', index));
+    tocLineItems = lines;
     reconcileKeyed<TocLine>(tocList, lines, {
       key: (line) => line.key,
       build: (line) => buildTocLine(line),
       update: (node, line) => updateTocLine(node, line),
       equals: (a, b) => tocSignature(a) === tocSignature(b),
     });
+    tocNav.refresh();
+    tocDrag.refresh();
   }
 
   function buildTocLine(line: TocLine): HTMLElement {
@@ -952,8 +1139,9 @@ export function mountPublicationWorkspace(
       node.dataset['anchor'] = line.anchor;
       node.dataset['thoughtId'] = line.thoughtId;
       node.style.paddingLeft = `${line.depth}rem`;
-      node.draggable = true;
-      node.classList.add('pub-toc-draggable');
+      // Ручка-аффорданс ручного порядка (задача d13fd645): видна на hover и на
+      // выбранной строке; порядок сохраняет общий drag-фасад `lib/ui`.
+      setTooltip(node, t('publications.ws.dragKeyboardHint'));
       const caret = line.hasChildren ? iconButton({
         icon: svgIcon('chevron-down'),
         title: line.collapsed ? t('publications.ws.tocExpand') : t('publications.ws.tocCollapse'),
@@ -964,7 +1152,7 @@ export function mountPublicationWorkspace(
           toggleCollapsed(line.thoughtId);
         },
       }) : span('', 'pub-toc-caret');
-      node.append(caret, span(line.label, 'pub-toc-label'));
+      node.append(makeGrip(t('publications.ws.dragHandle')), caret, span(line.label, 'pub-toc-label'));
       const marks = div('pub-toc-marks');
       if (line.repeat) {
         // Пометка повтора — переходу к первому вхождению раздела (2ebacd12).
@@ -1061,32 +1249,6 @@ export function mountPublicationWorkspace(
       ev.preventDefault();
       showMenuAt(ev.clientX, ev.clientY, rowMenu(thoughtId));
     });
-    if (line.kind === 'section') {
-      node.addEventListener('dragstart', (ev) => {
-        draggingKey = line.nodeKey;
-        draggingParent = line.parentThoughtId;
-        ev.dataTransfer?.setData('text/plain', line.nodeKey);
-      });
-      node.addEventListener('dragend', () => {
-        draggingKey = null;
-        draggingParent = null;
-      });
-      node.addEventListener('dragover', (ev) => {
-        // Переставляем только внутри одной группы соседей (разделы одного
-        // родителя) — иначе изменился бы не порядок, а структура.
-        if (draggingKey === null || draggingKey === line.nodeKey) return;
-        if (draggingParent !== line.parentThoughtId) return;
-        ev.preventDefault();
-        node.classList.add('pub-toc-drop');
-      });
-      node.addEventListener('dragleave', () => node.classList.remove('pub-toc-drop'));
-      node.addEventListener('drop', (ev) => {
-        ev.preventDefault();
-        node.classList.remove('pub-toc-drop');
-        if (draggingKey === null || draggingParent !== line.parentThoughtId) return;
-        void moveSibling(draggingKey, line.nodeKey, line.parentThoughtId);
-      });
-    }
   }
 
   function tocMark(kind: 'repeat' | 'cycle', title: string): HTMLElement {
@@ -1108,28 +1270,6 @@ export function mountPublicationWorkspace(
     ];
   }
 
-  /** Перенос раздела перед соседом в пределах одной группы (PUT order, батч). */
-  async function moveSibling(
-    movedKey: string,
-    beforeKey: string,
-    parentThoughtId: string | null,
-  ): Promise<void> {
-    const networkId = store.state.networkId;
-    if (networkId === null || publicationId === null || assembly === null) return;
-    const flat = flattenSections(assembly.sections);
-    const keys = siblingNodeKeys(flat, parentThoughtId);
-    const next = reorderIds(keys, movedKey, beforeKey);
-    if (next.join(',') === keys.join(',')) return;
-    const items: PublicationOrderItem[] = positionsFor(next);
-    try {
-      await etn.publications.setOrder(networkId, publicationId, items);
-    } catch (err) {
-      errorDialog(t('publications.ws.toc'), err);
-      return;
-    }
-    reload();
-  }
-
   // --- Документ ------------------------------------------------------------
 
   /**
@@ -1149,6 +1289,7 @@ export function mountPublicationWorkspace(
       });
     });
     docNav.refresh();
+    docDrag.refresh();
     updateCurrentSection();
   }
 
@@ -1164,6 +1305,9 @@ export function mountPublicationWorkspace(
       const heading = el(headingTag(block.level), 'pub-doc-heading');
       heading.dataset['thoughtId'] = block.thoughtId;
       if (block.repeat) heading.classList.add('pub-doc-repeat');
+      // Ручка ручного порядка раздела (задача d13fd645).
+      setTooltip(node, t('publications.ws.dragKeyboardHint'));
+      heading.append(makeGrip(t('publications.ws.dragHandle')));
       if (block.collapsible) {
         // Каретка-экспандер: сворачивает/разворачивает раздел, не открывая мысль
         // (задача b51dbca4) — поэтому клик по ней не всплывает к разделу.
@@ -1200,6 +1344,9 @@ export function mountPublicationWorkspace(
       node.dataset['blockKey'] = block.key;
       node.tabIndex = -1;
       renderHtml(node, block.html);
+      // Ручка ручного порядка текста среди текстов своего раздела (d13fd645).
+      setTooltip(node, t('publications.ws.dragKeyboardHint'));
+      node.prepend(makeGrip(t('publications.ws.dragHandle')));
       node.addEventListener('click', (ev) => selectBlock(ev, block.thoughtId));
       return node;
     }
@@ -1617,6 +1764,9 @@ export function mountPublicationWorkspace(
     docHost.removeEventListener('scroll', onDocScroll);
     document.removeEventListener('keydown', onKeydown);
     docNav.destroy();
+    docDrag.destroy();
+    tocNav.destroy();
+    tocDrag.destroy();
     publicationId = null;
     publication = null;
     assembly = null;

@@ -1,0 +1,49 @@
+/* Сортируемый список `lib/ui` (задача d13fd645) — грип-аффорданс, клон-призрак
+   и линии вставки. Размеры и цвета — только токенами (сторож guard-ui-tokens).
+   Показ грипа «на строке/блоке» владелец добавляет своим состоянием выделения
+   (например, `.pub-toc-selected .ui-drag-handle`), базово он виден на hover и
+   во время перетаскивания. */
+
+.ui-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  cursor: grab;
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity var(--transition-hover);
+  user-select: none;
+  touch-action: none;
+}
+
+.ui-drag-item:hover > .ui-drag-handle,
+.ui-drag-item.ui-drag-active > .ui-drag-handle,
+.ui-drag-handle:focus-visible {
+  opacity: 1;
+}
+
+.ui-drag-handle:active,
+.ui-drag-item.ui-drag-active .ui-drag-handle {
+  cursor: grabbing;
+}
+
+.ui-drag-active {
+  opacity: var(--state-disabled-opacity);
+}
+
+.ui-drag-over-before {
+  box-shadow: inset 0 1px 0 var(--accent);
+}
+
+.ui-drag-over-after {
+  box-shadow: inset 0 -1px 0 var(--accent);
+}
+
+.ui-drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  opacity: 0.6;
+  pointer-events: none;
+  margin: 0;
+}

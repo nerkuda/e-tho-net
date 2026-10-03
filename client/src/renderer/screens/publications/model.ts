@@ -443,6 +443,46 @@ export function positionsFor(ids: readonly string[]): PublicationOrderItem[] {
   return ids.map((node_key, index) => ({ node_key, position: index + 1 }));
 }
 
+/**
+ * Применяет локальный порядок к дереву сборки (чисто, без мутации входа).
+ *
+ * Сервер сортирует соседей одного родителя и тексты одного раздела по позиции
+ * своего `node_key` (раздел — id мысли/ребра, текст — id ребра-источника;
+ * операция f6b242fe). Здесь тот же порядок переносится на модель: разделы —
+ * среди детей своего родителя, тексты — внутри своего раздела. Позиции
+ * сравниваются ТОЛЬКО внутри группы (как и на сервере), поэтому батч может
+ * назначать позиции 1..N на группу. Узел без позиции сохраняет исходное место
+ * (стабильная сортировка по индексу), а позиционированные поднимаются выше.
+ *
+ * `items` — либо батч клиента, либо ПОЛНЫЙ список порядка из события
+ * `publication.order.reordered`; повторное применение идемпотентно.
+ */
+export function applyPublicationOrder(
+  assembly: PublicationAssembly | null,
+  items: readonly PublicationOrderItem[],
+): PublicationAssembly | null {
+  if (assembly === null || items.length === 0) return assembly;
+  const position = new Map(items.map((item) => [item.node_key, item.position]));
+  const orderByKey = <T>(list: readonly T[], keyOf: (item: T) => string): T[] => {
+    const indexed = list.map((value, index) => ({ value, index, pos: position.get(keyOf(value)) }));
+    indexed.sort((a, b) => {
+      const pa = a.pos ?? Number.POSITIVE_INFINITY;
+      const pb = b.pos ?? Number.POSITIVE_INFINITY;
+      return pa === pb ? a.index - b.index : pa - pb;
+    });
+    return indexed.map((entry) => entry.value);
+  };
+  const walk = (
+    sections: readonly PublicationAssemblySection[],
+  ): PublicationAssemblySection[] =>
+    orderByKey(sections, (section) => section.node_key).map((section) => ({
+      ...section,
+      texts: orderByKey(section.texts, (text) => text.edge_id),
+      children: walk(section.children),
+    }));
+  return { ...assembly, sections: walk(assembly.sections) };
+}
+
 // ---------------------------------------------------------------------------
 // Плоские блоки документа для keyed-рендера (задача 4f03b9d5). Чистые данные:
 // разметку строит `workspace.ts`, но состав блоков и их подписи сравнения
@@ -471,6 +511,10 @@ export type DocBlock =
       /** DOM-id блока: уникален на вхождение (`anchor` — только у первого). */
       domId: string;
       thoughtId: string;
+      /** Ключ локального порядка раздела (`node_key`, PUT order). */
+      nodeKey: string;
+      /** id мысли раздела-родителя; `null` — корневой (группа соседей). */
+      parentThoughtId: string | null;
       level: number;
       heading: string;
       preambleHtml: string;
@@ -486,6 +530,10 @@ export type DocBlock =
       key: string;
       domId: string;
       thoughtId: string;
+      /** Ключ локального порядка текста (`node_key` = id ребра-источника). */
+      nodeKey: string;
+      /** id мысли раздела-владельца: группа соседей текста (внутри раздела). */
+      parentThoughtId: string;
       html: string;
     }
   | { kind: 'extra'; key: string; groups: PublicationAssemblyExtraGroup[] };
@@ -544,12 +592,16 @@ export function documentBlocks(
     { kind: 'title', key: 'title', sig: titleSignature(publication, assembly.publication.summary_html) },
   ];
   const counter = new Map<string, number>();
-  const walk = (sections: readonly PublicationAssemblySection[], hidden: boolean): void => {
+  const walk = (
+    sections: readonly PublicationAssemblySection[],
+    hidden: boolean,
+    parentThoughtId: string | null,
+  ): void => {
     for (const section of sections) {
       const occ = occurrence(counter, section.anchor);
       const textOccs = section.texts.map((text) => occurrence(counter, text.anchor));
       if (hidden) {
-        walk(section.children, true);
+        walk(section.children, true, section.thought_id);
         continue;
       }
       const selfCollapsed = collapsed.has(section.thought_id);
@@ -558,6 +610,8 @@ export function documentBlocks(
         key: occ.key,
         domId: occ.domId,
         thoughtId: section.thought_id,
+        nodeKey: section.node_key,
+        parentThoughtId,
         level: section.level,
         heading: section.heading,
         preambleHtml: section.preamble_html,
@@ -574,6 +628,8 @@ export function documentBlocks(
             key: textOcc.key,
             domId: textOcc.domId,
             thoughtId: text.thought_id,
+            nodeKey: text.edge_id,
+            parentThoughtId: section.thought_id,
             html: text.body_html,
           });
         });
@@ -581,10 +637,10 @@ export function documentBlocks(
           out.push({ kind: 'extra', key: `${occ.key}#extra`, groups: section.extra });
         }
       }
-      walk(section.children, selfCollapsed);
+      walk(section.children, selfCollapsed, section.thought_id);
     }
   };
-  walk(assembly.sections, false);
+  walk(assembly.sections, false, null);
   return out;
 }
 

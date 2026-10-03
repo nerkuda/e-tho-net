@@ -46,6 +46,7 @@ export interface ListNavKeyEvent {
   key?: string;
   shiftKey?: boolean;
   ctrlKey?: boolean;
+  altKey?: boolean;
   target?: unknown | null;
   preventDefault?: () => void;
   stopPropagation?: () => void;
@@ -232,7 +233,8 @@ export function createListNav<E>(
     }
     // Поле правки текста: стрелки/Tab/Enter принадлежат редактору.
     if (isEditing(target)) return;
-    const action = resolveNavAction(key);
+    // Alt+↑/↓ — сдвиг порядка; навигацию курсора ведёт базовый разбор без Alt.
+    const action = resolveNavAction(key, { altKey: event.altKey === true });
     if (action === null) return;
     navActive = true;
     switch (action) {

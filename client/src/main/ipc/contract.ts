@@ -714,7 +714,7 @@ export interface EtnApi {
       networkId: string,
       id: string,
       items: readonly PublicationOrderItem[],
-    ): Promise<void>;
+    ): Promise<PublicationOrderItem[]>;
     /** `POST …/publications/{id}/exclusions` — исключить мысль. */
     addExclusion(networkId: string, id: string, thoughtId: string): Promise<void>;
     /** `DELETE …/publications/{id}/exclusions?thought_id=` — вернуть мысль. */

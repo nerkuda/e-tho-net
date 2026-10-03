@@ -85,6 +85,7 @@ export {
   runOptimistic,
   signalPermanentCommentSaved,
   signalPublicationCompositionChanged,
+  signalPublicationOrderChanged,
   signalThoughtSaved,
   signalThoughtUpdated,
   type OptimisticOptions,

@@ -14,6 +14,7 @@ import type {
 } from '@etn/shared';
 
 import {
+  applyPublicationOrder,
   blockSignature,
   collapsibleSectionIds,
   documentBlocks,
@@ -177,6 +178,80 @@ describe('модель рабочей области публикации: пе�
     ]);
     // Корневая группа при перестановке вложенных не меняется.
     assert.deepEqual(siblingNodeKeys(flat, null), ['A']);
+  });
+});
+
+describe('модель рабочей области: применение локального порядка (d13fd645)', () => {
+  const text = (id: string): PublicationAssemblySection['texts'][number] => ({
+    thought_id: id,
+    anchor: `pub-${id}`,
+    edge_id: `e:${id}`,
+    body_html: `<p>${id}</p>`,
+  });
+  const nested = (id: string): PublicationAssemblySection => ({ ...section(id), level: 2 });
+
+  it('переставляет корневые разделы, не трогая их содержимое', () => {
+    const asm = makeAssembly([section('A', [nested('A1')]), section('B'), section('C')]);
+    const ordered = applyPublicationOrder(asm, positionsFor(['e:C', 'e:A', 'e:B']))!;
+    assert.deepEqual(ordered.sections.map((s) => s.thought_id), ['C', 'A', 'B']);
+    const a = ordered.sections.find((s) => s.thought_id === 'A')!;
+    assert.deepEqual(a.children.map((c) => c.thought_id), ['A1']);
+  });
+
+  it('переставляет тексты внутри раздела, не вынося их к другому разделу', () => {
+    const asm = makeAssembly([
+      { ...section('A'), texts: [text('A1'), text('A2'), text('A3')] },
+      { ...section('B'), texts: [text('B1')] },
+    ]);
+    const ordered = applyPublicationOrder(asm, positionsFor(['e:A3', 'e:A1', 'e:A2']))!;
+    assert.deepEqual(ordered.sections[0]!.texts.map((t) => t.thought_id), ['A3', 'A1', 'A2']);
+    assert.deepEqual(ordered.sections[1]!.texts.map((t) => t.thought_id), ['B1']);
+  });
+
+  it('вложенный node_key не пересекает уровни: корни остаются на месте', () => {
+    const asm = makeAssembly([section('A', [nested('A1'), nested('A2')]), section('B')]);
+    const ordered = applyPublicationOrder(asm, positionsFor(['e:A2', 'e:A1']))!;
+    assert.deepEqual(ordered.sections.map((s) => s.thought_id), ['A', 'B']);
+    assert.deepEqual(ordered.sections[0]!.children.map((c) => c.thought_id), ['A2', 'A1']);
+  });
+
+  it('без позиции узел сохраняет место; применение идемпотентно', () => {
+    const asm = makeAssembly([section('A'), section('B'), section('C')]);
+    const items = positionsFor(['e:B', 'e:A']);
+    const once = applyPublicationOrder(asm, items)!;
+    assert.deepEqual(once.sections.map((s) => s.thought_id), ['B', 'A', 'C']);
+    const twice = applyPublicationOrder(once, items)!;
+    assert.deepEqual(twice.sections.map((s) => s.thought_id), ['B', 'A', 'C']);
+  });
+
+  it('пустой батч и `null`-сборка возвращаются как есть', () => {
+    const asm = makeAssembly([section('A')]);
+    assert.equal(applyPublicationOrder(asm, []), asm);
+    assert.equal(applyPublicationOrder(null, positionsFor(['A'])), null);
+  });
+
+  it('блоки документа несут node_key и группу соседей (вход drag-фасада)', () => {
+    const asm = makeAssembly([{ ...section('A', [nested('B')], 'A'), texts: [text('tA')] }]);
+    const blocks = documentBlocks(asm, null);
+    const sectionOf = (id: string) =>
+      blocks.find(
+        (b): b is Extract<typeof b, { kind: 'section' }> =>
+          b.kind === 'section' && b.thoughtId === id,
+      );
+    const a = sectionOf('A');
+    assert.ok(a !== undefined);
+    assert.equal(a.nodeKey, 'A');
+    assert.equal(a.parentThoughtId, null);
+    const b = sectionOf('B');
+    assert.ok(b !== undefined);
+    assert.equal(b.nodeKey, 'e:B');
+    assert.equal(b.parentThoughtId, 'A');
+    const textBlock = blocks.find(
+      (block): block is Extract<typeof block, { kind: 'text' }> => block.kind === 'text',
+    );
+    assert.ok(textBlock !== undefined);
+    assert.equal(textBlock.nodeKey, 'e:tA');
+    assert.equal(textBlock.parentThoughtId, 'A');
   });
 });
 
