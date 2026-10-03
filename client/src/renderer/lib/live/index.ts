@@ -40,6 +40,7 @@ export {
   hasQuery,
   invalidateQueries,
   markQueryStale,
+  onQueryInvalidated,
   queryKeysSnapshot,
   queryStore,
   querySubscriberCount,
@@ -78,6 +79,7 @@ export {
 } from './mutator.js';
 
 export {
+  IGNORED_REALTIME_EVENT_TYPES,
   realtimeRoutes,
   resetEventRouter,
   routeRealtimeEvent,

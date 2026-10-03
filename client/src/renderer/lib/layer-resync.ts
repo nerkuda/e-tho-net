@@ -21,7 +21,86 @@
 import type { FocusResponse, Thought } from '@etn/shared';
 
 import { etn } from './etn.js';
+import { queryKeys } from './live/query-keys.js';
+import { setQueryData, subscribeQuery } from './live/query-registry.js';
 import { store } from '../state.js';
+
+// ---------------------------------------------------------------------------
+// Привязка окрестности фокуса к слою данных (G2 тех.проекта 269016e2)
+// ---------------------------------------------------------------------------
+//
+// Окрестность фокуса живёт в слое запросов под ключом `focus:@id`. Активный
+// запрос подписан (пока холст смонтирован) — его fetcher это тот же вызов
+// `thoughts.focus()`, что и раньше, но перезапрос теперь запускает слой:
+// роутер (`event-router.ts`) гасит `focus`-ключи на чужие события, а локальные
+// мутации кладут ответ в кэш (`publishFocusResponse`) или гасят ключи
+// (`invalidateQueries`, см. `scheduleRefresh` в app.ts). Ручных перечитываний
+// окрестности у экранов больше нет.
+
+/** Активная подписка на запрос окрестности фокуса (одна на клиент). */
+let activeFocus: { key: string; networkId: string; thoughtId: string; unsub: () => void } | null =
+  null;
+
+/** Спроецировать ответ фокуса в store (окрестность + порядок/сортировки зон). */
+function applyFocusResponse(response: FocusResponse): void {
+  const zoneState = zoneStateFromFocus(response);
+  store.update({ focus: response, ...zoneState });
+  const networkId = store.state.networkId;
+  if (networkId !== null) {
+    void ensureManualPositionsInitialized(
+      networkId,
+      response.focused.id,
+      response,
+      zoneState.zoneOrder,
+    ).catch(() => undefined);
+  }
+}
+
+/**
+ * Подписать окрестность `thoughtId` на запрос слоя `focus:@id`. Повторный
+ * вызов для того же фокуса — no-op. Смена фокуса снимает прежнюю подписку.
+ */
+export function activateFocusQuery(networkId: string, thoughtId: string): void {
+  if (
+    activeFocus !== null &&
+    activeFocus.networkId === networkId &&
+    activeFocus.thoughtId === thoughtId
+  ) {
+    return;
+  }
+  activeFocus?.unsub();
+  const key = queryKeys.focus(thoughtId);
+  const unsub = subscribeQuery<FocusResponse>(
+    key,
+    () => etn.thoughts.focus(networkId, thoughtId),
+    (state) => {
+      if (state.data !== undefined) applyFocusResponse(state.data);
+    },
+  );
+  activeFocus = { key, networkId, thoughtId, unsub };
+}
+
+/** Снять активную подписку окрестности (смена сети, разбор сессии, тесты). */
+export function deactivateFocusQuery(): void {
+  activeFocus?.unsub();
+  activeFocus = null;
+}
+
+/**
+ * Положить свежий ответ фокуса в кэш слоя и спроецировать в store.
+ *
+ * Мутатор-путь G2: и своя правка (REST-ответ), и чужая (перезапрос по
+ * инвалидации роутера) приходят в один кэш `focus:@id`, затем в store — холст
+ * перерисовывается из кэша без ручных вызовов обновления.
+ */
+export function publishFocusResponse(response: FocusResponse): void {
+  setQueryData(queryKeys.focus(response.focused.id), response);
+  // Если на этот фокус уже подписана активная окрестность, её слушатель сам
+  // спроецировал данные (setQueryData уведомляет синхронно) — не дублируем.
+  if (activeFocus === null || activeFocus.thoughtId !== response.focused.id) {
+    applyFocusResponse(response);
+  }
+}
 
 /**
  * Finds the protected HOME (root) thought of a freshly opened network. The
@@ -104,11 +183,8 @@ export async function refreshFocusOrNull(networkId: string): Promise<FocusRespon
   if (focusId === undefined) return null;
   try {
     const response: FocusResponse = await etn.thoughts.focus(networkId, focusId);
-    const zoneState = zoneStateFromFocus(response);
-    store.update({ focus: response, ...zoneState });
-    void ensureManualPositionsInitialized(networkId, focusId, response, zoneState.zoneOrder).catch(
-      () => undefined,
-    );
+    publishFocusResponse(response);
+    activateFocusQuery(networkId, focusId);
     return response;
   } catch {
     return null;
@@ -133,11 +209,8 @@ export async function resetFocusToHome(networkId: string): Promise<FocusResponse
   }
   try {
     const response: FocusResponse = await etn.thoughts.focus(networkId, home.id);
-    const zoneState = zoneStateFromFocus(response);
-    store.update({ focus: response, ...zoneState });
-    void ensureManualPositionsInitialized(networkId, home.id, response, zoneState.zoneOrder).catch(
-      () => undefined,
-    );
+    publishFocusResponse(response);
+    activateFocusQuery(networkId, home.id);
     return response;
   } catch {
     return null;

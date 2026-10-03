@@ -51,6 +51,27 @@ interface QueryEntry<T = unknown> {
 
 const entries = new Map<string, QueryEntry<unknown>>();
 
+/**
+ * Наблюдатели инвалидаций (этап G2). Позволяют экрану узнать, что ключ его
+ * запроса погашен, не подписываясь на realtime-шину напрямую. Так холст
+ * перерисовывает нижнюю зону-отбор, когда окрестность фокуса перечитана, но её
+ * содержимое не изменилось (`canvasRenderKey` не ломается — ошибка 4fca95c9).
+ */
+type InvalidationListener = (prefix: string, keys: readonly string[]) => void;
+const invalidationListeners = new Set<InvalidationListener>();
+
+/** Подписаться на инвалидации ключей реестра; возвращает отписку. */
+export function onQueryInvalidated(listener: InvalidationListener): () => void {
+  invalidationListeners.add(listener);
+  return () => {
+    invalidationListeners.delete(listener);
+  };
+}
+
+function notifyInvalidated(prefix: string, keys: readonly string[]): void {
+  for (const listener of [...invalidationListeners]) listener(prefix, keys);
+}
+
 function asEntry<T>(entry: QueryEntry<unknown>): QueryEntry<T> {
   return entry as unknown as QueryEntry<T>;
 }
@@ -136,7 +157,14 @@ export function setQueryData<T>(key: string, data: T): void {
   notify(entry);
 }
 
-/** Пометить запись устаревшей, не трогая данные (stale-while-revalidate). */
+/**
+ * Пометить запись устаревшей, не трогая данные (stale-while-revalidate).
+ *
+ * Замечание (G2 65286909): вызов во время `loading` поднимает `version` и тем
+ * самым отбрасывает результат фетча в полёте — запись останется `stale` до
+ * следующей инвалидации. На мигрированных путях G2 функция не используется
+ * (гашение идёт через `invalidateQueries`), поэтому путь теоретический.
+ */
 export function markQueryStale(key: string): void {
   const entry = getEntry(key);
   if (entry === undefined) return;
@@ -273,7 +301,12 @@ export function invalidateQueries(prefix: string): string[] {
       void startFetch(asEntry(entry));
     }
   }
-  return touched.sort();
+  touched.sort();
+  // Уведомляем наблюдателей ДАЖЕ при пустом `touched`: экран мог ещё не
+  // зарегистрировать свой ключ (переходный период G2–G6), но обязан узнать,
+  // что событие его класса пришло (нижняя зона холста — ошибка 4fca95c9).
+  notifyInvalidated(prefix, touched);
+  return touched;
 }
 
 /** Полный сброс реестра (смена сети, тесты). */

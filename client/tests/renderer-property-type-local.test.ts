@@ -468,13 +468,24 @@ describe('локальная правка типа связи пересчиты
     const { store } = await import('../src/renderer/state.js');
     const { scheduleTypeRepaint, applyRealtimeToUi } =
       await import('../src/renderer/realtime-ui.js');
+    const { activateFocusQuery, deactivateFocusQuery } =
+      await import('../src/renderer/lib/layer-resync.js');
+    const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
+    const { resetEventRouter, routeRealtimeEvent } =
+      await import('../src/renderer/lib/live/event-router.js');
 
+    resetQueryRegistry();
+    resetEventRouter();
     store.update({
       networkId: 'n1',
       activeView: 'structures',
       activeTabId: 'tab1',
       focus: makeFocusResponse(),
     } as any);
+    // Слой данных (G2): окрестность подписана — перезапрос запускает инвалидация.
+    activateFocusQuery('n1', 't1');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const baseline = focusFetches;
 
     // Локальный производитель (менеджер свойств) уже перечитал каталог и зовёт
     // общий пересчёт: холст обязан перечитаться (фокус), «Структуры» и
@@ -483,13 +494,13 @@ describe('локальная правка типа связи пересчиты
     await new Promise((resolve) => setTimeout(resolve, 250));
     assert.equal(
       focusFetches,
-      1,
+      baseline + 1,
       'пересчёт после локальной правки типа связи перечитывает фокус (холст перерисовывается)',
     );
 
-    // Эталон: realtime-событие того же типа идёт этим же путём — «тот же набор
-    // обновлений» значит сравнение с ним, а не самостоятельный список.
-    applyRealtimeToUi({
+    // Эталон: realtime-событие того же типа идёт этим же путём (роутер слоя
+    // гасит `focusAll`) — «тот же набор обновлений» значит сравнение с ним.
+    const evt = {
       type: 'link-type.updated',
       seq: 1,
       ts: '2026-01-01T00:00:00.000Z',
@@ -499,13 +510,18 @@ describe('локальная правка типа связи пересчиты
       layer_id: 'base',
       data: { id: 'la', changes: { name_forward: 'X' }, version: 2 },
       meta: { version: 1 },
-    } as any);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    } as any;
+    routeRealtimeEvent(evt, { networkId: 'n1' });
+    applyRealtimeToUi(evt);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(
       focusFetches,
-      2,
+      baseline + 2,
       'realtime-ветка типа перечитывает фокус (эталон, с которым сверяется локальный путь)',
     );
+    deactivateFocusQuery();
+    resetQueryRegistry();
+    resetEventRouter();
   });
 
   it('набор пересчёта задан одним помощником и зовётся обоими путями', () => {
@@ -537,11 +553,14 @@ describe('локальная правка типа связи пересчиты
       ),
       'пересчёт не перезапрашивает каталог типов повторно',
     );
+    // Realtime-ветка типа (G2): каталог перечитывается отдельно, окрестность
+    // гасит роутер слоя (`focusAll`), а «Структуры»/«Хроника» обновляются
+    // легаси-путём экрана.
     assert.ok(
-      /case 'link-type\.deleted':[\s\S]{0,500}?void reloadTypeCatalogues\(\);[\s\S]{0,80}?scheduleTypeRepaint\(\);/.test(
+      /case 'link-type\.deleted':[\s\S]{0,700}?void reloadTypeCatalogues\(\);[\s\S]{0,160}?scheduleStructuresRefresh\(\);/.test(
         realtimeUi,
       ),
-      'realtime-ветка типа зовёт общий пересчёт',
+      'realtime-ветка типа перечитывает каталог и обновляет «Структуры» (фокус — роутер слоя)',
     );
   });
 

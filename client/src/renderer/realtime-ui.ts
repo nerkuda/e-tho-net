@@ -16,11 +16,8 @@
 import { PREF_KEY, parseStoredCanvasLinkFilter, type AnyRealtimeEvent } from '@etn/shared';
 
 import { resyncAfterLayerSwitch, scheduleRefresh } from './app.js';
-import { invalidateIndicators, invalidateRef, requestCanvasRepaint } from './canvas/canvas.js';
-import {
-  invalidateViewResultForRealtime,
-  onThoughtTypeViewRealtime,
-} from './canvas/focus-filter-strip.js';
+import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
+import { onThoughtTypeViewRealtime } from './canvas/focus-filter-strip.js';
 import { etn } from './lib/etn.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from './screens/pinned-bar.js';
@@ -82,36 +79,17 @@ export function reloadTypeCatalogues(): Promise<void> {
 let typeCataloguesReload: Promise<void> | null = null;
 
 /**
- * Запланировать пересчёт всего, что рисует окрестность фокуса: холст (секторы
- * родителей/потомков/родственников и линии рёбер — перечитываются свежим
- * ответом `focus()`), «Структуры» и «Хроника» (обе держат собственные снимки
- * страницы/дерева и сами по смене данных не перестраиваются).
+ * Пересчёт «окрестности фокуса + Структуры + Хроника» для ЛОКАЛЬНЫХ
+ * производителей (своё realtime-эхо до рендерера не доходит — G8 applier).
  *
- * ЕДИНСТВЕННОЕ место, где задан этот набор: realtime-ветки изменения
- * соседей/рёбер (`thought.reordered`, `link.*`, `property-value.*`) и смены
- * каталога типов (`scheduleTypeRepaint`) зовут его же. Локальные производители
- * зовут его сами — своё realtime-эхо до рендерера не доходит (G8 applier),
- * а потому без такого вызова карта не узнаёт о своей же правке.
+ * Слой данных (G2): холст здесь идёт через слой — `scheduleRefresh` гасит
+ * `focus`-ключи, активная окрестность перечитывается подпиской. «Структуры» и
+ * «Хроника» — легаси-путь до их миграции (G3+).
  */
 export function scheduleNeighbourhoodRepaint(): void {
   scheduleRefresh();
   scheduleStructuresRefresh();
   scheduleChronicleRefresh();
-  repaintViewResultIfActive();
-}
-
-/**
- * Перерисовать холст, если нижняя зона показывает результат ОТБОРА (ошибка
- * 4fca95c9). Результат отбора не входит в `canvasRenderKey` (canvas.ts), поэтому
- * событие, меняющее ТОЛЬКО строки отбора, не запускает `render()` и `views.run`
- * не переисполняется. Так выглядит создание/правка/удаление работы версии:
- * связь «запланировано в версию» помечена `show_on_map=false`, потому рёбра
- * отфильтрованы из окрестности фокуса, ответ `focus()` не меняется, а работа
- * видна только строкой отбора. В режиме «Потомки» — no-op: там нижняя зона и
- * есть окрестность фокуса, её изменения ловит ключ перерисовки.
- */
-function repaintViewResultIfActive(): void {
-  if (invalidateViewResultForRealtime()) requestCanvasRepaint();
 }
 
 /**
@@ -192,20 +170,19 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       }
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
       // Удалённая мысль могла быть строкой отбора, а не соседом фокуса — нижнюю
-      // зону перерисовываем отдельно (ошибка 4fca95c9).
-      repaintViewResultIfActive();
+      // зону перерисовывает подписчик холста на инвалидациях слоя (ошибка
+      // 4fca95c9, G2).
       break;
 
     case 'thought.created':
       // Новая мысль может войти в отбор — состав не трогаем, помечаем пересборку.
       applyPublicationCompositionRealtime();
-      if (inNeighbourhood(evt.data.thought.id)) scheduleRefresh();
+      // Слой данных (G2): окрестность фокуса перечитывается по инвалидации
+      // роутера (`focusAll`), нижняя зона — подписчиком холста на инвалидации
+      // (`onQueryInvalidated`). Ручных `scheduleRefresh`/`repaintViewResultIfActive`
+      // здесь больше нет. «Структуры» пока на легаси-пути (G2-остаток).
       scheduleStructuresRefresh();
       scheduleChronicleRefresh();
-      // Новая мысль окрестности фокуса ещё не в снимке (`inNeighbourhood` её не
-      // знает), но в режиме отбора она может попасть в его результат — нижнюю
-      // зону перерисовываем отдельно (ошибка 4fca95c9).
-      repaintViewResultIfActive();
       break;
 
     case 'thought.updated':
@@ -229,8 +206,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       applyStructuresRealtime(evt);
       scheduleChronicleRefresh();
       // Правка мысли, видимой только строкой отбора (заголовок/тип/актуальность)
-      // — нижняя зона перерисовывается отдельно (ошибка 4fca95c9).
-      repaintViewResultIfActive();
+      // — нижнюю зону перерисовывает подписчик холста на инвалидациях слоя
+      // (ошибка 4fca95c9, G2).
       break;
 
     // Свойство-СВЯЗЬ меняет рёбра на сервере (структурные «Родители»/
@@ -243,7 +220,11 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'property-value.deleted':
       // Состав публикации: пометка пересборки (замечание А2 приёмки b02ef1cf).
       applyPublicationCompositionRealtime();
-      scheduleNeighbourhoodRepaint();
+      // Слой данных (G2): окрестность фокуса гасит роутер (`focusAll`), нижняя
+      // зона — подписчик холста на инвалидации. Здесь остаётся легаси-обновление
+      // «Структур»/«Хроники» до их миграции.
+      scheduleStructuresRefresh();
+      scheduleChronicleRefresh();
       break;
 
     // Ребро уже нарисовано на «Структурах» — правка оформления применяется
@@ -254,13 +235,11 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'link.deleted':
       // Ребро может быть строкообразующим для состава публикации — пометка.
       applyPublicationCompositionRealtime();
-      scheduleRefresh();
+      // Слой данных (G2): окрестность фокуса перечитывает роутер (`focusAll`),
+      // нижняя зона — подписчик холста. «Дневник» перезапрашивает ленту, а
+      // «Структуры» — легаси-путь до своей миграции.
       applyStructuresRealtime(evt);
       scheduleChronicleRefresh();
-      // Связь может быть строкообразующей для отбора (в т.ч. скрытая на карте
-      // `show_on_map=false`) — нижняя зона перерисовывается отдельно
-      // (ошибка 4fca95c9).
-      repaintViewResultIfActive();
       break;
 
     case 'comment.created':
@@ -333,28 +312,26 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'user-preference.updated':
       if (evt.data.key === 'show_inactive') {
         store.update({ showInactive: evt.data.value === true });
-        scheduleRefresh();
+        // Фокус гасит роутер (`focusAll`); «Структуры» — легаси-путь.
         scheduleStructuresRefresh();
       } else if (evt.data.key === PREF_KEY.SHOW_TRASH) {
         // «Показывать содержимое корзины» (77923b49) — правка другого клиента:
-        // карта, локальный граф и структуры перечитываются (сервер фильтрует
-        // помеченных по этой настройке).
+        // карта перечитывается по инвалидации роутера, локальный граф и
+        // структуры — легаси-путь.
         store.update({ showTrash: evt.data.value !== false });
-        scheduleRefresh();
         scheduleStructuresRefresh();
       } else if (evt.data.key === PREF_KEY.CANVAS_LINK_FILTER) {
         // Another client (or the filter dialog itself) changed the canvas
-        // link-type filter (0.8.1) — pick up the new value and re-render the
-        // map. `scheduleRefresh` re-fetches `focus()`, which the server
-        // resolves against the just-updated preference.
+        // link-type filter (0.8.1) — pick up the new value; окрестность
+        // перечитает роутер (`focusAll`) против уже обновлённой настройки.
         store.update({ canvasLinkFilter: parseStoredCanvasLinkFilter(evt.data.value) });
-        scheduleRefresh();
       }
       break;
 
     case 'user-focus-preferences.updated':
     case 'user-focus-order.updated':
-      if (evt.data.focus_thought_id === store.state.focus?.focused.id) scheduleRefresh();
+      // Роутер гасит `focus:@<focus_thought_id>` — активная окрестность
+      // перезапросится слоем (G2); ручной вызов не нужен.
       break;
 
     case 'saved-filter.created':
@@ -399,9 +376,12 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // Another client changed the type catalogues (L21): reload both lists
       // and repaint everything that renders type styles/names. Типы и
       // определения свойств входят в условия отбора — та же пометка пересборки.
+      // Слой данных (G2): окрестность фокуса гасит роутер (`focusAll`),
+      // «Структуры»/«Хроника» — легаси-путь до миграции.
       applyPublicationCompositionRealtime();
       void reloadTypeCatalogues();
-      scheduleTypeRepaint();
+      scheduleStructuresRefresh();
+      scheduleChronicleRefresh();
       break;
 
     case 'thought-type-view.created':

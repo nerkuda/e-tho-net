@@ -34,9 +34,11 @@ import { ShimElement } from './dom-shim.js';
 
 type CanvasModule = typeof import('../src/renderer/canvas/canvas.js');
 type RealtimeUiModule = typeof import('../src/renderer/realtime-ui.js');
+type EventRouterModule = typeof import('../src/renderer/lib/live/event-router.js');
 
 let canvas: CanvasModule;
 let realtimeUi: RealtimeUiModule;
+let eventRouter: EventRouterModule;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -287,10 +289,14 @@ before(async () => {
   installEtn();
   canvas = await import('../src/renderer/canvas/canvas.js');
   realtimeUi = await import('../src/renderer/realtime-ui.js');
+  eventRouter = await import('../src/renderer/lib/live/event-router.js');
 });
 
 beforeEach(() => {
   installEtn();
+  // Дедуп роутера по seq — состояние процесса: сбрасываем между тестами,
+  // иначе второе событие с тем же seq будет отброшено как опоздавшее.
+  eventRouter.resetEventRouter();
   viewRows = [{ id: 'existing', title: 'Старая работа', type_id: TYPE_ID, active: true, marked_for_deletion: false }];
   viewRunCount = 0;
   store.update({ networkId: NETWORK_ID, focus: null, canvasZoom: 1, cloudWidth: 180 });
@@ -307,9 +313,12 @@ describe('realtime-обновление нижней зоны в режиме о
     // Другая сессия создала работу: она попадает в результат отбора...
     viewRows.push({ id: WORK_ID, title: 'Новая задача', type_id: TYPE_ID, active: true, marked_for_deletion: false });
     // ...окрестность фокуса при этом не меняется (ребро отфильтровано).
-    realtimeUi.applyRealtimeToUi(
-      foreignEvent('thought.created', { thought: thought(WORK_ID, 'Новая задача') }) as any,
-    );
+    // G2: реальный конвейер — роутер слоя гасит `focus`-ключи, подписка холста
+    // на инвалидации перерисовывает нижнюю зону (ошибка 4fca95c9); легаси-путь
+    // `applyRealtimeToUi` идёт следом (realtime.ts).
+    const evt = foreignEvent('thought.created', { thought: thought(WORK_ID, 'Новая задача') }) as any;
+    eventRouter.routeRealtimeEvent(evt, { networkId: NETWORK_ID });
+    realtimeUi.applyRealtimeToUi(evt);
     await settle();
 
     assert.ok(
@@ -334,11 +343,11 @@ describe('realtime-обновление нижней зоны в режиме о
 
     viewRows.push({ id: WORK_ID, title: 'Новая задача', type_id: TYPE_ID, active: true, marked_for_deletion: false });
     // Ребро работы→версия: тип связи `show_on_map=false`, поэтому focus() не меняется.
-    realtimeUi.applyRealtimeToUi(
-      foreignEvent('link.created', {
-        link: { id: 'l-work', source_id: WORK_ID, target_id: FOCUS_ID, type_id: null, active: true, version: 1 },
-      }) as any,
-    );
+    const evt = foreignEvent('link.created', {
+      link: { id: 'l-work', source_id: WORK_ID, target_id: FOCUS_ID, type_id: null, active: true, version: 1 },
+    }) as any;
+    eventRouter.routeRealtimeEvent(evt, { networkId: NETWORK_ID });
+    realtimeUi.applyRealtimeToUi(evt);
     await settle();
 
     assert.ok(viewRunCount > beforeRun, 'link.created обязан переисполнить активный отбор');

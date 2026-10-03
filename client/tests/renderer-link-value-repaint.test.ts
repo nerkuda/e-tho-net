@@ -123,10 +123,15 @@ function makeFocusResponse(): unknown {
 }
 
 /** Realtime-событие от чужого клиента (собственное эхо отсекает G8-applier). */
-function foreignEvent(type: string, networkId: string, data: unknown): Record<string, unknown> {
+function foreignEvent(
+  type: string,
+  networkId: string,
+  data: unknown,
+  seq = 1,
+): Record<string, unknown> {
   return {
     type,
-    seq: 1,
+    seq,
     ts: '2026-01-01T00:00:00.000Z',
     actor: { user_id: 'u2', client_id: 'c2' },
     audience: 'network',
@@ -148,7 +153,7 @@ function wait(ms: number): Promise<void> {
 describe('realtime-значение свойства-связи перечитывает окрестность фокуса (f0b959dd)', () => {
   it('property-value.set и link.created из активной сети перечитывают фокус; чужая сеть — игнор', async () => {
     shimDom();
-    /** Перезапросы фокуса — так виден `scheduleNeighbourhoodRepaint` (холст). */
+    /** Перезапросы фокуса — так видна инвалидация `focus`-ключей слоя (холст). */
     let focusFetches = 0;
     (globalThis as any).window.etn = {
       ui: { setState: async () => undefined },
@@ -164,8 +169,15 @@ describe('realtime-значение свойства-связи перечиты
       },
     };
     const { store } = await import('../src/renderer/state.js');
+    const { activateFocusQuery, deactivateFocusQuery } =
+      await import('../src/renderer/lib/layer-resync.js');
+    const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
+    const { resetEventRouter, routeRealtimeEvent } =
+      await import('../src/renderer/lib/live/event-router.js');
     const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
 
+    resetQueryRegistry();
+    resetEventRouter();
     store.update({
       networkId: 'n1',
       activeView: 'map',
@@ -173,50 +185,59 @@ describe('realtime-значение свойства-связи перечиты
       focus: makeFocusResponse(),
     } as any);
 
-    // Чужая сеть: событие соседней вкладки общий store активной не трогает.
-    applyRealtimeToUi(
-      foreignEvent('property-value.set', 'n2', {
-        owner_type: 'thought',
-        owner_id: 't1',
-        property_id: 'p1',
-        value: ['x'],
-      }) as any,
-    );
-    await wait(260);
-    assert.equal(focusFetches, 0, 'событие чужой сети окрестность не перечитывает');
+    // Слой данных (G2): окрестность подписана на `focus:@t1` — перезапрос
+    // запускает инвалидация роутера, а не ручной вызов.
+    activateFocusQuery('n1', 't1');
+    await wait(100);
+    const baseline = focusFetches;
+    assert.ok(baseline >= 1, 'подписка окрестности сразу читает фокус');
+
+    // Чужая сеть: событие соседней вкладки не маршрутизируется (граница сети).
+    const foreign = foreignEvent('property-value.set', 'n2', {
+      owner_type: 'thought',
+      owner_id: 't1',
+      property_id: 'p1',
+      value: ['x'],
+    }) as any;
+    routeRealtimeEvent(foreign, { networkId: 'n1' });
+    applyRealtimeToUi(foreign);
+    await wait(100);
+    assert.equal(focusFetches, baseline, 'событие чужой сети окрестность не перечитывает');
 
     // Своя сеть, чужой клиент: запись значения свойства-связи (сервер создал
-    // ребро) — карта перечитывает окрестность фокуса.
-    applyRealtimeToUi(
-      foreignEvent('property-value.set', 'n1', {
-        owner_type: 'thought',
-        owner_id: 't1',
-        property_id: 'p1',
-        value: ['x'],
-      }) as any,
-    );
-    await wait(260);
+    // ребро) — роутер гасит `focusAll`, подписка перечитывает окрестность.
+    const ownField = foreignEvent(
+      'property-value.set',
+      'n1',
+      { owner_type: 'thought', owner_id: 't1', property_id: 'p1', value: ['x'] },
+      2,
+    ) as any;
+    routeRealtimeEvent(ownField, { networkId: 'n1' });
+    applyRealtimeToUi(ownField);
+    await wait(100);
     assert.equal(
       focusFetches,
-      1,
-      'чужое `property-value.set` перечитывает фокус (путь жив, эталон для локального)',
+      baseline + 1,
+      'чужое `property-value.set` перечитывает фокус через слой',
     );
 
     // Типизированная связь, созданная другим клиентом, — тот же путь.
-    applyRealtimeToUi(
-      foreignEvent('link.created', 'n1', {
-        link: {
-          id: 'l9',
-          source_id: 't1',
-          target_id: 'c1',
-          type_id: null,
-          active: true,
-          version: 1,
-        },
-      }) as any,
-    );
-    await wait(260);
-    assert.equal(focusFetches, 2, 'чужой `link.created` перечитывает фокус');
+    const link = foreignEvent(
+      'link.created',
+      'n1',
+      {
+        link: { id: 'l9', source_id: 't1', target_id: 'c1', type_id: null, active: true, version: 1 },
+      },
+      3,
+    ) as any;
+    routeRealtimeEvent(link, { networkId: 'n1' });
+    applyRealtimeToUi(link);
+    await wait(100);
+    assert.equal(focusFetches, baseline + 2, 'чужой `link.created` перечитывает фокус через слой');
+
+    deactivateFocusQuery();
+    resetQueryRegistry();
+    resetEventRouter();
   });
 });
 
@@ -276,16 +297,21 @@ describe('проводка пересчёта окрестности из ред
   it('помощник пересчёта делегирует общий набор окрестности', () => {
     const realtimeUi = read('realtime-ui.ts');
     // Набор «холст + Структуры + Хроника» задан один раз, в
-    // `scheduleNeighbourhoodRepaint`; ветки link.*/property-value.* зовут его.
+    // `scheduleNeighbourhoodRepaint`; холст идёт через слой (`scheduleRefresh`
+    // гасит `focus`-ключи, G2), «Структуры»/«Хроника» — легаси-путь.
     assert.ok(
       /export function scheduleNeighbourhoodRepaint\(\): void \{[\s\S]{0,120}?scheduleRefresh\(\);[\s\S]{0,80}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
         realtimeUi,
       ),
       'scheduleNeighbourhoodRepaint пересчитывает холст, «Структуры» и «Хронику»',
     );
+    // Realtime-ветка значения свойства (G2): окрестность гасит роутер слоя
+    // (`focusAll`), здесь остаётся легаси-обновление «Структур»/«Хроники».
     assert.ok(
-      /case 'property-value\.set':[\s\S]{0,200}?scheduleNeighbourhoodRepaint\(\);/.test(realtimeUi),
-      'realtime-ветка значения свойства зовёт общий пересчёт окрестности',
+      /case 'property-value\.set':[\s\S]{0,900}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
+        realtimeUi,
+      ),
+      'realtime-ветка значения свойства обновляет «Структуры»/«Хронику» (фокус — роутер слоя)',
     );
   });
 

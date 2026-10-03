@@ -101,6 +101,7 @@ import { mountZoneSplitters } from './zone-splitters.js';
 import { splitterElement } from '../lib/ui/splitter.js';
 import {
   getActiveMode as getStripActiveMode,
+  invalidateViewResultForRealtime,
   loadPersistedStrip,
   mountFilterStrip,
   onModeChange as onStripModeChange,
@@ -108,6 +109,8 @@ import {
   runActiveViewIfNeeded,
   type ViewResult,
 } from './focus-filter-strip.js';
+import { matchesKeyPrefix } from '../lib/live/query-keys.js';
+import { onQueryInvalidated } from '../lib/live/query-registry.js';
 import { openThoughtDeleteDialog } from '../trash.js';
 
 // Канон облачка перенесён в lib/thought-cloud.ts (задача b28ab6d6): облачка
@@ -406,6 +409,16 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
         : null;
     scheduleRender();
   });
+  // Слой данных (G2): нижняя зона в режиме отбора не входит в
+  // {@link canvasRenderKey}, поэтому её перерисовывает подписка на инвалидации
+  // слоя — когда роутер событий или локальная мутация гасят `focus`-ключи
+  // (ошибка 4fca95c9). В режиме «Потомки» `invalidateViewResultForRealtime`
+  // вернёт `false` — там изменения ловит ключ перерисовки.
+  const invalidationUnsubscribe = onQueryInvalidated((prefix) => {
+    if (host?.isConnected !== true) return;
+    if (!matchesKeyPrefix(prefix, 'focus')) return;
+    if (invalidateViewResultForRealtime()) requestCanvasRepaint();
+  });
   // The focus band follows the focus row, whose position depends on the zone
   // shares and the host size — re-anchor it on resizes too (L12).
   const resizeObserver = new ResizeObserver(() => {
@@ -421,6 +434,7 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     stripModeUnsubscribe = null;
     storeUnsubscribe?.();
     storeUnsubscribe = null;
+    invalidationUnsubscribe();
     lockBadgeUnsubscribe?.();
     lockBadgeUnsubscribe = null;
     lockBadgeRefreshWired = false;

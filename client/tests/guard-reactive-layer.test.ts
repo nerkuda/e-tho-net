@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 import { REALTIME_EVENT_TYPES } from '@etn/shared';
 
-import { IGNORED_REALTIME_EVENT_TYPES, realtimeRoutes } from '../src/renderer/lib/live/event-router.js';
+import { IGNORED_REALTIME_EVENT_TYPES, realtimeRoutes } from '../src/renderer/lib/live/index.js';
 import { assertGuardClean } from './guard-helpers.js';
 
 const RENDERER_ROOT = path.resolve(
@@ -113,6 +113,25 @@ describe('guard: реактивный слой данных (269016e2, G1)', () 
           'перевести на queryStore/мутатор слоя.',
         pattern: /\bonRealtimeEvent\s*\(/,
         allow: (rel) => ON_REALTIME_WHITELIST.has(rel),
+      },
+    ]);
+  });
+
+  it('мигрированные модули G2 не подписываются на realtime напрямую', () => {
+    // холст и «Структуры» переведены на слой (G2): данные и перерисовку ведут
+    // реестр запросов и роутер, а не прямой `onRealtimeEvent`. `properties.ts`
+    // остаётся в whitelist до G5 — у него легаси-хук открытого редактора.
+    assertGuardClean(RENDERER_ROOT, [
+      {
+        name: 'g2-migrated-no-direct-subscription',
+        description:
+          'canvas и «Структуры» (G2 65286909) читают живые данные через слой ' +
+          '(focus:@id / structures-page): прямых подписок onRealtimeEvent быть не должно.',
+        pattern: /\bonRealtimeEvent\s*\(/,
+        include: (rel) =>
+          /(?:^|\/)canvas\/canvas\.ts$/.test(rel) ||
+          /(?:^|\/)screens\/structures\/structures\.ts$/.test(rel),
+        allow: () => false,
       },
     ]);
   });
