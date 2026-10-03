@@ -15,6 +15,10 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { reconcileKeyed } from '../src/renderer/lib/ui/keyed-list.js';
+import { listGroupKey, shelfBlockKey } from '../src/renderer/screens/publications/model.js';
+import { ShimElement } from './dom-shim.js';
+
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
 const REPO_ROOT = path.resolve(CLIENT_ROOT, '..');
@@ -166,26 +170,92 @@ describe('5de0332d п.7: переключение публикаций без п
 });
 
 describe('5de0332d п.8: фильтр по конкретной полке — плоский вид без остальных полок', () => {
-  it('вид «полки»: фильтр рисует один плоский блок', () => {
+  it('вид «полки»: фильтр рисует один плоский блок без шапки', () => {
     const body = functionBody(PUBL, 'function renderShelves(');
     assert.ok(body.includes('viewState.shelfFilter !== null'), 'учтён фильтр полки');
     assert.ok(body.includes('flat: true'), 'плоский блок без группировки');
-  });
-
-  it('вид «список»: фильтр тоже рисует один плоский блок', () => {
-    const body = functionBody(PUBL, 'function renderList(');
-    assert.ok(body.includes('viewState.shelfFilter !== null'), 'учтён фильтр полки');
-    assert.ok(body.includes('flat: true'), 'плоский блок без группировки');
-  });
-
-  it('плоский блок не рисует шапку-название и пустое состояние', () => {
     const shelf = functionBody(PUBL, 'function buildShelfBlock(');
     const flatAt = shelf.indexOf('block.flat === true');
     const headAt = shelf.indexOf('buildGroupHead(');
     assert.ok(flatAt >= 0 && headAt > flatAt, 'плоская ветка возвращает узел до построения шапки');
+  });
+
+  it('вид «список»: фильтр тоже рисует один плоский блок без шапки', () => {
+    const body = functionBody(PUBL, 'function renderList(');
+    assert.ok(body.includes('viewState.shelfFilter !== null'), 'учтён фильтр полки');
+    assert.ok(body.includes('flat: true'), 'плоский блок без группировки');
     const list = functionBody(PUBL, 'function buildListGroup(');
     const listFlatAt = list.indexOf('group.flat === true');
     const listHeadAt = list.indexOf('buildGroupHead(');
     assert.ok(listFlatAt >= 0 && listHeadAt > listFlatAt, 'плоский список — без шапки');
+  });
+
+  // Поведенческая проверка механизма (блокер приёмки): смена flat-ности должна
+  // ПЕРЕСОБРАТЬ узел. Проверяется на настоящем `reconcileKeyed` и настоящих
+  // функциях ключа из модели; `update` намеренно не меняет flat-ность — ровно
+  // как `updateShelfBlock`/`updateListGroup`. На прежнем ключе (id без flat)
+  // узел переиспользовался и оставался с шапкой/без шапки — тест краснел.
+  const shelfHostKey = shelfBlockKey;
+  const groupHostKey = listGroupKey;
+
+  /** Сверка как в экране: ключ = id+flat, update flat-ность не меняет. */
+  function sync<T>(
+    host: ShimElement,
+    items: T[],
+    keyOf: (item: T) => string,
+    isFlat: (item: T) => boolean,
+  ): void {
+    reconcileKeyed(host as unknown as HTMLElement, items, {
+      key: keyOf,
+      keyAttr: 'data-shelf-key',
+      // build рисует flat-класс; update (как в экране) flat-ность НЕ трогает.
+      build: (item) =>
+        new ShimElement(
+          'div',
+          isFlat(item) ? 'pub-shelf-flat' : 'pub-shelf pub-group',
+        ) as unknown as HTMLElement,
+      update: () => undefined,
+      equals: () => false,
+    });
+  }
+  const shelfBlock = (id: string, flat: boolean) => ({ shelf: { id }, flat });
+  const listGroup = (id: string, flat: boolean) => ({ id, flat });
+  const shelfFlat = (b: { shelf: { id: string }; flat?: boolean }): boolean => b.flat === true;
+  const groupFlat = (g: { id: string; flat?: boolean }): boolean => g.flat === true;
+  const classes = (host: ShimElement): string[] => host.children.map((c) => c.className);
+
+  it('«Все полки» → «Полка А»: узел полки пересобирается в плоский (без шапки)', () => {
+    const host = new ShimElement('div');
+    sync(host, [shelfBlock('shelfA', false)], shelfHostKey, shelfFlat);
+    assert.deepEqual(classes(host), ['pub-shelf pub-group'], 'сначала обычный блок с шапкой');
+    sync(host, [shelfBlock('shelfA', true)], shelfHostKey, shelfFlat);
+    assert.deepEqual(classes(host), ['pub-shelf-flat'], 'стал плоским — шапка исчезла');
+    assert.equal(host.children[0]?.getAttribute('data-shelf-key'), 'shelfA|flat', 'ключ плоского блока');
+  });
+
+  it('«Полка А» → «Все полки»: плоский узел пересобирается в группу с названием', () => {
+    const host = new ShimElement('div');
+    sync(host, [shelfBlock('shelfA', true)], shelfHostKey, shelfFlat);
+    assert.deepEqual(classes(host), ['pub-shelf-flat'], 'сначала плоский');
+    sync(host, [shelfBlock('shelfA', false)], shelfHostKey, shelfFlat);
+    assert.deepEqual(classes(host), ['pub-shelf pub-group'], 'вернулась группировка с шапкой');
+    assert.equal(host.children[0]?.getAttribute('data-shelf-key'), 'shelfA', 'ключ группы — чистый id');
+  });
+
+  it('вид «список»: смена flat-ности тоже пересобирает группу', () => {
+    const host = new ShimElement('div');
+    sync(host, [listGroup('shelfA', false)], groupHostKey, groupFlat);
+    assert.deepEqual(classes(host), ['pub-shelf pub-group']);
+    sync(host, [listGroup('shelfA', true)], groupHostKey, groupFlat);
+    assert.deepEqual(classes(host), ['pub-shelf-flat'], 'плоский список');
+    sync(host, [listGroup('shelfA', false)], groupHostKey, groupFlat);
+    assert.deepEqual(classes(host), ['pub-shelf pub-group'], 'группировка вернулась');
+  });
+
+  it('экран использует общие ключи из модели, а не id напрямую', () => {
+    assert.ok(PUBL.includes('shelfBlockKey('), 'renderShelves ключует через shelfBlockKey');
+    assert.ok(PUBL.includes('listGroupKey('), 'renderList ключует через listGroupKey');
+    assert.ok(!/key:\s*\(block\)\s*=>\s*block\.shelf\.id/.test(PUBL), 'нет ключа только по id полки');
+    assert.ok(!/key:\s*\(group\)\s*=>\s*group\.id/.test(PUBL), 'нет ключа только по id группы');
   });
 });

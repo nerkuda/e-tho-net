@@ -63,11 +63,13 @@ import {
   displayAuthorship,
   groupByShelves,
   isShelfCollapsed,
+  listGroupKey,
   nextShelfTitle,
   parsePublicationsViewState,
   publicationMenuCommands,
   publicationsEmptyKind,
   serializePublicationsViewState,
+  shelfBlockKey,
   shelfMenuCommands,
   type PublicationsViewState,
 } from './model.js';
@@ -732,15 +734,15 @@ function renderShelves(): void {
       flat: true,
     };
     reconcileKeyed(ui.shelvesHost, [block], {
-      key: (b) => b.shelf.id,
+      key: (b: ShelfBlock) => shelfBlockKey(b),
       keyAttr: LIB_SHELF_ATTR,
       build: (b) => buildShelfBlock(b),
       update: (node, b) => updateShelfBlock(node, b),
-      // Переход «все полки → конкретная» обязан ПЕРЕСОБРАТЬ узел: раньше он мог
-      // быть построен обычным блоком с шапкой, а плоский вид шапки не имеет
-      // (замечание 8 приёмки 5de0332d). Сверка подписей этого не видит, поэтому
-      // всегда перестраиваем.
-      equals: () => false,
+      equals: (a, b) =>
+        a.flat === b.flat &&
+        a.shelf.id === b.shelf.id &&
+        a.items.length === b.items.length &&
+        a.items.every((item, index) => rowSignature(item) === rowSignature(b.items[index])),
     });
     libraryNav?.refresh();
     return;
@@ -759,7 +761,7 @@ function renderShelves(): void {
     });
   }
   reconcileKeyed(ui.shelvesHost, blocks, {
-    key: (block) => block.shelf.id,
+    key: (block: ShelfBlock) => shelfBlockKey(block),
     keyAttr: LIB_SHELF_ATTR,
     build: (block) => buildShelfBlock(block),
     update: (node, block) => updateShelfBlock(node, block),
@@ -1023,12 +1025,14 @@ function renderList(): void {
       flat: true,
     };
     reconcileKeyed(ui.listHost, [group], {
-      key: (g) => g.id,
+      key: (g: ListGroup) => listGroupKey(g),
       keyAttr: LIB_SHELF_ATTR,
       build: (g) => buildListGroup(g),
       update: (node, g) => updateListGroup(node, g),
-      // См. renderShelves: переход к плоскому виду требует пересборки узла.
-      equals: () => false,
+      equals: (a, b) =>
+        a.flat === b.flat &&
+        a.rows.length === b.rows.length &&
+        a.rows.every((row, index) => rowSignature(row) === rowSignature(b.rows[index])),
     });
     libraryNav?.refresh();
     return;
@@ -1063,7 +1067,7 @@ function renderList(): void {
     pushGroup(null, t('publications.shelf.none'), grouped.unshelved);
   }
   reconcileKeyed(ui.listHost, groups, {
-    key: (group) => group.id,
+    key: (group: ListGroup) => listGroupKey(group),
     keyAttr: LIB_SHELF_ATTR,
     build: (group) => buildListGroup(group),
     update: (node, group) => updateListGroup(node, group),

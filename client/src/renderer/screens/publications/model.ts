@@ -27,6 +27,21 @@ import type { EntityOption } from '../../lib/entity-picker.js';
 /** Вид библиотеки: горизонтальные полки или плоский список (полки — группы). */
 export type PublicationsViewMode = 'shelves' | 'list';
 
+/**
+ * Ключ reconcile блока-полки для вида «полки». Плоский вид (фильтр по
+ * конкретной полке, 5de0332d п.8) входит в КЛЮЧ: смена flat-ности обязана
+ * пересобрать узел (шапка/пустое состояние добавляются/убираются), а `update`
+ * этого не умеет — `reconcileKeyed` строит заново только при отсутствии ключа.
+ */
+export function shelfBlockKey(block: { shelf: { id: string }; flat?: boolean }): string {
+  return block.flat === true ? `${block.shelf.id}|flat` : block.shelf.id;
+}
+
+/** Ключ reconcile группы списка — аналог {@link shelfBlockKey} для вида «список». */
+export function listGroupKey(group: { id: string; flat?: boolean }): string {
+  return group.flat === true ? `${group.id}|flat` : group.id;
+}
+
 /** Персональные настройки вида экрана «Публикации» (L4 `ui_state`, требование
  *  1b39206e). Уровень «пользователь × сеть», со слоями не ветвятся. */
 export interface PublicationsViewState {
