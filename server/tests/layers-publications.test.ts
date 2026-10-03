@@ -71,10 +71,14 @@ function seedLayer(ndb: NetworkDb): string {
   return id;
 }
 
-const ORDER_A_B: Array<{ node_key: string; position: number }> = [
-  { node_key: 'a', position: 1 },
-  { node_key: 'b', position: 2 },
-];
+/** Рецепт по типу мысли — для публикаций, у которых проверяется порядок. */
+function recipeForType(typeId: string): {
+  type_ids: string[];
+  sort: 'alpha';
+  order: 'asc';
+} {
+  return { type_ids: [typeId], sort: 'alpha', order: 'asc' };
+}
 
 describe(
   'публикации: ветвимость чтений и записи',
@@ -110,10 +114,25 @@ describe(
     it('слияние переносит публикацию, созданную в слое, вместе с её порядком', () => {
       const ndb = createInMemoryNetworkDb();
       try {
+        const type = createThoughtType(ndb, { name: 'Doc' }, 'u');
         const layerId = seedLayer(ndb);
         ndb.useLayer(layerId);
-        const p = createPublication(ndb, { title: 'Слой' }, 'u');
-        setPublicationOrder(ndb, p.id, ORDER_A_B, 'u');
+        const a = seedThought(ndb, 'A', type.id);
+        const b = seedThought(ndb, 'B', type.id);
+        const p = createPublication(
+          ndb,
+          { title: 'Слой', title_recipe: recipeForType(type.id) },
+          'u',
+        );
+        setPublicationOrder(
+          ndb,
+          p.id,
+          [
+            { node_key: a, position: 1 },
+            { node_key: b, position: 2 },
+          ],
+          'u',
+        );
 
         ndb.useLayer(BASE_LAYER_ID);
         assert.equal(getPublication(ndb, p.id), null);
@@ -124,7 +143,7 @@ describe(
         assert.equal(getPublication(ndb, p.id)?.title, 'Слой');
         assert.deepEqual(
           listPublicationOrder(ndb, p.id).map((i) => i.node_key),
-          ['a', 'b'],
+          [a, b],
         );
       } finally {
         ndb.close();
@@ -175,8 +194,23 @@ describe(
     it('пачка перестановок порядка сворачивается в одну позицию отчёта', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        const p = createPublication(ndb, { title: 'Основа' }, 'u');
-        setPublicationOrder(ndb, p.id, ORDER_A_B, 'u');
+        const type = createThoughtType(ndb, { name: 'Doc' }, 'u');
+        const a = seedThought(ndb, 'A', type.id);
+        const b = seedThought(ndb, 'B', type.id);
+        const p = createPublication(
+          ndb,
+          { title: 'Основа', title_recipe: recipeForType(type.id) },
+          'u',
+        );
+        setPublicationOrder(
+          ndb,
+          p.id,
+          [
+            { node_key: a, position: 1 },
+            { node_key: b, position: 2 },
+          ],
+          'u',
+        );
         const layerId = seedLayer(ndb);
 
         // В слое меняются ТОЛЬКО позиции тех же узлов — update-путь слияния.
@@ -185,8 +219,8 @@ describe(
           ndb,
           p.id,
           [
-            { node_key: 'a', position: 2 },
-            { node_key: 'b', position: 1 },
+            { node_key: a, position: 2 },
+            { node_key: b, position: 1 },
           ],
           'u',
         );
@@ -199,7 +233,7 @@ describe(
         ]);
         assert.deepEqual(
           listPublicationOrder(ndb, p.id).map((i) => i.node_key),
-          ['b', 'a'],
+          [b, a],
         );
       } finally {
         ndb.close();

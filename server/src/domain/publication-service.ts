@@ -225,18 +225,63 @@ export function setPublicationAcceptedIds(ndb: NetworkDb, id: string, ids: reado
 }
 
 /**
- * Принять всё текущее состояние отбора: исполнить рецепт заголовков и записать
- * результат в срез. Вызывается при создании публикации и сохранении порядка
- * (`PUT …/order`) — «все текущие узлы считаются принятыми» (DoD задачи e754527d).
+ * Исполнить рецепт заголовков публикации (read-only) и вернуть id текущего
+ * отбора. `userId` влияет лишь на сортировку (`viewed`), не на состав набора,
+ * поэтому для проверок принадлежности допустимо передать пустую строку.
  */
-function acceptCurrentSelection(ndb: NetworkDb, id: string, actorUserId: string): void {
+function selectCurrentSelection(
+  ndb: NetworkDb,
+  id: string,
+  actorUserId: string,
+): string[] {
   const row = ndb
     .prepare('SELECT title_recipe FROM publications_v WHERE id = ? LIMIT 1')
     .get(id) as { title_recipe: string | null } | undefined;
   const recipe = parseRecipe(row?.title_recipe ?? null);
+  if (recipe === null) return [];
   const warnings: string[] = [];
-  const ids = recipe === null ? [] : selectRecipeIds(ndb, actorUserId, recipe, warnings);
-  setPublicationAcceptedIds(ndb, id, ids);
+  return selectRecipeIds(ndb, actorUserId, recipe, warnings);
+}
+
+/** Порядок: узел публикации либо узел, когда-то существовавший (история). */
+function assertPublicationOrderKeysKnown(
+  ndb: NetworkDb,
+  publicationId: string,
+  items: readonly PublicationOrderItem[],
+  memberThoughtIds: ReadonlySet<string>,
+): void {
+  // История локального порядка — строки таблицы (включая надгробия и строки
+  // других слоёв): «узел когда-то существовал». Позволяет терпеть перестановку
+  // исчезнувшего узла (сценарий синхронизации клиентов/слоёв, ошибка 5f23f57d).
+  const historyRows = ndb
+    .prepare('SELECT node_key FROM publication_order WHERE publication_id = ?') // layers:physical-read
+    .all(publicationId) as Array<{ node_key: string }>;
+  const history = new Set(historyRows.map((r) => r.node_key));
+  const linkLookup = ndb.prepare(
+    'SELECT source_id, target_id FROM links_v WHERE id = ? LIMIT 1',
+  );
+  for (const item of items) {
+    if (typeof item.node_key !== 'string' || item.node_key === '') continue;
+    const key = item.node_key;
+    if (history.has(key)) continue;
+    // Мысль-узел (корень раздела) из отбора/принятого среза.
+    if (memberThoughtIds.has(key)) continue;
+    // Узел-ребро: родительское ребро раздела или ребро-источник текста — одно
+    // из его концов входит в публикацию. Произвольный (никогда не
+    // существовавший) узел сюда не попадает.
+    const link = linkLookup.get(key) as { source_id: string; target_id: string } | undefined;
+    if (
+      link !== undefined &&
+      (memberThoughtIds.has(link.source_id) || memberThoughtIds.has(link.target_id))
+    ) {
+      continue;
+    }
+    throw new EtnError('VALIDATION_ERROR', `Узел ${key} не принадлежит публикации.`, {
+      field: 'node_key',
+      code: 'unknown_node_key',
+      node_key: key,
+    });
+  }
 }
 
 /**
@@ -899,7 +944,13 @@ function applyPublicationOrder(
 
 /**
  * Батч перестановок порядка: одна транзакция, upsert поузловых строк.
- * Неизвестные/лишние узлы не проверяются — позиция мертва, если узел исчез.
+ *
+ * **Что проверяется (ошибка 5f23f57d).** Узел обязан принадлежать публикации:
+ * быть мыслью текущего отбора/принятого среза, ребром-узлом публикации
+ * (родительское ребро раздела или ребро-источник текста) либо строкой истории
+ * `publication_order` (узел существовал и исчез — перестановку терпим, это
+ * сценарий синхронизации клиентов/слоёв). Произвольный ключ, никогда не
+ * существовавший у публикации, отвергается `VALIDATION_ERROR`.
  *
  * **Принятие (задача e754527d).** Сохранение порядка — явное действие
  * расстановки: после него ВСЁ текущее состояние отбора считается принятым
@@ -914,8 +965,14 @@ export function setPublicationOrder(
 ): PublicationOrderItem[] {
   return ndb.transaction(() => {
     getPublicationOrThrow(ndb, publicationId);
+    const selectedIds = selectCurrentSelection(ndb, publicationId, actorUserId);
+    const members = new Set<string>([
+      ...selectedIds,
+      ...(getPublicationAcceptedIds(ndb, publicationId) ?? []),
+    ]);
+    assertPublicationOrderKeysKnown(ndb, publicationId, items, members);
     applyPublicationOrder(ndb, publicationId, items, actorUserId);
-    acceptCurrentSelection(ndb, publicationId, actorUserId);
+    setPublicationAcceptedIds(ndb, publicationId, selectedIds);
     invalidatePublicationMembershipCache(publicationId);
     return listPublicationOrder(ndb, publicationId);
   });

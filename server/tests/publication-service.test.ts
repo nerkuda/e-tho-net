@@ -415,26 +415,32 @@ describe(
     it('оживляет надгробия порядка, исключений и состава полки в слое', () => {
       const ndb = createInMemoryNetworkDb();
       try {
+        const type = createThoughtType(ndb, { name: 'Doc' }, 'u');
         const layerId = seedLayer(ndb);
         ndb.useLayer(layerId);
-        const p = createPublication(ndb, { title: 'X' }, 'u');
+        const thought = seedThought(ndb, 'T', type.id);
+        const p = createPublication(
+          ndb,
+          { title: 'X', title_recipe: { type_ids: [type.id], sort: 'alpha', order: 'asc' } },
+          'u',
+        );
 
         // publication_order: принудительное надгробие → повторная перестановка
-        // оживляет строку (детерминированный id), позиция применяется.
-        const orderId = publicationOrderId(p.id, 'n1');
+        // оживляет строку (детерминированный id), позиция применяется. Ключ —
+        // мысль отбора: после оживления она остаётся узлом публикации.
+        const orderId = publicationOrderId(p.id, thought);
         ndb
           .prepare(
             `INSERT INTO publication_order (id, layer_id, publication_id, node_key, position,
                                             deleted, updated_at, updated_by)
-             VALUES (?, ?, ?, 'n1', 9, 1, '2024-01-01T00:00:00Z', 'u')`,
+             VALUES (?, ?, ?, ?, 9, 1, '2024-01-01T00:00:00Z', 'u')`,
           )
-          .run(orderId, layerId, p.id);
+          .run(orderId, layerId, p.id, thought);
         assert.equal(listPublicationOrder(ndb, p.id).length, 0);
-        setPublicationOrder(ndb, p.id, [{ node_key: 'n1', position: 5 }], 'u');
-        assert.deepEqual(listPublicationOrder(ndb, p.id), [{ node_key: 'n1', position: 5 }]);
+        setPublicationOrder(ndb, p.id, [{ node_key: thought, position: 5 }], 'u');
+        assert.deepEqual(listPublicationOrder(ndb, p.id), [{ node_key: thought, position: 5 }]);
 
         // publication_exclusions: add → remove (надгробие) → add оживляет.
-        const thought = randomUUID();
         addPublicationExclusion(ndb, p.id, thought, 'u');
         removePublicationExclusion(ndb, p.id, thought);
         assert.equal(listPublicationExclusions(ndb, p.id).length, 0);
