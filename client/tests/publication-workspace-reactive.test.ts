@@ -301,4 +301,23 @@ describe('рабочая область публикации: реактивно
     assert.equal(stale(root), true, 'рабочая область подсвечивает stale');
     assert.equal(headerTitle(root), 'Смешанный заголовок', 'и применяет заголовок');
   });
+
+  it('внешняя пересборка снимает stale и перечитывает документ по новой сборке (29fd0587)', async () => {
+    const { handle, root } = await mount();
+    active = handle;
+    handle.markRebuildStale();
+    assert.equal(stale(root), true, 'подсветка зажжена');
+    // На сервере уже новая сборка (другой порядок разделов).
+    nextRecipe = true;
+
+    handle.applyRebuildRealtime();
+
+    assert.equal(stale(root), false, 'внешняя пересборка гасит подсветку сразу');
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    assert.deepEqual(
+      sectionIds(root),
+      ['sec-2', 'sec-1'],
+      'документ перечитан по новой сборке',
+    );
+  });
 });

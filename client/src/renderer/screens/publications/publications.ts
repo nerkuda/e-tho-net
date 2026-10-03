@@ -344,7 +344,14 @@ export function applyPublicationsRealtime(eventType: string, data?: unknown): vo
       if (routing.patch !== null) workspace.applyPublicationPatch(routing.patch);
       return;
     }
-    // Порядок/исключения/пересборка/корзина — перечитывание (элемент 2ebacd12).
+    // Пересборка (в т.ч. внешняя, от другого клиента) делает живой текст
+    // актуальным: подсветка «Пересобрать» гаснет, документ перечитывается
+    // (ошибка 29fd0587).
+    if (eventType === 'publication.rebuilt') {
+      workspace.applyRebuildRealtime();
+      return;
+    }
+    // Порядок/исключения/корзина — перечитывание (элемент 2ebacd12).
     workspace.reload();
   }
 }

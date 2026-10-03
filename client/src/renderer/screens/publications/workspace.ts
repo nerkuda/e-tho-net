@@ -132,6 +132,12 @@ export interface PublicationWorkspaceHandle {
    */
   markRebuildStale(): void;
   /**
+   * Внешняя пересборка (`publication.rebuilt`, в т.ч. от другого клиента):
+   * живой текст снова актуален — подсветка «Пересобрать» гаснет, документ
+   * перечитывается по новой сборке (ошибка 29fd0587).
+   */
+  applyRebuildRealtime(): void;
+  /**
    * Применить свежий снимок публикации БЕЗ перечитывания сборки: обновляет
    * шапку и титульный блок (локальная правка титула/подзаголовка/обложки/резюме,
    * замечания А и А2 приёмки b02ef1cf). Смена рецепта помечает текст устаревшим.
@@ -637,6 +643,19 @@ export function mountPublicationWorkspace(
     if (publicationId === null || staleRebuild) return;
     staleRebuild = true;
     updateRebuildStale();
+  }
+
+  /**
+   * Внешняя пересборка: снять устаревание и перечитать документ. Флаг снимается
+   * синхронно (кнопка гаснет сразу), перечитывание — с обычным дебаунсом
+   * `reload()` (ошибка 29fd0587: внешний `publication.rebuilt` перечитывал
+   * документ, но подсветка оставалась).
+   */
+  function applyRebuildRealtime(): void {
+    if (publicationId === null) return;
+    staleRebuild = false;
+    updateRebuildStale();
+    reload();
   }
 
   // --- Рендер состояний ----------------------------------------------------
@@ -1353,6 +1372,7 @@ export function mountPublicationWorkspace(
     applyThoughtRealtime,
     applyPublicationPatch,
     markRebuildStale,
+    applyRebuildRealtime,
     applyPublication,
     isOpen,
     destroy,
