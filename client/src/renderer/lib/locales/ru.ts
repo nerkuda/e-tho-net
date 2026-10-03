@@ -748,6 +748,8 @@ export const ru = {
   /** Кнопка возврата в библиотеку (шапка рабочей области). */
   'publications.ws.back': 'Назад',
   'publications.ws.rebuild': 'Пересобрать',
+  /** Подсветка «Пересобрать»: живой текст устарел (замечание А2 приёмки b02ef1cf). */
+  'publications.ws.rebuildStale': 'Живой текст устарел — пересоберите документ',
   'publications.ws.export': 'Экспорт',
   /** Кликабельный заголовок публикации (задача b51dbca4). */
   'publications.ws.openCard': 'Открыть карточку публикации',
@@ -837,6 +839,14 @@ export const ru = {
   'publication.cover.ownerThought': 'мысль',
   'publication.cover.ownerPublication': 'публикация',
   'publication.cover.ownerLink': 'связь',
+  /** Крестик снятия владельца-публикации с вложения (замечание Б2 b02ef1cf). */
+  'publication.cover.ownerRemove': 'Убрать владельца',
+  /** Подтверждение удаления последнего владельца (замечание Б2 b02ef1cf). */
+  'publication.cover.removeLastOwner.title': 'Удаление вложения',
+  'publication.cover.removeLastOwner.body':
+    'Если удалить последнего владельца вложения, вложение будет удалено. Удалить?',
+  /** Ошибка снятия владельца вложения. */
+  'publication.cover.removeOwner': 'Убрать владельца',
   'publication.cover.setDone': 'Обложка публикации обновлена.',
   'publication.cover.cleared': 'Обложка снята.',
   'publication.attachments.makeCover': 'Сделать обложкой публикации',

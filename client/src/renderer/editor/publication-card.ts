@@ -26,6 +26,7 @@ import type {
   Publication,
   PublicationUpdateInput,
   Shelf,
+  ThoughtRef,
 } from '@etn/shared';
 
 import { createMdEditor } from './md-editor.js';
@@ -33,12 +34,13 @@ import { buildAttachmentsPane } from './attachments.js';
 import { createMarkdownField, etnimgUrl, setMarkdownField } from './markdown-field.js';
 import { commentShell } from '../lib/ui/comment.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
+import { createPublicationCloud } from '../lib/ui/publication-cloud.js';
 import { renderMarkdown } from '@etn/markdown';
 import { div, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
-import { showDialog, errorDialog } from '../lib/dialog.js';
+import { showDialog, errorDialog, confirmDialog } from '../lib/dialog.js';
 import { menuAction, showMenuAt } from '../lib/menu.js';
 import { uiButton, iconButton } from '../lib/ui/button.js';
 import { uiTabs, type TabsHandle } from '../lib/ui/tabs.js';
@@ -108,6 +110,10 @@ export const publicationCardInternals = {
   activateTab: (id: string): void => tabsHandleRef?.setActive(id),
   /** Тестовый шов: открыть диалог выбора обложки (поведение списка/навигации). */
   openCoverDialog: (): void => void openCoverDialog(),
+  /** Тестовый шов: сбросить запомненную вкладку карточки (сеансовое состояние). */
+  resetTab: (): void => {
+    publicationTabId = null;
+  },
 };
 
 /** Что редактор передаёт карточке для отрисовки. */
@@ -137,6 +143,12 @@ let suppressFieldEvents = false;
 let coverThumbRef: HTMLElement | null = null;
 /** Полоса вкладок карточки (тестовый шов и интеграция). */
 let tabsHandleRef: TabsHandle | null = null;
+/**
+ * Выбранная пользователем вкладка карточки публикации: переживает переключение
+ * публикаций (как у мыслей), но не сеанс — сбрасывается при перезапуске, т.к.
+ * живёт только в памяти (замечание Г приёмки b02ef1cf).
+ */
+let publicationTabId: string | null = null;
 /** Кнопка «Действия» и хост прелоадера пересборки (ошибка c2dec45c). */
 let rebuildButtonRef: HTMLButtonElement | null = null;
 let rebuildFeedbackRef: HTMLElement | null = null;
@@ -427,6 +439,13 @@ function buildCard(): HTMLElement {
       },
       { id: 'meta', label: t('publication.tab.meta'), content: () => buildMetaPane() },
     ],
+    // Выбранная вкладка переживает переключение публикаций (как у мыслей), но
+    // НЕ сеанс: состояние — module-level, живёт до перезапуска (замечание Г
+    // приёмки b02ef1cf).
+    ...(publicationTabId !== null ? { activeId: publicationTabId } : {}),
+    onChange: (id) => {
+      publicationTabId = id;
+    },
   });
   tabsHandleRef = tabs;
 
@@ -1233,34 +1252,144 @@ async function openCoverDialog(): Promise<void> {
       return null;
     }
 
+    /** Разрешённые ссылки мыслей-владельцев (тип/значок/оформление, как везде). */
+    const refCache = new Map<string, ThoughtRef>();
+
+    /** Дочитывает ссылки мыслей-владельцев батчем (визуал типа — из ссылки). */
+    async function ensureRefs(owners: readonly AttachmentOwnerRef[]): Promise<void> {
+      const missing = owners
+        .filter((o) => o.owner_type === 'thought' && !refCache.has(o.owner_id))
+        .map((o) => o.owner_id);
+      if (missing.length === 0) return;
+      try {
+        const refs = await etn.thoughts.resolve(netId, missing.slice(0, 100));
+        for (const ref of refs) refCache.set(ref.id, ref);
+      } catch {
+        // Значок/оформление типа недоступны — облачко соберётся по имени.
+      }
+    }
+
     /** Заполняет строку облачками владельцев (мысли/публикации/связи). */
     function fillClouds(clouds: HTMLElement, attachment: Attachment): void {
-      const render = (owners: AttachmentOwnerRef[]): void => {
+      const draw = (): void => {
+        const owners = usageCache.get(attachment.id) ?? [];
         while (clouds.firstChild !== null) clouds.removeChild(clouds.firstChild);
-        for (const owner of owners) {
-          // Облачко-чип сущности — общая фабрика `lib/thought-cloud.ts` (как в
-          // полях и списках мысли); вид владельца — бледной подписью рядом.
-          clouds.append(
-            createThoughtCloud(
-              { id: owner.owner_id, title: owner.title ?? owner.owner_id },
-              { profile: 'chip', width: 'container' },
-            ),
-            span(ownerKindLabel(owner.owner_type), 'pub-cover-cloud-kind'),
-          );
-        }
+        for (const owner of owners) clouds.append(buildOwnerCloud(owner, attachment));
       };
       const cached = usageCache.get(attachment.id);
       if (cached !== undefined) {
-        render(cached);
+        void ensureRefs(cached).then(draw);
         return;
       }
       void etn.attachments
         .getUsage(netId, attachment.id)
-        .then((usage) => {
+        .then(async (usage) => {
           usageCache.set(attachment.id, usage.owners);
-          render(usage.owners);
+          await ensureRefs(usage.owners);
+          draw();
         })
         .catch(() => undefined);
+    }
+
+    /**
+     * Облачко одного владельца: мысль — общий компонент облачка мысли с её
+     * типом; публикация — компонент `lib/ui/publication-cloud`; связь — облачко
+     * со значком связи. У каждого — крестик снятия владельца (замечание Б2
+     * приёмки b02ef1cf).
+     */
+    function buildOwnerCloud(owner: AttachmentOwnerRef, attachment: Attachment): HTMLElement {
+      if (owner.owner_type === 'publication') {
+        return createPublicationCloud(
+          { id: owner.owner_id, title: owner.title ?? owner.owner_id },
+          {
+            width: 'container',
+            labels: {
+              open: t('publications.menu.open'),
+              read: t('publications.menu.read'),
+              findOnShelf: t('publication.action.findOnShelf'),
+              remove: t('publication.cover.ownerRemove'),
+            },
+            actions: {
+              onOpen: (id) => {
+                void import('../screens/publications/publications.js').then((m) =>
+                  m.openPublicationCard(id),
+                );
+              },
+              onRead: (id) => {
+                void import('../screens/publications/publications.js').then((m) =>
+                  m.openPublicationWorkspace(id),
+                );
+              },
+              onFindOnShelf: (id) => {
+                void import('../screens/publications/publications.js').then((m) =>
+                  m.revealPublicationInLibrary(id),
+                );
+              },
+              onRemove: (_id, event) => void removeOwner(attachment, owner, event),
+            },
+          },
+        );
+      }
+      const ref = refCache.get(owner.owner_id);
+      const input =
+        owner.owner_type === 'thought'
+          ? (ref ?? { id: owner.owner_id, title: owner.title ?? owner.owner_id })
+          : {
+              id: owner.owner_id,
+              title: owner.title ?? t('publication.cover.ownerLink'),
+              icon: '🔗',
+              icon_kind: 'emoji' as const,
+            };
+      return createThoughtCloud(input, {
+        profile: 'chip',
+        width: 'container',
+        actions: { onRemove: (_id, event) => void removeOwner(attachment, owner, event) },
+      });
+    }
+
+    /**
+     * Снимает владельца вложения: удаляет ЕГО строку вложения (общий носитель
+     * держат несколько строк-копий). Если владелец последний — сначала общий
+     * диалог подтверждения (замечание Б2 приёмки b02ef1cf).
+     */
+    async function removeOwner(
+      attachment: Attachment,
+      owner: AttachmentOwnerRef,
+      _event?: MouseEvent,
+    ): Promise<void> {
+      let owners = usageCache.get(attachment.id) ?? [];
+      if (owners.length === 0) {
+        try {
+          owners = (await etn.attachments.getUsage(netId, attachment.id)).owners;
+          usageCache.set(attachment.id, owners);
+        } catch {
+          owners = [];
+        }
+      }
+      if (owners.length <= 1) {
+        const confirmed = await confirmDialog(
+          t('publication.cover.removeLastOwner.title'),
+          t('publication.cover.removeLastOwner.body'),
+          true,
+          t('actions.delete'),
+        );
+        if (!confirmed) return;
+      }
+      try {
+        const list = await etn.attachments.list(netId, owner.owner_type, owner.owner_id);
+        const carrier = attachment.file_path ?? attachment.url ?? '';
+        const match = list.find(
+          (a) => a.kind === attachment.kind && (a.file_path ?? a.url ?? '') === carrier,
+        );
+        if (match === undefined) return;
+        await etn.attachments.remove(netId, match.id);
+      } catch (err) {
+        errorDialog(t('publication.cover.removeOwner'), err);
+        return;
+      }
+      notifyPublicationAttachmentsChanged(pubId);
+      usageCache.delete(attachment.id);
+      await runSearch();
     }
 
     /** Строит строку вложения (название + облачки). */
@@ -1497,13 +1626,6 @@ async function openCoverDialog(): Promise<void> {
     ],
   });
   refreshApply();
-}
-
-/** Подпись вида владельца вложения в «облачке». */
-function ownerKindLabel(kind: AttachmentOwnerRef['owner_type']): string {
-  if (kind === 'thought') return t('publication.cover.ownerThought');
-  if (kind === 'publication') return t('publication.cover.ownerPublication');
-  return t('publication.cover.ownerLink');
 }
 
 /** Читает Blob в `data:` URL (FileReader — в рендерере нет Buffer). */

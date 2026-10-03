@@ -943,8 +943,17 @@ export function promptDialog(title: string, label: string, initial = ''): Promis
 /**
  * Confirmation dialog with a message. Resolves `true` on confirm and `false`
  * when the dialog is dismissed (any close path — «Отмена», Esc, ×).
+ *
+ * `confirmLabel` переопределяет подпись подтверждающей кнопки (напр. «Удалить»
+ * для удаления последнего владельца вложения, замечание Б2 приёмки b02ef1cf);
+ * по умолчанию — общая `actions.confirm`.
  */
-export function confirmDialog(title: string, message: string, danger = false): Promise<boolean> {
+export function confirmDialog(
+  title: string,
+  message: string,
+  danger = false,
+  confirmLabel?: string,
+): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
     /** Единственная точка завершения промиса — см. {@link promptDialog}. */
@@ -960,7 +969,7 @@ export function confirmDialog(title: string, message: string, danger = false): P
       buttons: [
         { label: t('actions.cancel'), onClick: () => finish(false) },
         {
-          label: t('actions.confirm'),
+          label: confirmLabel ?? t('actions.confirm'),
           primary: !danger,
           danger,
           confirm: true,

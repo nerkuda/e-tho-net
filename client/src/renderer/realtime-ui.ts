@@ -38,7 +38,7 @@ import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chr
 import { store } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
 import { invalidateWikiLinkCache } from './editor/wiki-link-resolver.js';
-import { applyPublicationsRealtime, applyPublicationDocumentRealtime } from './screens/publications/publications.js';
+import { applyPublicationsRealtime, applyPublicationDocumentRealtime, applyPublicationCompositionRealtime } from './screens/publications/publications.js';
 
 /**
  * Tiny wrapper so the inline call sites above stay readable. Drops the cached
@@ -172,7 +172,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
   if (evt.network_id !== store.state.networkId) return;
   switch (evt.type) {
     case 'thought.deleted':
-      applyPublicationDocumentRealtime();
+      // Открытый документ публикации: состав не меняем на лету — помечаем
+      // «Пересобрать» устаревшим (замечание А2 приёмки b02ef1cf).
+      applyPublicationCompositionRealtime();
       invalidateIndicators(evt.data.id);
       invalidateRef(evt.data.id);
       invalidateHistoryBar();
@@ -195,7 +197,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'thought.created':
-      applyPublicationDocumentRealtime();
+      // Новая мысль может войти в отбор — состав не трогаем, помечаем пересборку.
+      applyPublicationCompositionRealtime();
       if (inNeighbourhood(evt.data.thought.id)) scheduleRefresh();
       scheduleStructuresRefresh();
       scheduleChronicleRefresh();
@@ -206,7 +209,10 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'thought.updated':
-      applyPublicationDocumentRealtime();
+      // Заголовок/оформление видимой мысли — точечное обновление её блока; смена
+      // типа/актуальности влияет на состав — та же пометка пересборки.
+      applyPublicationDocumentRealtime(evt.data.id);
+      applyPublicationCompositionRealtime();
       invalidateRef(evt.data.id);
       // A pinned chip mirrors the thought's title/icon/styles — refresh it.
       if (store.state.pins.includes(evt.data.id)) {
@@ -235,6 +241,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'link.created':
     case 'property-value.set':
     case 'property-value.deleted':
+      // Состав публикации: пометка пересборки (замечание А2 приёмки b02ef1cf).
+      applyPublicationCompositionRealtime();
       scheduleNeighbourhoodRepaint();
       break;
 
@@ -244,6 +252,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     // «Дневник» перезапрашивает ленту (чипсы связей показывают их подписи).
     case 'link.updated':
     case 'link.deleted':
+      // Ребро может быть строкообразующим для состава публикации — пометка.
+      applyPublicationCompositionRealtime();
       scheduleRefresh();
       applyStructuresRealtime(evt);
       scheduleChronicleRefresh();
@@ -266,7 +276,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // already invalidated by `invalidateIndicators`.
       invalidateIndicators(evt.data.comment.owner_id);
       applyChronicleRealtime(evt);
-      applyPublicationDocumentRealtime();
+      applyPublicationDocumentRealtime(evt.data.comment.owner_id);
       break;
 
     case 'comment.deleted':
@@ -275,7 +285,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // editor's comment view is patched by its own listener.
       invalidateIndicators(evt.data.owner_id);
       applyChronicleRealtime(evt);
-      applyPublicationDocumentRealtime();
+      applyPublicationDocumentRealtime(evt.data.owner_id);
       break;
 
     case 'comment.updated':
@@ -285,6 +295,8 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // and updates it in place via its own `onRealtimeEvent` hook.
       invalidateIndicators(null);
       applyChronicleRealtime(evt);
+      // Событие не несёт владельца — документ перечитываем безусловно (дебаунс
+      // в рабочей области гасит поток).
       applyPublicationDocumentRealtime();
       break;
 
@@ -377,7 +389,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'property-definition.updated':
     case 'property-definition.deleted':
       // Another client changed the type catalogues (L21): reload both lists
-      // and repaint everything that renders type styles/names.
+      // and repaint everything that renders type styles/names. Типы и
+      // определения свойств входят в условия отбора — та же пометка пересборки.
+      applyPublicationCompositionRealtime();
       void reloadTypeCatalogues();
       scheduleTypeRepaint();
       break;

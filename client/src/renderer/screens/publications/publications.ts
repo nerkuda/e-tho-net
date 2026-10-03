@@ -248,9 +248,19 @@ export function closePublicationWorkspace(): void {
   invalidatePublications();
 }
 
-/** Realtime-событие правки контента: открытая рабочая область перечитывается. */
-export function applyPublicationDocumentRealtime(): void {
-  if (workspace?.isOpen() === true) workspace.reload();
+/** Realtime-событие правки КОНТЕНТА: открытая рабочая область перечитывается. */
+export function applyPublicationDocumentRealtime(thoughtId?: string): void {
+  if (workspace?.isOpen() === true) workspace.reloadDocument(thoughtId);
+}
+
+/**
+ * Realtime-событие, влияющее на СОСТАВ (связи/тип/свойства мыслей, рецепт,
+ * создание/удаление): состав открытого документа на лету НЕ меняется — кнопка
+ * «Пересобрать» подсвечивается как «живой текст устарел» (замечание А2 приёмки
+ * b02ef1cf). Запросов сборки здесь нет — только локальная пометка.
+ */
+export function applyPublicationCompositionRealtime(): void {
+  if (workspace?.isOpen() === true) workspace.markRebuildStale();
 }
 
 /**

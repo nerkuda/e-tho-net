@@ -309,6 +309,24 @@ export {
 } from './chip-list.js';
 export type { ChipListOption, ChipListOptions, ChipListHandle } from './chip-list.js';
 
+// Облачко публикации — прямые углы, значок-книга, контекстное меню и крестик
+// снятия владельца (замечание Б2 приёмки b02ef1cf). Единственное место показа
+// облачка публикации.
+export {
+  PUBLICATION_CLOUD_CLASS,
+  PUBLICATION_CLOUD_ICON_CLASS,
+  PUBLICATION_CLOUD_TITLE_CLASS,
+  PUBLICATION_CLOUD_REMOVE_CLASS,
+  PUBLICATION_CLOUD_CONTAINER_CLASS,
+  createPublicationCloud,
+} from './publication-cloud.js';
+export type {
+  PublicationCloudInput,
+  PublicationCloudOptions,
+  PublicationCloudLabels,
+  PublicationCloudActions,
+} from './publication-cloud.js';
+
 // Состояния списков и панелей — пустое состояние с подсказкой и точкой входа
 // к действию, загрузка и ошибка (задача d7b7c367, требование e514768f).
 // Единственный разрешённый способ показать «пусто/грузлю/ошибка» в списках,

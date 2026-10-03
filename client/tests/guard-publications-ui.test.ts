@@ -224,7 +224,7 @@ describe('guard: UI публикаций (a3cfc018)', () => {
     );
     const dialog = card.slice(
       card.indexOf('async function openCoverDialog'),
-      card.indexOf('function ownerKindLabel'),
+      card.indexOf('function blobToDataUrl'),
     );
     assert.ok(dialog.length > 0, 'тело openCoverDialog найдено');
     // Список создаётся фасадом с контрактными аргументами.
@@ -250,6 +250,24 @@ describe('guard: UI публикаций (a3cfc018)', () => {
     // Диалог — через общий каркас (lib/dialog.ts), вкладки — через его API.
     assert.ok(dialog.includes('showDialog('), 'диалог обложки — общий каркас showDialog');
     assert.ok(dialog.includes('tabs:'), 'вкладки диалога обложки заданы API каркаса');
+    // Облачка владельцев — общие КОМПОНЕНТЫ (замечание Б2 приёмки b02ef1cf):
+    // мысль — общий облачок мысли (тип/оформление), публикация — lib/ui.
+    assert.ok(
+      dialog.includes('createThoughtCloud('),
+      'владелец-мысль рисуется общим компонентом облачка мысли',
+    );
+    assert.ok(
+      dialog.includes('createPublicationCloud('),
+      'владелец-публикация рисуется компонентом lib/ui/publication-cloud',
+    );
+    assert.ok(
+      dialog.includes('confirmDialog('),
+      'удаление последнего владельца подтверждается общим диалогом confirmDialog',
+    );
+    assert.ok(
+      !dialog.includes('pub-cover-cloud-kind'),
+      'самодельных подписей вида владельца («мысль»/«публикация») нет',
+    );
 
     const recipe = fs.readFileSync(
       path.join(RENDERER_ROOT, 'screens', 'publications', 'recipe.ts'),
@@ -262,6 +280,40 @@ describe('guard: UI публикаций (a3cfc018)', () => {
     assert.ok(
       recipe.indexOf('buildParentThoughtsSection(ctx') < recipe.indexOf('buildKeywordsSection(ctx'),
       '«Родительские мысли» — первое поле группы «ОТБОР РАЗДЕЛОВ»',
+    );
+  });
+
+  /**
+   * Облачко публикации — КОМПОНЕНТ `lib/ui` (замечание Б2 приёмки b02ef1cf):
+   * прямые углы, всегда значок-книга, экспорт из barrel `lib/ui`. Единственное
+   * место показа облачка публикации; самодельная разметка запрещена.
+   */
+  it('облачко публикации — компонент lib/ui с книгой и прямыми углами', () => {
+    const cloud = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'lib', 'ui', 'publication-cloud.ts'),
+      'utf8',
+    );
+    assert.ok(
+      cloud.includes("svgIcon('value-publication'"),
+      'значок облачка публикации — книга (value-publication)',
+    );
+    assert.ok(
+      cloud.includes('createPublicationCloud'),
+      'фасад createPublicationCloud объявлен в компоненте',
+    );
+    const css = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'lib', 'ui', 'publication-cloud.css'),
+      'utf8',
+    );
+    assert.match(
+      css,
+      /\.ui-pub-cloud\s*\{[\s\S]*?border-radius:\s*0;/,
+      'прямые углы облачка публикации',
+    );
+    const index = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'index.ts'), 'utf8');
+    assert.ok(
+      index.includes('createPublicationCloud'),
+      'компонент экспортируется из barrel lib/ui',
     );
   });
 

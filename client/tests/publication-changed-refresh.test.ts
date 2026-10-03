@@ -154,13 +154,16 @@ describe('диалог обложки: якоря поведения (замеч
     );
   });
 
-  it('облачка владельцев — общий фабричный чип, не самодельная разметка', () => {
+  it('облачка владельцев — общие компоненты (мысль/публикация), без самодельных подписей', () => {
     const clouds = functionBlock(source, 'function fillClouds(');
-    assert.ok(clouds.includes('createThoughtCloud('), 'облачко строит общая фабрика');
+    assert.ok(clouds.includes('buildOwnerCloud('), 'строка владельцев строится компонентом');
+    const cloud = functionBlock(source, 'function buildOwnerCloud(');
+    assert.ok(cloud.includes('createThoughtCloud('), 'владелец-мысль — общая фабрика облачка мысли');
     assert.ok(
-      clouds.includes("{ profile: 'chip', width: 'container' }"),
+      cloud.includes("profile: 'chip'") && cloud.includes("width: 'container'"),
       'профиль чипа и ширина по контейнеру',
     );
-    assert.ok(!clouds.includes('pub-cover-cloud\''), 'своего класса облачка больше нет');
+    assert.ok(cloud.includes('createPublicationCloud('), 'владелец-публикация — компонент lib/ui');
+    assert.ok(!source.includes('pub-cover-cloud-kind'), 'самодельных подписей вида владельца нет');
   });
 });

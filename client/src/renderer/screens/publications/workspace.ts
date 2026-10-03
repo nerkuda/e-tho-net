@@ -11,7 +11,10 @@
  * **Рендер документа — серверный.** Текст блоков приходит готовым HTML из
  * `GET /publications/{id}/assembly` (единый серверный markdown-рендерер);
  * клиент НЕ рендерит markdown сам и лишь вставляет доверенный HTML через
- * `renderHtml` (тот же приём, что у серверных сниппетов). Правка контента — не
+ * `renderHtml` (тот же приём, что у серверных сниппетов). Исключение — РЕЗЮМЕ
+ * титульного блока: при точечной правке оно рендерится тем же общим
+ * `@etn/markdown` из свежего `summary_md` (замечание А2 приёмки b02ef1cf), иначе
+ * сборка перечитывалась бы на каждую правку резюме. Правка контента — не
  * инлайн: выделение блока открывает мысль в карточке панели редактора
  * (`openThoughtInEditor`), а живое обновление документа идёт по realtime.
  *
@@ -72,6 +75,7 @@ import { buildPropertyListRows } from '../../lib/property-list.js';
 import { ensureLink, throwOnFailures } from '../../lib/link-ops.js';
 import { parseFilterDefinition } from '../../lib/filter-builder.js';
 import { notifyPublicationRebuilt } from '../../lib/publication-events.js';
+import { renderMarkdown } from '@etn/markdown';
 import * as users from '../../lib/users.js';
 import { store } from '../../state.js';
 
@@ -98,9 +102,21 @@ export interface PublicationWorkspaceHandle {
   /** Перечитать сборку и карточку (realtime/локальные правки). */
   reload(): void;
   /**
+   * Точечно перечитать документ при изменении КОНТЕНТА мысли (комментарий
+   * раздела/текста, заголовок). `thoughtId` — изменённая мысль: если её нет в
+   * текущей сборке, перечитывания не будет (замечание А2 приёмки b02ef1cf).
+   * Без `thoughtId` перечитывает безусловно.
+   */
+  reloadDocument(thoughtId?: string): void;
+  /**
+   * Пометить живой текст устаревшим (изменение состава/рецепта): кнопка
+   * «Пересобрать» подсвечивается до пересборки (замечание А2 приёмки b02ef1cf).
+   */
+  markRebuildStale(): void;
+  /**
    * Применить свежий снимок публикации БЕЗ перечитывания сборки: обновляет
-   * шапку и титульный блок (локальная правка титула/подзаголовка/обложки,
-   * замечание А приёмки b02ef1cf).
+   * шапку и титульный блок (локальная правка титула/подзаголовка/обложки/резюме,
+   * замечания А и А2 приёмки b02ef1cf). Смена рецепта помечает текст устаревшим.
    */
   applyPublication(publication: Publication): void;
   /** Открыта ли рабочая область (опционально — именно эта публикация). */
@@ -170,6 +186,13 @@ export function mountPublicationWorkspace(
   let reloadTimer: number | null = null;
   let draggingKey: string | null = null;
   let draggingParent: string | null = null;
+  /**
+   * Живой текст документа устарел: изменился состав/рецепт, но пересборки не
+   * было (решение пользователя «Остаётся + подсветка», замечание А2 приёмки
+   * b02ef1cf). Снимается пересборкой; ставится по фактам realtime-событий —
+   * без запроса сборки.
+   */
+  let staleRebuild = false;
 
   const root = div('pub-ws hidden');
   const header = div('pub-ws-header');
@@ -227,6 +250,10 @@ export function mountPublicationWorkspace(
     role: 'ghost',
     onClick: () => void rebuild(),
   });
+  // Точка-индикатор «живой текст устарел»: видна только при `staleRebuild`
+  // (класс на кнопке), снимается пересборкой (замечание А2 приёмки b02ef1cf).
+  rebuildButton.classList.add('pub-ws-rebuild');
+  rebuildButton.append(span('', 'pub-ws-rebuild-dot'));
   const exportButton = iconButton({
     icon: svgIcon('download'),
     title: t('publications.ws.export'),
@@ -370,6 +397,7 @@ export function mountPublicationWorkspace(
       renderCandidates();
       renderPager();
       renderState();
+      updateRebuildStale();
     } catch (err) {
       loading = false;
       loadError = err;
@@ -386,6 +414,20 @@ export function mountPublicationWorkspace(
   }
 
   /**
+   * Перечитать документ при изменении КОНТЕНТА мысли: если `thoughtId` задан и
+   * его нет в текущей сборке — перечитывания нет (событие не про этот документ,
+   * замечание А2 приёмки b02ef1cf). Композиция сборки при этом не фиксируется:
+   * события состава обрабатываются отдельно (`markRebuildStale`).
+   */
+  function reloadDocument(thoughtId?: string): void {
+    if (publicationId === null) return;
+    if (thoughtId !== undefined && assembly !== null && !assemblyHasThought(assembly, thoughtId)) {
+      return;
+    }
+    reload();
+  }
+
+  /**
    * Точечно применяет свежий снимок публикации: шапка и титульный блок берут
    * титул/подзаголовок/обложку из него. Сборку (разделы) не трогаем —
    * `reload()` для этого остаётся. Нужно для локальной правки из карточки
@@ -393,10 +435,20 @@ export function mountPublicationWorkspace(
    */
   function applyPublication(next: Publication): void {
     if (publicationId === null || next.id !== publicationId) return;
+    // Смена рецепта/источников/нумерации влияет на СОСТАВ: живой текст остаётся,
+    // но помечается устаревшим до пересборки (замечание А2 приёмки b02ef1cf).
+    const recipeChanged =
+      publication !== null &&
+      (JSON.stringify(publication.title_recipe ?? null) !== JSON.stringify(next.title_recipe ?? null) ||
+        publication.text_sources.join(',') !== next.text_sources.join(',') ||
+        publication.extra_properties.join(',') !== next.extra_properties.join(',') ||
+        publication.numbering_from !== next.numbering_from ||
+        publication.numbering_to !== next.numbering_to);
     publication = next;
     renderHeader();
     const titleBlock = docHost.querySelector<HTMLElement>('.pub-doc-titleblock');
     if (titleBlock !== null) titleBlock.replaceWith(buildTitleBlock());
+    if (recipeChanged) markRebuildStale();
   }
 
   async function rebuild(): Promise<void> {
@@ -416,6 +468,8 @@ export function mountPublicationWorkspace(
       setButtonTitle(rebuildButton, t('publications.ws.rebuild'));
       rebuildButton.disabled = false;
     }
+    // Пересборка снимает устаревание: живой текст снова соответствует составу.
+    staleRebuild = false;
     // Своё realtime-эхо подавлено, карточке публикации документ не обновится
     // (ошибка c2dec45c) — сообщаем локально, затем перечитываем документ.
     notifyPublicationRebuilt({ id: publicationId, source: 'workspace' });
@@ -434,6 +488,23 @@ export function mountPublicationWorkspace(
       .join(' · ');
     emptyNode(coverBox);
     coverBox.append(buildCover(publication, 'thumb'));
+  }
+
+  /**
+   * Состояние подсветки «Пересобрать»: устаревание по фактам realtime
+   * (`staleRebuild`) либо непринятые новые кандидаты в текущей сборке.
+   */
+  function updateRebuildStale(): void {
+    const hasCandidates = (assembly?.publication.new_candidates ?? 0) > 0;
+    const stale = staleRebuild || hasCandidates;
+    rebuildButton.classList.toggle('pub-ws-rebuild-stale', stale);
+    setButtonTitle(rebuildButton, stale ? t('publications.ws.rebuildStale') : t('publications.ws.rebuild'));
+  }
+
+  function markRebuildStale(): void {
+    if (publicationId === null || staleRebuild) return;
+    staleRebuild = true;
+    updateRebuildStale();
   }
 
   // --- Рендер состояний ----------------------------------------------------
@@ -778,10 +849,17 @@ export function mountPublicationWorkspace(
     }
     head.append(box);
     node.append(head);
-    const summary = assembly?.publication.summary_html ?? '';
-    if (summary !== '') {
+    // Резюме — из СВЕЖЕГО снимка публикации (а не из `assembly.publication`),
+    // чтобы правка резюме в карточке редактора отражалась в титульном блоке без
+    // перечитывания сборки (замечание А2 приёмки b02ef1cf). Рендер — тем же
+    // общим markdown-рендерером, что и у карточки/сервера.
+    const summaryHtml =
+      publication !== null
+        ? renderMarkdown(publication.summary_md ?? '')
+        : (assembly?.publication.summary_html ?? '');
+    if (summaryHtml !== '') {
       const block = div('pub-doc-summary');
-      renderHtml(block, summary);
+      renderHtml(block, summaryHtml);
       node.append(block);
     }
     return node;
@@ -1102,6 +1180,8 @@ export function mountPublicationWorkspace(
       candidatesOpen = false;
       collapsed.clear();
     }
+    // Открытие — свежая сборка: устаревание сбрасывается (пересборка/открытие).
+    staleRebuild = false;
     page = resolveOpenPage(page, samePublication, target);
     publicationId = id;
     root.classList.remove('hidden');
@@ -1133,7 +1213,27 @@ export function mountPublicationWorkspace(
   // Начальное состояние: контейнеры пусты, документ скрыт до открытия.
   renderState();
 
-  return { open, close, reload, applyPublication, isOpen, destroy };
+  return {
+    open,
+    close,
+    reload,
+    reloadDocument,
+    markRebuildStale,
+    applyPublication,
+    isOpen,
+    destroy,
+  };
+}
+
+/** Есть ли мысль в текущей сборке (раздел-предисловие или текст раздела). */
+function assemblyHasThought(assembly: PublicationAssembly, thoughtId: string): boolean {
+  for (const item of flattenSections(assembly.sections)) {
+    if (item.section.thought_id === thoughtId) return true;
+    for (const text of item.section.texts) {
+      if (text.thought_id === thoughtId) return true;
+    }
+  }
+  return false;
 }
 
 /** Удаляет всех детей узла (полная пересборка не-списковых слотов разрешена). */

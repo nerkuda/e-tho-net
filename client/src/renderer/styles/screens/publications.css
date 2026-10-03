@@ -675,19 +675,14 @@
   white-space: nowrap;
 }
 
+/* Вид владельца вложения рисуют общие компоненты облачков: мысли —
+   `lib/thought-cloud.ts` (профиль `chip`), публикации — `lib/ui/publication-cloud`
+   (прямые углы, книга). Здесь — только контейнер ряда (замечание Б2 b02ef1cf). */
 .pub-cover-clouds {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-}
-
-/* Вид владельца вложения — бледная подпись рядом с общим облачком-чипом
-   (`lib/thought-cloud.ts`, профиль `chip`); сам чип рисует фабрика. */
-.pub-cover-cloud-kind {
-  color: var(--text-faint);
-  font-size: var(--font-size-3xs);
-  white-space: nowrap;
 }
 
 .pub-cover-preview {
@@ -789,6 +784,32 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Кнопка «Пересобрать»: подсветка, когда живой текст устарел (состав/рецепт
+   изменились без пересборки) — замечание А2 приёмки b02ef1cf. Точка-индикатор
+   скрыта в обычном состоянии. */
+.pub-ws-rebuild {
+  position: relative;
+}
+
+.pub-ws-rebuild-dot {
+  display: none;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.pub-ws-rebuild-stale {
+  color: var(--accent);
+}
+
+.pub-ws-rebuild-stale .pub-ws-rebuild-dot {
+  display: block;
 }
 
 .pub-ws-body {

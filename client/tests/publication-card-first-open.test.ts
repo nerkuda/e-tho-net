@@ -126,13 +126,23 @@ function inputValue(root: ShimElement, id: string): string {
   return root.querySelector(`#${id}`)?.value ?? '<нет поля>';
 }
 
+/** Подпись активной вкладки карточки. */
+function activeTabLabel(root: ShimElement): string {
+  const tab = root
+    .findAll((el) => el.className.includes('ui-tab') && el.classList.contains('active'))
+    .find((el) => el.tagName === 'button');
+  return tab?.flatText() ?? '<нет активной вкладки>';
+}
+
 describe('карточка публикации: первое открытие (ошибка ecad219b, b02ef1cf)', () => {
   let scrollBox: ShimElement;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     installShim();
     scrollBox = new ShimElement('div');
     store.update({ networkId: NETWORK_ID });
+    // Сеансовая вкладка карточки живёт в модуле — сбрасываем между тестами.
+    (await cardModule()).publicationCardInternals.resetTab();
   });
 
   afterEach(async () => {
@@ -184,15 +194,43 @@ describe('карточка публикации: первое открытие (
     assert.equal(inputValue(scrollBox, 'pub-card-num-from'), '3', 'нумерация «с»');
     assert.equal(inputValue(scrollBox, 'pub-card-num-to'), '5', 'нумерация «по»');
   });
+
+  it('выбранная вкладка переживает переключение публикаций (замечание Г)', async () => {
+    const mod = await cardModule();
+    stubSummaryField(mod);
+    const host = { scrollBox: scrollBox as unknown as HTMLElement };
+
+    mod.showPublicationTarget(host, 'pub-1', publication());
+    // Выбираем вкладку «Метаданные» (как пользователь).
+    mod.publicationCardInternals.activateTab('meta');
+    assert.equal(activeTabLabel(scrollBox), 'Метаданные', 'вкладка выбрана');
+
+    // Переключение на ДРУГУЮ публикацию пересобирает карточку — вкладка остаётся.
+    mod.showPublicationTarget(host, 'pub-2', publication({ id: 'pub-2' }));
+    assert.equal(activeTabLabel(scrollBox), 'Метаданные', 'вкладка пережила переключение');
+
+    // Сброс сеансового состояния (тестовый шов) возвращает первую вкладку.
+    // Свежий контейнер — предыдущие карточки не убираются dispose'ом.
+    mod.publicationCardInternals.resetTab();
+    const fresh = new ShimElement('div');
+    mod.showPublicationTarget(
+      { scrollBox: fresh as unknown as HTMLElement },
+      'pub-3',
+      publication({ id: 'pub-3' }),
+    );
+    assert.equal(activeTabLabel(fresh), 'Резюме', 'после сброса — первая вкладка');
+  });
 });
 
 describe('карточка публикации: перечитывание резюме при apply (ошибка 6f013e67)', () => {
   let scrollBox: ShimElement;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     installShim();
     scrollBox = new ShimElement('div');
     store.update({ networkId: NETWORK_ID });
+    // Сеансовая вкладка карточки живёт в модуле — сбрасываем между тестами.
+    (await cardModule()).publicationCardInternals.resetTab();
   });
 
   afterEach(async () => {
