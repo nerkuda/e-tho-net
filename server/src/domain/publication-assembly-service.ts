@@ -41,6 +41,7 @@
 
 import {
   EtnError,
+  PUBLICATION_EMPTY_RECIPE_WARNING,
   type PropertyConfig,
   type Publication,
   type PublicationAssembly,
@@ -668,8 +669,17 @@ function buildDocument(
   warnings: string[],
 ): BuiltDocument {
   const excluded = loadExcluded(ndb, pub.id);
-  const selectedIds =
-    pub.title_recipe === null ? [] : selectRecipeIds(ndb, userId, pub.title_recipe, warnings);
+  // Рецепт не задан (`null`) — тот же пустой отбор, что и пустой рецепт: сборка
+  // пустая с предупреждением, а не «вся сеть» и не «пустой титул без
+  // объяснения» (задача 7cfaba7c, п.2). Единая точка: сюда приходят сборка,
+  // кандидаты, использование и экспорт.
+  let selectedIds: string[];
+  if (pub.title_recipe === null) {
+    warnings.push(PUBLICATION_EMPTY_RECIPE_WARNING);
+    selectedIds = [];
+  } else {
+    selectedIds = selectRecipeIds(ndb, userId, pub.title_recipe, warnings);
+  }
   const structSelected = includeExcluded
     ? selectedIds
     : selectedIds.filter((id) => !excluded.set.has(id));

@@ -791,6 +791,44 @@ describe('publication-assembly-service: кандидаты (временная �
       ndb.close();
     }
   });
+
+  it('рецепт не задан (null) — та же пустая сборка с предупреждением (7cfaba7c, п.2)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      seedThought(ndb, 'A', type.id);
+      seedThought(ndb, 'B', type.id);
+      // Мастер создания не задаёт рецепт — в базе `null` (а не пустой объект).
+      const pub = createPublication(ndb, { title: 'Док' }, USER);
+      assert.equal(pub.title_recipe, null);
+      const doc = assemblePublication(ndb, pub.id, USER);
+      assert.equal(doc.sections.length, 0);
+      assert.ok(
+        doc.warnings.some((w) => w.includes('отбор заголовков не задан')),
+        `warnings: ${JSON.stringify(doc.warnings)}`,
+      );
+      assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('валидный рецепт не даёт предупреждения о пустом отборе (регресс)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      seedThought(ndb, 'A', type.id);
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
+      const doc = assemblePublication(ndb, pub.id, USER);
+      assert.ok(
+        !doc.warnings.some((w) => w.includes('отбор заголовков не задан')),
+        `warnings: ${JSON.stringify(doc.warnings)}`,
+      );
+      assert.ok(doc.sections.length > 0, 'валидный рецепт даёт разделы');
+    } finally {
+      ndb.close();
+    }
+  });
 });
 
 describe('publication-assembly-service: использование мысли', { skip }, () => {
