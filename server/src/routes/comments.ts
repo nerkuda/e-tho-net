@@ -191,6 +191,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
                 data: {
                   id: input.comment_id,
                   owner_id: updated.owner_id,
+                  kind: updated.kind,
                   changes,
                   version: updated.version,
                 },
@@ -266,6 +267,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
                 data: {
                   id: input.comment_id,
                   owner_id: updated.owner_id,
+                  kind: updated.kind,
                   changes: { targets: updated.targets },
                   version: updated.version,
                 },
@@ -305,6 +307,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
                 data: {
                   id: input.comment_id,
                   owner_id: updated.owner_id,
+                  kind: updated.kind,
                   changes: { targets: updated.targets },
                   version: updated.version,
                 },

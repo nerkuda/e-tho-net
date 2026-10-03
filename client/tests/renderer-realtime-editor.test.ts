@@ -175,7 +175,7 @@ describe('realtime events — focus must NOT refresh for comment.* (206e33a1)', 
       audience: 'network',
       network_id: 'n1',
       layer_id: 'base',
-      data: { id: 'c1', owner_id: 't1', changes: { body_md: 'новый текст' }, version: 2 },
+      data: { id: 'c1', owner_id: 't1', kind: 'permanent', changes: { body_md: 'новый текст' }, version: 2 },
       meta: { version: 1 },
     });
 

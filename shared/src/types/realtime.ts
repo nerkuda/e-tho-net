@@ -8,6 +8,7 @@
  */
 
 import type {
+  CommentKind,
   CommentOwnerType,
   FocusDir,
   NetworkRole,
@@ -244,6 +245,13 @@ export interface CommentUpdatedData {
    * мысли/связи.
    */
   owner_id: string;
+  /**
+   * Вид комментария — постоянный или хронологический. Блок открытого документа
+   * публикации образует ТОЛЬКО постоянный комментарий мысли; без этого поля
+   * клиент не мог отличить правку хроно-комментария от постоянного и подменял
+   * текст блока (блокер приёмки b02ef1cf). Вид при правке не меняется.
+   */
+  kind: CommentKind;
   changes: Partial<Comment>;
   version: number;
 }

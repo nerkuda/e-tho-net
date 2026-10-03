@@ -300,17 +300,21 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
                   activity.push({ kind: 'comment', action: 'created', comment: c });
                 }
               } else {
+                // Строка комментария после записи батча существует; событие и
+                // активность эмитим только по ней (иначе `kind`/`owner_id`
+                // неизвестны). `kind` нужен подписчикам документа публикации.
                 const c = getComment(ndb, item.comment.id);
-                events.push({
-                  type: 'comment.updated',
-                  data: {
-                    id: item.comment.id,
-                    owner_id: c?.owner_id ?? '',
-                    version: item.comment.version,
-                    changes: { body_md: '' },
-                  },
-                });
                 if (c !== null) {
+                  events.push({
+                    type: 'comment.updated',
+                    data: {
+                      id: c.id,
+                      owner_id: c.owner_id,
+                      kind: c.kind,
+                      version: item.comment.version,
+                      changes: { body_md: '' },
+                    },
+                  });
                   activity.push({ kind: 'comment', action: 'updated', comment: c });
                 }
               }
