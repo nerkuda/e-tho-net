@@ -12,10 +12,14 @@
  *
  * Delivery rules (E4, 11-settings-and-state.md §4.3):
  *   * `audience: 'network'` → every member of the network;
- *   * `audience: 'user'`    → only connections of the same `user_id`;
- *   * the socket whose `client_id` equals `actor.client_id` never receives the
- *     event (echo suppression — the client already has the state from its REST
- *     response; on reconnect the event still replays through `resume`).
+ *   * `audience: 'user'`    → only connections of the same `user_id`.
+ *
+ * B1 техпроекта 269016e2: **эхо-подавление отменено — broadcast-to-all**.
+ * Сокет автора тоже получает своё событие (04-realtime.md §5/§9; спеку
+ * актуализирует оркестратор при приёмке). Клиент дедуплицирует собственные
+ * события по версии сущности/seq, поэтому кэш самовосстанавливается даже если
+ * забыт локальный mutator-патч, а несколько окон одного клиента видят правки
+ * друг друга.
  *
  * Replay (E5, 04-realtime.md §2.2, §6): a `resume { last_seq }` frame replays
  * retained events with `seq > last_seq` in batches; when the client's position
@@ -335,7 +339,7 @@ export class RealtimeGateway {
     });
   }
 
-  /** Live delivery with audience routing, layer visibility and echo suppression (E4, S9). */
+  /** Live delivery with audience routing and layer visibility (E4, S9). */
   private deliver<E extends RealtimeEventType>(conn: Connection, event: RealtimeEvent<E>): void {
     // audience=user events reach only the same user's connections (§4.3).
     // These are non-branchable data (13-layers.md §3) — no layer check.
@@ -348,16 +352,9 @@ export class RealtimeGateway {
       // that never happened on its ancestor chain (task S9, 13-layers.md §12).
       return;
     }
-    // Echo suppression: the originating client already has the state from its
-    // REST response (04-realtime.md §5, §9). An empty actor client_id means
-    // "no Client-Id on the request" — nothing to suppress.
-    if (
-      conn.clientId !== null &&
-      event.actor.client_id !== '' &&
-      event.actor.client_id === conn.clientId
-    ) {
-      return;
-    }
+    // B1: broadcast-to-all — the author's socket receives its own event too.
+    // Дедуп — на клиенте (версия сущности/seq, `lib/live/entities.ts` +
+    // `lib/live/event-router.ts`); сервер эхо больше не различает.
     sendJson(conn, event, this.logger);
   }
 
