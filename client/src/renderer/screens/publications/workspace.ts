@@ -106,10 +106,12 @@ export interface PublicationWorkspaceHandle {
    * ЕСТЬ в текущей сборке — обновить её блок. Пока живой текст устарел
    * (`staleRebuild`), точечная правка берётся из `bodyMd` события, без чтения
    * сборки (иначе материализуется отложенный рецепт, замечание-блокер 1 приёмки
-   * b02ef1cf). `bodyMd` не задан (удаление, хроно-комментарий) — блок не
-   * трогаем до пересборки. Мысль вне документа — ничего.
+   * b02ef1cf). Патчим ТОЛЬКО постоянный комментарий (`kind === 'permanent'`):
+   * хроно-запись блока не образует и текст блока подменить не должна (блокер
+   * приёмки b02ef1cf). `bodyMd` не задан (удаление) или kind не `permanent` —
+   * блок не трогаем. Мысль вне документа — ничего.
    */
-  applyCommentRealtime(ownerId?: string, bodyMd?: unknown): void;
+  applyCommentRealtime(ownerId?: string, bodyMd?: unknown, kind?: string): void;
   /**
    * Realtime-изменение мысли (`thought.updated`): если мысль ЕСТЬ в текущей
    * сборке — точечно обновить её блок и пометить текст устаревшим (заголовок
@@ -217,6 +219,13 @@ export function mountPublicationWorkspace(
    * без запроса сборки.
    */
   let staleRebuild = false;
+  /**
+   * Следующий полный рендер документа — принудительный, без опоры на подписи
+   * блоков. Ставится при выходе из stale (пересборка, в т.ч. внешняя): прямая
+   * правка DOM под stale могла разойтись с моделью, и документ обязан прийти
+   * ровно к серверной сборке (блокер приёмки b02ef1cf).
+   */
+  let forceDocumentRender = false;
 
   const root = div('pub-ws hidden');
   const header = div('pub-ws-header');
@@ -417,7 +426,10 @@ export function mountPublicationWorkspace(
       candidatesOpen = false;
       renderHeader();
       renderToc();
-      renderDocument();
+      // Выход из stale (пересборка, в т.ч. внешняя) рендерит документ
+      // принудительно — прямой патч DOM под stale не должен пережить сборку.
+      renderDocument(forceDocumentRender);
+      forceDocumentRender = false;
       renderCandidates();
       renderPager();
       renderState();
@@ -456,6 +468,11 @@ export function mountPublicationWorkspace(
    * отложенный рецепт и порядок разделов сдвигается, замечание-блокер 1 приёмки
    * b02ef1cf).
    *
+   * Модель блока (`navBlocks`) обновляется СИНХРОННО с DOM: `blockSignature`
+   * включает `preambleHtml`/`html`, и без синхронизации `reconcileKeyed` счёл бы
+   * блок неизменным и не перерисовал его при следующем полном рендере — прямой
+   * патч DOM «просачивался» бы в сборку (блокер приёмки b02ef1cf).
+   *
    * Компромисс: HTML собирается общим клиентским `renderMarkdown`, а не
    * серверным `renderPublicationFragment` (сервер умеет сдвиг уровней заголовков,
    * якоря и подстановку wiki-ссылок). Для предисловия/текста это несущественно;
@@ -466,21 +483,37 @@ export function mountPublicationWorkspace(
       const target = node.classList.contains('pub-doc-section')
         ? node.querySelector<HTMLElement>('.pub-doc-preamble')
         : node;
-      if (target !== null) renderHtml(target, html);
+      if (target === null) continue;
+      renderHtml(target, html);
+      // Синхронизируем модель (иначе сигнатура не отразит правку).
+      const block = blockForKey(node.dataset?.['blockKey']);
+      if (block === null) continue;
+      if (block.kind === 'section') block.preambleHtml = html;
+      else if (block.kind === 'text') block.html = html;
     }
   }
 
   /**
    * Точечно меняет ЗАГОЛОВОК разделов мысли по новому названию (без чтения
-   * сборки). Компромисс: при включённой нумерации номер раздела в заголовке до
-   * ближайшей пересборки теряется — заголовок с номером пересобирает сервер.
+   * сборки) и синхронно правит модель блока (см. {@link patchBlockText}).
+   * Компромисс: при включённой нумерации номер раздела в заголовке до ближайшей
+   * пересборки теряется — заголовок с номером пересобирает сервер.
    */
   function patchBlockHeading(thoughtId: string, title: string): void {
     for (const node of blockNodesForThought(thoughtId)) {
       if (!node.classList.contains('pub-doc-section')) continue;
       const text = node.querySelector<HTMLElement>('.pub-doc-heading-text');
-      if (text !== null) text.textContent = title;
+      if (text === null) continue;
+      text.textContent = title;
+      const block = blockForKey(node.dataset?.['blockKey']);
+      if (block !== null && block.kind === 'section') block.heading = title;
     }
+  }
+
+  /** Блок текущей модели по ключу DOM-узла (`data-block-key`). */
+  function blockForKey(key: string | undefined): DocBlock | null {
+    if (key === undefined) return null;
+    return navBlocks.find((block) => block.key === key) ?? null;
   }
 
   /**
@@ -505,18 +538,18 @@ export function mountPublicationWorkspace(
   /**
    * Realtime-изменение комментария мысли в документе (предисловие раздела/текст
    * блока = постоянный комментарий мысли): обновляет блок. Пока текст устарел
-   * (`staleRebuild`) — только точечная правка из payload (`body_md`), без чтения
-   * сборки (замечание-блокер 1 приёмки b02ef1cf). Владелец вне документа —
-   * ничего; при stale без `body_md` (удаление, хроно-комментарий) — без
-   * изменений (см. компромисс в хроно задачи).
+   * (`staleRebuild`) — только точечная правка из payload (`body_md`) и только для
+   * ПОСТОЯННОГО комментария (`kind === 'permanent'`), без чтения сборки
+   * (замечание-блокер 1 приёмки b02ef1cf). Хроно-запись блока не образует —
+   * игнорируется (блокер приёмки b02ef1cf). Владелец вне документа — ничего.
    */
-  function applyCommentRealtime(ownerId?: string, bodyMd?: unknown): void {
+  function applyCommentRealtime(ownerId?: string, bodyMd?: unknown, kind?: string): void {
     if (publicationId === null) return;
     if (ownerId !== undefined && assembly !== null && !assemblyHasThought(assembly, ownerId)) {
       return;
     }
     if (staleRebuild) {
-      if (ownerId !== undefined && typeof bodyMd === 'string') {
+      if (kind === 'permanent' && ownerId !== undefined && typeof bodyMd === 'string') {
         patchBlockText(ownerId, renderMarkdown(bodyMd));
       }
       return;
@@ -605,6 +638,9 @@ export function mountPublicationWorkspace(
     }
     // Пересборка снимает устаревание: живой текст снова соответствует составу.
     staleRebuild = false;
+    // Документ перерисовываем принудительно: точечные правки DOM под stale не
+    // должны пережить сборку (блокер приёмки b02ef1cf).
+    forceDocumentRender = true;
     // Своё realtime-эхо подавлено, карточке публикации документ не обновится
     // (ошибка c2dec45c) — сообщаем локально, затем перечитываем документ.
     notifyPublicationRebuilt({ id: publicationId, source: 'workspace' });
@@ -649,12 +685,14 @@ export function mountPublicationWorkspace(
    * Внешняя пересборка: снять устаревание и перечитать документ. Флаг снимается
    * синхронно (кнопка гаснет сразу), перечитывание — с обычным дебаунсом
    * `reload()` (ошибка 29fd0587: внешний `publication.rebuilt` перечитывал
-   * документ, но подсветка оставалась).
+   * документ, но подсветка оставалась). Документ перерисовывается принудительно
+   * — прямой патч DOM под stale не должен пережить сборку (блокер b02ef1cf).
    */
   function applyRebuildRealtime(): void {
     if (publicationId === null) return;
     staleRebuild = false;
     updateRebuildStale();
+    forceDocumentRender = true;
     reload();
   }
 
@@ -877,7 +915,12 @@ export function mountPublicationWorkspace(
 
   // --- Документ ------------------------------------------------------------
 
-  function renderDocument(): void {
+  /**
+   * Рендер документа. `force` отключает сверку по подписям: при выходе из stale
+   * прямая правка DOM могла разойтись с моделью, и все блоки обязаны
+   * перестроиться из серверной сборки (блокер приёмки b02ef1cf).
+   */
+  function renderDocument(force = false): void {
     const blocks = documentBlocks(assembly, publication, collapsed);
     navBlocks = blocks;
     preserveScroll(docHost, () => {
@@ -885,7 +928,7 @@ export function mountPublicationWorkspace(
         key: (block) => block.key,
         build: (block) => buildBlock(block),
         update: (node, block) => updateBlock(node, block),
-        equals: (a, b) => blockSignature(a) === blockSignature(b),
+        equals: (a, b) => !force && blockSignature(a) === blockSignature(b),
       });
     });
     docNav.refresh();

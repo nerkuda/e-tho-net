@@ -240,7 +240,7 @@ describe('рабочая область публикации: реактивно
     nextRecipe = true;
     const before = assemblyFetches;
 
-    handle.applyCommentRealtime('sec-1', 'Обновлённый текст');
+    handle.applyCommentRealtime('sec-1', 'Обновлённый текст', 'permanent');
 
     assert.equal(assemblyFetches, before, 'под stale сборка НЕ перечитывается');
     assert.deepEqual(
@@ -318,6 +318,42 @@ describe('рабочая область публикации: реактивно
       sectionIds(root),
       ['sec-2', 'sec-1'],
       'документ перечитан по новой сборке',
+    );
+  });
+
+  it('под stale правка ХРОНО-комментария не подменяет блок (блокер b02ef1cf)', async () => {
+    const { handle, root } = await mount();
+    active = handle;
+    handle.markRebuildStale();
+    const before = assemblyFetches;
+
+    handle.applyCommentRealtime('sec-1', 'ХРОНО-2 ПРОСОЧИЛСЯ', 'chronological');
+
+    assert.equal(assemblyFetches, before, 'сборка не читается');
+    assert.ok(
+      sectionNode(root, 'sec-1')?.querySelector('.pub-doc-preamble')?.innerHTML.includes('Начало'),
+      'хроно-комментарий блок не подменил',
+    );
+    assert.equal(stale(root), true, 'подсветка остаётся');
+  });
+
+  it('выход из stale принудительно приводит DOM к серверной сборке (блокер b02ef1cf)', async () => {
+    const { handle, root } = await mount();
+    active = handle;
+    handle.markRebuildStale();
+    // Имитируем «просочившуюся» под stale правку DOM в обход модели
+    // (как это делала правка хроно-комментария до фикса).
+    const preamble = sectionNode(root, 'sec-1')?.querySelector('.pub-doc-preamble') as ShimElement | null;
+    assert.ok(preamble !== null, 'предисловие раздела построено');
+    preamble.innerHTML = '<p>ПРОСОЧИЛОСЬ</p>';
+
+    handle.applyRebuildRealtime();
+    await new Promise((resolve) => setTimeout(resolve, 280));
+
+    assert.equal(
+      sectionNode(root, 'sec-1')?.querySelector('.pub-doc-preamble')?.innerHTML,
+      '<p>Начало</p>',
+      'принудительный рендер после stale вернул серверный текст',
     );
   });
 });

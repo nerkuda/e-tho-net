@@ -251,11 +251,17 @@ export function closePublicationWorkspace(): void {
 
 /**
  * Realtime-событие правки КОНТЕНТА мысли в документе (постоянный комментарий
- * раздела/текста). `bodyMd` — свежий текст из payload: пока живой текст устарел,
- * блок правится из него БЕЗ чтения сборки (замечание-блокер 1 приёмки b02ef1cf).
+ * раздела/текста). `bodyMd` — свежий текст из payload, `kind` — вид комментария:
+ * блок документа образует только `permanent`, поэтому под stale точечная правка
+ * идёт из payload БЕЗ чтения сборки, а хроно-записи игнорируются (замечание-
+ * блокер приёмки b02ef1cf).
  */
-export function applyPublicationDocumentRealtime(ownerId?: string, bodyMd?: unknown): void {
-  if (workspace?.isOpen() === true) workspace.applyCommentRealtime(ownerId, bodyMd);
+export function applyPublicationDocumentRealtime(
+  ownerId?: string,
+  bodyMd?: unknown,
+  kind?: string,
+): void {
+  if (workspace?.isOpen() === true) workspace.applyCommentRealtime(ownerId, bodyMd, kind);
 }
 
 /**

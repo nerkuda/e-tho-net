@@ -276,12 +276,12 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // already invalidated by `invalidateIndicators`.
       invalidateIndicators(evt.data.comment.owner_id);
       applyChronicleRealtime(evt);
-      // В документе публикации блок — это ПОСТОЯННЫЙ комментарий мысли; текст
-      // хроно-комментария блока не образует, поэтому его не пробрасываем.
-      applyPublicationDocumentRealtime(
-        evt.data.comment.owner_id,
-        evt.data.comment.kind === 'permanent' ? evt.data.comment.body_md : undefined,
-      );
+      // Блок документа публикации образует ТОЛЬКО постоянный комментарий мысли;
+      // хроно-записи документ не меняют — игнорируем их (блокер приёмки
+      // b02ef1cf: правка хроно-комментария подменяла текст блока).
+      if (evt.data.comment.kind === 'permanent') {
+        applyPublicationDocumentRealtime(evt.data.comment.owner_id, evt.data.comment.body_md, 'permanent');
+      }
       break;
 
     case 'comment.deleted':
@@ -300,11 +300,12 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // and updates it in place via its own `onRealtimeEvent` hook.
       invalidateIndicators(null);
       applyChronicleRealtime(evt);
-      // Событие несёт владельца — документ обновляем только если владелец в
-      // сборке. `changes.body_md` — свежий текст постоянного комментария; payload
-      // не несёт `kind`, поэтому при активном stale правка идёт из него (см.
-      // оговорку о хроно-комментариях в хроно задачи b02ef1cf).
-      applyPublicationDocumentRealtime(evt.data.owner_id, evt.data.changes.body_md);
+      // Только постоянный комментарий образует блок документа; `kind` пришёл в
+      // payload (блокер приёмки b02ef1cf) — правку хроно-записи игнорируем,
+      // чтобы не подменить текст блока.
+      if (evt.data.kind === 'permanent') {
+        applyPublicationDocumentRealtime(evt.data.owner_id, evt.data.changes.body_md, 'permanent');
+      }
       break;
 
     case 'attachment.created':
