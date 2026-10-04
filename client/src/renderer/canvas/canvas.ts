@@ -378,11 +378,21 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     // фокуса или заглушка «нет сети». Клик по этим местам (и только по ним)
     // считается ВЫБОРОМ фокусной мысли; клики по ползункам зон, строке
     // отбора и прочей оснастке холста — нет.
+    //
+    // Полоса фокуса (`.canvas-focus-row`) и часть промежутков карты имеют
+    // `pointer-events: none` (canvas.css) — клик по ним проходит НА ХОСТ
+    // `.canvas`, поэтому `event.target` равен самому хосту, а не потомку.
+    // Такой клик — тоже пустое место; оснастка (кнопки `.canvas-filter-strip`,
+    // ползунки `.zone-splitter`) — отдельные цели, не равные хосту, и под это
+    // правило не попадает (блокер верификации 3af98e31; регресс a01e71f3 —
+    // прежний обработчик сбрасывал `editorTarget` по любому клику не по
+    // линии/облачку).
     const onEmptyPlace =
-      t !== null &&
-      (t.closest('.zone') !== null ||
-        t.closest('.canvas-focus-row') !== null ||
-        t.closest('.canvas-empty') !== null);
+      t === host ||
+      (t !== null &&
+        (t.closest('.zone') !== null ||
+          t.closest('.canvas-focus-row') !== null ||
+          t.closest('.canvas-empty') !== null));
     if (onLine !== null || onCloud !== null || !onEmptyPlace) return;
     if (store.state.selectedLinkId !== null || store.state.editorTarget !== null) {
       store.update({ selectedLinkId: null, editorTarget: null });

@@ -281,14 +281,38 @@ describe('карта: клик по пустому месту выбирает �
     dispose();
   });
 
-  it('клик по оснастке холста (ползунок зон) курсор не трогает', async () => {
+  it('клик по пустой полосе фокуса (target = хост, pointer-events:none) выбирает фокус', async () => {
+    const dispose = await mount();
+    // `.canvas-focus-row` имеет pointer-events:none — клик по её пустой части
+    // приходит на ХОСТ `.canvas` (target === host), а не на потомка. Это был
+    // блокер верификации: обработчик не узнавал хост и не возвращал редактор.
+    store.update({ editorTarget: { kind: 'thought', id: PARENT_ID } });
+    kbdNav.setCursor(PARENT_ID);
+    assert.deepEqual(haloIds(), [PARENT_ID], 'гало на открытом родителе');
+
+    currentHost?.emit('click', {
+      target: currentHost,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+
+    assert.equal(store.state.editorTarget, null, 'полоса фокуса: редактор вернулся к фокусу');
+    assert.equal(kbdNav.getCanvasCursor(), FOCUS_ID, 'курсор на фокусной мысли');
+    assert.deepEqual(haloIds(), [FOCUS_ID], 'гало на фокусе — одна рамка');
+    assert.deepEqual(cursorIds(), [], 'пунктира нет');
+    dispose();
+  });
+
+  it('клик по оснастке холста (ползунок зон) курсор и редактор не трогает', async () => {
     const dispose = await mount();
     const splitter = currentHost?.querySelector('.zone-splitter') ?? null;
     assert.ok(splitter !== null, 'карта построила ползунок зон');
+    store.update({ editorTarget: { kind: 'thought', id: PARENT_ID } });
     kbdNav.setCursor(PARENT_ID);
     clickEmpty(splitter);
     assert.equal(kbdNav.getCanvasCursor(), PARENT_ID, 'ползунок зон — не выбор мысли');
-    assert.deepEqual(cursorIds(), [PARENT_ID], 'пунктир остался на прежней текущей');
+    assert.deepEqual(cursorIds(), [], 'текущая = открытая родитель — пунктира нет');
+    assert.deepEqual(haloIds(), [PARENT_ID], 'редактор на родителе не тронут');
     dispose();
   });
 });
