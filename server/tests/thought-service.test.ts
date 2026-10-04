@@ -666,6 +666,81 @@ describe(
       });
     });
 
+    // Ошибка 7102308b: зоны карты показывали в счётчике число СВЯЗЕЙ, а не
+    // уникальных мыслей. Одна мысль, пришедшая к фокусу несколькими
+    // параллельными связями (разные свойства-связи), должна считаться и
+    // отдаваться один раз — тогда индикатор зоны совпадает с числом облачков.
+    describe('dedup of parallel links (ошибка 7102308b)', () => {
+      it('a thought reached through two links is listed and counted once', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const focusId = seedThought(ndb, { title: 'Focus' });
+          const child = seedThought(ndb, { title: 'Child' });
+          // Untyped parallel links share (source, target, NULL) but SQLite
+          // treats NULLs as distinct in the live UNIQUE index — both rows stay.
+          seedLink(ndb, focusId, child);
+          seedLink(ndb, focusId, child);
+
+          const children = getNeighbors(ndb, focusId, 'children');
+          assert.equal(children.length, 1, 'one cloud for one thought, not two links');
+          assert.equal(children[0]!.id, child);
+          assert.equal(countNeighbors(ndb, focusId, 'children'), 1, 'counter counts thoughts');
+          assert.equal(
+            focus(ndb, USER, focusId).children.length,
+            1,
+            'focus first page is deduplicated too',
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('two distinct thoughts reached by links count as two', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const focusId = seedThought(ndb, { title: 'Focus' });
+          const a = seedThought(ndb, { title: 'A' });
+          const b = seedThought(ndb, { title: 'B' });
+          seedLink(ndb, focusId, a);
+          seedLink(ndb, focusId, a); // parallel link to the first thought
+          seedLink(ndb, focusId, b);
+
+          assert.deepEqual(
+            getNeighbors(ndb, focusId, 'children').map((n) => n.id).sort(),
+            [a, b].sort(),
+          );
+          assert.equal(countNeighbors(ndb, focusId, 'children'), 2);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('pagination offsets walk unique thoughts, not raw links', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const focusId = seedThought(ndb, { title: 'Focus' });
+          const first = seedThought(ndb, { title: 'First' });
+          const second = seedThought(ndb, { title: 'Second' });
+          // The first thought is held by three parallel links — a row-based
+          // offset would return it again at offset=1 and hide `second`.
+          seedLink(ndb, focusId, first);
+          seedLink(ndb, focusId, first);
+          seedLink(ndb, focusId, first);
+          seedLink(ndb, focusId, second);
+
+          const page0 = getNeighbors(ndb, focusId, 'children', { limit: 1, offset: 0, sort: 'alpha' });
+          const page1 = getNeighbors(ndb, focusId, 'children', { limit: 1, offset: 1, sort: 'alpha' });
+          assert.equal(page0.length, 1);
+          assert.equal(page0[0]!.id, first);
+          assert.equal(page1.length, 1);
+          assert.equal(page1[0]!.id, second, 'offset pages over thoughts, not links');
+          assert.equal(countNeighbors(ndb, focusId, 'children'), 2);
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
     describe('resolveThoughts', () => {
       it('returns metadata for known ids and drops unknown', () => {
         const ndb = createInMemoryNetworkDb();

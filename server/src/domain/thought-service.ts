@@ -1428,15 +1428,12 @@ function buildNeighborsQuery(
     // Alias is required: rowToNeighbor reads `manual_position` by name.
     (useManualJoin ? ', ufo.position AS manual_position' : '') +
     // `l.marked_for_deletion` (ошибка 355319d4) rides along with the other
-    // link fields so the DTO can mark trashed edges. Siblings GROUP BY the
-    // neighbour, so several parallel links collapse into one row: `MIN` is the
-    // conservative aggregate — the row counts as trashed only when EVERY
-    // parallel link is trashed (same spirit as `MIN(l.active)` above).
-    (dir === 'siblings'
-      ? ', MIN(l.id) AS link_id, MIN(l.type_id) AS link_type_id, MIN(l.active) AS link_active,' +
-        ' MIN(l.marked_for_deletion) AS link_marked_for_deletion'
-      : ', l.id AS link_id, l.type_id AS link_type_id, l.active AS link_active,' +
-        ' l.marked_for_deletion AS link_marked_for_deletion');
+    // link fields so the DTO can mark trashed edges. Every direction GROUPs BY
+    // the neighbour (see below), so several parallel links collapse into one
+    // row: `MIN` is the conservative aggregate — the row counts as trashed only
+    // when EVERY parallel link is trashed (same spirit as `MIN(l.active)`).
+    ', MIN(l.id) AS link_id, MIN(l.type_id) AS link_type_id, MIN(l.active) AS link_active,' +
+    ' MIN(l.marked_for_deletion) AS link_marked_for_deletion';
 
   const joins: string[] = [];
   const params: unknown[] = [];
@@ -1518,9 +1515,12 @@ function buildNeighborsQuery(
 
   const sqlParts = [select, 'FROM links_v l', ...joins.map((j) => j.trimStart())];
   sqlParts.push('WHERE ' + where.join(' AND '));
-  if (dir === 'siblings') {
-    sqlParts.push('GROUP BY t.id');
-  }
+  // Every direction lists THOUGHTS, not links: a neighbour held by several
+  // parallel links (e.g. the same target in two link properties, ошибка
+  // 7102308b) must appear once. GROUP BY t.id collapses those rows, so the
+  // page, the offsets and `countNeighbors` (COUNT over this subquery) all count
+  // unique thoughts — the zone counter and the visible clouds finally agree.
+  sqlParts.push('GROUP BY t.id');
   sqlParts.push(orderByClause(sort, order, dir));
   return { sql: sqlParts.join('\n'), params };
 }
@@ -1532,6 +1532,12 @@ function buildNeighborsQuery(
  * links originating at it; siblings are thoughts sharing at least one parent
  * (excluding the thought itself). Inactive thoughts and links are filtered out
  * unless `opts.showInactive` is set.
+ *
+ * The result is deduplicated by thought (errors 7102308b / 08-ui-spec zones):
+ * a neighbour reached through several parallel links is returned once, so
+ * `offset`/`limit` page over thoughts and `countNeighbors` counts thoughts, not
+ * links. The representative link fields (`link_id`/`link_type_id`/…) are the
+ * `MIN` aggregates over the collapsed parallel links.
  */
 export function getNeighbors(
   ndb: NetworkDb,
@@ -1565,7 +1571,9 @@ export function getNeighbors(
  * neighbours could wrongly conclude the extra thoughts were orphaned).
  *
  * Reuses {@link buildNeighborsQuery} verbatim (wrapped in `COUNT(*)`) so the
- * count and the page can never disagree on which rows match.
+ * count and the page can never disagree on which rows match. The query GROUPs
+ * BY thought (error 7102308b), so the count is the number of UNIQUE thoughts,
+ * not of parallel links — matching the clouds the zone actually shows.
  */
 export function countNeighbors(
   ndb: NetworkDb,
