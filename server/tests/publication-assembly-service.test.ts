@@ -406,6 +406,7 @@ describe('publication-assembly-service: тексты и исключения', {
       const child = seedThought(ndb, 'Child', type.id); // тоже раздел
       const t1 = seedThought(ndb, 'T1', plain.id);
       const t2 = seedThought(ndb, 'T2', plain.id);
+      const t3 = seedThought(ndb, 'T3', plain.id); // без комментария — пустой текст
       seedUntypedLink(ndb, a, child, 0);
       const prop = seedTextProperty(ndb, type.id);
       const lt = ndb
@@ -416,6 +417,7 @@ describe('publication-assembly-service: тексты и исключения', {
       seedLink(ndb, a, child, linkTypeId, 0);
       seedLink(ndb, a, t1, linkTypeId, 1);
       seedLink(ndb, a, t2, linkTypeId, 2);
+      seedLink(ndb, a, t3, linkTypeId, 3);
       seedComment(ndb, t1, 'Текст один');
       seedComment(ndb, t2, 'Текст два');
       const pub = createPublication(
@@ -426,8 +428,14 @@ describe('publication-assembly-service: тексты и исключения', {
 
       const doc = assemblePublication(ndb, pub.id, USER);
       const texts = doc.sections.find((s) => s.thought_id === a)!.texts;
-      assert.deepEqual(texts.map((t) => t.thought_id), [t1, t2]);
+      // Пустой комментарий НЕ фильтруется: мысль-текст попадает в DTO с пустым
+      // `body_html` (замечание 2 волны 7 — клиент рендерит пустой блок).
+      assert.deepEqual(
+        texts.map((t) => t.thought_id),
+        [t1, t2, t3],
+      );
       assert.match(texts[0]!.body_html, /Текст один/);
+      assert.equal(texts[2]!.body_html, '');
 
       // Пустой рецепт текстов — только предисловие.
       updatePublication(ndb, pub.id, { text_sources: [] }, USER);
