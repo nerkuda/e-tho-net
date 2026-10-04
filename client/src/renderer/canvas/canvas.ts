@@ -846,7 +846,15 @@ async function render(): Promise<void> {
   if (focusChanged) void ensureZoneTotals(focus);
   paintZoneIndicators();
   if (snapshot !== null) {
-    playFocusTransition(host, snapshot, drawLinksNow, externalOrigin);
+    // Topology of the new focus (focus id, visible parents, visible edges) lets
+    // the transition's phase 2 pick each new cloud's fly-out source (спека
+    // «FLIP-анимация холста», задача 380cc1e2). `edges` may be absent on an old
+    // server — `planEnteringSources` then falls back to the focus cloud.
+    playFocusTransition(host, snapshot, drawLinksNow, externalOrigin, {
+      focusId: focus.focused.id,
+      parentIds: focus.parents.map((p) => p.id),
+      edges: focus.edges ?? [],
+    });
   } else {
     redrawLinks?.();
   }

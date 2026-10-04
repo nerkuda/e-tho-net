@@ -69,6 +69,7 @@ import {
   countVisibleProperties,
   flipTransform,
   planFocusTransition,
+  planEnteringSources,
   resolveFocusFlightOrigin,
   LAYER_MENU_LABEL_FALLBACK,
   LAYER_MENU_LABEL_MAX,
@@ -1118,6 +1119,45 @@ describe('planFocusTransition (focus-change choreography, задача e9f0af94)
 
     const cleared = planFocusTransition([n('f', 'focus')], []);
     assert.equal(cleared.hasChanges, false);
+  });
+});
+
+describe('planEnteringSources (источники вылета новых облачков, задача 380cc1e2)', () => {
+  const topo = {
+    focusId: 'f',
+    parentIds: ['p1', 'p2'],
+    edges: [
+      { source_id: 'p1', target_id: 's1' },
+      { source_id: 'p2', target_id: 's2' },
+      { source_id: 's1', target_id: 'x' },
+    ],
+  };
+
+  it('предки и потомки вылетают из облачка фокуса', () => {
+    const out = planEnteringSources(
+      [{ id: 'pc', zone: 'parents' }, { id: 'ch', zone: 'children' }],
+      topo,
+    );
+    assert.equal(out.get('pc'), 'f');
+    assert.equal(out.get('ch'), 'f');
+  });
+
+  it('родственник вылетает из облачка своего видимого предка', () => {
+    const out = planEnteringSources([{ id: 's1', zone: 'siblings' }], topo);
+    assert.equal(out.get('s1'), 'p1');
+  });
+
+  it('родственник без видимого предка откатывается на облачко фокуса', () => {
+    const out = planEnteringSources([{ id: 's3', zone: 'siblings' }], topo);
+    assert.equal(out.get('s3'), 'f');
+  });
+
+  it('без фокуса и предков карта пуста — источников нет', () => {
+    const out = planEnteringSources(
+      [{ id: 's1', zone: 'siblings' }, { id: 'ch', zone: 'children' }],
+      { focusId: null, parentIds: [], edges: [] },
+    );
+    assert.equal(out.size, 0);
   });
 });
 
