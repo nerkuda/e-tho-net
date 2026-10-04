@@ -80,6 +80,8 @@ import {
   keysAppendedLast,
   linkEntryMatchesPick,
   positionsFor,
+  sectionNodeKey,
+  siblingNodeKeys,
   subtreeIds,
   TEXT_WIDTH_MAX,
   TEXT_WIDTH_MIN,
@@ -2210,12 +2212,16 @@ export function mountPublicationWorkspace(
    * предупреждение, не ошибка).
    */
   /**
-   * Завершение команд «Добавить текст/раздел…» (волна 8 приёмки, задача 053dae09):
+   * Завершение команд «Добавить текст/раздел…» (волна 8 приёмки, задача 053dae09;
+   * волна 9, задача b5cfad70):
    *
-   *  - п.1 — добавленный ТЕКСТ уезжает в КОНЕЦ группы текстов своего раздела тем
+   *  - п.1 — добавленный узел уезжает в КОНЕЦ группы соседей своего уровня тем
    *    же механизмом, что DnD/Alt (PUT order: `commitOrder` + `positionsFor`),
-   *    не трогая порядок существующих текстов; если он и так последний, запрос не
-   *    шлётся;
+   *    не трогая порядок существующих: ТЕКСТ — последним среди текстов своего
+   *    раздела (node_key — id ребра-источника); РАЗДЕЛ — последним среди
+   *    разделов-соседей по родителю `anchorId` (`null` — корни), node_key = id
+   *    ребра вхождения, для корня — id мысли. Если узел и так последний, запрос
+   *    не шлётся;
    *  - п.2 — добавленная мысль становится ТЕКУЩИМ блоком документа (прокрутка к
    *    ней + `makeDocCurrent` через `scrollToAnchor`) и открывается в редакторе:
    *    текст — вкладка «Комментарий» в режиме правки с курсором, раздел — просто
@@ -2234,22 +2240,34 @@ export function mountPublicationWorkspace(
     const added = new Set(addedIds);
     if (added.size === 0) return;
     const collapseChanged = anchorId !== null ? collapsed.delete(anchorId) : false;
-    // п.1: новый текст — последним в группе текстов своего раздела.
+    // п.1: добавленный узел — последним в группе соседей своего уровня.
     let orderApplied = false;
-    if (kind === 'text' && assembly !== null && anchorId !== null) {
-      const section = flattenSections(assembly.sections).find(
-        (item) => item.section.thought_id === anchorId,
-      )?.section;
-      if (section !== undefined) {
-        const keys = section.texts.map((text) => text.edge_id);
-        const addedKeys = section.texts
-          .filter((text) => added.has(text.thought_id))
-          .map((text) => text.edge_id);
-        const reordered = keysAppendedLast(keys, addedKeys);
-        if (addedKeys.length > 0 && reordered.some((key, index) => key !== keys[index])) {
-          await commitOrder(reordered);
-          orderApplied = true;
+    if (assembly !== null) {
+      let keys: string[] = [];
+      let addedKeys: string[] = [];
+      if (kind === 'text' && anchorId !== null) {
+        const section = flattenSections(assembly.sections).find(
+          (item) => item.section.thought_id === anchorId,
+        )?.section;
+        if (section !== undefined) {
+          keys = section.texts.map((text) => text.edge_id);
+          addedKeys = section.texts
+            .filter((text) => added.has(text.thought_id))
+            .map((text) => text.edge_id);
         }
+      } else if (kind === 'section') {
+        // Разделы уровня — прямые дети родителя `anchorId` (`null` — корни);
+        // их порядок в сборке и есть порядок документа (DFS из `flattenSections`).
+        const flat = flattenSections(assembly.sections);
+        keys = siblingNodeKeys(flat, anchorId);
+        addedKeys = flat
+          .filter((item) => item.parentThoughtId === anchorId && added.has(item.section.thought_id))
+          .map(sectionNodeKey);
+      }
+      const reordered = keysAppendedLast(keys, addedKeys);
+      if (addedKeys.length > 0 && reordered.some((key, index) => key !== keys[index])) {
+        await commitOrder(reordered);
+        orderApplied = true;
       }
     }
     // Разворот свёрнутого раздела менял состав блоков — перерисовываем, если
