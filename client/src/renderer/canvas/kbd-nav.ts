@@ -24,16 +24,13 @@
 import { setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { notice } from '../lib/notice.js';
+import { pickSpatialTarget, shouldDrawCurrentFrame } from '../lib/ui/nav-core.js';
 import { store } from '../state.js';
 import { reorderZone } from './drag-cloud.js';
 
 /** Frame class applied to the cloud under the keyboard cursor. */
 const CURSOR_CLS = 'kbd-cursor';
 
-/** Minimal forward projection, px — clouds closer than this are not targets. */
-const FORWARD_EPS_PX = 2;
-/** Penalty weight of the lateral offset against the forward distance. */
-const LATERAL_WEIGHT = 2.5;
 /** Share of the zone viewport scrolled when the arrow runs past the window. */
 const ZONE_SCROLL_SHARE = 0.8;
 
@@ -48,10 +45,11 @@ export interface CloudBox {
 
 /**
  * Picks the best cloud to move to from `current` in the unit direction
- * `(dx, dy)` (one of the four arrows): among the clouds projected forward onto
- * the direction, the score favours a small lateral offset — a cloud aligned
- * with the current one wins over a diagonally placed closer one. Returns null
- * when no cloud lies in the direction.
+ * `(dx, dy)` (one of the four arrows). Алгоритм — общий для всех 2D-навигаций
+ * (ядро `lib/ui/nav-core.ts::pickSpatialTarget`, задача 432ab7ba п.2): среди
+ * облачков, спроецированных вперёд, счёт штрафует боковое смещение — облачко на
+ * одной оси с текущим выигрывает у более близкого, но смещённого вбок. `null` —
+ * в направлении ничего нет.
  */
 export function pickSpatialCandidate(
   boxes: CloudBox[],
@@ -59,24 +57,14 @@ export function pickSpatialCandidate(
   dx: -1 | 0 | 1,
   dy: -1 | 0 | 1,
 ): CloudBox | null {
-  const cx = current.x + current.w / 2;
-  const cy = current.y + current.h / 2;
-  let best: CloudBox | null = null;
-  let bestScore = Number.POSITIVE_INFINITY;
-  for (const box of boxes) {
-    if (box.id === current.id) continue;
-    const vx = box.x + box.w / 2 - cx;
-    const vy = box.y + box.h / 2 - cy;
-    const forward = vx * dx + vy * dy;
-    if (forward <= FORWARD_EPS_PX) continue;
-    const lateral = Math.abs(vx * dy - vy * dx);
-    const score = forward + lateral * LATERAL_WEIGHT;
-    if (score < bestScore) {
-      bestScore = score;
-      best = box;
-    }
-  }
-  return best;
+  return pickSpatialTarget<CloudBox>(
+    boxes,
+    current,
+    dx,
+    dy,
+    (box) => box.id,
+    current.id,
+  );
 }
 
 let hostEl: HTMLElement | null = null;
@@ -187,6 +175,11 @@ export function syncCanvasCursor(): void {
     el.classList.remove(CURSOR_CLS);
   }
   if (cursorId === null) return;
+  // Двухрамочная навигация (ADR e6d48e09): текущая мысль совпала с открытой в
+  // редакторе (гало) — пунктир не рисуется, остаётся только сплошная рамка.
+  const editorTarget = store.state.editorTarget;
+  const openedId = editorTarget?.kind === 'thought' ? editorTarget.id : null;
+  if (!shouldDrawCurrentFrame(cursorId, openedId)) return;
   hostEl
     .querySelector<HTMLElement>(`.cloud[data-id="${CSS.escape(cursorId)}"]`)
     ?.classList.add(CURSOR_CLS);

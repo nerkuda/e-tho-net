@@ -45,7 +45,7 @@ describe('ea1b5f14: рабочая область публикации — пу�
     // не строится, а раздел остаётся кликабельным.
     assert.match(WS, /if \(line\.kind === 'section'\)/, 'строка оглавления — раздел');
     assert.ok(!WS.includes("node.classList.add('pub-toc-text')"), 'строк текстов в TOC больше нет');
-    assert.match(WS, /scrollToAnchor\(anchor\)/, 'клик по разделу прокручивает документ');
+    assert.match(WS, /scrollToAnchor\(anchor, true\)/, 'клик по разделу прокручивает документ');
     assert.match(WS, /function updateCurrentSection\(\)/, 'прокрутка подсвечивает текущий раздел');
   });
 

@@ -861,7 +861,10 @@ function patchVisualStates(): void {
   if (resultsHost === null) return;
   const selection = new Set(store.state.selection);
   patchCloudVisualStates(resultsHost, (id) => cloudVisualState(id, selection));
-  // Клавиатурный курсор не синхронизируем: строки и его DOM-якоря не менялись.
+  // Двухрамочная навигация (ADR e6d48e09): смена цели редактора меняет гало —
+  // пунктир текущего обязан появиться/исчезнуть на совпавшей мысли. Строки и
+  // геометрия при этом не перестраиваются, только классы.
+  syncStructuresCursor();
   drawTopOverlay();
   syncRenderSlices(dataSlice(), visualSlice());
 }

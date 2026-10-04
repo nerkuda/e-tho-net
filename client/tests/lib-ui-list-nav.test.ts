@@ -23,7 +23,9 @@ import {
   isEditingTarget,
   listTargetIndex,
   nextNavIndex,
+  pickSpatialTarget,
   resolveNavAction,
+  shouldDrawCurrentFrame,
 } from '../src/renderer/lib/ui/nav-core.js';
 import { createListNav, type ListNavAdapter, type ListNavHandle } from '../src/renderer/lib/ui/list.js';
 
@@ -89,6 +91,57 @@ describe('nav-core: чистая математика навигации', () =>
     const editable = new ShimElement('div');
     editable.setAttribute('contenteditable', 'true');
     assert.equal(isEditingTarget(editable), true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Пространственная (2D) навигация — общая для карты и сеточных списков
+// (задача 432ab7ba п.2) и двухрамочная семантика (ADR e6d48e09)
+// ---------------------------------------------------------------------------
+
+describe('nav-core: пространственная навигация', () => {
+  interface Box {
+    key: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  }
+  const box = (key: string, x: number, y: number, w = 100, h = 60): Box => ({ key, x, y, w, h });
+  const pick = (items: Box[], cur: Box, dx: -1 | 0 | 1, dy: -1 | 0 | 1): Box | null =>
+    pickSpatialTarget(items, cur, dx, dy, (item) => item.key, cur.key);
+
+  it('матрица переходов «2 столбца × 2 строки»: ←/→ по строке, ↑/↓ по столбцу', () => {
+    const a1 = box('a1', 105, 30);
+    const a2 = box('a2', 305, 30);
+    const b1 = box('b1', 105, 100);
+    const b2 = box('b2', 305, 100);
+    const items = [a1, a2, b1, b2];
+    assert.equal(pick(items, a1, 1, 0)?.key, 'a2', '→ вправо по ряду');
+    assert.equal(pick(items, a2, -1, 0)?.key, 'a1', '← влево по ряду');
+    assert.equal(pick(items, a2, 0, 1)?.key, 'b2', '↓ по столбцу');
+    assert.equal(pick(items, b1, 0, -1)?.key, 'a1', '↑ по столбцу');
+    assert.equal(pick(items, b2, 1, 0), null, 'в крайнем ряду → вправо цели нет');
+    assert.equal(pick(items, a1, 0, -1), null, 'из верхнего ряда ↑ цели нет');
+  });
+
+  it('боковой штраф: сущность на одной оси выигрывает у ближе по «вперёд»', () => {
+    const cur = box('cur', 200, 200);
+    const axis = box('axis', 210, 300);
+    const diag = box('diag', 320, 280);
+    assert.equal(pick([axis, diag], cur, 0, 1)?.key, 'axis');
+  });
+
+  it('текущая сущность сама целью не становится', () => {
+    const cur = box('cur', 200, 200);
+    assert.equal(pick([box('cur', 200, 200)], cur, 0, 1), null);
+  });
+
+  it('shouldDrawCurrentFrame: пунктир не рисуется на открытом в редакторе', () => {
+    assert.equal(shouldDrawCurrentFrame('t1', null), true, 'нет открытого — пунктир есть');
+    assert.equal(shouldDrawCurrentFrame('t1', 't2'), true, 'текущий ≠ открытый — обе рамки');
+    assert.equal(shouldDrawCurrentFrame('t1', 't1'), false, 'текущий = открытый — только сплошная');
+    assert.equal(shouldDrawCurrentFrame(null, 't1'), false, 'нет текущего — пунктира нет');
   });
 });
 

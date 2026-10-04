@@ -142,6 +142,74 @@ export function nextNavIndex(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Пространственная (2D) навигация — общая для карты мыслей и сеточных списков
+// (задача 432ab7ba п.2: «Полки» ходят геометрически, как карта). Чистая
+// геометрия без DOM: прямоугольники сущностей в координатах окна передаёт
+// адаптер представления.
+// ---------------------------------------------------------------------------
+
+/** Прямоугольник сущности в координатах окна (viewport). */
+export interface NavBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Рисовать ли ПУНКТИРНУЮ рамку текущего элемента (двухрамочная навигация,
+ * ADR e6d48e09): она не рисуется, когда текущий совпадает с ОТКРЫТЫМ в
+ * редакторе (остаётся только сплошная рамка). `null` текущий — рамки нет.
+ * Общее правило для карты, «Структур» и библиотеки «Публикаций».
+ */
+export function shouldDrawCurrentFrame(
+  currentKey: string | null,
+  openedKey: string | null,
+): boolean {
+  return currentKey !== null && currentKey !== openedKey;
+}
+
+/** Минимальный «вперёд»-зазор, px — более близкие сущности не считаются целью. */
+export const SPATIAL_FORWARD_EPS_PX = 2;
+/** Вес бокового смещения против «вперёд»-расстояния при выборе цели. */
+export const SPATIAL_LATERAL_WEIGHT = 2.5;
+
+/**
+ * Лучшая цель из `items` при шаге из `current` в единичном направлении
+ * `(dx, dy)` — одна из четырёх стрелок. Среди сущностей, спроецированных
+ * «вперёд», счёт штрафует боковое смещение: сущность на одной оси с текущей
+ * выигрывает у более близкой по «вперёд», но смещённой вбок. `null` — в
+ * направлении ничего нет. Сущность с ключом `currentKey` из выбора исключена.
+ */
+export function pickSpatialTarget<T extends NavBox>(
+  items: readonly T[],
+  current: NavBox,
+  dx: -1 | 0 | 1,
+  dy: -1 | 0 | 1,
+  keyOf: (item: T) => string,
+  currentKey: string,
+): T | null {
+  const cx = current.x + current.w / 2;
+  const cy = current.y + current.h / 2;
+  let best: T | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const item of items) {
+    if (keyOf(item) === currentKey) continue;
+    const vx = item.x + item.w / 2 - cx;
+    const vy = item.y + item.h / 2 - cy;
+    const forward = vx * dx + vy * dy;
+    if (forward <= SPATIAL_FORWARD_EPS_PX) continue;
+    const lateral = Math.abs(vx * dy - vy * dx);
+    const score = forward + lateral * SPATIAL_LATERAL_WEIGHT;
+    if (score < bestScore) {
+      bestScore = score;
+      best = item;
+    }
+  }
+  return best;
+}
+
 /**
  * Целевой индекс для одношагового перемещения по списку (`delta = ±1`).
  * Без выделения (`current < 0`) встаёт на первую строку при движении вниз и на

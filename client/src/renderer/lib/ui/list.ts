@@ -32,13 +32,23 @@
  * ядра (Tab, Escape), представление обрабатывает через
  * {@link ListNavAdapter.onKey}, вызываемый ДО базовых правил: так лента шагает
  * по полям записи и выходит из правки, не заводя второго контроллера.
+ *
+ * **Пространственный (2D) режим — расширение ядра.** Для сеточных представлений
+ * (полки «книжками», задача 432ab7ba п.2) адаптер включает
+ * {@link ListNavAdapter.useSpatialNav} и отдаёт прямоугольники сущностей
+ * ({@link ListNavAdapter.boxOf}); стрелки ходят по геометрии строк/столбцов
+ * (выбор цели — чистое ядро `nav-core.ts::pickSpatialTarget`), Home/End —
+ * границы текущей группы, Ctrl+Home/End — первой/последней. Без этого режима
+ * поведение не меняется.
  */
 
 import {
   isEditingTarget as coreIsEditingTarget,
   listTargetIndex,
   nextNavIndex,
+  pickSpatialTarget,
   resolveNavAction,
+  type NavBox,
 } from './nav-core.js';
 
 /** Loose view of `KeyboardEvent` fields used by the controller (test-friendly). */
@@ -91,6 +101,20 @@ export interface ListNavAdapter<E> {
   onClick?(target: HTMLElement): void;
   /** Клик вне корня (навигация гаснет — перерисовка не тянет фокус назад). */
   onOutsideClick?(): void;
+  /**
+   * Включена ли ПРОСТРАНСТВЕННАЯ (2D) навигация стрелками. Для сеточных
+   * представлений (полки «книжками»): ←/→/↑/↓ перемещают по геометрии
+   * (столбцами/строками, как на карте), Home/End — границы текущей группы,
+   * Ctrl+Home/End — границы первой/последней группы. Без неё — обычный
+   * последовательный ход ↑/↓. Требует {@link ListNavAdapter.boxOf}.
+   */
+  useSpatialNav?(): boolean;
+  /** Прямоугольник сущности в координатах окна — вход 2D-навигации. */
+  boxOf?(entry: E): NavBox | null;
+  /** Сущность — заголовок группы: на ней ←/→ сворачивают, а не двигают вбок. */
+  isGroupHead?(entry: E): boolean;
+  /** Ключ группы сущности (полка) — для Home/End «границы группы». */
+  groupOf?(entry: E): string | null;
 }
 
 /** Настройки компонента списка. */
@@ -223,6 +247,96 @@ export function createListNav<E>(
     setCurrent(entries[target] as E, { reveal: true });
   };
 
+  /** Пространственный режим включён и адаптер умеет отдавать прямоугольники. */
+  const spatial = (): boolean =>
+    adapter.boxOf !== undefined && adapter.useSpatialNav?.() === true;
+
+  /** Прямоугольник сущности (null — сущность не видна / нет геометрии). */
+  const boxOfEntry = (entry: E): NavBox | null => adapter.boxOf?.(entry) ?? null;
+
+  /**
+   * Пространственный шаг: из текущей сущности — ближайшая в направлении
+   * `(dx, dy)` по геометрии (выбор — в ядре `pickSpatialTarget`). Без текущей
+   * сущности: «вперёд» (вниз/вправо) — первая сущность, «назад» — последняя.
+   *
+   * С ЗАГОЛОВКА группы вертикаль ведёт в книги ЭТОЙ группы (первую/последнюю):
+   * заголовок тянется во всю ширину, и геометрический выбор предпочёл бы
+   * заголовок следующей группы книгам собственной (большое боковое смещение при
+   * малом «вперёд»). Пустая группа — обычный геометрический шаг.
+   */
+  const moveSpatial = (dx: -1 | 0 | 1, dy: -1 | 0 | 1): void => {
+    const entries = list();
+    if (entries.length === 0) {
+      setCurrent(null);
+      return;
+    }
+    if (current === null) {
+      const first = entries[0] as E;
+      setCurrent(dy > 0 || dx > 0 ? first : (entries[entries.length - 1] as E), { reveal: true });
+      return;
+    }
+    const isHead = (entry: E): boolean => adapter.isGroupHead?.(entry) === true;
+    if (dy !== 0 && isHead(current)) {
+      const group = adapter.groupOf?.(current) ?? null;
+      const hasBooks =
+        group !== null &&
+        entries.some((entry) => !isHead(entry) && adapter.groupOf?.(entry) === group);
+      if (hasBooks) {
+        moveGroupEdge(dy < 0, false);
+        return;
+      }
+    }
+    const currentBox = boxOfEntry(current);
+    if (currentBox === null) return;
+    const boxes = entries
+      .map((entry) => ({ entry, box: boxOfEntry(entry) }))
+      .filter((item): item is { entry: E; box: NavBox } => item.box !== null);
+    const next = pickSpatialTarget(
+      boxes.map((item) => ({ ...item.box, entry: item.entry })),
+      currentBox,
+      dx,
+      dy,
+      (item) => adapter.tokenOf(item.entry),
+      adapter.tokenOf(current),
+    );
+    if (next !== null) setCurrent(next.entry, { reveal: true });
+  };
+
+  /**
+   * Home/End в пространственном режиме: первая/последняя ПУБЛИКАЦИЯ группы
+   * (полки) текущей сущности; `global` (Ctrl+Home/End) — первой/последней
+   * группы. Пустая группа отдаёт свой заголовок.
+   */
+  const moveGroupEdge = (last: boolean, global: boolean): void => {
+    const entries = list();
+    if (entries.length === 0) {
+      setCurrent(null);
+      return;
+    }
+    const groupOf = (entry: E): string | null => adapter.groupOf?.(entry) ?? null;
+    const isHead = (entry: E): boolean => adapter.isGroupHead?.(entry) === true;
+    const groups: string[] = [];
+    for (const entry of entries) {
+      const key = groupOf(entry);
+      if (key !== null && !groups.includes(key)) groups.push(key);
+    }
+    if (groups.length === 0) {
+      moveToEdge(last);
+      return;
+    }
+    const currentGroup = current === null ? groups[0]! : groupOf(current);
+    const groupKey = global
+      ? (last ? groups[groups.length - 1]! : groups[0]!)
+      : (currentGroup ?? groups[0]!);
+    const inGroup = entries.filter((entry) => groupOf(entry) === groupKey);
+    const items = inGroup.filter((entry) => !isHead(entry));
+    const target =
+      items.length === 0
+        ? (inGroup[0] ?? null)
+        : (last ? items[items.length - 1]! : items[0]!);
+    if (target !== null) setCurrent(target, { reveal: true });
+  };
+
   const handleKeyDown = (event: ListNavKeyEvent): void => {
     const key = event.key ?? '';
     const target = (event.target ?? null) as HTMLElement | null;
@@ -237,35 +351,44 @@ export function createListNav<E>(
     const action = resolveNavAction(key, { altKey: event.altKey === true });
     if (action === null) return;
     navActive = true;
+    const useSpatial = spatial();
+    const onGroupHead = current !== null && adapter.isGroupHead?.(current) === true;
     switch (action) {
       case 'up':
         event.preventDefault?.();
-        move(-1);
+        if (useSpatial) moveSpatial(0, -1);
+        else move(-1);
         break;
       case 'down':
         event.preventDefault?.();
-        move(1);
+        if (useSpatial) moveSpatial(0, 1);
+        else move(1);
         break;
       case 'home':
         event.preventDefault?.();
-        moveToEdge(false);
+        if (useSpatial) moveGroupEdge(false, event.ctrlKey === true);
+        else moveToEdge(false);
         break;
       case 'end':
         event.preventDefault?.();
-        moveToEdge(true);
+        if (useSpatial) moveGroupEdge(true, event.ctrlKey === true);
+        else moveToEdge(true);
         break;
       case 'collapse':
+      case 'expand': {
+        // В пространственном режиме на КНИЖКЕ ←/→ — перемещение по горизонтали,
+        // а сворачивание — только на заголовке группы (спека 1eecd988).
+        if (useSpatial && !onGroupHead) {
+          event.preventDefault?.();
+          moveSpatial(action === 'collapse' ? -1 : 1, 0);
+          break;
+        }
         if (current !== null && adapter.onCollapse !== undefined) {
           event.preventDefault?.();
-          adapter.onCollapse(current, true);
+          adapter.onCollapse(current, action === 'collapse');
         }
         break;
-      case 'expand':
-        if (current !== null && adapter.onCollapse !== undefined) {
-          event.preventDefault?.();
-          adapter.onCollapse(current, false);
-        }
-        break;
+      }
       case 'activate':
         if (current !== null && adapter.onActivate !== undefined) {
           event.preventDefault?.();

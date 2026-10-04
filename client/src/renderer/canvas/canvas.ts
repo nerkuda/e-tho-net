@@ -667,6 +667,9 @@ function paintHalo(): void {
     const id = cloud.dataset['id'];
     cloud.classList.toggle('halo', id !== undefined && id === haloId);
   }
+  // Двухрамочная навигация (ADR e6d48e09): смена цели редактора меняет гало —
+  // пунктир текущего обязан появиться/исчезнуть на совпавшем облачке.
+  syncCanvasCursor();
 }
 
 /**

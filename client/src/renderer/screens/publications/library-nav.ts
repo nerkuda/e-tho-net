@@ -27,7 +27,7 @@
  */
 
 import { createListNav, type ListNavAdapter } from '../../lib/ui/list.js';
-import { isEditingTarget } from '../../lib/ui/nav-core.js';
+import { isEditingTarget, shouldDrawCurrentFrame, type NavBox } from '../../lib/ui/nav-core.js';
 import { visibleLibraryEntities, type LibraryEntity, type LibraryGroupLike } from './model.js';
 
 /** Класс секции группы (полки) — общий для обоих видов. */
@@ -36,8 +36,10 @@ export const LIB_GROUP_CLASS = 'pub-group';
 export const LIB_GROUP_COLLAPSED_CLASS = 'pub-group-collapsed';
 /** Класс заголовка группы (по нему ходит выделение полки). */
 export const LIB_HEAD_CLASS = 'pub-group-head';
-/** Класс выделения текущей сущности (полка/публикация). */
+/** Класс выделения текущей сущности (полка/публикация) — пунктир. */
 export const LIB_NAV_CURRENT_CLASS = 'pub-current';
+/** Класс публикации, ОТКРЫТОЙ в панели редактора — сплошная рамка (ADR e6d48e09). */
+export const LIB_OPEN_CLASS = 'pub-open';
 /** Атрибут секции с ключом полки. */
 export const LIB_SHELF_ATTR = 'data-shelf-key';
 /** Атрибут узла публикации с её id. */
@@ -53,6 +55,16 @@ export interface LibraryNavOptions {
   onOpenPublication: (publicationId: string) => void;
   /** Ctrl+Enter на публикации — открыть в режиме чтения (рабочая область). */
   onReadPublication: (publicationId: string) => void;
+  /**
+   * Активен вид «Полки» — включается пространственная (2D) навигация книжек
+   * (задача 432ab7ba п.2). В «Списке» — обычный последовательный ход.
+   */
+  isShelvesView?: () => boolean;
+  /**
+   * Ключ публикации, ОТКРЫТОЙ в панели редактора (`null` — нет) — сплошная
+   * рамка вместо пунктира на совпавшей книжке (ADR e6d48e09).
+   */
+  openedKey?: () => string | null;
 }
 
 /** Публичный дескриптор контроллера. */
@@ -120,6 +132,20 @@ export function attachLibraryNav(root: HTMLElement, opts: LibraryNavOptions): Li
     return Array.from(section.querySelectorAll<HTMLElement>(`[${LIB_PUB_ATTR}]`));
   }
 
+  /** Ключ публикации узла (`data-pub-key`). */
+  function pubKeyOfNode(node: HTMLElement): string {
+    return node.dataset?.['pubKey'] ?? node.getAttribute?.(LIB_PUB_ATTR) ?? '';
+  }
+
+  /** Узел публикации по её id (null — не видна). */
+  function findPublicationEl(publicationId: string): HTMLElement | null {
+    for (const section of sections()) {
+      const found = publicationNodes(section).find((node) => pubKeyOfNode(node) === publicationId);
+      if (found !== undefined) return found;
+    }
+    return null;
+  }
+
   /** Группы библиотеки для чистой функции видимой последовательности. */
   function readGroups(): LibraryGroupLike[] {
     const out: LibraryGroupLike[] = [];
@@ -144,26 +170,54 @@ export function attachLibraryNav(root: HTMLElement, opts: LibraryNavOptions): Li
       const section = sections().find((candidate) => shelfKeyOf(candidate) === entity.key);
       return section?.querySelector<HTMLElement>(`.${LIB_HEAD_CLASS}`) ?? section ?? null;
     }
+    return findPublicationEl(entity.key);
+  }
+
+  /** Снять обе рамки (текущая и открытая в редакторе). */
+  function clearHighlight(): void {
+    for (const cls of [LIB_NAV_CURRENT_CLASS, LIB_OPEN_CLASS]) {
+      for (const el of Array.from(root.querySelectorAll<HTMLElement>(`.${cls}`))) {
+        el.classList.remove(cls);
+      }
+    }
+  }
+
+  /**
+   * Перерисовать рамки: пунктир — текущая сущность навигации, сплошная —
+   * публикация, открытая в редакторе (ADR e6d48e09). При совпадении пунктир НЕ
+   * рисуется — остаётся только сплошная рамка.
+   */
+  function renderHighlight(): void {
+    clearHighlight();
+    const openedKey = opts.openedKey?.() ?? null;
+    const openedEl = openedKey === null ? null : findPublicationEl(openedKey);
+    if (openedEl !== null) openedEl.classList.add(LIB_OPEN_CLASS);
+    const currentEl = findEntityEl(current);
+    // Пунктир не рисуется только когда ТЕКУЩАЯ ПУБЛИКАЦИЯ открыта в редакторе;
+    // полка — не публикация, её пунктир не подавляется.
+    const openedForKey = current?.kind === 'publication' ? openedKey : null;
+    if (currentEl !== null && shouldDrawCurrentFrame(current?.key ?? null, openedForKey)) {
+      currentEl.classList.add(LIB_NAV_CURRENT_CLASS);
+    }
+  }
+
+  /** Ключ группы (полки) сущности — для Home/End «границы группы». */
+  function groupOfEntity(entity: LibraryEntity): string | null {
+    if (entity.kind === 'shelf') return entity.key;
     for (const section of sections()) {
-      const found = publicationNodes(section).find(
-        (node) => (node.dataset?.['pubKey'] ?? node.getAttribute?.(LIB_PUB_ATTR) ?? '') === entity.key,
-      );
-      if (found !== undefined) return found;
+      if (publicationNodes(section).some((node) => pubKeyOfNode(node) === entity.key)) {
+        return shelfKeyOf(section);
+      }
     }
     return null;
   }
 
-  /** Снять выделение со всех сущностей. */
-  function clearHighlight(): void {
-    for (const el of Array.from(root.querySelectorAll<HTMLElement>(`.${LIB_NAV_CURRENT_CLASS}`))) {
-      el.classList.remove(LIB_NAV_CURRENT_CLASS);
-    }
-  }
-
-  /** Перерисовать выделение по текущей сущности. */
-  function renderHighlight(): void {
-    clearHighlight();
-    findEntityEl(current)?.classList.add(LIB_NAV_CURRENT_CLASS);
+  /** Прямоугольник сущности в координатах окна — вход 2D-навигации «Полок». */
+  function boxOfEntity(entity: LibraryEntity): NavBox | null {
+    const el = findEntityEl(entity);
+    if (el === null || typeof el.getBoundingClientRect !== 'function') return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
   }
 
   const nav = createListNav<LibraryEntry>(root, {
@@ -172,6 +226,12 @@ export function attachLibraryNav(root: HTMLElement, opts: LibraryNavOptions): Li
     tokenOf: (entry) => `${entry.entity.kind}\u0000${entry.entity.key}`,
     elementOf: (entry) => findEntityEl(entry.entity),
     applyHighlight: () => renderHighlight(),
+    // Пространственная (2D) навигация — только в виде «Полки» (задача 432ab7ba
+    // п.2); «Список» ходит последовательно, как прежде.
+    useSpatialNav: () => opts.isShelvesView?.() === true,
+    boxOf: (entry) => boxOfEntity(entry.entity),
+    isGroupHead: (entry) => entry.entity.kind === 'shelf',
+    groupOf: (entry) => groupOfEntity(entry.entity),
     onSelectionChange: (entry) => {
       current = entry?.entity ?? null;
     },

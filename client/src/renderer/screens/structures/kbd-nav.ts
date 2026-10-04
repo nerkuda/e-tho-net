@@ -22,6 +22,8 @@
  * `Ctrl+Shift+Up/Down` and `Ctrl+Enter` (canvas-only) are not wired here.
  */
 
+import { currentThoughtId } from '../../history.js';
+import { shouldDrawCurrentFrame } from '../../lib/ui/nav-core.js';
 import { store } from '../../state.js';
 
 /** Frame class applied to the cloud under the keyboard cursor (shared with the canvas). */
@@ -123,13 +125,17 @@ export function resetStructuresCursor(): void {
   setCursor(null);
 }
 
-/** Re-applies the cursor frame after a full tree rebuild (renderTree() clears the DOM). */
+/** Re-applies the cursor frame after a full tree rebuild (renderTree() clears the DOM).
+ *  Двухрамочная семантика (ADR e6d48e09): если текущая мысль совпадает с
+ *  открытой в редакторе (гало, `currentThoughtId()`), пунктир НЕ рисуется —
+ *  остаётся только сплошная рамка. */
 export function syncStructuresCursor(): void {
   if (hostEl === null) return;
   for (const el of hostEl.querySelectorAll<HTMLElement>(`.${CURSOR_CLS}`)) {
     el.classList.remove(CURSOR_CLS);
   }
   if (cursorId === null) return;
+  if (!shouldDrawCurrentFrame(cursorId, currentThoughtId())) return;
   navRowOf(cursorId)?.cloud.classList.add(CURSOR_CLS);
 }
 

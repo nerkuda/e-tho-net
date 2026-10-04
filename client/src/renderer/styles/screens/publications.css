@@ -139,7 +139,8 @@
 
 .pub-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  /* Ширина «книжки» увеличена на 15% против прежних 11rem (задача 432ab7ba п.1). */
+  grid-template-columns: repeat(auto-fill, minmax(calc(11rem * 1.15), 1fr));
   gap: var(--space-3);
 }
 
@@ -172,26 +173,45 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  /* Текстовые зоны «книжки» — 5 строк (заголовок до 3 + подзаголовок до 2) плюс
+     строка автора внизу; высота карточки тем самым на 3 строки выше прежней
+     (задача 432ab7ba п.1). Линия — 1.3 от базового кегля. */
+  min-height: calc(6 * 1.3 * var(--font-size-m));
 }
 
+/* Заголовок — перенос до 3 строк; без подзаголовка занимает все 5 текстовых
+   строк (задача 432ab7ba п.1). */
 .pub-card-title {
   font-weight: var(--font-weight-medium);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  white-space: normal;
 }
 
+.pub-card-info.pub-card-info-no-subtitle .pub-card-title {
+  -webkit-line-clamp: 5;
+}
+
+/* Подзаголовок — до 2 строк под заголовком (задача 432ab7ba п.1). */
 .pub-card-subtitle {
   color: var(--text-dim);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
 }
 
-.pub-card-author,
-.pub-card-date {
+/* Автор — самой нижней строкой, не поместившееся обрезается (задача 432ab7ba п.1). */
+.pub-card-author {
+  margin-top: auto;
   color: var(--text-dim);
   font-size: var(--font-size-3xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pub-cover {
@@ -338,10 +358,19 @@
   -webkit-box-orient: vertical;
 }
 
-/* Выделение текущей сущности навигации — общее для обоих видов (задача
-   55ee3c85): класс вешает контроллер `library-nav.ts`. */
+/* Двухрамочная навигация библиотеки (ADR e6d48e09): текущая сущность навигации
+   (полка/публикация) — ПУНКТИРНАЯ рамка, как курсор карты/текста публикации;
+   публикация, ОТКРЫТАЯ в панели редактора, — сплошная рамка цвета фокуса
+   активного слоя. При совпадении пунктир не рисуется контроллером
+   (`library-nav.ts`), остаётся только сплошная. */
 .pub-current {
-  outline: 2px solid var(--accent);
+  outline: 2px dashed var(--warn-strong);
+  outline-offset: -2px;
+  border-radius: var(--radius-s);
+}
+
+.pub-open {
+  outline: 2px solid var(--layer-focus-stripe, var(--accent));
   outline-offset: -2px;
   border-radius: var(--radius-s);
 }

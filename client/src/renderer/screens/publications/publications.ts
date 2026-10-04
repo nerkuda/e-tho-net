@@ -59,7 +59,6 @@ import {
 } from '../../lib/live/index.js';
 import { buildCover } from './cover.js';
 import {
-  assemblyDateLabel,
   clampTextWidth,
   defaultPublicationsViewState,
   displayAuthorship,
@@ -144,6 +143,17 @@ const badgeBadges = new Map<string, HTMLElement>();
 /** Контроллер единой клавиатурной навигации обоих видов (задача 55ee3c85). */
 let libraryNav: LibraryNavHandle | null = null;
 
+/**
+ * Ключ публикации, ОТКРЫТОЙ в панели редактора (`null` — нет) — для сплошной
+ * рамки в библиотеке (двухрамочная навигация, ADR e6d48e09). Следим за сменой,
+ * чтобы перерисовать рамки пунктир/сплошная.
+ */
+function openedPublicationKey(): string | null {
+  const target = store.state.editorTarget;
+  return target?.kind === 'publication' ? target.id : null;
+}
+let lastOpenedPublicationKey: string | null = null;
+
 interface Ui {
   root: HTMLElement;
   search: HTMLInputElement;
@@ -197,6 +207,10 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     onEditShelf: (shelfId) => beginShelfRenameById(shelfId),
     onOpenPublication: (id) => void openPublicationCard(id),
     onReadPublication: (id) => void openPublicationWorkspace(id),
+    // Пространственная навигация «книжек» — только в виде «Полки» (432ab7ba п.2).
+    isShelvesView: () => viewState.viewMode === 'shelves',
+    // Публикация, открытая в панели редактора, — сплошная рамка (ADR e6d48e09).
+    openedKey: () => openedPublicationKey(),
   });
   wsHost = div('publications-host pub-ws-host hidden');
   hostEl.append(wsHost);
@@ -226,6 +240,13 @@ export function mountPublications(hostEl: HTMLElement): () => void {
   });
   unsubStore = store.subscribe(() => {
     if (hostEl.isConnected !== true) return;
+    // Двухрамочная навигация (ADR e6d48e09): смена открытой в редакторе
+    // публикации перерисовывает рамки библиотеки (пунктир/сплошная).
+    const opened = openedPublicationKey();
+    if (opened !== lastOpenedPublicationKey) {
+      lastOpenedPublicationKey = opened;
+      libraryNav?.refresh();
+    }
     if (store.state.activeView === 'publications') void initForNetwork(false);
   });
   return () => {
@@ -925,16 +946,18 @@ function buildCard(publication: Publication): HTMLElement {
   card.tabIndex = 0;
   card.append(buildCover(publication, 'card'));
   const info = div('pub-card-info');
-  info.append(
-    span(publication.title, 'pub-card-title'),
-    span(publication.subtitle ?? '', 'pub-card-subtitle'),
-    span(authorLine(publication), 'pub-card-author'),
-    span(assemblyDateLabel(publication.assembly_date), 'pub-card-date'),
-  );
+  // Дата сборки в «книжках» убрана (задача 432ab7ba п.1): текстовые зоны —
+  // заголовок (до 3 строк; без подзаголовка — до 5) и подзаголовок (до 2 строк),
+  // автор — САМОЙ НИЖНЕЙ строкой (после бейджа) с обрезкой.
   const badgeNode = badge('', { kind: 'pill', tone: 'accent' });
   badgeNode.classList.add('pub-new-badge');
   badgeBadges.set(publication.id, badgeNode);
-  info.append(badgeNode);
+  info.append(
+    span(publication.title, 'pub-card-title'),
+    span(publication.subtitle ?? '', 'pub-card-subtitle'),
+    badgeNode,
+    span(authorLine(publication), 'pub-card-author'),
+  );
   card.append(info);
   updateCard(card, publication);
   wireCardEvents(card, publication);
@@ -943,14 +966,15 @@ function buildCard(publication: Publication): HTMLElement {
 
 function updateCard(card: HTMLElement, publication: Publication): void {
   card.classList.toggle('pub-inactive', !publication.active);
+  const info = card.querySelector('.pub-card-info');
+  // Без подзаголовка заголовок занимает все 5 текстовых строк (задача 432ab7ba п.1).
+  info?.classList.toggle('pub-card-info-no-subtitle', (publication.subtitle ?? '') === '');
   const title = card.querySelector('.pub-card-title');
   if (title !== null) title.textContent = publication.title;
   const subtitle = card.querySelector('.pub-card-subtitle');
   if (subtitle !== null) subtitle.textContent = publication.subtitle ?? '';
   const author = card.querySelector('.pub-card-author');
   if (author !== null) author.textContent = authorLine(publication);
-  const date = card.querySelector('.pub-card-date');
-  if (date !== null) date.textContent = assemblyDateLabel(publication.assembly_date);
   const cover = card.querySelector('.pub-cover');
   if (cover !== null && cover.getAttribute('data-kind') !== publication.cover_kind) {
     cover.replaceWith(buildCover(publication, 'card'));

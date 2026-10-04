@@ -498,7 +498,7 @@ export function mountPublicationWorkspace(
       if (line !== null) tocLineNode(line.key)?.classList.add('pub-toc-selected');
     },
     onActivate: (line) => {
-      if (line.kind !== 'excluded') scrollToAnchor(line.anchor);
+      if (line.kind !== 'excluded') scrollToAnchor(line.anchor, true);
     },
     onClick: (target) => {
       let cursor: HTMLElement | null = target;
@@ -633,7 +633,45 @@ export function mountPublicationWorkspace(
    * (замечание 1 приёмки 5de0332d). Пока флаг взведён, первый scroll само
    * себя снимает и current не пересчитывается; страховочный таймер снимает
    * флаг, если события прокрутки не случилось вовсе.
+   *
+   * `focusDoc` — перевести фокус в тело документа (клик/Enter по оглавлению,
+   * задача 432ab7ba п.3): раздел становится ТЕКУЩИМ элементом документа
+   * (`.pub-doc-current`), и стрелки продолжают навигацию по тексту с него.
    */
+  function scrollToAnchor(anchor: string, focusDoc = false): void {
+    const node = docHost.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`);
+    if (node === null) return;
+    // Программная прокрутка: взводим блокировку ДО изменения scrollTop, чтобы
+    // прилетевшее событие прокрутки не пересчитало current (замечание 1).
+    lockScrollSync();
+    docHost.scrollTop = Math.max(0, topWithinDoc(node) - 8);
+    currentAnchor = anchor;
+    for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
+      row.classList.toggle('pub-toc-current', row.dataset['anchor'] === anchor);
+    }
+    makeDocCurrent(anchor, focusDoc);
+  }
+
+  /**
+   * Раздел/текст по якорю (`domId`) становится ТЕКУЩИМ элементом документа —
+   * пунктирная рамка `.pub-doc-current` и продолжение навигации стрелками с
+   * него (задача 432ab7ba п.3). `focus` переводит фокус в тело документа.
+   */
+  function makeDocCurrent(anchor: string, focus: boolean): void {
+    const block = navBlocks.find(
+      (candidate) =>
+        (candidate.kind === 'section' || candidate.kind === 'text') && candidate.domId === anchor,
+    );
+    const entry =
+      block === undefined
+        ? null
+        : (docEntries().find((candidate) => candidate.key === block.key) ?? null);
+    if (entry === null) {
+      if (focus) docHost.focus();
+      return;
+    }
+    docNav.setCurrent(entry, focus ? { focus: true } : {});
+  }
   let scrollSyncLocked = false;
   let scrollSyncTimer: number | null = null;
   const lockScrollSync = (): void => {
@@ -1368,7 +1406,7 @@ export function mountPublicationWorkspace(
     if (line.kind === 'excluded') return;
     const anchor = line.anchor;
     const thoughtId = line.thoughtId;
-    node.addEventListener('click', () => scrollToAnchor(anchor));
+    node.addEventListener('click', () => scrollToAnchor(anchor, true));
     node.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       showMenuAt(ev.clientX, ev.clientY, rowMenu(thoughtId));
@@ -1919,19 +1957,6 @@ export function mountPublicationWorkspace(
     currentAnchor = current;
     for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
       row.classList.toggle('pub-toc-current', row.dataset['anchor'] === current);
-    }
-  }
-
-  function scrollToAnchor(anchor: string): void {
-    const node = docHost.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`);
-    if (node === null) return;
-    // Программная прокрутка: взводим блокировку ДО изменения scrollTop, чтобы
-    // прилетевшее событие прокрутки не пересчитало current (замечание 1).
-    lockScrollSync();
-    docHost.scrollTop = Math.max(0, topWithinDoc(node) - 8);
-    currentAnchor = anchor;
-    for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
-      row.classList.toggle('pub-toc-current', row.dataset['anchor'] === anchor);
     }
   }
 
