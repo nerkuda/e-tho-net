@@ -82,7 +82,11 @@ describe('5de0332d п.2: dblclick открывает комментарий и �
   });
 
   it('путь пользователя: текст документа зовёт openThoughtCommentEditor', () => {
-    assert.match(WS, /openThoughtCommentEditor\(block\.thoughtId/);
+    // Волна 8 вынесла открытие в редактор в общий помощник
+    // `openTextCommentEditById` (тот же путь использует автовыбор добавленного) —
+    // проверяем и переход от блока, и сам вызов редактора.
+    assert.match(WS, /openTextCommentEditById\(block\.thoughtId/);
+    assert.match(WS, /mod\.openThoughtCommentEditor\(thoughtId, findText\)/);
     assert.match(
       WS,
       /closest\('p, li, blockquote, h1, h2, h3, h4, h5, h6'\)/,

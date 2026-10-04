@@ -449,6 +449,24 @@ export function positionsFor(ids: readonly string[]): PublicationOrderItem[] {
 }
 
 /**
+ * Новый порядок ОДНОЙ группы `node_key`, в котором ключи `added` уезжают в
+ * КОНЕЦ (волна 8, п.1: добавленный текст раздела — последним). Взаимный порядок
+ * остальных и добавленных сохраняется; при этом чужие группы не затрагиваются —
+ * вызывающий (DnD/Alt) и так переставляет ровно одну группу. Ключи `added`,
+ * которых нет в `keys`, игнорируются (в группе их нет).
+ */
+export function keysAppendedLast(
+  keys: readonly string[],
+  added: readonly string[],
+): string[] {
+  if (added.length === 0) return [...keys];
+  const set = new Set(added);
+  const kept = keys.filter((key) => !set.has(key));
+  const tail = keys.filter((key) => set.has(key));
+  return [...kept, ...tail];
+}
+
+/**
  * Применяет локальный порядок к дереву сборки (чисто, без мутации входа).
  *
  * Сервер сортирует соседей одного родителя и тексты одного раздела по позиции

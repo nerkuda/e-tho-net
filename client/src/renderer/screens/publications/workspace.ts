@@ -77,6 +77,7 @@ import {
   documentBlocks,
   fitFontSize,
   flattenSections,
+  keysAppendedLast,
   linkEntryMatchesPick,
   positionsFor,
   subtreeIds,
@@ -1721,8 +1722,16 @@ export function mountPublicationWorkspace(
     const target = ev.target as HTMLElement | null;
     const paragraph = target?.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6') ?? null;
     const text = (paragraph?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    openTextCommentEditById(block.thoughtId, text === '' ? undefined : text);
+  }
+
+  /**
+   * Открыть мысль-текст в редакторе на вкладке «Комментарий» в режиме правки
+   * (`findText` — курсор к началу абзаца, иначе к началу комментария).
+   */
+  function openTextCommentEditById(thoughtId: string, findText?: string): void {
     void import('../../editor/editor.js').then((mod) =>
-      mod.openThoughtCommentEditor(block.thoughtId, text === '' ? undefined : text),
+      mod.openThoughtCommentEditor(thoughtId, findText),
     );
   }
 
@@ -2200,6 +2209,68 @@ export function mountPublicationWorkspace(
    * рецепта текстов; после записи проверяется вхождение мысли в сборку (промах —
    * предупреждение, не ошибка).
    */
+  /**
+   * Завершение команд «Добавить текст/раздел…» (волна 8 приёмки, задача 053dae09):
+   *
+   *  - п.1 — добавленный ТЕКСТ уезжает в КОНЕЦ группы текстов своего раздела тем
+   *    же механизмом, что DnD/Alt (PUT order: `commitOrder` + `positionsFor`),
+   *    не трогая порядок существующих текстов; если он и так последний, запрос не
+   *    шлётся;
+   *  - п.2 — добавленная мысль становится ТЕКУЩИМ блоком документа (прокрутка к
+   *    ней + `makeDocCurrent` через `scrollToAnchor`) и открывается в редакторе:
+   *    текст — вкладка «Комментарий» в режиме правки с курсором, раздел — просто
+   *    открыт. Реактивность — слой `lib/live` (патч порядка), без подписки на
+   *    события realtime и без полного перечитывания сборки.
+   *
+   * `anchorId` — мысль-владелец добавленного содержимого (раздел для текста,
+   * родитель для «раздела на этом уровне»/сам блок для «подчинённого»): её
+   * сворачивание снимается, чтобы добавленный блок был видим.
+   */
+  async function finishAdditions(
+    addedIds: readonly string[],
+    kind: 'section' | 'text',
+    anchorId: string | null,
+  ): Promise<void> {
+    const added = new Set(addedIds);
+    if (added.size === 0) return;
+    const collapseChanged = anchorId !== null ? collapsed.delete(anchorId) : false;
+    // п.1: новый текст — последним в группе текстов своего раздела.
+    let orderApplied = false;
+    if (kind === 'text' && assembly !== null && anchorId !== null) {
+      const section = flattenSections(assembly.sections).find(
+        (item) => item.section.thought_id === anchorId,
+      )?.section;
+      if (section !== undefined) {
+        const keys = section.texts.map((text) => text.edge_id);
+        const addedKeys = section.texts
+          .filter((text) => added.has(text.thought_id))
+          .map((text) => text.edge_id);
+        const reordered = keysAppendedLast(keys, addedKeys);
+        if (addedKeys.length > 0 && reordered.some((key, index) => key !== keys[index])) {
+          await commitOrder(reordered);
+          orderApplied = true;
+        }
+      }
+    }
+    // Разворот свёрнутого раздела менял состав блоков — перерисовываем, если
+    // этого не сделал optimistic-патч порядка.
+    if (collapseChanged && !orderApplied) {
+      renderToc();
+      renderDocument();
+    }
+    // п.2: автовыбор и автооткрытие добавленного блока.
+    const block = navBlocks.find(
+      (candidate) =>
+        (candidate.kind === 'section' || candidate.kind === 'text') &&
+        candidate.kind === kind &&
+        added.has(candidate.thoughtId),
+    );
+    if (block === undefined || (block.kind !== 'section' && block.kind !== 'text')) return;
+    scrollToAnchor(block.domId);
+    if (block.kind === 'text') openTextCommentEditById(block.thoughtId);
+    else openThought(block.thoughtId);
+  }
+
   async function createChild(anchorId: string | null, kind: 'section' | 'text'): Promise<void> {
     const networkId = store.state.networkId;
     if (networkId === null || publicationId === null) return;
@@ -2290,32 +2361,32 @@ export function mountPublicationWorkspace(
     await load();
     // Проверка вхождения: мысль под рецепт, не попавшая в сборку, помечается
     // предупреждением (не ошибкой) — как «промах» расстановки.
-    const known = new Set<string>();
-    if (assembly !== null) {
-      for (const item of flattenSections(assembly.sections)) {
-        known.add(item.section.thought_id);
-        for (const text of item.section.texts) known.add(text.thought_id);
-      }
-    }
-    const missed = createdIds.filter((id) => !known.has(id));
-    if (missed.length === 0) return;
+    const isKnown = (id: string): boolean => assembly !== null && assemblyHasThought(assembly, id);
+    let missed = createdIds.filter((id) => !isKnown(id));
     // Соответствовать отбору своими свойствами не вышло — созданную мысль
     // привязываем под «Родительскую мысль» отбора, чтобы она вошла в разделы
     // (карточка ea1b5f14, пункт 3). Промах, который так не закрыть, —
     // предупреждение, не ошибка.
     const recipeParents = publicationParentIds();
-    if (kind === 'section' && recipeParents.length > 0) {
+    if (missed.length > 0 && kind === 'section' && recipeParents.length > 0) {
       try {
         for (const id of missed) {
           throwOnFailures(await setOnlyParents(networkId, id, [recipeParents[0]!], null));
         }
         await load();
-        return;
+        missed = createdIds.filter((id) => !isKnown(id));
       } catch (err) {
         errorDialog(t('publications.ws.createSection'), err);
       }
     }
-    notice(t('publications.ws.createMiss'), 'error');
+    // Вошедшие в сборку: новый текст — последним, затем автовыбор и автооткрытие
+    // (волна 8, задача 053dae09).
+    await finishAdditions(
+      createdIds.filter((id) => !missed.includes(id)),
+      kind,
+      anchorId,
+    );
+    if (missed.length > 0) notice(t('publications.ws.createMiss'), 'error');
   }
 
   /** Типы мыслей из рецепта заголовков публикации (для предзаполнения). */
