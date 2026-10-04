@@ -103,6 +103,38 @@ describe('волна 8, п.1: новый текст — последним в г
     );
   });
 
+  it('тексты раздела — одна группа независимо от свойства-источника (паритет с сервером)', () => {
+    // В DTO сборки тексты не несут свойства-источника: сервер после фикса волны 8
+    // собирает их ЕДИНЫМ пулом раздела, поэтому порядок клиента — по всему
+    // section.texts (edge_id), а не по отдельным свойствам. Кейс верификатора:
+    // tFull (свойство 1) + tEmpty (свойство 2), затем новый текст добавлен в
+    // свойство 1 (по сетевому месту он первый) — клиент переносит его в конец
+    // ВСЕЙ группы, а не «за текстами первого свойства».
+    const asm = assembly([
+      section('A', [
+        { thought_id: 'N', anchor: 'pub-N', edge_id: 'e:N', body_html: '' },
+        { thought_id: 'TFull', anchor: 'pub-TFull', edge_id: 'e:TFull', body_html: 'полный' },
+        { thought_id: 'TEmpty', anchor: 'pub-TEmpty', edge_id: 'e:TEmpty', body_html: '' },
+      ]),
+    ]);
+    const keys = ['e:N', 'e:TFull', 'e:TEmpty'];
+    const reordered = keysAppendedLast(keys, ['e:N']);
+    assert.deepEqual(reordered, ['e:TFull', 'e:TEmpty', 'e:N'], 'новый — последний во всём пуле');
+    const patched = applyPublicationOrder(asm, positionsFor(reordered))!;
+    assert.deepEqual(
+      patched.sections[0]!.texts.map((t) => t.edge_id),
+      ['e:TFull', 'e:TEmpty', 'e:N'],
+    );
+
+    // Alt/DnD через границу свойства: позиции, назначенные наоборот, реально
+    // меняют порядок пула (серверный локальный порядок перекрывает свойства).
+    const swapped = applyPublicationOrder(patched, positionsFor(['e:TEmpty', 'e:N', 'e:TFull']))!;
+    assert.deepEqual(
+      swapped.sections[0]!.texts.map((t) => t.edge_id),
+      ['e:TEmpty', 'e:N', 'e:TFull'],
+    );
+  });
+
   it('workspace применяет порядок общим commitOrder и не перечитывает сборку', () => {
     assert.match(
       WS,
