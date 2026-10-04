@@ -515,10 +515,16 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // 0.11.1 (задача 00160da1): +`etn.publications.deletionCheck` и
         // `etn.shelves.deletionCheck` (MCP-паритет REST deletion-check) —
         // оба readOnly → 48 аннотированных, readOnly 25 → 27.
-        assert.equal(annotated, 48);
-        assert.equal(hintReadOnly, 27);
-        assert.equal(hintDestructive, 2);
-        assert.equal(hintIdempotent, 12);
+        // 0.11.1 (задача 094653b6): 25 инструментов `etn.publications.*` /
+        // `etn.shelves.*` свёрнуты в `etn.guide` + `etn.ops` (ADR b2eebf8b/
+        // 8358eea9) — из `MCP_TOOL_NAMES` и аннотаций убраны все 25. Возврат к
+        // состоянию 0.8.3 (задача d379e091): 25 инструментов, аннотированы 23
+        // (`etn.ops` — диспетчер без тул-уровневых подсказок; `comments.update`
+        // исторически без аннотации): 17 readOnly, 0 destructive, 4 idempotent.
+        assert.equal(annotated, 23);
+        assert.equal(hintReadOnly, 17);
+        assert.equal(hintDestructive, 0);
+        assert.equal(hintIdempotent, 4);
       } finally {
         await handle.close();
       }

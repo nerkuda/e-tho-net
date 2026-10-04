@@ -35,7 +35,6 @@ import { registerBundleTools } from './tools/bundles.js';
 import { registerActivityTools } from './tools/activity.js';
 import { registerInstructionsTool } from './tools/instructions.js';
 import { registerOntologyTools } from './tools/ontology.js';
-import { registerPublicationTools } from './tools/publications.js';
 import { registerGuideTools } from './tools/ops.js';
 
 /**
@@ -60,6 +59,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   registerActivityTools(mcp, rt);
   registerInstructionsTool(mcp, rt);
   registerOntologyTools(mcp, rt);
-  // 0.11.1 (задача 8f6857f8): публикации и полки — чтение, управление, экспорт.
-  registerPublicationTools(mcp, rt);
+  // 0.11.1 (задача 094653b6): публикации и полки свёрнуты в `etn.guide` +
+  // `etn.ops` (ADR b2eebf8b/8358eea9); их обработчики — в tools/publications.ts,
+  // регистраций собственных инструментов больше нет.
 }

@@ -544,9 +544,28 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // `description` + `inputSchema` (контракт вызова, не режется): замер
         // 61 464 → 62 830 Б (+1 366). Планка поднята ровно под этот прирост
         // с малым запасом (61 600 → 63 000).
+        // 0.11.1 (задача 094653b6): 25 инструментов `etn.publications.*` /
+        // `etn.shelves.*` свёрнуты в `etn.guide` + `etn.ops` (ADR b2eebf8b/
+        // 8358eea9). Замер до/после: 48 инструментов / 62 830 Б →
+        // 25 / 41 939 Б; `descriptions+inputSchema` 53 135 → 37 174 Б. Бюджеты
+        // НЕ подняты, а опущены под фактическое сокращение (запас оставлен
+        // малым, чтобы описания не расползлись обратно). Освободившийся запас
+        // не реинвестирован — это цена префилла, её не тратят заново.
+        // 0.11.1 (задача 094653b6, часть 2): сторож-потолок ЧИСЛА инструментов
+        // `tools/list` — защита от ползучего раздувания (методика —
+        // стандарт «Расширение MCP-интерфейса — единая методика»; ориентир
+        // техпроекта 22e34ba5 — 30–35 инструментов на сервер).
         assert.ok(
-          bytes <= 63_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 63000`,
+          bytes <= 42_500,
+          `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 42500`,
+        );
+        // Потолок числа инструментов: фактическое 25 + запас 5 = 30 (нижняя
+        // граница ориентира техпроекта 22e34ba5). Превышение — только
+        // осознанным пересмотром стандарта/ADR, не молча.
+        assert.ok(
+          tools.length <= 30,
+          `tools/list exposes ${tools.length} tools — over the ceiling of 30 ` +
+            '(методика расширения MCP-интерфейса; ориентир 30–35 на сервер)',
         );
         // Отдельный бюджет на «префилл» из ADR: сумма байт `description` +
         // `inputSchema`. `inputSchema` не урезается — планка ограничивает
@@ -578,9 +597,12 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // → 52 180 Б; планка 52 100 → 52 300 (см. блок выше, обоснование там же).
         // 0.11.1 (задача 00160da1): +2 инструмента deletionCheck → 53 135 Б;
         // планка 52 300 → 53 300 (см. блок выше, обоснование — паритет 4cb17cb3).
+        // 0.11.1 (задача 094653b6): 25 публикационных/полочных инструментов
+        // сняты в `etn.guide`/`etn.ops` → 37 174 Б. Планка опущена до 37 500
+        // (не поднята): фиксирует фактическое сокращение, оставляя малый запас.
         assert.ok(
-          descriptionsPlusInputSchema <= 53_300,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 53300`,
+          descriptionsPlusInputSchema <= 37_500,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 37500`,
         );
       } finally {
         await handle.close();

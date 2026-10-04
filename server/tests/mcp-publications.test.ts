@@ -1,14 +1,17 @@
 /**
- * MCP-фасады подсистемы «Публикации» (0.11.1, задача 8f6857f8; карточки
+ * MCP-операции подсистемы «Публикации» через `etn.ops` (0.11.1, задача
+ * 094653b6; свернуто из собственных инструментов, ранее 8f6857f8; карточки
  * cab597a8 управление, f236bb22 чтение, a610c091 экспорт).
  *
  * Покрытие DoD:
- *   * каждый инструмент вызывается агентом в сквозном сценарии: создание →
+ *   * каждое из 25 действий вызывается агентом в сквозном сценарии: создание →
  *     чтение (list/get) → сборка → порядок → исключение → использование →
  *     экспорт (content и artifact) → пакетный экспорт → корзина/purge; полки
  *     (CRUD, состав, корзина);
  *   * assembly большой публикации (55 корневых разделов, 50+) отдаётся страницами;
  *   * валидация и сообщения ошибок идентичны REST (общие контракты и домен);
+ *   * негативные ветки: фиктивный `node_key` → 422, не-кандидат → 422,
+ *     постороннее исключение → 422, деструктив без `confirm` → VALIDATION_ERROR;
  *   * экспорт детерминирован (повторный md-экспорт байтово идентичен).
  *
  * Пропускается, когда нативная сборка `better-sqlite3` недоступна.
@@ -28,9 +31,9 @@ import {
   closeMcpContext,
   connectMcpClient,
   nativeAvailable,
+  callOp,
   toolJson,
   toolText,
-  type ClientCallToolResult,
 } from './mcp-helpers.js';
 import { authHeaders, buildRestContext, closeRestContext } from './rest-helpers.js';
 
@@ -77,13 +80,14 @@ function seedComment(ndb: NetworkDb, thoughtId: string, bodyMd: string, user: st
     .run(randomUUID(), thoughtId, bodyMd, NOW, NOW, NOW, user, user);
 }
 
-/** Call an MCP tool and fail the test on an MCP-visible error. */
+/** Call an `etn.ops` action and fail the test on an MCP-visible error. */
 async function call(
   client: Awaited<ReturnType<typeof connectMcpClient>>['client'],
-  name: string,
-  args: Record<string, unknown>,
+  action: string,
+  params: Record<string, unknown>,
+  confirm = false,
 ): Promise<unknown> {
-  const result: ClientCallToolResult = await client.callTool({ name, arguments: args });
+  const result = await callOp(client, action, params, confirm);
   assert.equal(result.isError, undefined, toolText(result));
   return toolJson(result);
 }
@@ -96,7 +100,7 @@ function assertZipArtifact(artifact: unknown): Buffer {
   return bytes;
 }
 
-describe('MCP-публикации: сквозной сценарий', { skip }, () => {
+describe('MCP-публикации (etn.ops): сквозной сценарий', { skip }, () => {
   it('создание → чтение → сборка → порядок → исключение → использование → экспорт → корзина', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -110,7 +114,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         // --- создание ------------------------------------------------------
-        const created = (await call(handle.client, 'etn.publications.create', {
+        const created = (await call(handle.client, 'publications.create', {
           network_id: ctx.networkId,
           title: 'Документ',
           subtitle: 'Подзаголовок',
@@ -124,13 +128,13 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         const pubId = created.id;
 
         // --- список и карточка --------------------------------------------
-        const list = (await call(handle.client, 'etn.publications.list', {
+        const list = (await call(handle.client, 'publications.list', {
           network_id: ctx.networkId,
         })) as { data: Array<{ id: string; title: string }>; meta: { total: number } };
         assert.equal(list.meta.total, 1);
         assert.equal(list.data[0]?.title, 'Документ');
 
-        const card = (await call(handle.client, 'etn.publications.get', {
+        const card = (await call(handle.client, 'publications.get', {
           network_id: ctx.networkId,
           publication_id: pubId,
         })) as {
@@ -155,7 +159,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(card.data.assembly_date, null);
 
         // --- правка --------------------------------------------------------
-        const patched = (await call(handle.client, 'etn.publications.update', {
+        const patched = (await call(handle.client, 'publications.update', {
           network_id: ctx.networkId,
           publication_id: pubId,
           subtitle: 'Новый подзаголовок',
@@ -165,7 +169,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(patched.authorship, 'Автор');
 
         // --- сборка --------------------------------------------------------
-        const assembly = (await call(handle.client, 'etn.publications.assembly', {
+        const assembly = (await call(handle.client, 'publications.assembly', {
           network_id: ctx.networkId,
           publication_id: pubId,
         })) as {
@@ -182,7 +186,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         const rootNodeKey = assembly.data.sections[0]!.node_key;
 
         // --- порядок (идемпотентный батч) ---------------------------------
-        const ordered = (await call(handle.client, 'etn.publications.order', {
+        const ordered = (await call(handle.client, 'publications.order', {
           network_id: ctx.networkId,
           publication_id: pubId,
           items: [{ node_key: rootNodeKey, position: 5 }],
@@ -190,7 +194,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(ordered.items[0]?.position, 5);
 
         // --- исключение и возврат -----------------------------------------
-        const excluded = (await call(handle.client, 'etn.publications.exclusions', {
+        const excluded = (await call(handle.client, 'publications.exclusions', {
           network_id: ctx.networkId,
           publication_id: pubId,
           thought_id: b,
@@ -199,7 +203,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
           excluded.exclusions.map((e) => e.thought_id),
           [b],
         );
-        const included = (await call(handle.client, 'etn.publications.exclusions', {
+        const included = (await call(handle.client, 'publications.exclusions', {
           network_id: ctx.networkId,
           publication_id: pubId,
           thought_id: b,
@@ -210,7 +214,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         // --- кандидаты: временная семантика и «расставить» ----------------
         // Новая мысль под рецепт вошла в отбор позже принятого состояния.
         const c = seedThought(ndb, 'Раздел C', type.id, ctx.adminId);
-        const candidates = (await call(handle.client, 'etn.publications.candidates', {
+        const candidates = (await call(handle.client, 'publications.candidates', {
           network_id: ctx.networkId,
           publication_id: pubId,
         })) as {
@@ -227,14 +231,14 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         // «Путь в дереве после вставки» (элемент интерфейса 43ec961f).
         assert.deepEqual(candidates.data.items[0]?.breadcrumbs, ['Раздел C']);
 
-        // MCP-двойник «расставить»: гасит кандидата и ставит его в конец порядка.
-        const accepted = (await call(handle.client, 'etn.publications.accept', {
+        // Действие «расставить»: гасит кандидата и ставит его в конец порядка.
+        const accepted = (await call(handle.client, 'publications.accept', {
           network_id: ctx.networkId,
           publication_id: pubId,
           thought_id: c,
         })) as { items: Array<{ node_key: string }> };
         assert.equal(accepted.items[accepted.items.length - 1]?.node_key, c);
-        const afterAccept = (await call(handle.client, 'etn.publications.candidates', {
+        const afterAccept = (await call(handle.client, 'publications.candidates', {
           network_id: ctx.networkId,
           publication_id: pubId,
         })) as { data: { total: number } };
@@ -242,28 +246,28 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(afterAccept.data.total, 0);
 
         // --- использование мысли ------------------------------------------
-        const usage = (await call(handle.client, 'etn.publications.usage', {
+        const usage = (await call(handle.client, 'publications.usage', {
           network_id: ctx.networkId,
           thought_id: a,
         })) as { data: { items: Array<{ role: string; publication_id: string }>; total: number } };
         assert.ok(usage.data.items.some((i) => i.role === 'section' && i.publication_id === pubId));
 
         // --- пересборка ----------------------------------------------------
-        const rebuilt = (await call(handle.client, 'etn.publications.rebuild', {
+        const rebuilt = (await call(handle.client, 'publications.rebuild', {
           network_id: ctx.networkId,
           publication_id: pubId,
         })) as { assembly_date: string | null };
         assert.ok(rebuilt.assembly_date, 'rebuild проставляет дату сборки');
 
         // --- экспорт: content (md), детерминизм ---------------------------
-        const md1 = (await call(handle.client, 'etn.publications.export', {
+        const md1 = (await call(handle.client, 'publications.export', {
           network_id: ctx.networkId,
           publication_id: pubId,
           format: 'md',
         })) as { content: string; filename: string; warnings: string[] };
         assert.match(md1.filename, /\.md$/);
         assert.ok(md1.content.length > 0);
-        const md2 = (await call(handle.client, 'etn.publications.export', {
+        const md2 = (await call(handle.client, 'publications.export', {
           network_id: ctx.networkId,
           publication_id: pubId,
           format: 'md',
@@ -271,7 +275,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(md2.content, md1.content, 'повторный md-экспорт байтово идентичен');
 
         // --- экспорт: content (html) --------------------------------------
-        const html = (await call(handle.client, 'etn.publications.export', {
+        const html = (await call(handle.client, 'publications.export', {
           network_id: ctx.networkId,
           publication_id: pubId,
           format: 'html',
@@ -280,7 +284,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.match(html.content, /<html|<!DOCTYPE|<h1/i);
 
         // --- экспорт: artifact (base64 zip) -------------------------------
-        const artifact = (await call(handle.client, 'etn.publications.export', {
+        const artifact = (await call(handle.client, 'publications.export', {
           network_id: ctx.networkId,
           publication_id: pubId,
           format: 'md',
@@ -291,7 +295,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.ok(artifact.files.some((f) => f.endsWith('.md')));
 
         // --- пакетный экспорт: md и html (обе ветки format) ----------------
-        const batch = (await call(handle.client, 'etn.publications.export_batch', {
+        const batch = (await call(handle.client, 'publications.export_batch', {
           network_id: ctx.networkId,
           ids: [pubId],
           format: 'md',
@@ -299,7 +303,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assertZipArtifact(batch.artifact);
         assert.equal(batch.report.publications[0]?.status, 'ok');
 
-        const batchHtml = (await call(handle.client, 'etn.publications.export_batch', {
+        const batchHtml = (await call(handle.client, 'publications.export_batch', {
           network_id: ctx.networkId,
           ids: [pubId],
           format: 'html',
@@ -308,24 +312,24 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(batchHtml.report.publications[0]?.status, 'ok');
 
         // --- корзина и purge ----------------------------------------------
-        const trashed = (await call(handle.client, 'etn.publications.trash', {
+        const trashed = (await call(handle.client, 'publications.trash', {
           network_id: ctx.networkId,
           publication_id: pubId,
         })) as { marked_for_deletion: boolean };
         assert.equal(trashed.marked_for_deletion, true);
-        const restored = (await call(handle.client, 'etn.publications.restore', {
+        const restored = (await call(handle.client, 'publications.restore', {
           network_id: ctx.networkId,
           publication_id: pubId,
         })) as { marked_for_deletion: boolean };
         assert.equal(restored.marked_for_deletion, false);
-        const deleted = (await call(handle.client, 'etn.publications.delete', {
+        const deleted = (await call(handle.client, 'publications.delete', {
           network_id: ctx.networkId,
           publication_id: pubId,
-        })) as { deleted: boolean; publication_id: string };
+        }, true)) as { deleted: boolean; publication_id: string };
         assert.equal(deleted.deleted, true);
-        const afterDelete = await handle.client.callTool({
-          name: 'etn.publications.get',
-          arguments: { network_id: ctx.networkId, publication_id: pubId },
+        const afterDelete = await callOp(handle.client, 'publications.get', {
+          network_id: ctx.networkId,
+          publication_id: pubId,
         });
         assert.equal(afterDelete.isError, true, 'после purge карточки нет');
       } finally {
@@ -347,13 +351,13 @@ describe('MCP-публикации: сквозной сценарий', { skip }
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const pub = (await call(handle.client, 'etn.publications.create', {
+        const pub = (await call(handle.client, 'publications.create', {
           network_id: ctx.networkId,
           title: 'Большая',
           title_recipe: { type_ids: [type.id], sort: 'alpha', order: 'asc' },
         })) as { id: string };
 
-        const page1 = (await call(handle.client, 'etn.publications.assembly', {
+        const page1 = (await call(handle.client, 'publications.assembly', {
           network_id: ctx.networkId,
           publication_id: pub.id,
           page: 1,
@@ -363,7 +367,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(page1.data.sections.length, 20);
         assert.equal(page1.data.meta.has_more, true);
 
-        const page2 = (await call(handle.client, 'etn.publications.assembly', {
+        const page2 = (await call(handle.client, 'publications.assembly', {
           network_id: ctx.networkId,
           publication_id: pub.id,
           page: 2,
@@ -371,7 +375,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(page2.data.sections.length, 20);
         assert.equal(page2.data.meta.has_more, true);
 
-        const page3 = (await call(handle.client, 'etn.publications.assembly', {
+        const page3 = (await call(handle.client, 'publications.assembly', {
           network_id: ctx.networkId,
           publication_id: pub.id,
           page: 3,
@@ -395,18 +399,18 @@ describe('MCP-публикации: сквозной сценарий', { skip }
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const pub = (await call(handle.client, 'etn.publications.create', {
+        const pub = (await call(handle.client, 'publications.create', {
           network_id: ctx.networkId,
           title: 'Документ',
         })) as { id: string };
 
-        const shelf = (await call(handle.client, 'etn.shelves.create', {
+        const shelf = (await call(handle.client, 'shelves.create', {
           network_id: ctx.networkId,
           title: 'Моя полка',
         })) as { id: string; title: string; items: unknown[] };
         assert.equal(shelf.title, 'Моя полка');
 
-        const list = (await call(handle.client, 'etn.shelves.list', {
+        const list = (await call(handle.client, 'shelves.list', {
           network_id: ctx.networkId,
         })) as { data: Array<{ id: string; title: string }>; meta: { total: number } };
         // Сеть создаётся с дефолтной полкой «Полка» (0.11.1, задача 8c2660e6).
@@ -414,14 +418,14 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.ok(list.data.some((s) => s.title === 'Полка'), 'есть дефолтная полка');
         assert.ok(list.data.some((s) => s.id === shelf.id), 'есть созданная полка');
 
-        const renamed = (await call(handle.client, 'etn.shelves.update', {
+        const renamed = (await call(handle.client, 'shelves.update', {
           network_id: ctx.networkId,
           shelf_id: shelf.id,
           title: 'Переименованная',
         })) as { title: string };
         assert.equal(renamed.title, 'Переименованная');
 
-        const assigned = (await call(handle.client, 'etn.shelves.assign', {
+        const assigned = (await call(handle.client, 'shelves.assign', {
           network_id: ctx.networkId,
           shelf_id: shelf.id,
           publication_id: pub.id,
@@ -430,7 +434,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(assigned.items[0]?.publication_id, pub.id);
         assert.equal(assigned.items[0]?.position, 1);
 
-        const unassigned = (await call(handle.client, 'etn.shelves.assign', {
+        const unassigned = (await call(handle.client, 'shelves.assign', {
           network_id: ctx.networkId,
           shelf_id: shelf.id,
           publication_id: pub.id,
@@ -438,27 +442,27 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         })) as { items: unknown[] };
         assert.equal(unassigned.items.length, 0);
 
-        const trashed = (await call(handle.client, 'etn.shelves.trash', {
+        const trashed = (await call(handle.client, 'shelves.trash', {
           network_id: ctx.networkId,
           shelf_id: shelf.id,
         })) as { marked_for_deletion: boolean };
         assert.equal(trashed.marked_for_deletion, true);
-        const hidden = (await call(handle.client, 'etn.shelves.list', {
+        const hidden = (await call(handle.client, 'shelves.list', {
           network_id: ctx.networkId,
         })) as { data: unknown[] };
         assert.equal(hidden.data.length, 1, 'помеченная полка скрыта, дефолтная «Полка» остаётся');
-        const restoredShelf = (await call(handle.client, 'etn.shelves.restore', {
+        const restoredShelf = (await call(handle.client, 'shelves.restore', {
           network_id: ctx.networkId,
           shelf_id: shelf.id,
         })) as { marked_for_deletion: boolean };
         assert.equal(restoredShelf.marked_for_deletion, false);
 
-        const deletedShelf = (await call(handle.client, 'etn.shelves.delete', {
+        const deletedShelf = (await call(handle.client, 'shelves.delete', {
           network_id: ctx.networkId,
           shelf_id: shelf.id,
-        })) as { deleted: boolean };
+        }, true)) as { deleted: boolean };
         assert.equal(deletedShelf.deleted, true);
-        const pubStillAlive = (await call(handle.client, 'etn.publications.get', {
+        const pubStillAlive = (await call(handle.client, 'publications.get', {
           network_id: ctx.networkId,
           publication_id: pub.id,
         })) as { data: { id: string } };
@@ -471,12 +475,12 @@ describe('MCP-публикации: сквозной сценарий', { skip }
     }
   });
 
-  it('etn.shelves.list лениво создаёт дефолтную «Полку» в основе (8c2660e6)', async () => {
+  it('shelves.list лениво создаёт дефолтную «Полку» в основе (8c2660e6)', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const initial = (await call(handle.client, 'etn.shelves.list', {
+        const initial = (await call(handle.client, 'shelves.list', {
           network_id: ctx.networkId,
         })) as { data: Array<{ id: string; title: string }> };
         assert.equal(initial.data.length, 1);
@@ -484,13 +488,13 @@ describe('MCP-публикации: сквозной сценарий', { skip }
 
         // Убираем полку физически — следующий список обязан создать её заново
         // (паритет с REST GET /shelves, карточка c80951ea v2).
-        const deleted = (await call(handle.client, 'etn.shelves.delete', {
+        const deleted = (await call(handle.client, 'shelves.delete', {
           network_id: ctx.networkId,
           shelf_id: initial.data[0]!.id,
-        })) as { deleted: boolean };
+        }, true)) as { deleted: boolean };
         assert.equal(deleted.deleted, true);
 
-        const recreated = (await call(handle.client, 'etn.shelves.list', {
+        const recreated = (await call(handle.client, 'shelves.list', {
           network_id: ctx.networkId,
         })) as { data: Array<{ id: string; title: string }> };
         assert.equal(recreated.data.length, 1, 'дефолтная полка создана заново');
@@ -500,6 +504,74 @@ describe('MCP-публикации: сквозной сценарий', { skip }
           .prepare('SELECT layer_id FROM shelves WHERE id = ?')
           .get(recreated.data[0]!.id) as { layer_id: string } | undefined;
         assert.equal(row?.layer_id, BASE_LAYER_ID, 'полка создана в основе');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('негативные ветки: node_key/кандидат/исключение → 422, деструктив без confirm → VALIDATION_ERROR', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const type = createThoughtType(ndb, { name: 'Doc' }, ctx.adminId);
+      seedThought(ndb, 'Раздел A', type.id, ctx.adminId);
+      const outside = seedThought(ndb, 'Посторонняя', null, ctx.adminId);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const pub = (await call(handle.client, 'publications.create', {
+          network_id: ctx.networkId,
+          title: 'Документ',
+          title_recipe: { type_ids: [type.id], sort: 'alpha', order: 'asc' },
+        })) as { id: string };
+
+        // 1. Фиктивный node_key → 422 (узел не принадлежит публикации).
+        const badOrder = await callOp(handle.client, 'publications.order', {
+          network_id: ctx.networkId,
+          publication_id: pub.id,
+          items: [{ node_key: randomUUID(), position: 1 }],
+        });
+        assert.equal(badOrder.isError, true);
+        assert.match(toolText(badOrder), /VALIDATION_ERROR/);
+        assert.match(toolText(badOrder), /не принадлежит публикации/);
+
+        // 2. Не-кандидат → 422 (в отборе публикации нет).
+        const notCandidate = await callOp(handle.client, 'publications.accept', {
+          network_id: ctx.networkId,
+          publication_id: pub.id,
+          thought_id: outside,
+        });
+        assert.equal(notCandidate.isError, true);
+        assert.match(toolText(notCandidate), /VALIDATION_ERROR/);
+        assert.match(toolText(notCandidate), /не является кандидатом/);
+
+        // 3. Постороннее исключение → 422 (мысль не входит в публикацию).
+        const badExclusion = await callOp(handle.client, 'publications.exclusions', {
+          network_id: ctx.networkId,
+          publication_id: pub.id,
+          thought_id: outside,
+        });
+        assert.equal(badExclusion.isError, true);
+        assert.match(toolText(badExclusion), /VALIDATION_ERROR/);
+        assert.match(toolText(badExclusion), /не входит в публикацию/);
+
+        // 4. Деструктив без confirm → VALIDATION_ERROR, домен не вызван.
+        const noConfirm = await callOp(handle.client, 'publications.delete', {
+          network_id: ctx.networkId,
+          publication_id: pub.id,
+        });
+        assert.equal(noConfirm.isError, true);
+        assert.match(toolText(noConfirm), /VALIDATION_ERROR/);
+        assert.match(toolText(noConfirm), /требуется confirm: true/);
+        // Публикация не тронута.
+        const still = (await call(handle.client, 'publications.get', {
+          network_id: ctx.networkId,
+          publication_id: pub.id,
+        })) as { data: { id: string } };
+        assert.equal(still.data.id, pub.id);
       } finally {
         await handle.close();
       }
@@ -536,9 +608,8 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(restMissing.statusCode, 422);
         const restMissingMessage = /title обязателен\./.exec(restMissing.body)?.[0];
         assert.ok(restMissingMessage, `REST: ожидался канонический текст, факт: ${restMissing.body}`);
-        const mcpMissing = await handle.client.callTool({
-          name: 'etn.publications.create',
-          arguments: { network_id: mcp.networkId },
+        const mcpMissing = await callOp(handle.client, 'publications.create', {
+          network_id: mcp.networkId,
         });
         assert.equal(mcpMissing.isError, true);
         assert.match(toolText(mcpMissing), /ETN error \[VALIDATION_ERROR\].*title обязателен\./s);
@@ -555,9 +626,9 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         };
         const restCover = await restApi('POST', '/publications', bothCovers);
         assert.equal(restCover.statusCode, 422);
-        const mcpCover = await handle.client.callTool({
-          name: 'etn.publications.create',
-          arguments: { network_id: mcp.networkId, ...bothCovers },
+        const mcpCover = await callOp(handle.client, 'publications.create', {
+          network_id: mcp.networkId,
+          ...bothCovers,
         });
         assert.equal(mcpCover.isError, true);
         const restCoverMessage = /только один источник обложки[^"]*/.exec(restCover.body)?.[0];
@@ -569,9 +640,9 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         const badSummary = { title: 'X', summary_md: '# Заголовок\n\nтекст' };
         const restSummary = await restApi('POST', '/publications', badSummary);
         assert.equal(restSummary.statusCode, 422);
-        const mcpSummary = await handle.client.callTool({
-          name: 'etn.publications.create',
-          arguments: { network_id: mcp.networkId, ...badSummary },
+        const mcpSummary = await callOp(handle.client, 'publications.create', {
+          network_id: mcp.networkId,
+          ...badSummary,
         });
         assert.equal(mcpSummary.isError, true);
         const restSummaryMessage =
@@ -624,7 +695,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         });
         assert.equal(restPub.statusCode, 200);
         const restPubData = (restPub.json() as { data: unknown }).data;
-        const mcpPub = (await call(handle.client, 'etn.publications.deletionCheck', {
+        const mcpPub = (await call(handle.client, 'publications.deletionCheck', {
           network_id: rest.networkId,
           publication_id: publicationId,
         })) as { data: unknown };
@@ -637,7 +708,7 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         });
         assert.equal(restShelf.statusCode, 200);
         const restShelfData = (restShelf.json() as { data: unknown }).data;
-        const mcpShelf = (await call(handle.client, 'etn.shelves.deletionCheck', {
+        const mcpShelf = (await call(handle.client, 'shelves.deletionCheck', {
           network_id: rest.networkId,
           shelf_id: shelfId,
         })) as { data: unknown };
@@ -660,28 +731,26 @@ describe('MCP-публикации: сквозной сценарий', { skip }
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        const pub = (await call(handle.client, 'etn.publications.create', {
+        const pub = (await call(handle.client, 'publications.create', {
           network_id: ctx.networkId,
           title: 'В слое',
         })) as { id: string };
 
-        // Рабочий слой: MCP-инструмент `etn.ops { action: "layers.create" }`.
+        // Рабочий слой: действие `layers.create` через `etn.ops`.
         const layer = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.ops',
-            arguments: {
-              action: 'layers.create',
-              params: { network_id: ctx.networkId, title: 'L-pub' },
-            },
+          await callOp(handle.client, 'layers.create', {
+            network_id: ctx.networkId,
+            title: 'L-pub',
           }),
         );
-        const selected = (await call(handle.client, 'etn.layers.select', {
-          network_id: ctx.networkId,
-          layer_id: layer.id,
-        })) as { id: string };
-        assert.equal(selected.id, layer.id);
+        // `etn.layers.select` — постоянный инструмент (не действие ops).
+        const sel = await handle.client.callTool({
+          name: 'etn.layers.select',
+          arguments: { network_id: ctx.networkId, layer_id: layer.id },
+        });
+        assert.equal(sel.isError, undefined, toolText(sel));
 
-        const patched = (await call(handle.client, 'etn.publications.update', {
+        const patched = (await call(handle.client, 'publications.update', {
           network_id: ctx.networkId,
           publication_id: pub.id,
           subtitle: 'В слое',
@@ -690,10 +759,13 @@ describe('MCP-публикации: сквозной сценарий', { skip }
         assert.equal(patched.subtitle, 'В слое');
 
         // Purge в рабочем слое недоступен — только пометка (паритет с REST).
-        const purge = await handle.client.callTool({
-          name: 'etn.publications.delete',
-          arguments: { network_id: ctx.networkId, publication_id: pub.id },
-        });
+        // `confirm: true` пропускает деструктивный гейт; отказ даёт домен.
+        const purge = await callOp(
+          handle.client,
+          'publications.delete',
+          { network_id: ctx.networkId, publication_id: pub.id },
+          true,
+        );
         assert.equal(purge.isError, true, 'в рабочем слое физическое удаление запрещено');
       } finally {
         await handle.close();

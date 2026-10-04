@@ -162,7 +162,7 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
   // zod-схемы («должен быть строкой.»), а REST — каноническую «{key}
   // обязателен.». Отсутствие поля отличается от неверного типа по сырому
   // входу (zod 4 убрал признак `received`).
-  it('etn.publications.create ↔ POST /publications: отсутствие title — каноническое «title обязателен.»', async () => {
+  it('etn.ops { publications.create } ↔ POST /publications: отсутствие title — каноническое «title обязателен.»', async () => {
     const w = await pairedWorld();
     try {
       const restRes = await w.rest.app.inject({
@@ -174,9 +174,8 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       assert.equal(restRes.statusCode, 422);
       const restErr = restRes.json() as RestError;
 
-      const mcpRes = await w.handle.client.callTool({
-        name: 'etn.publications.create',
-        arguments: { network_id: w.rest.networkId },
+      const mcpRes = await callOp(w.handle.client, 'publications.create', {
+        network_id: w.rest.networkId,
       });
       assert.equal(mcpRes.isError, true);
       const mcpErr = mcpErrorParts(toolText(mcpRes));
@@ -191,7 +190,7 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
   // Круг 2 ошибки 8577d41d: вложенное отсутствующее поле должно давать у
   // обоих фасадов ОДИН текст с полным путём (`items.0.node_key`), а не верхний
   // REST-ключ (`items`).
-  it('etn.publications.order ↔ PUT /publications/{id}/order: вложенный required — полный путь у обоих фасадов', async () => {
+  it('etn.ops { publications.order } ↔ PUT /publications/{id}/order: вложенный required — полный путь у обоих фасадов', async () => {
     const w = await pairedWorld();
     try {
       const restRes = await w.rest.app.inject({
@@ -203,9 +202,10 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       assert.equal(restRes.statusCode, 422);
       const restErr = restRes.json() as RestError;
 
-      const mcpRes = await w.handle.client.callTool({
-        name: 'etn.publications.order',
-        arguments: { network_id: w.rest.networkId, publication_id: 'pub-1', items: [{}] },
+      const mcpRes = await callOp(w.handle.client, 'publications.order', {
+        network_id: w.rest.networkId,
+        publication_id: 'pub-1',
+        items: [{}],
       });
       assert.equal(mcpRes.isError, true);
       const mcpErr = mcpErrorParts(toolText(mcpRes));

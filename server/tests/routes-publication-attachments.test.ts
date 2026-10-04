@@ -303,9 +303,9 @@ describe('вложения публикаций: MCP-паритет (46cf4bcb)',
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const created = toolJson<{ id: string }>(
-          await handle.client.callTool({
-            name: 'etn.publications.create',
-            arguments: { network_id: ctx.networkId, title: 'MCP-документ' },
+          await callOp(handle.client, 'publications.create', {
+            network_id: ctx.networkId,
+            title: 'MCP-документ',
           }),
         );
         const pubId = created.id;

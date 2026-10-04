@@ -53,35 +53,11 @@ export const MCP_TOOL_NAMES = [
   'etn.chronicle.query',
   'etn.layers.list',
   'etn.activity.list',
-  // публикации: чтение (0.11.1, задача 8f6857f8; карточка f236bb22)
-  'etn.publications.list',
-  'etn.publications.get',
-  'etn.publications.assembly',
-  'etn.publications.candidates',
-  'etn.publications.usage',
-  'etn.shelves.list',
-  // публикации/полки: проверка удаления (0.11.1, задача 00160da1; паритет REST)
-  'etn.publications.deletionCheck',
-  'etn.shelves.deletionCheck',
-  // публикации: экспорт (0.11.1, задача 8f6857f8; карточка a610c091)
-  'etn.publications.export',
-  'etn.publications.export_batch',
+  // Публикации и полки свёрнуты в `etn.guide` + `etn.ops` (0.11.1, задача
+  // 094653b6; ADR b2eebf8b/8358eea9): 25 инструментов `etn.publications.*` /
+  // `etn.shelves.*` сняты из витрины одним пакетом, их действия — в реестре
+  // `server/src/mcp/tools/ops-catalog.ts` (обработчики — tools/publications.ts).
   // mutate (§4.2)
-  'etn.publications.create',
-  'etn.publications.update',
-  'etn.publications.order',
-  'etn.publications.accept',
-  'etn.publications.exclusions',
-  'etn.publications.rebuild',
-  'etn.publications.trash',
-  'etn.publications.restore',
-  'etn.publications.delete',
-  'etn.shelves.create',
-  'etn.shelves.update',
-  'etn.shelves.delete',
-  'etn.shelves.trash',
-  'etn.shelves.restore',
-  'etn.shelves.assign',
   'etn.thoughts.write',
   'etn.comments.update',
   'etn.comments.edit',
@@ -158,40 +134,10 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.layers.list': { readOnlyHint: true },
   'etn.activity.list': { readOnlyHint: true },
 
-  // ---- публикации (0.11.1, задача 8f6857f8) -----------------------
-  // Чтение (карточка f236bb22) и экспорт (карточка a610c091): экспорт не
-  // пишет в БД, не публикует событий и не тратит write-бюджет — он собирает
-  // документ тем же доменом, что `/assembly`, и отдаёт агенту content/artifact.
-  'etn.publications.list': { readOnlyHint: true },
-  'etn.publications.get': { readOnlyHint: true },
-  'etn.publications.assembly': { readOnlyHint: true },
-  'etn.publications.candidates': { readOnlyHint: true },
-  'etn.publications.usage': { readOnlyHint: true },
-  'etn.shelves.list': { readOnlyHint: true },
-  // Проверки удаления (0.11.1, задача 00160da1): read-only — те же блокировки,
-  // что у `delete`/purge, без удаления; паритет REST `GET …/deletion-check`.
-  'etn.publications.deletionCheck': { readOnlyHint: true },
-  'etn.shelves.deletionCheck': { readOnlyHint: true },
-  'etn.publications.export': { readOnlyHint: true },
-  'etn.publications.export_batch': { readOnlyHint: true },
-  // Записи (карточка cab597a8). `order` — батч (PUT-семантика, идемпотентен),
-  // `exclusions`/`assign` — set-семантика (повтор не меняет результат);
-  // `delete` — физическое удаление (purge), необратимо.
-  'etn.publications.create': { destructiveHint: false, idempotentHint: false },
-  'etn.publications.update': { destructiveHint: false, idempotentHint: false },
-  'etn.publications.order': { idempotentHint: true },
-  'etn.publications.accept': { idempotentHint: true },
-  'etn.publications.exclusions': { idempotentHint: true },
-  'etn.publications.rebuild': { destructiveHint: false, idempotentHint: false },
-  'etn.publications.trash': { idempotentHint: true },
-  'etn.publications.restore': { idempotentHint: true },
-  'etn.publications.delete': { destructiveHint: true },
-  'etn.shelves.create': { destructiveHint: false, idempotentHint: false },
-  'etn.shelves.update': { destructiveHint: false, idempotentHint: false },
-  'etn.shelves.delete': { destructiveHint: true },
-  'etn.shelves.trash': { idempotentHint: true },
-  'etn.shelves.restore': { idempotentHint: true },
-  'etn.shelves.assign': { idempotentHint: true },
+  // Публикации и полки (0.11.1, задача 094653b6): собственных инструментов
+  // больше нет — 25 действий перенесены в `etn.ops` (реестр
+  // `tools/ops-catalog.ts`), где роль подсказок играют флаги `readOnly` /
+  // `destructive` записи реестра. Тул-уровневых аннотаций не требуется.
 
   // ---- mutating tools — destructiveHint ---------------------------
   'etn.thoughts.bulk_update': { destructiveHint: false, idempotentHint: false },
