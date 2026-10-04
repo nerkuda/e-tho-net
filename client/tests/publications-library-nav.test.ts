@@ -297,6 +297,39 @@ describe('навигация «Полок»: геометрия книжек (43
     nav.destroy();
   });
 
+  it('Ctrl+Home/Ctrl+End пропускают ПУСТЫЕ крайние полки (432ab7ba п.2)', () => {
+    // Дефолтная пустая полка первой, книги — во второй.
+    const root = geoRoot([{ id: 'empty', rows: [] }, { id: 's2', rows: [['c1', 'c2']] }]);
+    const { nav } = attach(root, { isShelvesView: () => true });
+    press(root, 'Home', undefined, true);
+    assert.deepEqual(
+      nav.current(),
+      { kind: 'publication', key: 'c1' },
+      'Ctrl+Home минует пустую первую полку — к первой книжке, где они есть',
+    );
+    // Пустая последняя полка — Ctrl+End к последней книжке предыдущей.
+    const root2 = geoRoot([{ id: 's1', rows: [['a1', 'a2']] }, { id: 'empty', rows: [] }]);
+    const second = attach(root2, { isShelvesView: () => true });
+    press(root2, 'End', undefined, true);
+    assert.deepEqual(
+      second.nav.current(),
+      { kind: 'publication', key: 'a2' },
+      'Ctrl+End минует пустую последнюю полку',
+    );
+    second.nav.destroy();
+    nav.destroy();
+  });
+
+  it('Ctrl+Home/Ctrl+End при полном отсутствии книжек — прежнее поведение (заголовок)', () => {
+    const root = geoRoot([{ id: 'e1', rows: [] }, { id: 'e2', rows: [] }]);
+    const { nav } = attach(root, { isShelvesView: () => true });
+    press(root, 'Home', undefined, true);
+    assert.deepEqual(nav.current(), { kind: 'shelf', key: 'e1' });
+    press(root, 'End', undefined, true);
+    assert.deepEqual(nav.current(), { kind: 'shelf', key: 'e2' });
+    nav.destroy();
+  });
+
   it('←/→ на ЗАГОЛОВКЕ сворачивают полку, на КНИЖКЕ — перемещают', () => {
     const root = geoRoot([{ id: 's1', rows: [['a1', 'a2']] }]);
     const { nav, spy } = attach(root, { isShelvesView: () => true });

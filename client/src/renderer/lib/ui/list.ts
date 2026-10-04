@@ -325,9 +325,20 @@ export function createListNav<E>(
       return;
     }
     const currentGroup = current === null ? groups[0]! : groupOf(current);
-    const groupKey = global
-      ? (last ? groups[groups.length - 1]! : groups[0]!)
-      : (currentGroup ?? groups[0]!);
+    // Ctrl+Home/Ctrl+End (global) — к первой/последней ГРУППЕ, ГДЕ ЕСТЬ
+    // элементы: пустые крайние полки пропускаются (замечание 432ab7ba п.2).
+    // Если элементов нет ни в одной группе — прежнее поведение (крайняя
+    // группа, т.е. её заголовок).
+    let groupKey: string;
+    if (global) {
+      const withItems = groups.filter((key) =>
+        entries.some((entry) => groupOf(entry) === key && !isHead(entry)),
+      );
+      const pool = withItems.length > 0 ? withItems : groups;
+      groupKey = last ? pool[pool.length - 1]! : pool[0]!;
+    } else {
+      groupKey = currentGroup ?? groups[0]!;
+    }
     const inGroup = entries.filter((entry) => groupOf(entry) === groupKey);
     const items = inGroup.filter((entry) => !isHead(entry));
     const target =
