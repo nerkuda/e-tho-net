@@ -14,9 +14,13 @@
  *     into the former focus's new zone (or dissolves when it is gone) without
  *     waiting for the flyer to land. All other visible clouds glide to their new
  *     places (zone changes AND slot-only reorders), and clouds gone with the new
- *     focus fade out. The centre's real content is swapped to the new focus only
- *     at the flyer's landing, so the new focus never flashes in the centre before
- *     the swap. Link overlays hide (and stop catching the pointer) for the move.
+ *     focus fade out. A cloud that changes ZONE plays through a clone in the
+ *     unclipped animation layer — the destination zone crops its content, so a
+ *     transform on the real cloud would be invisible mid-flight (приёмка
+ *     380cc1e2); a slot-only reorder stays on the real element. The centre's real
+ *     content is swapped to the new focus only at the flyer's landing, so the new
+ *     focus never flashes in the centre before the swap. Link overlays hide (and
+ *     stop catching the pointer) for the move.
  *
  *   Swap — the flyer and the held former-focus clone come off, the real new
  *     focus cloud appears exactly where the flyer landed, and the former focus's
@@ -348,13 +352,21 @@ export function playFocusTransition(
   // zone) is animated together in phase 1. The plan only knows zones, so a
   // slot-only move is decided here against the real rects — this keeps manual
   // reorder and link-change refreshes animated while a no-op re-render stays
-  // still.
-  const phase1Moves = [...plan.moving, ...plan.settling].filter((id) => {
+  // still. The two kinds play differently: a slot move stays inside its
+  // (scrolling, hence cropping) zone, a ZONE move must leave that zone.
+  const visiblyMoved = (id: string): boolean => {
     const b = beforeMap.get(id);
     const a = afterMap.get(id);
     return b !== undefined && a !== undefined && !sameRect(b, a);
-  });
-  if (prefersReducedMotion() || (!plan.hasChanges && phase1Moves.length === 0)) {
+  };
+  /** Survivors that changed zone — played through an unclipped clone. */
+  const crossZoneMoves = plan.moving.filter(visiblyMoved);
+  /** Survivors that only changed slot inside their zone — played in place. */
+  const slotMoves = plan.settling.filter(visiblyMoved);
+  if (
+    prefersReducedMotion() ||
+    (!plan.hasChanges && crossZoneMoves.length === 0 && slotMoves.length === 0)
+  ) {
     drawLinks?.();
     return;
   }
@@ -412,6 +424,15 @@ export function playFocusTransition(
   let flyer: HTMLElement | null = null;
   let releasedEl: HTMLElement | null = null;
   let hadFlyer = false;
+  /**
+   * Cross-zone movers playing through clones in the animation layer: each clone
+   * travels from the cloud's old zone slot to its new one while the real cloud
+   * waits hidden at the destination. The zone element crops its own content
+   * (`overflow-y: auto`), so a transform that parks the real cloud over its OLD
+   * zone would be invisible mid-flight — the very «появляются мгновенно»
+   * дефект приёмки 380cc1e2. The host-level layer is never cropped.
+   */
+  const zoneClones: Array<{ clone: HTMLElement; real: HTMLElement }> = [];
 
   // --- Swap: the flyer lands, content of the centre swaps. ------------------
   let swapped = false;
@@ -420,6 +441,14 @@ export function playFocusTransition(
     swapped = true;
     flyer?.remove();
     flyer = null;
+
+    // Cross-zone movers have landed: reveal each real cloud at its new slot and
+    // drop the travelling clone (see `zoneClones`).
+    for (const move of zoneClones) {
+      move.clone.remove();
+      setStyle(move.real, 'opacity', '1');
+    }
+    zoneClones.length = 0;
 
     if (releasedEl !== null) {
       // The departing clone has reached the former focus's new zone; hand the
@@ -446,6 +475,8 @@ export function playFocusTransition(
 
   const cleanup = (): void => {
     track.rollback();
+    for (const move of zoneClones) move.clone.remove();
+    zoneClones.length = 0;
     flyer?.remove();
     flyer = null;
     overlay?.remove();
@@ -566,12 +597,43 @@ export function playFocusTransition(
     }
 
     // --- Phase 1: every visible survivor moves simultaneously. --------------
-    for (const id of phase1Moves) {
+    // Slot-only reorders stay inside their scrolling zone, so their FLIP runs on
+    // the real element. A ZONE change would park the real cloud over its OLD
+    // zone, outside the destination zone's `overflow` box — invisible mid-flight
+    // (приёмка 380cc1e2: «появляются мгновенно»). Such moves play on a clone in
+    // the unclipped animation layer instead; the real cloud waits hidden at its
+    // new slot and takes over at the swap.
+    for (const id of slotMoves) {
       const b = beforeMap.get(id);
       const a = afterMap.get(id);
       if (b === undefined || a === undefined) continue;
       setStyle(a.el, 'transform-origin', 'top left');
       play(a.el, [{ transform: flipTo(b, a) }, { transform: 'none' }], tokens.flight, tokens.ease);
+    }
+    for (const id of crossZoneMoves) {
+      const b = beforeMap.get(id);
+      const a = afterMap.get(id);
+      if (b === undefined || a === undefined) continue;
+      // Degenerate timing (no flight token): no clone to play — the cloud is
+      // simply already in place in its new zone.
+      if (tokens.flight <= 0) continue;
+      const clone = a.el.cloneNode(true) as HTMLElement;
+      setStyle(clone, 'opacity', '1');
+      placeClone(clone, toLocal(hostRect, b));
+      layer.append(clone);
+      remember(a.el);
+      setStyle(a.el, 'opacity', '0');
+      zoneClones.push({ clone, real: a.el });
+      // `fill: 'forwards'` holds the landed frame until `swap` removes the clone
+      // and reveals the real cloud at the very same spot.
+      play(
+        clone,
+        [{ transform: 'none' }, { transform: moveTo(b, a) }],
+        tokens.flight,
+        tokens.ease,
+        0,
+        'forwards',
+      );
     }
 
     // Clouds leaving with the old focus fade out during phase 1.

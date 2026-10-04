@@ -31,6 +31,7 @@ const ANIM_TOKENS: Record<string, string> = {
 };
 
 interface FakeAnimation {
+  el: ShimElement;
   keyframes: any[];
   options: any;
   cancelled: boolean;
@@ -46,6 +47,7 @@ let created: FakeAnimation[] = [];
   options: any,
 ): FakeAnimation {
   const rec: FakeAnimation = {
+    el: this,
     keyframes,
     options,
     cancelled: false,
@@ -305,6 +307,68 @@ describe('transition: плавная смена фокуса (задача e9f0a
       created.filter((a) => a.options.delay > 0).length,
       0,
       'входа нет — фазы 2 нет',
+    );
+    T.finishFocusTransition();
+  });
+
+  it('фаза 1: переезд между зонами играется клоном в необрезаемом слое (приёмка 380cc1e2)', async () => {
+    const T = await load();
+    const host = makeHost([
+      cloud('f', 'focus', rect(400, 100, 200, 80)),
+      cloud('a', 'children', rect(100, 500)),
+      cloud('b', 'children', rect(220, 500)),
+    ]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    // «b» переезжает из детей в родственников — как 4 выживших потомка при
+    // выборе одного из них. Зона обрезает содержимое (`overflow-y: auto`),
+    // поэтому FLIP реального элемента был бы невидим в полёте: переезд обязан
+    // играться клоном в необрезаемом слое анимации, а реальное облачко — ждать
+    // свопа скрытым на новом слоте.
+    relayout(host, [
+      cloud('a', 'focus', rect(400, 100, 200, 80)),
+      cloud('f', 'parents', rect(100, 100)),
+      cloud('b', 'siblings', rect(700, 100)),
+    ]);
+
+    T.playFocusTransition(host as unknown as HTMLElement, before);
+
+    const anim = layer(host);
+    const clone = anim
+      ?.querySelectorAll('.cloud')
+      .find((c) => c.dataset['id'] === 'b');
+    assert.ok(clone !== undefined, 'переезжающее между зонами облачко играет клоном в слое');
+    const real = host
+      .querySelectorAll('.cloud')
+      .find((c) => c.dataset['id'] === 'b' && c.dataset['dir'] === 'siblings');
+    assert.equal(
+      real?.style.getPropertyValue('opacity'),
+      '0',
+      'реальное облачко скрыто на новом слоте до свопа',
+    );
+    // Клон летит из старого слота (children 220,500) в новый (siblings 700,100):
+    // dx = 480, dy = -400, масштаб 1. Конечный кадр удержан до свопа.
+    const cloneAnims = created.filter((a) => a.el === clone);
+    assert.equal(cloneAnims.length, 1, 'ровно одна transform-анимация клона');
+    const move = cloneAnims[0]!;
+    assert.equal(move.keyframes[0]?.transform, 'none', 'клон стартует из старого слота');
+    assert.equal(move.keyframes[1]?.transform, 'translate(480px, -400px) scale(1, 1)');
+    assert.equal(move.options.duration, 400, 'фаза 1 идёт по токену flight');
+    assert.equal(move.options.delay, 0, 'переезд одновременен с остальными видимыми');
+    assert.equal(move.options.fill, 'forwards', 'конечный кадр удержан до свопа');
+
+    // Приземление: клон снят, реальное облачко показано на своём слоте.
+    advance(400);
+    assert.equal(
+      real?.style.getPropertyValue('opacity'),
+      '1',
+      'по приземлении реальное облачко показано',
+    );
+    assert.equal(
+      layer(host)
+        ?.querySelectorAll('.cloud')
+        .find((c) => c.dataset['id'] === 'b') ?? null,
+      null,
+      'клон снят на свопе',
     );
     T.finishFocusTransition();
   });
