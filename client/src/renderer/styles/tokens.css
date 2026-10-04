@@ -172,6 +172,14 @@
   --anim-focus-fade: 300ms;
   --anim-focus-ease: cubic-bezier(0.2, 0.7, 0.3, 1);
 
+  /* Проявление карты при смене мыслесети (спека «Проявление карты при смене
+     мыслесети», задача 70a99f09). При переходе на другую сеть прежний расклад
+     убирается одномоментно, а новый (фокус + зоны) проявляется ОДНИМ общим
+     fade-in: все облачка стартуют одновременно на своих местах. Длительность
+     читает `canvas/transition.ts` через `getComputedStyle`; при
+     `prefers-reduced-motion` токен обнуляется — проявление мгновенное. */
+  --anim-network-reveal: 300ms;
+
   /* Параметры состояний: приглушение недоступного контрола (disabled). Цвета
      состояний — существующие --bg-hover/--bg-active/--accent-pressed/--accent-soft. */
   --state-disabled-opacity: 0.5;
@@ -382,6 +390,8 @@
     --anim-focus-flight: 0ms;
     --anim-focus-settle: 0ms;
     --anim-focus-fade: 0ms;
+    /* Одно общее проявление расклада при смене сети — тоже мгновенно. */
+    --anim-network-reveal: 0ms;
   }
 }
 

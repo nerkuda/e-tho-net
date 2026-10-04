@@ -27,6 +27,7 @@ const ANIM_TOKENS: Record<string, string> = {
   '--anim-focus-settle': '260ms',
   '--anim-focus-fade': '300ms',
   '--anim-focus-ease': 'cubic-bezier(0.2, 0.7, 0.3, 1)',
+  '--anim-network-reveal': '300ms',
 };
 
 interface FakeAnimation {
@@ -491,6 +492,94 @@ describe('transition: плавная смена фокуса (задача e9f0a
     assert.equal(fadeIn.options.fill, 'both', 'проявление удерживает и первый, и последний кадр');
     advance(400 + 260);
     assert.notEqual(entering.style.getPropertyValue('opacity'), '0', 'облачко видно после завершения');
+  });
+});
+
+describe('network-reveal: одно общее проявление расклада при смене мыслесети (задача 70a99f09)', () => {
+  it('все облачка проявляются ОДНОВРЕМЕННО одной opacity-анимацией, без перелётов', async () => {
+    const T = await load();
+    const host = makeHost([
+      cloud('f', 'focus', rect(400, 100, 200, 80)),
+      cloud('p', 'parents', rect(100, 100)),
+      cloud('c', 'children', rect(100, 500)),
+      cloud('s', 'siblings', rect(700, 100)),
+    ]);
+    let drawn = 0;
+    T.playNetworkReveal(host as unknown as HTMLElement, () => {
+      drawn += 1;
+    });
+
+    // Ровно одна анимация на каждое облачко, все с нулевой задержкой и по токену.
+    assert.equal(created.length, 4, 'по одной анимации на облачко');
+    for (const a of created) {
+      assert.deepEqual(a.keyframes, [{ opacity: '0' }, { opacity: '1' }], 'проявление opacity 0→1');
+      assert.equal(a.options.delay, 0, 'все облачка стартуют одновременно');
+      assert.equal(a.options.duration, 300, 'длительность — токен --anim-network-reveal');
+      assert.equal(a.options.fill, 'both', 'финальный кадр удерживается');
+    }
+    assert.equal(
+      created.filter((a) => a.keyframes.some((k: any) => k.transform !== undefined)).length,
+      0,
+      'никаких transform-анимаций (нет перелётов и клонов)',
+    );
+    assert.equal(layer(host), null, 'слой анимации фокуса не создаётся');
+    assert.equal(drawn, 1, 'линии перерисовываются один раз');
+    // Мутации принадлежат владельцу: до завершения облачка скрыты и проявить их
+    // может только завершение/досрочная остановка.
+    for (const c of host.querySelectorAll('.cloud')) {
+      assert.equal(c.style.getPropertyValue('opacity'), '0', 'облачко скрыто до проявления');
+    }
+    advance(300);
+    for (const c of host.querySelectorAll('.cloud')) {
+      assert.notEqual(c.style.getPropertyValue('opacity'), '0', 'после проявления облачко видимо');
+    }
+  });
+
+  it('reduced-motion — мгновенное проявление без анимаций', async () => {
+    const T = await load();
+    reducedMotion = true;
+    const host = makeHost([cloud('f', 'focus', rect(400, 100, 200, 80)), cloud('c', 'children', rect(100, 500))]);
+    let drawn = 0;
+    T.playNetworkReveal(host as unknown as HTMLElement, () => {
+      drawn += 1;
+    });
+    assert.equal(created.length, 0, 'анимации не запускаются');
+    assert.equal(drawn, 1, 'линии перерисовываются сразу');
+  });
+
+  it('реальное обновление во время проявления доводит его до финала (облачка видимы)', async () => {
+    const T = await load();
+    const host = makeHost([cloud('f', 'focus', rect(400, 100, 200, 80)), cloud('c', 'children', rect(100, 500))]);
+    T.playNetworkReveal(host as unknown as HTMLElement);
+    assert.equal(host.querySelectorAll('.cloud')[0]?.style.getPropertyValue('opacity'), '0');
+    T.finishFocusTransition();
+    for (const c of host.querySelectorAll('.cloud')) {
+      assert.equal(c.style.getPropertyValue('opacity'), '', 'инлайн-скрытие снято, облачко видимо');
+    }
+    assert.ok(created.every((a) => a.cancelled), 'запущенные анимации отменены');
+  });
+
+  it('проявление после смены сети снимает незавершённый фокус-переход (ровно один владелец)', async () => {
+    const T = await load();
+    const host = makeHost([cloud('f', 'focus', rect(400, 100, 200, 80)), cloud('a', 'children', rect(100, 500))]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    relayout(host, [cloud('a', 'focus', rect(400, 100, 200, 80)), cloud('f', 'parents', rect(100, 100))]);
+    T.playFocusTransition(host as unknown as HTMLElement, before);
+    assert.ok(layer(host) !== null, 'фокус-переход запущен');
+    // Смена сети приходит поверх: переход обязан быть доведён до финала, а
+    // затем проявлен новый расклад — слой-клонов не остаётся.
+    T.playNetworkReveal(host as unknown as HTMLElement);
+    assert.equal(layer(host), null, 'слой фокус-перехода снят до проявления');
+    assert.equal(
+      created.filter((a) => a.keyframes[0]?.opacity === '0' && a.keyframes[1]?.opacity === '1').length,
+      2,
+      'каждое облачко получило своё проявление',
+    );
+    // Завершение проявления возвращает облачка в видимое состояние.
+    T.finishFocusTransition();
+    for (const c of host.querySelectorAll('.cloud')) {
+      assert.equal(c.style.getPropertyValue('opacity'), '', 'облачко видимо после проявления');
+    }
   });
 });
 

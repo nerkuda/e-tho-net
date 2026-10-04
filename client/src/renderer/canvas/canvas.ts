@@ -96,6 +96,7 @@ import {
   captureClouds,
   finishFocusTransition,
   playFocusTransition,
+  playNetworkReveal,
   prefersReducedMotion,
 } from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
@@ -753,6 +754,7 @@ async function render(): Promise<void> {
   renderEnterCount++;
   if (host === null || zones === null || focusRow === null) return;
   renderCount++;
+  const generation = ++renderGeneration;
   // A real data update arriving mid-flight wins: snap any running transition to
   // its final state (release the held focus, drop the clones/layers) BEFORE the
   // old layout is captured and rebuilt. The rebuild below then starts from the
@@ -760,10 +762,18 @@ async function render(): Promise<void> {
   finishFocusTransition();
   applyCanvasScaleVars(host);
   const focus = store.state.focus;
+  // Смена мыслесети (спека «Проявление карты при смене мыслесети», задача
+  // 70a99f09): прежнее содержимое убирается одномоментно, а новый расклад
+  // проявляется одним общим fade-in — не хореографией смены фокуса.
+  const networkChanged = store.state.networkId !== lastNetworkId;
   if (focus === null) {
     emptyEl?.classList.remove('hidden');
     resetFocusBand(host);
     resetCanvasCursor();
+    // Смена сети без фокуса: облачка и линии прежней сети просто удаляются —
+    // без анимаций и перелётов. `lastNetworkId` здесь намеренно НЕ трогаем:
+    // первый рендер расклада новой сети обязан увидеть смену и проявиться.
+    if (networkChanged) clearRenderedContent();
     // The strip hides itself when there is no focus; nothing to do here.
     void renderFilterStrip(null);
     return;
@@ -783,7 +793,10 @@ async function render(): Promise<void> {
   // appended pages belong to the previous focus, and in-flight page requests
   // must not land on the new one.
   if (focusChanged) resetZonePaging(focus);
-  const animate = (focusChanged || zoneAnimationPending) && !prefersReducedMotion();
+  // Смена сети НЕ играет фокус-хореографию (её расклад раскрывается общим
+  // проявлением ниже): сравнивать старую и новую раскладки бессмысленно, а
+  // промежуточные состояния загрузки сети не должны мелькать.
+  const animate = !networkChanged && (focusChanged || zoneAnimationPending) && !prefersReducedMotion();
   zoneAnimationPending = false;
   const snapshot = animate ? captureClouds(host) : null;
   // Source of the flight when the focus was picked OUTSIDE the map (pinned /
@@ -820,6 +833,9 @@ async function render(): Promise<void> {
   }
 
   // --- Rebuild + transition: one synchronous task, one paint --------------
+  // Проиграл гонку — уступил более свежему рендеру: DOM не трогаем вовсе
+  // (иначе две дорисовки пересобирали бы расклад по очереди и облачка мелькали).
+  if (generation !== renderGeneration) return;
   renderFocusRow(focus);
   updateFocusBand();
   renderZone('parents', groupByThought(zoneNeighbors('parents', focus)));
@@ -837,6 +853,7 @@ async function render(): Promise<void> {
     setZoneAsViewResult(true, viewResult);
   }
   lastFocusId = focus.focused.id;
+  lastNetworkId = store.state.networkId;
   // The response is now on screen: a further store notification with the SAME
   // object is a layout/selection re-render, not fresh neighbourhood data.
   lastFocusResponse = focus;
@@ -845,7 +862,12 @@ async function render(): Promise<void> {
   // `syncZoneTotalsWithFreshFocus` from the store subscriber.
   if (focusChanged) void ensureZoneTotals(focus);
   paintZoneIndicators();
-  if (snapshot !== null) {
+  if (networkChanged) {
+    // Первый рендер расклада новой сети: одно ОБЩЕЕ проявление всех облачек
+    // (фокус + зоны) на своих местах — без промежуточных мельканий загрузки
+    // (спека «Проявление карты при смене мыслесети», задача 70a99f09).
+    playNetworkReveal(host, drawLinksNow);
+  } else if (snapshot !== null) {
     // Topology of the new focus (focus id, visible parents, visible edges) lets
     // the transition's phase 2 pick each new cloud's fly-out source (спека
     // «FLIP-анимация холста», задача 380cc1e2). `edges` may be absent on an old
@@ -940,6 +962,25 @@ function viewResultToZoneEntries(
 let lastFocusId: string | null = null;
 
 /**
+ * Id мыслесети, чей расклад уже нарисован на холсте. Отличает ПЕРВЫЙ рендер
+ * новой сети (мгновенная очистка прежнего содержимого + одно общее проявление
+ * расклада, спека «Проявление карты при смене мыслесети», задача 70a99f09) от
+ * внутрисетевой смены фокуса (двухфазная хореография). Обновляется только
+ * рендером, который реально перерисовал DOM.
+ */
+let lastNetworkId: string | null = null;
+
+/**
+ * Поколение рендера. `render()` асинхронна (резолв метаданных, полоса отборов,
+ * отбор нижней зоны), и пока она ждёт данные, новый триггер может запустить
+ * следующую дорисовку. Право перерисовать DOM получает только САМЫЙ СВЕЖИЙ
+ * рендер: устаревший выходит после `await`-ов, не трогая карту. Без этого обе
+ * дорисовки пересобирали расклад по очереди и облачка мелькали (та же природа,
+ * что у «дёрганой смены содержимого» при загрузке сети, задача 70a99f09).
+ */
+let renderGeneration = 0;
+
+/**
  * Ответ фокуса, по которому рисовался холст. Свежий ответ (пусть и тот же
  * фокус) — сигнал сверить количества секторов: своя запись связи не поднимает
  * версию мысли, других признаков изменений у ответа нет (ошибка ec5ba58c).
@@ -1024,6 +1065,31 @@ function resetFocusBand(h: HTMLElement): void {
     layerLabelEl.style.display = 'none';
   }
   for (const dir of ZONE_DIRS) setZoneIndicator(dir, null);
+}
+
+/**
+ * Мгновенно убирает расклад с карты — облачка фокуса и зон вместе с линиями
+ * (смена мыслесети, спека «Проявление карты при смене мыслесети», задача
+ * 70a99f09). Никаких анимаций, клонов и перелётов: прежнее содержимое просто
+ * удаляется, чтобы облачка прошлой сети не оставались и не мелькали, пока
+ * грузится новая.
+ */
+function clearRenderedContent(): void {
+  if (focusRow !== null) clear(focusRow);
+  focusCloudEl = null;
+  if (zones !== null) {
+    for (const dir of ZONE_DIRS) {
+      const zone = zones[dir];
+      const grid = zone.querySelector<HTMLElement>('.zone-grid');
+      if (grid !== null) clear(grid);
+      // Пустая зона не должна сохранять высоту прошлого расклада — иначе
+      // появляется лишняя прокрутка до прихода данных новой сети.
+      const spacer = zone.querySelector<HTMLElement>('.zone-spacer');
+      if (spacer !== null) spacer.style.height = '0px';
+    }
+  }
+  zoneData.clear();
+  redrawLinks?.();
 }
 
 /** Set by {@link requestZoneAnimation}; consumed by the next render. */

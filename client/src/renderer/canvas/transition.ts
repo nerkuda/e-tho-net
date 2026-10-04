@@ -116,6 +116,8 @@ interface AnimTokens {
   flight: number;
   settle: number;
   fade: number;
+  /** Одно общее проявление расклада после смены мыслесети (`--anim-network-reveal`). */
+  reveal: number;
   ease: string;
 }
 
@@ -136,6 +138,7 @@ function readAnimTokens(host: HTMLElement): AnimTokens {
     flight: ms('--anim-focus-flight'),
     settle: ms('--anim-focus-settle'),
     fade: ms('--anim-focus-fade'),
+    reveal: ms('--anim-network-reveal'),
     ease: ease === '' ? 'linear' : ease,
   };
 }
@@ -584,5 +587,101 @@ export function playFocusTransition(
     cleanup();
     drawLinks?.();
     console.error('[focus-transition] choreography failed — snapped to the settled layout', err);
+  }
+}
+
+/**
+ * Проявление ВСЕГО расклада после смены мыслесети (спека «Проявление карты при
+ * смене мыслесети», задача 70a99f09).
+ *
+ * При переходе на другую сеть прежнее содержимое убирается одномоментно (не
+ * хореографией — это делает рендер холста), а новый расклад (фокус + зоны)
+ * проявляется ОДНИМ общим fade-in: каждое облачко получает одну и ту же
+ * opacity-анимацию `0 → 1` с нулевой задержкой, то есть все стартуют
+ * одновременно на своих местах. Никаких перелётов, клонов и промежуточных
+ * состояний — промежуточные мелькания загрузки сети не показываются.
+ *
+ * Длительность и сглаживание — токены `--anim-network-reveal` /
+ * `--anim-focus-ease`; при `prefers-reduced-motion` (или нулевом токене)
+ * проявление мгновенное. Владение мутациями общее с фокус-переходом
+ * ({@link finishFocusTransition}): реальное обновление или следующий рендер
+ * доводят проявление до финала, не оставляя облачка невидимыми.
+ */
+export function playNetworkReveal(host: HTMLElement, drawLinks?: () => void): void {
+  finishFocusTransition();
+  const clouds = captureClouds(host);
+  const tokens = readAnimTokens(host);
+  if (prefersReducedMotion() || tokens.reveal <= 0 || clouds.length === 0) {
+    drawLinks?.();
+    return;
+  }
+  const generation = ++transitionGeneration;
+  const timers: number[] = [];
+  const animations: Animation[] = [];
+  const inline: InlineSnapshot[] = [];
+
+  const complete = (): void => {
+    if (generation !== transitionGeneration) return;
+    active = null;
+    for (const timer of timers) window.clearTimeout(timer);
+    timers.length = 0;
+    animations.length = 0;
+    for (const snap of inline) {
+      setStyle(snap.el, 'opacity', snap.opacity);
+      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
+      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
+    }
+    inline.length = 0;
+  };
+
+  const cleanup = (): void => {
+    for (const timer of timers) window.clearTimeout(timer);
+    timers.length = 0;
+    for (const animation of animations) {
+      try {
+        animation.cancel();
+      } catch {
+        // An already-finished animation may refuse to cancel — nothing to undo.
+      }
+    }
+    animations.length = 0;
+    for (const snap of inline) {
+      setStyle(snap.el, 'opacity', snap.opacity);
+      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
+      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
+    }
+    inline.length = 0;
+  };
+
+  // Владелец регистрируется ДО первой мутации (урок ошибки 66deb70a): сбой
+  // анимации обязан откатиться к видимому раскладу, а не оставить облачка
+  // скрытыми без владельца стилей.
+  active = { swap: () => {}, cleanup };
+  try {
+    for (const cloud of clouds) {
+      const el = cloud.el;
+      inline.push({
+        el,
+        opacity: el.style.getPropertyValue('opacity'),
+        pointerEvents: el.style.getPropertyValue('pointer-events'),
+        transformOrigin: el.style.getPropertyValue('transform-origin'),
+      });
+      setStyle(el, 'opacity', '0');
+      animations.push(
+        el.animate([{ opacity: '0' }, { opacity: '1' }], {
+          duration: tokens.reveal,
+          easing: tokens.ease,
+          delay: 0,
+          fill: 'both',
+        }),
+      );
+    }
+    drawLinks?.();
+    timers.push(window.setTimeout(complete, tokens.reveal));
+  } catch (err) {
+    active = null;
+    cleanup();
+    drawLinks?.();
+    console.error('[network-reveal] reveal failed — snapped to the settled layout', err);
   }
 }
