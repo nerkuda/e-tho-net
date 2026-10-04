@@ -143,7 +143,39 @@ describe('nav-core: пространственная навигация', () => 
     assert.equal(shouldDrawCurrentFrame('t1', 't1'), false, 'текущий = открытый — только сплошная');
     assert.equal(shouldDrawCurrentFrame(null, 't1'), false, 'нет текущего — пунктира нет');
   });
+
+  it('lateral «overlap»: заголовок во всю ширину выигрывает вертикаль у книжки своей колонки', () => {
+    // Заголовок следующей группы (во всю ширину) прямо под текущей книжкой;
+    // книжка той же колонки — чуть дальше. Центровая метрика берёт книжку
+    // (бокового смещения нет), перекрытийная — заголовок (интервалы пересеклись).
+    const header = box('header', 0, 100, 400, 20);
+    const sameColBook = box('book', 305, 140, 100, 60);
+    const cur = box('cur', 305, 30, 100, 60);
+    assert.equal(
+      pick(itemsWith(header, sameColBook), cur, 0, 1)?.key,
+      'book',
+      'по умолчанию (центры) — ближайшая книжка колонки',
+    );
+    assert.equal(
+      pickSpatialTarget(itemsWith(header, sameColBook), cur, 0, 1, (i) => i.key, cur.key, {
+        lateral: 'overlap',
+      })?.key,
+      'header',
+      'по перекрытию — заголовок группы (e80da89f п.1)',
+    );
+  });
 });
+
+/** Хелпер: список боксов для точечной проверки метрики. */
+function itemsWith(...boxes: Array<{ key: string; x: number; y: number; w: number; h: number }>): Array<{
+  key: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}> {
+  return boxes;
+}
 
 // ---------------------------------------------------------------------------
 // Компонент списка на подставном адаптере

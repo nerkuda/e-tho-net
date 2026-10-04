@@ -23,6 +23,7 @@
 
 import { setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
+import { currentThoughtId } from '../history.js';
 import { notice } from '../lib/notice.js';
 import { pickSpatialTarget, shouldDrawCurrentFrame } from '../lib/ui/nav-core.js';
 import { store } from '../state.js';
@@ -176,10 +177,12 @@ export function syncCanvasCursor(): void {
   }
   if (cursorId === null) return;
   // Двухрамочная навигация (ADR e6d48e09): текущая мысль совпала с открытой в
-  // редакторе (гало) — пунктир не рисуется, остаётся только сплошная рамка.
-  const editorTarget = store.state.editorTarget;
-  const openedId = editorTarget?.kind === 'thought' ? editorTarget.id : null;
-  if (!shouldDrawCurrentFrame(cursorId, openedId)) return;
+  // редакторе — пунктир не рисуется, остаётся только сплошная рамка. Открытая
+  // мысль — единое определение `currentThoughtId()` (цель редактора, иначе мысль
+  // в фокусе): при `editorTarget=null` редактор следует за фокусом, поэтому и
+  // Enter на фокусной, и клик по свободному месту открывают ИМЕННО фокусную
+  // мысль — её пунктир обязан гаснуть (задача e80da89f п.2).
+  if (!shouldDrawCurrentFrame(cursorId, currentThoughtId())) return;
   hostEl
     .querySelector<HTMLElement>(`.cloud[data-id="${CSS.escape(cursorId)}"]`)
     ?.classList.add(CURSOR_CLS);
@@ -325,6 +328,11 @@ function openCursorInEditor(): void {
   const id = cursorId;
   if (id === null) return;
   openThoughtInEditor(id);
+  // Цель редактора могла НЕ измениться (Enter на фокусной: `editorTarget=null` →
+  // редактор следует за фокусом, `openThoughtInEditor` выходит рано) — тогда
+  // перерисовки от store не будет, и пунктир остался бы. Пересчитываем рамки
+  // принудительно: открытая = текущая → пунктир гаснет (ADR e6d48e09, e80da89f п.2б).
+  syncCanvasCursor();
 }
 
 /** Ctrl+Enter: focus the cursor thought (same as a double click). */

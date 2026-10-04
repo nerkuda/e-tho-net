@@ -259,10 +259,17 @@ export function createListNav<E>(
    * `(dx, dy)` по геометрии (выбор — в ядре `pickSpatialTarget`). Без текущей
    * сущности: «вперёд» (вниз/вправо) — первая сущность, «назад» — последняя.
    *
-   * С ЗАГОЛОВКА группы вертикаль ведёт в книги ЭТОЙ группы (первую/последнюю):
-   * заголовок тянется во всю ширину, и геометрический выбор предпочёл бы
-   * заголовок следующей группы книгам собственной (большое боковое смещение при
-   * малом «вперёд»). Пустая группа — обычный геометрический шаг.
+   * Боковое смещение считается ПО ПЕРЕКРЫТИЮ интервалов (`lateral: 'overlap'`,
+   * задача e80da89f п.1): заголовок группы во всю ширину не штрафуется боком за
+   * колонку, поэтому вертикальный маршрут получается сам —
+   * «заголовок → ряд 1 → … → ряд N → заголовок следующей группы»; ↑ с верхнего
+   * ряда естественно ведёт на заголовок СВОЕЙ группы.
+   *
+   * Единственный негеометрический переход — ↑ С ЗАГОЛОВКА: он ведёт к заголовку
+   * ПРЕДЫДУЩЕЙ группы (требование e80da89f п.1: заголовки — «столбец» границ
+   * групп, и с заголовка вверх ожидается предыдущий заголовок, а не последний
+   * ряд предыдущей группы). Вниз с заголовка геометрия сама даёт первую книжку
+   * своей группы.
    */
   const moveSpatial = (dx: -1 | 0 | 1, dy: -1 | 0 | 1): void => {
     const entries = list();
@@ -276,13 +283,10 @@ export function createListNav<E>(
       return;
     }
     const isHead = (entry: E): boolean => adapter.isGroupHead?.(entry) === true;
-    if (dy !== 0 && isHead(current)) {
-      const group = adapter.groupOf?.(current) ?? null;
-      const hasBooks =
-        group !== null &&
-        entries.some((entry) => !isHead(entry) && adapter.groupOf?.(entry) === group);
-      if (hasBooks) {
-        moveGroupEdge(dy < 0, false);
+    if (dy < 0 && isHead(current)) {
+      const prevHead = previousGroupHead(current);
+      if (prevHead !== null) {
+        setCurrent(prevHead, { reveal: true });
         return;
       }
     }
@@ -298,8 +302,30 @@ export function createListNav<E>(
       dy,
       (item) => adapter.tokenOf(item.entry),
       adapter.tokenOf(current),
+      { lateral: 'overlap' },
     );
     if (next !== null) setCurrent(next.entry, { reveal: true });
+  };
+
+  /**
+   * Заголовок ПРЕДЫДУЩЕЙ группы (в порядке видимых групп) — цель ↑ с заголовка.
+   * `null` у первой группы (выше заголовков нет).
+   */
+  const previousGroupHead = (head: E): E | null => {
+    const groupOf = (entry: E): string | null => adapter.groupOf?.(entry) ?? null;
+    const isHead = (entry: E): boolean => adapter.isGroupHead?.(entry) === true;
+    const currentGroup = groupOf(head);
+    if (currentGroup === null) return null;
+    const groups: string[] = [];
+    const all = list();
+    for (const entry of all) {
+      const key = groupOf(entry);
+      if (key !== null && !groups.includes(key)) groups.push(key);
+    }
+    const index = groups.indexOf(currentGroup);
+    if (index <= 0) return null;
+    const previous = groups[index - 1]!;
+    return all.find((entry) => isHead(entry) && groupOf(entry) === previous) ?? null;
   };
 
   /**

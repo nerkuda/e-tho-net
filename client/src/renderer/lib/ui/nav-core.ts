@@ -176,11 +176,48 @@ export const SPATIAL_FORWARD_EPS_PX = 2;
 export const SPATIAL_LATERAL_WEIGHT = 2.5;
 
 /**
+ * Как измерять БОКОВОЕ (перпендикулярное направлению) смещение цели:
+ *  • `'center'` (по умолчанию) — расстояние ЦЕНТРОВ по перпендикуляру (карта:
+ *    облачка-точки, «прямо под» важнее «чуть вбок и ближе»);
+ *  • `'overlap'` — зазор между перпендикулярными интервалами (`0`, если они
+ *    перекрываются). Элемент ВО ВСЮ ШИРИНУ строки (заголовок группы сеточного
+ *    списка) тогда не штрафуется боком за любую колонку и выигрывает у книжек
+ *    соседней группы по вертикали — геометрия сама задаёт маршрут
+ *    «заголовок → ряд 1 → ряд 2 → заголовок следующей группы»
+ *    (задача e80da89f п.1, «Полки»). Обе метрики — чистые, без DOM.
+ */
+export type SpatialLateral = 'center' | 'overlap';
+
+/** Настройки выбора пространственной цели. */
+export interface SpatialPickOptions {
+  /** Метрика бокового смещения (см. {@link SpatialLateral}); по умолчанию `center`. */
+  lateral?: SpatialLateral;
+}
+
+/** Зазор между отрезками `[a0,a1]` и `[b0,b1]` (0 при перекрытии). */
+function intervalGap(a0: number, a1: number, b0: number, b1: number): number {
+  if (a1 <= b0) return b0 - a1;
+  if (b1 <= a0) return a0 - b1;
+  return 0;
+}
+
+/**
+ * Боковое смещение при метрике `overlap`: зазор интервалов по перпендикулярной
+ * оси (для вертикального шага — горизонталь, для горизонтального — вертикаль).
+ */
+function perpendicularGap(current: NavBox, item: NavBox, dx: -1 | 0 | 1, dy: -1 | 0 | 1): number {
+  return dy !== 0
+    ? intervalGap(current.x, current.x + current.w, item.x, item.x + item.w)
+    : intervalGap(current.y, current.y + current.h, item.y, item.y + item.h);
+}
+
+/**
  * Лучшая цель из `items` при шаге из `current` в единичном направлении
  * `(dx, dy)` — одна из четырёх стрелок. Среди сущностей, спроецированных
  * «вперёд», счёт штрафует боковое смещение: сущность на одной оси с текущей
  * выигрывает у более близкой по «вперёд», но смещённой вбок. `null` — в
  * направлении ничего нет. Сущность с ключом `currentKey` из выбора исключена.
+ * Метрика бокового смещения задаётся {@link SpatialPickOptions.lateral}.
  */
 export function pickSpatialTarget<T extends NavBox>(
   items: readonly T[],
@@ -189,9 +226,11 @@ export function pickSpatialTarget<T extends NavBox>(
   dy: -1 | 0 | 1,
   keyOf: (item: T) => string,
   currentKey: string,
+  options: SpatialPickOptions = {},
 ): T | null {
   const cx = current.x + current.w / 2;
   const cy = current.y + current.h / 2;
+  const lateralMode = options.lateral ?? 'center';
   let best: T | null = null;
   let bestScore = Number.POSITIVE_INFINITY;
   for (const item of items) {
@@ -200,7 +239,10 @@ export function pickSpatialTarget<T extends NavBox>(
     const vy = item.y + item.h / 2 - cy;
     const forward = vx * dx + vy * dy;
     if (forward <= SPATIAL_FORWARD_EPS_PX) continue;
-    const lateral = Math.abs(vx * dy - vy * dx);
+    const lateral =
+      lateralMode === 'overlap'
+        ? perpendicularGap(current, item, dx, dy)
+        : Math.abs(vx * dy - vy * dx);
     const score = forward + lateral * SPATIAL_LATERAL_WEIGHT;
     if (score < bestScore) {
       bestScore = score;

@@ -359,6 +359,105 @@ describe('навигация «Полок»: геометрия книжек (43
   });
 });
 
+// ---------------------------------------------------------------------------
+// Вертикальный маршрут через ЗАГОЛОВКИ полок (задача e80da89f п.1): боковое
+// смещение считается по перекрытию интервалов, поэтому заголовок во всю ширину
+// не промахивается мимо книжек соседней полки в «своих» колонках.
+// ---------------------------------------------------------------------------
+
+describe('навигация «Полок»: вертикаль через заголовки (e80da89f п.1)', () => {
+  it('↓ с книжки НИЖНЕГО ряда — на заголовок следующей полки (не на её книжку той же колонки)', () => {
+    // Полка 2 повторяет колонки полки 1 — ближайшая по «вперёд» книжка c2
+    // прямо под b2; маршрут обязан предпочесть ЗАГОЛОВОК s2.
+    const root = geoRoot([
+      { id: 's1', rows: [['a1', 'a2'], ['b1', 'b2']] },
+      { id: 's2', rows: [['c1', 'c2']] },
+    ]);
+    const { nav } = attach(root, { isShelvesView: () => true });
+    press(root, 'ArrowDown'); // s1
+    press(root, 'ArrowDown'); // a1
+    press(root, 'ArrowRight'); // a2
+    press(root, 'ArrowDown'); // b2 (нижний ряд, правая колонка)
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'b2' });
+    press(root, 'ArrowDown');
+    assert.deepEqual(
+      nav.current(),
+      { kind: 'shelf', key: 's2' },
+      '↓ с нижнего ряда — на ЗАГОЛОВОК следующей полки',
+    );
+    nav.destroy();
+  });
+
+  it('↑ с книжки ВЕРХНЕГО ряда — на заголовок СВОЕЙ полки (не на книжку полки выше)', () => {
+    const root = geoRoot([
+      { id: 's1', rows: [['a1', 'a2'], ['b1', 'b2']] },
+      { id: 's2', rows: [['c1', 'c2']] },
+    ]);
+    const { nav } = attach(root, { isShelvesView: () => true });
+    press(root, 'ArrowDown'); // s1
+    press(root, 'ArrowDown'); // a1
+    press(root, 'ArrowRight'); // a2
+    press(root, 'ArrowDown'); // b2
+    press(root, 'ArrowDown'); // s2
+    press(root, 'ArrowDown'); // c1
+    press(root, 'ArrowRight'); // c2 (верхний ряд, правая колонка)
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'c2' });
+    press(root, 'ArrowUp');
+    assert.deepEqual(
+      nav.current(),
+      { kind: 'shelf', key: 's2' },
+      '↑ с верхнего ряда — на ЗАГОЛОВОК своей полки',
+    );
+    nav.destroy();
+  });
+
+  it('↑ с ЗАГОЛОВКА — на заголовок ПРЕДЫДУЩЕЙ полки; у первой — без движения', () => {
+    const root = geoRoot([
+      { id: 's1', rows: [['a1']] },
+      { id: 's2', rows: [['c1']] },
+    ]);
+    const { nav } = attach(root, { isShelvesView: () => true });
+    press(root, 'End', undefined, true); // последняя книжка s2 => c1
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'c1' });
+    press(root, 'ArrowUp'); // заголовок s2
+    assert.deepEqual(nav.current(), { kind: 'shelf', key: 's2' });
+    press(root, 'ArrowUp'); // заголовок предыдущей полки
+    assert.deepEqual(nav.current(), { kind: 'shelf', key: 's1' });
+    press(root, 'ArrowUp'); // первая полка — выше заголовков нет
+    assert.deepEqual(nav.current(), { kind: 'shelf', key: 's1' });
+    nav.destroy();
+  });
+
+  it('полный вертикальный маршрут: заголовок → ряд → ряд → заголовок следующей полки', () => {
+    const root = geoRoot([
+      { id: 's1', rows: [['a1', 'a2'], ['b1', 'b2']] },
+      { id: 's2', rows: [['c1', 'c2']] },
+    ]);
+    const { nav } = attach(root, { isShelvesView: () => true });
+    const seq: Array<{ kind: string; key: string }> = [];
+    const press2 = (key: string): void => {
+      press(root, key);
+      const c = nav.current();
+      if (c !== null) seq.push(c);
+    };
+    press2('ArrowDown'); // s1 (заголовок)
+    press2('ArrowDown'); // a1
+    press2('ArrowDown'); // b1
+    press2('ArrowDown'); // s2 (заголовок следующей полки)
+    assert.deepEqual(seq, [
+      { kind: 'shelf', key: 's1' },
+      { kind: 'publication', key: 'a1' },
+      { kind: 'publication', key: 'b1' },
+      { kind: 'shelf', key: 's2' },
+    ]);
+    // Вверх: с ЗАГОЛОВКА s2 — сразу на заголовок предыдущей полки s1
+    // (требование e80da89f п.1), у первой полки выше цели нет.
+    press2('ArrowUp'); // s1 (заголовок предыдущей полки)
+    assert.deepEqual(seq.slice(4), [{ kind: 'shelf', key: 's1' }]);
+    nav.destroy();
+  });
+});
+
 describe('навигация библиотеки: двухрамочность (ADR e6d48e09)', () => {
   it('выбор → одна сплошная рамка; стрелка → пунктир и сплошная', () => {
     let opened: string | null = null;

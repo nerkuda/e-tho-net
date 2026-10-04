@@ -26,6 +26,7 @@ import type { FocusEdge, FocusNeighbor, FocusResponse, ThoughtRef } from '@etn/s
 
 import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
+import { currentThoughtId } from '../history.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { resolveEffectiveCanvasLinkFilter } from '../lib/effective-link-filter.js';
 import { takeFocusOrigin } from '../lib/focus-origin.js';
@@ -407,11 +408,11 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
       // `editorTarget` is intentionally NOT part of `canvasRenderKey`
       // (task ff82809a): a click on a parent/sibling only changes which
       // thought is open in the editor. Update the single `.halo` cloud in
-      // place instead of rebuilding every zone.
-      const haloId =
-        store.state.editorTarget?.kind === 'thought'
-          ? store.state.editorTarget.id
-          : null;
+      // place instead of rebuilding every zone. Открытая мысль — единое
+      // определение `currentThoughtId()` (цель редактора, иначе фокус):
+      // клик по свободному месту (editorTarget=null) открывает фокусную
+      // мысль, и её гало обязано появиться (задача e80da89f п.2а).
+      const haloId = currentThoughtId();
       if (haloId !== lastHaloId) {
         lastHaloId = haloId;
         paintHalo();
@@ -420,10 +421,7 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     }
     lastRenderKey = key;
     lastSelectionKey = selectionKey();
-    lastHaloId =
-      store.state.editorTarget?.kind === 'thought'
-        ? store.state.editorTarget.id
-        : null;
+    lastHaloId = currentThoughtId();
     scheduleRender();
   });
   // Слой данных (G2): нижняя зона в режиме отбора не входит в
@@ -661,8 +659,7 @@ function paintSelection(): void {
  *  the lower zone (task ff82809a). */
 function paintHalo(): void {
   if (host === null) return;
-  const editorTarget = store.state.editorTarget;
-  const haloId = editorTarget?.kind === 'thought' ? editorTarget.id : null;
+  const haloId = currentThoughtId();
   for (const cloud of host.querySelectorAll<HTMLElement>('.cloud')) {
     const id = cloud.dataset['id'];
     cloud.classList.toggle('halo', id !== undefined && id === haloId);
@@ -1166,6 +1163,12 @@ function renderFocusRow(focus: FocusResponse): void {
     },
   });
   cloud.classList.add('focus-cloud');
+  // Halo of the open-in-editor thought (§2.2.4): when the editor follows the
+  // focus (`editorTarget=null`), the FOCUS cloud is exactly the thought open in
+  // the editor — it carries the solid frame (единое определение
+  // `currentThoughtId()`, задача e80da89f п.2а). Fast-path repaint of the halo
+  // is handled by the store subscriber; this covers the full rebuild.
+  if (currentThoughtId() === thought.id) cloud.classList.add('halo');
 
   const parents = groupByThought(focus.parents).length;
   const children = groupByThought(focus.children).length;
@@ -2145,9 +2148,10 @@ function buildCloud(
   cloud.dataset['dir'] = dir;
   if (store.state.selection.includes(entry.id)) cloud.classList.add('selected');
   // Halo: the thought is open in the editor (§2.2.4) — a single click, Enter
-  // or a pick from the structures/chronicle view.
-  const editorTarget = store.state.editorTarget;
-  if (editorTarget?.kind === 'thought' && editorTarget.id === entry.id) {
+  // or a pick from the structures/chronicle view. Открытая мысль — единое
+  // определение `currentThoughtId()`: при `editorTarget=null` редактор следует
+  // за фокусом, поэтому фокусная мысль тоже несёт сплошную рамку (e80da89f п.2а).
+  if (currentThoughtId() === entry.id) {
     cloud.classList.add('halo');
   }
   // Полное имя — подсказкой на названии (фабрика ставит сокращённое).
