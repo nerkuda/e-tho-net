@@ -231,6 +231,13 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         // Прокрутка каретки к видимой в контейнере панели, а не в самом поле
         // (поле растёт по содержимому) — см. scrollCaretIntoView.
         EditorView.scrollHandler.of(scrollCaretIntoView),
+        // Нативная проверка орфографии (задача 1e373ac7). CodeMirror 6 в
+        // updateAttrs() принудительно ставит `spellcheck="false"` на contentDOM,
+        // поэтому ошибки в комментарии не подчёркивались, в отличие от обычных
+        // полей (`lib/ui/field.ts`, spellcheck по умолчанию true). Фасет
+        // contentAttributes применяется после и возвращает атрибуту true; языки
+        // спеллчекера задаёт главный процесс (client/src/main/index.ts).
+        EditorView.contentAttributes.of({ spellcheck: 'true' }),
         EditorView.lineWrapping,
         syntaxHighlighting(mdHighlightStyle, { fallback: true }),
         EditorView.updateListener.of((update) => {

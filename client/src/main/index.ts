@@ -12,7 +12,7 @@
  * The API-key never leaves this process: renderer talks to data exclusively over
  * IPC (G7).
  */
-import { app, BrowserWindow, powerMonitor, protocol, screen, shell } from 'electron';
+import { app, BrowserWindow, powerMonitor, protocol, screen, session, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { CLIENT_META_KEY } from '@etn/shared';
@@ -387,6 +387,33 @@ function registerEtnimgProtocol(deps: EtnimgServeDeps): void {
 }
 
 /**
+ * Нативные языки проверки орфографии (задача 1e373ac7).
+ *
+ * Electron на Windows/Linux использует Hunspell: набор доступных словарей
+ * зависит от сборки, а язык по умолчанию — локаль ОС, в которой русского
+ * может не быть. Комментарии в ETN двуязычны (русские тексты и англоязычные
+ * термины/идентификаторы), поэтому запрашиваем `ru` и `en-US`. Оставляем
+ * только те локали, для которых словарь реально доступен:
+ * `setSpellCheckerLanguages` бросает на неизвестной локали, а падать из-за
+ * этого старт приложения нельзя. Сама проверка включается атрибутом
+ * `spellcheck="true"` на contentDOM редактора комментария
+ * (client/src/renderer/editor/md-editor.ts).
+ */
+function configureSpellCheckerLanguages(): void {
+  try {
+    const available = session.defaultSession.availableSpellCheckerLanguages;
+    const wanted = ['ru', 'en-US'].filter((lang) => available.includes(lang));
+    if (wanted.length === 0) {
+      console.warn('[ETN] spellcheck: no dictionary for ru/en-US, using system default');
+      return;
+    }
+    session.defaultSession.setSpellCheckerLanguages(wanted);
+  } catch (err: unknown) {
+    console.error('[ETN] Failed to configure spellchecker languages:', err);
+  }
+}
+
+/**
  * App lifecycle. macOS re-creates a window on dock activation when none remain;
  * other platforms quit when all windows are closed (standard Electron idiom).
  */
@@ -507,6 +534,9 @@ app
     // Window background follows the stored theme so the very first paint
     // already matches (the renderer applies data-theme on boot, L10).
     const theme = storedTheme(localDb);
+
+    // Языки нативной проверки орфографии (задача 1e373ac7) — до создания окна.
+    configureSpellCheckerLanguages();
 
     const win = createWindow(theme, localDb);
 
