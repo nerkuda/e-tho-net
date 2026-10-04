@@ -270,7 +270,67 @@ describe('transition: плавная смена фокуса (задача e9f0a
       assert.equal(m.options.delay, 0, 'в фазе 1 движения стартуют одновременно');
       assert.equal(m.options.duration, 400, 'фаза 1 идёт по токену flight');
     }
+    // Базовый transform уезжающего клона — центр (старт), поэтому конечный кадр
+    // обязан удерживаться до свопа: иначе гонка конца анимации с
+    // `setTimeout(swap, flight)` может на кадр вернуть клон в центр.
+    const depart = created.find((a) => a.keyframes[0]?.transform === 'none');
+    assert.ok(depart !== undefined, 'уезжающий клон бывшего фокуса');
+    assert.equal(depart.options.fill, 'forwards', 'конечный кадр удержан до свопа');
     assert.equal(created.filter((a) => a.options.delay > 0).length, 0, 'входа нет — фазы 2 нет');
+  });
+
+  it('фаза 1: перестановка внутри зоны без смены зоны тоже анимируется', async () => {
+    const T = await load();
+    const host = makeHost([
+      cloud('f', 'focus', rect(400, 100, 200, 80)),
+      cloud('b', 'children', rect(100, 500)),
+      cloud('c', 'children', rect(220, 500)),
+    ]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    // «c» остаётся в зоне children, но меняет слот; «b» не двигается.
+    relayout(host, [
+      cloud('a', 'focus', rect(400, 100, 200, 80)),
+      cloud('b', 'children', rect(100, 500)),
+      cloud('c', 'children', rect(100, 500)),
+    ]);
+
+    T.playFocusTransition(host as unknown as HTMLElement, before);
+    const slot = created.find(
+      (a) => String(a.keyframes[0]?.transform).includes('translate(120px, 0px)'),
+    );
+    assert.ok(slot !== undefined, 'сдвинувшееся внутри зоны облачко анимируется в фазе 1');
+    assert.equal(slot.options.delay, 0, 'без задержки — одновременно с остальными');
+    assert.equal(slot.options.duration, 400, 'фаза 1 идёт по токену flight');
+    assert.equal(
+      created.filter((a) => a.options.delay > 0).length,
+      0,
+      'входа нет — фазы 2 нет',
+    );
+    T.finishFocusTransition();
+  });
+
+  it('ушедшее не-фокусное облачко растворяется в фазе 1', async () => {
+    const T = await load();
+    const host = makeHost([
+      cloud('f', 'focus', rect(400, 100, 200, 80)),
+      cloud('x', 'siblings', rect(100, 100)),
+      cloud('y', 'siblings', rect(220, 100)),
+    ]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    // Фокус тот же: уходит только сосед «y» (plan.leaving), а не фокус.
+    relayout(host, [
+      cloud('f', 'focus', rect(400, 100, 200, 80)),
+      cloud('x', 'siblings', rect(100, 100)),
+    ]);
+
+    T.playFocusTransition(host as unknown as HTMLElement, before);
+    const fade = created.find((a) => a.keyframes[0]?.opacity === '1' && a.keyframes[1]?.opacity === '0');
+    assert.ok(fade !== undefined, 'ушедшее облачко гаснет');
+    assert.equal(fade.options.duration, 300, 'затухание — по токену fade');
+    assert.equal(fade.options.fill, 'forwards', 'конечный кадр удержан');
+    assert.equal(fade.options.delay, 0, 'затухание — в фазе 1');
+    assert.ok(host.querySelector('.cloud-ghosts') !== null, 'призрак ушедшего облачка создан');
+    T.finishFocusTransition();
   });
 
   it('фаза 2: новые облачка вылетают из своих источников после фазы 1', async () => {

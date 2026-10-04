@@ -470,11 +470,17 @@ export function playFocusTransition(
       placeClone(overlay, toLocal(hostRect, oldFocus));
       layer.append(overlay);
       if (releasedAfter !== undefined) {
+        // `fill: 'forwards'` holds the end keyframe (the clone at its zone)
+        // until the swap reveals the real cloud: the baseline transform of the
+        // clone is the centre, so without the hold a race between the animation
+        // end and `setTimeout(swap, flight)` could flash it back into the centre.
         play(
           overlay,
           [{ transform: 'none' }, { transform: moveTo(oldFocus, releasedAfter) }],
           tokens.flight,
           tokens.ease,
+          0,
+          'forwards',
         );
       } else if (tokens.fade > 0) {
         const el = overlay;
