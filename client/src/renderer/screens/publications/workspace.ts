@@ -59,7 +59,7 @@ import { emptyState, errorState, loadingState } from '../../lib/ui/empty-state.j
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { createListNav, type ListNavAdapter } from '../../lib/ui/list.js';
-import { isEditingTarget } from '../../lib/ui/nav-core.js';
+import { isEditingTarget, shouldDrawCurrentFrame } from '../../lib/ui/nav-core.js';
 import {
   createDragList,
   dragHandle,
@@ -75,6 +75,7 @@ import {
   collapsibleSectionIds,
   displayAuthorship,
   documentBlocks,
+  fitFontSize,
   flattenSections,
   linkEntryMatchesPick,
   positionsFor,
@@ -84,6 +85,7 @@ import {
   tocLines,
   tocSignature,
   type DocBlock,
+  type FontFit,
   type TocLine,
 } from './model.js';
 import { loadPropertyRows } from './recipe.js';
@@ -103,6 +105,7 @@ import {
 } from '../../lib/live/index.js';
 import { routePublicationUpdate } from './update-routing.js';
 import { renderMarkdown } from '@etn/markdown';
+import { currentThoughtId } from '../../history.js';
 import * as users from '../../lib/users.js';
 import { store } from '../../state.js';
 
@@ -437,16 +440,41 @@ export function mountPublicationWorkspace(
     return null;
   };
 
+  /**
+   * Единая перерисовка обеих рамок тела документа (ADR e6d48e09): сплошная —
+   * на блоках мысли, открытой в редакторе (`currentThoughtId()`: цель редактора,
+   * иначе фокус — то же определение, что на карте/«Структурах»/в библиотеке);
+   * пунктирная `.pub-doc-current` — на текущем блоке навигации и ТОЛЬКО когда он
+   * не совпадает с открытым (`shouldDrawCurrentFrame`). Клик по разделу/тексту
+   * — полный выбор: пунктир гаснет, остаётся сплошная рамка.
+   *
+   * Это же правило обязано пересчитываться при смене цели редактора, а не только
+   * при ходу навигации, — иначе открытая мысль оставалась бы с пунктиром
+   * (замечание 1 волны 7).
+   */
+  function paintDocFrames(entry: DocNavEntry | null): void {
+    const openedId = currentThoughtId();
+    for (const node of Array.from(
+      docHost.querySelectorAll<HTMLElement>('.pub-doc-section, .pub-doc-text'),
+    )) {
+      node.classList.toggle(
+        'pub-doc-editor',
+        openedId !== null && node.dataset['thoughtId'] === openedId,
+      );
+      node.classList.remove('pub-doc-current');
+    }
+    if (entry === null) return;
+    const node = blockNode(entry.key);
+    if (node !== null && shouldDrawCurrentFrame(entry.thoughtId, openedId)) {
+      node.classList.add('pub-doc-current');
+    }
+  }
+
   const docNav = createListNav<DocNavEntry>(docHost, {
     entries: () => docEntries(),
     tokenOf: (entry) => entry.key,
     elementOf: (entry) => blockNode(entry.key),
-    applyHighlight: (entry) => {
-      for (const node of Array.from(docHost.querySelectorAll<HTMLElement>('.pub-doc-current'))) {
-        node.classList.remove('pub-doc-current');
-      }
-      if (entry !== null) blockNode(entry.key)?.classList.add('pub-doc-current');
-    },
+    applyHighlight: (entry) => paintDocFrames(entry),
     onCollapse: (entry, isCollapsed) => {
       if (entry.kind === 'section' && entry.collapsible) setSectionCollapsed(entry.thoughtId, isCollapsed);
     },
@@ -785,22 +813,13 @@ export function mountPublicationWorkspace(
   }
 
   /**
-   * Подсветка мысли, ОТКРЫТОЙ в редакторе, сплошной рамкой цвета фокуса (задача
-   * 77cce0ba, п.2; как `.cloud.halo` на карте мыслей). Идёт от текущей цели
-   * редактора и реагирует на её смену в обе стороны (открыли/закрыли): подписка
-   * на store ниже. Текущий блок навигации (`.pub-doc-current`) — пунктирный.
+   * Подсветка мысли, ОТКРЫТОЙ в редакторе, сплошной рамкой цвета фокуса и
+   * подавление пунктира на совпавшем блоке (задача 77cce0ba, п.2; ADR e6d48e09;
+   * замечание 1 волны 7). Реагирует на смену цели редактора/фокуса: пересчёт
+   * обеих рамок идёт через {@link paintDocFrames}.
    */
   function paintEditorHighlight(): void {
-    const target = store.state.editorTarget;
-    const haloId = target !== null && target.kind === 'thought' ? target.id : null;
-    for (const node of Array.from(
-      docHost.querySelectorAll<HTMLElement>('.pub-doc-section, .pub-doc-text'),
-    )) {
-      node.classList.toggle(
-        'pub-doc-editor',
-        haloId !== null && node.dataset['thoughtId'] === haloId,
-      );
-    }
+    paintDocFrames(docNav.current());
   }
   const editorHighlightUnsub = store.subscribe(paintEditorHighlight);
 
@@ -823,11 +842,16 @@ export function mountPublicationWorkspace(
    */
   function patchBlockText(thoughtId: string, html: string): void {
     for (const node of blockNodesForThought(thoughtId)) {
-      const target = node.classList.contains('pub-doc-section')
-        ? node.querySelector<HTMLElement>('.pub-doc-preamble')
-        : node;
-      if (target === null) continue;
-      renderHtml(target, html);
+      if (node.classList.contains('pub-doc-section')) {
+        const target = node.querySelector<HTMLElement>('.pub-doc-preamble');
+        if (target === null) continue;
+        renderHtml(target, html);
+      } else {
+        // Текст-блок: `renderTextBody` сам решает, что показать при пустом
+        // комментарии; `renderHtml` внутри сносит грип DnD — возвращаем его.
+        renderTextBody(node, html);
+        node.prepend(makeGrip(t('publications.ws.dragHandle')));
+      }
       // Синхронизируем модель (иначе сигнатура не отразит правку).
       const block = blockForKey(node.dataset?.['blockKey']);
       if (block === null) continue;
@@ -923,6 +947,7 @@ export function mountPublicationWorkspace(
     renderHeader();
     const titleBlock = docHost.querySelector<HTMLElement>('.pub-doc-titleblock');
     if (titleBlock !== null) titleBlock.replaceWith(buildTitleBlock());
+    fitTitleFonts();
   }
 
   /**
@@ -1716,6 +1741,9 @@ export function mountPublicationWorkspace(
     // постройки фасада (шапка монтируется раньше загрузки ui_state) — без этого
     // ширина применялась бы, а ползунок показывал прежнее значение (ea1b5f14).
     widthSlider.setValue(clamped);
+    // Ширина листа изменилась — кегль титульных строк пересчитывается
+    // (замечание 3 волны 7: ресайз ползунком).
+    fitTitleFonts();
   }
 
   /**
@@ -1740,6 +1768,28 @@ export function mountPublicationWorkspace(
     // Перерисовка снесла классы подсветки — восстанавливаем рамку открытой в
     // редакторе мысли (задача 77cce0ba, п.2).
     paintEditorHighlight();
+    // Титул получил новые размеры — пересчитываем кегль заголовка/подзаголовка
+    // (замечание 3 волны 7).
+    fitTitleFonts();
+  }
+
+  /**
+   * Тело мысли-текста. Пустой постоянный комментарий — не повод пропустить
+   * блок: мысль-текст рендерится ВСЕГДА, без текста — видимой пустой строкой
+   * нормальной высоты (замечание 2 волны 7), чтобы её можно было выделить,
+   * открыть в редакторе (dblclick → правка комментария), переместить (DnD/Alt)
+   * и скрыть (исключение). Заглушка — пустой абзац, высоту даёт CSS
+   * `.pub-doc-text-line`; на неё же опирается фиттинг/навигация.
+   */
+  function renderTextBody(node: HTMLElement, html: string): void {
+    renderHtml(node, html);
+    const empty = html.trim() === '';
+    node.classList.toggle('pub-doc-text-empty', empty);
+    if (empty) {
+      const line = el('p', 'pub-doc-text-line');
+      line.setAttribute('aria-hidden', 'true');
+      node.append(line);
+    }
   }
 
   function buildBlock(block: DocBlock): HTMLElement {
@@ -1805,7 +1855,7 @@ export function mountPublicationWorkspace(
       node.dataset['thoughtId'] = block.thoughtId;
       node.dataset['blockKey'] = block.key;
       node.tabIndex = -1;
-      renderHtml(node, block.html);
+      renderTextBody(node, block.html);
       // Ручка ручного порядка текста среди текстов своего раздела (d13fd645).
       setTooltip(node, t('publications.ws.dragKeyboardHint'));
       node.prepend(makeGrip(t('publications.ws.dragHandle')));
@@ -1852,36 +1902,30 @@ export function mountPublicationWorkspace(
   }
 
   /**
-   * Титульный лист (пункт 7 карточки ea1b5f14): с обложкой — обложка с крупным
-   * заголовком ПОВЕРХ (окантовка/тень, чтобы читался на любом фоне), скромный
-   * подзаголовок; без обложки — название крупнее H1 и подзаголовок вторым
-   * уровнем. Автор/дата — в ПРАВОМ НИЖНЕМ углу титульной части (задача 7cfaba7c,
-   * п.5), резюме — ниже всей титульной части.
+   * Титульный лист — «виртуальный портретный лист» (замечание 3 волны 7;
+   * уточнение макета пользователя): контейнер пропорций A-формата (1:√2),
+   * ВСЕГДА полной высоты; обложка — сверху во всю ширину с сохранением
+   * пропорций; остаток делится на две равные вертикальные половины — верхняя
+   * под заголовок (прижат к низу половины), нижняя под подзаголовок (по центру);
+   * автор — последней строкой внизу справа, с отступами от краёв (не под обрез).
+   * Кегль заголовка/подзаголовка подбирается фиттингом {@link fitTitleFonts}.
    */
   function buildTitleBlock(): HTMLElement {
     const node = div('pub-doc-titleblock');
-    // Титульная часть — обложка/заголовок + автор-дата: угловая метка
-    // позиционируется относительно неё, а не всего блока (резюме ниже).
     const titlePage = div('pub-doc-titlepage');
     const coverKind = publication?.cover_kind ?? 'none';
     if (publication !== null && coverKind !== 'none') {
       const hero = div('pub-doc-hero');
       hero.append(buildCover(publication, 'card'));
-      const overlay = div('pub-doc-hero-overlay');
-      overlay.append(el('h1', 'pub-doc-title', publication.title));
-      if ((publication.subtitle ?? '') !== '') {
-        overlay.append(el('div', 'pub-doc-subtitle', publication.subtitle ?? ''));
-      }
-      hero.append(overlay);
       titlePage.append(hero);
-    } else {
-      const box = div('pub-doc-titlebox');
-      box.append(el('h1', 'pub-doc-title', publication?.title ?? ''));
-      if ((publication?.subtitle ?? '') !== '') {
-        box.append(el('div', 'pub-doc-subtitle', publication?.subtitle ?? ''));
-      }
-      titlePage.append(box);
     }
+    const titleZone = div('pub-doc-title-zone');
+    titleZone.append(el('h1', 'pub-doc-title', publication?.title ?? ''));
+    const subtitleZone = div('pub-doc-subtitle-zone');
+    if ((publication?.subtitle ?? '') !== '') {
+      subtitleZone.append(el('div', 'pub-doc-subtitle', publication?.subtitle ?? ''));
+    }
+    titlePage.append(titleZone, subtitleZone);
     if (publication !== null) {
       const author = displayAuthorship(publication, users.resolveUserName(publication.created_by));
       titlePage.append(
@@ -1909,6 +1953,50 @@ export function mountPublicationWorkspace(
       node.append(block);
     }
     return node;
+  }
+
+  /**
+   * Границы кегля титульных строк (замечание 3 волны 7): заголовок стартует с
+   * 48px (×2 к `--font-size-3xl`), подзаголовок — с ~22px (×1.4 к
+   * `--font-size-l`); ниже пределов не опускаемся.
+   */
+  const TITLE_FONT_FIT: FontFit = { max: 48, min: 20, step: 2 };
+  const SUBTITLE_FONT_FIT: FontFit = { max: 22, min: 12, step: 1 };
+
+  /**
+   * Подбор кегля одной титульной строки: измеряем переполнение зоны
+   * (`scrollHeight` строки против `clientHeight` зоны) и итеративно уменьшаем
+   * шрифт до нижнего предела — без MutationObserver (замечание 3 волны 7).
+   * Зона не измерена (нулевая высота: лист скрыт/не разложен) — инлайн-кегль не
+   * трогаем, чтобы не «сжатой» остаться после показа.
+   */
+  function fitTitleZone(zone: HTMLElement | null, text: HTMLElement | null, config: FontFit): void {
+    if (zone === null || text === null) return;
+    if (typeof zone.clientHeight !== 'number' || zone.clientHeight <= 0) {
+      text.style.removeProperty('font-size');
+      return;
+    }
+    const size = fitFontSize(config, (candidate) => {
+      text.style.fontSize = `${candidate}px`;
+      return text.scrollHeight > zone.clientHeight;
+    });
+    text.style.fontSize = `${size}px`;
+  }
+
+  /** Пересчёт кегля заголовка и подзаголовка титула (рендер и ползунок ширины). */
+  function fitTitleFonts(): void {
+    const page = docHost.querySelector<HTMLElement>('.pub-doc-titlepage');
+    if (page === null) return;
+    fitTitleZone(
+      page.querySelector<HTMLElement>('.pub-doc-title-zone'),
+      page.querySelector<HTMLElement>('.pub-doc-title'),
+      TITLE_FONT_FIT,
+    );
+    fitTitleZone(
+      page.querySelector<HTMLElement>('.pub-doc-subtitle-zone'),
+      page.querySelector<HTMLElement>('.pub-doc-subtitle'),
+      SUBTITLE_FONT_FIT,
+    );
   }
 
   /** Выделение блока документа → мысль в карточке панели редактора (DoD). */
@@ -2281,6 +2369,10 @@ export function mountPublicationWorkspace(
     applyTextWidth(opts.getTextWidth());
     await load();
     if (target?.anchor !== undefined) scrollToAnchor(target.anchor);
+    // После первой раскладки листа кегль титула мог быть не измерен (документ
+    // рендерился в момент переключения вида) — пересчитываем ещё раз (замечание
+    // 3 волны 7).
+    fitTitleFonts();
   }
 
   function isOpen(id?: string): boolean {

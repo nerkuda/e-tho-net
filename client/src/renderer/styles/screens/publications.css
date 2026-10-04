@@ -1061,18 +1061,7 @@
   max-height: none;
 }
 
-/* Титульный лист (пункт 7 ea1b5f14; уточнение 5de0332d п.6; задача 7cfaba7c п.5):
-   название в 2 раза крупнее прежнего (--font-size-3xl), по центру; подзаголовок
-   уменьшен на 30% от прежнего удвоенного (×2 → ×1.4), по ЦЕНТРУ, на 2 строки
-   ниже заголовка; автор/дата — в правом нижнем углу титульной части. Величины
-   заданы множителем от токена — видно из кода. */
-.pub-doc.comment-view .pub-doc-title {
-  font-size: calc(var(--font-size-3xl) * 2);
-  line-height: 1.15;
-  margin: 0;
-  text-align: center;
-}
-
+/* Титульный блок целиком: лист + резюме под ним. */
 .pub-doc-titleblock {
   display: flex;
   flex-direction: column;
@@ -1082,33 +1071,101 @@
   margin-bottom: var(--space-5);
 }
 
-/* Титульная часть — якорь для угловой метки автор/дата. */
+/* Титульный лист — «виртуальный портретный лист» (замечание 3 волны 7; макет
+   пользователя): высота = ширина × √2 (A-формат 1:1.414) и ВСЕГДА полная —
+   даже без обложки и подзаголовка. Обложка прижата к верхнему краю, во всю
+   ширину, с сохранением пропорций; оставшееся пространство делится на две
+   равные вертикальные половины: верхняя — заголовок (прижат к низу половины),
+   нижняя — подзаголовок (по центру). Автор — внизу справа с отступами. */
 .pub-doc-titlepage {
   position: relative;
+  aspect-ratio: 1 / 1.414;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--radius-m);
 }
 
-/* С обложкой: обложка во всю ширину, заголовок и подзаголовок — поверх неё с
-   белой окантовкой/тенью, чтобы читались на любом фоне. */
+/* Обложка — верхняя часть листа: во всю ширину, пропорции картинки сохранены
+   (`object-fit: contain`, высота по натуральной пропорции). */
 .pub-doc-hero {
-  position: relative;
-  border-radius: var(--radius-m);
+  flex: 0 0 auto;
+  width: 100%;
   overflow: hidden;
 }
 
-.pub-doc-hero-overlay {
-  position: absolute;
-  inset: auto 0 0 0;
-  padding: var(--space-5) var(--space-4) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  background: linear-gradient(to top, rgb(0 0 0 / 55%), transparent);
+.pub-doc-hero .pub-cover,
+.pub-doc-hero .pub-cover-card {
+  aspect-ratio: auto;
+  width: 100%;
+  border-radius: 0;
+  background: transparent;
+  display: block;
 }
 
-.pub-doc-hero-overlay .pub-doc-title {
+.pub-doc-hero .pub-cover-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+/* Заглушка «цвет + инициалы» в титуле (картинка не загрузилась) — как миниатюра
+   карточки, чтобы зона не схлопнулась. */
+.pub-doc-hero .pub-cover-ph {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 2;
+}
+
+/* Две равные половины остатка под обложкой (пустые — если нет заголовка/
+   подзаголовка). `min-height: 0` не даёт содержимому растянуть половину. */
+.pub-doc-title-zone,
+.pub-doc-subtitle-zone {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Заголовок — горизонтально по центру, вертикально прижат к НИЗУ половины. */
+.pub-doc-title-zone {
+  align-items: flex-end;
+  justify-content: center;
+}
+
+/* Подзаголовок — по центру половины по обеим осям. */
+.pub-doc-subtitle-zone {
+  align-items: center;
+  justify-content: center;
+}
+
+.pub-doc-title-zone > .pub-doc-title,
+.pub-doc-subtitle-zone > .pub-doc-subtitle {
+  width: 100%;
+}
+
+.pub-doc.comment-view .pub-doc-title {
+  font-size: calc(var(--font-size-3xl) * 2);
+  line-height: 1.15;
+  margin: 0;
+  text-align: center;
+}
+
+/* Подзаголовок титула: ~22px (×1.4 к `--font-size-l`), по центру половины.
+   Цвет задаётся ниже (`.pub-doc-subtitle`). */
+.pub-doc.comment-view .pub-doc-subtitle {
+  font-size: calc(var(--font-size-l) * 1.4);
+  text-align: center;
   margin: 0;
 }
 
+.pub-doc-subtitle {
+  color: var(--text-dim);
+}
+
+/* Окантовка текста ПОВЕРХ обложки (волновая 1) — сохранена как требование для
+   случая, когда обложка занимает лист целиком и текст ложится на неё. */
 .pub-doc-hero-overlay .pub-doc-title,
 .pub-doc-hero-overlay .pub-doc-subtitle {
   color: #fff;
@@ -1118,44 +1175,16 @@
   -webkit-text-stroke: 0.4px rgb(255 255 255 / 65%);
 }
 
-.pub-doc-titlebox {
-  display: flex;
-  flex-direction: column;
-}
-
-/* Подзаголовок титула (5de0332d п.6; 7cfaba7c п.5): на 30% меньше прежнего
-   удвоенного (×2 → ×1.4), по ЦЕНТРУ, на 2 строки ниже заголовка (2 × межстрочный
-   шаг названия). Цвет НЕ задаём здесь: в титуле-герое его перекрывает белый цвет
-   оверлея. */
-.pub-doc.comment-view .pub-doc-subtitle {
-  font-size: calc(var(--font-size-l) * 1.4);
-  text-align: center;
-  margin-top: calc(2 * 1.15 * var(--font-size-3xl) * 2);
-}
-
-.pub-doc-subtitle {
-  color: var(--text-dim);
-}
-
-/* Автор/дата (7cfaba7c п.5): правый нижний угол титульной части, обычный размер
-   шрифта, жирный. */
+/* Автор/дата — последняя строка листа, внизу СПРАВА, с отступами от нижнего и
+   правого краёв (не под обрез). Цвет — обычный приглушённый: автор стоит на
+   листе НИЖЕ обложки, а не поверх неё. */
 .pub-doc-meta {
   position: absolute;
-  right: 0;
-  bottom: 0;
+  right: var(--space-4);
+  bottom: var(--space-4);
   color: var(--text-dim);
   font-size: var(--font-size-m);
   font-weight: var(--font-weight-bold);
-}
-
-/* На титуле-герое окантовка/тень — как у заголовка, иначе метка теряется на
-   обложке. */
-.pub-doc-titlepage:has(.pub-doc-hero) .pub-doc-meta {
-  color: #fff;
-  text-shadow:
-    0 1px 3px rgb(0 0 0 / 85%),
-    0 0 2px rgb(0 0 0 / 90%);
-  -webkit-text-stroke: 0.4px rgb(255 255 255 / 65%);
 }
 
 .pub-doc-section {
@@ -1270,6 +1299,18 @@
 .pub-doc-text:hover,
 .pub-doc-heading:hover {
   background: var(--surface-alt, var(--surface));
+}
+
+/* Мысль-текст без комментария — видимая пустая строка нормальной высоты
+   (замечание 2 волны 7): блок не пропадает, его можно выделить, открыть
+   (dblclick), переместить (DnD/Alt) и скрыть (исключение). Пустой абзац даёт
+   высоту строки; `min-height` — страховка от схлопывания. */
+.pub-doc-text-empty {
+  min-height: calc(1.5 * var(--font-size-m));
+}
+
+.pub-doc-text-line {
+  margin: 0;
 }
 
 .pub-doc-extra {

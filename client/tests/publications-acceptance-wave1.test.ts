@@ -141,15 +141,15 @@ describe('5de0332d п.6 + 7cfaba7c п.5: титульный лист', () => {
     );
   });
 
-  it('подзаголовок −30% (×1.4), по центру, на 2 строки ниже', () => {
+  it('подзаголовок ×1.4, по центру зоны', () => {
     assert.match(
       CSS,
-      /\.pub-doc\.comment-view \.pub-doc-subtitle\s*\{[^}]*font-size:\s*calc\(var\(--font-size-l\) \* 1\.4\)[^}]*text-align:\s*center[^}]*margin-top:\s*calc\(2 /s,
-      'подзаголовок ×1.4, по центру, на 2 строки ниже (задача 7cfaba7c, п.5)',
+      /\.pub-doc\.comment-view \.pub-doc-subtitle\s*\{[^}]*font-size:\s*calc\(var\(--font-size-l\) \* 1\.4\)[^}]*text-align:\s*center/s,
+      'подзаголовок ×1.4, по центру (задача 7cfaba7c, п.5; зоны — волна 7)',
     );
   });
 
-  it('автор/дата — в правом нижнем углу титула, жирным', () => {
+  it('автор/дата — в правом нижнем углу листа, жирным', () => {
     assert.match(
       CSS,
       /\.pub-doc-titlepage\s*\{[^}]*position:\s*relative/s,
@@ -157,8 +157,8 @@ describe('5de0332d п.6 + 7cfaba7c п.5: титульный лист', () => {
     );
     assert.match(
       CSS,
-      /\.pub-doc-meta\s*\{[^}]*position:\s*absolute[^}]*right:\s*0[^}]*bottom:\s*0[^}]*font-weight:\s*var\(--font-weight-bold\)/s,
-      'автор/дата прижаты к правому нижнему углу и выделены жирным',
+      /\.pub-doc-meta\s*\{[^}]*position:\s*absolute[^}]*right:\s*var\(--space-4\)[^}]*bottom:\s*var\(--space-4\)[^}]*font-weight:\s*var\(--font-weight-bold\)/s,
+      'автор/дата прижаты к правому нижнему углу с отступами и выделены жирным',
     );
   });
 });

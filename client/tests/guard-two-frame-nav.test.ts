@@ -6,7 +6,8 @@
  * `lib/ui/nav-core.ts::shouldDrawCurrentFrame` и применяется всеми
  * потребителями (карта `canvas/kbd-nav.ts`, «Структуры»
  * `screens/structures/kbd-nav.ts`, библиотека публикаций
- * `screens/publications/library-nav.ts`). Ни один экран не имеет права писать
+ * `screens/publications/library-nav.ts`, тело документа публикации
+ * `screens/publications/workspace.ts`). Ни один экран не имеет права писать
  * эту проверку собственной инлайн-логикой `id !== openedId` — иначе правило
  * разъезжается по экранам и снова расходится с ADR.
  *
@@ -54,6 +55,7 @@ const CONSUMERS: Array<{ file: string; calls: RegExp }> = [
   { file: 'canvas/kbd-nav.ts', calls: /shouldDrawCurrentFrame\(/ },
   { file: 'screens/structures/kbd-nav.ts', calls: /shouldDrawCurrentFrame\(/ },
   { file: 'screens/publications/library-nav.ts', calls: /shouldDrawCurrentFrame\(/ },
+  { file: 'screens/publications/workspace.ts', calls: /shouldDrawCurrentFrame\(/ },
 ];
 
 describe('guard: двухрамочность — единое правило ядра (ADR e6d48e09)', () => {
