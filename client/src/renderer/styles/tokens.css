@@ -279,6 +279,18 @@
   --md-font-size: var(--font-size-s);
   /* моноширинный шрифт кода — один и для просмотра, и для редактора */
   --md-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  /* Единый источник внутриблочной типографики markdown-комментария: просмотр
+     (`.comment-view`), документ публикации и живое редактирование CodeMirror
+     берут размеры отсюда (парные правила `styles/editor.css`, тема
+     `editor/md-editor.ts`; волна 9 приёмки, задача b5cfad70). Явные значения
+     защищают от проза-стилей Web Awesome (`@layer wa-native`), которые иначе
+     протекают в `.comment-view` (blockquote/strong/заголовки). */
+  --md-line-height: 1.55;
+  --md-strong-weight: 700;
+  /* Метрики цитаты: отступ слева, толщина рамки, вертикальный зазор. */
+  --md-quote-indent: 10px;
+  --md-quote-border-width: 3px;
+  --md-quote-gap: 6px;
 
   /* --- Группа пользовательских токенов (`--user-*`, требование e2895c24) ------
      Аспекты оформления, которые планируется отдать пользователю в настройках:

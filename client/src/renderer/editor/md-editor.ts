@@ -58,7 +58,7 @@ const mdHighlightStyle = HighlightStyle.define([
   // Насыщенность заголовка задаёт общее правило строки `.cm-md-h*` в
   // `styles/editor.css` (единый источник с просмотром, ошибка 45989471) —
   // здесь вес не дублируется.
-  { tag: tags.strong, fontWeight: '700' },
+  { tag: tags.strong, fontWeight: 'var(--md-strong-weight)' },
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: tags.link, color: 'var(--accent)' },
@@ -107,7 +107,7 @@ const mdTheme = EditorView.theme({
   '.cm-scroller': { fontFamily: 'inherit' },
   '.cm-content': {
     fontFamily: 'inherit',
-    lineHeight: '1.55',
+    lineHeight: 'var(--md-line-height)',
     caretColor: 'var(--accent)',
     padding: '2px 0',
   },
