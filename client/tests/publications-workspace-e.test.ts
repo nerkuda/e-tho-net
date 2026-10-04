@@ -89,17 +89,22 @@ describe('ea1b5f14: рабочая область публикации — пу�
     assert.ok(!/\.pub-toc[^{]*\{[^}]*margin-block:\s*var\(--space-3\)/s.test(CSS), 'в TOC отступов нет');
   });
 
-  it('п.7: титульный лист — портретный лист, обложка сверху, зоны заголовка/подзаголовка', () => {
-    assert.match(WS, /div\('pub-doc-hero'\)/, 'с обложкой — титул-герой (обложка сверху)');
+  it('п.7: титульный лист — портретный лист, обложка-фон, половины заголовка/подзаголовка', () => {
+    assert.match(WS, /div\('pub-doc-hero'\)/, 'с обложкой — фоновый слой обложки');
     assert.match(WS, /div\('pub-doc-title-zone'\)/, 'верхняя половина — зона заголовка');
     assert.match(WS, /div\('pub-doc-subtitle-zone'\)/, 'нижняя половина — зона подзаголовка');
+    assert.match(WS, /pub-doc-titlepage-cover/, 'лист с обложкой помечается модификатором обводки');
     assert.match(
       CSS,
       /\.pub-doc\.comment-view \.pub-doc-title\s*\{[^}]*font-size:\s*calc\(var\(--font-size-3xl\) \* 2\)/s,
       'название в 2 раза крупнее прежнего (5de0332d, п.6)',
     );
-    // Окантовка текста на обложке (волновая 1) сохранена как требование.
-    assert.match(CSS, /\.pub-doc-hero-overlay[\s\S]*?text-shadow/, 'окантовка/тень для читаемости');
+    // Контурная обводка трёх текстов поверх обложки (приём волны 1).
+    assert.match(
+      CSS,
+      /\.pub-doc-titlepage-cover \.pub-doc-title[\s\S]*?\.pub-doc-titlepage-cover \.pub-doc-subtitle[\s\S]*?\.pub-doc-titlepage-cover \.pub-doc-meta[\s\S]*?-webkit-text-stroke/s,
+      'обводка заголовка, подзаголовка и автора поверх обложки',
+    );
     assert.match(
       CSS,
       /\.pub-doc-titlepage\s*\{[^}]*aspect-ratio:\s*1\s*\/\s*1\.414/s,

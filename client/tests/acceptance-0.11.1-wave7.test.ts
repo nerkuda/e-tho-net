@@ -170,16 +170,22 @@ describe('волна 7, п.2: пустые мысли-тексты видны б
 });
 
 describe('волна 7, п.3: титульный лист — портретный лист, зоны, фиттинг', () => {
-  it('контейнер — A-портрет (1:√2), обложка сверху, две равные половины', () => {
+  it('контейнер — A-портрет (1:√2), обложка-фон под текстом, две равные половины', () => {
     assert.match(
       CSS,
       /\.pub-doc-titlepage\s*\{[^}]*aspect-ratio:\s*1\s*\/\s*1\.414/s,
       'высота листа = ширина × √2',
     );
+    // Обложка — независимый фоновый слой всего листа (абсолютный, под текстом).
+    assert.match(
+      CSS,
+      /\.pub-doc-hero\s*\{[^}]*position:\s*absolute[^}]*top:\s*0[^}]*left:\s*0[^}]*width:\s*100%/s,
+      'обложка — абсолютный фоновый слой сверху во всю ширину',
+    );
     assert.match(
       CSS,
       /\.pub-doc-title-zone,\s*\.pub-doc-subtitle-zone\s*\{[^}]*flex:\s*1 1 0/s,
-      'остаток делится на две равные половины',
+      'лист делится на две равные половины',
     );
     assert.match(
       CSS,
@@ -196,11 +202,19 @@ describe('волна 7, п.3: титульный лист — портретны
       /\.pub-doc-meta\s*\{[^}]*right:\s*var\(--space-4\)[^}]*bottom:\s*var\(--space-4\)/s,
       'автор внизу справа с отступами от краёв',
     );
+    // Контурная обводка трёх текстов поверх обложки (приём волны 1).
+    assert.match(
+      CSS,
+      /\.pub-doc-titlepage-cover \.pub-doc-title[\s\S]*?\.pub-doc-titlepage-cover \.pub-doc-subtitle[\s\S]*?\.pub-doc-titlepage-cover \.pub-doc-meta[\s\S]*?-webkit-text-stroke/s,
+      'обводка заголовка, подзаголовка и автора',
+    );
   });
 
-  it('разметка строит зоны и вызывает фиттинг при рендере и на ползунке', () => {
+  it('разметка строит фон-обложку, половины и вызывает фиттинг', () => {
+    assert.match(WS, /div\('pub-doc-hero'\)/, 'фоновый слой обложки');
     assert.match(WS, /div\('pub-doc-title-zone'\)/, 'верхняя половина — заголовок');
     assert.match(WS, /div\('pub-doc-subtitle-zone'\)/, 'нижняя половина — подзаголовок');
+    assert.match(WS, /pub-doc-titlepage-cover/, 'модификатор обводки на листе с обложкой');
     assert.match(WS, /function fitTitleFonts\(/, 'фиттинг вынесен в функцию');
     const calls = WS.match(/fitTitleFonts\(\)/g) ?? [];
     assert.ok(calls.length >= 2, 'фиттинг вызывается при рендере документа и на ползунке ширины');
