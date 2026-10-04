@@ -220,7 +220,8 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         MCP_MAX_THOUGHTS_PER_WRITE +
         ' связанных единиц знания одной транзакцией: мысли + постоянные/хронологические комментарии ' +
         '+ свойства + связи + вложения. `thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR ' +
-        '`target_ref`; `on_duplicate`: `fail`/`reuse`/`update`. Правка существующей — item-level ' +
+        '`target_ref` — для любого элемента; свойства-связи в `properties` тоже принимают `ref`; ' +
+        '`on_duplicate`: `fail`/`reuse`/`update`. Правка существующей — item-level ' +
         '`title`/`synonyms`/`type`/`type_id`/`active`; `synonyms` ЗАМЕНЯЮТ набор. Циклы ' +
         '`ref`/`target_ref` разрешены. Один write-бюджет + одна строка `audit_log` на вызов; ' +
         '`warnings` агрегированы по батчу. Неизвестные ключи отвергаются `VALIDATION_ERROR` ' +
@@ -299,16 +300,21 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
                   activity.push({ kind: 'comment', action: 'created', comment: c });
                 }
               } else {
-                events.push({
-                  type: 'comment.updated',
-                  data: {
-                    id: item.comment.id,
-                    version: item.comment.version,
-                    changes: { body_md: '' },
-                  },
-                });
+                // Строка комментария после записи батча существует; событие и
+                // активность эмитим только по ней (иначе `kind`/`owner_id`
+                // неизвестны). `kind` нужен подписчикам документа публикации.
                 const c = getComment(ndb, item.comment.id);
                 if (c !== null) {
+                  events.push({
+                    type: 'comment.updated',
+                    data: {
+                      id: c.id,
+                      owner_id: c.owner_id,
+                      kind: c.kind,
+                      version: item.comment.version,
+                      changes: { body_md: '' },
+                    },
+                  });
                   activity.push({ kind: 'comment', action: 'updated', comment: c });
                 }
               }

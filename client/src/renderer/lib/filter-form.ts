@@ -40,7 +40,8 @@ import { t } from './i18n.js';
 import { buildValueEditor } from '../editor/value-editor.js';
 import { emptyState } from './ui/empty-state.js';
 import { clear, div, el, setTooltip, span } from './dom.js';
-import { buildEntityChipField, type EntityOption } from './entity-picker.js';
+import { buildEntityChipField, thoughtEntityOption, type EntityOption } from './entity-picker.js';
+import { etn } from './etn.js';
 import { collapsibleSection } from './ui/collapsible.js';
 import { DPD_DEFAULT_TIME, openDatePeriodDialog } from './date-period-dialog.js';
 import {
@@ -99,6 +100,12 @@ export interface FilterBlockOptions {
   setCollapsed?: (value: boolean) => void;
   /** Заполнена ли группа — маркер `*`, подсветка заголовка. */
   isNonEmpty?: () => boolean;
+  /**
+   * Вид каретки сворачиваемой группы: текстовый треугольник (по умолчанию,
+   * как у панелей отбора) либо шеврон `lib/ui` (публикация, где вложенные
+   * уточнения должны отличаться от крупных групп рецепта).
+   */
+  caretKind?: 'chevron' | 'triangle';
 }
 
 /**
@@ -119,7 +126,7 @@ export function buildFilterBlock(title: string, opts: FilterBlockOptions = {}): 
   const section = collapsibleSection({
     title,
     collapsible,
-    caretKind: 'triangle',
+    caretKind: opts.caretKind ?? 'triangle',
     headerExtra: [star],
     body,
     getCollapsed: collapsible ? opts.getCollapsed : undefined,
@@ -244,11 +251,17 @@ export function buildKeywordsSection(ctx: FilterFormContext, opts: KeywordsSecti
   const clearBtn = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
   clearBtn.type = 'button';
   setTooltip(clearBtn, t('actions.reset'));
+  const syncClear = (): void => {
+    clearBtn.hidden = input.value.trim() === '';
+  };
   clearBtn.addEventListener('click', () => {
     ctx.getState().keywords = '';
     input.value = '';
     ctx.touch();
+    syncClear();
   });
+  input.addEventListener('input', syncClear);
+  syncClear();
   wrap.append(input, clearBtn);
   section.body.append(wrap);
   if (opts.showScope === true) section.body.append(buildKeywordScopeRow(ctx));
@@ -382,6 +395,97 @@ export function buildEntityChipSection(ctx: FilterFormContext, opts: EntityChipS
   return { ...section, fieldRefresh: field.refresh };
 }
 
+/**
+ * Группа «Родительские мысли» — выбранные корни поддеревьев (`parent_ids`).
+ * ЕДИНСТВЕННАЯ реализация роли: панель «Структур мыслей», панель «Хроники»,
+ * диалог отбора типа мысли и рецепт публикации собирают поле этим фасадом —
+ * своего чип-листа корней, своей догрузки «облачков» и своего живого поиска
+ * у экранов нет (единый конструктор, стандарт S4).
+ *
+ * Внутри — общий чип-лист сущностей (`buildEntityChipSection`), живая
+ * подсказка по мыслям (`findDuplicates`) и ленивая догрузка «облачков» уже
+ * выбранных корней (`etn.thoughts.resolve`); живой поиск кладёт найденные
+ * облачка в ту же карту. Своего контрола здесь нет — только сборка фасада
+ * под роль «выбор корней поддерева».
+ */
+export interface ParentThoughtsSectionOptions {
+  /** Заголовок группы (по умолчанию «Родительские мысли»). */
+  title?: string;
+  /** Подсказка поля. */
+  tooltip?: string;
+  /** Приглашение пустого поля (по умолчанию «Название мысли…»). */
+  placeholder?: string;
+  /** Приглашение непустого поля (по умолчанию «+ ещё одну мысль»). */
+  addPlaceholder?: string;
+  /** Дополнительные источники подсказок поля (токены отбора вызывающего). */
+  extraSources?: SuggestSource[];
+  /**
+   * Кнопка «выбрать…» (пикер корней поддерева). Обязательна для составных
+   * панелей: без неё у пустого поля нет явного триггера выбора — только ввод.
+   */
+  picker?: EntityChipSectionOptions['picker'];
+}
+
+/** Секция «Родительские мысли»: секция формы + перечитывание облачков. */
+export interface ParentThoughtsSection extends EntityChipSection {
+  /**
+   * Перечитывает «облачка» уже выбранных корней. Нужен вызывающим, которые
+   * меняют `parent_ids` ВНЕ поля (перетаскивание мысли на панель), — иначе
+   * чип остался бы сырым id до следующей перерисовки.
+   */
+  resolveClouds: () => void;
+}
+
+export function buildParentThoughtsSection(
+  ctx: FilterFormContext,
+  opts: ParentThoughtsSectionOptions = {},
+): ParentThoughtsSection {
+  const clouds = new Map<string, ThoughtCloudInput>();
+  let sectionRef: EntityChipSection | null = null;
+  const resolveClouds = (): void => {
+    const missing = ctx.getState().parentIds.filter((id) => !clouds.has(id) && !id.startsWith('$'));
+    if (ctx.networkId === '' || missing.length === 0) return;
+    void etn.thoughts
+      .resolve(ctx.networkId, missing)
+      .then((refs) => {
+        for (const ref of refs) clouds.set(ref.id, { ...ref });
+        sectionRef?.fieldRefresh();
+      })
+      .catch(() => undefined);
+  };
+  const section = buildEntityChipSection(ctx, {
+    title: opts.title ?? 'Родительские мысли',
+    getValues: () => ctx.getState().parentIds,
+    setValues: (values) => {
+      ctx.getState().parentIds = values;
+      resolveClouds();
+    },
+    loadOptions: async (query) => {
+      const needle = query.trim();
+      if (needle === '') return [];
+      try {
+        const hits = await etn.thoughts.findDuplicates(ctx.networkId, needle, [], []);
+        return hits.map((hit): EntityOption => {
+          clouds.set(hit.id, { ...hit });
+          return thoughtEntityOption(hit);
+        });
+      } catch {
+        return [];
+      }
+    },
+    optionsHeader: 'Мысли',
+    cloudOf: (id) => (id.startsWith('$') ? null : (clouds.get(id) ?? null)),
+    placeholder: opts.placeholder ?? 'Название мысли…',
+    addPlaceholder: opts.addPlaceholder ?? '+ ещё одну мысль',
+    ...(opts.extraSources !== undefined ? { extraSources: opts.extraSources } : {}),
+    ...(opts.tooltip !== undefined ? { tooltip: opts.tooltip } : {}),
+    ...(opts.picker !== undefined ? { picker: opts.picker } : {}),
+  });
+  sectionRef = section;
+  resolveClouds();
+  return { ...section, resolveClouds };
+}
+
 // ---------------------------------------------------------------------------
 // Условия по свойствам
 // ---------------------------------------------------------------------------
@@ -389,6 +493,8 @@ export interface ConditionsSectionOptions {
   title?: string;
   /** Источники подсказок значения условия (токены отбора типа мысли и т.п.). */
   extraSuggestFor?: (cond: PropertyConditionState) => readonly SuggestSource[];
+  /** Вид каретки сворачиваемой группы (по умолчанию — треугольник). */
+  caretKind?: 'chevron' | 'triangle';
 }
 
 /**
@@ -407,6 +513,7 @@ export function buildConditionsSection(
     getCollapsed: collapse.get,
     setCollapsed: collapse.set,
     isNonEmpty: () => ctx.getState().properties.length > 0,
+    ...(opts.caretKind !== undefined ? { caretKind: opts.caretKind } : {}),
   });
   const box = div('st-f-conds');
   const render = (): void => {
@@ -656,6 +763,8 @@ export interface ExtrasSectionOptions {
   /** Флажок «Корзина» гаснет, когда корзину не показывают (задача 77923b49). */
   trashedDisabled?: boolean;
   trashedTooltip?: string;
+  /** Вид каретки сворачиваемой группы (по умолчанию — треугольник). */
+  caretKind?: 'chevron' | 'triangle';
 }
 
 /** Признаки отбора заполнены. */
@@ -684,6 +793,7 @@ export function buildExtrasSection(
     getCollapsed: collapse.get,
     setCollapsed: collapse.set,
     isNonEmpty: () => extrasActive(ctx.getState()),
+    ...(opts.caretKind !== undefined ? { caretKind: opts.caretKind } : {}),
   });
   section.body.append(
     buildTriRow(ctx, 'Есть значение свойства', () => ctx.getState().hasProperties, (v) => (ctx.getState().hasProperties = v)),

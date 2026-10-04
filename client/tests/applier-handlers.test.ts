@@ -87,7 +87,6 @@ function envelope(type: string, data: unknown, actorClientId = 'other-client'): 
 
 function makeHooks(overrides: Partial<ApplierHooks> = {}): ApplierHooks {
   return {
-    getClientId: () => 'my-client',
     getCurrentUserId: () => 'u1',
     removeFromFocusHistoryEverywhere: () => {},
     getCurrentFocusId: () => null,
@@ -96,15 +95,15 @@ function makeHooks(overrides: Partial<ApplierHooks> = {}): ApplierHooks {
 }
 
 describe('Realtime applier (G8)', () => {
-  it('suppresses own-client echo', () => {
+  it('B1: forwards the author’s own event too (no echo suppression)', () => {
     const state = new RealtimeState();
     const result = applyRealtimeEvent(
       state,
       makeHooks(),
       envelope('thought.created', { thought: thought('t1', 'T') }, 'my-client'),
     );
-    assert.equal(result.applied, false);
-    assert.equal(state.getThought('t1'), null);
+    assert.equal(result.applied, true);
+    assert.equal(state.getThought('t1')?.title, 'T');
   });
 
   it('applies thought.created into the cache', () => {
@@ -161,10 +160,9 @@ describe('Realtime applier (G8)', () => {
     assert.equal(state.getThought('t1'), null);
   });
 
-  it('prunes focus history on own-client thought.deleted despite echo suppression', () => {
-    // Regression: deleting a thought from this client must still remove it from
-    // the local focus history. The cache write is echo-suppressed, but the
-    // history prune is a local sync that must run for own echoes too.
+  it('own-client thought.deleted prunes the cache AND the focus history (B1)', () => {
+    // B1: the author receives its own delete now — both the cache eviction and
+    // the focus-history prune must run.
     const state = new RealtimeState();
     state.setThought(thought('t1', 'Mine'));
     let historyCleanups = 0;
@@ -177,9 +175,9 @@ describe('Realtime applier (G8)', () => {
       }),
       envelope('thought.deleted', { id: 't1' }, 'my-client'),
     );
-    assert.equal(result.applied, false); // echo: cache mutation + forwarding skipped
-    assert.equal(state.getThought('t1')?.title, 'Mine'); // not removed from cache
-    assert.equal(historyCleanups, 1); // but history pruned regardless of actor
+    assert.equal(result.applied, true);
+    assert.equal(state.getThought('t1'), null);
+    assert.equal(historyCleanups, 1);
   });
 
   it('reports network-lost on self member.removed', () => {

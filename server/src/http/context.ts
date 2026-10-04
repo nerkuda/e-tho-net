@@ -26,7 +26,7 @@ export interface AuthContext {
   keyReadOnly: boolean;
   /** Display prefix of the key (for audit logging), e.g. `a1b2c3d4`. */
   keyPrefix: string;
-  /** `Client-Id` header value, or `null` when omitted (used for echo suppression). */
+  /** `Client-Id` header value, or `null` when omitted (event actor tag, per-client state). */
   clientId: string | null;
 }
 

@@ -33,6 +33,8 @@ import {
   type Link,
   type LinkType,
   type NetworkProperty,
+  type Publication,
+  type Shelf,
   type Thought,
   type ThoughtType,
 } from '@etn/shared';
@@ -46,6 +48,8 @@ import {
   snapshotLink,
   snapshotLinkType,
   snapshotProperty,
+  snapshotPublication,
+  snapshotShelf,
   snapshotThought,
   snapshotThoughtType,
   truncateTitle,
@@ -460,6 +464,58 @@ export function recordLayerActivity(
     entityType: 'layer',
     entityId: params.layer.id,
     entityTitle: snapshotLayer(params.layer),
+    layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
+  });
+}
+
+/**
+ * Записать событие по публикации (0.11.1, задача c59ce742; требование
+ * d4452908): создание, правка настроек, порядок (одна строка на батч),
+ * исключение, пересборка, корзина/восстановление/удаление.
+ */
+export function recordPublicationActivity(
+  ndb: NetworkDb,
+  params: {
+    networkId: string;
+    userId: string;
+    action: ActivityAction;
+    publication: Pick<Publication, 'id' | 'title'>;
+    layerId: string | null;
+    occurredAtMs?: number;
+  },
+): void {
+  recordActivity(ndb, {
+    networkId: params.networkId,
+    userId: params.userId,
+    action: params.action,
+    entityType: 'publication',
+    entityId: params.publication.id,
+    entityTitle: snapshotPublication(params.publication),
+    layerId: params.layerId,
+    occurredAtMs: params.occurredAtMs,
+  });
+}
+
+/** Записать событие по полке библиотеки публикаций (0.11.1, d4452908). */
+export function recordShelfActivity(
+  ndb: NetworkDb,
+  params: {
+    networkId: string;
+    userId: string;
+    action: ActivityAction;
+    shelf: Pick<Shelf, 'id' | 'title'>;
+    layerId: string | null;
+    occurredAtMs?: number;
+  },
+): void {
+  recordActivity(ndb, {
+    networkId: params.networkId,
+    userId: params.userId,
+    action: params.action,
+    entityType: 'shelf',
+    entityId: params.shelf.id,
+    entityTitle: snapshotShelf(params.shelf),
     layerId: params.layerId,
     occurredAtMs: params.occurredAtMs,
   });

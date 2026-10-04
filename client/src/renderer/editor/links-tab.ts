@@ -20,12 +20,13 @@
  * Enter). Счётчиков-иконок 📝/📅/📎 у этих облачков нет.
  */
 
-import type { MentionHit, ThoughtRef } from '@etn/shared';
+import type { MentionHit, PublicationUsageItem, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId, setFocus } from '../app.js';
 // Облачка мыслей во вкладке «Связи» (эндпоинты и строки упоминаний) собирает
 // общая фабрика: значок, цвета, начертание, бледность и единые жесты.
 import { createThoughtCloud } from '../lib/thought-cloud.js';
+import { t } from '../lib/i18n.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
 import { div, el, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
@@ -33,6 +34,7 @@ import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { toggleSelection } from '../selection/selection.js';
 import { store } from '../state.js';
+import { openPublicationInWorkspace } from '../screens/active-view.js';
 import {
   openLinkInEditor,
   openThoughtInEditor,
@@ -60,7 +62,7 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
 
   const root = div('links-tab');
 
-  // Две плоские группы на верхнем уровне вкладки — больше нет родительской
+  // Три плоские группы на верхнем уровне вкладки — больше нет родительской
   // группы-обёртки и нет отдельной группы «Локальный граф» (мини-граф
   // переехал на собственную вкладку «Граф»).
   const backlinks = groupSection(
@@ -81,19 +83,30 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       buildBody: () => buildMentionsBody(ctx),
     },
   );
-  // Раскладка пары (приёмка 0.8.1): сплиттер и фиксированные высоты действуют
-  // только когда ОБЕ группы развёрнуты; свёрнутая группа схлопывается до
-  // заголовка, единственная развёрнутая растягивается на всю вкладку,
-  // сплиттер над свёрнутой группой инертен (тела нет — resizable → null).
+  // Группа «Публикации» (0.11.1, задача 3275fd8d, элемент интерфейса 928fb3fc):
+  // ленивая загрузка с прелоадером, роли с хлебными крошками разделов.
+  const publications = groupSection(
+    {
+      id: 'links.publications',
+      title: t('publications.mentions.title'),
+      lazyCount: true,
+      defaultCollapsed: true,
+      buildBody: () => buildPublicationsBody(ctx),
+    },
+  );
+  // Раскладка групп (приёмка 0.8.1): сплиттеры и фиксированные высоты
+  // действуют, только когда ВСЕ группы развёрнуты; каждая свёрнутая группа
+  // схлопывается до заголовка, а единственная/частично развёрнутые
+  // растягиваются на всю вкладку, сплиттеры над свёрнутыми инертны.
   const bodyOf = (group: HTMLElement): HTMLElement | null =>
     group.querySelector(':scope > .group-body') as HTMLElement | null;
+  const groups = [backlinks, textMentions, publications];
+  const groupKeys = ['links.backlinks', 'links.text-mentions', 'links.publications'];
   const relayout = (): void => {
-    const both = bodyOf(backlinks) !== null && bodyOf(textMentions) !== null;
-    applyTabGroupClamp(backlinks, 'links.backlinks', both);
-    applyTabGroupClamp(textMentions, 'links.text-mentions', both);
+    const all = groups.every((group) => bodyOf(group) !== null);
+    groups.forEach((group, i) => applyTabGroupClamp(group, groupKeys[i]!, all));
   };
-  backlinks.addEventListener('etn:toggled', () => relayout());
-  textMentions.addEventListener('etn:toggled', () => relayout());
+  for (const group of groups) group.addEventListener('etn:toggled', () => relayout());
   relayout();
   // persistKey «links.mentions» сохраняем — это та же высота, что была
   // между группами «Упоминания» и «Локальный граф» раньше, чтобы пользователь
@@ -102,6 +115,8 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
     backlinks,
     rowSplitter(() => bodyOf(backlinks), { min: 50, persistKey: 'links.mentions' }),
     textMentions,
+    rowSplitter(() => bodyOf(textMentions), { min: 50, persistKey: 'links.publications' }),
+    publications,
   );
   return root;
 }
@@ -370,6 +385,93 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
     } catch {
       // stale link
     }
+  }
+
+  return box;
+}
+
+/**
+ * Подпись роли мысли в публикации (элемент интерфейса 928fb3fc): раздел —
+ * хлебные крошки имён родительских разделов, текст — название своего раздела,
+ * прямая ссылка — имя свойства типа «Публикация».
+ */
+function publicationRoleLabel(item: PublicationUsageItem): string {
+  switch (item.role) {
+    case 'section':
+      return t('publications.mentions.roleSection', (item.breadcrumbs ?? []).join(' → '));
+    case 'text':
+      return item.section_title !== undefined && item.section_title !== ''
+        ? t('publications.mentions.roleText', item.section_title)
+        : t('publications.mentions.roleText', '—');
+    case 'direct':
+    default:
+      return t('publications.mentions.roleDirect', item.property ?? '—');
+  }
+}
+
+/**
+ * Builds the «Публикации» group body (0.11.1, задача 3275fd8d): ленивая
+ * загрузка `GET /thoughts/{id}/publications` — список публикаций, в которые
+ * входит мысль, с ролью (раздел/текст/прямое свойство). Клик по строке
+ * открывает публикацию на странице и якоре, которые посчитал сервер
+ * (`usage.page`/`usage.anchor`); у прямой ссылки раздела нет — верх документа.
+ */
+function buildPublicationsBody(ctx: EditorContext): HTMLElement {
+  const networkId = requireNetworkId();
+  const box = div('mentions-body');
+  void reload();
+
+  async function reload(): Promise<void> {
+    box.replaceChildren(el('span', 'muted', t('publications.mentions.loading')));
+    let items: PublicationUsageItem[];
+    let total: number;
+    let hasMore: boolean;
+    try {
+      const result = await etn.publications.usage(networkId, ctx.ownerId);
+      items = result.items;
+      total = result.total;
+      hasMore = result.has_more;
+    } catch (err) {
+      box.replaceChildren(operationError(err));
+      return;
+    }
+    box
+      .closest('.group')
+      ?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${total})` }));
+    box.replaceChildren();
+    if (items.length === 0) {
+      box.append(el('p', 'muted', t('publications.mentions.empty')));
+      return;
+    }
+    for (const item of items) {
+      const row = div('mention-item');
+      // Клик обрабатывает САМА строка (не облачко): один путь открытия,
+      // без повторной загрузки сборки (клик по облачку всплывает сюда же).
+      const cloud = createThoughtCloud(
+        { id: item.publication_id, title: item.title, icon: '📄', icon_kind: 'emoji' },
+        {
+          profile: 'chip',
+          width: 'container',
+        },
+      );
+      const role = el('div', 'muted mention-snippet', publicationRoleLabel(item));
+      row.append(cloud, role);
+      row.addEventListener('click', () => void open(item));
+      box.append(row);
+    }
+    if (hasMore) {
+      box.append(
+        el('p', 'muted', t('publications.mentions.more', [items.length, total])),
+      );
+    }
+  }
+
+  /** Открыть публикацию на посчитанной сервером странице и якоре вхождения. */
+  async function open(item: PublicationUsageItem): Promise<void> {
+    await openPublicationInWorkspace(item.publication_id, {
+      ...(item.page !== undefined ? { page: item.page } : {}),
+      ...(item.anchor !== undefined ? { anchor: item.anchor } : {}),
+    });
   }
 
   return box;

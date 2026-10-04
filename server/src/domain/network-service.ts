@@ -20,6 +20,7 @@ import { EtnError, type Network, type TypeRoles } from '@etn/shared';
 import type { SystemDb } from '../db/system-db.js';
 import { closeNetworkDb, openNetworkDb } from '../db/network-db.js';
 import { networkDir } from '../paths.js';
+import { ensureDefaultShelf } from './publication-service.js';
 import type { Logger } from '../logger.js';
 
 /** Network lifecycle operations that require filesystem + per-DB work. */
@@ -95,7 +96,10 @@ export class NetworkServiceImpl implements NetworkService {
     //    base exists before any thought, per docs/13-layers.md §2.1.
     const ndb = openNetworkDb(this.dataDir, networkId, this.log);
 
-    // 2. Seed the protected HOME thought in a single transaction.
+    // 2. Seed the protected HOME thought in a single transaction. Заодно
+    //    создаётся дефолтная полка «Полка» (0.11.1, задача 8c2660e6; карточка
+    //    c80951ea v2) — в сети всегда есть хотя бы одна живая полка. Полка
+    //    пишется в основу (`ndb` открыт в базовом контексте), автор — владелец.
     const homeId = randomUUID();
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
@@ -108,6 +112,7 @@ export class NetworkServiceImpl implements NetworkService {
            VALUES (?, 'HOME', 'home', 1, 1, 1, 1, ?, ?, ?, ?, ?, ?)`,
         )
         .run(homeId, now, ownerId, now, ownerId, nowMs, nowMs);
+      ensureDefaultShelf(ndb, ownerId);
     });
 
     // 3. Record registry + owner membership in _system.db (atomic). Both rows

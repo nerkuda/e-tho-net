@@ -330,9 +330,12 @@ describe('правка реестрового свойства перечиты�
       realtimeHandler!(evt);
       await flush();
     };
+    // Монотонный seq: роутер слоя дедуплицирует события по seq — повторный
+    // seq=1 отбрасывал бы второе и последующие события (G1 техпроекта).
+    let realtimeSeq = 0;
     const realtimeEvent = (type: string, networkId: string, data: unknown) => ({
       type,
-      seq: 1,
+      seq: ++realtimeSeq,
       ts: '2026-01-01T00:00:00.000Z',
       actor: { user_id: 'u2', client_id: 'c2' },
       network_id: networkId,

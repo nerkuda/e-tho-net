@@ -9,14 +9,19 @@ import { describe, it } from 'node:test';
 
 import {
   buildDeepLinkUrl,
+  buildPublicationDeepLinkUrl,
   DEEP_LINK_SCHEME,
   extractDeepLinkFromArgv,
+  extractPublicationDeepLinkFromArgv,
   parseDeepLinkUrl,
+  parsePublicationDeepLinkUrl,
+  PUBLICATION_DEEP_LINK_PARAM,
 } from '../src/index.js';
 
 const NET_A = 'c4f9a3b2-1111-2222-3333-444455556666';
 const NET_B = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const THOUGHT = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+const PUBLICATION = '1b7c9d2e-3333-4444-5555-666677778888';
 
 describe('buildDeepLinkUrl', () => {
   it('строит корректный URL с lowercase UUID', () => {
@@ -124,5 +129,71 @@ describe('extractDeepLinkFromArgv', () => {
 
   it('работает с пустым массивом', () => {
     assert.equal(extractDeepLinkFromArgv([]), null);
+  });
+});
+
+describe('публикационный deep-link [[#pub:]] (f37b468d)', () => {
+  it('строит URL с параметром publication', () => {
+    const url = buildPublicationDeepLinkUrl({
+      networkId: NET_A.toUpperCase(),
+      publicationId: PUBLICATION.toUpperCase(),
+    });
+    assert.equal(
+      url,
+      `${DEEP_LINK_SCHEME}?net=${NET_A}&${PUBLICATION_DEEP_LINK_PARAM}=${PUBLICATION}`,
+    );
+  });
+
+  it('выбрасывает RangeError на невалидные id', () => {
+    assert.throws(
+      () => buildPublicationDeepLinkUrl({ networkId: 'no', publicationId: PUBLICATION }),
+      RangeError,
+    );
+    assert.throws(
+      () => buildPublicationDeepLinkUrl({ networkId: NET_A, publicationId: 'no' }),
+      RangeError,
+    );
+  });
+
+  it('round-trip build → parse', () => {
+    const original = { networkId: NET_A, publicationId: PUBLICATION };
+    assert.deepEqual(parsePublicationDeepLinkUrl(buildPublicationDeepLinkUrl(original)), original);
+  });
+
+  it('мысловая форма publication-парсером не парсится', () => {
+    assert.equal(parsePublicationDeepLinkUrl(`${DEEP_LINK_SCHEME}?net=${NET_A}&thought=${THOUGHT}`), null);
+  });
+
+  it('смешанная форма (thought + publication) отвергается', () => {
+    const url = `${DEEP_LINK_SCHEME}?net=${NET_A}&thought=${THOUGHT}&publication=${PUBLICATION}`;
+    assert.equal(parsePublicationDeepLinkUrl(url), null);
+  });
+
+  it('мысловой парсер publication-URL не принимает (обратная совместимость)', () => {
+    const url = buildPublicationDeepLinkUrl({ networkId: NET_A, publicationId: PUBLICATION });
+    assert.equal(parseDeepLinkUrl(url), null);
+  });
+
+  it('смешанная форма (thought + publication) отвергается и мысловым парсером', () => {
+    const url = `${DEEP_LINK_SCHEME}?net=${NET_A}&thought=${THOUGHT}&publication=${PUBLICATION}`;
+    assert.equal(parseDeepLinkUrl(url), null);
+    assert.equal(extractDeepLinkFromArgv([url]), null);
+  });
+
+  it('extractPublicationDeepLinkFromArgv находит URL среди аргументов', () => {
+    const argv = [
+      'C:\\path\\to\\electron.exe',
+      '--flag',
+      `${DEEP_LINK_SCHEME}?net=${NET_A}&${PUBLICATION_DEEP_LINK_PARAM}=${PUBLICATION}`,
+    ];
+    assert.deepEqual(extractPublicationDeepLinkFromArgv(argv), {
+      networkId: NET_A,
+      publicationId: PUBLICATION,
+    });
+  });
+
+  it('extractPublicationDeepLinkFromArgv игнорирует мысловую форму', () => {
+    const argv = [`${DEEP_LINK_SCHEME}?net=${NET_A}&thought=${THOUGHT}`];
+    assert.equal(extractPublicationDeepLinkFromArgv(argv), null);
   });
 });

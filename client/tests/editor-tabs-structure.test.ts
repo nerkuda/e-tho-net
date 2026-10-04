@@ -74,11 +74,12 @@ describe('вкладка «Свойства» — регулятор высот�
   });
 });
 
-describe('вкладка «Упоминания» — две плоские группы, дубли removed (8ab775d9, приёмка №9 + перепланировка 0.8.x)', () => {
-  it('содержит «Ссылки на мысль» и «Упоминания в текстах», но не «Локальный граф»/«Прямые связи»/«Использование»', () => {
+describe('вкладка «Упоминания» — плоские группы, дубли removed (8ab775d9, приёмка №9 + перепланировка 0.8.x + публикации 0.11.1)', () => {
+  it('содержит «Ссылки на мысль», «Упоминания в текстах» и «Публикации», но не «Локальный граф»/«Прямые связи»/«Использование»', () => {
     const src = readText(SRC.links);
     assert.ok(src.includes("title: 'Ссылки на мысль'"), 'backlinks group present');
     assert.ok(src.includes("title: 'Упоминания в текстах'"), 'text-mentions group present');
+    assert.ok(src.includes("title: t('publications.mentions.title')"), 'publications group present');
     assert.ok(!src.includes("title: 'Локальный граф'"), 'local graph group moved out');
     assert.ok(!src.includes("title: 'Прямые связи'"), 'direct-links group removed');
     assert.ok(!src.includes("title: 'Использование'"), 'usage group removed');
@@ -90,22 +91,27 @@ describe('вкладка «Упоминания» — две плоские гр
     assert.ok(!src.includes("'links.direct'"), 'links.direct persist key removed');
   });
 
-  it('родительской группы «Упоминания» больше нет — обе группы на верхнем уровне', () => {
-    // Сплиттер действует на паре плоских групп (не на обёртке).
+  it('родительской группы «Упоминания» больше нет — группы на верхнем уровне', () => {
+    // Сплиттеры действуют на плоских группах (не на обёртке); групп три:
+    // ссылки, упоминания в текстах и публикации (0.11.1, задача 3275fd8d).
     const src = readText(SRC.links);
     assert.ok(
-      src.includes("applyTabGroupClamp(backlinks, 'links.backlinks'"),
-      'backlinks group uses applyTabGroupClamp(links.backlinks)',
+      src.includes("'links.backlinks', 'links.text-mentions', 'links.publications'"),
+      'all three flat groups are clamped by the shared relayout',
     );
     assert.ok(
-      src.includes("applyTabGroupClamp(textMentions, 'links.text-mentions'"),
-      'textMentions group uses applyTabGroupClamp(links.text-mentions)',
+      src.includes('applyTabGroupClamp(group, groupKeys[i]!'),
+      'each flat group uses applyTabGroupClamp with its persist key',
     );
     // persistKey для сплиттера сохраняем — это та же настройка высоты,
     // что была между «Упоминания» и «Локальный граф» раньше.
     assert.ok(
       src.includes("persistKey: 'links.mentions'"),
       'splitter keeps the legacy persistKey for the mentions height',
+    );
+    assert.ok(
+      src.includes("persistKey: 'links.publications'"),
+      'publications splitter carries its own persist key',
     );
   });
 });
@@ -462,9 +468,9 @@ describe('вкладка «Мысли» редактора связи — обл
     assert.ok(!src.includes('cloud-ind'), 'no indicator row on the «Мысли» tab');
     assert.ok(!src.includes('buildLinkEndpointsBody'), 'old flat endpoints body removed');
     assert.ok(!src.includes('endpointRow'), 'old endpointRow helper removed');
-    // Ветка мысли (две группы со сплиттером) не тронута.
+    // Ветка мысли (плоские группы со сплиттерами) не тронута.
     assert.ok(
-      src.includes("applyTabGroupClamp(backlinks, 'links.backlinks'") &&
+      src.includes("'links.backlinks', 'links.text-mentions', 'links.publications'") &&
         src.includes("persistKey: 'links.mentions'"),
       'the thought «Упоминания» branch is intact',
     );

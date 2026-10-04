@@ -82,6 +82,7 @@ import {
   type SearchCriteriaState,
 } from '../lib/filter-builder.js';
 import { buildUserSelectWidget } from '../lib/users.js';
+import { createDebouncedWriter } from '../lib/debounced-writer.js';
 import {
   UI_STATE_KEY,
   type SearchResponse,
@@ -150,11 +151,47 @@ const subrootClouds = new Map<string, ThoughtCloudInput>();
 const subrootCloudsRequested = new Set<string>();
 
 /**
+ * Сбрасывает модульное состояние строки поиска перед новым монтированием.
+ *
+ * Рабочее пространство (а с ним и строка поиска) пересобирается при КАЖДОМ
+ * открытии мыслесети (`showScreen('workspace')` → `mountSearch`), но переменные
+ * модуля живут между монтированиями. Без сброса настройки одной сети («лейка»,
+ * «Ограничивать потомками мыслей» + мысль, места поиска, ограничения) остаются
+ * в памяти и показываются в другой сети, а флаг `restored` глушит чтение
+ * сохранённого состояния новой сети (ошибка 438092f6). Хранится состояние
+ * по-прежнему per-network: ключ L4 `ui_state` уже включает `network_id` — сеть
+ * без своей записи получает дефолт, а не чужие настройки.
+ *
+ * Отложенную запись настройки (`persistWriter`) сброс НЕ снимает: сеть и
+ * payload зафиксированы в момент планирования (см.
+ * {@link createDebouncedWriter}), поэтому та запись досылает настройку в СВОЮ
+ * (старую) сеть и после перемонтирования — иначе правка, сделанная меньше чем
+ * за 300 мс до ухода из сети, терялась бы.
+ */
+function resetSearchState(): void {
+  options = defaultSearchCriteriaState();
+  settingsOpen = false;
+  restored = false;
+  lastResults = null;
+  lastSelectedKey = null;
+  cursor = null;
+  subrootClouds.clear();
+  subrootCloudsRequested.clear();
+  if (searchTimer !== null) {
+    window.clearTimeout(searchTimer);
+    searchTimer = null;
+  }
+}
+
+/**
  * Mounts the search panel (called from the workspace builder). The panel holds
  * the results zone plus the toggleable settings zone; the funnel toggle sits in
  * the panel's top corner (the old toolbar gear is gone, задача a3247f84).
  */
 export function mountSearch(next: SearchChrome): () => void {
+  // Своё состояние на каждую мыслесеть: панель только что собрана заново под
+  // текущую сеть — прежние настройки не должны её пережить (ошибка 438092f6).
+  resetSearchState();
   chrome = next;
 
   const { host, input } = next;
@@ -379,7 +416,7 @@ function refreshOnActivation(): void {
 /**
  * Re-runs the search when the panel is already visible and the query is live —
  * called after a deletion so the deleted thought leaves the visible list at
- * once (the actor gets no realtime echo, 04-realtime.md §5).
+ * once (B1: the actor's own event arrives asynchronously).
  */
 export function refreshSearchIfVisible(): void {
   if (chrome === null || chrome.host.classList.contains('hidden')) return;
@@ -513,24 +550,26 @@ async function restoreState(): Promise<void> {
   }
 }
 
-/** Persists the current query + options (debounced). */
-let persistTimer: number | null = null;
+/**
+ * Persists the current query + options (debounced).
+ *
+ * Сеть и полезная нагрузка фиксируются в момент планирования (см. общий
+ * {@link createDebouncedWriter}): отложенная запись, пережившая смену сети
+ * (перемонтирование), досылается в СВОЮ сеть, а `resetSearchState` её не
+ * отменяет — иначе правка, сделанная перед уходом из сети, терялась бы
+ * (ошибка 438092f6, замечание верификатора). Набор сохраняемых ключей —
+ * конвертер конструктора (совместим с записанным до 0.8.2: те же имена полей).
+ */
+const persistWriter = createDebouncedWriter((networkId, payload) => {
+  void etn.ui.setState(networkId, UI_STATE_KEY.SEARCH_STATE, payload).catch(() => undefined);
+});
 function persistState(): void {
-  if (persistTimer !== null) window.clearTimeout(persistTimer);
-  persistTimer = window.setTimeout(() => {
-    persistTimer = null;
-    const networkId = store.state.networkId;
-    if (networkId === null || chrome === null) return;
-    void etn.ui
-      .setState(
-        networkId,
-        UI_STATE_KEY.SEARCH_STATE,
-        // Набор сохраняемых ключей — конвертер конструктора (совместим с
-        // записанным до 0.8.2: те же имена полей).
-        JSON.stringify({ q: chrome.input.value, options: searchCriteriaToStored(options) }),
-      )
-      .catch(() => undefined);
-  }, 300);
+  const networkId = store.state.networkId;
+  if (networkId === null || chrome === null) return;
+  persistWriter.schedule(
+    networkId,
+    JSON.stringify({ q: chrome.input.value, options: searchCriteriaToStored(options) }),
+  );
 }
 
 /** Resolves the effective scopes for the current option set. */

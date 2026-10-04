@@ -18,6 +18,7 @@ import { t } from '../lib/i18n.js';
 import { showDialog } from '../lib/dialog.js';
 import { el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { queryKeys, setQueryData } from '../lib/live/index.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 
@@ -44,11 +45,15 @@ export function showPinLimitMessage(): void {
   });
 }
 
-/** Persists the ordered list and mirrors it into the store. */
+/** Persists the ordered list and mirrors it into the store and the layer. */
 export async function setPins(networkId: string, orderedIds: string[]): Promise<boolean> {
   try {
     const entries = await etn.pins.set(networkId, orderedIds);
-    store.update({ pins: entries.map((entry) => entry.thought_id) });
+    const ids = entries.map((entry) => entry.thought_id);
+    store.update({ pins: ids });
+    // Срез слоя `pins` — порядок для панели закреплённых (G5): своя мутация
+    // кладёт ответ в кэш, как и роутер на `pinned-thoughts.updated`.
+    setQueryData(queryKeys.pins(), ids);
     return true;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

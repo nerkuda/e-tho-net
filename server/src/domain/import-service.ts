@@ -40,6 +40,10 @@ import {
   type Comment,
   type EtnxManifest,
   type EtnxManifestProperty,
+  type EtnxPublicationExclusion,
+  type EtnxPublicationOrder,
+  type EtnxShelf,
+  type EtnxShelfItem,
   type ImportPreview,
   type ImportSummary,
   type Link,
@@ -48,11 +52,17 @@ import {
   type PropertyDefinition,
   type PropertyValue,
   type PropertyValueValue,
+  type Publication,
   type ThoughtType,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { propertyValueId } from '../db/property-value-id.js';
+import {
+  publicationExclusionId,
+  publicationOrderId,
+  shelfItemId,
+} from '../db/publication-id.js';
 import type { Logger } from '../logger.js';
 import { parseManifest } from './etnx-format.js';
 import { normaliseInstant } from './dates.js';
@@ -714,6 +724,10 @@ function insertPropertyDefinition(
  * - For existing thoughts (by id): update mutable fields from the manifest
  *   (title, type_id, active, visual flags), keep `is_root`/`is_protected` as
  *   they were in the target network.
+ *
+ * Пометка корзины (`marked_for_deletion`/`_at`/`_by`) переносится из манифеста
+ * и при создании, и при обновлении — как у публикаций и полок (0.11.1, ошибка
+ * b3e0a1ee): без неё помеченная мысль после раунд-трипа приезжала живой.
  */
 function insertOrUpdateThought(
   ndb: NetworkDb,
@@ -722,6 +736,7 @@ function insertOrUpdateThought(
   actorUserId: string,
   now: string,
 ): { id: string; action: 'created' | 'updated' | 'reused' } {
+  const marked = markedColumns(t);
   const existing = ndb.prepare('SELECT id FROM thoughts_v WHERE id = ?').get(t.id) as
     | { id: string }
     | undefined;
@@ -732,8 +747,9 @@ function insertOrUpdateThought(
            id, title, title_norm, type_id, icon, icon_kind, active,
            is_protected, is_root, fg_color, bg_color, font_bold, font_italic,
            font_underline, font_strike, font_manual, version, created_at, created_by,
-           updated_at, updated_by
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           updated_at, updated_by, marked_for_deletion, marked_for_deletion_at,
+           marked_for_deletion_by
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         t.id,
@@ -757,6 +773,9 @@ function insertOrUpdateThought(
         actorUserId,
         now,
         actorUserId,
+        marked.flag,
+        marked.at,
+        marked.by,
       );
     return { id: t.id, action: 'created' };
   }
@@ -766,6 +785,7 @@ function insertOrUpdateThought(
          title = ?, title_norm = ?, type_id = ?, icon = ?, icon_kind = ?,
          active = ?, fg_color = ?, bg_color = ?, font_bold = ?, font_italic = ?,
          font_underline = ?, font_strike = ?, font_manual = ?,
+         marked_for_deletion = ?, marked_for_deletion_at = ?, marked_for_deletion_by = ?,
          version = version + 1, updated_at = ?, updated_by = ?
        WHERE id = ?`,
     )
@@ -783,11 +803,31 @@ function insertOrUpdateThought(
       t.font_underline ? 1 : 0,
       t.font_strike ? 1 : 0,
       15, // mark the four font_* fields as manual
+      marked.flag,
+      marked.at,
+      marked.by,
       now,
       actorUserId,
       t.id,
     );
   return { id: t.id, action: 'updated' };
+}
+
+/**
+ * Пометка корзины мысли из манифеста в виде SQL-аргументов. Отсутствие полей
+ * (манифест 1.2, записанный до правки) трактуется как «не помечена» — как у
+ * полок.
+ */
+function markedColumns(t: EtnxManifest['thoughts'][number]): {
+  flag: number;
+  at: string | null;
+  by: string | null;
+} {
+  return {
+    flag: t.marked_for_deletion === true ? 1 : 0,
+    at: t.marked_for_deletion_at ?? null,
+    by: t.marked_for_deletion_by ?? null,
+  };
 }
 
 /**
@@ -802,14 +842,16 @@ function createThoughtForTitleMatch(
   now: string,
 ): { id: string } {
   const newId = randomUUID();
+  const marked = markedColumns(t);
   ndb
     .prepare(
       `INSERT INTO thoughts (
          id, title, title_norm, type_id, icon, icon_kind, active,
          is_protected, is_root, fg_color, bg_color, font_bold, font_italic,
          font_underline, font_strike, font_manual, version, created_at, created_by,
-         updated_at, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         updated_at, updated_by, marked_for_deletion, marked_for_deletion_at,
+         marked_for_deletion_by
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       newId,
@@ -833,6 +875,9 @@ function createThoughtForTitleMatch(
       actorUserId,
       now,
       actorUserId,
+      marked.flag,
+      marked.at,
+      marked.by,
     );
   return { id: newId };
 }
@@ -1091,6 +1136,21 @@ function insertAttachment(
     );
 }
 
+/**
+ * Есть ли в целевой сети строка вложения с этим id. `attachments.id` —
+ * первичный ключ, поэтому именно он определяет идемпотентность повторного
+ * импорта (ошибка 626f4ff9): при существующей строке физический файл заново
+ * не распаковывается. Читаем физическую таблицу: строка одна на все слои
+ * (13-layers.md §5.3), надгробие слоя её не отменяет.
+ */
+function attachmentRowExists(ndb: NetworkDb, id: string): boolean {
+  return (
+    ndb
+      .prepare('SELECT 1 FROM attachments WHERE id = ? LIMIT 1') // layers:physical-read — строка вложения одна на все слои
+      .get(id) !== undefined
+  );
+}
+
 /** Insert a `comment_targets` row for the primary owner of a chronological comment. */
 function insertCommentTarget(
   ndb: NetworkDb,
@@ -1104,6 +1164,207 @@ function insertCommentTarget(
        VALUES (?, ?, ?)`,
     )
     .run(commentId, ownerType, ownerId);
+}
+
+// ---------------------------------------------------------------------------
+// Публикации и полки (0.11.1, задача 950e0a59; требование de697045)
+// ---------------------------------------------------------------------------
+
+/**
+ * Идемпотентный upsert публикации по `id` (требование de697045). Все поля
+ * карточки переносятся как есть: `title_recipe`/`text_sources`/
+ * `extra_properties` — из JSON-полей DTO в JSON-текст хранилища; рецепты,
+ * адресующие мысли, отсутствующие в срезе, остаются как есть и просто
+ * возвращают пустой результат (данные не теряются). `cover_kind` — вычисляемое
+ * поле DTO, не хранится и игнорируется. Аудит-поля (`created_*`/`updated_*`) и
+ * `version` берутся из манифеста — иначе повторный экспорт не совпал бы с
+ * исходным, а повторный импорт не был бы тождественным (DoD: раунд-трип
+ * «идентично»). Существующая публикация обновляется, новая вставляется с тем
+ * же `id`.
+ */
+function upsertPublication(ndb: NetworkDb, p: Publication): 'created' | 'updated' {
+  const titleRecipe = p.title_recipe === null ? null : JSON.stringify(p.title_recipe);
+  const textSources = JSON.stringify(p.text_sources ?? []);
+  const extraProperties = JSON.stringify(p.extra_properties ?? []);
+  const existing = ndb.prepare('SELECT 1 FROM publications_v WHERE id = ? LIMIT 1').get(p.id);
+  if (existing !== undefined) {
+    ndb
+      .prepare(
+        `UPDATE publications SET
+           title = ?, subtitle = ?, summary_md = ?, authorship = ?,
+           cover_attachment_id = ?, cover_url = ?, assembly_date = ?, title_recipe = ?,
+           text_sources = ?, extra_properties = ?, numbering_from = ?, numbering_to = ?,
+           active = ?, marked_for_deletion = ?, marked_for_deletion_at = ?,
+           marked_for_deletion_by = ?, version = ?, updated_at = ?, updated_by = ?
+         WHERE id = ?`,
+      )
+      .run(
+        p.title,
+        p.subtitle,
+        p.summary_md,
+        p.authorship,
+        p.cover_attachment_id,
+        p.cover_url,
+        p.assembly_date,
+        titleRecipe,
+        textSources,
+        extraProperties,
+        p.numbering_from,
+        p.numbering_to,
+        p.active ? 1 : 0,
+        p.marked_for_deletion ? 1 : 0,
+        p.marked_for_deletion_at,
+        p.marked_for_deletion_by,
+        p.version,
+        p.updated_at,
+        p.updated_by,
+        p.id,
+      );
+    return 'updated';
+  }
+  ndb
+    .prepare(
+      `INSERT INTO publications (
+         id, title, subtitle, summary_md, authorship, cover_attachment_id, cover_url,
+         assembly_date, title_recipe, text_sources, extra_properties,
+         numbering_from, numbering_to, active, marked_for_deletion,
+         marked_for_deletion_at, marked_for_deletion_by, version,
+         created_at, created_by, updated_at, updated_by
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      p.id,
+      p.title,
+      p.subtitle,
+      p.summary_md,
+      p.authorship,
+      p.cover_attachment_id,
+      p.cover_url,
+      p.assembly_date,
+      titleRecipe,
+      textSources,
+      extraProperties,
+      p.numbering_from,
+      p.numbering_to,
+      p.active ? 1 : 0,
+      p.marked_for_deletion ? 1 : 0,
+      p.marked_for_deletion_at,
+      p.marked_for_deletion_by,
+      p.version,
+      p.created_at,
+      p.created_by,
+      p.updated_at,
+      p.updated_by,
+    );
+  return 'created';
+}
+
+/**
+ * Идемпотентный upsert поузлового порядка: `id` детерминирован от
+ * `(publication_id, node_key)` (db/publication-id.ts) — надгробие той же
+ * поузловой строки оживляется (`deleted = 0`), как в домене.
+ */
+function upsertPublicationOrder(
+  ndb: NetworkDb,
+  row: EtnxPublicationOrder,
+  actorUserId: string,
+  now: string,
+): void {
+  const id = publicationOrderId(row.publication_id, row.node_key);
+  ndb
+    .prepare(
+      `INSERT INTO publication_order (id, publication_id, node_key, position, updated_at, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id, layer_id) DO UPDATE SET
+         position = excluded.position, deleted = 0,
+         updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+    )
+    .run(id, row.publication_id, row.node_key, row.position, now, actorUserId);
+}
+
+/** Идемпотентный upsert исключения мысли из публикации (детерминированный id). */
+function upsertPublicationExclusion(
+  ndb: NetworkDb,
+  row: EtnxPublicationExclusion,
+  thoughtId: string,
+  actorUserId: string,
+): void {
+  const id = publicationExclusionId(row.publication_id, thoughtId);
+  ndb
+    .prepare(
+      `INSERT INTO publication_exclusions (id, publication_id, thought_id, created_at, created_by)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id, layer_id) DO UPDATE SET deleted = 0`,
+    )
+    .run(id, row.publication_id, thoughtId, row.created_at, row.created_by || actorUserId);
+}
+
+/**
+ * Идемпотентный upsert полки по `id`. Аудит-поля и `version` — из манифеста
+ * (тождественность повторного экспорта/импорта, как у публикаций). Пометка
+ * корзины (`marked_for_deletion`/`_at`/`_by`) переносится, если манифест её
+ * несёт (0.11.1, c59ce742); отсутствие трактуется как «не помечена».
+ */
+function upsertShelf(ndb: NetworkDb, row: EtnxShelf): 'created' | 'updated' {
+  const marked = row.marked_for_deletion === true ? 1 : 0;
+  const markedAt = row.marked_for_deletion_at ?? null;
+  const markedBy = row.marked_for_deletion_by ?? null;
+  const existing = ndb.prepare('SELECT 1 FROM shelves_v WHERE id = ? LIMIT 1').get(row.id);
+  if (existing !== undefined) {
+    ndb
+      .prepare(
+        `UPDATE shelves SET title = ?, title_key = ?, position = ?, version = ?,
+           marked_for_deletion = ?, marked_for_deletion_at = ?, marked_for_deletion_by = ?,
+           updated_at = ?, updated_by = ? WHERE id = ?`,
+      )
+      .run(
+        row.title,
+        normalizeTitle(row.title),
+        row.position,
+        row.version,
+        marked,
+        markedAt,
+        markedBy,
+        row.updated_at,
+        row.updated_by,
+        row.id,
+      );
+    return 'updated';
+  }
+  ndb
+    .prepare(
+      `INSERT INTO shelves (id, title, title_key, position, version,
+         marked_for_deletion, marked_for_deletion_at, marked_for_deletion_by,
+         created_at, created_by, updated_at, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      row.id,
+      row.title,
+      normalizeTitle(row.title),
+      row.position,
+      row.version,
+      marked,
+      markedAt,
+      markedBy,
+      row.created_at,
+      row.created_by,
+      row.updated_at,
+      row.updated_by,
+    );
+  return 'created';
+}
+
+/** Идемпотентный upsert элемента состава полки (детерминированный id). */
+function upsertShelfItem(ndb: NetworkDb, row: EtnxShelfItem): void {
+  const id = shelfItemId(row.shelf_id, row.publication_id);
+  ndb
+    .prepare(
+      `INSERT INTO shelf_items (id, shelf_id, publication_id, position)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(id, layer_id) DO UPDATE SET position = excluded.position, deleted = 0`,
+    )
+    .run(id, row.shelf_id, row.publication_id, row.position);
 }
 
 // ---------------------------------------------------------------------------
@@ -1246,6 +1507,11 @@ export function applyManifest(
       chronological_comments_added: 0,
       property_values_set: 0,
       attachments_imported: 0,
+      attachments_skipped: 0,
+      publications_created: 0,
+      publications_updated: 0,
+      shelves_created: 0,
+      shelves_updated: 0,
       manifest_version: manifest.version,
     };
     const thoughtIdRemap = new Map<string, string>();
@@ -1444,12 +1710,14 @@ export function applyManifest(
         if (existingId !== undefined) {
           thoughtIdRemap.set(t.id, existingId);
           titleMatchIds.add(normTitle);
+          const marked = markedColumns(t);
           ndb
             .prepare(
               `UPDATE thoughts SET
                  active = ?, icon = ?, icon_kind = ?, fg_color = ?, bg_color = ?,
                  font_bold = ?, font_italic = ?, font_underline = ?, font_strike = ?,
-                 font_manual = ?, version = version + 1, updated_at = ?, updated_by = ?
+                 font_manual = ?, marked_for_deletion = ?, marked_for_deletion_at = ?,
+                 marked_for_deletion_by = ?, version = version + 1, updated_at = ?, updated_by = ?
                WHERE id = ?`,
             )
             .run(
@@ -1463,6 +1731,9 @@ export function applyManifest(
               t.font_underline ? 1 : 0,
               t.font_strike ? 1 : 0,
               15, // font_manual — all four bits set
+              marked.flag,
+              marked.at,
+              marked.by,
               now,
               opts.actorUserId,
               existingId,
@@ -1599,6 +1870,49 @@ export function applyManifest(
       summary.property_values_set += 1;
     }
 
+    // 8b. Публикации и полки (0.11.1, задача 950e0a59, требование de697045) --
+    // Формат 1.2 добавляет секции publications/publication_order/
+    // publication_exclusions/shelves/shelf_items. Манифест 1.1 их не несёт —
+    // секции читаются как пустые (обратная совместимость). Публикации и полки
+    // импортируются идемпотентным upsert по `id`; строки-детали получают
+    // детерминированный id от естественного ключа и оживляют надгробие.
+    const importedPublicationIds = new Set<string>();
+    for (const p of manifest.publications ?? []) {
+      const action = upsertPublication(ndb, p);
+      importedPublicationIds.add(p.id);
+      if (action === 'created') summary.publications_created = (summary.publications_created ?? 0) + 1;
+      else summary.publications_updated = (summary.publications_updated ?? 0) + 1;
+    }
+    for (const row of manifest.publication_order ?? []) {
+      if (!importedPublicationIds.has(row.publication_id)) continue;
+      // `node_key` — либо id ребра вхождения (рёбра сохраняют id), либо id
+      // мысли-корня (мысли при импорте получают новый id). Remap через
+      // thoughtIdRemap следует за мыслью; id ребра проходит без изменений.
+      const nodeKey = thoughtIdRemap.get(row.node_key) ?? row.node_key;
+      upsertPublicationOrder(ndb, { ...row, node_key: nodeKey }, opts.actorUserId, now);
+    }
+    for (const row of manifest.publication_exclusions ?? []) {
+      if (!importedPublicationIds.has(row.publication_id)) continue;
+      // Исключение следует за мыслью через remap импорта; мысль, отсутствующая
+      // в срезе, не теряет строку — исключение остаётся с исходным id.
+      const thoughtId = thoughtIdRemap.get(row.thought_id) ?? row.thought_id;
+      upsertPublicationExclusion(ndb, row, thoughtId, opts.actorUserId);
+    }
+    const importedShelfIds = new Set<string>();
+    for (const row of manifest.shelves ?? []) {
+      const action = upsertShelf(ndb, row);
+      importedShelfIds.add(row.id);
+      if (action === 'created') summary.shelves_created = (summary.shelves_created ?? 0) + 1;
+      else summary.shelves_updated = (summary.shelves_updated ?? 0) + 1;
+    }
+    for (const row of manifest.shelf_items ?? []) {
+      // Состав полки имеет смысл, только когда есть и полка, и публикация.
+      if (!importedShelfIds.has(row.shelf_id) || !importedPublicationIds.has(row.publication_id)) {
+        continue;
+      }
+      upsertShelfItem(ndb, row);
+    }
+
     // 9. Attachments --------------------------------------------------------
     const attachDir = path.join(path.dirname(ndb.dbPath), 'attachments');
     mkdirSync(attachDir, { recursive: true });
@@ -1609,7 +1923,23 @@ export function applyManifest(
       );
     } else
       for (const a of manifest.attachments) {
-        const resolvedOwnerId = thoughtIdRemap.get(a.owner_id);
+        // Идемпотентность повторного импорта: при уже существующей строке
+        // вложения физический файл НЕ распаковывается заново (иначе остаётся
+        // файл-сирота без владельца), а счётчик честно говорит «пропущено»
+        // (ошибка 626f4ff9).
+        if (attachmentRowExists(ndb, a.id)) {
+          summary.attachments_skipped = (summary.attachments_skipped ?? 0) + 1;
+          continue;
+        }
+        // Владелец вложения: мысль резолвится через remap импорта; публикация
+        // (строка-вложение-обложка, owner_type='publication') сохраняет свой id
+        // и должна быть импортирована этим же архивом.
+        const resolvedOwnerId =
+          a.owner_type === 'publication' && importedPublicationIds.has(a.owner_id)
+            ? a.owner_id
+            : a.owner_type === 'thought'
+              ? thoughtIdRemap.get(a.owner_id)
+              : undefined;
         if (resolvedOwnerId === undefined) continue;
         if (a.kind === 'file' && a.file_path !== null) {
           const buf = attachments.get(a.file_path);

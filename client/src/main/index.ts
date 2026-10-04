@@ -12,11 +12,11 @@
  * The API-key never leaves this process: renderer talks to data exclusively over
  * IPC (G7).
  */
-import { app, BrowserWindow, powerMonitor, protocol, screen, shell } from 'electron';
+import { app, BrowserWindow, powerMonitor, protocol, screen, session, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { CLIENT_META_KEY, type DeepLink } from '@etn/shared';
+import { CLIENT_META_KEY } from '@etn/shared';
+import { serveEtnimgRequest, type EtnimgServeDeps } from './etnimg.js';
 import { LocalDb } from './db/local-db.js';
 import {
   defaultMigrationsDir,
@@ -29,7 +29,7 @@ import {
 import { getOrCreateClientId } from './client-id.js';
 import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
-import { dispatchDeepLink, extractDeepLink } from './ipc/deep-link.js';
+import { dispatchDeepLink, extractDeepLink, type DeepLinkPayload } from './ipc/deep-link.js';
 import { initAutoUpdater } from './updater.js';
 import {
   loadWindowBounds,
@@ -183,7 +183,7 @@ const THEME_BG: Record<'light' | 'dark', string> = {
  * asynchronously via `app.on('open-url')`. We buffer it here and dispatch
  * once the renderer is ready.
  */
-let pendingDeepLink: DeepLink | null = null;
+let pendingDeepLink: DeepLinkPayload | null = null;
 
 /** Reads the stored L5 theme, defaulting to light. */
 function storedTheme(db: LocalDb): 'light' | 'dark' {
@@ -359,83 +359,58 @@ function wireWindowBoundsPersistence(
 }
 
 /**
- * Content types for files served over the `etnimg` protocol.
- */
-const ETNIMG_TYPES: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
-  bmp: 'image/bmp',
-  svg: 'image/svg+xml',
-  // Text attachments («Показать» in the attachment context menu, L1).
-  txt: 'text/plain; charset=utf-8',
-  md: 'text/plain; charset=utf-8',
-  markdown: 'text/plain; charset=utf-8',
-};
-
-/** A server-downloaded attachment file (etnimg fallback for remote servers). */
-interface ServerAttachmentFile {
-  contentType: string;
-  body: Buffer;
-}
-
-/**
- * Serves `etnimg://<host>/<path…>` read-only. The URL host is a single drive
- * letter (a Windows path like `C:\pics\img.png`) or the first segment of an
- * absolute POSIX path; `..`/`.` segments are rejected.
+ * Serves `etnimg://…` read-only via the shared transport module (0.11.1,
+ * ошибка 280a322b):
  *
- * The file is first looked up on the local filesystem. When it is missing
- * there (the attachment was stored by a **remote** server — its `file_path`
- * only exists on the server machine), `getServerFile` downloads the stored
- * copy over the REST API of the active connection; both preview images and
- * `![](etnimg:…)` pictures embedded in comments resolve through here.
+ *  - `etnimg://<host>/<path…>` — файл по абсолютному пути (диск латинской
+ *    буквой либо POSIX-путь), сначала локально, затем — серверной копией;
+ *  - `etnimg://attachment/<id>` — картинка вложения по id: `file_path`
+ *    резолвит main, дальше тот же порядок отдачи (локально → сервер).
+ *
+ * The API-key stays in this process; the renderer only ever builds the URL.
  */
-function registerEtnimgProtocol(
-  getServerFile: (filePath: string) => Promise<ServerAttachmentFile | null>,
-): void {
+function registerEtnimgProtocol(deps: EtnimgServeDeps): void {
   protocol.handle('etnimg', async (request) => {
-    const url = new URL(request.url);
-    const host = decodeURIComponent(url.hostname).toLowerCase();
-    const segments = decodeURIComponent(url.pathname)
-      .split('/')
-      .filter((s) => s !== '' && s !== '.' && s !== '..');
-    if (host === '' || segments.length === 0) {
-      return new Response('bad etnimg path', { status: 400 });
-    }
-    // Windows drive host ("c") → `C:\…`; anything else → a POSIX absolute path
-    // (`/host/segments…`) whose local read simply fails on Windows clients.
-    const filePath = /^[a-z]$/.test(host)
-      ? path.join(`${host}:`, ...segments)
-      : `/${[host, ...segments].join('/')}`;
-    try {
-      const stat = statSync(filePath);
-      if (stat.isFile()) {
-        const ext = filePath.toLowerCase().split('.').pop() ?? '';
-        return new Response(readFileSync(filePath), {
-          headers: {
-            'Content-Type': ETNIMG_TYPES[ext] ?? 'application/octet-stream',
-            'Cache-Control': 'max-age=3600',
-          },
-        });
-      }
-    } catch {
-      // No local file — fall through to the server download below.
-    }
-    const serverFile = await getServerFile(filePath);
-    if (serverFile === null) {
-      return new Response('not found', { status: 404 });
+    const result = await serveEtnimgRequest(request.url, deps);
+    if (!result.ok) {
+      return new Response(result.message, { status: result.status });
     }
     // `new Uint8Array(buffer)` re-types the Node Buffer into the DOM
     // `Uint8Array<ArrayBuffer>` accepted as BodyInit.
-    return new Response(new Uint8Array(serverFile.body), {
+    return new Response(new Uint8Array(result.body), {
       headers: {
-        'Content-Type': serverFile.contentType,
+        'Content-Type': result.contentType,
         'Cache-Control': 'max-age=3600',
       },
     });
   });
+}
+
+/**
+ * Нативные языки проверки орфографии (задача 1e373ac7).
+ *
+ * Electron на Windows/Linux использует Hunspell: набор доступных словарей
+ * зависит от сборки, а язык по умолчанию — локаль ОС, в которой русского
+ * может не быть. Комментарии в ETN двуязычны (русские тексты и англоязычные
+ * термины/идентификаторы), поэтому запрашиваем `ru` и `en-US`. Оставляем
+ * только те локали, для которых словарь реально доступен:
+ * `setSpellCheckerLanguages` бросает на неизвестной локали, а падать из-за
+ * этого старт приложения нельзя. Сама проверка включается атрибутом
+ * `spellcheck="true"` на contentDOM редактора комментария
+ * (client/src/renderer/editor/md-editor.ts).
+ */
+function configureSpellCheckerLanguages(): void {
+  try {
+    const available = session.defaultSession.availableSpellCheckerLanguages;
+    const wanted = ['ru', 'en-US'].filter((lang) => available.includes(lang));
+    if (wanted.length === 0) {
+      console.warn('[ETN] spellcheck: no dictionary for ru/en-US, using system default');
+      return;
+    }
+    session.defaultSession.setSpellCheckerLanguages(wanted);
+  } catch (err: unknown) {
+    console.error('[ETN] Failed to configure spellchecker languages:', err);
+  }
 }
 
 /**
@@ -503,21 +478,38 @@ app
       });
     }
 
-    // The etnimg protocol downloads server-stored attachment files through the
-    // active connection; `ipc` is assigned right after `registerIpc` below, so
-    // the resolver closure reads it lazily on every request.
+    // The etnimg protocol serves attachment files through the active
+    // connection: by-path URLs download the server copy when the file is not
+    // on this machine, and by-id URLs (`etnimg://attachment/<id>`) first
+    // resolve the attachment's `file_path` (ошибка 280a322b). `ipc` is
+    // assigned right after `registerIpc` below, so the resolvers read it
+    // lazily on every request.
     let ipc: IpcHandle | null = null;
-    registerEtnimgProtocol(async (filePath) => {
-      const rest = ipc?.getRest() ?? null;
-      const networkId = ipc?.getCurrentNetworkId() ?? null;
-      if (rest === null || networkId === null) return null;
-      try {
-        return await rest.getAttachmentRaw(networkId, filePath);
-      } catch {
-        // Not a server-stored file (a client-local path) or the server is
-        // unreachable — to the caller this is the same as a missing file.
-        return null;
-      }
+    registerEtnimgProtocol({
+      async fetchServerFile(filePath) {
+        const rest = ipc?.getRest() ?? null;
+        const networkId = ipc?.getCurrentNetworkId() ?? null;
+        if (rest === null || networkId === null) return null;
+        try {
+          return await rest.getAttachmentRaw(networkId, filePath);
+        } catch {
+          // Not a server-stored file (a client-local path) or the server is
+          // unreachable — to the caller this is the same as a missing file.
+          return null;
+        }
+      },
+      async resolveAttachmentFilePath(attachmentId) {
+        const rest = ipc?.getRest() ?? null;
+        const networkId = ipc?.getCurrentNetworkId() ?? null;
+        if (rest === null || networkId === null) return null;
+        try {
+          const attachment = await rest.getAttachment(networkId, attachmentId);
+          return attachment.file_path ?? null;
+        } catch {
+          // Unknown/deleted attachment or a non-file cover — treat as missing.
+          return null;
+        }
+      },
     });
 
     // Wire the renderer bridge (G7): single `etn:invoke` channel + realtime
@@ -542,6 +534,9 @@ app
     // Window background follows the stored theme so the very first paint
     // already matches (the renderer applies data-theme on boot, L10).
     const theme = storedTheme(localDb);
+
+    // Языки нативной проверки орфографии (задача 1e373ac7) — до создания окна.
+    configureSpellCheckerLanguages();
 
     const win = createWindow(theme, localDb);
 

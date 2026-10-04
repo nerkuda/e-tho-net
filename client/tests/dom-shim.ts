@@ -486,12 +486,6 @@ export class ShimElement {
     return null;
   }
 
-  private matches(selector: string): boolean {
-    if (selector.startsWith('.')) return this.classList.contains(selector.slice(1));
-    if (selector.startsWith('#')) return this.id === selector.slice(1);
-    return this.tagName === selector;
-  }
-
   querySelectorAll(selector: string): ShimElement[] {
     const hits: ShimElement[] = [];
     const walk = (node: ShimElement): void => {
@@ -522,20 +516,39 @@ export class ShimElement {
     return hits;
   }
 
-  /** Селектор элемента: `.class`, `#id`, `tag` и `[data-attr]`/`[data-attr=value]`. */
+  /** Селектор элемента: `.class`, `#id`, `tag`, `[data-attr]`/`[data-attr=value]`
+   *  и их составные формы (`.a.b[data-x="v"]` — продукт ищет облачко так:
+   *  `querySelector('.cloud[data-id="…"]')`). */
   private matchesSelector(selector: string): boolean {
-    if (selector.startsWith('[')) {
-      const close = selector.indexOf(']');
-      const inner = selector.slice(1, close < 0 ? undefined : close);
-      const eq = inner.indexOf('=');
-      if (eq >= 0) {
-        const name = inner.slice(0, eq);
-        const value = inner.slice(eq + 1).replace(/"/g, '');
-        return this.attributeVariants(name).some((key) => this.dataset[key] === value);
-      }
-      return this.attributeVariants(inner).some((key) => key in this.dataset);
+    // Отделяем часть-атрибут (может сопровождать класс/тег): `.cloud[data-id="x"]`.
+    let rest = selector;
+    const bracket = rest.indexOf('[');
+    if (bracket >= 0) {
+      const close = rest.indexOf(']', bracket);
+      const inner = rest.slice(bracket + 1, close < 0 ? undefined : close);
+      if (!this.matchesAttribute(inner)) return false;
+      rest = rest.slice(0, bracket) + (close < 0 ? '' : rest.slice(close + 1));
     }
-    return this.matches(selector);
+    if (rest.startsWith('.')) {
+      return rest
+        .slice(1)
+        .split('.')
+        .every((token) => token !== '' && this.classList.contains(token));
+    }
+    if (rest.startsWith('#')) return this.id === rest.slice(1);
+    if (rest === '') return true;
+    return this.tagName === rest;
+  }
+
+  /** Предикат части-атрибута селектора (`data-x` или `data-x="v"`). */
+  private matchesAttribute(inner: string): boolean {
+    const eq = inner.indexOf('=');
+    if (eq >= 0) {
+      const name = inner.slice(0, eq);
+      const value = inner.slice(eq + 1).replace(/"/g, '');
+      return this.attributeVariants(name).some((key) => this.dataset[key] === value);
+    }
+    return this.attributeVariants(inner).some((key) => key in this.dataset);
   }
 
   private attributeVariants(name: string): string[] {

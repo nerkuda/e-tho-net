@@ -33,6 +33,13 @@ import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import {
+  commitEntity,
+  getEntity,
+  getQueryState,
+  queryKeys,
+  subscribeQuery,
+} from '../lib/live/index.js';
 import { pinAt } from '../pinned/pins.js';
 import { store } from '../state.js';
 import { openStructuresThought } from './structures/structures.js';
@@ -41,10 +48,25 @@ import { openChronicleThought } from './chronicle/chronicle.js';
 let host: HTMLElement | null = null;
 /** Signature of the inputs the panel depends on — avoids redundant re-renders. */
 let lastSignature = '';
-/** Resolved chip metadata, reused across renders and evicted on updates. */
-const refCache = new Map<string, ThoughtRef>();
 /** Drop-position indicator shown while a drag hovers the panel. */
 let insertMarker: HTMLElement | null = null;
+
+/**
+ * Порядок закреплённых — срез слоя `pins` (G5 техпроекта 269016e2). Список
+ * ведёт сервер; роутер кладёт его на `pinned-thoughts.updated`, свои мутации —
+ * `setPins` (`setQueryData`), при открытии сети — `app.ts`. Метаданные чипа
+ * (заголовок/оформление/актуальность) читаются из нормализованного кэша слоя
+ * (`entity:@thought:@id`) — отдельного кэша ссылок у панели больше нет.
+ *
+ * G6: срез САМ читает сервер (перезапрос по инвалидации `pins`), а не берёт
+ * значение из легаси-зеркала `store.state.pins` — у панели один источник.
+ */
+function pinsFetcher(): Promise<string[]> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return Promise.resolve([]);
+  return etn.pins.list(networkId).then((rows) => rows.map((r) => r.thought_id));
+}
+
 
 /** Mounts the panel into the toolbar host (called from the workspace builder).
  *  Returns a teardown handle that releases the store subscription and the
@@ -56,9 +78,24 @@ export function mountPinnedBar(pinnedHost: HTMLElement): () => void {
     resolvePinTarget,
     onDragEnd: hideInsertMarker,
   });
+  // Общий store-тик: настройки видимости (`showInactive`/`showTrash`) входят в
+  // подпись рендера панели.
   const unsubscribe = store.subscribe(() => {
     if (host?.isConnected === true) void render();
   });
+  // Слой: срез `pins` (порядок) и метаданные чипов. Подписка на запрос
+  // перерисовывает панель и на смену данных, и на инвалидацию ключа (роутер на
+  // `thought.updated/deleted`, `pinned-thoughts.updated`; своя мутация кладёт
+  // список в кэш через `setPins`). Заголовок/оформление чипа — из
+  // нормализованного кэша.
+  const unsubscribeInvalidation = subscribeQuery<string[]>(
+    queryKeys.pins(),
+    pinsFetcher,
+    () => {
+      lastSignature = '';
+      if (host?.isConnected === true) void render();
+    },
+  );
   // The toolbar width changes with the window — re-fit the chip row.
   const resizeObserver = new ResizeObserver(() => {
     lastSignature = '';
@@ -69,25 +106,16 @@ export function mountPinnedBar(pinnedHost: HTMLElement): () => void {
 
   return () => {
     unsubscribe();
+    unsubscribeInvalidation();
     resizeObserver.disconnect();
     host = null;
     lastSignature = '';
   };
 }
 
-/**
- * Forces a re-render even when the inputs did not change — realtime
- * `thought.updated`/`thought.deleted` refresh the chip metadata (the pin list
- * itself updates through the store).
- */
-export function invalidatePinnedBar(): void {
-  lastSignature = '';
-  if (host?.isConnected === true) void render();
-}
-
-/** Evicts one thought's metadata (its `thought.updated` event arrived). */
-export function invalidatePinnedRef(thoughtId: string): void {
-  refCache.delete(thoughtId);
+/** Текущий порядок закреплённых — единственный источник, срез слоя `pins`. */
+function currentPins(): string[] {
+  return getQueryState<string[]>(queryKeys.pins()).data ?? [];
 }
 
 /** Opens a pinned thought the way the active view implies (08-ui-spec.md §16). */
@@ -105,7 +133,8 @@ function openPinnedEntry(id: string): void {
 async function render(): Promise<void> {
   if (host === null) return;
   const networkId = store.state.networkId;
-  const pins = store.state.pins;
+  // Порядок — из среза слоя `pins` (единственный источник панели; G6).
+  const pins = getQueryState<string[]>(queryKeys.pins()).data ?? [];
   const signature = `${networkId ?? ''}|${pins.join(',')}|${String(store.state.showInactive)}|${String(store.state.showTrash)}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
@@ -210,7 +239,7 @@ function resolvePinTarget(
 ): { dropIndex: number; highlightEl: HTMLElement } | null {
   const bar = el.closest<HTMLElement>('.pinned-bar');
   if (bar !== null && host !== null) {
-    const pins = store.state.pins;
+    const pins = currentPins();
     const chips = Array.from(host.querySelectorAll<HTMLElement>('.pinned-chip[data-id]'));
     const barLeft = host.getBoundingClientRect().left;
     // Walk left → right: the drop lands before the first chip whose midpoint
@@ -239,7 +268,7 @@ function resolvePinTarget(
   if (host !== null) {
     const rect = host.getBoundingClientRect();
     if (x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom) {
-      const pins = store.state.pins;
+      const pins = currentPins();
       showInsertMarker(10);
       return { dropIndex: pins.length, highlightEl: host };
     }
@@ -274,21 +303,23 @@ function hideInsertMarker(): void {
   insertMarker = null;
 }
 
-/** Resolves metadata for pin ids (one batched call; cached across renders). */
+/** Resolves metadata for pin ids (normalized layer cache; missing ids fetched). */
 async function resolveRefs(networkId: string, ids: string[]): Promise<Map<string, ThoughtRef>> {
-  const missing = ids.filter((id) => !refCache.has(id));
+  const missing = ids.filter((id) => getEntity<ThoughtRef>('thought', id) === undefined);
   if (missing.length > 0) {
     try {
       const resolved = await etn.thoughts.resolve(networkId, missing);
-      for (const ref of resolved) refCache.set(ref.id, ref);
+      // Метаданные идут в нормализованный кэш слоя — следующий рендер (и
+      // реалтайм-патч мысли роутером) увидит свежие заголовок/оформление.
+      for (const ref of resolved) commitEntity('thought', ref.id, ref);
     } catch {
       // Metadata unavailable — render the ids as-is; the next render retries.
     }
   }
   const out = new Map<string, ThoughtRef>();
   for (const id of ids) {
-    const ref = refCache.get(id);
-    if (ref !== undefined) out.set(id, ref);
+    const ref = getEntity<ThoughtRef>('thought', id);
+    if (ref !== undefined && ref !== null) out.set(id, ref);
   }
   return out;
 }

@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { createWriteStream, readFileSync, rmSync } from 'node:fs';
+import { createWriteStream, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -90,6 +90,83 @@ async function writeArchive(manifest: unknown, outPath: string): Promise<void> {
   await done;
 }
 
+/** Минимальный манифест 1.2 с одной мыслью и одним ФАЙЛОВЫМ вложением к ней. */
+function buildFileManifest(networkId: string): { manifest: unknown; attId: string } {
+  const now = new Date().toISOString();
+  const thoughtId = randomUUID();
+  const attId = randomUUID();
+  const manifest = {
+    format: 'etnx',
+    version: ETNX_VERSION,
+    exported_at: now,
+    source: { network_id: networkId, network_name: networkId, user_id: 'seed' },
+    thought_types: [],
+    link_types: [],
+    properties: [],
+    type_properties: [],
+    thoughts: [
+      {
+        id: thoughtId,
+        title: 'TEST 626f4ff9 — файловое вложение через импорт',
+        type_id: null,
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        marked_for_deletion: false,
+        marked_for_deletion_at: null,
+        marked_for_deletion_by: null,
+        created_at: now,
+        created_by: 'seed',
+      },
+    ],
+    thought_synonyms: [],
+    links: [],
+    comments: [],
+    comment_targets: [],
+    property_values: [],
+    attachments: [
+      {
+        id: attId,
+        owner_type: 'thought',
+        owner_id: thoughtId,
+        kind: 'file',
+        url: null,
+        file_path: 'cover.txt',
+        file_size: 5,
+        mime_type: 'text/plain',
+        title: 'файл',
+        description: null,
+        icon: null,
+        position: 0,
+        created_at: now,
+        created_by: 'seed',
+      },
+    ],
+  };
+  return { manifest, attId };
+}
+
+/** Записать .etnx-архив с manifest.json и бинарём файлового вложения. */
+async function writeArchiveWithBinary(
+  manifest: unknown,
+  relName: string,
+  binary: Buffer,
+  outPath: string,
+): Promise<void> {
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  const out = createWriteStream(outPath);
+  const done = new Promise<void>((resolve, reject) => {
+    out.on('close', () => resolve());
+    out.on('error', reject);
+    archive.on('error', reject);
+  });
+  archive.pipe(out);
+  archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+  archive.append(binary, { name: `attachments/${relName}` });
+  await archive.finalize();
+  await done;
+}
+
 describe(
   'import .etnx with attachments (af6ebdea)',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
@@ -131,6 +208,55 @@ describe(
         assert.equal(row.url, 'https://example.com/etn');
         assert.equal(row.updated_by, ctx.adminId, 'updated_by пишется из actor');
         assert.ok(row.created_at_ms > 0, 'created_at_ms заполнен, а не остался дефолтным нулём');
+      } finally {
+        rmSync(outPath, { force: true });
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('повторный импорт не плодит файлы-сироты и честно считает пропуски (626f4ff9)', async () => {
+      const ctx = await buildRestContext();
+      const outPath = path.join(tmpdir(), `etnx-att-file-${randomUUID()}.zip`);
+      const attachDir = path.join(path.dirname(ctx.ndb.dbPath), 'attachments');
+      try {
+        const { manifest, attId } = buildFileManifest(ctx.networkId);
+        await writeArchiveWithBinary(
+          manifest,
+          'cover.txt',
+          Buffer.from('hello'),
+          outPath,
+        );
+
+        const first = await importFromEtnx(
+          ctx.ndb,
+          readFileSync(outPath),
+          { actorUserId: ctx.adminId, parentThoughtId: ctx.homeId },
+          logger,
+        );
+        assert.equal(first.attachments_imported, 1, 'первый импорт пишет вложение');
+        assert.equal(first.attachments_skipped, 0, 'первый импорт ничего не пропускает');
+        assert.ok(
+          ctx.ndb.prepare('SELECT 1 FROM attachments WHERE id = ?').get(attId) !== undefined,
+          'строка вложения создана',
+        );
+        const filesAfterFirst = readdirSync(attachDir);
+        assert.equal(filesAfterFirst.length, 1, 'первый импорт распаковал ровно один файл');
+
+        // Повторный импорт того же архива: строка уже есть, файл не распаковывается.
+        const second = await importFromEtnx(
+          ctx.ndb,
+          readFileSync(outPath),
+          { actorUserId: ctx.adminId, parentThoughtId: ctx.homeId },
+          logger,
+        );
+        assert.equal(second.attachments_imported, 0, 'повторно вложение не импортируется');
+        assert.equal(second.attachments_skipped, 1, 'счётчик честно говорит «пропущено»');
+        const filesAfterSecond = readdirSync(attachDir);
+        assert.equal(
+          filesAfterSecond.length,
+          filesAfterFirst.length,
+          'файлов-сирот не прибавилось',
+        );
       } finally {
         rmSync(outPath, { force: true });
         await closeRestContext(ctx);

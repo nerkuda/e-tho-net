@@ -12,6 +12,11 @@
  * | `link-types`      | каталог типов связей (иерархия, свотч линии)      |
  * | `thoughts`        | мысли — живой поиск по серверу (`findDuplicates`) |
  * | `link-properties` | свойства-связи сети — по строке на имя стороны    |
+ * | `publications`    | публикации слоя — живой поиск (`GET /publications`)|
+ *
+ * Пятый источник — «публикации» (0.11.1, задача 3275fd8d, элемент интерфейса
+ * 9626efb6): поиск по названию/подзаголовку/автору, вариант — название с
+ * мини-обложкой, значение свойства вида `publication`.
  *
  * Четвёртый источник — «свойство связи» (требование cdb6b52f): строки общего
  * списка свойств (`lib/property-list.ts`) дают по варианту на КАЖДОЕ имя
@@ -50,7 +55,14 @@
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { t } from './i18n.js';
-import type { LinkPropertySide, LinkStyle, LinkType, Thought, ThoughtType } from '@etn/shared';
+import type {
+  LinkPropertySide,
+  LinkStyle,
+  LinkType,
+  Publication,
+  Thought,
+  ThoughtType,
+} from '@etn/shared';
 
 import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
@@ -82,7 +94,12 @@ import { createTree } from './ui/tree.js';
 // ---------------------------------------------------------------------------
 
 /** Какую сущность выбирает пикер. */
-export type EntityKind = 'thought-types' | 'link-types' | 'thoughts' | 'link-properties';
+export type EntityKind =
+  | 'thought-types'
+  | 'link-types'
+  | 'thoughts'
+  | 'link-properties'
+  | 'publications';
 
 /**
  * Выбранное СВОЙСТВО-связь (ошибка 1dd08949): пользователь выбирает не тип
@@ -186,6 +203,103 @@ export function thoughtEntityOption(hit: DuplicateHit): EntityOption {
     selectable: true,
     cloud: { ...hit },
   };
+}
+
+/**
+ * URL мини-обложки публикации для облачка варианта (0.11.1, задача 3275fd8d,
+ * элемент интерфейса 9626efb6): вложение — через протокол `etnimg` (байты
+ * отдаёт main-процесс), внешняя обложка — сам URL, иначе `null` (заглушка —
+ * глиф). Повторяет правило `screens/publications/cover.ts`, но живёт в `lib/`
+ * — пикер не имеет права зависеть от экранов (его подключает `canvas.ts`).
+ */
+export function publicationCoverUrl(pub: Publication): string | null {
+  if (pub.cover_kind === 'attachment' && pub.cover_attachment_id !== null) {
+    return `etnimg://attachment/${encodeURIComponent(pub.cover_attachment_id)}`;
+  }
+  if (pub.cover_kind === 'url' && pub.cover_url !== null) {
+    return pub.cover_url;
+  }
+  return null;
+}
+
+/**
+ * Вариант публикации (5-й источник пикера, 0.11.1, задача 3275fd8d): подпись
+ * — название, живой поиск ищет и по подзаголовку/автору; облачко — название с
+ * мини-обложкой (обложка-картинка — `icon_kind: 'image'`, иначе глиф книги).
+ */
+export function publicationEntityOption(pub: Publication): EntityOption {
+  const cover = publicationCoverUrl(pub);
+  const searchText = [pub.subtitle, pub.authorship]
+    .filter((part): part is string => part !== null && part.trim() !== '')
+    .join(' ');
+  return {
+    id: pub.id,
+    title: pub.title,
+    ...(searchText !== '' ? { searchText } : {}),
+    selectable: true,
+    cloud:
+      cover !== null
+        ? { id: pub.id, title: pub.title, icon: cover, icon_kind: 'image' }
+        : { id: pub.id, title: pub.title, icon: '📄', icon_kind: 'emoji' },
+  };
+}
+
+/** Варианты публикаций сети — тот же вид, что у источника `thoughts`. */
+export function publicationEntityOptions(pubs: readonly Publication[]): EntityOption[] {
+  return pubs.map(publicationEntityOption);
+}
+
+/** Размер порции живого поиска публикаций (догрузка при скролле выпадашки). */
+export const PUBLICATIONS_PAGE_SIZE = 50;
+
+/**
+ * Кандидаты-публикации текущего слоя для живого поиска/каталога пикера
+ * (`GET /publications`, поиск по названию/подзаголовку/автору). Пустой запрос
+ * возвращает первую страницу каталога. Порционный источник (0.11.1, задача
+ * 3275fd8d): выпадашка догружает следующую страницу при скролле вниз
+ * (`SuggestSource.loadMore`), поэтому ответ короче {@link PUBLICATIONS_PAGE_SIZE}
+ * — последний. Ошибка сети — пустой список (best-effort, как у прочих
+ * источников пикера).
+ */
+export async function loadPublicationOptions(
+  networkId: string,
+  query: string,
+  offset = 0,
+  limit = PUBLICATIONS_PAGE_SIZE,
+): Promise<EntityOption[]> {
+  const trimmed = query.trim();
+  try {
+    const res = await etn.publications.list(networkId, {
+      ...(trimmed !== '' ? { q: trimmed } : {}),
+      limit,
+      offset,
+    });
+    return publicationEntityOptions(res.items);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Догрузить публикации по id (для отображения уже выбранных значений, которых
+ * нет в текущей странице каталога). Ошибка/отсутствие — `null` (значение
+ * рисуется сырым id, как у прочих ссылок).
+ */
+export async function resolvePublicationOptions(
+  networkId: string,
+  ids: readonly string[],
+): Promise<EntityOption[]> {
+  const out: EntityOption[] = [];
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        out.push(publicationEntityOption(await etn.publications.get(networkId, id)));
+      } catch {
+        // Публикация недоступна — облачка нет.
+      }
+    }),
+  );
+  return out;
 }
 
 /**
@@ -551,8 +665,9 @@ export async function pickEntitiesModal(
 
     const body = div('st-f-picker list-dialog-body');
 
-    // --- Режим «мысли»: поиск с выпадашкой + чипы выбранного --------------
-    if (opts.kind === 'thoughts') {
+    // --- Режим «мысли»/«публикации»: поиск с выпадашкой + чипы выбранного ---
+    if (opts.kind === 'thoughts' || opts.kind === 'publications') {
+      const isPublications = opts.kind === 'publications';
       const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
       searchInput.type = 'text';
       searchInput.autocomplete = 'off';
@@ -565,9 +680,30 @@ export async function pickEntitiesModal(
       const chipsBox = div('entity-pick-chips');
       body.append(searchBar, chipsBox);
 
+      /** Догрузить облачко одной сущности по id (мысль/публикация). */
+      const loadCloud = async (id: string): Promise<ThoughtCloudInput | null> => {
+        if (isPublications) {
+          const [opt] = await resolvePublicationOptions(opts.networkId, [id]);
+          return opt?.cloud ?? null;
+        }
+        try {
+          const ref = (await etn.thoughts.resolve(opts.networkId, [id]))[0];
+          return ref !== undefined ? { ...ref } : null;
+        } catch {
+          return null;
+        }
+      };
+
+      /** Строка выпадашки по варианту публикации (облачко с мини-обложкой). */
+      const publicationEntries = (options: EntityOption[]): SuggestEntry[] =>
+        options.map((opt) => ({ value: opt.id, label: opt.title, thought: opt.cloud }));
+
       const searchSource: SuggestSource = {
         when: 'typed',
         load: (query) => {
+          if (isPublications) {
+            return loadPublicationOptions(opts.networkId, query).then(publicationEntries);
+          }
           const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
           return loadThoughtHits(opts.networkId, query, typeIds).then((hits) =>
             // Строка-мысль — облачком: DTO кандидата структурно совместим с
@@ -575,6 +711,15 @@ export async function pickEntitiesModal(
             hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
           );
         },
+        // Публикации — порционный серверный источник: скролл выпадашки вниз
+        // догружает следующую страницу (0.11.1, задача 3275fd8d).
+        ...(isPublications
+          ? {
+              loadMore: (query: string, offset: number) =>
+                loadPublicationOptions(opts.networkId, query, offset).then(publicationEntries),
+              pageSize: PUBLICATIONS_PAGE_SIZE,
+            }
+          : {}),
       };
       const handle = wireSuggest(searchInput, {
         sources: [searchSource],
@@ -584,18 +729,13 @@ export async function pickEntitiesModal(
             return;
           }
           checked.add(entry.value);
-          // Облачко выбранной мысли: данные из строки выпадашки, догрузка
-          // полного DTO по id — если строка пришла без него.
+          // Облачко выбранного: данные из строки выпадашки, догрузка полного
+          // DTO по id — если строка пришла без него.
           const title = entry.thought?.title ?? entry.label;
           pickedThoughts.set(entry.value, entry.thought ?? { id: entry.value, title });
-          void etn.thoughts
-            .resolve(opts.networkId, [entry.value])
-            .then((refs) => {
-              const ref = refs[0];
-              if (ref !== undefined) {
-                // DTO целиком в облачко фабрики (S1: поля не читаются точечно).
-                pickedThoughts.set(entry.value, { ...ref });
-              }
+          void loadCloud(entry.value)
+            .then((cloud) => {
+              if (cloud !== null) pickedThoughts.set(entry.value, cloud);
             })
             .catch(() => undefined)
             .finally(() => renderChips());
@@ -630,11 +770,10 @@ export async function pickEntitiesModal(
         }
       };
       const renderSelected = (): void => {
-        void etn.thoughts
-          .resolve(opts.networkId, [...checked])
-          .then((refs) => {
-            for (const ref of refs) {
-              pickedThoughts.set(ref.id, { ...ref });
+        void Promise.all([...checked].map((id) => loadCloud(id).then((cloud) => [id, cloud] as const)))
+          .then((entries) => {
+            for (const [id, cloud] of entries) {
+              if (cloud !== null) pickedThoughts.set(id, cloud);
             }
           })
           .catch(() => undefined)
@@ -876,6 +1015,30 @@ export async function pickEntitiesModal(
 // ---------------------------------------------------------------------------
 
 /** Параметры {@link buildEntityChipField}. */
+/**
+ * Перемещение значения `moved` ПЕРЕД значением `before` в списке выбранных
+ * (0.11.1, задача a3cfc018): чистая логика drag-переупорядочения чип-поля
+ * ({@link EntityChipFieldOptions.reorderable}). `moved` отсутствует во входе
+ * или совпадает с `before` — порядок не меняется; `before` не найден (брошено
+ * на пустое место/за пределы) — `moved` уходит в конец. Возвращается НОВЫЙ
+ * массив.
+ */
+export function reorderValues(
+  values: readonly string[],
+  moved: string,
+  before: string | null,
+): string[] {
+  if (!values.includes(moved) || before === moved) return [...values];
+  const without = values.filter((value) => value !== moved);
+  if (before === null) return [...without, moved];
+  const index = without.indexOf(before);
+  if (index === -1) return [...without, moved];
+  const out = [...without];
+  out.splice(index, 0, moved);
+  return out;
+}
+
+/** Опции чип-поля множественного выбора сущностей. */
 export interface EntityChipFieldOptions {
   /** Текущие значения (id сущностей или `$`-токены) — читаются при отрисовке. */
   getValues: () => string[];
@@ -883,11 +1046,27 @@ export interface EntityChipFieldOptions {
   onChange: (values: string[]) => void;
   /**
    * Кандидаты для живого поиска (и для облачков уже выбранных значений).
-   * Пустой запрос — весь каталог (типы) либо пусто (мысли).
+   * Пустой запрос — весь каталог (типы) либо пусто (мысли). Второй аргумент —
+   * смещение для порционной догрузки (только при заданном {@link pageSize}).
    */
-  loadOptions: (query: string) => EntityOption[] | Promise<EntityOption[]>;
+  loadOptions: (query: string, offset?: number) => EntityOption[] | Promise<EntityOption[]>;
+  /**
+   * Каталог, уже известный вызывающему: заполняет облачка значений ДО первого
+   * поиска и открытия пикера. Без него чипы предзаданных значений (например,
+   * свойств текстов «Рецептов») рисовались бы по одному id: `byId` наполняется
+   * только при загрузке источника (ошибка fb4173d9). Порядок вариантов
+   * задаёт вызывающий; повторный ввод значения перекрывает.
+   */
+  initialOptions?: readonly EntityOption[];
   /** Когда источник кандидатов участвует в списке (по умолчанию `always`). */
   optionsWhen?: 'always' | 'typed';
+  /**
+   * Размер порции живого поиска: задан — источник догружает следующую
+   * страницу при скролле выпадашки (`loadOptions(query, offset)`), по образцу
+   * порционного поиска целей связи (0.11.1, задача 3275fd8d). Ответ короче
+   * порции считается последним.
+   */
+  pageSize?: number;
   /** Заголовок группы кандидатов. */
   optionsHeader?: string;
   /** Источники подсказок вызывающего (токены) — общий список выпадашки. */
@@ -907,6 +1086,19 @@ export interface EntityChipFieldOptions {
    * («Название мысли…»), есть значения — `addPlaceholder` («+ ещё одну мысль»).
    */
   addPlaceholder?: string;
+  /**
+   * Перетаскивание чипов меняет ПОРЯДОК значений (0.11.1, задача a3cfc018:
+   * «порядок перетаскиванием» в рецептах публикации). При `true` каждый чип —
+   * источник DnD: брошенный на другой чип, перемещается перед ним; `onChange`
+   * получает переупорядоченный массив. По умолчанию порядок не меняется.
+   */
+  reorderable?: boolean;
+  /**
+   * Клик по чипу значения открывает сущность (0.11.1, задача 3275fd8d):
+   * значение свойства «Публикация» ведёт на экран публикаций (элемент
+   * интерфейса 9626efb6). Не задано — чип без обработчика клика.
+   */
+  onOpen?: (value: string) => void;
   /** Начальное состояние «поле недоступно» (поле ввода и кнопка пикера). */
   disabled?: boolean;
 }
@@ -926,6 +1118,10 @@ function entityEntry(opt: EntityOption): SuggestEntry {
   if (opt.cloud !== undefined) entry.thought = opt.cloud;
   if (opt.depth !== undefined) entry.indent = typeRowIndentSteps(opt.depth);
   if (opt.line != null) entry.swatch = opt.line;
+  // Сторона свойства-связи (задача 7cfaba7c, п.3): значок направления и пара имён
+  // «(прямое -> обратное)» — как в поле «Свойство связи» диалога добавления мысли.
+  if (opt.linkEnd != null) entry.linkEnd = opt.linkEnd;
+  if (opt.note !== undefined) entry.note = opt.note;
   return entry;
 }
 
@@ -991,6 +1187,8 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
 
   /** Заблокировано ли поле (выключатель зоны настроек поиска, задача a3247f84). */
   let disabled = opts.disabled === true;
+  /** Значение чипа, который сейчас тащат (drag-переупорядочение). */
+  let dragValue: string | null = null;
   /** Угловая кнопка «…» — создаётся ниже, если пикер задан. */
   let pickBtn: HTMLButtonElement | null = null;
   /** Угловая кнопка «✕» — очистка всего значения. */
@@ -1015,14 +1213,23 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     renderChips();
   };
 
+  const mapOptions = (options: EntityOption[]): SuggestEntry[] => {
+    for (const opt of options) byId.set(opt.id, opt);
+    return options.map(entityEntry);
+  };
   const source: SuggestSource = {
     when: opts.optionsWhen ?? 'always',
     ...(opts.optionsHeader !== undefined ? { header: opts.optionsHeader } : {}),
-    load: (query) =>
-      Promise.resolve(opts.loadOptions(query)).then((options) => {
-        for (const opt of options) byId.set(opt.id, opt);
-        return options.map(entityEntry);
-      }),
+    load: (query) => Promise.resolve(opts.loadOptions(query, 0)).then(mapOptions),
+    // Порционная догрузка (публикации): скролл выпадашки вниз зовёт
+    // `loadOptions(query, offset)`.
+    ...(opts.pageSize !== undefined
+      ? {
+          loadMore: (query: string, offset: number) =>
+            Promise.resolve(opts.loadOptions(query, offset)).then(mapOptions),
+          pageSize: opts.pageSize,
+        }
+      : {}),
   };
   const sources: SuggestSource[] = [source, ...(opts.extraSources ?? [])];
   wireSuggest(input, {
@@ -1048,21 +1255,39 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     const hadFocus = hasKeyboardFocus(field);
     const chips: HTMLElement[] = [];
     for (const value of opts.getValues()) {
-      const cloud = opts.cloudOf?.(value) ?? byId.get(value)?.cloud ?? { id: value, title: value };
-      chips.push(
-        createThoughtCloud(cloud, {
-          profile: 'chip',
-          width: 'container',
-          actions: disabled
+      const known = byId.get(value);
+      const explicitCloud = opts.cloudOf?.(value) ?? null;
+      // Вариант без облачка мысли (свойство-связь, структурная строка): у него
+      // есть лишь `title`, поэтому облачко собирается из имени варианта, а не из
+      // сырого id — иначе чип показывал UUID вместо имени (ошибка fb4173d9).
+      const cloud: ThoughtCloudInput =
+        explicitCloud ?? known?.cloud ?? { id: value, title: known?.title ?? value };
+      const chip = createThoughtCloud(cloud, {
+        profile: 'chip',
+        width: 'container',
+        actions: {
+          ...(opts.onOpen !== undefined ? { onClick: (id: string) => opts.onOpen?.(id) } : {}),
+          ...(disabled
             ? {}
             : {
                 onRemove: () => {
                   opts.onChange(opts.getValues().filter((v) => v !== value));
                   renderChips();
                 },
-              },
-        }),
-      );
+              }),
+        },
+      });
+      // Знак варианта-свойства-связи — значок конца связи, как в строках
+      // выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
+      // значка светился глиф мысли по умолчанию.
+      if (explicitCloud === null && known?.cloud === undefined && known?.linkEnd != null) {
+        const iconBox = chip.querySelector('.mini-icon');
+        if (iconBox !== null) iconBox.replaceChildren(buildLinkEndIcon(known.linkEnd));
+      }
+      if (opts.reorderable === true && !disabled) {
+        wireChipReorder(chip, value);
+      }
+      chips.push(chip);
     }
     // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
     field.replaceChildren(...chips, input);
@@ -1072,9 +1297,49 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     input.placeholder = empty
       ? (opts.placeholder ?? 'Добавить значение…')
       : (opts.addPlaceholder ?? opts.placeholder ?? 'Добавить значение…');
+    // Крестик очистки — только у ЗАПОЛНЕННОГО поля: у пустого значения
+    // очищать нечего, а лишняя «×» рядом с приглашением читается как ошибка.
+    clearBtn.hidden = empty;
     // Перерисовку может затеять и вызывающий (асинхронная догрузка каталога) —
     // его фокус не перехватываем, возвращаем только потерянный здесь.
     restoreKeyboardFocus(input, hadFocus, false);
+  }
+
+  /**
+   * DnD одного чипа (при `reorderable`): брошенный на другой чип, перемещается
+   * перед ним; переупорядоченный набор уходит в `onChange`. Порядок значений —
+   * порядок чипов; перерисовка сохраняет его.
+   */
+  function wireChipReorder(chip: HTMLElement, value: string): void {
+    chip.draggable = true;
+    chip.dataset['chipValue'] = value;
+    chip.addEventListener('dragstart', (ev) => {
+      dragValue = value;
+      chip.classList.add('entity-chip-drag');
+      if (ev.dataTransfer !== null) {
+        ev.dataTransfer.effectAllowed = 'move';
+        ev.dataTransfer.setData('text/plain', value);
+      }
+    });
+    chip.addEventListener('dragend', () => {
+      chip.classList.remove('entity-chip-drag');
+      dragValue = null;
+    });
+    chip.addEventListener('dragover', (ev) => {
+      if (dragValue === null || dragValue === value) return;
+      ev.preventDefault();
+      chip.classList.add('entity-chip-drop');
+    });
+    chip.addEventListener('dragleave', () => chip.classList.remove('entity-chip-drop'));
+    chip.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      chip.classList.remove('entity-chip-drop');
+      const moved = dragValue ?? ev.dataTransfer?.getData('text/plain') ?? '';
+      dragValue = null;
+      if (moved === '' || moved === value) return;
+      opts.onChange(reorderValues(opts.getValues(), moved, value));
+      renderChips();
+    });
   }
 
   /** Приводит поле ввода, кнопку пикера и рамку к состоянию `disabled`. */
@@ -1084,6 +1349,11 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     root.classList.toggle('disabled', disabled);
   }
 
+  // Предзаданный каталог — до первой отрисовки чипов, чтобы предзаполненные
+  // значения получали имя сразу (ошибка fb4173d9).
+  if (opts.initialOptions !== undefined) {
+    for (const option of opts.initialOptions) byId.set(option.id, option);
+  }
   field.append(input);
   renderChips();
   // Угловые кнопки поля: «…» (список) — когда задан пикер, «✕» — очистка всего.
@@ -1235,6 +1505,7 @@ const PICKER_TITLES: Record<Exclude<EntityKind, 'link-properties'>, string> = {
   'thought-types': 'Выбрать тип мысли',
   'link-types': 'Выбрать тип связи',
   thoughts: 'Выбрать мысль',
+  publications: t('publications.field.pickerTitle'),
 };
 
 /** Заголовок диалога «…»: `override` вызывающего либо словарная подпись вида
@@ -1290,6 +1561,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     } else if (opts.kind === 'link-properties') {
       allOptions = linkPropertyEntityOptions(opts.linkPropertyRows?.() ?? []);
     } else {
+      // Мысли и публикации набираются живым поиском по серверу — каталога нет.
       allOptions = [];
     }
     byId = new Map(allOptions.map((o) => [o.id, o]));
@@ -1332,9 +1604,9 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     let opt = byId.get(current);
     // Каталог типов мог прийти позже создания поля (realtime). Заполненное
     // поле выпадашку не открывает, поэтому обновляем каталог здесь — иначе
-    // значение рисовалось бы сырым id. Для мыслей каталог набирается живым
-    // поиском, перечитывать нечего.
-    if (opt === undefined && opts.kind !== 'thoughts') {
+    // значение рисовалось бы сырым id. Для мыслей и публикаций каталог
+    // набирается живым поиском, перечитывать нечего.
+    if (opt === undefined && opts.kind !== 'thoughts' && opts.kind !== 'publications') {
       reloadOptions();
       opt = byId.get(current);
     }
@@ -1347,6 +1619,18 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
           const ref = refs[0];
           if (ref !== undefined && current === ref.id && currentCloud === null) {
             currentCloud = { ...ref };
+            if (root.isConnected) renderValue();
+          }
+        })
+        .catch(() => undefined);
+    }
+    // Публикация — тоже серверный поиск: облачко значения догружаем по id.
+    if (currentCloud === null && opt === undefined && opts.kind === 'publications') {
+      void resolvePublicationOptions(opts.networkId, [current])
+        .then((options) => {
+          const cloud = options[0]?.cloud;
+          if (cloud !== undefined && current === cloud.id && currentCloud === null) {
+            currentCloud = cloud;
             if (root.isConnected) renderValue();
           }
         })
@@ -1468,7 +1752,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   let lastQuery = '';
 
   const sources: SuggestSource[] = [];
-  if (opts.kind !== 'thoughts') {
+  if (opts.kind !== 'thoughts' && opts.kind !== 'publications') {
     // Единственный источник на весь каталог: пустой запрос — весь список
     // (с учётом раскрытия), непустой — совпадения вместе с цепочкой предков.
     // Один источник — ручное открытие кареткой (force игнорирует `when`) не
@@ -1510,6 +1794,29 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         lastQuery = query;
         return entries;
       },
+    });
+  } else if (opts.kind === 'publications') {
+    // Публикации: живой поиск по серверу (`GET /publications`), как у мыслей;
+    // вариант — название с мини-обложкой (элемент интерфейса 9626efb6).
+    // Порционный источник: скролл выпадашки вниз догружает страницу.
+    const publicationEntries = (options: EntityOption[]): SuggestEntry[] =>
+      options.map((opt) => {
+        byId.set(opt.id, opt);
+        const entry: SuggestEntry = { value: opt.id, label: opt.title };
+        if (opt.cloud !== undefined) entry.thought = opt.cloud;
+        return entry;
+      });
+    sources.push({
+      when: 'typed',
+      load: (query) => {
+        if (opts.disabled === true) return [];
+        return loadPublicationOptions(opts.networkId, query).then(publicationEntries);
+      },
+      loadMore: (query, offset) => {
+        if (opts.disabled === true) return Promise.resolve([]);
+        return loadPublicationOptions(opts.networkId, query, offset).then(publicationEntries);
+      },
+      pageSize: PUBLICATIONS_PAGE_SIZE,
     });
   } else {
     // Мысли: живой поиск по серверу; полный список без запроса невозможен.

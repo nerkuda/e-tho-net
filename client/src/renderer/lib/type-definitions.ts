@@ -15,7 +15,7 @@
  *  - **локально** — правка определений в редакторе типа
  *    (`screens/type-manager.ts`), привязок свойства и самого реестрового
  *    свойства из менеджера свойств (`screens/property-manager.ts`). Своё
- *    realtime-эхо до рендерера не доходит — главный процесс его отбрасывает
+ *    realtime-эхо приходит асинхронно (B1) — главный процесс его отбрасывает
  *    (G8 applier), поэтому производители уведомляют подписчиков сами:
  *    {@link notifyTypeDefinitionsChanged} (владелец — тип) и
  *    {@link notifyPropertyRegistryChanged} (правка реестра адресует только
@@ -160,7 +160,7 @@ const localRegistryListeners = new Set<(facts: DefinitionChangeFacts) => void>()
 /**
  * Подписка на локальную правку РЕЕСТРОВОГО свойства (ошибка 98aa0889):
  * `screens/property-manager.ts` пишет `PATCH /properties/{id}` и `DELETE
- * /properties/{id}`, своё realtime-эхо до рендерера не доходит (G8 applier).
+ * /properties/{id}`, своё realtime-эхо приходит асинхронно (B1) (G8 applier).
  */
 export function onPropertyRegistryChanged(
   listener: (facts: DefinitionChangeFacts) => void,
@@ -196,7 +196,7 @@ const localTypeListeners = new Set<(facts: TypeChangeFacts) => void>();
  * удаление типа мысли) и `screens/property-manager.ts` (`PATCH /properties/{id}`
  * и `DELETE /properties/{id}` свойства-связи правят/удаляют связанный
  * `link_type`; `PATCH /link-types/{id}` — смена родителя). Каталог типов каждый
- * производитель перечитывает сам, а своё realtime-эхо до рендерера не доходит
+ * производитель перечитывает сам, а своё realtime-эхо приходит асинхронно (B1)
  * (G8 applier). Отличие от {@link onTypeDefinitionsChanged}: тот канал несёт
  * только владельца и говорит про НАБОР определений свойств типа («Свойства»
  * редактора), а этот — про подпись и оформление самого типа (шапка редактора),

@@ -85,6 +85,11 @@ export const BRANCHABLE_TABLES = [
   'comments',
   'comment_targets',
   'attachments',
+  'publications',
+  'publication_order',
+  'publication_exclusions',
+  'shelves',
+  'shelf_items',
 ] as const;
 
 /** Имя temp-представления ветвимой таблицы. */
@@ -95,6 +100,21 @@ export function layerViewName(table: string): string {
 /** Имя temp-снапшота видимости ветвимой таблицы. */
 export function layerSnapshotName(table: string): string {
   return `${table}_snap`;
+}
+
+/**
+ * True when the physical table exists in the connection's schema.
+ *
+ * Ветвимые таблицы добавляются разными миграциями (например, `publications` —
+ * миграция 047, тогда как ядро слоёв — 025). Соединение, чья схема ещё не
+ * доведена до версии с таблицей (тесты, воспроизводящие промежуточные
+ * состояния БД; мигратор на живой сети применяет файлы по порядку до запуска
+ * сервера), не должно падать на построении представлений для таблицы,
+ * которой в этой схеме ещё нет, — представление появится при следующей
+ * установке контекста после применения миграции.
+ */
+function branchableTableExists(db: Database.Database, table: string): boolean {
+  return (db.pragma(`table_info(${table})`) as Array<{ name: string }>).length > 0;
 }
 
 /** Guard against corrupt parent cycles: цепочка не длиннее 5 уровней (§2.1). */
@@ -201,7 +221,9 @@ export function ensureLayerViews(db: Database.Database, useSnapshot: boolean): v
   for (const table of BRANCHABLE_TABLES) {
     const info = db.pragma(`table_info(${table})`) as Array<{ name: string }>;
     if (info.length === 0) {
-      throw new Error(`branchable table ${table} not found — migrations not applied?`);
+      // Таблица добавлена миграцией, ещё не применённой к этой схеме —
+      // представление для неё не создаётся (см. branchableTableExists).
+      continue;
     }
     const cols = info
       .map((c) => c.name)
@@ -240,6 +262,10 @@ export function ensureLayerViews(db: Database.Database, useSnapshot: boolean): v
  */
 export function rebuildLayerSnapshot(db: Database.Database): void {
   for (const table of BRANCHABLE_TABLES) {
+    if (!branchableTableExists(db, table)) {
+      // Схема ещё не знает таблицу (не применена создающая её миграция).
+      continue;
+    }
     db.exec(
       `DELETE FROM temp.${layerSnapshotName(table)};
        INSERT INTO temp.${layerSnapshotName(table)} (src_rowid, id)

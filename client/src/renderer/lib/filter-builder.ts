@@ -125,6 +125,15 @@ export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropert
     { op: 'all_of', label: 'содержит все из' },
     { op: 'none_of', label: 'не содержит ни одного из' },
   ],
+  // Ссылка на публикацию (0.11.1, задача f37b468d): отбор по id — та же
+  // матрица, что у cross_network_ref.
+  publication: [
+    { op: 'eq', label: 'равно' },
+    { op: 'ne', label: 'не равно' },
+    { op: 'any_of', label: 'содержит любой из' },
+    { op: 'all_of', label: 'содержит все из' },
+    { op: 'none_of', label: 'не содержит ни одного из' },
+  ],
 };
 
 // ---------------------------------------------------------------------------

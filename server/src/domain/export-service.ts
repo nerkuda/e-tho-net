@@ -39,6 +39,7 @@ import {
   type ExportEtnxOptions,
   type ExportFormat,
   type ExportJob,
+  type PublicationExportReport,
 } from '@etn/shared';
 import { renderMarkdown } from '@etn/markdown';
 
@@ -57,6 +58,12 @@ interface ExportJobEntry extends ExportJob {
   filePath?: string;
   /** Requested output format (stored so the download route can pick a MIME type). */
   format?: ExportFormat;
+  /** Explicit MIME type overriding {@link contentTypeFor} (e.g. publication zip). */
+  contentType?: string;
+  /** Рекомендуемое имя файла результата (переопределяет дефолт download-роута). */
+  filename?: string;
+  /** Отчёт джобы по публикациям (экспорт публикаций). */
+  report?: PublicationExportReport | null;
   /** Wall-clock ms when the job reached a terminal state (for TTL sweep). */
   finishedAt?: number;
 }
@@ -86,7 +93,42 @@ function sweepJobs(): void {
 }
 
 function toPublicJob(entry: ExportJobEntry): ExportJob {
-  return { job_id: entry.job_id, status: entry.status, download_url: entry.download_url };
+  return {
+    job_id: entry.job_id,
+    status: entry.status,
+    download_url: entry.download_url,
+    ...(entry.filename === undefined ? {} : { filename: entry.filename }),
+    ...(entry.report === undefined ? {} : { report: entry.report }),
+  };
+}
+
+/**
+ * Register an already-rendered file-backed job under the shared job store.
+ *
+ * Publication exports (задача 6d87f1f2) build their zip in a temp file and only
+ * need the job/status/download lifecycle of this service — they must not spin up
+ * a second job mechanism. The entry is immediately `done`; the caller owns the
+ * file, this service owns its cleanup on TTL (via {@link sweepJobs}).
+ */
+export function registerFinishedFileJob(input: {
+  filePath: string;
+  contentType: string;
+  filename?: string;
+  report?: PublicationExportReport | null;
+}): ExportJob {
+  const jobId = randomUUID();
+  const entry: ExportJobEntry = {
+    job_id: jobId,
+    status: 'done',
+    download_url: `/api/v1/jobs/${jobId}/download`,
+    filePath: input.filePath,
+    contentType: input.contentType,
+    ...(input.filename === undefined ? {} : { filename: input.filename }),
+    ...(input.report === undefined ? {} : { report: input.report }),
+    finishedAt: Date.now(),
+  };
+  jobs.set(jobId, entry);
+  return toPublicJob(entry);
 }
 
 /**
@@ -206,14 +248,14 @@ export function getExportJob(jobId: string): ExportJob | null {
 export function getExportJobContent(
   jobId: string,
   format?: ExportFormat,
-): { body: string | Buffer; contentType: string } | null {
+): { body: string | Buffer; contentType: string; filename?: string } | null {
   sweepJobs();
   const entry = jobs.get(jobId);
   if (!entry || entry.status !== 'done') return null;
   const effectiveFormat = format ?? entry.format ?? 'markdown';
-  const contentType = contentTypeFor(effectiveFormat);
-  if (effectiveFormat === 'etnx') {
-    if (entry.filePath === undefined) return null;
+  const contentType = entry.contentType ?? contentTypeFor(effectiveFormat);
+  const filename = entry.filename;
+  if (entry.filePath !== undefined) {
     if (!existsSync(entry.filePath)) return null;
     const buf = readFileSync(entry.filePath);
     // Best-effort cleanup: the file is no longer needed once the bytes are
@@ -223,10 +265,10 @@ export function getExportJobContent(
     } catch {
       // already gone — fine.
     }
-    return { body: buf, contentType };
+    return { body: buf, contentType, ...(filename === undefined ? {} : { filename }) };
   }
   if (entry.content === undefined) return null;
-  return { body: entry.content, contentType };
+  return { body: entry.content, contentType, ...(filename === undefined ? {} : { filename }) };
 }
 
 /** MIME type for an export job's stored content. */
@@ -323,15 +365,22 @@ function collectZip(manifest: EtnxManifest, ndb: NetworkDb, outputPath: string):
     archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
 
     const attachDir = path.join(path.dirname(ndb.dbPath), 'attachments');
+    // Дедупликация имён внутри архива: строка-вложение-обложка публикации
+    // ссылается на тот же физический файл, что и вложение мысли (ADR 73cfcf64),
+    // поэтому два ряда манифеста дают один и тот же `attachments/<basename>`.
+    // Повторный `append` создал бы дубль-запись в zip.
+    const archived = new Set<string>();
     for (const att of manifest.attachments) {
       if (att.kind !== 'file' || att.file_path === null) continue;
       const rel = att.file_path.replace(/^\/+/, '');
+      if (archived.has(rel)) continue;
       const abs = joinWithinDir(attachDir, rel);
       if (abs === null) continue;
       if (!existsSync(abs)) {
         logger.warn({ rel }, 'attachment missing on export — skipping');
         continue;
       }
+      archived.add(rel);
       archive.append(createReadStream(abs), { name: `attachments/${rel}` });
     }
 

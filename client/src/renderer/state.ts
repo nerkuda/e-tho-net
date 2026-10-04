@@ -27,6 +27,7 @@ import {
   type LinkTypeFilterInput,
   type Network,
   type NetworkListItem,
+  type Publication,
   type SortKind,
   type SortOrder,
   type Thought,
@@ -37,18 +38,22 @@ import type { TabDto } from '../main/ipc/contract.js';
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
 
-/** Workspace views (L15/L20, 08-ui-spec.md §15.1, §17, задача f27809d0 «События»): map / structures / chronicle / activity. */
-export type WorkspaceView = 'map' | 'structures' | 'chronicle' | 'activity';
+/** Workspace views (L15/L20, 08-ui-spec.md §15.1, §17, задача f27809d0 «События»): map / structures / chronicle / activity / publications (0.11.1). */
+export type WorkspaceView = 'map' | 'structures' | 'chronicle' | 'activity' | 'publications';
 
 /** Editor dock position (L4 `editor_position`, 08-ui-spec.md §6.1). */
 export type EditorPosition = 'left' | 'right' | 'top' | 'bottom' | 'hidden';
 
-/** What the editor currently shows: a picked thought/link or the focused thought.
- *  A picked thought may carry its full entity (`thought`) — the canvas click
- *  loads it right away (`openThoughtInEditor`); the structures/chronicle views
- *  deliver it via `structuresActiveThought` instead. */
+/** What the editor currently shows: a picked thought/link/publication or the
+ *  focused thought. A picked thought may carry its full entity (`thought`) —
+ *  the canvas click loads it right away (`openThoughtInEditor`); the
+ *  structures/chronicle views deliver it via `structuresActiveThought`
+ *  instead. Третий вариант `publication` (0.11.1, ADR eb687eea) — карточка
+ *  публикации, отдельный модуль `editor/publication-card.ts`. */
 export type EditorTarget =
-  { kind: 'thought'; id: string; thought?: Thought } | { kind: 'link'; id: string; link: Link };
+  | { kind: 'thought'; id: string; thought?: Thought }
+  | { kind: 'link'; id: string; link: Link }
+  | { kind: 'publication'; id: string; publication?: Publication };
 
 /** Realtime connection status as reported by the main process. */
 export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
@@ -319,9 +324,9 @@ export const store = new Store();
 
 /**
  * Applies an updated link to the focus edges so the canvas repaints the line
- * instantly. The server never echoes realtime events to the acting client
- * (04-realtime.md §5) — the REST response is the only immediate feedback, so
- * without this the old colour/width would stay until the next focus fetch.
+ * instantly. B1 техпроекта 269016e2: сервер шлёт событие и автору, поэтому
+ * правка доедет и realtime-путём — этот локальный патч остаётся ускорителем
+ * (мгновенный отклик без ожидания события/REST-круга).
  *
  * The canvas shows the active-only neighbourhood (focus is requested without
  * `show_inactive`): a deactivated link loses its edge, a reactivated one gains

@@ -11,12 +11,24 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { EtnError } from '@etn/shared';
+import { EtnError, BASE_LAYER_ID } from '@etn/shared';
 import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { createLayer } from '../src/domain/layer-service.js';
+import {
+  addShelfItem,
+  createPublication,
+  createShelf,
+  getPublication,
+  getShelf,
+  listShelves,
+  trashPublication,
+  trashShelf,
+  updatePublication,
+} from '../src/domain/publication-service.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import {
   clearThoughtRefUsages,
@@ -210,6 +222,87 @@ describe(
         // A full purge afterwards still cleans the remainder.
         assert.equal(purgeTrash(ndb).result.purged, 2);
         assert.equal(listTrash(ndb).thoughts.length + listTrash(ndb).links.length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('публикации и полки в корзине: список, блокировки, purge и видимость слоя', () => {
+      const ndb: NetworkDb = createInMemoryNetworkDb();
+      try {
+        // --- основа: свободная публикация и пустая полка ---------------------
+        const pub = createPublication(ndb, { title: 'Свободная' }, USER);
+        const shelf = createShelf(ndb, { title: 'Полка' }, USER);
+        trashPublication(ndb, pub.id, USER);
+        trashShelf(ndb, shelf.id, USER);
+
+        const trash = listTrash(ndb);
+        const pubEntry = trash.publications.find((p) => p.id === pub.id);
+        assert.ok(pubEntry !== undefined, 'публикация видна в корзине');
+        assert.equal(pubEntry.blocked, false);
+        assert.equal(pubEntry.blocking.properties, 0);
+        const shelfEntry = trash.shelves.find((s) => s.id === shelf.id);
+        assert.ok(shelfEntry !== undefined, 'полка видна в корзине');
+        assert.equal(shelfEntry.blocked, false);
+        assert.equal(shelfEntry.blocking.items, 0);
+        // Пометка скрывает полку из библиотеки.
+        assert.equal(listShelves(ndb).length, 0);
+
+        const sweep = purgeTrash(ndb);
+        assert.equal(sweep.result.purged, 2);
+        assert.equal(sweep.result.skipped, 0);
+        assert.deepEqual(sweep.result.deleted_publication_ids, [pub.id]);
+        assert.deepEqual(sweep.result.deleted_shelf_ids, [shelf.id]);
+        assert.ok(sweep.events?.some((e) => e.type === 'publication.purged'));
+        assert.ok(sweep.events?.some((e) => e.type === 'shelf.deleted'));
+        assert.equal(getPublication(ndb, pub.id), null);
+        assert.equal(getShelf(ndb, shelf.id), null);
+
+        // --- непустая полка НЕ блокируется: состав уходит каскадом -----------
+        const pubOnShelf = createPublication(ndb, { title: 'На полке' }, USER);
+        const busy = createShelf(ndb, { title: 'Занятая' }, USER);
+        addShelfItem(ndb, busy.id, pubOnShelf.id, 1, USER);
+        trashShelf(ndb, busy.id, USER);
+        const busyEntry = listTrash(ndb).shelves.find((s) => s.id === busy.id);
+        assert.equal(busyEntry?.blocked, false);
+        assert.equal(busyEntry?.blocking.items, 1);
+        const sweep2 = purgeTrash(ndb, [busy.id]);
+        assert.equal(sweep2.result.purged, 1);
+        assert.equal(sweep2.result.skipped, 0);
+        assert.equal(getShelf(ndb, busy.id), null);
+        // Публикация жива — полка ведёт себя как плейлист (карточка c80951ea).
+        assert.notEqual(getPublication(ndb, pubOnShelf.id), null);
+
+        // --- удерживающий слой блокирует purge в основе ----------------------
+        const held = createPublication(ndb, { title: 'Удерживаемая' }, USER);
+        const layer = createLayer(ndb, {
+          parentId: BASE_LAYER_ID,
+          title: 'Слой',
+          createdBy: USER,
+        });
+        ndb.useLayer(layer.id);
+        updatePublication(ndb, held.id, { subtitle: 'правка слоя' }, USER);
+        ndb.useLayer(BASE_LAYER_ID);
+        trashPublication(ndb, held.id, USER);
+
+        const heldEntry = listTrash(ndb).publications.find((p) => p.id === held.id);
+        assert.equal(heldEntry?.blocked, true);
+        assert.ok((heldEntry?.blocking.layers.length ?? 0) >= 1);
+        const sweep3 = purgeTrash(ndb, [held.id]);
+        assert.equal(sweep3.result.purged, 0);
+        assert.equal(sweep3.result.skipped, 1);
+        assert.notEqual(getPublication(ndb, held.id), null);
+
+        // --- в рабочем слое публикация заблокирована (purge только в основе) --
+        ndb.useLayer(layer.id);
+        const inLayer = createPublication(ndb, { title: 'Слоевая' }, USER);
+        trashPublication(ndb, inLayer.id, USER);
+        const layerEntry = listTrash(ndb).publications.find((p) => p.id === inLayer.id);
+        assert.equal(layerEntry?.blocked, true);
+        const sweep4 = purgeTrash(ndb, [inLayer.id]);
+        assert.equal(sweep4.result.purged, 0);
+        assert.equal(sweep4.result.skipped, 1);
+        assert.notEqual(getPublication(ndb, inLayer.id), null);
       } finally {
         ndb.close();
       }

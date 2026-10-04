@@ -1,14 +1,21 @@
 /**
  * Сквозные тесты `etn.guide` + `etn.ops` (задача 86ef2ff4, версия 0.8.3).
  *
- * Покрывают: реестр гайда (≤ 10 КБ) и инструкцию по `topic`; диспетчер
+ * Покрывают: реестр гайда (≤ 16 КБ) и инструкцию по `topic`; диспетчер
  * `etn.ops` — неизвестное действие, confirm-отказ для деструктивных, обход по
  * группам действий (locks, attachments, activity, layers, thoughts, trash,
- * export, metrics, networks, members, changes, comments, properties/usage).
- * Детальные семантики групп живут в профильных тестах (`mcp-locks`,
- * `mcp-activity`, `mcp-layers`, `mcp-p3`, `mcp-tools`, `mcp-networks-write`),
- * переведённых на `etn.ops` тем же кодмодом; здесь — сквозная проверка, что
- * каждая группа достижима через диспетчер.
+ * export, metrics, networks, members, changes, comments, properties/usage,
+ * publications, shelves). Детальные семантики групп живут в профильных тестах
+ * (`mcp-locks`, `mcp-activity`, `mcp-layers`, `mcp-p3`, `mcp-tools`,
+ * `mcp-networks-write`, `mcp-publications`), переведённых на `etn.ops` тем же
+ * кодмодом; здесь — сквозная проверка, что каждая группа достижима через
+ * диспетчер.
+ *
+ * Кап реестра (0.11.1, задача 094653b6): 10 240 → 16 384 Б. Реестр `etn.guide`
+ * без `topic` — ответ по запросу, а не префилл (в префилл идёт только краткое
+ * `description` инструмента `etn.guide`, см. `mcp-telemetry.test.ts`); перенос
+ * 25 публикационных/полочных действий добавил ~4,8 КБ строк «действие — когда
+ * нужно». Кап поднят ровно под это с запасом, чтобы описания не расползлись.
  *
  * Пропускается, если нативный биндинг `better-sqlite3` недоступен.
  */
@@ -34,7 +41,7 @@ import {
 } from './mcp-helpers.js';
 
 describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
-  it('etn.guide без topic отдаёт реестр ≤ 10 КБ и перечисляет все действия', async () => {
+  it('etn.guide без topic отдаёт реестр ≤ 16 КБ и перечисляет все действия', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -43,8 +50,8 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.equal(res.isError, undefined, toolText(res));
         const text = toolText(res);
         assert.ok(
-          Buffer.byteLength(text, 'utf8') <= 10_240,
-          `реестр гайда ${Buffer.byteLength(text, 'utf8')} Б — превышает бюджет 10 КБ`,
+          Buffer.byteLength(text, 'utf8') <= 16_384,
+          `реестр гайда ${Buffer.byteLength(text, 'utf8')} Б — превышает бюджет 16 КБ`,
         );
         for (const action of OPS_ACTION_NAMES) {
           assert.ok(text.includes(`**${action}**`), `реестр не упоминает действие ${action}`);

@@ -2,14 +2,16 @@
  * Trash (mark-for-deletion) domain service (task S13, docs/03-server-api.md
  * §14b; docs/02-data-model.md §3.1.2).
  *
- * There is no separate "trash" table: the trash is the set of thoughts and
- * links with `marked_for_deletion = 1`. Listing it just reads those rows and
- * precomputes each one's blocking check so the «Корзина» dialog does not fire
- * a per-row request; purging physically deletes every unblocked marked row.
+ * There is no separate "trash" table: the trash is the set of rows with
+ * `marked_for_deletion = 1` — thoughts, links and (0.11.1, задача c59ce742)
+ * publications and shelves. Listing it just reads those rows and precomputes
+ * each one's blocking check so the «Корзина» dialog does not fire a per-row
+ * request; purging physically deletes every unblocked marked row.
  *
- * The actual delete runs through the same {@link deleteThought} /
- * {@link deleteLink} domain functions as a direct `DELETE`, so the blocking
- * check stays in exactly one place.
+ * The actual delete runs through the same domain functions as a direct
+ * `DELETE` ({@link deleteThought} / {@link deleteLink} /
+ * {@link purgePublication} / {@link deleteShelf}), so the blocking and
+ * base-only rules stay in exactly one place.
  *
  * Веха 9 (задача 8b2efe2d): {@link purgeTrash} не открывает транзакцию сам —
  * она исполняется фасадами через обёртку {@link runWrite}, которая даёт
@@ -21,24 +23,38 @@
 import type {
   TrashLinkEntry,
   TrashListResult,
+  TrashPublicationEntry,
   TrashPurgeResult,
+  TrashShelfEntry,
   TrashThoughtEntry,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { isBaseContext } from '../db/layer-write.js';
 import { getLink, checkLinkDeletion, deleteLink } from './link-service.js';
 import { getThought, checkThoughtDeletion, deleteThought } from './thought-service.js';
+import {
+  checkPublicationDeletion,
+  checkShelfDeletion,
+  deleteShelf,
+  getPublication,
+  getShelf,
+  purgePublication,
+} from './publication-service.js';
 import type { AnyWriteEvent, WriteActivityEntry, WriteOutcome } from './write-wrapper.js';
 
 /**
  * Full outcome of a purge: the public {@link TrashPurgeResult} plus the ids
  * that were actually deleted, so the route/MCP layer can fan out the standard
- * `thought.deleted` / `link.deleted` real-time events. Callers strip the id
- * lists from the wire response (03-server-api.md §14b exposes only the counts).
+ * `thought.deleted` / `link.deleted` / `publication.purged` / `shelf.deleted`
+ * real-time events. Callers strip the id lists from the wire response
+ * (03-server-api.md §14b exposes only the counts).
  */
 export interface TrashPurgeOutcome extends TrashPurgeResult {
   deleted_thought_ids: string[];
   deleted_link_ids: string[];
+  deleted_publication_ids: string[];
+  deleted_shelf_ids: string[];
 }
 
 /** Исход очистки для обёртки записи: результат + события + журнал. */
@@ -67,11 +83,22 @@ function trashCheckLink(ndb: NetworkDb, id: string) {
  * because «Удалить всё, что возможно» regularly empties it.
  */
 export function listTrash(ndb: NetworkDb): TrashListResult {
+  const base = isBaseContext(ndb);
   const thoughtIds = (
     ndb.prepare('SELECT id FROM thoughts_v WHERE marked_for_deletion = 1').all() as { id: string }[]
   ).map((r) => r.id);
   const linkIds = (
     ndb.prepare('SELECT id FROM links_v WHERE marked_for_deletion = 1').all() as { id: string }[]
+  ).map((r) => r.id);
+  const publicationIds = (
+    ndb
+      .prepare('SELECT id FROM publications_v WHERE marked_for_deletion = 1')
+      .all() as { id: string }[]
+  ).map((r) => r.id);
+  const shelfIds = (
+    ndb
+      .prepare('SELECT id FROM shelves_v WHERE marked_for_deletion = 1')
+      .all() as { id: string }[]
   ).map((r) => r.id);
 
   const thoughts: TrashThoughtEntry[] = [];
@@ -90,7 +117,34 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
     links.push({ ...link, blocked: check.blocked, blocking: check.blocking });
   }
 
-  return { thoughts, links };
+  // Публикации (0.11.1, задача c59ce742; требование 200b87be): та же проверка
+  // блокировки, что у `DELETE /publications/{id}` (живые значения свойств типа
+  // «Публикация» + удерживающие слои), плюс физическая очистка возможна только
+  // в основе — в рабочем слое строка показывается как заблокированная, чтобы
+  // диалог корзины не обещал недоступное удаление.
+  const publications: TrashPublicationEntry[] = [];
+  for (const id of publicationIds) {
+    const publication = getPublication(ndb, id);
+    if (publication === null) continue; // deleted concurrently — defensive
+    const check = checkPublicationDeletion(ndb, id);
+    publications.push({
+      ...publication,
+      blocked: check.blocked || !base,
+      blocking: check.blocking,
+    });
+  }
+
+  // Полки: собственных блокировок нет (состав уходит каскадом, публикации
+  // живы); блокирует только рабочий слой — purge доступен лишь в основе.
+  const shelves: TrashShelfEntry[] = [];
+  for (const id of shelfIds) {
+    const shelf = getShelf(ndb, id);
+    if (shelf === null) continue; // deleted concurrently — defensive
+    const check = checkShelfDeletion(ndb, id);
+    shelves.push({ ...shelf, blocked: check.blocked, blocking: check.blocking });
+  }
+
+  return { thoughts, links, publications, shelves };
 }
 
 /**
@@ -118,8 +172,11 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
 export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeWrite {
   let purged = 0;
   let skipped = 0;
+  const base = isBaseContext(ndb);
   const deletedThoughtIds: string[] = [];
   const deletedLinkIds: string[] = [];
+  const deletedPublicationIds: string[] = [];
+  const deletedShelfIds: string[] = [];
   const events: AnyWriteEvent[] = [];
   const activity: WriteActivityEntry[] = [];
 
@@ -137,6 +194,8 @@ export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeWrite {
   const trash = listTrash(ndb);
   const thoughtSnapshots = new Map(trash.thoughts.map((t) => [t.id, t]));
   const linkSnapshots = new Map(trash.links.map((l) => [l.id, l]));
+  const publicationSnapshots = new Map(trash.publications.map((p) => [p.id, p]));
+  const shelfSnapshots = new Map(trash.shelves.map((s) => [s.id, s]));
 
   const thoughtIds = (
     ndb.prepare('SELECT id FROM thoughts_v WHERE marked_for_deletion = 1').all() as { id: string }[]
@@ -145,6 +204,18 @@ export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeWrite {
     .filter(takeId);
   const linkIds = (
     ndb.prepare('SELECT id FROM links_v WHERE marked_for_deletion = 1').all() as { id: string }[]
+  )
+    .map((r) => r.id)
+    .filter(takeId);
+  const publicationIds = (
+    ndb
+      .prepare('SELECT id FROM publications_v WHERE marked_for_deletion = 1')
+      .all() as { id: string }[]
+  )
+    .map((r) => r.id)
+    .filter(takeId);
+  const shelfIds = (
+    ndb.prepare('SELECT id FROM shelves_v WHERE marked_for_deletion = 1').all() as { id: string }[]
   )
     .map((r) => r.id)
     .filter(takeId);
@@ -190,6 +261,43 @@ export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeWrite {
     purged += 1;
   }
 
+  // Публикации: правила те же, что у `DELETE /publications/{id}` — блокировки
+  // (значения свойств «Публикация», удерживающие слои) и физическое удаление
+  // только в основе. В рабочем слое помеченная публикация пропускается, пока
+  // не сольётся в основу.
+  for (const id of publicationIds) {
+    if (getPublication(ndb, id) === null) {
+      deletedPublicationIds.push(id);
+      purged += 1;
+      continue;
+    }
+    if (!base || checkPublicationDeletion(ndb, id).blocked) {
+      skipped += 1;
+      continue;
+    }
+    purgePublication(ndb, id);
+    deletedPublicationIds.push(id);
+    purged += 1;
+  }
+  // Полки — после публикаций (порядок не принципиален: своих блокировок у
+  // полки нет, состав уходит каскадом, публикации живы). В рабочем слое
+  // помеченная полка пропускается до слияния в основу.
+  for (const id of shelfIds) {
+    const shelf = getShelf(ndb, id);
+    if (shelf === null) {
+      deletedShelfIds.push(id);
+      purged += 1;
+      continue;
+    }
+    if (!base) {
+      skipped += 1;
+      continue;
+    }
+    deleteShelf(ndb, id);
+    deletedShelfIds.push(id);
+    purged += 1;
+  }
+
   // События и журнал — из фактически удалённого: снимок берём из
   // предоперационных карт (каскадно исчезнувшие связи в них есть).
   for (const id of deletedThoughtIds) {
@@ -206,6 +314,20 @@ export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeWrite {
       activity.push({ kind: 'link', action: 'deleted', link: snapshot });
     }
   }
+  for (const id of deletedPublicationIds) {
+    events.push({ type: 'publication.purged', data: { id } });
+    const snapshot = publicationSnapshots.get(id);
+    if (snapshot !== undefined) {
+      activity.push({ kind: 'publication', action: 'deleted', publication: snapshot });
+    }
+  }
+  for (const id of deletedShelfIds) {
+    events.push({ type: 'shelf.deleted', data: { id } });
+    const snapshot = shelfSnapshots.get(id);
+    if (snapshot !== undefined) {
+      activity.push({ kind: 'shelf', action: 'deleted', shelf: snapshot });
+    }
+  }
 
   return {
     result: {
@@ -213,6 +335,8 @@ export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeWrite {
       skipped,
       deleted_thought_ids: deletedThoughtIds,
       deleted_link_ids: deletedLinkIds,
+      deleted_publication_ids: deletedPublicationIds,
+      deleted_shelf_ids: deletedShelfIds,
     },
     events,
     activity,

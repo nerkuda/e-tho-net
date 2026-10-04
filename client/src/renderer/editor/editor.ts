@@ -52,7 +52,7 @@ import {
 } from '@etn/shared';
 
 import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
-import { invalidateIndicators, invalidateRef } from '../canvas/canvas.js';
+import { invalidateRef } from '../canvas/canvas.js';
 // Канон значка и стиля мысли живёт в общей фабрике облачка: иконка-кнопка
 // заголовка редактора рисуется им же, а сид диалога настроек читает
 // разрешённый стиль через resolveCloudStyle (редактор полей, не представление).
@@ -60,9 +60,9 @@ import { applyThoughtIcon, resolveCloudStyle } from '../lib/thought-cloud.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { noteThoughtWillOpen } from '../history.js';
-import { inNeighbourhood, reloadTypeCatalogues } from '../realtime-ui.js';
+import { inNeighbourhood } from '../lib/focus-neighbourhood.js';
+import { reloadTypeCatalogues } from '../lib/type-catalogues.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
-import { invalidatePinnedBar, invalidatePinnedRef } from '../screens/pinned-bar.js';
 import { invalidateSelectionThought } from '../selection/selection.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
 import {
@@ -81,20 +81,18 @@ import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
-// Набор ВЛОЖЕНИЙ показанной сущности (ошибка abd25adb): realtime-события
-// `attachment.created/updated/deleted` от другого клиента обязаны обновить
-// вкладку «Вложения» открытого редактора. `created` несёт владельца снимком, а
-// `updated`/`deleted` — только id, поэтому владельца находит индекс показанных
-// вложений (lib/attachment-events.ts).
+// Набор ВЛОЖЕНИЙ показанной сущности (ошибки 05bd8809, abd25adb): изменения
+// приходят кэш-путём слоя — роутер гасит ключ `attachments:@owner`, локальные
+// производители зовут `invalidateQueries` того же ключа. Локальный канал
+// `etn:attachments-changed` и индекс показанных вложений снесены (G4).
 import {
-  attachmentChangeFacts,
-  forgetShownAttachment,
-  isAttachmentEventType,
-  sameAttachmentOwner,
-  shownAttachmentOwner,
-  type AttachmentEventType,
-  type AttachmentOwner,
-} from '../lib/attachment-events.js';
+  asRealtimeCause,
+  invalidateQueries,
+  onQueryInvalidated,
+  queryKeys,
+  signalThoughtSaved,
+  signalThoughtUpdated,
+} from '../lib/live/index.js';
 // Набор свойств показанной сущности зависит от определений свойств её типа
 // (ошибка 74b94c26): realtime-события `property-definition.*` и локальные
 // уведомления редактора типа/менеджера свойств обязаны перечитать вкладку
@@ -114,7 +112,6 @@ import {
   type ShownTypeChain,
   type TypeChangeFacts,
 } from '../lib/type-definitions.js';
-import { onRealtimeEvent } from '../realtime.js';
 import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
@@ -131,7 +128,8 @@ import {
   type StripElements,
 } from '../screens/tabs/tab-overflow.js';
 import { showIconDialog, type IconPickResult } from './icon-dialog.js';
-import { editMarkdownField } from './markdown-field.js';
+import { editMarkdownField, focusMarkdownFieldAt } from './markdown-field.js';
+import { commentFocusStep } from './comment-focus.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 import { showThoughtTypeEditor } from '../screens/type-manager.js';
 import { openPropertyManagerEditor } from '../screens/property-manager.js';
@@ -146,6 +144,8 @@ import {
   releaseHeld,
   type LockHandle,
 } from '../lib/lock-guard.js';
+import { disposePublicationCard, showPublicationTarget } from './publication-card.js';
+import { t } from '../lib/i18n.js';
 
 /** What the editor currently edits. */
 export interface EditorContext {
@@ -415,6 +415,10 @@ export async function setThoughtEditorTarget(thought: Thought): Promise<void> {
 /** Current editor context: a picked thought/link, else the focused thought. */
 export function currentEditorContext(): EditorContext | null {
   const target = store.state.editorTarget;
+  // Третий вариант цели — публикация (0.11.1, ADR eb687eea): карточку рисует
+  // отдельный модуль `publication-card.ts`, контекст мысли/связи здесь не
+  // строится (иначе render() показал бы мысль фокуса вместо карточки).
+  if (target !== null && target.kind === 'publication') return null;
   if (target !== null && target.kind === 'link') {
     return { ownerType: 'link', ownerId: target.id, thought: null, link: target.link };
   }
@@ -463,6 +467,13 @@ let scrollBox: HTMLElement | null = null;
 let positionButton: HTMLButtonElement | null = null;
 let titleEl: HTMLElement | null = null;
 let lastSignature = '';
+/** Подпись отрисовки карточки публикации (третий EditorTarget, ADR eb687eea). */
+let lastPublicationSignature = '';
+
+/** Удаляет детей узла (без `replaceChildren`/`clear` — сторож keyed-списков). */
+function emptyChildren(node: HTMLElement): void {
+  while (node.firstChild !== null) node.removeChild(node.firstChild);
+}
 
 /**
  * Identity part of the render signature (bug 6b757336; задача 90b2256e):
@@ -656,6 +667,8 @@ export function mountEditor(editorHost: HTMLElement): void {
   stalePanes = new Set();
   lastSignature = '';
   lastIdentitySignature = '';
+  lastPublicationSignature = '';
+  disposePublicationCard();
 
   // The collapse state is global per group id (ee745368): it survives entity
   // changes and restarts, so switching to another thought does not restore
@@ -689,29 +702,22 @@ export function mountEditor(editorHost: HTMLElement): void {
     registerMetadataTab();
 
     // Изменение НАБОРА ВЛОЖЕНИЙ владельца обновляет и счётчик, и список вкладки
-    // «Вложения». Два источника, оба сходятся в этом канале:
-    //  * локальный (ошибка 05bd8809) — вставка картинки в поле markdown,
-    //    «Назначить иконкой мысли» из файла, правки на самой вкладке: свои
-    //    производители шлют событие сами (своё realtime-эхо отбрасывает
-    //    G8-applier главного процесса);
-    //  * realtime (ошибка abd25adb) — другой клиент или MCP: обработчик
-    //    `attachment.*` ({@link applyAttachmentRealtime}) гейтит по показанной
-    //    сущности и ПЕРЕиспускает это же событие — одна точка применения, показанная
-    //    вкладка перечитывает список на месте, скрытая — сбрасывает кэш.
-    // Раньше (05bd8809) обновлялся только счётчик: вкладка, построенная при первом
-    // заходе, кэшируется и при показе «Комментария» отключается от DOM, а её
-    // собственный слушатель события в этот момент самоотписывается и список не
-    // перечитывает — прежний список возвращался на экран до смены сущности. Кэш
-    // сбрасывается тем же механизмом, что и прочие инвалидации (см.
-    // invalidateAttachmentsPanes). Один документный слушатель на всё время жизни
-    // приложения.
-    document.addEventListener('etn:attachments-changed', (event) => {
-      const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
+    // «Вложения». Оба источника (локальные правки и чужие realtime-события)
+    // сходятся в одном ключе слоя `attachments:@ownerType:@ownerId`: роутер гасит
+    // его на события `attachment.*`, производители — через `invalidateQueries`.
+    // Гейт по показанной сущности — по префиксу ключа (чужой владелец не
+    // задевает вкладку). Показанная вкладка перечитывает список на месте, скрытая
+    // — сбрасывает кэш (см. `invalidateAttachmentsPanes`, ошибка 05bd8809).
+    // Подписка живёт всё время жизни приложения (регистрация вкладок — один раз),
+    // как и прежний документный слушатель; отписка не требуется.
+    onQueryInvalidated((prefix) => {
       const ctx = renderCtx;
-      if (ctx !== null && detail?.ownerType === ctx.ownerType && detail?.ownerId === ctx.ownerId) {
-        refreshTabCount('attachments');
-        invalidateAttachmentsPanes();
+      if (ctx === null) return;
+      if (prefix !== queryKeys.attachmentsAll() && prefix !== queryKeys.attachments(ctx.ownerType, ctx.ownerId)) {
+        return;
       }
+      refreshTabCount('attachments');
+      invalidateAttachmentsPanes();
     });
 
     // Изменение ОПРЕДЕЛЕНИЙ СВОЙСТВ типа показанной сущности перечитывает
@@ -720,21 +726,21 @@ export function mountEditor(editorHost: HTMLElement): void {
     //    `property-definition.*` (привязка свойства у типа) и
     //    `property-registry.*` (само свойство реестра);
     //  * локальный — правка в редакторе типа / менеджере свойств: своё
-    //    realtime-эхо до рендерера не доходит (главный процесс его
+    //    realtime-эхо приходит асинхронно (B1) (главный процесс его
     //    отбрасывает, G8 applier), поэтому производители уведомляют сами —
     //    владельцем (типом) либо id реестрового свойства.
     // Гейт по цепочке типов показанной сущности — в lib/type-definitions.ts.
-    onRealtimeEvent((evt) => {
+    // Чужой путь идёт через СЛОЙ (G5): роутер гасит `types-catalog` на
+    // `property-definition.*`/`property-registry.*`/`thought-type.*`/`link-type.*`,
+    // причина инвалидации — само realtime-событие. Своего `onRealtimeEvent` у
+    // редактора больше нет.
+    onQueryInvalidated((prefix, _keys, cause) => {
+      if (prefix !== queryKeys.typesCatalog()) return;
+      const evt = asRealtimeCause(cause);
+      if (evt === null) return;
       // Чужие сети: событие приходит на открытый сокет соседней вкладки, но к
       // показанной сущности этой сети не относится.
       if (evt.network_id !== store.state.networkId) return;
-      // Изменение набора ВЛОЖЕНИЙ показанной сущности (ошибка abd25adb): другой
-      // клиент или MCP добавил/изменил/удалил вложение — вкладка «Вложения»
-      // перечитывает список и счётчик без переоткрытия мысли.
-      if (isAttachmentEventType(evt.type)) {
-        applyAttachmentRealtime(evt.type, evt.data);
-        return;
-      }
       if (isDefinitionEventType(evt.type)) {
         applyDefinitionChange(definitionChangeFacts(evt.type, evt.data));
         return;
@@ -981,17 +987,17 @@ function invalidateDefinitionDependentPanes(): void {
  * (ошибка 05bd8809: вставка картинки в комментарий увеличивала счётчик вкладки,
  * но её список оставался прежним до переоткрытия мысли).
  *
- * Событие `etn:attachments-changed` шлют все производители вложений редактора:
- * вставка файла из буфера в поле markdown (markdown-field.ts — постоянный
- * комментарий и текст вложения) и «Назначить иконкой мысли» из файла
- * (editor.ts). Гейт по владельцу у вызывающего: событие адресуется сущности, а
- * не вкладке, поэтому вкладки другой сущности не трогаются.
+ * Изменение набора приходит кэш-путём слоя (G4 тех.проекта 269016e2): роутер
+ * гасит ключ `attachments:@ownerType:@ownerId` на чужие события `attachment.*`,
+ * локальные производители (вставка файла в поле markdown, «Назначить иконкой
+ * мысли» из файла) зовут `invalidateQueries` того же ключа. Гейт по владельцу —
+ * по префиксу ключа (см. подписку на инвалидации в `registerAllTabs`).
  *
  * Почему именно сброс кэша:
  *  * вкладка кэшируется в `builtPanes` и переживает переход на «Комментарий»;
- *    её собственный слушатель события при отключении от DOM самоотписывается
- *    (защита от утечки, attachments.ts) и список не перечитывает — именно так
- *    появлялся устаревший список;
+ *    её собственный слушатель инвалидаций при отключении от DOM
+ *    самоотписывается (защита от утечки, attachments.ts) и список не
+ *    перечитывает — именно так появлялся устаревший список;
  *  * следующая активация собирает вкладку заново и читает список с сервера —
  *    вложение из вставки в комментарий видно сразу, без переоткрытия мысли.
  *
@@ -1004,65 +1010,6 @@ function invalidateDefinitionDependentPanes(): void {
 function invalidateAttachmentsPanes(): void {
   if (shownTab === 'attachments') return;
   invalidatePanes(['attachments']);
-}
-
-/** Владелец, показанный в редакторе сейчас; `null` — цели нет. */
-function shownOwner(): AttachmentOwner | null {
-  const ctx = renderCtx;
-  if (ctx === null) return null;
-  return { ownerType: ctx.ownerType, ownerId: ctx.ownerId };
-}
-
-/**
- * Применяет к открытому редактору realtime-изменение ВЛОЖЕНИЙ (ошибка abd25adb):
- * другой клиент или MCP `etn.attachments.*` добавил, изменил или удалил
- * вложение показанной сущности — вкладка «Вложения» (её список и счётчик)
- * обновляется без переоткрытия мысли.
- *
- * Гейт — по показанной сущности. `created` несёт владельца снимком; у
- * `updated`/`deleted` владельца в событии нет (04-realtime.md §4.4), поэтому его
- * находит индекс вложений, прочитанных для показанной сущности
- * ({@link rememberShownAttachments} наполняется счётчиком вкладки и её списком).
- * Чужие сети отсечены вызывающим по `network_id`.
- *
- * Применение идёт тем же локальным каналом `etn:attachments-changed`, что и
- * собственные правки: диспетчеризация не дублирует обработку, потому что
- * realtime-путь доставляет только ЧУЖИЕ записи (своё эхо отбрасывает
- * G8-applier главного процесса), а локальные производители о чужих правках не
- * уведомляют. Слушатель канала обновляет счётчик и сбрасывает кэш скрытой
- * вкладки; показанная вкладка перечитывает список на месте — встроенный
- * просмотрщик-редактор текстового вложения (CodeMirror) не разрушается.
- *
- * Вложение, которое ушло из показанной сущности (удалено или перенесено в
- * другую), снимается с индекса, чтобы его дальнейшие события её не задевали.
- */
-function applyAttachmentRealtime(type: AttachmentEventType, data: unknown): void {
-  const shown = shownOwner();
-  if (shown === null) return;
-  const facts = attachmentChangeFacts(type, data);
-  const known = facts.attachmentId === null ? null : shownAttachmentOwner(facts.attachmentId);
-  const wasShown = known !== null && sameAttachmentOwner(known, shown);
-  // Прибывает в показанную сущность: `created` — всегда, `updated` — перенос.
-  // Тип владельца в `changes` может отсутствовать (он не менялся) — тогда
-  // вложение прибыло именно в свою цель, и показанный тип верен.
-  const arrives =
-    facts.ownerId !== null &&
-    facts.ownerId === shown.ownerId &&
-    (facts.ownerType === null || facts.ownerType === shown.ownerType);
-  if (!wasShown && !arrives) return;
-  // Ушло из показанной сущности: удалено либо перенесено (у `updated` есть
-  // владелец, и он не показанный). Чистый `updated` без владельца оставляет id
-  // в индексе — вложение никуда не делось.
-  const left =
-    facts.attachmentId !== null &&
-    wasShown &&
-    (type === 'attachment.deleted' || (facts.ownerId !== null && !arrives));
-  if (left && facts.attachmentId !== null) forgetShownAttachment(facts.attachmentId);
-  document.dispatchEvent(
-    new CustomEvent('etn:attachments-changed', {
-      detail: { ownerType: shown.ownerType, ownerId: shown.ownerId },
-    }),
-  );
 }
 
 // Правка реестрового свойства (ошибка 98aa0889) идёт тем же путём: сеть/слой
@@ -1407,7 +1354,54 @@ function retargetHeader(ctx: EditorContext): boolean {
  * kind must reuse the skeleton, not tear the panel down.
  */
 async function render(): Promise<void> {
-  if (host === null || scrollBox === null || positionButton === null) return;
+  if (host === null || scrollBox === null || positionButton === null || titleEl === null) return;
+
+  // Третий вариант цели — карточка публикации (0.11.1, ADR eb687eea). Она
+  // рисуется отдельным модулем `publication-card.ts` в том же хосте панели;
+  // канв-специфичные механики редактора (история, halo, выделение) не
+  // применяются — их отключает `currentEditorContext()` (возвращает null).
+  const pubTarget = store.state.editorTarget;
+  if (pubTarget !== null && pubTarget.kind === 'publication') {
+    // Версия публикации в подписи НЕ участвует (ошибка 82aada28): карточка
+    // хранит актуальный снимок сама и обновляется на месте, а смена версии на
+    // каждом сохранении пересобирала бы панель и теряла фокус.
+    const pubSignature = `publication|${pubTarget.id}|${store.state.editorPosition}`;
+    if (pubSignature !== lastPublicationSignature) {
+      // Хост очищаем только при ВХОДЕ в карточку публикации. Переключение
+      // публикация→публикация идёт переадресацией внутри уже стоящего узла
+      // (`showPublicationTarget` → `retargetPublicationCard`), панель не мигает
+      // (замечание 7 приёмки 5de0332d).
+      const entering = lastPublicationSignature === '';
+      lastPublicationSignature = pubSignature;
+      if (entering) emptyChildren(scrollBox);
+      // Карточка публикации рисуется отдельным модулем и НЕ является контекстом
+      // мысли/связи: гасим кэш последней отрисованной сущности и `renderCtx`.
+      // Иначе при переходе от карточки к мысли дешёвый гейт store-подписки
+      // (`liveRenderedKey`) может счесть мысль «уже отрисованной» и пропустить
+      // перерисовку — панель остаётся карточкой, а `focusEditorComment`
+      // навсегда ждёт поле комментария (замечание 2 приёмки 5de0332d).
+      liveRenderedKey = null;
+      renderCtx = null;
+    }
+    titleEl.textContent = t('publication.card.title');
+    showPublicationTarget(
+      { scrollBox },
+      pubTarget.id,
+      pubTarget.publication,
+    );
+    return;
+  }
+  if (lastPublicationSignature !== '') {
+    // Уходим с карточки публикации на мысль/связь: отпустить её подписки,
+    // очистить хост и сбросить подписи, чтобы следующий render пошёл полным
+    // путём.
+    lastPublicationSignature = '';
+    lastSignature = '';
+    lastIdentitySignature = '';
+    disposePublicationCard();
+    emptyChildren(scrollBox);
+  }
+
   const ctx = currentEditorContext();
 
   const layerId = store.state.currentLayer?.id ?? '';
@@ -1832,34 +1826,79 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
  * switches it into edit mode — CodeMirror mounts focused with the caret at
  * the end.
  */
-function focusEditorComment(): void {
-  if (scrollBox === null) return;
-  if (shownTab !== 'main') {
-    // The first tab button is «Комментарий» — click reuses the regular lazy
-    // pane activation instead of duplicating it here (synchronous: by the
-    // next line the main pane is the active one).
-    const tab = scrollBox.querySelector<HTMLButtonElement>('.editor-tab');
-    if (tab === null) return;
-    tab.click();
-  }
-  // The comment group is the bottom section of the tab; when the user has it
-  // collapsed, expand it (a click on the header toggles — only click when
-  // the persisted state says it is collapsed).
-  if (store.state.collapsedGroups['permanent'] === true) {
-    scrollBox.querySelector<HTMLElement>('.main-bottom .group > .group-header')?.click();
-  }
-  const deadline = Date.now() + 5000;
+/** id мысли, открытой в редакторе (override редактора, иначе фокус). */
+function shownThoughtId(): string {
+  const target = store.state.editorTarget;
+  if (target !== null && target.kind === 'thought') return target.id;
+  return store.state.focus?.focused.id ?? '';
+}
+
+function focusEditorComment(thoughtId: string, findText?: string): void {
+  const deadline = Date.now() + 8000;
+  let activated = false;
   const tick = (): void => {
-    // Каркас комментария — оболочка `lib/ui/comment.ts` (задача 9cb87c42).
-    const field = scrollBox?.querySelector<HTMLElement>('.ui-comment .md-field') ?? null;
-    if (field === null || field.isConnected === false) {
-      // Still loading (or a rebuild raced us) — keep waiting a bit.
+    if (scrollBox === null) return;
+    // Владелец ОТРИСОВАННОЙ панели (не `editorTarget`): при холодной смене
+    // мысли панель держит предыдущую сущность, пока грузится новая, и поле
+    // старой мысли не должно приниматься за целевое (блокер 4 ea1b5f14).
+    const renderedOwnerId =
+      renderCtx !== null && renderCtx.ownerType === 'thought' ? renderCtx.ownerId : null;
+    const field =
+      scrollBox?.querySelector<HTMLElement>('.ui-comment .md-field') ?? null;
+    const step = commentFocusStep({
+      renderedOwnerId,
+      thoughtId,
+      hasField: field !== null && field.isConnected !== false,
+      activated,
+    });
+    if (step === 'wait') {
       if (Date.now() < deadline) window.setTimeout(tick, 50);
       return;
     }
-    editMarkdownField(field);
+    if (step === 'activate') {
+      if (shownTab !== 'main') {
+        // The first tab button is «Комментарий» — click reuses the regular lazy
+        // pane activation instead of duplicating it here. Пока панель занята
+        // карточкой публикации, кнопок вкладок нет — НЕ помечаем активацию
+        // выполненной, чтобы повторить попытку после отрисовки мысли (иначе
+        // вкладка «Свойства» не переключилась бы, задача 77cce0ba, п.3).
+        const commentTab = scrollBox.querySelector<HTMLButtonElement>('.editor-tab');
+        if (commentTab !== null) {
+          activated = true;
+          commentTab.click();
+        }
+      } else {
+        activated = true;
+      }
+      // The comment group is the bottom section of the tab; when collapsed,
+      // expand it (a click toggles — click only when persisted state says so).
+      if (activated && store.state.collapsedGroups['permanent'] === true) {
+        scrollBox.querySelector<HTMLElement>('.main-bottom .group > .group-header')?.click();
+      }
+      // Активация вкладки/группы могла пересобрать панель — даём тик и
+      // перезапрашиваем поле уже у подтверждённой мысли.
+      window.setTimeout(tick, 0);
+      return;
+    }
+    // step === 'focus': поле нужной мысли смонтировано.
+    // С офсетом — `focusMarkdownFieldAt` сам включает правку и ставит каретку;
+    // без офсета — обычный вход в правку (каретка в конец).
+    if (findText !== undefined && findText !== '') focusMarkdownFieldAt(field!, findText);
+    else editMarkdownField(field!);
   };
   window.setTimeout(tick, 0);
+}
+
+/**
+ * Открывает мысль в редакторе, активирует вкладку «Комментарий», включает режим
+ * правки постоянного комментария и ставит курсор: по вхождению `findText` в
+ * исходнике комментария, иначе — в начало. Точка входа двойного клика по тексту
+ * публикации (задача ea1b5f14, пункт 4): точный офсет рендер-узла к markdown
+ * недостижим — курсор идёт к началу абзаца, ошибок не бросаем.
+ */
+export function openThoughtCommentEditor(id: string, findText?: string): void {
+  openThoughtInEditor(id);
+  focusEditorComment(id, findText);
 }
 
 // ---------------------------------------------------------------------------
@@ -1928,7 +1967,7 @@ function isVersionConflict(err: unknown): boolean {
  * Reflects a successfully updated thought in every place it may currently be
  * shown: the canvas focus cloud / zone clouds, the editor (the focus follower
  * or a picked target), the structures results list, the pinned bar and the
- * history bar. The server never echoes realtime events to the acting client
+ * history bar. B1: the acting client receives its own events too, asynchronously
  * (04-realtime.md §5), so the REST response is the only immediate feedback —
  * without this the old icon/title/style would stay until the next focus fetch.
  *
@@ -1936,8 +1975,17 @@ function isVersionConflict(err: unknown): boolean {
  * «Назначить иконкой мысли» (attachments.ts) — both mutate the same visual
  * fields of a thought the actor may see in several views at once.
  */
-export function reflectThoughtUpdate(updated: Thought): void {
+export function reflectThoughtUpdate(
+  updated: Thought,
+  changes: Record<string, unknown> = {},
+): void {
   const id = updated.id;
+  // Общий путь слоя (ошибка 4b3d1940): REST-ответ кладём в нормализованный кэш
+  // и гасим те же слой-ключи, что роутер на `thought.updated` — прежде всего
+  // `focus:@id`. Без этого мысль, видимая строкой отбора холста «не в фокусе»
+  // (не сосед фокуса), не перерисовывалась до собственного realtime-эха, а
+  // кэш-потребители (закреплённые, wiki-заголовки) не видели свежую сущность.
+  signalThoughtUpdated(updated, changes);
   const focus = store.state.focus;
   if (focus !== null) {
     if (focus.focused.id === id) {
@@ -1946,7 +1994,7 @@ export function reflectThoughtUpdate(updated: Thought): void {
     } else if (inNeighbourhood(id)) {
       // The thought is visible on the canvas as a focus neighbour — refetch
       // the focus so its icon/type/colours repaint right away. The actor gets
-      // no realtime echo, so the stale cached ref must go first.
+      // own event arrives asynchronously, so the stale cached ref must go first.
       invalidateRef(id);
       scheduleRefresh();
     }
@@ -1967,14 +2015,9 @@ export function reflectThoughtUpdate(updated: Thought): void {
   // The structures results list is server-rendered; reload it so the saved
   // icon/title/type appear right away.
   scheduleStructuresRefresh();
-  // The pinned bar and the history bar render the thought from their own
-  // cached/last-signature state and don't pick up a store patch alone (the
-  // actor gets no realtime echo — same reasoning as above). Force both to
-  // refetch so a changed icon/colour/title shows up there too.
-  if (store.state.pins.includes(id)) {
-    invalidatePinnedRef(id);
-    invalidatePinnedBar();
-  }
+  // Панель закреплённых читает метаданные чипа из нормализованного кэша слоя
+  // (G5): свежая сущность и срез `pins` уже погашены общим путём
+  // (`signalThoughtUpdated`) — отдельного вызова здесь не нужно.
   invalidateHistoryBar();
   // Панель выделенных держит свой кэш строк и подписана лишь на состав
   // выделения: переименование/смена оформления выделенной мысли обновляет её
@@ -2005,9 +2048,13 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
       await applyCommentTemplateIfEmpty(networkId, ctx.ownerId, patch.type_id);
     }
     // Reflect the change wherever the entity is shown (see the helper) — the
-    // actor gets no realtime echo, so the stores are patched from the save
-    // response.
-    reflectThoughtUpdate(updated);
+    // actor's own event arrives asynchronously, so the stores are patched from the save
+    // response. `patch` уточняет условные ключи слоя (вход/выход из отбора).
+    reflectThoughtUpdate(updated, patch as Record<string, unknown>);
+    // Своя правка полей мысли: открытый документ публикации помечает живой
+    // текст устаревшим (заголовок влияет на отбор) / правит заголовок блока —
+    // сигнал слоя, своего realtime-эха нет (до B1).
+    signalThoughtSaved(ctx.ownerId, patch as Record<string, unknown>);
     // A type change re-skins the focus cloud (type icon/colours) — reconcile
     // the whole focus from the server so nothing lags behind the patch.
     if (patch.type_id !== undefined) {
@@ -2034,7 +2081,7 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<boolean> {
   const networkId = requireNetworkId();
   try {
     const updated = await etn.links.update(networkId, link.id, patch, link.version);
-    // Repaint the line at once — the actor gets no realtime echo
+    // Repaint the line at once — the actor's own event arrives asynchronously
     // (04-realtime.md §5), so the focus edges are patched from the response.
     patchFocusEdge(updated);
     if (patch.active !== undefined) {
@@ -2046,7 +2093,7 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<boolean> {
       store.update({ editorTarget: { kind: 'link', id: updated.id, link: updated } });
     }
     // The structures results list is server-rendered; reload it so the saved
-    // link type/style show up right away (the actor gets no realtime echo).
+    // link type/style show up right away (the actor's own event arrives later).
     scheduleStructuresRefresh();
     return true;
   } catch (err) {
@@ -2268,7 +2315,7 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
       void saveThought({ type_id: typeId }).then((ok) => {
         const focusComment = focusCommentAfterTypeSave;
         focusCommentAfterTypeSave = false;
-        if (ok && focusComment) focusEditorComment();
+        if (ok && focusComment) focusEditorComment(shownThoughtId());
       });
     },
     onCreateNew: async (query) => {
@@ -2447,12 +2494,8 @@ async function savePickedIcon(thought: Thought, result: IconPickResult): Promise
     }
     // The attachments tab (if built) reloads and the 📎 indicator repaints —
     // same notification path as a paste from the comment field.
-    invalidateIndicators(thought.id);
-    document.dispatchEvent(
-      new CustomEvent('etn:attachments-changed', {
-        detail: { ownerType: 'thought', ownerId: thought.id },
-      }),
-    );
+    invalidateQueries(queryKeys.indicators(thought.id));
+    invalidateQueries(queryKeys.attachments('thought', thought.id));
   }
   // `icon_attachment_id: null` clears a stale link on emoji/URL/clear picks.
   return saveThought({
@@ -2552,7 +2595,7 @@ function buildLinkHeader(initial: Link): HTMLElement {
       void saveLink(link, { type_id: typeId }).then((ok) => {
         const focusComment = focusCommentAfterTypeSave;
         focusCommentAfterTypeSave = false;
-        if (ok && focusComment) focusEditorComment();
+        if (ok && focusComment) focusEditorComment(shownThoughtId());
       });
     },
     onCreateNew: async (_query) => {

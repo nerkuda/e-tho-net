@@ -952,6 +952,16 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'thought-type-view.updated': 'изменён отбор типа',
   'thought-type-view.deleted': 'удалён отбор типа',
   'thought-type-view.run': 'исполнен отбор',
+  // Публикации и полки (0.11.1, задача c59ce742) — только строки статус-бара.
+  'publication.updated': 'изменена публикация',
+  'publication.order.reordered': 'изменён порядок публикации',
+  'publication.exclusions.changed': 'изменены исключения публикации',
+  'publication.rebuilt': 'публикация пересобрана',
+  'publication.trashed': 'публикация в корзине',
+  'publication.restored': 'публикация восстановлена',
+  'publication.purged': 'публикация удалена',
+  'shelf.updated': 'изменена полка',
+  'shelf.deleted': 'полка удалена',
 };
 
 /**
@@ -1337,17 +1347,19 @@ export interface TransitionNode {
  * (`canvas/transition.ts`) owns the actual measurements, clones and timings —
  * this function is the truth table behind them, unit-tested without a browser.
  *
- * Roles:
+ * Roles (хореография 2026-10-04, задача 380cc1e2 — две последовательные фазы):
  *  * `flyingId` — the selected thought: a clone of its new focus cloud flies
  *    from its old zone slot into the centre (null when the focus did not change);
- *  * `releasedFocus` — the former focus: it HOLDS the centre with its old
- *    content until the flyer lands (своп содержимого только после приземления),
- *    then leaves to its new zone (or fades);
- *  * `leaving` — gone with the new focus, fade out during the flight;
- *  * `entering` — new with the focus, fade in after the flight;
- *  * `moving` — survivors that changed zone, glide to the new zone during flight;
- *  * `settling` — survivors that only change slot inside their zone, they keep
- *    the old position during the flight and settle into the new order after it.
+ *  * `releasedFocus` — the former focus: it leaves the centre SIMULTANEOUSLY
+ *    with the flyer (не дожидаясь приземления) — its held clone glides into the
+ *    new zone or dissolves when the thought is no longer visible; всего лишь
+ *    своп содержимого центра происходит в момент приземления выбранной;
+ *  * `leaving` — gone with the new focus, fade out during phase 1;
+ *  * `entering` — new with the focus, fly out of their source clouds in phase 2
+ *    (строго после завершения фазы 1) — see {@link planEnteringSources};
+ *  * `moving` — survivors that changed zone, glide to the new zone in phase 1;
+ *  * `settling` — survivors that only change slot inside their zone: they glide
+ *    into the new order in phase 1 too (одновременно с остальными видимыми).
  */
 export interface TransitionPlan {
   focusBefore: string | null;
@@ -1456,6 +1468,53 @@ export function planFocusTransition(
     settling,
     hasChanges,
   };
+}
+
+/** Минимальная форма видимого ребра (подмножество `FocusEdge`) для выбора
+ *  источника вылета entering-облачка. */
+export interface VisibleEdgeLike {
+  source_id: string;
+  target_id: string;
+}
+
+/** Облачко, впервые появляющееся в новой раскладке, вместе со своей зоной. */
+export interface EnteringNode {
+  id: string;
+  zone: TransitionZone;
+}
+
+/** Топология фокуса, нужная для выбора источников вылета: сам фокус, видимые
+ *  предки и рёбра между видимыми мыслями (из ответа `POST /thoughts/{id}/focus`). */
+export interface FocusSourceTopology {
+  focusId: string | null;
+  parentIds: readonly string[];
+  edges: readonly VisibleEdgeLike[];
+}
+
+/**
+ * Источник вылета каждого entering-облачка (спека «FLIP-анимация холста»,
+ * хореография 2026-10-04, задача 380cc1e2): предки и потомки нового фокуса
+ * вылетают из облачка самого фокуса, мысли-родственники — из облачка одного из
+ * своих видимых предков (ребро `parent → sibling` из топологии), с откатом на
+ * фокус, когда видимого предка нет. Возвращает `id → id источника`; мысли без
+ * разрешимого источника в карту не попадают — оркестратор проявляет их на месте.
+ */
+export function planEnteringSources(
+  entering: readonly EnteringNode[],
+  topo: FocusSourceTopology,
+): Map<string, string> {
+  const parents = new Set(topo.parentIds);
+  const out = new Map<string, string>();
+  for (const node of entering) {
+    if (node.zone === 'focus') continue;
+    const source =
+      node.zone === 'siblings'
+        ? topo.edges.find((e) => e.target_id === node.id && parents.has(e.source_id))?.source_id
+        : undefined;
+    const resolved = source ?? topo.focusId;
+    if (resolved !== null) out.set(node.id, resolved);
+  }
+  return out;
 }
 
 /** Пригоден ли прямоугольник как стартовая точка полёта (ненулевой размер). */

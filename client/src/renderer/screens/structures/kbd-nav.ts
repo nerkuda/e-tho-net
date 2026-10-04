@@ -22,14 +22,23 @@
  * `Ctrl+Shift+Up/Down` and `Ctrl+Enter` (canvas-only) are not wired here.
  */
 
+import { currentThoughtId } from '../../history.js';
+import { shouldDrawCurrentFrame } from '../../lib/ui/nav-core.js';
 import { store } from '../../state.js';
 
 /** Frame class applied to the cloud under the keyboard cursor (shared with the canvas). */
 const CURSOR_CLS = 'kbd-cursor';
 
 let hostEl: HTMLElement | null = null;
-/** Thought id under the keyboard cursor; null — no cursor (starts on the first arrow press). */
-let cursorId: string | null = null;
+/**
+ * KEY rendered row under the keyboard cursor (unique per row: path key
+ * `root/child`, `root^parent`); null — no cursor (starts on the first arrow
+ * press). Именно KEY, а не id мысли: одна и та же мысль может быть видна
+ * НЕСКОЛЬКИМИ строками (корень отбора одной ветви и раскрытый родитель/потомок
+ * другой), и поиск строки по id направлял курсор на первое вхождение — ход
+ * «застревал» на строках отбора и не заходил в раскрытый блок (задача e80da89f п.3).
+ */
+let cursorKey: string | null = null;
 
 /** Callbacks into the host module (structures.ts). */
 export interface StructuresKbdNavCallbacks {
@@ -55,9 +64,9 @@ export function initStructuresKbdNav(host: HTMLElement, cb: StructuresKbdNavCall
   host.tabIndex = 0;
 
   host.addEventListener('click', (event) => {
-    const cloud = (event.target as HTMLElement).closest<HTMLElement>('.st-cloud.cloud');
-    const id = cloud?.dataset['id'];
-    if (id !== undefined) setCursor(id);
+    const rowEl = (event.target as HTMLElement).closest<HTMLElement>('.st-row');
+    const key = rowEl?.dataset['key'];
+    if (key !== undefined) setCursor(key);
   });
 
   host.addEventListener('keydown', (event) => {
@@ -107,7 +116,10 @@ export function initStructuresKbdNav(host: HTMLElement, cb: StructuresKbdNavCall
         break;
       case 'Enter':
         event.preventDefault();
-        if (cursorId !== null) callbacks?.openThought(cursorId);
+        {
+          const row = cursorKey === null ? null : navRowOf(cursorKey);
+          if (row !== null) callbacks?.openThought(row.id);
+        }
         break;
       case 'Escape':
         setCursor(null);
@@ -123,14 +135,20 @@ export function resetStructuresCursor(): void {
   setCursor(null);
 }
 
-/** Re-applies the cursor frame after a full tree rebuild (renderTree() clears the DOM). */
+/** Re-applies the cursor frame after a full tree rebuild (renderTree() clears the DOM).
+ *  Двухрамочная семантика (ADR e6d48e09): если текущая мысль совпадает с
+ *  открытой в редакторе (гало, `currentThoughtId()`), пунктир НЕ рисуется —
+ *  остаётся только сплошная рамка. */
 export function syncStructuresCursor(): void {
   if (hostEl === null) return;
   for (const el of hostEl.querySelectorAll<HTMLElement>(`.${CURSOR_CLS}`)) {
     el.classList.remove(CURSOR_CLS);
   }
-  if (cursorId === null) return;
-  navRowOf(cursorId)?.cloud.classList.add(CURSOR_CLS);
+  if (cursorKey === null) return;
+  const row = navRowOf(cursorKey);
+  if (row === null) return;
+  if (!shouldDrawCurrentFrame(row.id, currentThoughtId())) return;
+  row.cloud.classList.add(CURSOR_CLS);
 }
 
 /** All rows in the flat visual (DOM) order — the sequential walk order. */
@@ -148,12 +166,13 @@ function navRows(): NavRow[] {
   return out;
 }
 
-function navRowOf(id: string): NavRow | null {
-  return navRows().find((r) => r.id === id) ?? null;
+/** Rendered row by its unique path key (null — row gone / never rendered). */
+function navRowOf(key: string): NavRow | null {
+  return navRows().find((r) => r.key === key) ?? null;
 }
 
-function setCursor(id: string | null): void {
-  cursorId = id;
+function setCursor(key: string | null): void {
+  cursorKey = key;
   syncStructuresCursor();
 }
 
@@ -162,21 +181,21 @@ function setCursor(id: string | null): void {
 function step(delta: -1 | 1): void {
   const rows = navRows();
   if (rows.length === 0) return;
-  if (cursorId === null) {
+  if (cursorKey === null) {
     const first = rows[0];
     if (first === undefined) return;
-    setCursor(first.id);
+    setCursor(first.key);
     first.cloud.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     return;
   }
-  const index = rows.findIndex((r) => r.id === cursorId);
+  const index = rows.findIndex((r) => r.key === cursorKey);
   if (index === -1) {
     setCursor(null);
     return;
   }
   const target = rows[index + delta];
   if (target === undefined) return;
-  setCursor(target.id);
+  setCursor(target.key);
   target.cloud.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
@@ -184,15 +203,15 @@ function step(delta: -1 | 1): void {
 function stepRight(): void {
   const rows = navRows();
   if (rows.length === 0) return;
-  if (cursorId === null) {
+  if (cursorKey === null) {
     const first = rows[0];
     if (first !== undefined) {
-      setCursor(first.id);
+      setCursor(first.key);
       first.cloud.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
     return;
   }
-  const current = navRowOf(cursorId);
+  const current = navRowOf(cursorKey);
   if (current !== null && canExpand(current, 'children')) {
     callbacks?.toggleExpand(current.key, current.id, current.rootId, 'children');
     return;
@@ -202,7 +221,7 @@ function stepRight(): void {
 
 /** Explorer ArrowLeft: collapse children, then parents; else step backward. */
 function stepLeft(): void {
-  const current = cursorId === null ? null : navRowOf(cursorId);
+  const current = cursorKey === null ? null : navRowOf(cursorKey);
   if (current !== null && isExpanded(current, 'children')) {
     callbacks?.toggleExpand(current.key, current.id, current.rootId, 'children');
     return;
@@ -219,14 +238,14 @@ function jumpToEdge(toStart: boolean): void {
   const rows = navRows();
   const target = toStart ? rows[0] : rows[rows.length - 1];
   if (target === undefined) return;
-  setCursor(target.id);
+  setCursor(target.key);
   target.cloud.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /** Ctrl+Up/Down: toggle the cursor thought's parents/children expansion. */
 function toggleCursorExpansion(dir: 'parents' | 'children'): void {
-  if (cursorId === null || callbacks === null) return;
-  const current = navRowOf(cursorId);
+  if (cursorKey === null || callbacks === null) return;
+  const current = navRowOf(cursorKey);
   if (current === null) return;
   callbacks.toggleExpand(current.key, current.id, current.rootId, dir);
 }

@@ -238,6 +238,67 @@ export type {
 export { vaadinGridAdapter } from './table-grid.js';
 export type { GridColumnSpec, GridTableAdapter, GridPoint } from './table-grid.js';
 
+// Общее ЯДРО клавиатурной навигации таблиц и списков (ADR fadf99e0,
+// требование 93115633, задача 7893e429): какие клавиши, границы, Home/End,
+// PgUp/PgDn, поведение без выделения, отсечка полей ввода. Правила живут
+// только здесь — применяются сразу ко всем таблицам и спискам.
+export {
+  NAV_KEY_ACTIONS,
+  resolveNavAction,
+  isReorderAction,
+  nextNavIndex,
+  listTargetIndex,
+  isEditingTarget,
+} from './nav-core.js';
+export type { NavAction, NavKeyModifiers, NavIndexOptions } from './nav-core.js';
+
+// Диапазонный ползунок — единый фасад (задача ea1b5f14): владелец задаёт
+// границы/шаг/начальное значение и обработчики, фасад владеет разметкой, ARIA
+// и показом текущего значения. Своих `<input type="range">` в экранах нет —
+// за этим следит сторож `guard-ui-slider`.
+export { SLIDER_CLASS, uiSlider } from './slider.js';
+export type { SliderOptions, SliderHandle } from './slider.js';
+
+// Общий КОМПОНЕНТ СПИСКА (ADR fadf99e0, требование 93115633, задача 7893e429):
+// навигация списков (лента «Дневника», библиотека «Публикаций») через общее
+// ядро. Разметку caller рисует keyed-сверкой; компонент отдаёт адаптеру
+// выделение по ключу, прокрутку и фокус.
+export { createListNav } from './list.js';
+export type {
+  ListNavAdapter,
+  ListNavOptions,
+  ListNavSetOptions,
+  ListNavHandle,
+  ListNavKeyEvent,
+  ListNavClickEvent,
+} from './list.js';
+
+// Сортируемый список (задача d13fd645): общий drag-фасад ручного порядка над
+// компонентом списка — pointer-драг, клон-призрак, линии вставки, авто-скролл
+// и клавиатурный сдвиг Alt+↑/↓. Drag-логика живёт только здесь (сторож
+// guard-drag-list), а не в экранах.
+export {
+  DRAG_HANDLE_CLASS,
+  DRAG_ITEM_CLASS,
+  DRAG_ACTIVE_CLASS,
+  DRAG_OVER_BEFORE_CLASS,
+  DRAG_OVER_AFTER_CLASS,
+  DRAG_GHOST_CLASS,
+  DRAG_HANDLE_GLYPH,
+  DRAG_THRESHOLD,
+  AUTO_SCROLL_STEP,
+  AUTO_SCROLL_EDGE,
+  dragHandle,
+  createDragList,
+} from './drag-list.js';
+export type {
+  DragListItem,
+  DragListAdapter,
+  DragListNav,
+  DragListOptions,
+  DragListHandle,
+} from './drag-list.js';
+
 // Единое дерево списков — общий рендер строк над типом-деревом данных
 // (задача d1c15a2d, требование 0086037c, компонент 24a05c95). Единственный
 // разрешённый способ сборки деревьев типов в рендерере (сторож guard-ui-tree).
@@ -281,6 +342,24 @@ export {
   chipList,
 } from './chip-list.js';
 export type { ChipListOption, ChipListOptions, ChipListHandle } from './chip-list.js';
+
+// Облачко публикации — прямые углы, значок-книга, контекстное меню и крестик
+// снятия владельца (замечание Б2 приёмки b02ef1cf). Единственное место показа
+// облачка публикации.
+export {
+  PUBLICATION_CLOUD_CLASS,
+  PUBLICATION_CLOUD_ICON_CLASS,
+  PUBLICATION_CLOUD_TITLE_CLASS,
+  PUBLICATION_CLOUD_REMOVE_CLASS,
+  PUBLICATION_CLOUD_CONTAINER_CLASS,
+  createPublicationCloud,
+} from './publication-cloud.js';
+export type {
+  PublicationCloudInput,
+  PublicationCloudOptions,
+  PublicationCloudLabels,
+  PublicationCloudActions,
+} from './publication-cloud.js';
 
 // Состояния списков и панелей — пустое состояние с подсказкой и точкой входа
 // к действию, загрузка и ошибка (задача d7b7c367, требование e514768f).

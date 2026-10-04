@@ -37,6 +37,7 @@ import { isFilterSort, isSortOrder, sortValueLabel } from '../lib/filter-builder
 import { svgIcon } from '../lib/icons.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
+import { onQueryInvalidated } from '../lib/live/index.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 
@@ -150,6 +151,17 @@ export function takeViewResult(): ViewResult | null {
  *  «Потомки» so the next focus render does not briefly flash stale data). */
 export function clearViewResult(): void {
   lastResult = null;
+}
+
+/**
+ * Есть ли мысль среди строк ТЕКУЩЕГО результата отбора (замечание G2 65286909).
+ * Холст по этому признаку решает, переисполнять ли отбор на инвалидацию
+ * `focus:@<id>`: правка мысли, уже видимой строкой отбора, могла изменить строку
+ * и требует переисполнения; правка мысли вне окрестности И вне отбора —
+ * не требует (не тратим лишний `views.run`).
+ */
+export function isThoughtInViewResult(id: string): boolean {
+  return lastResult !== null && lastResult.items.some((item) => item.id === id);
 }
 
 /**
@@ -854,6 +866,30 @@ let unsupportedSortNotified: string | null = null;
 const viewSortOrderCache = new Map<string, ViewSortOrder | null>();
 
 /**
+ * Использует ли определение отбора критерий `keywords` (блокер G3). Кеш по
+ * `viewId`: заполняется при чтении определения ({@link loadViewSortOrder}).
+ * Нужен холсту, чтобы решать, переисполнять ли отбор на правку заголовка/
+ * синонимов мысли: без `keywords` такие поля состав отбора не меняют.
+ */
+const viewKeywordsCache = new Map<string, boolean>();
+
+/** Есть ли в определении непустой критерий `keywords`. */
+function definitionUsesKeywords(parsed: unknown): boolean {
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  const kw = (parsed as { keywords?: unknown }).keywords;
+  return typeof kw === 'string' && kw.trim() !== '';
+}
+
+/**
+ * Использует ли `keywords` активный отбор холста. `false`, пока определение не
+ * прочитано (отбор не исполнялся) — тогда лишний `views.run` не запускаем.
+ */
+export function activeViewUsesKeywords(): boolean {
+  if (currentMode.kind !== 'view') return false;
+  return viewKeywordsCache.get(currentMode.viewId) ?? false;
+}
+
+/**
  * Сортировка/направление отбора, прочитанные из `definition`.
  * `unsupported` — сохранённые значения ВНЕ единого набора конструктора
  * (`lib/filter-builder.ts`, требование «Сортировки отбора: единый набор…»):
@@ -869,6 +905,7 @@ interface ViewSortOrder {
 /** Drops every cached view `sort`/`order` (вызывается при rebuild полосы). */
 function invalidateViewSortCache(): void {
   viewSortOrderCache.clear();
+  viewKeywordsCache.clear();
 }
 
 /** Загружает `sort`/`order` из определения отбора и кеширует по `viewId`.
@@ -896,6 +933,7 @@ async function loadViewSortOrder(
     });
     const full = resp.data.find((v) => v.id === viewId);
     if (full === undefined) {
+      viewKeywordsCache.set(viewId, false);
       viewSortOrderCache.set(viewId, null);
       return null;
     }
@@ -903,9 +941,13 @@ async function loadViewSortOrder(
     try {
       parsed = JSON.parse(full.definition) as unknown;
     } catch {
+      viewKeywordsCache.set(viewId, false);
       viewSortOrderCache.set(viewId, null);
       return null;
     }
+    // Использует ли отбор `keywords` — нужно холсту для признака «состав мог
+    // измениться» на правку заголовка/синонимов (блокер G3).
+    viewKeywordsCache.set(viewId, definitionUsesKeywords(parsed));
     const obj = parsed as { sort?: unknown; order?: unknown };
     const sort = obj?.sort;
     const order = obj?.order;
@@ -1054,6 +1096,13 @@ async function refreshStripFromRealtime(
     notifyModeChange();
   }
 }
+
+// Слой (G6): `thought-type-view.*` роутер гасит ключ `views:@<typeId>` — полоса
+// перестраивается из подписки на инвалидацию, без прямого realtime-хука.
+onQueryInvalidated((prefix) => {
+  if (!prefix.startsWith('views:@')) return;
+  onThoughtTypeViewRealtime({ thought_type_id: prefix.slice('views:@'.length) });
+});
 
 /** Re-renders the strip when the focused thought changes. The canvas
  *  invokes this after a focus switch so the strip resets to the new

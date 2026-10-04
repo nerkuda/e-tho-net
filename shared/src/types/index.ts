@@ -25,6 +25,7 @@ export * from './lock.js';
 export * from './activity.js';
 export * from './trash.js';
 export * from './layer.js';
+export * from './publication.js';
 export * from './logging.js';
 export * from './api.js';
 export * from './mcp.js';

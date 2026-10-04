@@ -196,6 +196,15 @@
   color: var(--accent);
   border-color: var(--accent);
 }
+/* Кнопка с атрибутом `hidden` обязана исчезать: у пустого поля угловая «✕»
+   скрывается через `clearBtn.hidden = true`, но `[hidden] { display: none }` —
+   правило user-agent, а `.link-value-corner-btn { display: inline-flex }` его
+   перебивает (автор всегда сильнее UA; та же грабля, что у `.editor-tab[hidden]`).
+   Без этого рядом с пустым приглашением светилась лишняя «×» (замечание
+   пользователя по задаче b02ef1cf). */
+.link-value-corner-btn[hidden] {
+  display: none;
+}
 .link-value-add {
   flex: 1 1 120px;
   min-width: 120px;
@@ -399,4 +408,14 @@
 }
 .mini-graph-hint {
   font-size: 11px;
+}
+
+/* DnD-подсветка чипов поля выбора сущностей (lib/entity-picker.ts, 0.11.1):
+ * перетаскивание меняет порядок значений (reorderable). */
+.entity-chip-drag {
+  opacity: 0.5;
+}
+.entity-chip-drop {
+  outline: 1px dashed var(--accent);
+  border-radius: var(--radius-s);
 }

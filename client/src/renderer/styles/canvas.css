@@ -534,15 +534,18 @@ body.resizing-h {
 }
 
 /* Halo (§2.2.4): the thought is open in the editor — single click, Enter or a
- * pick from another view. A soft accent ring plus glow around the cloud.
- * While a layer with explicit colours is active the ring takes the layer's
- * focus-stripe colour (0.6.4, 13-layers.md §2.2a) — the border of the edited
- * thought is part of the layer indication. */
+ * pick from another view. A double ring around the cloud: the inner band takes
+ * the layer's focus-stripe colour (0.6.4, 13-layers.md §2.2a) — the border of
+ * the edited thought is part of the layer indication — and the outer thin
+ * contrast band (`--focus-ring-contrast`) keeps it readable on the focus band,
+ * which is painted in the SAME stripe colour (задача 3af98e31). Единый механизм
+ * двойной рамки открытого: тот же токен канта используют `.pub-open` и
+ * `.pub-doc-editor`; «Структуры» переиспользуют этот класс. */
 .cloud.halo {
   border-color: var(--layer-focus-stripe, var(--accent));
   box-shadow:
     0 0 0 1px var(--layer-focus-stripe, var(--accent)),
-    0 0 0 5px var(--accent-soft),
+    0 0 0 4px var(--focus-ring-contrast),
     var(--shadow-focus);
 }
 
@@ -754,9 +757,13 @@ body.cloud-dragging * {
 .cloud-icon img {
   /* Definite height (not %) — during intrinsic sizing the box height is
    * content-driven, so a `max-height: 100%` never clamps and a large PNG
-   * blew the cloud up to its natural size. Keep the image within the emoji
-   * glyph size; wide images clamp to the box width without distortion. */
-  height: calc(var(--cloud-font) * 1.45);
+   * blew the cloud up to its natural size. `1em` ties the image to the band's
+   * own font-size (inherited from `.cloud-icon`), so the picture is exactly as
+   * tall as the emoji glyph; a hard-coded `calc(var(--cloud-font) * 1.45)`
+   * ignored the `.cloud.focus-cloud .cloud-icon` font-size bump (1.9) and the
+   * image stayed small in the enlarged focus band (ошибка c1b57533). Wide
+   * images clamp to the box width without distortion. */
+  height: 1em;
   width: auto;
   max-width: 100%;
   object-fit: contain;
@@ -1011,6 +1018,22 @@ body.cloud-dragging * {
   border-width: 2px;
   box-shadow: var(--shadow-focus);
   cursor: default;
+}
+
+/* The focus cloud doubles as the editor halo whenever the editor follows the
+ * focus (`editorTarget=null`, the default) — and it is the case the halo is
+ * usually seen in. `.cloud.focus-cloud` (below `.cloud.halo` in this module,
+ * equal specificity) would otherwise override the halo's border and box-shadow
+ * and the double ring would silently disappear. Re-assert it here (specificity
+ * 0,3,0 wins). The inner band keeps the layer focus colour — per spec the
+ * opened thought's frame IS the focus-stripe colour (13-layers.md §2.2a),
+ * so a layer recolours it; the outer contrast band stays (задача 3af98e31). */
+.cloud.focus-cloud.halo {
+  border-color: var(--layer-focus-stripe, var(--accent));
+  box-shadow:
+    0 0 0 1px var(--layer-focus-stripe, var(--accent)),
+    0 0 0 4px var(--focus-ring-contrast),
+    var(--shadow-focus);
 }
 
 .cloud.focus-cloud .cloud-title {

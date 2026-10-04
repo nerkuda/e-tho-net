@@ -418,6 +418,9 @@ const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly ThoughtQueryProperty
   // адресу. eq/ne — точное совпадение; any_of/all_of/none_of — для набора.
   // is_empty/not_empty не нужны (адрес либо точно совпал, либо нет).
   cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
+  // Ссылка на публикацию сети (0.7.1… 0.11.1, задача f37b468d, требование
+  // 9ce84a2b): та же матрица, что у cross_network_ref — отбор по id.
+  publication: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
 };
 
 /** Storage column of `property_values` per property `value_type`. */
@@ -433,6 +436,9 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   thought_ref: 'value_thought_ref',
   // Кросс-сетевая ссылка: адрес в value_text (single или JSON-массив).
   cross_network_ref: 'value_text',
+  // Ссылка на публикацию: id в value_text (single или JSON-массив) — как
+  // cross_network_ref, отдельной колонки нет.
+  publication: 'value_text',
 };
 
 /** Default keyword scope: title + synonyms only (the original behaviour). */

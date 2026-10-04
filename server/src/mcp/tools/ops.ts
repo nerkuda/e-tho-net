@@ -3,7 +3,7 @@
  * (задача 86ef2ff4, версия 0.8.3).
  *
  * `etn.guide` — read-only витрина: без параметров отдаёт компактный реестр
- * «действие → когда нужно» (бюджет ≤ 10 КБ), с `topic` — полную инструкцию
+ * «действие → когда нужно» (бюджет ≤ 16 КБ), с `topic` — полную инструкцию
  * вызова (состав `params`, обязательность `confirm`, эффекты, коды ошибок).
  * `etn.ops` — исполнитель: `action` + плоский `params` + `confirm: true` для
  * деструктивных. Перечень действий и схемы — в `ops-catalog.ts` (данные в
@@ -38,6 +38,7 @@ import {
   AttachmentsDelete,
   AttachmentsSearch,
   AttachmentsUpdate,
+  AttachmentsUsage,
   ChangesList,
   CommentsDelete,
   ExportSubgraph,
@@ -88,6 +89,7 @@ import {
   createAttachmentFromInput,
   deleteAttachment,
   getAttachment,
+  listAttachmentUsage,
   searchAttachments,
   updateAttachment,
 } from '../../domain/attachment-service.js';
@@ -144,13 +146,14 @@ import {
 } from '../context.js';
 import type { McpRuntime } from '../context.js';
 import { executeMentionsScan } from './shared.js';
+import { PUBLICATION_OPS_HANDLERS } from './publications.js';
 import { GUIDE_TOPICS, GUIDE_TOPICS_BY_NAME, GUIDE_TOPIC_NAMES, OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, type OpEntry } from './ops-catalog.js';
 
 /** Разложить `params` по схеме действия (уже провалидированы контрактом). */
-type Params = Record<string, unknown>;
+export type Params = Record<string, unknown>;
 
 /** Обработчик одного действия: получает runtime, проверенные `params` и extra вызова. */
-type OpHandler = (
+export type OpHandler = (
   rt: McpRuntime,
   params: Params,
   extra: { requestId?: string | number },
@@ -388,6 +391,13 @@ const HANDLERS: Record<string, OpHandler> = {
         offset: a.offset,
       });
       return items;
+    });
+  },
+  'attachments.usage': (rt, p) => {
+    const a = p as unknown as z.infer<typeof AttachmentsUsage.schema>;
+    return runTool(() => {
+      const ndb = openMemberNetwork(rt, a.network_id);
+      return listAttachmentUsage(ndb, a.attachment_id);
     });
   },
   'attachments.update': (rt, p, extra) => {
@@ -1304,6 +1314,7 @@ const HANDLERS: Record<string, OpHandler> = {
               thoughts_reused: result.thoughts_reused,
               links_created: result.links_created,
               attachments_imported: result.attachments_imported,
+              attachments_skipped: result.attachments_skipped ?? 0,
             },
           },
         };
@@ -1320,6 +1331,7 @@ const HANDLERS: Record<string, OpHandler> = {
           chronological_comments_added: result.chronological_comments_added,
           property_values_set: result.property_values_set,
           attachments_imported: result.attachments_imported,
+          attachments_skipped: result.attachments_skipped ?? 0,
           thought_types_created: result.thought_types_created,
           thought_types_reused: result.thought_types_reused,
           link_types_created: result.link_types_created,
@@ -1765,6 +1777,11 @@ const HANDLERS: Record<string, OpHandler> = {
       } satisfies OntologyDeleteResult & { request_id: string };
     });
   },
+
+  // ---- publications / shelves (0.11.1, задача 094653b6) --------------------
+  // 25 операций публикаций и полок перенесены из собственных инструментов в
+  // паттерн guide+ops; обработчики — в publications.ts (единый источник).
+  ...PUBLICATION_OPS_HANDLERS,
 };
 
 /** Проверка доступа к сети для read-действий (форwards на общий хелпер). */
@@ -1781,7 +1798,7 @@ function assertAccess(rt: McpRuntime, networkId: string): void {
 // Регистрация инструментов
 // ---------------------------------------------------------------------------
 
-/** Текст реестра «действие → когда нужно» (бюджет ≤ 10 КБ). */
+/** Текст реестра «действие → когда нужно» (бюджет ≤ 16 КБ). */
 function renderRegistry(): string {
   const groups: { group: string; entries: OpEntry[] }[] = [];
   for (const entry of OPS_ACTIONS) {
@@ -1866,6 +1883,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         'Справочник MCP (прогрессивное раскрытие). Без параметров — реестр ' +
         '«действие/тема → когда нужно». С `topic` — полная инструкция: для редких операций — ' +
         'состав `params`, `confirm`, эффекты, коды ошибок; для частых — детали из их `description`. ' +
+        'Редкие операции включают публикации и полки (`publications.*`/`shelves.*`). ' +
         'Исполнитель редких операций — `etn.ops`.',
       inputSchema: Guide.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.guide'],
@@ -1907,7 +1925,8 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         'Исполнитель редких операций, снятых из постоянного набора (прогрессивное раскрытие). ' +
         '`action` — имя из справочника `etn.guide`; `params` — плоский объект; `confirm: true` ' +
         'обязателен для деструктивных (delete/purge/truncate/import/layers.delete/merge), ' +
-        'без него VALIDATION_ERROR. Сначала прочитай `etn.guide { topic }` — состав params и эффекты.',
+        'без него VALIDATION_ERROR. Сначала прочитай `etn.guide { topic }` — состав params и эффекты. ' +
+        'Среди редких — администрирование, слои, экспорт/импорт, публикации и полки.',
       inputSchema: Ops.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ops'],
     },

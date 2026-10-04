@@ -69,6 +69,11 @@ const CLIENT_COMPOSED_RESULTS = new Set([
   // флагу), а клиент нормализует `total` до числа, запрашивая `count: true`
   // явно, — единого серверного объекта с именем `StructureIdsQueryResult` нет.
   'StructureIdsQueryResult',
+  // Список публикаций (0.11.1, задача a3cfc018): сервер отдаёт страницу через
+  // `sendList` (`data` + `meta{total,limit,offset}`), клиент сводит их в форму
+  // `PublicationListResult`; единого серверного объекта с таким именем нет
+  // (прецедент `NeighborPage`).
+  'PublicationListResult',
 ]);
 
 /** Собрать все `.ts` под каталогом (рекурсивно). */

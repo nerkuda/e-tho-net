@@ -23,8 +23,10 @@ import type {
   AttachmentCopyResult,
   AttachmentFileInput,
   AttachmentInput,
+  AttachmentOwnerType,
   AttachmentSearchQuery,
   AttachmentUpdateInput,
+  AttachmentUsage,
   ChronicleFilterDefinition,
   ChronicleQueryRequest,
   ChronicleQueryResponse,
@@ -77,6 +79,21 @@ import type {
   SavedFilter,
   SavedFilterDefinition,
   PinnedThoughtEntry,
+  Publication,
+  PublicationActiveFilter,
+  PublicationAssembly,
+  PublicationCandidatesResult,
+  PublicationCreateInput,
+  PublicationDeletionCheckResult,
+  PublicationExportRequest,
+  PublicationListResult,
+  PublicationOrderItem,
+  PublicationSort,
+  PublicationUpdateInput,
+  PublicationUsageResult,
+  Shelf,
+  ShelfDeletionCheckResult,
+  ShelfInput,
   SearchRequest,
   SearchResponse,
   StructureQueryRequest,
@@ -267,7 +284,16 @@ export interface DeleteLogsResult {
 }
 
 /** Workspace view modes (08-ui-spec.md §15.1, задача f27809d0 «События»). */
-export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity';
+export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity' | 'publications';
+
+/**
+ * Разобранная цель `etn://open`-deep-link (task R11; публикации — 0.11.1,
+ * задача 3275fd8d, требование 7f583ef9): мысль (`thoughtId`) или публикация
+ * (`publicationId`). Формы взаимоисключающи.
+ */
+export type DeepLinkPayload =
+  | { networkId: string; thoughtId: string }
+  | { networkId: string; publicationId: string };
 
 /**
  * Public DTO of an open tab (07-client-electron.md §3.6, workplan Q2).
@@ -647,6 +673,95 @@ export interface EtnApi {
     /** `POST /networks/{nid}/activity/truncate` — обрезка до `untilMs`. */
     truncate(networkId: string, untilMs: number): Promise<ActivityTruncateResult>;
   };
+  /**
+   * Клиентский мост подсистемы «Публикации» (0.11.1, задача a3cfc018;
+   * REST-маршруты c59ce742). Паритет с REST: библиотека, полки, карточка,
+   * жизненный цикл, пересборка, кандидаты, использование, экспорт.
+   */
+  publications: {
+    list(
+      networkId: string,
+      query?: {
+        q?: string;
+        shelf?: string;
+        active?: PublicationActiveFilter;
+        sort?: PublicationSort;
+        include_trashed?: boolean;
+        limit?: number;
+        offset?: number;
+      },
+    ): Promise<PublicationListResult>;
+    create(networkId: string, input: PublicationCreateInput): Promise<Publication>;
+    get(networkId: string, id: string): Promise<Publication>;
+    /**
+     * `GET …/publications/{id}/deletion-check` — блокировки физического
+     * удаления (аналог `deletion-check` мысли). Диалог удаления решает по нему,
+     * доступна ли кнопка «Удалить совсем» (задача 00160da1).
+     */
+    deletionCheck(networkId: string, id: string): Promise<PublicationDeletionCheckResult>;
+    update(
+      networkId: string,
+      id: string,
+      input: PublicationUpdateInput,
+      expectedVersion?: number,
+    ): Promise<Publication>;
+    trash(networkId: string, id: string): Promise<Publication>;
+    restore(networkId: string, id: string): Promise<Publication>;
+    purge(networkId: string, id: string): Promise<void>;
+    rebuild(networkId: string, id: string): Promise<Publication>;
+    /** `PUT …/publications/{id}/order` — батч локального порядка узлов. */
+    setOrder(
+      networkId: string,
+      id: string,
+      items: readonly PublicationOrderItem[],
+    ): Promise<PublicationOrderItem[]>;
+    /** `POST …/publications/{id}/exclusions` — исключить мысль. */
+    addExclusion(networkId: string, id: string, thoughtId: string): Promise<void>;
+    /** `DELETE …/publications/{id}/exclusions?thought_id=` — вернуть мысль. */
+    removeExclusion(networkId: string, id: string, thoughtId: string): Promise<void>;
+    assembly(
+      networkId: string,
+      id: string,
+      query?: { page?: number; include_excluded?: boolean },
+    ): Promise<PublicationAssembly>;
+    candidates(
+      networkId: string,
+      id: string,
+      query?: { limit?: number; offset?: number; include_excluded?: boolean },
+    ): Promise<PublicationCandidatesResult>;
+    /** `POST …/publications/{id}/candidates/accept` — «расставить» кандидата. */
+    acceptCandidate(networkId: string, id: string, thoughtId: string): Promise<void>;
+    usage(
+      networkId: string,
+      thoughtId: string,
+      query?: { limit?: number; offset?: number; publication_limit?: number },
+    ): Promise<PublicationUsageResult>;
+    export(
+      networkId: string,
+      id: string,
+      request: PublicationExportRequest,
+    ): Promise<ExportJobStartResult>;
+    /** `GET /networks/{nid}/shelves` — полки библиотеки с составом. */
+    listShelves(networkId: string): Promise<Shelf[]>;
+    createShelf(networkId: string, input: ShelfInput): Promise<Shelf>;
+    updateShelf(networkId: string, id: string, input: ShelfInput): Promise<Shelf>;
+    trashShelf(networkId: string, id: string): Promise<Shelf>;
+    restoreShelf(networkId: string, id: string): Promise<Shelf>;
+    purgeShelf(networkId: string, id: string): Promise<void>;
+    /**
+     * `GET …/shelves/{id}/deletion-check` — блокировки физического удаления
+     * полки (только контекст слоя; состав сносится каскадом). Диалог удаления
+     * решает по нему, доступна ли кнопка «Удалить совсем» (задача 00160da1).
+     */
+    shelfDeletionCheck(networkId: string, id: string): Promise<ShelfDeletionCheckResult>;
+    addShelfItem(
+      networkId: string,
+      shelfId: string,
+      publicationId: string,
+      position?: number,
+    ): Promise<Shelf>;
+    removeShelfItem(networkId: string, shelfId: string, publicationId: string): Promise<Shelf>;
+  };
   types: {
     listThoughtTypes(networkId: string): Promise<ThoughtType[]>;
     /** `GET /thought-types/counts` — own record count per type id (task
@@ -910,12 +1025,12 @@ export interface EtnApi {
     ): Promise<Comment>;
   };
   attachments: {
-    list(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<Attachment[]>;
+    list(networkId: string, ownerType: AttachmentOwnerType, ownerId: string): Promise<Attachment[]>;
     /** `GET /attachments/{id}` — одна запись с владельцем (для резолва кликов по activity). */
     get(networkId: string, id: string): Promise<Attachment>;
     add(
       networkId: string,
-      ownerType: 'thought' | 'link',
+      ownerType: AttachmentOwnerType,
       ownerId: string,
       input: AttachmentInput,
     ): Promise<Attachment>;
@@ -926,12 +1041,18 @@ export interface EtnApi {
      */
     uploadFile(
       networkId: string,
-      ownerType: 'thought' | 'link',
+      ownerType: AttachmentOwnerType,
       ownerId: string,
       input: AttachmentFileInput,
     ): Promise<Attachment>;
     update(networkId: string, id: string, input: AttachmentUpdateInput): Promise<Attachment>;
     remove(networkId: string, id: string): Promise<void>;
+    /**
+     * `GET /attachments/{id}/usage` — владельцы (мысли, публикации, связи),
+     * держащие тот же физический носитель; «облачка» в диалоге выбора обложки
+     * (0.11.1, задача 46cf4bcb).
+     */
+    getUsage(networkId: string, id: string): Promise<AttachmentUsage>;
     /** `GET /attachments/{id}/content` — text (+ rendered html) of a text-like file (L7). */
     getContent(networkId: string, id: string): Promise<AttachmentContent>;
     /** `PUT /attachments/{id}/content` — overwrites a text-like file (L7). */
@@ -1050,10 +1171,10 @@ export interface EtnApi {
       }) => void,
     ): () => void;
     /**
-     * Own-mutation flag (S11, 08-ui-spec.md §2.2): main suppressed the event
-     * as this client's echo, but the write may have created a layer shadow
-     * row — the renderer refreshes the canvas override marking. Payload:
-     * `{networkId}`.
+     * Own-mutation flag (S11, 08-ui-spec.md §2.2): the write may have created
+     * a layer shadow row — the renderer refreshes the canvas override marking
+     * right away (B1: the realtime event also arrives, but asynchronously).
+     * Payload: `{networkId}`.
      */
     onSelfMutated(cb: (payload: { networkId: string }) => void): () => void;
     /**
@@ -1066,10 +1187,12 @@ export interface EtnApi {
   /**
    * Deep-link subscription (task R11, docs/12-wiki-id-refs.md §7.4). The main
    * process pushes `etn://open?net=<id>&thought=<id>` payloads here — cold
-   * start (Win/Linux), `second-instance`, or `open-url` (macOS).
+   * start (Win/Linux), `second-instance`, or `open-url` (macOS). Публикации
+   * (0.11.1, задача 3275fd8d, требование 7f583ef9) несут `publicationId`
+   * вместо `thoughtId` — формы взаимоисключающи.
    */
   deepLink: {
-    onDeepLink(cb: (payload: { networkId: string; thoughtId: string }) => void): () => void;
+    onDeepLink(cb: (payload: DeepLinkPayload) => void): () => void;
   };
   ui: {
     getState(networkId: string, key: string, tabId?: string | null): Promise<string | null>;
@@ -1115,9 +1238,8 @@ export interface EtnApi {
     /**
      * Drops a thought from the visit history of the active profile/network —
      * the actor-side companion of the applier's prune on `thought.deleted`
-     * (the server sends no realtime echo to the deleting client, L4). `tabId`
-     * scopes the removal to one tab; `null` clears across all tabs of the
-     * network (server-side deletion cleanup).
+     * (L4). `tabId` scopes the removal to one tab; `null` clears across all
+     * tabs of the network (server-side deletion cleanup).
      */
     remove(thoughtId: string, tabId?: string | null): Promise<void>;
     /** Clears the whole visit history of the active profile/network. `tabId`

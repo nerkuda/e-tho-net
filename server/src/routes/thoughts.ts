@@ -795,9 +795,10 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const events: AnyWriteEvent[] = [];
           const activity: WriteActivityEntry[] = [];
           // Real-time: emit a `thought.created` for every new thought and a
-          // `link.created` for every new link so other connected clients
-          // refresh without polling. The actor has no echo (04-realtime.md §5);
-          // the local refresh below reconciles the canvas / structures view.
+          // `link.created` for every new link so connected clients refresh
+          // without polling. Since B1 the author receives its own event too
+          // (asynchronously); the local refresh below keeps the canvas /
+          // structures view in sync instantly and is idempotent.
           for (const thought of copied.created_thoughts) {
             events.push({ type: 'thought.created', data: { thought } });
             activity.push({ kind: 'thought', action: 'created', thought });

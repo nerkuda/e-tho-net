@@ -13,6 +13,12 @@
 
 import type { Link } from './link.js';
 import type { Thought } from './thought.js';
+import type {
+  Publication,
+  PublicationDeletionBlocking,
+  Shelf,
+  ShelfDeletionBlocking,
+} from './publication.js';
 
 /** A layer whose shadow row holds a thought/link back from physical deletion. */
 export interface HoldingLayerRef {
@@ -61,15 +67,36 @@ export type TrashLinkEntry = Link & {
   blocking: LinkDeletionBlocking;
 };
 
+/**
+ * A marked-for-deletion publication with its precomputed blocking
+ * (GET /trash; 0.11.1, задача c59ce742, требование 200b87be).
+ */
+export type TrashPublicationEntry = Publication & {
+  blocked: boolean;
+  blocking: PublicationDeletionBlocking;
+};
+
+/**
+ * A marked-for-deletion shelf with its precomputed blocking (GET /trash;
+ * 0.11.1). Полка блокирована только в рабочем слое (физическое удаление — в
+ * основе); состав сносится каскадом и удалению не мешает.
+ */
+export type TrashShelfEntry = Shelf & {
+  blocked: boolean;
+  blocking: ShelfDeletionBlocking;
+};
+
 /** Response of `GET /trash` (03-server-api.md §14b). */
 export interface TrashListResult {
   thoughts: TrashThoughtEntry[];
   links: TrashLinkEntry[];
+  publications: TrashPublicationEntry[];
+  shelves: TrashShelfEntry[];
 }
 
 /** Response of `POST /trash/purge` (03-server-api.md §14b). */
 export interface TrashPurgeResult {
-  /** How many marked thoughts/links were physically deleted. */
+  /** How many marked rows (thoughts/links/publications/shelves) were physically deleted. */
   purged: number;
   /** How many stayed behind because they were blocked. */
   skipped: number;

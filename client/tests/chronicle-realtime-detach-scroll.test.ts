@@ -29,6 +29,9 @@ describe('chronicle realtime: detachChip сбрасывает прокрутку
     // keyed-сверка держит позицию прокрутки, поэтому её сбрасываем явно после
     // перезагрузки, чтобы перемещённая запись была видна.
     assert.match(fnBody, /if \(movesToHome && feedWrap !== null\) feedWrap\.scrollTop = 0;/);
-    assert.match(fnBody, /await reload\(\);[\s\S]*?feedWrap\.scrollTop = 0;/);
+    assert.match(
+      fnBody,
+      /invalidateQueries\(queryKeys\.chronicleFeedAll\(\)\);[\s\S]*?await refreshFeedAndCalendar\(\);[\s\S]*?feedWrap\.scrollTop = 0;/,
+    );
   });
 });

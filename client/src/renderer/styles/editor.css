@@ -837,7 +837,7 @@
   /* Размер через переменную: Ctrl+колесо (M9) масштабирует и виджеты
      редактора, у которых тот же класс. */
   font-size: var(--md-font-size);
-  line-height: 1.55;
+  line-height: var(--md-line-height);
   overflow-wrap: break-word;
 }
 
@@ -944,7 +944,13 @@
 .comment-view h6,
 .cm-editor .cm-line.cm-md-h6 {
   font-weight: 700;
-  line-height: 1.55;
+  line-height: var(--md-line-height);
+  /* Семейство/перенос — как у текста редактора, а не заголовочный шрифт и
+     `text-wrap: balance` проза-стилей Web Awesome (`@layer wa-native`): иначе
+     документ публикации и просмотр комментария различались бы с правкой
+     (волна 9 приёмки, задача b5cfad70). */
+  font-family: inherit;
+  text-wrap: initial;
 }
 
 .comment-view h1,
@@ -1008,8 +1014,8 @@
 
 .comment-view blockquote,
 .cm-editor .cm-line.cm-md-quote-line {
-  padding-left: 10px;
-  border-left: 3px solid var(--border-strong);
+  padding-left: var(--md-quote-indent);
+  border-left: var(--md-quote-border-width) solid var(--border-strong);
   color: var(--text-dim);
 }
 
@@ -1018,15 +1024,33 @@
    одной цитаты отступа нет — как в просмотре, где строки образуют один абзац).
    Классы `cm-md-quote-first`/`cm-md-quote-last` ставит `editor/md-live.ts`. */
 .comment-view blockquote {
-  margin-block: 6px;
+  margin-block: var(--md-quote-gap);
+  /* Проза-стили Web Awesome (`@layer wa-native`) задают blockquote серифное
+     семейство (`--wa-font-family-longform`), кегль ×1.125² и padding
+     `--wa-space-xl` (26px) — луковый слой проигрывает только ЯВНО объявленным
+     свойствам, поэтому документ публикации и просмотр комментария выглядели
+     крупнее и просторнее правки. Задаём их здесь равными парным правилам
+     редактора (волна 9 приёмки, задача b5cfad70). */
+  font-family: inherit;
+  font-size: inherit;
+  line-height: var(--md-line-height);
+  padding-block: var(--md-quote-gap);
+  padding-inline-end: 0;
 }
 
 .cm-editor .cm-line.cm-md-quote-first {
-  padding-top: 6px;
+  padding-top: var(--md-quote-gap);
 }
 
 .cm-editor .cm-line.cm-md-quote-last {
-  padding-bottom: 6px;
+  padding-bottom: var(--md-quote-gap);
+}
+
+/* Полужирный: проза-стили Web Awesome ставят `--wa-font-weight-bold` (600),
+   редактор (HighlightStyle `tags.strong`) — 700. Единый вес из токена. */
+.comment-view strong,
+.comment-view b {
+  font-weight: var(--md-strong-weight);
 }
 
 /* Wiki-ссылки [[имя|алиас]] (M3): вид — как внутренние ссылки, клик — фокус мысли. */
@@ -1179,7 +1203,7 @@
    (min 5 lines); the editor panel itself provides scrolling. Font size rides
    the global --md-font-size variable (M9 zoom). */
 .md-field-view {
-  min-height: calc(1.55em * 5);
+  min-height: calc(var(--md-line-height) * 5em);
   max-height: none;
   overflow: visible;
   cursor: text;
@@ -1188,10 +1212,10 @@
 
 .md-field-area {
   width: 100%;
-  min-height: calc(1.55em * 5);
+  min-height: calc(var(--md-line-height) * 5em);
   font-family: inherit;
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: var(--md-font-size);
+  line-height: var(--md-line-height);
 }
 
 /* Единый вид форм-гридов редакторов (задача 0a1a2414, требование 0dddd939):

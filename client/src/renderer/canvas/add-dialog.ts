@@ -44,6 +44,7 @@ import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
+import { signalPublicationCompositionChanged } from '../lib/live/index.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdLookupQuery, isNotFoundError } from '../lib/pure.js';
 import { buildEntityCombo, loadCrossNetworkCandidates, type LinkPropertyPick } from '../lib/entity-picker.js';
 import {
@@ -299,6 +300,9 @@ async function addLinkPropertyValue(
   }
   const targets = existing.includes(anchorId) ? existing : [...existing, anchorId];
   await etn.properties.set(networkId, 'thought', ownerId, pick.key, targets);
+  // Своё значение свойства-связи меняет состав публикации: сигнал слоя (до B1)
+  // с владельцем и якорем.
+  signalPublicationCompositionChanged([ownerId, anchorId]);
 }
 
 /** Creates/links every picked item (the old insertAll flow, L19 focus). */

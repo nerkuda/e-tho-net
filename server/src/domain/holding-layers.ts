@@ -20,6 +20,17 @@
  * физическое (надгробие), а эффект «пропало из основы» появится лишь после
  * слияния — для пользователя это обман. Такая проверка возвращает основу
  * элементом списка `{ id: BASE_LAYER_ID, title: 'Основа' }`.
+ *
+ * **Служебные (резервные) слои не удерживают** (ошибка 1d0620a8, §8.2). Резерв
+ * слияния (`is_service = 1`) — техническая копия для отката: `mergeLayer` перед
+ * реплеем кладёт в него `copyRowToLayer` строки-«победители» из целевой цепочки
+ * (что именно слияние перезапишет или удалит), дословно. Своих живых правок в
+ * резерве нет — он зеркалит до-слиянийное состояние основы, поэтому не означает
+ * «другой слой тоже хочет эту сущность». Физическое удаление (`DELETE FROM
+ * <table> WHERE id = ?`) сносит теневые строки всех слоёв, включая резервные,
+ * так что удержание резерва ничего бы не спасло, лишь навсегда запирало purge
+ * после любого перезаписывающего слияния. Откат слияния, вернувший бы сознательно
+ * вычищенную пользователем сущность, смысла не имеет — исключаем `is_service`.
  */
 
 import { BASE_LAYER_ID, type HoldingLayerRef } from '@etn/shared';
@@ -31,8 +42,10 @@ import { existsInBaseLayer, isBaseContext } from '../db/layer-write.js';
 const BASE_LAYER_TITLE = 'Основа';
 
 /**
- * Живые теневые строки-удержания во всех не-основных слоях, кроме текущего
- * слоя соединения (его собственная тень — и есть проверяемая строка).
+ * Живые теневые строки-удержания во всех не-основных, **не-служебных** слоях,
+ * кроме текущего слоя соединения (его собственная тень — и есть проверяемая
+ * строка). Резервы слияния (`is_service = 1`) удерживающими не считаются —
+ * обоснование в шапке модуля (ошибка 1d0620a8).
  */
 function otherHoldingLayers(
   ndb: NetworkDb,
@@ -43,7 +56,7 @@ function otherHoldingLayers(
     .prepare(
       `SELECT l.id, l.title
        FROM layers l
-       WHERE l.is_base = 0 AND l.id <> ? AND l.id IN (
+       WHERE l.is_base = 0 AND l.is_service = 0 AND l.id <> ? AND l.id IN (
        ${holdersQuery}
        )
        ORDER BY l.created_at, l.id`,
@@ -87,6 +100,29 @@ export function listLinkHoldingLayers(ndb: NetworkDb, linkId: string): HoldingLa
     [linkId],
   );
   if (!isBaseContext(ndb) && existsInBaseLayer(ndb, 'links', linkId)) {
+    holding.unshift({ id: BASE_LAYER_ID, title: BASE_LAYER_TITLE });
+  }
+  return holding;
+}
+
+/**
+ * Layers holding a **publication** back from physical deletion (0.11.1,
+ * задача 8178e007; требование жизненного цикла 200b87be): удерживает живая
+ * теневая строка самой публикации в ином слое; в рабочем слое — и живая
+ * строка основы (удаление там было бы надгробием, а не физическим
+ * удалением). Ссылки `[[#pub:]]` и состав полок не удерживают — остаются
+ * висячими / подчищаются каскадом.
+ */
+export function listPublicationHoldingLayers(
+  ndb: NetworkDb,
+  publicationId: string,
+): HoldingLayerRef[] {
+  const holding = otherHoldingLayers(
+    ndb,
+    `SELECT layer_id FROM publications WHERE id = ? AND deleted = 0 -- layers:physical-read`,
+    [publicationId],
+  );
+  if (!isBaseContext(ndb) && existsInBaseLayer(ndb, 'publications', publicationId)) {
     holding.unshift({ id: BASE_LAYER_ID, title: BASE_LAYER_TITLE });
   }
   return holding;

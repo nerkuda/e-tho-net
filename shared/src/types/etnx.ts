@@ -13,8 +13,10 @@
  */
 
 import type { Comment, CommentTarget } from './comment.js';
+import type { AttachmentOwnerType } from '../enums.js';
 import type { Link } from './link.js';
 import type { LinkType } from './link-type.js';
+import type { Publication } from './publication.js';
 import type {
   NetworkProperty,
   PropertyDefinition,
@@ -49,7 +51,7 @@ export interface ThoughtSynonym {
  */
 export interface EtnxAttachment {
   id: string;
-  owner_type: 'thought' | 'link';
+  owner_type: AttachmentOwnerType;
   owner_id: string;
   kind: 'url' | 'file';
   url: string | null;
@@ -83,6 +85,58 @@ export interface EtnxManifestType {
 export type EtnxManifestProperty = Omit<NetworkProperty, 'value_type'> & {
   value_type: NetworkProperty['value_type'] | 'thought_ref';
 };
+
+/**
+ * Поузловая строка локального порядка публикации (0.11.1, задача 950e0a59).
+ * Зеркало `publication_order` без служебных колонок слоёв; `id` не хранится —
+ * он детерминирован от `(publication_id, node_key)` и пересчитывается при
+ * импорте (`db/publication-id.ts`).
+ */
+export interface EtnxPublicationOrder {
+  publication_id: string;
+  /** id ребра вхождения либо id мысли корневого раздела. */
+  node_key: string;
+  position: number;
+}
+
+/** Исключённая из публикации мысль (зеркало `publication_exclusions`). */
+export interface EtnxPublicationExclusion {
+  publication_id: string;
+  thought_id: string;
+  created_at: string;
+  created_by: string;
+}
+
+/**
+ * Полка библиотеки публикаций (зеркало `shelves` без состава).
+ *
+ * Пометка корзины (`marked_for_deletion`) переносится форматом 1.2 — по тому же
+ * образцу, что у публикаций (`EtnxPublication`): без неё помеченная полка после
+ * импорта приезжала бы живой. Поля опциональны при чтении: манифест 1.2,
+ * записанный до этой правки, их не несёт — импорт трактует отсутствие как
+ * «не помечена».
+ */
+export interface EtnxShelf {
+  id: string;
+  title: string;
+  position: number;
+  version: number;
+  /** Корзина: пометка обратима, purge — только в основе (0.11.1, c59ce742). */
+  marked_for_deletion?: boolean;
+  marked_for_deletion_at?: string | null;
+  marked_for_deletion_by?: string | null;
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+/** Элемент состава полки (зеркало `shelf_items`; `id` детерминирован). */
+export interface EtnxShelfItem {
+  shelf_id: string;
+  publication_id: string;
+  position: number;
+}
 
 /**
  * Full manifest object. The server writes this verbatim as `manifest.json`
@@ -124,4 +178,23 @@ export interface EtnxManifest {
   /** Thought attachments — `kind = 'file'` rows reference paths inside the
    *  zip's `attachments/` directory. */
   attachments: EtnxAttachment[];
+  /**
+   * Публикации сети (0.11.1, задача 950e0a59) — экспортируются ВСЕ публикации
+   * среза, независимо от содержимого подграфа. `id` сохраняется; импорт —
+   * идемпотентный upsert по `id`. `cover_kind` — вычисляемое поле DTO, при
+   * импорте не читается.
+   *
+   * Секции публикаций появились в формате 1.2 и ОПЦИОНАЛЬНЫ при чтении:
+   * манифест 1.1 без них импортируется как пустой набор (обратная
+   * совместимость).
+   */
+  publications: Publication[];
+  /** Поузловый локальный порядок публикаций. */
+  publication_order: EtnxPublicationOrder[];
+  /** Исключённые из публикаций мысли. */
+  publication_exclusions: EtnxPublicationExclusion[];
+  /** Полки библиотеки публикаций. */
+  shelves: EtnxShelf[];
+  /** Состав полок. */
+  shelf_items: EtnxShelfItem[];
 }

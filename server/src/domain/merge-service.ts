@@ -47,6 +47,7 @@ import {
   type LayerDiscardReport,
   type LayerMergeConflict,
   type LayerMergeMissingClosure,
+  type LayerMergePublicationReorderCollapsed,
   type LayerMergeReport,
   type LayerMergeReorderCollapsed,
   type LayerMergeSkip,
@@ -493,7 +494,9 @@ function ref(table: BranchableTable, id: unknown): { table: BranchableTable; id:
 
 /** Table owning a polymorphic `(owner_type, owner_id)` pair. */
 function ownerTableOf(ownerType: unknown): BranchableTable {
-  return ownerType === 'link' ? 'links' : 'thoughts';
+  if (ownerType === 'link') return 'links';
+  if (ownerType === 'publication') return 'publications';
+  return 'thoughts';
 }
 
 /** Table owning a type-side `(owner_type, owner_id)` pair. */
@@ -539,6 +542,17 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
       return compact([ref('comments', r.comment_id), ref(ownerTableOf(r.owner_type), r.owner_id)]);
     case 'attachments':
       return compact([ref(ownerTableOf(r.owner_type), r.owner_id)]);
+    // 0.11.1: подсистема публикаций. Обложка (`cover_attachment_id`) — не
+    // ссылка замыкания: как и `thoughts.icon_attachment_id`, пойнтер
+    // обнуляется при удалении вложения, а не отвергает слияние.
+    case 'publication_order':
+      return compact([ref('publications', r.publication_id)]);
+    case 'publication_exclusions':
+      // Исключение адресует мысль, которой может уже не быть (висячее
+      // исключение безвредно) — замыкается только на публикацию.
+      return compact([ref('publications', r.publication_id)]);
+    case 'shelf_items':
+      return compact([ref('shelves', r.shelf_id), ref('publications', r.publication_id)]);
     default:
       return [];
   }
@@ -564,14 +578,32 @@ const LINK_CONTENT_FIELDS = [
   'marked_for_deletion',
 ] as const;
 
-/** Whether an update-path link row differs from its winner by `position`
- * only — such rows collapse into one `reorder_collapsed` entry (§6.5). */
-function isPositionOnlyChange(row: AnyRow, winner: AnyRow): boolean {
-  if (row.position === winner.position) return false;
-  for (const field of LINK_CONTENT_FIELDS) {
-    if (row[field] !== winner[field]) return false;
+/** publication_order content fields that must match for a row to count as
+ * position-only (0.11.1, требование e7487d77 п.2: массовые правки только
+ * `position` в `publication_order` сворачиваются в одну позицию отчёта —
+ * расширение таблично-управляемого механизма свёртки по прецеденту
+ * `links.position`). */
+const PUBLICATION_ORDER_CONTENT_FIELDS = ['publication_id', 'node_key'] as const;
+
+/**
+ * Whether an update-path row differs from its winner by `position` only, and
+ * the collapse-group key if so (иначе `null`). Группировка — по «владельцу»
+ * порядка: `links` → `source_id` (мысль, у которой переставили детей),
+ * `publication_order` → `publication_id`.
+ */
+function positionOnlyGroup(table: BranchableTable, row: AnyRow, winner: AnyRow): string | null {
+  if (row.position === winner.position) return null;
+  const fields =
+    table === 'links'
+      ? LINK_CONTENT_FIELDS
+      : table === 'publication_order'
+        ? PUBLICATION_ORDER_CONTENT_FIELDS
+        : null;
+  if (fields === null) return null;
+  for (const field of fields) {
+    if (row[field] !== winner[field]) return null;
   }
-  return true;
+  return table === 'links' ? (row.source_id as string) : (row.publication_id as string);
 }
 
 /** Copy a physical row verbatim into another layer (reserve layer, §8.2). */
@@ -774,6 +806,7 @@ function mergeLayerInner(
   // --- Phase D: replay (tombstones → updates → inserts, §8.1) -------------
   const applied: Record<string, number> = {};
   const reorderGroups = new Map<string, number>();
+  const publicationReorderGroups = new Map<string, number>();
   const deletedAttachmentIds = new Set<string>();
 
   /** Tombstone replay: the deletion lands in P (§8.1, реализация — only P's
@@ -863,10 +896,12 @@ function mergeLayerInner(
         )
         .run(target.id, winner.version as number, row.rowid);
     }
-    // §6.5: position-only link updates collapse into one report entry.
-    if (table === 'links' && isPositionOnlyChange(row, winner)) {
-      const key = row.source_id as string;
-      reorderGroups.set(key, (reorderGroups.get(key) ?? 0) + 1);
+    // §6.5: position-only updates collapse into one report entry; 0.11.1 —
+    // тем же механизмом и для порядка публикаций (e7487d77 п.2).
+    const group = positionOnlyGroup(table, row, winner);
+    if (group !== null) {
+      const map = table === 'links' ? reorderGroups : publicationReorderGroups;
+      map.set(group, (map.get(group) ?? 0) + 1);
     }
   };
 
@@ -944,6 +979,13 @@ function mergeLayerInner(
         'UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ? AND layer_id = ?',
       )
       .run(attachmentId, target.id);
+    // 0.11.1: обложка публикации, как и иконка мысли, — не ссылка замыкания;
+    // при удалении строки-вложения пойнтер обнуляется.
+    ndb
+      .prepare(
+        'UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ? AND layer_id = ?',
+      )
+      .run(attachmentId, target.id);
   }
 
   // --- Phase E: remove the merged rows from L (§8.4) ----------------------
@@ -980,6 +1022,9 @@ function mergeLayerInner(
   const reorder_collapsed: LayerMergeReorderCollapsed[] = [...reorderGroups.entries()].map(
     ([thought_id, count]) => ({ thought_id, count }),
   );
+  const publication_reorder_collapsed: LayerMergePublicationReorderCollapsed[] = [
+    ...publicationReorderGroups.entries(),
+  ].map(([publication_id, count]) => ({ publication_id, count }));
 
   // --- Phase F: trash auto-purge (§8.4, same call as layer deletion) ------
   // Исход очистки (события/журнал) здесь не раздаётся — события раздаёт
@@ -997,6 +1042,7 @@ function mergeLayerInner(
     applied,
     skipped,
     reorder_collapsed,
+    publication_reorder_collapsed,
     reserve_layer_id: reserveLayerId,
     purged: purge.purged,
     deleted_thought_ids: purge.deleted_thought_ids,

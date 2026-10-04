@@ -135,7 +135,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('lists the 13 etn:// resources (1 static + 12 templated)', async () => {
+  it('lists the 14 etn:// resources (1 static + 13 templated)', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -147,13 +147,17 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
           ...listed.resources.map((r) => r.uri),
           ...templates.resourceTemplates.map((r) => r.uriTemplate),
         ].sort();
-        assert.equal(uris.length, 13);
+        assert.equal(uris.length, 14);
         assert.ok(uris.includes('etn://networks'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}/usage'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}/backlinks'));
         assert.ok(uris.includes('etn://networks/{network_id}/thought-types/{type_id}'));
         assert.ok(uris.includes('etn://networks/{network_id}/trash'));
+        // 0.11.1 (задача 46cf4bcb): вложения публикации — паритет REST.
+        assert.ok(
+          uris.includes('etn://networks/{network_id}/publications/{publication_id}/attachments'),
+        );
       } finally {
         await handle.close();
       }
@@ -501,6 +505,22 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // `ontology.delete` (−1 destructive), `thoughts.trash`/`links.restore`/
         // `properties.resolve` (−3 idempotent) → 23 из 25: 17 readOnly,
         // 0 destructive (витрина деструктивных инструментов пуста), 4 idempotent.
+        // 0.11.1 (задача 8f6857f8, «Публикации»): +22 инструмента, все
+        // аннотированы → 45. readOnly: 6 чтения + 2 экспорта (сборка без
+        // записи в БД) = +8 → 25. destructive: `publications.delete` и
+        // `shelves.delete` (purge) = +2 → 2. idempotent: order, exclusions,
+        // trash, restore, shelves.trash, shelves.restore, shelves.assign = +7 → 11.
+        // 0.11.1 (задача e754527d, круг 2): +`etn.publications.accept`
+        // (MCP-двойник REST accept) — idempotent → +1: 46 аннотированных, 12 idempotent.
+        // 0.11.1 (задача 00160da1): +`etn.publications.deletionCheck` и
+        // `etn.shelves.deletionCheck` (MCP-паритет REST deletion-check) —
+        // оба readOnly → 48 аннотированных, readOnly 25 → 27.
+        // 0.11.1 (задача 094653b6): 25 инструментов `etn.publications.*` /
+        // `etn.shelves.*` свёрнуты в `etn.guide` + `etn.ops` (ADR b2eebf8b/
+        // 8358eea9) — из `MCP_TOOL_NAMES` и аннотаций убраны все 25. Возврат к
+        // состоянию 0.8.3 (задача d379e091): 25 инструментов, аннотированы 23
+        // (`etn.ops` — диспетчер без тул-уровневых подсказок; `comments.update`
+        // исторически без аннотации): 17 readOnly, 0 destructive, 4 idempotent.
         assert.equal(annotated, 23);
         assert.equal(hintReadOnly, 17);
         assert.equal(hintDestructive, 0);

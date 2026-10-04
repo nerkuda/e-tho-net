@@ -7,7 +7,8 @@
  *
  *  1. A `comment.*` event for ANY thought in the network arrived at the
  *     renderer via the realtime bridge.
- *  2. `applyRealtimeToUi` (realtime-ui.ts) called `scheduleRefresh()` for
+ *  2. производный мост `applyDerivedRealtime` (realtime-effects.ts, G6 — прежний
+ *     мост `applyRealtimeToUi`) called `scheduleRefresh()` for
  *     every comment event, even though comments are sub-objects that never
  *     change the focus response (parents/children/siblings/edges).
  *  3. `scheduleRefresh()` arms a 200 ms debounce → `refreshFocus()` → store
@@ -20,7 +21,7 @@
  *
  * The fix has two parts:
  *
- *  a) `realtime-ui.ts` stops calling `scheduleRefresh()` for `comment.*`
+ *  a) мост производных эффектов (`realtime-effects.ts`) не вызывает `scheduleRefresh()` для `comment.*`
  *     events. The editor's own realtime hook (`wireCommentRealtime` in
  *     comments.ts) handles foreign comment changes for the open entity
  *     in place — patching the comment view via `setMarkdownField` rather
@@ -119,14 +120,14 @@ function makePermanent(commentId: string, ownerId: string, bodyMd: string): Comm
 }
 
 /**
- * Sends an arbitrary realtime event through `applyRealtimeToUi` and flushes
+ * Sends an arbitrary realtime event through `applyDerivedRealtime` and flushes
  * the 200 ms `scheduleRefresh` debounce. After it resolves, any `store.update`
  * that the event caused will have landed — if NONE has, the event was
  * handled without a focus refresh (the fix).
  */
 async function deliverEvent(evt: AnyRealtimeEvent): Promise<void> {
-  const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
-  applyRealtimeToUi(evt);
+  const { applyDerivedRealtime } = await import('../src/renderer/realtime-effects.js');
+  applyDerivedRealtime(evt);
   await new Promise<void>((r) => setTimeout(r, 250));
 }
 
@@ -175,7 +176,7 @@ describe('realtime events — focus must NOT refresh for comment.* (206e33a1)', 
       audience: 'network',
       network_id: 'n1',
       layer_id: 'base',
-      data: { id: 'c1', changes: { body_md: 'новый текст' }, version: 2 },
+      data: { id: 'c1', owner_id: 't1', kind: 'permanent', changes: { body_md: 'новый текст' }, version: 2 },
       meta: { version: 1 },
     });
 

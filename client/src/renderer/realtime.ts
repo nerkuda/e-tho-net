@@ -4,19 +4,22 @@
  * Subscribes to `etn.realtime.*` and funnels events into the store:
  *  - status → `rtStatus` (🟢/🟡/🔴 indicator, H19 offline blocking);
  *  - events → narrowed via {@link isRealtimeEvent}, described for the status
- *    bar, then dispatched to every registered listener (canvas, editor,
- *    history bar, drafts…);
+ *    bar, then routed through the data layer (`routeRealtimeEvent`) and the
+ *    single derived-effects bridge (`effects.onEventApplied`);
  *  - `resume.stale` → full re-focus request;
  *  - derived effects: `focus-lost` (focused thought deleted) and
  *    `network-lost` (network deleted or self removed from members).
  *
- * The main process already drops own-client echoes (G8 applier), so every event
- * reaching here is a change from another client or a server-side action.
+ * B1 техпроекта 269016e2: сервер шлёт событие и автору (broadcast-to-all),
+ * main-forward'ит все принятые события — сюда доходят и СОБСТВЕННЫЕ правки.
+ * Идемпотентность держит слой (`lib/live`): дедуп по seq/версии сущности и
+ * буферизация событий сущности с optimistic-мутацией в полёте.
  */
 
 import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { etn } from './lib/etn.js';
+import { routeRealtimeEvent } from './lib/live/event-router.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
 import { store, type RtStatus } from './state.js';
 import { markTabDirty } from './screens/tabs/tab-state.js';
@@ -33,6 +36,14 @@ export interface RealtimeEffects {
   /** The session's layer changed server-side (S11): switched by another tab of
    * this client or deleted — the whole visible state must be re-synced. */
   onLayerControl: (payload: { kind: 'switched' | 'deleted'; networkId: string; layer: { id: string; title: string } }) => void;
+  /**
+   * Принятое событие прошло роутер слоя (G6 техпроекта 269016e2). Единственная
+   * точка производных эффектов, не выражаемых ключом запроса (store-срезы,
+   * ref-кэш холста, панель истории, перечитывание каталогов типов). Регистрирует
+   * `app.ts` (`applyDerivedRealtime`) — прямые подписки на шину вне этого моста
+   * запрещены сторожем `guard-reactive-layer.test.ts`.
+   */
+  onEventApplied: (evt: AnyRealtimeEvent) => void;
 }
 
 const effects: RealtimeEffects = {
@@ -40,10 +51,8 @@ const effects: RealtimeEffects = {
   onFocusLost: () => undefined,
   onNetworkLost: () => undefined,
   onLayerControl: () => undefined,
+  onEventApplied: () => undefined,
 };
-
-/** Event listeners — content modules register their own without clobbering. */
-const eventListeners = new Set<(evt: AnyRealtimeEvent) => void>();
 
 let initialized = false;
 let hideTimer: number | null = null;
@@ -57,16 +66,6 @@ const EVENT_TEXT_TTL_MS = 5_000;
  */
 export function setRealtimeEffects(next: Partial<RealtimeEffects>): void {
   Object.assign(effects, next);
-}
-
-/**
- * Subscribes to accepted realtime events. Returns the unsubscribe function.
- */
-export function onRealtimeEvent(listener: (evt: AnyRealtimeEvent) => void): () => void {
-  eventListeners.add(listener);
-  return () => {
-    eventListeners.delete(listener);
-  };
 }
 
 /** Connects the realtime bridge. Called once at boot. */
@@ -162,7 +161,12 @@ export function initRealtime(): void {
     if (evt.type === 'member.removed' && store.state.me?.id === evt.data.user_id) {
       effects.onNetworkLost();
     }
-    for (const listener of eventListeners) listener(evt);
+    // Реактивный слой данных (269016e2): событие идёт декларативным роутером —
+    // он патчит нормализованный кэш и гасит ключи запросов (границу сети
+    // уважает переданный networkId). Производные эффекты, не выражаемые ключом,
+    // применяет мост `effects.onEventApplied` (G6; прежний switch снесён).
+    routeRealtimeEvent(evt, { networkId: store.state.networkId });
+    effects.onEventApplied(evt);
   });
 }
 

@@ -35,6 +35,12 @@ export interface TabSpec {
   id: string;
   label: string;
   /**
+   * Счётчик `(N)` у подписи (бейдж), как у вкладок панели мысли
+   * (`editor.ts`, `.editor-tab-count`). `undefined` — бейджа нет. Обновляется
+   * вызовом {@link TabsHandle.setCount} после изменения набора.
+   */
+  count?: number;
+  /**
    * Содержимое панели. Функция вызывается ЛЕНИВО — при первом показе вкладки,
    * и ровно один раз: возвращённый узел переиспользуется при повторных
    * переключениях (состояние вкладки не теряется).
@@ -59,6 +65,8 @@ export interface TabsHandle {
   setActive(id: string): void;
   /** Идентификатор активной вкладки. */
   activeId(): string;
+  /** Обновляет счётчик `(N)` вкладки; `undefined` — бейдж скрывается. */
+  setCount(id: string, count: number | undefined): void;
 }
 
 /** Счётчик для уникальных id вкладок и панелей (aria-связи). */
@@ -81,6 +89,8 @@ export function uiTabs(opts: TabsOptions): TabsHandle {
 
   const buttons = new Map<string, HTMLButtonElement>();
   const panes = new Map<string, HTMLElement>();
+  /** Бейджи счётчиков `(N)`, по вкладке (для {@link TabsHandle.setCount}). */
+  const countBadges = new Map<string, HTMLElement>();
   const built = new Set<string>();
   const first = opts.tabs[0]?.id ?? '';
   let active = opts.activeId !== undefined && opts.tabs.some((t) => t.id === opts.activeId)
@@ -118,6 +128,19 @@ export function uiTabs(opts: TabsOptions): TabsHandle {
     if (emit) opts.onChange?.(id);
   };
 
+  /** Обновляет бейдж счётчика вкладки; `undefined` — бейдж скрывается. */
+  function setCount(id: string, count: number | undefined): void {
+    const badge = countBadges.get(id);
+    if (badge === undefined) return;
+    if (count === undefined) {
+      badge.textContent = '';
+      badge.classList.add('hidden');
+      return;
+    }
+    badge.textContent = `(${count})`;
+    badge.classList.remove('hidden');
+  }
+
   const focusAt = (index: number): void => {
     const list = opts.tabs;
     if (list.length === 0) return;
@@ -135,6 +158,12 @@ export function uiTabs(opts: TabsOptions): TabsHandle {
     btn.type = 'button';
     btn.id = tabId;
     btn.textContent = spec.label;
+    // Бейдж счётчика — как у вкладок панели мысли (`.editor-tab-count`):
+    // рядом с подписью, бледным, скрыт при отсутствии значения.
+    const badge = el('span', 'ui-tab-count hidden');
+    btn.append(badge);
+    countBadges.set(spec.id, badge);
+    setCount(spec.id, spec.count);
     btn.setAttribute('role', 'tab');
     btn.setAttribute('aria-controls', paneId);
     btn.addEventListener('click', () => activate(spec.id, true));
@@ -173,5 +202,6 @@ export function uiTabs(opts: TabsOptions): TabsHandle {
     root,
     setActive: (id: string): void => activate(id, true),
     activeId: (): string => active,
+    setCount,
   };
 }

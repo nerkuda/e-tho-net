@@ -57,6 +57,7 @@ import {
   buildEntityChipSection,
   buildExtrasSection,
   buildKeywordsSection,
+  buildParentThoughtsSection,
   buildSortSection,
   type FilterFormContext,
   type FilterSection,
@@ -67,13 +68,11 @@ import {
   buildEntityChipField,
   filterEntityOptions,
   pickEntitiesModal,
-  thoughtEntityOption,
   thoughtTypeEntityOptions,
   linkTypeEntityOptions,
   type EntityOption,
 } from '../../lib/entity-picker.js';
 import { wireSuggest, type SuggestEntry, type SuggestSource } from '../../lib/suggest-dropdown.js';
-import { type ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { buildUserSelectWidget, listUsers, resolveUserName } from '../../lib/users.js';
 import { store } from '../../state.js';
 
@@ -508,23 +507,17 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   );
 
   // --- Родительские мысли ---------------------------------------------------
-  const parentSection = buildEntityChipSection(ctx, {
-    title: 'Родительские мысли',
-    getValues: () => state.parentIds,
-    setValues: (values) => {
-      state.parentIds = values;
-    },
-    loadOptions: (query) => parentThoughtOptions(networkId, query),
-    optionsHeader: 'Мысли',
-    extraSources: [tokenSourceFor({ kind: 'parent' })],
-    cloudOf: (value) => (value.startsWith('$') ? null : (parentClouds.get(value) ?? null)),
-    placeholder: 'Название мысли или токен…',
-    tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
-    picker: { label: 'Выбрать из списка', open: (managed) => pickParentThoughts(networkId, managed) },
-  });
-  sections.push(parentSection);
-  // Догрузить облачка уже выбранных мыслей (в каталоге живого поиска их нет).
-  void resolveParentClouds(networkId, state.parentIds).then(() => parentSection.fieldRefresh());
+  // ОБЩИЙ фасад роли (`buildParentThoughtsSection`): тот же чип-лист корней,
+  // живой поиск и ленивая догрузка облачков, что в «Структурах», «Хронике» и
+  // рецепте публикации. Своей копии у диалога больше нет.
+  sections.push(
+    buildParentThoughtsSection(ctx, {
+      placeholder: 'Название мысли или токен…',
+      extraSources: [tokenSourceFor({ kind: 'parent' })],
+      tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
+      picker: { label: 'Выбрать из списка', open: (managed) => pickParentThoughts(networkId, managed) },
+    }),
+  );
 
   // --- Типы мыслей и связи --------------------------------------------------
   sections.push(
@@ -601,43 +594,9 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
 }
 
 // ---------------------------------------------------------------------------
-// Кандидаты «Родительские мысли» (живой поиск мыслей) — общий пикер
+// Редактор одиночного значения: живой поиск (id, токен или пользователь по
+// имени) + выбор пользователя из каталога.
 // ---------------------------------------------------------------------------
-
-/** Облачка выбранных мыслей «Родительских мыслей» (id → данные облачка). */
-const parentClouds = new Map<string, ThoughtCloudInput>();
-
-/** Live-search кандидаты мыслей для чип-листа «Родительские мысли». */
-async function parentThoughtOptions(networkId: string, query: string): Promise<EntityOption[]> {
-  const needle = query.trim();
-  if (needle === '') return [];
-  try {
-    const hits = await etn.thoughts.findDuplicates(networkId, needle, [], []);
-    return hits.map((hit) => {
-      parentClouds.set(hit.id, { ...hit });
-      return thoughtEntityOption(hit);
-    });
-  } catch {
-    return [];
-  }
-}
-
-/** Дозаполняет облачка уже выбранных родительских мыслей (резолв по id). */
-async function resolveParentClouds(networkId: string, ids: readonly string[]): Promise<void> {
-  const missing = ids.filter((id) => !id.startsWith('$') && !parentClouds.has(id));
-  if (missing.length === 0) return;
-  try {
-    const refs = await etn.thoughts.resolve(networkId, [...missing]);
-    for (const ref of refs) parentClouds.set(ref.id, { ...ref });
-  } catch {
-    // Оффлайн — чипы останутся с сырым id.
-  }
-}
-
-/**
- * Редактор одиночного значения: живой поиск (id, токен или пользователь по
- * имени) + выбор пользователя из каталога.
- */
 function buildAuthorSingleEditor(
   currentId: string,
   onChange: (id: string) => void,

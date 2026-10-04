@@ -26,7 +26,7 @@
  * `last_seq` is persisted per `(client_id, network_id)` in `client_meta.last_seq`
  * as a JSON map `{ [network_id]: seq }`. It is advanced synchronously on every
  * received event — the event "passed" on the wire even if the applier later
- * suppresses its echo (11-settings-and-state.md §1.4).
+ * drops it as stale (11-settings-and-state.md §1.4).
  */
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';

@@ -116,6 +116,36 @@ describe('zone-paging: сверка со свежим количеством (о
     assert.equal(plan.grew, false);
   });
 
+  it('первая порция свежего ответа того же фокуса уже показана — порция не перезапрашивается (31ed1d43)', () => {
+    // До правки сектор был пуст (loaded 0, total 0), затем у фокуса появился
+    // подчинённый, и свежий ответ фокуса принёс его первой же порцией. Префикс
+    // «израсходованного» обязан учесть эту порцию, иначе догрузка запросит
+    // страницу с offset = 0 заново и задвоит строку в `zoneAppended` — мысль
+    // переживёт удаление связи и останется висеть на карте.
+    const plan = planZoneReconcile({ loaded: 0, total: 0, loading: false }, 1, ZONE_PAGE_SIZE, 1);
+    assert.deepEqual(plan.counters, { loaded: 1, total: 1 });
+    assert.equal(
+      hasMore({ ...plan.counters, loading: false }),
+      false,
+      'первая порция уже показана ответом фокуса — догружать нечего',
+    );
+  });
+
+  it('первая порция свежего ответа не сжимает уже израсходованный префикс', () => {
+    const plan = planZoneReconcile({ loaded: 120, total: 200, loading: false }, 200, ZONE_PAGE_SIZE, 50);
+    assert.deepEqual(plan.counters, { loaded: 120, total: 200 });
+    assert.equal(plan.grew, false);
+  });
+
+  it('рост за первой порцией с учётом показанной порции — догрузка идёт с её конца', () => {
+    // Фокус показывал 50 подчинённых; появился 51-й — порция запрашивается с
+    // offset 50, а не 0.
+    const plan = planZoneReconcile({ loaded: 50, total: 50, loading: false }, 51, ZONE_PAGE_SIZE, 50);
+    assert.deepEqual(plan.counters, { loaded: 50, total: 51 });
+    assert.equal(plan.grew, true);
+    assert.equal(hasMore({ ...plan.counters, loading: false }), true);
+  });
+
   it('своя запись добавила мысль за префиксом — количество выросло, нужна порция', () => {
     // Фокус с 66 подчинёнными показывал первые 50; новая мысль встала в хвост.
     const plan = planZoneReconcile({ loaded: 50, total: 66, loading: false }, 67);

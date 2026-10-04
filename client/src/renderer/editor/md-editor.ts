@@ -41,6 +41,12 @@ export interface MdEditor {
   setValue(md: string): void;
   /** Inserts markdown at the caret (newline-separated when mid-line). */
   insertAtCaret(text: string): void;
+  /**
+   * Ставит каретку на позицию (клампится по длине документа), фокусирует
+   * редактор и прокручивает к курсору. Нужно двойному клику по тексту
+   * публикации: курсор в месте клика/начале абзаца (задача ea1b5f14).
+   */
+  setCaret(position: number): void;
   focus(): void;
   focusToEnd(): void;
   blur(): void;
@@ -52,7 +58,7 @@ const mdHighlightStyle = HighlightStyle.define([
   // Насыщенность заголовка задаёт общее правило строки `.cm-md-h*` в
   // `styles/editor.css` (единый источник с просмотром, ошибка 45989471) —
   // здесь вес не дублируется.
-  { tag: tags.strong, fontWeight: '700' },
+  { tag: tags.strong, fontWeight: 'var(--md-strong-weight)' },
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: tags.link, color: 'var(--accent)' },
@@ -101,7 +107,7 @@ const mdTheme = EditorView.theme({
   '.cm-scroller': { fontFamily: 'inherit' },
   '.cm-content': {
     fontFamily: 'inherit',
-    lineHeight: '1.55',
+    lineHeight: 'var(--md-line-height)',
     caretColor: 'var(--accent)',
     padding: '2px 0',
   },
@@ -225,6 +231,13 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         // Прокрутка каретки к видимой в контейнере панели, а не в самом поле
         // (поле растёт по содержимому) — см. scrollCaretIntoView.
         EditorView.scrollHandler.of(scrollCaretIntoView),
+        // Нативная проверка орфографии (задача 1e373ac7). CodeMirror 6 в
+        // updateAttrs() принудительно ставит `spellcheck="false"` на contentDOM,
+        // поэтому ошибки в комментарии не подчёркивались, в отличие от обычных
+        // полей (`lib/ui/field.ts`, spellcheck по умолчанию true). Фасет
+        // contentAttributes применяется после и возвращает атрибуту true; языки
+        // спеллчекера задаёт главный процесс (client/src/main/index.ts).
+        EditorView.contentAttributes.of({ spellcheck: 'true' }),
         EditorView.lineWrapping,
         syntaxHighlighting(mdHighlightStyle, { fallback: true }),
         EditorView.updateListener.of((update) => {
@@ -275,6 +288,11 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       view.focus();
     },
     focus: () => view.focus(),
+    setCaret: (position: number) => {
+      const anchor = Math.max(0, Math.min(view.state.doc.length, Math.trunc(position)));
+      view.focus();
+      view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    },
     focusToEnd: () => {
       view.focus();
       // `scrollIntoView` (замечание проверки f4f99e3f): без него при входе в

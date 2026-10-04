@@ -17,13 +17,16 @@ import { closeDialog, errorDialog } from './lib/dialog.js';
 import { hasTextSelection } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import {
+  activateFocusQuery,
+  deactivateFocusQuery,
+  findRootThought,
   refreshFocusOrNull,
   resetFocusToHome,
-  zoneStateFromFocus,
-  ensureManualPositionsInitialized,
-  findRootThought,
+  publishFocusResponse,
 } from './lib/layer-resync.js';
 import { closeMenu } from './lib/menu.js';
+import { queryKeys } from './lib/live/query-keys.js';
+import { invalidateQueries, setQueryData } from './lib/live/query-registry.js';
 import { notice } from './lib/notice.js';
 import { logUiEvent } from './lib/ui-log.js';
 import { UI_STATE_KEY, PREF_KEY, parseStoredCanvasLinkFilter } from '@etn/shared';
@@ -43,14 +46,13 @@ import {
 } from './lib/pure.js';
 import { initListClamps } from './editor/list-heights.js';
 import { noteThoughtRemoved, noteThoughtWillOpen } from './history.js';
-import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
-import { applyRealtimeToUi } from './realtime-ui.js';
+import { initRealtime, setRealtimeEffects } from './realtime.js';
+import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache } from './lib/lock-cache.js';
-import { scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
-import { invalidateAllRefs, invalidateIndicators, invalidateRef } from './canvas/canvas.js';
+import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
 import { refreshSearchIfVisible } from './search/search.js';
@@ -89,6 +91,9 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // before anything else, otherwise a quick Ctrl+V in the new network would
   // target an id that no longer exists on the map.
   resetCanvasCursor();
+  // Слой данных (G2): снимаем подписку прошлой окрестности — иначе её
+  // слушатель писал бы фокус закрытой сети в store.
+  deactivateFocusQuery();
   const network = await etn.networks.open(networkId);
   const prefs = await etn.networks.getPreferences(networkId);
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
@@ -173,6 +178,8 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     structuresActiveThought: null,
     pins: (pinsRaw ?? []).map((p) => p.thought_id),
   });
+  // Срез слоя `pins` (G5): порядок закреплённых для панели — из ответа сети.
+  setQueryData(queryKeys.pins(), (pinsRaw ?? []).map((p) => p.thought_id));
 
   // Q3: refresh tab list and activate the right entry. When the caller
   // supplies `tabId` (the picker / tab activation), that exact tab wins —
@@ -224,10 +231,12 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // switching tabs inside a network actually swaps the view (not just the
   // highlighted tab).
   const viewFromTab = activeTabView;
+  const knownView = (value: string | null): value is WorkspaceView =>
+    value === 'structures' || value === 'chronicle' || value === 'publications';
   const resolvedView: WorkspaceView =
-    viewFromTab === 'structures' || viewFromTab === 'chronicle'
+    knownView(viewFromTab)
       ? viewFromTab
-      : activeViewRaw === 'structures' || activeViewRaw === 'chronicle'
+      : knownView(activeViewRaw)
         ? activeViewRaw
         : 'map';
   store.update({ activeView: resolvedView });
@@ -279,12 +288,11 @@ export async function loadFocusForTab(
 ): Promise<void> {
   try {
     const response = await etn.thoughts.focus(networkId, thoughtId);
-    store.update({
-      focus: response,
-      editorTarget: null,
-      selectedLinkId: null,
-      ...zoneStateFromFocus(response),
-    });
+    // Слой данных (G2): свежий ответ идёт в кэш `focus:@id`, активная
+    // окрестность подписывается на него — холст рисует из кэша.
+    publishFocusResponse(response);
+    activateFocusQuery(networkId, thoughtId);
+    store.update({ editorTarget: null, selectedLinkId: null });
   } catch {
     // The persisted thought vanished (deleted, no access) — fall back to a
     // blank focus so the workspace isn't stuck showing the previous network's
@@ -331,14 +339,16 @@ export async function setFocus(id: string): Promise<void> {
   // before the store update below (same reasoning as before: the history bar
   // re-renders from store changes, so this needs to land first).
   await noteThoughtWillOpen(id);
-  const zoneState = zoneStateFromFocus(response);
+  // Слой данных (G2): ответ фокуса кладётся в кэш `focus:@id` (мутатор-путь),
+  // активная окрестность подписывается на ключ. Ручного перечитывания
+  // окрестности нет — холст перерисовывается из кэша.
+  publishFocusResponse(response);
+  activateFocusQuery(networkId, id);
   store.update({
-    focus: response,
     editorTarget: null,
     selectedLinkId: null,
     structuresActiveThoughtId: null,
     structuresActiveThought: null,
-    ...zoneState,
   });
   // Milestone journal mark (task 92b89e6f): the focus response has landed and
   // the canvas/store now render it — the closing bracket of the
@@ -352,7 +362,6 @@ export async function setFocus(id: string): Promise<void> {
   } else {
     void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
   }
-  void ensureManualPositionsInitialized(networkId, id, response, zoneState.zoneOrder).catch(() => undefined);
 }
 
 /**
@@ -371,12 +380,22 @@ export async function refreshFocus(): Promise<void> {
   await refreshFocusOrNull(networkId);
 }
 
-/** Coalesces consecutive refresh requests into one call. */
+/**
+ * Coalesces consecutive focus-refresh requests into one call.
+ *
+ * Слой данных (G2): вместо прямого перечитывания `thoughts.focus()` гасим
+ * `focus`-ключи реестра — активная окрестность (подписана, пока холст
+ * смонтирован) перезапросится роутером/слоем. Дебаунс окна сохранён.
+ */
 export function scheduleRefresh(): void {
   if (refreshTimer !== null) window.clearTimeout(refreshTimer);
   refreshTimer = window.setTimeout(() => {
     refreshTimer = null;
-    void refreshFocus().catch(() => undefined);
+    const touched = invalidateQueries(queryKeys.focusAll());
+    // Переходный fallback: экрана на слое ещё нет (или запрос не подписан) —
+    // окрестность перечитываем напрямую, как раньше. Как только холст
+    // подпишется на `focus:@id`, перезапрос пойдёт через слой.
+    if (touched.length === 0) void refreshFocus().catch(() => undefined);
   }, REFRESH_DEBOUNCE_MS);
 }
 
@@ -405,7 +424,7 @@ export async function resyncAfterLayerSwitch(): Promise<void> {
   // A stale trash badge here is exactly bug 0.5.4: a mark lifted in a layer
   // kept hiding on the base cloud after switching back.
   invalidateAllRefs();
-  invalidateIndicators(null);
+  invalidateQueries(queryKeys.indicatorsAll());
   // Re-read the focus FIRST: the editor follows it once the cached snapshots
   // are dropped below, and this way it renders straight into the new layer's
   // data instead of flashing the old layer's focus for a frame.
@@ -428,11 +447,13 @@ export async function resyncAfterLayerSwitch(): Promise<void> {
     structuresActiveThought: null,
   });
   scheduleStructuresRefresh();
-  scheduleChronicleRefresh();
+  // «Дневник» (G3) — тем же слоем: гасим ключ ленты, экран перечитает её сам.
+  invalidateQueries(queryKeys.chronicleFeedAll());
 }
 
 /** Returns to the network list (e.g. after `network-lost`). */
 export function backToNetworks(): void {
+  deactivateFocusQuery();
   store.resetNetwork();
   showScreen('networks');
 }
@@ -470,6 +491,7 @@ export async function restoreSession(): Promise<void> {
 /** Disconnects the profile and returns to onboarding (H18 user menu). */
 export async function disconnect(): Promise<void> {
   await etn.server.disconnect();
+  deactivateFocusQuery();
   store.resetNetwork();
   store.update({ me: null, profileId: null });
   showScreen('onboarding');
@@ -483,9 +505,10 @@ export function requireNetworkId(): string {
 }
 
 /**
- * Actor-side cleanup after deleting a thought (workplan L4). The server never
- * echoes `thought.deleted` to the acting client (04-realtime.md §5), so the
- * deleting client mirrors the applier's handling locally:
+ * Actor-side cleanup after deleting a thought (workplan L4). B1 техпроекта
+ * 269016e2: the server delivers `thought.deleted` to the acting client too
+ * (asynchronously), so this local mirror only makes the effect immediate — the
+ * arriving event is idempotent afterwards.
  *
  *   * the thought leaves the local focus history (after the rotation that
  *     `setFocus` performs), caches and the selection;
@@ -530,7 +553,7 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
   // is never resurrected as "the previous thought" on the next transition.
   noteThoughtRemoved(deletedId);
   await etn.history.remove(deletedId, store.state.activeTabId).catch(() => undefined);
-  invalidateIndicators(deletedId);
+  invalidateQueries(queryKeys.indicators(deletedId));
   invalidateRef(deletedId);
   invalidateHistoryBar();
   invalidateStructuresThought(deletedId);
@@ -606,8 +629,11 @@ export async function boot(): Promise<void> {
         resyncAfterLayerSwitch(),
       );
     },
+    // G6: единственная точка производных эффектов события (store-срезы,
+    // бесхитростные кэши UI, каталоги типов). Прежний мост `onRealtimeEvent`
+    // снесён вместе со старым switch — прямых подписок на шину нет.
+    onEventApplied: (evt) => applyDerivedRealtime(evt),
   });
-  onRealtimeEvent(applyRealtimeToUi);
 
   const profiles = await etn.server.listProfiles();
   const active = profiles.find((p) => p.isActive);

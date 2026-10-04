@@ -322,9 +322,9 @@ async function resolveRows(ids: readonly string[]): Promise<void> {
 /**
  * Точечно обновляет строку выделения после изменения мысли (переименование,
  * смена оформления/типа/актуальности): мысль в выделении — сбрасываем её кэш и
- * перерисовываем ТОЛЬКО её строку. Нужен локальным производителям и realtime:
- * своего эха актору сервер не шлёт (04-realtime.md §5), а панель подписана лишь
- * на состав выделения (ошибка 3a64e680).
+ * перерисовываем ТОЛЬКО её строку. Нужен локальным производителям (мгновенный
+ * отклик) и realtime: своё событие приходит асинхронно (B1), а панель подписана
+ * лишь на состав выделения (ошибка 3a64e680).
  */
 export function invalidateSelectionThought(thoughtId: string): void {
   if (!store.state.selection.includes(thoughtId)) return;
@@ -862,7 +862,7 @@ async function applyStyleToAll(patch: ThoughtStylePatch): Promise<boolean> {
     }),
   );
   const failed = results.filter((r) => r.status === 'rejected').length;
-  // No realtime echo to the actor (04-realtime.md §5) — drop the cached refs so
+  // Own event arrives asynchronously (B1) — drop the cached refs so
   // the refreshed zones re-resolve the thoughts and repaint their style.
   for (const id of ids) invalidateRef(id);
   scheduleRefresh();

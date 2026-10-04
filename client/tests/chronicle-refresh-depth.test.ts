@@ -100,17 +100,18 @@ describe('лента «Дневника»: refresh сохраняет загру
       'помощник сохранения глубины перезапрашивает ленту до rows.length',
     );
 
-    // 1) Полный refresh (правка записи / realtime fallback).
+    // 1) Отложенный перезапрос по инвалидации слоя (G3) — тот же помощник.
     assert.match(
-      bodyOf('async function reloadAndSync('),
+      bodyOf('async function refreshFeedAndCalendar('),
       /await reloadKeepingDepth\(\)/,
-      'reloadAndSync сохраняет глубину через помощник',
+      'refreshFeedAndCalendar сохраняет глубину через помощник',
     );
-    // 2) Удаление записи.
+    // 2) Удаление записи (G6): гасит ключ ленты — отложенный перезапрос идёт
+    //    тем же помощником глубины (`refreshFeedAndCalendar`).
     assert.match(
       bodyOf('async function removeRecord('),
-      /await reloadKeepingDepth\(\)/,
-      'removeRecord сохраняет глубину (не сбрасывает ленту в начало)',
+      /invalidateQueries\(queryKeys\.chronicleFeedAll\(\)\)/,
+      'removeRecord гасит ключ ленты (глубину сохраняет общий refresh)',
     );
     // 3) Локальная вставка: дозагрузка «+50» при pendingReconcile.
     assert.match(

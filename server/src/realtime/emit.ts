@@ -76,8 +76,8 @@ export interface EmitDomainEventDeps {
 /**
  * Acting party of a change. `client_id` may be `null` when the request carried
  * no `Client-Id`; the persisted {@link RealtimeActor.client_id} is normalised
- * to `''` in that case (the shared type requires a string) and the gateway
- * skips echo suppression for empty ids.
+ * to `''` in that case (the shared type requires a string). B1: the gateway no
+ * longer suppresses the author's echo — `client_id` is informational.
  */
 export type DomainEventActor = { user_id: string; client_id: string | null };
 
@@ -110,8 +110,7 @@ export interface EmitDomainEventOptions {
  * @param type - catalogue event type (04-realtime.md §4).
  * @param data - payload matching `type` (see {@link RealtimeEventMap}).
  * @param actor - `{ user_id, client_id }` of the acting client; `client_id`
- *   may be `null` when the request carried no `Client-Id` (echo suppression
- *   is then skipped).
+ *   may be `null` when the request carried no `Client-Id`.
  * @param options - audience override and/or event metadata.
  */
 export function emitDomainEvent<E extends RealtimeEventType>(

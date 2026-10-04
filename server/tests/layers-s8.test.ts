@@ -9,9 +9,10 @@
  *     with the divergence list (§8.1);
  *   * a non-closed partial merge is rejected with `missing_closure` and
  *     passes once the selection is completed (§8.1);
- *   * the reserve layer is a holding layer by design: it keeps the trash
- *     auto-purge (§8.4) from purging the rows it backs up until the reserve
- *     itself is deleted (13-layers.md §8.2);
+ *   * the reserve layer does **not** hold the trash auto-purge: it is a
+ *     technical copy for rollback, so the §8.4 purge removes the merged
+ *     marked row right away even while the reserve stays alive (ошибка
+ *     1d0620a8; before the fix the reserve held rows forever);
  *   * the S14 DoD scenario: re-typed links, re-pointed links (tombstone +
  *     new id), deleted links and a reordered children batch merge without
  *     losses and without dangling edges, the reorder collapsing into one
@@ -354,7 +355,7 @@ describe(
       }
     });
 
-    it('the reserve layer holds trash rows until it is deleted (documented §8.2 decision)', async () => {
+    it('the reserve layer does not hold trash rows — purge proceeds past a live reserve (ошибка 1d0620a8, §8.2)', async () => {
       const ctx = await buildRestContext();
       try {
         const m = await thought(ctx, 'M');
@@ -367,27 +368,31 @@ describe(
         const res = await merge(ctx, layer.id);
         assert.equal(res.statusCode, 200, JSON.stringify(res.json()));
         const report = res.json().data as LayerMergeReport;
-        // The mark landed in the base; the reserve backs the pre-merge live
-        // row, so the auto-purge (§8.4) cannot purge it yet.
-        assert.equal(report.purged, 0);
-        const mAfter = await call(ctx, 'GET', `/thoughts/${m}`);
-        assert.equal(mAfter.statusCode, 200);
-        assert.equal(mAfter.json().data.marked_for_deletion, true);
-
-        const trash = (await call(ctx, 'GET', '/trash')).json().data as {
-          thoughts: Array<{ id: string; blocked: boolean; blocking: { layers: Array<{ id: string }> } }>;
-        };
-        const entry = trash.thoughts.find((t) => t.id === m);
-        assert.ok(entry !== undefined);
-        assert.equal(entry.blocked, true);
-        assert.deepEqual(entry.blocking.layers.map((l) => l.id), [report.reserve_layer_id]);
-
-        // Deleting the reserve releases the hold — and the layer-deletion
-        // auto-purge (§2.4) removes M in the same transaction.
-        const delReserve = await call(ctx, 'DELETE', `/layers/${report.reserve_layer_id}`);
-        assert.equal(delReserve.statusCode, 200, delReserve.body?.toString());
-        assert.equal((delReserve.json().data as { purged: number }).purged, 1);
+        // The mark overwrote a live base row, so a reserve backing it was
+        // created and stays alive after the merge…
+        assert.notEqual(report.reserve_layer_id, null);
+        const reserveStillLive = (
+          ctx.ndb
+            .prepare('SELECT COUNT(*) AS c FROM layers WHERE id = ?')
+            .get(report.reserve_layer_id) as { c: number }
+        ).c;
+        assert.equal(reserveStillLive, 1);
+        // …yet it does not hold: the technical copy for rollback is not a layer
+        // «with its own edits», so the §8.4 auto-purge removes M right away.
+        assert.equal(report.purged, 1);
+        // M's shadow rows are physically gone from every layer, including the
+        // reserve (rowCount skips service layers — count raw).
+        const raw = (
+          ctx.ndb.prepare('SELECT COUNT(*) AS c FROM thoughts WHERE id = ?').get(m) as { c: number }
+        ).c;
+        assert.equal(raw, 0);
         assert.equal(rowCount(ctx, 'thoughts', m), 0);
+
+        // And the trash is empty of M afterwards.
+        const trash = (await call(ctx, 'GET', '/trash')).json().data as {
+          thoughts: Array<{ id: string }>;
+        };
+        assert.equal(trash.thoughts.find((t) => t.id === m), undefined);
       } finally {
         await closeRestContext(ctx);
       }

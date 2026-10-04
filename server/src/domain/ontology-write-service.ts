@@ -967,6 +967,10 @@ function canConvert(
       // теряет смысл. Конвертация бессмысленна (как для `link` / legacy
       // `thought_ref`).
       return false;
+    case 'publication':
+      // Ссылка на публикацию: id адресует конкретную публикацию и при смене
+      // value_type теряет смысл — конвертировать не во что.
+      return false;
   }
 }
 

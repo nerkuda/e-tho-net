@@ -58,7 +58,7 @@ export interface TabRealtimePoolOptions {
   localDb: import('../db/local-db.js').LocalDb;
   /** Shared in-memory realtime cache (G8, 11-settings-and-state.md §1.4). */
   rtState: RealtimeState;
-  /** Resolves the current user id (used by applier for echo suppression). */
+  /** Resolves the current user id (used by the applier for `member.removed`). */
   getCurrentUserId: () => string | null;
   /** Removes a thought from per-view focus histories across all profiles. */
   removeFromFocusHistoryEverywhere: (thoughtId: string) => void;
@@ -193,7 +193,6 @@ export class TabRealtimePool {
       const result = applyRealtimeEvent(
         this.opts.rtState,
         {
-          getClientId: this.opts.getClientId,
           getCurrentUserId: currentUserId,
           removeFromFocusHistoryEverywhere: (thoughtId: string) => {
             this.opts.removeFromFocusHistoryEverywhere(thoughtId);

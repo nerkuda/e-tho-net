@@ -289,9 +289,12 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           );
         }
         const extension = extensionFor(content.contentType);
+        // Экспорт публикаций несёт собственное имя `<slug>.zip` (операция
+        // 1f161c74); классический экспорт подграфа — дефолт по формату.
+        const filename = content.filename ?? `etn-export.${extension}`;
         reply
           .header('content-type', content.contentType)
-          .header('content-disposition', `attachment; filename="etn-export.${extension}"`)
+          .header('content-disposition', `attachment; filename="${filename}"`)
           .send(content.body);
       },
     );

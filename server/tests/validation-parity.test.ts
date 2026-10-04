@@ -157,4 +157,122 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       await closeWorld(w);
     }
   });
+
+  // Ошибка 8577d41d: MCP на ОТСУТСТВУЮЩЕЕ обязательное поле отдавал текст
+  // zod-схемы («должен быть строкой.»), а REST — каноническую «{key}
+  // обязателен.». Отсутствие поля отличается от неверного типа по сырому
+  // входу (zod 4 убрал признак `received`).
+  it('etn.ops { publications.create } ↔ POST /publications: отсутствие title — каноническое «title обязателен.»', async () => {
+    const w = await pairedWorld();
+    try {
+      const restRes = await w.rest.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${w.rest.networkId}/publications`,
+        headers: authHeaders(w.rest),
+        payload: {},
+      });
+      assert.equal(restRes.statusCode, 422);
+      const restErr = restRes.json() as RestError;
+
+      const mcpRes = await callOp(w.handle.client, 'publications.create', {
+        network_id: w.rest.networkId,
+      });
+      assert.equal(mcpRes.isError, true);
+      const mcpErr = mcpErrorParts(toolText(mcpRes));
+      assert.equal(mcpErr.code, restErr.error.code);
+      assert.equal(mcpErr.message, 'title обязателен.');
+      assert.equal(mcpErr.message, restErr.error.message, 'MCP и REST дают одинаковый текст');
+    } finally {
+      await closeWorld(w);
+    }
+  });
+
+  // Круг 2 ошибки 8577d41d: вложенное отсутствующее поле должно давать у
+  // обоих фасадов ОДИН текст с полным путём (`items.0.node_key`), а не верхний
+  // REST-ключ (`items`).
+  it('etn.ops { publications.order } ↔ PUT /publications/{id}/order: вложенный required — полный путь у обоих фасадов', async () => {
+    const w = await pairedWorld();
+    try {
+      const restRes = await w.rest.app.inject({
+        method: 'PUT',
+        url: `/api/v1/networks/${w.rest.networkId}/publications/pub-1/order`,
+        headers: authHeaders(w.rest),
+        payload: { items: [{}] },
+      });
+      assert.equal(restRes.statusCode, 422);
+      const restErr = restRes.json() as RestError;
+
+      const mcpRes = await callOp(w.handle.client, 'publications.order', {
+        network_id: w.rest.networkId,
+        publication_id: 'pub-1',
+        items: [{}],
+      });
+      assert.equal(mcpRes.isError, true);
+      const mcpErr = mcpErrorParts(toolText(mcpRes));
+      assert.equal(mcpErr.code, restErr.error.code);
+      assert.equal(mcpErr.message, 'items.0.node_key обязателен.');
+      assert.equal(mcpErr.message, restErr.error.message, 'MCP и REST дают одинаковый текст');
+    } finally {
+      await closeWorld(w);
+    }
+  });
+
+  // Ошибка 9918e23b: record-поле с одиночной вложенностью (`tables`) — путь
+  // zod-ошибки REST относителен значению поля (длина 1), поэтому REST отдавал
+  // фиксированный spec.msg верхнего ключа, а MCP — полный путь с дефолтным
+  // текстом. Теперь оба фасада дают дословно один текст с полным путём.
+  it('etn.layers.merge ↔ POST /layers/{id}/merge: record tables — полный путь у обоих фасадов', async () => {
+    const w = await pairedWorld();
+    try {
+      const cases: Array<{ tables: Record<string, unknown>; message: string }> = [
+        { tables: { t1: 123 }, message: 'tables.t1 должен быть массивом строк.' },
+        { tables: { t1: [123] }, message: 'tables.t1.0 должен быть строкой.' },
+      ];
+      for (const { tables, message } of cases) {
+        const restRes = await w.rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${w.rest.networkId}/layers/L/merge`,
+          headers: authHeaders(w.rest),
+          payload: { tables },
+        });
+        assert.equal(restRes.statusCode, 422);
+        const restErr = restRes.json() as RestError;
+        assert.equal(restErr.error.code, 'VALIDATION_ERROR');
+        assert.equal(restErr.error.message, message);
+
+        const mcpRes = await callOp(
+          w.handle.client, 'layers.merge',
+          { network_id: w.rest.networkId, layer_id: 'L', tables },
+          true,
+        );
+        assert.equal(mcpRes.isError, true);
+        const mcpErr = mcpErrorParts(toolText(mcpRes));
+        assert.equal(mcpErr.code, restErr.error.code);
+        assert.equal(mcpErr.message, restErr.error.message, 'MCP и REST дают одинаковый текст');
+      }
+    } finally {
+      await closeWorld(w);
+    }
+  });
+
+  it('etn.layers.select: отсутствие layer_id — «обязателен», неверный тип — прежний текст', async () => {
+    const w = await pairedWorld();
+    try {
+      const missing = await w.handle.client.callTool({
+        name: 'etn.layers.select',
+        arguments: { network_id: w.rest.networkId },
+      });
+      assert.equal(missing.isError, true);
+      assert.equal(mcpErrorParts(toolText(missing)).message, 'layer_id обязателен.');
+
+      const wrongType = await w.handle.client.callTool({
+        name: 'etn.layers.select',
+        arguments: { network_id: w.rest.networkId, layer_id: 123 },
+      });
+      assert.equal(wrongType.isError, true);
+      assert.equal(mcpErrorParts(toolText(wrongType)).message, 'layer_id должен быть строкой.');
+    } finally {
+      await closeWorld(w);
+    }
+  });
 });

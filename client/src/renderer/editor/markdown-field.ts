@@ -13,8 +13,10 @@
 import type { MentionsScanThought } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
-import { invalidateIndicators } from '../canvas/canvas.js';
+import { invalidateQueries, queryKeys } from '../lib/live/index.js';
 import { div, el, errText, renderHtml } from '../lib/dom.js';
+import { pickEntitiesModal } from '../lib/entity-picker.js';
+import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -38,9 +40,9 @@ import {
   zoomByWheel,
 } from './md-zoom.js';
 
-/** Owner entity for pasted-image attachments ('thought' | 'link'). */
+/** Owner entity for pasted-image attachments ('thought' | 'link' | 'publication'). */
 export interface AttachmentsOwner {
-  ownerType: 'thought' | 'link';
+  ownerType: 'thought' | 'link' | 'publication';
   ownerId: string;
 }
 
@@ -48,6 +50,13 @@ export interface AttachmentsOwner {
 interface MarkdownFieldHandle {
   showEdit(md?: string): void;
   set(md: string, html: string): void;
+  /**
+   * Переключает поле в правку и ставит каретку: по вхождению `findText` в
+   * исходнике markdown, а если его нет — в начало документа. Нужно двойному
+   * клику по тексту публикации (задача ea1b5f14, пункт 4): точный офсет
+   * рендер-узла к markdown недостижим, поэтому курсор — к началу абзаца.
+   */
+  focusAt(findText?: string): void;
 }
 
 const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
@@ -292,18 +301,17 @@ export function createMarkdownField(opts: {
       },
       true,
     );
-    // Контекстное меню: «Вставить текст шаблона из типа мысли»
-    // (08-ui-spec.md §6.4). Пункт появляется только когда тип назначен и
-    // шаблон непустой — тогда нативное контекстное меню редактора не
-    // показывается; иначе пропускаем событие, и пользователь видит
-    // стандартное меню CM6.
+    // Контекстное меню редактора: «Вставить текст шаблона из типа мысли»
+    // (08-ui-spec.md §6.4) и «Вставить ссылку на публикацию…» (0.11.1, задача
+    // 3275fd8d, требование 7f583ef9). Меню показывается, только когда есть
+    // хотя бы один применимый пункт; иначе пропускаем событие, и пользователь
+    // видит стандартное меню CM6.
     editor.dom.addEventListener('contextmenu', (event) => {
-      if (opts.onInsertTemplate === undefined || editor === null) return;
-      const template = opts.onInsertTemplate();
-      if (template === null || template.trim() === '') return;
-      event.preventDefault();
-      const items: MenuItem[] = [
-        {
+      if (editor === null) return;
+      const items: MenuItem[] = [];
+      const template = opts.onInsertTemplate?.() ?? null;
+      if (template !== null && template.trim() !== '') {
+        items.push({
           label: 'Вставить текст шаблона из типа мысли',
           onClick: () => {
             if (editor === null) return;
@@ -314,8 +322,32 @@ export function createMarkdownField(opts: {
               editor.insertAtCaret(template);
             }
           },
+        });
+      }
+      items.push({
+        label: t('publications.link.insert'),
+        onClick: () => {
+          if (editor === null) return;
+          void pickEntitiesModal({
+            networkId,
+            kind: 'publications',
+            title: t('publications.field.pickerTitle'),
+            single: true,
+          }).then((ids) => {
+            const id = ids?.[0];
+            if (id === undefined || editor === null) return;
+            void etn.publications
+              .get(networkId, id)
+              .then((pub) => {
+                if (editor === null) return;
+                editor.insertAtCaret(`[[#pub:${pub.id}|${pub.title}]]`);
+              })
+              .catch(() => undefined);
+          });
         },
-      ];
+      });
+      if (items.length === 0) return;
+      event.preventDefault();
       showMenuAt(event.clientX, event.clientY, items);
     });
     area.replaceChildren(editor.dom);
@@ -346,6 +378,14 @@ export function createMarkdownField(opts: {
         editor.setValue(md);
       }
     },
+    focusAt: (findText) => {
+      showEdit();
+      if (editor === null) return;
+      const source = editor.getValue();
+      const position =
+        findText !== undefined && findText !== '' ? source.indexOf(findText) : -1;
+      editor.setCaret(position >= 0 ? position : 0);
+    },
   });
 
   // Комментарийный контекст (карточка ETN 34ffbd75): после замены legacy-ссылок
@@ -371,6 +411,15 @@ export function createMarkdownField(opts: {
 /** Switches an already-built field into edit mode (e.g. to restore a draft). */
 export function editMarkdownField(root: HTMLElement, md?: string): void {
   handles.get(root)?.showEdit(md);
+}
+
+/**
+ * Переключает поле в правку и ставит каретку по вхождению `findText` в
+ * исходнике markdown (нет вхождения — начало документа). Точка входа
+ * двойного клика по тексту публикации (задача ea1b5f14, пункт 4).
+ */
+export function focusMarkdownFieldAt(root: HTMLElement, findText?: string): void {
+  handles.get(root)?.focusAt(findText);
 }
 
 /** Updates an already-built field's content (e.g. after an external change). */
@@ -406,16 +455,13 @@ async function insertClipboardFiles(
       notice('Не удалось добавить вложение.', 'error');
       continue;
     }
-    invalidateIndicators(owner.ownerId);
+    invalidateQueries(queryKeys.indicators(owner.ownerId));
     // Tell the editor chrome the owner's attachment set changed: the
     // «Вложения» tab (if built) reloads its list, the tab badge re-counts —
     // without this a paste from the comment field left a stale empty list
-    // until the editor target changed.
-    document.dispatchEvent(
-      new CustomEvent('etn:attachments-changed', {
-        detail: { ownerType: owner.ownerType, ownerId: owner.ownerId },
-      }),
-    );
+    // until the editor target changed. Кэш-путь слоя (G4): ключ списка вложений
+    // владельца гасится, подписчики (вкладка/бейдж) перечитывают список.
+    invalidateQueries(queryKeys.attachments(owner.ownerType, owner.ownerId));
     const filePath = attachment.file_path;
     if (filePath === null || filePath === '') continue;
     const url = etnimgUrl(filePath);

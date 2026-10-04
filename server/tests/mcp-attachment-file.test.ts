@@ -15,7 +15,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
@@ -249,6 +251,128 @@ describe('MCP: загрузка файла в вложение (75c75a2f)', { sk
         });
         assert.equal(wres.isError, true);
         assert.match(toolText(wres), /data_base64/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Ошибка 5fcb8307: `file_path` — путь в ОС СЕРВЕРА. Нерезолвящийся на
+  // сервере путь раньше молча создавал битое вложение (mime_type/file_size
+  // пусты, файл недоступен). Теперь это явная VALIDATION_ERROR с путём в
+  // деталях; клиентский файл передаётся содержимым через data_base64.
+  it('etn.ops attachments.add: нерезолвящийся file_path отвергается (5fcb8307)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const missing = path.join(os.tmpdir(), `etn-missing-${randomUUID()}.png`);
+        const res = await callOp(handle.client, 'attachments.add', {
+          network_id: ctx.networkId,
+          owner_type: 'thought',
+          owner_id: ctx.homeId,
+          kind: 'file',
+          file_path: missing,
+          mime_type: 'image/png',
+        });
+        assert.equal(res.isError, true, 'нерезолвящийся путь должен быть отказом');
+        const text = toolText(res);
+        assert.match(text, /VALIDATION_ERROR/);
+        // Путь присутствует в деталях/сообщении — агент видит, что именно не найдено.
+        assert.ok(text.includes(missing), `в деталях должен быть путь: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.ops attachments.add: каталог как file_path отвергается (6a95ba12)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // os.tmpdir() существует, но это каталог, а не файл: `existsSync` его
+        // пропускал, поэтому проверка обязана опираться на statSync().isFile().
+        const dir = os.tmpdir();
+        const res = await callOp(handle.client, 'attachments.add', {
+          network_id: ctx.networkId,
+          owner_type: 'thought',
+          owner_id: ctx.homeId,
+          kind: 'file',
+          file_path: dir,
+          mime_type: 'image/png',
+        });
+        assert.equal(res.isError, true, 'каталог должен быть отказом');
+        const text = toolText(res);
+        assert.match(text, /VALIDATION_ERROR/);
+        assert.ok(text.includes(dir), `в деталях должен быть путь: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.ops attachments.add: резолвящийся file_path работает как раньше (5fcb8307)', async () => {
+    const ctx = await buildMcpContext();
+    const existing = path.join(os.tmpdir(), `etn-file-${randomUUID()}.png`);
+    fs.writeFileSync(existing, 'png-bytes');
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = toolJson<{ id: string }>(
+          await callOp(handle.client, 'attachments.add', {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: ctx.homeId,
+            kind: 'file',
+            file_path: existing,
+            mime_type: 'image/png',
+          }),
+        );
+        assert.ok(created.id.length > 0, 'вложение создано');
+        const row = openNetworkDb(ctx.dataDir, ctx.networkId)
+          .prepare('SELECT kind, file_path FROM attachments WHERE id = ?')
+          .get(created.id) as { kind: string; file_path: string | null };
+        assert.equal(row.kind, 'file');
+        assert.equal(row.file_path, existing, 'путь сохранён как передан');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      fs.rmSync(existing, { force: true });
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.write attachments[]: нерезолвящийся file_path отвергается (5fcb8307)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const missing = path.join(os.tmpdir(), `etn-missing-write-${randomUUID()}.txt`);
+        const res = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              {
+                ref: 'bad-path',
+                thought: { title: 'Битый путь' },
+                attachments: [{ kind: 'file', file_path: missing, mime_type: 'text/plain' }],
+              },
+            ],
+          },
+        });
+        assert.equal(res.isError, true, 'нерезолвящийся путь должен быть отказом');
+        const text = toolText(res);
+        assert.match(text, /VALIDATION_ERROR/);
+        assert.ok(text.includes(missing), `в деталях должен быть путь: ${text}`);
       } finally {
         await handle.close();
       }

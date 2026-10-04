@@ -5,11 +5,11 @@
  * пользователя продолжит показывать помеченных на удаление, пока не
  * перезапустится.
  *
- * Путь ровно тот же, что у `show_inactive` (симметрия настроек видимости):
- * `store.update({ showTrash })` + `scheduleRefresh()` +
- * `scheduleStructuresRefresh()`. Проверяется реальный вызов
- * `applyRealtimeToUi` под DOM-шимом: значение флага, перезапрос фокуса и
- * игнор чужих ключей/чужих сетей.
+ * Путь (G2): окрестность фокуса гасит роутер слоя (`focusAll`), активная
+ * подписка перечитывает её; `store.update({ showTrash })` и легаси-обновление
+ * «Структур» — рядом. Проверяется реальный конвейер `routeRealtimeEvent` +
+ * `applyDerivedRealtime` (G6; прежний `applyRealtimeToUi` снесён) под DOM-шимом: значение флага, перезапрос фокуса и игнор
+ * чужих ключей/чужих сетей.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -74,10 +74,15 @@ function makeFocusResponse(): unknown {
 }
 
 /** Realtime-событие чужого клиента (собственное эхо отсекает G8-applier). */
-function foreignEvent(type: string, networkId: string, data: unknown): Record<string, unknown> {
+function foreignEvent(
+  type: string,
+  networkId: string,
+  data: unknown,
+  seq = 1,
+): Record<string, unknown> {
   return {
     type,
-    seq: 1,
+    seq,
     ts: '2026-01-01T00:00:00.000Z',
     actor: { user_id: 'u2', client_id: 'c2' },
     audience: 'user',
@@ -110,8 +115,15 @@ describe('realtime show_trash: настройка другого клиента 
       },
     };
     const { store } = await import('../src/renderer/state.js');
-    const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
+    const { applyDerivedRealtime } = await import('../src/renderer/realtime-effects.js');
+    const { activateFocusQuery, deactivateFocusQuery } =
+      await import('../src/renderer/lib/layer-resync.js');
+    const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
+    const { resetEventRouter, routeRealtimeEvent } =
+      await import('../src/renderer/lib/live/event-router.js');
 
+    resetQueryRegistry();
+    resetEventRouter();
     store.update({
       networkId: 'n1',
       activeView: 'map',
@@ -119,37 +131,42 @@ describe('realtime show_trash: настройка другого клиента 
       focus: makeFocusResponse() as any,
       showTrash: true,
     } as any);
+    // Слой данных (G2): окрестность подписана — перезапрос запускает роутер.
+    activateFocusQuery('n1', 't1');
+    await wait(100);
+    const baseline = focusFetches;
+
+    /** Реальный конвейер: роутер слоя, затем легаси-применение. */
+    const deliver = (evt: Record<string, unknown>): void => {
+      routeRealtimeEvent(evt as any, { networkId: 'n1' });
+      applyDerivedRealtime(evt as any);
+    };
 
     // Чужая сеть — событие соседней вкладки общий store не трогает.
-    applyRealtimeToUi(
-      foreignEvent('user-preference.updated', 'n2', { key: 'show_trash', value: false }) as any,
-    );
+    deliver(foreignEvent('user-preference.updated', 'n2', { key: 'show_trash', value: false }, 1));
     await wait(REFRESH_SLACK_MS);
     assert.equal(store.state.showTrash, true, 'событие чужой сети настройку не меняет');
-    assert.equal(focusFetches, 0, 'событие чужой сети фокус не перечитывает');
+    assert.equal(focusFetches, baseline, 'событие чужой сети фокус не перечитывает');
 
-    // Чужой ключ в своей сети — не наша настройка.
-    applyRealtimeToUi(
-      foreignEvent('user-preference.updated', 'n1', { key: 'cloud_width', value: 200 }) as any,
-    );
+    // Чужой ключ в своей сети — не наша настройка (роутер не гасит focus).
+    deliver(foreignEvent('user-preference.updated', 'n1', { key: 'cloud_width', value: 200 }, 2));
     await wait(REFRESH_SLACK_MS);
     assert.equal(store.state.showTrash, true);
-    assert.equal(focusFetches, 0, 'чужой ключ preference фокус не перечитывает');
+    assert.equal(focusFetches, baseline, 'чужой ключ preference фокус не перечитывает');
 
     // Своя сеть: другой клиент выключил корзину — store и карта следуют.
-    applyRealtimeToUi(
-      foreignEvent('user-preference.updated', 'n1', { key: 'show_trash', value: false }) as any,
-    );
+    deliver(foreignEvent('user-preference.updated', 'n1', { key: 'show_trash', value: false }, 3));
     await wait(REFRESH_SLACK_MS);
     assert.equal(store.state.showTrash, false, 'настройка пришла от другого клиента');
-    assert.equal(focusFetches, 1, 'карта перечитала окрестность фокуса');
+    assert.equal(focusFetches, baseline + 1, 'карта перечитала окрестность фокуса через слой');
 
     // Обратное включение — тем же путём.
-    applyRealtimeToUi(
-      foreignEvent('user-preference.updated', 'n1', { key: 'show_trash', value: true }) as any,
-    );
+    deliver(foreignEvent('user-preference.updated', 'n1', { key: 'show_trash', value: true }, 4));
     await wait(REFRESH_SLACK_MS);
     assert.equal(store.state.showTrash, true);
-    assert.equal(focusFetches, 2);
+    assert.equal(focusFetches, baseline + 2);
+    deactivateFocusQuery();
+    resetQueryRegistry();
+    resetEventRouter();
   });
 });

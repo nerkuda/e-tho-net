@@ -53,6 +53,10 @@ export const MCP_TOOL_NAMES = [
   'etn.chronicle.query',
   'etn.layers.list',
   'etn.activity.list',
+  // Публикации и полки свёрнуты в `etn.guide` + `etn.ops` (0.11.1, задача
+  // 094653b6; ADR b2eebf8b/8358eea9): 25 инструментов `etn.publications.*` /
+  // `etn.shelves.*` сняты из витрины одним пакетом, их действия — в реестре
+  // `server/src/mcp/tools/ops-catalog.ts` (обработчики — tools/publications.ts).
   // mutate (§4.2)
   'etn.thoughts.write',
   'etn.comments.update',
@@ -129,6 +133,11 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.thoughts.find_duplicates': { readOnlyHint: true },
   'etn.layers.list': { readOnlyHint: true },
   'etn.activity.list': { readOnlyHint: true },
+
+  // Публикации и полки (0.11.1, задача 094653b6): собственных инструментов
+  // больше нет — 25 действий перенесены в `etn.ops` (реестр
+  // `tools/ops-catalog.ts`), где роль подсказок играют флаги `readOnly` /
+  // `destructive` записи реестра. Тул-уровневых аннотаций не требуется.
 
   // ---- mutating tools — destructiveHint ---------------------------
   'etn.thoughts.bulk_update': { destructiveHint: false, idempotentHint: false },

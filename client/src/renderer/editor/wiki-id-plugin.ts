@@ -59,11 +59,12 @@ interface ParsedWikiLink {
   from: number;
   /** Exclusive end offset (after `]]`). */
   to: number;
-  /** Offset of the id token (`#<uuid>` or `n:<net>#<uuid>`) start. */
+  /** Offset of the id token (`#<uuid>` / `n:<net>#<uuid>` / `#pub:<uuid>`) start. */
   idFrom: number;
   /** Offset of the id token end. */
   idTo: number;
-  kind: 'id' | 'cross';
+  kind: 'id' | 'cross' | 'pub';
+  /** Target id: thought id for `id`/`cross`, publication id for `pub`. */
   thoughtId: string;
   networkId: string | null;
   /** `[[…|alias]]` — alias (without leading `|`). `null` if absent. */
@@ -104,6 +105,11 @@ function cacheKey(networkId: string, thoughtId: string): string {
   return `${networkId}:${thoughtId}`;
 }
 
+/** Cache key of a publication link: мысль и публикация — разные пространства id. */
+export function publicationCacheKey(networkId: string, publicationId: string): string {
+  return `pub:${networkId}:${publicationId}`;
+}
+
 /** Scan the document source for ID-form wiki-links. */
 function parseIdLinks(source: string): ParsedWikiLink[] {
   const out: ParsedWikiLink[] = [];
@@ -125,7 +131,7 @@ function parseIdLinks(source: string): ParsedWikiLink[] {
     const aliasRaw = pipe === -1 ? null : content.slice(pipe + 1).trim();
     const alias = aliasRaw !== null && aliasRaw !== '' ? aliasRaw : null;
 
-    let kind: 'id' | 'cross' | null = null;
+    let kind: 'id' | 'cross' | 'pub' | null = null;
     let thoughtId: string | null = null;
     let networkId: string | null = null;
     let idFrom = -1;
@@ -139,6 +145,18 @@ function parseIdLinks(source: string): ParsedWikiLink[] {
         // `#` lives at i + 2; the id text starts at i + 3.
         idFrom = i + 3;
         idTo = idFrom + id.length;
+      } else if (id.toLowerCase().startsWith('pub:')) {
+        // Публикация (0.11.1, задача 3275fd8d): `[[#pub:<uuid>]]` — префиксная
+        // ID-форма (ADR 7168009e). Токен включает `#pub:<uuid>` целиком.
+        const pubId = id.slice('pub:'.length).trim();
+        if (UUID_RE.test(pubId)) {
+          kind = 'pub';
+          thoughtId = pubId.toLowerCase();
+          // Токен после `#` — это `pub:<uuid>`: `idStart = idFrom - 1` даёт
+          // `#`, `idTo` — конец uuid.
+          idFrom = i + 3;
+          idTo = idFrom + 'pub:'.length + pubId.length;
+        }
       }
     } else if (target.startsWith('n:')) {
       const hashAt = target.indexOf('#', 2);
@@ -329,10 +347,17 @@ function computeWikiIdDecos(
   for (const link of links) {
     // For [[#<id>]] the cache key uses the *active* network (link.networkId
     // is null). For [[n:<net>#<id>]] the key uses the explicit cross-network
-    // id. Without an active network there is nothing to resolve against yet —
+    // id. Публикации — собственное пространство ключей (`pub:`-префикс).
+    // Without an active network there is nothing to resolve against yet —
     // the widget still covers the id and shows `…`.
     const keyNetworkId = link.networkId ?? networkId;
-    const meta = keyNetworkId === null ? undefined : cache.get(cacheKey(keyNetworkId, link.thoughtId));
+    const key =
+      keyNetworkId === null
+        ? null
+        : link.kind === 'pub'
+          ? publicationCacheKey(keyNetworkId, link.thoughtId)
+          : cacheKey(keyNetworkId, link.thoughtId);
+    const meta = key === null ? undefined : cache.get(key);
     const title = meta?.title ?? '';
     const deleted = meta !== undefined && !meta.exists;
     // The raw id never leaks into the UI: `…` until the resolve returns.
@@ -393,6 +418,8 @@ function collectUnresolvedTokens(
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   for (const link of parseIdLinks(source)) {
+    // Публикации — отдельный источник/резолвер (`collectUnresolvedPublications`).
+    if (link.kind === 'pub') continue;
     // Same routing as in `computeWikiIdDecos`: `[[#<id>]]` uses the active
     // network; `[[n:<net>#<id>]]` uses the explicit one. We can only
     // collect tokens for which we know the network — same-network links
@@ -409,6 +436,22 @@ function collectUnresolvedTokens(
     bucket.add(link.thoughtId);
   }
   return out;
+}
+
+/** Публикации из документа, ещё не попавшие в кеш (текущая сеть). */
+function collectUnresolvedPublications(
+  source: string,
+  cache: Map<string, ResolvedMeta>,
+  networkId: string | null,
+): string[] {
+  if (networkId === null) return [];
+  const out = new Set<string>();
+  for (const link of parseIdLinks(source)) {
+    if (link.kind !== 'pub') continue;
+    if (cache.has(publicationCacheKey(networkId, link.thoughtId))) continue;
+    out.add(link.thoughtId);
+  }
+  return [...out];
 }
 
 /**
@@ -438,6 +481,39 @@ async function resolveAndApply(
     view.dispatch({ effects: setCacheEntries.of(entries) });
   } catch {
     // Silent failure: cache stays empty, widgets show `…` (never the raw id).
+  }
+}
+
+/**
+ * Разрешить пачку публикаций (`GET /publications/{id}`) и положить в кеш
+ * плагина (`pub:`-ключи). Ошибка/404 — «не найдена» (метка «удалена»).
+ */
+async function resolvePubsAndApply(
+  view: EditorView,
+  networkId: string,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    const entries = await Promise.all(
+      ids.map(async (id): Promise<{ key: string; meta: ResolvedMeta }> => {
+        try {
+          const pub = await etn.publications.get(networkId, id);
+          return {
+            key: publicationCacheKey(networkId, id),
+            meta: { title: pub.title, exists: true, networkId },
+          };
+        } catch {
+          return {
+            key: publicationCacheKey(networkId, id),
+            meta: { title: '', exists: false, networkId },
+          };
+        }
+      }),
+    );
+    view.dispatch({ effects: setCacheEntries.of(entries) });
+  } catch {
+    // Silent failure: cache stays empty, widgets show `…`.
   }
 }
 
@@ -490,11 +566,12 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
       // the fallback covers the brief window when no network was active yet.
       const networkId = state.networkId ?? safeCurrentNetwork();
       const unresolved = collectUnresolvedTokens(source, state.cache, networkId);
+      const unresolvedPubs = collectUnresolvedPublications(source, state.cache, networkId);
       // Early exit: nothing to resolve. Without this guard, the `finally` block
       // below would re-enter schedule() in a tight microtask loop (every
       // dispatch of `setCacheEntries` triggers an update, which would schedule
       // again), freezing the UI on every comment-field focus.
-      if (unresolved.size === 0) return;
+      if (unresolved.size === 0 && unresolvedPubs.length === 0) return;
       this.inflight = true;
       // Convert every unresolved bucket into a `resolveAndApply` call.
       const tasks: Promise<void>[] = [];
@@ -502,6 +579,9 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
         // netId is always a real network id at this point — collectUnresolvedTokens
         // filters out unresolved same-network links when no network is active.
         tasks.push(resolveAndApply(this.view, netId, [...ids]));
+      }
+      if (networkId !== null && unresolvedPubs.length > 0) {
+        tasks.push(resolvePubsAndApply(this.view, networkId, unresolvedPubs));
       }
       void Promise.all(tasks).finally(() => {
         this.inflight = false;
@@ -630,4 +710,5 @@ export const __testing = {
   moveAcrossWikiIdBlock,
   cacheKey,
   collectUnresolvedTokens,
+  collectUnresolvedPublications,
 };

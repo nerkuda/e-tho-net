@@ -31,7 +31,13 @@ export type NetworkRole = (typeof NETWORK_ROLES)[number];
  *  ссылка: значение адресует мысль ДРУГОЙ сети по `n:<network_id>#<thought_id>`,
  *  хранится в `property_values.value_text` как скаляр; снапшот имени — в
  *  служебной неветвимой таблице `property_value_cross_refs`. Ссылка на
- *  собственную сеть запрещена, голый id без сети адресом не является. */
+ *  собственную сеть запрещена, голый id без сети адресом не является.
+ *  `publication` (0.11.1, задача f37b468d, требование 9ce84a2b) — ссылка на
+ *  публикацию ТЕКУЩЕЙ сети: значение адресует `publications.id`, хранится в
+ *  `property_values.value_text` как скаляр (single) или JSON-массив id
+ *  (multiple) — по образцу `cross_network_ref`, отдельной колонки не вводим
+ *  (прецедент ADR ae8346d0). Живое значение блокирует физическое удаление
+ *  публикации (`countPublicationRefUsages`). */
 export const PROPERTY_VALUE_TYPES = [
   'text',
   'date',
@@ -41,6 +47,7 @@ export const PROPERTY_VALUE_TYPES = [
   'link',
   'thought_ref',
   'cross_network_ref',
+  'publication',
 ] as const;
 export type PropertyValueType = (typeof PROPERTY_VALUE_TYPES)[number];
 
@@ -203,8 +210,11 @@ export type SavedFilterView = (typeof SAVED_FILTER_VIEWS)[number];
 export const CHRONICLE_LINK_SCOPES = ['sources', 'targets', 'both'] as const;
 export type ChronicleLinkScope = (typeof CHRONICLE_LINK_SCOPES)[number];
 
-/** Polymorphic owner of an {@link Attachment} (02-data-model.md §3.9). */
-export const ATTACHMENT_OWNER_TYPES = ['thought', 'link'] as const;
+/** Polymorphic owner of an {@link Attachment} (02-data-model.md §3.9).
+ *  `publication` (0.11.1, задача f37b468d, ADR 73cfcf64) — обложка публикации:
+ *  строка-вложение с тем же физическим файлом, что и исходное вложение мысли;
+ *  модель «один владелец на строку» не меняется. */
+export const ATTACHMENT_OWNER_TYPES = ['thought', 'link', 'publication'] as const;
 export type AttachmentOwnerType = (typeof ATTACHMENT_OWNER_TYPES)[number];
 
 /** Polymorphic owner of a {@link PropertyDefinition} — always a type (02-data-model.md §3.4). */

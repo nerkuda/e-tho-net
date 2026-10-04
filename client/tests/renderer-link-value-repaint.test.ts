@@ -16,7 +16,8 @@
  * перечитывал.
  *
  * Здесь проверяется:
- *  1) реальный путь ЧУЖОГО события через `applyRealtimeToUi` под DOM-шимом:
+ *  1) реальный путь ЧУЖОГО события через `routeRealtimeEvent` + производные
+ *     эффекты `applyDerivedRealtime` (G6) под DOM-шимом:
  *     `property-value.set` и `link.created` из активной сети перечитывают
  *     окрестность фокуса (холст), событие чужой сети — игнорируется;
  *  2) чистый гейт локального производителя `inFocusNeighbourhood`: фокус и его
@@ -123,10 +124,15 @@ function makeFocusResponse(): unknown {
 }
 
 /** Realtime-событие от чужого клиента (собственное эхо отсекает G8-applier). */
-function foreignEvent(type: string, networkId: string, data: unknown): Record<string, unknown> {
+function foreignEvent(
+  type: string,
+  networkId: string,
+  data: unknown,
+  seq = 1,
+): Record<string, unknown> {
   return {
     type,
-    seq: 1,
+    seq,
     ts: '2026-01-01T00:00:00.000Z',
     actor: { user_id: 'u2', client_id: 'c2' },
     audience: 'network',
@@ -148,7 +154,7 @@ function wait(ms: number): Promise<void> {
 describe('realtime-значение свойства-связи перечитывает окрестность фокуса (f0b959dd)', () => {
   it('property-value.set и link.created из активной сети перечитывают фокус; чужая сеть — игнор', async () => {
     shimDom();
-    /** Перезапросы фокуса — так виден `scheduleNeighbourhoodRepaint` (холст). */
+    /** Перезапросы фокуса — так видна инвалидация `focus`-ключей слоя (холст). */
     let focusFetches = 0;
     (globalThis as any).window.etn = {
       ui: { setState: async () => undefined },
@@ -164,8 +170,15 @@ describe('realtime-значение свойства-связи перечиты
       },
     };
     const { store } = await import('../src/renderer/state.js');
-    const { applyRealtimeToUi } = await import('../src/renderer/realtime-ui.js');
+    const { activateFocusQuery, deactivateFocusQuery } =
+      await import('../src/renderer/lib/layer-resync.js');
+    const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
+    const { resetEventRouter, routeRealtimeEvent } =
+      await import('../src/renderer/lib/live/event-router.js');
+    const { applyDerivedRealtime } = await import('../src/renderer/realtime-effects.js');
 
+    resetQueryRegistry();
+    resetEventRouter();
     store.update({
       networkId: 'n1',
       activeView: 'map',
@@ -173,50 +186,59 @@ describe('realtime-значение свойства-связи перечиты
       focus: makeFocusResponse(),
     } as any);
 
-    // Чужая сеть: событие соседней вкладки общий store активной не трогает.
-    applyRealtimeToUi(
-      foreignEvent('property-value.set', 'n2', {
-        owner_type: 'thought',
-        owner_id: 't1',
-        property_id: 'p1',
-        value: ['x'],
-      }) as any,
-    );
-    await wait(260);
-    assert.equal(focusFetches, 0, 'событие чужой сети окрестность не перечитывает');
+    // Слой данных (G2): окрестность подписана на `focus:@t1` — перезапрос
+    // запускает инвалидация роутера, а не ручной вызов.
+    activateFocusQuery('n1', 't1');
+    await wait(100);
+    const baseline = focusFetches;
+    assert.ok(baseline >= 1, 'подписка окрестности сразу читает фокус');
+
+    // Чужая сеть: событие соседней вкладки не маршрутизируется (граница сети).
+    const foreign = foreignEvent('property-value.set', 'n2', {
+      owner_type: 'thought',
+      owner_id: 't1',
+      property_id: 'p1',
+      value: ['x'],
+    }) as any;
+    routeRealtimeEvent(foreign, { networkId: 'n1' });
+    applyDerivedRealtime(foreign);
+    await wait(100);
+    assert.equal(focusFetches, baseline, 'событие чужой сети окрестность не перечитывает');
 
     // Своя сеть, чужой клиент: запись значения свойства-связи (сервер создал
-    // ребро) — карта перечитывает окрестность фокуса.
-    applyRealtimeToUi(
-      foreignEvent('property-value.set', 'n1', {
-        owner_type: 'thought',
-        owner_id: 't1',
-        property_id: 'p1',
-        value: ['x'],
-      }) as any,
-    );
-    await wait(260);
+    // ребро) — роутер гасит `focusAll`, подписка перечитывает окрестность.
+    const ownField = foreignEvent(
+      'property-value.set',
+      'n1',
+      { owner_type: 'thought', owner_id: 't1', property_id: 'p1', value: ['x'] },
+      2,
+    ) as any;
+    routeRealtimeEvent(ownField, { networkId: 'n1' });
+    applyDerivedRealtime(ownField);
+    await wait(100);
     assert.equal(
       focusFetches,
-      1,
-      'чужое `property-value.set` перечитывает фокус (путь жив, эталон для локального)',
+      baseline + 1,
+      'чужое `property-value.set` перечитывает фокус через слой',
     );
 
     // Типизированная связь, созданная другим клиентом, — тот же путь.
-    applyRealtimeToUi(
-      foreignEvent('link.created', 'n1', {
-        link: {
-          id: 'l9',
-          source_id: 't1',
-          target_id: 'c1',
-          type_id: null,
-          active: true,
-          version: 1,
-        },
-      }) as any,
-    );
-    await wait(260);
-    assert.equal(focusFetches, 2, 'чужой `link.created` перечитывает фокус');
+    const link = foreignEvent(
+      'link.created',
+      'n1',
+      {
+        link: { id: 'l9', source_id: 't1', target_id: 'c1', type_id: null, active: true, version: 1 },
+      },
+      3,
+    ) as any;
+    routeRealtimeEvent(link, { networkId: 'n1' });
+    applyDerivedRealtime(link);
+    await wait(100);
+    assert.equal(focusFetches, baseline + 2, 'чужой `link.created` перечитывает фокус через слой');
+
+    deactivateFocusQuery();
+    resetQueryRegistry();
+    resetEventRouter();
   });
 });
 
@@ -232,7 +254,7 @@ describe('гейт локальной записи значения свойст
       thoughts: { focus: async () => makeFocusResponse() },
     };
     const { store } = await import('../src/renderer/state.js');
-    const { inFocusNeighbourhood } = await import('../src/renderer/realtime-ui.js');
+    const { inFocusNeighbourhood } = await import('../src/renderer/lib/focus-neighbourhood.js');
 
     store.update({ networkId: 'n1', focus: makeFocusResponse() } as any);
     // Мысль-владелец: фокус и его соседи — видимы.
@@ -250,18 +272,34 @@ describe('гейт локальной записи значения свойст
     store.update({ focus: null } as any);
     assert.equal(inFocusNeighbourhood('thought', 't1'), false, 'без фокуса — игнор');
 
-    // Локальный производитель фокус-мысли: гейт пропускает → пересчёт
-    // планируется и реально перечитывает фокус (холст/секторы/линии).
+    // Локальный производитель фокус-мысли: гейт пропускает → слой гасит
+    // focus-ключи, активная подписка перечитывает окрестность (холст/секторы).
     store.update({ focus: makeFocusResponse() } as any);
     let focusFetches = 0;
     (globalThis as any).window.etn.thoughts.focus = async () => {
       focusFetches++;
       return makeFocusResponse();
     };
-    const { scheduleNeighbourhoodRepaint } = await import('../src/renderer/realtime-ui.js');
-    if (inFocusNeighbourhood('thought', 't1')) scheduleNeighbourhoodRepaint();
-    await wait(260);
-    assert.equal(focusFetches, 1, 'запись значения свойства-связи фокус-мысли перечитывает окрестность');
+    const { activateFocusQuery, deactivateFocusQuery } =
+      await import('../src/renderer/lib/layer-resync.js');
+    const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
+    const { invalidateAfterMutation } = await import('../src/renderer/lib/live/mutator.js');
+    const { queryKeys } = await import('../src/renderer/lib/live/query-keys.js');
+    resetQueryRegistry();
+    activateFocusQuery('n1', 't1');
+    await wait(100);
+    const base = focusFetches;
+    if (inFocusNeighbourhood('thought', 't1')) {
+      invalidateAfterMutation([queryKeys.focusAll()]);
+    }
+    await wait(100);
+    assert.equal(
+      focusFetches,
+      base + 1,
+      'запись значения свойства-связи фокус-мысли перечитывает окрестность через слой',
+    );
+    deactivateFocusQuery();
+    resetQueryRegistry();
   });
 });
 
@@ -273,36 +311,47 @@ describe('проводка пересчёта окрестности из ред
   const read = (rel: string): string =>
     readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
 
-  it('помощник пересчёта делегирует общий набор окрестности', () => {
-    const realtimeUi = read('realtime-ui.ts');
-    // Набор «холст + Структуры + Хроника» задан один раз, в
-    // `scheduleNeighbourhoodRepaint`; ветки link.*/property-value.* зовут его.
+  it('пересчёт окрестности задан слоем — ручных помощников в мосте нет', () => {
+    const effects = read('realtime-effects.ts');
+    // G2/G6: решение «когда обновлять» ушло в слой; ручные помощники снесены.
     assert.ok(
-      /export function scheduleNeighbourhoodRepaint\(\): void \{[\s\S]{0,120}?scheduleRefresh\(\);[\s\S]{0,80}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
-        realtimeUi,
-      ),
-      'scheduleNeighbourhoodRepaint пересчитывает холст, «Структуры» и «Хронику»',
+      !effects.includes('scheduleNeighbourhoodRepaint'),
+      'scheduleNeighbourhoodRepaint снесён (G2)',
+    );
+    assert.ok(!effects.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
+    // Ветки значения свойства в мосте больше нет вовсе (G6: только производные
+    // эффекты store/кэшей): окрестность гасит роутер слоя.
+    assert.ok(
+      !effects.includes("case 'property-value.set':"),
+      'у значения свойства нет собственной ветки (роутер слоя)',
     );
     assert.ok(
-      /case 'property-value\.set':[\s\S]{0,200}?scheduleNeighbourhoodRepaint\(\);/.test(realtimeUi),
-      'realtime-ветка значения свойства зовёт общий пересчёт окрестности',
+      !effects.includes('scheduleStructuresRefresh'),
+      'мост не дёргает «Структуры» вручную (роутер слоя)',
+    );
+    assert.ok(
+      !effects.includes('scheduleChronicleRefresh'),
+      'мост не дёргает «Дневник» вручную (роутер слоя, G3)',
     );
   });
 
-  it('запись значения свойства-связи зовёт пересчёт под гейтом видимости', () => {
+  it('запись значения свойства-связи идёт mutator-путём под гейтом видимости', () => {
     const properties = read('editor/properties.ts');
 
-    // Импорт общего набора и гейта из realtime-ui (локальный путь — тот же
-    // набор, что у чужого realtime-события).
+    // Гейт видимости — из lib/focus-neighbourhood; пересчёт — mutator-слой
+    // (`invalidateAfterMutation`).
     assert.ok(
-      /import \{ inFocusNeighbourhood, scheduleNeighbourhoodRepaint \} from '\.\.\/realtime-ui\.js';/.test(
-        properties,
-      ),
-      'редактор свойств берёт набор и гейт из realtime-ui',
+      /import \{ inFocusNeighbourhood \} from '\.\.\/lib\/focus-neighbourhood\.js';/.test(properties),
+      'редактор свойств берёт гейт видимости из lib/focus-neighbourhood',
     );
-    // Сам помощник: пересчёт только для видимого владельца.
     assert.ok(
-      /function repaintAfterLinkValueWrite\(ownerType: 'thought' \| 'link', ownerId: string\): void \{\s*if \(inFocusNeighbourhood\(ownerType, ownerId\)\) scheduleNeighbourhoodRepaint\(\);/.test(
+      /import \{ invalidateAfterMutation \} from '\.\.\/lib\/live\/mutator\.js';/.test(properties),
+      'редактор свойств гасит ключи mutator-слоем',
+    );
+    // Сам помощник: пересчёт только для видимого владельца, через слой
+    // (focus + «Структуры» + лента «Дневника», G3).
+    assert.ok(
+      /function repaintAfterLinkValueWrite\(ownerType: 'thought' \| 'link', ownerId: string\): void \{\s*if \(!inFocusNeighbourhood\(ownerType, ownerId\)\) return;[\s\S]{0,500}?invalidateAfterMutation\(\[[\s\S]{0,200}?queryKeys\.focusAll\(\),[\s\S]{0,200}?queryKeys\.structuresPageAll\(\),[\s\S]{0,200}?queryKeys\.chronicleFeedAll\(\),?[\s\S]{0,50}?\]\);/.test(
         properties,
       ),
       'пересчёт окрестности выполняется только для владельца, видимого на карте',

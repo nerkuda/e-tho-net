@@ -16,11 +16,16 @@
  * tab title is refreshed after every change.
  */
 
-import type { Attachment, Thought, ThoughtUpdateInput } from '@etn/shared';
+import type { Attachment, AttachmentOwnerType, Thought, ThoughtUpdateInput } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
-import { invalidateIndicators } from '../canvas/canvas.js';
-import { rememberShownAttachments } from '../lib/attachment-events.js';
+import {
+  commitEntity,
+  invalidateQueries,
+  onQueryInvalidated,
+  queryKeys,
+  registerQuery,
+} from '../lib/live/index.js';
 import { closeDialog, confirmDialog, showDialog } from '../lib/dialog.js';
 import { div, el, errText, isHttpUrl, span } from '../lib/dom.js';
 import { radioRow } from '../lib/ui/choice-row.js';
@@ -54,9 +59,10 @@ export function registerAttachmentsTab(): void {
         ctx.ownerType,
         ctx.ownerId,
       );
-      // Индекс показанных вложений: по нему realtime-события `updated`/`deleted`
-      // (у них в событии только id) находят показанную сущность — ошибка abd25adb.
-      rememberShownAttachments(items);
+      // Записи вложений — в нормализованный кэш слоя: по ним роутер разрешает
+      // владельца для событий `attachment.updated/deleted`, несущих только id.
+      for (const item of items) commitEntity('attachment', item.id, item);
+      registerQuery(queryKeys.attachments(ctx.ownerType, ctx.ownerId), null);
       return items.length;
     } catch {
       return undefined;
@@ -107,7 +113,7 @@ export async function assignDataIconToThought(
   const patch: ThoughtUpdateInput = { icon, icon_kind: 'image' };
   if (iconAttachmentId !== null) patch.icon_attachment_id = iconAttachmentId;
   const updated = await etn.thoughts.update(networkId, thought.id, patch, thought.version);
-  reflectThoughtUpdate(updated);
+  reflectThoughtUpdate(updated, patch as Record<string, unknown>);
   return updated;
 }
 
@@ -173,7 +179,7 @@ const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
  */
 async function uploadLocalFile(
   networkId: string,
-  ownerType: 'thought' | 'link',
+  ownerType: AttachmentOwnerType,
   ownerId: string,
   filePath: string,
   title: string | null,
@@ -213,10 +219,51 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** Builds the whole attachments tab pane content for the entity. */
+/** Параметры построения панели вложений для любого вида владельца. */
+export interface AttachmentsPaneOptions {
+  ownerType: AttachmentOwnerType;
+  ownerId: string;
+  /** Мысль-владелец (пункт «Назначить иконкой мысли»); у публикации — null. */
+  thought?: Thought | null;
+  /** Дополнительные пункты контекстного меню (напр. «Сделать обложкой публикации»). */
+  extraMenuItems?: (attachment: Attachment) => MenuItem[];
+  /** Уведомление о смене числа вложений (бейдж вкладки панели мысли). */
+  onCountChange?: () => void;
+}
+
+/** Вкладка «Вложения» панели мысли: общая панель над владельцем-мыслью/связью. */
 function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
+  return buildAttachmentsPane({
+    ownerType: ctx.ownerType,
+    ownerId: ctx.ownerId,
+    thought: ctx.thought,
+    onCountChange: () => refreshTabCount('attachments'),
+  });
+}
+
+/**
+ * Строит панель «Вложения» для ЛЮБОГО вида владельца (мысль / связь /
+ * публикация, 0.11.1, задача b02ef1cf): общий список, drag&drop, диалог
+ * добавления и встроенный просмотрщик. Мысле-специфичные пункты меню
+ * («Назначить иконкой мысли») показываются только для владельца-мысли;
+ * дополнительные пункты даёт вызывающий (`extraMenuItems`).
+ */
+export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement {
+  const ownerType = opts.ownerType;
+  const ownerId = opts.ownerId;
+  const thought = opts.thought ?? null;
+  const extraMenuItems = opts.extraMenuItems;
+  const onCountChange = opts.onCountChange;
   const networkId = requireNetworkId();
   const root = div('attachments-tab');
+  /**
+   * Гаснет ключ списка вложений владельца (кэш-путь слоя, G4): подписчики —
+   * эта панель и бейдж вкладки — перечитывают набор. Своего realtime-эха у
+   * локальной правки нет, поэтому инвалидация — единственный сигнал.
+   */
+  const refreshAttachments = (): void => {
+    invalidateQueries(queryKeys.attachments(ownerType, ownerId));
+  };
 
   const top = div('attachments-top');
   const drop = div('attachments-drop');
@@ -248,20 +295,21 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   showViewerHint('Выберите вложение для просмотра.');
   void reload();
 
-  // Pastes from OTHER markdown fields (e.g. the permanent comment on the
-  // «Комментарий» tab) add attachments behind this list's back — reload when the
-  // owner matches. The listener self-unregisters once the pane is gone.
-  const onExternalChange = (event: Event): void => {
+  // Набор вложений владельца живёт под ключом слоя `attachments:@owner`:
+  // роутер гасит его на чужие события `attachment.*`, производители (вставка в
+  // markdown, правки на вкладке) — через `invalidateQueries`. Оба источника
+  // сходятся сюда: пока вкладка подключена — перечитываем список на месте,
+  // отключённую (скрытую) отпускает редактор (`editor.ts`).
+  registerQuery(queryKeys.attachments(ownerType, ownerId), null);
+  const layerUnsub = onQueryInvalidated((prefix) => {
     if (!root.isConnected) {
-      document.removeEventListener('etn:attachments-changed', onExternalChange);
+      layerUnsub();
       return;
     }
-    const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
-    if (detail?.ownerType === ctx.ownerType && detail?.ownerId === ctx.ownerId) {
+    if (prefix === queryKeys.attachmentsAll() || prefix === queryKeys.attachments(ownerType, ownerId)) {
       void reload();
     }
-  };
-  document.addEventListener('etn:attachments-changed', onExternalChange);
+  });
 
   // --- drag & drop ----------------------------------------------------------
   drop.addEventListener('dragover', (event) => {
@@ -293,7 +341,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     for (const url of urls) {
       if (!isHttpUrl(url)) continue;
       try {
-        await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, { kind: 'url', url });
+        await etn.attachments.add(networkId, ownerType, ownerId, { kind: 'url', url });
         added++;
       } catch {
         notice('Не удалось добавить вложение.', 'error');
@@ -304,7 +352,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         // Electron exposes the OS path on dropped File objects (Electron ≤31).
         const path = (file as File & { path?: string }).path ?? file.name;
         try {
-          await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
+          await etn.attachments.add(networkId, ownerType, ownerId, {
             kind: 'file',
             file_path: path,
             file_size: file.size,
@@ -318,8 +366,8 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       }
     }
     if (added > 0) {
-      invalidateIndicators(ctx.ownerId);
-      await reload();
+      invalidateQueries(queryKeys.indicators(ownerId));
+      refreshAttachments();
       return;
     }
     // Nothing was recognised — say so instead of failing silently.
@@ -334,15 +382,15 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     list.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let attachments: Attachment[];
     try {
-      attachments = await etn.attachments.list(networkId, ctx.ownerType, ctx.ownerId);
+      attachments = await etn.attachments.list(networkId, ownerType, ownerId);
     } catch (err) {
       list.replaceChildren(operationError(err));
       return;
     }
-    // Показанный список — источник индекса владельцев для realtime-событий
-    // (ошибка abd25adb): `attachment.updated`/`deleted` несут только id.
-    rememberShownAttachments(attachments);
-    refreshTabCount('attachments');
+    // Записи вложений — в нормализованный кэш слоя: по ним роутер разрешает
+    // владельца событий `attachment.updated/deleted`, несущих только id.
+    for (const attachment of attachments) commitEntity('attachment', attachment.id, attachment);
+    onCountChange?.();
     list.replaceChildren();
     rowById.clear();
     if (attachments.length === 0) {
@@ -544,7 +592,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     const widget = createMarkdownField({
       md: content.text,
       html: viewHtml(content.text, content.html),
-      attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
+      attachmentsOwner: { ownerType: ownerType, ownerId: ownerId },
       onSave: async (md) => {
         const result = await etn.attachments.updateContent(networkId, attachment.id, {
           data_base64: utf8ToBase64(md),
@@ -569,7 +617,6 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
    * иконку с вложением — Ctrl-hover показывает полную картинку.
    */
   async function assignAsThoughtIcon(attachment: Attachment): Promise<void> {
-    const thought = ctx.thought;
     if (thought === null) return;
 
     // url-вложение с favicon: источник готов, ссылку на вложение не ставим —
@@ -622,13 +669,16 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         owner_type: 'thought',
         owner_id: targetId,
       });
-      invalidateIndicators(attachment.owner_id);
-      invalidateIndicators(targetId);
+      invalidateQueries(queryKeys.indicators(attachment.owner_id));
+      invalidateQueries(queryKeys.indicators(targetId));
       if (selectedId === attachment.id) {
         selectedId = null;
         showViewerHint('Выберите вложение для просмотра.');
       }
-      await reload();
+      // Вложение ушло из показанного владельца и прибыло к целевому: гасим оба
+      // списка — подписчики перечитают набор.
+      refreshAttachments();
+      invalidateQueries(queryKeys.attachments('thought', targetId));
     } catch (err) {
       notice(`Не удалось перенести: ${errText(err)}`, 'error');
     }
@@ -654,7 +704,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         target_owner_ids: targetIds,
       });
       for (const created of copyResult.created) {
-        invalidateIndicators(created.owner_id);
+        invalidateQueries(queryKeys.indicators(created.owner_id));
       }
       const created = copyResult.created.length;
       const skipped = copyResult.skipped.length;
@@ -681,12 +731,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     if (!ok) return;
     try {
       await etn.attachments.remove(networkId, attachment.id);
-      invalidateIndicators(attachment.owner_id);
+      invalidateQueries(queryKeys.indicators(attachment.owner_id));
       if (selectedId === attachment.id) {
         selectedId = null;
         showViewerHint('Выберите вложение для просмотра.');
       }
-      await reload();
+      refreshAttachments();
     } catch (err) {
       notice(`Не удалось удалить: ${errText(err)}`, 'error');
     }
@@ -703,7 +753,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         menuAction(t('attachments.menu.openDefault'), () => void openDefault(attachment)),
       );
     }
-    if (ctx.ownerType === 'thought' && canAssignAsThoughtIcon(attachment)) {
+    // Дополнительные пункты владельца (напр. «Сделать обложкой публикации»):
+    // их состав задаёт вызывающий, общий список команд здесь не расширяется.
+    if (extraMenuItems !== undefined) {
+      items.push(...extraMenuItems(attachment));
+    }
+    if (ownerType === 'thought' && canAssignAsThoughtIcon(attachment)) {
       items.push(
         menuAction(t('attachments.menu.assignIcon'), () => void assignAsThoughtIcon(attachment)),
       );
@@ -816,8 +871,8 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       try {
         const hits = await etn.attachments.search(networkId, {
           q,
-          exclude_owner_type: ctx.ownerType,
-          exclude_owner_id: ctx.ownerId,
+          exclude_owner_type: ownerType,
+          exclude_owner_id: ownerId,
         });
         if (seq !== searchSeq) return;
         renderSearchResults(hits);
@@ -848,7 +903,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
      */
     async function reuseAttachment(attachment: Attachment): Promise<void> {
       try {
-        await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
+        await etn.attachments.add(networkId, ownerType, ownerId, {
           kind: attachment.kind,
           url: attachment.kind === 'url' ? attachment.url : null,
           file_path: attachment.kind === 'file' ? attachment.file_path : null,
@@ -857,9 +912,9 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
           title: attachment.title,
           description: attachment.description,
         });
-        invalidateIndicators(ctx.ownerId);
+        invalidateQueries(queryKeys.indicators(ownerId));
         closeDialog();
-        await reload();
+        refreshAttachments();
       } catch (err) {
         searchError.textContent = errText(err);
       }
@@ -904,23 +959,23 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
           const name = location.split(/[\\/]/).pop() ?? location;
           await uploadLocalFile(
             networkId,
-            ctx.ownerType,
-            ctx.ownerId,
+            ownerType,
+            ownerId,
             location,
             titleInput.value.trim() || name,
             descInput.value.trim() || null,
           );
         } else {
-          await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
+          await etn.attachments.add(networkId, ownerType, ownerId, {
             kind,
             url: location,
             title: titleInput.value.trim() || null,
             description: descInput.value.trim() || null,
           });
         }
-        invalidateIndicators(ctx.ownerId);
+        invalidateQueries(queryKeys.indicators(ownerId));
         close();
-        await reload();
+        refreshAttachments();
       } catch (err) {
         errorLine.show(errText(err));
       }

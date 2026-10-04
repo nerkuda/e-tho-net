@@ -59,7 +59,16 @@ export type IconName =
   | 'value-url'
   | 'value-ref'
   // Кросс-сетевая ссылка (задача 7849008a): адрес `n:<network_id>#<thought_id>`.
-  | 'value-cross-network-ref';
+  | 'value-cross-network-ref'
+  // Ссылка на публикацию (0.11.1, задача 3275fd8d): иконка перед именем
+  // свойства вида `publication` в общем списке свойств.
+  | 'value-publication'
+  // Шапка рабочей области публикации (0.11.1, задача b51dbca4): «Экспорт» —
+  // lucide «download»; разворот/сворачивание панели оглавления — lucide
+  // «panel-left-open»/«panel-left-close».
+  | 'download'
+  | 'panel-left-open'
+  | 'panel-left-close';
 
 /**
  * Trusted static inner-SVG markup per icon (lucide geometry, MIT). Assigned
@@ -183,6 +192,21 @@ const PATHS: Record<IconName, string> = {
     '<circle cx="12" cy="12" r="9"/>' +
     '<circle cx="12" cy="12" r="4"/>' +
     '<path d="M3 12h4M17 12h4"/>',
+  // Ссылка на публикацию (0.11.1, задача 3275fd8d): раскрытая книга —
+  // метафора «живого документа из мыслесети».
+  'value-publication':
+    '<path d="M12 7v14"/>' +
+    '<path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  // Экспорт документа (lucide «download»): стрелка в лоток.
+  download:
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>' +
+    '<polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+  // Панель оглавления (lucide «panel-left-open»/«panel-left-close»): колонка
+  // слева и стрелка разворота вправо/влево — заметный символ сворачивания.
+  'panel-left-open':
+    '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/>',
+  'panel-left-close':
+    '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/>',
 };
 
 /**

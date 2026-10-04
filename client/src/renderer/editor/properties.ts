@@ -28,8 +28,14 @@ import type {
   ThoughtRef,
 } from '@etn/shared';
 
-import { onRealtimeEvent } from '../realtime.js';
-import { inFocusNeighbourhood, scheduleNeighbourhoodRepaint } from '../realtime-ui.js';
+import { inFocusNeighbourhood } from '../lib/focus-neighbourhood.js';
+import { queryKeys } from '../lib/live/query-keys.js';
+import { invalidateAfterMutation } from '../lib/live/mutator.js';
+import {
+  asRealtimeCause,
+  onQueryInvalidated,
+  signalPublicationCompositionChanged,
+} from '../lib/live/index.js';
 import {
   div,
   el,
@@ -86,7 +92,7 @@ let wired = false;
 /**
  * Довести локальную запись значения свойства-СВЯЗИ до холста и панелей
  * (ошибка f0b959dd). Серверная запись создаёт/удаляет РЕБРО, а собственное
- * realtime-эхо собственного клиента до рендерера не доходит (G8 applier,
+ * realtime-эхо собственного клиента приходит асинхронно (B1) (G8 applier,
  * 04-realtime.md §5) — без этого холст не перечитывал окрестность, и новая
  * мысль не появлялась в секторе родителей/родственников. Realtime-путь для
  * ЧУЖИХ правок уже работал: `realtime-ui.ts` на `property-value.set/deleted`
@@ -99,7 +105,30 @@ let wired = false;
  * всей окрестности на каждый чип не делается — только по факту записи.
  */
 function repaintAfterLinkValueWrite(ownerType: 'thought' | 'link', ownerId: string): void {
-  if (inFocusNeighbourhood(ownerType, ownerId)) scheduleNeighbourhoodRepaint();
+  if (!inFocusNeighbourhood(ownerType, ownerId)) return;
+  // Слой данных (G2/G3): гасим focus-, structures- и chronicle-ключи —
+  // активная окрестность, «Структуры» и лента «Дневника» перечитаются слоем
+  // (роутер/инвалидация), без ручных `scheduleNeighbourhoodRepaint`.
+  invalidateAfterMutation([
+    queryKeys.focusAll(),
+    queryKeys.structuresPageAll(),
+    queryKeys.chronicleFeedAll(),
+  ]);
+}
+
+/**
+ * Сигнал «состав публикации мог измениться» для владельца значения.
+ *
+ * Значение свойства — критерий рецепта (`extra_properties`): его запись может
+ * ВВЕСТИ мысль в сборку, которой там ещё нет. Поэтому кроме id владельца
+ * передаём признак `mayChangeComposition` (передача G5→G6, симметрично «входу»
+ * в отбор G3): рабочая область зажигает stale безусловно. У владельца-СВЯЗИ
+ * концы (мысли) неизвестны — консервативный stale без списка.
+ */
+function signalCompositionForOwner(ownerType: 'thought' | 'link', ownerId: string): void {
+  signalPublicationCompositionChanged(ownerType === 'thought' ? [ownerId] : undefined, {
+    mayChangeComposition: true,
+  });
 }
 
 /**
@@ -116,7 +145,13 @@ export function registerPropertiesGroup(): void {
   registerTabRetarget('properties', (_pane, ctx) => retargetPropertiesTab(ctx));
   if (!wired) {
     wired = true;
-    onRealtimeEvent((evt) => {
+    // Чужое значение свойства гасит `focus:@owner` (роутер на
+    // `property-value.set/deleted`) — перечитываем открытую вкладку «Свойства».
+    // Свой `onRealtimeEvent` снесён (G5): используется причина слоя.
+    onQueryInvalidated((prefix, _keys, cause) => {
+      if (prefix !== queryKeys.focusAll() && !prefix.startsWith('focus:@')) return;
+      const evt = asRealtimeCause(cause);
+      if (evt === null) return;
       if (evt.type === 'property-value.set' || evt.type === 'property-value.deleted') {
         currentReload?.();
       }
@@ -362,7 +397,10 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
   // delete in either group should refresh the other). The realtime listener
   // already invokes `currentReload` for both groups; piggy-back on it by
   // re-rendering ourselves whenever it fires.
-  onRealtimeEvent((evt) => {
+  onQueryInvalidated((prefix, _keys, cause) => {
+    if (prefix !== queryKeys.focusAll() && !prefix.startsWith('focus:@')) return;
+    const evt = asRealtimeCause(cause);
+    if (evt === null) return;
     if (evt.type === 'property-value.set' || evt.type === 'property-value.deleted') {
       if (box.isConnected) void reload();
     }
@@ -552,6 +590,10 @@ function buildOutsideLinkCell(
           remaining.length > 0 ? remaining : null,
         );
         repaintAfterLinkValueWrite(ownerType, ownerId);
+        // Своё значение свойства-связи меняет состав публикации: сигнал слоя
+        // (до B1; гейт `repaintAfterLinkValueWrite` по фокусу здесь не годится —
+        // публикация может быть открыта и без фокуса на владельце).
+        signalCompositionForOwner(ownerType, ownerId);
         onRemove();
         return true;
       } catch (err) {
@@ -592,6 +634,7 @@ function buildOutsideLinkCell(
           // Внетиповое свойство-связь меняет рёбра так же, как типовое, —
           // окрестность фокуса перечитываем сразу (ошибка f0b959dd).
           repaintAfterLinkValueWrite(ownerType, ownerId);
+          signalCompositionForOwner(ownerType, ownerId);
           onRemove();
           return true;
         } catch (err) {
@@ -732,6 +775,7 @@ function buildOutsideValueCell(
         if (!ok) return;
         try {
           await etn.properties.remove(networkId, ownerType, ownerId, value.property_name);
+          signalCompositionForOwner(ownerType, ownerId);
           onRemove();
         } catch (err) {
           notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
@@ -865,7 +909,7 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
         current: value,
         // Своя запись значения-связи не поднимает версию мысли (гейт полной
         // пересборки `mountEditor` не срабатывает), а realtime-эхо своего
-        // клиента до рендерера не доходит (G8) — счётчик строки, нарисованный
+        // клиента приходит асинхронно (B1) (G8) — счётчик строки, нарисованный
         // при `reload()`, перерисовываем здесь же (ошибка 9ee8e608).
         onLinkCountChange: (next) => {
           nameText.textContent = propertyNameLabel(definition, next);
@@ -1013,14 +1057,18 @@ function buildEditorCell(opts: {
           // для связей — no-op (в property_values ничего не хранится).
           await etn.properties.set(networkId, ownerType, ownerId, definition.key, value);
         }
+        // Своя запись значения свойства меняет состав публикации: сигнал слоя
+        // (до B1). Скаляр — как в realtime `property-value.set` — тоже помечает
+        // живой текст устаревшим.
+        signalCompositionForOwner(ownerType, ownerId);
         // Свойство-связь создало/убрало РЕБРО серверной записью (ошибка
-        // f0b959dd): своего realtime-эха у клиента нет — окрестность фокуса
-        // перечитываем сразу после успешного сохранения.
+        // f0b959dd): своё событие приходит асинхронно (B1) — окрестность фокуса
+        // перечитываем сразу после успешного сохранения (идемпотентный ускоритель).
         if (definition.value_type === 'link') {
           repaintAfterLinkValueWrite(ownerType, ownerId);
           // Число целей в заголовке строки рисуется при `reload()` и после
-          // своей записи не перечитывалось (ошибка 9ee8e608): realtime-эхо
-          // собственного клиента до рендерера не доходит (G8), версию мысли
+          // своей записи не перечитывалось (ошибка 9ee8e608): своё событие
+          // приходит асинхронно (B1), версию мысли
           // запись значения не поднимает — гейт полной пересборки редактора не
           // срабатывает. Новое число целей известно из записанного набора
           // (`save` получает массив target_id, `null` — очистка).

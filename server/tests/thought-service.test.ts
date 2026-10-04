@@ -34,6 +34,7 @@ import {
   updateThought,
 } from '../src/domain/thought-service.js';
 import { setFocusPreferences } from '../src/domain/focus-service.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
 import { createTypeProperty, getPropertyValues } from '../src/domain/property-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 
@@ -87,6 +88,34 @@ function seedLink(ndb: NetworkDb, sourceId: string, targetId: string, active = 1
        VALUES (?, ?, ?, NULL, ?, 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'u', 'u')`,
     )
     .run(randomUUID(), sourceId, targetId, active);
+}
+
+/**
+ * Insert a raw TYPED link row (non-null `type_id`) between two seeded thoughts.
+ * The type must already exist in `link_types` — build it with {@link linkTypeOf}.
+ */
+function seedTypedLink(
+  ndb: NetworkDb,
+  sourceId: string,
+  targetId: string,
+  typeId: string,
+): void {
+  ndb
+    .prepare(
+      `INSERT INTO links (id, source_id, target_id, type_id, active, version,
+                          created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, ?, 1, 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'u', 'u')`,
+    )
+    .run(randomUUID(), sourceId, targetId, typeId);
+}
+
+/** Create a link type through the ontology service and return its id. */
+function linkTypeOf(ndb: NetworkDb, name: string, actorUserId = 'user-1'): string {
+  return createLinkType(
+    ndb,
+    { name_forward: name, name_reverse: name },
+    actorUserId,
+  ).id;
 }
 
 describe(
@@ -660,6 +689,115 @@ describe(
             assert.equal(total, 65, `call ${call}: unexpected total`);
             assert.ok(page.every((n) => childIds.includes(n.id)));
           }
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
+    // Ошибка 7102308b: зоны карты показывали в счётчике число СВЯЗЕЙ, а не
+    // уникальных мыслей. Одна мысль, пришедшая к фокусу несколькими
+    // параллельными связями (разные свойства-связи), должна считаться и
+    // отдаваться один раз — тогда индикатор зоны совпадает с числом облачков.
+    describe('dedup of parallel links (ошибка 7102308b)', () => {
+      it('a thought reached through two links is listed and counted once', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const focusId = seedThought(ndb, { title: 'Focus' });
+          const child = seedThought(ndb, { title: 'Child' });
+          // Untyped parallel links share (source, target, NULL) but SQLite
+          // treats NULLs as distinct in the live UNIQUE index — both rows stay.
+          seedLink(ndb, focusId, child);
+          seedLink(ndb, focusId, child);
+
+          const children = getNeighbors(ndb, focusId, 'children');
+          assert.equal(children.length, 1, 'one cloud for one thought, not two links');
+          assert.equal(children[0]!.id, child);
+          assert.equal(countNeighbors(ndb, focusId, 'children'), 1, 'counter counts thoughts');
+          assert.equal(
+            focus(ndb, USER, focusId).children.length,
+            1,
+            'focus first page is deduplicated too',
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('two distinct thoughts reached by links count as two', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const focusId = seedThought(ndb, { title: 'Focus' });
+          const a = seedThought(ndb, { title: 'A' });
+          const b = seedThought(ndb, { title: 'B' });
+          seedLink(ndb, focusId, a);
+          seedLink(ndb, focusId, a); // parallel link to the first thought
+          seedLink(ndb, focusId, b);
+
+          assert.deepEqual(
+            getNeighbors(ndb, focusId, 'children').map((n) => n.id).sort(),
+            [a, b].sort(),
+          );
+          assert.equal(countNeighbors(ndb, focusId, 'children'), 2);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('pagination offsets walk unique thoughts, not raw links', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const focusId = seedThought(ndb, { title: 'Focus' });
+          const first = seedThought(ndb, { title: 'First' });
+          const second = seedThought(ndb, { title: 'Second' });
+          // The first thought is held by three parallel links — a row-based
+          // offset would return it again at offset=1 and hide `second`.
+          seedLink(ndb, focusId, first);
+          seedLink(ndb, focusId, first);
+          seedLink(ndb, focusId, first);
+          seedLink(ndb, focusId, second);
+
+          const page0 = getNeighbors(ndb, focusId, 'children', { limit: 1, offset: 0, sort: 'alpha' });
+          const page1 = getNeighbors(ndb, focusId, 'children', { limit: 1, offset: 1, sort: 'alpha' });
+          assert.equal(page0.length, 1);
+          assert.equal(page0[0]!.id, first);
+          assert.equal(page1.length, 1);
+          assert.equal(page1[0]!.id, second, 'offset pages over thoughts, not links');
+          assert.equal(countNeighbors(ndb, focusId, 'children'), 2);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      // Точный сценарий карточки ошибки 7102308b: одна мысль указана в ДВУХ
+      // РАЗНЫХ свойствах-связях, то есть две связи разных типов из онтологии.
+      it('a thought in two DIFFERENT typed links is deduplicated and counted once', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const focusId = seedThought(ndb, { title: 'Focus' });
+          const child = seedThought(ndb, { title: 'Child' });
+          const other = seedThought(ndb, { title: 'Other' });
+          const typeA = linkTypeOf(ndb, 'Свойство A');
+          const typeB = linkTypeOf(ndb, 'Свойство B');
+          assert.notEqual(typeA, typeB);
+          // Focus --(A)--> Child ; Focus --(B)--> Child ; Focus --(A)--> Other
+          seedTypedLink(ndb, focusId, child, typeA);
+          seedTypedLink(ndb, focusId, child, typeB);
+          seedTypedLink(ndb, focusId, other, typeA);
+
+          const children = getNeighbors(ndb, focusId, 'children');
+          assert.deepEqual(
+            children.map((n) => n.id).sort(),
+            [child, other].sort(),
+            'two typed links to one thought collapse into one row',
+          );
+          assert.equal(countNeighbors(ndb, focusId, 'children'), 2, 'unique thoughts, not links');
+          assert.equal(focus(ndb, USER, focusId).children.length, 2);
+
+          // Родительская сторона — та же дедупликация при обратном направлении.
+          const parents = getNeighbors(ndb, child, 'parents');
+          assert.deepEqual(parents.map((n) => n.id), [focusId]);
+          assert.equal(countNeighbors(ndb, child, 'parents'), 1);
         } finally {
           ndb.close();
         }

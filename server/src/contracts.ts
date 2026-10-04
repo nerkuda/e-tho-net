@@ -34,6 +34,7 @@ import { z, type ZodType } from 'zod';
 
 import {
   ATTACHMENT_KINDS,
+  ATTACHMENT_OWNER_TYPES,
   AUDIT_CATEGORIES,
   COMMENT_KINDS,
   COMMENT_OWNER_TYPES,
@@ -56,6 +57,9 @@ import {
   parseLinkTypeFilterValue,
   PROPERTY_OWNER_TYPES,
   PROPERTY_VALUE_TYPES,
+  PUBLICATION_ACTIVE_FILTERS,
+  PUBLICATION_EXPORT_FORMATS,
+  PUBLICATION_SORTS,
   REALTIME_DEFAULTS,
   SAVED_FILTER_VIEWS,
   SEARCH_SCOPES,
@@ -70,6 +74,11 @@ import {
   type ThoughtRef,
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
+import {
+  numberingRangeInvalid,
+  recipeOverlap,
+  summaryHasMarkdownHeadings,
+} from './domain/publication-validation.js';
 import { validateLayerColors } from './domain/layer-service.js';
 import type { TraversalBounds } from './domain/graph-traversal.js';
 import type {
@@ -237,6 +246,35 @@ function firstIssue(error: z.ZodError): ZodIssueLike {
   return issue ?? (error.issues[0] as unknown as ZodIssueLike);
 }
 
+/**
+ * Отсутствует ли значение по пути issue во входе. zod 4 больше не кладёт в
+ * issue признак `received` (в zod 3 отсутствие поля давало
+ * `received === 'undefined'`), поэтому «обязательное поле не передано»
+ * отличаем от «передан неверный тип» по сырому входу: `undefined` на любом
+ * шаге пути означает, что поля нет. `input === undefined` (вызывающий не
+ * передал вход) — не считаем отсутствием, поведение прежнее.
+ */
+function isAbsentIn(input: unknown, path: unknown): boolean {
+  if (input === undefined) return false;
+  const parts = Array.isArray(path)
+    ? path.filter((p): p is string | number => typeof p === 'string' || typeof p === 'number')
+    : [];
+  if (parts.length === 0) return false;
+  let cur: unknown = input;
+  for (const part of parts) {
+    if (cur === null || typeof cur !== 'object') return true;
+    if (Array.isArray(cur)) {
+      if (typeof part !== 'number' || part < 0 || part >= cur.length) return true;
+      cur = cur[part];
+    } else {
+      const obj = cur as Record<string, unknown>;
+      if (obj[String(part)] === undefined) return true;
+      cur = obj[String(part)];
+    }
+  }
+  return false;
+}
+
 /** Поле, к которому относится issue: путь ошибки (для вложенных — `a.b.0`),
  *  для пустого пути (union/enum) — ключ карты rest. */
 function issueKey(fallback: string, issue: ZodIssueLike): string {
@@ -247,6 +285,20 @@ function issueKey(fallback: string, issue: ZodIssueLike): string {
     return parts.map(String).join('.');
   }
   return fallback;
+}
+
+/**
+ * Ключ поля для пошаговой валидации REST-парсера. Путь zod-ошибки относителен
+ * значения поля, поэтому при вложенной ошибке к нему добавляется имя верхнего
+ * REST-ключа (`items` + `0.node_key` → `items.0.node_key`) — тот же полный
+ * путь, что zod даёт MCP при разборе всего входа. Для скалярного поля путь
+ * пуст, и ключ остаётся верхним.
+ */
+function restFieldIssueKey(key: string, issue: ZodIssueLike): string {
+  const parts = issue.path?.filter(
+    (p): p is string | number => typeof p === 'string' || typeof p === 'number',
+  );
+  return parts !== undefined && parts.length > 0 ? `${key}.${parts.map(String).join('.')}` : key;
 }
 
 /** Детали ошибки REST: `{ field }`, для enum — с `allowed`, для
@@ -268,7 +320,9 @@ function issueDetails(key: string, issue: ZodIssueLike, allowedKeys?: string[]):
  * Каноническое сообщение ошибки поля. Совпадает у обоих фасадов; по умолчанию
  * — русский wire-стиль REST-слоя, переопределяется `spec.msg` (шаблон
  * подставляется с ключом объявленного поля `specKey`, путь ошибки — для
- * значений по умолчанию и деталей).
+ * значений по умолчанию и деталей). `input` — исходное значение/объект,
+ * проверенный zod-схемой: по нему отличаем «обязательное поле отсутствует»
+ * («{key} обязателен.», как в REST) от «передан неверный тип».
  */
 export function messageForIssue(
   specKey: string,
@@ -276,40 +330,47 @@ export function messageForIssue(
   spec: RestFieldSpec | undefined,
   field: ZodType | undefined,
   issue: ZodIssueLike,
+  input?: unknown,
 ): string {
-  const specVars: Record<string, string | number | bigint> = { key: specKey };
   const vars: Record<string, string | number | bigint> = { key: pathKey };
+  // Ключ подстановки в сообщение обязан совпадать у REST и MCP. Путь zod-ошибки
+  // REST относителен значению поля, поэтому непустой путь (даже длиной 1, как у
+  // record-поля: `tables` + `t1`) — это вложенная ошибка, и берём полный путь
+  // `pathKey` (`tables.t1`), как его видит MCP при разборе всего входа; только
+  // пустой путь (ошибка на самом поле) остаётся верхним REST-ключом `specKey`.
+  const keyVars: Record<string, string | number | bigint> =
+    Array.isArray(issue.path) && issue.path.length > 0 ? vars : { key: specKey };
   if (issue.code === 'custom') {
     return issue.message;
   }
   if (issue.code === 'invalid_type') {
-    if (issue.received === 'undefined') {
-      return template(spec?.msg ?? '{key} обязателен.', specVars);
+    if (isAbsentIn(input, issue.path)) {
+      return template(spec?.msg ?? '{key} обязателен.', keyVars);
     }
     const nulls = field !== undefined && field.safeParse(null).success;
     const suffix = nulls ? ' или null' : '';
     switch (issue.expected) {
       case 'string':
-        return template(spec?.msg ?? `{key} должен быть строкой${suffix}.`, specVars);
+        return template(spec?.msg ?? `{key} должен быть строкой${suffix}.`, keyVars);
       case 'int':
       case 'number':
-        return template(spec?.msg ?? `{key} должен быть целым числом${suffix}.`, specVars);
+        return template(spec?.msg ?? `{key} должен быть целым числом${suffix}.`, keyVars);
       case 'boolean':
-        return template(spec?.msg ?? `{key} должен быть логическим значением${suffix}.`, specVars);
+        return template(spec?.msg ?? `{key} должен быть логическим значением${suffix}.`, keyVars);
       case 'array':
-        return template(spec?.msg ?? '{key} должен быть массивом строк.', specVars);
+        return template(spec?.msg ?? '{key} должен быть массивом строк.', keyVars);
       case 'object':
-        return template(spec?.msg ?? '{key} должен быть объектом.', specVars);
+        return template(spec?.msg ?? '{key} должен быть объектом.', keyVars);
       default:
-        return template(spec?.msg ?? 'Недопустимый {key}.', specVars);
+        return template(spec?.msg ?? 'Недопустимый {key}.', keyVars);
     }
   }
   if (issue.code === 'too_small') {
     if (issue.origin === 'string') {
-      return template(spec?.msg ?? '{key} обязателен.', specVars);
+      return template(spec?.msg ?? '{key} обязателен.', keyVars);
     }
     if (issue.origin === 'array') {
-      return template(spec?.msg ?? '{key} должен быть непустым массивом.', specVars);
+      return template(spec?.msg ?? '{key} должен быть непустым массивом.', keyVars);
     }
     return template(
       spec?.msg ?? '{key} должен быть целым числом не меньше {min}.',
@@ -329,13 +390,13 @@ export function messageForIssue(
     );
   }
   if (issue.code === 'invalid_value') {
-    return template(spec?.msg ?? 'Недопустимый {key}.', specVars);
+    return template(spec?.msg ?? 'Недопустимый {key}.', keyVars);
   }
   if (issue.code === 'unrecognized_keys') {
     const keys = Array.isArray(issue.keys) ? issue.keys.map(String).join(', ') : '';
-    return template(spec?.msg ?? 'Неизвестные поля: {keys}.', { ...specVars, keys });
+    return template(spec?.msg ?? 'Неизвестные поля: {keys}.', { ...keyVars, keys });
   }
-  return template(spec?.msg ?? 'Недопустимый {key}.', specVars);
+  return template(spec?.msg ?? 'Недопустимый {key}.', keyVars);
 }
 
 /** `EtnError` канонической ошибки поля с деталями и requestId. */
@@ -468,8 +529,17 @@ export function parseRest<S extends z.ZodObject>(
       const res = field.safeParse(value);
       if (!res.success) {
         const issue = firstIssue(res.error);
-        const fieldKey = issueKey(key, issue);
-        throw fieldError(requestId, fieldKey, messageForIssue(key, fieldKey, spec, field, issue), issueDetails(fieldKey, issue));
+        const fieldKey = restFieldIssueKey(key, issue);
+        // Путь zod-ошибки REST относителен значению поля: при вложенной ошибке
+        // (`fieldKey !== key`) заблуждение не о самом поле, а о его элементе —
+        // сообщение и тип строятся по полному пути и объявленной спецификации
+        // ЭТОГО пути, а не верхнего ключа (`contract.rest` объявляет только
+        // верхние ключи, так что для вложенного пути spec/field не находятся —
+        // ровно как у MCP). Иначе (ошибка на самом поле) — его spec и тип.
+        const nested = fieldKey !== key;
+        const issueSpec = nested ? contract.rest[fieldKey] : spec;
+        const issueField = nested ? undefined : field;
+        throw fieldError(requestId, fieldKey, messageForIssue(key, fieldKey, issueSpec, issueField, issue, value), issueDetails(fieldKey, issue));
       }
       value = res.data;
     }
@@ -513,7 +583,7 @@ export function parseRest<S extends z.ZodObject>(
       ...Object.keys(contract.schema.shape),
       ...Object.keys(contract.rest),
     ].filter((k, i, arr) => arr.indexOf(k) === i);
-    throw fieldError(requestId, fieldKey, messageForIssue(fieldKey, fieldKey, spec, undefined, issue), issueDetails(fieldKey, issue, allowedKeys));
+    throw fieldError(requestId, fieldKey, messageForIssue(fieldKey, fieldKey, spec, undefined, issue, merged), issueDetails(fieldKey, issue, allowedKeys));
   }
   // Возвращается `out`, а не `res.data`: схема отбрасывает неизвестные поля,
   // а в REST-карте бывают поля вне схемы (например, `colors` у слоёв).
@@ -539,7 +609,7 @@ export function mcpValidationError(contract: OperationContract, args: unknown): 
   const shape = contract.schema.shape as Record<string, ZodType>;
   return new EtnError(
     'VALIDATION_ERROR',
-    messageForIssue(fieldKey, fieldKey, spec, shape[fieldKey], issue),
+    messageForIssue(fieldKey, fieldKey, spec, shape[fieldKey], issue, args),
     issueDetails(fieldKey, issue),
   );
 }
@@ -1221,7 +1291,7 @@ export const AttachmentsAdd = defineContract(
   'etn.attachments.add',
   z.object({
     network_id: NetworkId,
-    owner_type: z.enum(['thought', 'link']),
+    owner_type: z.enum(ATTACHMENT_OWNER_TYPES),
     owner_id: z.string().min(1),
     kind: z.enum(ATTACHMENT_KINDS),
     url: z.string().min(1).nullable().optional(),
@@ -1244,7 +1314,7 @@ export const AttachmentsCopy = defineContract(
   z.object({
     network_id: NetworkId,
     attachment_id: z.string().min(1),
-    target_owner_type: z.enum(['thought', 'link']),
+    target_owner_type: z.enum(ATTACHMENT_OWNER_TYPES),
     target_owner_ids: z.array(z.string().min(1)).min(1),
   }),
   {},
@@ -1256,7 +1326,7 @@ export const AttachmentsSearch = defineContract(
     network_id: NetworkId,
     q: z.string().min(1),
     kind: z.enum(ATTACHMENT_KINDS).optional(),
-    exclude_owner_type: z.enum(['thought', 'link']).optional(),
+    exclude_owner_type: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
     exclude_owner_id: z.string().min(1).optional(),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
@@ -1274,6 +1344,17 @@ export const AttachmentsUpdate = defineContract(
     url: z.string().nullable().optional(),
     file_path: z.string().nullable().optional(),
   }),
+  {},
+);
+
+/**
+ * `etn.attachments.usage` — использование вложения (0.11.1, задача 46cf4bcb;
+ * паритет REST `GET /attachments/{id}/usage`). Владельцы (мысли, связи,
+ * публикации), которые держат тот же физический носитель.
+ */
+export const AttachmentsUsage = defineContract(
+  'etn.attachments.usage',
+  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
   {},
 );
 
@@ -1883,7 +1964,11 @@ export const RestTrashList = defineContract(
   { network_id: { from: { kind: 'param', name: 'networkId' } } },
 );
 
-/** POST /networks/:id/trash/purge — очистка (опционально targeted `ids`). */
+/**
+ * POST /networks/:id/trash/purge — очистка (опционально targeted `ids`).
+ * С 0.11.1 (задача c59ce742) корзина охватывает и публикации/полки, поэтому
+ * `ids` принимает id строк любого вида — см. `listTrash`.
+ */
 export const RestTrashPurge = defineContract(
   'rest:trash.purge',
   z.object({ network_id: NetworkId }),
@@ -2316,8 +2401,8 @@ export const RestAttachmentSearch = defineContract(
     q: { from: { kind: 'query' }, t: z.string().optional() },
     exclude_owner_type: {
       from: { kind: 'query' },
-      t: z.enum(['thought', 'link']).optional(),
-      msg: 'exclude_owner_type должен быть thought|link.',
+      t: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
+      msg: 'exclude_owner_type должен быть thought|link|publication.',
     },
     exclude_owner_id: { from: { kind: 'query' }, t: z.string().optional(), msg: 'exclude_owner_id должен быть строкой.' },
     kind: { from: { kind: 'query' }, t: z.enum(ATTACHMENT_KINDS).optional(), msg: 'kind должен быть url|file.' },
@@ -2343,9 +2428,9 @@ export const RestAttachmentCopy = defineContract(
     attachment_id: { from: { kind: 'param', name: 'id' } },
     target_owner_type: {
       from: { kind: 'body' },
-      t: z.enum(['thought', 'link']),
+      t: z.enum(ATTACHMENT_OWNER_TYPES),
       req: true,
-      msg: 'target_owner_type должен быть thought|link.',
+      msg: 'target_owner_type должен быть thought|link|publication.',
     },
     target_owner_ids: {
       from: { kind: 'body' },
@@ -2379,6 +2464,20 @@ export const RestAttachmentById = defineContract(
   },
 );
 
+/**
+ * `GET /attachments/{id}/usage` — использование вложения (0.11.1, задача
+ * 46cf4bcb): владельцы (мысли, связи, публикации), которые держат этот
+ * носитель. Нужно «облачкам» в диалоге выбора обложки публикации.
+ */
+export const RestAttachmentUsage = defineContract(
+  'rest:attachments.usage',
+  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    attachment_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
 export const RestAttachmentUpdate = defineContract(
   'rest:attachments.update',
   z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
@@ -2395,8 +2494,8 @@ export const RestAttachmentUpdate = defineContract(
     position: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: 'position должен быть числом.' },
     owner_type: {
       from: { kind: 'body' },
-      t: z.enum(['thought', 'link']).optional(),
-      msg: 'owner_type должен быть thought|link.',
+      t: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
+      msg: 'owner_type должен быть thought|link|publication.',
     },
     owner_id: { from: { kind: 'body' }, t: z.string().optional() },
   },
@@ -3789,3 +3888,782 @@ export interface ReaderTaskFail {
 
 /** Ответ reader-воркера. */
 export type ReaderTaskResponse = ReaderTaskOk | ReaderTaskFail;
+
+// ---------------------------------------------------------------------------
+// Публикации (0.11.1, задача 8178e007; карточка CRUD 5af247e4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Объект рецепта заголовков — тот же формат, что `saved_filters.definition`
+ * (отбор «Структур мыслей»). Домен и сборка разбирают его своими парсерами,
+ * контракт проверяет только «объект или null».
+ */
+const PublicationTitleRecipe = z.record(z.string(), z.unknown()).nullable().optional();
+
+/** Резюме публикации (markdown без заголовков — проверяется refine). */
+const PublicationSummary = z.string().nullable().optional();
+
+/** Общие поля тела публикации (создание и патч). */
+const PublicationBodyShape = {
+  title: z.string().min(1),
+  subtitle: z.string().nullable().optional(),
+  summary_md: PublicationSummary,
+  authorship: z.string().nullable().optional(),
+  cover_attachment_id: z.string().min(1).nullable().optional(),
+  cover_url: z.string().min(1).nullable().optional(),
+  title_recipe: PublicationTitleRecipe,
+  text_sources: z.array(z.string().min(1)).optional(),
+  extra_properties: z.array(z.string().min(1)).optional(),
+  numbering_from: z.number().int().nullable().optional(),
+  numbering_to: z.number().int().nullable().optional(),
+};
+
+/**
+ * Межполевые правила публикации (единый источник — domain/publication-validation).
+ * Вызывается из `.superRefine` обеих схем.
+ */
+function refinePublicationFields(
+  value: {
+    summary_md?: string | null;
+    cover_attachment_id?: string | null;
+    cover_url?: string | null;
+    text_sources?: string[];
+    extra_properties?: string[];
+    numbering_from?: number | null;
+    numbering_to?: number | null;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.summary_md != null && summaryHasMarkdownHeadings(value.summary_md)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['summary_md'],
+      message: 'резюме не может содержать заголовки (markdown без заголовков)',
+      params: { code: 'summary_headings_forbidden' },
+    });
+  }
+  if (value.cover_attachment_id != null && value.cover_url != null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['cover_attachment_id'],
+      message: 'только один источник обложки: вложение или URL',
+      params: { code: 'cover_conflict' },
+    });
+  }
+  const overlap = recipeOverlap(value.text_sources ?? [], value.extra_properties ?? []);
+  if (overlap.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['text_sources'],
+      message: 'свойства текстов и «дополнительных материалов» пересекаются',
+      params: { code: 'recipe_overlap' },
+    });
+  }
+  if (numberingRangeInvalid(value.numbering_from ?? null, value.numbering_to ?? null)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['numbering_from'],
+      message: 'numbering_from не может быть больше numbering_to',
+      params: { code: 'numbering_range' },
+    });
+  }
+}
+
+/** Вход создания публикации (POST /publications). */
+export const PublicationCreateFields = z
+  .object(PublicationBodyShape)
+  .strict()
+  .superRefine(refinePublicationFields);
+export type PublicationCreateFields = z.infer<typeof PublicationCreateFields>;
+
+/** Вход патча публикации (PATCH /publications/{id}): все поля необязательны. */
+export const PublicationUpdateFields = z
+  .object({
+    ...PublicationBodyShape,
+    title: z.string().min(1).optional(),
+    active: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine(refinePublicationFields);
+export type PublicationUpdateFields = z.infer<typeof PublicationUpdateFields>;
+
+/** Параметры списка публикаций (GET /publications). */
+export const PublicationListFields = z
+  .object({
+    q: z.string().optional(),
+    shelf: z.string().min(1).optional(),
+    active: z.enum(PUBLICATION_ACTIVE_FILTERS).optional(),
+    sort: z.enum(PUBLICATION_SORTS).optional(),
+    include_trashed: z.boolean().optional(),
+    limit: z.number().int().min(0).max(200).optional(),
+    offset: z.number().int().min(0).optional(),
+  })
+  .strict();
+export type PublicationListFields = z.infer<typeof PublicationListFields>;
+
+/** Батч перестановок порядка (PUT /publications/{id}/order). */
+export const PublicationOrderFields = z
+  .object({
+    items: z
+      .array(
+        z
+          .object({ node_key: z.string().min(1), position: z.number() })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+export type PublicationOrderFields = z.infer<typeof PublicationOrderFields>;
+
+/** Исключения мысли (POST/DELETE /publications/{id}/exclusions). */
+export const PublicationExclusionFields = z.object({ thought_id: z.string().min(1) }).strict();
+export type PublicationExclusionFields = z.infer<typeof PublicationExclusionFields>;
+
+/** Вход создания/правки полки. */
+export const ShelfFields = z
+  .object({
+    title: z.string().min(1).optional(),
+    position: z.number().optional(),
+  })
+  .strict();
+export type ShelfFields = z.infer<typeof ShelfFields>;
+
+/** Элемент состава полки (POST/DELETE /shelves/{id}/items). */
+export const ShelfItemFields = z
+  .object({
+    publication_id: z.string().min(1),
+    position: z.number().optional(),
+  })
+  .strict();
+export type ShelfItemFields = z.infer<typeof ShelfItemFields>;
+
+// ---------------------------------------------------------------------------
+// REST-контракты публикаций и полок (0.11.1, задача c59ce742; операции
+// 5af247e4 CRUD, 200b87be жизненный цикл, 19d80dd2 сборка, f6b242fe порядок,
+// 109061e0 исключения, f9a20c3f пересборка/кандидаты, f49c6420 использование,
+// c80951ea полки)
+//
+// Поля схем объявлены ЛИТЕРАЛЬНО (не спредом *Fields): сторож
+// guard-rest-contracts сверяет объявленность по тексту блока контракта, а
+// `parseRest` читает только поля REST-карты. Межполевые правила публикации
+// (резюме без заголовков, единственный источник обложки, непересечение
+// рецептов, диапазон нумерации) проверяет домен (`publication-service`)
+// штатными `VALIDATION_ERROR` с теми же кодами — дублировать refine здесь
+// не нужно.
+// ---------------------------------------------------------------------------
+
+/** Общие REST-источники полей тела публикации. */
+const publicationRestMap = {
+  title: { from: { kind: 'body' } },
+  subtitle: { from: { kind: 'body' } },
+  summary_md: { from: { kind: 'body' } },
+  authorship: { from: { kind: 'body' } },
+  cover_attachment_id: { from: { kind: 'body' } },
+  cover_url: { from: { kind: 'body' } },
+  title_recipe: { from: { kind: 'body' } },
+  text_sources: { from: { kind: 'body' } },
+  extra_properties: { from: { kind: 'body' } },
+  numbering_from: { from: { kind: 'body' } },
+  numbering_to: { from: { kind: 'body' } },
+} as const;
+
+/** POST /networks/:id/publications — создание. */
+export const RestPublicationCreate = defineContract(
+  'rest:publications.create',
+  z.object({
+    network_id: NetworkId,
+    title: z.string().min(1),
+    subtitle: z.string().nullable().optional(),
+    summary_md: z.string().nullable().optional(),
+    authorship: z.string().nullable().optional(),
+    cover_attachment_id: z.string().min(1).nullable().optional(),
+    cover_url: z.string().min(1).nullable().optional(),
+    title_recipe: z.record(z.string(), z.unknown()).nullable().optional(),
+    text_sources: z.array(z.string().min(1)).optional(),
+    extra_properties: z.array(z.string().min(1)).optional(),
+    numbering_from: z.number().int().nullable().optional(),
+    numbering_to: z.number().int().nullable().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    ...publicationRestMap,
+  },
+);
+
+/** GET /networks/:id/publications — список. */
+export const RestPublicationList = defineContract(
+  'rest:publications.list',
+  z.object({
+    network_id: NetworkId,
+    q: z.string().optional(),
+    shelf: z.string().min(1).optional(),
+    active: z.enum(PUBLICATION_ACTIVE_FILTERS).optional(),
+    sort: z.enum(PUBLICATION_SORTS).optional(),
+    include_trashed: z.boolean().optional(),
+    limit: z.number().int().min(1).optional(),
+    offset: z.number().int().min(0).optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    q: { from: { kind: 'query' }, parse: singleQueryValue },
+    shelf: { from: { kind: 'query' }, parse: singleQueryValue },
+    active: { from: { kind: 'query' }, parse: singleQueryValue },
+    sort: { from: { kind: 'query' }, parse: singleQueryValue },
+    include_trashed: { from: { kind: 'query', coerce: 'bool' } },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
+  },
+);
+
+/** GET /networks/:id/publications/{id} — карточка. */
+export const RestPublicationById = defineContract(
+  'rest:publications.by-id',
+  z.object({ network_id: NetworkId, publication_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/**
+ * GET /networks/:id/publications/{id}/deletion-check — блокировки физического
+ * удаления публикации (аналог `deletion-check` мысли, 03-server-api.md §6.5a).
+ * Диалог удаления публикации решает по нему, доступно ли «Удалить совсем»
+ * (задача 00160da1).
+ */
+export const RestPublicationDeletionCheck = defineContract(
+  'rest:publications.deletion-check',
+  z.object({ network_id: NetworkId, publication_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** PATCH /networks/:id/publications/{id} — правка настроек. */
+export const RestPublicationUpdate = defineContract(
+  'rest:publications.update',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    title: z.string().min(1).optional(),
+    subtitle: z.string().nullable().optional(),
+    summary_md: z.string().nullable().optional(),
+    authorship: z.string().nullable().optional(),
+    cover_attachment_id: z.string().min(1).nullable().optional(),
+    cover_url: z.string().min(1).nullable().optional(),
+    title_recipe: z.record(z.string(), z.unknown()).nullable().optional(),
+    text_sources: z.array(z.string().min(1)).optional(),
+    extra_properties: z.array(z.string().min(1)).optional(),
+    numbering_from: z.number().int().nullable().optional(),
+    numbering_to: z.number().int().nullable().optional(),
+    active: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    ...publicationRestMap,
+    active: { from: { kind: 'body' } },
+  },
+);
+
+/**
+ * PUT /networks/:id/publications/{id}/order — батч локального порядка.
+ * Метод PUT (карточка f6b242fe): повторная отправка того же батча
+ * идемпотентна, тело `{ items: [{ node_key, position }] }`.
+ */
+export const RestPublicationOrder = defineContract(
+  'rest:publications.order',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    items: z
+      .array(z.object({ node_key: z.string().min(1), position: z.number() }).strict())
+      .min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    items: { from: { kind: 'body' } },
+  },
+);
+
+/** POST /networks/:id/publications/{id}/exclusions — исключить мысль. */
+export const RestPublicationExclusionAdd = defineContract(
+  'rest:publications.exclusion-add',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    thought_id: z.string().min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    thought_id: { from: { kind: 'body' }, msg: 'thought_id обязателен.' },
+  },
+);
+
+/** DELETE /networks/:id/publications/{id}/exclusions?thought_id= — снять. */
+export const RestPublicationExclusionRemove = defineContract(
+  'rest:publications.exclusion-remove',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    thought_id: z.string().min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    thought_id: { from: { kind: 'query' }, parse: singleQueryValue, msg: 'thought_id обязателен.' },
+  },
+);
+
+/** POST /networks/:id/publications/{id}/rebuild — пересборка. */
+export const RestPublicationRebuild = defineContract(
+  'rest:publications.rebuild',
+  z.object({ network_id: NetworkId, publication_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** GET /networks/:id/publications/{id}/assembly — сборка документа. */
+export const RestPublicationAssembly = defineContract(
+  'rest:publications.assembly',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    page: z.number().int().min(1).optional(),
+    include_excluded: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    page: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    include_excluded: { from: { kind: 'query', coerce: 'bool' } },
+  },
+);
+
+/** POST /networks/:id/publications/{id}/export — экспорт документа (операция 1f161c74). */
+export const RestPublicationExport = defineContract(
+  'rest:publications.export',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    format: z.enum(PUBLICATION_EXPORT_FORMATS),
+    with_assets: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    format: { from: { kind: 'body' }, msg: 'Недопустимый format (ожидается md|html).' },
+    with_assets: { from: { kind: 'body' } },
+  },
+);
+
+/** POST /networks/:id/publications/export-batch — пакетный экспорт (операция 074d7a97). */
+export const RestPublicationExportBatch = defineContract(
+  'rest:publications.export-batch',
+  z.object({
+    network_id: NetworkId,
+    ids: z.array(z.string().min(1)).optional(),
+    active_only: z.boolean().optional(),
+    format: z.enum(PUBLICATION_EXPORT_FORMATS),
+    with_assets: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    ids: { from: { kind: 'body' } },
+    active_only: { from: { kind: 'body' } },
+    format: { from: { kind: 'body' }, msg: 'Недопустимый format (ожидается md|html).' },
+    with_assets: { from: { kind: 'body' } },
+  },
+);
+
+/** GET /networks/:id/publications/{id}/candidates — новые кандидаты. */
+export const RestPublicationCandidates = defineContract(
+  'rest:publications.candidates',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    limit: z.number().int().min(1).optional(),
+    offset: z.number().int().min(0).optional(),
+    include_excluded: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
+    include_excluded: { from: { kind: 'query', coerce: 'bool' } },
+  },
+);
+
+/**
+ * POST /networks/:id/publications/{id}/candidates/accept — «расставить»
+ * кандидата из плашки (задача e754527d; элемент интерфейса 43ec961f): гасит
+ * его индивидуально и фиксирует позицию в конец порядка.
+ */
+export const RestPublicationCandidateAccept = defineContract(
+  'rest:publications.candidate-accept',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    thought_id: z.string().min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    publication_id: { from: { kind: 'param', name: 'id' } },
+    thought_id: { from: { kind: 'body' }, msg: 'thought_id обязателен.' },
+  },
+);
+
+/** GET /networks/:id/thoughts/{id}/publications — использование мысли. */
+export const RestPublicationUsage = defineContract(
+  'rest:publications.usage',
+  z.object({
+    network_id: NetworkId,
+    thought_id: z.string().min(1),
+    limit: z.number().int().min(1).optional(),
+    offset: z.number().int().min(0).optional(),
+    publication_limit: z.number().int().min(0).optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    thought_id: { from: { kind: 'param', name: 'id' } },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
+    publication_limit: { from: { kind: 'query', coerce: 'int', min: 0 } },
+  },
+);
+
+// --- Полки библиотеки публикаций (операция c80951ea) -----------------------
+
+/** POST /networks/:id/shelves — создать полку. */
+export const RestShelfCreate = defineContract(
+  'rest:shelves.create',
+  z.object({ network_id: NetworkId, title: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    title: { from: { kind: 'body' }, msg: 'title полки обязателен.' },
+  },
+);
+
+/** GET /networks/:id/shelves — список полок с составом. */
+export const RestShelfList = defineContract(
+  'rest:shelves.list',
+  z.object({ network_id: NetworkId }),
+  { network_id: { from: { kind: 'param', name: 'networkId' } } },
+);
+
+/** PATCH /networks/:id/shelves/{id} — переименование/порядок. */
+export const RestShelfUpdate = defineContract(
+  'rest:shelves.update',
+  z.object({
+    network_id: NetworkId,
+    shelf_id: z.string().min(1),
+    title: z.string().min(1).optional(),
+    position: z.number().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+    title: { from: { kind: 'body' } },
+    position: { from: { kind: 'body' } },
+  },
+);
+
+/** DELETE /networks/:id/shelves/{id} — удалить полку (purge). */
+export const RestShelfDelete = defineContract(
+  'rest:shelves.delete',
+  z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/**
+ * GET /networks/:id/shelves/{id}/deletion-check — блокировки физического удаления
+ * полки (только контекст слоя; состав сносится каскадом). Диалог удаления полки
+ * решает по нему, доступно ли «Удалить совсем» (задача 00160da1).
+ */
+export const RestShelfDeletionCheck = defineContract(
+  'rest:shelves.deletion-check',
+  z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** POST /networks/:id/shelves/{id}/trash — пометить полку на удаление. */
+export const RestShelfTrash = defineContract(
+  'rest:shelves.trash',
+  z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** POST /networks/:id/shelves/{id}/restore — снять пометку. */
+export const RestShelfRestore = defineContract(
+  'rest:shelves.restore',
+  z.object({ network_id: NetworkId, shelf_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** POST /networks/:id/shelves/{id}/items — положить публикацию. */
+export const RestShelfItemAdd = defineContract(
+  'rest:shelves.item-add',
+  z.object({
+    network_id: NetworkId,
+    shelf_id: z.string().min(1),
+    publication_id: z.string().min(1),
+    position: z.number().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+    publication_id: { from: { kind: 'body' }, msg: 'publication_id обязателен.' },
+    position: { from: { kind: 'body' } },
+  },
+);
+
+/** DELETE /networks/:id/shelves/{id}/items?publication_id= — убрать. */
+export const RestShelfItemRemove = defineContract(
+  'rest:shelves.item-remove',
+  z.object({
+    network_id: NetworkId,
+    shelf_id: z.string().min(1),
+    publication_id: z.string().min(1),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    shelf_id: { from: { kind: 'param', name: 'id' } },
+    publication_id: {
+      from: { kind: 'query' },
+      parse: singleQueryValue,
+      msg: 'publication_id обязателен.',
+    },
+  },
+);
+
+// ---------------------------------------------------------------------------
+// MCP-контракты публикаций и полок (0.11.1, задача 8f6857f8; карточки
+// cab597a8 управление, f236bb22 чтение, a610c091 экспорт)
+//
+// Один контракт на инструмент; вход — та же zod-схема и REST-карта, что у
+// соответствующей REST-операции, поэтому валидация и канонические сообщения
+// ошибок совпадают с REST (требование «валидация и ошибки идентичны REST»).
+// `defineContract` делает MCP-схему `.strict()` (задача c245e7de) — агент
+// получает `VALIDATION_ERROR` на опечатку в ключе.
+// ---------------------------------------------------------------------------
+
+/** MCP `etn.publications.create` = REST `POST /publications`. */
+export const McpPublicationCreate = defineContract(
+  'etn.publications.create',
+  RestPublicationCreate.schema,
+  RestPublicationCreate.rest,
+);
+
+/** MCP `etn.publications.list` = REST `GET /publications`. */
+export const McpPublicationList = defineContract(
+  'etn.publications.list',
+  RestPublicationList.schema,
+  RestPublicationList.rest,
+);
+
+/** MCP `etn.publications.get` = REST `GET /publications/{id}`. */
+export const McpPublicationGet = defineContract(
+  'etn.publications.get',
+  RestPublicationById.schema,
+  RestPublicationById.rest,
+);
+
+/** MCP `etn.publications.update` = REST `PATCH /publications/{id}`. */
+export const McpPublicationUpdate = defineContract(
+  'etn.publications.update',
+  RestPublicationUpdate.schema,
+  RestPublicationUpdate.rest,
+);
+
+/** MCP `etn.publications.order` = REST `PUT /publications/{id}/order`. */
+export const McpPublicationOrder = defineContract(
+  'etn.publications.order',
+  RestPublicationOrder.schema,
+  RestPublicationOrder.rest,
+);
+
+/**
+ * MCP `etn.publications.exclusions` — один инструмент на добавление и снятие
+ * исключения (карточка cab597a8 «добавить/снять исключение»). `excluded`
+ * (по умолчанию `true`) выбирает ветку; REST-пары exclusion-add/remove
+ * остаются двумя операциями.
+ */
+export const McpPublicationExclusions = defineContract(
+  'etn.publications.exclusions',
+  z.object({
+    network_id: NetworkId,
+    publication_id: z.string().min(1),
+    thought_id: z.string().min(1),
+    excluded: z.boolean().optional(),
+  }),
+  {},
+);
+
+/** MCP `etn.publications.rebuild` = REST `POST /publications/{id}/rebuild`. */
+export const McpPublicationRebuild = defineContract(
+  'etn.publications.rebuild',
+  RestPublicationRebuild.schema,
+  RestPublicationRebuild.rest,
+);
+
+/** MCP `etn.publications.trash` = REST `POST /publications/{id}/trash`. */
+export const McpPublicationTrash = defineContract(
+  'etn.publications.trash',
+  RestPublicationById.schema,
+  RestPublicationById.rest,
+);
+
+/** MCP `etn.publications.restore` = REST `POST /publications/{id}/restore`. */
+export const McpPublicationRestore = defineContract(
+  'etn.publications.restore',
+  RestPublicationById.schema,
+  RestPublicationById.rest,
+);
+
+/** MCP `etn.publications.delete` = REST `DELETE /publications/{id}` (purge). */
+export const McpPublicationDelete = defineContract(
+  'etn.publications.delete',
+  RestPublicationById.schema,
+  RestPublicationById.rest,
+);
+
+/** MCP `etn.publications.assembly` = REST `GET /publications/{id}/assembly`. */
+export const McpPublicationAssembly = defineContract(
+  'etn.publications.assembly',
+  RestPublicationAssembly.schema,
+  RestPublicationAssembly.rest,
+);
+
+/** MCP `etn.publications.candidates` = REST `GET /publications/{id}/candidates`. */
+export const McpPublicationCandidates = defineContract(
+  'etn.publications.candidates',
+  RestPublicationCandidates.schema,
+  RestPublicationCandidates.rest,
+);
+
+/** MCP `etn.publications.accept` = REST `POST /publications/{id}/candidates/accept`. */
+export const McpPublicationAccept = defineContract(
+  'etn.publications.accept',
+  RestPublicationCandidateAccept.schema,
+  RestPublicationCandidateAccept.rest,
+);
+
+/** MCP `etn.publications.usage` = REST `GET /thoughts/{id}/publications`. */
+export const McpPublicationUsage = defineContract(
+  'etn.publications.usage',
+  RestPublicationUsage.schema,
+  RestPublicationUsage.rest,
+);
+
+/**
+ * MCP `etn.publications.deletionCheck` = REST
+ * `GET /publications/{id}/deletion-check` (0.11.1, задача 00160da1) — блокировки
+ * физического удаления публикации для диалога удаления (паритет REST/MCP).
+ */
+export const McpPublicationDeletionCheck = defineContract(
+  'etn.publications.deletionCheck',
+  RestPublicationDeletionCheck.schema,
+  RestPublicationDeletionCheck.rest,
+);
+
+/** MCP `etn.publications.export` = REST `POST /publications/{id}/export`. */
+export const McpPublicationExport = defineContract(
+  'etn.publications.export',
+  RestPublicationExport.schema,
+  RestPublicationExport.rest,
+);
+
+/** MCP `etn.publications.export_batch` = REST `POST /publications/export-batch`. */
+export const McpPublicationExportBatch = defineContract(
+  'etn.publications.export_batch',
+  RestPublicationExportBatch.schema,
+  RestPublicationExportBatch.rest,
+);
+
+/** MCP `etn.shelves.list` = REST `GET /shelves`. */
+export const McpShelfList = defineContract(
+  'etn.shelves.list',
+  RestShelfList.schema,
+  RestShelfList.rest,
+);
+
+/**
+ * MCP `etn.shelves.deletionCheck` = REST `GET /shelves/{id}/deletion-check`
+ * (0.11.1, задача 00160da1) — блокировки физического удаления полки (только
+ * контекст слоя) для диалога удаления (паритет REST/MCP).
+ */
+export const McpShelfDeletionCheck = defineContract(
+  'etn.shelves.deletionCheck',
+  RestShelfDeletionCheck.schema,
+  RestShelfDeletionCheck.rest,
+);
+
+/** MCP `etn.shelves.create` = REST `POST /shelves`. */
+export const McpShelfCreate = defineContract(
+  'etn.shelves.create',
+  RestShelfCreate.schema,
+  RestShelfCreate.rest,
+);
+
+/** MCP `etn.shelves.update` = REST `PATCH /shelves/{id}`. */
+export const McpShelfUpdate = defineContract(
+  'etn.shelves.update',
+  RestShelfUpdate.schema,
+  RestShelfUpdate.rest,
+);
+
+/** MCP `etn.shelves.delete` = REST `DELETE /shelves/{id}` (purge, состав каскадом). */
+export const McpShelfDelete = defineContract(
+  'etn.shelves.delete',
+  RestShelfDelete.schema,
+  RestShelfDelete.rest,
+);
+
+/** MCP `etn.shelves.trash` = REST `POST /shelves/{id}/trash`. */
+export const McpShelfTrash = defineContract(
+  'etn.shelves.trash',
+  RestShelfTrash.schema,
+  RestShelfTrash.rest,
+);
+
+/** MCP `etn.shelves.restore` = REST `POST /shelves/{id}/restore`. */
+export const McpShelfRestore = defineContract(
+  'etn.shelves.restore',
+  RestShelfRestore.schema,
+  RestShelfRestore.rest,
+);
+
+/**
+ * MCP `etn.shelves.assign` — доложить/убрать публикацию в составе полки
+ * (карточка cab597a8 «полки и состав»). `assigned` (по умолчанию `true`)
+ * выбирает ветку; REST-пара item-add/item-remove остаётся двумя операциями.
+ */
+export const McpShelfAssign = defineContract(
+  'etn.shelves.assign',
+  z.object({
+    network_id: NetworkId,
+    shelf_id: z.string().min(1),
+    publication_id: z.string().min(1),
+    position: z.number().optional(),
+    assigned: z.boolean().optional(),
+  }),
+  {},
+);

@@ -2932,6 +2932,10 @@ function convertStoredValue(
       // теряет смысл. Конвертация бессмысленна — значение сбрасывается
       // (как и для `link` / legacy `thought_ref`).
       return null;
+    case 'publication':
+      // Ссылка на публикацию: id адресует конкретную публикацию и при смене
+      // value_type теряет смысл — конвертировать не во что.
+      return null;
   }
 }
 
@@ -3268,6 +3272,14 @@ function readValue(
       if (raw.startsWith('[')) return parseRefIds(raw);
       return multiple ? [raw] : raw;
     }
+    case 'publication': {
+      // Ссылка на публикацию лежит в value_text: single — id строкой,
+      // multiple — JSON-массив id (та же форма, что у cross_network_ref).
+      const raw = row.value_text;
+      if (raw === null) return null;
+      if (raw.startsWith('[')) return parseRefIds(raw);
+      return multiple ? [raw] : raw;
+    }
   }
 }
 
@@ -3280,11 +3292,13 @@ function isMultipleProperty(prop: PropertyLike): boolean {
   // Legacy (миграция 040): в живой БД thought_ref-свойств быть не должно,
   // но для value-handling (тесты, унаследованные архивы) — multiple
   // распознаётся и для thought_ref. cross_network_ref (0.8.3, задача
-  // 7849008a) — массив кросс-сетевых адресов.
+  // 7849008a) — массив кросс-сетевых адресов, publication (0.11.1, задача
+  // f37b468d) — массив id публикаций.
   return (
     prop.value_type === 'url' ||
     prop.value_type === 'thought_ref' ||
-    prop.value_type === 'cross_network_ref'
+    prop.value_type === 'cross_network_ref' ||
+    prop.value_type === 'publication'
   );
 }
 
@@ -3322,7 +3336,9 @@ function storageColumn(valueType: PropertyValueType): string {
   // маппинга `value_${valueType}` дал бы несуществующую колонку
   // `value_cross_network_ref` и падение INSERT (ошибка 052c84b2). Чтение
   // согласовано — `readValue` берёт `value_text` для обоих видов.
-  return valueType === 'url' || valueType === 'cross_network_ref'
+  // `publication` (0.11.1, задача f37b468d) — третья владелица `value_text`:
+  // id публикации скаляром/JSON-массивом, отдельной колонки нет.
+  return valueType === 'url' || valueType === 'cross_network_ref' || valueType === 'publication'
     ? 'value_text'
     : `value_${valueType}`;
 }
@@ -4247,6 +4263,47 @@ function validateAndCoerce(
       }
       return { column, raw: isMultipleProperty(prop) ? JSON.stringify([value]) : value };
     }
+    case 'publication': {
+      // Ссылка на публикацию ТЕКУЩЕЙ сети (0.11.1, задача f37b468d,
+      // требование 9ce84a2b): значение — id публикации (single) или
+      // JSON-массив id (multiple). Каждый id проверяется на существование в
+      // текущем слое (`publications_v`); удаление цели блокирует живые
+      // значения (см. `countPublicationRefUsages` в publication-service).
+      if (Array.isArray(value)) {
+        if (!isMultipleProperty(prop)) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `property "${prop.name}" does not allow multiple values`,
+            { key: prop.name, expected: 'publication', multiple: false },
+          );
+        }
+        const ids = [...new Set(value as string[])];
+        if (ids.length === 0) {
+          // An empty selection clears the value (same as null).
+          return { column, raw: null };
+        }
+        if (ids.some((id) => typeof id !== 'string')) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `property "${prop.name}" expects publication ids`,
+            { key: prop.name, expected: 'publication' },
+          );
+        }
+        for (const id of ids) {
+          validatePublicationRefTarget(ndb, prop, id);
+        }
+        return { column, raw: JSON.stringify(ids) };
+      }
+      if (typeof value !== 'string') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `property "${prop.name}" expects a publication id`,
+          { key: prop.name, expected: 'publication' },
+        );
+      }
+      validatePublicationRefTarget(ndb, prop, value);
+      return { column, raw: isMultipleProperty(prop) ? JSON.stringify([value]) : value };
+    }
   }
 }
 
@@ -4284,6 +4341,23 @@ function validateThoughtRefTarget(ndb: NetworkDb, prop: PropertyLike, id: string
       ref: id,
       allowed_type_ids: allowedIds,
       actual_type_id: target.type_id,
+    });
+  }
+}
+
+/**
+ * Validate one `publication` id against the property (0.11.1, задача f37b468d,
+ * требование 9ce84a2b): the publication must exist in the connection's layer
+ * context (`publications_v`), so a tombstoned/absent publication is rejected
+ * the same way a missing thought is for a link property. Allowed-type filters
+ * are not applicable — a publication has no thought type.
+ */
+function validatePublicationRefTarget(ndb: NetworkDb, prop: PropertyLike, id: string): void {
+  const target = ndb.prepare('SELECT 1 FROM publications_v WHERE id = ?').get(id);
+  if (!target) {
+    throw new EtnError('VALIDATION_ERROR', `referenced publication ${id} does not exist`, {
+      key: prop.name,
+      ref: id,
     });
   }
 }
@@ -5212,6 +5286,10 @@ function canStoredValueConvert(
     case 'cross_network_ref':
       // Кросс-сетевая ссылка: снапшот привязан к адресу и при смене value_type
       // теряет смысл. Конвертация бессмысленна.
+      return false;
+    case 'publication':
+      // Ссылка на публикацию: id адресует конкретную публикацию и при смене
+      // value_type теряет смысл — конвертация бессмысленна.
       return false;
   }
 }

@@ -466,30 +466,41 @@ describe('локальная правка типа связи пересчиты
       },
     };
     const { store } = await import('../src/renderer/state.js');
-    const { scheduleTypeRepaint, applyRealtimeToUi } =
-      await import('../src/renderer/realtime-ui.js');
+    const { applyDerivedRealtime } = await import('../src/renderer/realtime-effects.js');
+    const { activateFocusQuery, deactivateFocusQuery } =
+      await import('../src/renderer/lib/layer-resync.js');
+    const { resetQueryRegistry } = await import('../src/renderer/lib/live/query-registry.js');
+    const { invalidateAfterMutation } = await import('../src/renderer/lib/live/mutator.js');
+    const { queryKeys } = await import('../src/renderer/lib/live/query-keys.js');
+    const { resetEventRouter, routeRealtimeEvent } =
+      await import('../src/renderer/lib/live/event-router.js');
 
+    resetQueryRegistry();
+    resetEventRouter();
     store.update({
       networkId: 'n1',
       activeView: 'structures',
       activeTabId: 'tab1',
       focus: makeFocusResponse(),
     } as any);
+    // Слой данных (G2): окрестность подписана — перезапрос запускает инвалидация.
+    activateFocusQuery('n1', 't1');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const baseline = focusFetches;
 
-    // Локальный производитель (менеджер свойств) уже перечитал каталог и зовёт
-    // общий пересчёт: холст обязан перечитаться (фокус), «Структуры» и
-    // «Хроника» — перестроиться (их разбудит тот же набор, см. проводку ниже).
-    scheduleTypeRepaint();
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // Локальный производитель (менеджер свойств) уже перечитал каталог и гасит
+    // focus-/structures-ключи слоя: холст обязан перечитаться (фокус).
+    invalidateAfterMutation([queryKeys.focusAll(), queryKeys.structuresPageAll()]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(
       focusFetches,
-      1,
+      baseline + 1,
       'пересчёт после локальной правки типа связи перечитывает фокус (холст перерисовывается)',
     );
 
-    // Эталон: realtime-событие того же типа идёт этим же путём — «тот же набор
-    // обновлений» значит сравнение с ним, а не самостоятельный список.
-    applyRealtimeToUi({
+    // Эталон: realtime-событие того же типа идёт этим же путём (роутер слоя
+    // гасит `focusAll`) — «тот же набор обновлений» значит сравнение с ним.
+    const evt = {
       type: 'link-type.updated',
       seq: 1,
       ts: '2026-01-01T00:00:00.000Z',
@@ -499,72 +510,69 @@ describe('локальная правка типа связи пересчиты
       layer_id: 'base',
       data: { id: 'la', changes: { name_forward: 'X' }, version: 2 },
       meta: { version: 1 },
-    } as any);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    } as any;
+    routeRealtimeEvent(evt, { networkId: 'n1' });
+    applyDerivedRealtime(evt);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(
       focusFetches,
-      2,
+      baseline + 2,
       'realtime-ветка типа перечитывает фокус (эталон, с которым сверяется локальный путь)',
     );
+    deactivateFocusQuery();
+    resetQueryRegistry();
+    resetEventRouter();
   });
 
-  it('набор пересчёта задан одним помощником и зовётся обоими путями', () => {
+  it('решение «когда обновлять» принято слоем — ручных помощников нет', () => {
     const read = (rel: string): string =>
       readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
-    const realtimeUi = read('realtime-ui.ts');
+    const effects = read('realtime-effects.ts');
 
-    // Набор «холст + Структуры + Хроника» задан одним помощником
-    // `scheduleNeighbourhoodRepaint` (0.8.2, ошибка f0b959dd вынесла его сюда
-    // для правок рёбер); пересчёт типов делегирует ему — набор остаётся в
-    // одном месте.
+    // G2/G3/G6: `scheduleNeighbourhoodRepaint`/`scheduleTypeRepaint` снесены.
+    // Ветка типа: каталог перечитывается производным эффектом, окрестность,
+    // «Структуры» и «Дневник» гасит роутер слоя — ручных вызовов нет.
     assert.ok(
-      /export function scheduleNeighbourhoodRepaint\(\): void \{[\s\S]{0,120}?scheduleRefresh\(\);[\s\S]{0,80}?scheduleStructuresRefresh\(\);[\s\S]{0,80}?scheduleChronicleRefresh\(\);/.test(
-        realtimeUi,
-      ),
-      'scheduleNeighbourhoodRepaint пересчитывает холст, «Структуры» и «Хронику»',
+      !effects.includes('scheduleNeighbourhoodRepaint'),
+      'scheduleNeighbourhoodRepaint снесён (G2)',
+    );
+    assert.ok(!effects.includes('scheduleTypeRepaint'), 'scheduleTypeRepaint снесён (G2)');
+    assert.ok(
+      /case 'link-type\.deleted':[\s\S]{0,700}?void reloadTypeCatalogues\(\);/.test(effects),
+      'эффект типа перечитывает каталог (фокус/«Структуры»/«Дневник» — роутер)',
     );
     assert.ok(
-      /export function scheduleTypeRepaint\(\): void \{\s*scheduleNeighbourhoodRepaint\(\);\s*\}/.test(
-        realtimeUi,
-      ),
-      'scheduleTypeRepaint делегирует общий пересчёт окрестности',
-    );
-    // Каталог перечитывается отдельно и ДО пересчёта: повторного перезапроса
-    // каталога из пересчёта нет (прецедент in-flight дележа).
-    assert.ok(
-      !/export function scheduleTypeRepaint\(\): void \{[\s\S]{0,400}?reloadTypeCatalogues\(\)/.test(
-        realtimeUi,
-      ),
-      'пересчёт не перезапрашивает каталог типов повторно',
-    );
-    assert.ok(
-      /case 'link-type\.deleted':[\s\S]{0,500}?void reloadTypeCatalogues\(\);[\s\S]{0,80}?scheduleTypeRepaint\(\);/.test(
-        realtimeUi,
-      ),
-      'realtime-ветка типа зовёт общий пересчёт',
+      !effects.includes('scheduleChronicleRefresh'),
+      'эффект не дёргает «Дневник» вручную (роутер слоя, G3)',
     );
   });
 
-  it('менеджер свойств доводит локальную правку и удаление типа связи до холста и панелей', () => {
+  it('менеджер свойств доводит локальную правку типа связи до слоя', () => {
     const read = (rel: string): string =>
       readFileSync(resolve(import.meta.dirname, '..', 'src', 'renderer', rel), 'utf8');
     const propertyManager = read('screens/property-manager.ts');
 
-    // Правка свойства-связи: каталог перечитан ДО уведомления редактора —
-    // затем уведомление и пересчёт холста/панелей.
+    // Импорт mutator-слоя и ключей.
     assert.ok(
-      /await reloadTypeCatalogues\(\);[\s\S]{0,400}?notifyTypeChanged\([\s\S]{0,300}?typeUpdateFacts\(\{ ownerType: 'link_type'[\s\S]{0,800}?scheduleTypeRepaint\(\);/.test(
+      /import \{ invalidateAfterMutation \} from '\.\.\/lib\/live\/mutator\.js';/.test(
         propertyManager,
       ),
-      'правка типа связи в редакторе свойства пересчитывает холст и панели',
+      'менеджер свойств гасит ключи mutator-слоем',
     );
-    // Удаление свойства-связи вместе с типом связи: пометка типа удалённым →
-    // пересчёт (отвязанные рёбра получают свежий фокус, панели — свежие данные).
+    // Правка типа связи: каталог перечитан ДО, затем — инвалидация слоя
+    // (focus + «Структуры» + лента «Дневника», G3).
     assert.ok(
-      /notifyTypeChanged\(typeDeletedFacts\(\{ ownerType: 'link_type'[\s\S]{0,500}?scheduleTypeRepaint\(\);/.test(
+      /await reloadTypeCatalogues\(\);[\s\S]{0,400}?notifyTypeChanged\([\s\S]{0,300}?typeUpdateFacts\(\{ ownerType: 'link_type'[\s\S]{0,900}?invalidateAfterMutation\(\[[\s\S]{0,200}?queryKeys\.focusAll\(\),[\s\S]{0,200}?queryKeys\.structuresPageAll\(\),[\s\S]{0,200}?queryKeys\.chronicleFeedAll\(\),?[\s\S]{0,50}?\]\);/.test(
         propertyManager,
       ),
-      'удаление типа связи вместе со свойством пересчитывает холст и панели',
+      'правка типа связи гасит focus-/structures-/chronicle-ключи',
+    );
+    // Удаление типа связи вместе со свойством — тем же путём.
+    assert.ok(
+      /notifyTypeChanged\(typeDeletedFacts\(\{ ownerType: 'link_type'[\s\S]{0,600}?invalidateAfterMutation\(\[[\s\S]{0,200}?queryKeys\.focusAll\(\),[\s\S]{0,200}?queryKeys\.structuresPageAll\(\),[\s\S]{0,200}?queryKeys\.chronicleFeedAll\(\),?[\s\S]{0,50}?\]\);/.test(
+        propertyManager,
+      ),
+      'удаление типа связи гасит focus-/structures-/chronicle-ключи',
     );
   });
 });

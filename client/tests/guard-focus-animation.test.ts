@@ -26,12 +26,13 @@ const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const TRANSITION = path.join(CLIENT_ROOT, 'src', 'renderer', 'canvas', 'transition.ts');
 const CANVAS = path.join(CLIENT_ROOT, 'src', 'renderer', 'canvas', 'canvas.ts');
 
-/** Токены, которыми живёт фазовая хореография. */
+/** Токены, которыми живёт фазовая хореография и проявление при смене сети. */
 const TOKENS = [
   '--anim-focus-flight',
   '--anim-focus-settle',
   '--anim-focus-fade',
   '--anim-focus-ease',
+  '--anim-network-reveal',
 ] as const;
 
 /** Строка — комментарий? (в пояснениях единицы и имена токенов допустимы). */
@@ -66,7 +67,7 @@ describe('guard: плавная смена фокуса — длительнос
     const reducedEnd = css.indexOf('prefers-reduced-motion: reduce');
     assert.ok(reducedEnd >= 0, 'нет блока prefers-reduced-motion: reduce');
     const reduced = css.slice(reducedEnd);
-    for (const token of ['--anim-focus-flight', '--anim-focus-settle', '--anim-focus-fade']) {
+    for (const token of ['--anim-focus-flight', '--anim-focus-settle', '--anim-focus-fade', '--anim-network-reveal']) {
       assert.match(
         reduced,
         new RegExp(`${token}\\s*:\\s*0ms`),
@@ -91,5 +92,47 @@ describe('guard: плавная смена фокуса — длительнос
       !/\bawait\b/.test(between),
       'между renderFocusRow и playFocusTransition есть await — новый фокус мелькнёт в центре до начала полёта',
     );
+  });
+
+  // Смена мыслесети — не хореография смены фокуса: прежний расклад убирается
+  // одномоментно, а новый проявляется ОДНИМ общим fade-in. Фокус-переход на
+  // смене сети не играется (задача 70a99f09).
+  it('canvas.ts: смена сети гасит фокус-анимацию и запускает общее проявление', () => {
+    const source = fs.readFileSync(CANVAS, 'utf8');
+    assert.match(
+      source,
+      /!networkChanged && \(focusChanged \|\| zoneAnimationPending\)/,
+      'фокус-хореография обязана быть выключена при смене сети (networkChanged)',
+    );
+    assert.match(
+      source,
+      /playNetworkReveal\(host, drawLinksNow\)/,
+      'первый рендер новой сети обязан запускать общее проявление расклада',
+    );
+    // Проявление — в той же синхронной задаче, что и пересборка.
+    const start = source.indexOf('renderFocusRow(focus);');
+    const end = source.indexOf('playNetworkReveal(host, drawLinksNow)');
+    assert.ok(start >= 0 && end > start, 'не найдена связка пересборки и проявления');
+    assert.ok(
+      !/\bawait\b/.test(source.slice(start, end)),
+      'между пересборкой и проявлением есть await — расклад мелькнёт до проявления',
+    );
+  });
+
+  // Пока предыдущий асинхронный рендер ждёт данные, новый триггер делает его
+  // устаревшим: право перерисовать DOM — только у самого свежего рендера. Без
+  // этого обе дорисовки пересобирали карту по очереди (мелькание при загрузке
+  // сети, задача 70a99f09).
+  it('canvas.ts: устаревший рендер не трогает DOM (последний рендер выигрывает)', () => {
+    const source = fs.readFileSync(CANVAS, 'utf8');
+    assert.match(
+      source,
+      /const generation = \+\+renderGeneration;/,
+      'каждый рендер обязан получить своё поколение',
+    );
+    const guard = source.indexOf('if (generation !== renderGeneration) return;');
+    const paint = source.indexOf('renderFocusRow(focus);');
+    assert.ok(guard >= 0, 'нет проверки поколения рендера');
+    assert.ok(paint > guard, 'проверка поколения обязана стоять ДО пересборки DOM');
   });
 });

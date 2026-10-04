@@ -15,6 +15,12 @@
  * меню, копирование, подписка на селектор store. Общение с элементом Grid
  * изолировано тонким адаптером {@link GridTableAdapter} (`./table-grid.ts`).
  *
+ * **Общее ядро навигации.** Правила клавиатуры (какие клавиши, границы,
+ * Home/End, PgUp/PgDn, поведение без текущей строки) — в `./nav-core.ts`
+ * (ADR fadf99e0, задача 7893e429): то же ядро использует список `./list.ts`.
+ * Таблица здесь — лишь адаптер представления над ядром; своего расчёта
+ * индексов и своей карты клавиш у неё нет.
+ *
  * **Keyed-сверка (`reconcileKeyed`) к строкам не применима.** Строки живут в
  * вендорском Grid (shadow DOM, виртуализация): свой набор он получает через
  * `items` и сверяет сам, `reconcileKeyed` работает по element-детям
@@ -91,6 +97,7 @@ import { t } from '../i18n.js';
 import { showMenuAt, type MenuItem } from '../menu.js';
 import { emptyState, type EmptyStateOptions, type StateAction } from './empty-state.js';
 import { FOCUS_ANCHOR_ATTR } from './focus-anchor.js';
+import { nextNavIndex, resolveNavAction, type NavAction } from './nav-core.js';
 import { select, type StateSelector } from './state.js';
 import {
   vaadinGridAdapter,
@@ -165,15 +172,30 @@ export interface CellCursor {
 /** Клавиша навигации, обрабатываемая таблицей. */
 export type NavKey = 'ArrowUp' | 'ArrowDown' | 'Home' | 'End' | 'PageUp' | 'PageDown';
 
-/** Является ли имя клавиши навигационной. */
+/** Навигационные действия ядра, которые двигают строку таблицы. */
+const ROW_ACTIONS: Readonly<Record<NavKey, NavAction>> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  Home: 'home',
+  End: 'end',
+  PageUp: 'pageUp',
+  PageDown: 'pageDown',
+};
+
+/**
+ * Является ли имя клавиши навигационной. Карта клавиш — из общего ядра
+ * навигации `nav-core.ts` (ADR fadf99e0, задача 7893e429), единая для таблиц и
+ * списков.
+ */
 export function isNavKey(key: string): key is NavKey {
+  const action = resolveNavAction(key);
   return (
-    key === 'ArrowUp' ||
-    key === 'ArrowDown' ||
-    key === 'Home' ||
-    key === 'End' ||
-    key === 'PageUp' ||
-    key === 'PageDown'
+    action === 'up' ||
+    action === 'down' ||
+    action === 'home' ||
+    action === 'end' ||
+    action === 'pageUp' ||
+    action === 'pageDown'
   );
 }
 
@@ -400,7 +422,9 @@ export function sortRows<T>(
  * Целевой индекс строки для клавиши навигации. Без текущей строки
  * (`current < 0`) первое нажатие встаёт: `End` — на последнюю, `PageDown` —
  * на последнюю строку первой страницы, остальные — на первую. Возвращает
- * `-1`, если строк нет.
+ * `-1`, если строк нет. Расчёт — в общем ядре {@link nextNavIndex} (ADR
+ * fadf99e0, задача 7893e429): правило границ и Home/End едино для таблиц и
+ * списков.
  */
 export function nextRowIndex(
   key: NavKey,
@@ -408,28 +432,7 @@ export function nextRowIndex(
   count: number,
   pageStep: number,
 ): number {
-  if (count <= 0) return -1;
-  const last = count - 1;
-  const step = pageStep >= 1 ? pageStep : 1;
-  if (current < 0) {
-    if (key === 'End') return last;
-    if (key === 'PageDown') return Math.min(last, step - 1);
-    return 0;
-  }
-  switch (key) {
-    case 'ArrowDown':
-      return Math.min(last, current + 1);
-    case 'ArrowUp':
-      return Math.max(0, current - 1);
-    case 'Home':
-      return 0;
-    case 'End':
-      return last;
-    case 'PageDown':
-      return Math.min(last, current + step);
-    case 'PageUp':
-      return Math.max(0, current - step);
-  }
+  return nextNavIndex(ROW_ACTIONS[key], current, count, { pageStep, emptyTarget: 'first' });
 }
 
 /** Экранирует ячейку TSV: табуляция/перевод строки/кавычка — в кавычки (стиль Excel). */

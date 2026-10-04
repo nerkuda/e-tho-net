@@ -31,9 +31,11 @@ import type {
   Link,
   LinkType,
   NetworkProperty,
+  Publication,
   RealtimeAudience,
   RealtimeEventMap,
   RealtimeEventType,
+  Shelf,
   Thought,
   ThoughtType,
 } from '@etn/shared';
@@ -47,6 +49,8 @@ import {
   recordLinkTypeActivity,
   recordOwnerActivity,
   recordPropertyActivity,
+  recordPublicationActivity,
+  recordShelfActivity,
   recordThoughtActivity,
   recordThoughtTypeActivity,
   recordTypePropertyActivity,
@@ -111,7 +115,13 @@ export type WriteActivityEntry =
         | Pick<Link, 'id' | 'source_id' | 'target_id' | 'type_id'>
         | { id: string };
     }
-  | { kind: 'layer'; action: ActivityAction; layer: Pick<Layer, 'id' | 'title'> };
+  | { kind: 'layer'; action: ActivityAction; layer: Pick<Layer, 'id' | 'title'> }
+  | {
+      kind: 'publication';
+      action: ActivityAction;
+      publication: Pick<Publication, 'id' | 'title'>;
+    }
+  | { kind: 'shelf'; action: ActivityAction; shelf: Pick<Shelf, 'id' | 'title'> };
 
 /** Запись аудита — форма определяется фасадом (для MCP — одна строка на вызов). */
 export interface WriteAuditEntry {
@@ -213,6 +223,16 @@ function applyActivityEntry(
       return;
     case 'layer':
       recordLayerActivity(ndb, { ...base, action: entry.action, layer: entry.layer });
+      return;
+    case 'publication':
+      recordPublicationActivity(ndb, {
+        ...base,
+        action: entry.action,
+        publication: entry.publication,
+      });
+      return;
+    case 'shelf':
+      recordShelfActivity(ndb, { ...base, action: entry.action, shelf: entry.shelf });
       return;
   }
 }

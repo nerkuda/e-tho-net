@@ -223,7 +223,7 @@ async function toggleLinkActive(networkId: string, linkId: string): Promise<void
       { active: !link.active },
       link.version,
     );
-    // Repaint at once (no realtime echo to the actor, 04-realtime.md §5);
+    // Repaint at once (B1: own event arrives asynchronously);
     // the debounced refresh reconciles the neighbour zones.
     patchFocusEdge(updated);
     scheduleRefresh();
@@ -246,7 +246,7 @@ async function invertLink(networkId: string, linkId: string): Promise<void> {
       { source_id: link.target_id, target_id: link.source_id },
       link.version,
     );
-    // No realtime echo to the actor (04-realtime.md §5) — patch locally. Both
+    // Own event arrives asynchronously (B1) — patch locally for instant feedback. Both
     // store updates render synchronously BEFORE the animation flag is armed,
     // so the flag is consumed by the debounced zone-reconciling refresh only.
     patchFocusEdge(updated);
@@ -299,6 +299,12 @@ export interface ThoughtMenuOptions {
   openLabel?: string;
   /** Спрятать команду открытия: мысль уже открыта в редакторе. */
   hideOpenCommand?: boolean;
+  /**
+   * Спрятать подменю «Добавить» (вверх/вниз/налево): на экране публикации
+   * структурой разделов управляют собственные команды «В публикации», а не
+   * общие команды мыслей (задача 7cfaba7c, п.4).
+   */
+  hideAddCommand?: boolean;
   /** Вставить команду «В фокус» рядом с открытием (контексты редактора). */
   focusHandler?: () => void;
   /** Команды конкретного контекста (значение свойства) — блоком перед «Удалить». */
@@ -438,27 +444,31 @@ export function buildThoughtMenuItems(
         ];
 
   return [
-    menuSubmenu('Добавить', [
-      menuAction('вверх (родитель)', () =>
-        openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'parent' }),
-      ),
-      menuAction('вниз (ребёнок)', () =>
-        openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'child' }),
-      ),
-      menuAction(
-        'налево (родственник)',
-        () => {
-          if (siblingParentId !== null) {
-            openAddDialog({
-              anchorId: siblingParentId,
-              anchorTitle: siblingParentTitle,
-              direction: 'child',
-            });
-          }
-        },
-        { disabled: !canAddSibling },
-      ),
-    ]),
+    ...(opts.hideAddCommand === true
+      ? []
+      : [
+          menuSubmenu('Добавить', [
+            menuAction('вверх (родитель)', () =>
+              openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'parent' }),
+            ),
+            menuAction('вниз (ребёнок)', () =>
+              openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'child' }),
+            ),
+            menuAction(
+              'налево (родственник)',
+              () => {
+                if (siblingParentId !== null) {
+                  openAddDialog({
+                    anchorId: siblingParentId,
+                    anchorTitle: siblingParentTitle,
+                    direction: 'child',
+                  });
+                }
+              },
+              { disabled: !canAddSibling },
+            ),
+          ]),
+        ]),
     menuAction('Изменить актуальность', () => void toggleActive(networkId, target.id)),
     // Submenu is enabled only while the zone is sorted «ручной» (08-ui-spec.md
     // §2.7). Siblings never accept manual order (§6.2); for parents/children
@@ -605,7 +615,7 @@ async function toggleActive(networkId: string, id: string): Promise<void> {
       return;
     }
     await etn.thoughts.update(networkId, id, { active: !thought.active }, thought.version);
-    // No realtime echo to the actor (04-realtime.md §5) — drop the cached ref
+    // Own event arrives asynchronously (B1) — drop the cached ref
     // so the refreshed zones re-resolve the thought and repaint the dim state.
     invalidateRef(id);
     scheduleRefresh();
@@ -641,17 +651,13 @@ async function changeIcon(networkId: string, id: string): Promise<void> {
   if (value === null) return;
   try {
     const thought = await etn.thoughts.get(networkId, id);
-    const updated = await etn.thoughts.update(
-      networkId,
-      id,
-      { icon: value.trim() === '' ? null : value.trim(), icon_kind: 'emoji' },
-      thought.version,
-    );
+    const patch = { icon: value.trim() === '' ? null : value.trim(), icon_kind: 'emoji' as const };
+    const updated = await etn.thoughts.update(networkId, id, patch, thought.version);
     // The menu is reachable from every thought representation (canvas clouds,
     // pinned chips, structures clouds, selection rows) — reflect the new icon
     // in all of them at once, not just on the canvas (fixes/045, same class
     // as the attachments-tab «Назначить иконкой мысли» command).
-    reflectThoughtUpdate(updated);
+    reflectThoughtUpdate(updated, patch as Record<string, unknown>);
   } catch (err) {
     errorDialog('Изменить иконку', err);
   }

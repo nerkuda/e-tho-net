@@ -26,6 +26,7 @@ import { BASE_LAYER_ID } from '@etn/shared';
 import { runMigrations } from '../src/db/migrator.js';
 import { createInMemoryNetworkDb, registerMigrationHelpers } from '../src/db/network-db.js';
 import { networkMigrationsDir } from '../src/paths.js';
+import { networkMigrationFilesFrom } from './migration-files.js';
 import { createComment } from '../src/domain/comment-service.js';
 import { createLink, deleteLink, checkLinkDeletion } from '../src/domain/link-service.js';
 import { createTypeProperty, setPropertyValue, setTypePropertyDefaultOverride } from '../src/domain/property-service.js';
@@ -266,54 +267,48 @@ describe(
         // (025 + the follow-ups: the S6 trigger fix, session layers, the
         // switch seq, the live-triple index, property descriptions, единый
         // реестр свойств и связей — колонка `side` для привязок 0.8.1).
+        // Ожидание вычисляется из каталога (задача 8816c01f) — новая
+        // миграция не требует правки теста. Якорь версии — 025 (`pre-layers`
+        // доведена до 024): из каталога «до какой версии» не выводится.
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, [
-          '025_layers.sql',
-          '026_fts_layer_tombstones.sql',
-          '027_session_layers.sql',
-          '028_session_layers_switch_seq.sql',
-          '029_links_triple_live.sql',
-          '030_type_property_description.sql',
-          '031_layer_colors.sql',
-          '032_properties_registry.sql',
-          '033_authorship_columns.sql',
-          '034_object_locks.sql',
-          '035_activity_log.sql',
-          '036_property_values_deterministic_id.sql',
-          '037_thought_type_views.sql',
-          '038_search_trigram.sql',
-          '039_structural_link_properties.sql',
-          '040_thought_ref_to_link_properties.sql',
-          '041_type_property_side.sql',
-          '042_unified_property_link_registry.sql',
-          '043_type_properties_canonical_unique.sql',
-          '044_cross_network_ref.sql',
-          '045_links_covering_indexes.sql',
-          '046_comments_time.sql',
-        ]);
+        assert.deepEqual(res.applied, networkMigrationFilesFrom('025_layers.sql'));
 
-        // 1. Row counts unchanged (the layers table is new, everything else
-        // kept; 032 turns the seeded definition into one registry property;
-        // 034 creates object_locks, пустую при апгрейде чистой базы;
-        // 035 — activity_log, тоже пустую; 037 — thought_type_views, пустую
-        // при апгрейде чистой базы; 038 пересоздаёт FTS5-таблицы с новым
-        // токенизатором — бэкфилл сохраняет те же строки; 042 заводит
-        // свойство голому link_type «lt1», у которого до миграции не было
-        // реестровой строки).
+        // 1. Данные, бывшие до 025, сохранены: у каждой старой таблицы то же
+        //    число строк. Проверка сформулирована покомпонентно, а не точным
+        //    снимком всей схемы (задача 8816c01f): миграция, добавляющая новую
+        //    таблицу, больше не требует правки этого теста. Исключение —
+        //    `type_properties`: 039/042 законно дописывают привязки (см. ниже).
         const after = tableCounts(db);
-        assert.deepEqual(after, {
-          ...before,
+        for (const [table, count] of Object.entries(before)) {
+          if (table === 'type_properties') continue;
+          assert.equal(after[table], count, `счётчик строк изменился при апгрейде: ${table}`);
+        }
+        // Смысловые ожидания схемы конкретной версии — то, что из каталога
+        // миграций не выводится (неустранимый минимум): слой-основа и пустые
+        // служебные таблицы. 032 превращает сидированное определение в одну
+        // реестровую строку; 034 создаёт object_locks; 035 — activity_log;
+        // 037 — thought_type_views (пустые при апгрейде чистой базы); 044
+        // (задача 7849008a) — property_value_cross_refs; 047 (0.11.1) —
+        // таблицы публикаций. 042 заводит свойство голому link_type «lt1»,
+        // у которого до миграции не было реестровой строки.
+        const expectedNewTables: Record<string, number> = {
           layers: 1,
           session_layers: 0,
           properties: 4, // +2 структурных «Родители»/«Потомки» (039) +1 для голого lt1 (042)
-          type_properties: 3, // +2 «Родители»/«Потомки» (039); 0 привязка голого lt1 — свойство в реестре без привязки (требование e93001ac)
+          type_properties: 3, // 1 сидированная +2 «Родители»/«Потомки» (039); привязки голого lt1 нет (требование e93001ac)
           object_locks: 0,
           activity_log: 0,
           thought_type_views: 0,
-          // Миграция 044 (задача 7849008a) — служебная таблица снапшотов
-          // кросс-сетевых ссылок. На свежеобновлённой сети строк нет.
           property_value_cross_refs: 0,
-        });
+          publications: 0,
+          publication_order: 0,
+          publication_exclusions: 0,
+          shelves: 0,
+          shelf_items: 0,
+        };
+        for (const [table, count] of Object.entries(expectedNewTables)) {
+          assert.equal(after[table], count, `неверное число строк в ${table}`);
+        }
 
         // 2. The base layer row.
         const base = db

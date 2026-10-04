@@ -48,7 +48,7 @@ import {
   defaultLayerColors,
   invertThemeColor,
 } from '../lib/layer-colors.js';
-import { onRealtimeEvent } from '../realtime.js';
+import { onRoutedRealtimeEvent } from '../lib/live/index.js';
 import { resyncAfterLayerSwitch } from '../app.js';
 import { store, type Theme } from '../state.js';
 import { upsertTab } from './tabs/tab-state.js';
@@ -237,7 +237,7 @@ async function refreshLayerOverrides(): Promise<void> {
 /**
  * Schedules an override refresh after something may have changed the current
  * layer's rows (08-ui-spec.md §2.2): own mutations (flagged by main as
- * `realtime:selfmut` — the server echo is suppressed for the applier) and
+ * `realtime:selfmut` — the event arrives asynchronously (B1)) and
  * foreign realtime events. The badge must appear the moment a thought gains
  * a layer version, not on the next layer/tab switch.
  */
@@ -283,7 +283,10 @@ export function initLayerOverridesTracking(): void {
   etn.realtime.onSelfMutated((payload) => {
     if (payload.networkId === store.state.networkId) scheduleLayerOverridesRefresh();
   });
-  onRealtimeEvent((evt) => {
+  // Чужие изменения — через СЛОЙ (G6): подписка на события, прошедшие роутер
+  // (`onRoutedRealtimeEvent`), а не на шину напрямую. Побочный эффект
+  // (переопределения объектов текущим слоем) не выражается ключом запроса.
+  onRoutedRealtimeEvent((evt) => {
     if (evt.network_id !== store.state.networkId) return;
     if (OVERRIDE_RELEVANT_EVENTS.has(evt.type)) scheduleLayerOverridesRefresh();
   });

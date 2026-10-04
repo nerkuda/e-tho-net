@@ -36,9 +36,7 @@ import {
   filterEntityOptions,
   linkTypeEntityOptions,
   pickEntitiesModal,
-  thoughtEntityOption,
   thoughtTypeEntityOptions,
-  type EntityOption,
 } from '../../lib/entity-picker.js';
 import {
   buildConditionsSection,
@@ -47,13 +45,14 @@ import {
   buildFilterFooterButtons,
   buildFilterForm,
   buildKeywordsSection,
+  buildParentThoughtsSection,
   buildSortSection,
   buildTrashedRow,
   buildTriRow,
   extrasActive,
-  type EntityChipSection,
   type FilterFormContext,
   type FilterSection,
+  type ParentThoughtsSection,
 } from '../../lib/filter-form.js';
 import {
   buildChronicleWire,
@@ -71,7 +70,7 @@ import {
   type SavedFilterEntry,
   type SavedFilterStore,
 } from '../../lib/saved-filter-bar.js';
-import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
+import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
 import { store } from '../../state.js';
 import {
   SEARCH_DEBOUNCE_MS,
@@ -92,8 +91,8 @@ type FilterState = ChronicleCriteriaState;
 let filter: FilterState = defaultChronicleCriteriaState();
 /** Ref of the selected saved filter (null — not saved yet / custom). */
 let savedFilterId: string | null = null;
-/** Chip meta of the «Родительские мысли» field, resolved by id (not persisted). */
-const parentClouds = new Map<string, ThoughtCloudInput>();
+/** Секция «Родительские мысли» критериев целей (для внешнего добавления корня). */
+let targetsParentsRef: ParentThoughtsSection | null = null;
 /** Строка сохранённых отборов (общий модуль `lib/saved-filter-bar.ts`). */
 let savedBar: SavedFilterBarHandle | null = null;
 /** Имя отбора в поле строки — переживает перерисовку панели. */
@@ -207,20 +206,11 @@ export function getSavedFilterId(): string | null {
 export function addThoughtToFilter(id: string): void {
   if (!filter.targets.parentIds.includes(id)) {
     filter.targets = { ...filter.targets, parentIds: [...filter.targets.parentIds, id] };
-    void syncParentChips().then(() => renderPanel());
-  }
-}
-
-/** Resolves chip metadata for the current parent ids (missing thoughts dropped). */
-async function syncParentChips(): Promise<void> {
-  parentClouds.clear();
-  const ids = filter.targets.parentIds;
-  if (ids.length === 0) return;
-  try {
-    const refs = await etn.thoughts.resolve(requireNetworkId(), ids);
-    for (const ref of refs) parentClouds.set(ref.id, { ...ref });
-  } catch {
-    // Keep whatever chips we had (offline) — the ids stay in the filter.
+    // Перерисовка пересобирает секцию «Родительские мысли»; общий фасад сам
+    // резолвит облачко добавленного корня и обновит чип (замечание
+    // координатора: без своей копии синхронизации облачков).
+    targetsParentsRef?.resolveClouds();
+    renderPanel();
   }
 }
 
@@ -444,20 +434,14 @@ function targetsLinkTypesSection(ctx: FilterFormContext): FilterSection {
 
 /**
  * Секция «Родительские мысли» критериев целей: отбор записей, у которых есть
- * цель, подчинённая любой из указанных мыслей.
+ * цель, подчинённая любой из указанных мыслей. ОБЩИЙ фасад роли
+ * (`buildParentThoughtsSection`) — тот же чип-лист корней, живой поиск и
+ * ленивая догрузка облачков, что в «Структурах», диалоге типа и публикациях.
+ * Ссылка на секцию нужна внешнему переносу мысли на панель
+ * ({@link addThoughtToFilter}).
  */
-function targetsParentsSection(ctx: FilterFormContext): EntityChipSection {
-  const section = buildEntityChipSection(ctx, {
-    title: 'Родительские мысли',
-    getValues: () => ctx.getState().parentIds,
-    setValues: (values) => {
-      ctx.getState().parentIds = values;
-    },
-    loadOptions: (query) => parentThoughtOptions(query),
-    optionsHeader: 'Мысли',
-    cloudOf: (id) => (id.startsWith('$') ? null : (parentClouds.get(id) ?? null)),
-    placeholder: 'Название мысли…',
-    addPlaceholder: '+ ещё одну мысль',
+function targetsParentsSection(ctx: FilterFormContext): ParentThoughtsSection {
+  const section = buildParentThoughtsSection(ctx, {
     tooltip: 'Отобрать записи, цель которых подчинена указанным мыслям',
     picker: {
       label: 'Выбрать из списка',
@@ -473,7 +457,7 @@ function targetsParentsSection(ctx: FilterFormContext): EntityChipSection {
       },
     },
   });
-  void syncParentChips().then(() => section.fieldRefresh());
+  targetsParentsRef = section;
   return section;
 }
 
@@ -520,21 +504,6 @@ function targetsExtrasSection(ctx: FilterFormContext): FilterSection {
   return section;
 }
 
-/** Живой поиск мыслей для поля «Родительские мысли». */
-async function parentThoughtOptions(query: string): Promise<EntityOption[]> {
-  const needle = query.trim();
-  if (needle === '') return [];
-  try {
-    const hits = await etn.thoughts.findDuplicates(requireNetworkId(), needle, [], []);
-    return hits.map((hit) => {
-      parentClouds.set(hit.id, { ...hit });
-      return thoughtEntityOption(hit);
-    });
-  } catch {
-    return [];
-  }
-}
-
 /** Builds and mounts the filter panel into `host`; returns the root element. */
 export function mountChronicleFilterPanel(
   host: HTMLElement,
@@ -547,10 +516,23 @@ export function mountChronicleFilterPanel(
   panel = div('chron-filter');
   host.append(panel);
   renderPanel();
+  wireSavedFiltersToLayer();
   void reloadSavedFilters();
   // Реестр свойств нужен условиям целей — рисуем панель ещё раз, когда он есть.
   void loadPropertyDefs().then(() => renderPanel());
   return panel;
+}
+
+/** Слой (G6): `saved-filter.*` роутер гасит ключ `saved-filters` — панель
+ *  перечитывает список сохранённых отборов сама, без прямого realtime-хука. */
+let savedFiltersWired = false;
+function wireSavedFiltersToLayer(): void {
+  if (savedFiltersWired) return;
+  savedFiltersWired = true;
+  onQueryInvalidated((prefix) => {
+    if (!matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) return;
+    void reloadSavedFilters();
+  });
 }
 
 /** Перерисовывает панель из текущего состояния (общий каркас). */

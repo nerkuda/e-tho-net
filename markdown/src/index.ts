@@ -3,30 +3,49 @@
  * of comments, HTML export) and the client (live-preview widgets), so both
  * sides always agree on the markup (task M1).
  *
- * Safety model (parity with the previous server renderer):
- *   1. `html: false` — raw HTML in the source is escaped, never passed through.
- *   2. Links/images go through the protocol allow-list in {@link isSafeUrl};
- *      rejected URLs render as plain text, so `javascript:` and friends can
- *      never reach an `href`/`src`.
- *   3. All dynamic values (alt, title, wiki targets) are HTML-escaped.
+ * Publication-aware rendering (heading shift, decapitation, anchors, TOC,
+ * numbering, `[[#pub:…]]` links, title substitution) lives in
+ * {@link renderPublicationFragment}; it goes through the same single pipeline
+ * and is opt-in per call, so plain {@link renderMarkdown} output is unchanged.
  */
 
-import MarkdownIt from 'markdown-it';
-import hljs from 'highlight.js/lib/common';
-
-import { imagePlugin } from './image.js';
-import { linkSafetyPlugin } from './link.js';
-import { isSafeUrl } from './url.js';
-import { wikiLinkPlugin } from './wiki-link.js';
+import { DEFAULT_MAX_LENGTH, getRenderer } from './renderer.js';
 
 export { parseAltSize } from './image.js';
 export { isSafeUrl } from './url.js';
+export { DEFAULT_MAX_LENGTH } from './renderer.js';
 export {
   WIKI_LINK_CLASS,
   WIKI_LINK_TARGET_ATTR,
   WIKI_LINK_ID_ATTR,
   WIKI_LINK_NETWORK_ATTR,
+  WIKI_LINK_MISSING_CLASS,
 } from './wiki-link.js';
+export type {
+  WikiLinkRef,
+  WikiLinkResolution,
+  WikiLinkResolver,
+} from './wiki-link.js';
+export {
+  PUB_ANCHOR_PREFIX,
+  shortId,
+  publicationAnchor,
+  formatSectionNumber,
+  buildToc,
+  renderPublicationFragment,
+  renderPublicationMarkdownFragment,
+} from './publication.js';
+export type {
+  NumberingRange,
+  PublicationHeading,
+  HeadingAnchorContext,
+  HeadingAnchorProvider,
+  PublicationRenderOptions,
+  PublicationRenderResult,
+  PublicationMarkdownOptions,
+  PublicationMarkdownResult,
+  TocNode,
+} from './publication.js';
 
 /**
  * Marker of the rendering pipeline version. The server re-renders the cached
@@ -40,74 +59,24 @@ export {
  * `markdown-it/5`: no renderer change. Bumped by migration 040 (0.8.1,
  * thought_ref → свойства-связи): the migration edits `body_md` of comments
  * moved from links to thoughts (a transfer note is prepended) and folds
- * on-link property values into permanent comments, leaving `body_html`
- * stale on purpose — the sweep re-renders every comment after the migration.
+ * on-link property values into permanent comments, leaving `body_html` stale
+ * on purpose — the sweep re-renders every comment after the migration.
+ *
+ * `markdown-it/6`: publication toolkit (0.11.1). Plain `renderMarkdown` output
+ * is byte-for-byte unchanged (every publication rule is gated on the per-render
+ * `env`), but the pinning invariant of the export determinism ADR
+ * ([[#06874c5d]]) requires the version to move with the pipeline.
+ *
+ * `markdown-it/7`: `breaks: true` — a single newline renders as `<br>` so the
+ * view matches the editor (задача 5de0332d, п. 3). Cached `body_html` must
+ * re-render.
  */
-export const MD_RENDER_VERSION = 'markdown-it/5';
-
-/** Default input cap (256 KiB) to bound rendering work for a single document. */
-export const DEFAULT_MAX_LENGTH = 256 * 1024;
+export const MD_RENDER_VERSION = 'markdown-it/7';
 
 /** Options for {@link renderMarkdown}. */
 export interface RenderOptions {
   /** Maximum input length in characters before rendering is refused. */
   maxLength?: number;
-}
-
-/** The shared renderer instance (statically configured, safe to reuse). */
-let instance: MarkdownIt | null = null;
-
-function getRenderer(): MarkdownIt {
-  if (instance !== null) return instance;
-  const md = new MarkdownIt({
-    html: false,
-    linkify: false,
-    typographer: false,
-    breaks: false,
-    highlight: (code, lang) => highlightFence(code, lang),
-  });
-  // The single hook is shared by links and images, so it is configured with
-  // the permissive image set; the exact per-construct rules are enforced in
-  // the image renderer and the link-safety plugin.
-  md.validateLink = (url: string) => isSafeUrl(url, true);
-  wikiLinkPlugin(md);
-  imagePlugin(md);
-  linkSafetyPlugin(md);
-  instance = md;
-  return md;
-}
-
-/** Fence info string is only trusted as a class/language id when plain. */
-const PLAIN_LANG_RE = /^[a-zA-Z0-9_+.-]+$/;
-
-/** HTML-escape the five significant characters of a text node. */
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/** Render one fenced code block: highlight.js when the language is known. */
-function highlightFence(code: string, lang: string): string {
-  const safeLang = lang !== '' && PLAIN_LANG_RE.test(lang) ? lang : '';
-  if (safeLang === 'mermaid') {
-    // Диаграммы рендерит клиент (mermaid.js) — сервер отдаёт только блок
-    // с пометкой, чтобы просмотр и live preview вели себя одинаково (M7).
-    return `<pre class="mermaid"><code>${escapeHtml(code)}</code></pre>`;
-  }
-  const language = safeLang !== '' && hljs.getLanguage(safeLang) !== undefined ? safeLang : '';
-  if (language === '') {
-    return `<pre><code class="hljs">${escapeHtml(code)}</code></pre>`;
-  }
-  try {
-    const value = hljs.highlight(code, { language }).value;
-    return `<pre><code class="hljs language-${language}">${value}</code></pre>`;
-  } catch {
-    return `<pre><code class="hljs">${escapeHtml(code)}</code></pre>`;
-  }
 }
 
 /**

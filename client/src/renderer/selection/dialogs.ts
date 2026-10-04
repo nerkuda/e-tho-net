@@ -15,6 +15,7 @@ import type { EffectiveTypeProperty, ThoughtRef } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
+import { signalPublicationCompositionChanged } from '../lib/live/index.js';
 import { buildValueEditor } from '../editor/value-editor.js';
 import { div, el } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
@@ -185,6 +186,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     }
     let applied = 0;
     let failed = 0;
+    const appliedIds: string[] = [];
     for (const row of filled) {
       for (const ref of selectedRefs) {
         const defs = ref.type_id === null ? undefined : defsByType.get(ref.type_id);
@@ -192,17 +194,22 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
         try {
           await etn.properties.set(networkId, 'thought', ref.id, row.def.key, row.value);
           applied += 1;
+          appliedIds.push(ref.id);
         } catch {
           failed += 1;
         }
       }
     }
+    // Изменённые мысли — чтобы рабочая область публикации не зажгла stale от
+    // значения посторонней сборке мысли (ужесточение G4, задача 8a039ea3).
+    if (applied > 0) signalPublicationCompositionChanged(appliedIds);
     if (applied > 0) notice(`Значения применены (${applied}).`, 'success');
     if (failed > 0) notice(`Не удалось применить: ${failed}.`, 'error');
     // Своя запись значения (в т.ч. свойства-связи) не поднимает версию мысли, а
-    // собственному клиенту не приходит realtime-эхо (G8), поэтому ни таблица
+    // собственное событие приходит асинхронно (B1), поэтому ни таблица
     // значений свойств открытой карточки, ни карта о новом ребре не узнают до
-    // смены фокуса (ошибка 4ba1fccc). Правка массовая — ключ не един, значит
+    // прихода события / смены фокуса (ошибка 4ba1fccc). Локальное уведомление —
+    // идемпотентный ускоритель. Правка массовая — ключ не един, значит
     // перечитываем всё; уведомляем и освежаем окрестность фокуса ТОЛЬКО когда
     // хоть одна запись удалась, на полной неудаче молчим.
     if (applied > 0) {

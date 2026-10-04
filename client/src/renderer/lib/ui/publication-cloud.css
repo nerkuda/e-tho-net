@@ -1,0 +1,66 @@
+/**
+ * Облачко публикации `lib/ui` (`.ui-pub-cloud*`, замечание Б2 приёмки
+ * b02ef1cf). Прямые углы и значок-книга отличают публикацию от скруглённых
+ * пилюль-мыслей. Подключается из `lib/ui/register.ts`; цвета — только токены.
+ */
+
+.ui-pub-cloud {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 1px var(--space-3);
+  border: 1px solid var(--border);
+  /* Прямые углы — осознанное отличие облачка публикации от мыслей. */
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+.ui-pub-cloud-container {
+  max-width: 100%;
+}
+
+.ui-pub-cloud-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-faint);
+}
+
+.ui-pub-cloud-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ui-pub-cloud-remove {
+  flex: none;
+  position: relative;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--font-size-3xs);
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Невидимая зона нажатия крестика — не меньше токена тач-таргета (требование
+   5677bc3d, как у `.ui-chip-remove`): визуальный «×» компактен, попадать можно
+   с запасом. */
+.ui-pub-cloud-remove::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: max(100%, var(--hit-area-min));
+  block-size: max(100%, var(--hit-area-min));
+  transform: translate(-50%, -50%);
+}
+
+.ui-pub-cloud-remove:hover {
+  color: var(--text);
+}

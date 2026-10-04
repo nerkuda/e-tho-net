@@ -32,9 +32,7 @@ import {
   filterEntityOptions,
   linkTypeEntityOptions,
   pickEntitiesModal,
-  thoughtEntityOption,
   thoughtTypeEntityOptions,
-  type EntityOption,
 } from '../../lib/entity-picker.js';
 import {
   buildAuthorshipSection,
@@ -46,6 +44,7 @@ import {
   buildFilterFooterButtons,
   buildFilterForm,
   buildKeywordsSection,
+  buildParentThoughtsSection,
   buildSortSection,
   type FilterFormContext,
   type FilterSection,
@@ -57,7 +56,7 @@ import {
   type SavedFilterStore,
 } from '../../lib/saved-filter-bar.js';
 import type { SuggestSource } from '../../lib/suggest-dropdown.js';
-import type { ThoughtCloudInput } from '../../lib/thought-cloud.js';
+import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
 import { store } from '../../state.js';
 import { requireNetworkId } from '../../app.js';
 import { checkboxRow } from '../../lib/ui/choice-row.js';
@@ -144,8 +143,6 @@ let state: FilterState = defaultState();
 
 /** Property registry: id → registry row (0.6.5: one property, one id). */
 const propertyDefs = new Map<string, NetworkProperty>();
-/** Облачка выбранных родительских мыслей (id → данные облачка, лениво). */
-const parentClouds = new Map<string, ThoughtCloudInput>();
 /** Строка сохранённых отборов (общий модуль `lib/saved-filter-bar.ts`). */
 let savedBar: SavedFilterBarHandle | null = null;
 /** Имя отбора в поле строки — переживает перерисовку панели. */
@@ -279,9 +276,16 @@ export function buildTraversalFilter(): LinkTypeFilterInput | undefined {
   return out;
 }
 
-/** Reloads the saved-filter list (called on `saved-filter.*` realtime events). */
-export function invalidateSavedFilters(): void {
-  void savedBar?.reload();
+/** Слой (G6): `saved-filter.*` роутер гасит ключ `saved-filters` — панель
+ *  перечитывает свой список отборов сама, без прямого realtime-хука. */
+let savedFiltersWired = false;
+function wireSavedFiltersToLayer(): void {
+  if (savedFiltersWired) return;
+  savedFiltersWired = true;
+  onQueryInvalidated((prefix) => {
+    if (!matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) return;
+    void savedBar?.reload();
+  });
 }
 
 /** Признаки «Дополнительно» заполнены («Корзина» — независимый флаг, но
@@ -305,6 +309,7 @@ function extrasActive(s: FilterCriteriaState): boolean {
 export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallbacks): void {
   host = panelHost;
   callbacks = cb;
+  wireSavedFiltersToLayer();
   renderPanel();
 
   store.subscribe(() => {
@@ -410,35 +415,6 @@ function keywordsHistorySource(): SuggestSource {
 // ---------------------------------------------------------------------------
 // Panel DOM — общий каркас
 // ---------------------------------------------------------------------------
-
-/** Догружает облачка уже выбранных родительских мыслей (по id). */
-function resolveParentClouds(): void {
-  const networkId = store.state.networkId;
-  const missing = state.parentIds.filter((id) => !parentClouds.has(id));
-  if (networkId === null || missing.length === 0) return;
-  void etn.thoughts
-    .resolve(networkId, missing)
-    .then((refs) => {
-      for (const ref of refs) parentClouds.set(ref.id, { ...ref });
-      renderPanel();
-    })
-    .catch(() => undefined);
-}
-
-/** Live-search кандидаты мыслей для чип-листа «Родительские мысли». */
-async function parentThoughtOptions(query: string): Promise<EntityOption[]> {
-  const needle = query.trim();
-  if (needle === '') return [];
-  try {
-    const hits = await etn.thoughts.findDuplicates(requireNetworkId(), needle, [], []);
-    return hits.map((hit) => {
-      parentClouds.set(hit.id, { ...hit });
-      return thoughtEntityOption(hit);
-    });
-  } catch {
-    return [];
-  }
-}
 
 /** Ограничение обхода по связям (задача c965ad03) — панельное дополнение.
  *  Ошибка 6158d2ea: группа доступна только при заполненных «Родительских
@@ -576,17 +552,12 @@ function renderPanel(): void {
           }),
       },
     }),
-    buildEntityChipSection(ctx, {
-      title: 'Родительские мысли',
-      getValues: () => state.parentIds,
-      setValues: (values) => {
-        state.parentIds = values;
-      },
-      loadOptions: (query) => parentThoughtOptions(query),
-      optionsHeader: 'Мысли',
-      cloudOf: (id) => (id.startsWith('$') ? null : (parentClouds.get(id) ?? null)),
-      placeholder: 'Название мысли…',
-      addPlaceholder: '+ ещё одну мысль',
+    // «Родительские мысли» — ОБЩИЙ фасад `lib/filter-form.ts`
+    // (`buildParentThoughtsSection`): тот же чип-лист корней поддеревьев с
+    // ленивой догрузкой облачков, что и в рецепте публикации. Своей копии
+    // синхронизации облачков у панели больше нет (замечание координатора:
+    // не оставлять две копии логики).
+    buildParentThoughtsSection(ctx, {
       tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
       picker: {
         label: 'Выбрать из списка',
@@ -654,7 +625,6 @@ function renderPanel(): void {
   buildFilterForm({ sections, footer: [btnRow, savedBar.root], mount: host });
 
   for (const section of sections) section.refresh();
-  resolveParentClouds();
 }
 
 // ---------------------------------------------------------------------------

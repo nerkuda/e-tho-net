@@ -1145,6 +1145,23 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // Participants saw the same catalogue events as for human edits.
         const types = events.map((e) => e.type);
         assert.ok(types.includes('comment.updated'), `events: ${types.join(',')}`);
+        // Событие обновления несёт владельца и вид комментария — нужно точечным
+        // подписчикам (документ публикации, замечания 6 и блокер приёмки
+        // b02ef1cf): по `kind` клиент отличает постоянный комментарий мысли от
+        // хроно-записи и не подменяет текст блока.
+        assert.ok(thoughtId !== '', 'мысль-владелец известна');
+        for (const evt of events.filter((e) => e.type === 'comment.updated')) {
+          assert.equal(
+            (evt.data as { owner_id?: string }).owner_id,
+            thoughtId,
+            'comment.updated несёт owner_id владельца',
+          );
+          assert.equal(
+            (evt.data as { kind?: string }).kind,
+            'chronological',
+            'comment.updated несёт kind комментария',
+          );
+        }
         assert.ok(types.includes('comment.deleted'), `events: ${types.join(',')}`);
         const deletedEvent = events.find((e) => e.type === 'comment.deleted');
         assert.ok(deletedEvent !== undefined);

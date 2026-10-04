@@ -655,6 +655,302 @@ export const ru = {
   'stats.row.layers': 'Слои',
   /** Итог по вложениям (подстановки — всего, файлов, размер). */
   'stats.attachments': 'Вложений: %1, файлов %2, общий размер %3',
+
+  // -- Публикации: библиотека (0.11.1, задача a3cfc018) ---------------------
+  /** Заголовок экрана и вида. */
+  'publications.title': 'Публикации',
+  /** Плейсхолдер поиска по библиотеке. */
+  'publications.search': 'Поиск по названию…',
+  /** Кнопка создания публикации. */
+  'publications.new': 'Публикация',
+  /** Кнопка создания полки. */
+  'publications.newShelf': 'Полка',
+  /** Подсказка кнопки создания полки (задача 55ee3c85). */
+  'publications.newShelfHint': 'Создать новую полку',
+  /** Подсказка кнопки создания публикации (задача 55ee3c85). */
+  'publications.newHint': 'Создать публикацию мастером',
+  /** Заголовок диалога создания полки (ошибка 87ad669a). */
+  'publications.shelf.create': 'Новая полка',
+  /** Подпись поля имени новой полки. */
+  'publications.shelf.name': 'Название полки',
+  /** Пустое состояние полки без публикаций (ошибка 87ad669a). */
+  'publications.shelf.empty': 'На полке пока нет публикаций',
+  /** Сегмент вида «полки». */
+  'publications.view.shelves': 'Полки',
+  /** Сегмент вида «список». */
+  'publications.view.list': 'Список',
+  /** Подпись кнопки сортировки. */
+  'publications.sort': 'Сортировка',
+  /** Подсказка сортировки: что именно сортируется (задача 55ee3c85). */
+  'publications.sort.hint': 'Сортировать публикации внутри полок; порядок самих полок — свой',
+  'publications.sort.manual': 'Вручную',
+  'publications.sort.title': 'По названию',
+  'publications.sort.date': 'По дате сборки',
+  'publications.sort.author': 'По автору',
+  /** Кнопка панели фильтров. */
+  'publications.filters': 'Фильтры',
+  'publications.active.true': 'Актуальные',
+  'publications.active.false': 'Неактуальные',
+  'publications.active.any': 'Все',
+  /** Пункт «показать все полки». */
+  'publications.shelf.all': 'Все полки',
+  /** Полка публикаций, не входящих в полки (вид «список»/«полки»). */
+  'publications.shelf.none': 'Без полки',
+  /** Пустое состояние библиотеки. */
+  'publications.empty': 'Публикаций пока нет',
+  'publications.emptyHint': 'Создайте первую публикацию мастером.',
+  /** Пустое состояние поиска/фильтра. */
+  'publications.emptySearch': 'Ничего не найдено',
+  /** Ошибка загрузки списка. */
+  'publications.error': 'Не удалось загрузить публикации',
+  /** Бейдж «+N новых» (подстановка — число). */
+  'publications.newBadge': '+%1 новых',
+  /** Пагинация списка. */
+  'publications.prev': 'Назад',
+  'publications.next': 'Вперёд',
+  'publications.page': '%1–%2 из %3',
+  /** Контекстное меню публикации. */
+  'publications.menu.export': 'Экспортировать',
+  'publications.menu.exportMd': 'Экспорт в Markdown',
+  'publications.menu.exportHtml': 'Экспорт в HTML',
+  // Тост-уведомления экспорта (задача 77cce0ba, п.4): успех с путём и сбой с
+  // причиной — по образцу прочих тостов клиента.
+  'publications.export.saved': 'Публикация сохранена: %1',
+  'publications.export.saveFailed': 'Не удалось сохранить файл: %1',
+  'publications.export.failed': 'Экспорт завершился с ошибкой.',
+  'publications.export.failedReason': 'Экспорт не удался: %1',
+  /** Пункты контекстного меню публикации (задачи 00160da1, b51dbca4):
+   *  открыть карточку, удалить, читать, экспортировать. */
+  'publications.menu.open': 'Открыть',
+  'publications.menu.read': 'Читать',
+  'publications.menu.delete': 'Удалить',
+  /** Контекстное меню полки и inline-переименование. */
+  'publications.shelf.rename': 'Переименовать полку',
+  /** Команда меню полки: создать публикацию с предвыбранной полкой (задача 55ee3c85). */
+  'publications.menu.addPublication': 'Добавить публикацию',
+  /** Диалог удаления публикации/полки (задача 00160da1). */
+  'publications.delete.publicationTitle': 'Удаление публикации «%1»',
+  'publications.delete.shelfTitle': 'Удаление полки «%1»',
+  'publications.delete.reasonProperties': 'Нельзя удалить совсем — публикация используется в свойствах (%1).',
+  'publications.delete.reasonBase': 'Нельзя удалить совсем — публикация существует в основе: в слое её можно только поместить в корзину.',
+  'publications.delete.reasonLayers': 'Нельзя удалить совсем — публикация изменена в слоях: %1.',
+  'publications.delete.reasonShelfBase': 'Нельзя удалить совсем — полка существует в основе: в слое её можно только поместить в корзину.',
+  /** Мастер создания публикации. */
+  'publications.wizard.title': 'Новая публикация',
+  'publications.wizard.meta': 'Название',
+  'publications.wizard.recipe': 'Отбор заголовков',
+  'publications.wizard.texts': 'Свойства текстов',
+  'publications.wizard.create': 'Создать',
+  'publications.wizard.fTitle': 'Название',
+  'publications.wizard.fSubtitle': 'Подзаголовок',
+  'publications.wizard.fAuthor': 'Автор',
+  'publications.wizard.fShelf': 'Полка',
+  'publications.wizard.noShelf': 'Без полки',
+  'publications.wizard.fTextsHint':
+    'Комментарии мыслей этих свойств образуют текст раздела. Шаг можно пропустить.',
+  'publications.wizard.titleRequired': 'Укажите название публикации.',
+
+  // -- Публикации: рабочая область открытой публикации (0.11.1, задача 4f03b9d5) --
+  /** Кнопка возврата в библиотеку (шапка рабочей области). */
+  'publications.ws.back': 'Назад',
+  'publications.ws.rebuild': 'Пересобрать',
+  /** Подсветка «Пересобрать»: живой текст устарел (замечание А2 приёмки b02ef1cf). */
+  'publications.ws.rebuildStale': 'Живой текст устарел — пересоберите документ',
+  'publications.ws.export': 'Экспорт',
+  /** Кликабельный заголовок публикации (задача b51dbca4). */
+  'publications.ws.openCard': 'Открыть карточку публикации',
+  /** Кнопки тулбара «Свернуть все»/«Развернуть все» по разделам. */
+  'publications.ws.collapseAll': 'Свернуть все',
+  'publications.ws.expandAll': 'Развернуть все',
+  /** Каретка-экспандер раздела в теле документа. */
+  'publications.ws.sectionCollapse': 'Свернуть раздел',
+  'publications.ws.sectionExpand': 'Развернуть раздел',
+  /** Оглавление документа. */
+  'publications.ws.toc': 'Оглавление',
+  'publications.ws.tocCollapse': 'Свернуть оглавление',
+  'publications.ws.tocExpand': 'Развернуть оглавление',
+  /** Подпись строки текста раздела в оглавлении (подстановка — номер текста). */
+  'publications.ws.text': 'Текст %1',
+  /** Пометки раздела. */
+  'publications.ws.repeat': 'Повторное вхождение',
+  'publications.ws.cycle': 'Обрыв кольца',
+  /** Ручной порядок: ручка-аффорданс и подсказка про клавиатуру (d13fd645). */
+  'publications.ws.dragHandle': 'Перетащите, чтобы изменить порядок',
+  'publications.ws.dragKeyboardHint': 'Перетащите мышью или сдвиньте Alt+↑/↓',
+  /** Контекстное меню раздела/текста. */
+  'publications.ws.openThought': 'Открыть мысль',
+  'publications.ws.exclude': 'Исключить',
+  'publications.ws.restore': 'Вернуть',
+  'publications.ws.createSection': 'Создать подраздел',
+  'publications.ws.createText': 'Создать текст',
+  /** Плашка новых кандидатов (подстановка — число). */
+  'publications.ws.candidates': '+%1 новых мыслей под отбор',
+  'publications.ws.candidatesEmpty': 'Новые кандидаты не найдены',
+  /** Действия над кандидатом: расставить в конец / скрыть (исключить). */
+  'publications.ws.place': 'Расставить (в конец)',
+  'publications.ws.hide': 'Скрыть',
+  /** Блок «дополнительные материалы». */
+  'publications.ws.extra': 'Дополнительные материалы',
+  /** Пагинация разделов (подстановки — с, по, всего). */
+  'publications.ws.prev': 'Назад',
+  'publications.ws.next': 'Вперёд',
+  'publications.ws.page': 'Разделы %1–%2 из %3',
+  /** Состояния и предупреждения документа. */
+  'publications.ws.loadError': 'Не удалось загрузить документ',
+  'publications.ws.retry': 'Повторить',
+  'publications.ws.noTextSources': 'У публикации не заданы свойства текстов.',
+  // Пустой отбор заголовков (задача 7cfaba7c, п.2): сервер отдаёт пустую сборку
+  // с предупреждением — документ показывает это состояние, а не пустую страницу.
+  'publications.ws.emptyRecipe':
+    'В рецепте не задано ни одного условия — добавьте условия отбора в рецепте.',
+  'publications.ws.createMiss': 'Мысль создана, но в отбор публикации не попала.',
+  /** Ширина колонки текста документа — подсказка ползунка (ea1b5f14, п. 5). */
+  'publications.ws.textWidth': 'Ширина текста',
+  /** Контекстное меню блока документа (ea1b5f14, п. 3). */
+  'publications.block.menu': 'В публикации',
+  'publications.block.moveUp': 'Сдвинуть вверх',
+  'publications.block.moveDown': 'Сдвинуть вниз',
+  'publications.block.moveToSection': 'Переместить в раздел…',
+  // Раздельные команды добавления раздела (задача 7cfaba7c, п.4): родитель
+  // подставляется по команде — родитель блока либо сам блок.
+  'publications.block.addSectionSibling': 'Добавить раздел на этом уровне…',
+  'publications.block.addSectionChild': 'Добавить подчинённый раздел…',
+  'publications.block.addText': 'Добавить текст раздела…',
+  'publications.block.exclude': 'Исключить из публикации',
+  'publications.block.include': 'Включить',
+  'publications.block.open': 'Открыть мысль в редакторе',
+  'publications.block.moveToSectionTitle': 'Переместить в раздел',
+  'publications.block.moveToSectionEmpty': 'В публикации нет других разделов',
+  'publications.block.moveFailed': 'Не удалось определить свойство текста для переноса.',
+  'publications.block.moveCycle': 'Нельзя переместить раздел в собственный подраздел.',
+
+  // -- Публикации: карточка в панели редактора (0.11.1, задача a3cfc018) ----
+  /** Заголовок панели редактора для цели publication. */
+  'publication.card.title': 'Публикация',
+  'publication.tab.meta': 'Метаданные',
+  'publication.tab.summary': 'Резюме',
+  'publication.tab.recipe': 'Рецепт',
+  'publication.tab.attachments': 'Вложения',
+  // Шапка редактора публикации (задача b02ef1cf): настройки, меню «Действия».
+  'publication.settings': 'Настройки',
+  'publication.settings.title': 'Настройки публикации',
+  'publication.settings.shelves': 'Полки',
+  'publication.settings.author': 'Автор',
+  'publication.actions': 'Действия',
+  'publication.action.changeCover': 'Изменить обложку',
+  'publication.action.findOnShelf': 'Найти на полке',
+  'publication.action.rebuild': 'Пересобрать',
+  'publication.action.copy': 'Копировать',
+  'publication.action.copyId': 'Копировать ID',
+  'publication.copy.linkDone': 'Ссылка на публикацию скопирована.',
+  'publication.copy.idDone': 'ID публикации скопирован.',
+  'publication.copy.failed': 'Не удалось скопировать.',
+  'publication.status.active': 'актуально',
+  'publication.field.titlePlaceholder': 'Заголовок публикации',
+  'publication.field.subtitlePlaceholder': 'Подзаголовок',
+  // Рецепт публикации: крупные группы с подсказками (задача b02ef1cf).
+  'publication.recipe.group.select': 'ОТБОР РАЗДЕЛОВ',
+  'publication.recipe.group.selectHint':
+    'Укажите родительские мысли — их поддеревья дадут разделы публикации; остальные условия уточняют состав.',
+  'publication.recipe.group.texts': 'СВОЙСТВА С СОДЕРЖИМЫМ РАЗДЕЛОВ',
+  'publication.recipe.group.textsHint':
+    'Укажите, из каких свойств отобранных разделов нужно составлять их тексты.',
+  'publication.recipe.group.extras': 'ДОПОЛНИТЕЛЬНЫЕ МАТЕРИАЛЫ',
+  'publication.recipe.group.extrasHint':
+    'Укажите свойства, значения которых нужно включить в публикацию как дополнительные материалы.',
+  'publication.recipe.group.numbering': 'НУМЕРАЦИЯ РАЗДЕЛОВ',
+  // Диалог обложки публикации (задача b02ef1cf).
+  'publication.cover.title': 'Обложка',
+  'publication.cover.tab.attachments': 'Вложения',
+  'publication.cover.tab.url': 'Ссылка (URL)',
+  'publication.cover.upload': 'Загрузить из файла',
+  'publication.cover.apply': 'Применить и закрыть',
+  'publication.cover.previewHint': 'Предпросмотр',
+  'publication.cover.empty': 'Вложения-картинки не найдены.',
+  'publication.cover.urlPlaceholder': 'URL изображения',
+  'publication.cover.ownerThought': 'мысль',
+  'publication.cover.ownerPublication': 'публикация',
+  'publication.cover.ownerLink': 'связь',
+  /** Крестик снятия владельца-публикации с вложения (замечание Б2 b02ef1cf). */
+  'publication.cover.ownerRemove': 'Убрать владельца',
+  /** Подтверждение удаления последнего владельца (замечание Б2 b02ef1cf). */
+  'publication.cover.removeLastOwner.title': 'Удаление вложения',
+  'publication.cover.removeLastOwner.body':
+    'Если удалить последнего владельца вложения, вложение будет удалено. Удалить?',
+  /** Ошибка снятия владельца вложения. */
+  'publication.cover.removeOwner': 'Убрать владельца',
+  'publication.cover.setDone': 'Обложка публикации обновлена.',
+  'publication.cover.cleared': 'Обложка снята.',
+  'publication.attachments.makeCover': 'Сделать обложкой публикации',
+  'publication.field.title': 'Название',
+  'publication.field.subtitle': 'Подзаголовок',
+  'publication.field.author': 'Автор',
+  /** Placeholder автора: пустое авторство показывается создателем (c3e44cab). */
+  'publication.field.authorPlaceholder': 'создатель',
+  /** Ошибка настройки рецепта: свойство и в текстах, и в доп. материалах. */
+  'publication.recipe.overlap':
+    'Свойство не может быть одновременно источником текстов и дополнительным материалом.',
+  /** Управление порядком публикации внутри полки (вкладка «Полки и статус»). */
+  'publication.orderUp': 'Переместить выше',
+  'publication.orderDown': 'Переместить ниже',
+  /** Рецепт заголовков: ключевые слова. */
+  'publication.recipe.keywordsPlaceholder': 'Ключевые слова…',
+  'publication.recipe.keywordsTooltip':
+    'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. Пример: счет* -вод*',
+  'publication.recipe.types': 'Типы мыслей',
+  'publication.recipe.typesPlaceholder': 'Название типа…',
+  'publication.recipe.parentsTooltip': 'Ограничить отбор мыслями, подчинёнными указанным',
+  'publication.recipe.parentsTitle': 'Родительские мысли',
+  'publication.recipe.pickThoughts': 'Выбрать мысли…',
+  'publication.recipe.pickTypes': 'Выбрать типы…',
+  'publication.field.summary': 'Резюме',
+  'publication.summary.placeholder': 'Резюме публикации… (двойной клик — правка, Ctrl+Enter — сохранить)',
+  'publication.field.cover': 'Обложка',
+  'publication.field.assembly': 'Дата сборки',
+  'publication.field.numberingFrom': 'Нумеровать с уровня',
+  'publication.field.numberingTo': 'по уровень',
+  'publication.field.texts': 'Свойства текстов',
+  'publication.field.extras': 'Дополнительные материалы',
+  'publication.shelves': 'Полки',
+  'publication.inactive': 'Неактуальна',
+  'publication.toTrash': 'В корзину',
+  'publication.restore': 'Из корзины',
+  'publication.rebuild': 'Пересобрать',
+  /** Прелоадер пересборки в карточке (ошибка c2dec45c). */
+  'publication.rebuilding': 'Пересборка…',
+  /** Подтверждение успешной пересборки (ошибка c2dec45c). */
+  'publication.rebuilt.ready': 'Документ пересобран',
+  'publication.save': 'Сохранить',
+  'publication.cover.none': 'Без обложки',
+  'publication.cover.url': 'URL обложки',
+  'publication.cover.pick': 'Выбрать вложение…',
+  'publication.error': 'Не удалось сохранить публикацию',
+
+  // -- Публикации: поле свойства, упоминания, ссылки (0.11.1, задача 3275fd8d) --
+  /** Поле значения свойства вида `publication`: заголовок пикера. */
+  'publications.field.pickerTitle': 'Выбрать публикацию',
+  /** Приглашение пустого поля значения-публикации. */
+  'publications.field.placeholder': 'Название публикации…',
+  /** Приглашение непустого поля значения-публикации. */
+  'publications.field.addPlaceholder': '+ ещё одну публикацию',
+  /** Группа «Публикации» на вкладке «Упоминания» карточки мысли. */
+  'publications.mentions.title': 'Публикации',
+  /** Загрузка списка публикаций-упоминаний. */
+  'publications.mentions.loading': 'Поиск публикаций…',
+  /** Пустое состояние группы. */
+  'publications.mentions.empty': 'Эта мысль не входит ни в одну публикацию.',
+  /** Роль мысли-раздела (подстановка — хлебные крошки раздела). */
+  'publications.mentions.roleSection': 'раздел: %1',
+  /** Роль мысли-текста (подстановка — название раздела). */
+  'publications.mentions.roleText': 'текст раздела «%1»',
+  /** Роль прямой ссылки свойством (подстановка — имя свойства). */
+  'publications.mentions.roleDirect': 'свойство «%1»',
+  /** Строка усечения списка (подстановки — показано, всего). */
+  'publications.mentions.more': 'Показано %1 из %2',
+  /** Пункт меню вставки ссылки в редакторе. */
+  'publications.link.insert': 'Вставить ссылку на публикацию…',
+  /** Пометка ссылки на удалённую публикацию (рендер, как у мыслей). */
+  'publications.link.deleted': 'удалена',
 } as const;
 
 /** Ключи исходного языка — основа типа {@link MessageKey}. */

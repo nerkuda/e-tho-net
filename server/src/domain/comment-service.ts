@@ -770,6 +770,11 @@ export function updateComment(
 export interface EditCommentResult {
   id: string;
   version: number;
+  /**
+   * Вид комментария (правкой не меняется) — чтобы эмиттеры `comment.updated`
+   * заполняли payload без повторного чтения строки (блокер приёмки b02ef1cf).
+   */
+  kind: CommentKind;
   /** Список заголовков секций после правки (виртуальная первая строка — для текста без `#`). */
   sections: string[];
   /** Полная длина нового тела в символах. */
@@ -828,6 +833,7 @@ export function editComment(
     return {
       id: updated.id,
       version: updated.version,
+      kind: updated.kind,
       sections: result.sections,
       chars_total: result.body.length,
       body_md: result.body,

@@ -17,15 +17,11 @@
 import {
   STRUCTURES_PAGE_SIZE,
   UI_STATE_KEY,
-  type AnyRealtimeEvent,
   type FocusEdge,
   type HierarchyResponse,
-  type LinkUpdateInput,
   type StructureFilter,
   type StructurePropertyCondition,
-  type StructureSort,
   type ThoughtRef,
-  type ThoughtUpdateInput,
 } from '@etn/shared';
 
 import {
@@ -57,17 +53,13 @@ import { notice } from '../../lib/notice.js';
 import { badge } from '../../lib/ui/badge.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { createRealtimeBatch } from '../../lib/realtime-batch.js';
+import { matchesKeyPrefix, queryKeys } from '../../lib/live/query-keys.js';
 import {
-  applyLinkUpdateToState,
-  applyThoughtUpdateToState,
-  linkChangeNeedsReload,
-  removeLinkFromState,
-  removeThoughtFromState,
-  rowRenderSignature,
-  thoughtChangeNeedsReload,
-  type StructuresLinkCriteria,
-  type StructuresState,
-} from './realtime-apply.js';
+  invalidateQueries,
+  onQueryInvalidated,
+  registerQuery,
+  setQueryData,
+} from '../../lib/live/query-registry.js';
 import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { deepEqual } from '../../lib/ui/state.js';
@@ -165,15 +157,59 @@ let appliedQuery: {
   order: FilterState['order'];
 } | null = null;
 
-/**
- * Поколение точечного додара направлений (ошибка 0eebf8eb): монотонный номер
- * старта додара и номер последнего старта по каждому id. Поздний ответ
- * устаревшего додара (в т.ч. два додара по одному id разрешились не в порядке
- * старта) не должен перезаписывать свежие флаги. Поколение ОТБОРА стережёт
- * отдельно `querySeq` — сменившийся отбор обесценивает любой ответ.
- */
-let directionsCallSeq = 0;
-const directionsStartedAt = new Map<string, number>();
+// ---------------------------------------------------------------------------
+// Привязка снимка «Структур» к слою данных (G2 тех.проекта 269016e2)
+// ---------------------------------------------------------------------------
+//
+// Снимок экрана живёт под ключом слоя `structures-page:@<filter>`. Роутер
+// событий гасит ключ на чужие изменения, локальные мутации — через
+// `scheduleStructuresRefresh` (тоже инвалидация). Решение «когда обновлять»
+// принято СЛОЕМ; экран применяет один путь — отложенный полный перезапрос
+// активной страницы (окно дебаунса 400 мс сохранено). Bеspoke-инкремент
+// (`realtime-apply.ts`) снесён: классификация события вне слоя запрещена.
+
+/** Ключ запроса-снимка по текущему отбору. */
+function structuresFilterKey(): string {
+  const state = getFilterState();
+  return `${state.sort}:${state.order}:${state.keywords.length}:${state.typeIds.length}:${appliedQuery === null ? 'draft' : 'applied'}`;
+}
+
+let structuresQueryKey: string | null = null;
+let structuresInvalidationUnsub: (() => void) | null = null;
+let snapshotSeq = 0;
+
+/** Зарегистрировать ключ снимка в реестре (инвалидации его видят). */
+function retargetStructuresQuery(): void {
+  const key = queryKeys.structuresPage(structuresFilterKey());
+  if (key === structuresQueryKey) return;
+  structuresQueryKey = key;
+  registerQuery(key, null);
+}
+
+/** Подписать экран на инвалидации `structures-page` (один раз). */
+function bindStructuresQuery(): void {
+  retargetStructuresQuery();
+  if (structuresInvalidationUnsub !== null) return;
+  structuresInvalidationUnsub = onQueryInvalidated((prefix) => {
+    if (!matchesKeyPrefix(prefix, 'structures-page')) return;
+    // Скрытый вид не гоняет сетевые перезагрузки вхолостую (ошибка 8e702d8c):
+    // помечаем снимок грязным, перезагрузка — при показе вида.
+    if (store.state.activeView === 'structures') realtimeBatch.markFull();
+    else fullRefreshPending = true;
+  });
+}
+
+/** Опубликовать снимок страницы в кэш слоя (диагностика/наблюдатели). */
+function publishStructuresSnapshot(): void {
+  if (structuresQueryKey === null) return;
+  retargetStructuresQuery();
+  setQueryData(structuresQueryKey, {
+    seq: ++snapshotSeq,
+    resultIds: [...resultIds],
+    total,
+    applied: appliedQuery,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // View switching (L4 active_view)
@@ -354,7 +390,7 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
   const state = getFilterState();
   const seq = ++querySeq;
   // Быстрая смена фильтра: гасим предыдущий запрос (требование ebed4980) —
-  // его fetch в main прерывается, ответ не приходит вовсе.
+  // его fetch в main прерывается, ответа нет вовсе.
   inflightQuery?.abort();
   const controller = new AbortController();
   inflightQuery = controller;
@@ -399,6 +435,7 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
     // right after the query, without waiting for the first expansion (§15.4).
     for (const [id, flags] of Object.entries(result.directions)) directions.set(id, flags);
     renderTree(keepScroll);
+    publishStructuresSnapshot();
   } catch (err) {
     // Отменённый запрос — не ошибка: его сменил более новый (требование
     // ebed4980). Ничего не показываем.
@@ -412,6 +449,52 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
 // ---------------------------------------------------------------------------
 // Expansion (§15.5)
 // ---------------------------------------------------------------------------
+
+/** Направления связей мысли (наполненность эллипсов дерева). */
+interface StructureDirections {
+  has_incoming: boolean;
+  has_outgoing: boolean;
+}
+
+/**
+ * Подпись строки дерева для keyed-сверки: то, что видно в строке и НЕ входит в
+ * сам `TreeRow` (метаданные мысли, наполненность эллипсов, раскрытость узла).
+ * Совпала — строку не трогаем (identity, прокрутка, hover); изменилась —
+ * сверка зовёт `update` одной строки.
+ *
+ * (Перенесена из `realtime-apply.ts`: инкрементальный realtime-путь снесён в
+ * G2 65286909, а подпись строки остаётся нужна `reconcileKeyed`.)
+ */
+function rowRenderSignature(
+  ref: ThoughtRef | undefined,
+  dir: StructureDirections | undefined,
+  expansion: Partial<Record<'parents' | 'children', boolean>> | undefined,
+): string {
+  const r =
+    ref === undefined
+      ? '∅'
+      : [
+          ref.title,
+          ref.active ? 1 : 0,
+          ref.type_id ?? '',
+          ref.icon ?? '',
+          ref.icon_kind,
+          ref.icon_attachment_id ?? '',
+          ref.marked_for_deletion ? 1 : 0,
+          ref.fg_color ?? '',
+          ref.bg_color ?? '',
+          ref.font_bold === null ? '' : ref.font_bold ? 1 : 0,
+          ref.font_italic === null ? '' : ref.font_italic ? 1 : 0,
+          ref.font_underline === null ? '' : ref.font_underline ? 1 : 0,
+          ref.font_strike === null ? '' : ref.font_strike ? 1 : 0,
+        ].join('\u0001');
+  const d = dir === undefined ? '' : `${dir.has_incoming ? 1 : 0}${dir.has_outgoing ? 1 : 0}`;
+  const e =
+    expansion === undefined
+      ? ''
+      : `${expansion.parents === true ? 1 : 0}${expansion.children === true ? 1 : 0}`;
+  return `${r}\u0002${d}\u0002${e}`;
+}
 
 /** Current flattened rows + per-node «Показать ещё» markers (§15.5). */
 function currentTree(): { rows: TreeRow[]; moreMarkers: MoreMarker[] } {
@@ -672,9 +755,16 @@ export function mountStructures(hostEl: HTMLElement): () => void {
   });
 
   if (store.state.activeView === 'structures') void ensureStructuresInitialised();
+  // Слой данных (G2): подписка снимка «Структур» на инвалидации ключа
+  // `structures-page` — роутер гасит его на чужие события, локальные
+  // производители зовут `scheduleStructuresRefresh`.
+  bindStructuresQuery();
 
   return () => {
     unsubscribe();
+    structuresInvalidationUnsub?.();
+    structuresInvalidationUnsub = null;
+    structuresQueryKey = null;
     host = null;
   };
 }
@@ -771,7 +861,10 @@ function patchVisualStates(): void {
   if (resultsHost === null) return;
   const selection = new Set(store.state.selection);
   patchCloudVisualStates(resultsHost, (id) => cloudVisualState(id, selection));
-  // Клавиатурный курсор не синхронизируем: строки и его DOM-якоря не менялись.
+  // Двухрамочная навигация (ADR e6d48e09): смена цели редактора меняет гало —
+  // пунктир текущего обязан появиться/исчезнуть на совпавшей мысли. Строки и
+  // геометрия при этом не перестраиваются, только классы.
+  syncStructuresCursor();
   drawTopOverlay();
   syncRenderSlices(dataSlice(), visualSlice());
 }
@@ -1574,54 +1667,36 @@ function connectorLabel(links: FocusEdge[]): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Realtime-путь «Структур» (задача afcfb144, уровень 3 тех.проекта `1d48df6d`).
+ * Realtime-путь «Структур» (G2 тех.проекта 269016e2; прежняя задача afcfb144
+ * заменена).
  *
- * **Таблица «событие → действие».**
+ * Снимок экрана живёт под ключом слоя `structures-page:@<filter>`. Роутер
+ * событий гасит этот ключ на чужие изменения (thought/link/property-value/
+ * типы/слой), локальные производители — через {@link scheduleStructuresRefresh}
+ * (та же инвалидация). Экран применяет ОДИН путь: отложенный полный перезапрос
+ * активной страницы и раскрытых уровней ({@link reloadAll}) с окном дебаунса
+ * 400 мс. Классификация событий вне слоя (прежний `realtime-apply.ts`) снесена.
  *
- * | Событие | Инкрементально | Fallback (полный перезапрос) |
- * |---|---|---|
- * | `thought.updated` | мысль уже видима и правка меняет только оформление/имя без влияния на порядок: `refs` + `update()` одной строки | нет среди видимых — игнор; сортировка `updated` — ЛЮБАЯ правка (ключ `updated_at`); сортировка `alpha` или активный текст. отбор + смена `title`; текст. отбор + `synonyms`; отбор по типам + `type_id`; скрытые неактуальные/корзина + `active`/`marked_for_deletion` |
- * | `thought.deleted` | убрать из `resultIds`/`refs`/`directions`/`hierarchy`/`edges` → строка уходит removed-путём сверки | нет среди видимых — игнор |
- * | `link.updated` | ребро нарисовано и меняется только оформление (`color`/`style`/`width`) → `edges` + перерисовка линий | ребро не нарисовано — игнор; смена концов (`source_id`/`target_id`) или `active`; смена `type_id` под активным фильтром обхода (сосед может выпасть из раскрытых уровней); `marked_for_deletion` при скрытой корзине (линия обязана исчезнуть) — состав/структура графа |
- * | `link.deleted` | ребро нарисовано → убрать из `edges` + перерисовать линии + точечный додар `directions` концов | ребро не нарисовано — игнор |
- * | `thought.created` | — | всегда: вхождение в отбор не проверяется (нет построения проверки членства) |
- * | `link.created`, `property-value.*`, `thought-type*`, `link-type*`, `property-definition.*`, `*-view.*`, `layer.merged` | — | всегда (состав/структура/каталог) |
- *
- * Очередь событий за окно дебаунса применяется ОДНИМ батчем → один reconcile
- * (`renderTree`) на окно. Наличие хоть одного fallback-события в окне отменяет
- * батч и запускает {@link reloadAll}. Локальные производители по-прежнему зовут
- * {@link scheduleStructuresRefresh} (полный путь) сами — своё realtime-эхо до
- * рендерера не доходит.
- *
- * **Эллипсы при удалении ребра.** Линия снимается точечно, но `directions`
- * (наполненность эллипсов) считается сервером по ВСЕМ активным связям мысли, а
- * не только по видимым, — из кэша `edges` её не вывести. Поэтому для концов
- * УДАЛЁННОГО ребра направления перечитываются точечно
- * ({@link refreshDirections}), а не полной перезагрузкой страницы. Правки,
- * меняющие состав графа (в том числе смена типа под фильтром обхода и пометка
- * корзины при скрытой корзине), идут полным путём — эллипсы берутся из
- * перезапроса.
+ * Скрытый вид не гоняет сетевые перезагрузки вхолостую: инвалидация помечает
+ * снимок «грязным» ({@link fullRefreshPending}), а перезагрузка идёт при показе
+ * вида (ошибка 8e702d8c).
  */
-type StructuresRealtimeOp =
-  | { kind: 'thought-updated'; id: string; changes: ThoughtUpdateInput }
-  | { kind: 'thought-deleted'; id: string }
-  | { kind: 'link-updated'; id: string; changes: LinkUpdateInput }
-  | { kind: 'link-deleted'; id: string };
-
 /**
- * Отложенный полный путь: fallback-событие пришло, когда вид «Структур» не
- * показан. Сетевые перезагрузки вхолостую не гоняем — снимок помечается
- * «грязным» и перезагружается при следующем показе вида (ошибка 8e702d8c).
+ * Отложенный полный путь: инвалидация пришла, когда вид «Структур» не показан.
+ * Сетевые перезагрузки вхолостую не гоняем — снимок помечается «грязным» и
+ * перезагружается при следующем показе вида (ошибка 8e702d8c).
  */
 let fullRefreshPending = false;
 
-const realtimeBatch = createRealtimeBatch<StructuresRealtimeOp>({
+/**
+ * Окно дебаунса полного перезапроса активной страницы (400 мс сохранено из
+ * прежнего инкрементального пути). `applyBatch` не используется: решение «когда
+ * обновлять» принято слоем, экран применяет один путь — {@link reloadAll}.
+ */
+const realtimeBatch = createRealtimeBatch<never>({
   windowMs: 400,
-  applyBatch: (ops) => applyStructuresOps(ops),
+  applyBatch: () => undefined,
   applyFull: () => {
-    // Инкрементальные события поддерживают снимок и вне экрана, но полный путь
-    // при скрытом виде — вхолостую: помечаем снимок «грязным» и перезагружаем
-    // при показе вида (ошибка 8e702d8c).
     if (store.state.activeView !== 'structures') {
       fullRefreshPending = true;
       return;
@@ -1630,211 +1705,25 @@ const realtimeBatch = createRealtimeBatch<StructuresRealtimeOp>({
   },
 });
 
-/** Коллекции снимка экрана для чистого применощего модуля. */
-function structuresState(): StructuresState {
-  return { refs, edges, resultIds, directions, hierarchy };
-}
-
-/** Критерии отбора, влияющие на применимость события к строке. */
-function criteriaSnapshot(): {
-  sort: StructureSort;
-  keywords: string;
-  typeIds: readonly string[];
-  showInactive: boolean;
-  showTrash: boolean;
-} {
-  const state = getFilterState();
-  return {
-    sort: state.sort,
-    keywords: state.keywords,
-    typeIds: state.typeIds,
-    showInactive: store.state.showInactive,
-    showTrash: store.state.showTrash,
-  };
-}
-
-/** Критерии, влияющие на применимость правки РЕБРА (эллипсы концов). */
-function linkCriteriaSnapshot(): StructuresLinkCriteria {
-  return {
-    // Фильтр обхода по типам связей активен ровно тогда, когда задан у
-    // применённого отбора (тот же, что у раскрытия — `fetchHierarchy`).
-    linkFilterActive: appliedQuery?.filter.link_filter !== undefined,
-    showTrash: store.state.showTrash,
-  };
-}
-
-/**
- * Применить накопленный батч к снимку и ОДИН раз свернуть дерево. Пустой батч
- * (событие не изменило видимого) кадр сверки не запускает. Для концов
- * изменённого/удалённого ребра дополнительно запускается точечный додар
- * направлений ({@link refreshDirections}).
- */
-function applyStructuresOps(ops: readonly StructuresRealtimeOp[]): void {
-  const state = structuresState();
-  const refreshDirectionsFor = new Set<string>();
-  let changed = false;
-  for (const op of ops) {
-    switch (op.kind) {
-      case 'thought-updated':
-        if (applyThoughtUpdateToState(state, op.id, op.changes)) changed = true;
-        break;
-      case 'thought-deleted': {
-        const wasRoot = resultIds.includes(op.id);
-        if (removeThoughtFromState(state, op.id)) {
-          changed = true;
-          if (wasRoot) total = Math.max(0, total - 1);
-        }
-        break;
-      }
-      case 'link-updated': {
-        // Всё, что меняет состав графа (концы, active, тип под фильтром
-        // обхода, пометка корзины при скрытой корзине), уходит полным путём
-        // ещё в `applyStructuresRealtime`; сюда доходит только точечное
-        // оформление нарисованного ребра (цвет/стиль/ширина/тип/пометка).
-        if (applyLinkUpdateToState(state, op.id, op.changes)) changed = true;
-        break;
-      }
-      case 'link-deleted': {
-        const edge = edges.get(op.id);
-        if (edge !== undefined) {
-          refreshDirectionsFor.add(edge.source_id);
-          refreshDirectionsFor.add(edge.target_id);
-        }
-        if (removeLinkFromState(state, op.id)) changed = true;
-        break;
-      }
-    }
-  }
-  if (changed) renderTree(true);
-  if (refreshDirectionsFor.size > 0) void refreshDirections(refreshDirectionsFor);
-}
-
-/**
- * Точечный додар свежих `directions` (наполненности эллипсов) для концов
- * удалённого ребра. Эллипс сервер считает по ВСЕМ активным связям мысли с
- * учётом фильтра обхода и видимости корзины, поэтому из локального кэша
- * `edges` (связи только среди видимых) его не вывести.
- *
- * Источник — та же точка {@link fetchHierarchy}, что и раскрытие: тот же
- * `link_filter` отбора и `showInactive`/корзина, значит и та же семантика
- * закраски. Соседей и рёбра ответа НЕ сливаем в снимок — берём лишь флаги
- * нужных мыслей. Додар не удался — полный путь ({@link reloadAll}): эллипс
- * нельзя оставить неверным.
- *
- * Ответ отбрасывается, если за время полёта сменился отбор (`querySeq`),
- * сеть/вкладка или этот id уже перезапрошен более новым додаром (ошибка
- * 0eebf8eb): иначе поздний устаревший ответ перезаписал бы свежие флаги.
- */
-async function refreshDirections(ids: ReadonlySet<string>): Promise<void> {
-  const networkId = store.state.networkId;
-  const tabId = store.state.activeTabId;
-  const seen = `${networkId}:${tabId ?? ''}`;
-  if (networkId === null) return;
-  const seq = querySeq;
-  const call = ++directionsCallSeq;
-  for (const id of ids) directionsStartedAt.set(id, call);
-  /** Снять свои маркеры поколения (чужие — более новых додаров — не трогаем). */
-  const clearMarkers = (): void => {
-    for (const id of ids) {
-      if (directionsStartedAt.get(id) === call) directionsStartedAt.delete(id);
-    }
-  };
-  let fresh: ReadonlyArray<readonly [string, { has_incoming: boolean; has_outgoing: boolean } | undefined]>;
-  try {
-    fresh = await Promise.all(
-      [...ids].map(
-        async (id) =>
-          [id, (await fetchHierarchy(networkId, id, 'children', {})).directions[id]] as const,
-      ),
-    );
-  } catch {
-    clearMarkers();
-    realtimeBatch.markFull();
-    return;
-  }
-  // Сменили сеть/вкладку или отбор, пока шёл додар, — ответ устарел.
-  if (networkIdSeen !== seen || seq !== querySeq) {
-    clearMarkers();
-    return;
-  }
-  let changed = false;
-  for (const [id, flags] of fresh) {
-    // Этот id уже перезапрошен более новым додаром — не перезаписываем свежее.
-    if (directionsStartedAt.get(id) !== call) continue;
-    directionsStartedAt.delete(id);
-    if (flags === undefined) continue;
-    const prev = directions.get(id);
-    if (
-      prev === undefined ||
-      prev.has_incoming !== flags.has_incoming ||
-      prev.has_outgoing !== flags.has_outgoing
-    ) {
-      directions.set(id, flags);
-      changed = true;
-    }
-  }
-  if (changed) renderTree(true);
-}
-
-/**
- * Принять чужое realtime-событие: классифицировать и положить в очередь окна
- * (батч) или пометить окно как fallback. Событие по невидимой сущности
- * игнорируется — состав отбора по нему не перестраиваем.
- *
- * Гейта по активному виду НЕТ (замечание проверки уровня 3): снимок экрана
- * поддерживается и когда «Структуры» не показаны — иначе `thought.deleted` вне
- * экрана не чистил бы `refs`/активную мысль, и при возврате оставалась бы
- * устаревшая строка (ре-квери при возврате не запускается). Отрисовка (один
- * reconcile на окно) идёт тем же путём.
- */
-export function applyStructuresRealtime(evt: AnyRealtimeEvent): void {
-  switch (evt.type) {
-    case 'thought.updated': {
-      const { id, changes } = evt.data;
-      if (!refs.has(id)) return;
-      if (thoughtChangeNeedsReload(changes, criteriaSnapshot())) {
-        realtimeBatch.markFull();
-        return;
-      }
-      realtimeBatch.push({ kind: 'thought-updated', id, changes });
-      return;
-    }
-    case 'thought.deleted': {
-      const { id } = evt.data;
-      clearActiveThought(id);
-      if (!refs.has(id) && !resultIds.includes(id)) return;
-      realtimeBatch.push({ kind: 'thought-deleted', id });
-      return;
-    }
-    case 'link.updated': {
-      const { id, changes } = evt.data;
-      if (!edges.has(id)) return;
-      if (linkChangeNeedsReload(changes, linkCriteriaSnapshot())) {
-        realtimeBatch.markFull();
-        return;
-      }
-      realtimeBatch.push({ kind: 'link-updated', id, changes });
-      return;
-    }
-    case 'link.deleted': {
-      const { id } = evt.data;
-      if (!edges.has(id)) return;
-      realtimeBatch.push({ kind: 'link-deleted', id });
-      return;
-    }
-    default:
-      return;
-  }
-}
 
 /**
  * Полный путь: пометить окно дебаунса как требующее перезапроса страницы и
- * всех раскрытых уровней ({@link reloadAll}). Зовётся локальными
- * производителями и realtime-ветками, которые нельзя применить точечно.
+ * всех раскрытых уровней ({@link reloadAll}).
+ *
+ * Слой данных (G2): вызывается инвалидацией `structures-page` — и роутером
+ * (чужие события), и локальными производителями, которые зовут
+ * {@link scheduleStructuresRefresh}. Прежний bespoke-инкремент
+ * (`realtime-apply.ts`) снесён: решение «когда обновлять» принято слоем.
+ */
+
+/**
+ * Полный путь (G2): погасить ключ снимка `structures-page` в слое. Активная
+ * подписка экрана ({@link bindStructuresQuery}) среагирует отложенным
+ * перезапросом, скрытый вид — пометкой «грязный». Зовётся локальными
+ * производителями (правка/удаление типа связи, удаление мысли и т.п.).
  */
 export function scheduleStructuresRefresh(): void {
-  if (store.state.activeView !== 'structures') return;
-  realtimeBatch.markFull();
+  invalidateQueries(queryKeys.structuresPageAll());
 }
 
 /** Reloads the page and all expanded hierarchy levels. */
@@ -1870,6 +1759,7 @@ async function reloadAll(): Promise<void> {
     }
   }
   renderTree(true);
+  publishStructuresSnapshot();
 }
 
 /** Сбросить «текущую мысль» (и цель редактора), если удалена именно она. */

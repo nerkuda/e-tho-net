@@ -226,6 +226,12 @@ export const UI_STATE_KEY = {
    *  (L4 `ui_state`), как размеры панелей; наличие/количество записей на
    *  размер не влияют. */
   TYPE_EDITOR_PROPERTY_SPLIT: 'type_editor_property_split',
+  /** Персональные настройки вида экрана «Публикации» (0.11.1, требование
+   *  1b39206e): JSON `{ viewMode, sort, activeFilter, shelfFilter, filtersOpen }`.
+   *  Хранятся локально (L4 `ui_state`) на уровне «пользователь × сеть», со
+   *  слоями не ветвятся; полки и их порядок — общесетевые сущности, здесь не
+   *  дублируются. */
+  PUBLICATIONS_STATE: 'publications_state',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];
 
@@ -519,12 +525,17 @@ export function validateTypeRoles(input: unknown): TypeRoles {
  *     `type_properties` entry now references it by `property_id`; older 1.0
  *     manifests carry the nature inline and are rejected on import with a
  *     clear error (`etnx-format.ts` §`oldVersionRejection`).
+ *   * `1.2` (0.11.1, задача 950e0a59): added the «Публикации» sections
+ *     `publications` / `publication_order` / `publication_exclusions` /
+ *     `shelves` / `shelf_items` and cover attachment rows
+ *     (`owner_type='publication'`). The sections are OPTIONAL on read — a 1.1
+ *     archive without them imports as an empty set (backward compatibility).
  *
  * When the schema changes, the next version MUST bump this constant and the
  * importer SHOULD branch on the value (e.g. upgrade `v.1.x` payloads before
  * applying).
  */
-export const ETNX_VERSION = '1.1' as const;
+export const ETNX_VERSION = '1.2' as const;
 
 /**
  * Hard upper bound (in bytes) on the in-memory .etnx zip produced by the

@@ -60,7 +60,14 @@ import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { markCrossNetworkThoughtPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { loadCrossNetworkCandidates } from '../lib/entity-picker.js';
-import { createThoughtCloud } from '../lib/thought-cloud.js';
+import {
+  buildEntityChipField,
+  loadPublicationOptions,
+  pickEntitiesModal,
+  PUBLICATIONS_PAGE_SIZE,
+  resolvePublicationOptions,
+} from '../lib/entity-picker.js';
+import { createThoughtCloud, type ThoughtCloudInput } from '../lib/thought-cloud.js';
 import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
 import {
   historySuggestSource,
@@ -79,6 +86,8 @@ import {
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { toggleSelection } from '../selection/selection.js';
 import { openWikiIdTarget } from './wiki-link.js';
+import { openPublicationInWorkspace } from '../screens/active-view.js';
+import { t } from '../lib/i18n.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { uiButton } from '../lib/ui/button.js';
 import { choiceControl } from '../lib/ui/choice-row.js';
@@ -220,7 +229,99 @@ export function buildValueEditor(opts: ValueEditorOptions): HTMLElement {
       // в текстовом поле + кнопка «обновить снапшот» через IPC
       // `properties.crossResolve` (REST POST …/properties/{key}/cross-resolve).
       return buildCrossNetworkRefEditor(opts);
+    case 'publication':
+      // Ссылка на публикацию текущего слоя (0.11.1, задача 3275fd8d, элемент
+      // интерфейса 9626efb6): значение — id публикации (single) или массив id
+      // (multiple); поле — общий чип-лист сущностей с профилем «публикации».
+      return buildPublicationRefEditor(opts);
   }
+}
+
+/**
+ * Редактор значения свойства вида `publication` (0.11.1, задача 3275fd8d):
+ * ссылка на публикацию текущего слоя. Значение — id (single) или массив id
+ * (multiple), как хранит сервер (f37b468d). Поле — общий чип-лист сущностей
+ * `buildEntityChipField` (стандарт S3): живой поиск по названию/подзаголовку/
+ * автору, кнопка «…» — модальный пикер публикаций, чипы — название с
+ * мини-обложкой, клик по чипу открывает публикацию на её экране.
+ */
+function buildPublicationRefEditor(opts: ValueEditorOptions): HTMLElement {
+  const networkId = opts.networkId;
+  const isMultiple = opts.definition.config?.multiple === true;
+  const key = opts.definition.key ?? '';
+  let ids = readPublicationIds(opts.value);
+  /** Облачка значений по id: обложка и название приходят серверным резолвом. */
+  const clouds = new Map<string, ThoughtCloudInput>();
+
+  const remember = (options: readonly { id: string; cloud?: ThoughtCloudInput }[]): void => {
+    for (const option of options) {
+      if (option.cloud !== undefined) clouds.set(option.id, option.cloud);
+    }
+  };
+
+  /** Записать набор (пусто — `null`; single — одна строка, multiple — массив). */
+  const publish = (): void => {
+    const payload =
+      ids.length === 0 ? null : isMultiple ? [...ids] : ids[0]!;
+    void Promise.resolve()
+      .then(() => opts.save(payload))
+      .then((ok) => {
+        // Успешная запись — просим таблицу свойств перечитать значение
+        // (подписи могли прийти из пикера, где облачко ещё не догружено).
+        if (ok === true && key !== '') notifyPropertyValuesRefreshed(key);
+      });
+  };
+
+  const root = div('value-editor value-editor--publication');
+  const field = buildEntityChipField({
+    getValues: () => ids,
+    onChange: (next) => {
+      ids = isMultiple ? [...next] : next.slice(-1);
+      publish();
+    },
+    loadOptions: (query, offset = 0) =>
+      loadPublicationOptions(networkId, query, offset).then((options) => {
+        remember(options);
+        return options;
+      }),
+    optionsWhen: 'typed',
+    pageSize: PUBLICATIONS_PAGE_SIZE,
+    picker: {
+      label: t('publications.field.pickerTitle'),
+      open: (managed) =>
+        pickEntitiesModal({
+          networkId,
+          kind: 'publications',
+          title: t('publications.field.pickerTitle'),
+          single: !isMultiple,
+          currentIds: managed,
+        }),
+    },
+    cloudOf: (value) => clouds.get(value) ?? null,
+    onOpen: (id) => void openPublicationInWorkspace(id),
+    placeholder: t('publications.field.placeholder'),
+    addPlaceholder: t('publications.field.addPlaceholder'),
+  });
+  root.append(field.root);
+
+  // Облачка уже выбранных значений: серверный резолв по id (в каталоге
+  // текущей страницы их может не быть).
+  if (ids.length > 0) {
+    void resolvePublicationOptions(networkId, ids)
+      .then((options) => {
+        remember(options);
+        field.refresh();
+      })
+      .catch(() => undefined);
+  }
+  return root;
+}
+
+/** Достать id публикаций из значения (строка single либо массив id). */
+function readPublicationIds(value: unknown): string[] {
+  if (typeof value === 'string') return value === '' ? [] : [value];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item !== '');
 }
 
 /**
@@ -1615,8 +1716,8 @@ export function buildLinkValueEditor(opts: {
     if (ok && opts.historyPropertyId !== undefined) {
       recordTextItemsHistory(networkId, opts.historyPropertyId, next);
     }
-    // Своя запись ребра не поднимает версию мысли, а собственному клиенту не
-    // приходит realtime-эхо (G8) — сверка окрестности на карте закрывает лишь
+    // Своя запись ребра не поднимает версию мысли, а собственное событие
+    // приходит асинхронно (B1) — сверка окрестности на карте закрывает лишь
     // случай, когда новое ребро меняет её подпись. Второе ребро ДРУГОГО типа к
     // уже видимому соседу за границей первой порции сектора подпись не меняет,
     // и таблица значений свойств фокуса осталась бы со старым снимком (ошибка

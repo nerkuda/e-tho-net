@@ -1,7 +1,9 @@
 /**
  * Trash routes (task S13, 03-server-api.md §14b).
  *
- *   GET  /networks/:networkId/trash        — marked-for-deletion thoughts/links
+ *   GET  /networks/:networkId/trash        — marked-for-deletion rows of every
+ *                                            kind: thoughts, links, publications,
+ *                                            shelves (0.11.1, задача c59ce742)
  *   POST /networks/:networkId/trash/purge  — delete unblocked marked rows
  *                                            (optional body `{ ids: [...] }` —
  *                                            targeted purge, ошибка 8b4b7a7e)
@@ -9,7 +11,9 @@
  * The trash has no dedicated table: it is the set of rows with
  * `marked_for_deletion = 1` (02-data-model.md §3.1.2). Listing precomputes each
  * row's blocking check; purging physically deletes the unblocked ones and
- * silently skips the blocked ones.
+ * silently skips the blocked ones. Publications and shelves follow the same
+ * base-only rule as their direct `DELETE` (200b87be): in a working layer they
+ * are listed as blocked and skipped by the sweep.
  *
  * Веха 8 (задача c9d5f21e): вход — единые контракты из `contracts.ts`.
  */

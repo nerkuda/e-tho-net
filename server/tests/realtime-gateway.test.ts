@@ -351,7 +351,7 @@ describe(
       }
     });
 
-    it('delivers network.updated to other members and suppresses the echo (E4)', async () => {
+    it('delivers network.updated to other members AND to the author (B1 broadcast-to-all)', async () => {
       running = await buildApp();
       const member = seedUser(running, 'member', running.networkId);
       const ownerWs = connect(running, running.networkId, running.owner.key, 'client-X');
@@ -377,10 +377,40 @@ describe(
         const data = event.data as { display_name?: string };
         assert.equal(data.display_name, 'Renamed');
 
-        // The originating client (client-X) must not receive the echo.
-        await assert.rejects(ownerQ.next((m) => m.type === 'network.updated', 400));
+        // B1: эхо-подавление отменено — автор тоже получает своё событие.
+        const own = await ownerQ.next((m) => m.type === 'network.updated');
+        assert.equal(own.seq, event.seq);
       } finally {
         await closeSockets(ownerWs, memberWs);
+        await running.app.close();
+        running.sys.close();
+      }
+    });
+
+    it('delivers the event to BOTH sockets that share the author client_id (B1)', async () => {
+      running = await buildApp();
+      const ownerA = connect(running, running.networkId, running.owner.key, 'shared-client');
+      const ownerB = connect(running, running.networkId, running.owner.key, 'shared-client');
+      await waitForOpen(ownerA);
+      await waitForOpen(ownerB);
+      const qA = new MessageQueue(ownerA);
+      const qB = new MessageQueue(ownerB);
+      try {
+        const res = await running.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${running.networkId}`,
+          headers: {
+            authorization: `Bearer ${running.owner.key}`,
+            'client-id': 'shared-client',
+          },
+          payload: { display_name: 'Shared' },
+        });
+        assert.equal(res.statusCode, 200);
+        const onA = await qA.next((m) => m.type === 'network.updated');
+        const onB = await qB.next((m) => m.type === 'network.updated');
+        assert.equal(onA.seq, onB.seq);
+      } finally {
+        await closeSockets(ownerA, ownerB);
         await running.app.close();
         running.sys.close();
       }
@@ -440,8 +470,10 @@ describe(
         // Another client of the same user receives it.
         const event = await qZ.next((m) => m.type === 'user-preference.updated');
         assert.equal(event.audience, 'user');
-        // The acting client does not (echo), the other user does not (audience).
-        await assert.rejects(qX.next((m) => m.type === 'user-preference.updated', 400));
+        // B1: the acting client ALSO receives its own event (broadcast-to-all)…
+        const own = await qX.next((m) => m.type === 'user-preference.updated');
+        assert.equal(own.seq, event.seq);
+        // …while the other USER still does not (audience=user boundary).
         await assert.rejects(qY.next((m) => m.type === 'user-preference.updated', 400));
       } finally {
         await closeSockets(ownerX, ownerZ, memberY);
@@ -585,7 +617,7 @@ describe(
       );
     });
 
-    it('streams to two clients of one user independently, with per-client echo (E6)', async () => {
+    it('streams to two clients of one user independently, including the author (E6/B1)', async () => {
       running = await buildApp();
       const member = seedUser(running, 'member', running.networkId);
       const ownerX = connect(running, running.networkId, running.owner.key, 'client-X');
@@ -609,7 +641,7 @@ describe(
         const onY = await qY.next((m) => m.type === 'network.updated');
         assert.equal(onX.seq, onY.seq);
 
-        // A change made by client-X reaches client-Y but not client-X itself.
+        // A change made by client-X reaches client-Y AND client-X itself (B1).
         const res2 = await running.app.inject({
           method: 'PATCH',
           url: `/api/v1/networks/${running.networkId}`,
@@ -622,7 +654,8 @@ describe(
         assert.equal(res2.statusCode, 200);
         const onY2 = await qY.next((m) => m.type === 'network.updated');
         assert.equal(onY2.seq, (onX.seq as number) + 1);
-        await assert.rejects(qX.next((m) => m.type === 'network.updated', 400));
+        const onX2 = await qX.next((m) => m.type === 'network.updated');
+        assert.equal(onX2.seq, onY2.seq);
       } finally {
         await closeSockets(ownerX, ownerY);
         await running.app.close();
@@ -647,7 +680,8 @@ describe(
         // pong reply proves the server has applied the hello client-id.
         ws.send(JSON.stringify({ type: 'ping' }));
         await q.next((m) => m.type === 'pong');
-        // The actor (owner, client 'late-client') emits; echo must be suppressed.
+        // The actor (owner, client 'late-client') emits; B1 — it receives its
+        // own event over the same socket (broadcast-to-all).
         const res = await running.app.inject({
           method: 'PATCH',
           url: `/api/v1/networks/${running.networkId}`,
@@ -658,7 +692,9 @@ describe(
           payload: { display_name: 'Hello' },
         });
         assert.equal(res.statusCode, 200);
-        await assert.rejects(q.next((m) => m.type === 'network.updated', 400));
+        const ownEvent = await q.next((m) => m.type === 'network.updated');
+        const ownData = ownEvent.data as { display_name?: string };
+        assert.equal(ownData.display_name, 'Hello');
       } finally {
         await closeSockets(ws);
         await running.app.close();

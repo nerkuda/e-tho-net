@@ -1,38 +1,39 @@
 /**
- * Focus-change transition choreography (спека «FLIP-анимация холста», задача
- * e9f0af94, 08-ui-spec.md §2.8).
+ * Focus-change transition choreography (спека «FLIP-анимация холста», задачи
+ * e9f0af94 / 380cc1e2, 08-ui-spec.md §2.8).
  *
  * The data (store/focus) changes immediately; only the VISUAL swap is deferred.
  * After the canvas has re-rendered into the new layout this module plays a
- * three-phase choreography over that fresh DOM, using the previous layout
- * captured by {@link captureClouds}:
+ * TWO-PHASE choreography over that fresh DOM, using the previous layout captured
+ * by {@link captureClouds}. Inside a phase every movement starts at once; phase 2
+ * starts strictly after phase 1 has finished.
  *
- *   Phase 1 — flight (`--anim-focus-flight`). A clone of the new focus cloud
- *     flies from the selected cloud's old slot into the centre. The centre
- *     itself shows the OLD focus cloud (an overlay clone) with its old content
- *     for the whole flight — the real focus cloud is revealed only at the swap,
- *     so new content never flashes in place. Survivors that changed zone glide
- *     to their new zone; survivors that only changed slot stay pinned at their
- *     old position; clouds gone with the new focus fade out; link overlays hide
- *     (and stop catching the pointer) for the whole move.
+ *   Phase 1 — simultaneous move (`--anim-focus-flight`). One clone of the new
+ *     focus cloud flies from the selected cloud's old slot into the centre. At
+ *     the SAME time the former focus leaves the centre — its held clone glides
+ *     into the former focus's new zone (or dissolves when it is gone) without
+ *     waiting for the flyer to land. All other visible clouds glide to their new
+ *     places (zone changes AND slot-only reorders), and clouds gone with the new
+ *     focus fade out. A cloud that changes ZONE plays through a clone in the
+ *     unclipped animation layer — the destination zone crops its content, so a
+ *     transform on the real cloud would be invisible mid-flight (приёмка
+ *     380cc1e2); a slot-only reorder stays on the real element. The centre's real
+ *     content is swapped to the new focus only at the flyer's landing, so the new
+ *     focus never flashes in the centre before the swap. Link overlays hide (and
+ *     stop catching the pointer) for the move.
  *
- * `playFocusTransition` MUST be called in the SAME synchronous task as the DOM
- * rebuild of the focus row (`render()` in `canvas.ts`): it hides the real new
- * focus cloud and lays the held overlay over it before returning, so the very
- * first painted frame of the new state already shows the old content in the
- * centre. An `await` between the rebuild and this call lets the browser paint a
- * frame with the new focus content in place — the flicker the acceptance
- * rejected (дефект 1 задачи e9f0af94). `guard-focus-animation` protects this.
+ *   Swap — the flyer and the held former-focus clone come off, the real new
+ *     focus cloud appears exactly where the flyer landed, and the former focus's
+ *     zone cloud is revealed at the very spot its clone reached.
  *
- *   Swap — the flyer and the held overlay come off, the real new focus cloud
- *     appears exactly where the flyer landed, and the former focus hands off to
- *     its new zone cloud at the very spot it held.
+ *   Phase 2 — new clouds fly out (`--anim-focus-settle`). Begins only when
+ *     phase 1 is over: every cloud first seen in the new layout flies out of its
+ *     source cloud, fading in on its slot — parents and children of the new
+ *     focus from the focus cloud, siblings (родственники) from a visible parent
+ *     cloud (`planEnteringSources`). This shows how the new neighbourhood is
+ *     connected to what is already on screen.
  *
- *   Phase 2 — settle (`--anim-focus-settle`). The former focus slides from the
- *     centre into its zone, the pinned survivors glide into the new order, and
- *     the clouds new to the neighbourhood fade in.
- *
- * After the settle the link overlays are redrawn against the settled layout and
+ * After phase 2 the link overlays are redrawn against the settled layout and
  * fade back in (`--anim-focus-fade`) — mid-flight line geometry is never shown.
  *
  * Durations and easing come from the `--anim-focus-*` tokens
@@ -43,13 +44,24 @@
  * to its final state before the new render; a newer transition supersedes the
  * old one. The animation layers ignore the pointer, so hover/click/drag on the
  * live clouds is never disturbed.
+ *
+ * `playFocusTransition` MUST be called in the SAME synchronous task as the DOM
+ * rebuild of the focus row (`render()` in `canvas.ts`): it hides the real new
+ * focus cloud and lays the departing former-focus clone over it before
+ * returning, so the very first painted frame of the new state already shows the
+ * old content in the centre. An `await` between the rebuild and this call lets
+ * the browser paint a frame with the new focus content in place — the flicker
+ * the acceptance rejected (дефект 1 задачи e9f0af94). `guard-focus-animation`
+ * protects this.
  */
 
 import { div } from '../lib/dom.js';
 import {
   flipTransform,
+  planEnteringSources,
   planFocusTransition,
   resolveFocusFlightOrigin,
+  type FocusSourceTopology,
   type RectLike,
   type TransitionNode,
   type TransitionZone,
@@ -108,6 +120,8 @@ interface AnimTokens {
   flight: number;
   settle: number;
   fade: number;
+  /** Одно общее проявление расклада после смены мыслесети (`--anim-network-reveal`). */
+  reveal: number;
   ease: string;
 }
 
@@ -128,6 +142,7 @@ function readAnimTokens(host: HTMLElement): AnimTokens {
     flight: ms('--anim-focus-flight'),
     settle: ms('--anim-focus-settle'),
     fade: ms('--anim-focus-fade'),
+    reveal: ms('--anim-network-reveal'),
     ease: ease === '' ? 'linear' : ease,
   };
 }
@@ -138,6 +153,90 @@ interface InlineSnapshot {
   opacity: string;
   pointerEvents: string;
   transformOrigin: string;
+}
+
+/**
+ * Учёт артефактов перехода: запланированные таймеры, запущенные анимации и
+ * снапшоты инлайн-стилей облачков. Общий для фокус-хореографии
+ * ({@link playFocusTransition}) и проявления расклада ({@link playNetworkReveal}):
+ * оба меняют одни и те же три инлайн-свойства и обязаны одинаково их вернуть —
+ * поэтому снапшот/восстановление и отмена анимаций живут здесь, а не дублируются
+ * в каждом переходе. Владение мутациями — у вызывающего (`active`), который
+ * зовёт {@link settle} при штатном завершении и {@link rollback} при досрочной
+ * остановке/сбое.
+ */
+interface InlineStyleTrack {
+  /** Запоминает текущие инлайн-стили элемента ДО первой мутации. */
+  remember(el: HTMLElement): void;
+  /** Планирует колбэк и запоминает его таймер для отмены. */
+  schedule(fn: () => void, ms: number): void;
+  /** Запускает анимацию и запоминает её для отмены. */
+  animate(el: HTMLElement, keyframes: Keyframe[], options: KeyframeAnimationOptions): void;
+  /** Восстанавливает инлайн-стили всех запомненных элементов. */
+  restoreInline(): void;
+  /**
+   * Штатное завершение: остановить оставшиеся таймеры и вернуть инлайн-стили,
+   * НЕ отменяя уже доигранные анимации.
+   */
+  settle(): void;
+  /**
+   * Полный откат (досрочная остановка/сбой): снять таймеры, отменить анимации
+   * и вернуть инлайн-стили.
+   */
+  rollback(): void;
+}
+
+/** Создаёт пустой {@link InlineStyleTrack}. */
+function createInlineStyleTrack(): InlineStyleTrack {
+  const timers: number[] = [];
+  const animations: Animation[] = [];
+  const inline: InlineSnapshot[] = [];
+
+  const restoreInline = (): void => {
+    for (const snap of inline) {
+      setStyle(snap.el, 'opacity', snap.opacity);
+      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
+      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
+    }
+    inline.length = 0;
+  };
+
+  return {
+    remember(el: HTMLElement): void {
+      inline.push({
+        el,
+        opacity: el.style.getPropertyValue('opacity'),
+        pointerEvents: el.style.getPropertyValue('pointer-events'),
+        transformOrigin: el.style.getPropertyValue('transform-origin'),
+      });
+    },
+    schedule(fn: () => void, ms: number): void {
+      timers.push(window.setTimeout(fn, ms));
+    },
+    animate(el: HTMLElement, keyframes: Keyframe[], options: KeyframeAnimationOptions): void {
+      animations.push(el.animate(keyframes, options));
+    },
+    restoreInline,
+    settle(): void {
+      for (const timer of timers) window.clearTimeout(timer);
+      timers.length = 0;
+      animations.length = 0;
+      restoreInline();
+    },
+    rollback(): void {
+      for (const timer of timers) window.clearTimeout(timer);
+      timers.length = 0;
+      for (const animation of animations) {
+        try {
+          animation.cancel();
+        } catch {
+          // An already-finished animation may refuse to cancel — nothing to undo.
+        }
+      }
+      animations.length = 0;
+      restoreInline();
+    },
+  };
 }
 
 /** Live transition — only one may run at a time for the single canvas host. */
@@ -154,9 +253,10 @@ let active: ActiveTransition | null = null;
 
 /**
  * Ends any running transition at once, snapping to the final layout: the held
- * focus is released, the real clouds are shown, clones and layers are removed.
- * Called at the START of every render (and on unmount) so a real data update
- * arriving mid-flight wins immediately and never gets clobbered or rolled back.
+ * former-focus clone is released, the real clouds are shown, clones and layers
+ * are removed. Called at the START of every render (and on unmount) so a real
+ * data update arriving mid-flight wins immediately and never gets clobbered or
+ * rolled back.
  */
 export function finishFocusTransition(): void {
   if (active === null) return;
@@ -189,6 +289,13 @@ function flipTo(before: RectLike, after: RectLike): string {
   return `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
 }
 
+/** Transform placing an element that currently sits at `from` so it reads at
+ *  `to` (the counterpart of {@link flipTo}'s start transform for a travel that
+ *  is expressed as an END keyframe — the departing former-focus clone). */
+function moveTo(from: RectLike, to: RectLike): string {
+  return flipTo(to, from);
+}
+
 /** Sub-pixel-tolerant rect equality — a cloud that did not move is not animated. */
 function sameRect(a: RectLike, b: RectLike): boolean {
   return (
@@ -217,12 +324,17 @@ function placeClone(el: HTMLElement, local: RectLike): void {
  *  (облачко панели закреплённых/истории, строка поиска, `lib/focus-origin.ts`):
  *  полёт стартует от него «со стороны клика» и имеет приоритет над слотом
  *  выбранного облачка на карте. Без пригодного источника полёт не играется —
- *  вызывающий мягко деградирует до свопа без клона. */
+ *  вызывающий мягко деградирует до свопа без клона.
+ *
+ *  `focusSources` — топология нового фокуса (`focusId`, видимые предки, рёбра):
+ *  по ней фаза 2 выбирает источник вылета каждого нового облачка. Без неё
+ *  источником служит облачко фокуса (мягкая деградация). */
 export function playFocusTransition(
   host: HTMLElement,
   before: CloudSnapshot[],
   drawLinks?: () => void,
   externalOrigin?: RectLike | null,
+  focusSources?: FocusSourceTopology,
 ): void {
   finishFocusTransition();
   if (before.length === 0) {
@@ -236,15 +348,25 @@ export function playFocusTransition(
   const beforeMap = new Map(before.map((s) => [s.id, s]));
   const afterMap = new Map(after.map((s) => [s.id, s]));
 
-  // A same-zone slot move is invisible in the plan (it only knows zones), so it
-  // is decided here against the real rects — this keeps manual reorder and
-  // link-change refreshes animated while a no-op re-render stays still.
-  const settleMoves = plan.settling.filter((id) => {
+  // Every survivor that visibly moved (zone change OR a slot move inside its
+  // zone) is animated together in phase 1. The plan only knows zones, so a
+  // slot-only move is decided here against the real rects — this keeps manual
+  // reorder and link-change refreshes animated while a no-op re-render stays
+  // still. The two kinds play differently: a slot move stays inside its
+  // (scrolling, hence cropping) zone, a ZONE move must leave that zone.
+  const visiblyMoved = (id: string): boolean => {
     const b = beforeMap.get(id);
     const a = afterMap.get(id);
     return b !== undefined && a !== undefined && !sameRect(b, a);
-  });
-  if (prefersReducedMotion() || (!plan.hasChanges && settleMoves.length === 0)) {
+  };
+  /** Survivors that changed zone — played through an unclipped clone. */
+  const crossZoneMoves = plan.moving.filter(visiblyMoved);
+  /** Survivors that only changed slot inside their zone — played in place. */
+  const slotMoves = plan.settling.filter(visiblyMoved);
+  if (
+    prefersReducedMotion() ||
+    (!plan.hasChanges && crossZoneMoves.length === 0 && slotMoves.length === 0)
+  ) {
     drawLinks?.();
     return;
   }
@@ -255,31 +377,14 @@ export function playFocusTransition(
   }
 
   const generation = ++transitionGeneration;
-  const timers: number[] = [];
-  const animations: Animation[] = [];
-  const inline: InlineSnapshot[] = [];
+  const track = createInlineStyleTrack();
+  const schedule = track.schedule;
+  const remember = track.remember;
   const hostRect = host.getBoundingClientRect();
-
-  const schedule = (fn: () => void, ms: number): void => {
-    timers.push(
-      window.setTimeout(() => {
-        fn();
-      }, ms),
-    );
-  };
-
-  const remember = (el: HTMLElement): void => {
-    inline.push({
-      el,
-      opacity: el.style.getPropertyValue('opacity'),
-      pointerEvents: el.style.getPropertyValue('pointer-events'),
-      transformOrigin: el.style.getPropertyValue('transform-origin'),
-    });
-  };
 
   const play = (el: HTMLElement, keyframes: Keyframe[], ms: number, easing: string, delay = 0, fill?: FillMode): void => {
     if (ms <= 0) return;
-    animations.push(el.animate(keyframes, { duration: ms, easing, delay, ...(fill === undefined ? {} : { fill }) }));
+    track.animate(el, keyframes, { duration: ms, easing, delay, ...(fill === undefined ? {} : { fill }) });
   };
 
   const layer = div('focus-anim-layer');
@@ -318,8 +423,16 @@ export function playFocusTransition(
   let overlay: HTMLElement | null = null;
   let flyer: HTMLElement | null = null;
   let releasedEl: HTMLElement | null = null;
-  let releasedFrom: RectLike | null = null;
   let hadFlyer = false;
+  /**
+   * Cross-zone movers playing through clones in the animation layer: each clone
+   * travels from the cloud's old zone slot to its new one while the real cloud
+   * waits hidden at the destination. The zone element crops its own content
+   * (`overflow-y: auto`), so a transform that parks the real cloud over its OLD
+   * zone would be invisible mid-flight — the very «появляются мгновенно»
+   * дефект приёмки 380cc1e2. The host-level layer is never cropped.
+   */
+  const zoneClones: Array<{ clone: HTMLElement; real: HTMLElement }> = [];
 
   // --- Swap: the flyer lands, content of the centre swaps. ------------------
   let swapped = false;
@@ -329,29 +442,26 @@ export function playFocusTransition(
     flyer?.remove();
     flyer = null;
 
-    if (releasedEl !== null && releasedFrom !== null) {
-      // Hand the centre's content over to the former focus's zone cloud at the
-      // very spot the overlay held, then let it slide into its zone.
+    // Cross-zone movers have landed: reveal each real cloud at its new slot and
+    // drop the travelling clone (see `zoneClones`).
+    for (const move of zoneClones) {
+      move.clone.remove();
+      setStyle(move.real, 'opacity', '1');
+    }
+    zoneClones.length = 0;
+
+    if (releasedEl !== null) {
+      // The departing clone has reached the former focus's new zone; hand the
+      // zone cloud over to the very spot the clone reached, then drop the clone.
       overlay?.remove();
       overlay = null;
       setStyle(releasedEl, 'opacity', '1');
-      const a = afterMap.get(plan.releasedFocus ?? '');
-      if (a !== undefined) {
-        play(
-          releasedEl,
-          [{ transform: flipTo(releasedFrom, a) }, { transform: 'none' }],
-          tokens.settle,
-          tokens.ease,
-        );
-      }
     } else if (overlay !== null) {
-      // The old focus left the neighbourhood — fade it out where it stood.
+      // The old focus left the neighbourhood — its dissolving clone (or a
+      // zero-fade degradation) goes away with the swap.
       const el = overlay;
       overlay = null;
-      play(el, [{ opacity: '1' }, { opacity: '0' }], tokens.fade, 'ease-out', 0, 'forwards');
-      schedule(() => {
-        el.remove();
-      }, tokens.fade);
+      el.remove();
     }
 
     if (newFocus !== undefined) {
@@ -364,22 +474,9 @@ export function playFocusTransition(
   };
 
   const cleanup = (): void => {
-    for (const timer of timers) window.clearTimeout(timer);
-    timers.length = 0;
-    for (const animation of animations) {
-      try {
-        animation.cancel();
-      } catch {
-        // An already-finished animation may refuse to cancel — nothing to undo.
-      }
-    }
-    animations.length = 0;
-    for (const snap of inline) {
-      setStyle(snap.el, 'opacity', snap.opacity);
-      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
-      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
-    }
-    inline.length = 0;
+    track.rollback();
+    for (const move of zoneClones) move.clone.remove();
+    zoneClones.length = 0;
     flyer?.remove();
     flyer = null;
     overlay?.remove();
@@ -393,15 +490,7 @@ export function playFocusTransition(
   const complete = (): void => {
     if (generation !== transitionGeneration) return;
     active = null;
-    for (const timer of timers) window.clearTimeout(timer);
-    timers.length = 0;
-    animations.length = 0;
-    for (const snap of inline) {
-      setStyle(snap.el, 'opacity', snap.opacity);
-      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
-      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
-    }
-    inline.length = 0;
+    track.settle();
     flyer?.remove();
     flyer = null;
     overlay?.remove();
@@ -441,14 +530,41 @@ export function playFocusTransition(
   active = { swap, cleanup };
 
   try {
-    // Held focus: a clone of the OLD focus cloud keeps the centre unchanged
-    // while the flyer travels; it is the only thing the user sees in the centre
-    // until the swap (the real new focus cloud is hidden below).
+    const releasedAfter =
+      plan.releasedFocus === null ? undefined : afterMap.get(plan.releasedFocus);
+
+    // Former focus: a clone of its old focus cloud starts in the centre and
+    // leaves in phase 1 — gliding into the former focus's new zone, or
+    // dissolving in place when the thought is gone from the new layout. It
+    // departs SIMULTANEOUSLY with the flyer (no waiting for the landing); the
+    // real zone cloud stays hidden until the swap reveals it at the clone's
+    // landing spot, so no frame shows the same thought twice.
     if (plan.focusChanged && oldFocus !== undefined) {
       overlay = oldFocus.el.cloneNode(true) as HTMLElement;
       setStyle(overlay, 'opacity', '1');
       placeClone(overlay, toLocal(hostRect, oldFocus));
       layer.append(overlay);
+      if (releasedAfter !== undefined) {
+        // `fill: 'forwards'` holds the end keyframe (the clone at its zone)
+        // until the swap reveals the real cloud: the baseline transform of the
+        // clone is the centre, so without the hold a race between the animation
+        // end and `setTimeout(swap, flight)` could flash it back into the centre.
+        play(
+          overlay,
+          [{ transform: 'none' }, { transform: moveTo(oldFocus, releasedAfter) }],
+          tokens.flight,
+          tokens.ease,
+          0,
+          'forwards',
+        );
+      } else if (tokens.fade > 0) {
+        const el = overlay;
+        play(el, [{ opacity: '1' }, { opacity: '0' }], tokens.fade, 'ease-out', 0, 'forwards');
+        schedule(() => {
+          if (overlay === el) overlay = null;
+          el.remove();
+        }, tokens.fade);
+      }
     }
 
     // Flyer: a clone of the NEW focus cloud starting exactly where the
@@ -471,47 +587,56 @@ export function playFocusTransition(
       setStyle(newFocus.el, 'transform-origin', 'top left');
     }
 
-    // The former focus's zone cloud must not show next to the held overlay yet;
-    // it takes over from the overlay at the swap (same spot — seamless).
-    if (plan.focusChanged && plan.releasedFocus !== null) {
-      const released = afterMap.get(plan.releasedFocus);
-      if (released !== undefined && oldFocus !== undefined) {
-        releasedEl = released.el;
-        releasedFrom = oldFocus;
-        remember(released.el);
-        setStyle(released.el, 'opacity', '0');
-        setStyle(released.el, 'transform-origin', 'top left');
-      }
+    // The former focus's zone cloud must not show next to the travelling clone;
+    // it takes over from the clone at the swap (same spot — seamless).
+    if (plan.focusChanged && releasedAfter !== undefined) {
+      releasedEl = releasedAfter.el;
+      remember(releasedAfter.el);
+      setStyle(releasedAfter.el, 'opacity', '0');
+      setStyle(releasedAfter.el, 'transform-origin', 'top left');
     }
 
-    // --- Phase 1: survivors that changed zone glide during the flight. ------
-    for (const id of plan.moving) {
+    // --- Phase 1: every visible survivor moves simultaneously. --------------
+    // Slot-only reorders stay inside their scrolling zone, so their FLIP runs on
+    // the real element. A ZONE change would park the real cloud over its OLD
+    // zone, outside the destination zone's `overflow` box — invisible mid-flight
+    // (приёмка 380cc1e2: «появляются мгновенно»). Such moves play on a clone in
+    // the unclipped animation layer instead; the real cloud waits hidden at its
+    // new slot and takes over at the swap.
+    for (const id of slotMoves) {
       const b = beforeMap.get(id);
       const a = afterMap.get(id);
       if (b === undefined || a === undefined) continue;
       setStyle(a.el, 'transform-origin', 'top left');
       play(a.el, [{ transform: flipTo(b, a) }, { transform: 'none' }], tokens.flight, tokens.ease);
     }
-
-    // Survivors that only change slot: pinned at the old position for the
-    // flight, then settle into the new order (fill `backwards` holds the start
-    // keyframe through the delay).
-    for (const id of settleMoves) {
+    for (const id of crossZoneMoves) {
       const b = beforeMap.get(id);
       const a = afterMap.get(id);
       if (b === undefined || a === undefined) continue;
-      setStyle(a.el, 'transform-origin', 'top left');
+      // Degenerate timing (no flight token): no clone to play — the cloud is
+      // simply already in place in its new zone.
+      if (tokens.flight <= 0) continue;
+      const clone = a.el.cloneNode(true) as HTMLElement;
+      setStyle(clone, 'opacity', '1');
+      placeClone(clone, toLocal(hostRect, b));
+      layer.append(clone);
+      remember(a.el);
+      setStyle(a.el, 'opacity', '0');
+      zoneClones.push({ clone, real: a.el });
+      // `fill: 'forwards'` holds the landed frame until `swap` removes the clone
+      // and reveals the real cloud at the very same spot.
       play(
-        a.el,
-        [{ transform: flipTo(b, a) }, { transform: 'none' }],
-        tokens.settle,
-        tokens.ease,
+        clone,
+        [{ transform: 'none' }, { transform: moveTo(b, a) }],
         tokens.flight,
-        'backwards',
+        tokens.ease,
+        0,
+        'forwards',
       );
     }
 
-    // Clouds leaving with the old focus fade out during the flight.
+    // Clouds leaving with the old focus fade out during phase 1.
     if (plan.leaving.length > 0 && tokens.fade > 0) {
       ghosts = div('cloud-ghosts');
       for (const id of plan.leaving) {
@@ -533,18 +658,32 @@ export function playFocusTransition(
       }
     }
 
-    // Clouds new to the neighbourhood fade in after the flight. `fill: 'both'`
-    // (not `'backwards'`) keeps the end keyframe applied once the animation
-    // finishes: with `'backwards'` the inline `opacity: 0` set below became
-    // effective again the moment the fade-in ended, so the clouds stayed
-    // visible only if a later restore (`complete`/`cleanup`) won the race
-    // (ошибка 90811979 — облачка отбора мелькали и исчезали).
+    // --- Phase 2: clouds new to the neighbourhood fly out of their sources. --
+    // Source per entering cloud: the focus cloud for parents/children, a visible
+    // parent cloud for siblings (`planEnteringSources`). The fly-out starts only
+    // after phase 1 (delay = flight) and every new cloud starts together. The
+    // end keyframe is held (`fill: 'both'`) so the cloud cannot drop back to the
+    // inline `opacity: 0` when the animation ends (ошибка 90811979).
+    const enteringSources = planEnteringSources(
+      plan.entering
+        .map((id) => afterMap.get(id))
+        .filter((s): s is CloudSnapshot => s !== undefined)
+        .map((s) => ({ id: s.id, zone: s.zone })),
+      focusSources ?? { focusId: plan.focusAfter, parentIds: [], edges: [] },
+    );
     for (const id of plan.entering) {
       const a = afterMap.get(id);
       if (a === undefined) continue;
       remember(a.el);
       setStyle(a.el, 'opacity', '0');
-      play(a.el, [{ opacity: '0' }, { opacity: '1' }], tokens.settle, 'ease-out', tokens.flight, 'both');
+      setStyle(a.el, 'transform-origin', 'top left');
+      const sourceId = enteringSources.get(id);
+      const src = sourceId === undefined ? undefined : afterMap.get(sourceId);
+      const keyframes: Keyframe[] =
+        src !== undefined && src.id !== id
+          ? [{ transform: moveTo(a, src), opacity: '0' }, { transform: 'none', opacity: '1' }]
+          : [{ opacity: '0' }, { opacity: '1' }];
+      play(a.el, keyframes, tokens.settle, 'ease-out', tokens.flight, 'both');
     }
 
     schedule(swap, tokens.flight);
@@ -560,5 +699,69 @@ export function playFocusTransition(
     cleanup();
     drawLinks?.();
     console.error('[focus-transition] choreography failed — snapped to the settled layout', err);
+  }
+}
+
+/**
+ * Проявление ВСЕГО расклада после смены мыслесети (спека «Проявление карты при
+ * смене мыслесети», задача 70a99f09).
+ *
+ * При переходе на другую сеть прежнее содержимое убирается одномоментно (не
+ * хореографией — это делает рендер холста), а новый расклад (фокус + зоны)
+ * проявляется ОДНИМ общим fade-in: каждое облачко получает одну и ту же
+ * opacity-анимацию `0 → 1` с нулевой задержкой, то есть все стартуют
+ * одновременно на своих местах. Никаких перелётов, клонов и промежуточных
+ * состояний — промежуточные мелькания загрузки сети не показываются.
+ *
+ * Длительность и сглаживание — токены `--anim-network-reveal` /
+ * `--anim-focus-ease`; при `prefers-reduced-motion` (или нулевом токене)
+ * проявление мгновенное. Владение мутациями общее с фокус-переходом
+ * ({@link finishFocusTransition}): реальное обновление или следующий рендер
+ * доводят проявление до финала, не оставляя облачка невидимыми.
+ */
+export function playNetworkReveal(host: HTMLElement, drawLinks?: () => void): void {
+  finishFocusTransition();
+  const clouds = captureClouds(host);
+  const tokens = readAnimTokens(host);
+  if (prefersReducedMotion() || tokens.reveal <= 0 || clouds.length === 0) {
+    drawLinks?.();
+    return;
+  }
+  const generation = ++transitionGeneration;
+  const track = createInlineStyleTrack();
+
+  const complete = (): void => {
+    if (generation !== transitionGeneration) return;
+    active = null;
+    track.settle();
+  };
+
+  const cleanup = (): void => {
+    track.rollback();
+  };
+
+  // Владелец регистрируется ДО первой мутации (урок ошибки 66deb70a): сбой
+  // анимации обязан откатиться к видимому раскладу, а не оставить облачка
+  // скрытыми без владельца стилей.
+  active = { swap: () => {}, cleanup };
+  try {
+    for (const cloud of clouds) {
+      const el = cloud.el;
+      track.remember(el);
+      setStyle(el, 'opacity', '0');
+      track.animate(el, [{ opacity: '0' }, { opacity: '1' }], {
+        duration: tokens.reveal,
+        easing: tokens.ease,
+        delay: 0,
+        fill: 'both',
+      });
+    }
+    drawLinks?.();
+    track.schedule(complete, tokens.reveal);
+  } catch (err) {
+    active = null;
+    cleanup();
+    drawLinks?.();
+    console.error('[network-reveal] reveal failed — snapped to the settled layout', err);
   }
 }

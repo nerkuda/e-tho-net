@@ -71,16 +71,19 @@ const THOUGHT_CLOUD_TS = path.join(RENDERER_ROOT, 'lib', 'thought-cloud.ts');
  *  - `canvas/canvas.ts` — перенос полей в форму `FocusNeighbor` для отбора;
  *  - `screens/type-manager.ts` — редактор ТИПОВ (не мыслей);
  *  - `selection/selection.ts` — сид диалога стиля выделения;
- *  - `screens/structures/realtime-apply.ts` — слияние частичных изменений
- *    (`thought.updated`) в кэшированный `ThoughtRef` и подпись изменения строки
- *    (сериализация DTO для keyed-сверки, не представление мысли — облачко
- *    по-прежнему собирает только `lib/thought-cloud.ts`).
+ *  - `screens/structures/structures.ts` — сериализация `ThoughtRef` для
+ *    keyed-сверки строк дерева (`rowRenderSignature`; перенесена из снесённого
+ *    `realtime-apply.ts` в G2): читает поля оформления, но облачко по-прежнему
+ *    собирает только `lib/thought-cloud.ts`.
  */
 const VISUAL_FIELD_READERS = new Set([
   'lib/thought-cloud.ts',
   'lib/type-tree.ts',
   'editor/style-dialog.ts',
   'editor/icon-dialog.ts',
+  // Универсальный диалог выбора ресурса (задача d1a56d76): источник «Иконки
+  // мыслей» читает иконку/вид типа для сетки быстрого выбора.
+  'editor/resource-picker.ts',
   'editor/editor.ts',
   'canvas/clipboard.ts',
   'canvas/add-dialog.ts',
@@ -88,7 +91,7 @@ const VISUAL_FIELD_READERS = new Set([
   'canvas/canvas.ts',
   'screens/type-manager.ts',
   'selection/selection.ts',
-  'screens/structures/realtime-apply.ts',
+  'screens/structures/structures.ts',
 ]);
 
 /**
@@ -554,6 +557,49 @@ describe('guard: представление мысли строится толь
         pattern: /cloud-has-bg|CLOUD_BG_CLASS/,
       },
     ]);
+  });
+
+  it('картинка-иконка в полосе масштабируется вместе с эмодзи (font-size полосы)', () => {
+    // Ошибка c1b57533: высота `<img>` иконки была привязана к базовому
+    // `calc(var(--cloud-font) * 1.45)` и не учитывала подъём `font-size` у
+    // `.cloud.focus-cloud .cloud-icon` (1.9) — в фокусном облачке картинка
+    // оставалась маленькой, тогда как эмодзи заполнял полосу. Размер картинки
+    // обязан следовать шрифту полосы (`1em`), а не базовой переменной, иначе
+    // любой контекстный подъём размера глифа снова разведёт их.
+    const css = stripCssComments(readText(STYLES_CSS));
+
+    // Контекстный подъём размера глифа существует — иначе правило `1em` не
+    // имело бы смысла, и тест защищал бы от несуществующего расхождения.
+    const sizeBumps: string[] = [];
+    let iconImgHeight: string | null = null;
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = (m[1] ?? '').trim().replace(/\s+/g, ' ');
+      const body = m[2] ?? '';
+      if (lastCompoundClasses(selector).includes('cloud-icon')) {
+        const decl = parseDeclarations(body).find((d) => d.prop === 'font-size');
+        if (decl !== undefined) sizeBumps.push(`${selector} { font-size: ${decl.value} }`);
+      }
+      if (/\.cloud-icon\s+img$/.test(selector)) {
+        const decl = parseDeclarations(body).find((d) => d.prop === 'height');
+        iconImgHeight = decl?.value ?? null;
+      }
+    }
+
+    assert.ok(
+      sizeBumps.length > 0,
+      'должен существовать контекстный подъём `font-size` у `.cloud-icon` (например, `.cloud.focus-cloud .cloud-icon`)',
+    );
+    assert.ok(iconImgHeight !== null, 'правило `.cloud-icon img { height: … }` должно существовать');
+    assert.match(
+      iconImgHeight,
+      /^1em$/,
+      `высота картинки-иконки должна быть font-relative (\`1em\`), а не фиксированной ` +
+        `от базовой переменной — иначе она не догоняет увеличенный глиф (найдено: «${iconImgHeight}»)`,
+    );
+    assert.ok(
+      !/var\(--cloud-font\)/.test(iconImgHeight),
+      'высота картинки-иконки не должна опираться на базовый `var(--cloud-font)` в обход шрифта полосы',
+    );
   });
 
   it('в каждом месте ширина облачка объявлена явно или задана раскладкой места', () => {

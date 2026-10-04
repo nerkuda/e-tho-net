@@ -354,9 +354,12 @@ describe('определения свойств типа перечитываю�
       realtimeHandler!(evt);
       await flush();
     };
+    // Монотонный seq: роутер слоя дедуплицирует события по seq — повторный
+    // seq=1 отбрасывал бы второе и последующие события (G1 техпроекта).
+    let realtimeSeq = 0;
     const realtimeEvent = (type: string, networkId: string, data: unknown) => ({
       type,
-      seq: 1,
+      seq: ++realtimeSeq,
       ts: '2026-01-01T00:00:00.000Z',
       actor: { user_id: 'u2', client_id: 'c2' },
       network_id: networkId,
@@ -482,9 +485,17 @@ describe('проводка уведомлений об определениях 
       /rememberShownDefinitions\(definitions\)/.test(properties),
       'вкладка «Свойства» запоминает показанные определения',
     );
-    // Редактор слушает оба источника и перечитывает только «Свойства».
+    // Редактор слушает оба источника и перечитывает только «Свойства»:
+    // чужой путь — через слой (G5: инвалидация `types-catalog`, причина-событие),
+    // локальный — прежним каналом `onTypeDefinitionsChanged`.
     const editor = read('editor/editor.ts');
-    assert.ok(/onRealtimeEvent\(\(evt\) => \{/.test(editor), 'realtime-подписка на месте');
+    assert.ok(
+      /onQueryInvalidated\(\(prefix, _keys, cause\) => \{[\s\S]{0,160}?prefix !== queryKeys\.typesCatalog\(\)/.test(
+        editor,
+      ),
+      'чужой путь через слой: подписка на инвалидацию types-catalog',
+    );
+    assert.ok(/asRealtimeCause\(cause\)/.test(editor), 'причина инвалидации — realtime-событие');
     assert.ok(/onTypeDefinitionsChanged\(\(owner\) => \{/.test(editor), 'локальная подписка на месте');
     assert.ok(
       /function invalidateDefinitionDependentPanes\(\): void \{\s*invalidatePanes\(\['properties'\]\)/.test(

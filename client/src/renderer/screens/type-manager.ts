@@ -111,7 +111,7 @@ import {
 import { buildEntityCombo, normalizeParentTypeId, type EntityOption } from '../lib/entity-picker.js';
 // Локальные уведомления открытого редактора об изменении набора свойств типа
 // (ошибка 74b94c26), самого типа (8dd5dfed) и его удаления (7dfad7d4): своё
-// realtime-эхо до рендерера не доходит (G8 applier).
+// realtime-эхо приходит асинхронно (B1) (G8 applier).
 import {
   notifyTypeChanged,
   notifyTypeDefinitionsChanged,
@@ -174,6 +174,8 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   thought_ref: 'ссылка на мысль (legacy)',
   // Кросс-сетевая ссылка (задача 7849008a).
   cross_network_ref: 'кросс-сетевая ссылка',
+  // Ссылка на публикацию (0.11.1, задача f37b468d).
+  publication: 'публикация',
 };
 
 /** Reloads the thought-type catalogue (selects and cloud styles read it). */
@@ -671,7 +673,7 @@ export function buildThoughtTypesPanel(): CataloguePanel {
       // Удалённый тип уходит из цепочки типов показанной сущности (ошибка
       // 7dfad7d4): открытый редактор обязан пометить тип исчезнувшим,
       // перечитать «Свойства» и отвязать показанную сущность. Своё
-      // realtime-эхо до рендерера не доходит (G8 applier), поэтому уведомляем
+      // realtime-эхо приходит асинхронно (B1) (G8 applier), поэтому уведомляем
       // локально — каталог перечитан строкой выше, значит шапку можно
       // перерисовать сразу и по свежим данным.
       notifyTypeChanged(typeDeletedFacts({ ownerType: 'thought_type', ownerId: type.id }));
@@ -1324,7 +1326,7 @@ export function showThoughtTypeEditor(
       current = await readFreshTypeSnapshot(networkId, current);
       // Набор свойств типа изменился (ошибка 74b94c26): открытый редактор
       // мысли этого типа (или его потомка) обязан перечитать таблицу
-      // «Свойства». Своё realtime-эхо до рендерера не доходит, поэтому
+      // «Свойства». Своё realtime-эхо приходит асинхронно (B1), поэтому
       // редактор уведомляется локально.
       notifyTypeDefinitionsChanged({ ownerType: 'thought_type', ownerId: current.id });
       await refreshThoughtTypes();
@@ -1332,7 +1334,7 @@ export function showThoughtTypeEditor(
       // Оформление и подпись САМОГО типа (ошибка 8dd5dfed): шапка открытого
       // редактора мысли этого типа резолвит их из цепочки типов, а каталог
       // перечитан строкой выше — значит, шапку можно перерисовать сразу и по
-      // свежим данным. Своё realtime-эхо до рендерера не доходит (G8 applier).
+      // свежим данным. Своё realtime-эхо приходит асинхронно (B1) (G8 applier).
       if (savedTypeFields !== null) {
         notifyTypeChanged(
           typeUpdateFacts({ ownerType: 'thought_type', ownerId: current.id }, savedTypeFields),

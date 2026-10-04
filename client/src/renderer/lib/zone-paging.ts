@@ -120,10 +120,18 @@ export function planZoneReconcile(
   counters: ZonePagingCounters,
   freshTotal: number,
   firstPageSize: number = ZONE_PAGE_SIZE,
+  shownFirstPage: number = 0,
 ): ZoneReconcilePlan {
   const total = Math.max(0, freshTotal);
+  // Свежий ответ фокуса на ТОМ ЖЕ фокусе сам приносит первую порцию сектора:
+  // её строки уже показаны, поэтому «израсходованный» префикс не может быть
+  // меньше её длины. Без этого пересчёт, увидев рост количества, запросил бы
+  // порцию с offset = 0 (первую же страницу) заново и сложил её в
+  // `zoneAppended` — строка задвоилась бы и пережила удаление связи, оставшись
+  // висеть на карте (ошибка 31ed1d43).
+  const consumed = Math.max(counters.loaded, shownFirstPage);
   const loaded = totalKnown(counters)
-    ? Math.min(counters.loaded, total)
-    : Math.min(firstPageSize, total);
+    ? Math.min(consumed, total)
+    : Math.min(Math.max(firstPageSize, shownFirstPage), total);
   return { counters: { loaded, total }, grew: totalKnown(counters) && total > counters.total };
 }

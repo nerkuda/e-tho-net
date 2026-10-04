@@ -641,12 +641,19 @@ const DIALOG_FILES = new Set([
   'admin/admin.ts',
   'canvas/add-dialog.ts',
   'editor/attachments.ts',
-  'editor/icon-dialog.ts',
+  'editor/publication-card.ts',
+  // Универсальный диалог выбора ресурса (задача d1a56d76): единый каркас
+  // вкладок-источников, на котором собраны пикер иконки (icon-dialog, теперь
+  // адаптер без своего showDialog) и диалог обложки публикации.
+  'editor/resource-picker.ts',
   'editor/style-dialog.ts',
   'editor/wiki-link.ts',
   'import-export/export-dialog.ts',
   'import-export/import-dialog.ts',
   'lib/date-period-dialog.ts',
+  // Общий диалог удаления сущности «Удалить совсем / В корзину» (задача
+  // 00160da1): фасад для мыслей, связей, публикаций и полок.
+  'lib/delete-dialog.ts',
   'lib/entity-picker.ts',
   'lib/saved-filter-bar.ts',
   'pinned/pins.ts',
@@ -656,6 +663,11 @@ const DIALOG_FILES = new Set([
   'screens/layers.ts',
   'screens/network-stats.ts',
   'screens/networks.ts',
+  'screens/publications/wizard.ts',
+  // Диалог «Переместить в раздел…» рабочей области публикации (ea1b5f14,
+  // пункт 3): дерево разделов внутри общей оболочки `showDialog`; не
+  // список-диалог — раскладку держит `createTree`.
+  'screens/publications/workspace.ts',
   'screens/property-manager.ts',
   'screens/settings.ts',
   'screens/tabs/picker.ts',

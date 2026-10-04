@@ -26,6 +26,7 @@ import type { FocusEdge, FocusNeighbor, FocusResponse, ThoughtRef } from '@etn/s
 
 import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
+import { currentThoughtId } from '../history.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { resolveEffectiveCanvasLinkFilter } from '../lib/effective-link-filter.js';
 import { takeFocusOrigin } from '../lib/focus-origin.js';
@@ -79,6 +80,10 @@ import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js
 import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
 import { store } from '../state.js';
 import {
+  getQueryState,
+  subscribeQuery,
+} from '../lib/live/index.js';
+import {
   initLinksOverlay,
   drawLinksNow,
   setEllipseHover,
@@ -91,6 +96,7 @@ import {
   captureClouds,
   finishFocusTransition,
   playFocusTransition,
+  playNetworkReveal,
   prefersReducedMotion,
 } from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
@@ -100,7 +106,10 @@ import { initKbdNav, resetCanvasCursor, setCursor, syncCanvasCursor } from './kb
 import { mountZoneSplitters } from './zone-splitters.js';
 import { splitterElement } from '../lib/ui/splitter.js';
 import {
+  activeViewUsesKeywords,
   getActiveMode as getStripActiveMode,
+  invalidateViewResultForRealtime,
+  isThoughtInViewResult,
   loadPersistedStrip,
   mountFilterStrip,
   onModeChange as onStripModeChange,
@@ -108,6 +117,8 @@ import {
   runActiveViewIfNeeded,
   type ViewResult,
 } from './focus-filter-strip.js';
+import { queryKeys } from '../lib/live/query-keys.js';
+import { onQueryInvalidated } from '../lib/live/query-registry.js';
 import { openThoughtDeleteDialog } from '../trash.js';
 
 // Канон облачка перенесён в lib/thought-cloud.ts (задача b28ab6d6): облачка
@@ -150,8 +161,6 @@ const OVERSCAN_ROWS = 2;
  *  anchored inside the zone's CONTENT box, so the padding is discounted on both
  *  axes when the anchor offset is computed. */
 const ZONE_PADDING_PX = 12;
-/** How many indicator fetches may run concurrently. */
-const INDICATOR_CONCURRENCY = 3;
 /** Minimum mouse travel before a press becomes a drag, px. */
 export const DRAG_THRESHOLD_PX = 4;
 /** `etn.thoughts.neighbors` limit for the Ctrl-hover ellipse preview list —
@@ -236,10 +245,23 @@ const refCache = new Map<string, ThoughtRef>();
  * a neighbour's new icon never reached its cloud (ошибка 1ea2d05a).
  */
 let refEpoch = 0;
-/** Indicator cache (id → counts), invalidated on comment/attachment events. */
-const indicatorCache = new Map<string, IndicatorInfo>();
-const indicatorQueue: string[] = [];
-let indicatorRunning = 0;
+/**
+ * Подписки на запросы индикаторов слоя (`indicators:@id`). Данные счётчиков
+ * (комментарии/вложения) живут в реестре запросов реактивного слоя (G5
+ * техпроекта 269016e2): подписка на видимую мысль «зажигает» запрос, инвалидация
+ * ключа (роутер на `comment.*`/`attachment.*`, производители — на свою правку)
+ * перезапрашивает его, а слушатель перерисовывает ячейки. Своей кэш-россыпи у
+ * холста больше нет. Подписки сбрасываются при смене сети и размонтировании.
+ */
+const indicatorSubscriptions = new Map<string, () => void>();
+let indicatorNetworkId: string | null = null;
+
+/** Снимает все подписки индикаторов (смена сети/размонтирование холста). */
+function resetIndicatorSubscriptions(): void {
+  for (const unsubscribe of indicatorSubscriptions.values()) unsubscribe();
+  indicatorSubscriptions.clear();
+  indicatorNetworkId = null;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -353,13 +375,35 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     const t = event.target as HTMLElement | null;
     const onLine = t?.closest('.link-hit, .link-line') ?? null;
     const onCloud = t?.closest('.cloud') ?? null;
-    if (
-      onLine === null &&
-      onCloud === null &&
-      (store.state.selectedLinkId !== null || store.state.editorTarget !== null)
-    ) {
+    // Пустое место карты — фон зоны (сетка/пустое поле/промежуток), полоса
+    // фокуса или заглушка «нет сети». Клик по этим местам (и только по ним)
+    // считается ВЫБОРОМ фокусной мысли; клики по ползункам зон, строке
+    // отбора и прочей оснастке холста — нет.
+    //
+    // Полоса фокуса (`.canvas-focus-row`) и часть промежутков карты имеют
+    // `pointer-events: none` (canvas.css) — клик по ним проходит НА ХОСТ
+    // `.canvas`, поэтому `event.target` равен самому хосту, а не потомку.
+    // Такой клик — тоже пустое место; оснастка (кнопки `.canvas-filter-strip`,
+    // ползунки `.zone-splitter`) — отдельные цели, не равные хосту, и под это
+    // правило не попадает (блокер верификации 3af98e31; регресс a01e71f3 —
+    // прежний обработчик сбрасывал `editorTarget` по любому клику не по
+    // линии/облачку).
+    const onEmptyPlace =
+      t === host ||
+      (t !== null &&
+        (t.closest('.zone') !== null ||
+          t.closest('.canvas-focus-row') !== null ||
+          t.closest('.canvas-empty') !== null));
+    if (onLine !== null || onCloud !== null || !onEmptyPlace) return;
+    if (store.state.selectedLinkId !== null || store.state.editorTarget !== null) {
       store.update({ selectedLinkId: null, editorTarget: null });
     }
+    // Клик по пустому месту = выбор фокусной мысли: курсор навигации ставится на
+    // неё — как клик/Enter по облачку (§2.2.4, §2.9). Тогда открытая в редакторе
+    // (фокус) и текущая совпадают, пунктир гасится (`shouldDrawCurrentFrame`),
+    // остаётся одна сплошная рамка, а стрелки продолжают ход с фокуса
+    // (замечание волны 6, задача 3af98e31; ADR e6d48e09).
+    setCursor(store.state.focus?.focused.id ?? null);
   });
 
   storeUnsubscribe = store.subscribe(() => {
@@ -387,11 +431,11 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
       // `editorTarget` is intentionally NOT part of `canvasRenderKey`
       // (task ff82809a): a click on a parent/sibling only changes which
       // thought is open in the editor. Update the single `.halo` cloud in
-      // place instead of rebuilding every zone.
-      const haloId =
-        store.state.editorTarget?.kind === 'thought'
-          ? store.state.editorTarget.id
-          : null;
+      // place instead of rebuilding every zone. Открытая мысль — единое
+      // определение `currentThoughtId()` (цель редактора, иначе фокус):
+      // клик по свободному месту (editorTarget=null) открывает фокусную
+      // мысль, и её гало обязано появиться (задача e80da89f п.2а).
+      const haloId = currentThoughtId();
       if (haloId !== lastHaloId) {
         lastHaloId = haloId;
         paintHalo();
@@ -400,11 +444,37 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     }
     lastRenderKey = key;
     lastSelectionKey = selectionKey();
-    lastHaloId =
-      store.state.editorTarget?.kind === 'thought'
-        ? store.state.editorTarget.id
-        : null;
+    lastHaloId = currentThoughtId();
     scheduleRender();
+  });
+  // Слой данных (G2): нижняя зона в режиме отбора не входит в
+  // {@link canvasRenderKey}, поэтому её перерисовывает подписка на инвалидации
+  // слоя — когда роутер событий или локальная мутация гасят `focus`-ключи
+  // (ошибка 4fca95c9). В режиме «Потомки» `invalidateViewResultForRealtime`
+  // вернёт `false` — там изменения ловит ключ перерисовки.
+  //
+  // Сужение (замечание G2 65286909) + блокер G3: отбор переисполняется, когда
+  // инвалидация касается холста:
+  //  - широкая `focus` (`focusAll`) — состав/порядок мог измениться целиком;
+  //  - свой ключ `focus:@<текущий фокус>` — правка фокусной мысли;
+  //  - ключ мысли, УЖЕ видимой строкой отбора, — её строка могла измениться;
+  //  - сигнал `view-composition` — правка могла ВВЕСТИ мысль в отбор
+  //    (тип/актуальность/корзина), независимо от видимости старого результата;
+  //  - сигнал `view-composition-keywords` — поля keywords-критерия (заголовок/
+  //    синонимы), но только если активный отбор реально использует `keywords`.
+  // Правка мысли вне окрестности, вне отбора и без этих полей лишний
+  // `views.run` не запускает.
+  const invalidationUnsubscribe = onQueryInvalidated((prefix) => {
+    if (host?.isConnected !== true) return;
+    const ownFocusId = store.state.focus?.focused.id;
+    const touchesCanvas =
+      prefix === 'focus' ||
+      prefix === queryKeys.viewComposition() ||
+      (prefix === queryKeys.viewCompositionKeywords() && activeViewUsesKeywords()) ||
+      (ownFocusId !== undefined && prefix === queryKeys.focus(ownFocusId)) ||
+      (prefix.startsWith('focus:@') && isThoughtInViewResult(prefix.slice('focus:@'.length)));
+    if (!touchesCanvas) return;
+    if (invalidateViewResultForRealtime()) requestCanvasRepaint();
   });
   // The focus band follows the focus row, whose position depends on the zone
   // shares and the host size — re-anchor it on resizes too (L12).
@@ -421,12 +491,15 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     stripModeUnsubscribe = null;
     storeUnsubscribe?.();
     storeUnsubscribe = null;
+    invalidationUnsubscribe();
     lockBadgeUnsubscribe?.();
     lockBadgeUnsubscribe = null;
     lockBadgeRefreshWired = false;
     resizeObserver.disconnect();
     linksOverlay.dispose();
     disposeZoneSplitters();
+    // Подписки индикаторов слоя — снять вместе с холстом.
+    resetIndicatorSubscriptions();
     // Detach the DOM handles so no late async render paints into a dead host.
     host = null;
     zones = null;
@@ -447,7 +520,7 @@ export function getRef(id: string): ThoughtRef | null {
 /**
  * Drops the cached metadata for a thought so the next render re-resolves it
  * (icon/type/colors). Called on realtime `thought.updated`/`thought.deleted`
- * and by local producers (`reflectThoughtUpdate`) that got no realtime echo.
+ * and by local producers (`reflectThoughtUpdate`) for an immediate repaint.
  *
  * Evicting a ref that IS rendered bumps {@link refEpoch}: the focus response
  * carries no icon/colors of a neighbour, so a re-fetch of the same focus is
@@ -524,21 +597,6 @@ export function getZoneEntries(dir: ZoneDir): ZoneEntry[] {
  */
 export function setAddDialogOpener(opener: ((ctx: AddDialogContext) => void) | null): void {
   addDialogOpener = opener;
-}
-
-/**
- * Invalidates cached indicator counts and re-fetches them, patching the
- * rendered clouds (called after comment/attachment changes and realtime events).
- */
-export function invalidateIndicators(id: string | null): void {
-  if (id === null) {
-    const ids = [...indicatorCache.keys()];
-    indicatorCache.clear();
-    for (const known of ids) queueIndicatorLoad(known);
-  } else {
-    indicatorCache.delete(id);
-    queueIndicatorLoad(id);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -624,12 +682,14 @@ function paintSelection(): void {
  *  the lower zone (task ff82809a). */
 function paintHalo(): void {
   if (host === null) return;
-  const editorTarget = store.state.editorTarget;
-  const haloId = editorTarget?.kind === 'thought' ? editorTarget.id : null;
+  const haloId = currentThoughtId();
   for (const cloud of host.querySelectorAll<HTMLElement>('.cloud')) {
     const id = cloud.dataset['id'];
     cloud.classList.toggle('halo', id !== undefined && id === haloId);
   }
+  // Двухрамочная навигация (ADR e6d48e09): смена цели редактора меняет гало —
+  // пунктир текущего обязан появиться/исчезнуть на совпавшем облачке.
+  syncCanvasCursor();
 }
 
 /**
@@ -694,6 +754,7 @@ async function render(): Promise<void> {
   renderEnterCount++;
   if (host === null || zones === null || focusRow === null) return;
   renderCount++;
+  const generation = ++renderGeneration;
   // A real data update arriving mid-flight wins: snap any running transition to
   // its final state (release the held focus, drop the clones/layers) BEFORE the
   // old layout is captured and rebuilt. The rebuild below then starts from the
@@ -701,10 +762,18 @@ async function render(): Promise<void> {
   finishFocusTransition();
   applyCanvasScaleVars(host);
   const focus = store.state.focus;
+  // Смена мыслесети (спека «Проявление карты при смене мыслесети», задача
+  // 70a99f09): прежнее содержимое убирается одномоментно, а новый расклад
+  // проявляется одним общим fade-in — не хореографией смены фокуса.
+  const networkChanged = store.state.networkId !== lastNetworkId;
   if (focus === null) {
     emptyEl?.classList.remove('hidden');
     resetFocusBand(host);
     resetCanvasCursor();
+    // Смена сети без фокуса: облачка и линии прежней сети просто удаляются —
+    // без анимаций и перелётов. `lastNetworkId` здесь намеренно НЕ трогаем:
+    // первый рендер расклада новой сети обязан увидеть смену и проявиться.
+    if (networkChanged) clearRenderedContent();
     // The strip hides itself when there is no focus; nothing to do here.
     void renderFilterStrip(null);
     return;
@@ -724,7 +793,10 @@ async function render(): Promise<void> {
   // appended pages belong to the previous focus, and in-flight page requests
   // must not land on the new one.
   if (focusChanged) resetZonePaging(focus);
-  const animate = (focusChanged || zoneAnimationPending) && !prefersReducedMotion();
+  // Смена сети НЕ играет фокус-хореографию (её расклад раскрывается общим
+  // проявлением ниже): сравнивать старую и новую раскладки бессмысленно, а
+  // промежуточные состояния загрузки сети не должны мелькать.
+  const animate = !networkChanged && (focusChanged || zoneAnimationPending) && !prefersReducedMotion();
   zoneAnimationPending = false;
   const snapshot = animate ? captureClouds(host) : null;
   // Source of the flight when the focus was picked OUTSIDE the map (pinned /
@@ -761,6 +833,9 @@ async function render(): Promise<void> {
   }
 
   // --- Rebuild + transition: one synchronous task, one paint --------------
+  // Проиграл гонку — уступил более свежему рендеру: DOM не трогаем вовсе
+  // (иначе две дорисовки пересобирали бы расклад по очереди и облачка мелькали).
+  if (generation !== renderGeneration) return;
   renderFocusRow(focus);
   updateFocusBand();
   renderZone('parents', groupByThought(zoneNeighbors('parents', focus)));
@@ -778,6 +853,7 @@ async function render(): Promise<void> {
     setZoneAsViewResult(true, viewResult);
   }
   lastFocusId = focus.focused.id;
+  lastNetworkId = store.state.networkId;
   // The response is now on screen: a further store notification with the SAME
   // object is a layout/selection re-render, not fresh neighbourhood data.
   lastFocusResponse = focus;
@@ -786,9 +862,21 @@ async function render(): Promise<void> {
   // `syncZoneTotalsWithFreshFocus` from the store subscriber.
   if (focusChanged) void ensureZoneTotals(focus);
   paintZoneIndicators();
-  scheduleIndicatorLoads();
-  if (snapshot !== null) {
-    playFocusTransition(host, snapshot, drawLinksNow, externalOrigin);
+  if (networkChanged) {
+    // Первый рендер расклада новой сети: одно ОБЩЕЕ проявление всех облачек
+    // (фокус + зоны) на своих местах — без промежуточных мельканий загрузки
+    // (спека «Проявление карты при смене мыслесети», задача 70a99f09).
+    playNetworkReveal(host, drawLinksNow);
+  } else if (snapshot !== null) {
+    // Topology of the new focus (focus id, visible parents, visible edges) lets
+    // the transition's phase 2 pick each new cloud's fly-out source (спека
+    // «FLIP-анимация холста», задача 380cc1e2). `edges` may be absent on an old
+    // server — `planEnteringSources` then falls back to the focus cloud.
+    playFocusTransition(host, snapshot, drawLinksNow, externalOrigin, {
+      focusId: focus.focused.id,
+      parentIds: focus.parents.map((p) => p.id),
+      edges: focus.edges ?? [],
+    });
   } else {
     redrawLinks?.();
   }
@@ -872,6 +960,25 @@ function viewResultToZoneEntries(
 
 /** Focus id of the last render — gates the transition choreography (§2.8). */
 let lastFocusId: string | null = null;
+
+/**
+ * Id мыслесети, чей расклад уже нарисован на холсте. Отличает ПЕРВЫЙ рендер
+ * новой сети (мгновенная очистка прежнего содержимого + одно общее проявление
+ * расклада, спека «Проявление карты при смене мыслесети», задача 70a99f09) от
+ * внутрисетевой смены фокуса (двухфазная хореография). Обновляется только
+ * рендером, который реально перерисовал DOM.
+ */
+let lastNetworkId: string | null = null;
+
+/**
+ * Поколение рендера. `render()` асинхронна (резолв метаданных, полоса отборов,
+ * отбор нижней зоны), и пока она ждёт данные, новый триггер может запустить
+ * следующую дорисовку. Право перерисовать DOM получает только САМЫЙ СВЕЖИЙ
+ * рендер: устаревший выходит после `await`-ов, не трогая карту. Без этого обе
+ * дорисовки пересобирали расклад по очереди и облачка мелькали (та же природа,
+ * что у «дёрганой смены содержимого» при загрузке сети, задача 70a99f09).
+ */
+let renderGeneration = 0;
 
 /**
  * Ответ фокуса, по которому рисовался холст. Свежий ответ (пусть и тот же
@@ -958,6 +1065,31 @@ function resetFocusBand(h: HTMLElement): void {
     layerLabelEl.style.display = 'none';
   }
   for (const dir of ZONE_DIRS) setZoneIndicator(dir, null);
+}
+
+/**
+ * Мгновенно убирает расклад с карты — облачка фокуса и зон вместе с линиями
+ * (смена мыслесети, спека «Проявление карты при смене мыслесети», задача
+ * 70a99f09). Никаких анимаций, клонов и перелётов: прежнее содержимое просто
+ * удаляется, чтобы облачка прошлой сети не оставались и не мелькали, пока
+ * грузится новая.
+ */
+function clearRenderedContent(): void {
+  if (focusRow !== null) clear(focusRow);
+  focusCloudEl = null;
+  if (zones !== null) {
+    for (const dir of ZONE_DIRS) {
+      const zone = zones[dir];
+      const grid = zone.querySelector<HTMLElement>('.zone-grid');
+      if (grid !== null) clear(grid);
+      // Пустая зона не должна сохранять высоту прошлого расклада — иначе
+      // появляется лишняя прокрутка до прихода данных новой сети.
+      const spacer = zone.querySelector<HTMLElement>('.zone-spacer');
+      if (spacer !== null) spacer.style.height = '0px';
+    }
+  }
+  zoneData.clear();
+  redrawLinks?.();
 }
 
 /** Set by {@link requestZoneAnimation}; consumed by the next render. */
@@ -1127,6 +1259,12 @@ function renderFocusRow(focus: FocusResponse): void {
     },
   });
   cloud.classList.add('focus-cloud');
+  // Halo of the open-in-editor thought (§2.2.4): when the editor follows the
+  // focus (`editorTarget=null`), the FOCUS cloud is exactly the thought open in
+  // the editor — it carries the solid frame (единое определение
+  // `currentThoughtId()`, задача e80da89f п.2а). Fast-path repaint of the halo
+  // is handled by the store subscriber; this covers the full rebuild.
+  if (currentThoughtId() === thought.id) cloud.classList.add('halo');
 
   const parents = groupByThought(focus.parents).length;
   const children = groupByThought(focus.children).length;
@@ -1316,10 +1454,10 @@ function syncZoneTotalsWithFreshFocus(): void {
 
 /**
  * Сверяет сектора со свежим ответом фокуса, когда фокус НЕ менялся (ошибка
- * ec5ba58c). Своя запись ребра не поднимает версию мысли, а собственному
- * клиенту не приходит realtime-эхо (04-realtime.md §5) — без этой сверки
- * индикатор-число показывал старое количество, а мысль, добавленная за уже
- * загруженный префикс, не появлялась в секторе до смены фокуса.
+ * ec5ba58c). Своя запись ребра не поднимает версию мысли, а собственное событие
+ * приходит асинхронно (B1) — без этой сверки индикатор-число показывал старое
+ * количество, а мысль, добавленная за уже загруженный префикс, не появлялась в
+ * секторе до смены фокуса.
  *
  * Что делает:
  *  - перечитывает `meta.total` каждого сектора и переносит его в счётчики, не
@@ -1345,6 +1483,17 @@ async function reconcileZoneTotals(focus: FocusResponse): Promise<void> {
   let neighbourhoodChanged = zoneNeighbourhoodSignature !== null
     && zoneNeighbourhoodSignature !== signature;
   zoneNeighbourhoodSignature = signature;
+  // Свежий ответ ТОГО ЖЕ фокуса обновляет состав первой порции секторов, а
+  // `zoneVisibleIds` был посеян только при смене фокуса. Синхронизируем набор
+  // (вместе с уже подгруженными порциями), иначе догрузка может повторно
+  // принять мысль, уже показанную ответом фокуса (ошибка 31ed1d43).
+  zoneVisibleIds = new Set<string>([
+    focus.focused.id,
+    ...focus.parents.map((n) => n.id),
+    ...focus.children.map((n) => n.id),
+    ...focus.siblings.map((n) => n.id),
+    ...[...zoneAppended.values()].flatMap((list) => list.map((n) => n.id)),
+  ]);
   // Количества читаются параллельно: сверка едет на каждом свежем ответе
   // фокуса, три последовательных запроса вместо одного круга — лишняя задержка.
   const totals = await Promise.all(
@@ -1355,7 +1504,9 @@ async function reconcileZoneTotals(focus: FocusResponse): Promise<void> {
     const total = totals[index];
     if (total === null || total === undefined) return;
     const counters = zonePaging.get(dir);
-    const plan = planZoneReconcile(counters ?? createZonePaging(), total);
+    // Длина свежей первой порции ответа фокуса — строки уже показаны, префикс
+    // «израсходованного» не может быть меньше (ошибка 31ed1d43).
+    const plan = planZoneReconcile(counters ?? createZonePaging(), total, undefined, focus[dir].length);
     if (counters !== undefined && plan.counters.total !== counters.total) {
       neighbourhoodChanged = true;
     }
@@ -1465,7 +1616,6 @@ async function appendNextZonePage(
     if (appendedAny) {
       renderZone(dir, groupByThought(zoneNeighbors(dir, focus)));
       paintZoneIndicators();
-      scheduleIndicatorLoads();
       // Colours/icon of the appended clouds come from the ref cache, which
       // the focus response only seeded for the first page — resolve the new
       // ids and repaint the zone when they arrive (best effort).
@@ -2030,7 +2180,7 @@ function buildCloud(
   const ref = entry.ref;
   // The live neighbour carries a fresh `active` flag in every focus response —
   // prefer it over the cached ref, which can lag after a local toggle until the
-  // ref is re-resolved (no realtime echo to the actor, 04-realtime.md §5).
+  // ref is re-resolved (B1: its own event also arrives, but asynchronously).
   // `marked_for_deletion` lives only on the ref (FocusNeighbor does not carry
   // it) — the factory reads it from the ref and paints the trash badge itself.
   const isInactive = (entry.links[0]?.active ?? ref?.active) === false;
@@ -2094,9 +2244,10 @@ function buildCloud(
   cloud.dataset['dir'] = dir;
   if (store.state.selection.includes(entry.id)) cloud.classList.add('selected');
   // Halo: the thought is open in the editor (§2.2.4) — a single click, Enter
-  // or a pick from the structures/chronicle view.
-  const editorTarget = store.state.editorTarget;
-  if (editorTarget?.kind === 'thought' && editorTarget.id === entry.id) {
+  // or a pick from the structures/chronicle view. Открытая мысль — единое
+  // определение `currentThoughtId()`: при `editorTarget=null` редактор следует
+  // за фокусом, поэтому фокусная мысль тоже несёт сплошную рамку (e80da89f п.2а).
+  if (currentThoughtId() === entry.id) {
     cloud.classList.add('halo');
   }
   // Полное имя — подсказкой на названии (фабрика ставит сокращённое).
@@ -2271,55 +2422,51 @@ registerHoverPreviewResolver('neighbors', resolveNeighborsPreview);
 // ---------------------------------------------------------------------------
 
 /**
- * Enqueues an indicator fetch for a thought (deduplicated, cached). Exported
- * so the structures tree can share the same cache/queue for its clouds (L15,
- * 08-ui-spec.md §15.4: clouds match the canvas 1-to-1, indicators included).
+ * Enqueues an indicator load for a thought: подписывает холст на запрос слоя
+ * `indicators:@id` (deduplicated). Exported so the structures tree can share the
+ * same query/layer data for its clouds (L15, 08-ui-spec.md §15.4: clouds match
+ * the canvas 1-to-1, indicators included).
  */
 export function queueIndicatorLoad(id: string): void {
-  // Clouds are rebuilt on scroll/resize (virtualized zones); a cached value
-  // must be re-applied to the fresh DOM instead of being skipped.
-  const cached = indicatorCache.get(id);
-  if (cached !== undefined) {
-    applyIndicators(id, cached);
-    return;
-  }
-  if (indicatorQueue.includes(id)) return;
-  indicatorQueue.push(id);
-  scheduleIndicatorLoads();
-}
-
-/** Drains the indicator queue with bounded concurrency. */
-function scheduleIndicatorLoads(): void {
-  while (indicatorRunning < INDICATOR_CONCURRENCY && indicatorQueue.length > 0) {
-    const id = indicatorQueue.shift();
-    if (id === undefined) break;
-    indicatorRunning++;
-    void loadIndicators(id).finally(() => {
-      indicatorRunning--;
-      scheduleIndicatorLoads();
-    });
-  }
-}
-
-/** Fetches comment/attachment counts for a thought and patches its clouds. */
-async function loadIndicators(id: string): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  try {
-    const [comments, attachments] = await Promise.all([
-      etn.comments.list(networkId, 'thought', id),
-      etn.attachments.list(networkId, 'thought', id),
-    ]);
-    const info: IndicatorInfo = {
-      permanent: comments.some((c) => c.kind === 'permanent'),
-      chrono: comments.filter((c) => c.kind === 'chronological').length,
-      attachments: attachments.length,
-    };
-    indicatorCache.set(id, info);
-    applyIndicators(id, info);
-  } catch {
-    // Counts stay unknown — the indicators remain grey.
+  // Смена сети обнуляет реестр запросов — старые подписки «повисают» на
+  // удалённых записях. Пересоздаём их в контексте новой сети.
+  if (indicatorNetworkId !== networkId) {
+    resetIndicatorSubscriptions();
+    indicatorNetworkId = networkId;
   }
+  // Clouds are rebuilt on scroll/resize (virtualized zones); a value already in
+  // the layer must be re-applied to the fresh DOM instead of being skipped.
+  const existing = indicatorSubscriptions.get(id);
+  if (existing !== undefined) {
+    const state = getQueryState<IndicatorInfo>(queryKeys.indicators(id));
+    if (state.data !== undefined) applyIndicators(id, state.data);
+    return;
+  }
+  const unsubscribe = subscribeQuery<IndicatorInfo>(
+    queryKeys.indicators(id),
+    () => fetchIndicatorCounts(id),
+    (state) => {
+      if (state.data !== undefined) applyIndicators(id, state.data);
+    },
+  );
+  indicatorSubscriptions.set(id, unsubscribe);
+}
+
+/** Fetches comment/attachment counts for one thought (fetcher слоя). */
+async function fetchIndicatorCounts(id: string): Promise<IndicatorInfo> {
+  const networkId = store.state.networkId;
+  if (networkId === null) throw new Error('network is not open');
+  const [comments, attachments] = await Promise.all([
+    etn.comments.list(networkId, 'thought', id),
+    etn.attachments.list(networkId, 'thought', id),
+  ]);
+  return {
+    permanent: comments.some((c) => c.kind === 'permanent'),
+    chrono: comments.filter((c) => c.kind === 'chronological').length,
+    attachments: attachments.length,
+  };
 }
 
 /**
@@ -2362,7 +2509,6 @@ export const canvasInternals = {
   groupByThought,
   viewResultToZoneEntries,
   refCache,
-  indicatorCache,
   canvasRenderKey,
   selectionKey,
   deferSingleClick,
@@ -2585,7 +2731,7 @@ async function createLinkFromDrop(
       return;
     }
     throwOnFailures(await ensureLink(networkId, sourceId, targetId));
-    // The acting client gets no realtime echo (04-realtime.md §5) — refresh
+    // The acting client's own event arrives asynchronously (B1) — refresh
     // explicitly so the new edge, the zone move and the editor's «Связи»
     // update, and animate the thought flowing into its new zone.
     requestZoneAnimation();

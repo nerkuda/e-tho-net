@@ -1,0 +1,1414 @@
+/* ---------------------------------------------------------------------------
+ * Экран «Публикации» — библиотека (0.11.1, задача a3cfc018; элемент интерфейса
+ * 1eecd988) и карточка публикации в панели редактора (c3e44cab).
+ *
+ * Только раскладка и повседневные размеры экрана; контролы, поля, таблицы,
+ * вкладки и состояния приходят из фасадов `lib/ui` (своих ролей под них нет).
+ * ------------------------------------------------------------------------- */
+
+/* Хост экрана — как у прочих видов (`.canvas`/`.structures`/`.chronicle`/
+   `.activity`) обязан расти: без `flex: 1` он не растягивался, между ним и
+   панелью редактора оставалась пустота, панель вставала не у правого края, а
+   её абсолютный сплиттер (привязан к правому краю `.workspace-body`) отрывался
+   от панели (ошибка fea20bd1). `display: flex` — чтобы внутренний
+   `.publications` (`flex: 1`) заполнял хост. */
+.publications-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.publications {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* --layer-bg (ошибка f24fbef0): полотно «Публикаций» следует фону активного
+   * слоя, как холст, «Дневник» и «События». Без правила хост был прозрачен и
+   * наследовал фон `body` — смена слоя не была видна. */
+  background: var(--layer-bg, var(--bg));
+}
+
+.pub-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.pub-search {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  max-width: 24rem;
+}
+
+.pub-spacer {
+  flex: 1 1 auto;
+}
+
+.pub-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-alt, var(--surface));
+}
+
+.pub-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.pub-shelves {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Полка вида «Полки» — горизонтальная поверхность-ряд, на которой расставлены
+   карточки (задача 55ee3c85): фон/скругление/внутренние отступы токенами,
+   ширина — от контейнера. */
+.pub-shelf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-alt, var(--surface));
+}
+
+/* Заголовок полки-группы — ОБЩИЙ для обоих видов (кнопка фасада `uiButton`,
+   класс LIB_HEAD_CLASS). Кегль/начертание отличают его от текста пустого
+   состояния. */
+.pub-group-head {
+  justify-content: flex-start;
+  gap: var(--space-2);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-l);
+  color: var(--text);
+  padding: var(--space-1) var(--space-2);
+}
+
+/* Шеврон сворачивания: в свёрнутой группе повёрнут, содержимое скрыто. */
+.pub-group-head .icon {
+  transition: transform 0.12s ease;
+}
+
+.pub-group-collapsed > .pub-group-head .icon {
+  transform: rotate(-90deg);
+}
+
+.pub-group-collapsed > .pub-cards,
+.pub-group-collapsed > .pub-entries,
+.pub-group-collapsed > .pub-shelf-empty,
+.pub-group-collapsed > .pub-list-empty {
+  display: none;
+}
+
+/* Пустое состояние полки без публикаций (ошибка 87ad669a): делает только что
+   созданную пустую полку заметной, а не шапкой в 29px. */
+.pub-shelf-empty {
+  padding: var(--space-2);
+}
+
+.pub-group-head.pub-drop {
+  background: var(--accent-soft, var(--surface-alt, var(--surface)));
+  outline: 1px dashed var(--accent);
+}
+
+/* Inline-переименование полки (задача 00160da1, общее для обоих видов): поле
+   ввода вместо имени, живёт в секции перед шапкой (в `<button>` его не вложить). */
+.pub-shelf-rename {
+  min-width: 12rem;
+  max-width: 24rem;
+  font: inherit;
+  margin: var(--space-1) var(--space-2);
+}
+
+.pub-cards {
+  display: grid;
+  /* Ширина «книжки» увеличена на 15% против прежних 11rem (задача 432ab7ba п.1). */
+  grid-template-columns: repeat(auto-fill, minmax(calc(11rem * 1.15), 1fr));
+  gap: var(--space-3);
+}
+
+.pub-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.pub-card:hover {
+  border-color: var(--accent);
+}
+
+.pub-card.pub-inactive {
+  opacity: var(--state-disabled-opacity);
+}
+
+.pub-card.pub-dragging {
+  opacity: 0.5;
+}
+
+.pub-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  /* Текстовые зоны «книжки» — 5 строк (заголовок до 3 + подзаголовок до 2) плюс
+     строка автора внизу; высота карточки тем самым на 3 строки выше прежней
+     (задача 432ab7ba п.1). Линия — 1.3 от базового кегля. */
+  min-height: calc(6 * 1.3 * var(--font-size-m));
+}
+
+/* Заголовок — перенос до 3 строк; без подзаголовка занимает все 5 текстовых
+   строк (задача 432ab7ba п.1). */
+.pub-card-title {
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+}
+
+.pub-card-info.pub-card-info-no-subtitle .pub-card-title {
+  -webkit-line-clamp: 5;
+}
+
+/* Подзаголовок — до 2 строк под заголовком (задача 432ab7ba п.1). */
+.pub-card-subtitle {
+  color: var(--text-dim);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+}
+
+/* Автор — самой нижней строкой, не поместившееся обрезается (задача 432ab7ba п.1). */
+.pub-card-author {
+  margin-top: auto;
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-cover {
+  overflow: hidden;
+  border-radius: var(--radius-s);
+  background: var(--surface-alt, var(--surface));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pub-cover-card {
+  aspect-ratio: 3 / 2;
+  width: 100%;
+}
+
+.pub-cover-row {
+  width: 2.5rem;
+  height: 1.75rem;
+  flex: none;
+}
+
+.pub-cover-thumb {
+  width: 3.5rem;
+  height: 2.5rem;
+  flex: none;
+}
+
+.pub-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pub-cover-ph {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pub-cover-initials {
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.05em;
+}
+
+.pub-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Группа списка: полка-заголовок + двухстрочные строки публикаций. Таблиц с
+   колонками внутри групп нет (прямое требование задачи 55ee3c85). */
+.pub-list-section {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+}
+
+.pub-list-section > .pub-group-head {
+  background: var(--surface-alt, var(--surface));
+}
+
+.pub-list-count {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+.pub-entries {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Пустое состояние пустой полки-группы в «Списке» (ошибка 87ad669a). */
+.pub-list-empty {
+  padding: var(--space-2) var(--space-3);
+}
+
+/* Строка публикации — ДВЕ строки: (1) заголовок крупным шрифтом без переноса +
+   автор обычным, прижат вправо; (2) подзаголовок мелким шрифтом с переносом,
+   не более двух строк по высоте (задача 55ee3c85). */
+.pub-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.pub-entry + .pub-entry {
+  border-top: 1px solid var(--border);
+}
+
+.pub-entry:hover {
+  background: var(--surface-alt, var(--surface));
+}
+
+.pub-entry.pub-inactive {
+  opacity: var(--state-disabled-opacity);
+}
+
+.pub-entry-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pub-entry-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pub-entry-title {
+  font-size: var(--font-size-m);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.pub-entry-author {
+  color: var(--text-dim);
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.pub-entry-subtitle {
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Двухрамочная навигация библиотеки (ADR e6d48e09): текущая сущность навигации
+   (полка/публикация) — ПУНКТИРНАЯ рамка, как курсор карты/текста публикации;
+   публикация, ОТКРЫТАЯ в панели редактора, — сплошная рамка цвета фокуса
+   активного слоя. При совпадении пунктир не рисуется контроллером
+   (`library-nav.ts`), остаётся только сплошная. */
+.pub-current {
+  outline: 2px dashed var(--warn-strong);
+  outline-offset: -2px;
+  border-radius: var(--radius-s);
+}
+
+.pub-open {
+  outline: 2px solid var(--layer-focus-stripe, var(--accent));
+  outline-offset: -2px;
+  /* Контрастный кант двойной рамки открытого — тот же токен, что у гало карты
+     (`.cloud.halo`) и блока документа (`.pub-doc-editor`); инсет-тень даёт
+     вторую полосу внутри строки, не вылезая за соседей (задача 3af98e31). */
+  box-shadow: inset 0 0 0 4px var(--focus-ring-contrast);
+  border-radius: var(--radius-s);
+}
+
+.pub-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.pub-count {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+/* --- Карточка публикации в панели редактора ------------------------------ */
+
+/* Корень карточки — тот же каркас, что у панели мысли: шапку отбивает
+   фасад `.editor-fields`, панели вкладок — `.tab-pane-root`. Своего паддинга
+   и зазора у корня нет — иначе они удваивались бы с фасадом (замечание
+   пользователя: «сделать по образцу, а не похоже»).
+   Корень заполняет панель редактора (`flex: 1`), поэтому высоту дальше
+   делят вкладки: шапка остаётся на месте, а активная панель прокручивается
+   сама (замечание пользователя: содержимое вкладок не прокручивалось). */
+.pub-card-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Полоса вкладок и набор панелей тянутся на остаток высоты карточки —
+   без этого колонка сжималась под контейнер, а длинная форма («Рецепт»)
+   обрезалась без прокрутки. */
+.pub-card-editor > .ui-tabs {
+  flex: 1 1 auto;
+}
+
+/* Активная панель вкладки — своя область прокрутки с отступом `--space-5`
+   (10px, как `.tab-pane-root` и `.editor-fields` панели мысли): поля не
+   прижимаются к левому краю, длинная форма доступна целиком. */
+.pub-card-editor .ui-tabpanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+/* Обложка в слоте иконки: слот-фасад `.editor-icon-box` держит 40×40,
+   картинка заполняет его по обрезке. */
+.pub-card-editor-thumb {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.pub-card-editor-thumb .pub-cover,
+.pub-card-editor-thumb .pub-cover-thumb {
+  width: 100%;
+  height: 100%;
+  flex: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.pub-card-editor-thumb .pub-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Подзаголовок — вторая строка шапки, та же роль, что `.synonyms-input`
+   у панели мысли (полная ширина, отступ до третьей строки). */
+.pub-card-editor-subtitle {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.pub-card-pane {
+  padding: var(--space-2) 0;
+}
+
+.pub-card-cover-buttons {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* Нумерация уровней — подблок группы «Отбор разделов»: подпись + пара полей
+   «с уровня / по уровень». Подписи полей обязательны (замечание пользователя). */
+.pub-card-numbering {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+.pub-card-numbering-title {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.pub-card-numbering-row {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.pub-card-numbering-row > .ui-field {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+/* --- Вкладка «Рецепт»: крупные группы с воздухом между ними -------------- */
+
+.pub-card-recipe-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.pub-card-recipe-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-card-recipe-group-title {
+  font-size: var(--font-size-s);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.pub-card-recipe-group-hint {
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+  margin-bottom: var(--space-2);
+}
+
+.pub-card-recipe-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Внутренние уточняющие аккордеоны («Свойства», «Дополнительно») — бледные
+   вложенные карточки с рамкой: их заголовки не должны читаться как заголовки
+   крупных групп рецепта (замечание пользователя). */
+.pub-card-recipe-group .st-f-block:has(.st-f-collapsible-title) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+}
+
+.pub-card-recipe-group .st-f-block:has(.st-f-collapsible-title) .st-f-title {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-normal);
+}
+
+/* Каретка вложенного аккордеона — шеврон (замечание пользователя): свёрнутая
+   группа указывает вправо. У общей разметки `filter-form` SVG не вращается —
+   там треугольник подменялся текстом. */
+.pub-card-recipe-group .st-f-caret svg {
+  transition: transform var(--transition-hover, 0.15s) ease;
+}
+
+.pub-card-recipe-group .st-f-caret.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.pub-card-empty {
+  color: var(--text-dim);
+}
+
+.pub-card-shelf-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pub-card-shelf-order {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.pub-cover-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 12rem;
+}
+
+/* --- Вкладки карточки: резюме, свойства текстов/доп. материалы, метаданные,
+       состояние пересборки -------------------------------------------------- */
+
+.pub-card-summary,
+.pub-card-texts,
+.pub-card-extras {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-card-meta-assembly {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+/* Прелоадер пересборки рядом с «Действия» (ошибка c2dec45c). */
+.pub-card-rebuild-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-size-2xs);
+  color: var(--text-dim);
+}
+
+/* Настройки (шестерёнка): подпись + содержимое строки. */
+.pub-card-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.pub-card-settings-shelves {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* --- Диалог обложки: список слева, препросмотр справа (горизонтальный
+       сплиттер ширины) ----------------------------------------------------- */
+
+.pub-cover-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 18rem;
+}
+
+.pub-cover-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pub-cover-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pub-cover-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* Шов сплиттера ширины: размер и курсор задаёт владелец (общий гриф — в
+   `lib/ui/splitter.css`). Горизонтальный шов — `col-resize`. */
+.pub-cover-splitter {
+  flex: 0 0 10px;
+  width: 10px;
+  cursor: col-resize;
+}
+
+.pub-cover-list-box {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pub-cover-list {
+  overflow-y: auto;
+}
+
+/* Строка списка диалога обложки. Класс СВОЙ (`pub-cover-item`), а не
+   `.pub-cover-row`: последний занят миниатюрой обложки в списках
+   (`cover.ts`, 2.5rem×1.75rem) и сжимал строку до этой рамки. */
+.pub-cover-item {
+  width: 100%;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.pub-cover-item:hover {
+  background: var(--bg-hover);
+}
+
+.pub-cover-item-current {
+  background: var(--accent-soft);
+}
+
+.pub-cover-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Вид владельца вложения рисуют общие компоненты облачков: мысли —
+   `lib/thought-cloud.ts` (профиль `chip`), публикации — `lib/ui/publication-cloud`
+   (прямые углы, книга). Здесь — только контейнер ряда (замечание Б2 b02ef1cf). */
+.pub-cover-clouds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pub-cover-preview {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.pub-cover-preview-url {
+  min-height: 12rem;
+}
+
+.pub-cover-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.pub-cover-url {
+  width: 100%;
+}
+
+/* --- Рабочая область открытой публикации (0.11.1, задача 4f03b9d5) ------- */
+
+.pub-ws-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  /* --layer-bg (задача 77cce0ba, п.1): полотно рабочей области чтения тоже
+   * следует фону активного слоя — библиотека (.publications) правило имела, а
+   * область чтения была прозрачной и показывала фон body при смене слоя. */
+  background: var(--layer-bg, var(--bg));
+}
+
+.pub-ws {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pub-ws-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* Единая кликабельная карточка шапки (пункт 1 карточки ea1b5f14): обложка +
+   заголовок + подзаголовок + автор/дата — один контейнер; hover-подсветка,
+   клик в любом месте открывает панель редактора публикации. Кнопки-значки —
+   вне карточки, в `.pub-ws-right`. */
+.pub-ws-card {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  margin-left: calc(var(--space-2) * -1);
+  border-radius: var(--radius-m);
+  cursor: pointer;
+}
+
+.pub-ws-card:hover {
+  background: var(--surface-alt, var(--surface));
+}
+
+/* Правая группа шапки: ползунок ширины текста над рядом кнопок, прижато вправо
+   (пункт 5 карточки ea1b5f14). */
+.pub-ws-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+
+.pub-ws-cover {
+  flex: none;
+  width: 4.5rem;
+}
+
+.pub-ws-titlebox {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Заголовок публикации — кнопка-фасад (задача b51dbca4): клик/Enter открывает
+   карточку в панели редактора; отдельной кнопки «Настройки» больше нет. */
+.pub-ws-title {
+  justify-content: flex-start;
+  max-width: 100%;
+  min-width: 0;
+  font-size: var(--font-size-l);
+  font-weight: var(--font-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-ws-subtitle,
+.pub-ws-meta {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-ws-meta {
+  font-size: var(--font-size-3xs);
+}
+
+.pub-ws-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Кнопка «Пересобрать»: подсветка, когда живой текст устарел (состав/рецепт
+   изменились без пересборки) — замечание А2 приёмки b02ef1cf. Точка-индикатор
+   скрыта в обычном состоянии. */
+.pub-ws-rebuild {
+  position: relative;
+}
+
+.pub-ws-rebuild-dot {
+  display: none;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.pub-ws-rebuild-stale {
+  color: var(--accent);
+}
+
+.pub-ws-rebuild-stale .pub-ws-rebuild-dot {
+  display: block;
+}
+
+.pub-ws-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* Оглавление */
+
+.pub-toc {
+  flex: none;
+  width: 16rem;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.pub-ws.pub-toc-collapsed .pub-toc {
+  width: 2.25rem;
+}
+
+/* Свёрнутая панель оглавления: символ разворота делаем заметным (задача
+   b51dbca4) — центрируем кнопку-переключатель, не даём flex-у её сжать и
+   подкрашиваем акцентом, вместо прежней «неразличимой точки».
+   Без `flex: 0 0 auto` и с паддингами словаря кнопка ужималась до ~20×14px, а
+   SVG `panel-left-open` рендерился ~4×4px (замер верификатора); узкой панели
+   2.25rem достаточно для полного глифа 16px, если убрать inline-паддинги. */
+.pub-ws.pub-toc-collapsed .pub-toc-head {
+  justify-content: center;
+  padding-inline: var(--space-1);
+}
+
+/* Акцент поверх словарного `.ui-btn--ghost.ui-btn--icon` и защита от сжатия
+   (равная специфичность решается порядком бандла, а он не контракт — грабли
+   36889dd6): поднимаем специфичностью через `.pub-toc-head`. */
+.pub-ws.pub-toc-collapsed .pub-toc-head .pub-toc-toggle {
+  flex: 0 0 auto;
+  padding-inline: 0;
+  color: var(--accent);
+}
+
+.pub-ws.pub-toc-collapsed .pub-toc-title,
+.pub-ws.pub-toc-collapsed .pub-toc-list {
+  display: none;
+}
+
+.pub-toc-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.pub-toc-title {
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.pub-toc-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.pub-toc-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.pub-toc-line:hover {
+  background: var(--surface-alt, var(--surface));
+}
+
+.pub-toc-line.pub-toc-current {
+  background: var(--accent-soft, var(--surface-alt, var(--surface)));
+  color: var(--accent);
+}
+
+/* Выбранная клавиатурой строка оглавления (общий компонент списка): ручка
+   ручного порядка видна всегда, не только на hover (задача d13fd645). */
+.pub-toc-line.pub-toc-selected {
+  background: var(--surface-alt, var(--surface));
+  color: var(--accent);
+}
+
+.pub-toc-line.pub-toc-selected .ui-drag-handle,
+.pub-doc-current .ui-drag-handle {
+  opacity: 1;
+}
+
+/* Ручка раздела/текста в оглавлении — перед кареткой, компактна. */
+.pub-toc-line .ui-drag-handle {
+  margin-right: var(--space-1);
+}
+
+.pub-doc-heading .ui-drag-handle,
+.pub-doc-text .ui-drag-handle {
+  margin-right: var(--space-1);
+}
+
+/* Устаревшая подсветка drop (native HTML5 DnD) больше не используется. */
+.pub-toc-line.pub-toc-drop {
+  outline: 1px dashed var(--accent);
+}
+
+.pub-toc-line.pub-toc-folded .pub-toc-caret .icon {
+  transform: rotate(-90deg);
+}
+
+.pub-toc-caret {
+  flex: none;
+  width: 1.25rem;
+}
+
+.pub-toc-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-toc-text .pub-toc-label {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+.pub-toc-excluded .pub-toc-label {
+  text-decoration: line-through;
+  color: var(--text-dim);
+}
+
+.pub-toc-marks {
+  display: flex;
+  gap: var(--space-1);
+  color: var(--text-dim);
+}
+
+.pub-toc-mark {
+  font-size: var(--font-size-3xs);
+}
+
+/* Документ */
+
+.pub-ws-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.pub-doc {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* Ширина колонки текста — доля доступного пространства (пункт 5 ea1b5f14):
+     50–100% через `--pub-doc-width`; на 100% от краёв остаётся не меньше
+     ~20px (внутренние отступы + внешний зазор). */
+  width: var(--pub-doc-width, 100%);
+  max-width: none;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: var(--space-5) max(var(--space-5), 20px);
+}
+
+/* Документ использует типографику markdown-просмотра комментария
+   (`.comment-view`, пункт 6 ea1b5f14), но прокрутку и высоту задаёт сам. */
+.pub-doc.comment-view {
+  max-height: none;
+}
+
+/* Титульный блок целиком: лист + резюме под ним. */
+.pub-doc-titleblock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-5);
+}
+
+/* Титульный лист — «виртуальный портретный лист» (замечание 3 волны 7; вторая
+   редакция макета пользователя 2026-10-04): высота = ширина × √2 (A-формат
+   1:1.414), ВСЕГДА полная. ОБЛОЖКА — ФОНОВЫЙ СЛОЙ (абсолютный, под текстом):
+   сверху, по центру, во всю ширину, пропорции сохранены; может покрывать весь
+   лист или только верх. Поверх — ДВЕ РАВНЫЕ половины листа: верхняя — заголовок
+   (прижат к низу половины), нижняя — подзаголовок (по центру). Автор — внизу
+   нижней половины справа, с отступами. Обложка и текст — независимые слои. */
+.pub-doc-titlepage {
+  position: relative;
+  aspect-ratio: 1 / 1.414;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--radius-m);
+}
+
+/* Обложка — фоновый слой под текстом: прижата к верху, по центру, во всю ширину,
+   высота по натуральной пропорции картинки (`object-fit: contain`). */
+.pub-doc-hero {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.pub-doc-hero .pub-cover,
+.pub-doc-hero .pub-cover-card {
+  aspect-ratio: auto;
+  width: 100%;
+  border-radius: 0;
+  background: transparent;
+  display: block;
+}
+
+.pub-doc-hero .pub-cover-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+/* Заглушка «цвет + инициалы» в титуле (картинка не загрузилась) — как миниатюра
+   карточки, чтобы слой не схлопнулся. */
+.pub-doc-hero .pub-cover-ph {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 2;
+}
+
+/* Две равные половины ЛИСТА (не три части): обе по 50% высоты листа, поверх
+   фоновой обложки (`z-index`). Пустые — если нет заголовка/подзаголовка.
+   `min-height: 0` не даёт содержимому растянуть половину. */
+.pub-doc-title-zone,
+.pub-doc-subtitle-zone {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Заголовок — горизонтально по центру, вертикально прижат к НИЗУ половины. */
+.pub-doc-title-zone {
+  align-items: flex-end;
+  justify-content: center;
+}
+
+/* Подзаголовок — по центру половины по обеим осям. */
+.pub-doc-subtitle-zone {
+  align-items: center;
+  justify-content: center;
+}
+
+.pub-doc-title-zone > .pub-doc-title,
+.pub-doc-subtitle-zone > .pub-doc-subtitle {
+  width: 100%;
+}
+
+.pub-doc.comment-view .pub-doc-title {
+  font-size: calc(var(--font-size-3xl) * 2);
+  line-height: 1.15;
+  margin: 0;
+  text-align: center;
+}
+
+/* Подзаголовок титула: ~22px (×1.4 к `--font-size-l`), по центру половины. */
+.pub-doc.comment-view .pub-doc-subtitle {
+  font-size: calc(var(--font-size-l) * 1.4);
+  text-align: center;
+  margin: 0;
+}
+
+.pub-doc-subtitle {
+  color: var(--text-dim);
+}
+
+/* Три текста титула ПОВЕРХ обложки — контурная обводка (приём волны 1, бывший
+   `.pub-doc-hero-overlay`): заголовок/подзаголовок/автор читаются на любой
+   картинке. Обводка включается, когда лист несёт обложку (модификатор
+   `.pub-doc-titlepage-cover`). */
+.pub-doc-titlepage-cover .pub-doc-title,
+.pub-doc-titlepage-cover .pub-doc-subtitle,
+.pub-doc-titlepage-cover .pub-doc-meta {
+  color: #fff;
+  text-shadow:
+    0 1px 3px rgb(0 0 0 / 85%),
+    0 0 2px rgb(0 0 0 / 90%);
+  -webkit-text-stroke: 0.4px rgb(255 255 255 / 65%);
+}
+
+/* Автор/дата — последняя строка нижней половины, внизу СПРАВА, с отступами от
+   нижнего и правого краёв (не под обрез); поверх обложки (`z-index`). */
+.pub-doc-meta {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 1;
+  color: var(--text-dim);
+  font-size: var(--font-size-m);
+  font-weight: var(--font-weight-bold);
+}
+
+.pub-doc-section {
+  scroll-margin-top: var(--space-5);
+}
+
+/* Заголовок раздела документа (замечание 4 приёмки 5de0332d): ВСЕ заголовки
+   выровнены по одному левому краю независимо от наличия каретки. Грип и
+   каретка вынесены в абсолютный жёлоб слева и не участвуют в потоке — текст
+   начинается с постоянного отступа у всех уровней. Уровни различаются
+   шрифтом (размер задаёт `.comment-view h1..h6`), а не сдвигом. */
+.pub-doc-heading {
+  position: relative;
+  display: block;
+  cursor: pointer;
+  /* Жёлоб: место грипа (слева) + компактной каретки. */
+  padding-left: calc(var(--control-w-m) + var(--space-5));
+}
+
+.pub-doc-heading > .ui-drag-handle {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.pub-doc-heading > .pub-doc-caret {
+  position: absolute;
+  left: var(--space-5);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Компактная каретка: ghost-иконка в жёлобе не должна выталкивать текст и
+   расширяться паддингами тулбара. */
+.pub-doc-heading > .pub-doc-caret.ui-btn {
+  width: var(--control-w-m);
+  height: var(--control-w-m);
+  padding: 0;
+}
+
+.pub-doc-heading > .pub-doc-caret-empty {
+  width: var(--control-w-m);
+  height: var(--control-w-m);
+  pointer-events: none;
+}
+
+.pub-doc-heading-text {
+  display: inline;
+}
+
+.pub-doc-section.pub-doc-collapsed .pub-doc-caret .icon {
+  transform: rotate(-90deg);
+}
+
+/* Текущий блок клавиатурной навигации тела документа (общий компонент
+   `lib/ui/list.ts` поверх `nav-core.ts`) — пунктирная рамка, как курсор карты
+   мыслей (`.cloud.kbd-cursor`, задача 77cce0ba, п.2). */
+.pub-doc-current {
+  outline: 2px dashed var(--warn-strong);
+  outline-offset: -2px;
+  border-radius: var(--radius-s);
+}
+
+/* Мысль, открытая в редакторе, — сплошная рамка цвета фокуса, как гало облачка
+   на карте мыслей (`.cloud.halo` — `--layer-focus-stripe`; задача 77cce0ba,
+   п.2). Идёт после `.pub-doc-current`, поэтому у совпавшего блока выигрывает
+   сплошная рамка. Второй тонкий кант — общий токен двойной рамки открытого
+   (`--focus-ring-contrast`, как у гало и `.pub-open`; задача 3af98e31). */
+.pub-doc-editor {
+  outline: 2px solid var(--layer-focus-stripe, var(--accent));
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px var(--focus-ring-contrast);
+  border-radius: var(--radius-s);
+}
+
+.pub-doc:focus {
+  outline: none;
+}
+
+.pub-doc-heading.pub-doc-repeat::after {
+  content: '↻';
+  margin-left: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+.pub-doc-preamble,
+.pub-doc-text {
+  cursor: pointer;
+  /* Отступ между текстами разных мыслей (пункт 6 ea1b5f14) — тем же ритмом,
+     что у блоков markdown-просмотра комментария. В оглавлении отступов нет:
+     правило привязано к `.pub-doc`, а не к панели. */
+  margin-block: var(--space-3);
+}
+
+/* Внутренние абзацы одной мысли сохраняют собственные отступы (`1em`), а
+   крайние — не удваивают блочный отступ между мыслями. */
+.pub-doc-text > :first-child,
+.pub-doc-preamble > :first-child,
+.pub-doc-summary > :first-child {
+  margin-top: 0;
+}
+
+.pub-doc-text > :last-child,
+.pub-doc-preamble > :last-child,
+.pub-doc-summary > :last-child {
+  margin-bottom: 0;
+}
+
+.pub-doc-preamble:hover,
+.pub-doc-text:hover,
+.pub-doc-heading:hover {
+  background: var(--surface-alt, var(--surface));
+}
+
+/* Мысль-текст без комментария — видимая пустая строка нормальной высоты
+   (замечание 2 волны 7): блок не пропадает, его можно выделить, открыть
+   (dblclick), переместить (DnD/Alt) и скрыть (исключение). Пустой абзац даёт
+   высоту строки; `min-height` — страховка от схлопывания. */
+.pub-doc-text-empty {
+  min-height: calc(1.5 * var(--font-size-m));
+}
+
+.pub-doc-text-line {
+  margin: 0;
+}
+
+.pub-doc-extra {
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+}
+
+.pub-doc-extra-title {
+  display: block;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-dim);
+  margin-bottom: var(--space-2);
+}
+
+.pub-doc-extra-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.pub-ws-state,
+.pub-ws-pager,
+.pub-cand {
+  padding: var(--space-3) var(--space-4);
+}
+
+.pub-ws-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.pub-ws-count {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+}
+
+.pub-cand {
+  border-bottom: 1px solid var(--border);
+}
+
+.pub-cand-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.pub-cand-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pub-cand-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pub-cand-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pub-cand-path {
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Диалог «Переместить в раздел…» (ea1b5f14, пункт 3) ------------------ */
+
+.pub-move-body {
+  min-height: 18rem;
+  padding: var(--space-2);
+}
+
+.pub-move-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -47,6 +47,7 @@ const EXPECTED_GUARD_UI = [
   'guard-ui-licenses.test.ts',
   'guard-ui-popover.test.ts',
   'guard-ui-run.test.ts',
+  'guard-ui-slider.test.ts',
   'guard-ui-states.test.ts',
   'guard-ui-tables.test.ts',
   'guard-ui-tokens.test.ts',

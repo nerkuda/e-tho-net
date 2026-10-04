@@ -44,25 +44,29 @@ import { runMigrations } from '../src/db/migrator.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { networkMigrationsDir } from '../src/paths.js';
+import { networkMigrationFilesFrom } from './migration-files.js';
 
 /** Файл миграции, ради которой заведён этот набор. */
 const MIGRATION = '043_type_properties_canonical_unique.sql';
 
-/** Миграции, добавленные после 043; pre043Db оставляет «после 042» в состоянии
- *  «до 043», и первый прогон `runMigrations` применяет их все. */
-const MIGRATIONS_AFTER_043: readonly string[] = [
-  MIGRATION,
-  '044_cross_network_ref.sql',
-  '045_links_covering_indexes.sql',
-  '046_comments_time.sql',
-];
+/**
+ * Миграции, добавленные после 043; `pre043Db` оставляет состояние «после 042»,
+ * и первый прогон `runMigrations` применяет их все. Ожидание вычисляется из
+ * каталога (задача 8816c01f): новая миграция попадает в него сама, без правки
+ * этого файла.
+ */
+const MIGRATIONS_AFTER_043: readonly string[] = networkMigrationFilesFrom(MIGRATION);
 
 /**
  * Подмножество «повторно прогоняемых» миграций после 043: тесты дважды гоняют
  * `runMigrations` на одном соединении, доказывая идемпотентность пересборки
- * 043. 046 (`ALTER TABLE comments ADD COLUMN use_time`) неидемпотентна — в
- * SQLite нет `ADD COLUMN IF NOT EXISTS` (та же особенность у 033); повторно она
- * не проигрывается, как и в реальном миграторе, который помнит применённый файл.
+ * 043. Здесь — неустранимый смысловой минимум (не выводится из каталога):
+ * идемпотентность файла по имени не определить, поэтому перечислены ровно те
+ * миграции, что доказанно безопасны для повторного прогона. Неидемпотентные
+ * (`046` — `ALTER TABLE … ADD COLUMN`, в SQLite нет `ADD COLUMN IF NOT EXISTS`;
+ * `047` — `CREATE TABLE` без `IF NOT EXISTS`) в набор не входят. Новая
+ * миграция НЕ попадает сюда автоматически, поэтому правки этого списка она не
+ * требует (в отличие от {@link MIGRATIONS_AFTER_043}).
  */
 const REPLAYED_AFTER_043: readonly string[] = [
   MIGRATION,

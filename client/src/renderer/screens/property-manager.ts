@@ -67,7 +67,6 @@
  */
 
 import type {
-  AnyRealtimeEvent,
   EffectiveTypeProperty,
   LinkPropertyValueItem,
   LinkType,
@@ -106,12 +105,14 @@ import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
-import { onRealtimeEvent } from '../realtime.js';
-import { reloadTypeCatalogues, scheduleTypeRepaint } from '../realtime-ui.js';
-// Локальные уведомления открытого редактора (своё realtime-эхо до рендерера не
-// доходит, G8 applier): изменение набора свойств типа (ошибка 74b94c26),
-// правка/удаление самого реестрового свойства (98aa0889) и правка/удаление
-// СВЯЗАННОГО ТИПА СВЯЗИ единым жизненным циклом свойства-связи (7dfad7d4).
+import { reloadTypeCatalogues } from '../lib/type-catalogues.js';
+import { queryKeys } from '../lib/live/query-keys.js';
+import { invalidateAfterMutation } from '../lib/live/mutator.js';
+import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
+// Локальные уведомления открытого редактора (своё событие приходит асинхронно,
+// B1 — уведомление даёт мгновенный отклик): изменение набора свойств типа
+// (ошибка 74b94c26), правка/удаление самого реестрового свойства (98aa0889) и
+// правка/удаление СВЯЗАННОГО ТИПА СВЯЗИ единым жизненным циклом (7dfad7d4).
 import {
   linkTypeFieldsFromPropertyChanges,
   notifyPropertyRegistryChanged,
@@ -150,6 +151,8 @@ const VALUE_TYPE_LABELS: Record<Exclude<PropertyValueType, 'thought_ref'> | 'tho
   // Кросс-сетевая ссылка (задача 7849008a): значение адресует мысль ДРУГОЙ
   // сети по `n:<network_id>#<thought_id>`; снапшот имени — служебные данные.
   cross_network_ref: 'кросс-сетевая ссылка',
+  // Ссылка на публикацию (0.11.1, задача f37b468d) — публикация текущей сети.
+  publication: 'публикация',
 };
 
 /** Виды значения, доступные пользователю в выборе — `thought_ref` скрыт. */
@@ -162,6 +165,9 @@ const SELECTABLE_VALUE_TYPES: PropertyValueType[] = [
   'link',
   // Кросс-сетевая ссылка (задача 7849008a) — доступна в выборе.
   'cross_network_ref',
+  // Ссылка на публикацию (0.11.1, задача f37b468d; задача 77cce0ba, п.5) —
+  // серверный enum её знает, в выборе клиента тоже должна быть.
+  'publication',
 ];
 
 /**
@@ -317,7 +323,7 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
       const result = await etn.propertyRegistry.remove(networkId, property.id);
       // Свойство реестра исчезло (ошибка 98aa0889): открытый редактор мысли
       // обязан перечитать набор — свойство могло быть привязано к типу или
-      // покрывать его зеркалом. Своё realtime-эхо до рендерера не доходит
+      // покрывать его зеркалом. Своё realtime-эхо приходит асинхронно (B1)
       // (G8 applier), поэтому уведомляем локально.
       notifyPropertyRegistryChanged(property.id);
       // Свойство-связь уносит и связанный тип связи (единый жизненный цикл
@@ -338,9 +344,13 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
         notifyTypeChanged(typeDeletedFacts({ ownerType: 'link_type', ownerId: linkTypeId }));
         // Исчезнувший тип связи: отвязанные рёбра на холсте перерисовываются
         // только по свежему фокусу (сервер обнулил их `type_id`, отдельного
-        // события о связи не шлёт), а «Структуры»/«Хроника» держат собственные
-        // снимки — тот же набор пересчёта, что и realtime-эхо (270b8454).
-        scheduleTypeRepaint();
+        // события о связи не шлёт), а «Структуры» и «Дневник» держат снимки.
+        // Слой данных (G2/G3): гасим focus-, structures- и chronicle-ключи.
+        invalidateAfterMutation([
+          queryKeys.focusAll(),
+          queryKeys.structuresPageAll(),
+          queryKeys.chronicleFeedAll(),
+        ]);
       }
       cachedRows = null;
       // Сервер возвращает точный счётчик ставших структурными рёбер (или null
@@ -362,12 +372,15 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
     }
   }
 
-  // Realtime: `property-registry.*` инвалидирует кеш; `link-type.*` тоже —
-  // имена сторон (`name_forward` / `name_reverse`) в строке свойства-связи
-  // и предварительная оценка числа рёбер зависят от каталога типов связей.
-  const unsubscribe = etn.realtime.onEvent((raw: unknown) => {
-    if (!isPropertyRegistryOrLinkTypeEvent(raw)) return;
-    if (raw.networkId !== networkId) return;
+  // Realtime через слой (G5): роутер гасит `types-catalog` на
+  // `property-registry.*`/`link-type.*`; причина — само событие. Имена сторон
+  // свойства-связи и оценка числа рёбер зависят от каталога типов связей.
+  const unsubscribe = onQueryInvalidated((prefix, _keys, cause) => {
+    if (prefix !== queryKeys.typesCatalog()) return;
+    const evt = asRealtimeCause(cause);
+    if (evt === null) return;
+    if (evt.network_id !== networkId) return;
+    if (!isRegistryOrLinkTypeEventType(evt.type)) return;
     cachedRows = null;
     void reload();
   });
@@ -385,24 +398,19 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
 }
 
 /**
- * True when `raw` is an event that invalidates the cached property list:
- * `property-registry.*` (a row changed) or `link-type.*` (a link-type row
- * appeared/disappeared/renamed — the link-rows of the flat list show both
- * side names). Other events pass through.
+ * Тип события, инвалидирующего кэш списка свойств: `property-registry.*`
+ * (строка изменилась) или `link-type.*` (строка типа связи
+ * появилась/исчезла/переименовалась — плоский список показывает имена обеих
+ * сторон). Гейт по типу причины-события слоя (G5).
  */
-function isPropertyRegistryOrLinkTypeEvent(
-  raw: unknown,
-): raw is AnyRealtimeEvent & { networkId: string } {
-  if (typeof raw !== 'object' || raw === null) return false;
-  const evt = raw as { type?: unknown; networkId?: unknown };
+function isRegistryOrLinkTypeEventType(type: string): boolean {
   return (
-    typeof evt.networkId === 'string' &&
-    (evt.type === 'property-registry.created' ||
-      evt.type === 'property-registry.updated' ||
-      evt.type === 'property-registry.deleted' ||
-      evt.type === 'link-type.created' ||
-      evt.type === 'link-type.updated' ||
-      evt.type === 'link-type.deleted')
+    type === 'property-registry.created' ||
+    type === 'property-registry.updated' ||
+    type === 'property-registry.deleted' ||
+    type === 'link-type.created' ||
+    type === 'link-type.updated' ||
+    type === 'link-type.deleted'
   );
 }
 
@@ -1738,7 +1746,7 @@ export function openPropertyManagerEditor(
         // `link_type`, а родителя — `syncLinkTypeParent` строкой выше. Открытый
         // редактор показанной СВЯЗИ этого типа обязан перерисовать шапку —
         // ошибка 7dfad7d4 (симметрично правке самого типа, 5d41589). Своё
-        // realtime-эхо до рендерера не доходит (G8 applier), поэтому уведомляем
+        // realtime-эхо приходит асинхронно (B1) (G8 applier), поэтому уведомляем
         // локально, а каталог типов перечитываем ДО уведомления: шапка
         // резолвит подпись и вид линии из него.
         const linkTypeFields = linkTypeFieldsFromPropertyChanges(changes);
@@ -1753,13 +1761,15 @@ export function openPropertyManagerEditor(
           notifyTypeChanged(
             typeUpdateFacts({ ownerType: 'link_type', ownerId: linkTypeId }, linkTypeFields),
           );
-          // Холст и панели («Структуры», «Хроника») рисуют подпись и вид линии
+          // Холст и панели («Структуры», «Дневник») рисуют подпись и вид линии
           // ребра из каталога типов, а свои страницы держат в собственных
-          // снимках — локальная правка типа связи доводится до них ТЕМ ЖЕ
-          // набором пересчёта, что и realtime-эхо (ошибка 270b8454). Каталог уже
-          // перечитан строкой выше, поэтому пересчёт не перезапрашивает его
-          // повторно.
-          scheduleTypeRepaint();
+          // снимках — локальная правка типа связи доводится до них. Слой данных
+          // (G2/G3): гасим focus-, structures- и chronicle-ключи.
+          invalidateAfterMutation([
+            queryKeys.focusAll(),
+            queryKeys.structuresPageAll(),
+            queryKeys.chronicleFeedAll(),
+          ]);
         }
         // Применим привязки к типам мыслей.
         await applyTypeRows(current.id);
@@ -1798,7 +1808,7 @@ export function openPropertyManagerEditor(
     if (draft.typeRows.length === 0 && removed.length === 0) return;
     // Типы, чей набор свойств правится этим проходом (снятые и черновые
     // строки) — после записи они обязаны уведомить открытый редактор
-    // (ошибка 74b94c26): свой realtime-эхо до рендерера не доходит.
+    // (ошибка 74b94c26): свой realtime-эхо приходит асинхронно (B1).
     const touchedTypeIds = new Set<string>();
     for (const snap of removed) touchedTypeIds.add(snap.thoughtTypeId);
     for (const row of draft.typeRows) touchedTypeIds.add(row.thoughtTypeId);
@@ -2766,12 +2776,15 @@ export function buildLinkTypesPanel(): CataloguePanel {
     tree.setFilter(searchQuery);
   });
 
-  // Realtime: `link-type.*` инвалидирует кеш; `property-registry.*` тоже —
-  // клик открывает свойство, и его название/тип значения должны быть
-  // актуальны в момент клика.
-  const unsubscribe = onRealtimeEvent((raw: unknown) => {
-    if (!isPropertyRegistryOrLinkTypeEvent(raw)) return;
-    if (raw.networkId !== networkId) return;
+  // Realtime через слой (G5): `link-type.*`/`property-registry.*` гасят
+  // `types-catalog` (роутер), причина — само событие. Клик открывает свойство,
+  // и его название/тип значения должны быть актуальны в момент клика.
+  const unsubscribe = onQueryInvalidated((prefix, _keys, cause) => {
+    if (prefix !== queryKeys.typesCatalog()) return;
+    const evt = asRealtimeCause(cause);
+    if (evt === null) return;
+    if (evt.network_id !== networkId) return;
+    if (!isRegistryOrLinkTypeEventType(evt.type)) return;
     cachedTypes = null;
     cachedRows = null;
     cachedCounts = null;

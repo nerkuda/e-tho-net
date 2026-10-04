@@ -54,6 +54,7 @@ function rootLength(css: string, name: string): number | null {
 /** Компактные контролы: визуальный глиф меньше тач-таргета, зона — псевдоэлемент. */
 const COMPACT_CONTROLS: Array<{ file: string; selector: string }> = [
   { file: 'lib/ui/chip-list.css', selector: '.ui-chip-remove' },
+  { file: 'lib/ui/publication-cloud.css', selector: '.ui-pub-cloud-remove' },
   { file: 'lib/ui/tree.css', selector: '.ui-tree-caret' },
   { file: 'lib/ui/field.css', selector: '.ui-clearable-btn' },
   { file: 'styles.css', selector: '.tab-close' },

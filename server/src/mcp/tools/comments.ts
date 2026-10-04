@@ -96,7 +96,13 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
             events: [
               {
                 type: 'comment.updated',
-                data: { id: updated.id, changes: args.changes, version: updated.version },
+                data: {
+                  id: updated.id,
+                  owner_id: updated.owner_id,
+                  kind: updated.kind,
+                  changes: args.changes,
+                  version: updated.version,
+                },
               },
             ],
             activity: [{ kind: 'comment', action: 'updated', comment: updated }],
@@ -180,6 +186,8 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
                 type: 'comment.updated',
                 data: {
                   id: edited.id,
+                  owner_id: comment?.owner_id ?? '',
+                  kind: edited.kind,
                   changes: { body_md: edited.body_md },
                   version: edited.version,
                 },

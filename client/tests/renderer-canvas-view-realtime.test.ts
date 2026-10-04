@@ -33,10 +33,12 @@ import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 
 type CanvasModule = typeof import('../src/renderer/canvas/canvas.js');
-type RealtimeUiModule = typeof import('../src/renderer/realtime-ui.js');
+type RealtimeEffectsModule = typeof import('../src/renderer/realtime-effects.js');
+type EventRouterModule = typeof import('../src/renderer/lib/live/event-router.js');
 
 let canvas: CanvasModule;
-let realtimeUi: RealtimeUiModule;
+let realtimeEffects: RealtimeEffectsModule;
+let eventRouter: EventRouterModule;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -112,6 +114,9 @@ function metaViewRow(id: string, name: string, isDefault: boolean): Record<strin
   };
 }
 
+/** Определение активного отбора — тест подменяет его (в т.ч. на keywords). */
+let viewDefinition = JSON.stringify({ criteria: [] });
+
 function fullView(id: string, name: string, isDefault: boolean): Record<string, unknown> {
   return {
     id,
@@ -119,7 +124,7 @@ function fullView(id: string, name: string, isDefault: boolean): Record<string, 
     name,
     name_key: id,
     description: null,
-    definition: JSON.stringify({ criteria: [] }),
+    definition: viewDefinition,
     position: 0,
     is_default: isDefault,
     version: 1,
@@ -286,14 +291,24 @@ before(async () => {
   installGlobals();
   installEtn();
   canvas = await import('../src/renderer/canvas/canvas.js');
-  realtimeUi = await import('../src/renderer/realtime-ui.js');
+  realtimeEffects = await import('../src/renderer/realtime-effects.js');
+  eventRouter = await import('../src/renderer/lib/live/event-router.js');
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   installEtn();
+  // Дедуп роутера по seq — состояние процесса: сбрасываем между тестами,
+  // иначе второе событие с тем же seq будет отброшено как опоздавшее.
+  eventRouter.resetEventRouter();
   viewRows = [{ id: 'existing', title: 'Старая работа', type_id: TYPE_ID, active: true, marked_for_deletion: false }];
+  viewDefinition = JSON.stringify({ criteria: [] });
   viewRunCount = 0;
   store.update({ networkId: NETWORK_ID, focus: null, canvasZoom: 1, cloudWidth: 180 });
+  // Сброс удержанного полосой фокуса: `dispose()` не зовёт `renderStrip(null)`,
+  // и следующий тест с тем же FOCUS_ID считался бы «фокус не менялся» — кэш
+  // определения отбора (в т.ч. признак `keywords`) не перечитывался бы.
+  const strip = await import('../src/renderer/canvas/focus-filter-strip.js');
+  await strip.renderStrip(null);
 });
 
 describe('realtime-обновление нижней зоны в режиме отбора (ошибка 4fca95c9)', () => {
@@ -307,9 +322,12 @@ describe('realtime-обновление нижней зоны в режиме о
     // Другая сессия создала работу: она попадает в результат отбора...
     viewRows.push({ id: WORK_ID, title: 'Новая задача', type_id: TYPE_ID, active: true, marked_for_deletion: false });
     // ...окрестность фокуса при этом не меняется (ребро отфильтровано).
-    realtimeUi.applyRealtimeToUi(
-      foreignEvent('thought.created', { thought: thought(WORK_ID, 'Новая задача') }) as any,
-    );
+    // G2: реальный конвейер — роутер слоя гасит `focus`-ключи, подписка холста
+    // на инвалидации перерисовывает нижнюю зону (ошибка 4fca95c9); мост производных
+    // эффектов `applyDerivedRealtime` идёт следом (realtime.ts).
+    const evt = foreignEvent('thought.created', { thought: thought(WORK_ID, 'Новая задача') }) as any;
+    eventRouter.routeRealtimeEvent(evt, { networkId: NETWORK_ID });
+    realtimeEffects.applyDerivedRealtime(evt);
     await settle();
 
     assert.ok(
@@ -334,11 +352,11 @@ describe('realtime-обновление нижней зоны в режиме о
 
     viewRows.push({ id: WORK_ID, title: 'Новая задача', type_id: TYPE_ID, active: true, marked_for_deletion: false });
     // Ребро работы→версия: тип связи `show_on_map=false`, поэтому focus() не меняется.
-    realtimeUi.applyRealtimeToUi(
-      foreignEvent('link.created', {
-        link: { id: 'l-work', source_id: WORK_ID, target_id: FOCUS_ID, type_id: null, active: true, version: 1 },
-      }) as any,
-    );
+    const evt = foreignEvent('link.created', {
+      link: { id: 'l-work', source_id: WORK_ID, target_id: FOCUS_ID, type_id: null, active: true, version: 1 },
+    }) as any;
+    eventRouter.routeRealtimeEvent(evt, { networkId: NETWORK_ID });
+    realtimeEffects.applyDerivedRealtime(evt);
     await settle();
 
     assert.ok(viewRunCount > beforeRun, 'link.created обязан переисполнить активный отбор');
@@ -346,6 +364,162 @@ describe('realtime-обновление нижней зоны в режиме о
     assert.ok(
       canvas.getZoneEntries('children').some((e) => e.id === WORK_ID),
       'новая строка отбора появилась после внешнего link.created',
+    );
+    dispose();
+  });
+
+  it('вход в отбор и видимая строка переисполняют отбор; невидимая правка без полей-признаков — нет', async () => {
+    const dispose = await mountWithView();
+    assert.ok(viewRunCount >= 1, 'отбор по умолчанию исполнился');
+
+    // 1) Мысль ВНЕ окрестности и ВНЕ результата отбора, правка без полей,
+    //    влияющих на состав отбора (заголовок, но отбор не использует keywords):
+    //    views.run НЕ переисполняется.
+    const invisibleId = '00000000-0000-4000-8000-000000000999';
+    const beforeRun = viewRunCount;
+    const invisibleEvt = {
+      ...foreignEvent('thought.updated', {
+        id: invisibleId,
+        changes: { title: 'Невидимая правка' },
+        version: 2,
+      }),
+      seq: 2,
+    } as any;
+    eventRouter.routeRealtimeEvent(invisibleEvt, { networkId: NETWORK_ID });
+    realtimeEffects.applyDerivedRealtime(invisibleEvt);
+    await settle();
+    assert.equal(viewRunCount, beforeRun, 'правка без полей-признаков отбор не переисполняет');
+
+    // 2) «Вход» в отбор (блокер G3): смена типа/актуальности у НЕвидимой мысли
+    //    может ввести её в отбор — views.run обязан переисполниться, даже если
+    //    старое видимое множество не содержит записи.
+    const afterInvisible = viewRunCount;
+    const entryEvt = {
+      ...foreignEvent('thought.updated', {
+        id: invisibleId,
+        changes: { type_id: TYPE_ID, active: true },
+        version: 3,
+      }),
+      seq: 3,
+    } as any;
+    eventRouter.routeRealtimeEvent(entryEvt, { networkId: NETWORK_ID });
+    realtimeEffects.applyDerivedRealtime(entryEvt);
+    await settle();
+    assert.ok(
+      viewRunCount > afterInvisible,
+      'смена типа/актуальности переисполняет отбор (мысль могла войти)',
+    );
+
+    // 3) Мысль, УЖЕ видимая строкой отбора: её строка могла измениться — отбор
+    //    обязан переисполниться (направление «выход»/обновление строки).
+    const visibleId = 'existing';
+    const beforeVisible = viewRunCount;
+    const visibleEvt = {
+      ...foreignEvent('thought.updated', {
+        id: visibleId,
+        changes: { title: 'Видимая правка' },
+        version: 2,
+      }),
+      seq: 4,
+    } as any;
+    eventRouter.routeRealtimeEvent(visibleEvt, { networkId: NETWORK_ID });
+    realtimeEffects.applyDerivedRealtime(visibleEvt);
+    await settle();
+    assert.ok(viewRunCount > beforeVisible, 'правка видимой строки отбора переисполняет отбор');
+    dispose();
+  });
+
+  it('keywords-положительный: заголовок невидимой мысли при keywords-отборе переисполняет отбор, оформление — нет', async () => {
+    // Активный отбор использует критерий `keywords` — заголовок/синонимы
+    // входят в состав отбора. Мысль ВНЕ видимого результата: её новое имя
+    // может ВВЕСТИ её в отбор (симметрично «входу» при смене типа).
+    viewDefinition = JSON.stringify({ criteria: [], keywords: 'работа' });
+    const dispose = await mountWithView();
+    assert.ok(viewRunCount >= 1, 'keywords-отбор исполнился при отрисовке');
+    const strip = await import('../src/renderer/canvas/focus-filter-strip.js');
+    // Переисполняем активный отбор — полоса читает определение и запоминает
+    // признак `keywords` (как при показе результата в UI).
+    await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(strip.activeViewUsesKeywords(), true, 'keywords-отбор распознан полосой');
+    const invisibleId = '00000000-0000-4000-8000-000000000998';
+
+    const beforeTitle = viewRunCount;
+    const titleEvt = {
+      ...foreignEvent('thought.updated', {
+        id: invisibleId,
+        changes: { title: 'Работа новая' },
+        version: 2,
+      }),
+      seq: 10,
+    } as any;
+    eventRouter.routeRealtimeEvent(titleEvt, { networkId: NETWORK_ID });
+    realtimeEffects.applyDerivedRealtime(titleEvt);
+    await settle();
+    assert.ok(
+      viewRunCount > beforeTitle,
+      'правка заголовка при keywords-отборе переисполняет отбор',
+    );
+
+    const afterTitle = viewRunCount;
+    const decoEvt = {
+      ...foreignEvent('thought.updated', {
+        id: invisibleId,
+        changes: { bg_color: '#ffffff' },
+        version: 3,
+      }),
+      seq: 11,
+    } as any;
+    eventRouter.routeRealtimeEvent(decoEvt, { networkId: NETWORK_ID });
+    realtimeEffects.applyDerivedRealtime(decoEvt);
+    await settle();
+    assert.equal(afterTitle, viewRunCount, 'оформление keywords-отбор не переисполняет');
+    dispose();
+  });
+
+  /**
+   * Ошибка 4b3d1940: «Перестали обновляться мысли на карте, когда изменяю её
+   * заголовок». Мысль — строка нижней зоны (активного отбора), НЕ сосед фокуса.
+   * Локальная правка из редактора обязана идти ОБЩИМ путём слоя
+   * (`reflectThoughtUpdate` → `signalThoughtUpdated` → те же ключи, что роутер на
+   * `thought.updated`), а не только через окрестность фокуса. Без фикса
+   * `invalidateRef`/`scheduleRefresh` для строки отбора не срабатывают
+   * (`inNeighbourhood` ложно) — ни `views.run`, ни перерисовка, заголовок облачка
+   * остаётся старым до собственного realtime-эха. Тест краснел до фикса.
+   */
+  it('своя правка заголовка строки отбора перерисовывает карту без realtime-эха (4b3d1940)', async () => {
+    const dispose = await mountWithView();
+    assert.ok(viewRunCount >= 1, 'отбор по умолчанию исполнился при отрисовке');
+    const beforeRun = viewRunCount;
+    const beforeRender = renderCount();
+    assert.equal(
+      canvas.getZoneEntries('children').find((e) => e.id === 'existing')?.links[0]?.title,
+      'Старая работа',
+    );
+
+    // REST-ответ редактора уже несёт новое имя; realtime-эхо (B1) придёт позже —
+    // UI обязан обновиться сразу общим путём слоя.
+    viewRows = [
+      { id: 'existing', title: 'Локально новое', type_id: TYPE_ID, active: true, marked_for_deletion: false },
+    ];
+    const { reflectThoughtUpdate } = await import('../src/renderer/editor/editor.js');
+    reflectThoughtUpdate(
+      { ...thought('existing', 'Локально новое'), version: 2 },
+      { title: 'Локально новое' },
+    );
+    await settle();
+
+    assert.ok(
+      viewRunCount > beforeRun,
+      `своя правка строки отбора обязана переисполнить отбор; вызовов было ${viewRunCount - beforeRun}`,
+    );
+    assert.ok(
+      renderCount() > beforeRender,
+      `своя правка строки отбора обязана перерисовать холст; рендеров было ${renderCount() - beforeRender}`,
+    );
+    assert.equal(
+      canvas.getZoneEntries('children').find((e) => e.id === 'existing')?.links[0]?.title,
+      'Локально новое',
+      'заголовок облачка на карте обновился локальной правкой',
     );
     dispose();
   });

@@ -12,7 +12,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
-import type { EtnBridgeApi, IpcInvokePayload } from '../main/ipc/contract.js';
+import type { DeepLinkPayload, EtnBridgeApi, IpcInvokePayload } from '../main/ipc/contract.js';
 import { cleanIpcError } from './ipc-error.js';
 
 /** Invoke a main-process handler over the single IPC channel. */
@@ -176,6 +176,42 @@ function buildApi(): EtnBridgeApi {
       rollup: (networkId, untilMs) => invoke('activity.rollup', networkId, untilMs),
       truncate: (networkId, untilMs) => invoke('activity.truncate', networkId, untilMs),
     },
+    publications: {
+      list: (networkId, query) => invoke('publications.list', networkId, query),
+      create: (networkId, input) => invoke('publications.create', networkId, input),
+      get: (networkId, id) => invoke('publications.get', networkId, id),
+      update: (networkId, id, input, expectedVersion) =>
+        invoke('publications.update', networkId, id, input, expectedVersion),
+      trash: (networkId, id) => invoke('publications.trash', networkId, id),
+      restore: (networkId, id) => invoke('publications.restore', networkId, id),
+      purge: (networkId, id) => invoke('publications.purge', networkId, id),
+      deletionCheck: (networkId, id) => invoke('publications.deletionCheck', networkId, id),
+      rebuild: (networkId, id) => invoke('publications.rebuild', networkId, id),
+      setOrder: (networkId, id, items) => invoke('publications.setOrder', networkId, id, items),
+      addExclusion: (networkId, id, thoughtId) =>
+        invoke('publications.addExclusion', networkId, id, thoughtId),
+      removeExclusion: (networkId, id, thoughtId) =>
+        invoke('publications.removeExclusion', networkId, id, thoughtId),
+      assembly: (networkId, id, query) => invoke('publications.assembly', networkId, id, query),
+      candidates: (networkId, id, query) => invoke('publications.candidates', networkId, id, query),
+      acceptCandidate: (networkId, id, thoughtId) =>
+        invoke('publications.acceptCandidate', networkId, id, thoughtId),
+      usage: (networkId, thoughtId, query) =>
+        invoke('publications.usage', networkId, thoughtId, query),
+      export: (networkId, id, request) => invoke('publications.export', networkId, id, request),
+      listShelves: (networkId) => invoke('publications.listShelves', networkId),
+      createShelf: (networkId, input) => invoke('publications.createShelf', networkId, input),
+      updateShelf: (networkId, id, input) => invoke('publications.updateShelf', networkId, id, input),
+      trashShelf: (networkId, id) => invoke('publications.trashShelf', networkId, id),
+      restoreShelf: (networkId, id) => invoke('publications.restoreShelf', networkId, id),
+      purgeShelf: (networkId, id) => invoke('publications.purgeShelf', networkId, id),
+      shelfDeletionCheck: (networkId, id) =>
+        invoke('publications.shelfDeletionCheck', networkId, id),
+      addShelfItem: (networkId, shelfId, publicationId, position) =>
+        invoke('publications.addShelfItem', networkId, shelfId, publicationId, position),
+      removeShelfItem: (networkId, shelfId, publicationId) =>
+        invoke('publications.removeShelfItem', networkId, shelfId, publicationId),
+    },
     types: {
       listThoughtTypes: (networkId) => invoke('types.listThoughtTypes', networkId),
       getThoughtTypeCounts: (networkId) => invoke('types.getThoughtTypeCounts', networkId),
@@ -272,6 +308,7 @@ function buildApi(): EtnBridgeApi {
       copy: (networkId, attachmentId, input) =>
         invoke('attachments.copy', networkId, attachmentId, input),
       search: (networkId, query) => invoke('attachments.search', networkId, query),
+      getUsage: (networkId, id) => invoke('attachments.getUsage', networkId, id),
     },
     admin: {
       listUsers: () => invoke('admin.listUsers'),
@@ -340,9 +377,9 @@ function buildApi(): EtnBridgeApi {
         ipcRenderer.on('realtime:layer', listener);
         return () => ipcRenderer.removeListener('realtime:layer', listener);
       },
-      /** Own-mutation flag (S11, 08-ui-spec.md §2.2): the event was suppressed
-       * as this client's echo, but the write may have created a layer shadow
-       * row — the renderer refreshes the override marking. */
+      /** Own-mutation flag (S11, 08-ui-spec.md §2.2): the write may have
+       * created a layer shadow row — the renderer refreshes the override
+       * marking right away (B1: the realtime event also arrives, but later). */
       onSelfMutated(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
           cb(payload as { networkId: string });
@@ -366,13 +403,13 @@ function buildApi(): EtnBridgeApi {
     },
     deepLink: {
       /**
-       * Subscribe to `etn://open?net=<id>&thought=<id>` deep links dispatched
-       * by the main process (task R11). The callback receives the parsed
-       * payload `{ networkId, thoughtId }`.
+       * Subscribe to `etn://open?net=<id>&thought=<id>` (или `…&publication=<id>`)
+       * deep links dispatched by the main process (task R11; публикации — 0.11.1,
+       * задача 3275fd8d). The callback receives the parsed payload.
        */
       onDeepLink(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
-          cb(payload as { networkId: string; thoughtId: string });
+          cb(payload as DeepLinkPayload);
         ipcRenderer.on('etn:deep-link', listener);
         return () => ipcRenderer.removeListener('etn:deep-link', listener);
       },

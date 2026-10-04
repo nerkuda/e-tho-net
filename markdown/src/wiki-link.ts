@@ -11,11 +11,17 @@
  * - `[[n:<uuid>#<uuid>]]` / `[[n:<uuid>#<uuid>|<alias>]]` — cross-network
  *   link; additionally carries `data-wiki-network="<uuid>"`.
  *
+ * Publication rendering (task d8ad884e) adds, gated on the per-render `env`
+ * (`env.pub`), the prefixed form `[[#pub:<uuid>]]` and a resolver hook: in
+ * publication mode the caller decides what each link becomes (in-document
+ * anchor, plain title, or an «удалена» marker) instead of emitting a span.
+ *
  * Resolution to a thought happens at click time in the client, never at
  * render time (names may change after the HTML is cached).
  */
 
 import type MarkdownIt from 'markdown-it';
+import type Token from 'markdown-it/lib/token.mjs';
 
 /** Class of the rendered span (matched by the client's click handler). */
 export const WIKI_LINK_CLASS = 'wiki-link';
@@ -33,6 +39,11 @@ export const WIKI_LINK_ID_ATTR = 'data-wiki-id';
  * this attribute is absent.
  */
 export const WIKI_LINK_NETWORK_ATTR = 'data-wiki-network';
+/**
+ * Extra class on the «удалена» marker emitted when a publication-mode resolver
+ * reports `{ kind: 'missing' }` (requirement [[#7f583ef9]]).
+ */
+export const WIKI_LINK_MISSING_CLASS = 'wiki-link-missing';
 
 /**
  * UUID v4 (and any other variant) — case-insensitive, 8-4-4-4-12 hex with
@@ -41,17 +52,54 @@ export const WIKI_LINK_NETWORK_ATTR = 'data-wiki-network';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Kind of a parsed wiki link. */
-type WikiLinkKind = 'name' | 'id' | 'cross';
+export type WikiLinkKind = 'name' | 'id' | 'cross' | 'pub';
 
 /** Meta attached to a `wiki_link` token. */
-interface WikiLinkMeta {
+export interface WikiLinkMeta {
   target: string;
   alias: string | null;
   kind: WikiLinkKind;
-  /** Thought id for kind='id' / 'cross'. */
+  /** Thought / publication id for kind='id' / 'cross' / 'pub'. */
   targetId: string | null;
   /** Network id for kind='cross'. */
   networkId: string | null;
+}
+
+/** A parsed wiki link handed to a publication resolver. */
+export interface WikiLinkRef {
+  kind: WikiLinkKind;
+  /** Target id for 'id' / 'cross' / 'pub', otherwise null. */
+  id: string | null;
+  /** Network id for 'cross', otherwise null. */
+  networkId: string | null;
+  /** Raw target text (name form, or the `#…` / `n:…` token). */
+  target: string;
+  /** Author-provided alias, when present. */
+  alias: string | null;
+}
+
+/** What a publication resolver turns a wiki link into. */
+export type WikiLinkResolution =
+  | { kind: 'anchor'; anchor: string; text: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'missing' };
+
+/**
+ * Publication-mode resolver. Called for every wiki link when `env.pub` is set.
+ * Returning `undefined` falls back to plain text (the alias, or «удалена» for
+ * target-id forms) so publication output never carries dangling spans.
+ */
+export type WikiLinkResolver = (ref: WikiLinkRef) => WikiLinkResolution | undefined;
+
+/** The `env.pub` slice the wiki-link plugin reacts to. */
+interface PublicationHook {
+  resolveLink?: WikiLinkResolver;
+}
+
+/** Returns the publication hook carried by the current render env, if any. */
+function pubHook(env: unknown): PublicationHook | undefined {
+  const pub = (env as { pub?: PublicationHook } | null | undefined)?.pub;
+  return pub ?? undefined;
 }
 
 export function wikiLinkPlugin(md: MarkdownIt): void {
@@ -73,7 +121,7 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     const alias = aliasRaw !== null && aliasRaw !== '' ? aliasRaw : null;
     if (target === '') return false;
 
-    // Resolve the kind: name / id / cross. Invalid UUIDs fall back to
+    // Resolve the kind: name / id / cross / pub. Invalid UUIDs fall back to
     // legacy 'name' so existing `[[имя с #]]` patterns keep working.
     let kind: WikiLinkKind = 'name';
     let targetId: string | null = null;
@@ -83,6 +131,14 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
       if (UUID_RE.test(id)) {
         kind = 'id';
         targetId = id.toLowerCase();
+      } else if (id.startsWith('pub:') && pubHook(state.env) !== undefined) {
+        // `[[#pub:<uuid>]]` — publication link (task d8ad884e). Only parsed in
+        // publication mode: plain renderMarkdown keeps its legacy behaviour.
+        const pubId = id.slice('pub:'.length).trim();
+        if (UUID_RE.test(pubId)) {
+          kind = 'pub';
+          targetId = pubId.toLowerCase();
+        }
       }
     } else if (target.startsWith('n:')) {
       // n:<networkId>#<thoughtId>
@@ -106,9 +162,35 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     return true;
   });
 
-  md.renderer.rules.wiki_link = (tokens, idx) => {
+  md.renderer.rules.wiki_link = (tokens, idx, _options, env) => {
     const meta = tokens[idx]!.meta as WikiLinkMeta;
     const esc = md.utils.escapeHtml;
+
+    // Publication mode: when the caller supplies a resolver it decides the
+    // output for EVERY wiki link so the exported/read document has no
+    // unresolved spans (req. [[#888453b6]]). Without a resolver the span forms
+    // are kept as-is, so a resolver-less publication render matches
+    // `renderMarkdown` (only the `[[#pub:…]]` form is publication-specific).
+    const resolver = pubHook(env)?.resolveLink;
+    if (resolver !== undefined) {
+      const resolved = resolver({
+        kind: meta.kind,
+        id: meta.targetId,
+        networkId: meta.networkId,
+        target: meta.target,
+        alias: meta.alias,
+      });
+      if (resolved !== undefined) return renderResolution(resolved, esc);
+      // No decision — plain text fallback (аlias when present).
+      if (meta.kind === 'name') return esc(meta.alias ?? meta.target);
+      return esc(meta.alias ?? 'удалена');
+    }
+    if (meta.kind === 'pub') {
+      // Parsed only in publication mode; without a resolver there is no span
+      // form — fall back to text so no dangling span is emitted.
+      return esc(meta.alias ?? 'удалена');
+    }
+
     const attrs: string[] = [`class="${WIKI_LINK_CLASS}"`];
 
     if (meta.kind === 'id' || meta.kind === 'cross') {
@@ -134,5 +216,35 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     attrs.push('data-legacy-link="true"');
     const label = meta.alias ?? meta.target;
     return `<span ${attrs.join(' ')}>${esc(label)}</span>`;
+  };
+}
+
+/** Renders a resolver decision to safe HTML. */
+function renderResolution(
+  resolution: WikiLinkResolution,
+  esc: (input: string) => string,
+): string {
+  if (resolution.kind === 'anchor') {
+    return `<a href="#${esc(resolution.anchor)}">${esc(resolution.text)}</a>`;
   }
+  if (resolution.kind === 'text') return esc(resolution.text);
+  return `<span class="${WIKI_LINK_CLASS} ${WIKI_LINK_MISSING_CLASS}">удалена</span>`;
+}
+
+/** Recursively collects human-readable text out of an inline token's children. */
+export function inlinePlainText(token: Token): string {
+  const children = token.children;
+  if (children === null) return token.content;
+  let out = '';
+  for (const child of children) {
+    if (child.type === 'text' || child.type === 'code_inline') {
+      out += child.content;
+    } else if (child.type === 'wiki_link') {
+      const meta = child.meta as WikiLinkMeta | null;
+      out += meta?.alias ?? meta?.target ?? '';
+    } else if (child.type === 'softbreak' || child.type === 'hardbreak') {
+      out += ' ';
+    }
+  }
+  return out.trim();
 }

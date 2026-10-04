@@ -56,6 +56,7 @@ const EXPECTED_MODULES = [
   'styles/screens/chronicle.css',
   'styles/layers.css',
   'styles/screens/events.css',
+  'styles/screens/publications.css',
   'styles/legacy.css',
 ];
 

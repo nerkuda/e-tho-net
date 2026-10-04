@@ -33,6 +33,7 @@ import type Database from 'better-sqlite3';
 import { registerMigrationHelpers } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { networkMigrationsDir } from '../src/paths.js';
+import { networkMigrationFilesFrom } from './migration-files.js';
 
 /** Файл миграции, ради которой заведён этот набор. */
 const MIGRATION = '046_comments_time.sql';
@@ -152,7 +153,9 @@ describe(
         seedComment(db, 'c-permanent', 'permanent', '2024-01-01T00:00:00.000Z', null);
 
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, [MIGRATION]);
+        // База доведена до 045 (pre046Db) — применяется каталог с 046
+        // (задача 8816c01f: ожидание вычисляется, не перечисляется).
+        assert.deepEqual(res.applied, networkMigrationFilesFrom(MIGRATION));
 
         // date-only в valid_from + пустой valid_to → оба стали маркером.
         assert.deepEqual(readComment(db, 'c-date-only'), {

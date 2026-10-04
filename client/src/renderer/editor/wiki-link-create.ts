@@ -21,7 +21,7 @@ import type { Comment } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { invalidateIndicators } from '../canvas/canvas.js';
+import { invalidateQueries, queryKeys } from '../lib/live/index.js';
 import { canSave, offlineNotice } from '../drafts.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { errText } from '../lib/dom.js';
@@ -184,7 +184,7 @@ async function replaceLinksInComment(
   if (count === 0) return;
 
   const updated = await etn.comments.update(networkId, fresh.id, { body_md: md }, fresh.version);
-  invalidateIndicators(ctx.ownerId);
+  invalidateQueries(queryKeys.indicators(ctx.ownerId));
   ctx.refresh(updated.body_md, updated.body_html);
   ctx.afterLinksReplaced?.();
 }

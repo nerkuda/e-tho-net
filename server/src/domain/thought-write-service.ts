@@ -17,7 +17,13 @@
  *   2. **Write thoughts** — для каждого элемента создаётся (или
  *      переиспользуется/обновляется) мысль через {@link upsertThoughtBundle}
  *      с её собственным постоянным комментарием, хронологией, свойствами
- *      и вложениями. `ref` мапится на полученный `id`.
+ *      и вложениями. `ref` мапится на полученный `id`. Значения свойств,
+ *      называющие локальный `ref` батча, откладываются до фазы 2.5 (цель
+ *      может быть ещё не создана).
+ *   2.5. **Deferred ref property values** — значения, равные объявленным `ref`,
+ *      резолвятся в реальные id и пишутся здесь, когда все мысли батча уже
+ *      имеют id (ошибка 93bc46bb). Свойство признаётся связью по тем же
+ *      семантикам имён, что и фаза 2 (`resolveDefinition`).
  *   3. **Write links** — все связи с `target_id` (существующая) или
  *      `target_ref` (только что созданная) разрешаются в реальные id и
  *      пишутся пакетом.
@@ -48,7 +54,12 @@ import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { resolveLinkTypeIdByName } from './link-type-service.js';
 import { createLink } from './link-service.js';
 import { listComments } from './comment-service.js';
-import { computeThoughtCardWarnings, getPropertyValues } from './property-service.js';
+import {
+  computeThoughtCardWarnings,
+  getPropertyValues,
+  resolveDefinition,
+  setPropertyValue,
+} from './property-service.js';
 
 export { EtnError, MCP_MAX_THOUGHTS_PER_WRITE };
 
@@ -232,6 +243,109 @@ function resolveExistingThoughtIds(input: ThoughtWriteInput): Map<string, string
 }
 
 /**
+ * Every local name declared in the batch: `local_refs` keys plus
+ * `thoughts[].ref`. Used both to validate `links[].target_ref` before any write
+ * and to spot link-property values that name a batch ref instead of a real id
+ * (ошибка 93bc46bb).
+ */
+function collectDeclaredRefs(input: ThoughtWriteInput): Set<string> {
+  const declaredRefs = new Set<string>();
+  if (input.local_refs !== undefined) {
+    for (const name of Object.keys(input.local_refs)) declaredRefs.add(name);
+  }
+  for (const item of input.thoughts) {
+    if (item.ref !== undefined) declaredRefs.add(item.ref);
+  }
+  return declaredRefs;
+}
+
+/**
+ * `true` when a property value names any ref declared in this batch (a single
+ * string, or one of the strings of a multi-value / link set). Such a value is
+ * a local `ref`, not a real id — it must be resolved on the same phase as
+ * `links[].target_ref` (ошибка 93bc46bb), never written verbatim.
+ */
+function valueReferencesDeclaredRef(
+  value: PropertyValueValue,
+  declaredRefs: Set<string>,
+): boolean {
+  if (typeof value === 'string') return declaredRefs.has(value);
+  if (Array.isArray(value)) {
+    return value.some((v) => typeof v === 'string' && declaredRefs.has(v));
+  }
+  return false;
+}
+
+/**
+ * Replace every string of a property value that names a resolved batch ref with
+ * its real thought id; other values (real ids, scalars, cross-network objects)
+ * pass through untouched.
+ */
+function resolveRefValue(
+  value: PropertyValueValue,
+  refToId: Map<string, string>,
+): PropertyValueValue {
+  if (typeof value === 'string') return refToId.get(value) ?? value;
+  if (Array.isArray(value)) {
+    // Only a pure string set can name batch refs; a `cross_network_ref` set is
+    // addressed by cross-network objects and passes through untouched.
+    if (value.every((v): v is string => typeof v === 'string')) {
+      return value.map((v) => refToId.get(v) ?? v);
+    }
+    return value;
+  }
+  return value;
+}
+
+/**
+ * Split each item's `properties` into those written on phase 2 (as before) and
+ * those whose value names a batch `ref` — the latter cannot be written before
+ * the referenced thought exists, so they are deferred to phase 2.5, once every
+ * thought has a real id (ошибка 93bc46bb).
+ *
+ * The split deliberately does NOT decide whether a property is a link property:
+ * phase 2 accepts a link property by canonical registry name AND by the display
+ * name of EITHER side of its binding (paths 1 and 3 of `resolveDefinition`),
+ * and that resolution needs the owner — which does not exist yet. So any value
+ * naming a declared ref is deferred; phase 2.5 then asks `resolveDefinition`
+ * the same question phase 2 would and resolves the ref only for
+ * `value_type: 'link'` (a scalar whose text equals a ref name is written
+ * verbatim). A key unknown to the registry stays deferred too and raises the
+ * usual `NOT_FOUND` from `setPropertyValue` in phase 2.5.
+ */
+function splitRefPropertyValues(
+  input: ThoughtWriteInput,
+  declaredRefs: Set<string>,
+): {
+  kept: Array<Record<string, PropertyValueValue> | undefined>;
+  deferred: Array<Record<string, PropertyValueValue> | undefined>;
+} {
+  const kept: Array<Record<string, PropertyValueValue> | undefined> = [];
+  const deferred: Array<Record<string, PropertyValueValue> | undefined> = [];
+  for (const item of input.thoughts) {
+    if (item.properties === undefined) {
+      kept.push(undefined);
+      deferred.push(undefined);
+      continue;
+    }
+    let keptHere: Record<string, PropertyValueValue> | undefined;
+    let deferredHere: Record<string, PropertyValueValue> | undefined;
+    for (const [key, value] of Object.entries(item.properties)) {
+      if (valueReferencesDeclaredRef(value, declaredRefs)) {
+        deferredHere ??= {};
+        deferredHere[key] = value;
+        continue;
+      }
+      keptHere ??= {};
+      keptHere[key] = value;
+    }
+    kept.push(keptHere);
+    deferred.push(deferredHere);
+  }
+  return { kept, deferred };
+}
+
+/**
  * Validate `links[].target_id` / `target_ref` XOR and check `target_ref`
  * resolves to a ref declared elsewhere in the batch. The `refToId` map is
  * seeded from `thought_id`-addressed items so cross-batch references to
@@ -244,13 +358,7 @@ function validateLinkTargets(input: ThoughtWriteInput, refToId: Map<string, stri
   // any item has been written. Empty refs (items with no `ref`) are ignored.
   // `local_refs` keys are also "declared" — the user named them on purpose
   // and the corresponding uuid sits in `refToId`.
-  const declaredRefs = new Set<string>();
-  if (input.local_refs !== undefined) {
-    for (const name of Object.keys(input.local_refs)) declaredRefs.add(name);
-  }
-  for (const item of input.thoughts) {
-    if (item.ref !== undefined) declaredRefs.add(item.ref);
-  }
+  const declaredRefs = collectDeclaredRefs(input);
   for (const [index, item] of input.thoughts.entries()) {
     if (item.links === undefined) continue;
     for (const [linkIndex, link] of item.links.entries()) {
@@ -297,7 +405,9 @@ function validateLinkTargets(input: ThoughtWriteInput, refToId: Map<string, stri
  *   2. **Thoughts** — для каждого элемента создаём/обновляем/переиспользуем
  *      мысль через {@link upsertThoughtBundle} БЕЗ связей (комментарий,
  *      хронология, свойства, вложения — идут в комплекте). `ref → id`
- *      собирается параллельно.
+ *      собирается параллельно. Значения свойств, называющие `ref`, отложены.
+ *   2.5. **Deferred ref property values** — значения, равные объявленным
+ *      `ref`, резолвятся в id и пишутся (все мысли уже созданы).
  *   3. **Links** — резолвим `target_ref` в реальные id (все мысли уже
  *      имеют id к этому моменту, циклы корректны), создаём связи
  *      пакетом. Знание на связи (`links[].properties`, `links[].comment`)
@@ -324,7 +434,16 @@ export function writeThoughts(
   // Seed the ref map with thought_id-addressed items so cross-batch
   // target_ref references to those ids resolve during phase 3.
   const refToId = resolveExistingThoughtIds(resolved);
+  const declaredRefs = collectDeclaredRefs(resolved);
   validateLinkTargets(resolved, refToId);
+  // Property values that name a batch `ref` cannot be written on phase 2 (the
+  // target may not exist yet) — they join phase 2.5, once every thought has a
+  // real id. Whether such a value IS a link property is decided there by the
+  // same `resolveDefinition` semantics phase 2 uses (ошибка 93bc46bb).
+  const { kept: keptProperties, deferred: deferredProperties } = splitRefPropertyValues(
+    resolved,
+    declaredRefs,
+  );
 
   return ndb.transaction(() => {
     const items: ThoughtWriteItemResult[] = [];
@@ -355,7 +474,7 @@ export function writeThoughts(
         ...(item.on_duplicate !== undefined ? { on_duplicate: item.on_duplicate } : {}),
         ...(item.comment === undefined ? {} : { comment: item.comment }),
         ...(item.chronicle === undefined ? {} : { chronicle: item.chronicle }),
-        ...(item.properties === undefined ? {} : { properties: item.properties }),
+        ...(keptProperties[index] === undefined ? {} : { properties: keptProperties[index] }),
         ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
       };
 
@@ -451,6 +570,48 @@ export function writeThoughts(
       });
     }
 
+    // ---- phase 2.5: deferred ref property values ---------------------------
+    // Every thought now has a real id, so a property addressed by ANY name the
+    // read side shows (canonical registry name, or the display name of either
+    // side of a link property — same `resolveDefinition` semantics as phase 2)
+    // can be recognised and, when it is a link property, have its `ref` values
+    // resolved exactly like `links[].target_ref` (ошибка 93bc46bb). A scalar
+    // whose text merely equals a ref name is written verbatim.
+    for (const [index, deferred] of deferredProperties.entries()) {
+      if (deferred === undefined) continue;
+      const itemResult = items[index];
+      if (itemResult === undefined) continue;
+      for (const [key, rawValue] of Object.entries(deferred)) {
+        const def = resolveDefinition(ndb, 'thought', itemResult.id, key);
+        const value =
+          def?.value_type === 'link' ? resolveRefValue(rawValue, refToId) : rawValue;
+        const pv = setPropertyValue(
+          ndb,
+          'thought',
+          itemResult.id,
+          key,
+          value,
+          actorUserId,
+          crossNetworkAccess,
+        );
+        // Merge into the item echo with the same projection phase 2 uses, so
+        // `link_ids` still feed `link.created` publication in the facade.
+        itemResult.properties = {
+          ...(itemResult.properties ?? {}),
+          [key]:
+            pv.value_type === 'link'
+              ? {
+                  id: null,
+                  targets: linkTargetIds(pv.value),
+                  ...(pv.link_ids !== undefined && pv.link_ids.length > 0
+                    ? { link_ids: pv.link_ids }
+                    : {}),
+                }
+              : { id: pv.id },
+        };
+      }
+    }
+
     // ---- phase 3: materialize links ---------------------------------------
     // All thoughts have real ids now (forward refs to items later in the
     // batch resolve correctly), so each `target_ref` translates to a real
@@ -530,7 +691,10 @@ export function writeThoughts(
     // `REQUIRED_PROPERTY_MISSING` (ошибка 6f5812a3). Recompute warnings against
     // the FINAL card state once every link exists — this also refreshes the
     // aggregated `warnings[]` so batch-level consumers see the same picture.
-    if (pendingLinks.some((p) => p.links !== undefined && p.links.length > 0)) {
+    if (
+      deferredProperties.some((d) => d !== undefined) ||
+      pendingLinks.some((p) => p.links !== undefined && p.links.length > 0)
+    ) {
       warnings.length = 0;
       for (const [index, it] of items.entries()) {
         const fresh = computeThoughtCardWarnings(ndb, it.id);

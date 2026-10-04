@@ -33,7 +33,9 @@ export type ActivityAction =
 /**
  * Виды сущностей, изменение которых оставляет запись в `activity_log`.
  * Состав совпадает с LockEntityType и расширен «comment»/«attachment»/
- * «layer», которые захватываются, но не пишутся в журнал под `edit.*`.
+ * «layer», которые захватываются, но не пишутся в журнал под `edit.*`;
+ * «publication»/«shelf» добавлены подсистемой «Публикации» (0.11.1,
+ * задача c59ce742; требование d4452908).
  */
 export type ActivityEntityType =
   | 'thought'
@@ -43,7 +45,9 @@ export type ActivityEntityType =
   | 'property'
   | 'comment'
   | 'attachment'
-  | 'layer';
+  | 'layer'
+  | 'publication'
+  | 'shelf';
 
 /** Лимит длины снимка `entity_title` — формируется в activity-snapshot.ts. */
 export const ACTIVITY_TITLE_MAX = 256;

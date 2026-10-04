@@ -35,7 +35,7 @@ import type { Comment } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import { requireNetworkId } from '../app.js';
-import { invalidateIndicators } from '../canvas/canvas.js';
+import { invalidateQueries, queryKeys } from '../lib/live/index.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { div, errText } from '../lib/dom.js';
 import { MENU_SEPARATOR, menuAction, type MenuItem } from '../lib/menu.js';
@@ -341,7 +341,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
             }, version);
             version = updated.version;
           }
-          invalidateIndicators(ctx.ownerId);
+          invalidateQueries(queryKeys.indicators(ctx.ownerId));
           await reload();
         } catch (err) {
           notice(`Не удалось сохранить: ${errText(err)}`, 'error');
@@ -396,7 +396,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
           version = updated.version;
           html = updated.body_html;
         }
-        invalidateIndicators(ctx.ownerId);
+        invalidateQueries(queryKeys.indicators(ctx.ownerId));
         await reload();
         return html;
       },
@@ -425,7 +425,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       const current = comments.find((c) => c.id === comment.id);
       if (current === undefined) return;
       await etn.comments.remove(networkId, current.id, current.version);
-      invalidateIndicators(ctx.ownerId);
+      invalidateQueries(queryKeys.indicators(ctx.ownerId));
       if (selectedId === comment.id) showEmptyEditor();
       await reload();
     } catch (err) {

@@ -710,6 +710,171 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
 
+  // --- publications & shelves (0.11.1, задача a3cfc018; маршруты c59ce742) -
+  handlers.set(
+    'publications.list',
+    bind((networkId: string, query?: Parameters<RestClient['listPublications']>[1]) =>
+      requireRest(deps).listPublications(networkId, query),
+    ),
+  );
+  handlers.set(
+    'publications.create',
+    bind(
+      (
+        networkId: string,
+        input: Parameters<RestClient['createPublication']>[1],
+      ) => requireRest(deps).createPublication(networkId, input),
+    ),
+  );
+  handlers.set(
+    'publications.get',
+    bind((networkId: string, id: string) => requireRest(deps).getPublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.deletionCheck',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).checkPublicationDeletion(networkId, id),
+    ),
+  );
+  handlers.set(
+    'publications.update',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        input: Parameters<RestClient['updatePublication']>[2],
+        expectedVersion?: number,
+      ) =>
+        requireRest(deps).updatePublication(
+          networkId,
+          id,
+          input,
+          expectedVersion === undefined ? undefined : { expectedVersion },
+        ),
+    ),
+  );
+  handlers.set(
+    'publications.trash',
+    bind((networkId: string, id: string) => requireRest(deps).trashPublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.restore',
+    bind((networkId: string, id: string) => requireRest(deps).restorePublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.purge',
+    bind((networkId: string, id: string) => requireRest(deps).purgePublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.rebuild',
+    bind((networkId: string, id: string) => requireRest(deps).rebuildPublication(networkId, id)),
+  );
+  handlers.set(
+    'publications.setOrder',
+    bind((networkId: string, id: string, items: Parameters<RestClient['setPublicationOrder']>[2]) =>
+      requireRest(deps).setPublicationOrder(networkId, id, items),
+    ),
+  );
+  handlers.set(
+    'publications.addExclusion',
+    bind((networkId: string, id: string, thoughtId: string) =>
+      requireRest(deps).addPublicationExclusion(networkId, id, thoughtId),
+    ),
+  );
+  handlers.set(
+    'publications.removeExclusion',
+    bind((networkId: string, id: string, thoughtId: string) =>
+      requireRest(deps).removePublicationExclusion(networkId, id, thoughtId),
+    ),
+  );
+  handlers.set(
+    'publications.assembly',
+    bind(
+      (networkId: string, id: string, query?: Parameters<RestClient['getPublicationAssembly']>[2]) =>
+        requireRest(deps).getPublicationAssembly(networkId, id, query),
+    ),
+  );
+  handlers.set(
+    'publications.candidates',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        query?: Parameters<RestClient['listPublicationCandidates']>[2],
+      ) => requireRest(deps).listPublicationCandidates(networkId, id, query),
+    ),
+  );
+  handlers.set(
+    'publications.acceptCandidate',
+    bind((networkId: string, id: string, thoughtId: string) =>
+      requireRest(deps).acceptPublicationCandidate(networkId, id, thoughtId),
+    ),
+  );
+  handlers.set(
+    'publications.usage',
+    bind(
+      (networkId: string, thoughtId: string, query?: Parameters<RestClient['listPublicationUsage']>[2]) =>
+        requireRest(deps).listPublicationUsage(networkId, thoughtId, query),
+    ),
+  );
+  handlers.set(
+    'publications.export',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        request: Parameters<RestClient['exportPublication']>[2],
+      ) => requireRest(deps).exportPublication(networkId, id, request),
+    ),
+  );
+  handlers.set(
+    'publications.listShelves',
+    bind((networkId: string) => requireRest(deps).listShelves(networkId)),
+  );
+  handlers.set(
+    'publications.createShelf',
+    bind((networkId: string, input: Parameters<RestClient['createShelf']>[1]) =>
+      requireRest(deps).createShelf(networkId, input),
+    ),
+  );
+  handlers.set(
+    'publications.updateShelf',
+    bind(
+      (networkId: string, id: string, input: Parameters<RestClient['updateShelf']>[2]) =>
+        requireRest(deps).updateShelf(networkId, id, input),
+    ),
+  );
+  handlers.set(
+    'publications.trashShelf',
+    bind((networkId: string, id: string) => requireRest(deps).trashShelf(networkId, id)),
+  );
+  handlers.set(
+    'publications.restoreShelf',
+    bind((networkId: string, id: string) => requireRest(deps).restoreShelf(networkId, id)),
+  );
+  handlers.set(
+    'publications.purgeShelf',
+    bind((networkId: string, id: string) => requireRest(deps).purgeShelf(networkId, id)),
+  );
+  handlers.set(
+    'publications.shelfDeletionCheck',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).checkShelfDeletion(networkId, id),
+    ),
+  );
+  handlers.set(
+    'publications.addShelfItem',
+    bind((networkId: string, shelfId: string, publicationId: string, position?: number) =>
+      requireRest(deps).addShelfItem(networkId, shelfId, publicationId, position),
+    ),
+  );
+  handlers.set(
+    'publications.removeShelfItem',
+    bind((networkId: string, shelfId: string, publicationId: string) =>
+      requireRest(deps).removeShelfItem(networkId, shelfId, publicationId),
+    ),
+  );
+
   // --- layers (S11, 13-layers.md §10.3; 03-server-api.md §5a) --------------
   handlers.set(
     'layers.list',
@@ -1223,11 +1388,11 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   // --- attachments ----------------------------------------------------------
   handlers.set(
     'attachments.list',
-    bind((networkId: string, ownerType: 'thought' | 'link', ownerId: string) => {
+    bind((networkId: string, ownerType: 'thought' | 'link' | 'publication', ownerId: string) => {
       const rest = requireRest(deps);
-      return ownerType === 'thought'
-        ? rest.listThoughtAttachments(networkId, ownerId)
-        : rest.listLinkAttachments(networkId, ownerId);
+      if (ownerType === 'thought') return rest.listThoughtAttachments(networkId, ownerId);
+      if (ownerType === 'link') return rest.listLinkAttachments(networkId, ownerId);
+      return rest.listPublicationAttachments(networkId, ownerId);
     }),
   );
   handlers.set(
@@ -1241,14 +1406,14 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind(
       (
         networkId: string,
-        ownerType: 'thought' | 'link',
+        ownerType: 'thought' | 'link' | 'publication',
         ownerId: string,
         input: Parameters<RestClient['createThoughtAttachment']>[2],
       ) => {
         const rest = requireRest(deps);
-        return ownerType === 'thought'
-          ? rest.createThoughtAttachment(networkId, ownerId, input)
-          : rest.createLinkAttachment(networkId, ownerId, input);
+        if (ownerType === 'thought') return rest.createThoughtAttachment(networkId, ownerId, input);
+        if (ownerType === 'link') return rest.createLinkAttachment(networkId, ownerId, input);
+        return rest.createPublicationAttachment(networkId, ownerId, input);
       },
     ),
   );
@@ -1257,16 +1422,20 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind(
       (
         networkId: string,
-        ownerType: 'thought' | 'link',
+        ownerType: 'thought' | 'link' | 'publication',
         ownerId: string,
         input: Parameters<RestClient['uploadThoughtAttachmentFile']>[2],
       ) => {
         const rest = requireRest(deps);
-        return ownerType === 'thought'
-          ? rest.uploadThoughtAttachmentFile(networkId, ownerId, input)
-          : rest.uploadLinkAttachmentFile(networkId, ownerId, input);
+        if (ownerType === 'thought') return rest.uploadThoughtAttachmentFile(networkId, ownerId, input);
+        if (ownerType === 'link') return rest.uploadLinkAttachmentFile(networkId, ownerId, input);
+        return rest.uploadPublicationAttachmentFile(networkId, ownerId, input);
       },
     ),
+  );
+  handlers.set(
+    'attachments.getUsage',
+    bind((networkId: string, id: string) => requireRest(deps).getAttachmentUsage(networkId, id)),
   );
   handlers.set(
     'attachments.update',
@@ -2110,10 +2279,9 @@ async function openExternalShell(target: string): Promise<string> {
  * IPC channels whose successful call mutates branchable network data
  * (13-layers.md §3): the write may have created a layer shadow row. The
  * invoke dispatcher flags these to the renderer as `realtime:selfmut`
- * (08-ui-spec.md §2.2) — the SERVER suppresses own echoes (04-realtime.md §5:
- * a `deliver` with `actor.client_id === conn.clientId` never sends), so no WS
- * event arrives for them and the canvas override marking would refresh only
- * on the next layer/tab switch.
+ * (08-ui-spec.md §2.2). B1 техпроекта 269016e2 снял эхо-подавление сервера
+ * (событие доставляется и автору), но приходит асинхронно — флаг ускоряет
+ * обновление метки переопределений слоя на холсте сразу после ответа REST.
  *
  * Excluded on purpose: local-only channels (tabs/ui/meta/pins/savedFilters),
  * user-scoped preferences and orders (non-branchable tables), the type

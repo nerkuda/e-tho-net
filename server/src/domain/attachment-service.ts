@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -33,9 +33,11 @@ import {
   type AttachmentFileInput,
   type AttachmentInput,
   type AttachmentKind,
+  type AttachmentOwnerRef,
   type AttachmentOwnerType,
   type AttachmentSearchQuery,
   type AttachmentUpdateInput,
+  type AttachmentUsage,
 } from '@etn/shared';
 
 import { renderMarkdown } from '@etn/markdown';
@@ -124,7 +126,10 @@ function validateOwnerType(ownerType: unknown): AttachmentOwnerType {
  */
 function ensureOwnerExists(ndb: NetworkDb, ownerType: AttachmentOwnerType, ownerId: string): void {
   // Reads go through the layer-resolving views (13-layers.md §4.2).
-  const table = ownerType === 'thought' ? 'thoughts_v' : 'links_v';
+  // `publication` (0.11.1, задача f37b468d, ADR 73cfcf64) — обложка публикации:
+  // публикация текущего слоя (`publications_v`).
+  const table =
+    ownerType === 'thought' ? 'thoughts_v' : ownerType === 'link' ? 'links_v' : 'publications_v';
   const row = ndb.prepare(`SELECT 1 FROM ${table} WHERE id = ? LIMIT 1`).get(ownerId);
   if (!row) {
     throw new EtnError('NOT_FOUND', `${ownerType} ${ownerId} not found`, {
@@ -173,6 +178,105 @@ export function listAttachments(
     )
     .all(ownerType, ownerId) as AttachmentRow[];
   return rows.map(rowToAttachment);
+}
+
+/** Порядок групп владельцев в ответе «использование вложения». */
+const OWNER_TYPE_RANK: Record<AttachmentOwnerType, number> = {
+  thought: 0,
+  publication: 1,
+  link: 2,
+};
+
+/** Батч-резолв названий владельцев из `thoughts_v`/`publications_v`. */
+function resolveOwnerTitles(
+  ndb: NetworkDb,
+  ids: readonly string[],
+  table: 'thoughts_v' | 'publications_v',
+): Map<string, string> {
+  if (ids.length === 0) return new Map();
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ndb
+    .prepare(`SELECT id, title FROM ${table} WHERE id IN (${placeholders})`)
+    .all(...ids) as { id: string; title: string }[];
+  return new Map(rows.map((r) => [r.id, r.title]));
+}
+
+/**
+ * Использование вложения (0.11.1, задача 46cf4bcb): все владельцы, которые
+ * держат это вложение — мысли, связи и публикации. Нужно диалогу выбора
+ * обложки публикации: в строке вложения показываются «облачка» мыслей и
+ * публикаций, к которым относится картинка.
+ *
+ * У строки вложения ровно один владелец, но общий физический носитель
+ * (файл/URL) может быть привязан несколькими строками — прежде всего
+ * копированием на другого владельца (ADR 73cfcf64). Поэтому берутся владельцы
+ * ВСЕХ живых строк с тем же `kind` и тем же `url`/`file_path`, что у указанной
+ * строки; дубли по `(owner_type, owner_id)` схлопываются.
+ *
+ * Названия мыслей и публикаций подставляются из `*_v`; у связи названия нет
+ * (`title: null`). Порядок детерминирован (`thought` → `publication` → `link`,
+ * внутри группы — по id владельца).
+ *
+ * Throws `NOT_FOUND` (404), если строка вложения не видна в текущем слое.
+ */
+export function listAttachmentUsage(ndb: NetworkDb, attachmentId: string): AttachmentUsage {
+  const source = getAttachmentOrThrow(ndb, attachmentId);
+  // Общий носитель: для kind='url' — тот же url, для kind='file' — тот же
+  // file_path. Ветка выбирается по НЕпустой колонке носителя, поэтому
+  // nullable-колонка не «склеивает» между собой вложения без адреса.
+  // (Раньше вторая ветка ошибочно проверяла `file_path IS NULL` и для
+  // файловых вложений не находила ни строки — блокер приёмки 46cf4bcb.)
+  const rows = ndb
+    .prepare(
+      `SELECT owner_type, owner_id FROM attachments_v
+        WHERE kind = ?
+          AND ((url IS NOT NULL AND url = ?) OR (file_path IS NOT NULL AND file_path = ?))
+        ORDER BY owner_type ASC, owner_id ASC`,
+    )
+    .all(source.kind, source.url, source.file_path) as {
+    owner_type: string;
+    owner_id: string;
+  }[];
+
+  const seen = new Set<string>();
+  const refs: { owner_type: AttachmentOwnerType; owner_id: string }[] = [];
+  for (const row of rows) {
+    const type = row.owner_type as AttachmentOwnerType;
+    const key = `${type}\u0000${row.owner_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({ owner_type: type, owner_id: row.owner_id });
+  }
+
+  const thoughtTitles = resolveOwnerTitles(
+    ndb,
+    refs.filter((r) => r.owner_type === 'thought').map((r) => r.owner_id),
+    'thoughts_v',
+  );
+  const publicationTitles = resolveOwnerTitles(
+    ndb,
+    refs.filter((r) => r.owner_type === 'publication').map((r) => r.owner_id),
+    'publications_v',
+  );
+
+  const owners: AttachmentOwnerRef[] = refs
+    .map((r) => ({
+      owner_type: r.owner_type,
+      owner_id: r.owner_id,
+      title:
+        r.owner_type === 'thought'
+          ? (thoughtTitles.get(r.owner_id) ?? null)
+          : r.owner_type === 'publication'
+            ? (publicationTitles.get(r.owner_id) ?? null)
+            : null,
+    }))
+    .sort(
+      (a, b) =>
+        OWNER_TYPE_RANK[a.owner_type] - OWNER_TYPE_RANK[b.owner_type] ||
+        (a.owner_id < b.owner_id ? -1 : a.owner_id > b.owner_id ? 1 : 0),
+    );
+
+  return { attachment_id: source.id, owners };
 }
 
 /**
@@ -350,6 +454,18 @@ export function createAttachmentFile(
 }
 
 /**
+ * `true`, если путь существует и указывает на обычный файл. Каталог (и любой
+ * не-файл) здесь отвергается так же, как несуществующий путь — ошибка 6a95ba12.
+ */
+function isResolvableFile(filePath: string): boolean {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Single attachment-creation entry point for the REST/MCP facades (задача
  * 75c75a2f): ordinary metadata-only creation, or an inline file upload when
  * `data_base64` carries a payload. Both branches delegate to the existing
@@ -358,8 +474,12 @@ export function createAttachmentFile(
  *
  * Throws `VALIDATION_ERROR` (422) when `data_base64` is combined with `kind`
  * other than `'file'` or with fields that only describe a metadata attachment,
- * plus every error of the underlying primitive (bad base64, oversize, missing
- * `mime_type`); `NOT_FOUND` (404) when the owner does not exist.
+ * when a `kind='file'` `file_path` does not resolve on the server or resolves
+ * to something other than a regular file — a directory included (ошибки
+ * 5fcb8307/6a95ba12: файл должен быть доступен серверу; клиентский файл
+ * передаётся через `data_base64`), plus every error of the underlying
+ * primitive (bad base64, oversize, missing `mime_type`); `NOT_FOUND` (404)
+ * when the owner does not exist.
  */
 export function createAttachmentFromInput(
   ndb: NetworkDb,
@@ -373,6 +493,34 @@ export function createAttachmentFromInput(
     input.data_base64 !== null &&
     input.data_base64.trim() !== '';
   if (!hasData) {
+    // Ошибка 5fcb8307: `file_path` — путь в файловой системе СЕРВЕРА. Этот
+    // диспетчер обслуживает внешние MCP-вызовы (`etn.ops attachments.add` и
+    // `attachments[]` в `etn.thoughts.write`); агент работает с удалённым
+    // сервером, его локальный путь там не резолвится — раньше вызов молча
+    // создавал битое вложение (`mime_type`/`file_size` пусты, файл недоступен).
+    // Теперь нерезолвящийся путь — явная ошибка вызова; клиентский файл
+    // передаётся содержимым через `data_base64` ({@link createAttachmentFile}).
+    // Ошибка 6a95ba12: путь обязан указывать на обычный файл — каталог проходит
+    // `existsSync`, поэтому используется `isResolvableFile` (`statSync().isFile()`).
+    // REST-маршрут `POST …/attachments` вызывает {@link createAttachment}
+    // напрямую и сохраняет документированный контракт «ссылка на путь в ОС
+    // клиента» (требование a5456b79) — его эта проверка не затрагивает.
+    if (
+      input.kind === 'file' &&
+      typeof input.file_path === 'string' &&
+      input.file_path.trim() !== '' &&
+      !isResolvableFile(input.file_path)
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `file_path не указывает на файл на сервере: ${input.file_path}`,
+        {
+          field: 'file_path',
+          file_path: input.file_path,
+          hint: 'файл с машины клиента передавайте содержимым в data_base64',
+        },
+      );
+    }
     return createAttachment(ndb, ownerType, ownerId, input, actorUserId);
   }
   if (input.kind !== 'file') {
@@ -415,6 +563,11 @@ export function createAttachmentFromInput(
  * Targets that already own an attachment with the same `kind` and the same
  * `url`/`file_path` are skipped silently and reported via `skipped`.
  *
+ * Targets may be thoughts, links or publications (0.11.1, задача f37b468d):
+ * this is the mechanism behind «взять обложку из чужого вложения» — the source
+ * thought keeps its row, the publication gets its own row over the same file
+ * (ADR 73cfcf64).
+ *
  * Throws:
  *   * `NOT_FOUND` (404) if the source attachment does not exist;
  *   * `VALIDATION_ERROR` (422) if any target owner id does not exist.
@@ -431,14 +584,6 @@ export function copyAttachment(
   actorUserId: string,
 ): AttachmentCopyResult {
   const targetOwnerType = validateOwnerType(input.target_owner_type);
-  // Link owners are intentionally not supported yet: the workplan task scope is
-  // "copy attachment to other thoughts". When support is added, the route
-  // handler will switch to validateOwnerType unconditionally.
-  if (targetOwnerType !== 'thought') {
-    throw new EtnError('VALIDATION_ERROR', 'target_owner_type must be "thought"', {
-      field: 'target_owner_type',
-    });
-  }
   const targetIds = Array.from(new Set(input.target_owner_ids));
   if (targetIds.length === 0) {
     return { created: [], skipped: [] };
@@ -448,36 +593,44 @@ export function copyAttachment(
     // All targets must exist before any row is written — 422 names the first
     // missing id so the client can show a precise error.
     const placeholders = targetIds.map(() => '?').join(', ');
-    const existingThoughtIds = new Set(
+    const targetTable =
+      targetOwnerType === 'thought'
+        ? 'thoughts_v'
+        : targetOwnerType === 'link'
+          ? 'links_v'
+          : 'publications_v';
+    const existingTargetIds = new Set(
       (
         ndb
-          .prepare(`SELECT id FROM thoughts_v WHERE id IN (${placeholders})`)
+          .prepare(`SELECT id FROM ${targetTable} WHERE id IN (${placeholders})`)
           .all(...targetIds) as { id: string }[]
       ).map((r) => r.id),
     );
     for (const id of targetIds) {
-      if (!existingThoughtIds.has(id)) {
-        throw new EtnError('VALIDATION_ERROR', `thought ${id} not found`, {
+      if (!existingTargetIds.has(id)) {
+        throw new EtnError('VALIDATION_ERROR', `${targetOwnerType} ${id} not found`, {
           field: 'target_owner_ids',
           missing: id,
         });
       }
     }
     // Detect duplicates in one pass: same owner + same kind + same url/file_path.
-    // The url/file_path leg is split by kind to keep NULL-handling clean in SQL.
+    // The leg is chosen by the NON-null carrier column, so a file attachment
+    // (url IS NULL) is matched by file_path and vice versa. (Раньше вторая
+    // ветка ошибочно проверяла `file_path IS NULL`: повторное копирование
+    // файлового вложения создавало дубль строки вместо `skipped` — общий
+    // корень с блокером usage, приёмка 46cf4bcb.)
     const dupRows = ndb
       .prepare(
         `SELECT owner_id FROM attachments_v
          WHERE owner_type = ? AND kind = ? AND owner_id IN (${placeholders})
-           AND ((? IS NOT NULL AND url = ?) OR (? IS NULL AND file_path = ?))`,
+           AND ((url IS NOT NULL AND url = ?) OR (file_path IS NOT NULL AND file_path = ?))`,
       )
       .all(
         targetOwnerType,
         source.kind,
         ...targetIds,
         source.url,
-        source.url,
-        source.file_path,
         source.file_path,
       ) as { owner_id: string }[];
     const duplicateIds = new Set(dupRows.map((r) => r.owner_id));
