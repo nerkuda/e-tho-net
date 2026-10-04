@@ -372,6 +372,10 @@
 .pub-open {
   outline: 2px solid var(--layer-focus-stripe, var(--accent));
   outline-offset: -2px;
+  /* Контрастный кант двойной рамки открытого — тот же токен, что у гало карты
+     (`.cloud.halo`) и блока документа (`.pub-doc-editor`); инсет-тень даёт
+     вторую полосу внутри строки, не вылезая за соседей (задача 3af98e31). */
+  box-shadow: inset 0 0 0 4px var(--focus-ring-contrast);
   border-radius: var(--radius-s);
 }
 
@@ -1219,10 +1223,12 @@
 /* Мысль, открытая в редакторе, — сплошная рамка цвета фокуса, как гало облачка
    на карте мыслей (`.cloud.halo` — `--layer-focus-stripe`; задача 77cce0ba,
    п.2). Идёт после `.pub-doc-current`, поэтому у совпавшего блока выигрывает
-   сплошная рамка. */
+   сплошная рамка. Второй тонкий кант — общий токен двойной рамки открытого
+   (`--focus-ring-contrast`, как у гало и `.pub-open`; задача 3af98e31). */
 .pub-doc-editor {
   outline: 2px solid var(--layer-focus-stripe, var(--accent));
   outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px var(--focus-ring-contrast);
   border-radius: var(--radius-s);
 }
 

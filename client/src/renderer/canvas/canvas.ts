@@ -374,13 +374,25 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     const t = event.target as HTMLElement | null;
     const onLine = t?.closest('.link-hit, .link-line') ?? null;
     const onCloud = t?.closest('.cloud') ?? null;
-    if (
-      onLine === null &&
-      onCloud === null &&
-      (store.state.selectedLinkId !== null || store.state.editorTarget !== null)
-    ) {
+    // Пустое место карты — фон зоны (сетка/пустое поле/промежуток), полоса
+    // фокуса или заглушка «нет сети». Клик по этим местам (и только по ним)
+    // считается ВЫБОРОМ фокусной мысли; клики по ползункам зон, строке
+    // отбора и прочей оснастке холста — нет.
+    const onEmptyPlace =
+      t !== null &&
+      (t.closest('.zone') !== null ||
+        t.closest('.canvas-focus-row') !== null ||
+        t.closest('.canvas-empty') !== null);
+    if (onLine !== null || onCloud !== null || !onEmptyPlace) return;
+    if (store.state.selectedLinkId !== null || store.state.editorTarget !== null) {
       store.update({ selectedLinkId: null, editorTarget: null });
     }
+    // Клик по пустому месту = выбор фокусной мысли: курсор навигации ставится на
+    // неё — как клик/Enter по облачку (§2.2.4, §2.9). Тогда открытая в редакторе
+    // (фокус) и текущая совпадают, пунктир гасится (`shouldDrawCurrentFrame`),
+    // остаётся одна сплошная рамка, а стрелки продолжают ход с фокуса
+    // (замечание волны 6, задача 3af98e31; ADR e6d48e09).
+    setCursor(store.state.focus?.focused.id ?? null);
   });
 
   storeUnsubscribe = store.subscribe(() => {

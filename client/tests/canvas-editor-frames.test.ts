@@ -228,3 +228,67 @@ describe('карта: Enter на фокусной мысли гасит пунк
     dispose();
   });
 });
+
+/** Пустой элемент внутри зоны — цель клика «по пустому месту» карты. */
+function blankZoneTarget(): ShimElement {
+  const zone = currentHost?.querySelector('.zone') ?? null;
+  assert.ok(zone !== null, 'карта построила зону');
+  const blank = new ShimElement('div', 'zone-empty');
+  zone.append(blank);
+  return blank;
+}
+
+/** Клик по указанному элементу через реальный обработчик пустого места (host). */
+function clickEmpty(target: ShimElement): void {
+  currentHost?.emit('click', {
+    target,
+    preventDefault: (): void => undefined,
+    stopPropagation: (): void => undefined,
+  });
+}
+
+describe('карта: клик по пустому месту выбирает фокусную мысль (3af98e31 п.1)', () => {
+  it('клик по пустому → текущая = фокусная, одна сплошная рамка, пунктира нет', async () => {
+    const dispose = await mount();
+    const blank = blankZoneTarget();
+    // Расходим позиции: курсор уведён на родителя — виден пунктир, гало на фокусе.
+    kbdNav.setCursor(PARENT_ID);
+    assert.deepEqual(cursorIds(), [PARENT_ID], 'пунктир на родителе до клика');
+
+    clickEmpty(blank);
+
+    assert.equal(kbdNav.getCanvasCursor(), FOCUS_ID, 'курсор навигации встал на фокусную мысль');
+    assert.deepEqual(cursorIds(), [], 'текущая = открытая (фокус) — пунктир погашен');
+    assert.deepEqual(haloIds(), [FOCUS_ID], 'одна сплошная рамка на фокусной мысли');
+    dispose();
+  });
+
+  it('клик по пустому с мыслью, открытой не в фокусе, возвращает на фокус', async () => {
+    const dispose = await mount();
+    const blank = blankZoneTarget();
+    // Открыт родитель: гало на нём, курсор тоже на нём (клик по облачку).
+    store.update({ editorTarget: { kind: 'thought', id: PARENT_ID } });
+    kbdNav.setCursor(PARENT_ID);
+    assert.deepEqual(haloIds(), [PARENT_ID], 'гало на открытом родителе');
+    assert.deepEqual(cursorIds(), [], 'текущая = открытая — пунктира нет');
+
+    clickEmpty(blank);
+
+    assert.equal(store.state.editorTarget, null, 'редактор возвращён к фокусу');
+    assert.equal(kbdNav.getCanvasCursor(), FOCUS_ID, 'курсор на фокусной мысли');
+    assert.deepEqual(haloIds(), [FOCUS_ID], 'гало вернулось на фокус');
+    assert.deepEqual(cursorIds(), [], 'рамка одна сплошная');
+    dispose();
+  });
+
+  it('клик по оснастке холста (ползунок зон) курсор не трогает', async () => {
+    const dispose = await mount();
+    const splitter = currentHost?.querySelector('.zone-splitter') ?? null;
+    assert.ok(splitter !== null, 'карта построила ползунок зон');
+    kbdNav.setCursor(PARENT_ID);
+    clickEmpty(splitter);
+    assert.equal(kbdNav.getCanvasCursor(), PARENT_ID, 'ползунок зон — не выбор мысли');
+    assert.deepEqual(cursorIds(), [PARENT_ID], 'пунктир остался на прежней текущей');
+    dispose();
+  });
+});
