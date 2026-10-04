@@ -674,6 +674,41 @@ describe('routes-publications: real-time и видимость слоёв', { sk
       await closeRestContext(ctx);
     }
   });
+
+  // Ошибка 4efb01bb: событие СОЗДАНИЯ несло тело входного запроса, а не полный
+  // DTO, поэтому клиентский кэш получал публикацию без неуказанных полей
+  // (`text_sources`/`extra_properties`) и карточка падала на `[...p.text_sources]`.
+  it('событие создания публикации несёт полный DTO (ошибка 4efb01bb)', async () => {
+    const ctx = await buildRestContext();
+    let port = 0;
+    try {
+      await ctx.app.listen({ port: 0, host: '127.0.0.1' });
+      port = (ctx.app.server.address() as AddressInfo).port;
+      // Подписчик — свой client-id, writer — другой: иначе подавление эха
+      // скроет собственное событие автора.
+      const watcher = await connectWs(ctx, port, 'c');
+      sockets.push(watcher);
+
+      const created = await api(ctx, 'POST', '/publications', {
+        payload: { title: 'Полный DTO' },
+        headers: { 'client-id': 'c2' },
+      });
+      assert.equal(created.statusCode, 201, created.body);
+      const createdId = (created.json().data as { id: string }).id;
+
+      const evt = await nextEvent(watcher, (m) => m.type === 'publication.updated', 5000);
+      assert.ok(evt !== null, 'событие создания публикации получено');
+      const data = evt.data as { id: string; changes: Record<string, unknown> };
+      assert.equal(data.id, createdId, 'событие адресовано созданной публикации');
+      assert.deepEqual(data.changes.text_sources, [], 'changes.text_sources — массив');
+      assert.deepEqual(data.changes.extra_properties, [], 'changes.extra_properties — массив');
+      assert.equal(data.changes.cover_kind, 'none', 'вычисляемый cover_kind присутствует');
+      assert.equal(data.changes.active, true, 'active присутствует (полный DTO)');
+    } finally {
+      for (const ws of sockets.splice(0)) ws.close();
+      await closeRestContext(ctx);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

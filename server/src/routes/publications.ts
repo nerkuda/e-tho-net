@@ -194,10 +194,18 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
             result: created,
             // Отдельного `publication.created` каталог 67b8748e не объявляет:
             // создание узнаётся тем же `publication.updated`.
+            //
+            // В `changes` кладём ПОЛНЫЙ созданный DTO, а не тело входного запроса
+            // (ошибка 4efb01bb): тело создания не содержит неуказанных полей
+            // (`text_sources`, `extra_properties`), и клиентский кэш, кладущий
+            // патч события как «частичную запись» поверх ещё не загруженного
+            // снимка, получал публикацию без этих полей. Потребители (карточка)
+            // держат полный `Publication` и падали на `[...p.text_sources]`.
+            // Полный DTO — прецедент `thought.created` ({ thought: created }).
             events: [
               {
                 type: 'publication.updated' as const,
-                data: { id: created.id, changes: create, version: created.version },
+                data: { id: created.id, changes: created, version: created.version },
               },
             ],
             activity: [

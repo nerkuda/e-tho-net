@@ -378,10 +378,15 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
           result: created,
           // Отдельного `publication.created` каталог 67b8748e не объявляет:
           // создание узнаётся тем же `publication.updated` (паритет с REST).
+          //
+          // `changes` — ПОЛНЫЙ созданный DTO, а не тело запроса (ошибка
+          // 4efb01bb): иначе клиентский кэш получал частичную запись без
+          // `text_sources`/`extra_properties`, и карточка падала на
+          // `[...p.text_sources]`. Паритет с REST и с `thought.created`.
           events: [
             {
               type: 'publication.updated' as const,
-              data: { id: created.id, changes: create, version: created.version },
+              data: { id: created.id, changes: created, version: created.version },
             },
           ],
           activity: [

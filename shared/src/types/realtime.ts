@@ -454,7 +454,13 @@ export interface ThoughtTypeViewRunData {
 /** `publication.updated` — создание/правка настроек или титула. */
 export interface PublicationUpdatedData {
   id: string;
-  /** Изменённые поля; при создании — тело создания. */
+  /**
+   * Изменённые поля при правке; при создании — ПОЛНЫЙ созданный DTO
+   * (не тело запроса): клиентский кэш кладёт патч как частичную запись, когда
+   * полного снимка ещё нет, поэтому тело создания оставляло бы публикацию без
+   * неуказанных полей (`text_sources`/`extra_properties`) — прецедент
+   * `thought.created` ({ thought: created }), ошибка 4efb01bb.
+   */
   changes: Partial<Publication>;
   version: number;
 }

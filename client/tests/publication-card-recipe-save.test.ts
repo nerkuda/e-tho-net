@@ -28,6 +28,14 @@ import type { Publication, PublicationUpdateInput } from '@etn/shared';
 import { ShimElement } from './dom-shim.js';
 import type { MdEditor } from '../src/renderer/editor/md-editor.js';
 import { store } from '../src/renderer/state.js';
+import {
+  clearEntities,
+  getEntity,
+  invalidateQueries,
+  patchEntity,
+  queryKeys,
+  resetQueryRegistry,
+} from '../src/renderer/lib/live/index.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -347,5 +355,90 @@ describe('карточка публикации: автосейв при сме�
     assert.deepEqual(calls.conflicts, [], 'CONFLICT не возник');
     assert.equal(calls.updates.length, 2, 'вторая правка сохранена');
     assert.equal(calls.updates[1]!.version, 2, 'вторая правка ушла с актуальной version');
+  });
+});
+
+/**
+ * Ошибка 4efb01bb: выбор родительской мысли в рецепте НОВОЙ публикации падал с
+ * `p.text_sources is not iterable`. Живой кэш мог отдать карточке ЧАСТИЧНУЮ
+ * запись публикации (патч realtime-события раньше полного снимка), у которой
+ * нет `text_sources`/`extra_properties`; апдейтер панели настроек делал
+ * `[...p.text_sources]`. Корень устранён на сервере (событие создания несёт
+ * полный DTO, тест `routes-publications`), здесь закрепляем защиту слоя.
+ */
+describe('карточка публикации: устойчивость к частичной записи кэша (ошибка 4efb01bb)', () => {
+  let scrollBox: ShimElement;
+
+  beforeEach(() => {
+    installShim([publication()]);
+    scrollBox = new ShimElement('div');
+    store.update({ networkId: NETWORK_ID, editorTarget: null });
+    clearEntities();
+    resetQueryRegistry();
+  });
+
+  afterEach(async () => {
+    const mod = await import('../src/renderer/editor/publication-card.js');
+    mod.disposePublicationCard();
+    clearEntities();
+    resetQueryRegistry();
+  });
+
+  it('частичная запись без text_sources не роняет апдейтер панели настроек', async () => {
+    await openRecipeTab(scrollBox, publication());
+
+    // Realtime-патч до полного снимка: в кэше появляется публикация без
+    // массивов рецепта (точная форма симптома — нет `text_sources`).
+    patchEntity(
+      'publication',
+      'pub-1',
+      {
+        title: 'Частичная',
+        subtitle: null,
+        summary_md: null,
+        authorship: null,
+        cover_attachment_id: null,
+        cover_url: null,
+        cover_kind: 'none',
+        assembly_date: null,
+        title_recipe: null,
+        numbering_from: null,
+        numbering_to: null,
+        active: true,
+      },
+      { seq: 5, version: 2 },
+    );
+    const cached = getEntity<Record<string, unknown>>('publication', 'pub-1');
+    assert.equal(cached?.text_sources, undefined, 'имитирован неполный объект кэша');
+
+    // Инвалидация ключа карточки заставляет её применить запись из кэша.
+    assert.doesNotThrow(() => invalidateQueries(queryKeys.publicationCard('pub-1')));
+
+    const keywords = scrollBox.querySelector('.st-f-keywords') as ShimElement | null;
+    assert.ok(keywords !== null, 'поле рецепта осталось построенным — апдейтер не упал');
+  });
+
+  it('прямая подача объекта без text_sources в апдейтер не бросает исключение', async () => {
+    const mod = await cardModule();
+    mod.showPublicationTarget(
+      { scrollBox: scrollBox as unknown as HTMLElement },
+      'pub-1',
+      publication(),
+    );
+    const recipeTab = scrollBox
+      .findAll((el) => el.className.includes('ui-tab') && el.textContent !== '')
+      .find((el) => el.textContent === 'Рецепт');
+    assert.ok(recipeTab !== undefined);
+    recipeTab.click();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const partial = {
+      id: 'pub-1',
+      title: 'Без массивов',
+      numbering_from: null,
+      numbering_to: null,
+      title_recipe: null,
+    } as unknown as Publication;
+    assert.doesNotThrow(() => mod.publicationCardInternals.apply(partial));
   });
 });

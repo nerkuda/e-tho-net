@@ -767,8 +767,13 @@ function buildRecipePane(): HTMLElement {
   updaters.push((p) => {
     fromInput.value = p.numbering_from === null ? '' : String(p.numbering_from);
     toInput.value = p.numbering_to === null ? '' : String(p.numbering_to);
-    textSources = [...p.text_sources];
-    extraProperties = [...p.extra_properties];
+    // Защита слоя (ошибка 4efb01bb): апдейтер обязан выдержать неполный объект
+    // публикации — живой кэш может отдать частичную запись (патч realtime-события
+    // до полного снимка), у которой нет `text_sources`/`extra_properties`.
+    // Корень — событие создания несёт полный DTO (сервер), но слой не должен
+    // падать на недопустимых данных.
+    textSources = [...(p.text_sources ?? [])];
+    extraProperties = [...(p.extra_properties ?? [])];
     textsField?.refresh();
     extrasField?.refresh();
     checkOverlap();
