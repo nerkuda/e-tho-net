@@ -151,6 +151,90 @@ interface InlineSnapshot {
   transformOrigin: string;
 }
 
+/**
+ * Учёт артефактов перехода: запланированные таймеры, запущенные анимации и
+ * снапшоты инлайн-стилей облачков. Общий для фокус-хореографии
+ * ({@link playFocusTransition}) и проявления расклада ({@link playNetworkReveal}):
+ * оба меняют одни и те же три инлайн-свойства и обязаны одинаково их вернуть —
+ * поэтому снапшот/восстановление и отмена анимаций живут здесь, а не дублируются
+ * в каждом переходе. Владение мутациями — у вызывающего (`active`), который
+ * зовёт {@link settle} при штатном завершении и {@link rollback} при досрочной
+ * остановке/сбое.
+ */
+interface InlineStyleTrack {
+  /** Запоминает текущие инлайн-стили элемента ДО первой мутации. */
+  remember(el: HTMLElement): void;
+  /** Планирует колбэк и запоминает его таймер для отмены. */
+  schedule(fn: () => void, ms: number): void;
+  /** Запускает анимацию и запоминает её для отмены. */
+  animate(el: HTMLElement, keyframes: Keyframe[], options: KeyframeAnimationOptions): void;
+  /** Восстанавливает инлайн-стили всех запомненных элементов. */
+  restoreInline(): void;
+  /**
+   * Штатное завершение: остановить оставшиеся таймеры и вернуть инлайн-стили,
+   * НЕ отменяя уже доигранные анимации.
+   */
+  settle(): void;
+  /**
+   * Полный откат (досрочная остановка/сбой): снять таймеры, отменить анимации
+   * и вернуть инлайн-стили.
+   */
+  rollback(): void;
+}
+
+/** Создаёт пустой {@link InlineStyleTrack}. */
+function createInlineStyleTrack(): InlineStyleTrack {
+  const timers: number[] = [];
+  const animations: Animation[] = [];
+  const inline: InlineSnapshot[] = [];
+
+  const restoreInline = (): void => {
+    for (const snap of inline) {
+      setStyle(snap.el, 'opacity', snap.opacity);
+      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
+      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
+    }
+    inline.length = 0;
+  };
+
+  return {
+    remember(el: HTMLElement): void {
+      inline.push({
+        el,
+        opacity: el.style.getPropertyValue('opacity'),
+        pointerEvents: el.style.getPropertyValue('pointer-events'),
+        transformOrigin: el.style.getPropertyValue('transform-origin'),
+      });
+    },
+    schedule(fn: () => void, ms: number): void {
+      timers.push(window.setTimeout(fn, ms));
+    },
+    animate(el: HTMLElement, keyframes: Keyframe[], options: KeyframeAnimationOptions): void {
+      animations.push(el.animate(keyframes, options));
+    },
+    restoreInline,
+    settle(): void {
+      for (const timer of timers) window.clearTimeout(timer);
+      timers.length = 0;
+      animations.length = 0;
+      restoreInline();
+    },
+    rollback(): void {
+      for (const timer of timers) window.clearTimeout(timer);
+      timers.length = 0;
+      for (const animation of animations) {
+        try {
+          animation.cancel();
+        } catch {
+          // An already-finished animation may refuse to cancel — nothing to undo.
+        }
+      }
+      animations.length = 0;
+      restoreInline();
+    },
+  };
+}
+
 /** Live transition — only one may run at a time for the single canvas host. */
 interface ActiveTransition {
   /** Swap effects not yet run — idempotent (used by a forced finish too). */
@@ -281,31 +365,14 @@ export function playFocusTransition(
   }
 
   const generation = ++transitionGeneration;
-  const timers: number[] = [];
-  const animations: Animation[] = [];
-  const inline: InlineSnapshot[] = [];
+  const track = createInlineStyleTrack();
+  const schedule = track.schedule;
+  const remember = track.remember;
   const hostRect = host.getBoundingClientRect();
-
-  const schedule = (fn: () => void, ms: number): void => {
-    timers.push(
-      window.setTimeout(() => {
-        fn();
-      }, ms),
-    );
-  };
-
-  const remember = (el: HTMLElement): void => {
-    inline.push({
-      el,
-      opacity: el.style.getPropertyValue('opacity'),
-      pointerEvents: el.style.getPropertyValue('pointer-events'),
-      transformOrigin: el.style.getPropertyValue('transform-origin'),
-    });
-  };
 
   const play = (el: HTMLElement, keyframes: Keyframe[], ms: number, easing: string, delay = 0, fill?: FillMode): void => {
     if (ms <= 0) return;
-    animations.push(el.animate(keyframes, { duration: ms, easing, delay, ...(fill === undefined ? {} : { fill }) }));
+    track.animate(el, keyframes, { duration: ms, easing, delay, ...(fill === undefined ? {} : { fill }) });
   };
 
   const layer = div('focus-anim-layer');
@@ -378,22 +445,7 @@ export function playFocusTransition(
   };
 
   const cleanup = (): void => {
-    for (const timer of timers) window.clearTimeout(timer);
-    timers.length = 0;
-    for (const animation of animations) {
-      try {
-        animation.cancel();
-      } catch {
-        // An already-finished animation may refuse to cancel — nothing to undo.
-      }
-    }
-    animations.length = 0;
-    for (const snap of inline) {
-      setStyle(snap.el, 'opacity', snap.opacity);
-      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
-      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
-    }
-    inline.length = 0;
+    track.rollback();
     flyer?.remove();
     flyer = null;
     overlay?.remove();
@@ -407,15 +459,7 @@ export function playFocusTransition(
   const complete = (): void => {
     if (generation !== transitionGeneration) return;
     active = null;
-    for (const timer of timers) window.clearTimeout(timer);
-    timers.length = 0;
-    animations.length = 0;
-    for (const snap of inline) {
-      setStyle(snap.el, 'opacity', snap.opacity);
-      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
-      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
-    }
-    inline.length = 0;
+    track.settle();
     flyer?.remove();
     flyer = null;
     overlay?.remove();
@@ -622,41 +666,16 @@ export function playNetworkReveal(host: HTMLElement, drawLinks?: () => void): vo
     return;
   }
   const generation = ++transitionGeneration;
-  const timers: number[] = [];
-  const animations: Animation[] = [];
-  const inline: InlineSnapshot[] = [];
+  const track = createInlineStyleTrack();
 
   const complete = (): void => {
     if (generation !== transitionGeneration) return;
     active = null;
-    for (const timer of timers) window.clearTimeout(timer);
-    timers.length = 0;
-    animations.length = 0;
-    for (const snap of inline) {
-      setStyle(snap.el, 'opacity', snap.opacity);
-      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
-      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
-    }
-    inline.length = 0;
+    track.settle();
   };
 
   const cleanup = (): void => {
-    for (const timer of timers) window.clearTimeout(timer);
-    timers.length = 0;
-    for (const animation of animations) {
-      try {
-        animation.cancel();
-      } catch {
-        // An already-finished animation may refuse to cancel — nothing to undo.
-      }
-    }
-    animations.length = 0;
-    for (const snap of inline) {
-      setStyle(snap.el, 'opacity', snap.opacity);
-      setStyle(snap.el, 'pointer-events', snap.pointerEvents);
-      setStyle(snap.el, 'transform-origin', snap.transformOrigin);
-    }
-    inline.length = 0;
+    track.rollback();
   };
 
   // Владелец регистрируется ДО первой мутации (урок ошибки 66deb70a): сбой
@@ -666,24 +685,17 @@ export function playNetworkReveal(host: HTMLElement, drawLinks?: () => void): vo
   try {
     for (const cloud of clouds) {
       const el = cloud.el;
-      inline.push({
-        el,
-        opacity: el.style.getPropertyValue('opacity'),
-        pointerEvents: el.style.getPropertyValue('pointer-events'),
-        transformOrigin: el.style.getPropertyValue('transform-origin'),
-      });
+      track.remember(el);
       setStyle(el, 'opacity', '0');
-      animations.push(
-        el.animate([{ opacity: '0' }, { opacity: '1' }], {
-          duration: tokens.reveal,
-          easing: tokens.ease,
-          delay: 0,
-          fill: 'both',
-        }),
-      );
+      track.animate(el, [{ opacity: '0' }, { opacity: '1' }], {
+        duration: tokens.reveal,
+        easing: tokens.ease,
+        delay: 0,
+        fill: 'both',
+      });
     }
     drawLinks?.();
-    timers.push(window.setTimeout(complete, tokens.reveal));
+    track.schedule(complete, tokens.reveal);
   } catch (err) {
     active = null;
     cleanup();
