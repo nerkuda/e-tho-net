@@ -23,7 +23,10 @@
  *
  * **Детерминизм.** Обход всегда даёт одно дерево на одном графе: рёбра
  * сортируются `links.position ASC, id ASC`, локальный порядок публикации
- * ([[#18f3bebf]]) перекрывает сетевой по ключу узла. Якоря `pub-<shortid>`
+ * ([[#18f3bebf]]) перекрывает сетевой по ключу узла. Тексты раздела — ЕДИНЫЙ
+ * пул значений всех свойств-источников (свойство — признак принадлежности, не
+ * порядок): глобальная сортировка по `localOf(edge_id) ?? branchPosition`,
+ * ничья — по индексу свойства, позиции ребра и id. Якоря `pub-<shortid>`
  * выводятся из id мысли и не зависят от пагинации (стабильны между страницами).
  * Построение дерева итеративное — глубина алгоритмически не ограничена.
  *
@@ -705,29 +708,41 @@ function buildDocument(
   const textsBySection = new Map<string, SectionText[]>();
   const textIds = new Set<string>();
   for (const section of contentNodes) {
-    const texts: SectionText[] = [];
-    for (const propId of pub.text_sources) {
+    // ЕДИНЫЙ пул текстов раздела: значения ВСЕХ свойств-источников — одна
+    // группа соседей (текст перемещается среди текстов СВОЕГО раздела).
+    // Свойство — только признак принадлежности, НЕ порядок. Глобальная
+    // сортировка по компаратору локального порядка: `localOf(edge_id) ??
+    // branchPosition(edge)`; ничья разрешается индексом свойства, сетевой
+    // позицией ребра и его id — детерминированный стабильный порядок для
+    // рёбер без позиции ([[#f6b242fe]], [[#18f3bebf]]).
+    const pool: Array<PropertyEdge & { sourceIndex: number }> = [];
+    pub.text_sources.forEach((propId, sourceIndex) => {
       const prop = propertyRow(propId);
       if (prop === null) {
         warnings.push(`свойство текстов ${propId} не найдено`);
-        continue;
+        return;
       }
       if (prop.value_type !== 'link') {
         warnings.push(`свойство текстов «${prop.name}» не является свойством-связью`);
-        continue;
+        return;
       }
-      const edges = readPropertyEdges(ndb, section.thoughtId, prop);
-      edges.sort(
-        (a, b) =>
-          (localOrder.get(a.edge_id) ?? a.position) - (localOrder.get(b.edge_id) ?? b.position) ||
-          (a.edge_id < b.edge_id ? -1 : a.edge_id > b.edge_id ? 1 : 0),
-      );
-      for (const edge of edges) {
-        if (contentIds.has(edge.thought_id)) continue; // роль раздела приоритетна
-        if (!includeExcluded && excluded.set.has(edge.thought_id)) continue;
-        texts.push({ thoughtId: edge.thought_id, edgeId: edge.edge_id });
-        textIds.add(edge.thought_id);
+      for (const edge of readPropertyEdges(ndb, section.thoughtId, prop)) {
+        pool.push({ ...edge, sourceIndex });
       }
+    });
+    pool.sort(
+      (a, b) =>
+        (localOrder.get(a.edge_id) ?? a.position) - (localOrder.get(b.edge_id) ?? b.position) ||
+        a.sourceIndex - b.sourceIndex ||
+        a.position - b.position ||
+        (a.edge_id < b.edge_id ? -1 : a.edge_id > b.edge_id ? 1 : 0),
+    );
+    const texts: SectionText[] = [];
+    for (const edge of pool) {
+      if (contentIds.has(edge.thought_id)) continue; // роль раздела приоритетна
+      if (!includeExcluded && excluded.set.has(edge.thought_id)) continue;
+      texts.push({ thoughtId: edge.thought_id, edgeId: edge.edge_id });
+      textIds.add(edge.thought_id);
     }
     textsBySection.set(section.thoughtId, texts);
   }

@@ -537,6 +537,160 @@ describe('publication-assembly-service: тексты и исключения', {
   });
 });
 
+describe('publication-assembly-service: тексты — единый пул свойств раздела (волна 8)', { skip }, () => {
+  /**
+   * Второе свойство-источник текстов: `seedTextProperty` создаёт тип связи с
+   * фиксированными именами (второй вызов в той же сети даёт DUPLICATE) —
+   * поэтому здесь имена уникальны.
+   */
+  const seedAnotherTextProperty = (ndb: NetworkDb, typeId: string): string => {
+    const suffix = randomUUID().slice(0, 8);
+    const linkType = createLinkType(
+      ndb,
+      { name_forward: `Текст-${suffix}`, name_reverse: `Раздел-${suffix}` },
+      USER,
+    );
+    const prop = createTypeProperty(
+      ndb,
+      'thought_type',
+      typeId,
+      {
+        key: `texts2-${suffix}`,
+        value_type: 'link',
+        config: { link_type_id: linkType.id },
+      },
+      USER,
+    );
+    return prop.property_id;
+  };
+  /** link_type_id свойства-связи (для seedLink). */
+  const linkTypeOf = (ndb: NetworkDb, propId: string): string => {
+    const row = ndb.prepare('SELECT config FROM properties_v WHERE id = ?').get(propId) as {
+      config: string;
+    };
+    return (JSON.parse(row.config) as { link_type_id: string }).link_type_id;
+  };
+  const textIdsOf = (
+    doc: ReturnType<typeof assemblePublication>,
+    sectionId: string,
+  ): string[] => doc.sections.find((s) => s.thought_id === sectionId)!.texts.map((t) => t.thought_id);
+
+  it('новый текст первого свойства с последней позицией — ПОСЛЕДНИЙ в сборке', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const plain = createThoughtType(ndb, { name: 'Plain' }, USER);
+      const section = seedThought(ndb, 'S', type.id);
+      const tFull = seedThought(ndb, 'TFull', plain.id);
+      const tEmpty = seedThought(ndb, 'TEmpty', plain.id);
+      const tNew = seedThought(ndb, 'TNew', plain.id);
+      const p1 = seedTextProperty(ndb, type.id);
+      const p2 = seedAnotherTextProperty(ndb, type.id);
+      const eFull = seedLink(ndb, section, tFull, linkTypeOf(ndb, p1), 0);
+      const eEmpty = seedLink(ndb, section, tEmpty, linkTypeOf(ndb, p2), 0);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(type.id), text_sources: [p1, p2] },
+        USER,
+      );
+      // Базовый порядок: tFull (свойство 1), tEmpty (свойство 2).
+      setPublicationOrder(ndb, pub.id, [
+        { node_key: eFull, position: 1 },
+        { node_key: eEmpty, position: 2 },
+      ], USER);
+      assert.deepEqual(textIdsOf(assemblePublication(ndb, pub.id, USER), section), [tFull, tEmpty]);
+
+      // Новый текст добавлен в ПЕРВОЕ свойство (штатный сценарий «Добавить
+      // текст раздела…»): его ребро идёт первым по сетевой позиции.
+      const eNew = seedLink(ndb, section, tNew, linkTypeOf(ndb, p1), 0);
+      // Клиент назначает ему позицию ПОСЛЕДНЕГО во всей группе текстов раздела.
+      setPublicationOrder(ndb, pub.id, [
+        { node_key: eFull, position: 1 },
+        { node_key: eEmpty, position: 2 },
+        { node_key: eNew, position: 3 },
+      ], USER);
+      // Перечитывание сборки (аналог F5) — новый текст ПОСЛЕДНИЙ, существующие
+      // сохраняют взаимный порядок.
+      assert.deepEqual(
+        textIdsOf(assemblePublication(ndb, pub.id, USER), section),
+        [tFull, tEmpty, tNew],
+        'новый текст — последний независимо от того, в каком свойстве он лежит',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('перемещение текста через границу свойства (PUT order) меняет порядок сборки', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const plain = createThoughtType(ndb, { name: 'Plain' }, USER);
+      const section = seedThought(ndb, 'S', type.id);
+      const tA = seedThought(ndb, 'TA', plain.id);
+      const tB = seedThought(ndb, 'TB', plain.id);
+      const p1 = seedTextProperty(ndb, type.id);
+      const p2 = seedAnotherTextProperty(ndb, type.id);
+      const eA = seedLink(ndb, section, tA, linkTypeOf(ndb, p1), 0);
+      const eB = seedLink(ndb, section, tB, linkTypeOf(ndb, p2), 0);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(type.id), text_sources: [p1, p2] },
+        USER,
+      );
+      setPublicationOrder(ndb, pub.id, [
+        { node_key: eA, position: 1 },
+        { node_key: eB, position: 2 },
+      ], USER);
+      assert.deepEqual(textIdsOf(assemblePublication(ndb, pub.id, USER), section), [tA, tB]);
+      // Alt/DnD: текст свойства 2 встаёт перед текстом свойства 1.
+      setPublicationOrder(ndb, pub.id, [
+        { node_key: eB, position: 1 },
+        { node_key: eA, position: 2 },
+      ], USER);
+      assert.deepEqual(
+        textIdsOf(assemblePublication(ndb, pub.id, USER), section),
+        [tB, tA],
+        'локальный порядок перекрывает и границу свойства',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('тексты без локальных позиций — детерминированный порядок (сетевое место, свойство, id)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const plain = createThoughtType(ndb, { name: 'Plain' }, USER);
+      const section = seedThought(ndb, 'S', type.id);
+      const tA = seedThought(ndb, 'TA', plain.id);
+      const tB = seedThought(ndb, 'TB', plain.id);
+      const tC = seedThought(ndb, 'TC', plain.id);
+      const p1 = seedTextProperty(ndb, type.id);
+      const p2 = seedAnotherTextProperty(ndb, type.id);
+      const lt1 = linkTypeOf(ndb, p1);
+      const lt2 = linkTypeOf(ndb, p2);
+      seedLink(ndb, section, tA, lt1, 0);
+      seedLink(ndb, section, tB, lt1, 1);
+      seedLink(ndb, section, tC, lt2, 0);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(type.id), text_sources: [p1, p2] },
+        USER,
+      );
+      // Сетевое место: tA(0,свойство1), tC(0,свойство2), tB(1,свойство1);
+      // ничья tA/tC разрешается индексом свойства → [tA, tC, tB].
+      const first = textIdsOf(assemblePublication(ndb, pub.id, USER), section);
+      assert.deepEqual(first, [tA, tC, tB]);
+      // Повторная сборка даёт тот же порядок (детерминизм).
+      assert.deepEqual(textIdsOf(assemblePublication(ndb, pub.id, USER), section), first);
+    } finally {
+      ndb.close();
+    }
+  });
+});
+
 describe('publication-assembly-service: кандидаты (временная семантика)', { skip }, () => {
   it('новая мысль под отбор становится кандидатом; при создании кандидатов нет', () => {
     const ndb = createInMemoryNetworkDb();
