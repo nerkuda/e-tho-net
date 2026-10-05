@@ -656,6 +656,9 @@ const DIALOG_FILES = new Set([
   'lib/delete-dialog.ts',
   'lib/entity-picker.ts',
   'lib/saved-filter-bar.ts',
+  // Диалог выбора свойства-связи при дропе мысли на облачко (задача d144ef71):
+  // общая оболочка `showDialog` + готовое комбо link-properties; не список.
+  'lib/thought-drop.ts',
   'pinned/pins.ts',
   'screens/about-dialog.ts',
   'screens/activity/activity.ts',

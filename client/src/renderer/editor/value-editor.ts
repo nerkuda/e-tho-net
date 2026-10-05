@@ -84,6 +84,8 @@ import {
   type LinkValueRemovalMode,
 } from './link-value-removal.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
+import { wireExternalDragSource } from '../canvas/drag-cloud.js';
+import { registerThoughtDropField } from '../lib/thought-drop.js';
 import { toggleSelection } from '../selection/selection.js';
 import { openWikiIdTarget } from './wiki-link.js';
 import { openPublicationInWorkspace } from '../screens/active-view.js';
@@ -1902,9 +1904,15 @@ export function buildLinkValueEditor(opts: {
       displayTitle(a).localeCompare(displayTitle(b), 'ru'),
     );
     for (const id of ordered) {
-      field.append(
-        buildCloud(id, (mode) => removeEdges([id], mode)),
-      );
+      const cloud = buildCloud(id, (mode) => removeEdges([id], mode));
+      // Мысль-значение тянут pointer-жестом единого канала (d144ef71):дроп в
+      // ДРУГОЕ поле переносит её (Shift — копирует), дроп на облачко за
+      // пределами поля открывает выбор свойства-связи.
+      wireExternalDragSource(cloud, id, 'field-chip', {
+        sourceField: root,
+        removeFromSource: () => removeEdges([id], 'auto'),
+      });
+      field.append(cloud);
     }
     const addInput = fieldInput({
       extraClass: 'value-combo-add link-value-add',
@@ -1970,6 +1978,17 @@ export function buildLinkValueEditor(opts: {
   // неудаче облачко остаётся с подписью из ребра/сырым id).
   void resolveLinkRefs(networkId, current, refs).then(() => {
     if (root.isConnected) render();
+  });
+
+  // Приёмник pointer-дропа мысли (d144ef71): мысль, брошенная из карты/панели/
+  // другого поля, становится значением этого свойства. Повтор (мысль уже есть)
+  // — не изменение, чтобы перенос не снял её из поля-источника впустую.
+  registerThoughtDropField(root, {
+    accept: (id: string): boolean => {
+      if (current.includes(id)) return false;
+      setAndPersist([...current, id]);
+      return true;
+    },
   });
 
   render();

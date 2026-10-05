@@ -2593,7 +2593,7 @@ function wireEllipseDrag(
  * the `.cloud` check and open the add dialog instead of linking).
  */
 const ELLIPSE_DROP_TARGET_SELECTOR =
-  '.cloud[data-id], .pinned-chip[data-id], .history-cloud[data-id], .menu-item[data-drag-id]';
+  '.cloud[data-id], .prop-ref-cloud[data-id], .pinned-chip[data-id], .history-cloud[data-id], .menu-item[data-drag-id]';
 
 /** Reads the thought id off a resolved ellipse-drop target element. */
 function ellipseDropId(dropEl: HTMLElement): string | null {

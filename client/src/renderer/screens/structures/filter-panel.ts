@@ -56,6 +56,7 @@ import {
   type SavedFilterStore,
 } from '../../lib/saved-filter-bar.js';
 import type { SuggestSource } from '../../lib/suggest-dropdown.js';
+import { registerThoughtDropField } from '../../lib/thought-drop.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
 import { store } from '../../state.js';
 import { requireNetworkId } from '../../app.js';
@@ -309,6 +310,19 @@ function extrasActive(s: FilterCriteriaState): boolean {
 export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallbacks): void {
   host = panelHost;
   callbacks = cb;
+  // Дроп мысли (pointer-жест) в ЛЮБОЕ место панели добавляет её в
+  // «Родительские мысли» отбора — единая трактовка с панелью «Хроники»
+  // (задача d144ef71). Чип-поле корней внутри панели имеет собственный приёмник
+  // (общий фасад `buildParentThoughtsSection`) и перехватывает дроп точнее.
+  registerThoughtDropField(panelHost, {
+    accept: (id: string): boolean => {
+      if (state.parentIds.includes(id)) return false;
+      state.parentIds = [...state.parentIds, id];
+      renderPanel();
+      callbacks?.onStatePersist();
+      return true;
+    },
+  });
   wireSavedFiltersToLayer();
   renderPanel();
 
