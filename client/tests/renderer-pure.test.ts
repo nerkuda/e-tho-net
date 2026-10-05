@@ -1042,6 +1042,18 @@ describe('flipTransform (focus transition, 08-ui-spec §2.8)', () => {
       { dx: 10, dy: 10, sx: 44, sy: 44 },
     );
   });
+
+  it('keeps one uniform scale for a non-proportional rect (ошибка 9e1b87c9)', () => {
+    // Классический случай фокус↔зона: исходный слот узкий и высокий (облачко
+    // зоны в 2–3 строки), целевой — широкий и низкий (фокус в одну строку).
+    // Сырые отношения разные: sx = 150/300 = 0.5, sy = 120/60 = 2.
+    const t = flipTransform(
+      { left: 0, top: 0, width: 150, height: 120 },
+      { left: 0, top: 0, width: 300, height: 60 },
+    );
+    assert.equal(t.sx, t.sy, 'единый коэффициент — глифы не искажаются');
+    assert.equal(t.sx, Math.sqrt(0.5 * 2), 'коэффициент — геометрическое среднее отношений');
+  });
 });
 
 describe('planFocusTransition (focus-change choreography, задача e9f0af94)', () => {

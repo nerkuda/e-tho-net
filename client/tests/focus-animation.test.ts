@@ -281,6 +281,37 @@ describe('transition: плавная смена фокуса (задача e9f0a
     assert.equal(created.filter((a) => a.options.delay > 0).length, 0, 'входа нет — фазы 2 нет');
   });
 
+  it('полёт клона масштабируется пропорционально при разной форме слотов (ошибка 9e1b87c9)', async () => {
+    const T = await load();
+    // Фокус широкий и низкий; выбранное облачко зоны — узкое и высокое.
+    const host = makeHost([
+      cloud('f', 'focus', rect(400, 100, 200, 80)),
+      cloud('a', 'children', rect(100, 500, 150, 120)),
+    ]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    relayout(host, [
+      cloud('a', 'focus', rect(400, 100, 300, 60)),
+      cloud('f', 'children', rect(100, 500, 150, 120)),
+    ]);
+
+    T.playFocusTransition(host as unknown as HTMLElement, before);
+
+    // Клон выбранной мысли — единственная transform-анимация, стартующая от
+    // старого слота и приземляющаяся в `transform: none`.
+    const flyer = created.find(
+      (a) =>
+        String(a.keyframes[0]?.transform).includes('scale(') &&
+        a.keyframes[1]?.transform === 'none',
+    );
+    assert.ok(flyer !== undefined, 'клон выбранной мысли летит в центр');
+    const m = String(flyer.keyframes[0]?.transform).match(/scale\(([-\d.]+), ([-\d.]+)\)/);
+    assert.ok(m !== null, 'стартовый кадр несёт scale');
+    assert.equal(m[1], m[2], 'единый коэффициент: sx === sy — глифы не искажены');
+    // Сырые отношения 150/300 = 0.5 и 120/60 = 2 → sqrt(0.5·2) = 1.
+    assert.equal(Number(m[1]), 1, 'коэффициент — геометрическое среднее отношений');
+    T.finishFocusTransition();
+  });
+
   it('фаза 1: перестановка внутри зоны без смены зоны тоже анимируется', async () => {
     const T = await load();
     const host = makeHost([

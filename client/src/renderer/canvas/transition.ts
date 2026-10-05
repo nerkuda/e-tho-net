@@ -283,7 +283,10 @@ function toLocal(hostRect: RectLike, r: RectLike): RectLike {
   return { left: r.left - hostRect.left, top: r.top - hostRect.top, width: r.width, height: r.height };
 }
 
-/** FLIP start transform as a CSS `transform` string. */
+/** FLIP start transform as a CSS `transform` string. `sx === sy` из
+ *  {@link flipTransform} (ошибка 9e1b87c9): единый коэффициент по обеим осям,
+ *  поэтому `scale(s, s)` не сплющивает и не растягивает глифы перелетающего
+ *  облачка, когда пропорции его старого и нового слотов разные. */
 function flipTo(before: RectLike, after: RectLike): string {
   const { dx, dy, sx, sy } = flipTransform(before, after);
   return `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
