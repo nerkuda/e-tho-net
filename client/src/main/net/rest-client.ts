@@ -54,6 +54,7 @@ import {
   type PublicationExportRequest,
   type PublicationListResult,
   type PublicationOrderItem,
+  type PublicationPrint,
   type PublicationSort,
   type PublicationUpdateInput,
   type PublicationUsageResult,
@@ -3403,6 +3404,36 @@ export class RestClient {
       `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/export`,
       { body: request, requestOptions: opts ?? { clientRequestId: randomUUID() } },
     );
+  }
+
+  /**
+   * `GET /networks/{nid}/publications/{id}/print` — самодостаточный печатный
+   * HTML публикации (0.11.2, задача 178f4921): картинки встроены как data-URI,
+   * водяной знак. Тело — не JSON, поэтому идём мимо `request` (как
+   * {@link downloadJob}). Заголовок `x-publication-slug` несёт имя файла;
+   * основной процесс печатает HTML в PDF скрытым окном (`webContents.printToPDF`).
+   */
+  public async getPublicationPrintHtml(
+    networkId: string,
+    id: string,
+  ): Promise<PublicationPrint> {
+    const url =
+      `${this.baseUrl}/api/v1/networks/${encodeURIComponent(networkId)}` +
+      `/publications/${encodeURIComponent(id)}/print`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${await this.getApiKey()}`,
+      'Client-Id': this.getClientId(),
+      Accept: 'text/html',
+    };
+    const res = await this.fetchImpl(url, { method: 'GET', headers });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new EtnError(
+        mapHttpStatus(res.status),
+        `publication print failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
+      );
+    }
+    return { html: await res.text(), slug: res.headers.get('x-publication-slug') ?? '' };
   }
 
   /** `GET /networks/{nid}/shelves` — полки библиотеки с составом. */

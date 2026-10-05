@@ -87,6 +87,7 @@ import {
   publicationMembershipCache,
 } from '../domain/publication-assembly-service.js';
 import {
+  renderPublicationPrintHtml,
   startPublicationBatchExportJob,
   startPublicationExportJob,
 } from '../domain/publication-export-service.js';
@@ -579,6 +580,33 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           resolveUserName,
         );
         sendSuccess(reply, { job_id: job.job_id } satisfies ExportJobStartResult, undefined, 202);
+      },
+    );
+
+    /**
+     * GET /networks/:nid/publications/:id/print — печатное представление
+     * публикации (0.11.2, задача 178f4921): самодостаточный HTML с
+     * инлайн-картинками и водяным знаком. PDF формирует КЛИЕНТ скрытым окном
+     * Electron (`webContents.printToPDF`) — сервер печатать не умеет, PDF-формат
+     * из экспортного меню перехватывает клиент (ADR клиентской печати).
+     * Заголовок `x-publication-slug` несёт детерминированное имя файла.
+     */
+    app.get(
+      '/networks/:networkId/publications/:id/print',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestPublicationById, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const { html, slug } = renderPublicationPrintHtml(
+          ndb,
+          input.publication_id,
+          req.auth!.user.id,
+          resolveUserName,
+        );
+        reply
+          .header('content-type', 'text/html; charset=utf-8')
+          .header('x-publication-slug', slug)
+          .send(html);
       },
     );
 

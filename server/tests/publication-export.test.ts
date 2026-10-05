@@ -329,6 +329,57 @@ describe('publication-export: одиночный экспорт', { skip }, () =
     assert.ok(html.includes('src="https://example.test/cover.png"'), html);
   });
 
+  it('print: печатный HTML сохраняет титул, оглавление, якоря, водяной знак и инлайн-картинки', async () => {
+    const ctx = await buildRestContext();
+    cleanups.push(() => closeRestContext(ctx));
+
+    const docType = createThoughtType(ctx.ndb, { name: 'Doc' }, ctx.adminId);
+    const a = seedThought(ctx.ndb, 'Раздел A', docType.id, ctx.adminId);
+    const b = seedThought(ctx.ndb, 'Раздел B', docType.id, ctx.adminId);
+    seedLink(ctx.ndb, a, b, null, 0, ctx.adminId);
+    seedComment(ctx.ndb, a, `См. [[#${b}]].`, ctx.adminId);
+
+    // Реальная картинка-вложение: должна вклеиться как data-URI.
+    const attachmentsDir = path.join(ctx.dataDir, 'networks', ctx.networkId, 'attachments');
+    fs.mkdirSync(attachmentsDir, { recursive: true });
+    const imgPath = path.join(attachmentsDir, 'pic.png');
+    fs.writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 9, 9, 9]));
+    seedComment(ctx.ndb, b, `![pic](${etnimgUrl(imgPath)})`, ctx.adminId);
+
+    const pub = createPublication(
+      ctx.ndb,
+      { title: 'Печатный Док', title_recipe: { type_ids: [docType.id], sort: 'alpha', order: 'asc' } },
+      ctx.adminId,
+    );
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/networks/${ctx.networkId}/publications/${pub.id}/print`,
+      headers: authHeaders(ctx),
+    });
+    assert.equal(res.statusCode, 200);
+    assert.match(res.headers['content-type'] as string, /text\/html/);
+    assert.equal(res.headers['x-publication-slug'], 'pechatnyy-dok');
+    const html = res.body;
+
+    // Титул и оглавление.
+    assert.match(html, /^<!doctype html>/);
+    assert.ok(html.includes('<title>Печатный Док</title>'), html);
+    assert.ok(html.includes('<h1>Печатный Док</h1>'), html);
+    assert.ok(html.includes('<nav class="pub-toc"><h2>Оглавление</h2>'), html);
+    // Внутренние якоря: ссылка оглавления/текста и цель-раздел.
+    assert.ok(html.includes(`href="#${publicationAnchor(b)}"`), html);
+    assert.ok(html.includes(`<section id="${publicationAnchor(b)}">`), html);
+    assert.ok(html.includes(`id="${publicationAnchor(b)}"`), html);
+    // Водяной знак присутствует и помечен как печатный (position: fixed).
+    assert.ok(html.includes('pub-watermark'), html);
+    assert.ok(html.includes('Документ сгенерирован в ETN'), html);
+    assert.ok(html.includes('position:fixed'), html);
+    // Картинка вклеена как data-URI, а исходный etnimg-URL исчез.
+    assert.ok(html.includes('src="data:image/png;base64,'), html);
+    assert.ok(!html.includes('etnimg://'), html);
+  });
+
   it('разделы глубже H6: обезглавливание в абзац, а не кламп (md и html)', async () => {
     const ctx = await buildRestContext();
     cleanups.push(() => closeRestContext(ctx));

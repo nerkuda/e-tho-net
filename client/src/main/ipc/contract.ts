@@ -741,6 +741,16 @@ export interface EtnApi {
       id: string,
       request: PublicationExportRequest,
     ): Promise<ExportJobStartResult>;
+    /**
+     * Экспорт публикации в PDF (0.11.2, задача 178f4921): клиент запрашивает
+     * самодостаточный печатный HTML (`GET …/publications/{id}/print`), печатает
+     * его в PDF скрытым окном Electron (`webContents.printToPDF`) и сохраняет
+     * файл диалогом. Сервер PDF не формирует — формат «pdf» перехватывает клиент.
+     */
+    exportPdf(
+      networkId: string,
+      id: string,
+    ): Promise<{ saved_path: string | null; cancelled: boolean; error?: string }>;
     /** `GET /networks/{nid}/shelves` — полки библиотеки с составом. */
     listShelves(networkId: string): Promise<Shelf[]>;
     createShelf(networkId: string, input: ShelfInput): Promise<Shelf>;

@@ -727,6 +727,7 @@ export const ru = {
   'publications.menu.export': 'Экспортировать',
   'publications.menu.exportMd': 'Экспорт в Markdown',
   'publications.menu.exportHtml': 'Экспорт в HTML',
+  'publications.menu.exportPdf': 'Экспорт в PDF',
   // Тост-уведомления экспорта (задача 77cce0ba, п.4): успех с путём и сбой с
   // причиной — по образцу прочих тостов клиента.
   'publications.export.saved': 'Публикация сохранена: %1',

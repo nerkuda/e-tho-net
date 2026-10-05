@@ -384,6 +384,20 @@ export interface PublicationUsageResult {
 export const PUBLICATION_EXPORT_FORMATS = ['md', 'html'] as const;
 export type PublicationExportFormat = (typeof PUBLICATION_EXPORT_FORMATS)[number];
 
+/**
+ * Печатное представление публикации (0.11.2, задача 178f4921): самодостаточный
+ * HTML документа (картинки встроены как data-URI, водяной знак на каждой
+ * странице) и детерминированный slug публикации — имя PDF-файла. Общая форма
+ * серверного рендера `renderPublicationPrintHtml` (отдаёт это плюс `warnings`)
+ * и клиентского {@link RestClient.getPublicationPrintHtml}: HTML идёт телом
+ * ответа, slug — заголовком `x-publication-slug`. PDF печатает клиент скрытым
+ * окном Electron, сервер PDF не формирует (ADR клиентской печати).
+ */
+export interface PublicationPrint {
+  html: string;
+  slug: string;
+}
+
 /** Тело `POST /networks/:networkId/publications/:id/export` (операция 1f161c74). */
 export interface PublicationExportRequest {
   format: PublicationExportFormat;
