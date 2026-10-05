@@ -11,9 +11,10 @@
  * показывает объём хранения по всем ветвям, а не число видимых сущностей.
  *
  * Надгробия (`deleted = 1`) не считаются нигде: это скрытые физические строки.
- * Разбивка мыслей/связей: `total` — все живые строки; `active`/`inactive` — не
- * в корзине с `active = 1`/`0`; `trashed` — `marked_for_deletion = 1`.
- * У онтологии (типы, свойства) и слоёв разбивок нет — только «всего».
+ * Разбивка мыслей/связей/публикаций: `total` — все живые строки; `active`/
+ * `inactive` — не в корзине с `active = 1`/`0`; `trashed` —
+ * `marked_for_deletion = 1`. У онтологии (типы, свойства), полок и слоёв
+ * разбивок нет — только «всего».
  *
  * Слои считаются как в `listLayers` (13-layers.md §10.1): сервисные
  * (резервные, `is_service = 1`) скрыты по умолчанию и не учитываются, основа
@@ -114,6 +115,21 @@ export function networkStatistics(ndb: NetworkDb): NetworkStats {
       trashed: `SELECT COUNT(*) AS c FROM links -- layers:physical-read
                 WHERE deleted = 0 AND marked_for_deletion = 1`,
     }),
+    publications: breakdown(ndb, {
+      total: `SELECT COUNT(*) AS c FROM publications -- layers:physical-read
+              WHERE deleted = 0`,
+      active: `SELECT COUNT(*) AS c FROM publications -- layers:physical-read
+               WHERE deleted = 0 AND marked_for_deletion = 0 AND active = 1`,
+      inactive: `SELECT COUNT(*) AS c FROM publications -- layers:physical-read
+                 WHERE deleted = 0 AND marked_for_deletion = 0 AND active = 0`,
+      trashed: `SELECT COUNT(*) AS c FROM publications -- layers:physical-read
+                WHERE deleted = 0 AND marked_for_deletion = 1`,
+    }),
+    shelves: count(
+      ndb,
+      `SELECT COUNT(*) AS c FROM shelves -- layers:physical-read
+       WHERE deleted = 0`,
+    ),
     layers: count(ndb, 'SELECT COUNT(*) AS c FROM layers WHERE is_service = 0'),
     attachments: attachmentStats(ndb),
   };
