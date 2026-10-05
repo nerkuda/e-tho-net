@@ -1314,34 +1314,23 @@ export interface RectLike {
 }
 
 /**
- * FLIP delta: the transform a cloud must START from so that, animating to
- * `transform: none`, it lands exactly at `after`. A zero-size target must not
- * divide by zero (`max(1, …)`).
+ * FLIP delta: the `translate` a cloud must START from so that, animating to
+ * `transform: none`, it lands exactly at `after` (viewport coordinates).
  *
- * Масштаб ЕДИНЫЙ по обеим осям (ошибка 9e1b87c9): непропорциональный
- * `scale(sx, sy)` искажал глифы переезжающего облачка, когда пропорции
- * исходного и целевого слотов разные (фокус широкий и низкий, облачко зоны
- * узкое и высокое — в 2–3 строки). Единый коэффициент — геометрическое среднее
- * сырых отношений `sqrt(sx * sy)`: он сохраняет площадь (визуальный вес) и
- * является минимакс-оптимумом по относительной ошибке ширины и высоты
- * (`s / sx == sy / s` при `s = sqrt(sx·sy)`), поэтому видимый скачок на старте
- * полёта — когда реальное облачко исчезает и его место занимает клон —
- * наименьший из возможных для одного коэффициента. Значение возвращается под
- * обоими ключами, чтобы формат `scale(s, s)` и единственный потребитель
- * (`canvas/transition.ts`) не менялись.
+ * Масштаб НЕ вычисляется вовсе (ошибка 9e1b87c9, уточнение спеки 0.11.2):
+ * переезжающие облачка с первого кадра имеют размер и вид своего НОВОГО слота,
+ * анимируется только положение. Прежний `scale()` искажал глифы, когда
+ * пропорции исходного и целевого слотов разные (фокус широкий и низкий, облачко
+ * зоны узкое и высокое — в 2–3 строки); любой единый коэффициент всё равно
+ * оставлял скачок на старте полёта. Поэтому функция отдаёт только сдвиг
+ * `dx/dy` — ровно то, чем ограничивается хореография (`canvas/transition.ts`).
+ * Ширина/высота входа не используются, но остаются в {@link RectLike}: дельта
+ * считается по прямоугольникам целиком, а нулевые размеры безопасны.
  */
-export function flipTransform(
-  before: RectLike,
-  after: RectLike,
-): { dx: number; dy: number; sx: number; sy: number } {
-  const sx = before.width / Math.max(1, after.width);
-  const sy = before.height / Math.max(1, after.height);
-  const scale = Math.sqrt(sx * sy);
+export function flipTransform(before: RectLike, after: RectLike): { dx: number; dy: number } {
   return {
     dx: before.left - after.left,
     dy: before.top - after.top,
-    sx: scale,
-    sy: scale,
   };
 }
 

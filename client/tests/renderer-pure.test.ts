@@ -1028,31 +1028,33 @@ describe('zoomable (Ctrl-hover magnifier predicate)', () => {
 });
 
 describe('flipTransform (focus transition, 08-ui-spec §2.8)', () => {
-  it('computes the start transform from the old rect to the new one', () => {
+  it('computes the start translate from the old rect to the new one', () => {
     assert.deepEqual(
       flipTransform(
         { left: 0, top: 0, width: 200, height: 100 },
         { left: 100, top: 50, width: 100, height: 50 },
       ),
-      { dx: -100, dy: -50, sx: 2, sy: 2 },
+      { dx: -100, dy: -50 },
     );
-    // A zero-size target must not divide by zero.
+    // Zero-sized rects are safe: only left/top take part.
     assert.deepEqual(
       flipTransform({ left: 10, top: 10, width: 44, height: 44 }, { left: 0, top: 0, width: 0, height: 0 }),
-      { dx: 10, dy: 10, sx: 44, sy: 44 },
+      { dx: 10, dy: 10 },
     );
   });
 
-  it('keeps one uniform scale for a non-proportional rect (ошибка 9e1b87c9)', () => {
+  it('never returns a scale — the mover already carries its target size (ошибка 9e1b87c9)', () => {
     // Классический случай фокус↔зона: исходный слот узкий и высокий (облачко
     // зоны в 2–3 строки), целевой — широкий и низкий (фокус в одну строку).
-    // Сырые отношения разные: sx = 150/300 = 0.5, sy = 120/60 = 2.
+    // Разные пропорции не должны порождать никакого масштаба: перелёт — чистый
+    // перенос, а размер/вид меняется одномоментно в первом кадре.
     const t = flipTransform(
       { left: 0, top: 0, width: 150, height: 120 },
-      { left: 0, top: 0, width: 300, height: 60 },
+      { left: 0, top: 250, width: 300, height: 60 },
     );
-    assert.equal(t.sx, t.sy, 'единый коэффициент — глифы не искажаются');
-    assert.equal(t.sx, Math.sqrt(0.5 * 2), 'коэффициент — геометрическое среднее отношений');
+    assert.deepEqual(t, { dx: 0, dy: -250 });
+    assert.equal(Object.hasOwn(t, 'sx'), false, 'никакого sx');
+    assert.equal(Object.hasOwn(t, 'sy'), false, 'никакого sy');
   });
 });
 
