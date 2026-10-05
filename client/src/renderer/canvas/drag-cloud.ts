@@ -34,6 +34,10 @@
  * drags in several ways (Alt+drag is link selection, a lone Alt focuses the
  * menu bar), and a gesture reads the modifiers live mid-drag anyway. The
  * per-zone ellipse-drag gesture (canvas.ts, `wireEllipseDrag`) is untouched.
+ * Every source suppresses the native default on mousedown (like the ellipse
+ * gesture), so the press selects no page text; a focusable source (value chip,
+ * cloud — `tabIndex = 0`) gets its mouse focus restored explicitly (ошибка
+ * 036bdbe6).
  *
  * Existing links are reused (server 409 → no-op); the reverse link, if any, is
  * removed first and its type carried over to the new link.
@@ -212,6 +216,17 @@ export function wireExternalDragSource(
 ): void {
   el.addEventListener('mousedown', (event) => {
     if (event.button !== 0 || gesture !== null) return;
+    // Suppress the native default for the whole gesture (mousedown → mouseup).
+    // This is a pointer gesture, not HTML5 drag-n-drop, so without it Chromium
+    // starts a native text selection that ends where the pointer is released —
+    // invisible on the canvas (`user-select: none`), clearly visible in the
+    // editor, where the value chip sits among selectable text (ошибка 036bdbe6,
+    // регрессия задачи d144ef71). `preventDefault` also drops the mouse focus of
+    // a focusable source, so it is restored explicitly (`el` is `tabIndex = 0`
+    // with its own keydown handlers). The same idiom guards the ellipse gesture
+    // (canvas.ts, `wireEllipseDrag`), but only once the gesture truly starts.
+    event.preventDefault();
+    el.focus({ preventScroll: true });
     gesture = {
       id,
       dir: undefined,
@@ -250,6 +265,13 @@ function onCloudMouseDown(event: MouseEvent): void {
   const rawDir = cloud.dataset['dir'];
   const dir: OrderableDir | undefined =
     rawDir === 'parents' || rawDir === 'children' ? rawDir : undefined;
+  // Suppress the native default for the whole gesture (mousedown → mouseup) —
+  // a pointer drag is not HTML5 DnD, so Chromium would otherwise start a native
+  // text selection (ошибка 036bdbe6, регрессия задачи d144ef71); the cloud keeps
+  // its mouse focus (same idiom as the ellipse gesture). Only after the checks
+  // above — an unrelated press inside the host stays untouched.
+  event.preventDefault();
+  cloud.focus({ preventScroll: true });
   gesture = {
     id,
     dir,
