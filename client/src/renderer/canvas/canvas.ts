@@ -1174,19 +1174,19 @@ function wireLockBadgeRefresh(): void {
     // `lockCacheTick` is bumped on every cache transition; use it as the
     // signal so unrelated store updates do not re-paint badges.
     void store.state.lockCacheTick;
-    const host = canvasHost();
-    if (host === null) return;
-    for (const cloud of host.querySelectorAll<HTMLElement>('.cloud')) {
+    // Use the canvas's own module-level host (set by `mountCanvas`), NOT a
+    // global `document.querySelector('.canvas-host')` — the real workspace
+    // host element is `div('canvas view-host')` (screens/workspace.ts), so
+    // the selector never matched and the subscriber silently bailed: the
+    // badge only appeared on a full cloud rebuild (ошибка cdffbf6c).
+    const root = host;
+    if (root === null) return;
+    for (const cloud of root.querySelectorAll<HTMLElement>('.cloud')) {
       const id = cloud.dataset['id'];
       if (id === undefined) continue;
       refreshCloudLockBadges(cloud, 'thought', id);
     }
   });
-}
-
-/** Resolve the canvas host element; returns `null` before the canvas mounts. */
-function canvasHost(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('.canvas-host');
 }
 
 /** Ids physically overridden by the session's current layer (S11, §10.3) —
