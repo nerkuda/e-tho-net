@@ -491,6 +491,7 @@ export function buildParentThoughtsSection(
   // трактовка для всех панелей отбора: Структуры, Хроника, отбор типа мысли,
   // рецепт публикации (все собирают эту секцию общим фасадом).
   registerThoughtDropField(section.fieldRoot, {
+    kind: 'filter',
     accept: (id: string): boolean => {
       const values = ctx.getState().parentIds;
       if (values.includes(id)) return false;

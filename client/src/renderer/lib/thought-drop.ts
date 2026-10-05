@@ -27,6 +27,7 @@ import { store } from '../state.js';
 import { div, errText } from './dom.js';
 import { showDialog } from './dialog.js';
 import { buildEntityCombo, type LinkPropertyPick } from './entity-picker.js';
+import { addLinkPropertyValue } from './link-property-write.js';
 import { etn } from './etn.js';
 import { t } from './i18n.js';
 import { notice } from './notice.js';
@@ -42,11 +43,20 @@ import { walkDropField } from './thought-drop-pure.js';
 export { resolveFieldDrop, type FieldDropPlan } from './thought-drop-pure.js';
 
 /**
- * Приёмник дропа мысли — поле значений-связей. `accept` синхронно меняет
- * состояние поля и возвращает `true`, если набор изменился (мысль уже была —
- * `false`, чтобы перенос не снял её из поля-источника впустую).
+ * Вид поля-приёмника. `link-value` — поле значения свойства-связи (между такими
+ * полями мысль ПЕРЕНОСЯТ: исчезает из источника); `filter` — поле
+ * «Родительские мысли» панелей отбора и сама панель (туда мысль только
+ * ДОБАВЛЯЕТСЯ, источник не трогается — задача d144ef71, претензия проверки).
+ */
+export type ThoughtDropFieldKind = 'link-value' | 'filter';
+
+/**
+ * Приёмник дропа мысли. `accept` синхронно меняет состояние поля и возвращает
+ * `true`, если набор изменился (мысль уже была — `false`, чтобы перенос не снял
+ * её из поля-источника впустую).
  */
 export interface ThoughtDropField {
+  kind: ThoughtDropFieldKind;
   accept: (thoughtId: string) => boolean;
 }
 
@@ -55,11 +65,6 @@ const dropFields = new WeakMap<HTMLElement, ThoughtDropField>();
 /** Регистрирует контейнер поля как приёмник мыслей (перерегистрация перекрывает). */
 export function registerThoughtDropField(el: HTMLElement, handlers: ThoughtDropField): void {
   dropFields.set(el, handlers);
-}
-
-/** Снимает поле с учёта (нужно, если контейнер переиспользуется вне пересборки). */
-export function unregisterThoughtDropField(el: HTMLElement): void {
-  dropFields.delete(el);
 }
 
 /**
@@ -82,33 +87,6 @@ async function loadPropertyRows(networkId: string): Promise<readonly PropertyLis
   } catch {
     return [];
   }
-}
-
-/**
- * Записывает якорь в значение свойства-связи владельца (паритет с диалогом
- * добавления, ошибка 1dd08949): набор ЧИТАЕТСЯ и объединяется с якорем —
- * `properties.set` заменяет набор целиком.
- */
-export async function applyLinkPropertyValue(
-  networkId: string,
-  ownerId: string,
-  pick: LinkPropertyPick,
-  anchorId: string,
-): Promise<void> {
-  let existing: string[] = [];
-  try {
-    const values = await etn.properties.get(networkId, 'thought', ownerId);
-    const entry = values.find((v) => 'values' in v && v.property_id === pick.propertyId);
-    if (entry !== undefined && 'values' in entry) {
-      existing = entry.values.map((it) => it.target_id);
-    }
-  } catch {
-    /* набор не прочитался — пишем только якорь (лучше связь, чем отказ) */
-  }
-  const targets = existing.includes(anchorId) ? existing : [...existing, anchorId];
-  await etn.properties.set(networkId, 'thought', ownerId, pick.key, targets);
-  notifyPropertyValuesRefreshed(pick.key);
-  scheduleRefresh();
 }
 
 /**
@@ -166,8 +144,14 @@ export async function openLinkPropertyDropDialog(opts: {
             return;
           }
           const chosen = pick;
-          void applyLinkPropertyValue(networkId, opts.draggedId, chosen, opts.targetId)
-            .then(() => close())
+          void addLinkPropertyValue(networkId, opts.draggedId, chosen, opts.targetId)
+            .then(() => {
+              // Общий модуль сигналит о смене состава публикации; здесь —
+              // собственное перечитывание значений свойств и обновление карты.
+              notifyPropertyValuesRefreshed(chosen.key);
+              scheduleRefresh();
+              close();
+            })
             .catch((err) => notice(`${t('thoughtDrop.linkFailed')}: ${errText(err)}`, 'error'));
         },
       },

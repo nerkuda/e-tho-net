@@ -315,6 +315,7 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
   // (задача d144ef71). Чип-поле корней внутри панели имеет собственный приёмник
   // (общий фасад `buildParentThoughtsSection`) и перехватывает дроп точнее.
   registerThoughtDropField(panelHost, {
+    kind: 'filter',
     accept: (id: string): boolean => {
       if (state.parentIds.includes(id)) return false;
       state.parentIds = [...state.parentIds, id];

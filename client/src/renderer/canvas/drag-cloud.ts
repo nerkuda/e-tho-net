@@ -352,15 +352,19 @@ function onCloudMouseUp(event: MouseEvent): void {
       dropActions.chronicleFilterAdd?.(g.id);
       break;
     case 'field-add': {
-      // Add to the field under the cursor; a plain move out of a DIFFERENT
-      // field then removes the thought from its source (Shift — copy).
+      // Add to the field under the cursor. A plain move out of a DIFFERENT
+      // LINK-VALUE field then removes the thought from its source (Shift —
+      // copy); a drop into a filter field (parent thoughts / filter panel) only
+      // adds — the property value in the editor must not be lost (d144ef71).
       const fieldEl = target.fieldEl!;
-      const accepted = resolveThoughtDropField(fieldEl)?.handlers.accept(g.id) ?? false;
+      const field = resolveThoughtDropField(fieldEl);
+      const accepted = field?.handlers.accept(g.id) ?? false;
       const plan = resolveFieldDrop({
         accepted,
         originIsField: g.origin === 'field-chip',
         sameField: g.sourceField !== undefined && g.sourceField === fieldEl,
         copy: event.shiftKey,
+        targetMovable: field?.handlers.kind === 'link-value',
       });
       if (plan.removeFromSource) g.removeFromSource?.();
       break;

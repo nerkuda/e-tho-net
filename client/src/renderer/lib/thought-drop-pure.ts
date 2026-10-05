@@ -13,21 +13,29 @@ export interface FieldDropPlan {
 }
 
 /**
- * Семантика дропа мысли в поле. Перенос — когда драг начат в ДРУГОМ поле,
- * Shift не зажат, поля разные и приёмник реально изменился; во всех остальных
- * случаях мысль в источнике не трогается (копирование, бросок в своё же поле,
- * повторный бросок в поле, где мысль уже есть).
+ * Семантика дропа мысли в поле. Перенос — только когда драг начат в ДРУГОМ
+ * поле-связи, приёмник ТОЖЕ поле-связи (перемещаемое значение), Shift не зажат
+ * и приёмник реально изменился. Во всех остальных случаях мысль в источнике не
+ * трогается: копирование, бросок в своё же поле, повторный бросок в поле, где
+ * мысль уже есть, и бросок в НЕ-полевой приёмник (поле «Родительские мысли»,
+ * панель отбора) — там только добавление, без снятия из источника.
  */
 export function resolveFieldDrop(input: {
   accepted: boolean;
   originIsField: boolean;
   sameField: boolean;
   copy: boolean;
+  /** Приёмник — поле значения свойства-связи (единственное, между чем переносят). */
+  targetMovable: boolean;
 }): FieldDropPlan {
   return {
     add: input.accepted,
     removeFromSource:
-      input.accepted && input.originIsField && !input.copy && !input.sameField,
+      input.accepted &&
+      input.originIsField &&
+      input.targetMovable &&
+      !input.copy &&
+      !input.sameField,
   };
 }
 

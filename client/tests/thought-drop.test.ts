@@ -23,37 +23,83 @@ const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const readText = (rel: string): string => readFileSync(resolve(RENDERER, rel), 'utf8');
 
 describe('resolveFieldDrop: перенос vs копирование (d144ef71)', () => {
-  it('перенос из другого поля без Shift снимает мысль из источника', () => {
+  it('перенос между полями-связями без Shift снимает мысль из источника', () => {
     assert.deepEqual(
-      resolveFieldDrop({ accepted: true, originIsField: true, sameField: false, copy: false }),
+      resolveFieldDrop({
+        accepted: true,
+        originIsField: true,
+        sameField: false,
+        copy: false,
+        targetMovable: true,
+      }),
       { add: true, removeFromSource: true },
     );
   });
 
   it('Shift — копирование: источник не трогается', () => {
     assert.deepEqual(
-      resolveFieldDrop({ accepted: true, originIsField: true, sameField: false, copy: true }),
+      resolveFieldDrop({
+        accepted: true,
+        originIsField: true,
+        sameField: false,
+        copy: true,
+        targetMovable: true,
+      }),
       { add: true, removeFromSource: false },
     );
   });
 
   it('бросок в своё же поле не снимает источник', () => {
     assert.deepEqual(
-      resolveFieldDrop({ accepted: true, originIsField: true, sameField: true, copy: false }),
+      resolveFieldDrop({
+        accepted: true,
+        originIsField: true,
+        sameField: true,
+        copy: false,
+        targetMovable: true,
+      }),
       { add: true, removeFromSource: false },
     );
   });
 
   it('мысль уже была в приёмнике — не изменение и не снятие из источника', () => {
     assert.deepEqual(
-      resolveFieldDrop({ accepted: false, originIsField: true, sameField: false, copy: false }),
+      resolveFieldDrop({
+        accepted: false,
+        originIsField: true,
+        sameField: false,
+        copy: false,
+        targetMovable: true,
+      }),
       { add: false, removeFromSource: false },
     );
   });
 
   it('драг с карты/панели (не из поля) только добавляет', () => {
     assert.deepEqual(
-      resolveFieldDrop({ accepted: true, originIsField: false, sameField: false, copy: false }),
+      resolveFieldDrop({
+        accepted: true,
+        originIsField: false,
+        sameField: false,
+        copy: false,
+        targetMovable: true,
+      }),
+      { add: true, removeFromSource: false },
+    );
+  });
+
+  // Регресс по блокеру проверки: чип поля-связи, брошенный в НЕ-полевой
+  // приёмник («Родительские мысли», панель отбора), не должен сниматься из
+  // поля-источника — там только добавление.
+  it('бросок чипа поля-связи в приёмник-фильтр НЕ снимает значение из источника', () => {
+    assert.deepEqual(
+      resolveFieldDrop({
+        accepted: true,
+        originIsField: true,
+        sameField: false,
+        copy: false,
+        targetMovable: false,
+      }),
       { add: true, removeFromSource: false },
     );
   });
@@ -93,6 +139,7 @@ describe('связывание поля редактора (d144ef71)', () => {
 
   it('buildLinkValueEditor регистрирует корень как приёмник мыслей', () => {
     assert.match(src, /registerThoughtDropField\(root, \{/);
+    assert.match(src, /kind: 'link-value',/);
     assert.match(src, /accept: \(id: string\): boolean =>/);
   });
 
@@ -106,8 +153,9 @@ describe('связывание поля редактора (d144ef71)', () => {
 describe('приёмник панелей отбора (d144ef71)', () => {
   const src = readText('lib/filter-form.ts');
 
-  it('«Родительские мысли» регистрируют чип-поле как приёмник', () => {
+  it('«Родительские мысли» регистрируют чип-поле как приёмник-фильтр', () => {
     assert.match(src, /registerThoughtDropField\(section\.fieldRoot, \{/);
+    assert.match(src, /kind: 'filter',/);
     assert.match(src, /ctx\.getState\(\)\.parentIds = \[\.\.\.values, id\]/);
     assert.match(src, /resolveClouds\(\);\s*\n\s*ctx\.touch\(\);/);
   });
@@ -117,9 +165,10 @@ describe('приёмник панелей отбора (d144ef71)', () => {
     assert.match(src, /fieldRoot: field\.root/);
   });
 
-  it('панель «Структур» принимает drop в любое место (образец «Хроники»)', () => {
+  it('панель «Структур» принимает drop в любое место как приёмник-фильтр', () => {
     const structures = readText('screens/structures/filter-panel.ts');
     assert.match(structures, /registerThoughtDropField\(panelHost, \{/);
+    assert.match(structures, /kind: 'filter',/);
     assert.match(structures, /state\.parentIds = \[\.\.\.state\.parentIds, id\]/);
     assert.match(structures, /callbacks\?\.onStatePersist\(\)/);
   });
@@ -134,11 +183,13 @@ describe('единый pointer-канал drag-cloud (d144ef71)', () => {
     assert.match(src, /type DragOrigin = 'cloud' \| 'selection' \| 'history' \| 'pinned' \| 'chronicle' \| 'field-chip';/);
   });
 
-  it('дроп в поле разрешается приёмником, перенос снимает источник', () => {
+  it('дроп в поле разрешается приёмником; перенос снимает источник только у link-value', () => {
     assert.match(src, /const fieldTarget = resolveThoughtDropField\(el\);/);
     assert.match(src, /case 'field-add': \{/);
-    assert.match(src, /const accepted = resolveThoughtDropField\(fieldEl\)\?\.handlers\.accept\(g\.id\) \?\? false;/);
+    assert.match(src, /const field = resolveThoughtDropField\(fieldEl\);/);
+    assert.match(src, /const accepted = field\?\.handlers\.accept\(g\.id\) \?\? false;/);
     assert.match(src, /resolveFieldDrop\(\{/);
+    assert.match(src, /targetMovable: field\?\.handlers\.kind === 'link-value',/);
     assert.match(src, /if \(plan\.removeFromSource\) g\.removeFromSource\?\.\(\);/);
   });
 
@@ -166,9 +217,12 @@ describe('диалог выбора свойства-связи (d144ef71)', () 
     assert.match(src, /onChangeEntity: \(option\) => \{/);
   });
 
-  it('пишет связь через набор значения владельца (паритет add-dialog)', () => {
-    assert.match(src, /etn\.properties\.set\(networkId, 'thought', ownerId, pick\.key, targets\)/);
-    assert.match(src, /notifyPropertyValuesRefreshed\(pick\.key\)/);
+  it('пишет связь через общий модуль записи значения-связи', () => {
+    assert.match(src, /import \{ addLinkPropertyValue \} from '\.\/link-property-write\.js';/);
+    assert.match(src, /addLinkPropertyValue\(networkId, opts\.draggedId, chosen, opts\.targetId\)/);
+    assert.match(src, /notifyPropertyValuesRefreshed\(chosen\.key\)/);
+    const write = readText('lib/link-property-write.ts');
+    assert.match(write, /signalPublicationCompositionChanged\(\[ownerId, anchorId\]\)/);
   });
 
   it('строки UI — из словаря', () => {
@@ -176,9 +230,12 @@ describe('диалог выбора свойства-связи (d144ef71)', () 
   });
 });
 
-describe('эллипс тоже видит чипы-облачка (d144ef71)', () => {
-  it('селектор цели эллипса включает чип поля-связи', () => {
+describe('эллипс не расширялся под чипы (возврат претензии, d144ef71)', () => {
+  it('селектор цели эллипса НЕ включает чип поля-связи', () => {
     const src = readText('canvas/canvas.ts');
-    assert.match(src, /\.cloud\[data-id\], \.prop-ref-cloud\[data-id\]/);
+    const selector = /const ELLIPSE_DROP_TARGET_SELECTOR =\s*\n\s*'([^']+)'/;
+    const match = selector.exec(src);
+    assert.ok(match !== null, 'селектор эллипса объявлен');
+    assert.doesNotMatch(match[1] ?? '', /prop-ref-cloud/);
   });
 });
