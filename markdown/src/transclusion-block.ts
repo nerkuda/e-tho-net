@@ -22,7 +22,7 @@
 
 import type MarkdownIt from 'markdown-it';
 
-import { TRANSCLUSION_MARKER_PREFIX } from './transclusion.js';
+import { TRANSCLUSION_MARKER_PREFIX, TRANSCLUSION_MAX_DEPTH } from './transclusion.js';
 
 /** Корневой класс обёртки блока трансклюзии. */
 export const TRANSCLUSION_BLOCK_CLASS = 'md-transclusion';
@@ -153,10 +153,16 @@ export function transclusionBlockPlugin(md: MarkdownIt): void {
         stack.pop();
         html = '</div>';
       } else if (kind === 'skip') {
-        html = errorTag(stack.length + 1, source, section, TRANSCLUSION_SKIPPED_CLASS, labels.skipped);
+        const depth = Math.min(stack.length + 1, TRANSCLUSION_MAX_DEPTH);
+        html = errorTag(depth, source, section, TRANSCLUSION_SKIPPED_CLASS, labels.skipped);
       } else {
-        const label = section !== null ? labels.noSection : labels.noSource;
-        html = errorTag(stack.length + 1, source, section, TRANSCLUSION_MISSING_CLASS, label);
+        // Причину различает атрибут `reason` маркера (ADR `85a7a01e`,
+        // требование `fc60d763`): `section` — раздел не найден, иначе источник.
+        // Атрибут `section` есть у обеих причин и подпись по нему не выбрать.
+        const reason = attr(rest, 'reason');
+        const label = reason === 'section' ? labels.noSection : labels.noSource;
+        const depth = Math.min(stack.length + 1, TRANSCLUSION_MAX_DEPTH);
+        html = errorTag(depth, source, section, TRANSCLUSION_MISSING_CLASS, label);
       }
 
       const token = state.push('html_block', '', 0);

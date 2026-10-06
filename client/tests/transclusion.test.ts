@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { EditorState } from '@codemirror/state';
+import { EditorState, RangeSet } from '@codemirror/state';
 import { Decoration, type DecorationSet } from '@codemirror/view';
 
 import { parseTransclusions } from '@etn/markdown';
@@ -39,8 +39,11 @@ const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const ID_B = '11111111-2222-3333-4444-555555555555';
 const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
 
-/** Собирает плоский список декораций набора. */
-function collect(deco: DecorationSet, length: number): Array<{ from: number; to: number; value: Decoration }> {
+/** Собирает плоский список декораций набора (декорации или атомарные диапазоны). */
+function collect(
+  deco: DecorationSet | RangeSet<Decoration>,
+  length: number,
+): Array<{ from: number; to: number; value: Decoration }> {
   const out: Array<{ from: number; to: number; value: Decoration }> = [];
   deco.between(0, length, (from, to, value) => {
     out.push({ from, to, value });
@@ -122,7 +125,12 @@ test('buildTransclusionDecorations: курсор вне — блок с разв
   assert.equal(items[0]!.from, refs[0]!.start);
   assert.equal(items[0]!.to, refs[0]!.end);
   assert.equal(items[0]!.value.spec.block, true);
-  assert.equal(atomic.size, 0);
+  // Неделимость навигации стрелками (блокер верификатора): весь диапазон блока
+  // атомарен, иначе второй Right заводит каретку внутрь и блок распадается.
+  assert.equal(atomic.size, 1);
+  assert.deepEqual(collect(atomic, src.length).map((a) => [a.from, a.to]), [
+    [refs[0]!.start, refs[0]!.end],
+  ]);
 });
 
 test('buildTransclusionDecorations: курсор внутри — атомарный #id, раздел свободен', () => {
@@ -145,11 +153,14 @@ test('buildTransclusionDecorations: свёрнутая ссылка — видж
   const ref = parseTransclusions(src)[0]!;
   const key = transclusionCacheKey(NET, ref);
   const cache = new Map([[key, { title: 'Мысль', exists: true, error: null, html: '<p>тело</p>' }]]);
-  const { deco } = buildTransclusionDecorations(src, { from: 0, to: 0 }, cache, NET, new Set([key]));
+  const { deco, atomic } = buildTransclusionDecorations(src, { from: 0, to: 0 }, cache, NET, new Set([key]));
   const items = collect(deco, src.length);
   assert.equal(items.length, 1);
   assert.notEqual(items[0]!.value.spec.block, true);
   assert.equal(items[0]!.value.spec.widget?.constructor.name, 'TransclusionLinkWidget');
+  // Свёрнутая ссылка — тоже единый атомарный элемент.
+  assert.equal(atomic.size, 1);
+  assert.deepEqual(collect(atomic, src.length).map((a) => [a.from, a.to]), [[ref.start, ref.end]]);
 });
 
 // ---------------------------------------------------------------------------
@@ -233,7 +244,9 @@ test('buildTransclusionDecorations: источник в правке — бло�
   assert.equal(spec.widget?.editing, true);
   assert.equal(spec.widget?.sourceId, ID_A);
   assert.equal(spec.widget?.lockedBy, null);
-  assert.equal(atomic.size, 0, 'в правке блока токен #id не атомарен');
+  // Блок в правке — единый атомарный диапазон (неделимость навигации, a2b68d72).
+  assert.equal(atomic.size, 1);
+  assert.deepEqual(collect(atomic, src.length).map((a) => [a.from, a.to]), [[ref.start, ref.end]]);
 });
 
 test('buildTransclusionDecorations: чужой захват источника — lockedBy в блоке', () => {

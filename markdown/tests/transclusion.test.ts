@@ -192,15 +192,20 @@ test('развёртка: цикл A→B→A не разворачивается
   assert.ok(out.includes(`${PREFIX} skip source=${A} depth=3 reason=cycle -->`));
 });
 
-test('развёртка: нет источника — missing', () => {
+test('развёртка: нет источника — missing с reason=source', () => {
   const out = expandTransclusions(`![[#${A}]]`, makeResolver({}));
-  assert.ok(out.includes(`${PREFIX} missing source=${A} -->`));
+  assert.ok(out.includes(`${PREFIX} missing source=${A} reason=source -->`));
   assert.ok(!out.includes('begin'));
 });
 
-test('развёртка: раздела нет в источнике — missing с section', () => {
+test('развёртка: раздела нет в источнике — missing с section и reason=section', () => {
   const out = expandTransclusions(`![[#${A}#Раздел]]`, makeResolver({ [A]: '## Другой\nx' }));
-  assert.ok(out.includes(`${PREFIX} missing source=${A} section="Раздел" -->`));
+  assert.ok(out.includes(`${PREFIX} missing source=${A} section="Раздел" reason=section -->`));
+});
+
+test('развёртка: нет источника со ссылкой на раздел — reason=source', () => {
+  const out = expandTransclusions(`![[#${A}#Раздел]]`, makeResolver({}));
+  assert.ok(out.includes(`${PREFIX} missing source=${A} section="Раздел" reason=source -->`));
 });
 
 test('развёртка: section экранируется в маркере', () => {
@@ -274,4 +279,34 @@ test('блоки: подписи экранируются', () => {
     transclusion: { labels: { ...LABELS, noSource: '<b>нет</b>' } },
   });
   assert.ok(html.includes('&lt;b&gt;нет&lt;/b&gt;'));
+});
+
+test('блоки: нет источника со ссылкой на раздел — подпись «нет источника»', () => {
+  const out = expandTransclusions(`![[#${A}#Раздел]]`, makeResolver({}));
+  const html = renderMarkdown(out, { transclusion: { labels: LABELS } });
+  assert.ok(html.includes('md-transclusion--missing'));
+  assert.ok(html.includes('data-transclusion-section="Раздел"'));
+  assert.match(html, />нет источника<\/div>/);
+  assert.ok(!html.includes('нет раздела'));
+});
+
+test('блоки: раздела нет — подпись «нет раздела»', () => {
+  const out = expandTransclusions(`![[#${A}#Нет]]`, makeResolver({ [A]: '## Есть\nx' }));
+  const html = renderMarkdown(out, { transclusion: { labels: LABELS } });
+  assert.match(html, />нет раздела<\/div>/);
+});
+
+test('блоки: skip при пределе глубины клампится в 1..5', () => {
+  const bodies: Record<string, string> = {
+    [A]: `![[#${B}]]`,
+    [B]: `![[#${C}]]`,
+    [C]: `![[#${D}]]`,
+    [D]: `![[#${E}]]`,
+    [E]: `![[#${F}]]`,
+  };
+  const out = expandTransclusions(`![[#${A}]]`, makeResolver(bodies));
+  const html = renderMarkdown(out, { transclusion: { labels: LABELS } });
+  assert.ok(html.includes('md-transclusion--skipped'));
+  assert.ok(html.includes('data-transclusion-depth="5"'));
+  assert.ok(!html.includes('data-transclusion-depth="6"'));
 });

@@ -29,7 +29,7 @@
  * - `<!-- etn:transclusion begin source=<uuid>[ section="…"] depth=<N> -->`
  * - `<!-- etn:transclusion end source=<uuid> depth=<N> -->`
  * - `<!-- etn:transclusion skip source=<uuid> depth=<N> reason=<cycle|depth_limit> -->`
- * - `<!-- etn:transclusion missing source=<uuid>[ section="…"] -->`
+ * - `<!-- etn:transclusion missing source=<uuid>[ section="…"] reason=<source|section> -->`
  */
 
 /** Depth cap of the recursive expansion (requirement `166a7555`, const). */
@@ -348,7 +348,7 @@ function expandRef(
   if (!resolved.found) {
     return marker(
       `<!-- ${TRANSCLUSION_MARKER_PREFIX} missing source=${ref.sourceId}` +
-        `${sectionAttr(ref.section)} -->`,
+        `${sectionAttr(ref.section)} reason=source -->`,
     );
   }
 
@@ -358,7 +358,7 @@ function expandRef(
     if (section === null) {
       return marker(
         `<!-- ${TRANSCLUSION_MARKER_PREFIX} missing source=${ref.sourceId}` +
-          `${sectionAttr(ref.section)} -->`,
+          `${sectionAttr(ref.section)} reason=section -->`,
       );
     }
     body = section;

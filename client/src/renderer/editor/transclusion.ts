@@ -645,6 +645,9 @@ export function buildTransclusionDecorations(
     // Режим правки блока перекрывает прочие режимы: блок остаётся блоком даже
     // при каретке внутри ссылки (задача f59d24e1).
     if (editingSourceId !== null && editingSourceId === ref.sourceId) {
+      // Неделимость блока при навигации стрелками (задача a2b68d72): диапазон
+      // целиком атомарен — курсор не заходит внутрь развёрнутого блока.
+      atomParts.push({ from: ref.start, to: ref.end, value: Decoration.mark({}) });
       parts.push({
         from: ref.start,
         to: ref.end,
@@ -682,6 +685,8 @@ export function buildTransclusionDecorations(
     }
 
     if (key !== null && collapsed.has(key)) {
+      // Свёрнутая ссылка — тоже единый элемент: диапазон атомарен при стрелках.
+      atomParts.push({ from: ref.start, to: ref.end, value: Decoration.mark({}) });
       parts.push({
         from: ref.start,
         to: ref.end,
@@ -698,6 +703,10 @@ export function buildTransclusionDecorations(
       continue;
     }
 
+    // Развёрнутый блок: диапазон атомарен (задача a2b68d72) — иначе Right/Left
+    // заводят каретку внутрь, декорации пересобираются в режим правки ссылки и
+    // блок распадается в исходный markdown (блокер верификатора).
+    atomParts.push({ from: ref.start, to: ref.end, value: Decoration.mark({}) });
     parts.push({
       from: ref.start,
       to: ref.end,
