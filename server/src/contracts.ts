@@ -48,7 +48,6 @@ import {
   SORT_ORDERS,
   FOCUS_DIRS,
   ICON_KINDS,
-  isIconLibraryName,
   LAYER_DIFF_MAX_LIMIT,
   LAYER_DIFF_SECTIONS,
   LAYER_THOUGHT_MERGE_MODES,
@@ -75,6 +74,7 @@ import {
   type ThoughtRef,
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
+import { LIBRARY_ICON_MESSAGE, libraryIconValid } from './domain/icon-view.js';
 import {
   numberingRangeInvalid,
   recipeOverlap,
@@ -120,26 +120,7 @@ export const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
 export const PROPERTY_ID_PROPERTY_CONFLICT = 'provide at most one of property_id or property';
 
 /**
- * Кросс-полевое правило вида иконки `icon` (ADR 2b655b29, требование
- * ead91183, задача 610a440e): при `icon_kind='icon'` значение поля `icon`
- * обязано быть именем каталога Lucide из `@etn/shared` (`ICON_LIBRARY_NAMES`);
- * неизвестное имя — VALIDATION_ERROR. `null`/`undefined` допустимы (вид
- * задан, значение ещё не выбрано — как у emoji/image). Для `emoji`/`image`
- * правило не срабатывает — их значения проверяются по-прежнему.
- *
- * Применяется и к REST (через полно-схемную проверку `parseRest`), и к MCP
- * (схема `etn.ontology.write`): неизвестное имя отвергается обоими фасадами.
- */
-const LIBRARY_ICON_MESSAGE =
-  'icon должен быть именем иконки из каталога Lucide (kebab-case).';
-
-function libraryIconValid(value: { icon_kind?: unknown; icon?: unknown }): boolean {
-  if (value.icon_kind !== 'icon') return true;
-  if (value.icon === undefined || value.icon === null) return true;
-  return typeof value.icon === 'string' && isIconLibraryName(value.icon);
-}
-
-/** `direction` inline-ссылки (task O4, docs/03-server-api.md §6.3). */
+ * `direction` inline-ссылки (task O4, docs/03-server-api.md §6.3). */
 export const LinkDirection = z
   .enum(['parent', 'child'])
   .describe(

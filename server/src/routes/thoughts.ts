@@ -78,6 +78,7 @@ import {
 } from '../contracts.js';
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
+import { assertLibraryIcon } from '../domain/icon-view.js';
 import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
 import {
   clearThoughtRefUsages,
@@ -433,6 +434,18 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const changes = parseThoughtUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Частичная правка может нести только `icon` или только `icon_kind` —
+        // правило вида `icon` (задача 610a440e) проверяет ИТОГОВУЮ пару,
+        // слитую с сохранённой мыслью. Мысль не найдена — решение за
+        // `updateThought` (NOT_FOUND), здесь ничего не проверяем.
+        const before = getThought(ndb, id);
+        if (before !== null) {
+          assertLibraryIcon(
+            changes.icon_kind ?? before.icon_kind,
+            changes.icon !== undefined ? changes.icon : before.icon,
+            req.id,
+          );
+        }
         const thought = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const updated = updateThought(ndb, id, changes, expectedVersion, req.auth!.user.id);
           return {

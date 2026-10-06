@@ -65,6 +65,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { assertLibraryIcon } from './icon-view.js';
 import {
   createLinkType,
   getLinkType,
@@ -1073,6 +1074,13 @@ export function writeOntology(
             id,
           });
         }
+        // Частичная правка вида иконки: `item.icon_kind` может не прийти, а
+        // `item.icon` — прийти; правило вида `icon` (задача 610a440e) проверяет
+        // ИТОГОВУЮ пару, слитую с сохранённым типом (та же проверка, что у REST).
+        assertLibraryIcon(
+          item.icon_kind ?? existing.icon_kind,
+          item.icon !== undefined ? item.icon : existing.icon,
+        );
         const updateInput: ThoughtTypeUpdateInput = {};
         if (item.name !== '' && item.name !== existing.name) updateInput.name = item.name;
         if (item.description !== undefined && item.description !== existing.description) {

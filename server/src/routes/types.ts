@@ -76,6 +76,7 @@ import {
 } from '../domain/property-service.js';
 import { getLinkType } from '../domain/link-type-service.js';
 import { getThoughtType } from '../domain/thought-type-service.js';
+import { assertLibraryIcon } from '../domain/icon-view.js';
 
 /** Route params for a network + type id. */
 interface TypeIdParams {
@@ -404,6 +405,18 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const { changes, confirmed } = parseThoughtTypeUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Частичная правка может нести только `icon` (вид сохранён) или только
+        // `icon_kind` (значение сохранено) — правило вида `icon` (задача
+        // 610a440e) проверяет ИТОГОВУЮ пару, слитую с сохранённым типом. Тип не
+        // найден — решение за `updateThoughtType` (NOT_FOUND).
+        const before = getThoughtType(ndb, id);
+        if (before !== null) {
+          assertLibraryIcon(
+            changes.icon_kind ?? before.icon_kind,
+            changes.icon !== undefined ? changes.icon : before.icon,
+            req.id,
+          );
+        }
         const type = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const updated = updateThoughtType(ndb, id, changes, expectedVersion, req.auth!.user.id, {
             confirmed,

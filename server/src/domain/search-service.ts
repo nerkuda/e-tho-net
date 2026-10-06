@@ -1138,7 +1138,10 @@ export function findDuplicates(
         matched_on: 'partial',
         type_id: row.type_id,
         icon: row.icon,
-        icon_kind: row.icon_kind === 'image' ? 'image' : 'emoji',
+        // Все три вида иконки сохраняются как есть (задача 610a440e):
+        // библиотечный вид `icon` не должен схлопываться в `emoji`.
+        icon_kind:
+          row.icon_kind === 'image' || row.icon_kind === 'icon' ? row.icon_kind : 'emoji',
         fg_color: row.fg_color,
         bg_color: row.bg_color,
         font_bold: readFont(row.font_manual, FONT_BOLD_BIT, row.font_bold),

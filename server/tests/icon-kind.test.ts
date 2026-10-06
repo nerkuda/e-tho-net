@@ -140,6 +140,102 @@ describe(
       }
     });
 
+    it('частичная правка только icon при сохранённом виде icon: валидируется итоговая пара', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const created = await createThought(ctx, {
+          title: 'Частичная правка иконки',
+          icon: KNOWN_ICON,
+          icon_kind: 'icon',
+        });
+        assert.equal(created.statusCode, 201, created.body);
+        const id = (created.json().data as { id: string }).id;
+
+        // `icon_kind` не передан — сохранён вид icon, и итоговое имя обязано
+        // быть в каталоге. До фикса такой PATCH проходил с 200.
+        const bad = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${id}`,
+          headers: { ...authHeaders(ctx), 'if-match': '1' },
+          payload: { icon: UNKNOWN_ICON },
+        });
+        assert.equal(bad.statusCode, 422, bad.body);
+        assert.equal((bad.json() as RestError).error.message, LIBRARY_ICON_MESSAGE);
+
+        const good = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${id}`,
+          headers: { ...authHeaders(ctx), 'if-match': '1' },
+          payload: { icon: 'search' },
+        });
+        assert.equal(good.statusCode, 200, good.body);
+        const data = good.json().data as { icon: string | null; icon_kind: string };
+        assert.equal(data.icon_kind, 'icon');
+        assert.equal(data.icon, 'search');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('частичная правка только icon_kind при невалидном сохранённом icon — VALIDATION_ERROR', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Вид emoji допускает произвольную строку в слоте — сохраняем её.
+        const created = await createThought(ctx, {
+          title: 'Плохой слот иконки',
+          icon: UNKNOWN_ICON,
+          icon_kind: 'emoji',
+        });
+        assert.equal(created.statusCode, 201, created.body);
+        const id = (created.json().data as { id: string }).id;
+
+        const bad = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${id}`,
+          headers: { ...authHeaders(ctx), 'if-match': '1' },
+          payload: { icon_kind: 'icon' },
+        });
+        assert.equal(bad.statusCode, 422, bad.body);
+        assert.equal((bad.json() as RestError).error.message, LIBRARY_ICON_MESSAGE);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('find_duplicates отдаёт вид icon без искажения (search-service)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const created = await createThought(ctx, {
+          title: 'Уникальное имя для проверки дублей Zeta',
+          icon: KNOWN_ICON,
+          icon_kind: 'icon',
+        });
+        assert.equal(created.statusCode, 201, created.body);
+        const id = (created.json().data as { id: string }).id;
+
+        const res = await ctx.app.inject({
+          method: 'GET',
+          url:
+            `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=` +
+            encodeURIComponent('Уникальное имя для проверки дублей Zeta'),
+          headers: authHeaders(ctx),
+        });
+        assert.equal(res.statusCode, 200, res.body);
+        // Одиночная сеть — список: `{ data: DuplicateHit[], meta }`.
+        const hits = res.json().data as Array<{
+          id: string;
+          icon: string | null;
+          icon_kind: string;
+        }>;
+        const hit = hits.find((h) => h.id === id);
+        assert.ok(hit, 'созданная мысль найдена среди дублей');
+        assert.equal(hit!.icon_kind, 'icon');
+        assert.equal(hit!.icon, KNOWN_ICON);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('обратная совместимость: emoji и image работают, правило не срабатывает', async () => {
       const ctx = await buildRestContext();
       try {
@@ -209,6 +305,51 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('частичная правка типа: только icon при сохранённом виде icon и только icon_kind при плохом icon', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const withIcon = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types`,
+          headers: authHeaders(ctx),
+          payload: { name: 'Тип частичный', icon: KNOWN_ICON, icon_kind: 'icon' },
+        });
+        assert.equal(withIcon.statusCode, 201, withIcon.body);
+        const id = (withIcon.json().data as { id: string }).id;
+
+        // Только `icon` — вид сохранён icon, итоговое имя обязано быть в каталоге.
+        const partialIcon = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${id}`,
+          headers: authHeaders(ctx),
+          payload: { icon: UNKNOWN_ICON },
+        });
+        assert.equal(partialIcon.statusCode, 422, partialIcon.body);
+        assert.equal((partialIcon.json() as RestError).error.message, LIBRARY_ICON_MESSAGE);
+
+        // Только `icon_kind` — сохранённый слот emoji содержит произвольную строку.
+        const oddSlot = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types`,
+          headers: authHeaders(ctx),
+          payload: { name: 'Тип плохой слот', icon: UNKNOWN_ICON, icon_kind: 'emoji' },
+        });
+        assert.equal(oddSlot.statusCode, 201, oddSlot.body);
+        const oddId = (oddSlot.json().data as { id: string }).id;
+
+        const partialKind = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${oddId}`,
+          headers: authHeaders(ctx),
+          payload: { icon_kind: 'icon' },
+        });
+        assert.equal(partialKind.statusCode, 422, partialKind.body);
+        assert.equal((partialKind.json() as RestError).error.message, LIBRARY_ICON_MESSAGE);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );
 
@@ -244,6 +385,45 @@ describe(
             },
           });
           assert.equal(good.isError, undefined, toolText(good));
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('правка существующего типа только icon при сохранённом виде icon — VALIDATION_ERROR', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const created = await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [
+                { ref: 'probe', name: 'MCProbe', icon: KNOWN_ICON, icon_kind: 'icon' },
+              ],
+            },
+          });
+          assert.equal(created.isError, undefined, toolText(created));
+          const createdData = JSON.parse(toolText(created)) as {
+            thought_types: Array<{ id: string }>;
+          };
+          const typeId = createdData.thought_types[0]!.id;
+
+          // `icon_kind` не передан — сохранён вид icon; итоговое имя вне каталога.
+          const bad = await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ id: typeId, name: 'MCProbe', icon: UNKNOWN_ICON }],
+            },
+          });
+          assert.equal(bad.isError, true, toolText(bad));
+          assert.match(toolText(bad), /VALIDATION_ERROR/);
+          assert.match(toolText(bad), /Lucide/);
         } finally {
           await handle.close();
         }
