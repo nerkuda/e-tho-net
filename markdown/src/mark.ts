@@ -29,7 +29,13 @@ export function markPlugin(md: MarkdownIt): void {
     }
     // No closing `==` or empty content — leave it to the plain-text rule.
     if (close >= max || close === openEnd) return false;
-    if (silent) return true;
+    // silent (skipToken) contract: the rule must advance `state.pos`, otherwise
+    // markdown-it throws «inline rule didn't increment state.pos» when the
+    // construct appears inside a link label `[...]`.
+    if (silent) {
+      state.pos = close + 2;
+      return true;
+    }
 
     const oldMax = state.posMax;
     state.pos = openEnd;

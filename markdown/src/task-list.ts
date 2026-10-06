@@ -43,6 +43,13 @@ function parentListOpen(tokens: Token[], itemIdx: number): Token | null {
   return null;
 }
 
+/** Adds a CSS class to a token's `class` attribute at most once. */
+function addClass(token: Token, cls: string): void {
+  const current = token.attrGet('class');
+  if (current !== null && current.split(/\s+/).includes(cls)) return;
+  token.attrJoin('class', cls);
+}
+
 export function taskListPlugin(md: MarkdownIt): void {
   md.core.ruler.after('inline', 'task_list', (state) => {
     const tokens = state.tokens;
@@ -67,7 +74,9 @@ export function taskListPlugin(md: MarkdownIt): void {
 
       itemOpen.attrJoin('class', 'task-list-item');
       const listOpen = parentListOpen(tokens, tokens.indexOf(itemOpen));
-      listOpen?.attrJoin('class', 'contains-task-list');
+      // `attrJoin` per task item would repeat the class in loose lists, where
+      // every item is its own paragraph — add it to the list only once.
+      if (listOpen !== null) addClass(listOpen, 'contains-task-list');
     }
   });
 

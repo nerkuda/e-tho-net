@@ -52,7 +52,12 @@ export function htmlCommentPlugin(md: MarkdownIt): void {
     const end = state.src.indexOf(CLOSE, state.pos + OPEN.length);
     // The comment must be fully inside the current inline range.
     if (end === -1 || end + CLOSE.length > state.posMax) return false;
-    if (silent) return true;
+    // silent (skipToken) contract: advance `state.pos` so a comment inside a
+    // link label `[[name|a<!-- c -->b]]` does not make markdown-it throw.
+    if (silent) {
+      state.pos = end + CLOSE.length;
+      return true;
+    }
     state.pos = end + CLOSE.length;
     return true;
   });

@@ -463,3 +463,67 @@ test('HTML-комментарий внутри fenced-кода сохраняе�
   assert.ok(html.includes('&lt;!-- keep --&gt;'), html);
 });
 
+// ---------------------------------------------------------------------------
+// silent-контракт markdown-it: новые конструкции внутри `[...]`
+// (регрессия по ревью задачи 2fc28fa2)
+// ---------------------------------------------------------------------------
+
+test('новые конструкции внутри label ссылки не роняют рендер (silent-контракт)', () => {
+  const inputs = [
+    '[==a==](http://e.com)',
+    '[<u>x</u>](http://e.com)',
+    '[<!-- c -->](http://e.com)',
+    '[![==a==](https://e.com/i.png)](https://e.com/)',
+    '[<u>u</u>]',
+    '[==a==]',
+    '[==a](http://e.com)',
+    `[[#8e0d670e-de61-4da7-b13e-9232cd1c6ca5|==x==]]`,
+    '[[name|<u>x</u>]]',
+    '[[name|a<!-- c -->b]]',
+    '[ <u>u</u> ]',
+  ];
+  for (const src of inputs) {
+    assert.doesNotThrow(() => renderMarkdown(src), src);
+  }
+});
+
+test('==…== внутри label ссылки рендерится как <mark> внутри <a>', () => {
+  const html = renderMarkdown('[==a==](http://e.com)');
+  assert.ok(html.includes('<a href="http://e.com"><mark>a</mark></a>'), html);
+});
+
+test('<u>…</u> внутри label ссылки рендерится как <u> внутри <a>', () => {
+  const html = renderMarkdown('[<u>x</u>](http://e.com)');
+  assert.ok(html.includes('<a href="http://e.com"><u>x</u></a>'), html);
+});
+
+test('HTML-комментарий внутри label ссылки скрыт, ссылка сохранена', () => {
+  const html = renderMarkdown('[<!-- c -->](http://e.com)');
+  assert.ok(!html.includes('<!--'), html);
+  assert.ok(html.includes('<a href="http://e.com">'), html);
+});
+
+test('картинка с ==…== в alt внутри ссылки не роняет рендер', () => {
+  const html = renderMarkdown('[![==a==](https://e.com/i.png)](https://e.com/)');
+  assert.ok(html.includes('<img src="https://e.com/i.png"'), html);
+  assert.ok(html.includes('<a href="https://e.com/">'), html);
+});
+
+test('конструкции внутри wiki-алиаса не роняют рендер и остаются текстом', () => {
+  // Алиас wiki-ссылки — плоский текст (экранируется), но parsing label
+  // проходит через skipToken: правило обязано двигать state.pos.
+  assert.doesNotThrow(() => renderMarkdown('[[name|<u>x</u>]]'));
+  assert.doesNotThrow(() => renderMarkdown('[[name|a<!-- c -->b]]'));
+  assert.doesNotThrow(
+    () => renderMarkdown(`[[#8e0d670e-de61-4da7-b13e-9232cd1c6ca5|==x==]]`),
+  );
+});
+
+test('loose-список задач: класс contains-task-list не дублируется', () => {
+  const html = renderMarkdown('- [ ] a\n\n- [x] b');
+  assert.equal((html.match(/contains-task-list/g) ?? []).length, 1, html);
+  assert.match(html, /<ul class="contains-task-list">/);
+  assert.equal((html.match(/type="checkbox"/g) ?? []).length, 2, html);
+});
+
+

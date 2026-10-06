@@ -48,7 +48,12 @@ export function underlinePlugin(md: MarkdownIt): void {
     }
     // No closing `</u>` or empty content — plain text (escaped later).
     if (close === -1 || close === openEnd) return false;
-    if (silent) return true;
+    // silent (skipToken) contract: advance `state.pos` so a link label such as
+    // `[<u>x</u>]` does not make markdown-it throw.
+    if (silent) {
+      state.pos = close + 4;
+      return true;
+    }
 
     const oldMax = state.posMax;
     state.pos = openEnd;
