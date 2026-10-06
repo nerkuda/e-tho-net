@@ -22,4 +22,6 @@ etn.thoughts.search { network_id: "253431e2-780d-466b-879e-6373f73fbad5",
 - два remote: `origin` (рабочий) и `github` (публичный); push на github — только явный;
 - Node 22 — не менять;
 - версию бампить во всех пяти `package.json` + `docs/install-server.md`;
-- релиз собирает workflow по тегу `v*`, вручную `gh release create` не вызывать.
+- релиз собирает workflow по тегу `v*`, вручную `gh release create` не вызывать;
+- аннотация тега `-m` становится заголовком GitHub Release — пишите её в виде
+  `ETN X.Y.Z — <тема версии>`.
