@@ -41,6 +41,27 @@ export const TRANSCLUSION_MARKER_PREFIX = 'etn:transclusion';
 /** UUID (8-4-4-4-12 hex with dashes) — mirrors `wiki-link.ts`. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Собирает исходник ссылки трансклюзии: `![[#<id>]]` — полный постоянный
+ * комментарий мысли, либо `![[#<id>#Раздел]]` — его раздел. Единый дом
+ * конструкции `![[…]]` (сторож `own-transclusion-outside-package`):
+ * сервер и клиент строят ссылку ТОЛЬКО этой функцией, собственных шаблонов не
+ * заводят. Обратная операция — {@link parseTransclusions}.
+ *
+ * @throws когда `sourceId` не UUID или раздел содержит перевод строки.
+ */
+export function formatTransclusionRef(sourceId: string, section?: string | null): string {
+  const id = typeof sourceId === 'string' ? sourceId.trim() : '';
+  if (!UUID_RE.test(id)) {
+    throw new Error('formatTransclusionRef: sourceId must be a UUID');
+  }
+  const sec = section === null || section === undefined ? '' : String(section).trim();
+  if (/[\r\n]/.test(sec)) {
+    throw new Error('formatTransclusionRef: section must not contain a line break');
+  }
+  return sec === '' ? `![[#${id.toLowerCase()}]]` : `![[#${id.toLowerCase()}#${sec}]]`;
+}
+
 /** A parsed transclusion reference and its position in the source. */
 export interface TransclusionRef {
   /** Verbatim source text of the reference (`![[#<id>#Раздел]]`). */

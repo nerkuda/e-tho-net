@@ -43,6 +43,7 @@ export type {
 export {
   TRANSCLUSION_MAX_DEPTH,
   TRANSCLUSION_MARKER_PREFIX,
+  formatTransclusionRef,
   parseTransclusions,
   extractSection,
   expandTransclusions,

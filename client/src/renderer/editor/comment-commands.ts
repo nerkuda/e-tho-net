@@ -71,6 +71,12 @@ export interface CommentCommandHost {
   /** Корень поля (для проверок принадлежности фокуса и т. п.). */
   root: HTMLElement;
   /**
+   * Владелец комментария — текущая мысль (родитель новых мыслей) или связь.
+   * `null` — поле не привязано к комментарию (командам создания мыслей нечего
+   * дать в родители). Задаётся владельцем поля из опции `commentContext`.
+   */
+  getCommentOwner?(): CommentOwnerRef | null;
+  /**
    * Команды уровня поля, которые знает само поле (отмена, сохранение и
    * прочие команды режима правки). `true` — команда обработана.
    */
@@ -83,12 +89,20 @@ export interface CommentCommandHost {
   subscribe?(listener: () => void): () => void;
 }
 
+/** Владелец комментария: мысль (родитель новых мыслей) или связь. */
+export interface CommentOwnerRef {
+  ownerType: 'thought' | 'link';
+  ownerId: string;
+}
+
 /** Контекст исполнения команды, передаваемый зарегистрированному обработчику. */
 export interface CommentCommandContext {
   /** Редактор текущего поля. */
   editor: MdEditor;
   /** Корень поля. */
   root: HTMLElement;
+  /** Владелец комментария (родитель новых мыслей) либо `null`. */
+  getCommentOwner(): CommentOwnerRef | null;
   /** Запустить другую команду этого же поля (для составных команд). */
   run(command: string): boolean;
 }
@@ -153,6 +167,7 @@ function contextOf(host: CommentCommandHost, editor: MdEditor): CommentCommandCo
   return {
     editor,
     root: host.root,
+    getCommentOwner: () => host.getCommentOwner?.() ?? null,
     run: (nested) => runCommentCommand(nested, host),
   };
 }
@@ -324,6 +339,18 @@ export const COMMENT_COMMANDS: Readonly<Record<string, CommentCommandDef>> = Obj
     icon: 'arrow-down',
   },
   'comment.split': { id: 'comment.split', labelKey: 'comment.cmd.split', icon: 'split' },
+  // Команды создания мыслей из выделения (ТП3, задача 5f854e7a; элемент
+  // интерфейса `2a21c27e`). Тела команд живут в `editor/comment-thought-create.ts`.
+  'comment.createFromSection': {
+    id: 'comment.createFromSection',
+    labelKey: 'comment.cmd.createFromSection',
+    icon: 'heading-2',
+  },
+  'comment.createFromSelection': {
+    id: 'comment.createFromSelection',
+    labelKey: 'comment.cmd.createFromSelection',
+    icon: 'plus',
+  },
   'comment.cancel': { id: 'comment.cancel', labelKey: 'comment.cmd.cancel', icon: 'x' },
   'comment.save': { id: 'comment.save', labelKey: 'comment.cmd.save', icon: 'save' },
   'comment.hotkeysDialog': {
@@ -451,6 +478,9 @@ export const COMMENT_MENU_LAYOUT: readonly CommentLayoutNode[] = Object.freeze([
   { kind: 'command', id: 'comment.pasteAsText' },
   { kind: 'separator' },
   { kind: 'command', id: 'comment.find' },
+  { kind: 'separator' },
+  { kind: 'command', id: 'comment.createFromSection' },
+  { kind: 'command', id: 'comment.createFromSelection' },
   { kind: 'command', id: 'comment.split' },
   { kind: 'separator' },
   { kind: 'command', id: 'comment.cancel' },

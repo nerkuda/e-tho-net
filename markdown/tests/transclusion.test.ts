@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   TRANSCLUSION_MAX_DEPTH,
   TRANSCLUSION_MARKER_PREFIX,
+  formatTransclusionRef,
   parseTransclusions,
   extractSection,
   expandTransclusions,
@@ -364,4 +365,18 @@ test('блоки: skip при пределе глубины клампится �
   assert.ok(html.includes('md-transclusion--skipped'));
   assert.ok(html.includes('data-transclusion-depth="5"'));
   assert.ok(!html.includes('data-transclusion-depth="6"'));
+});
+
+test('formatTransclusionRef: прямая и обратная операция согласованы', () => {
+  assert.equal(formatTransclusionRef(A), `![[#${A}]]`);
+  assert.equal(formatTransclusionRef(A.toUpperCase()), `![[#${A}]]`, 'id нормализуется');
+  assert.equal(formatTransclusionRef(A, 'Раздел'), `![[#${A}#Раздел]]`);
+  assert.equal(formatTransclusionRef(A, '   '), `![[#${A}]]`, 'пустой раздел — полный комментарий');
+
+  const ref = parseTransclusions(formatTransclusionRef(A, 'C# / заметки'))[0];
+  assert.equal(ref?.sourceId, A);
+  assert.equal(ref?.section, 'C# / заметки', 'решётка внутри раздела сохраняется');
+
+  assert.throws(() => formatTransclusionRef('not-a-uuid'), /UUID/);
+  assert.throws(() => formatTransclusionRef(A, 'две\nстроки'), /line break/);
 });

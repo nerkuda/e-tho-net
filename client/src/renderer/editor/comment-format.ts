@@ -27,6 +27,11 @@ import { type EditorView, keymap } from '@codemirror/view';
 import { COMMENT_KEYMAP_DEFAULTS, effectiveChord } from '../lib/keymap.js';
 import { registerCommentCommand, runCommentCommand } from './comment-commands.js';
 import { registerCommentHotkeysDialog } from './comment-hotkeys-dialog.js';
+// Тела команд создания мыслей из выделения (ТП3, задача 5f854e7a) регистрируются
+// при загрузке своего модуля; здесь — только подключение к набору команд поля
+// (боковой импорт, а не вызов: цикл через `canvas` с комментарием не даёт
+// безопасно вызывать чужой модуль из тела `installCommentFormatCommands`).
+import './comment-thought-create.js';
 import { expandTransclusionsForClipboard } from './transclusion.js';
 import {
   blockMarker,

@@ -299,6 +299,12 @@ export function createMarkdownField(opts: {
   const commandHost: CommentCommandHost = {
     getEditor: () => (editing ? editor : null),
     root,
+    // Владелец комментария — родитель новых мыслей команд ТП3 (задача
+    // 5f854e7a). Известен только у поля с контекстом комментария.
+    getCommentOwner: () => {
+      const cc = opts.commentContext;
+      return cc === undefined ? null : { ownerType: cc.ownerType, ownerId: cc.ownerId };
+    },
     runFieldCommand: (command) => {
       // Поиск открывается в обоих режимах; замена — только в правке
       // (элемент b8eabc22, требование d72ea6eb).
