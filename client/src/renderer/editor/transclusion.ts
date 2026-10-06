@@ -963,6 +963,16 @@ function transclusionRefAt(view: EditorView, pos: number): TransclusionRef | nul
   return transclusionAtCaret(view.state.doc.toString(), pos)?.ref ?? null;
 }
 
+/**
+ * Активна ли правка блока (есть редактируемый текст источника). Пока она
+ * активна, `Enter` НЕ перехватывается: его обрабатывает родительский keymap
+ * (перевод строки/список), иначе клавиша «мертва» и хоткеи родительского
+ * редактора не действуют на текст блока.
+ */
+export function isBlockEditing(state: EditorState): boolean {
+  return state.field(transclusionState, false)?.blockEdit != null;
+}
+
 /** Восстанавливает исходную ссылку вместо текста блока и выходит из правки. */
 export function restoreBlockEdit(view: EditorView, be: BlockEditState): void {
   const len = view.state.doc.length;
@@ -1087,8 +1097,10 @@ export const transclusionEditGestures = [
         run: (view) => {
           // Открытый автокомплит (мысли/разделы) обрабатывает Enter сам.
           if (completionStatus(view.state) === 'active') return false;
-          // Внутри правки блока Enter не вставляет перевод строки.
-          if (view.state.field(transclusionState, false)?.blockEdit !== null) return true;
+          // В правке блока Enter — обычный перевод строки: не перекрываем
+          // родительский keymap (defaultKeymap/markdown). Иначе клавиша «мертва»
+          // и хоткеи родительского редактора не действуют на текст блока.
+          if (isBlockEditing(view.state)) return false;
           const ref = transclusionRefAt(view, view.state.selection.main.head);
           if (ref === null) return false;
           void beginBlockEdit(view, ref);

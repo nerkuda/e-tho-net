@@ -17,6 +17,7 @@ import { parseTransclusions } from '@etn/markdown';
 
 import {
   buildTransclusionDecorations,
+  isBlockEditing,
   listSectionTitles,
   mergeSectionContent,
   renderTransclusionMarkdown,
@@ -457,4 +458,21 @@ test('buildTransclusionDecorations: ссылка вне диапазона пр�
   const widget = items.find((it) => it.value.spec.widget !== undefined);
   assert.ok(widget !== undefined);
   assert.equal(widget!.from, refs[1]!.start);
+});
+
+test('isBlockEditing: Enter отдаётся родительскому keymap в правке блока', () => {
+  const src = `до ![[#${ID_A}]] после`;
+  const ref = parseTransclusions(src)[0]!;
+  let state = EditorState.create({ doc: src, extensions: [transclusionState] });
+  assert.equal(isBlockEditing(state), false, 'вне правки блока Enter обрабатываем сами');
+  state = state.update({
+    effects: transclusionInternals.setBlockEditRange.of({
+      sourceId: ID_A,
+      section: null,
+      refRaw: ref.raw,
+      from: ref.start,
+      to: ref.start + 5,
+    }),
+  }).state;
+  assert.equal(isBlockEditing(state), true, 'в правке блока Enter отдаём родителю (перевод строки)');
 });

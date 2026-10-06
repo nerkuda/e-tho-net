@@ -946,6 +946,9 @@ export function addCommentTarget(
   const ot = validateOwnerType(ownerType);
   return ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, commentId);
+    // Смена привязок комментария — тоже запись в захваченного владельца
+    // (ошибка 68be6829, требование 647fa34a).
+    enforceCommentLocks(ndb, current.targets, actorUserId);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
         entity: 'comment',
@@ -1004,6 +1007,9 @@ export function removeCommentTarget(
   const ot = validateOwnerType(ownerType);
   return ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, commentId);
+    // Смена привязок комментария — тоже запись в захваченного владельца
+    // (ошибка 68be6829, требование 647fa34a).
+    enforceCommentLocks(ndb, current.targets, actorUserId);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
         entity: 'comment',

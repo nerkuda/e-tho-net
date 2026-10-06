@@ -583,5 +583,27 @@ describe(
         ndb.close();
       }
     });
+
+    it('смена привязок комментария при чужом захвате владельца — 409 LOCKED', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Источник');
+        const other = seedThought(ndb, 'Другая');
+        const c = createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'x' }, ALICE);
+        acquireLock(ndb, { entityType: 'thought', entityId: t, userId: ALICE, clientId: 'alice-cli' });
+        assert.throws(
+          () => addCommentTarget(ndb, c.id, 'thought', other, c.version, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.throws(
+          () => removeCommentTarget(ndb, c.id, 'thought', t, c.version, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.equal(listComments(ndb, 'thought', t).length, 1, 'привязка не изменилась');
+        assert.equal(listComments(ndb, 'thought', other).length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
   },
 );
