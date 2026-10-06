@@ -345,11 +345,60 @@ export function listComments(
   return rows.map((row) => rowToComment(row, targets.get(row.id) ?? []));
 }
 
+/** Строка-победитель постоянного комментария владельца (без метаданных обрезки). */
+interface PermanentCommentRow {
+  id: string;
+  body_md: string;
+  valid_from: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Детерминированно выбрать видимый постоянный комментарий владельца
+ * (ошибка a7d3ef19, 0.12.1).
+ *
+ * Частичный уникальный индекс `idx_comments_permanent_one` обеспечивает
+ * единственность постоянного комментария лишь В ПРЕДЕЛАХ ОДНОГО слоя
+ * (`owner_type, owner_id, layer_id`). Уникальности по цепочке слоёв нет:
+ * если слой завёл свой постоянный комментарий (новый логический `id`), пока
+ * в основе появлялся комментарий того же владельца, в контексте слоя
+ * `comments_v` отдаёт ДВЕ строки-победителя (по одной на логический `id`).
+ * Прежний `LIMIT 1` без `ORDER BY` выбирал произвольную из них — «витрины»
+ * (`etn.instructions`, `meta.permanent`, `comment_preview`) могли показать
+ * чужую редакцию комментария.
+ *
+ * Порядок — по семантике слоёв ETN (13-layers.md §4.1): побеждает строка из
+ * БЛИЖАЙШЕГО слоя цепочки (`layer_chain.depth` минимальна), то есть та, что
+ * действительно видима из текущего контекста. Табличка `layer_chain` —
+ * per-connection temp-объект (db/layer-chain.ts), доступный тому же соединению.
+ * Дополнительные ключи (`updated_at`/`version`/`id`) страхуют от неоднозначности
+ * на равной глубине и дают стабильный порядок. Тот же приём, что в
+ * `property-service.resolveVisiblePropertyValueId` (ошибка 49d1f5e8), — для
+ * естественного ключа, которым у постоянного комментария является владелец.
+ */
+function getPermanentRow(
+  ndb: NetworkDb,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+): PermanentCommentRow | undefined {
+  return ndb
+    .prepare(
+      `SELECT c.id, c.body_md, c.valid_from, c.created_at, c.updated_at
+       FROM comments_v c
+       JOIN layer_chain lc ON lc.layer_id = c.layer_id
+       WHERE c.owner_type = ? AND c.owner_id = ? AND c.kind = 'permanent'
+       ORDER BY lc.depth ASC, c.updated_at DESC, c.version DESC, c.id ASC
+       LIMIT 1`,
+    )
+    .get(ownerType, ownerId) as PermanentCommentRow | undefined;
+}
+
 /**
  * Превью постоянного комментария (tasks N2/N5): `body_md` — первые
  * {@link COMMENT_PREVIEW_CHARS} символов с метаданными обрезки; `null`, когда
- * постоянного комментария нет. Один SELECT по частичному уникальному индексу
- * `idx_comments_permanent_one`.
+ * постоянного комментария нет. Строка-победитель выбирается
+ * {@link getPermanentRow} (детерминированно — видимая версия).
  */
 export function getPermanentPreview(
   ndb: NetworkDb,
@@ -359,21 +408,7 @@ export function getPermanentPreview(
   bodyTransform?: BodyExpander,
 ): PermanentCommentPreview | null {
   validateOwnerType(ownerType);
-  const row = ndb
-    .prepare(
-      `SELECT id, body_md, valid_from, created_at, updated_at FROM comments_v
-       WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent'
-       LIMIT 1`,
-    )
-    .get(ownerType, ownerId) as
-    | {
-        id: string;
-        body_md: string;
-        valid_from: string;
-        created_at: string;
-        updated_at: string;
-      }
-    | undefined;
+  const row = getPermanentRow(ndb, ownerType, ownerId);
   if (row === undefined) {
     return null;
   }
@@ -400,8 +435,8 @@ export function getPermanentPreview(
  * «Условная обрезка текстов в ответах MCP». Возвращается из
  * `etn.thoughts.get` в `meta.permanent` — единственный случай, когда
  * постоянный комментарий отдаётся целиком без метаданных `chars_*`/
- * `truncated`. Тот же SELECT, что в {@link getPermanentPreview}, без
- * усечения тела.
+ * `truncated`. Тот же выбор строки, что в {@link getPermanentPreview}
+ * ({@link getPermanentRow}), без усечения тела.
  */
 export function getPermanentFull(
   ndb: NetworkDb,
@@ -410,21 +445,7 @@ export function getPermanentFull(
   bodyTransform?: BodyExpander,
 ): PermanentCommentFull | null {
   validateOwnerType(ownerType);
-  const row = ndb
-    .prepare(
-      `SELECT id, body_md, valid_from, created_at, updated_at FROM comments_v
-       WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent'
-       LIMIT 1`,
-    )
-    .get(ownerType, ownerId) as
-    | {
-        id: string;
-        body_md: string;
-        valid_from: string;
-        created_at: string;
-        updated_at: string;
-      }
-    | undefined;
+  const row = getPermanentRow(ndb, ownerType, ownerId);
   if (row === undefined) {
     return null;
   }
