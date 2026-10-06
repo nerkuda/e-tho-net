@@ -434,27 +434,42 @@ export const livePreview = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+/**
+ * Обработчик `mousedown` виджета live-preview: клик по виджету уводит каретку
+ * в диапазон блока — декорации раскрывают исходный markdown.
+ *
+ * Реагирует только на ОСНОВНУЮ кнопку мыши (`event.button === 0`): правый и
+ * средний клик — жесты вызова контекстного меню, они не должны менять
+ * выделение и разворачивать виджет (ошибка `87751f42`, тот же класс, что
+ * `27b95e60` в `transclusion.ts`). Событие при этом не гасим — `contextmenu`
+ * открывает меню поля поверх прежнего состояния. Родной обработчик CM6 на
+ * неосновных кнопках выделение не двигает (`view/dist/index.js`:
+ * basicMouseSelection — только при `button == 0`).
+ */
+export function mdWidgetMouseDown(event: MouseEvent, view: EditorView): boolean {
+  if (event.button !== 0) return false;
+  const target = event.target as Element | null;
+  const widget = target?.closest?.(`.${MD_WIDGET_CLASS}`);
+  if (!(widget instanceof HTMLElement)) return false;
+  const fromRaw = widget.dataset.mdFrom;
+  const toRaw = widget.dataset.mdTo;
+  if (fromRaw === undefined || toRaw === undefined) return false;
+  const from = Number(fromRaw);
+  const to = Number(toRaw);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to - from < 2) return false;
+
+  let pos = from + 1;
+  const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (coords !== null && coords > from && coords < to) pos = coords;
+  view.dispatch({
+    selection: { anchor: Math.min(pos, to - 1) },
+    scrollIntoView: false,
+    userEvent: 'select',
+  });
+  return true;
+}
+
 /** Клик по виджету: каретка в диапазон блока — декорации раскроют исходник. */
 export const mdWidgetClick = EditorView.domEventHandlers({
-  mousedown: (event, view) => {
-    const target = event.target as Element | null;
-    const widget = target?.closest?.(`.${MD_WIDGET_CLASS}`);
-    if (!(widget instanceof HTMLElement)) return false;
-    const fromRaw = widget.dataset.mdFrom;
-    const toRaw = widget.dataset.mdTo;
-    if (fromRaw === undefined || toRaw === undefined) return false;
-    const from = Number(fromRaw);
-    const to = Number(toRaw);
-    if (!Number.isFinite(from) || !Number.isFinite(to) || to - from < 2) return false;
-
-    let pos = from + 1;
-    const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
-    if (coords !== null && coords > from && coords < to) pos = coords;
-    view.dispatch({
-      selection: { anchor: Math.min(pos, to - 1) },
-      scrollIntoView: false,
-      userEvent: 'select',
-    });
-    return true;
-  },
+  mousedown: mdWidgetMouseDown,
 });
