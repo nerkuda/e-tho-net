@@ -146,7 +146,9 @@ describe('команды поля комментария (editor/comment-command
     assert.ok(labels.includes('Жирный'));
     assert.ok(labels.includes('Копировать'));
     assert.ok(labels.includes('Поиск'));
-    assert.ok(labels.includes('Разделение'));
+    // Идентификатор `comment.split` заведён ТП1 как точка расширения; подпись
+    // команды уточнена ТП3 (задача 578c8525) до названия элемента `2a21c27e`.
+    assert.ok(labels.includes('Разделить выделение на мысли'));
     assert.ok(labels.includes('Отмена'));
     assert.ok(labels.includes('Сохранить'));
 

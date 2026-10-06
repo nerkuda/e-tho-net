@@ -1,16 +1,21 @@
 /**
- * Команды «Создать мысль из раздела» и «Создать мысль из выделенного»
- * (0.12.1, задача 5f854e7a, ТП3 «Манипуляции с выделением в комментарии»;
- * элемент интерфейса `2a21c27e`).
+ * Команды «Создать мысль из раздела», «Создать мысль из выделенного» и
+ * «Разделить выделение на мысли» (0.12.1, задачи 5f854e7a и 578c8525, ТП3
+ * «Манипуляции с выделением в комментарии»; элемент интерфейса `2a21c27e`).
  *
- * Модуль владеет телами двух команд поля комментария:
+ * Модуль владеет телами трёх команд поля комментария:
  *  - «из раздела» — каретка (или выделение) стоит в разделе: заголовок
  *    становится названием новой мысли, тело — текстом раздела без заголовка;
  *  - «из выделенного» — любое непустое выделение целиком становится одной
  *    мыслью: название — первая значимая строка, тело — всё выделение (первая
- *    строка остаётся в теле).
+ *    строка остаётся в теле);
+ *  - «разделить выделение на мысли» — выделение разбирается на единицы
+ *    (`parseSelectionUnits`), по мысли на единицу с учётом вложенности
+ *    (вложенные единицы — под-мысли созданной мысли-родителя), на месте каждой
+ *    единицы — трансклюзия. Доступна при не менее 2 единицах разбора, диалога
+ *    и предпросмотра нет.
  *
- * Общее для обеих команд (ТП3): новая мысль — ребёнок текущей мысли
+ * Общее для всех команд (ТП3): новая мысль — ребёнок текущей мысли
  * (владелец комментария), тип не назначается, позиция — в конец списка детей;
  * на месте исходного фрагмента ставится трансклюзия полного постоянного
  * комментария новой мысли (без `#раздел` — заголовок ушёл в название,
@@ -48,8 +53,21 @@ export const CREATE_FROM_SECTION_COMMAND = 'comment.createFromSection';
 /** Идентификатор команды «Создать мысль из выделенного». */
 export const CREATE_FROM_SELECTION_COMMAND = 'comment.createFromSelection';
 
+/**
+ * Идентификатор команды «Разделить выделение на мысли» (задача 578c8525).
+ * Идентификатор `comment.split` был заведён ТП1 как точка расширения — здесь
+ * регистрируется её тело.
+ */
+export const SPLIT_SELECTION_COMMAND = 'comment.split';
+
 /** Максимальная длина названия новой мысли (требование `f64f5893`). */
 export const TITLE_MAX_LENGTH = 250;
+
+/**
+ * Минимальное число единиц разбора, при котором доступна команда «Разделить
+ * выделение на мысли» (ТП3, элемент интерфейса `2a21c27e`).
+ */
+export const SPLIT_MIN_UNITS = 2;
 
 /* ------------------------------------------------------------------ *
  * Порт создания мысли (тестовый шов).
@@ -253,6 +271,88 @@ export function planFromSelection(snap: MdEditorSnapshot): CommentThoughtPlan | 
 }
 
 /* ------------------------------------------------------------------ *
+ * План команды «Разделить выделение на мысли» (задача 578c8525).
+ * ------------------------------------------------------------------ */
+
+/**
+ * Узел плана разделения: одна единица разбора → будущая мысль. `start`/`end` —
+ * диапазон единицы в тексте редактора `[start, end)`; `children` — вложенные
+ * единицы, которые станут под-мыслями созданной мысли-родителя.
+ */
+export interface SplitSelectionNode {
+  /** Начало заменяемого фрагмента в тексте редактора (включительно). */
+  start: number;
+  /** Конец заменяемого фрагмента в тексте редактора (исключительно). */
+  end: number;
+  /** Название новой мысли (первая значимая строка, ≤250). */
+  title: string;
+  /**
+   * Тело новой мысли — постоянный комментарий: полный текст единицы, для
+   * единицы-раздела — без строки заголовка (`sectionBody`, требование
+   * `23c11231`).
+   */
+  bodyMd: string;
+  /** Вложенные единицы — под-мысли этой мысли. */
+  children: SplitSelectionNode[];
+}
+
+/**
+ * Строит лес узлов плана из дерева единиц разбора, смещая их диапазоны на
+ * `offset` (начало выделения в тексте редактора). Единица без значимой строки
+ * своей мысли не даёт — её вложенные единицы поднимаются на уровень выше.
+ *
+ * Тело единицы: для раздела — текст БЕЗ строки заголовка (`sectionBody`):
+ * заголовок уходит в название, «раздела с таким заголовком в новой мысли нет»,
+ * поэтому в развёртке трансклюзии заголовок не появляется (требование
+ * `23c11231`, правило разбора `f5695a1e`; та же механика, что у команды
+ * «Создать мысль из раздела» в задаче `5f854e7a`). Для остальных единиц тело —
+ * полный текст единицы.
+ */
+function buildSplitNodes(units: readonly MarkdownUnit[], offset: number): SplitSelectionNode[] {
+  const nodes: SplitSelectionNode[] = [];
+  for (const unit of units) {
+    const children = buildSplitNodes(unit.children, offset);
+    const title = thoughtTitle(unit.text);
+    if (title === '') {
+      nodes.push(...children);
+      continue;
+    }
+    nodes.push({
+      start: unit.start + offset,
+      end: unit.end + offset,
+      title,
+      bodyMd: unit.kind === 'section' ? sectionBody(unit.text) : unit.text,
+      children,
+    });
+  }
+  return nodes;
+}
+
+/** Число единиц разбора в лесе (включая вложенные). */
+function countSplitNodes(nodes: readonly SplitSelectionNode[]): number {
+  let total = 0;
+  for (const node of nodes) total += 1 + countSplitNodes(node.children);
+  return total;
+}
+
+/**
+ * План команды «Разделить выделение на мысли»: лес единиц разбора текущего
+ * выделения (вложенность сохраняется). `null` — выделения нет, оно пустое или
+ * содержит менее {@link SPLIT_MIN_UNITS} единиц (команда недоступна, ТП3).
+ *
+ * Разбор — только `parseSelectionUnits` из `@etn/markdown`; собственной нарезки
+ * модуль не содержит (ADR `01ec1467`, сторож `guard-selection-single-parser`).
+ */
+export function planSplitSelection(snap: MdEditorSnapshot): SplitSelectionNode[] | null {
+  if (snap.from === snap.to) return null;
+  const selected = snap.text.slice(snap.from, snap.to);
+  if (selected.trim() === '') return null;
+  const nodes = buildSplitNodes(parseSelectionUnits(selected), snap.from);
+  if (countSplitNodes(nodes) < SPLIT_MIN_UNITS) return null;
+  return nodes;
+}
+
+/* ------------------------------------------------------------------ *
  * Тела команд.
  * ------------------------------------------------------------------ */
 
@@ -292,6 +392,65 @@ function runCreate(
   return true;
 }
 
+/* ------------------------------------------------------------------ *
+ * Тело команды «Разделить выделение на мысли» (задача 578c8525).
+ * ------------------------------------------------------------------ */
+
+/**
+ * Создаёт по мысли на каждую единицу плана и заменяет каждую единицу её
+ * трансклюзией. Обход — в порядке документа, родитель создаётся прежде
+ * ребёнка: под-мысль вложенной единицы получает родителем id мысли-родителя,
+ * а не текущую мысль контейнера (элемент интерфейса `2a21c27e`). Правки
+ * диапазонов не пересекаются (`parseSelectionUnits`), поэтому уезжают одной
+ * транзакцией редактора; текст вне единиц остаётся на месте.
+ */
+async function splitAndReplace(
+  editor: MdEditor,
+  nodes: readonly SplitSelectionNode[],
+  owner: CommentOwnerRef,
+): Promise<void> {
+  const port = commentThoughtCreatePort();
+  try {
+    const parentId = await port.resolveParent(owner);
+    if (parentId === null) {
+      notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`, 'error');
+      return;
+    }
+    const changes: Array<{ from: number; to: number; insert: string }> = [];
+    let caret: number | null = null;
+    const walk = async (
+      list: readonly SplitSelectionNode[],
+      parent: string,
+    ): Promise<void> => {
+      for (const node of list) {
+        const created = await port.create({
+          parentId: parent,
+          title: node.title,
+          bodyMd: node.bodyMd,
+        });
+        const insert = formatTransclusionRef(created.id);
+        changes.push({ from: node.start, to: node.end, insert });
+        if (caret === null) caret = node.start + insert.length;
+        await walk(node.children, created.id);
+      }
+    };
+    await walk(nodes, parentId);
+    editor.applyEdit({ changes, selection: { anchor: caret ?? 0 } });
+  } catch (err) {
+    notice(`${t('comment.create.error')}: ${errText(err)}`, 'error');
+  }
+}
+
+/** Ход команды «Разделить выделение на мысли»: план → владелец → создание. */
+function runSplit(ctx: CommentCommandContext): boolean {
+  const nodes = planSplitSelection(ctx.editor.snapshot());
+  if (nodes === null) return false;
+  const owner = ctx.getCommentOwner();
+  if (owner === null) return false;
+  void splitAndReplace(ctx.editor, nodes, owner);
+  return true;
+}
+
 /**
  * Регистрирует тела обеих команд (идемпотентно — повторный вызов заменяет
  * записи реестра). Вызывается при установке набора команд поля. Идентификаторы
@@ -307,6 +466,10 @@ export function installCommentThoughtCreateCommands(): void {
   registerCommentCommand('comment.createFromSelection', {
     run: (ctx) => runCreate(ctx, planFromSelection(ctx.editor.snapshot())),
     state: (snap) => ({ disabled: planFromSelection(snap) === null }),
+  });
+  registerCommentCommand('comment.split', {
+    run: (ctx) => runSplit(ctx),
+    state: (snap) => ({ disabled: planSplitSelection(snap) === null }),
   });
 }
 

@@ -56,6 +56,12 @@ let create: Create;
 const PARENT_ID = '11111111-1111-4111-8111-111111111111';
 const NEW_ID = '22222222-2222-4222-8222-222222222222';
 const LINK_ID = '33333333-3333-4333-8333-333333333333';
+/** Идентификаторы для команды разделения — по одному на каждую единицу. */
+const UNIT_IDS = [
+  '44444444-4444-4444-8444-444444444401',
+  '44444444-4444-4444-8444-444444444402',
+  '44444444-4444-4444-8444-444444444403',
+] as const;
 
 /** Фейковый редактор: хранит снимок и собирает применённые правки. */
 function fakeEditor(text: string, from: number, to: number = from) {
@@ -318,3 +324,207 @@ describe('сборка ссылки трансклюзии (@etn/markdown)', () 
     );
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Команда «Разделить выделение на мысли» (задача 578c8525).
+ * ------------------------------------------------------------------ */
+
+/** Порт с уникальным id на каждый вызов — для проверки родительства. */
+function sequencePort() {
+  const requests: CommentThoughtCreateRequest[] = [];
+  let index = 0;
+  const port: CommentThoughtCreatePort = {
+    resolveParent: async () => PARENT_ID,
+    create: async (request: CommentThoughtCreateRequest) => {
+      requests.push(request);
+      const id = UNIT_IDS[index++];
+      if (id === undefined) throw new Error('слишком много единиц в тесте');
+      return { id };
+    },
+  };
+  return { port, requests };
+}
+
+describe('разделение: правило разбора единиц (требование f5695a1e)', () => {
+  it('список: элемент — единица, вложенный — под-мысль', () => {
+    const text = '- один\n- два\n  - вложенный';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.equal(plan?.length, 2, 'два элемента верхнего уровня');
+    assert.deepEqual(
+      plan!.map((node) => node.title),
+      ['один', 'два'],
+    );
+    assert.equal(plan![0]!.children.length, 0);
+    assert.equal(plan![1]!.children.length, 1);
+    assert.equal(plan![1]!.children[0]!.title, 'вложенный');
+    // Тело — полный текст единицы (маркер сохранён).
+    assert.equal(plan![1]!.bodyMd, '- два');
+    assert.equal(plan![1]!.children[0]!.bodyMd, '  - вложенный');
+    assert.equal(plan![1]!.children[0]!.start, text.indexOf('  - вложенный'));
+  });
+
+  it('разделы: заголовок — мысль, подраздел — под-мысль', () => {
+    const text = '# A\nтело A\n## B\nтело B';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.equal(plan?.length, 1, 'один раздел верхнего уровня');
+    assert.equal(plan![0]!.title, 'A', 'символы # уходят из названия');
+    // Тело раздела — без строки заголовка: заголовок ушёл в название, в
+    // развёртке трансклюзии его нет (требование 23c11231).
+    assert.equal(plan![0]!.bodyMd, 'тело A');
+    assert.equal(plan![0]!.children.length, 1);
+    assert.equal(plan![0]!.children[0]!.title, 'B');
+    assert.equal(plan![0]!.children[0]!.bodyMd, 'тело B');
+  });
+
+  it('абзацы: без пустой строки блок кода — продолжение абзаца', () => {
+    const cont = 'первый абзац\n\nвторой абзац\n```\nкод\n```';
+    const plan = create.planSplitSelection({ text: cont, from: 0, to: cont.length });
+    assert.equal(plan?.length, 2, 'код без пустой строки не открывает новую единицу');
+    assert.equal(plan![1]!.title, 'второй абзац');
+    assert.equal(plan![1]!.bodyMd, 'второй абзац\n```\nкод\n```');
+  });
+
+  it('абзацы: блок кода отделён пустой строкой — новая единица по первой строке блока', () => {
+    const sep = 'абзац\n\n```\nкод\n```';
+    const plan = create.planSplitSelection({ text: sep, from: 0, to: sep.length });
+    assert.equal(plan?.length, 2);
+    assert.equal(plan![1]!.title, 'код', 'ограждение блока пропущено');
+    assert.equal(plan![1]!.bodyMd, '```\nкод\n```');
+  });
+
+  it('слова в одной строке — одна мысль', () => {
+    assert.equal(
+      create.planSplitSelection({ text: 'несколько слов в строке', from: 0, to: 23 }),
+      null,
+      'одна единица — команда недоступна',
+    );
+    const text = 'несколько слов в строке\n\nвторой абзац';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.deepEqual(
+      plan!.map((node) => node.title),
+      ['несколько слов в строке', 'второй абзац'],
+      'строка целиком — одна единица',
+    );
+  });
+
+  it('комбинированное: до заголовка — абзацы/список, после — разделы', () => {
+    const text = 'абзац до\n\n- пункт\n\n# Заголовок\nтело раздела';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.deepEqual(
+      plan!.map((node) => node.title),
+      ['абзац до', 'пункт', 'Заголовок'],
+    );
+  });
+
+  it('два абзаца — две единицы', () => {
+    const text = 'абзац один\n\nабзац два';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.deepEqual(
+      plan!.map((node) => node.title),
+      ['абзац один', 'абзац два'],
+    );
+  });
+});
+
+describe('разделение: доступность и исполнение', () => {
+  it('доступна при ≥2 единицах, неактивна при 1 единице и без выделения', () => {
+    const two = 'абзац один\n\nабзац два';
+    assert.equal(
+      commands.commentCommandState('comment.split', { text: two, from: 0, to: two.length }).disabled,
+      false,
+    );
+    assert.equal(
+      commands.commentCommandState('comment.split', { text: 'одна строка', from: 0, to: 10 }).disabled,
+      true,
+      'одна единица разбора',
+    );
+    assert.equal(
+      commands.commentCommandState('comment.split', { text: 'одна строка', from: 0, to: 0 }).disabled,
+      true,
+      'выделения нет',
+    );
+  });
+
+  it('создаёт мысль на единицу, вложенные — под-мысли, трансклюзии на месте', async () => {
+    const text = '- один\n- два\n  - вложенный';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, requests } = sequencePort();
+    create.setCommentThoughtCreatePort(port);
+
+    const handled = commands.runCommentCommand('comment.split', host(editor));
+    assert.equal(handled, true);
+    await flush();
+
+    assert.deepEqual(
+      requests.map((request) => request.title),
+      ['один', 'два', 'вложенный'],
+      'порядок мысли как в документе',
+    );
+    assert.deepEqual(
+      requests.map((request) => request.parentId),
+      [PARENT_ID, PARENT_ID, UNIT_IDS[1]],
+      'вложенная единица — под-мысль созданного родителя, не текущей мысли',
+    );
+    assert.deepEqual(
+      requests.map((request) => request.bodyMd),
+      ['- один', '- два', '  - вложенный'],
+      'тело — единица целиком (требование f64f5893)',
+    );
+
+    assert.equal(editor.edits.length, 1, 'одна транзакция редактора');
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: 6, insert: `![[#${UNIT_IDS[0]}]]` },
+      { from: 7, to: 12, insert: `![[#${UNIT_IDS[1]}]]` },
+      { from: 13, to: 26, insert: `![[#${UNIT_IDS[2]}]]` },
+    ]);
+  });
+
+  it('текст вне единиц (пустые строки между ними) остаётся на месте', async () => {
+    const text = 'абзац один\n\nабзац два';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, requests } = sequencePort();
+    create.setCommentThoughtCreatePort(port);
+    commands.runCommentCommand('comment.split', host(editor));
+    await flush();
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: 10, insert: `![[#${UNIT_IDS[0]}]]` },
+      { from: 12, to: 21, insert: `![[#${UNIT_IDS[1]}]]` },
+    ]);
+    // Пустая строка `[10, 12)` не входит ни в одну правку.
+    assert.ok(
+      (editor.edits[0].changes as Array<{ from: number; to: number }>).every(
+        (change) => change.to <= 10 || change.from >= 12,
+      ),
+    );
+  });
+
+  it('нет владельца комментария — мыслей не создаётся', async () => {
+    const text = 'абзац один\n\nабзац два';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, requests } = sequencePort();
+    create.setCommentThoughtCreatePort(port);
+    const handled = commands.runCommentCommand('comment.split', host(editor, null));
+    assert.equal(handled, false);
+    await flush();
+    assert.equal(requests.length, 0);
+    assert.equal(editor.edits.length, 0);
+  });
+
+  it('родитель не найден — правок нет', async () => {
+    const text = 'абзац один\n\nабзац два';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, requests } = sequencePort();
+    create.setCommentThoughtCreatePort({ ...port, resolveParent: async () => null });
+    commands.runCommentCommand('comment.split', host(editor));
+    await flush();
+    assert.equal(requests.length, 0);
+    assert.equal(editor.edits.length, 0);
+  });
+
+  it('команда зарегистрирована в реестре', () => {
+    assert.equal(commands.hasCommentCommandRunner(create.SPLIT_SELECTION_COMMAND), true);
+  });
+});
+
