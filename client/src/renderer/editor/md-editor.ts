@@ -27,6 +27,7 @@ import { findMatches } from './text-search.js';
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
+import { transclusionExtensions } from './transclusion.js';
 import { wikiLinkLegacyActions } from './wiki-link-legacy-actions.js';
 
 /** Callbacks of the editor (the field orchestrates view/edit modes). */
@@ -378,6 +379,7 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         keymap.of([...historyKeymap, ...completionKeymap, ...defaultKeymap]),
         wikiLinkAutocompletion(),
         ...wikiIdExtensions,
+        ...transclusionExtensions,
         wikiLinkLegacyActions,
         livePreview,
         mdWidgetClick,

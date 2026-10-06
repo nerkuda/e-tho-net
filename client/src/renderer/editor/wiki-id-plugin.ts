@@ -119,6 +119,12 @@ function parseIdLinks(source: string): ParsedWikiLink[] {
       i += 1;
       continue;
     }
+    // Трансклюзия (восклицательный знак перед скобками) — не wiki-ссылка:
+    // её ведёт отдельный модуль `editor/transclusion.ts` (задача f72a9134).
+    if (i > 0 && source[i - 1] === '!') {
+      i += 1;
+      continue;
+    }
     const close = source.indexOf(']]', i + 2);
     if (close === -1) break;
     const content = source.slice(i + 2, close);

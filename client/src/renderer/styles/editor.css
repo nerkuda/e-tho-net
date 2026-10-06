@@ -1148,6 +1148,46 @@
   font-style: italic;
 }
 
+/* Трансклюзии комментариев в редакторе (0.12.1, ТП2, задача f72a9134):
+   блок развёрнутого текста, свёрнутая ссылка и кнопка смены ссылки.
+   Фон по уровням, анимация и неделимость навигации — задача a2b68d72. */
+.cm-editor .cm-transclusion-block {
+  position: relative;
+  border-left: 2px solid var(--border-strong, var(--border));
+  background: var(--surface, rgba(127, 127, 127, 0.06));
+  border-radius: 3px;
+  padding: 4px 6px 4px 8px;
+}
+
+.cm-editor .cm-transclusion-block .cm-transclusion-change-link {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  opacity: 0;
+}
+
+.cm-editor .cm-transclusion-block:hover .cm-transclusion-change-link,
+.cm-editor .cm-transclusion-block .cm-transclusion-change-link:focus-visible {
+  opacity: 1;
+}
+
+.cm-editor .cm-transclusion-error {
+  color: var(--muted, #888);
+  font-style: italic;
+}
+
+.cm-editor .cm-transclusion-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+
+.cm-editor .cm-transclusion-id {
+  color: var(--accent-strong, var(--accent));
+  font-weight: 500;
+}
+
 /* Авто-упоминания мыслей в тексте комментариев (L24, 08-ui-spec.md §6.4):
    пунктирное подчёркивание отличает их от явных wiki-ссылок. */
 .thought-mention {

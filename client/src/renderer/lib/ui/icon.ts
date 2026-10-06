@@ -60,6 +60,7 @@ import {
   Network,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Plus,
   Replace,
   RotateCcw,
@@ -168,7 +169,9 @@ export type IconName =
   // перемещение строк и «замена» — команды из таблицы умолчаний keymap.
   | 'arrow-up'
   | 'arrow-down'
-  | 'replace';
+  | 'replace'
+  // Смена ссылки трансклюзии (0.12.1, задача f72a9134, ТП2).
+  | 'link-edit';
 
 /**
  * Значки обвязки: kebab-имя проекта → узел Lucide (`IconNode`). Именованные
@@ -241,6 +244,8 @@ const CHROME_ICONS: Record<IconName, IconNode> = {
   'arrow-up': ArrowUp,
   'arrow-down': ArrowDown,
   replace: Replace,
+  // Смена ссылки трансклюзии (0.12.1, задача f72a9134).
+  'link-edit': Pencil,
 };
 
 /** Имена значков обвязки — каталог в порядке объявления. */

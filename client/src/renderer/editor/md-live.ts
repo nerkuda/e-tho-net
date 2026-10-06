@@ -373,6 +373,9 @@ function buildDecorations(state: EditorState): DecorationSet {
         // Wiki-ссылка — инлайн-элемент: скобки видны и внутри, и сразу
         // после `]]`, чтобы ссылку можно было править.
         case 'WikiLink': {
+          // Трансклюзия (восклицательный знак перед скобками) — не wiki-ссылка:
+          // её развёртку и виджет ведёт `editor/transclusion.ts` (f72a9134).
+          if (from > 0 && state.sliceDoc(from - 1, from) === '!') return false;
           if (!isNearInline(ranges, from, to)) {
             const parsed = wikiLabel(state.sliceDoc(from, to));
             if (parsed !== null) {

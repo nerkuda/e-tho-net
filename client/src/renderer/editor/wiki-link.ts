@@ -30,21 +30,28 @@ import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
 import { searchLegacyWikiTarget, WIKI_LINK_PUB_ATTR } from './wiki-link-resolver.js';
 import { tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
+import { transclusionSectionCompletions } from './transclusion.js';
 
 /** Chars allowed inside an in-progress wiki prefix (no closing/alias/newline). */
 const WIKI_PREFIX_RE = /^[^[\]\n|]*$/;
 
+/** Минимум символов имени для автокомплита трансклюзии (элемент 7a479549). */
+export const TRANSCLUSION_MIN_PREFIX = 3;
+
 /**
- * Parses the text before the caret (a single line) for an in-progress wiki
- * link: the last `[[` followed only by prefix characters. Returns the `[[`
- * position and the typed prefix, or `null` when the caret is not inside one
- * (closed link, alias part after `|`, or an empty prefix).
+ * Позиция открывающих скобок и набранный префикс; `transclusion` — перед
+ * `[[` стоит восклицательный знак (ссылка трансклюзии, элемент интерфейса
+ * 7a479549). Возвращает также `transclusion`, только когда он истинен, —
+ * форма ответа прежняя для обычных wiki-ссылок.
  */
-export function wikiPrefixAt(before: string): { open: number; prefix: string } | null {
+export function wikiPrefixAt(
+  before: string,
+): { open: number; prefix: string; transclusion?: true } | null {
   const open = before.lastIndexOf('[[');
   if (open === -1) return null;
   const rest = before.slice(open + 2);
   if (rest === '' || !WIKI_PREFIX_RE.test(rest)) return null;
+  if (open > 0 && before[open - 1] === '!') return { open, prefix: rest, transclusion: true };
   return { open, prefix: rest };
 }
 
@@ -104,6 +111,9 @@ function wikiLinkCompletions(): CompletionSource {
     const before = line.text.slice(0, context.pos - line.from);
     const hit = wikiPrefixAt(before);
     if (hit === null) return null;
+    // Трансклюзия: список мыслей открывается не раньше трёх символов имени
+    // (элемент интерфейса 7a479549); обычная wiki-ссылка — с первого.
+    if (hit.transclusion === true && hit.prefix.length < TRANSCLUSION_MIN_PREFIX) return null;
 
     let cached = cache.get(hit.prefix);
     if (cached === undefined || cached.expires < Date.now()) {
@@ -124,7 +134,12 @@ function wikiLinkCompletions(): CompletionSource {
 
 /** Autocomplete extension: opens on `[[` + typed prefix, inserts `имя]]`. */
 export function wikiLinkAutocompletion(): Extension {
-  return autocompletion({ override: [wikiLinkCompletions()], activateOnTyping: true });
+  return autocompletion({
+    // Один автокомплит на wiki-ссылки и трансклюзии (ADR 8c41387c):
+    // подсказки мыслей — здесь, разделов источника — в transclusion.ts.
+    override: [wikiLinkCompletions(), transclusionSectionCompletions()],
+    activateOnTyping: true,
+  });
 }
 
 /**
