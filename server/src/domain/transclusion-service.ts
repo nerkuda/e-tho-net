@@ -19,7 +19,8 @@
  * in the ТП2 permanent comment.
  */
 
-import { expandTransclusions, type TransclusionResolver } from '@etn/markdown';
+import { expandTransclusions, parseTransclusions, type TransclusionResolver } from '@etn/markdown';
+import type { TransclusionLostWarning } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 
@@ -70,4 +71,44 @@ export function createTransclusionResolver(ndb: NetworkDb): TransclusionResolver
 export function createBodyExpander(ndb: NetworkDb): BodyExpander {
   const resolve = createTransclusionResolver(ndb);
   return (body_md: string): string => expandTransclusions(body_md, resolve);
+}
+
+/**
+ * Source ids whose live transclusions disappeared between two versions of a
+ * markdown field (ТП2, задача `ed796c43`, требование `822a9149`).
+ *
+ * The references are parsed by the single `@etn/markdown` parser
+ * (`parseTransclusions`) — the server never parses the transclusion syntax
+ * itself (ADR `8c41387c`, guard `own-transclusion-outside-package`). SETS of
+ * source ids are compared, so a reference moved or repeated elsewhere in the
+ * text is not a loss, while dropping one of several (or replacing `A` with `B`)
+ * is. Order follows the ORIGINAL text so the warning is stable and readable.
+ *
+ * `before` with no references — or a non-markdown field — yields `[]`.
+ */
+export function lostTransclusionSources(before: string, after: string): string[] {
+  const beforeIds = parseTransclusions(before).map((ref) => ref.sourceId);
+  if (beforeIds.length === 0) return [];
+  const afterIds = new Set(parseTransclusions(after).map((ref) => ref.sourceId));
+  const lost: string[] = [];
+  const seen = new Set<string>();
+  for (const id of beforeIds) {
+    if (afterIds.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    lost.push(id);
+  }
+  return lost;
+}
+
+/**
+ * Warning for a markdown write that lost live transclusions, or `null` when
+ * nothing was lost (требование `822a9149`). The write is advisory — the caller
+ * still applies it and merely attaches the warning to the response.
+ */
+export function transclusionLossWarning(
+  before: string,
+  after: string,
+): TransclusionLostWarning | null {
+  const sources = lostTransclusionSources(before, after);
+  return sources.length === 0 ? null : { code: 'TRANSCLUSION_LOST', sources };
 }

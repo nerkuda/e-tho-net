@@ -28,6 +28,7 @@ import {
   type CommentOwnerType,
   type CommentTarget,
   type CommentUpdateInput,
+  type MutationWarning,
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
@@ -175,6 +176,10 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (input.valid_to !== undefined) changes.valid_to = input.valid_to;
         if (input.use_time !== undefined) changes.use_time = input.use_time;
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        // Коллектор предупреждений записи (требование 822a9149): правка,
+        // теряющая живые трансклюзии, применяется, но несёт предупреждение в
+        // `meta.warnings` — единый серверный механизм для REST и MCP.
+        const warnings: MutationWarning[] = [];
         const comment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
           const updated = updateComment(
             ndb,
@@ -182,6 +187,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             changes,
             input.expected_version,
             req.auth!.user.id,
+            { warnings },
           );
           return {
             result: updated,
@@ -204,6 +210,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           version: comment.version,
           updated_at: comment.updated_at,
           request_id: req.id,
+          ...(warnings.length > 0 ? { warnings } : {}),
         });
       },
     );

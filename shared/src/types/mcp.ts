@@ -22,7 +22,7 @@ import type {
   ThoughtBundleThoughtAction,
   ThoughtDuplicateCandidate,
 } from './thought-bundle.js';
-import type { ThoughtCardWarning } from './thought-card-warning.js';
+import type { MutationWarning } from './transclusion-warning.js';
 import type { Link } from './link.js';
 import type { Thought, ThoughtRef, ThoughtUsage } from './thought.js';
 
@@ -188,12 +188,13 @@ export interface McpMutationResult {
   version: number;
   request_id?: string;
   /**
-   * Non-fatal warnings about the resulting card (task O6). Currently emitted
-   * by `etn.thoughts.write` batch items (via the bundle domain) — the call
-   * succeeded, but the card is not fully compliant with its type's
-   * required-property contract. Absent when no warnings apply.
+   * Non-fatal warnings about the resulting card or the applied text change
+   * (tasks O6, ed796c43). Currently emitted by `etn.thoughts.write` batch items
+   * (card completeness via the bundle domain) and by comment writes that lost
+   * live transclusions (`TRANSCLUSION_LOST`, требование 822a9149). The call
+   * succeeded; absent when there is nothing to warn about.
    */
-  warnings?: ThoughtCardWarning[];
+  warnings?: MutationWarning[];
 }
 
 /** Base shape of an `etn://` resource URI (opaque string; templated by server). */
@@ -590,17 +591,20 @@ export interface McpThoughtWriteItemResult {
    * рёбра «молча». Пусто/не задано — дефолтов-связей не было.
    */
   default_link_ids?: string[];
-  /** Card-completeness warnings (task O6) for this item. */
-  warnings: ThoughtCardWarning[];
+  /**
+   * Per-item non-fatal warnings (task O6 card completeness; требование
+   * 822a9149 — a comment/chronicle write that lost live transclusions).
+   */
+  warnings: MutationWarning[];
 }
 
 /** Result of `etn.thoughts.write`. */
 export interface McpThoughtWriteResult {
   /** Per-item results in the same order as `thoughts[]` in the request. */
   items: McpThoughtWriteItemResult[];
-  /** Aggregated "card completeness" warnings across the batch — each entry
-   *  carries `ref` or `thought_id` so the caller can locate the offender. */
-  warnings: ThoughtCardWarning[];
+  /** Aggregated non-fatal warnings across the batch — each entry carries `ref`
+   *  or `thought_id` so the caller can locate the offender. */
+  warnings: MutationWarning[];
   /** Echo of the network's session layer the batch materialised in. */
   layer: { id: string; title: string };
   request_id?: string;

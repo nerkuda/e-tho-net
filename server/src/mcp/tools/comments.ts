@@ -7,7 +7,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
-import type { McpMutationResult } from '@etn/shared';
+import type { McpMutationResult, MutationWarning } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import {
   CommentsEdit,
@@ -82,7 +82,8 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'Patch a comment (permanent or chronological) by `comment_id` — last-write-wins per field. ' +
         '`valid_from`/`valid_to` apply to chronological entries (permanent ignores them). ' +
         '`expected_version` enables optimistic concurrency — mismatch fails VERSION_CONFLICT. ' +
-        'Returns { id, version }.',
+        'Returns { id, version }. A write that drops live transclusions still applies but ' +
+        'carries a `warnings` entry (code TRANSCLUSION_LOST, требование 822a9149).',
       inputSchema: CommentsUpdate.schema,
     },
     (args, extra) =>
@@ -91,6 +92,10 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
         const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        // Коллектор предупреждений записи (требование 822a9149): правка,
+        // теряющая живые трансклюзии, применяется, но предупреждение
+        // возвращается агенту в `warnings`.
+        const warnings: MutationWarning[] = [];
         const comment = runWrite(ndb, fx, () => {
           const updated = updateComment(
             ndb,
@@ -98,6 +103,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
             args.changes,
             args.expected_version,
             rt.deps.auth.userId,
+            { warnings },
           );
           return {
             result: updated,
@@ -126,6 +132,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
           id: comment.id,
           version: comment.version,
           request_id: String(extra.requestId),
+          ...(warnings.length > 0 ? { warnings } : {}),
         } satisfies McpMutationResult;
       }),
   );
@@ -218,6 +225,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
           sections: result.sections,
           chars_total: result.chars_total,
           request_id: String(extra.requestId),
+          ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
         };
       }),
   );

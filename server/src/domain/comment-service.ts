@@ -35,6 +35,7 @@ import {
   type CommentTarget,
   type CommentUpdateInput,
   type CommentsPreview,
+  type MutationWarning,
   type PermanentCommentFull,
   type PermanentCommentPreview,
 } from '@etn/shared';
@@ -45,6 +46,7 @@ import { applySectionOps, type EditOp } from './markdown-sections.js';
 import { normaliseInstant } from './dates.js';
 import { enforceLock } from './lock-service.js';
 import type { BodyExpander } from './transclusion-service.js';
+import { transclusionLossWarning } from './transclusion-service.js';
 import type { NetworkDb } from '../db/network-db.js';
 import {
   deleteRowLayered,
@@ -680,15 +682,39 @@ export function createCommentWithTargets(
 }
 
 /**
+ * Options of {@link updateComment}.
+ */
+export interface UpdateCommentOptions {
+  /**
+   * Отключает защиту «`body_md` не пустое» для вызовов из {@link editComment}
+   * (граница 154df95d).
+   */
+  allowEmptyBody?: boolean;
+  /**
+   * Коллектор предупреждений записи (требование `822a9149`). Если правка
+   * `body_md` теряет существовавшие ранее живые трансклюзии, домен добавляет
+   * сюда `TRANSCLUSION_LOST`-предупреждение; сама запись при этом применяется.
+   * Так все пути записи комментария (REST PATCH, `etn.comments.update/edit`,
+   * комментарий батча `etn.thoughts.write`) получают проверку из одного места,
+   * не меняя тип возврата {@link Comment}.
+   */
+  warnings?: MutationWarning[];
+}
+
+/**
  * Patch a comment (docs/03-server-api.md §10). Last-write-wins per field;
  * `body_html` is re-rendered whenever `body_md` changes. `version` is bumped
  * on every successful update.
  *
- * `allowEmptyBody` — отключает защиту «`body_md` не пустое» для вызовов из
- * {@link editComment}: удаление единственной секции текста без `#` оставляет
- * пустое тело, но запись в БД сохраняется (граница 154df95d). По умолчанию
- * `false` — REST `PATCH /comments/{id}` и `etn.comments.update` продолжают
- * отвергать опустошение записи.
+ * `options.allowEmptyBody` — отключает защиту «`body_md` не пустое» для
+ * вызовов из {@link editComment}: удаление единственной секции текста без `#`
+ * оставляет пустое тело, но запись в БД сохраняется (граница 154df95d). По
+ * умолчанию `false` — REST `PATCH /comments/{id}` и `etn.comments.update`
+ * продолжают отвергать опустошение записи.
+ *
+ * `options.warnings` — коллектор предупреждений записи (требование
+ * `822a9149`): правка, теряющая живые трансклюзии, добавляет туда
+ * `TRANSCLUSION_LOST`, но всё равно применяется.
  *
  * Содержание (требование 26f0aa52): постоянный комментарий всегда требует
  * непустой `body_md`; хронологическая запись вне `allowEmptyBody` не может
@@ -705,7 +731,7 @@ export function updateComment(
   changes: CommentUpdateInput,
   expectedVersion: number | undefined,
   actorUserId: string,
-  options: { allowEmptyBody?: boolean } = {},
+  options: UpdateCommentOptions = {},
 ): Comment {
   return ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, id);
@@ -719,6 +745,13 @@ export function updateComment(
         expected: expectedVersion,
         current: current.version,
       });
+    }
+    // Проверка потери живых трансклюзий (требование 822a9149) — ДО применения
+    // правки: предупреждение собирается из «старого → нового» тела, но саму
+    // запись не отменяет.
+    if (changes.body_md !== undefined && options.warnings !== undefined) {
+      const warning = transclusionLossWarning(current.body_md, changes.body_md);
+      if (warning !== null) options.warnings.push(warning);
     }
 
     const sets: string[] = [];
@@ -821,6 +854,12 @@ export interface EditCommentResult {
   chars_total: number;
   /** Итоговое тело после применения всех ops — для передачи в события и журналы. */
   body_md: string;
+  /**
+   * Предупреждения записи (требование `822a9149`): если правка потеряла живые
+   * трансклюзии — `TRANSCLUSION_LOST` со списком источников. Пусто, когда
+   * потерь нет.
+   */
+  warnings: MutationWarning[];
 }
 
 /**
@@ -862,13 +901,16 @@ export function editComment(
       });
     }
     const result = applySectionOps(current.body_md, ops);
+    // Коллектор предупреждений: секционная правка тоже может потерять живые
+    // трансклюзии (требование 822a9149) — напр. `replace_section`/`delete_section`.
+    const warnings: MutationWarning[] = [];
     const updated = updateComment(
       ndb,
       id,
       { body_md: result.body },
       undefined,
       actorUserId,
-      { allowEmptyBody: result.body === '' },
+      { allowEmptyBody: result.body === '', warnings },
     );
     return {
       id: updated.id,
@@ -877,6 +919,7 @@ export function editComment(
       sections: result.sections,
       chars_total: result.body.length,
       body_md: result.body,
+      warnings,
     };
   });
 }
