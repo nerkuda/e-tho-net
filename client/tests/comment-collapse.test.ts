@@ -267,6 +267,46 @@ describe('сворачивание разделов комментария (edit
     assert.equal(mod.isCollapsedHiddenAt(collapsed, doc.indexOf('вложенный')), true);
   });
 
+  it('инвариант: id разделов совпадают в просмотре и правке при теле из HTML-комментария', async () => {
+    installShim();
+    installStorage();
+    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
+
+    // Тело заголовка A — только HTML-комментарий: @etn/markdown не эмитит для
+    // него узла, в просмотре у A видимого тела нет, в правке — есть строка.
+    const doc = '## A\n<!-- hidden -->\n## B\nx\n';
+    const editor = EditorState.create({
+      doc,
+      extensions: [
+        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+        mod.commentCollapseExtension(mod.createCommentCollapseState('net', undefined)),
+      ],
+    });
+    assert.deepEqual(
+      mod.commentCollapseInternals.collectSections(editor).map((s) => s.id),
+      ['h2#1', 'h2#2'],
+      'в правке A = h2#1, B = h2#2',
+    );
+
+    // Просмотр: реальный HTML без узла под комментарий — h2 A, h2 B, p x.
+    const view = new ShimElement('div');
+    const h2a = new ShimElement('h2');
+    const h2b = new ShimElement('h2');
+    const p = new ShimElement('p');
+    view.append(h2a, h2b, p);
+
+    const state = mod.createCommentCollapseState('net', undefined);
+    mod.decorateCommentView(view as unknown as HTMLElement, state);
+    const toggles = view.findAll(mod.COLLAPSE_TOGGLE_CLASS);
+    assert.equal(toggles.length, 1, 'у A сворачивать нечего — индикатор только у B');
+    assert.equal(toggles[0]?.dataset['collapseId'], 'h2#2', 'B = h2#2, как и в правке');
+
+    // Свёрнутость h2#2 из правки прячет тело B и в просмотре.
+    state.setCollapsed('h2#2', true);
+    mod.decorateCommentView(view as unknown as HTMLElement, state);
+    assert.equal(p.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true);
+  });
+
   it('регресс: состояние не едет на сервер', async () => {
     installShim();
     installStorage();

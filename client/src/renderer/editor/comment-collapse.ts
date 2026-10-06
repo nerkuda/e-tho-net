@@ -20,10 +20,19 @@
  * «сеть + владелец поля + раздел») и переживает переоткрытие поля; на сервер
  * не едет (требование b482b36b). Распространение на блоки трансклюзий — ТП2.
  *
+ * Владелец поля — сущность-владелец комментария (мысль/связь/публикация), а
+ * для записи хроно-комментария — сам комментарий (иначе все записи одной
+ * мысли делили бы одно состояние свёрнутости). Осознанное уточнение ключа
+ * требования b482b36b («мысль-владелец поля»): при ТП2 ключ расширяется
+ * мыслью-контейнером и путём вставки, комментарий-владелец остаётся частью
+ * идентичности поля.
+ *
  * «Раздел» идентифицируется позиционно: `h{уровень}#{n}` — n-й по счёту
  * заголовок этого уровня в документе, `n#{m}` — m-й по счёту вложенный блок.
- * Позиционные ключи одинаковы для обоих режимов одного и того же текста и
- * переживают переоткрытие; при правке текста выше раздела ключ может
+ * Нумеруются ВСЕ заголовки/вложенные блоки, даже те, чьё тело в просмотре
+ * невидимо (тело из одного HTML-комментария): иначе нумерация разошлась бы с
+ * редактором. Позиционные ключи одинаковы для обоих режимов одного и того же
+ * текста и переживают переоткрытие; при правке текста выше раздела ключ может
  * сместиться (осознанный компромисс — семантический ключ по тексту разошёлся
  * бы между просмотром и правкой на inline-разметке).
  */
@@ -233,28 +242,33 @@ export function decorateCommentView(view: HTMLElement, state: CommentCollapseSta
   const levelCounters = new Map<number, number>();
 
   // Заголовки: тело — сиблинги до следующего заголовка того же/высшего уровня.
+  // Идентификатор присваивается КАЖДОМУ заголовку (счётчик уровня растёт всегда),
+  // даже когда видимого тела нет (например, тело — только HTML-комментарий,
+  // невидимый в просмотре): иначе нумерация разошлась бы с редактором, который
+  // считает телом строку комментария, и id указывал бы на разные разделы.
   for (const { node, siblings, index } of headings) {
     const level = headingLevel(node);
+    const n = (levelCounters.get(level) ?? 0) + 1;
+    levelCounters.set(level, n);
     const hide: HTMLElement[] = [];
     for (const sib of siblings.slice(index + 1)) {
       const sibLevel = headingLevel(sib);
       if (sibLevel !== 0 && sibLevel <= level) break;
       hide.push(sib);
     }
-    if (hide.length === 0) continue; // сворачивать нечего
-    const n = (levelCounters.get(level) ?? 0) + 1;
-    levelCounters.set(level, n);
+    if (hide.length === 0) continue; // сворачивать нечего (id всё равно присвоен)
     sections.push({ id: `h${level}#${n}`, anchor: node, hide });
   }
 
   // Вложенные блоки: скрывается содержимое блока, индикатор — у его начала.
+  // Счётчик также растёт для каждого обнаруженного блока (см. выше).
   let nested = 0;
   for (const block of nestedBlocks) {
     const hide = Array.from(block.children).filter(
       (child): child is HTMLElement => child instanceof HTMLElement,
     );
-    if (hide.length === 0) continue;
     nested += 1;
+    if (hide.length === 0) continue;
     sections.push({ id: `n#${nested}`, anchor: block, hide });
   }
 
@@ -286,6 +300,7 @@ export function decorateCommentView(view: HTMLElement, state: CommentCollapseSta
       state.setCollapsed(section.id, !state.isCollapsed(section.id));
       apply();
     });
+    btn.dataset.collapseId = section.id;
     // Двойной клик по индикатору не должен переводить поле в правку.
     btn.addEventListener('dblclick', (event) => event.stopPropagation());
     section.anchor.prepend(btn);
@@ -377,8 +392,13 @@ function collectSections(state: EditorState): EditorSection[] {
   const sections: EditorSection[] = [];
 
   // Заголовки: тело — строки до начала строки следующего заголовка не выше уровнем.
+  // Счётчик уровня растёт для КАЖДОГО заголовка — в паре с просмотром, который
+  // тоже нумерует все заголовки (см. decorateCommentView): иначе id разошлись бы
+  // на заголовке с невидимым в просмотре телом (HTML-комментарий).
   const levelCounters = new Map<number, number>();
   headings.forEach((heading, index) => {
+    const n = (levelCounters.get(heading.level) ?? 0) + 1;
+    levelCounters.set(heading.level, n);
     let end = doc.length;
     for (let j = index + 1; j < headings.length; j += 1) {
       if ((headings[j]?.level ?? 0) <= heading.level) {
@@ -387,12 +407,10 @@ function collectSections(state: EditorState): EditorSection[] {
       }
     }
     const bodyFrom = doc.lineAt(heading.to).to + 1;
-    if (bodyFrom >= end) return; // тело пустое — сворачивать нечего
+    if (bodyFrom >= end) return; // тело пустое — сворачивать нечего (id присвоен)
     const lastLine = doc.lineAt(end - 1);
     const bodyTo = lastLine.to;
     if (bodyTo <= bodyFrom) return;
-    const n = (levelCounters.get(heading.level) ?? 0) + 1;
-    levelCounters.set(heading.level, n);
     sections.push({
       id: `h${heading.level}#${n}`,
       anchorFrom: doc.lineAt(heading.from).from,
@@ -404,10 +422,10 @@ function collectSections(state: EditorState): EditorSection[] {
   // Вложенные блоки: тело — весь блок, индикатор — у его первой строки.
   let nested = 0;
   for (const block of nestedBlocks) {
+    nested += 1;
     const bodyFrom = doc.lineAt(block.from).from;
     const bodyTo = doc.lineAt(block.to).to;
     if (bodyTo <= bodyFrom) continue;
-    nested += 1;
     sections.push({ id: `n#${nested}`, anchorFrom: bodyFrom, bodyFrom, bodyTo });
   }
 
