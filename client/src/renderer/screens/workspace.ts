@@ -265,7 +265,9 @@ export function buildWorkspace(): HTMLElement {
   // and hides in the structures view, which replaces canvas + search with its
   // own space.
   const searchInput = fieldInput({ extraClass: 'search-input', bare: true });
-  searchInput.placeholder = t('actions.searchShortcut', 'Ctrl+F');
+  // Глобальный поиск вызывается по Ctrl+Shift+F (0.12.1, задача 045f98db,
+  // требование 778e13f4): Ctrl+F закреплён за поиском внутри текстового поля.
+  searchInput.placeholder = t('actions.searchShortcut', 'Ctrl+Shift+F');
   setTooltip(searchInput, 'Поиск по сети');
 
   // The drop-panel settings gear used to sit here (задача a3247f84, 0.8.2);

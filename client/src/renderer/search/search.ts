@@ -5,7 +5,7 @@
  *   collapsible groups «Найдено по именам/текстам/связям/в хронологии»,
  *   snippets render server `<mark>` highlights via innerHTML) and «настройки
  *   поиска», revealed by the funnel toggle in the panel's top corner;
- * - activation (Ctrl+F / focus) reveals the drop panel and restores the
+ * - activation (Ctrl+Shift+F / focus) reveals the drop panel and restores the
  *   previous `search_state` (text + options) from L4 ui_state; Escape hides the
  *   panel again;
  * - the server search runs for queries of 3+ characters: debounced 250 ms while

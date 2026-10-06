@@ -36,7 +36,7 @@ export const ru = {
   'actions.browse': 'Обзор…',
   /** Единый плейсхолдер строки поиска. */
   'actions.search': 'Поиск…',
-  /** Плейсхолдер поиска с подсказкой горячей клавиши: `t('actions.searchShortcut', 'Ctrl+F')`. */
+  /** Плейсхолдер поиска с подсказкой горячей клавиши: `t('actions.searchShortcut', 'Ctrl+Shift+F')`. */
   'actions.searchShortcut': 'Поиск… (%1)',
   /** Пометить сущность на удаление (в корзину). */
   'actions.delete': 'Удалить',
