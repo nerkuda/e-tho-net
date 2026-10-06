@@ -111,6 +111,81 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
     );
   });
 
+  it('REST и MCP: snippet хроники MCP согласован с развёрнутым телом, REST — без трансформа (ошибка a3fb62b6)', async () => {
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    const handle = await connectMcpClient(mcp, rest.adminKey);
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const source = seedThought(ndb, 'Источник сниппета');
+      createComment(
+        ndb,
+        'thought',
+        source,
+        { kind: 'permanent', body_md: 'Текст источника с **жирным**.' },
+        USER,
+      );
+      const box = seedThought(ndb, 'Контейнер сниппета');
+      const rec = createComment(
+        ndb,
+        'thought',
+        box,
+        { kind: 'chronological', body_md: `Заметка. ![[#${source}]]`, valid_from: '2024-01-01' },
+        USER,
+      );
+
+      const payload = { thought_ids: [box], order: 'asc' };
+      const restRes = await rest.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+        headers: authHeaders(rest),
+        payload,
+      });
+      assert.equal(restRes.statusCode, 200);
+      const restRow = (restRes.json().data as Array<{ id: string; snippet: string }>).find(
+        (r) => r.id === rec.id,
+      );
+      assert.ok(restRow !== undefined, 'REST-строка хроники не найдена');
+      assert.ok(
+        restRow.snippet.includes('![[#'),
+        `REST без трансформа обязан отдавать исходный литерал ссылки: ${restRow.snippet}`,
+      );
+
+      const mcpRes = await handle.client.callTool({
+        name: 'etn.chronicle.query',
+        arguments: { network_id: rest.networkId, ...payload },
+      });
+      const mcpRow = toolJson<{ rows: Array<{ id: string; snippet: string }> }>(mcpRes).rows.find(
+        (r) => r.id === rec.id,
+      );
+      assert.ok(mcpRow !== undefined, 'MCP-строка хроники не найдена');
+      assert.ok(
+        !mcpRow.snippet.includes('![[#'),
+        `MCP snippet содержит литерал трансклюзии: ${mcpRow.snippet}`,
+      );
+      assert.ok(
+        !mcpRow.snippet.includes('etn:transclusion'),
+        `служебные маркеры границ не должны попадать в сниппет: ${mcpRow.snippet}`,
+      );
+      assert.ok(
+        mcpRow.snippet.includes('Текст источника'),
+        `MCP snippet не развёрнут: ${mcpRow.snippet}`,
+      );
+    } finally {
+      await handle.close();
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      await closeRestContext(rest);
+    }
+  });
+
   it('REST и MCP: keyword_scope без comment отключает поиск по тексту записи', async () => {
     const rest = await buildRestContext();
     const mcp = await buildMcpContext({

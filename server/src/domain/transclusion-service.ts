@@ -85,6 +85,19 @@ export function createBodyExpander(ndb: NetworkDb): BodyExpander {
 }
 
 /**
+ * Build a {@link BodyExpander} for PREVIEW/snippet text (MCP chronicle `snippet`,
+ * ошибка `a3fb62b6`): the same transclusion expansion, but with the boundary
+ * markers disabled (`markers: false`). The preview must not show either the raw
+ * `![[#…]]` literal or the ADR `85a7a01e` HTML-comment markers; an
+ * absent/skipped source simply contributes nothing.
+ */
+export function createSnippetExpander(ndb: NetworkDb): BodyExpander {
+  const resolve = createTransclusionResolver(ndb);
+  return (body_md: string): string =>
+    expandTransclusions(body_md, resolve, { markers: false });
+}
+
+/**
  * Презентер тела комментария для MCP-инструментов, отдающих РЯДОМ `body_md` и
  * `body_html` (`etn.comments.get`, `etn.chronicle.query`): разворачивает
  * трансклюзии (как {@link createBodyExpander}) и пересобирает `body_html` из

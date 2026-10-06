@@ -906,6 +906,12 @@ export function queryChronicle(
      * передаёт ничего и получает кешированный `body_html`).
      */
     bodyHtmlTransform?: (body_md: string) => string;
+    /**
+     * Транспорт-агностичный transform `body_md` → текст сниппета (MCP-фасад
+     * передаёт развёртку трансклюзий БЕЗ маркеров границ — ошибка a3fb62b6;
+     * REST не передаёт ничего и получает сниппет из исходного текста).
+     */
+    snippetTransform?: (body_md: string) => string;
   } = {},
 ): ChronicleQueryResponse {
   const userId = opts.userId ?? '';
@@ -1033,11 +1039,18 @@ export function queryChronicle(
     });
   }
 
-  const withSnippets = rows.map((row) => ({
-    ...row,
-    snippet: makeSnippet(row.body_md, includeWords),
-    body_html:
-      opts.bodyHtmlTransform === undefined ? row.body_html : opts.bodyHtmlTransform(row.body_md),
-  }));
+  const withSnippets = rows.map((row) => {
+    // Сниппет строится из того же развёрнутого текста, что и `body_html`, если
+    // фасад передал трансформ (MCP): иначе превью показывало бы литерал
+    // трансклюзии при развёрнутом содержимом строки (ошибка a3fb62b6).
+    const snippetSource =
+      opts.snippetTransform === undefined ? row.body_md : opts.snippetTransform(row.body_md);
+    return {
+      ...row,
+      snippet: makeSnippet(snippetSource, includeWords),
+      body_html:
+        opts.bodyHtmlTransform === undefined ? row.body_html : opts.bodyHtmlTransform(row.body_md),
+    };
+  });
   return { rows: buildRows(ndb, withSnippets, refs, linkTargets), total };
 }
