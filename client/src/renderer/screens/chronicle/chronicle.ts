@@ -1397,6 +1397,9 @@ async function openBodyEditor(
       md: comment.body_md,
       html: comment.body_html,
       placeholder: t('diary.emptyRecordHint'),
+      // Каретка/выделение при входе в правку — в месте клика в просмотре
+      // (требование bac754e4, задача 189da39e).
+      sourceMapView: true,
       ...(owner !== null ? { attachmentsOwner: owner } : {}),
       onSave: async (md) => {
         const fresh = await etn.comments.get(networkId, row.id);

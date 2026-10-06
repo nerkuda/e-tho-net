@@ -1715,12 +1715,21 @@ export function mountPublicationWorkspace(
   }
 
   /**
-   * Двойной клик по тексту (пункт 4): мысль открывается в редакторе на вкладке
-   * «Комментарий» в режиме правки, курсор — по началу кликнутого абзаца
-   * (точный офсет рендера к markdown недостижим; нет вхождения — начало).
+   * Двойной клик по тексту (пункт 4; уточнено задачей 189da39e): мысль
+   * открывается в редакторе на вкладке «Комментарий» в режиме правки, а
+   * каретка/выделение встают по вхождению кликнутого слова. Точный офсет
+   * рендер-узла ленты к markdown недостижим: текст собирает
+   * `renderPublicationFragment` (сдвиг заголовков, подстановка ссылок), а не
+   * `renderMarkdown` по `body_md`, — поэтому ориентир — выделенное слово, а
+   * при его отсутствии — начало кликнутого абзаца.
    */
   function openTextCommentEdit(ev: MouseEvent, block: DocBlock): void {
     if (block.kind !== 'text') return;
+    const word = (window.getSelection?.()?.toString() ?? '').trim();
+    if (word !== '') {
+      openTextCommentEditById(block.thoughtId, word);
+      return;
+    }
     const target = ev.target as HTMLElement | null;
     const paragraph = target?.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6') ?? null;
     const text = (paragraph?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
@@ -1729,7 +1738,7 @@ export function mountPublicationWorkspace(
 
   /**
    * Открыть мысль-текст в редакторе на вкладке «Комментарий» в режиме правки
-   * (`findText` — курсор к началу абзаца, иначе к началу комментария).
+   * (`findText` — каретка/выделение по вхождению, иначе каретка в конец).
    */
   function openTextCommentEditById(thoughtId: string, findText?: string): void {
     void import('../../editor/editor.js').then((mod) =>

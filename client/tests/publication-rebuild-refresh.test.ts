@@ -187,6 +187,7 @@ function fakeMdEditor(initial: string): MdEditor {
     },
     insertAtCaret: () => undefined,
     setCaret: () => undefined,
+    setSelection: () => undefined,
     focus: () => undefined,
     focusToEnd: () => undefined,
     blur: () => undefined,

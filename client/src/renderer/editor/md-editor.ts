@@ -93,6 +93,12 @@ export interface MdEditor {
    * публикации: курсор в месте клика/начале абзаца (задача ea1b5f14).
    */
   setCaret(position: number): void;
+  /**
+   * Ставит выделение `[anchor, head]` (оба клампятся по длине документа),
+   * фокусирует редактор и прокручивает к нему. Нужно входу в правку из
+   * просмотра: каретка и выделенное слово — в месте клика (задача 189da39e).
+   */
+  setSelection(anchor: number, head: number): void;
   focus(): void;
   focusToEnd(): void;
   blur(): void;
@@ -410,6 +416,13 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       const anchor = Math.max(0, Math.min(view.state.doc.length, Math.trunc(position)));
       view.focus();
       view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    },
+    setSelection: (anchorPos: number, headPos: number) => {
+      const len = view.state.doc.length;
+      const anchor = Math.max(0, Math.min(len, Math.trunc(anchorPos)));
+      const head = Math.max(0, Math.min(len, Math.trunc(headPos)));
+      view.focus();
+      view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
     },
     focusToEnd: () => {
       view.focus();

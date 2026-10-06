@@ -6,11 +6,17 @@
  * change through `onSave` (which returns the freshly rendered HTML) and
  * returns to the view; `Esc` cancels, restoring the previous text.
  *
+ * With `sourceMapView` the view is rendered by the single `@etn/markdown`
+ * renderer with source-position annotations, so a double-click enters editing
+ * with the caret (and the double-clicked word's selection) at the click place
+ * (task 189da39e, ADR ee4e721b).
+ *
  * `onSave` may be omitted (e.g. a "new" form whose text is committed together
  * with the rest of the dialog): blur then just switches back to the view.
  */
 
 import type { MentionsScanThought } from '@etn/shared';
+import { renderMarkdown, sourceOffsetFromCaret, type SourceMapNode } from '@etn/markdown';
 
 import { requireNetworkId } from '../app.js';
 import { invalidateQueries, queryKeys } from '../lib/live/index.js';
@@ -67,11 +73,40 @@ interface MarkdownFieldHandle {
   set(md: string, html: string): void;
   /**
    * Переключает поле в правку и ставит каретку: по вхождению `findText` в
-   * исходнике markdown, а если его нет — в начало документа. Нужно двойному
-   * клику по тексту публикации (задача ea1b5f14, пункт 4): точный офсет
-   * рендер-узла к markdown недостижим, поэтому курсор — к началу абзаца.
+   * исходнике markdown (вхождение выделяется — слово, кликнутое в ленте
+   * публикаций, остаётся выделенным), а если его нет — в начало документа.
+   * Нужно двойному клику по тексту публикации (задача ea1b5f14, пункт 4;
+   * уточнено задачей 189da39e): точный офсет рендер-узла ленты к markdown
+   * недостижим — курсор идёт по вхождению кликнутого слова.
    */
   focusAt(findText?: string): void;
+}
+
+/**
+ * Диапазон исходника markdown, который надо выделить при входе в правку
+ * (позиции каретки для CodeMirror 6). `anchor` — начало, `head` — конец.
+ */
+export interface MdSourceSelection {
+  anchor: number;
+  head: number;
+}
+
+/**
+ * Переводит выделение в просмотре (узлы и смещения DOM) в диапазон исходника
+ * markdown через разметку позиций единого рендерера `@etn/markdown`
+ * (`sourceOffsetFromCaret`, ADR ee4e721b). `null` — узлы вне размеченного
+ * рендера (просмотр без `sourceMap`): вызывающий откатывается к прежнему
+ * поведению. Экспортируется для юнит-тестов (задача 189da39e).
+ */
+export function sourceRangeFromSelection(
+  anchor: { node: Node | null; offset: number },
+  focus: { node: Node | null; offset: number },
+): MdSourceSelection | null {
+  if (anchor.node === null || focus.node === null) return null;
+  const from = sourceOffsetFromCaret(anchor.node as unknown as SourceMapNode, anchor.offset);
+  const to = sourceOffsetFromCaret(focus.node as unknown as SourceMapNode, focus.offset);
+  if (from === null || to === null) return null;
+  return { anchor: from, head: to };
 }
 
 const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
@@ -139,6 +174,15 @@ export function createMarkdownField(opts: {
    * редактировании или при сохранении непустого значения.
    */
   placeholder?: string;
+  /**
+   * Просмотр рендерит сам единый рендерер `@etn/markdown` с разметкой позиций
+   * (`renderMarkdown(md, { sourceMap: true })`), а не серверный HTML: узлы
+   * несут диапазоны исходных смещений, поэтому двойной клик в просмотре
+   * входит в правку с кареткой и выделением в месте клика (требование
+   * bac754e4, ADR ee4e721b). Включать только для markdown-исходников: для
+   * plain-text (просмотр вложений) — оставить выключенным.
+   */
+  sourceMapView?: boolean;
   minRows?: number;
 }): HTMLElement {
   const root = div('md-field');
@@ -329,10 +373,25 @@ export function createMarkdownField(opts: {
       });
   };
 
+  /**
+   * HTML просмотра: с `sourceMapView` — единый рендерер с разметкой позиций
+   * (`sourceMap`), чтобы клик в просмотре отображался в смещение исходника;
+   * иначе (или при пустом/слишком большом исходнике) — серверный HTML.
+   */
+  const viewHtml = (): string => {
+    if (opts.sourceMapView !== true || currentMd.trim() === '') return currentHtml;
+    try {
+      return renderMarkdown(currentMd, { sourceMap: true });
+    } catch {
+      return currentHtml;
+    }
+  };
+
   const renderView = (): void => {
     view.replaceChildren();
-    if (currentHtml.trim() !== '') {
-      renderHtml(view, currentHtml);
+    const html = viewHtml();
+    if (html.trim() !== '') {
+      renderHtml(view, html);
       renderMermaidBlocks(view);
       annotateMentions(view, {
         excludeThoughtId: excludeThoughtId(),
@@ -407,7 +466,7 @@ export function createMarkdownField(opts: {
   };
 
   /** Mounts a fresh editor for the current markdown. */
-  const mountEditor = (): void => {
+  const mountEditor = (locate?: MdSourceSelection): void => {
     mounting = true;
     editor?.destroy();
     cancelled = false;
@@ -510,17 +569,20 @@ export function createMarkdownField(opts: {
     // после редактора: кнопки сразу отражают состояние текущего выделения.
     area.replaceChildren(buildCommentToolbar(commandHost), editor.dom);
     mounting = false;
-    editor.focusToEnd();
+    // Вход по клику в просмотре — каретка/выделение в месте клика; программный
+    // вход (кнопка, восстановление черновика) — каретка в конец (как раньше).
+    if (locate !== undefined) editor.setSelection(locate.anchor, locate.head);
+    else editor.focusToEnd();
   };
 
-  const showEdit = (md?: string): void => {
+  const showEdit = (md?: string, locate?: MdSourceSelection): void => {
     if (md !== undefined) currentMd = md;
     view.classList.add('hidden');
     area.classList.remove('hidden');
     editing = true;
     root.classList.add('md-field--editing');
     modeActions.setEditing(true);
-    mountEditor();
+    mountEditor(locate);
     activateFieldKeys();
     search.refresh();
     opts.onEditChange?.(true);
@@ -529,7 +591,31 @@ export function createMarkdownField(opts: {
   // Programmatic focus (e.g. the editor rebuild refocus, editor.ts) lands on
   // the wrapper and is delegated to the editor.
   area.addEventListener('focus', () => editor?.focus());
-  view.addEventListener('dblclick', () => showEdit());
+  /**
+   * Выделение в просмотре → диапазон исходника (задача 189da39e): двойной
+   * клик по слову переводит выделение браузера в позиции markdown через
+   * разметку позиций рендерера. `undefined` — разметки нет (просмотр без
+   * `sourceMapView`) или выделение вне поля — тогда вход в правку без офсета.
+   */
+  const selectionInView = (): MdSourceSelection | undefined => {
+    const selection = view.ownerDocument.getSelection?.() ?? null;
+    if (selection === null || selection.rangeCount === 0) return undefined;
+    if (
+      selection.anchorNode === null ||
+      selection.focusNode === null ||
+      !view.contains(selection.anchorNode) ||
+      !view.contains(selection.focusNode)
+    ) {
+      return undefined;
+    }
+    return (
+      sourceRangeFromSelection(
+        { node: selection.anchorNode, offset: selection.anchorOffset },
+        { node: selection.focusNode, offset: selection.focusOffset },
+      ) ?? undefined
+    );
+  };
+  view.addEventListener('dblclick', () => showEdit(undefined, selectionInView()));
 
   handles.set(root, {
     showEdit,
@@ -545,10 +631,13 @@ export function createMarkdownField(opts: {
     focusAt: (findText) => {
       showEdit();
       if (editor === null) return;
-      const source = editor.getValue();
-      const position =
-        findText !== undefined && findText !== '' ? source.indexOf(findText) : -1;
-      editor.setCaret(position >= 0 ? position : 0);
+      const needle = findText ?? '';
+      const position = needle !== '' ? editor.getValue().indexOf(needle) : -1;
+      // Найдено — выделяем вхождение: слово, по которому кликнули в ленте
+      // публикаций, остаётся выделенным (задача 189da39e); иначе — каретка в
+      // начало (вхождения нет: текст изменён форматированием).
+      if (position >= 0) editor.setSelection(position, position + needle.length);
+      else editor.setCaret(0);
     },
   });
 
@@ -579,8 +668,9 @@ export function editMarkdownField(root: HTMLElement, md?: string): void {
 
 /**
  * Переключает поле в правку и ставит каретку по вхождению `findText` в
- * исходнике markdown (нет вхождения — начало документа). Точка входа
- * двойного клика по тексту публикации (задача ea1b5f14, пункт 4).
+ * исходнике markdown (вхождение выделяется; нет вхождения — начало
+ * документа). Точка входа двойного клика по тексту публикации
+ * (задача ea1b5f14, пункт 4; уточнено задачей 189da39e).
  */
 export function focusMarkdownFieldAt(root: HTMLElement, findText?: string): void {
   handles.get(root)?.focusAt(findText);

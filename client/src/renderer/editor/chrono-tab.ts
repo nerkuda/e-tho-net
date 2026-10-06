@@ -358,6 +358,9 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     const widget = createMarkdownField({
       md: existing?.body_md ?? '',
       html: existing?.body_html ?? '',
+      // Каретка/выделение при входе в правку — в месте клика в просмотре
+      // (требование bac754e4, задача 189da39e).
+      sourceMapView: true,
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
       // Контекст комментария для флоу «создать мысль по legacy-ссылке»
       // (карточка ETN 34ffbd75): после замены ссылок поле перерисовывается,

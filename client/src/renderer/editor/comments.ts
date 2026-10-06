@@ -249,6 +249,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       md: permanent?.body_md ?? '',
       html: permanent?.body_html ?? '',
       placeholder: 'Введите комментарий…',
+      // Вход в правку двойным кликом ставит каретку/выделение в место клика
+      // (требование bac754e4, задача 189da39e): просмотр размечен позициями.
+      sourceMapView: true,
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
       // Контекст комментария для флоу «создать мысль по legacy-ссылке»
       // (карточка ETN 34ffbd75): владелец — родитель создаваемой мысли.
