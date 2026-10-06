@@ -362,6 +362,41 @@ export function sourceRangeFromSelection(
   return { anchor: from, head: to };
 }
 
+/**
+ * Выделение DOM-просмотра → диапазон исходника с учётом карты развёрнутых
+ * трансклюзий (ошибка 0fdd8c86). Читает выделение документа просмотра,
+ * проверяет, что оба его конца внутри поля, и переводит позиции картой
+ * `viewMap`, построенной `renderView` (`buildExpandedSourceMap`). `undefined` —
+ * выделения нет, оно вне поля или у разметки нет офсета: тогда вход в правку
+ * идёт без офсета (откат к каретке в конец).
+ *
+ * Вынесено из `selectionInView` отдельной функцией-швом (задача 3e74715f):
+ * иначе склейку «развёртка → `viewMap` → выделение просмотра» можно было
+ * проверить только сквозным UI-пробником.
+ */
+export function viewSelectionToSourceRange(
+  view: HTMLElement,
+  viewMap: ViewOffsetMap | null,
+): MdSourceSelection | undefined {
+  const selection = view.ownerDocument.getSelection?.() ?? null;
+  if (selection === null || selection.rangeCount === 0) return undefined;
+  if (
+    selection.anchorNode === null ||
+    selection.focusNode === null ||
+    !view.contains(selection.anchorNode) ||
+    !view.contains(selection.focusNode)
+  ) {
+    return undefined;
+  }
+  return (
+    sourceRangeFromSelection(
+      { node: selection.anchorNode, offset: selection.anchorOffset },
+      { node: selection.focusNode, offset: selection.focusOffset },
+      viewMap ?? undefined,
+    ) ?? undefined
+  );
+}
+
 const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
 
 /**
@@ -991,25 +1026,8 @@ export function createMarkdownField(opts: {
    * `viewMap` (ошибка 0fdd8c86). `undefined` — разметки нет (просмотр без
    * `sourceMapView`) или выделение вне поля — тогда вход в правку без офсета.
    */
-  const selectionInView = (): MdSourceSelection | undefined => {
-    const selection = view.ownerDocument.getSelection?.() ?? null;
-    if (selection === null || selection.rangeCount === 0) return undefined;
-    if (
-      selection.anchorNode === null ||
-      selection.focusNode === null ||
-      !view.contains(selection.anchorNode) ||
-      !view.contains(selection.focusNode)
-    ) {
-      return undefined;
-    }
-    return (
-      sourceRangeFromSelection(
-        { node: selection.anchorNode, offset: selection.anchorOffset },
-        { node: selection.focusNode, offset: selection.focusOffset },
-        viewMap ?? undefined,
-      ) ?? undefined
-    );
-  };
+  const selectionInView = (): MdSourceSelection | undefined =>
+    viewSelectionToSourceRange(view, viewMap);
   view.addEventListener('dblclick', () => showEdit(undefined, selectionInView()));
 
   handles.set(root, {

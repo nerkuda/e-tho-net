@@ -56,9 +56,9 @@ function shimDom(): void {
 }
 
 shimDom();
-const { buildExpandedSourceMap, mapViewOffsetToSource, sourceRangeFromSelection } = await import(
-  '../src/renderer/editor/markdown-field.js'
-);
+const { buildExpandedSourceMap, mapViewOffsetToSource, sourceRangeFromSelection, viewSelectionToSourceRange } =
+  await import('../src/renderer/editor/markdown-field.js');
+const { transclusionInternals } = await import('../src/renderer/editor/transclusion.js');
 
 /** Текстовый узел структурной модели резолвера. */
 function textNode(value: string): any {
@@ -335,5 +335,102 @@ describe('просмотр с трансклюзией: вложенные бл�
       map!,
     );
     assert.deepEqual(range, { anchor: raw.indexOf('![['), head: raw.indexOf('![[') });
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Склейка renderView → viewMap → selectionInView (ошибка 3e74715f)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Фейковое поле просмотра: `ownerDocument.getSelection` отдаёт заданное
+ * выделение, `contains` определяет, внутри ли поля его концы. Проверяется сам
+ * шов `viewSelectionToSourceRange` — та же функция, что зовёт `selectionInView`
+ * по двойному клику.
+ */
+function viewWithSelection(
+  anchor: { node: any; offset: number },
+  focus: { node: any; offset: number },
+  inside = true,
+): any {
+  const selection = {
+    rangeCount: 1,
+    anchorNode: anchor.node,
+    anchorOffset: anchor.offset,
+    focusNode: focus.node,
+    focusOffset: focus.offset,
+  };
+  return { contains: () => inside, ownerDocument: { getSelection: () => selection } };
+}
+
+describe('просмотр с трансклюзией: склейка viewMap → selectionInView (3e74715f)', () => {
+  const raw = `Перед блоком.\n\n![[#${TR_ID}]]\n\nПосле блока.\n`;
+  const body = 'Текст источника.\n\nВторой абзац источника.';
+  const loader = (): Promise<{ found: boolean; title: string; body_md: string }> =>
+    Promise.resolve({ found: true, title: 'Источник', body_md: body });
+
+  /** Прод-путь renderView: развёртка `expandWithLoader` → карта смещений. */
+  async function renderViewMap(): Promise<{ expanded: string; map: NonNullable<ReturnType<typeof buildExpandedSourceMap>> }> {
+    const { text } = await transclusionInternals.expandWithLoader(raw, loader);
+    const map = buildExpandedSourceMap(raw, text);
+    assert.ok(map !== null, 'карта развёртки построена — как в renderView');
+    return { expanded: text, map };
+  }
+
+  it('двойной клик вне развёрнутого блока входит в правку в месте клика', async () => {
+    const { expanded, map } = await renderViewMap();
+    const expStart = expanded.indexOf('После блока.');
+    const srcStart = raw.indexOf('После блока.');
+    const block = expandedBlock(expStart, 'После блока.');
+    const view = viewWithSelection(
+      { node: block.childNodes[0], offset: 'После '.length },
+      { node: block.childNodes[0], offset: 'После '.length + 'блока'.length },
+    );
+
+    assert.deepEqual(viewSelectionToSourceRange(view, map), {
+      anchor: srcStart + 'После '.length,
+      head: srcStart + 'После '.length + 'блока'.length,
+    });
+  });
+
+  it('двойной клик внутри развёрнутого блока ведёт к ссылке-трансклюзии', async () => {
+    const { expanded, map } = await renderViewMap();
+    const refStart = raw.indexOf('![[');
+    const inside = expanded.indexOf('Текст источника');
+    const block = expandedBlock(inside, 'Текст источника.');
+    const view = viewWithSelection(
+      { node: block.childNodes[0], offset: 0 },
+      { node: block.childNodes[0], offset: 'Текст'.length },
+    );
+
+    assert.deepEqual(viewSelectionToSourceRange(view, map), { anchor: refStart, head: refStart });
+  });
+
+  it('выделение вне поля просмотра не даёт офсета (вход в правку без каретки)', async () => {
+    const { expanded, map } = await renderViewMap();
+    const inside = expanded.indexOf('Текст источника');
+    const block = expandedBlock(inside, 'Текст источника.');
+    const view = viewWithSelection(
+      { node: block.childNodes[0], offset: 0 },
+      { node: block.childNodes[0], offset: 3 },
+      false,
+    );
+
+    assert.equal(viewSelectionToSourceRange(view, map), undefined);
+  });
+
+  it('без развёртки карты нет — смещение берётся из разметки как есть', () => {
+    const plain = 'Просто текст без развёртки.\n';
+    const start = plain.indexOf('текст');
+    const block = expandedBlock(start, 'текст');
+    const view = viewWithSelection(
+      { node: block.childNodes[0], offset: 0 },
+      { node: block.childNodes[0], offset: 'текст'.length },
+    );
+
+    assert.deepEqual(viewSelectionToSourceRange(view, null), {
+      anchor: start,
+      head: start + 'текст'.length,
+    });
   });
 });

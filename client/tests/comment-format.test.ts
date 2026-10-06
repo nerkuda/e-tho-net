@@ -469,17 +469,20 @@ describe('comment-format: буфер обмена и устаревшие поз
     assert.equal(editor.edits.length, 0, 'вставка не затирает изменившееся выделение');
   });
 
-  it('вставить как текст: гонка сетевого разворота — вставка по актуальной каретке', async () => {
-    const editor = fakeEditor('[]', 1, 1);
-    const source = `![[#${SRC}]]`;
+  it('вставить как текст: перестановка выделения на идентичный фрагмент отменяет вставку', async () => {
+    // Непустое выделение (не каретка): именно на нём проявляется дефект 253b0dd3
+    // — перестановка на ИДЕНТИЧНЫЙ по тексту, но другое вхождение.
+    const text = 'foo bar foo';
+    const editor = fakeEditor(text, 0, 3); // первое «foo»
     format.setCommentClipboardPort({
-      readText: () => Promise.resolve(source),
+      readText: () => Promise.resolve(`![[#${SRC}]]`),
       writeText: () => Promise.resolve(),
     });
     format.setTransclusionTextPort({
       expand: async () => {
-        // За время сетевого разворота каретка сместилась: в начало вставили «Q».
-        editor.mutate(`Q[]`, 2, 2);
+        // Долгий сетевой разворот: за это время выделение переставили на
+        // ВТОРОЕ «foo» — тот же текст, другое место. Вставка идти туда не должна.
+        editor.mutate(text, 8, 11);
         return 'BBB';
       },
     });
@@ -487,12 +490,7 @@ describe('comment-format: буфер обмена и устаревшие поз
     commands.runCommentCommand('comment.pasteAsText', host(editor));
     await flush();
 
-    assert.deepEqual(
-      editor.edits[0]?.changes,
-      [{ from: 2, to: 2, insert: 'BBB' }],
-      'вставка идёт в актуальную каретку, а не в устаревшую позицию 1',
-    );
-    assert.deepEqual(editor.edits[0]?.selection, { anchor: 5, head: 5 });
+    assert.equal(editor.edits.length, 0, 'идентичный фрагмент не должен получить вставку');
   });
 });
 
