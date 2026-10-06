@@ -38,6 +38,15 @@
  * фабрикой `factory` — в просмотре (обход `.md-transclusion`) и в правке
  * (виджет блока читает фабрику из {@link collapseScopeFacet}).
  *
+ * **Правка блока (ошибка `4204e34c`).** Пока блок трансклюзии открыт на правку,
+ * текст источника вставлен в то же поле вместо ссылки (`editor/transclusion.ts`
+ * `beginBlockEdit`), и CM6-путь обязан адресовать его заголовки состоянию ЭТОГО
+ * блока, а не контейнера. Границы и путь вставки правки приходят из
+ * {@link blockEditCollapseFacet} (его ставит поле `transclusionState`): диапазон
+ * правки для CM6 — отдельная область сворачивания со своим namespace нумерации
+ * и своим состоянием (фабрика). Собственные разделы контейнера при этом не
+ * смешиваются с разделями блока: тексты блока — граница их тел.
+ *
  * «Раздел» идентифицируется позиционно: `h{уровень}#{n}` — n-й по счёту
  * заголовок этого уровня в документе, `n#{m}` — m-й по счёту вложенный блок.
  * Нумеруются ВСЕ заголовки/вложенные блоки, даже те, чьё тело в просмотре
@@ -56,6 +65,7 @@ import {
   type EditorState,
   type Extension,
   type Range,
+  type Text,
 } from '@codemirror/state';
 import {
   Decoration,
@@ -197,6 +207,33 @@ export const collapseScopeFacet = Facet.define<CollapseScopeFactory, CollapseSco
 export function collapseScopeExtension(factory: CollapseScopeFactory): Extension {
   return collapseScopeFacet.of(factory);
 }
+
+/**
+ * Диапазон активной правки блока трансклюзии в документе (ошибка `4204e34c`):
+ * пока блок открыт на правку, его текст лежит прямо в поле вместо ссылки, и
+ * сворачивание заголовков этого текста должно адресоваться состоянию пути
+ * вставки блока, а не состоянию поля-контейнера. Провайдер — поле
+ * `transclusionState` (см. `editor/transclusion.ts`).
+ */
+export interface BlockEditCollapseRegion {
+  /** Начало вставленного текста блока в документе. */
+  from: number;
+  /** Конец вставленного текста блока (исключительно). */
+  to: number;
+  /** id мысли-источника правящегося блока — путь вставки (`[sourceId]`). */
+  sourceId: string;
+}
+
+/**
+ * Фасет диапазона правки блока: `null` — правка блока не активна. Значения
+ * приходят от поля `transclusionState`; последнее значение — при нескольких.
+ */
+export const blockEditCollapseFacet = Facet.define<
+  BlockEditCollapseRegion | null,
+  BlockEditCollapseRegion | null
+>({
+  combine: (values) => values[values.length - 1] ?? null,
+});
 
 // ---------------------------------------------------------------------------
 // Индикатор
@@ -436,6 +473,14 @@ export function decorateCommentView(
 /** Эффект переключения свёрнутости раздела. */
 export const setCollapseEffect = StateEffect.define<{ id: string; collapsed: boolean }>();
 
+/**
+ * Эффект перерисовки декораций без изменения набора контейнера: переключение
+ * раздела области трансклюзии пишет в её собственное состояние (фабрика), а
+ * editor-field о таком изменении не знает — этот эффект заставляет пересобрать
+ * декорации и перечитать производное состояние.
+ */
+export const refreshCollapseEffect = StateEffect.define<null>();
+
 /** Набор свёрнутых разделов (единственный источник для декораций). */
 const collapseSetField = StateField.define<Set<string>>({
   create: () => new Set(),
@@ -469,6 +514,25 @@ interface EditorSection {
   anchorFrom: number;
   bodyFrom: number;
   bodyTo: number;
+  /**
+   * Путь вставки области, которой принадлежит раздел: `null` — собственные
+   * разделы поля-контейнера, массив — блок трансклюзии (правка блока).
+   * Определяет, в какое состояние пишется свёртка.
+   */
+  path: readonly string[] | null;
+}
+
+/** Заголовок раздела дерева синтаксиса (сырые координаты). */
+interface RawHeading {
+  level: number;
+  from: number;
+  to: number;
+}
+
+/** Вложенный блок дерева синтаксиса (сырые координаты). */
+interface RawBlock {
+  from: number;
+  to: number;
 }
 
 /** Минимум узла дерева, нужный проверке вложенности (SyntaxNode подходит). */
@@ -488,42 +552,42 @@ function isNestedNode(node: { parent: TreeNodeLike | null }): boolean {
   return false;
 }
 
-/** Собирает сворачиваемые разделы документа по дереву синтаксиса. */
-function collectSections(state: EditorState): EditorSection[] {
-  const doc = state.doc;
-  const headings: Array<{ level: number; from: number; to: number }> = [];
-  const nestedBlocks: Array<{ from: number; to: number }> = [];
-
-  syntaxTree(state).iterate({
-    enter(node) {
-      const name = node.name;
-      if (/^ATXHeading[1-6]$/.test(name) || /^SetextHeading[12]$/.test(name)) {
-        const level = Number(name.slice(-1));
-        headings.push({ level, from: node.from, to: node.to });
-        return;
-      }
-      if (name === 'BulletList' || name === 'OrderedList' || name === 'Blockquote') {
-        if (isNestedNode(node.node)) nestedBlocks.push({ from: node.from, to: node.to });
-      }
-    },
-  });
-
+/**
+ * Собирает разделы одного namespace (набор заголовков + вложенных блоков) с
+ * общими позиционными счётчиками; `boundTo` ограничивает документ справа,
+ * `obstacles` — позиции, за которые тело раздела не заходит (границы области
+ * трансклюзии для собственных разделов контейнера). `path` — чей namespace:
+ * `null` — поле-контейнер.
+ */
+function buildSections(
+  doc: Text,
+  headings: readonly RawHeading[],
+  blocks: readonly RawBlock[],
+  boundTo: number,
+  path: readonly string[] | null,
+  obstacles: readonly { from: number }[],
+): EditorSection[] {
   const sections: EditorSection[] = [];
 
-  // Заголовки: тело — строки до начала строки следующего заголовка не выше уровнем.
-  // Счётчик уровня растёт для КАЖДОГО заголовка — в паре с просмотром, который
-  // тоже нумерует все заголовки (см. decorateCommentView): иначе id разошлись бы
-  // на заголовке с невидимым в просмотре телом (HTML-комментарий).
+  // Заголовки: тело — строки до начала строки следующего заголовка не выше
+  // уровнем (в этом же namespace). Счётчик уровня растёт для КАЖДОГО заголовка
+  // — в паре с просмотром, который тоже нумерует все заголовки
+  // (см. decorateCommentView): иначе id разошлись бы на заголовке с невидимым
+  // в просмотре телом (HTML-комментарий).
   const levelCounters = new Map<number, number>();
   headings.forEach((heading, index) => {
     const n = (levelCounters.get(heading.level) ?? 0) + 1;
     levelCounters.set(heading.level, n);
-    let end = doc.length;
+    let end = boundTo;
     for (let j = index + 1; j < headings.length; j += 1) {
       if ((headings[j]?.level ?? 0) <= heading.level) {
         end = doc.lineAt(headings[j]!.from).from;
         break;
       }
+    }
+    // Тело не заходит за границы области (текст блока — граница разделов поля).
+    for (const obstacle of obstacles) {
+      if (obstacle.from > heading.to && obstacle.from < end) end = obstacle.from;
     }
     const bodyFrom = doc.lineAt(heading.to).to + 1;
     if (bodyFrom >= end) return; // тело пустое — сворачивать нечего (id присвоен)
@@ -535,19 +599,74 @@ function collectSections(state: EditorState): EditorSection[] {
       anchorFrom: doc.lineAt(heading.from).from,
       bodyFrom,
       bodyTo,
+      path,
     });
   });
 
   // Вложенные блоки: тело — весь блок, индикатор — у его первой строки.
   let nested = 0;
-  for (const block of nestedBlocks) {
+  for (const block of blocks) {
     nested += 1;
     const bodyFrom = doc.lineAt(block.from).from;
     const bodyTo = doc.lineAt(block.to).to;
     if (bodyTo <= bodyFrom) continue;
-    sections.push({ id: `n#${nested}`, anchorFrom: bodyFrom, bodyFrom, bodyTo });
+    sections.push({ id: `n#${nested}`, anchorFrom: bodyFrom, bodyFrom, bodyTo, path });
   }
 
+  return sections;
+}
+
+/**
+ * Собирает сворачиваемые разделы документа по дереву синтаксиса. При активной
+ * правке блока трансклюзии (`region`) его текст образует отдельную область:
+ * заголовки/вложенные блоки внутри нумеруются своим namespace и адресуются
+ * состоянию пути вставки (`[sourceId]`), а тела собственных разделов поля не
+ * заходят на текст блока (ошибка `4204e34c`).
+ */
+function collectSections(
+  state: EditorState,
+  region: BlockEditCollapseRegion | null = null,
+): EditorSection[] {
+  const doc = state.doc;
+  const regionFrom = region === null ? -1 : Math.max(0, Math.min(region.from, doc.length));
+  const regionTo = region === null ? -1 : Math.max(regionFrom, Math.min(region.to, doc.length));
+  const inRegion = (pos: number): boolean => region !== null && pos >= regionFrom && pos < regionTo;
+
+  const containerHeadings: RawHeading[] = [];
+  const scopedHeadings: RawHeading[] = [];
+  const containerBlocks: RawBlock[] = [];
+  const scopedBlocks: RawBlock[] = [];
+
+  syntaxTree(state).iterate({
+    enter(node) {
+      const name = node.name;
+      if (/^ATXHeading[1-6]$/.test(name) || /^SetextHeading[12]$/.test(name)) {
+        const heading = { level: Number(name.slice(-1)), from: node.from, to: node.to };
+        (inRegion(node.from) ? scopedHeadings : containerHeadings).push(heading);
+        return;
+      }
+      if (name === 'BulletList' || name === 'OrderedList' || name === 'Blockquote') {
+        if (!isNestedNode(node.node)) return;
+        const block = { from: node.from, to: node.to };
+        (inRegion(node.from) ? scopedBlocks : containerBlocks).push(block);
+      }
+    },
+  });
+
+  const sections = buildSections(
+    doc,
+    containerHeadings,
+    containerBlocks,
+    doc.length,
+    null,
+    // Текст блока — граница тел собственных разделов контейнера.
+    region === null ? [] : [{ from: regionFrom }],
+  );
+  if (region !== null) {
+    sections.push(
+      ...buildSections(doc, scopedHeadings, scopedBlocks, regionTo, [region.sourceId], []),
+    );
+  }
   return sections.sort((a, b) => a.bodyFrom - b.bodyFrom);
 }
 
@@ -556,16 +675,32 @@ class CollapseToggleWidget extends WidgetType {
   constructor(
     readonly id: string,
     readonly collapsed: boolean,
+    /** Путь вставки области: `null` — своё поле, массив — блок трансклюзии. */
+    readonly path: readonly string[] | null = null,
   ) {
     super();
   }
 
   override eq(other: CollapseToggleWidget): boolean {
-    return other.id === this.id && other.collapsed === this.collapsed;
+    return (
+      other.id === this.id &&
+      other.collapsed === this.collapsed &&
+      samePath(other.path, this.path)
+    );
   }
 
   override toDOM(view: EditorView): HTMLElement {
+    const factory = view.state.facet(collapseScopeFacet);
     const btn = createToggleButton(this.collapsed, () => {
+      // Раздел области трансклюзии пишет в своё производное состояние (состояние
+      // поля-контейнера не трогаем); декорации пересобирает refresh-эффект.
+      if (this.path !== null) {
+        if (factory === null) return;
+        const state = factory(this.path);
+        state.setCollapsed(this.id, !state.isCollapsed(this.id));
+        view.dispatch({ effects: refreshCollapseEffect.of(null) });
+        return;
+      }
       view.dispatch({
         effects: setCollapseEffect.of({ id: this.id, collapsed: !this.collapsed }),
       });
@@ -580,29 +715,59 @@ class CollapseToggleWidget extends WidgetType {
   }
 }
 
+/** Совпадают ли пути вставки двух разделов. */
+function samePath(a: readonly string[] | null, b: readonly string[] | null): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
 /** Строит декорации и список скрытых диапазонов для текущего состояния. */
 function buildDecorations(state: EditorState): CollapseDecoState {
   const collapsed = state.field(collapseSetField);
+  const region = state.facet(blockEditCollapseFacet);
+  const factory = state.facet(collapseScopeFacet);
   const ranges: CollapsedRange[] = [];
   const parts: Array<Range<Decoration>> = [];
 
-  for (const section of collectSections(state)) {
+  // Производные состояния областей трансклюзий — по одной на путь вставки.
+  const scopedStates = new Map<string, CommentCollapseState>();
+  const scopedState = (path: readonly string[]): CommentCollapseState | null => {
+    if (factory === null) return null;
+    const key = path.join('#');
+    let scoped = scopedStates.get(key);
+    if (scoped === undefined) {
+      scoped = factory(path);
+      scopedStates.set(key, scoped);
+    }
+    return scoped;
+  };
+  const isCollapsed = (section: EditorSection): boolean =>
+    section.path === null
+      ? collapsed.has(section.id)
+      : (scopedState(section.path)?.isCollapsed(section.id) ?? false);
+
+  for (const section of collectSections(state, region)) {
     // Раздел внутри тела уже свёрнутого раздела скрыт родителем — не строим.
     if (ranges.some((r) => section.anchorFrom >= r.from && section.anchorFrom < r.to)) continue;
-    const isCollapsed = collapsed.has(section.id);
+    const sectionCollapsed = isCollapsed(section);
     parts.push(
       Decoration.widget({
-        widget: new CollapseToggleWidget(section.id, isCollapsed),
+        widget: new CollapseToggleWidget(section.id, sectionCollapsed, section.path),
         side: -1,
       }).range(section.anchorFrom),
     );
-    if (isCollapsed) {
+    if (sectionCollapsed) {
       ranges.push({ from: section.bodyFrom, to: section.bodyTo });
       parts.push(Decoration.replace({ block: true }).range(section.bodyFrom, section.bodyTo));
     }
   }
 
-  return { setRef: collapsed, ranges, deco: Decoration.set(parts, true) };
+  return {
+    setRef: collapsed,
+    ranges,
+    deco: Decoration.set(parts, true),
+  };
 }
 
 /** Поле декораций сворачивания (также отдаёт диапазоны скрытых тел). */
@@ -610,7 +775,10 @@ const collapseDecoField = StateField.define<CollapseDecoState>({
   create: (state) => buildDecorations(state),
   update: (value, tr) => {
     const current = tr.state.field(collapseSetField);
-    if (!tr.docChanged && current === value.setRef) return value;
+    // Пересборка: правка документа (в т.ч. вход/выход из правки блока), смена
+    // набора контейнера либо refresh-эффект производной области трансклюзии.
+    const refreshed = tr.effects.some((effect) => effect.is(refreshCollapseEffect));
+    if (!tr.docChanged && current === value.setRef && !refreshed) return value;
     return buildDecorations(tr.state);
   },
   provide: (field) => EditorView.decorations.from(field, (state) => state.deco),

@@ -4,7 +4,8 @@
  *
  * Проверяются: локальное хранение состояния (localStorage, на сервер не едет),
  * разметка просмотра (индикаторы и скрытие тела), декорации live preview
- * CodeMirror 6, согласованный пропуск декораций внутри свёрнутого тела и
+ * CodeMirror 6, согласованный пропуск декораций внутри свёрнутого тела,
+ * независимость сворачивания в правке блока трансклюзии (ошибка 4204e34c) и
  * регресс-тест «на сервер не едет».
  */
 
@@ -415,6 +416,86 @@ describe('сворачивание разделов комментария (edit
     mod.decorateCommentView(view as unknown as HTMLElement, ownState, factoryFor);
     assert.equal(bP.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true, 'тело B скрыто');
     assert.equal(cP.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false, 'тело C не тронуто');
+  });
+
+  it('правка блока трансклюзии: сворачивание своим состоянием, не состоянием контейнера', async () => {
+    installShim();
+    const storage = installStorage();
+    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
+
+    // Контейнер А: собственный раздел «Свой» и вставленный блок Б (его текст
+    // лежит в поле вместо ссылки, пока блок открыт на правку).
+    const doc = '## Свой\nтекст А\n\n## Раздел Б\nтекст Б\n';
+    const region = { from: doc.indexOf('## Раздел Б'), to: doc.length, sourceId: 'B' };
+
+    const container = mod.createCommentCollapseState('net', 'comment:cA');
+    const scopedB = mod.createCommentCollapseState(
+      'net',
+      mod.transclusionCollapseOwnerKey('comment:cA', ['B']),
+    );
+    const factoryFor = (path: readonly string[]): ReturnType<Module['createCommentCollapseState']> =>
+      path.length === 1 && path[0] === 'B'
+        ? scopedB
+        : mod.createCommentCollapseState('net', undefined);
+
+    const makeState = (): EditorState =>
+      EditorState.create({
+        doc,
+        extensions: [
+          markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+          mod.commentCollapseExtension(container),
+          mod.collapseScopeExtension(factoryFor),
+          mod.blockEditCollapseFacet.of(region),
+        ],
+      });
+
+    const field = mod.commentCollapseInternals.collapseDecoField;
+    const counts = (state: EditorState): { widgets: number; replaces: number } => {
+      let widgets = 0;
+      let replaces = 0;
+      const it = state.field(field).deco.iter();
+      while (it.value !== null) {
+        const spec =
+          (it.value as unknown as { spec?: { widget?: unknown; block?: boolean } }).spec ?? {};
+        if (spec.widget !== undefined) widgets += 1;
+        if (spec.block === true) replaces += 1;
+        it.next();
+      }
+      return { widgets, replaces };
+    };
+
+    // Нумерация: собственный H2 контейнера — h2#1, раздел блока — тоже h2#1, но
+    // в своём namespace (путь B): заголовки блока не сдвигают нумерацию А.
+    const sections = mod.commentCollapseInternals.collectSections(makeState(), region);
+    assert.deepEqual(
+      sections.map((s) => `${s.id}:${s.path === null ? 'A' : s.path.join('#')}`).sort(),
+      ['h2#1:A', 'h2#1:B'],
+    );
+
+    // Свёрнут собственный раздел контейнера (h2#1) — раздел блока с тем же id
+    // НЕ сворачивается: состояния контейнера и блока независимы.
+    container.setCollapsed('h2#1', true);
+    const containerCollapsed = makeState();
+    assert.deepEqual(counts(containerCollapsed), { widgets: 2, replaces: 1 });
+    assert.equal(mod.isCollapsedHiddenAt(containerCollapsed, doc.indexOf('текст А')), true);
+    assert.equal(
+      mod.isCollapsedHiddenAt(containerCollapsed, doc.indexOf('текст Б')),
+      false,
+      'состояние А не сворачивает блок',
+    );
+
+    // Обратно: сворачивание раздела блока пишет в путь #B (refresh-эффект
+    // пересобирает декорации), собственные разделы А не тронуты.
+    container.setCollapsed('h2#1', false);
+    const open = makeState();
+    assert.deepEqual(counts(open), { widgets: 2, replaces: 0 });
+    scopedB.setCollapsed('h2#1', true);
+    const toggled = open.update({ effects: mod.refreshCollapseEffect.of(null) }).state;
+    assert.deepEqual(counts(toggled), { widgets: 2, replaces: 1 });
+    assert.equal(mod.isCollapsedHiddenAt(toggled, doc.indexOf('текст Б')), true, 'блок свёрнут');
+    assert.equal(mod.isCollapsedHiddenAt(toggled, doc.indexOf('текст А')), false, 'А не тронут');
+    assert.equal(container.isCollapsed('h2#1'), false, 'в состояние контейнера не писали');
+    assert.equal(storage.getItem('comment.collapse.net.comment:cA|#B'), '["h2#1"]');
   });
 
   it('регресс: состояние не едет на сервер', async () => {

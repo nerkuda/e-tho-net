@@ -56,6 +56,12 @@
  * разных контейнерах хранит свёрнутость раздельно. Просмотр идёт тем же путём
  * (обход `.md-transclusion` в `decorateCommentView`).
  *
+ * **Правка блока (ошибка `4204e34c`).** Пока текст источника вставлен в поле
+ * вместо ссылки (`blockEdit`), `transclusionState` отдаёт диапазон правки
+ * фасетом `blockEditCollapseFacet`: заголовки блока в CM6 нумеруются своим
+ * namespace и сворачиваются состоянием пути вставки, не трогая собственные
+ * разделы поля-контейнера.
+ *
  * За границами задачи (другие работы ТП2): команды
  * «как текст» (`e9f553e5`), realtime-обновление блока.
  */
@@ -110,7 +116,11 @@ import { iconButton } from '../lib/ui/button.js';
 import { svgIcon } from '../lib/ui/icon.js';
 
 import { buildTransclusionMenuItems } from './comment-commands.js';
-import { collapseScopeFacet, decorateCommentView } from './comment-collapse.js';
+import {
+  blockEditCollapseFacet,
+  collapseScopeFacet,
+  decorateCommentView,
+} from './comment-collapse.js';
 
 /** Корневой класс блока трансклюзии (редактирование). */
 export const TRANSCLUSION_BLOCK_CLASS = 'cm-transclusion-block';
@@ -907,7 +917,17 @@ export const transclusionState = StateField.define<TransclusionStateData>({
     );
     return { networkId, cache, collapsed, editingSourceId, blockEdit, lockedSources, deco, atomic };
   },
-  provide: (f) => EditorView.decorations.from(f, (s) => s.deco),
+  provide: (f) => [
+    EditorView.decorations.from(f, (s) => s.deco),
+    // Активная правка блока — отдельная область сворачивания для CM6
+    // (ошибка 4204e34c): её заголовки адресуются состоянию пути вставки блока,
+    // а не состоянию поля-контейнера.
+    blockEditCollapseFacet.from(f, (s) =>
+      s.blockEdit === null
+        ? null
+        : { from: s.blockEdit.from, to: s.blockEdit.to, sourceId: s.blockEdit.sourceId },
+    ),
+  ],
 });
 
 /** Атомарные токены `#<id>` в режиме правки ссылки. */
