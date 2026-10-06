@@ -50,8 +50,8 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
         // MCP-выдача отдаёт `body_md` с развёрнутыми трансклюзиями и маркерами
         // границ (ТП2, задача bcfc7eb7, ADR 85a7a01e); в базе хранится
         // исходная ссылка, REST-ответы её сохраняют. `body_html` пересобирается
-        // из развёрнутого текста — иначе кеш показывает литерал `![[#…]]`
-        // (ошибка a6da3d37).
+        // из развёрнутого текста — иначе кеш показывает нетронутую ссылку-
+        // трансклюзию как обычный текст (ошибка a6da3d37).
         const present = createBodyPresenter(ndb);
         if (args.comment_id !== undefined) {
           const comment = getComment(ndb, args.comment_id);
