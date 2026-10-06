@@ -329,6 +329,25 @@ test('пустой пункт единицы не даёт', () => {
   assert.deepEqual(shape(units), [{ kind: 'list', text: '- второй', children: [] }]);
 });
 
+test('голый маркер с вложенным списком: родительской единицы нет, вложенная есть', () => {
+  for (const src of ['-\n  - b', '- \n  - b']) {
+    const units = parseSelectionUnits(src);
+    assert.deepEqual(
+      shape(units),
+      [{ kind: 'list', text: '  - b', children: [] }],
+      `ожидание для ${JSON.stringify(src)}`,
+    );
+    assertDisjointRanges(src, units);
+  }
+});
+
+test('пункт с содержимым и вложенным списком по-прежнему даёт родителя', () => {
+  const units = parseSelectionUnits('- a\n  - b');
+  assert.deepEqual(shape(units), [
+    { kind: 'list', text: '- a', children: [{ kind: 'list', text: '  - b', children: [] }] },
+  ]);
+});
+
 test('не-строка отвергается', () => {
   assert.throws(() => parseSelectionUnits(42 as unknown as string), /must be a string/);
 });

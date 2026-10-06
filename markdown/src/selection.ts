@@ -52,10 +52,12 @@ export interface MarkdownUnit {
   /** Вид единицы. */
   kind: MarkdownUnitKind;
   /**
-   * Сырой markdown собственного содержимого единицы — без вложенных единиц
-   * (`children`), с сохранением исходной разметки (маркер списка, `#` заголовка,
-   * ограждение блока кода). Пустая строка у элемента, состоящего только из
-   * вложенного списка. Имя мысли потребитель берёт из первой значимой строки.
+   * Точный срез исходного выделения по диапазону `[start, end)`
+   * (`text === source.slice(start, end)`) — собственное содержимое единицы без
+   * вложенных единиц (`children`), с сохранением разметки (маркер списка, `#`
+   * заголовка, ограждение блока кода) и пустых строк внутри. Единицы без
+   * собственного содержимого (голый маркер `-`, `- `) не создаются вовсе.
+   * Имя мысли потребитель берёт из первой значимой строки.
    */
   text: string;
   /** Начало единицы в переданной строке выделения (включительно). */
@@ -377,12 +379,15 @@ function listItemUnits(
     children.push({ kind: 'paragraph', text, start: part.start, end: part.end, children: [] });
   }
 
+  // Собственного содержимого ДО первого вложенного списка нет — родительская
+  // единица была бы «голым» маркером (`-`, `- `): её не создаём, вложенные
+  // элементы остаются единицами сами по себе.
+  if (firstListIndex === 0) return children;
+
   // Единица родителя — от начала элемента до первого вложенного списка.
   const parentStart = itemRange.start;
   const parentEnd = trimRangeEnd(src, parentStart, parts[firstListIndex]!.start);
-  const parentText = parentStart < parentEnd ? src.slice(parentStart, parentEnd) : '';
-  if (parentText.trim() === '') return children;
-  return [{ kind: 'list', text: parentText, start: parentStart, end: parentEnd, children }];
+  return [{ kind: 'list', text: src.slice(parentStart, parentEnd), start: parentStart, end: parentEnd, children }];
 }
 
 /**
