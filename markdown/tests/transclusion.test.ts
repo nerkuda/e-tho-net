@@ -13,6 +13,7 @@ import {
   parseTransclusions,
   extractSection,
   expandTransclusions,
+  renderMarkdown,
   type TransclusionResolver,
 } from '../src/index.js';
 
@@ -220,4 +221,57 @@ test('развёртка: несколько ссылок разворачива
 
 test('развёртка: предел глубины — константа 5', () => {
   assert.equal(TRANSCLUSION_MAX_DEPTH, 5);
+});
+
+// ---------------------------------------------------------------------------
+// Блочная обёртка развёртки (задача a2b68d72, ADR c425202a)
+// ---------------------------------------------------------------------------
+
+const LABELS = { noSource: 'нет источника', noSection: 'нет раздела', skipped: 'не раскрыто' };
+
+test('блоки: опция выключена — вывод прежний (маркеры скрыты)', () => {
+  const out = expandTransclusions(`![[#${A}]]`, makeResolver({ [A]: 'тело' }));
+  const html = renderMarkdown(out);
+  assert.ok(!html.includes('md-transclusion'));
+  assert.ok(!html.includes('etn:transclusion'));
+  assert.match(html, /тело/);
+});
+
+test('блоки: опция включает обёртку с глубиной и источником', () => {
+  const out = expandTransclusions(`![[#${A}]]`, makeResolver({ [A]: 'тело' }));
+  const html = renderMarkdown(out, { transclusion: { labels: LABELS } });
+  assert.match(
+    html,
+    new RegExp(`<div class="md-transclusion" data-transclusion-depth="1" data-transclusion-source="${A}">`),
+  );
+  assert.match(html, /<p>тело<\/p>/);
+  assert.ok(html.includes('</div>'));
+});
+
+test('блоки: вложенность даёт глубину 2', () => {
+  const out = expandTransclusions(`![[#${A}]]`, makeResolver({ [A]: `A ![[#${B}]]`, [B]: 'B' }));
+  const html = renderMarkdown(out, { transclusion: { labels: LABELS } });
+  assert.match(html, /data-transclusion-depth="1"[^>]*data-transclusion-source="[^"]+"/);
+  assert.match(html, /data-transclusion-depth="2"/);
+});
+
+test('блоки: нет источника — контейнер ошибки с подписью', () => {
+  const out = expandTransclusions(`![[#${A}]]`, makeResolver({}));
+  const html = renderMarkdown(out, { transclusion: { labels: LABELS } });
+  assert.match(html, /<div class="md-transclusion md-transclusion--missing"[^>]*>нет источника<\/div>/);
+});
+
+test('блоки: раздела нет — подпись раздела и атрибут section', () => {
+  const out = expandTransclusions(`![[#${A}#Нет]]`, makeResolver({ [A]: '## Есть\nx' }));
+  const html = renderMarkdown(out, { transclusion: { labels: LABELS } });
+  assert.ok(html.includes('data-transclusion-section="Нет"'));
+  assert.match(html, />нет раздела<\/div>/);
+});
+
+test('блоки: подписи экранируются', () => {
+  const out = expandTransclusions(`![[#${A}]]`, makeResolver({}));
+  const html = renderMarkdown(out, {
+    transclusion: { labels: { ...LABELS, noSource: '<b>нет</b>' } },
+  });
+  assert.ok(html.includes('&lt;b&gt;нет&lt;/b&gt;'));
 });

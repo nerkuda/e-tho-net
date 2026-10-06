@@ -1157,6 +1157,61 @@
   background: var(--surface, rgba(127, 127, 127, 0.06));
   border-radius: 3px;
   padding: 4px 6px 4px 8px;
+  /* Появление/раскрытие блока анимировано (ADR c425202a); при
+     prefers-reduced-motion токен обнулён — появление мгновенное. */
+  animation: md-transclusion-in var(--md-transclusion-anim, 160ms) ease;
+}
+
+/* Блоки развёрнутых трансклюзий (задача a2b68d72, ADR c425202a, требование
+   29a3c17a): оттенок фона вычисляется от базового токена темы по глубине —
+   в тёмной теме светлее, в светлой темнее. Уровней до 5; цвета не
+   хардкодятся — коэффициент смешения умножается на номер уровня. */
+.md-transclusion {
+  --md-transclusion-step: 7%;
+  --md-transclusion-level: 1;
+  background: color-mix(
+    in srgb,
+    var(--text) calc(var(--md-transclusion-step) * var(--md-transclusion-level)),
+    var(--surface)
+  );
+  border-left: 2px solid var(--border-strong, var(--border));
+  border-radius: 3px;
+  padding: 4px 6px 4px 8px;
+  animation: md-transclusion-in var(--md-transclusion-anim, 160ms) ease;
+}
+
+.md-transclusion[data-transclusion-depth='1'] {
+  --md-transclusion-level: 1;
+}
+.md-transclusion[data-transclusion-depth='2'] {
+  --md-transclusion-level: 2;
+}
+.md-transclusion[data-transclusion-depth='3'] {
+  --md-transclusion-level: 3;
+}
+.md-transclusion[data-transclusion-depth='4'] {
+  --md-transclusion-level: 4;
+}
+.md-transclusion[data-transclusion-depth='5'] {
+  --md-transclusion-level: 5;
+}
+
+/* Плашки состояний источника (требование fc60d763): нет источника/раздела,
+   нераскрытая ссылка (цикл/предел глубины). */
+.md-transclusion--missing,
+.md-transclusion--skipped {
+  color: var(--muted, var(--text-dim));
+  font-style: italic;
+}
+
+/* Появление блока/ссылки трансклюзии. */
+@keyframes md-transclusion-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .cm-editor .cm-transclusion-block .cm-transclusion-change-link {
@@ -1181,6 +1236,7 @@
   cursor: pointer;
   text-decoration: none;
   border-bottom: 1px dotted currentColor;
+  animation: md-transclusion-in var(--md-transclusion-anim, 160ms) ease;
 }
 
 .cm-editor .cm-transclusion-id {

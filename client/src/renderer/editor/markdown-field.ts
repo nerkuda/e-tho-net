@@ -16,7 +16,12 @@
  */
 
 import type { MentionsScanThought } from '@etn/shared';
-import { renderMarkdown, sourceOffsetFromCaret, type SourceMapNode } from '@etn/markdown';
+import {
+  parseTransclusions,
+  renderMarkdown,
+  sourceOffsetFromCaret,
+  type SourceMapNode,
+} from '@etn/markdown';
 
 import { requireNetworkId } from '../app.js';
 import { invalidateQueries, queryKeys } from '../lib/live/index.js';
@@ -46,7 +51,7 @@ import { createCommentSearch } from './comment-search.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
-import { transclusionEditHostExtension } from './transclusion.js';
+import { transclusionEditHostExtension, renderTransclusionView } from './transclusion.js';
 import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
 import {
   buildCommentPasteLinks,
@@ -232,6 +237,8 @@ export function createMarkdownField(opts: {
    * `comments.update`/`comments.create` (ошибка 3eb4d1d5).
    */
   let commitPending = false;
+  /** Счётчик рендеров просмотра — защита от гонок асинхронной развёртки трансклюзий (a2b68d72). */
+  let renderSeq = 0;
   /** Снятие контекста сочетаний поля; `null` — контекст не активен. */
   let releaseCommentKeys: (() => void) | null = null;
 
@@ -428,9 +435,9 @@ export function createMarkdownField(opts: {
     }
   };
 
-  const renderView = (): void => {
+  /** Рисует просмотр из готового HTML (общий путь обычного и трансклюзийного рендера). */
+  const paintView = (html: string): void => {
     view.replaceChildren();
-    const html = viewHtml();
     if (html.trim() !== '') {
       renderHtml(view, html);
       renderMermaidBlocks(view);
@@ -456,6 +463,27 @@ export function createMarkdownField(opts: {
       const ph = el('div', 'md-field-placeholder', opts.placeholder);
       view.append(ph);
     }
+  };
+
+  const renderView = (): void => {
+    // Развёртка трансклюзий в просмотре (задача a2b68d72): ссылки-трансклюзии
+    // разворачиваются общим механизмом `@etn/markdown`, а рендер рисует блоки с
+    // фоном по уровням и плашками ошибок источника. Асинхронно (нужны тексты
+    // источников) — с защитой от гонок по счётчику и режиму правки.
+    if (opts.sourceMapView === true && parseTransclusions(currentMd).length > 0) {
+      const seq = ++renderSeq;
+      view.replaceChildren();
+      void renderTransclusionView(currentMd, networkId)
+        .then((html) => {
+          if (seq === renderSeq && !editing && html !== null) paintView(html);
+        })
+        .catch(() => {
+          if (seq === renderSeq && !editing) paintView(currentHtml);
+        });
+      return;
+    }
+    renderSeq += 1;
+    paintView(viewHtml());
   };
 
   const showView = (): void => {

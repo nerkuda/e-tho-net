@@ -10,6 +10,7 @@
  */
 
 import { DEFAULT_MAX_LENGTH, getRenderer } from './renderer.js';
+import type { TransclusionRenderOptions } from './transclusion-block.js';
 
 export { parseAltSize } from './image.js';
 export { isSafeUrl } from './url.js';
@@ -46,6 +47,19 @@ export {
   extractSection,
   expandTransclusions,
 } from './transclusion.js';
+export {
+  TRANSCLUSION_BLOCK_CLASS,
+  TRANSCLUSION_MISSING_CLASS,
+  TRANSCLUSION_SKIPPED_CLASS,
+  TRANSCLUSION_DEPTH_ATTR,
+  TRANSCLUSION_SOURCE_ATTR,
+  TRANSCLUSION_SECTION_ATTR,
+  transclusionBlockPlugin,
+} from './transclusion-block.js';
+export type {
+  TransclusionLabels,
+  TransclusionRenderOptions,
+} from './transclusion-block.js';
 export type {
   TransclusionRef,
   TransclusionResolution,
@@ -115,6 +129,14 @@ export interface RenderOptions {
    * the plain render output is byte-for-byte unchanged.
    */
   sourceMap?: boolean;
+  /**
+   * Блочные обёртки развёрнутых трансклюзий (ТП2, задача `a2b68d72`): каждый
+   * вставленный фрагмент оборачивается в `<div class="md-transclusion">` с
+   * атрибутом глубины, а маркеры ошибок/пропуска — в контейнер с подписью.
+   * Требует готовых маркеров `etn:transclusion` (выход `expandTransclusions`).
+   * Без опции маркеры скрываются, как раньше, и вывод не меняется.
+   */
+  transclusion?: TransclusionRenderOptions;
 }
 
 /**
@@ -133,5 +155,6 @@ export function renderMarkdown(source: unknown, opts: RenderOptions = {}): strin
   return getRenderer().render(source, {
     sourceMap: opts.sourceMap === true,
     sourceMapSource: opts.sourceMap === true ? source : undefined,
+    transclusionLabels: opts.transclusion?.labels,
   });
 }

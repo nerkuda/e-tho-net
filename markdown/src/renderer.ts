@@ -22,6 +22,7 @@ import { linkSafetyPlugin } from './link.js';
 import { markPlugin } from './mark.js';
 import { sourceMapPlugin } from './source-map.js';
 import { taskListPlugin } from './task-list.js';
+import { transclusionBlockPlugin } from './transclusion-block.js';
 import { underlinePlugin } from './underline.js';
 import { isSafeUrl } from './url.js';
 import { wikiLinkPlugin } from './wiki-link.js';
@@ -67,6 +68,10 @@ export function getRenderer(): MarkdownIt {
   markPlugin(md);
   underlinePlugin(md);
   htmlCommentPlugin(md);
+  // ТП2 (задача a2b68d72): блочная обёртка развёрнутых трансклюзий — ПОСЛЕ
+  // скрытия HTML-комментариев, чтобы правило маркеров стояло перед ним.
+  // Включается опцией рендера `transclusionLabels`; без неё вывод не меняется.
+  transclusionBlockPlugin(md);
   taskListPlugin(md);
   // ТП1 (задача ba68771d): разметка отрендеренных узлов диапазонами исходных
   // смещений — opt-in через env.sourceMap, вне него вывод не меняется.

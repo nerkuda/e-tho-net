@@ -18,10 +18,13 @@ import { parseTransclusions } from '@etn/markdown';
 import {
   buildTransclusionDecorations,
   listSectionTitles,
+  renderTransclusionMarkdown,
+  renderTransclusionView,
   setBlockEdit,
   transclusionAtCaret,
   transclusionCacheKey,
   transclusionInternals,
+  transclusionLabels,
   transclusionLinkLabel,
   transclusionState,
   type TransclusionSource,
@@ -287,4 +290,66 @@ test('transclusionState: вход в правку разворачивает с�
   state = state.update({ effects: setBlockEdit.of(ID_A) }).state;
   assert.equal(state.field(transclusionState).collapsed.size, 0);
   assert.equal(state.field(transclusionState).editingSourceId, ID_A);
+});
+
+// ---------------------------------------------------------------------------
+// Визуальные слои блока в просмотре (задача a2b68d72, ADR c425202a)
+// ---------------------------------------------------------------------------
+
+test('transclusionLabels: обе подписи ошибок и пропуск непусты', () => {
+  const labels = transclusionLabels();
+  assert.ok(labels.noSource.length > 0);
+  assert.ok(labels.noSection.length > 0);
+  assert.ok(labels.skipped.length > 0);
+  assert.notEqual(labels.noSource, labels.noSection);
+});
+
+test('renderTransclusionMarkdown: обёртка с глубиной и источником', () => {
+  const ID = ID_A;
+  const text = `<!-- etn:transclusion begin source=${ID} depth=1 -->\nтело\n<!-- etn:transclusion end source=${ID} depth=1 -->`;
+  const html = renderTransclusionMarkdown(text);
+  assert.ok(html.includes('class="md-transclusion"'));
+  assert.ok(html.includes('data-transclusion-depth="1"'));
+  assert.ok(html.includes(`data-transclusion-source="${ID}"`));
+});
+
+test('renderTransclusionView: без трансклюзий — null', async () => {
+  assert.equal(await renderTransclusionView('обычный текст', NET), null);
+  assert.equal(await renderTransclusionView('', NET), null);
+});
+
+test('loadEntry: развёртка даёт HTML просмотра с блоком глубины 1', async () => {
+  const ref = parseTransclusions(`![[#${ID_A}]]`)[0]!;
+  const entry = await transclusionInternals.loadEntry(ref, loaderFrom({ [ID_A]: '# Заголовок' }));
+  assert.equal(entry.error, null);
+  assert.ok((entry.html ?? '').includes('class="md-transclusion"'));
+  assert.ok((entry.html ?? '').includes('data-transclusion-depth="1"'));
+});
+
+test('loadEntry: вложенный источник даёт блок глубины 2', async () => {
+  const ref = parseTransclusions(`![[#${ID_A}]]`)[0]!;
+  const entry = await transclusionInternals.loadEntry(
+    ref,
+    loaderFrom({ [ID_A]: `A ![[#${ID_B}]]`, [ID_B]: 'B' }),
+  );
+  assert.ok((entry.html ?? '').includes('data-transclusion-depth="2"'));
+});
+
+test('renderTransclusionView: разворачивает и рисует блоки с уровнями', async () => {
+  const html = await renderTransclusionView(
+    `![[#${ID_A}]]`,
+    NET,
+    loaderFrom({ [ID_A]: `A ![[#${ID_B}]]`, [ID_B]: 'B' }),
+  );
+  assert.ok(html !== null);
+  assert.ok(html.includes('class="md-transclusion"'));
+  assert.ok(html.includes('data-transclusion-depth="1"'));
+  assert.ok(html.includes('data-transclusion-depth="2"'));
+});
+
+test('renderTransclusionView: нет источника — плашка ошибки в HTML', async () => {
+  const html = await renderTransclusionView(`![[#${ID_A}]]`, NET, loaderFrom({}));
+  assert.ok(html !== null);
+  assert.ok(html.includes('md-transclusion--missing'));
+  assert.ok(html.includes('md-transclusion'));
 });

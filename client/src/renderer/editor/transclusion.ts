@@ -1,7 +1,8 @@
 /**
- * Трансклюзии комментариев в поле markdown (0.12.1, ТП2, задачи `f72a9134` и
- * `f59d24e1`; ADR `8c41387c`, ADR `dc1758ad`, ADR `85a7a01e`, ADR `fdb1a271`;
- * элементы интерфейса `7a479549` и `2b116d37`; требование `647fa34a`).
+ * Трансклюзии комментариев в поле markdown (0.12.1, ТП2, задачи `f72a9134`,
+ * `f59d24e1` и `a2b68d72`; ADR `8c41387c`, ADR `dc1758ad`, ADR `85a7a01e`,
+ * ADR `fdb1a271`, ADR `c425202a`; элементы интерфейса `7a479549` и `2b116d37`;
+ * требования `647fa34a`, `29a3c17a`, `fc60d763`).
  *
  * Узкий клиентский модуль поверх единого рендерера: разбор ссылок и развёртка
  * текста выполняются ТОЛЬКО экспортируемыми функциями `@etn/markdown`
@@ -26,9 +27,18 @@
  *  3. **Ссылка** — блок свёрнут кнопкой: показано имя мысли (клик — вход в
  *     правку). Выход выделения за скобки возвращает блок.
  *
- * За границами задачи (другие работы ТП2): фон по уровням/анимация/неделимость
- * навигации (`a2b68d72`), контекстное меню (`955478e8`), запись изменений
- * блока в источник (`e2c14673`), realtime-обновление блока.
+ * **Визуальные слои блока (задача `a2b68d72`).** Развёрнутый текст рендерится с
+ * блочными обёртками `@etn/markdown` (`data-transclusion-depth`), поэтому фон
+ * подкрашивается по уровню вложенности (ADR `c425202a`), а плашки ошибок
+ * источника приходят из рендера (`fc60d763`). Блок неделим при навигации:
+ * замена идёт блоком на весь диапазон ссылки, а клик по блоку не ставит каретку
+ * внутрь (правка ссылки — кнопкой смены ссылки, правка блока — двойным кликом).
+ * Появление/раскрытие блока анимировано (CSS, с учётом `prefers-reduced-motion`).
+ * Просмотр поля (view-режим) разворачивает ссылки через `renderTransclusionView`.
+ *
+ * За границами задачи (другие работы ТП2): контекстное меню (`955478e8`), запись
+ * изменений блока в источник (`e2c14673`), realtime-обновление блока,
+ * свёрнутость разделов внутри трансклюзий (`1b405a92`).
  */
 
 import {
@@ -59,6 +69,7 @@ import {
   expandTransclusions,
   parseTransclusions,
   renderMarkdown,
+  type TransclusionLabels,
   type TransclusionRef,
   type TransclusionResolution,
 } from '@etn/markdown';
@@ -167,6 +178,24 @@ export function transclusionCacheKey(networkId: string, ref: TransclusionRef): s
   return `${networkId}:${ref.sourceId}#${ref.section ?? ''}`;
 }
 
+/**
+ * Локализованные подписи контейнеров трансклюзий (задача `a2b68d72`): единый
+ * рендерер оборачивает развёрнутые фрагменты блоками (глубина/ошибки), а текст
+ * ошибок даёт клиент через `t()` — рендерер строк не знает.
+ */
+export function transclusionLabels(): TransclusionLabels {
+  return {
+    noSource: t('comment.transclusion.noSource'),
+    noSection: t('comment.transclusion.noSection'),
+    skipped: t('comment.transclusion.skipped'),
+  };
+}
+
+/** Отрисовка развёрнутого markdown с блочными обёртками трансклюзий. */
+export function renderTransclusionMarkdown(text: string): string {
+  return renderMarkdown(text, { transclusion: { labels: transclusionLabels() } });
+}
+
 /** Загруженный источник: имя мысли, наличие и полный текст постоянного комментария. */
 export interface TransclusionSource {
   found: boolean;
@@ -259,7 +288,23 @@ async function loadEntry(
   if (ref.section !== null && extractSection(top.body_md, ref.section) === null) {
     return { title, exists: true, error: 'section', html: null };
   }
-  return { title, exists: true, error: null, html: renderMarkdown(text) };
+  return { title, exists: true, error: null, html: renderTransclusionMarkdown(text) };
+}
+
+/**
+ * Готовит HTML просмотра (view-режим поля) для markdown с трансклюзиями
+ * (задача `a2b68d72`): разворачивает ссылки через общий загрузчик и отдаёт
+ * HTML с блочными обёртками (глубина, ошибки). `null` — трансклюзий в тексте
+ * нет, вызывающий оставляет прежний путь рендера. Экспортируется для тестов.
+ */
+export async function renderTransclusionView(
+  md: string,
+  networkId: string,
+  load: TransclusionSourceLoader = defaultTransclusionLoader(networkId),
+): Promise<string | null> {
+  if (md.trim() === '' || parseTransclusions(md).length === 0) return null;
+  const { text } = await expandWithLoader(md, load);
+  return renderTransclusionMarkdown(text);
 }
 
 /* ------------------------------------------------------------------ *
@@ -655,17 +700,20 @@ export const transclusionClick = EditorView.domEventHandlers({
     const target = event.target as Element | null;
     // Кнопка смены ссылки: не трогаем курсор, событие обработает кнопка.
     if (target !== null && target.closest(`.${TRANSCLUSION_CHANGE_CLASS}`) !== null) return true;
-    const el = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}, .${TRANSCLUSION_LINK_CLASS}`);
+    const block = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
+    if (block instanceof HTMLElement) {
+      // Неделимость блока при навигации мышью (задача a2b68d72, требование
+      // 29a3c17a/элемент 2b116d37): клик по блоку НЕ ставит каретку внутрь
+      // ссылки — блок остаётся целым (иначе он распадался бы в исходный
+      // markdown и стрелки шли бы сквозь него). Правка ссылки — кнопкой
+      // смены ссылки (свёрнутая ссылка), правка блока — двойным кликом/Enter.
+      return true;
+    }
+    const el = target?.closest?.(`.${TRANSCLUSION_LINK_CLASS}`);
     if (!(el instanceof HTMLElement)) return false;
     const from = Number(el.dataset.mdFrom);
     const to = Number(el.dataset.mdTo);
     if (!Number.isFinite(from) || !Number.isFinite(to) || to - from < 2) return false;
-    // Блок в режиме правки не переводим в правку ссылки — каретка не нужна.
-    const ctx = transclusionAtCaret(view.state.doc.toString(), from + 1);
-    if (ctx !== null) {
-      const editing = view.state.field(transclusionState, false)?.editingSourceId ?? null;
-      if (editing !== null && editing === ctx.ref.sourceId) return true;
-    }
     let pos = from + 1;
     const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
     if (coords !== null && coords > from && coords < to) pos = coords;
