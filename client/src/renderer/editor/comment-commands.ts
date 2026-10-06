@@ -41,7 +41,7 @@ import {
   showMenuAt,
   type MenuItem,
 } from '../lib/menu.js';
-import { iconButton, setButtonActive } from '../lib/ui/button.js';
+import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
 import { renderIcon, type IconName } from '../lib/ui/icon.js';
 import type { MdEditor, MdEditorSnapshot } from './md-editor.js';
 
@@ -50,6 +50,9 @@ export const COMMENT_KEY_CONTEXT_ID = 'comment-field';
 
 /** Класс корня тулбара (вид — в `styles/editor.css`). */
 export const COMMENT_TOOLBAR_CLASS = 'md-field-toolbar';
+
+/** Класс панели кнопок режима под полем (вид — в `styles/editor.css`). */
+export const COMMENT_ACTIONS_CLASS = 'md-field-actions';
 
 /* ------------------------------------------------------------------ *
  * Хост команд: поле, к которому применяется команда.
@@ -564,6 +567,74 @@ export function buildCommentToolbar(host: CommentCommandHost): HTMLElement {
   refreshCommentToolbar(bar, host);
   host.subscribe?.(() => refreshCommentToolbar(bar, host));
   return bar;
+}
+
+/* ------------------------------------------------------------------ *
+ * Кнопки режима под полем (элемент a0e5bc2e).
+ * ------------------------------------------------------------------ */
+
+/** Панель кнопок режима поля и переключение её вида по режиму. */
+export interface CommentModeActions {
+  /** Корень панели — вставляется под полем. */
+  readonly root: HTMLElement;
+  /** Показывает кнопки режима: `true` — правка, `false` — просмотр. */
+  setEditing(editing: boolean): void;
+}
+
+/**
+ * Собирает панель кнопок режима под полем комментария (элемент `a0e5bc2e`):
+ * в просмотре — «Редактировать», в правке — «Отменить»/«Сохранить». Кнопки —
+ * через словарь `lib/ui` (требование `edc5faea`), строки — из словаря `t()`.
+ *
+ * Действия идут тем же путём, что и сочетания Esc/Ctrl+Enter: командой поля
+ * через диспетчер `runCommentCommand` (`comment.edit` / `comment.cancel` /
+ * `comment.save`), поэтому клик и клавиша делают ровно одно и то же.
+ */
+export function createCommentModeActions(host: CommentCommandHost): CommentModeActions {
+  const edit = uiButton({
+    label: t('comment.action.edit'),
+    role: 'secondary',
+    size: 's',
+    onClick: () => {
+      runCommentCommand('comment.edit', host);
+    },
+  });
+  edit.dataset['action'] = 'edit';
+  const cancel = uiButton({
+    label: t('comment.cmd.cancel'),
+    role: 'secondary',
+    size: 's',
+    onClick: () => {
+      runCommentCommand('comment.cancel', host);
+    },
+  });
+  cancel.dataset['action'] = 'cancel';
+  const save = uiButton({
+    label: t('comment.cmd.save'),
+    role: 'primary',
+    size: 's',
+    onClick: () => {
+      runCommentCommand('comment.save', host);
+    },
+  });
+  save.dataset['action'] = 'save';
+
+  // Клик по кнопке не должен снимать фокус/выделение редактора до обработчика:
+  // иначе `blur` сохранит правку раньше, чем «Отмена» её отменит (как у строк
+  // контекстного меню, `guardCommentMenuFocus`).
+  for (const btn of [edit, cancel, save]) {
+    btn.addEventListener('mousedown', (event) => event.preventDefault());
+  }
+
+  const root = div(COMMENT_ACTIONS_CLASS);
+  root.append(edit, cancel, save);
+  const setEditing = (editing: boolean): void => {
+    edit.hidden = editing;
+    cancel.hidden = !editing;
+    save.hidden = !editing;
+  };
+  setEditing(false);
+  return { root, setEditing };
 }
 
 /* ------------------------------------------------------------------ *

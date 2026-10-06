@@ -25,6 +25,7 @@ import { bindWikiCreateContext } from '../lib/wiki-create-context.js';
 import {
   buildCommentMenuItems,
   buildCommentToolbar,
+  createCommentModeActions,
   enterCommentEdit,
   guardCommentMenuFocus,
   type CommentCommandHost,
@@ -215,6 +216,13 @@ export function createMarkdownField(opts: {
       }
       if (command === 'comment.findNext') return search.next();
       if (command === 'comment.findPrevious') return search.previous();
+      if (command === 'comment.edit') {
+        // Вход в правку кнопкой под полем — тот же путь, что и двойной клик
+        // (элемент a0e5bc2e). Действует в просмотре; в правке не нужен.
+        if (editing) return false;
+        showEdit();
+        return true;
+      }
       if (!editing || editor === null) return false;
       if (command === 'comment.cancel') {
         cancelled = true;
@@ -231,6 +239,14 @@ export function createMarkdownField(opts: {
     // Состояние кнопок тулбара обновляется по изменениям выделения/текста.
     subscribe: (listener) => editor?.subscribe(listener) ?? (() => {}),
   };
+
+  /**
+   * Кнопки режима под полем (элемент a0e5bc2e, задача 3901f07e): в просмотре —
+   * всплывающая «Редактировать», в правке — «Отменить»/«Сохранить». Вид
+   * переключает `showView`/`showEdit`, действия идут командой поля (тот же путь,
+   * что Esc/Ctrl+Enter).
+   */
+  const modeActions = createCommentModeActions(commandHost);
 
   /**
    * Включает контекст сочетаний поля, пока поле — текущий элемент (фокус).
@@ -346,6 +362,8 @@ export function createMarkdownField(opts: {
     const wasEditing = editor !== null && !area.classList.contains('hidden');
     editing = false;
     deactivateFieldKeys();
+    root.classList.remove('md-field--editing');
+    modeActions.setEditing(false);
     area.classList.add('hidden');
     view.classList.remove('hidden');
     renderView();
@@ -500,6 +518,8 @@ export function createMarkdownField(opts: {
     view.classList.add('hidden');
     area.classList.remove('hidden');
     editing = true;
+    root.classList.add('md-field--editing');
+    modeActions.setEditing(true);
     mountEditor();
     activateFieldKeys();
     search.refresh();
@@ -547,7 +567,7 @@ export function createMarkdownField(opts: {
     });
   }
 
-  root.append(search.element, view, area);
+  root.append(search.element, view, area, modeActions.root);
   showView();
   return root;
 }

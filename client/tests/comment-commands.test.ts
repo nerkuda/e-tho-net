@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
 import { ShimElement } from './dom-shim.js';
+import { ru } from '../src/renderer/lib/locales/ru.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -233,5 +234,73 @@ describe('команды поля комментария (editor/comment-command
     const second = keyEvent({ key: 'b', code: 'KeyB', ctrlKey: true });
     assert.equal(keymap.dispatchKeyEvent(second as KeyboardEvent), false);
     assert.equal(calls, 1, 'вне правки контекст поля снят');
+  });
+});
+
+/**
+ * Кнопки режима под полем комментария (0.12.1, задача 3901f07e, ТП1; элемент
+ * интерфейса `a0e5bc2e`): «Редактировать» в просмотре, «Отменить»/«Сохранить»
+ * в правке. Кнопки — словарь `lib/ui`; действия идут командой поля, тем же
+ * путём, что сочетания Esc/Ctrl+Enter.
+ */
+describe('кнопки режима под полем (createCommentModeActions)', () => {
+  beforeEach(async () => {
+    installShim();
+    mod = (await import('../src/renderer/editor/comment-commands.js')) as Module;
+    mod.commentCommandsInternals.reset();
+  });
+
+  function actionsHost(seen: string[]): any {
+    return {
+      getEditor: () => null,
+      root: new ShimElement('div'),
+      runFieldCommand: (command: string): boolean => {
+        seen.push(command);
+        return true;
+      },
+    };
+  }
+
+  it('в просмотре видна «Редактировать», кнопки правки скрыты', () => {
+    const actions = mod.createCommentModeActions(actionsHost([]) as any);
+    const root = actions.root as unknown as ShimElement;
+    const edit = root.querySelector('[data-action="edit"]')!;
+    const cancel = root.querySelector('[data-action="cancel"]')!;
+    const save = root.querySelector('[data-action="save"]')!;
+
+    assert.equal(edit.hidden, false, '«Редактировать» видна в просмотре');
+    assert.equal(cancel.hidden, true, '«Отменить» скрыта в просмотре');
+    assert.equal(save.hidden, true, '«Сохранить» скрыта в просмотре');
+
+    // Строки и роли — из словарей (требования edc5faea, 0e5ff1c6): самодельных
+    // классов и литералов быть не должно.
+    assert.equal(edit.textContent, ru['comment.action.edit']);
+    assert.equal(cancel.textContent, ru['comment.cmd.cancel']);
+    assert.equal(save.textContent, ru['comment.cmd.save']);
+    assert.ok(edit.className.split(' ').includes('ui-btn--secondary'));
+    assert.ok(cancel.className.split(' ').includes('ui-btn--secondary'));
+    assert.ok(save.className.split(' ').includes('ui-btn--primary'));
+  });
+
+  it('в правке видны «Отменить»/«Сохранить», «Редактировать» скрыта', () => {
+    const actions = mod.createCommentModeActions(actionsHost([]) as any);
+    const root = actions.root as unknown as ShimElement;
+    actions.setEditing(true);
+    assert.equal(root.querySelector('[data-action="edit"]')!.hidden, true);
+    assert.equal(root.querySelector('[data-action="cancel"]')!.hidden, false);
+    assert.equal(root.querySelector('[data-action="save"]')!.hidden, false);
+  });
+
+  it('клик исполняет команду поля через диспетчер (единый путь с Esc/Ctrl+Enter)', () => {
+    const seen: string[] = [];
+    const actions = mod.createCommentModeActions(actionsHost(seen) as any);
+    const root = actions.root as unknown as ShimElement;
+
+    root.querySelector('[data-action="edit"]')!.click();
+    actions.setEditing(true);
+    root.querySelector('[data-action="cancel"]')!.click();
+    root.querySelector('[data-action="save"]')!.click();
+
+    assert.deepEqual(seen, ['comment.edit', 'comment.cancel', 'comment.save']);
   });
 });
