@@ -23,14 +23,13 @@
  *    after-anchor. Offsets are absolute positions in the very string passed to
  *    {@link renderMarkdown} (the caller's `body_md`, CRLF included).
  * 2. **View side.** {@link sourceOffsetFromCaret} turns a DOM caret position
- *    into a `body_md` offset. Inside an annotated leaf it is
- *    `range.start + <characters before the caret>`, corrected by
- *    {@link MD_SOURCE_SHIFT_ATTR} when the leaf contains escapes/entities
- *    (see below); at block level it anchors on the nearest preceding
- *    `data-md-after` (`after + <characters since that anchor>`), so markdown
- *    markup of preceding constructs does not disturb the count. The package
- *    stays DOM-free — the helper works on a minimal structural interface a real
- *    `Element`/`Text` satisfies.
+ *    into a `body_md` offset. It anchors on the nearest preceding
+ *    `data-md-after` (`after + <characters since that anchor>`), or on the
+ *    construct start when there is none, so markdown markup of preceding
+ *    constructs does not disturb the count; escapes/entities are corrected by
+ *    {@link MD_SOURCE_SHIFT_ATTR} (see below). The package stays DOM-free — the
+ *    helper works on a minimal structural interface a real `Element`/`Text`
+ *    satisfies.
  *
  * Granularity. Block ranges are exact for their content start (line-leading
  * markup — heading hashes, list bullets, quotes, task boxes — is skipped).
@@ -51,20 +50,33 @@
  *
  * Escapes and HTML entities inside a construct (`**a \* b**`, `**a &amp; b**`)
  * render shorter than their source slice, so a plain `range.start + <chars>`
- * leaf mapping would drift (задача `86598085`; ошибка `1b9cf949`). markdown-it
- * keeps those runs as `text_special` tokens — `markup` = the whole source run,
- * `content` = the rendered text — until its `text_join` core rule merges them.
- * Our core rule runs right after `inline` (before `text_join`), so it records
- * the difference as {@link MD_SOURCE_SHIFT_ATTR} on the leaf element: a list of
- * `<renderedBoundary>:<delta>` entries the resolver adds once the caret passes
- * the shortened run. No extra element wraps the text — only one more `data-`
- * attribute under `sourceMap`, so the default output stays byte-for-byte.
+ * mapping would drift (задача `86598085`; ошибки `1b9cf949`, `d2ad1345`).
+ * markdown-it keeps those runs as `text_special` tokens — `markup` = the whole
+ * source run, `content` = the rendered text — until its `text_join` core rule
+ * merges them. Our core rule runs right after `inline` (before `text_join`), so
+ * it records the difference as {@link MD_SOURCE_SHIFT_ATTR} on ANY annotated
+ * inline construct, leaf or not: a list of `<renderedBoundary>:<delta>` entries.
+ * The resolver adds a delta once the caret moves past the shortened run — in
+ * the leaf case from the construct start, in the anchor case only for entries
+ * strictly after the nearest preceding `data-md-after` anchor (so a shortened
+ * run absorbed by an anchor is not counted twice, ошибка `d2ad1345`). To keep
+ * the rendered boundaries exact for an anchored construct, the shift map also
+ * counts the visible text of nested `code_inline` / `wiki_link` children (their
+ * text is not a `text` token of the construct). No extra element wraps the
+ * text — only one more `data-` attribute under `sourceMap`, so the default
+ * output stays byte-for-byte.
  *
- * Honest limit: a markdown link or image inside a construct (`**[a](u)**`)
- * renders as its label, which is neither annotated nor counted as a text run,
- * so `range.start + <chars>` (and the block-anchor fallback) stays approximate
- * there — the case the leaf/ancestor model cannot cover without annotating
- * links/images (out of scope of the source map, задача `ba68771d`).
+ * Honest limits (out of scope of the source map, задача `ba68771d`):
+ *
+ * - A markdown link or image inside a construct (`**[a](u)**`) renders as its
+ *   label, which is neither annotated nor counted as a text run, so the
+ *   mapping stays approximate there.
+ * - An inline HTML comment `<!-- … -->` inside a construct is dropped by the
+ *   `html_comment` inline rule WITHOUT emitting a token, so its source run is
+ *   invisible to the token-based shift map and no delta can be derived; the
+ *   construct stays leaf and the click after the comment drifts by the comment
+ *   length. Compensating it would need a hidden marker token (a renderer
+ *   change) — not done here (замечание верификатора ошибки `1b9cf949`).
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -79,10 +91,10 @@ export const MD_SOURCE_AFTER_ATTR = 'data-md-after';
 /** `data-`attribute marking a node whose text is a verbatim source slice. */
 export const MD_SOURCE_LEAF_ATTR = 'data-md-leaf';
 /**
- * `data-`attribute on a leaf carrying its rendered→source shift map: a
- * comma-separated list of `<renderedBoundary>:<delta>` entries compensating
- * escapes / HTML entities whose source run is longer than the rendered text
- * (задача `86598085`, ошибка `1b9cf949`).
+ * `data-`attribute on an annotated inline construct carrying its rendered→source
+ * shift map: a comma-separated list of `<renderedBoundary>:<delta>` entries
+ * compensating escapes / HTML entities whose source run is longer than the
+ * rendered text (задача `86598085`, ошибки `1b9cf949`, `d2ad1345`).
  */
 export const MD_SOURCE_SHIFT_ATTR = 'data-md-shift';
 
@@ -288,18 +300,22 @@ function hasAnnotatedDescendant(children: readonly Token[], i: number): boolean 
 }
 
 /**
- * Rendered→source shift map of a leaf construct: markdown-it renders escapes
- * (`\*` → `*`) and HTML entities (`&amp;` → `&`) as `text_special` tokens whose
- * `markup` (source run) is longer than their `content` (rendered text), so the
- * leaf's rendered length is smaller than its source slice. Returns ascending
- * `{ at, delta }` entries — `at` is the rendered offset right after the
- * shortened run, `delta` the number of source characters hidden there.
+ * Rendered→source shift map of an annotated inline construct: markdown-it
+ * renders escapes (`\*` → `*`) and HTML entities (`&amp;` → `&`) as
+ * `text_special` tokens whose `markup` (source run) is longer than their
+ * `content` (rendered text), so the construct's rendered length is smaller than
+ * its source slice. Returns ascending `{ at, delta }` entries — `at` is the
+ * rendered offset right after the shortened run, `delta` the number of source
+ * characters hidden there.
  *
- * Only `text`/`text_special` runs are counted; a link/image label inside a leaf
- * is not a verbatim slice and stays an honest limit of the model (see the
- * module head).
+ * The rendered cursor counts every run that contributes visible text to the
+ * construct: `text` / `text_special` (including those of nested constructs, as
+ * the loop walks all descendants) plus nested `code_inline` / `wiki_link`
+ * children, whose visible text is held by the token itself rather than by a
+ * `text` child. Constructs that own none of these (a link/image label, an HTML
+ * comment) are honest limits (see the module head).
  */
-function leafShiftEntries(
+function constructShiftEntries(
   children: readonly Token[],
   i: number,
 ): Array<{ at: number; delta: number }> {
@@ -309,9 +325,27 @@ function leafShiftEntries(
   for (let j = i + 1; j < children.length; j++) {
     const other = children[j]!;
     if (other.level <= level) break;
-    if (other.type !== 'text' && other.type !== 'text_special') continue;
-    const renderedLength = other.content.length;
-    const sourceLength = other.type === 'text_special' ? other.markup.length : renderedLength;
+    let renderedLength = 0;
+    let sourceLength = 0;
+    if (other.type === 'text') {
+      renderedLength = other.content.length;
+      sourceLength = renderedLength;
+    } else if (other.type === 'text_special') {
+      renderedLength = other.content.length;
+      sourceLength = other.markup.length;
+    } else if (other.type === 'code_inline') {
+      // The code span's rendered text is its token content (verbatim).
+      renderedLength = other.content.length;
+      sourceLength = renderedLength;
+    } else if (other.type === 'wiki_link') {
+      // The wiki-link's visible text is its verbatim source slice, so the
+      // resolved range length equals the rendered length.
+      const range = (other.meta as RangeCarrier | null)?.mdRange;
+      renderedLength = range === undefined ? 0 : range.end - range.start;
+      sourceLength = renderedLength;
+    } else {
+      continue;
+    }
     rendered += renderedLength;
     if (sourceLength > renderedLength) {
       entries.push({ at: rendered, delta: sourceLength - renderedLength });
@@ -485,6 +519,9 @@ function stampRanges(state: { src: string; tokens: Token[] }, input: string): vo
     // A construct is a leaf only when it owns no annotated descendant: with a
     // nested construct (`==a [[Мысль]] b==`, `**a *b* c**`) the verbatim
     // assumption breaks, and mapping must go through the descendant anchors.
+    // The shift map, however, is attached to ANY annotated construct: an
+    // escape/entity in a non-leaf construct drifts the anchor-branch fallback
+    // too, so the resolver compensates it there as well (ошибка `d2ad1345`).
     for (let i = 0; i < children.length; i++) {
       const child = children[i]!;
       if (!LEAF_INLINE_TYPES.has(child.type)) continue;
@@ -492,10 +529,10 @@ function stampRanges(state: { src: string; tokens: Token[] }, input: string): vo
       if (meta?.mdRange === undefined) continue;
       if (!hasAnnotatedDescendant(children, i)) {
         child.attrSet(MD_SOURCE_LEAF_ATTR, '1');
-        const shifts = leafShiftEntries(children, i);
-        if (shifts.length > 0) {
-          child.attrSet(MD_SOURCE_SHIFT_ATTR, shifts.map((e) => `${e.at}:${e.delta}`).join(','));
-        }
+      }
+      const shifts = constructShiftEntries(children, i);
+      if (shifts.length > 0) {
+        child.attrSet(MD_SOURCE_SHIFT_ATTR, shifts.map((e) => `${e.at}:${e.delta}`).join(','));
       }
     }
   }
@@ -898,11 +935,13 @@ function collectAnchors(ancestor: SourceMapNode): RenderedAnchor[] {
  * Converts a DOM caret position (`node` + character `offset` inside it) into an
  * offset in the markdown source, using the nearest annotated ancestor.
  *
- * - Inside an annotated leaf construct the source offset is
- *   `range.start + <characters before the caret>`, clamped to the range.
- * - At block level the result anchors on the nearest preceding
- *   `data-md-after` descendant: `anchor.after + <characters since the anchor>`,
- *   so markdown markup of preceding constructs does not disturb the count.
+ * The mapping anchors on the nearest preceding `data-md-after` descendant — or
+ * on the construct start when there is none — and adds the characters rendered
+ * since the anchor, so markdown markup of preceding constructs does not disturb
+ * the count. Escapes/entities shorten the rendered text, so the
+ * {@link MD_SOURCE_SHIFT_ATTR} deltas whose boundary falls strictly after the
+ * anchor and no later than the caret are added on top (for a leaf construct,
+ * i.e. with no anchor, the anchor is the construct start, boundary `0`).
  *
  * Returns `null` when no annotated ancestor exists (mapping not rendered).
  */
@@ -913,30 +952,32 @@ export function sourceOffsetFromCaret(
   const found = nearestSourceRange(node);
   if (found === null || node === null) return found?.range.start ?? null;
 
-  const isLeaf =
-    found.node.nodeType === ELEMENT_NODE &&
-    typeof found.node.getAttribute === 'function' &&
-    found.node.getAttribute(MD_SOURCE_LEAF_ATTR) === '1';
   const caret = charsBeforeCaret(node, offset, found.node);
-  if (isLeaf) {
-    // Compensate escapes/entities: the source run is longer than the rendered
-    // text, so the shift starts once the caret passes the shortened run.
-    let shift = 0;
-    const raw = typeof found.node.getAttribute === 'function'
-      ? found.node.getAttribute(MD_SOURCE_SHIFT_ATTR)
-      : null;
-    for (const entry of parseShiftEntries(raw)) {
-      if (entry.at <= caret) shift += entry.delta;
-    }
-    return clamp(found.range.start + caret + shift, found.range);
-  }
 
+  // Nearest preceding after-anchor (none → anchor on the construct start).
+  let baseRendered = 0;
+  let baseSource = found.range.start;
   let best: RenderedAnchor | null = null;
   for (const anchor of collectAnchors(found.node)) {
     if (anchor.endRendered <= caret && (best === null || anchor.endRendered >= best.endRendered)) {
       best = anchor;
     }
   }
-  if (best === null) return clamp(found.range.start + caret, found.range);
-  return clamp(best.after + (caret - best.endRendered), found.range);
+  if (best !== null) {
+    baseRendered = best.endRendered;
+    baseSource = best.after;
+  }
+
+  // Compensate escapes/entities: the source run is longer than the rendered
+  // text, so a delta applies once the caret passes the shortened run — but only
+  // for runs after the base anchor, since an anchor already absorbs the shift
+  // of everything up to it (and a nested construct's own map covers its inside).
+  let shift = 0;
+  const raw = typeof found.node.getAttribute === 'function'
+    ? found.node.getAttribute(MD_SOURCE_SHIFT_ATTR)
+    : null;
+  for (const entry of parseShiftEntries(raw)) {
+    if (entry.at > baseRendered && entry.at <= caret) shift += entry.delta;
+  }
+  return clamp(baseSource + (caret - baseRendered) + shift, found.range);
 }

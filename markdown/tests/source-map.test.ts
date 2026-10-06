@@ -11,6 +11,7 @@ import {
   ELEMENT_NODE,
   MD_SOURCE_END_ATTR,
   MD_SOURCE_LEAF_ATTR,
+  MD_SOURCE_SHIFT_ATTR,
   MD_SOURCE_START_ATTR,
   TEXT_NODE,
   computeLineStarts,
@@ -638,6 +639,89 @@ test('несколько escape/entity внутри одной конструк�
   const bs = String.fromCharCode(92);
   const src = '**' + bs + '* &amp; ' + bs + '* z**';
   assert.equal(clickOffset(src, 'z', 'z'), src.indexOf('z'));
+});
+
+// ---------------------------------------------------------------------------
+// Ошибка d2ad1345: сдвиг на НЕ-leaf (вложенной) инлайновой конструкции
+// ---------------------------------------------------------------------------
+
+test('не-leaf конструкция несёт карту сдвига и не помечена листом', () => {
+  const bs = String.fromCharCode(92);
+  const html = renderMarkdown('**a ==c== b ' + bs + '* d**', { sourceMap: true });
+  const strong = /<strong([^>]*)>/.exec(html)?.[1] ?? '';
+  assert.ok(strong.includes(MD_SOURCE_SHIFT_ATTR), html);
+  assert.ok(!strong.includes(MD_SOURCE_LEAF_ATTR), html);
+});
+
+test('escape ПОСЛЕ вложенной конструкции: клик точен (d2ad1345)', () => {
+  const bs = String.fromCharCode(92);
+  // `**a ==c== b \* d**` — escape в «хвосте» после вложенного ==c==.
+  const src = '**a ==c== b ' + bs + '* d**';
+  assert.equal(src.indexOf('d'), 15);
+  assert.equal(clickOffset(src, 'd', 'd'), 15);
+  // до и внутри вложенной конструкции клики по-прежнему точны
+  assertClickInText(src, 'a ', 'a');
+  assertClickInText(src, 'c', 'c');
+  assertClickInText(src, ' b ', 'b');
+});
+
+test('escape ПЕРЕД вложенной конструкцией: клик точен (d2ad1345)', () => {
+  const bs = String.fromCharCode(92);
+  // `**b \* d ==c==**` — escape до единственного анкера, база — начало strong.
+  const src = '**b ' + bs + '* d ==c==**';
+  assert.equal(src.indexOf('d'), 7);
+  assert.equal(clickOffset(src, 'd', 'd'), 7);
+  assertClickInText(src, 'b ', 'b');
+  assertClickInText(src, 'c', 'c');
+});
+
+test('escape в не-leaf em-конструкции: клик точен (d2ad1345)', () => {
+  const bs = String.fromCharCode(92);
+  const src = '**a _x_ b ' + bs + '* d**';
+  assert.equal(src.indexOf('d'), 13);
+  assert.equal(clickOffset(src, 'd', 'd'), 13);
+});
+
+test('HTML-entity в не-leaf конструкции: клик после неё точен (d2ad1345)', () => {
+  const src = '**a ==c== b &amp; d**';
+  assert.equal(clickOffset(src, 'd', 'd'), src.indexOf('d'));
+  assertClickInText(src, 'a ', 'a');
+  assertClickInText(src, 'c', 'c');
+});
+
+test('escape внутри вложенной конструкции не задваивается внешним анкером (d2ad1345)', () => {
+  const bs = String.fromCharCode(92);
+  const src = '**a ' + bs + '* b ==c' + bs + '*d== e**';
+  assert.equal(src.indexOf('e'), 18);
+  // клик после вложенной конструкции идёт через её анкер: сдвиг внутри уже
+  // поглощён анкером и повторно не прибавляется.
+  assert.equal(clickOffset(src, 'e', 'e'), 18);
+  // внутри вложенной конструкции — её собственная карта сдвига
+  assert.equal(clickOffset(src, 'c*d', 'd'), src.indexOf('d', src.indexOf('c')));
+  assertClickInText(src, 'b ', 'b');
+});
+
+test('code_inline внутри конструкции: граница сдвига считается с его текстом', () => {
+  const bs = String.fromCharCode(92);
+  // Без учёта видимого текста code_inline граница escape упала бы до её анкера
+  // и сдвиг не применился бы.
+  const src = '**`xxxxx` ' + bs + '* b**';
+  assert.equal(clickOffset(src, 'b', 'b'), src.indexOf('b'));
+});
+
+test('wiki-ссылка внутри конструкции: граница сдвига считается с её текстом', () => {
+  const bs = String.fromCharCode(92);
+  const src = '**a [[Мысль]] b ' + bs + '* c**';
+  assert.equal(clickOffset(src, 'c', 'c'), src.indexOf('c'));
+});
+
+test('байт-паритет: не-leaf конструкции с escape вне sourceMap не меняются', () => {
+  const bs = String.fromCharCode(92);
+  assert.equal(
+    renderMarkdown('**a ==c== b ' + bs + '* d**'),
+    '<p><strong>a <mark>c</mark> b * d</strong></p>\n',
+  );
+  assert.equal(renderMarkdown('**b ' + bs + '* d ==c==**'), '<p><strong>b * d <mark>c</mark></strong></p>\n');
 });
 
 test('ограничение: markdown-ссылка внутри конструкции смещает leaf-клик', () => {
