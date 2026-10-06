@@ -13,6 +13,10 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
+import { parseTransclusions } from '@etn/markdown';
+
+import type { TransclusionTextPort } from '../src/renderer/editor/comment-format.js';
+
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -86,6 +90,9 @@ const FORMAT_IDS = [
   'comment.copy',
   'comment.cut',
   'comment.paste',
+  'comment.copyAsText',
+  'comment.cutAsText',
+  'comment.pasteAsText',
 ];
 
 describe('comment-format: регистрация тел команд', () => {
@@ -95,6 +102,7 @@ describe('comment-format: регистрация тел команд', () => {
     commands.commentCommandsInternals.reset();
     format = (await import('../src/renderer/editor/comment-format.js')) as Format;
     format.setCommentClipboardPort(null);
+    format.setTransclusionTextPort(null);
     format.installCommentFormatCommands();
   });
 
@@ -182,5 +190,169 @@ describe('comment-format: регистрация тел команд', () => {
 
   it('расширение перекрытия собирается без ошибок', () => {
     assert.notEqual(format.commentFieldKeymapExtension(), undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Команды «как текст» с разворотом трансклюзий (ТП2, задача e9f553e5)
+// ---------------------------------------------------------------------------
+
+const SRC = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+
+/** Сливает микрозадачи цепочки async-команд. */
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** Порт развёртки-заглушка: `![[…]]`-ссылки заменяются текстом из карты. */
+function stubTextPort(bodies: Record<string, string>): TransclusionTextPort {
+  return {
+    expand: async (text) => {
+      let out = '';
+      let last = 0;
+      const re = /!\[\[#([0-9a-f-]+)(?:#([^\]]*))?\]\]/g;
+      for (const match of text.matchAll(re)) {
+        out += text.slice(last, match.index);
+        out += bodies[match[1]!.toLowerCase()] ?? '';
+        last = match.index! + match[0].length;
+      }
+      out += text.slice(last);
+      return out;
+    },
+  };
+}
+
+describe('comment-format: команды «как текст» (e9f553e5)', () => {
+  beforeEach(async () => {
+    installShim();
+    commands = (await import('../src/renderer/editor/comment-commands.js')) as Commands;
+    commands.commentCommandsInternals.reset();
+    format = (await import('../src/renderer/editor/comment-format.js')) as Format;
+    format.setCommentClipboardPort(null);
+    format.setTransclusionTextPort(null);
+    format.installCommentFormatCommands();
+  });
+
+  it('копировать как текст пишет в буфер развёрнутое содержимое без ссылок', async () => {
+    const written: string[] = [];
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(''),
+      writeText: (text) => {
+        written.push(text);
+        return Promise.resolve();
+      },
+    });
+    format.setTransclusionTextPort(stubTextPort({ [SRC]: 'AA' }));
+
+    const source = `до ![[#${SRC}]] после`;
+    const editor = fakeEditor(source, 0, source.length);
+    assert.equal(commands.runCommentCommand('comment.copyAsText', host(editor)), true);
+    await flush();
+
+    assert.deepEqual(written, ['до AA после']);
+    assert.ok(!written[0]!.includes('!['), 'ссылок-трансклюзий в буфере нет');
+    assert.equal(editor.edits.length, 0, 'копирование документ не меняет');
+  });
+
+  it('копировать как текст без выделения недоступно и в буфер не пишет', async () => {
+    const written: string[] = [];
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(''),
+      writeText: (text) => {
+        written.push(text);
+        return Promise.resolve();
+      },
+    });
+    format.setTransclusionTextPort(stubTextPort({}));
+    const editor = fakeEditor('x', 0, 0);
+    assert.equal(
+      commands.commentCommandState('comment.copyAsText', editor.snapshot()).disabled,
+      true,
+    );
+    commands.runCommentCommand('comment.copyAsText', host(editor));
+    await flush();
+    assert.deepEqual(written, []);
+  });
+
+  it('вырезать как текст пишет развёртку и удаляет выделение', async () => {
+    const written: string[] = [];
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(''),
+      writeText: (text) => {
+        written.push(text);
+        return Promise.resolve();
+      },
+    });
+    format.setTransclusionTextPort(stubTextPort({ [SRC]: 'тело' }));
+
+    const source = `x ![[#${SRC}]] y`;
+    const editor = fakeEditor(source, 2, source.length - 2);
+    commands.runCommentCommand('comment.cutAsText', host(editor));
+    await flush();
+
+    assert.deepEqual(written, ['тело']);
+    assert.deepEqual(editor.edits[0].changes, [{ from: 2, to: source.length - 2, insert: '' }]);
+    assert.deepEqual(editor.edits[0].selection, { anchor: 2, head: 2 });
+  });
+
+  it('вставить как текст вставляет содержимое буфера с разворотом трансклюзий', async () => {
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(`a ![[#${SRC}]] b`),
+      writeText: () => Promise.resolve(),
+    });
+    format.setTransclusionTextPort(stubTextPort({ [SRC]: 'BBB' }));
+
+    const editor = fakeEditor('[]', 1, 1);
+    assert.equal(commands.runCommentCommand('comment.pasteAsText', host(editor)), true);
+    await flush();
+
+    assert.deepEqual(editor.edits[0].changes, [{ from: 1, to: 1, insert: 'a BBB b' }]);
+    assert.deepEqual(editor.edits[0].selection, { anchor: 8, head: 8 });
+  });
+
+  it('вставить как текст проглатывает неразрешимую ссылку (пустой результат — без правки)', async () => {
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(`![[#${SRC}]]`),
+      writeText: () => Promise.resolve(),
+    });
+    format.setTransclusionTextPort(stubTextPort({}));
+
+    const editor = fakeEditor('[]', 1, 1);
+    commands.runCommentCommand('comment.pasteAsText', host(editor));
+    await flush();
+    assert.equal(editor.edits.length, 0);
+  });
+
+  it('сбой развёртки не теряет текст: копируется исходное выделение', async () => {
+    const written: string[] = [];
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(''),
+      writeText: (text) => {
+        written.push(text);
+        return Promise.resolve();
+      },
+    });
+    format.setTransclusionTextPort({ expand: () => Promise.reject(new Error('нет сети')) });
+
+    const source = `a ![[#${SRC}]] b`;
+    commands.runCommentCommand('comment.copyAsText', host(fakeEditor(source, 0, source.length)));
+    await flush();
+    assert.deepEqual(written, [source]);
+  });
+
+  it('простая вставка оставляет исходник ссылки — он распознаётся как трансклюзия', async () => {
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(`![[#${SRC}]]`),
+      writeText: () => Promise.resolve(),
+    });
+    const editor = fakeEditor('', 0, 0);
+    commands.runCommentCommand('comment.paste', host(editor));
+    await flush();
+
+    const inserted = editor.edits[0].changes[0].insert as string;
+    assert.equal(inserted, `![[#${SRC}]]`, 'исходник вставляется дословно');
+    assert.equal(
+      parseTransclusions(inserted).length,
+      1,
+      'вставленный исходник распознаётся единым парсером как трансклюзия',
+    );
   });
 });

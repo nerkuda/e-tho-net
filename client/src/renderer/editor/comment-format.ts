@@ -13,6 +13,11 @@
  *     через `MdEditorCallbacks.extraExtensions`. `defaultKeymap` CM6 НЕ
  *     заменяется: иначе теряются `moveLineUp/Down`, `Mod-i`, `Shift-Mod-k`,
  *     `Escape` и прочие штатные привязки (хроника задач `2ec4058b`/`e7bf87e3`).
+ *
+ * С ТП2 здесь же живут тела команд «как текст» (задача `e9f553e5`): простые
+ * копировать/вырезать/вставить и их варианты с разворотом трансклюзий через
+ * {@link TransclusionTextPort} (разбор — в `@etn/markdown`, резолвер — в
+ * `transclusion.ts`).
  */
 
 import { completionStatus } from '@codemirror/autocomplete';
@@ -22,6 +27,7 @@ import { type EditorView, keymap } from '@codemirror/view';
 import { COMMENT_KEYMAP_DEFAULTS, effectiveChord } from '../lib/keymap.js';
 import { registerCommentCommand, runCommentCommand } from './comment-commands.js';
 import { registerCommentHotkeysDialog } from './comment-hotkeys-dialog.js';
+import { expandTransclusionsForClipboard } from './transclusion.js';
 import {
   blockMarker,
   canMoveLine,
@@ -76,6 +82,34 @@ export function setCommentClipboardPort(port: CommentClipboardPort | null): void
 /** Действующий порт буфера обмена. */
 export function commentClipboard(): CommentClipboardPort {
   return clipboardPort ?? systemClipboard();
+}
+
+/* ------------------------------------------------------------------ *
+ * Порт развёртки трансклюзий для команд «как текст» (ТП2, задача e9f553e5).
+ * ------------------------------------------------------------------ */
+
+/**
+ * Разворачивает трансклюзии markdown-текста в чистый текст без ссылок и
+ * служебных маркеров. Тела команд «копировать/вырезать/вставить как текст»
+ * ходят через этот порт, а не через `@etn/markdown` напрямую, — так их
+ * поведение проверяется юнит-тестом без сети. Разбор и развёртку выполняет
+ * только `transclusion.ts` поверх единого рендерера (сторож
+ * `guard-markdown-single-renderer`).
+ */
+export interface TransclusionTextPort {
+  expand(text: string): Promise<string>;
+}
+
+let transclusionTextPort: TransclusionTextPort | null = null;
+
+/** Подменяет порт развёртки (тестовый шов); `null` — системная развёртка. */
+export function setTransclusionTextPort(port: TransclusionTextPort | null): void {
+  transclusionTextPort = port;
+}
+
+/** Действующий порт развёртки. */
+export function transclusionText(): TransclusionTextPort {
+  return transclusionTextPort ?? { expand: expandTransclusionsForClipboard };
 }
 
 /* ------------------------------------------------------------------ *
@@ -177,6 +211,7 @@ export function installCommentFormatCommands(): void {
   });
 
   registerClipboardCommands();
+  registerClipboardAsTextCommands();
   // Команда подменю настроек «Сочетания клавиш» открывает диалог настройки
   // (задача d534eb35); тело команды живёт в модуле диалога.
   registerCommentHotkeysDialog();
@@ -229,6 +264,84 @@ function registerClipboardCommands(): void {
             editor.applyEdit({
               changes: [{ from: snap.from, to: snap.to, insert: text }],
               selection: { anchor: caret, head: caret },
+            });
+          },
+          () => undefined,
+        );
+      return true;
+    },
+  });
+}
+
+/**
+ * Команды «как текст» (ТП2, задача `e9f553e5`): копировать/вырезать/вставить с
+ * разворотом трансклюзий. В отличие от простых копировать/вырезать/вставить,
+ * текст проходит через {@link TransclusionTextPort}: ссылки-трансклюзии
+ * заменяются содержимым источника, а нераскрытые/отсутствующие источники
+ * «проглатываются» — в буфере и тексте ссылок не остаётся. Простая вставка
+ * (`comment.paste`) исходник ссылки не трогает, поэтому вставленный исходник
+ * трансклюзии распознаётся редактором как трансклюзия.
+ */
+function registerClipboardAsTextCommands(): void {
+  /** Разворот с безопасным откатом: сбой развёртки не должен терять текст. */
+  const expanded = (text: string): Promise<string> =>
+    transclusionText()
+      .expand(text)
+      .catch(() => text);
+
+  registerCommentCommand('comment.copyAsText', {
+    run: (ctx) => {
+      const snap = ctx.editor.snapshot();
+      if (snap.from === snap.to) return true;
+      const selected = snap.text.slice(snap.from, snap.to);
+      void expanded(selected).then((text) =>
+        commentClipboard().writeText(text).catch(() => undefined),
+      );
+      return true;
+    },
+    state: (snap) => ({ disabled: snap.from === snap.to }),
+  });
+
+  registerCommentCommand('comment.cutAsText', {
+    run: (ctx) => {
+      const snap = ctx.editor.snapshot();
+      if (snap.from === snap.to) return true;
+      const selected = snap.text.slice(snap.from, snap.to);
+      // Удаляем выделение только при успешной записи в буфер — как в `comment.cut`.
+      void expanded(selected).then((text) =>
+        commentClipboard()
+          .writeText(text)
+          .then(
+            () => {
+              ctx.editor.applyEdit({
+                changes: [{ from: snap.from, to: snap.to, insert: '' }],
+                selection: { anchor: snap.from, head: snap.from },
+              });
+            },
+            () => undefined,
+          ),
+      );
+      return true;
+    },
+    state: (snap) => ({ disabled: snap.from === snap.to }),
+  });
+
+  registerCommentCommand('comment.pasteAsText', {
+    run: (ctx) => {
+      const editor = ctx.editor;
+      void commentClipboard()
+        .readText()
+        .then(
+          (text) => {
+            if (text === '') return;
+            void expanded(text).then((insert) => {
+              if (insert === '') return;
+              const snap = editor.snapshot();
+              const caret = snap.from + insert.length;
+              editor.applyEdit({
+                changes: [{ from: snap.from, to: snap.to, insert }],
+                selection: { anchor: caret, head: caret },
+              });
             });
           },
           () => undefined,

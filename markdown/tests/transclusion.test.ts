@@ -229,6 +229,61 @@ test('развёртка: предел глубины — константа 5',
 });
 
 // ---------------------------------------------------------------------------
+// Развёртка без маркеров — «как текст» (задача e9f553e5)
+// ---------------------------------------------------------------------------
+
+test('маркеры false: полный комментарий разворачивается без маркеров и без лишних строк', () => {
+  const md = `текст\n![[#${A}]]\nконец`;
+  const out = expandTransclusions(md, makeResolver({ [A]: 'тело A' }), { markers: false });
+  assert.equal(out, 'текст\nтело A\nконец');
+  assert.ok(!out.includes('etn:transclusion'), 'маркеры не просачиваются');
+});
+
+test('маркеры false: раздел разворачивается содержимым, ссылка проглатывается', () => {
+  const body = '## Раздел\nтело\n### Под\nпод\n## Другой\nчужое\n';
+  const out = expandTransclusions(`![[#${A}#Раздел]]`, makeResolver({ [A]: body }), { markers: false });
+  assert.equal(out, '## Раздел\nтело\n### Под\nпод');
+});
+
+test('маркеры false: нет источника — пусто (ссылка удалена)', () => {
+  const out = expandTransclusions(`до ![[#${A}]] после`, makeResolver({}), { markers: false });
+  assert.equal(out, 'до  после');
+});
+
+test('маркеры false: нет раздела — пусто', () => {
+  const out = expandTransclusions(`![[#${A}#Нет]]`, makeResolver({ [A]: '## Есть\nx' }), { markers: false });
+  assert.equal(out, '');
+});
+
+test('маркеры false: вложенность разворачивается, цикл и предел глубины гаснут', () => {
+  const nested = expandTransclusions(
+    `![[#${A}]]`,
+    makeResolver({ [A]: `A\n![[#${B}]]`, [B]: 'B' }),
+    { markers: false },
+  );
+  assert.equal(nested, 'A\nB');
+
+  const cyclic = expandTransclusions(
+    `![[#${A}]]`,
+    makeResolver({ [A]: `A\n![[#${B}]]`, [B]: `B\n![[#${A}]]` }),
+    { markers: false },
+  );
+  assert.equal(cyclic, 'A\nB\n', 'повтор ссылки в цепочке не разворачивается');
+
+  const ids = [A, B, C, D, E, F];
+  const bodies: Record<string, string> = {};
+  for (let i = 0; i < ids.length - 1; i++) bodies[ids[i]!] = `у${i + 1}\n![[#${ids[i + 1]}]]`;
+  bodies[F] = 'у6';
+  const deep = expandTransclusions(`![[#${A}]]`, makeResolver(bodies), { markers: false });
+  assert.equal(deep, 'у1\nу2\nу3\nу4\nу5\n', 'шестой уровень за пределом не разворачивается');
+});
+
+test('маркеры по умолчанию: вывод прежний (с маркерами)', () => {
+  const out = expandTransclusions(`![[#${A}]]`, makeResolver({ [A]: 'тело' }));
+  assert.ok(out.includes(`${PREFIX} begin source=${A} depth=1 -->`));
+});
+
+// ---------------------------------------------------------------------------
 // Блочная обёртка развёртки (задача a2b68d72, ADR c425202a)
 // ---------------------------------------------------------------------------
 

@@ -311,15 +311,17 @@ export function defaultTransclusionLoader(networkId: string): TransclusionSource
 }
 
 /**
- * Разворачивает текст ссылки, итеративно дозагружая источники. Рекурсия,
- * глубина (5) и защита от циклов — внутри `expandTransclusions`
- * (`@etn/markdown`); здесь лишь наполняем резолвер текстами и повторяем
- * развёртку, пока остаются неизвестные источники.
+ * Разворачивает текст, итеративно дозагружая источники. Рекурсия, глубина (5)
+ * и защита от циклов — внутри `expandTransclusions` (`@etn/markdown`); здесь
+ * лишь наполняем резолвер текстами и повторяем развёртку, пока остаются
+ * неизвестные источники. `markers: false` даёт текст без служебных маркеров
+ * границ (режим «как текст», задача `e9f553e5`).
  */
-async function expandWithLoader(
+async function expandRounds(
   raw: string,
   load: TransclusionSourceLoader,
-): Promise<{ text: string; top: TransclusionSource | null }> {
+  markers: boolean,
+): Promise<{ text: string; topId: string | null }> {
   const bodies = new Map<string, string | null>();
   const topId = parseTransclusions(raw)[0]?.sourceId ?? null;
   let text = raw;
@@ -335,7 +337,7 @@ async function expandWithLoader(
         ? { found: false, body_md: '' }
         : { found: true, body_md: body };
     };
-    text = expandTransclusions(raw, resolver);
+    text = expandTransclusions(raw, resolver, { markers });
     if (pending.size === 0) break;
     const fetched = await Promise.all(
       [...pending].map(async (id): Promise<readonly [string, string | null]> => {
@@ -345,8 +347,50 @@ async function expandWithLoader(
     );
     for (const [id, body] of fetched) bodies.set(id, body);
   }
+  return { text, topId };
+}
+
+/** Разворачивает текст ссылки с маркерами и подтягивает данные верхнего источника. */
+async function expandWithLoader(
+  raw: string,
+  load: TransclusionSourceLoader,
+): Promise<{ text: string; top: TransclusionSource | null }> {
+  const { text, topId } = await expandRounds(raw, load, true);
   const top = topId === null ? null : await load(topId);
   return { text, top };
+}
+
+/**
+ * Разворачивает трансклюзии в чистый текст БЕЗ ссылок и служебных маркеров —
+ * для команд «как текст» (ТП2, задача `e9f553e5`): контекстное меню «копировать/
+ * вырезать как текст» и «вставить как текст» делятся содержимым без ссылок.
+ * Разбор и развёртка — только через `@etn/markdown`; источник, который не
+ * найден, и нераскрытая ссылка просто «проглатываются» (в текст ничего не
+ * подставляется). Текст без трансклюзий возвращается как есть.
+ */
+export async function expandTransclusionsToText(
+  raw: string,
+  networkId: string,
+  load: TransclusionSourceLoader = defaultTransclusionLoader(networkId),
+): Promise<string> {
+  if (parseTransclusions(raw).length === 0) return raw;
+  const { text } = await expandRounds(raw, load, false);
+  return text;
+}
+
+/**
+ * Развёртка текста для команд «как текст»: сеть определяется самой функцией.
+ * Вне сети (список сетей, ранний доступ) и при сбое загрузки возвращает текст
+ * как есть — команда не должна молча терять выделение/буфер.
+ */
+export async function expandTransclusionsForClipboard(raw: string): Promise<string> {
+  const networkId = safeNetwork();
+  if (networkId === null) return raw;
+  try {
+    return await expandTransclusionsToText(raw, networkId);
+  } catch {
+    return raw;
+  }
 }
 
 /** Строит данные ссылки для отрисовки (развёртка и состояния ошибок). */

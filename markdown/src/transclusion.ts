@@ -77,6 +77,15 @@ export type TransclusionResolver = (
 export interface ExpandTransclusionsOptions {
   /** Depth cap; defaults to {@link TRANSCLUSION_MAX_DEPTH} (5). */
   maxDepth?: number;
+  /**
+   * Emit the ADR `85a7a01e` boundary markers around every expanded fragment.
+   * `true` (default) — the marker-wrapped form MCP and the client view consume.
+   * `false` — plain expanded text only: no boundary comments, no extra blank
+   * lines, and absent/skipped sources contribute nothing (their links are
+   * swallowed). Used by the client's «as text» clipboard commands (ТП2, задача
+   * `e9f553e5`), which reuse the single parser but must not leak markers.
+   */
+  markers?: boolean;
 }
 
 /** Half-open character range in the source markdown. */
@@ -284,6 +293,9 @@ function wrapBlock(source: string, start: number, end: number, block: string): s
  * reason=cycle` marker; one beyond the depth cap as `skip reason=depth_limit`;
  * an absent source (or an absent requested section) as `missing`.
  *
+ * With `markers: false` the same expansion emits plain text instead: boundary
+ * comments are dropped and the absent/skipped cases contribute nothing.
+ *
  * @throws when `source` is not a string.
  */
 export function expandTransclusions(
@@ -295,7 +307,8 @@ export function expandTransclusions(
     throw new Error('expandTransclusions: source must be a string');
   }
   const maxDepth = opts.maxDepth ?? TRANSCLUSION_MAX_DEPTH;
-  return expandLevel(source, resolveTransclusion, maxDepth, 1, []);
+  const markers = opts.markers ?? true;
+  return expandLevel(source, resolveTransclusion, maxDepth, 1, [], markers);
 }
 
 /** Expands one nesting level (`depth` is the level of the refs found in `text`). */
@@ -305,6 +318,7 @@ function expandLevel(
   maxDepth: number,
   depth: number,
   stack: readonly string[],
+  markers: boolean,
 ): string {
   const refs = parseTransclusions(text);
   if (refs.length === 0) return text;
@@ -312,7 +326,7 @@ function expandLevel(
   let last = 0;
   for (const ref of refs) {
     out += text.slice(last, ref.start);
-    out += expandRef(ref, text, resolveTransclusion, maxDepth, depth, stack);
+    out += expandRef(ref, text, resolveTransclusion, maxDepth, depth, stack, markers);
     last = ref.end;
   }
   out += text.slice(last);
@@ -327,28 +341,36 @@ function expandRef(
   maxDepth: number,
   depth: number,
   stack: readonly string[],
+  markers: boolean,
 ): string {
   const key = `${ref.sourceId}#${ref.section ?? ''}`;
   const marker = (body: string): string => wrapBlock(source, ref.start, ref.end, body);
+  // Plain form (`markers: false`): a marker-wrapped block collapses to its inner
+  // text; absent/skipped sources collapse to nothing — the link is swallowed.
+  const wrap = (markerBody: string, inner: string): string =>
+    markers ? marker(markerBody) : inner;
 
   if (depth > maxDepth) {
-    return marker(
+    return wrap(
       `<!-- ${TRANSCLUSION_MARKER_PREFIX} skip source=${ref.sourceId}` +
         ` depth=${depth} reason=depth_limit -->`,
+      '',
     );
   }
   if (stack.includes(key)) {
-    return marker(
+    return wrap(
       `<!-- ${TRANSCLUSION_MARKER_PREFIX} skip source=${ref.sourceId}` +
         ` depth=${depth} reason=cycle -->`,
+      '',
     );
   }
 
   const resolved = resolveTransclusion(ref.sourceId, ref.section ?? undefined);
   if (!resolved.found) {
-    return marker(
+    return wrap(
       `<!-- ${TRANSCLUSION_MARKER_PREFIX} missing source=${ref.sourceId}` +
         `${sectionAttr(ref.section)} reason=source -->`,
+      '',
     );
   }
 
@@ -356,9 +378,10 @@ function expandRef(
   if (ref.section !== null) {
     const section = extractSection(body, ref.section);
     if (section === null) {
-      return marker(
+      return wrap(
         `<!-- ${TRANSCLUSION_MARKER_PREFIX} missing source=${ref.sourceId}` +
           `${sectionAttr(ref.section)} reason=section -->`,
+        '',
       );
     }
     body = section;
@@ -367,11 +390,11 @@ function expandRef(
   const inner = expandLevel(body, resolveTransclusion, maxDepth, depth + 1, [
     ...stack,
     key,
-  ]);
+  ], markers);
   const begin =
     `<!-- ${TRANSCLUSION_MARKER_PREFIX} begin source=${ref.sourceId}` +
     `${sectionAttr(ref.section)} depth=${depth} -->`;
   const end =
     `<!-- ${TRANSCLUSION_MARKER_PREFIX} end source=${ref.sourceId} depth=${depth} -->`;
-  return marker(`${begin}\n${inner}\n${end}`);
+  return wrap(`${begin}\n${inner}\n${end}`, inner);
 }
