@@ -234,3 +234,178 @@ describe('контекст сочетаний панели поиска (editor/
     commentSearch.leaveCommentSearchKeys();
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Поиск и замена в правке — по ИСХОДНИКУ markdown (ошибка 3eb4d1d5).
+ * ------------------------------------------------------------------ */
+
+type Field = typeof import('../src/renderer/editor/markdown-field.js');
+type I18n = typeof import('../src/renderer/lib/i18n.js');
+
+/** Редактор-заглушка: держит markdown-исходник и записывает правки. */
+interface FakeEditor {
+  getValue(): string;
+  setSearchHighlight(highlight: unknown): void;
+  selectMatch(from: number, to: number): void;
+  applyEdit(edit: {
+    changes:
+      | { from: number; to: number; insert: string }
+      | ReadonlyArray<{ from: number; to: number; insert: string }>;
+  }): void;
+  readonly highlightCalls: unknown[];
+}
+
+function fakeEditor(initial: string): FakeEditor {
+  let value = initial;
+  const highlightCalls: unknown[] = [];
+  return {
+    getValue: () => value,
+    setSearchHighlight: (highlight) => {
+      highlightCalls.push(highlight);
+    },
+    selectMatch: () => undefined,
+    applyEdit: (edit) => {
+      const changes = Array.isArray(edit.changes) ? [...edit.changes] : [edit.changes];
+      // Правки применяются справа налево, чтобы смещения не сдвигались.
+      changes.sort((a, b) => b.from - a.from);
+      for (const change of changes) {
+        value = value.slice(0, change.from) + change.insert + value.slice(change.to);
+      }
+    },
+    get highlightCalls() {
+      return highlightCalls;
+    },
+  };
+}
+
+describe('панель поиска/замены в правке идёт по исходнику markdown (3eb4d1d5)', () => {
+  beforeEach(() => {
+    installShim();
+  });
+
+  async function panel(editor: FakeEditor | null, editing: boolean): Promise<{
+    controller: CommentSearchShape;
+    findInput: ShimElement;
+    replaceInput: ShimElement;
+    replaceButton: ShimElement;
+    replaceAllButton: ShimElement;
+    countLabel: ShimElement;
+    replaceRow: ShimElement;
+  }> {
+    const commentSearch = (await import(
+      '../src/renderer/editor/comment-search.js'
+    )) as CommentSearch;
+    const root = new ShimElement('div');
+    const view = new ShimElement('div');
+    root.append(view);
+    const controller = commentSearch.createCommentSearch({
+      root: root as unknown as HTMLElement,
+      view: view as unknown as HTMLElement,
+      getEditor: () => editor as unknown as import('../src/renderer/editor/md-editor.js').MdEditor | null,
+      isEditing: () => editing,
+      restoreFocus: () => undefined,
+      highlightPort: { set: () => undefined, clear: () => undefined },
+    });
+    root.append(controller.element as unknown as ShimElement);
+    const inputs = controller.element.querySelectorAll('input');
+    const buttons = controller.element.querySelectorAll('button');
+    return {
+      controller: controller as unknown as CommentSearchShape,
+      findInput: inputs[0]!,
+      replaceInput: inputs[1]!,
+      replaceButton: buttons[3]!,
+      replaceAllButton: buttons[4]!,
+      countLabel: controller.element.querySelector('.md-field-search__count')!,
+      replaceRow: controller.element.querySelectorAll('.md-field-search__row')[1]!,
+    };
+  }
+
+  /** Минимум панели, нужный тесту. */
+  interface CommentSearchShape {
+    element: ShimElement;
+    open(mode: 'find' | 'replace'): void;
+    isOpen(): boolean;
+  }
+
+  it('в правке находит текст, видимый только в исходнике (HTML-комментарий)', async () => {
+    const source = '# Заголовок\n\n<!-- служебный -->\n\nПовтор поиск поиск.';
+    // Просмотр HTML-комментарий скрывает — в его тексте «служебный» нет.
+    const editor = fakeEditor(source);
+    const p = await panel(editor, true);
+    p.controller.open('replace');
+
+    p.findInput.value = 'служебный';
+    p.findInput.emit('input');
+
+    const i18n = (await import('../src/renderer/lib/i18n.js')) as I18n;
+    assert.equal(p.countLabel.textContent, i18n.t('comment.search.count', [1, 1]));
+    assert.equal(p.replaceButton.disabled, false, 'замена доступна в правке');
+    assert.equal(p.replaceAllButton.disabled, false);
+
+    p.replaceInput.value = 'ОК';
+    p.replaceButton.click();
+    assert.match(editor.getValue(), /<!-- ОК -->/);
+    assert.doesNotMatch(editor.getValue(), /служебный/);
+  });
+
+  it('«Заменить всё» меняет все вхождения исходника', async () => {
+    const editor = fakeEditor('поиск и ПОИСК, поиск.');
+    const p = await panel(editor, true);
+    p.controller.open('replace');
+    p.findInput.value = 'поиск';
+    p.findInput.emit('input');
+    p.replaceInput.value = 'найдено';
+    p.replaceAllButton.click();
+    assert.equal(editor.getValue(), 'найдено и найдено, найдено.');
+  });
+
+  it('в просмотре строка замены не показывается, режим деградирует к поиску', async () => {
+    const p = await panel(null, false);
+    p.controller.open('replace');
+    assert.equal(p.replaceRow.hidden, true);
+    assert.equal(p.replaceButton.disabled, true);
+    assert.equal(p.replaceAllButton.disabled, true);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Коммит правки при уходе фокуса (ошибка 3eb4d1d5).
+ * ------------------------------------------------------------------ */
+
+describe('коммит правки при уходе фокуса из редактора (3eb4d1d5)', () => {
+  beforeEach(() => {
+    installShim();
+  });
+
+  it('фокус на собственном элементе поля (панель поиска) не коммитит правку', async () => {
+    const field = (await import(
+      '../src/renderer/editor/markdown-field.js'
+    )) as Field;
+    const root = new ShimElement('div');
+    const panelInput = new ShimElement('input');
+    const toolbar = new ShimElement('div');
+    const outside = new ShimElement('div');
+    root.append(panelInput, toolbar);
+
+    assert.equal(
+      field.editorBlurCommits(root as unknown as Node, panelInput as unknown as EventTarget),
+      false,
+      'фокус в панели поиска — поле остаётся в правке',
+    );
+    assert.equal(
+      field.editorBlurCommits(root as unknown as Node, toolbar as unknown as EventTarget),
+      false,
+      'фокус в тулбаре — поле остаётся в правке',
+    );
+    assert.equal(
+      field.editorBlurCommits(root as unknown as Node, outside as unknown as EventTarget),
+      true,
+      'фокус ушёл наружу — правка коммитится',
+    );
+    assert.equal(
+      field.editorBlurCommits(root as unknown as Node, null),
+      true,
+      'программный blur (relatedTarget = null) — правка коммитится',
+    );
+  });
+});

@@ -37,8 +37,13 @@ export interface MdEditorCallbacks {
   onEscape?: () => void;
   /** Ctrl/Cmd+Enter: commit the edit and return to the view. */
   onCommit?: () => void;
-  /** Focus left the editor (commit point of the field). */
-  onBlur?: () => void;
+  /**
+   * Focus left the editor (commit point of the field). Получает событие
+   * `focusout`, чтобы поле могло отличить уход фокуса наружу от перехода на
+   * собственный элемент поля (панель поиска, тулбар) — см.
+   * `markdown-field.ts` (`editorBlurCommits`).
+   */
+  onBlur?: (event: FocusEvent) => void;
   /**
    * Дополнительные расширения CM6 (например, точечное перекрытие сочетаний
    * команд поля комментария через `Prec.high` — задача ab0c4470).
@@ -386,8 +391,8 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
     }),
   });
 
-  view.dom.addEventListener('focusout', () => {
-    cb.onBlur?.();
+  view.dom.addEventListener('focusout', (event) => {
+    cb.onBlur?.(event);
   });
 
   return {

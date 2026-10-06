@@ -111,6 +111,18 @@ export function sourceRangeFromSelection(
 
 const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
 
+/**
+ * Решает, коммитить ли правку при уходе фокуса из редактора: если фокус ушёл
+ * на собственный элемент поля (`root` — панель поиска/замены, тулбар, кнопки
+ * режима), правку НЕ коммитим. Иначе открытие панели поиска (`Ctrl+F`/`Ctrl+H`
+ * ставит фокус в её поле) выбивало поле из правки: `onBlur` → `commitOrRevert`
+ * → `showView`, и поиск начинал идти по тексту просмотра, а замена блокировалась
+ * (ошибка 3eb4d1d5). Экспортируется для юнит-тестов (задача 045f98db).
+ */
+export function editorBlurCommits(root: Node, related: EventTarget | null): boolean {
+  return related === null || !root.contains(related as Node);
+}
+
 /** Builds a markdown view/edit field. */
 export function createMarkdownField(opts: {
   md: string;
@@ -322,6 +334,12 @@ export function createMarkdownField(opts: {
     if (next instanceof Node && root.contains(next)) return;
     deactivateFieldKeys();
     search.leaveKeys();
+    // Фокус ушёл из поля целиком. Если правка была открыта и редактор уже не
+    // в фокусе (его `focusout` пропущен — фокус держала панель поиска), коммит
+    // иначе не случится. Обычный уход из редактора наружу сюда уже приходит с
+    // `editing === false` (commitOrRevert отработал в `onBlur` редактора) —
+    // повторного коммита нет.
+    if (editing) commitOrRevert();
   });
 
   // Масштаб документа (M9): Ctrl+колесо над полем меняет глобальный
@@ -481,7 +499,11 @@ export function createMarkdownField(opts: {
         cancelled = false;
         editor?.blur();
       },
-      onBlur: () => commitOrRevert(),
+      onBlur: (event) => {
+        // Фокус ушёл на элемент самого поля (панель поиска и т.п.) — правка
+        // остаётся открытой; коммит только при уходе фокуса наружу.
+        if (editorBlurCommits(root, event.relatedTarget)) commitOrRevert();
+      },
       // Точечное Prec.high-перекрытие сочетаний команд, которые иначе
       // «съедает» CM6 (Ctrl+I/U, Ctrl+Shift+K, Tab/Shift+Tab, Alt+↑/↓).
       extraExtensions: [commentFieldKeymapExtension(), commentCollapseExtension(collapseState)],
