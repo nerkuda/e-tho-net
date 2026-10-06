@@ -2590,6 +2590,19 @@ export const RestNetworkPreferenceKey = defineContract(
 );
 
 // ---------------------------------------------------------------------------
+// Серверные настройки пользователя вне сети (REST — routes/me.ts)
+// ---------------------------------------------------------------------------
+
+/** PUT /users/me/settings/:key — имя настройки из пути (ADR 3a829d25). */
+export const RestUserSettingKey = defineContract(
+  'rest:users.me.setting-key',
+  z.object({ key: z.string().min(1) }),
+  {
+    key: { from: { kind: 'param' } },
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Связи (REST — routes/links.ts) и импорт (routes/import.ts)
 // ---------------------------------------------------------------------------
 

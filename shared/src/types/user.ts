@@ -6,7 +6,7 @@
  * semantic 0/1 INTEGER columns of SQLite; the server converts at the boundary.
  */
 
-import type { PrefKey } from '../constants.js';
+import type { PrefKey, UserSettingKey } from '../constants.js';
 
 /** A server user — row of `_system.db.users` (02-data-model.md §2.1). */
 export interface User {
@@ -113,3 +113,23 @@ export interface UserPreferenceEntry {
   value: unknown;
   updated_at: string;
 }
+
+/**
+ * Server-level per-user setting entry outside any network.
+ *
+ * Rows of `_system.db.user_settings`, accessed via `/api/v1/users/me/settings`
+ * (11-settings-and-state.md §2.1 L3s, ADR 3a829d25). Values are shared by all
+ * networks and all devices of the user on this server.
+ */
+export interface UserSettingEntry {
+  key: UserSettingKey | (string & {});
+  /** JSON value (already parsed by the transport layer). */
+  value: unknown;
+  updated_at: string;
+}
+
+/**
+ * `GET /api/v1/users/me/settings` response — a map «key → JSON value» of all
+ * server-level settings of the current user (03-server-api.md §3, ADR 3a829d25).
+ */
+export type UserSettingsMap = Record<string, unknown>;
