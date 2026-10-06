@@ -198,7 +198,7 @@ curl http://localhost:4321/api/v1/health        # bash
 Invoke-RestMethod http://localhost:4321/api/v1/health   # PowerShell
 ```
 
-Должно вернуть `{"status":"ok","version":"0.11.2","uptime":...}`.
+Должно вернуть `{"status":"ok","version":"0.12.1","uptime":...}`.
 
 ### 5.1. systemd (Linux)
 
