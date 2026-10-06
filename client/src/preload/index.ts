@@ -331,6 +331,8 @@ function buildApi(): EtnBridgeApi {
       listKeys: () => invoke('me.listKeys'),
       createKey: (label, maxWritesPerMinute) => invoke('me.createKey', label, maxWritesPerMinute),
       removeKey: (id) => invoke('me.removeKey', id),
+      getSettings: () => invoke('me.getSettings'),
+      setSetting: (key, value) => invoke('me.setSetting', key, value),
     },
     locks: {
       acquire: (networkId, entityType, entityId) =>

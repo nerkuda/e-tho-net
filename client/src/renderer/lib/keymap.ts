@@ -188,6 +188,61 @@ export function chordCandidates(chord: string): string[] {
   return keyVariants(key).map((variant) => composeChord(mods, variant));
 }
 
+/**
+ * Приводит строку сочетания к канонической форме (`ctrl+b` → `Ctrl+B`,
+ * `alt+up` → `Alt+ArrowUp`). `null` — клавиши нет (одни модификаторы/пустая
+ * строка). Обратная к {@link chordFromEvent}: чем нормализует пользовательский
+ * ввод, тем же видом оперирует диалог настройки сочетаний.
+ */
+export function normalizeChord(chord: string): string | null {
+  const { mods, key } = parseChord(chord);
+  if (key === '' || MODIFIER_ORDER.includes(key as (typeof MODIFIER_ORDER)[number])) return null;
+  return composeChord(mods, key);
+}
+
+/**
+ * Каноническое сочетание из события клавиатуры (для перехвата в диалоге
+ * настройки). `null` — событие модификатора (Ctrl/Shift/Alt/Meta) либо клавиши
+ * без имени: такое сочетание неполно и захвату не подлежит.
+ *
+ * Клавиша берётся прежде всего по `event.code` (физическая клавиша): сочетание
+ * настраивается независимо от раскладки — на русской раскладке `Ctrl+B` даёт
+ * `event.key === 'и'`, но `event.code === 'KeyB'`, и в настройку попадает `Ctrl+B`
+ * (то же основание, что у {@link dispatchKeyEvent}, ср. ошибка 98302e81).
+ */
+export function chordFromEvent(event: KeyboardEvent): string | null {
+  const mods = new Set<string>();
+  if (event.ctrlKey) mods.add('Ctrl');
+  if (event.altKey) mods.add('Alt');
+  if (event.shiftKey) mods.add('Shift');
+  if (event.metaKey) mods.add('Meta');
+
+  const key = keyNameFromEvent(event);
+  if (key === null) return null;
+  return composeChord(mods, key);
+}
+
+/** Каноническое имя клавиши события; `null` — модификатор или неопознанная клавиша. */
+function keyNameFromEvent(event: KeyboardEvent): string | null {
+  const code = event.code ?? '';
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^Numpad[0-9]$/.test(code)) return code.slice(6);
+  if (code === 'NumpadAdd') return 'Add';
+  if (code === 'NumpadSubtract') return 'Subtract';
+  if (code === 'NumpadMultiply') return 'Multiply';
+  if (code === 'NumpadDivide') return 'Divide';
+  if (code === 'Space') return 'Space';
+  if (/^(?:F[0-9]{1,2}|Arrow(?:Up|Down|Left|Right)|Tab|Enter|Escape|Backspace|Delete|Insert|Home|End|PageUp|PageDown)$/.test(code)) {
+    return code;
+  }
+
+  const key = event.key;
+  if (key === undefined || key === '' || MODIFIER_KEYS.has(key)) return null;
+  if (key === ' ') return 'Space';
+  return canonKey(key);
+}
+
 /** Токены клавиши из `event.code` (физическая клавиша). */
 function codeVariants(code: string): string[] {
   if (code === '') return [];

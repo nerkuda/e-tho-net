@@ -58,6 +58,7 @@ import { initRealtime, setRealtimeEffects } from './realtime.js';
 import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
+import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache } from './lib/lock-cache.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
@@ -478,6 +479,12 @@ export function backToNetworks(): void {
  * be430215: every re-pick opened a duplicate tab of an already open network).
  */
 export async function restoreSession(): Promise<void> {
+  // Серверные настройки пользователя (уровень «пользователь × сервер», ADR
+  // 3a829d25, задача d534eb35): сочетания клавиш комментария. Общая точка
+  // после успешного подключения — boot() и оба пути онбординга зовут
+  // restoreSession(). Недоступные настройки не блокируют вход: при сбое
+  // остаются умолчания.
+  await loadUserSettings().catch(() => undefined);
   // Q5: warm the `networkList` cache early so the first tab-strip render has
   // display_names. The accessibility marking itself re-runs at the end of
   // `openNetwork`, once `store.tabs` is populated — marking here raced an
@@ -500,6 +507,9 @@ export async function restoreSession(): Promise<void> {
 export async function disconnect(): Promise<void> {
   await etn.server.disconnect();
   deactivateFocusQuery();
+  // Сочетания клавиш принадлежат пользователю сервера (L3s): при отключении
+  // возвращаем умолчания, чтобы их не унаследовал следующий пользователь.
+  resetUserSettings();
   store.resetNetwork();
   store.update({ me: null, profileId: null });
   showScreen('onboarding');

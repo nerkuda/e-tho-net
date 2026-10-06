@@ -18,7 +18,9 @@
 import type { IconNode, Icons } from 'lucide';
 import {
   Activity,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   AtSign,
   Bold,
   BookOpen,
@@ -59,6 +61,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  Replace,
   RotateCcw,
   Save,
   Scissors,
@@ -160,7 +163,12 @@ export type IconName =
   | 'paste'
   | 'copy-text'
   | 'split'
-  | 'ellipsis';
+  | 'ellipsis'
+  // Значки диалога настройки сочетаний (0.12.1, задача d534eb35, ТП1):
+  // перемещение строк и «замена» — команды из таблицы умолчаний keymap.
+  | 'arrow-up'
+  | 'arrow-down'
+  | 'replace';
 
 /**
  * Значки обвязки: kebab-имя проекта → узел Lucide (`IconNode`). Именованные
@@ -229,6 +237,10 @@ const CHROME_ICONS: Record<IconName, IconNode> = {
   'copy-text': ClipboardCopy,
   split: Split,
   ellipsis: Ellipsis,
+  // Диалог настройки сочетаний (0.12.1, задача d534eb35).
+  'arrow-up': ArrowUp,
+  'arrow-down': ArrowDown,
+  replace: Replace,
 };
 
 /** Имена значков обвязки — каталог в порядке объявления. */

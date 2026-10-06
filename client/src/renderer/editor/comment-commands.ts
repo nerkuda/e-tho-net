@@ -294,6 +294,28 @@ export const COMMENT_COMMANDS: Readonly<Record<string, CommentCommandDef>> = Obj
     icon: 'paste',
   },
   'comment.find': { id: 'comment.find', labelKey: 'comment.cmd.find', icon: 'search' },
+  'comment.replace': { id: 'comment.replace', labelKey: 'comment.cmd.replace', icon: 'replace' },
+  'comment.findNext': { id: 'comment.findNext', labelKey: 'comment.cmd.findNext', icon: 'arrow-down' },
+  'comment.findPrevious': {
+    id: 'comment.findPrevious',
+    labelKey: 'comment.cmd.findPrevious',
+    icon: 'arrow-up',
+  },
+  'comment.globalSearch': {
+    id: 'comment.globalSearch',
+    labelKey: 'comment.cmd.globalSearch',
+    icon: 'search',
+  },
+  'comment.moveLineUp': {
+    id: 'comment.moveLineUp',
+    labelKey: 'comment.cmd.moveLineUp',
+    icon: 'arrow-up',
+  },
+  'comment.moveLineDown': {
+    id: 'comment.moveLineDown',
+    labelKey: 'comment.cmd.moveLineDown',
+    icon: 'arrow-down',
+  },
   'comment.split': { id: 'comment.split', labelKey: 'comment.cmd.split', icon: 'split' },
   'comment.cancel': { id: 'comment.cancel', labelKey: 'comment.cmd.cancel', icon: 'x' },
   'comment.save': { id: 'comment.save', labelKey: 'comment.cmd.save', icon: 'save' },

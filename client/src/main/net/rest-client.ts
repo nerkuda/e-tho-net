@@ -578,6 +578,29 @@ export class RestClient {
     await this.request('DELETE', `/me/keys/${encodeURIComponent(id)}`, { requestOptions: opts });
   }
 
+  /**
+   * `GET /me/settings` — all server-level (L3s) settings of the current user as
+   * a «key → JSON value» map (ADR 3a829d25, task f57524ab).
+   */
+  public async getMySettings(): Promise<import('@etn/shared').UserSettingsMap> {
+    return this.request('GET', '/me/settings');
+  }
+
+  /**
+   * `PUT /me/settings/{key}` — set one server-level user setting. The server
+   * validates the value shape (e.g. `comment_hotkeys` must be a string map).
+   */
+  public async setMySetting(
+    key: string,
+    value: unknown,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request('PUT', `/me/settings/${encodeURIComponent(key)}`, {
+      body: { value },
+      requestOptions: opts,
+    });
+  }
+
   // -------------------------------------------------------------------------
   // §4 Admin: users
   // -------------------------------------------------------------------------

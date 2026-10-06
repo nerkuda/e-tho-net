@@ -19,8 +19,9 @@ import { completionStatus } from '@codemirror/autocomplete';
 import { type Extension, Prec } from '@codemirror/state';
 import { type EditorView, keymap } from '@codemirror/view';
 
-import { COMMENT_KEYMAP_DEFAULTS } from '../lib/keymap.js';
+import { COMMENT_KEYMAP_DEFAULTS, effectiveChord } from '../lib/keymap.js';
 import { registerCommentCommand, runCommentCommand } from './comment-commands.js';
+import { registerCommentHotkeysDialog } from './comment-hotkeys-dialog.js';
 import {
   blockMarker,
   canMoveLine,
@@ -176,6 +177,9 @@ export function installCommentFormatCommands(): void {
   });
 
   registerClipboardCommands();
+  // Команда подменю настроек «Сочетания клавиш» открывает диалог настройки
+  // (задача d534eb35); тело команды живёт в модуле диалога.
+  registerCommentHotkeysDialog();
 }
 
 /** Простые копировать/вырезать/вставить (ошибка `80f978e5`). */
@@ -299,6 +303,12 @@ export function commentFieldKeymapExtension(): Extension {
       key,
       run: (view: EditorView): boolean => {
         if (TAB_COMMANDS.has(command) && completionStatus(view.state) === 'active') return false;
+        // Пользовательское переопределение сочетания (задача d534eb35):
+        // расширение привязано к УМОЛЧАЛЬНОМУ сочетанию статически, поэтому
+        // проверяем, что команда всё ещё закреплена за ним. Переопределил
+        // пользователь — умолчальное сочетание уступает штатному поведению CM6,
+        // а команду вызывает новое сочетание через диспетчер `lib/keymap.ts`.
+        if (effectiveChord(command) !== chord) return false;
         return runCommentCommand(command);
       },
     }));

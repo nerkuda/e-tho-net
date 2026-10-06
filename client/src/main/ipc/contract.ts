@@ -1124,6 +1124,17 @@ export interface EtnApi {
       maxWritesPerMinute?: number | null,
     ): Promise<{ id: string; apiKey: string }>;
     removeKey(id: string): Promise<void>;
+    /**
+     * `GET /me/settings` — server-level (L3s) settings of the current user,
+     * shared by all networks and devices on this server (ADR 3a829d25,
+     * task f57524ab). Returns a «key → JSON value» map.
+     */
+    getSettings(): Promise<import('@etn/shared').UserSettingsMap>;
+    /**
+     * `PUT /me/settings/{key}` — set one server-level user setting. The server
+     * validates the value shape (`comment_hotkeys` — a string map).
+     */
+    setSetting(key: string, value: unknown): Promise<void>;
   };
   /**
    * Object-locks REST bridge (task 4f141756, операция 8919b057 «/locks»,

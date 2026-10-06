@@ -1649,6 +1649,14 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'me.removeKey',
     bind((id: string) => requireRest(deps).deleteMyKey(id)),
   );
+  handlers.set(
+    'me.getSettings',
+    bind(() => requireRest(deps).getMySettings()),
+  );
+  handlers.set(
+    'me.setSetting',
+    bind((key: string, value: unknown) => requireRest(deps).setMySetting(key, value)),
+  );
 
   // --- object locks (task 4f141756, docs/03-server-api.md §13c) --------------
   handlers.set(
