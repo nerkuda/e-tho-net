@@ -155,6 +155,11 @@ export function showCommentHotkeysDialog(): void {
       key: (command) => command,
       build: (command) => buildRow(command),
       update: (node, command) => updateRow(node as HTMLElement, command),
+      // Элементы — те же строки-команды, но их ОТОБРАЖЕНИЕ зависит от
+      // изменяемого состояния (переопределения, режим записи, конфликты).
+      // Структурное равенство строк пропустило бы обновление, поэтому всегда
+      // зовём `update` — строк немного, перерисовка дёшева.
+      equals: () => false,
     });
   }
 
@@ -256,6 +261,10 @@ export function showCommentHotkeysDialog(): void {
    */
   function onCaptureKey(event: KeyboardEvent): void {
     if (capturing === null || closed) return;
+    // Нажатие уже поглощено каркасом диалога (его capture-слушатель
+    // зарегистрирован раньше): `Escape` гасит закрытие/подтверждение —
+    // как сочетание его захватывать нельзя.
+    if (event.defaultPrevented) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.repeat) return;

@@ -33,11 +33,20 @@ function installShim(): void {
     querySelector: () => null,
     activeElement: null,
   };
-  const win = ((globalThis as any).window ??= {}) as Record<string, unknown>;
+  // Свежий `window` на каждый тест: запоминаем слушатели, зарегистрированные
+  // каркасом диалога и режимом записи сочетания, чтобы возить их в тестах.
+  const win = ((globalThis as any).window = {}) as Record<string, unknown>;
+  const listeners: Array<{ type: string; fn: (event: unknown) => void; capture: boolean }> = [];
+  (win as any).__listeners = listeners;
   win.setTimeout = setTimeout;
   win.clearTimeout = clearTimeout;
-  win.addEventListener = () => undefined;
-  win.removeEventListener = () => undefined;
+  win.addEventListener = (type: string, fn: (event: unknown) => void, opts?: unknown) => {
+    listeners.push({ type, fn, capture: opts === true });
+  };
+  win.removeEventListener = (type: string, fn: (event: unknown) => void) => {
+    const index = listeners.findIndex((entry) => entry.type === type && entry.fn === fn);
+    if (index >= 0) listeners.splice(index, 1);
+  };
   win.innerWidth = 1024;
   win.innerHeight = 768;
 }
@@ -60,7 +69,7 @@ function keyEvent(init: Record<string, unknown>): KeyboardEvent {
     shiftKey: init['shiftKey'] ?? false,
     metaKey: init['metaKey'] ?? false,
     repeat: init['repeat'] ?? false,
-    defaultPrevented: false,
+    defaultPrevented: init['defaultPrevented'] ?? false,
     target: null,
     preventDefault(): void {
       (this as { defaultPrevented: boolean }).defaultPrevented = true;
@@ -69,6 +78,22 @@ function keyEvent(init: Record<string, unknown>): KeyboardEvent {
       /* no-op */
     },
   } as unknown as KeyboardEvent;
+}
+
+/**
+ * Проигрывает нажатие через ПОСЛЕДНИЙ capture-слушатель `keydown` на шиме
+ * `window` — это слушатель режима записи сочетания (каркас диалога вешает свой
+ * capture-`onKey` раньше, при `showDialog`). Изолирует проверку защиты от уже
+ * поглощённого нажатия от обработки Escape каркасом.
+ */
+function fireCaptureChordListener(event: KeyboardEvent): void {
+  const listeners = ((globalThis as any).window.__listeners ?? []) as Array<{
+    type: string;
+    fn: (event: unknown) => void;
+    capture: boolean;
+  }>;
+  const capture = listeners.filter((entry) => entry.type === 'keydown' && entry.capture);
+  capture[capture.length - 1]?.fn(event);
 }
 
 /** Тело документа шима. */
@@ -186,5 +211,58 @@ describe('диалог настройки сочетаний клавиш (edito
     assert.ok(bold !== undefined);
     assert.equal(bold.querySelector('[data-chord]')?.textContent, 'Ctrl+Alt+B');
     assert.equal(bold.querySelector('[data-reset]')?.disabled, false);
+  });
+
+  it('клик по сочетанию включает режим записи, сброс возвращает умолчание', () => {
+    keymap.setKeymapOverrides({ 'comment.bold': 'Ctrl+Alt+B' });
+    dialog.showCommentHotkeysDialog();
+
+    const boldRow = (): ShimElement => {
+      const row = listRows().find((item) => item.dataset['command'] === 'comment.bold');
+      assert.ok(row !== undefined);
+      return row;
+    };
+    assert.equal(boldRow().querySelector('[data-chord]')?.textContent, 'Ctrl+Alt+B');
+
+    // Режим записи: строка обязана перерисоваться (не остаться прежней).
+    boldRow().querySelector('[data-chord]')?.click();
+    assert.equal(boldRow().querySelector('[data-chord]')?.textContent, 'Нажмите сочетание…');
+    assert.equal(boldRow().classList.contains('comment-hotkeys-row--recording'), true);
+
+    // Сброс к умолчанию отражается тем же обновлением строк.
+    boldRow().querySelector('[data-reset]')?.click();
+    assert.equal(boldRow().querySelector('[data-chord]')?.textContent, 'Ctrl+B');
+    assert.equal(boldRow().classList.contains('comment-hotkeys-row--recording'), false);
+    assert.equal(boldRow().querySelector('[data-reset]')?.disabled, true);
+  });
+
+  it('конфликтующее сочетание помечается в строке', () => {
+    // Ctrl+I по умолчанию принадлежит курсиву — назначаем его жирному.
+    keymap.setKeymapOverrides({ 'comment.bold': 'Ctrl+I' });
+    dialog.showCommentHotkeysDialog();
+
+    const bold = listRows().find((row) => row.dataset['command'] === 'comment.bold');
+    assert.ok(bold !== undefined);
+    assert.equal(bold.classList.contains('comment-hotkeys-row--conflict'), true);
+  });
+
+  it('режим записи: поглощённое нажатие не захватывается, обычное назначается', () => {
+    dialog.showCommentHotkeysDialog();
+    const boldRow = (): ShimElement => {
+      const row = listRows().find((item) => item.dataset['command'] === 'comment.bold');
+      assert.ok(row !== undefined);
+      return row;
+    };
+    boldRow().querySelector('[data-chord]')?.click();
+
+    // Нажатие уже поглощено каркасом диалога (Escape → закрытие/подтверждение):
+    // сочетанием оно не становится, режим записи продолжается.
+    const swallowed = keyEvent({ key: 'Escape', code: 'Escape', defaultPrevented: true });
+    fireCaptureChordListener(swallowed);
+    assert.equal(boldRow().querySelector('[data-chord]')?.textContent, 'Нажмите сочетание…');
+
+    // Обычное нажатие назначается команде.
+    fireCaptureChordListener(keyEvent({ key: 'j', code: 'KeyJ', ctrlKey: true }));
+    assert.equal(boldRow().querySelector('[data-chord]')?.textContent, 'Ctrl+J');
   });
 });

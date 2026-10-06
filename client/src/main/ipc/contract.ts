@@ -1125,14 +1125,14 @@ export interface EtnApi {
     ): Promise<{ id: string; apiKey: string }>;
     removeKey(id: string): Promise<void>;
     /**
-     * `GET /me/settings` — server-level (L3s) settings of the current user,
-     * shared by all networks and devices on this server (ADR 3a829d25,
-     * task f57524ab). Returns a «key → JSON value» map.
+     * `GET /users/me/settings` — server-level (L3s) settings of the current
+     * user, shared by all networks and devices on this server (ADR 3a829d25,
+     * task f57524ab; spec operation e7e07b24). Returns a «key → JSON value» map.
      */
     getSettings(): Promise<import('@etn/shared').UserSettingsMap>;
     /**
-     * `PUT /me/settings/{key}` — set one server-level user setting. The server
-     * validates the value shape (`comment_hotkeys` — a string map).
+     * `PUT /users/me/settings/{key}` — set one server-level user setting. The
+     * server validates the value shape (`comment_hotkeys` — a string map).
      */
     setSetting(key: string, value: unknown): Promise<void>;
   };
