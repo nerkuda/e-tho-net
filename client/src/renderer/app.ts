@@ -674,8 +674,8 @@ export async function boot(): Promise<void> {
   showScreen('onboarding');
 }
 
-/** Global keyboard shortcuts (08-ui-spec.md §13): Ctrl+F, Escape, Ctrl+±/0,
- *  and the copy/paste bindings of workplan L26 (Ctrl+C, Ctrl+V).
+/** Global keyboard shortcuts (08-ui-spec.md §13): Ctrl+Shift+F, Escape,
+ *  Ctrl+±/0, and the copy/paste bindings of workplan L26 (Ctrl+C, Ctrl+V).
  *
  *  Все команды регистрируются в общеклиентском диспетчере контекстов
  *  (`lib/keymap.ts`, ADR `b420b08c`): он владеет единственной точкой перехвата
@@ -752,12 +752,13 @@ function globalKeyBindings(): KeyBindingDef[] {
     return false;
   });
 
-  bind('app.focusMapSearch', ['Ctrl+F', 'Meta+F'], (event) => {
-    // Ctrl+F focuses the canvas search row — hidden in the structures view
+  // Глобальный поиск клиента перенесён на Ctrl+Shift+F (0.12.1, задача
+  // 045f98db, требование 778e13f4): Ctrl+F закреплён за поиском внутри
+  // текущего текстового поля (панель поиска комментария, ТП1).
+  bind('app.focusMapSearch', ['Ctrl+Shift+F', 'Meta+Shift+F'], (event) => {
+    // Ctrl+Shift+F focuses the canvas search row — hidden in the structures view
     // (§15.1) and while a comment/field is being edited (native find should
     // not be hijacked there), so the shortcut does nothing in those cases.
-    // Глобальный поиск переезжает на Ctrl+Shift+F отдельной задачей ТП1;
-    // до тех пор сохраняем текущее поведение.
     if (isEditableTarget(event.target)) return false;
     if (store.state.screen === 'workspace' && store.state.activeView === 'map') {
       document.querySelector<HTMLInputElement>('.search-input')?.focus();

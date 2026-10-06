@@ -172,6 +172,8 @@ function fakeMdEditor(initial: string): MdEditor {
     snapshot: () => ({ text: value, from: value.length, to: value.length }),
     applyEdit: () => undefined,
     subscribe: () => () => undefined,
+    setSearchHighlight: () => undefined,
+    selectMatch: () => undefined,
     destroy: () => undefined,
   };
 }

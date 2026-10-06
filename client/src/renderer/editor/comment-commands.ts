@@ -160,8 +160,10 @@ function contextOf(host: CommentCommandHost, editor: MdEditor): CommentCommandCo
 export function runCommentCommand(command: string, host?: CommentCommandHost): boolean {
   const target = host ?? currentCommentCommandHost();
   if (target === null) return false;
+  // Поле обрабатывает свои команды первым и без редактора: поиск в просмотре
+  // (Ctrl+F) открывает панель, хотя правки нет (требование d72ea6eb).
+  if (target.runFieldCommand?.(command) === true) return true;
   const editor = target.getEditor();
-  if (editor !== null && target.runFieldCommand?.(command) === true) return true;
   if (editor === null) return false;
   const entry = commandEntries.get(command);
   if (entry === undefined) return false;

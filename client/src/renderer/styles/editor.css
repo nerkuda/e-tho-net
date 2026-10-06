@@ -1305,6 +1305,63 @@
   display: block;
 }
 
+/* Панель поиска и замены поля комментария (0.12.1, задача 045f98db, ТП1;
+   элемент b8eabc22): первая строка поля, видна в обоих режимах, пока открыта.
+   Поля — фасад lib/ui (`.ui-input`), здесь только раскладка ряда. */
+.md-field-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-1);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.md-field-search[hidden] {
+  display: none;
+}
+
+.md-field-search__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.md-field-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.md-field-search__count {
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+/* Подсветка вхождений поиска (CSS Custom Highlight API) в просмотре. Виджеты
+   wiki-ссылок в поиск не попадают (требование d72ea6eb) — их текст исключён
+   ещё при сборе узлов. Текущее вхождение — акцентной заливкой. */
+::highlight(etn-md-search) {
+  background-color: var(--accent-soft);
+  color: var(--text);
+}
+
+::highlight(etn-md-search-current) {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* То же для правки: декорации CM6 (md-editor.ts) вместо Custom Highlight. */
+.cm-md-search-hit {
+  background-color: var(--accent-soft);
+  border-radius: var(--radius-s);
+}
+
+.cm-md-search-hit--current {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+}
+
 /* Единый вид форм-гридов редакторов (задача 0a1a2414, требование 0dddd939):
  * таблицы-ФОРМЫ ввода (привязки свойств и типов, значения выделения, списки
  * вкладок редактора) остаются `<table>()`, но выглядят одним семейством с

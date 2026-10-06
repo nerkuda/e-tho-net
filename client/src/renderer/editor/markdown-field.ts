@@ -30,6 +30,7 @@ import {
   type CommentCommandHost,
 } from './comment-commands.js';
 import { commentFieldKeymapExtension } from './comment-format.js';
+import { createCommentSearch } from './comment-search.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
@@ -136,6 +137,10 @@ export function createMarkdownField(opts: {
 }): HTMLElement {
   const root = div('md-field');
   const view = div('md-field-view comment-view');
+  // Просмотр фокусируем по клику (но не добавляем в порядок табуляции): поле —
+  // текущий элемент для сочетаний, поэтому Ctrl+F открывает поиск и в
+  // просмотре (элемент b8eabc22, требование d72ea6eb).
+  view.tabIndex = -1;
   const area = div('md-field-area');
   area.tabIndex = -1;
   area.setAttribute('aria-label', 'Текст комментария');
@@ -152,15 +157,43 @@ export function createMarkdownField(opts: {
   let releaseCommentKeys: (() => void) | null = null;
 
   /**
+   * Панель поиска и замены поля (0.12.1, задача 045f98db): открывается по
+   * Ctrl+F и в просмотре, и в правке, замена — только в правке.
+   */
+  const search = createCommentSearch({
+    root,
+    view,
+    getEditor: () => (editing ? editor : null),
+    isEditing: () => editing,
+    restoreFocus: () => {
+      if (editing) editor?.focus();
+      else view.focus();
+    },
+  });
+
+  /**
    * Хост команд поля (ТП1 «Команды редактирования комментария», задача
    * 3d6f98cb): тулбар и контекстное меню применяют команды к этому полю, а
-   * команды уровня поля (отмена/сохранение) исполняет сам каркас правки.
+   * команды уровня поля (поиск, отмена/сохранение) исполняет сам каркас правки.
    */
   const commandHost: CommentCommandHost = {
-    getEditor: () => editor,
+    getEditor: () => (editing ? editor : null),
     root,
     runFieldCommand: (command) => {
-      if (editor === null) return false;
+      // Поиск открывается в обоих режимах; замена — только в правке
+      // (элемент b8eabc22, требование d72ea6eb).
+      if (command === 'comment.find') {
+        search.open('find');
+        return true;
+      }
+      if (command === 'comment.replace') {
+        if (!editing) return false;
+        search.open('replace');
+        return true;
+      }
+      if (command === 'comment.findNext') return search.next();
+      if (command === 'comment.findPrevious') return search.previous();
+      if (!editing || editor === null) return false;
       if (command === 'comment.cancel') {
         cancelled = true;
         editor.blur();
@@ -177,21 +210,36 @@ export function createMarkdownField(opts: {
     subscribe: (listener) => editor?.subscribe(listener) ?? (() => {}),
   };
 
-  /** Включает контекст сочетаний поля, пока оно в правке и в фокусе. */
-  const enterCommentKeys = (): void => {
-    if (!editing) return;
+  /**
+   * Включает контекст сочетаний поля, пока поле — текущий элемент (фокус).
+   * Действует и в просмотре: команды без редактора — no-op, но Ctrl+F открывает
+   * панель поиска (требование d72ea6eb).
+   */
+  const activateFieldKeys = (): void => {
     releaseCommentKeys ??= enterCommentEdit(commandHost);
   };
   /** Снимает контекст сочетаний поля. */
-  const leaveCommentKeys = (): void => {
+  const deactivateFieldKeys = (): void => {
     releaseCommentKeys?.();
     releaseCommentKeys = null;
   };
-  root.addEventListener('focusin', () => enterCommentKeys());
+  root.addEventListener('focusin', (event) => {
+    const target = event.target;
+    // Фокус в панели поиска — её контекст поверх: команды форматирования из
+    // поля поиска срабатывать не должны.
+    if (target instanceof Node && search.element.contains(target)) {
+      deactivateFieldKeys();
+      search.enterKeys();
+      return;
+    }
+    search.leaveKeys();
+    activateFieldKeys();
+  });
   root.addEventListener('focusout', (event) => {
     const next = event.relatedTarget;
     if (next instanceof Node && root.contains(next)) return;
-    leaveCommentKeys();
+    deactivateFieldKeys();
+    search.leaveKeys();
   });
 
   // Масштаб документа (M9): Ctrl+колесо над полем меняет глобальный
@@ -272,10 +320,11 @@ export function createMarkdownField(opts: {
   const showView = (): void => {
     const wasEditing = editor !== null && !area.classList.contains('hidden');
     editing = false;
-    leaveCommentKeys();
+    deactivateFieldKeys();
     area.classList.add('hidden');
     view.classList.remove('hidden');
     renderView();
+    search.refresh();
     if (wasEditing) opts.onEditChange?.(false);
   };
 
@@ -427,7 +476,8 @@ export function createMarkdownField(opts: {
     area.classList.remove('hidden');
     editing = true;
     mountEditor();
-    enterCommentKeys();
+    activateFieldKeys();
+    search.refresh();
     opts.onEditChange?.(true);
   };
 
@@ -445,6 +495,7 @@ export function createMarkdownField(opts: {
       if (editor !== null && !area.classList.contains('hidden')) {
         editor.setValue(md);
       }
+      search.refresh();
     },
     focusAt: (findText) => {
       showEdit();
@@ -471,7 +522,7 @@ export function createMarkdownField(opts: {
     });
   }
 
-  root.append(view, area);
+  root.append(search.element, view, area);
   showView();
   return root;
 }

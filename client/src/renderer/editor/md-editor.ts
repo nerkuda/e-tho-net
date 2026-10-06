@@ -13,9 +13,17 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { languages } from '@codemirror/language-data';
 import { tags } from '@lezer/highlight';
-import { EditorState, type Extension, type SelectionRange } from '@codemirror/state';
-import { drawSelection, EditorView, keymap } from '@codemirror/view';
+import {
+  EditorState,
+  RangeSetBuilder,
+  StateEffect,
+  StateField,
+  type Extension,
+  type SelectionRange,
+} from '@codemirror/state';
+import { Decoration, drawSelection, EditorView, keymap, type DecorationSet } from '@codemirror/view';
 
+import { findMatches } from './text-search.js';
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
@@ -61,6 +69,16 @@ export interface MdEditorEdit {
   selection?: { anchor: number; head?: number };
 }
 
+/**
+ * Подсветка вхождений поиска в редакторе (панель поиска поля комментария,
+ * задача 045f98db): запрос и текущее совпадение. `null` — подсветка снята.
+ */
+export interface MdSearchHighlight {
+  query: string;
+  /** Текущее совпадение (подсвечивается сильнее), либо `null`. */
+  current: { from: number; to: number } | null;
+}
+
 /** Handle of a mounted editor. */
 export interface MdEditor {
   /** The editor's DOM node (paste listener target). */
@@ -85,7 +103,61 @@ export interface MdEditor {
   applyEdit(edit: MdEditorEdit): void;
   /** Подписка на изменения текста/выделения (для состояния кнопок тулбара). */
   subscribe(listener: () => void): () => void;
+  /**
+   * Подсвечивает все вхождения запроса подсветкой CM6 (панель поиска поля,
+   * задача 045f98db). `null` снимает подсветку.
+   */
+  setSearchHighlight(highlight: MdSearchHighlight | null): void;
+  /**
+   * Выделяет диапазон и прокручивает к нему, НЕ забирая фокус у панели поиска
+   * (навигация F3/Enter из панели). Фокус остаётся там, где был.
+   */
+  selectMatch(from: number, to: number): void;
 }
+
+/** Эффект установки подсветки поиска. */
+const setSearchHighlightEffect = StateEffect.define<MdSearchHighlight | null>();
+
+/** Состояние подсветки: текущий запрос и собранные декорации. */
+interface MdSearchState {
+  highlight: MdSearchHighlight | null;
+  deco: DecorationSet;
+}
+
+const searchMatchMark = Decoration.mark({ class: 'cm-md-search-hit' });
+const searchCurrentMark = Decoration.mark({ class: 'cm-md-search-hit cm-md-search-hit--current' });
+
+/** Собирает декорации подсветки всех вхождений запроса (текущее — сильнее). */
+function buildSearchDecorations(text: string, highlight: MdSearchHighlight | null): DecorationSet {
+  if (highlight === null || highlight.query === '') return Decoration.none;
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const match of findMatches(text, highlight.query)) {
+    const current =
+      highlight.current !== null &&
+      highlight.current.from === match.from &&
+      highlight.current.to === match.to;
+    builder.add(match.from, match.to, current ? searchCurrentMark : searchMatchMark);
+  }
+  return builder.finish();
+}
+
+const mdSearchField = StateField.define<MdSearchState>({
+  create: () => ({ highlight: null, deco: Decoration.none }),
+  update(value, tr) {
+    let highlight = value.highlight;
+    let touched = false;
+    for (const effect of tr.effects) {
+      if (effect.is(setSearchHighlightEffect)) {
+        highlight = effect.value;
+        touched = true;
+      }
+    }
+    if (tr.docChanged) touched = true;
+    if (!touched) return value;
+    return { highlight, deco: buildSearchDecorations(tr.state.doc.toString(), highlight) };
+  },
+  provide: (field) => EditorView.decorations.from(field, (state) => state.deco),
+});
 
 /** Syntax colours through the app's CSS variables (follows light/dark themes). */
 const mdHighlightStyle = HighlightStyle.define([
@@ -298,6 +370,7 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         wikiLinkLegacyActions,
         livePreview,
         mdWidgetClick,
+        mdSearchField,
         mdTheme,
         // Дополнительные расширения вызывающего (точечные перекрытия сочетаний
         // команд поля — задача ab0c4470). Идут последними; приоритет задаётся
@@ -363,6 +436,17 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       return () => {
         listeners.delete(listener);
       };
+    },
+    setSearchHighlight: (highlight) => {
+      view.dispatch({ effects: setSearchHighlightEffect.of(highlight) });
+    },
+    selectMatch: (from, to) => {
+      const len = view.state.doc.length;
+      const anchor = Math.max(0, Math.min(len, Math.trunc(from)));
+      const head = Math.max(anchor, Math.min(len, Math.trunc(to)));
+      // Фокус НЕ забираем: навигация идёт из панели поиска, её поле должно
+      // остаться активным (F3/Enter продолжают работать).
+      view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
     },
     destroy: () => {
       alive = false;

@@ -202,6 +202,19 @@ describe('команды поля комментария (editor/comment-command
     assert.equal(registryCalls, 1);
   });
 
+  it('команды поля вызываются и без редактора (поиск в просмотре)', () => {
+    const field = {
+      getEditor: () => null,
+      root: new ShimElement('div'),
+      runFieldCommand: (command: string): boolean => command === 'comment.find',
+    };
+    // Поиск открывается и в просмотре — команда поля исполняется без редактора
+    // (требование d72ea6eb, элемент b8eabc22).
+    assert.equal(mod.runCommentCommand('comment.find', field as any), true);
+    // Прочие команды без редактора остаются no-op.
+    assert.equal(mod.runCommentCommand('comment.bold', field as any), false);
+  });
+
   it('контекст сочетаний comment-field маршрутизирует команду активному полю', () => {
     let calls = 0;
     mod.registerCommentCommand('comment.bold', {
