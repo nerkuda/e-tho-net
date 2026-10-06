@@ -46,6 +46,7 @@ import {
   isHeadingActive,
   isInlineActive,
   moveLine,
+  relocatedSelection,
   toggleBlockquote,
   toggleBulletList,
   toggleHeading,
@@ -237,16 +238,21 @@ function registerClipboardCommands(): void {
 
   registerCommentCommand('comment.cut', {
     run: (ctx) => {
-      const snap = ctx.editor.snapshot();
-      if (snap.from === snap.to) return true;
-      const selected = snap.text.slice(snap.from, snap.to);
+      const editor = ctx.editor;
+      const before = editor.snapshot();
+      if (before.from === before.to) return true;
+      const selected = before.text.slice(before.from, before.to);
       // Удаляем выделение только при успешной записи в буфер: иначе вырезание
-      // потеряло бы текст (буфер недоступен — оставляем как есть).
+      // потеряло бы текст (буфер недоступен — оставляем как есть). Позиции
+      // сняты ДО асинхронной записи, поэтому правку перепрокладываем по
+      // актуальному выделению, а при расхождении контекста отменяем (486d0ef1).
       void commentClipboard().writeText(selected).then(
         () => {
-          ctx.editor.applyEdit({
-            changes: [{ from: snap.from, to: snap.to, insert: '' }],
-            selection: { anchor: snap.from, head: snap.from },
+          const range = relocatedSelection(before, editor.snapshot());
+          if (range === null) return;
+          editor.applyEdit({
+            changes: [{ from: range.from, to: range.to, insert: '' }],
+            selection: { anchor: range.from, head: range.from },
           });
         },
         () => undefined,
@@ -259,15 +265,19 @@ function registerClipboardCommands(): void {
   registerCommentCommand('comment.paste', {
     run: (ctx) => {
       const editor = ctx.editor;
+      const before = editor.snapshot();
       void commentClipboard()
         .readText()
         .then(
           (text) => {
             if (text === '') return;
-            const snap = editor.snapshot();
-            const caret = snap.from + text.length;
+            // Позиции сняты ДО чтения буфера — перепрокладываем по актуальному
+            // выделению (486d0ef1): при расхождении контекста вставку отменяем.
+            const range = relocatedSelection(before, editor.snapshot());
+            if (range === null) return;
+            const caret = range.from + text.length;
             editor.applyEdit({
-              changes: [{ from: snap.from, to: snap.to, insert: text }],
+              changes: [{ from: range.from, to: range.to, insert: text }],
               selection: { anchor: caret, head: caret },
             });
           },
@@ -309,18 +319,24 @@ function registerClipboardAsTextCommands(): void {
 
   registerCommentCommand('comment.cutAsText', {
     run: (ctx) => {
-      const snap = ctx.editor.snapshot();
-      if (snap.from === snap.to) return true;
-      const selected = snap.text.slice(snap.from, snap.to);
-      // Удаляем выделение только при успешной записи в буфер — как в `comment.cut`.
+      const editor = ctx.editor;
+      const before = editor.snapshot();
+      if (before.from === before.to) return true;
+      const selected = before.text.slice(before.from, before.to);
+      // Удаляем выделение только при успешной записи в буфер — как в
+      // `comment.cut`. Ожидание длиннее (разворот трансклюзий — сетевой запрос),
+      // поэтому после него позиции перепрокладываем, а при расхождении
+      // контекста правку отменяем (ошибка 486d0ef1).
       void expanded(selected).then((text) =>
         commentClipboard()
           .writeText(text)
           .then(
             () => {
-              ctx.editor.applyEdit({
-                changes: [{ from: snap.from, to: snap.to, insert: '' }],
-                selection: { anchor: snap.from, head: snap.from },
+              const range = relocatedSelection(before, editor.snapshot());
+              if (range === null) return;
+              editor.applyEdit({
+                changes: [{ from: range.from, to: range.to, insert: '' }],
+                selection: { anchor: range.from, head: range.from },
               });
             },
             () => undefined,
@@ -334,6 +350,7 @@ function registerClipboardAsTextCommands(): void {
   registerCommentCommand('comment.pasteAsText', {
     run: (ctx) => {
       const editor = ctx.editor;
+      const before = editor.snapshot();
       void commentClipboard()
         .readText()
         .then(
@@ -341,10 +358,14 @@ function registerClipboardAsTextCommands(): void {
             if (text === '') return;
             void expanded(text).then((insert) => {
               if (insert === '') return;
-              const snap = editor.snapshot();
-              const caret = snap.from + insert.length;
+              // Разворот трансклюзий — сетевой запрос; позиции сняты ДО него,
+              // после ожидания перепрокладываем по актуальному выделению и
+              // отменяем вставку при расхождении контекста (ошибка 486d0ef1).
+              const range = relocatedSelection(before, editor.snapshot());
+              if (range === null) return;
+              const caret = range.from + insert.length;
               editor.applyEdit({
-                changes: [{ from: snap.from, to: snap.to, insert }],
+                changes: [{ from: range.from, to: range.to, insert }],
                 selection: { anchor: caret, head: caret },
               });
             });

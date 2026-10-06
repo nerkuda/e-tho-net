@@ -57,6 +57,16 @@ function fakeEditor(text: string, from: number, to: number = from) {
     applyEdit: (edit: any) => {
       edits.push(edit);
     },
+    /**
+     * Меняет документ и выделение — эмулирует правку во время асинхронного
+     * ожидания команды. Реальный CM6 сам перепрокладывает выделение через
+     * изменения, поэтому тест задаёт и текст, и новые офсеты выделения.
+     */
+    mutate: (nextText: string, nextFrom: number, nextTo: number = nextFrom) => {
+      state.text = nextText;
+      state.from = nextFrom;
+      state.to = nextTo;
+    },
     edits,
   };
 }
@@ -354,5 +364,134 @@ describe('comment-format: команды «как текст» (e9f553e5)', () =
       1,
       'вставленный исходник распознаётся единым парсером как трансклюзия',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Гонка асинхронного ожидания и позиций правки (ошибка 486d0ef1)
+// ---------------------------------------------------------------------------
+
+describe('comment-format: буфер обмена и устаревшие позиции (486d0ef1)', () => {
+  beforeEach(async () => {
+    installShim();
+    commands = (await import('../src/renderer/editor/comment-commands.js')) as Commands;
+    commands.commentCommandsInternals.reset();
+    format = (await import('../src/renderer/editor/comment-format.js')) as Format;
+    format.setCommentClipboardPort(null);
+    format.setTransclusionTextPort(null);
+    format.installCommentFormatCommands();
+  });
+
+  it('вырезать: правка перепрокладывается по актуальному выделению после ожидания', async () => {
+    const editor = fakeEditor('abc def', 4, 7);
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(''),
+      writeText: () => {
+        // Во время асинхронной записи документ изменился: в начало вставили
+        // «ZZ», CM6 сдвинул выделение на [6, 9) — там всё ещё «def».
+        editor.mutate('ZZabc def', 6, 9);
+        return Promise.resolve();
+      },
+    });
+
+    commands.runCommentCommand('comment.cut', host(editor));
+    await flush();
+
+    assert.deepEqual(
+      editor.edits[0]?.changes,
+      [{ from: 6, to: 9, insert: '' }],
+      'удаляется актуальное выделение, а не устаревшие позиции [4, 7)',
+    );
+  });
+
+  it('вырезать: изменившееся выделение — правка отменяется, текст не портится', async () => {
+    const editor = fakeEditor('abc def', 4, 7);
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(''),
+      writeText: () => {
+        // Пользователь переставил выделение на другой фрагмент.
+        editor.mutate('abc def', 0, 3);
+        return Promise.resolve();
+      },
+    });
+
+    commands.runCommentCommand('comment.cut', host(editor));
+    await flush();
+
+    assert.equal(editor.edits.length, 0, 'устаревшие позиции не применяются');
+  });
+
+  it('вырезать как текст: перепрокладка после сетевого разворота трансклюзий', async () => {
+    const written: string[] = [];
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(''),
+      writeText: (text) => {
+        written.push(text);
+        return Promise.resolve();
+      },
+    });
+    const source = `x ![[#${SRC}]] y`;
+    const editor = fakeEditor(source, 2, source.length - 2);
+    format.setTransclusionTextPort({
+      expand: async () => {
+        // Долгий разворот: за это время документ изменился (реальное время).
+        editor.mutate(`ZZ ${source}`, 5, source.length + 1);
+        return 'тело';
+      },
+    });
+
+    commands.runCommentCommand('comment.cutAsText', host(editor));
+    await flush();
+
+    assert.deepEqual(written, ['тело']);
+    assert.deepEqual(
+      editor.edits[0]?.changes,
+      [{ from: 5, to: source.length + 1, insert: '' }],
+      'удаление по актуальным позициям выделения',
+    );
+  });
+
+  it('вставить: изменившееся выделение — вставка отменяется', async () => {
+    const editor = fakeEditor('ab', 0, 2);
+    // Чтение буфера само по себе документ не меняет; эмулируем правку во время
+    // ожидания мутацией из порта — как её сделал бы реальный обмен/ввод.
+    format.setCommentClipboardPort({
+      readText: () => {
+        editor.mutate('ab', 0, 1); // выделение сузилось с «ab» до «a»
+        return Promise.resolve('XY');
+      },
+      writeText: () => Promise.resolve(),
+    });
+
+    commands.runCommentCommand('comment.paste', host(editor));
+    await flush();
+
+    assert.equal(editor.edits.length, 0, 'вставка не затирает изменившееся выделение');
+  });
+
+  it('вставить как текст: гонка сетевого разворота — вставка по актуальной каретке', async () => {
+    const editor = fakeEditor('[]', 1, 1);
+    const source = `![[#${SRC}]]`;
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(source),
+      writeText: () => Promise.resolve(),
+    });
+    format.setTransclusionTextPort({
+      expand: async () => {
+        // За время сетевого разворота каретка сместилась: в начало вставили «Q».
+        editor.mutate(`Q[]`, 2, 2);
+        return 'BBB';
+      },
+    });
+
+    commands.runCommentCommand('comment.pasteAsText', host(editor));
+    await flush();
+
+    assert.deepEqual(
+      editor.edits[0]?.changes,
+      [{ from: 2, to: 2, insert: 'BBB' }],
+      'вставка идёт в актуальную каретку, а не в устаревшую позицию 1',
+    );
+    assert.deepEqual(editor.edits[0]?.selection, { anchor: 5, head: 5 });
   });
 });
