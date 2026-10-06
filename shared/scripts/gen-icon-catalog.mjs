@@ -10,6 +10,11 @@
  * the same `lucide` package; `client/tests/guard-icon-catalog.test.ts` keeps
  * the two in sync.
  *
+ * Besides the canonical names the script emits the alias map
+ * `ICON_LIBRARY_ALIASES` (alias kebab-name → canonical kebab-name, ошибка
+ * 08b90470): the client icon-picker search matches aliases too and returns the
+ * canonical name (the only name the server accepts and the DB stores).
+ *
  * Usage (after `npm install`, any cwd):
  *   node shared/scripts/gen-icon-catalog.mjs
  *
@@ -54,11 +59,32 @@ for (const [exportName, node] of Object.entries(icons)) {
 }
 const names = [...byNode.values()].sort((a, b) => a.localeCompare(b));
 
+/**
+ * Alias map: kebab-name of a non-canonical export → kebab-name of the
+ * canonical export of the same geometry. Aliases colliding with a real
+ * canonical name are dropped (canonical wins), duplicates keep the first.
+ */
+const canonicalNames = new Set(names);
+const aliasByName = new Map();
+for (const [exportName, node] of Object.entries(icons)) {
+  const canonicalExport = byNode.get(node);
+  if (canonicalExport === exportName) continue;
+  const aliasKebab = iconNameFromExport(exportName);
+  const canonicalKebab = iconNameFromExport(canonicalExport);
+  if (aliasKebab === canonicalKebab || canonicalNames.has(aliasKebab)) continue;
+  if (!aliasByName.has(aliasKebab)) aliasByName.set(aliasKebab, canonicalKebab);
+}
+const aliases = [...aliasByName.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
 if (names.length < 100) {
   throw new Error(`lucide catalogue looks empty: ${names.length} names`);
 }
+if (aliases.length === 0) {
+  throw new Error('lucide alias map looks empty');
+}
 
 const body = names.map((name) => `  '${name}',`).join('\n');
+const aliasBody = aliases.map(([alias, canonical]) => `  '${alias}': '${canonical}',`).join('\n');
 
 const content = `/**
  * Каталог имён иконок Lucide, допустимых для вида иконки мысли
@@ -75,6 +101,11 @@ const content = `/**
  * client/src/renderer/lib/ui/icon.ts (buildIconCatalog); синхронность
  * сторон стережёт client/tests/guard-icon-catalog.test.ts.
  *
+ * Рядом с каноническими именами собран карта псевдонимов
+ * ICON_LIBRARY_ALIASES (псевдоним → каноническое имя, ошибка 08b90470):
+ * поиск во вкладке «Библиотека» находит значок и по псевдониму, а отдаёт
+ * каноническое имя — единственное, что принимает сервер и хранит БД.
+ *
  * Перегенерировать после обновления lucide:
  *   node shared/scripts/gen-icon-catalog.mjs
  */
@@ -89,6 +120,26 @@ const ICON_LIBRARY_NAME_SET: ReadonlySet<string> = new Set(ICON_LIBRARY_NAMES);
 /** Является ли строка именем иконки каталога Lucide (kebab-case). */
 export function isIconLibraryName(value: string): boolean {
   return ICON_LIBRARY_NAME_SET.has(value);
+}
+
+/**
+ * Псевдонимы kebab-имён Lucide: псевдоним → каноническое kebab-имя той же
+ * геометрии (ошибка 08b90470). Псевдонимы, совпавшие с каноническим именем,
+ * опущены — каноническое имя приоритетнее.
+ */
+export const ICON_LIBRARY_ALIASES: Readonly<Record<string, string>> = {
+${aliasBody}
+};
+
+/**
+ * Каноническое kebab-имя значка по каноническому имени ИЛИ псевдониму;
+ * null — строки нет среди имён и псевдонимов Lucide. Псевдонимы нужны для
+ * ПОИСКА; хранить и валидировать следует только канонические имена.
+ */
+export function canonicalIconLibraryName(value: string): string | null {
+  if (ICON_LIBRARY_NAME_SET.has(value)) return value;
+  if (!Object.prototype.hasOwnProperty.call(ICON_LIBRARY_ALIASES, value)) return null;
+  return ICON_LIBRARY_ALIASES[value] ?? null;
 }
 `;
 

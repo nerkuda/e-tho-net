@@ -16,6 +16,7 @@
  */
 
 import type { IconNode, Icons } from 'lucide';
+import { ICON_LIBRARY_ALIASES } from '@etn/shared';
 import {
   Activity,
   ArrowDown,
@@ -395,15 +396,43 @@ export function loadIconCatalog(): Promise<IconCatalog> {
 }
 
 /**
+ * Псевдонимы Lucide, сгруппированные по каноническому kebab-имени:
+ * `home` → [`house`, …]. Единый источник псевдонимов — генератор
+ * `@etn/shared` (`ICON_LIBRARY_ALIASES`, см. `shared/scripts/gen-icon-catalog.mjs`),
+ * поэтому поиск фасада и каталог сервера не расходятся.
+ */
+const ALIASES_BY_CANONICAL: ReadonlyMap<string, readonly string[]> = (() => {
+  const map = new Map<string, string[]>();
+  for (const [alias, canonical] of Object.entries(ICON_LIBRARY_ALIASES)) {
+    const list = map.get(canonical);
+    if (list === undefined) map.set(canonical, [alias]);
+    else list.push(alias);
+  }
+  return map;
+})();
+
+/** Псевдонимы (kebab) канонического имени значка; пустой список — их нет. */
+export function iconAliases(name: string): readonly string[] {
+  return ALIASES_BY_CANONICAL.get(name) ?? [];
+}
+
+/**
  * Поиск по каталогу: регистронезависимо, все слова запроса должны входить в
- * имя значка. Пустой запрос — весь каталог.
+ * каноническое имя значка ИЛИ в один из его псевдонимов Lucide. Возвращаются
+ * КАНОНИЧЕСКИЕ имена (единственные, что принимает сервер и хранит БД), поэтому
+ * запрос по псевдониму (`house`) находит значок (`home`) и подсказывает его
+ * каноническое имя. Пустой запрос — весь каталог.
  */
 export function searchIconCatalog(names: readonly string[], query: string): string[] {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter((t) => t !== '');
   if (tokens.length === 0) return [...names];
   return names.filter((name) => {
     const lower = name.toLowerCase();
-    return tokens.every((token) => lower.includes(token));
+    const aliases = ALIASES_BY_CANONICAL.get(name);
+    return tokens.every((token) => {
+      if (lower.includes(token)) return true;
+      return aliases !== undefined && aliases.some((alias) => alias.includes(token));
+    });
   });
 }
 

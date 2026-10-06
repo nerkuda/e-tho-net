@@ -37,6 +37,7 @@ const {
   buildIconCatalog,
   loadIconCatalog,
   searchIconCatalog,
+  iconAliases,
 } = (await import('../src/renderer/lib/ui/icon.js')) as IconModule;
 
 describe('фасад иконок: рендер значка', () => {
@@ -105,6 +106,21 @@ describe('фасад иконок: каталог и поиск', () => {
     assert.deepEqual(searchIconCatalog(names, 'arrow l'), ['arrow-left']);
     assert.deepEqual(searchIconCatalog(names, '  '), names);
     assert.deepEqual(searchIconCatalog(names, 'нет такого'), []);
+  });
+
+  it('поиск находит значок по псевдониму Lucide и отдаёт каноническое имя (08b90470)', () => {
+    // 'house' — псевдоним канонической иконки 'home'.
+    const names = ['home', 'search'];
+    assert.deepEqual(searchIconCatalog(names, 'house'), ['home']);
+    assert.deepEqual(searchIconCatalog(names, 'HOUSE'), ['home']);
+    // каноническое имя по-прежнему находится напрямую.
+    assert.deepEqual(searchIconCatalog(names, 'home'), ['home']);
+    assert.deepEqual(searchIconCatalog(names, 'нет такого'), []);
+  });
+
+  it('iconAliases отдаёт псевдонимы по каноническому имени', () => {
+    assert.ok(iconAliases('home').includes('house'), 'у home есть псевдоним house');
+    assert.deepEqual(iconAliases('definitely-not-a-lucide-icon'), []);
   });
 
   it('полный каталог библиотеки грузится лениво и содержит значки', async () => {
