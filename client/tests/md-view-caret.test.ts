@@ -24,6 +24,7 @@ import {
   MD_SOURCE_AFTER_ATTR,
   MD_SOURCE_END_ATTR,
   MD_SOURCE_LEAF_ATTR,
+  MD_SOURCE_SHIFT_ATTR,
   MD_SOURCE_START_ATTR,
 } from '@etn/markdown';
 
@@ -112,6 +113,27 @@ describe('маппинг выделения просмотра в исходни
       { node: mark.childNodes[0], offset: 6 },
     );
     assert.deepEqual(range, { anchor: 12, head: 16 });
+  });
+
+  it('карта сдвига листа компенсирует escape/HTML-entity (ошибка 1b9cf949)', () => {
+    // `**a \* b**`: диапазон видимого текста [2, 8), `\*` короче исходника на 1.
+    const text = textNode('a * b');
+    const strong = element(
+      {
+        [MD_SOURCE_START_ATTR]: '2',
+        [MD_SOURCE_END_ATTR]: '8',
+        [MD_SOURCE_LEAF_ATTR]: '1',
+        [MD_SOURCE_SHIFT_ATTR]: '3:1',
+      },
+      [text],
+    );
+    element({ [MD_SOURCE_START_ATTR]: '0', [MD_SOURCE_END_ATTR]: '10' }, [strong]);
+    // Каретка на `b` (4-й отрисованный символ) → 2 + 4 + 1 = 7 (истина).
+    const range = sourceRangeFromSelection({ node: text, offset: 4 }, { node: text, offset: 4 });
+    assert.deepEqual(range, { anchor: 7, head: 7 });
+    // До укороченного прогона сдвиг не применяется.
+    const before = sourceRangeFromSelection({ node: text, offset: 2 }, { node: text, offset: 2 });
+    assert.deepEqual(before, { anchor: 4, head: 4 });
   });
 
   it('клик на уровне блока отсчитывается от предыдущего data-md-after', () => {

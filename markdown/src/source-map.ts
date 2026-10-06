@@ -24,11 +24,13 @@
  *    {@link renderMarkdown} (the caller's `body_md`, CRLF included).
  * 2. **View side.** {@link sourceOffsetFromCaret} turns a DOM caret position
  *    into a `body_md` offset. Inside an annotated leaf it is
- *    `range.start + <characters before the caret>`; at block level it anchors
- *    on the nearest preceding `data-md-after` (`after + <characters since that
- *    anchor>`), so markdown markup of preceding constructs does not disturb the
- *    count. The package stays DOM-free — the helper works on a minimal
- *    structural interface a real `Element`/`Text` satisfies.
+ *    `range.start + <characters before the caret>`, corrected by
+ *    {@link MD_SOURCE_SHIFT_ATTR} when the leaf contains escapes/entities
+ *    (see below); at block level it anchors on the nearest preceding
+ *    `data-md-after` (`after + <characters since that anchor>`), so markdown
+ *    markup of preceding constructs does not disturb the count. The package
+ *    stays DOM-free — the helper works on a minimal structural interface a real
+ *    `Element`/`Text` satisfies.
  *
  * Granularity. Block ranges are exact for their content start (line-leading
  * markup — heading hashes, list bullets, quotes, task boxes — is skipped).
@@ -47,11 +49,22 @@
  * descendants' after-anchors instead (задача `86598085`, замечание верификатора
  * проверки `ba68771d`).
  *
- * Honest limit: an escape (`\*`), an HTML entity (`&amp;`) or a markdown link
- * inside a construct is a rendered slice shorter than its source, and no
- * per-text-node anchor exists for it, so `range.start + <chars>` stays
- * approximate there — the one case the leaf/ancestor model cannot cover without
- * wrapping text in extra elements (not allowed: output byte-parity).
+ * Escapes and HTML entities inside a construct (`**a \* b**`, `**a &amp; b**`)
+ * render shorter than their source slice, so a plain `range.start + <chars>`
+ * leaf mapping would drift (задача `86598085`; ошибка `1b9cf949`). markdown-it
+ * keeps those runs as `text_special` tokens — `markup` = the whole source run,
+ * `content` = the rendered text — until its `text_join` core rule merges them.
+ * Our core rule runs right after `inline` (before `text_join`), so it records
+ * the difference as {@link MD_SOURCE_SHIFT_ATTR} on the leaf element: a list of
+ * `<renderedBoundary>:<delta>` entries the resolver adds once the caret passes
+ * the shortened run. No extra element wraps the text — only one more `data-`
+ * attribute under `sourceMap`, so the default output stays byte-for-byte.
+ *
+ * Honest limit: a markdown link or image inside a construct (`**[a](u)**`)
+ * renders as its label, which is neither annotated nor counted as a text run,
+ * so `range.start + <chars>` (and the block-anchor fallback) stays approximate
+ * there — the case the leaf/ancestor model cannot cover without annotating
+ * links/images (out of scope of the source map, задача `ba68771d`).
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -65,6 +78,13 @@ export const MD_SOURCE_END_ATTR = 'data-md-end';
 export const MD_SOURCE_AFTER_ATTR = 'data-md-after';
 /** `data-`attribute marking a node whose text is a verbatim source slice. */
 export const MD_SOURCE_LEAF_ATTR = 'data-md-leaf';
+/**
+ * `data-`attribute on a leaf carrying its rendered→source shift map: a
+ * comma-separated list of `<renderedBoundary>:<delta>` entries compensating
+ * escapes / HTML entities whose source run is longer than the rendered text
+ * (задача `86598085`, ошибка `1b9cf949`).
+ */
+export const MD_SOURCE_SHIFT_ATTR = 'data-md-shift';
 
 /** Half-open character range in the markdown source. */
 export interface SourceRange {
@@ -267,6 +287,39 @@ function hasAnnotatedDescendant(children: readonly Token[], i: number): boolean 
   return false;
 }
 
+/**
+ * Rendered→source shift map of a leaf construct: markdown-it renders escapes
+ * (`\*` → `*`) and HTML entities (`&amp;` → `&`) as `text_special` tokens whose
+ * `markup` (source run) is longer than their `content` (rendered text), so the
+ * leaf's rendered length is smaller than its source slice. Returns ascending
+ * `{ at, delta }` entries — `at` is the rendered offset right after the
+ * shortened run, `delta` the number of source characters hidden there.
+ *
+ * Only `text`/`text_special` runs are counted; a link/image label inside a leaf
+ * is not a verbatim slice and stays an honest limit of the model (see the
+ * module head).
+ */
+function leafShiftEntries(
+  children: readonly Token[],
+  i: number,
+): Array<{ at: number; delta: number }> {
+  const level = children[i]!.level;
+  const entries: Array<{ at: number; delta: number }> = [];
+  let rendered = 0;
+  for (let j = i + 1; j < children.length; j++) {
+    const other = children[j]!;
+    if (other.level <= level) break;
+    if (other.type !== 'text' && other.type !== 'text_special') continue;
+    const renderedLength = other.content.length;
+    const sourceLength = other.type === 'text_special' ? other.markup.length : renderedLength;
+    rendered += renderedLength;
+    if (sourceLength > renderedLength) {
+      entries.push({ at: rendered, delta: sourceLength - renderedLength });
+    }
+  }
+  return entries;
+}
+
 
 /** Absolute content range of a block token (start at first rendered char). */
 function blockRange(
@@ -437,7 +490,13 @@ function stampRanges(state: { src: string; tokens: Token[] }, input: string): vo
       if (!LEAF_INLINE_TYPES.has(child.type)) continue;
       const meta = child.meta as RangeCarrier | null;
       if (meta?.mdRange === undefined) continue;
-      if (!hasAnnotatedDescendant(children, i)) child.attrSet(MD_SOURCE_LEAF_ATTR, '1');
+      if (!hasAnnotatedDescendant(children, i)) {
+        child.attrSet(MD_SOURCE_LEAF_ATTR, '1');
+        const shifts = leafShiftEntries(children, i);
+        if (shifts.length > 0) {
+          child.attrSet(MD_SOURCE_SHIFT_ATTR, shifts.map((e) => `${e.at}:${e.delta}`).join(','));
+        }
+      }
     }
   }
 }
@@ -769,6 +828,20 @@ function clamp(value: number, range: SourceRange): number {
   return value;
 }
 
+/** Parses a leaf shift map (`<renderedBoundary>:<delta>,…`) into entries. */
+function parseShiftEntries(raw: string | null): Array<{ at: number; delta: number }> {
+  if (raw === null || raw === '') return [];
+  const entries: Array<{ at: number; delta: number }> = [];
+  for (const part of raw.split(',')) {
+    const sep = part.indexOf(':');
+    if (sep === -1) continue;
+    const at = Number(part.slice(0, sep));
+    const delta = Number(part.slice(sep + 1));
+    if (Number.isFinite(at) && Number.isFinite(delta) && delta > 0) entries.push({ at, delta });
+  }
+  return entries;
+}
+
 /** Rendered characters before the caret (`node` + `offset`) inside `ancestor`. */
 function charsBeforeCaret(
   node: SourceMapNode,
@@ -845,7 +918,18 @@ export function sourceOffsetFromCaret(
     typeof found.node.getAttribute === 'function' &&
     found.node.getAttribute(MD_SOURCE_LEAF_ATTR) === '1';
   const caret = charsBeforeCaret(node, offset, found.node);
-  if (isLeaf) return clamp(found.range.start + caret, found.range);
+  if (isLeaf) {
+    // Compensate escapes/entities: the source run is longer than the rendered
+    // text, so the shift starts once the caret passes the shortened run.
+    let shift = 0;
+    const raw = typeof found.node.getAttribute === 'function'
+      ? found.node.getAttribute(MD_SOURCE_SHIFT_ATTR)
+      : null;
+    for (const entry of parseShiftEntries(raw)) {
+      if (entry.at <= caret) shift += entry.delta;
+    }
+    return clamp(found.range.start + caret + shift, found.range);
+  }
 
   let best: RenderedAnchor | null = null;
   for (const anchor of collectAnchors(found.node)) {

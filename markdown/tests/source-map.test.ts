@@ -89,10 +89,23 @@ function mkEl(attrs: Record<string, string>): ParsedNode {
   };
 }
 
+/**
+ * Decodes the five entities {@link escapeHtml} emits, so the fake DOM's
+ * `textContent` matches a real browser's (which decodes character references).
+ */
+function decodeEntities(data: string): string {
+  return data
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
 function mkText(data: string): ParsedNode {
   return {
     nodeType: TEXT_NODE,
-    textContent: data,
+    textContent: decodeEntities(data),
     parentNode: null,
     childNodes: [],
   } as unknown as ParsedNode;
@@ -592,15 +605,47 @@ test('hard break внутри strong: клик по тексту после пе
   assert.equal(clickOffset(src, 'b', 'b'), src.indexOf('b'));
 });
 
-test('ограничение: экранированный символ внутри конструкции смещает leaf-клик', () => {
-  // Рендер `\*` короче исходника на символ (обратный слэш отбрасывается), а
-  // leaf-ветка считает только отрендеренные символы. Честное ограничение
-  // задокументировано в шапке source-map.ts: без обёртки текста в элементы
-  // (запрещена — байт-паритет вывода) точного якоря для escape/entity нет.
+test('escape внутри конструкции: клик по тексту после escape точен (1b9cf949)', () => {
+  // Рендер `\*` короче исходника на символ (обратный слэш отбрасывается);
+  // карта сдвига `data-md-shift` на leaf-конструкции компенсирует разницу.
   const bs = String.fromCharCode(92);
   const src = '**a ' + bs + '* b**';
   assert.equal(src.indexOf('b'), 7);
-  assert.equal(clickOffset(src, 'b', 'b'), 6);
+  assert.equal(clickOffset(src, 'b', 'b'), 7);
+  // до escape смещение не сдвигается
+  assert.equal(clickOffset(src, 'a', 'a'), src.indexOf('a'));
+});
+
+test('HTML-entity внутри конструкции: клик по тексту после entity точен (1b9cf949)', () => {
+  const src = '**a &amp; b**';
+  assert.equal(src.indexOf('b'), 10);
+  assert.equal(clickOffset(src, 'b', 'b'), 10);
+});
+
+test('escape/entity внутри em, s, mark и underline: клик после них точен', () => {
+  const bs = String.fromCharCode(92);
+  for (const [src, needle] of [
+    ['*a ' + bs + '* b*', 'b'],
+    ['~~a &amp; b~~', 'b'],
+    ['==a ' + bs + '* b==', 'b'],
+    ['<u>a &amp; b</u>', 'b'],
+  ] as const) {
+    assert.equal(clickOffset(src, needle, needle), src.indexOf(needle), src);
+  }
+});
+
+test('несколько escape/entity внутри одной конструкции суммируются', () => {
+  const bs = String.fromCharCode(92);
+  const src = '**' + bs + '* &amp; ' + bs + '* z**';
+  assert.equal(clickOffset(src, 'z', 'z'), src.indexOf('z'));
+});
+
+test('ограничение: markdown-ссылка внутри конструкции смещает leaf-клик', () => {
+  // Ссылка рендерится меткой (не аннотируется и не считается текстовым
+  // прогоном), поэтому карта сдвига её не компенсирует — честное ограничение
+  // задокументировано в шапке source-map.ts.
+  const src = '**[метка](http://e) хвост**';
+  assert.notEqual(clickOffset(src, 'хвост', 'хвост'), src.indexOf('хвост'));
 });
 
 test('байт-паритет: вне sourceMap вывод стандартных конструкций не меняется', () => {
