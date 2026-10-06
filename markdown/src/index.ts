@@ -40,6 +40,19 @@ export type {
   WikiLinkResolver,
 } from './wiki-link.js';
 export {
+  TRANSCLUSION_MAX_DEPTH,
+  TRANSCLUSION_MARKER_PREFIX,
+  parseTransclusions,
+  extractSection,
+  expandTransclusions,
+} from './transclusion.js';
+export type {
+  TransclusionRef,
+  TransclusionResolution,
+  TransclusionResolver,
+  ExpandTransclusionsOptions,
+} from './transclusion.js';
+export {
   PUB_ANCHOR_PREFIX,
   shortId,
   publicationAnchor,
