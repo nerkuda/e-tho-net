@@ -155,7 +155,8 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
   ],
   [
     'editor/resource-picker.ts',
-    'одиночные слоты превью источников ресурса (файл/URL); списки не рисует',
+    'одиночные слоты превью источников ресурса (файл/URL); сетку вкладки ' +
+      '«Библиотека» рисует reconcileKeyed',
   ],
   ['editor/graph-tab.ts', 'разовое монтирование тела вкладки графа'],
   ['editor/markdown-field.ts', 'одиночные слоты: превью и контейнер markdown-редактора'],
