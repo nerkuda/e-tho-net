@@ -78,17 +78,22 @@ export interface TypesListBudgetResult<T> {
 }
 
 /**
- * Truncate a single type entry's `description` field to `previewChars`,
- * preserving the entry's other fields. Non-string descriptions (e.g.
- * `null`) are left alone.
+ * Truncate a single type entry's soft AI-face markdown fields (`description`
+ * and, for thought types, `comment_template_md`) to `previewChars`,
+ * preserving the entry's other fields. Non-string values (e.g. `null`) are
+ * left alone. `comment_template_md` is included so the budget invariant holds
+ * after ТП2 started returning the (potentially long) template in the catalogue
+ * (требование 39e30070).
  */
-function shrinkEntryDescription(
+function shrinkEntryTexts(
   entry: Record<string, unknown>,
   previewChars: number,
 ): void {
-  const desc = entry['description'];
-  if (typeof desc === 'string' && desc.length > previewChars) {
-    entry['description'] = desc.slice(0, previewChars);
+  for (const key of ['description', 'comment_template_md'] as const) {
+    const text = entry[key];
+    if (typeof text === 'string' && text.length > previewChars) {
+      entry[key] = text.slice(0, previewChars);
+    }
   }
 }
 
@@ -119,8 +124,8 @@ export function shrinkTypesListToBudget<T extends TypesListBudgetPayload>(
   // Step 1: shorten every type entry's `description` to `previewChars`.
   // -------------------------------------------------------------------------
   if (previewChars > 0) {
-    for (const t of payload.thought_types ?? []) shrinkEntryDescription(t, previewChars);
-    for (const t of payload.link_types ?? []) shrinkEntryDescription(t, previewChars);
+    for (const t of payload.thought_types ?? []) shrinkEntryTexts(t, previewChars);
+    for (const t of payload.link_types ?? []) shrinkEntryTexts(t, previewChars);
   }
   const afterPreviewChars = JSON.stringify(payload).length;
   if (afterPreviewChars <= maxChars) {

@@ -19,7 +19,6 @@
  */
 
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import { openNetworkDb } from '../src/db/network-db.js';
@@ -365,6 +364,92 @@ describe('MCP-развёртка трансклюзий (bcfc7eb7, ADR 85a7a01e)
         const resolve = createTransclusionResolver(ndb);
         assert.deepEqual(resolve(A), { found: false, body_md: '' });
         assert.equal(resolve(sourceId).found, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.types.list разворачивает description и comment_template_md типов (R8, scope описаний типов)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const sourceId = await makeThoughtWithComment(
+          handle.client,
+          ctx.networkId,
+          'Источник типа',
+          'Текст из типа.',
+        );
+        const typeName = 'Тип с трансклюзией';
+        const linkNameForward = 'тип-связи-прямой';
+        const linkNameReverse = 'тип-связи-обратный';
+        const wrote = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_types: [
+              {
+                name: typeName,
+                description: `До. ![[#${sourceId}]] После.`,
+                comment_template_md: `Шаблон: ![[#${sourceId}]]`,
+              },
+            ],
+            link_types: [
+              {
+                name_forward: linkNameForward,
+                name_reverse: linkNameReverse,
+                description: `Связь. ![[#${sourceId}]]`,
+              },
+            ],
+          },
+        });
+        assert.equal(wrote.isError, undefined, toolText(wrote));
+
+        const list = toolJson<{
+          thought_types: Array<{
+            id: string;
+            name: string;
+            description: string | null;
+            comment_template_md: string | null;
+          }>;
+          link_types: Array<{ id: string; name_forward: string; description: string | null }>;
+        }>(
+          await handle.client.callTool({
+            name: 'etn.types.list',
+            arguments: { network_id: ctx.networkId, scope: 'all' },
+          }),
+        );
+
+        const thoughtType = list.thought_types.find((t) => t.name === typeName);
+        assert.ok(thoughtType !== undefined, 'новый тип мысли отсутствует в каталоге');
+        assert.ok(
+          (thoughtType.description ?? '').includes('<!-- etn:transclusion begin'),
+          `description типа не развёрнут: ${thoughtType.description}`,
+        );
+        assert.ok(
+          (thoughtType.description ?? '').includes('Текст из типа.'),
+          'текст источника не развёрнут в description',
+        );
+        assert.ok(
+          !(thoughtType.description ?? '').includes('![[#'),
+          'исходная ссылка осталась в description',
+        );
+        assert.ok(
+          (thoughtType.comment_template_md ?? '').includes('Текст из типа.') &&
+            (thoughtType.comment_template_md ?? '').includes('<!-- etn:transclusion begin'),
+          `comment_template_md типа не развёрнут: ${thoughtType.comment_template_md}`,
+        );
+
+        const linkType = list.link_types.find((t) => t.name_forward === linkNameForward);
+        assert.ok(linkType !== undefined, 'новый тип связи отсутствует в каталоге');
+        assert.ok(
+          (linkType.description ?? '').includes('Текст из типа.') &&
+            (linkType.description ?? '').includes('<!-- etn:transclusion begin'),
+          `description типа связи не развёрнут: ${linkType.description}`,
+        );
       } finally {
         await handle.close();
       }

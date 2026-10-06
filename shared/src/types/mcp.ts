@@ -281,6 +281,11 @@ export interface CardThoughtTypeRef {
  *  (это контракт `etn.types.list` для типов; эффективный набор для конкретной
  *  мысли — через `etn.thoughts.get { meta.views }`). */
 export interface McpThoughtTypeEntry extends ThoughtTypeRef {
+  /**
+   * Шаблон постоянного комментария мысли (требование 39e30070, ТП2): в MCP-выдаче
+   * текст отдаётся с развёрнутыми трансклюзиями, как и `description`.
+   */
+  comment_template_md: string | null;
   properties: McpEffectiveTypeProperty[];
   views: McpThoughtTypeViewEntry[];
 }
