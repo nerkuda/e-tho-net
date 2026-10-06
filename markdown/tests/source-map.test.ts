@@ -565,6 +565,44 @@ test('вложенные **a *b* c**: strong не лист, em лист, кли�
   assertClickInText(src, ' c', 'c');
 });
 
+// Регресс из проверки приёмки: многострочные конструкции с мягким/жёстким
+// переносом рендерятся через <br> (0 текстовых символов), поэтому не могут
+// быть leaf — иначе leaf-ветка резолвера теряет символы переноса.
+
+test('soft break внутри strong: не лист, клик по тексту после переноса точен', () => {
+  const src = '**a\nb**';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.ok(!/<strong[^>]*data-md-leaf/.test(html), html);
+  assert.match(html, /<br [^>]*data-md-after="4"/, html);
+  assert.equal(clickOffset(src, 'b', 'b'), src.indexOf('b'));
+});
+
+test('soft break внутри em и s: клик по тексту после переноса точен', () => {
+  assert.equal(clickOffset('*a\nb*', 'b', 'b'), '*a\nb*'.indexOf('b'));
+  assert.equal(clickOffset('~~a\nb~~', 'b', 'b'), '~~a\nb~~'.indexOf('b'));
+});
+
+test('soft break внутри mark и underline: клик по тексту после переноса точен', () => {
+  assert.equal(clickOffset('==a\nb==', 'b', 'b'), '==a\nb=='.indexOf('b'));
+  assert.equal(clickOffset('<u>a\nb</u>', 'b', 'b'), '<u>a\nb</u>'.indexOf('b'));
+});
+
+test('hard break внутри strong: клик по тексту после переноса точен', () => {
+  const src = '**a  \nb**';
+  assert.equal(clickOffset(src, 'b', 'b'), src.indexOf('b'));
+});
+
+test('ограничение: экранированный символ внутри конструкции смещает leaf-клик', () => {
+  // Рендер `\*` короче исходника на символ (обратный слэш отбрасывается), а
+  // leaf-ветка считает только отрендеренные символы. Честное ограничение
+  // задокументировано в шапке source-map.ts: без обёртки текста в элементы
+  // (запрещена — байт-паритет вывода) точного якоря для escape/entity нет.
+  const bs = String.fromCharCode(92);
+  const src = '**a ' + bs + '* b**';
+  assert.equal(src.indexOf('b'), 7);
+  assert.equal(clickOffset(src, 'b', 'b'), 6);
+});
+
 test('байт-паритет: вне sourceMap вывод стандартных конструкций не меняется', () => {
   assert.equal(renderMarkdown('**жирным**'), '<p><strong>жирным</strong></p>\n');
   assert.equal(renderMarkdown('*курсивом*'), '<p><em>курсивом</em></p>\n');

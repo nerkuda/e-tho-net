@@ -41,9 +41,17 @@
  * keeps the block-anchored approximation.
  *
  * A construct is marked `data-md-leaf` (verbatim 1:1 text) only when it has no
- * annotated descendants: nested constructs (`==a [[Мысль]] b==`,
- * `**a *b* c**`) are handled through their descendants' after-anchors instead
- * (задача `86598085`, замечание верификатора проверки `ba68771d`).
+ * annotated descendant: nested constructs (`==a [[Мысль]] b==`,
+ * `**a *b* c**`) and constructs containing a soft/hard break
+ * (`**a\nb**` → `<br>`, zero rendered characters) are handled through their
+ * descendants' after-anchors instead (задача `86598085`, замечание верификатора
+ * проверки `ba68771d`).
+ *
+ * Honest limit: an escape (`\*`), an HTML entity (`&amp;`) or a markdown link
+ * inside a construct is a rendered slice shorter than its source, and no
+ * per-text-node anchor exists for it, so `range.start + <chars>` stays
+ * approximate there — the one case the leaf/ancestor model cannot cover without
+ * wrapping text in extra elements (not allowed: output byte-parity).
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -240,14 +248,21 @@ const LEAF_INLINE_TYPES = new Set<string>([
   'code_inline',
 ]);
 
-/** True when `token` owns an annotated descendant among `children` after `i`. */
+/**
+ * True when `token` (at `children[i]`) owns a descendant carrying a source
+ * annotation — either a visible-text range (`mdRange`) or an after-anchor
+ * (`mdAfter`, e.g. a soft/hard break rendered as `<br>`). Such a construct is
+ * NOT a verbatim source slice: its rendered text omits the descendant's markup
+ * (or the zero-width `<br>`), so the leaf shortcut would drift — mapping must
+ * go through the descendant anchors instead.
+ */
 function hasAnnotatedDescendant(children: readonly Token[], i: number): boolean {
   const level = children[i]!.level;
   for (let j = i + 1; j < children.length; j++) {
     const other = children[j]!;
     if (other.level <= level) break;
     const meta = other.meta as RangeCarrier | null;
-    if (meta?.mdRange !== undefined) return true;
+    if (meta?.mdRange !== undefined || meta?.mdAfter !== undefined) return true;
   }
   return false;
 }
