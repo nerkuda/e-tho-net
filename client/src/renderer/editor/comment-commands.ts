@@ -41,7 +41,7 @@ import {
   showMenuAt,
   type MenuItem,
 } from '../lib/menu.js';
-import { BUTTON_ACTIVE_CLASS, iconButton } from '../lib/ui/button.js';
+import { iconButton, setButtonActive } from '../lib/ui/button.js';
 import { renderIcon, type IconName } from '../lib/ui/icon.js';
 import type { MdEditor, MdEditorSnapshot } from './md-editor.js';
 
@@ -425,11 +425,18 @@ function layoutToMenuItems(
         () => {
           runCommentCommand(node.id, host);
         },
-        { icon: renderIcon(def.icon) },
+        { icon: renderIcon(def.icon), disabled: isCommandDisabled(node.id, host) },
       ),
     );
   }
   return items;
+}
+
+/** Недоступна ли команда для текущего выделения (для пунктов меню/подменю). */
+function isCommandDisabled(id: string, host: CommentCommandHost): boolean {
+  const editor = host.getEditor();
+  if (editor === null) return false;
+  return commentCommandState(id, editor.snapshot()).disabled === true;
 }
 
 /** Пункты контекстного меню поля комментария (без подменю настроек). */
@@ -510,7 +517,7 @@ export function refreshCommentToolbar(bar: HTMLElement, host: CommentCommandHost
     const id = btn.dataset['command'];
     if (id === undefined) continue;
     const state = commentCommandState(id, snapshot);
-    btn.classList.toggle(BUTTON_ACTIVE_CLASS, state.active === true);
+    setButtonActive(btn, state.active === true);
     btn.disabled = state.disabled === true;
   }
 }

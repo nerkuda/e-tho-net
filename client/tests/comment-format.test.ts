@@ -163,6 +163,15 @@ describe('comment-format: регистрация тел команд', () => {
     assert.deepEqual(editor.edits[0].selection, { anchor: 3, head: 3 });
   });
 
+  it('пункты меню отражают применимость: копировать/вырезать недоступны без выделения', () => {
+    const collapsed = commands.buildCommentMenuItems(host(fakeEditor('x', 0, 0)));
+    const selected = commands.buildCommentMenuItems(host(fakeEditor('x', 0, 1)));
+    const copyOf = (items: ReturnType<Commands['buildCommentMenuItems']>): boolean | undefined =>
+      items.find((item) => item.label === 'Копировать')?.disabled;
+    assert.equal(copyOf(collapsed), true);
+    assert.equal(copyOf(selected), false);
+  });
+
   it('сочетания конфликтов CM6 переводятся в нотацию keymap', () => {
     assert.deepEqual(format.chordToCm6Keys('Ctrl+I'), ['Ctrl-i', 'Mod-i']);
     assert.deepEqual(format.chordToCm6Keys('Ctrl+Shift+K'), ['Ctrl-Shift-k', 'Mod-Shift-k']);

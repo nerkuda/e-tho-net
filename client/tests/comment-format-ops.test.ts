@@ -76,6 +76,19 @@ describe('comment-format-ops: внутристрочные команды', () =
     assert.equal(isInlineActive(snap('****', 2), '**'), true);
     assert.equal(isInlineActive(snap('hello', 3), '**'), false);
   });
+
+  it('каретка ВНУТРИ обёртки снимает формат (блокер проверки)', () => {
+    const edit = toggleInline(snap('**hello**', 4), '**');
+    assert.equal(apply('**hello**', edit.changes), 'hello');
+    assert.deepEqual(edit.selection, { anchor: 2, head: 2 });
+    assert.equal(isInlineActive(snap('**hello**', 4), '**'), true);
+  });
+
+  it('каретка внутри курсива снимает курсив', () => {
+    const edit = toggleInline(snap('a *b* c', 4), '*');
+    assert.equal(apply('a *b* c', edit.changes), 'a b c');
+    assert.deepEqual(edit.selection, { anchor: 3, head: 3 });
+  });
 });
 
 describe('comment-format-ops: заголовки', () => {
@@ -119,6 +132,32 @@ describe('comment-format-ops: списки', () => {
 
   it('сохраняет отступ строк', () => {
     assert.equal(apply('  a', toggleBulletList(snap('  a', 0, 3)).changes), '  - a');
+  });
+});
+
+describe('comment-format-ops: блочные команды на пустой каретке', () => {
+  it('пустое поле: маркер вставляется, каретка — после него', () => {
+    const cases: Array<[string, unknown, string, number]> = [
+      ['- ', toggleBulletList(snap('', 0)), '- ', 2],
+      ['1. ', toggleOrderedList(snap('', 0)), '1. ', 3],
+      ['- [ ] ', toggleTaskList(snap('', 0)), '- [ ] ', 6],
+      ['# ', toggleHeading(snap('', 0), 1), '# ', 2],
+      ['> ', toggleBlockquote(snap('', 0)), '> ', 2],
+    ];
+    for (const [label, edit, expected, caret] of cases) {
+      const typed = edit as { changes: unknown; selection: { anchor: number; head: number } };
+      assert.equal(apply('', typed.changes), expected, `команда ${label}`);
+      assert.deepEqual(typed.selection, { anchor: caret, head: caret }, `каретка ${label}`);
+    }
+  });
+
+  it('каретка на пустой строке: маркер ставится в эту строку', () => {
+    const bullet = toggleBulletList(snap('a\n\nb', 2));
+    assert.equal(apply('a\n\nb', bullet.changes), 'a\n- \nb');
+    assert.deepEqual(bullet.selection, { anchor: 4, head: 4 });
+
+    const heading = toggleHeading(snap('a\n\nb', 2), 2);
+    assert.equal(apply('a\n\nb', heading.changes), 'a\n## \nb');
   });
 });
 

@@ -75,13 +75,26 @@ function blockBodies(snap: EditorSnapshot): string[] {
     .filter((body) => body !== '');
 }
 
+/** Позиция каретки после маркера строки (нет маркера — после отступа). */
+function caretAfter(newLine: string, marker: RegExp): number {
+  const match = marker.exec(newLine);
+  if (match !== null) return match[0].length;
+  return /^[ \t]*/.exec(newLine)?.[0].length ?? 0;
+}
+
 /**
  * Применяет пофункциональное преобразование к каждой строке блока. Если ничего
  * не изменилось — возвращает пустую правку с прежним выделением.
+ *
+ * `caretOffset` включается только при каретке (пустое выделение): он даёт
+ * позицию каретки ВНУТРИ строки каретки — так блочная команда на пустой
+ * строке вставляет маркер и ставит каретку после него (элемент `1ab005ca`).
+ * При непустом выделении результат выделяет весь блок.
  */
 function editBlock(
   snap: EditorSnapshot,
   map: (body: string, indent: string, index: number, count: number) => string,
+  caretOffset?: (newLine: string, lineIndex: number) => number,
 ): TextEdit {
   const { start, end } = blockRange(snap);
   const lines = snap.text.slice(start, end).split('\n');
@@ -93,10 +106,15 @@ function editBlock(
     return { changes: [], selection: { anchor: snap.from, head: snap.to } };
   }
   const insert = next.join('\n');
-  return {
-    changes: [{ from: start, to: end, insert }],
-    selection: { anchor: start, head: start + insert.length },
-  };
+  const changes: MdEditorChange[] = [{ from: start, to: end, insert }];
+  if (snap.from === snap.to && caretOffset !== undefined) {
+    const caretLine = snap.text.slice(start, snap.from).split('\n').length - 1;
+    let pos = start;
+    for (let i = 0; i < caretLine; i += 1) pos += (next[i]?.length ?? 0) + 1;
+    const col = caretOffset(next[caretLine] ?? '', caretLine);
+    return { changes, selection: { anchor: pos + col, head: pos + col } };
+  }
+  return { changes, selection: { anchor: start, head: start + insert.length } };
 }
 
 /* ------------------------------------------------------------------ *
@@ -142,11 +160,48 @@ export function toggleInline(snap: EditorSnapshot, open: string, close: string =
       selection: { anchor: from + open.length, head: to + open.length },
     };
   }
+  // Каретка внутри уже обёрнутого фрагмента — снимаем формат.
+  const enclosing = findEnclosing(snap, open, close);
+  if (enclosing !== null) {
+    const changes: MdEditorChange[] = [
+      { from: enclosing.openFrom, to: enclosing.openFrom + open.length, insert: '' },
+      { from: enclosing.closeTo - close.length, to: enclosing.closeTo, insert: '' },
+    ];
+    const caret = from - open.length;
+    return { changes, selection: { anchor: caret, head: caret } };
+  }
   const insert = open + close;
   return {
     changes: [{ from, to: from, insert }],
     selection: { anchor: from + open.length, head: from + open.length },
   };
+}
+
+/**
+ * Пара маркеров, внутри которой стоит каретка (`**he|llo**`). Возвращает
+ * границы обёртки либо `null`. Маркер не считается частью более длинной серии
+ * того же символа (чтобы `*` не «поймался» внутри `**…**`), обёртка не
+ * пересекает перевод строки.
+ */
+function findEnclosing(
+  snap: EditorSnapshot,
+  open: string,
+  close: string,
+): { openFrom: number; closeTo: number } | null {
+  if (snap.from !== snap.to) return null;
+  const { text, from } = snap;
+  // Ищем открывающий маркер СТРОГО до каретки (`from - 1`): если каретка стоит
+  // перед закрывающим маркером, `lastIndexOf(open, from)` вернул бы его самого.
+  const left = from === 0 ? -1 : text.lastIndexOf(open, from - 1);
+  if (left === -1) return null;
+  if (left > 0 && text[left - 1] === open[0]) return null;
+  const innerStart = left + open.length;
+  if (innerStart > from) return null;
+  const right = text.indexOf(close, from);
+  if (right === -1) return null;
+  if (right + close.length < text.length && text[right + close.length] === close[0]) return null;
+  if (text.slice(innerStart, right).includes('\n')) return null;
+  return { openFrom: left, closeTo: right + close.length };
 }
 
 /** Активна ли внутристрочная команда для текущего выделения/каретки. */
@@ -159,7 +214,7 @@ export function isInlineActive(snap: EditorSnapshot, open: string, close: string
   ) {
     return true;
   }
-  if (from === to) return false;
+  if (from === to) return findEnclosing(snap, open, close) !== null;
   const selected = text.slice(from, to);
   return selected.length > open.length + close.length && selected.startsWith(open) && selected.endsWith(close);
 }
@@ -181,58 +236,76 @@ function allOwn(bodies: string[], own: RegExp): boolean {
   return bodies.length > 0 && bodies.every((body) => own.test(body));
 }
 
-/** Заголовок H1–H3 (toggle: повторный вызов снимает заголовок). */
+/**
+ * Заголовок H1–H3 (toggle: повторный вызов снимает заголовок). На пустой
+ * строке/пустом поле маркер ставится, каретка — после него.
+ */
 export function toggleHeading(snap: EditorSnapshot, level: 1 | 2 | 3): TextEdit {
   const marker = `${'#'.repeat(level)} `;
   const own = new RegExp(`^#{${level}} `);
   const isAll = allOwn(blockBodies(snap), own);
-  return editBlock(snap, (body, indent) => {
-    if (body === '') return indent;
-    if (isAll) return indent + body.replace(own, '');
-    return `${indent}${marker}${body.replace(/^#{1,6} /, '')}`;
-  });
+  return editBlock(
+    snap,
+    (body, indent) => {
+      if (isAll) return indent + body.replace(own, '');
+      return `${indent}${marker}${body.replace(/^#{1,6} /, '')}`;
+    },
+    (line) => caretAfter(line, /^[ \t]*#{1,6} /),
+  );
 }
 
 /** Маркированный список (`- `). */
 export function toggleBulletList(snap: EditorSnapshot): TextEdit {
   const isAll = allOwn(blockBodies(snap), BULLET_OWN);
-  return editBlock(snap, (body, indent) => {
-    if (body === '') return indent;
-    if (isAll) return indent + body.replace(/^[-*+] /, '');
-    return `${indent}- ${body.replace(ANY_BLOCK_MARKER, '')}`;
-  });
+  return editBlock(
+    snap,
+    (body, indent) => {
+      if (isAll) return indent + body.replace(/^[-*+] /, '');
+      return `${indent}- ${body.replace(ANY_BLOCK_MARKER, '')}`;
+    },
+    (line) => caretAfter(line, /^[ \t]*[-*+] (?!\[[ xX]\] )/),
+  );
 }
 
 /** Нумерованный список (`1. `, `2. `, … — нумерация подряд). */
 export function toggleOrderedList(snap: EditorSnapshot): TextEdit {
   const isAll = allOwn(blockBodies(snap), ORDERED_OWN);
   let counter = 0;
-  return editBlock(snap, (body, indent) => {
-    if (body === '') return indent;
-    if (isAll) return indent + body.replace(ORDERED_OWN, '');
-    counter += 1;
-    return `${indent}${counter}. ${body.replace(ANY_BLOCK_MARKER, '')}`;
-  });
+  return editBlock(
+    snap,
+    (body, indent) => {
+      if (isAll) return indent + body.replace(ORDERED_OWN, '');
+      counter += 1;
+      return `${indent}${counter}. ${body.replace(ANY_BLOCK_MARKER, '')}`;
+    },
+    (line) => caretAfter(line, /^[ \t]*\d+[.)] /),
+  );
 }
 
 /** Список задач (`- [ ] `). */
 export function toggleTaskList(snap: EditorSnapshot): TextEdit {
   const isAll = allOwn(blockBodies(snap), TASK_OWN);
-  return editBlock(snap, (body, indent) => {
-    if (body === '') return indent;
-    if (isAll) return indent + body.replace(TASK_OWN, '');
-    return `${indent}- [ ] ${body.replace(ANY_BLOCK_MARKER, '')}`;
-  });
+  return editBlock(
+    snap,
+    (body, indent) => {
+      if (isAll) return indent + body.replace(TASK_OWN, '');
+      return `${indent}- [ ] ${body.replace(ANY_BLOCK_MARKER, '')}`;
+    },
+    (line) => caretAfter(line, /^[ \t]*[-*+] \[[ xX]\] /),
+  );
 }
 
 /** Цитата (`> `). */
 export function toggleBlockquote(snap: EditorSnapshot): TextEdit {
   const isAll = allOwn(blockBodies(snap), QUOTE_OWN);
-  return editBlock(snap, (body, indent) => {
-    if (body === '') return indent;
-    if (isAll) return indent + body.replace(QUOTE_OWN, '');
-    return `${indent}> ${body}`;
-  });
+  return editBlock(
+    snap,
+    (body, indent) => {
+      if (isAll) return indent + body.replace(QUOTE_OWN, '');
+      return `${indent}> ${body}`;
+    },
+    (line) => caretAfter(line, /^[ \t]*> /),
+  );
 }
 
 /** Активность блочного маркера: все непустые строки уже имеют маркер. */
