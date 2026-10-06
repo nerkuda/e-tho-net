@@ -160,13 +160,14 @@ describe(
       }
     });
 
-    it('create with comment: комментарий сверх лимита рендера откатывает мысль', async () => {
+    it('create with comment: комментарий сверх лимита рендера — 422 и откат мысли', async () => {
       const ctx = await buildRestContext();
       try {
-        // Тело сверх лимита 256 КиБ рендерер `@etn/markdown` отвергает, а
+        // Тело сверх лимита 256 КиБ отвергается проверкой ДО рендера (ошибка
+        // 2764d7bb): клиентская ошибка 422 VALIDATION_ERROR с details.field =
+        // `comment.body_md`, а не 500 INTERNAL от голого Error рендерера.
         // createComment исполняется внутри транзакции createThought — INSERT
-        // мысли обязан откатиться (ошибка о коде ответа при этом лимите:
-        // см. карточку дефекта). Проверяем именно отсутствие частичной записи.
+        // мысли обязан откатиться.
         const big = 'a'.repeat(256 * 1024 + 1);
         const res = await ctx.app.inject({
           method: 'POST',
@@ -174,11 +175,42 @@ describe(
           headers: authHeaders(ctx),
           payload: { title: 'Слишком большой комментарий', comment: { body_md: big } },
         });
-        assert.notEqual(res.statusCode, 201);
+        assert.equal(res.statusCode, 422);
+        const error = res.json().error as { code: string; details?: { field?: string } };
+        assert.equal(error.code, 'VALIDATION_ERROR');
+        assert.equal(error.details?.field, 'comment.body_md');
         const thoughts = ctx.ndb
           .prepare('SELECT COUNT(*) AS n FROM thoughts_v WHERE title = ?')
           .get('Слишком большой комментарий') as { n: number };
         assert.equal(thoughts.n, 0);
+        const comments = ctx.ndb
+          .prepare('SELECT COUNT(*) AS n FROM comments_v WHERE length(body_md) > ?')
+          .get(256 * 1024) as { n: number };
+        assert.equal(comments.n, 0);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('POST /comments: комментарий сверх лимита рендера — 422 VALIDATION_ERROR (ошибка 2764d7bb)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const id = await createThought(ctx, { title: 'Владелец большого комментария' });
+        const big = 'a'.repeat(256 * 1024 + 1);
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${id}/comments`,
+          headers: authHeaders(ctx),
+          payload: { kind: 'permanent', body_md: big },
+        });
+        assert.equal(res.statusCode, 422);
+        const error = res.json().error as { code: string; details?: { field?: string } };
+        assert.equal(error.code, 'VALIDATION_ERROR');
+        assert.equal(error.details?.field, 'body_md');
+        const comments = ctx.ndb
+          .prepare('SELECT COUNT(*) AS n FROM comments_v WHERE owner_id = ?')
+          .get(id) as { n: number };
+        assert.equal(comments.n, 0, 'комментарий не создан');
       } finally {
         await closeRestContext(ctx);
       }

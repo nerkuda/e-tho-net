@@ -40,7 +40,7 @@ import {
   type PermanentCommentPreview,
 } from '@etn/shared';
 
-import { renderMarkdown } from '@etn/markdown';
+import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
 
 import { applySectionOps, type EditOp } from './markdown-sections.js';
 import { normaliseInstant } from './dates.js';
@@ -178,6 +178,40 @@ function homeThoughtId(ndb: NetworkDb): string | null {
 /** Непустой текст: строка, у которой после `trim()` остались символы. */
 function isNonEmptyText(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * Лимит рендера тела комментария (ошибка 2764d7bb, требование 99055dba):
+ * единый рендерер `@etn/markdown` отвергает источник длиннее
+ * {@link DEFAULT_MAX_LENGTH} обычным `Error`, который глобальный обработчик
+ * превращал в `500 INTERNAL`. Проверяем длину ДО рендера и отвечаем
+ * `422 VALIDATION_ERROR` с `details.field` — это клиентская ошибка ввода, а не
+ * внутренняя. Граница включительна: ровно {@link DEFAULT_MAX_LENGTH} символов
+ * допустимо, отвергается только превышение.
+ *
+ * @param bodyMd - тело в формате Markdown.
+ * @param field - путь поля тела в исходном запросе для `details.field`
+ *   (`body_md` для `POST /comments`, `comment.body_md` для `POST /thoughts`).
+ */
+function assertBodyWithinRenderLimit(bodyMd: string, field: string): void {
+  if (bodyMd.length > DEFAULT_MAX_LENGTH) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `body_md превышает лимит рендера (${bodyMd.length} > ${DEFAULT_MAX_LENGTH} символов).`,
+      { field, limit: DEFAULT_MAX_LENGTH },
+    );
+  }
+}
+
+/**
+ * Опции создания комментария.
+ */
+export interface CreateCommentOptions {
+  /**
+   * Путь поля тела в исходном запросе для `details.field` при превышении лимита
+   * рендера (ошибка 2764d7bb). По умолчанию `body_md`.
+   */
+  bodyField?: string;
 }
 
 /**
@@ -502,8 +536,15 @@ export function createComment(
   ownerId: string,
   input: CommentInput,
   actorUserId: string,
+  options: CreateCommentOptions = {},
 ): Comment {
-  return createCommentWithTargets(ndb, [{ owner_type: ownerType, owner_id: ownerId }], input, actorUserId);
+  return createCommentWithTargets(
+    ndb,
+    [{ owner_type: ownerType, owner_id: ownerId }],
+    input,
+    actorUserId,
+    options,
+  );
 }
 
 /**
@@ -533,6 +574,7 @@ export function createCommentWithTargets(
   rawTargets: CommentTarget[],
   input: CommentInput,
   actorUserId: string,
+  options: CreateCommentOptions = {},
 ): Comment {
   const kind = validateKind(input.kind);
   // Dedup targets preserving order; validate owner types and ids.
@@ -591,6 +633,9 @@ export function createCommentWithTargets(
     );
   }
   const bodyMd = input.body_md ?? '';
+  // Лимит рендера проверяется ДО `renderMarkdown` (ошибка 2764d7bb): иначе
+  // единый рендерер бросил бы обычный `Error` и запрос ушёл бы в 500.
+  assertBodyWithinRenderLimit(bodyMd, options.bodyField ?? 'body_md');
   const bodyHtml = renderMarkdown(bodyMd);
 
   return ndb.transaction(() => {
@@ -699,6 +744,11 @@ export interface UpdateCommentOptions {
    * не меняя тип возврата {@link Comment}.
    */
   warnings?: MutationWarning[];
+  /**
+   * Путь поля тела в исходном запросе для `details.field` при превышении лимита
+   * рендера (ошибка 2764d7bb). По умолчанию `body_md`.
+   */
+  bodyField?: string;
 }
 
 /**
@@ -771,6 +821,8 @@ export function updateComment(
         });
       }
       sets.push('body_md = ?', 'body_html = ?');
+      // Лимит рендера проверяется ДО `renderMarkdown` (ошибка 2764d7bb).
+      assertBodyWithinRenderLimit(changes.body_md, options.bodyField ?? 'body_md');
       args.push(changes.body_md, renderMarkdown(changes.body_md));
     }
     // Хронологическая запись не может стать полностью пустой (требование

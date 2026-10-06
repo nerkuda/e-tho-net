@@ -913,6 +913,9 @@ export function createThought(
         id,
         { kind: 'permanent', title: null, body_md: explicitBody },
         actorUserId,
+        // Тело пришло вложенным полем `comment.body_md` — так и указываем путь
+        // в `details.field` при превышении лимита рендера (ошибка 2764d7bb).
+        { bodyField: 'comment.body_md' },
       );
     } else if (input.type_id !== undefined && input.type_id !== null) {
       const template = getThoughtType(ndb, input.type_id)?.comment_template_md;

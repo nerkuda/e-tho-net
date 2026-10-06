@@ -23,7 +23,7 @@ import {
   listComments,
   updateComment,
 } from '../src/domain/comment-service.js';
-import { renderMarkdown } from '@etn/markdown';
+import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
 import { acquireLock } from '../src/domain/lock-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
@@ -460,6 +460,83 @@ describe(
             ),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('rejects a comment body over the render limit with VALIDATION_ERROR (ошибка 2764d7bb)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'OverLimit');
+        const big = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        let caught: unknown;
+        try {
+          createComment(ndb, 'thought', t, { kind: 'permanent', body_md: big }, USER);
+        } catch (e) {
+          caught = e;
+        }
+        assert.ok(caught instanceof EtnError, 'должна бросаться EtnError, а не голый Error');
+        assert.equal(caught.code, 'VALIDATION_ERROR');
+        assert.deepEqual(caught.details, { field: 'body_md', limit: DEFAULT_MAX_LENGTH });
+        const count = ndb.prepare('SELECT COUNT(*) AS n FROM comments_v').get() as { n: number };
+        assert.equal(count.n, 0, 'при отказе ничего не записано');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('accepts a comment body exactly at the render limit (boundary, ошибка 2764d7bb)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'AtLimit');
+        const body = 'a'.repeat(DEFAULT_MAX_LENGTH);
+        const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: body }, USER);
+        assert.equal(c.body_md.length, DEFAULT_MAX_LENGTH);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('uses the caller-supplied field path in details.field (ошибка 2764d7bb)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'NestedField');
+        const big = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        assert.throws(
+          () =>
+            createComment(
+              ndb,
+              'thought',
+              t,
+              { kind: 'permanent', body_md: big },
+              USER,
+              { bodyField: 'comment.body_md' },
+            ),
+          (e: unknown) =>
+            e instanceof EtnError &&
+            e.code === 'VALIDATION_ERROR' &&
+            (e.details as { field?: string }).field === 'comment.body_md',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('rejects an over-limit body on update and keeps the stored body (ошибка 2764d7bb)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'UpdateOverLimit');
+        const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: 'ok' }, USER);
+        const big = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        assert.throws(
+          () => updateComment(ndb, c.id, { body_md: big }, undefined, USER),
+          (e: unknown) =>
+            e instanceof EtnError &&
+            e.code === 'VALIDATION_ERROR' &&
+            (e.details as { field?: string }).field === 'body_md',
+        );
+        assert.equal(listComments(ndb, 'thought', t)[0]?.body_md, 'ok');
       } finally {
         ndb.close();
       }
