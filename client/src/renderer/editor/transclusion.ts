@@ -916,48 +916,64 @@ export const transclusionAtomicRanges = EditorView.atomicRanges.of((view) => {
   return state === undefined ? RangeSet.empty : state.atomic;
 });
 
-/** Клики по блоку/ссылке: вход в правку ссылки; кнопка обрабатывает себя сама. */
-export const transclusionClick = EditorView.domEventHandlers({
-  mousedown: (event, view) => {
-    const target = event.target as Element | null;
-    // Кнопка смены ссылки: не трогаем курсор, событие обработает кнопка.
-    if (target !== null && target.closest(`.${TRANSCLUSION_CHANGE_CLASS}`) !== null) return true;
-    // Клик вне редактируемого текста блока — записать изменения блока в
-    // источник и выйти из режима правки блока (задача e2c14673, элемент
-    // 2b116d37). Курсор ставится обычным путём (return false).
-    const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
-    if (be !== null) {
-      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-      if (pos === null || pos < be.from || pos > be.to) {
-        void saveBlockEdit(view);
-        return false;
-      }
+/**
+ * Обработчик `mousedown` трансклюзий: клик по свёрнутой ссылке уводит каретку
+ * внутрь неё (режим правки ссылки), клик по блоку не ставит каретку
+ * (неделимость блока, задача `a2b68d72`), клик вне правки блока завершает её
+ * записью в источник (задача `e2c14673`).
+ *
+ * Реагирует только на ОСНОВНУЮ кнопку мыши (`event.button === 0`): правый и
+ * средний клик — жесты вызова контекстного меню, они не должны менять
+ * выделение и разворачивать свёрнутую ссылку (ошибка `27b95e60`). Событие при
+ * этом не гасим — `contextmenu` открывает меню поверх прежнего состояния.
+ * Родной обработчик CM6 на неосновных кнопках выделение не двигает
+ * (`view/dist/index.js`: basicMouseSelection — только при `button == 0`).
+ */
+export function transclusionMouseDown(event: MouseEvent, view: EditorView): boolean {
+  if (event.button !== 0) return false;
+  const target = event.target as Element | null;
+  // Кнопка смены ссылки: не трогаем курсор, событие обработает кнопка.
+  if (target !== null && target.closest(`.${TRANSCLUSION_CHANGE_CLASS}`) !== null) return true;
+  // Клик вне редактируемого текста блока — записать изменения блока в
+  // источник и выйти из режима правки блока (задача e2c14673, элемент
+  // 2b116d37). Курсор ставится обычным путём (return false).
+  const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
+  if (be !== null) {
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (pos === null || pos < be.from || pos > be.to) {
+      void saveBlockEdit(view);
       return false;
     }
-    const block = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
-    if (block instanceof HTMLElement) {
-      // Неделимость блока при навигации мышью (задача a2b68d72, требование
-      // 29a3c17a/элемент 2b116d37): клик по блоку НЕ ставит каретку внутрь
-      // ссылки — блок остаётся целым (иначе он распадался бы в исходный
-      // markdown и стрелки шли бы сквозь него). Правка ссылки — кнопкой
-      // смены ссылки (свёрнутая ссылка), правка блока — двойным кликом/Enter.
-      return true;
-    }
-    const el = target?.closest?.(`.${TRANSCLUSION_LINK_CLASS}`);
-    if (!(el instanceof HTMLElement)) return false;
-    const from = Number(el.dataset.mdFrom);
-    const to = Number(el.dataset.mdTo);
-    if (!Number.isFinite(from) || !Number.isFinite(to) || to - from < 2) return false;
-    let pos = from + 1;
-    const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
-    if (coords !== null && coords > from && coords < to) pos = coords;
-    view.dispatch({
-      selection: { anchor: Math.min(pos, to - 1) },
-      scrollIntoView: false,
-      userEvent: 'select',
-    });
+    return false;
+  }
+  const block = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
+  if (block instanceof HTMLElement) {
+    // Неделимость блока при навигации мышью (задача a2b68d72, требование
+    // 29a3c17a/элемент 2b116d37): клик по блоку НЕ ставит каретку внутрь
+    // ссылки — блок остаётся целым (иначе он распадался бы в исходный
+    // markdown и стрелки шли бы сквозь него). Правка ссылки — кнопкой
+    // смены ссылки (свёрнутая ссылка), правка блока — двойным кликом/Enter.
     return true;
-  },
+  }
+  const el = target?.closest?.(`.${TRANSCLUSION_LINK_CLASS}`);
+  if (!(el instanceof HTMLElement)) return false;
+  const from = Number(el.dataset.mdFrom);
+  const to = Number(el.dataset.mdTo);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to - from < 2) return false;
+  let pos = from + 1;
+  const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (coords !== null && coords > from && coords < to) pos = coords;
+  view.dispatch({
+    selection: { anchor: Math.min(pos, to - 1) },
+    scrollIntoView: false,
+    userEvent: 'select',
+  });
+  return true;
+}
+
+/** Клики по блоку/ссылке: вход в правку ссылки; кнопка обрабатывает себя сама. */
+export const transclusionClick = EditorView.domEventHandlers({
+  mousedown: transclusionMouseDown,
 });
 
 /* ------------------------------------------------------------------ *
@@ -1026,22 +1042,28 @@ export function transclusionMenuHandlers(
  * Контекстное меню блока трансклюзии (элемент `1e0fb0bd`): правый клик по
  * блоку или свёрнутой ссылке в режиме правки окружения. Пока блок в правке,
  * действует меню поля — там блок уже обычный текст. Событие гасится, чтобы не
- * дошло до меню поля (`markdown-field` слушает `editor.dom`).
+ * дошло до меню поля (`markdown-field` слушает `editor.dom`). Открывается
+ * поверх текущего состояния: `mousedown` по неосновной кнопке выделение не
+ * двигает (см. {@link transclusionMouseDown}, ошибка `27b95e60`), поэтому
+ * свёрнутая ссылка остаётся свёрнутой.
  */
+export function transclusionContextMenuHandler(event: MouseEvent, view: EditorView): boolean {
+  if (isBlockEditing(view.state)) return false;
+  const ref = transclusionWidgetRefAt(view, event.target as Element | null);
+  if (ref === null) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  showMenuAt(
+    event.clientX,
+    event.clientY,
+    buildTransclusionMenuItems(transclusionMenuHandlers(view, ref)),
+  );
+  return true;
+}
+
+/** Расширение-обработчик контекстного меню блока (точка подключения в поле). */
 export const transclusionContextMenu = EditorView.domEventHandlers({
-  contextmenu: (event, view) => {
-    if (isBlockEditing(view.state)) return false;
-    const ref = transclusionWidgetRefAt(view, event.target as Element | null);
-    if (ref === null) return false;
-    event.preventDefault();
-    event.stopPropagation();
-    showMenuAt(
-      event.clientX,
-      event.clientY,
-      buildTransclusionMenuItems(transclusionMenuHandlers(view, ref)),
-    );
-    return true;
-  },
+  contextmenu: transclusionContextMenuHandler,
 });
 
 /* ------------------------------------------------------------------ *
