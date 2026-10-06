@@ -88,7 +88,7 @@ export function createBodyExpander(ndb: NetworkDb): BodyExpander {
  * Build a {@link BodyExpander} for PREVIEW/snippet text (MCP chronicle `snippet`,
  * ошибка `a3fb62b6`): the same transclusion expansion, but with the boundary
  * markers disabled (`markers: false`). The preview must not show either the raw
- * `![[#…]]` literal or the ADR `85a7a01e` HTML-comment markers; an
+ * transclusion link or the ADR `85a7a01e` HTML-comment markers; an
  * absent/skipped source simply contributes nothing.
  */
 export function createSnippetExpander(ndb: NetworkDb): BodyExpander {

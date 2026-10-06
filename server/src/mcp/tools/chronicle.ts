@@ -64,7 +64,7 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         const present = createBodyPresenter(ndb);
         // `snippet` собирается из развёрнутого текста без маркеров границ
         // (ошибка a3fb62b6): превью строки согласовано с `body_md`/`body_html`
-        // и не показывает литерал `![[#…]]`.
+        // и не показывает сырую ссылку-трансклюзию.
         const expandSnippet = createSnippetExpander(ndb);
         const result = queryChronicle(ndb, request, {
           userId: rt.deps.auth.userId,
