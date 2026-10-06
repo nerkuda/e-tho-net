@@ -48,6 +48,7 @@ import {
   SORT_ORDERS,
   FOCUS_DIRS,
   ICON_KINDS,
+  isIconLibraryName,
   LAYER_DIFF_MAX_LIMIT,
   LAYER_DIFF_SECTIONS,
   LAYER_THOUGHT_MERGE_MODES,
@@ -117,6 +118,26 @@ export const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
 
 /** Error text shared by every `property_id`/`property` pair (задача d5ab1630). */
 export const PROPERTY_ID_PROPERTY_CONFLICT = 'provide at most one of property_id or property';
+
+/**
+ * Кросс-полевое правило вида иконки `icon` (ADR 2b655b29, требование
+ * ead91183, задача 610a440e): при `icon_kind='icon'` значение поля `icon`
+ * обязано быть именем каталога Lucide из `@etn/shared` (`ICON_LIBRARY_NAMES`);
+ * неизвестное имя — VALIDATION_ERROR. `null`/`undefined` допустимы (вид
+ * задан, значение ещё не выбрано — как у emoji/image). Для `emoji`/`image`
+ * правило не срабатывает — их значения проверяются по-прежнему.
+ *
+ * Применяется и к REST (через полно-схемную проверку `parseRest`), и к MCP
+ * (схема `etn.ontology.write`): неизвестное имя отвергается обоими фасадами.
+ */
+const LIBRARY_ICON_MESSAGE =
+  'icon должен быть именем иконки из каталога Lucide (kebab-case).';
+
+function libraryIconValid(value: { icon_kind?: unknown; icon?: unknown }): boolean {
+  if (value.icon_kind !== 'icon') return true;
+  if (value.icon === undefined || value.icon === null) return true;
+  return typeof value.icon === 'string' && isIconLibraryName(value.icon);
+}
 
 /** `direction` inline-ссылки (task O4, docs/03-server-api.md §6.3). */
 export const LinkDirection = z
@@ -1435,7 +1456,9 @@ const OntologyWriteThoughtTypeFields = z
     font_strike: z.boolean().nullable().optional(),
     comment_template_md: z.string().nullable().optional(),
   })
-  .strict();
+  .strict()
+  // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+  .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] });
 const OntologyWriteLinkTypeFields = z
   .object({
     ref: z.string().min(1).optional(),
@@ -2965,7 +2988,9 @@ export const RestThoughtCreateBody = defineContract(
     font_italic: z.boolean().optional(),
     font_underline: z.boolean().optional(),
     font_strike: z.boolean().optional(),
-  }),
+  })
+    // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] }),
   {
     title: { from: { kind: 'body' }, msg: 'title обязателен и не может быть пустым.' },
     synonyms: { from: { kind: 'body' } },
@@ -3033,7 +3058,9 @@ export const RestThoughtUpdateBody = defineContract(
     font_italic: z.boolean().nullable().optional(),
     font_underline: z.boolean().nullable().optional(),
     font_strike: z.boolean().nullable().optional(),
-  }),
+  })
+    // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] }),
   {
     title: { from: { kind: 'body' } },
     synonyms: { from: { kind: 'body' } },
@@ -3303,7 +3330,9 @@ export const RestThoughtTypeCreateBody = defineContract(
     font_strike: z.boolean().nullable().optional(),
     description: z.string().nullable().optional(),
     comment_template_md: z.string().nullable().optional(),
-  }),
+  })
+    // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] }),
   {
     name: { from: { kind: 'body' }, msg: 'name обязателен и не может быть пустым.' },
     parent_id: {
@@ -3345,7 +3374,9 @@ export const RestThoughtTypeUpdateBody = defineContract(
     // повторный PATCH с `confirmed: true` выполняет правку. Без `parent_id`
     // флаг игнорируется.
     confirmed: z.boolean().optional(),
-  }),
+  })
+    // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] }),
   {
     name: { from: { kind: 'body' } },
     parent_id: { from: { kind: 'body' }, parse: (raw: unknown) => (raw === '' ? null : raw) },

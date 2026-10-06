@@ -22,6 +22,7 @@
  */
 
 import type {
+  IconKind,
   ThoughtCopyItem,
   ThoughtCopyLink,
 } from '@etn/shared';
@@ -458,7 +459,7 @@ interface ThoughtLike {
   synonyms: string[];
   type_id: string | null;
   icon: string | null;
-  icon_kind: 'emoji' | 'image';
+  icon_kind: IconKind;
   icon_attachment_id: string | null;
   active: boolean;
   fg_color: string | null;

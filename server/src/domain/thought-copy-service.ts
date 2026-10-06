@@ -28,6 +28,7 @@ import { randomUUID } from 'node:crypto';
 import {
   type Attachment,
   EtnError,
+  type IconKind,
   type Link,
   type LinkStyle,
   type PropertyValueValue,
@@ -359,11 +360,14 @@ function snapshotSourceId(item: ThoughtCopyItem): string {
  * `parseIconKind` in routes). When the icon fails the check we drop it and
  * fall back to a plain thought without an icon (`icon=null`,
  * `icon_kind='emoji'`).
+ *
+ * Виды `emoji` и `icon` переносятся без изменений (`icon` вида `icon` —
+ * уже провалидированное имя каталога Lucide, задача 610a440e).
  */
 function normaliseIcon(
   icon: string | null,
-  iconKind: 'emoji' | 'image',
-): { icon: string | null; iconKind: 'emoji' | 'image' } {
+  iconKind: IconKind,
+): { icon: string | null; iconKind: IconKind } {
   if (iconKind !== 'image') return { icon, iconKind };
   if (icon === null || icon === '') return { icon: null, iconKind: 'emoji' };
   if (icon.startsWith('data:') || icon.startsWith('http://') || icon.startsWith('https://')) {
