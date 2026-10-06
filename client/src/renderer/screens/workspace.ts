@@ -26,7 +26,7 @@
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { store, type RtStatus } from '../state.js';
 import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
 import { initLayerOverridesTracking, wireLayerMenu } from './layers.js';

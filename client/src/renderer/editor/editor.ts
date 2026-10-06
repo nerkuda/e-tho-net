@@ -76,7 +76,7 @@ import {
 import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';

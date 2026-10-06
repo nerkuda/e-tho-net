@@ -29,7 +29,7 @@
 
 import { fieldInput } from '../../lib/ui/field.js';
 import { uiButton } from '../../lib/ui/button.js';
-import { svgIcon } from '../../lib/icons.js';
+import { svgIcon } from '../../lib/ui/icon.js';
 import { deferSingleClick } from '../../lib/thought-cloud.js';
 import { RECORD_TITLE_CLASS, RECORD_TITLE_INPUT_CLASS } from './record-groups.js';
 

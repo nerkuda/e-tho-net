@@ -23,7 +23,7 @@
 
 import { div, el, span } from '../dom.js';
 import { t } from '../i18n.js';
-import { svgIcon } from '../icons.js';
+import { svgIcon } from './icon.js';
 
 /** Классы разметки: потребитель подставляет своё оформление. */
 export interface CollapsibleClasses {

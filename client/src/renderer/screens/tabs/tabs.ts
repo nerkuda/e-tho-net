@@ -15,7 +15,7 @@
 import { openNetwork } from '../../app.js';
 import { t } from '../../lib/i18n.js';
 import { div, el, setTooltip, span } from '../../lib/dom.js';
-import { svgIcon } from '../../lib/icons.js';
+import { svgIcon } from '../../lib/ui/icon.js';
 import { etn } from '../../lib/etn.js';
 import { store } from '../../state.js';
 import type { TabDto } from '../../../main/ipc/contract.js';

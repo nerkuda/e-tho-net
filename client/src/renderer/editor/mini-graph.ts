@@ -57,7 +57,7 @@ import { select } from 'd3-selection';
 import { zoom, type D3ZoomEvent } from 'd3-zoom';
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 // Пилюли-узлы мини-графа собирает общая фабрика облачка (профиль `graph`):
 // значок, цвета, начертание, бледность, метка корзины и обрезка названия
 // раскладкой с подсказкой — те же, что во всех списках клиента. HTML-облачко

@@ -65,7 +65,7 @@ export interface ButtonOptions {
 
 /** Опции иконочной кнопки: подсказка обязательна (роль `icon` требования). */
 export interface IconButtonOptions extends Omit<ButtonOptions, 'label' | 'title'> {
-  /** Содержимое-иконка (например, `svgIcon(...)` из `lib/icons.ts`). */
+  /** Содержимое-иконка (например, `svgIcon(...)` из `lib/ui/icon.ts`). */
   icon: Node;
   /** Подсказка; она же становится `aria-label`. */
   title: string;

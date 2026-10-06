@@ -68,7 +68,7 @@ import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
 import { div, el, span } from './dom.js';
 import { etn } from './etn.js';
-import { svgIcon, type IconName } from './icons.js';
+import { svgIcon, type IconName } from './ui/icon.js';
 import {
   buildLinkEndIcon,
   linkEndIconSpec,
@@ -550,7 +550,7 @@ export interface EntityPickerDialogCtx {
  * команды в тултипе (`title`) и в `aria-label` (доступность с клавиатуры).
  */
 export interface EntityPickerCommand {
-  /** Имя иконки из единого набора проекта (`lib/icons.ts`). */
+  /** Имя иконки из единого набора проекта (`lib/ui/icon.ts`). */
   icon: IconName;
   /** Полное название команды — тултип и доступная подпись кнопки. */
   title: string;

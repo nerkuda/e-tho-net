@@ -54,7 +54,7 @@ import { etn } from '../lib/etn.js';
 import { isInsideDialog } from '../lib/dialog.js';
 import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import {
   isNotFoundError,
   isSearchSettingsOpenStored,

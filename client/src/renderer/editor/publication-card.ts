@@ -38,7 +38,7 @@ import { createPublicationCloud } from '../lib/ui/publication-cloud.js';
 import { renderMarkdown } from '@etn/markdown';
 import { div, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { etn } from '../lib/etn.js';
 import { showDialog, errorDialog, confirmDialog } from '../lib/dialog.js';
 import { menuAction, showMenuAt } from '../lib/menu.js';

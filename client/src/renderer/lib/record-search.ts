@@ -31,7 +31,7 @@ import type { ChronicleRow } from '@etn/shared';
 
 import { div, el, fmtDate, renderHtml, span } from './dom.js';
 import { t } from './i18n.js';
-import { svgIcon } from './icons.js';
+import { svgIcon } from './ui/icon.js';
 import { iconButton } from './ui/button.js';
 import { checkboxRow } from './ui/choice-row.js';
 import { fieldInput } from './ui/field.js';

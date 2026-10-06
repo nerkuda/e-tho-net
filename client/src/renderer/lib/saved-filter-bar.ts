@@ -30,7 +30,7 @@
 import { confirmDialog, errorDialog, promptDialog, showDialog } from './dialog.js';
 import { t } from './i18n.js';
 import { div, el, span } from './dom.js';
-import { svgIcon } from './icons.js';
+import { svgIcon } from './ui/icon.js';
 import { menuAction, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
 import { iconButton, uiButton } from './ui/button.js';

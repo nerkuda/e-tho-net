@@ -22,7 +22,7 @@
 
 import { div } from './dom.js';
 import { isValidLocalDay } from './dates.js';
-import { svgIcon } from './icons.js';
+import { svgIcon } from './ui/icon.js';
 import { iconButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 

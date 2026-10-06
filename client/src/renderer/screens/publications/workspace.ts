@@ -41,7 +41,7 @@ import {
 } from '../../lib/dom.js';
 import { t } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
-import { svgIcon, type IconName } from '../../lib/icons.js';
+import { svgIcon, type IconName } from '../../lib/ui/icon.js';
 import { errorDialog, isInsideDialog, showDialog } from '../../lib/dialog.js';
 import { notice } from '../../lib/notice.js';
 import {

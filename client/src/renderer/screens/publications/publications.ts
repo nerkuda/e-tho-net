@@ -32,7 +32,7 @@ import {
 import { t, type MessageKey } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
 import { notice } from '../../lib/notice.js';
-import { svgIcon } from '../../lib/icons.js';
+import { svgIcon } from '../../lib/ui/icon.js';
 import { errorDialog, promptDialog } from '../../lib/dialog.js';
 import { openEntityDeleteDialog } from '../../lib/delete-dialog.js';
 import {

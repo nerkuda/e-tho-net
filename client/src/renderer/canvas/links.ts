@@ -45,7 +45,7 @@ import { closeMenu, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { div, el, setTooltip } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview } from '../lib/hover-preview.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { ELLIPSE_INSIDE } from '../lib/pure.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
 import { resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../lib/type-tree.js';

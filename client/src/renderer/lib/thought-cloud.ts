@@ -35,7 +35,7 @@ import type { IconKind, ThoughtRef } from '@etn/shared';
 import { store } from '../state.js';
 import { div, el, renderHighlightedText, setTooltip, span } from './dom.js';
 import { noteFocusOrigin } from './focus-origin.js';
-import { svgIcon } from './icons.js';
+import { svgIcon } from './ui/icon.js';
 import { contrastText } from './pure.js';
 import { resolveThoughtTypeVisual } from './type-tree.js';
 import { logUiEvent } from './ui-log.js';

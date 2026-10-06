@@ -84,7 +84,7 @@ import { confirmDialog, errorDialog, raiseOpenDialog, showDialog, type DialogBut
 import { div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { footerErrorLine, operationError, type ErrorAddress, type FooterErrorLine } from '../lib/ui/messages.js';
 import { loadingState } from '../lib/ui/empty-state.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import {

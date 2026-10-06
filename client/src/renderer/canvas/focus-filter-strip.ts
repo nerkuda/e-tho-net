@@ -34,7 +34,7 @@ import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { div } from '../lib/dom.js';
 import { isFilterSort, isSortOrder, sortValueLabel } from '../lib/filter-builder.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
 import { onQueryInvalidated } from '../lib/live/index.js';

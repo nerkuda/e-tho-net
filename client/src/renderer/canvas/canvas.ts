@@ -43,7 +43,7 @@ import {
   registerHoverPreviewResolver,
   type HoverPreviewContent,
 } from '../lib/hover-preview.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { notice } from '../lib/notice.js';
 // Канон стиля/значка облачка и отложенный одиночный клик живут в общей
 // фабрике (задача b28ab6d6): облачка холста собирает `createThoughtCloud`,

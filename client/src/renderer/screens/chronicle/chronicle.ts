@@ -55,7 +55,7 @@ import { div, el, errText, fmtDate, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
-import { svgIcon } from '../../lib/icons.js';
+import { svgIcon } from '../../lib/ui/icon.js';
 import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import {

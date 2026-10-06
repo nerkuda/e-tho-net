@@ -192,7 +192,7 @@ describe('иконки видов значения (требование 4)', ()
     }
   });
 
-  it('иконки объявлены в общем наборе (lib/icons.ts)', () => {
+  it('иконки объявлены в общем наборе (lib/ui/icon.ts)', () => {
     const src = read(ICONS_TS);
     for (const icon of ['value-text', 'value-number', 'value-date', 'value-bool', 'value-url', 'value-ref', 'value-publication']) {
       assert.ok(src.includes(`'${icon}'`), `иконка «${icon}» объявлена в IconName`);

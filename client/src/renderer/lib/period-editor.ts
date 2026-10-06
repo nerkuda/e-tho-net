@@ -50,7 +50,7 @@
 import { div, el, span } from './dom.js';
 import { setPeriodFrom, setPeriodTo } from './dates.js';
 import { dateField } from './date-field.js';
-import { svgIcon } from './icons.js';
+import { svgIcon } from './ui/icon.js';
 import { optionsSuggestSource, wireSuggest, type SuggestHandle } from './suggest-dropdown.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
