@@ -41,9 +41,9 @@ import {
   showMenuAt,
   type MenuItem,
 } from '../lib/menu.js';
-import { iconButton } from '../lib/ui/button.js';
+import { BUTTON_ACTIVE_CLASS, iconButton } from '../lib/ui/button.js';
 import { renderIcon, type IconName } from '../lib/ui/icon.js';
-import type { MdEditor } from './md-editor.js';
+import type { MdEditor, MdEditorSnapshot } from './md-editor.js';
 
 /** Идентификатор контекста сочетаний поля комментария. */
 export const COMMENT_KEY_CONTEXT_ID = 'comment-field';
@@ -70,6 +70,12 @@ export interface CommentCommandHost {
    * прочие команды режима правки). `true` — команда обработана.
    */
   runFieldCommand?(command: string): boolean;
+  /**
+   * Подписка на изменения текста/выделения редактора — для обновления
+   * состояния кнопок тулбара. Возвращает функцию отписки. Поле может ещё не
+   * иметь редактора — тогда подписка на будущий (возвращается no-op).
+   */
+  subscribe?(listener: () => void): () => void;
 }
 
 /** Контекст исполнения команды, передаваемый зарегистрированному обработчику. */
@@ -82,10 +88,20 @@ export interface CommentCommandContext {
   run(command: string): boolean;
 }
 
-/** Запись реестра: обработчик команды. */
+/** Состояние команды для кнопки тулбара (элемент `1ab005ca`). */
+export interface CommentCommandState {
+  /** Команда применена к текущему выделению/блоку — кнопка «нажата». */
+  active?: boolean;
+  /** Команда сейчас неприменима — кнопка заблокирована. */
+  disabled?: boolean;
+}
+
+/** Запись реестра: обработчик команды и её состояние. */
 export interface CommentCommandEntry {
   /** Тело команды. `false` — команда отказалась обрабатывать (как в keymap). */
   run(ctx: CommentCommandContext): boolean | void;
+  /** Состояние кнопки для текущего снимка редактора (элемент `1ab005ca`). */
+  state?(snapshot: MdEditorSnapshot): CommentCommandState;
 }
 
 const commandEntries = new Map<string, CommentCommandEntry>();
@@ -104,6 +120,11 @@ export function unregisterCommentCommand(id: string): void {
 /** Есть ли у команды зарегистрированный обработчик. */
 export function hasCommentCommandRunner(id: string): boolean {
   return commandEntries.has(id);
+}
+
+/** Состояние команды для снимка редактора (по умолчанию — пустое). */
+export function commentCommandState(id: string, snapshot: MdEditorSnapshot): CommentCommandState {
+  return commandEntries.get(id)?.state?.(snapshot) ?? {};
 }
 
 /** Кладёт поле на вершину стека активных (текущий элемент). */
@@ -477,6 +498,23 @@ function submenuButton(node: CommentLayoutSubmenu, host: CommentCommandHost): HT
   return btn;
 }
 
+/**
+ * Обновляет состояние кнопок тулбара по текущему выделению/блоку (элемент
+ * `1ab005ca`: «кнопка отражает применимость команды к текущему выделению»).
+ */
+export function refreshCommentToolbar(bar: HTMLElement, host: CommentCommandHost): void {
+  const editor = host.getEditor();
+  if (editor === null) return;
+  const snapshot = editor.snapshot();
+  for (const btn of bar.querySelectorAll<HTMLButtonElement>('[data-command]')) {
+    const id = btn.dataset['command'];
+    if (id === undefined) continue;
+    const state = commentCommandState(id, snapshot);
+    btn.classList.toggle(BUTTON_ACTIVE_CLASS, state.active === true);
+    btn.disabled = state.disabled === true;
+  }
+}
+
 /** Собирает тулбар команд поля комментария (виден только в правке). */
 export function buildCommentToolbar(host: CommentCommandHost): HTMLElement {
   const bar = div(COMMENT_TOOLBAR_CLASS);
@@ -492,6 +530,8 @@ export function buildCommentToolbar(host: CommentCommandHost): HTMLElement {
       bar.append(commandButton(node.id, host));
     }
   }
+  refreshCommentToolbar(bar, host);
+  host.subscribe?.(() => refreshCommentToolbar(bar, host));
   return bar;
 }
 

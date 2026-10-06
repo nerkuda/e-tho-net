@@ -29,6 +29,7 @@ import {
   guardCommentMenuFocus,
   type CommentCommandHost,
 } from './comment-commands.js';
+import { commentFieldKeymapExtension } from './comment-format.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
@@ -172,10 +173,9 @@ export function createMarkdownField(opts: {
       }
       return false;
     },
+    // Состояние кнопок тулбара обновляется по изменениям выделения/текста.
+    subscribe: (listener) => editor?.subscribe(listener) ?? (() => {}),
   };
-  // Тулбар — верхняя панель поля; живёт внутри `area`, поэтому виден только в
-  // правке (`area` скрыта в просмотре) — требование 6f8575a5.
-  const toolbar = buildCommentToolbar(commandHost);
 
   /** Включает контекст сочетаний поля, пока оно в правке и в фокусе. */
   const enterCommentKeys = (): void => {
@@ -331,6 +331,9 @@ export function createMarkdownField(opts: {
         editor?.blur();
       },
       onBlur: () => commitOrRevert(),
+      // Точечное Prec.high-перекрытие сочетаний команд, которые иначе
+      // «съедает» CM6 (Ctrl+I/U, Ctrl+Shift+K, Tab/Shift+Tab, Alt+↑/↓).
+      extraExtensions: [commentFieldKeymapExtension()],
     });
     // Pasting files (screenshots / copied files) saves them as server-stored
     // attachments of the owner entity and inserts a markdown reference at the
@@ -410,7 +413,10 @@ export function createMarkdownField(opts: {
       // иначе поле выйдет из правки и команда не применится к выделению.
       guardCommentMenuFocus(menuRoot);
     });
-    area.replaceChildren(toolbar, editor.dom);
+    // Тулбар — верхняя панель поля; живёт внутри `area`, поэтому виден только в
+    // правке (`area` скрыта в просмотре) — требование 6f8575a5. Собирается
+    // после редактора: кнопки сразу отражают состояние текущего выделения.
+    area.replaceChildren(buildCommentToolbar(commandHost), editor.dom);
     mounting = false;
     editor.focusToEnd();
   };

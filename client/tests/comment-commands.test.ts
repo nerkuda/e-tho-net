@@ -46,7 +46,10 @@ type Keymap = typeof import('../src/renderer/lib/keymap.js');
 let mod: Module;
 let keymap: Keymap;
 
-const fakeEditor = { insertAtCaret: () => undefined } as any;
+const fakeEditor = {
+  insertAtCaret: () => undefined,
+  snapshot: () => ({ text: '', from: 0, to: 0 }),
+} as any;
 
 function host(editor: unknown = fakeEditor): any {
   return { getEditor: () => editor, root: new ShimElement('div') };

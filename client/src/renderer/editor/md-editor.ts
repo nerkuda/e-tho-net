@@ -13,7 +13,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { languages } from '@codemirror/language-data';
 import { tags } from '@lezer/highlight';
-import { EditorState, type SelectionRange } from '@codemirror/state';
+import { EditorState, type Extension, type SelectionRange } from '@codemirror/state';
 import { drawSelection, EditorView, keymap } from '@codemirror/view';
 
 import { livePreview, mdWidgetClick } from './md-live.js';
@@ -31,6 +31,34 @@ export interface MdEditorCallbacks {
   onCommit?: () => void;
   /** Focus left the editor (commit point of the field). */
   onBlur?: () => void;
+  /**
+   * Дополнительные расширения CM6 (например, точечное перекрытие сочетаний
+   * команд поля комментария через `Prec.high` — задача ab0c4470).
+   */
+  extraExtensions?: Extension[];
+}
+
+/** Снимок текста и главного выделения редактора. */
+export interface MdEditorSnapshot {
+  /** Полный текст документа (markdown). */
+  text: string;
+  /** Начало выделения (меньший офсет); равен `to` при каретке. */
+  from: number;
+  /** Конец выделения (больший офсет). */
+  to: number;
+}
+
+/** Одна правка диапазона: заменить `[from, to)` на `insert`. */
+export interface MdEditorChange {
+  from: number;
+  to?: number;
+  insert?: string;
+}
+
+/** Транзакция правки редактора (текст и/или выделение). */
+export interface MdEditorEdit {
+  changes: MdEditorChange | readonly MdEditorChange[];
+  selection?: { anchor: number; head?: number };
 }
 
 /** Handle of a mounted editor. */
@@ -51,6 +79,12 @@ export interface MdEditor {
   focusToEnd(): void;
   blur(): void;
   destroy(): void;
+  /** Текст и главное выделение — вход чистых преобразований команд. */
+  snapshot(): MdEditorSnapshot;
+  /** Применяет правку (текст и/или выделение) одной транзакцией. */
+  applyEdit(edit: MdEditorEdit): void;
+  /** Подписка на изменения текста/выделения (для состояния кнопок тулбара). */
+  subscribe(listener: () => void): () => void;
 }
 
 /** Syntax colours through the app's CSS variables (follows light/dark themes). */
@@ -201,6 +235,10 @@ export const mdEditorInternals = { scrollCaretIntoView };
 
 /** Creates a markdown editor for the given initial document. */
 export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdEditor {
+  /** Подписчики на изменения (текст/выделение) — состояние кнопок тулбара. */
+  const listeners = new Set<() => void>();
+  /** Редактор уничтожен (например, поле вышло из правки) — правки игнорируем. */
+  let alive = true;
   const view = new EditorView({
     state: EditorState.create({
       doc: initial,
@@ -242,6 +280,9 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         syntaxHighlighting(mdHighlightStyle, { fallback: true }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) cb.onInput?.(update.state.doc.toString());
+          if (update.docChanged || update.selectionSet) {
+            for (const listener of listeners) listener();
+          }
         }),
         // The markdown keymap (Enter/Backspace list handling) must outrank
         // the default keymap below.
@@ -258,6 +299,10 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         livePreview,
         mdWidgetClick,
         mdTheme,
+        // Дополнительные расширения вызывающего (точечные перекрытия сочетаний
+        // команд поля — задача ab0c4470). Идут последними; приоритет задаётся
+        // самим расширением (`Prec.high`), а не порядком подключения.
+        ...(cb.extraExtensions ?? []),
       ],
     }),
   });
@@ -304,6 +349,25 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       });
     },
     blur: () => view.contentDOM.blur(),
-    destroy: () => view.destroy(),
+    snapshot: () => {
+      const { state } = view;
+      const sel = state.selection.main;
+      return { text: state.doc.toString(), from: sel.from, to: sel.to };
+    },
+    applyEdit: (edit) => {
+      if (!alive) return;
+      view.dispatch({ changes: edit.changes, selection: edit.selection });
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    destroy: () => {
+      alive = false;
+      listeners.clear();
+      view.destroy();
+    },
   };
 }

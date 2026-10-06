@@ -190,6 +190,9 @@ function fakeMdEditor(initial: string): MdEditor {
     focus: () => undefined,
     focusToEnd: () => undefined,
     blur: () => undefined,
+    snapshot: () => ({ text: value, from: value.length, to: value.length }),
+    applyEdit: () => undefined,
+    subscribe: () => () => undefined,
     destroy: () => undefined,
   };
 }
