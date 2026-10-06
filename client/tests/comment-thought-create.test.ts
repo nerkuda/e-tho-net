@@ -139,6 +139,14 @@ describe('план: название и тело (правило f64f5893)', () 
     assert.equal(create.thoughtTitle('```js\nconst x = 1'), 'const x = 1');
   });
 
+  it('закрывающая последовательность # заголовка уходит из названия', () => {
+    assert.equal(create.thoughtTitle('## Раздел ##'), 'Раздел');
+    assert.equal(create.thoughtTitle('# Заголовок #'), 'Заголовок');
+    assert.equal(create.thoughtTitle('### A ### '), 'A');
+    // `#` внутри слова — не закрывающая последовательность.
+    assert.equal(create.thoughtTitle('## C#'), 'C#');
+  });
+
   it('пустое выделение/без значимой строки — плана нет', () => {
     assert.equal(create.planFromSelection({ text: 'x', from: 2, to: 2 }), null);
     assert.equal(create.planFromSelection({ text: '   \n  ', from: 0, to: 7 }), null);
@@ -164,6 +172,13 @@ describe('план: название и тело (правило f64f5893)', () 
     assert.equal(plan?.bodyMd, 'текст раздела\n\nещё строка');
     assert.equal(plan?.start, 0);
     assert.equal(plan?.end, text.length);
+  });
+
+  it('«из раздела»: раздел без собственного текста даёт пустое тело', () => {
+    const text = '# A\n## B\nтекст B';
+    const plan = create.planFromSection({ text, from: 1, to: 1 });
+    assert.equal(plan?.title, 'A');
+    assert.equal(plan?.bodyMd, '', 'заголовок ушёл в название, тела нет');
   });
 
   it('«из раздела»: каретка вне раздела (до первого заголовка) — плана нет', () => {
@@ -376,6 +391,26 @@ describe('разделение: правило разбора единиц (тр
     assert.equal(plan![0]!.children[0]!.bodyMd, 'тело B');
   });
 
+  it('раздел без собственного текста — мысль без тела, подраздел — под-мысль', () => {
+    const text = '# A\n## B\nтекст B';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.equal(plan?.length, 1);
+    assert.equal(plan![0]!.title, 'A');
+    assert.equal(plan![0]!.bodyMd, '', 'у раздела нет собственного текста');
+    assert.equal(plan![0]!.children.length, 1);
+    assert.equal(plan![0]!.children[0]!.title, 'B');
+    assert.equal(plan![0]!.children[0]!.bodyMd, 'текст B');
+  });
+
+  it('последний подраздел без собственного текста — тоже пустое тело', () => {
+    const text = '# A\nтело A\n## B';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.equal(plan![0]!.bodyMd, 'тело A');
+    assert.equal(plan![0]!.children.length, 1);
+    assert.equal(plan![0]!.children[0]!.title, 'B');
+    assert.equal(plan![0]!.children[0]!.bodyMd, '');
+  });
+
   it('абзацы: без пустой строки блок кода — продолжение абзаца', () => {
     const cont = 'первый абзац\n\nвторой абзац\n```\nкод\n```';
     const plan = create.planSplitSelection({ text: cont, from: 0, to: cont.length });
@@ -525,6 +560,56 @@ describe('разделение: доступность и исполнение',
 
   it('команда зарегистрирована в реестре', () => {
     assert.equal(commands.hasCommentCommandRunner(create.SPLIT_SELECTION_COMMAND), true);
+  });
+
+  it('раздел без тела: мысль создаётся без comment, трансклюзия всё равно ставится', async () => {
+    const text = '# A\n## B\nтекст B';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, requests } = sequencePort();
+    create.setCommentThoughtCreatePort(port);
+
+    const handled = commands.runCommentCommand('comment.split', host(editor));
+    assert.equal(handled, true, 'команда доступна (2 единицы разбора)');
+    await flush();
+
+    assert.deepEqual(
+      requests.map((request) => request.title),
+      ['A', 'B'],
+    );
+    assert.deepEqual(
+      requests.map((request) => request.bodyMd),
+      ['', 'текст B'],
+    );
+    assert.deepEqual(
+      requests.map((request) => request.parentId),
+      [PARENT_ID, UNIT_IDS[0]],
+      'подраздел B — под-мысль мысли A',
+    );
+    assert.equal(editor.edits.length, 1, 'правка применена, команда не упала');
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: 3, insert: `![[#${UNIT_IDS[0]}]]` },
+      { from: 4, to: 16, insert: `![[#${UNIT_IDS[1]}]]` },
+    ]);
+  });
+
+  it('пустое тело — вход REST без поля comment; непустое — с comment', () => {
+    const empty = create.buildCommentThoughtCreateInput({
+      parentId: PARENT_ID,
+      title: 'A',
+      bodyMd: '',
+    });
+    assert.equal('comment' in empty, false, 'пустой body_md сервер отклоняет — поле не шлём');
+    assert.deepEqual(empty.create_link, {
+      direction: 'parent',
+      target_thought_id: PARENT_ID,
+    });
+
+    const full = create.buildCommentThoughtCreateInput({
+      parentId: PARENT_ID,
+      title: 'B',
+      bodyMd: 'текст B',
+    });
+    assert.deepEqual(full.comment, { body_md: 'текст B' });
   });
 });
 

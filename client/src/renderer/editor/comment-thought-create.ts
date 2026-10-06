@@ -34,6 +34,7 @@
  */
 
 import { formatTransclusionRef, parseSelectionUnits, type MarkdownUnit } from '@etn/markdown';
+import type { ThoughtCreateInput } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
 import { errText } from '../lib/dom.js';
@@ -110,10 +111,28 @@ export function commentThoughtCreatePort(): CommentThoughtCreatePort {
 }
 
 /**
+ * Вход REST-создания мысли по запросу порта: постоянный комментарий добавляется,
+ * только если тело непустое. Сервер отклоняет пустой `comment.body_md`
+ * (требование `26f0aa52`), а отсутствие поля `comment` — валидно; поэтому
+ * единица-раздел без собственного текста даёт мысль без тела, но трансклюзия
+ * на её месте всё равно ставится (требование `f64f5893`).
+ */
+export function buildCommentThoughtCreateInput(
+  request: CommentThoughtCreateRequest,
+): ThoughtCreateInput {
+  return {
+    title: request.title,
+    // Семантика REST (03-server-api.md §6.3): 'parent' — target становится
+    // родителем новой мысли; позиция среди детей — по умолчанию в конец.
+    create_link: { direction: 'parent', target_thought_id: request.parentId },
+    ...(request.bodyMd === '' ? {} : { comment: { body_md: request.bodyMd } }),
+  };
+}
+
+/**
  * Системный порт: родитель — сама мысль-владелец (для комментария связи —
  * её источник, как в `wiki-link-create.ts`); создание — REST `POST /thoughts`
- * с `comment` и связью-родителем `direction: 'parent'` (новая мысль встаёт
- * ПОД текущей).
+ * со связью-родителем `direction: 'parent'` (новая мысль встаёт ПОД текущей).
  */
 function restCreatePort(): CommentThoughtCreatePort {
   return {
@@ -123,13 +142,10 @@ function restCreatePort(): CommentThoughtCreatePort {
       return link.source_id;
     },
     async create(request) {
-      const created = await etn.thoughts.create(requireNetworkId(), {
-        title: request.title,
-        comment: { body_md: request.bodyMd },
-        // Семантика REST (03-server-api.md §6.3): 'parent' — target становится
-        // родителем новой мысли; позиция среди детей — по умолчанию в конец.
-        create_link: { direction: 'parent', target_thought_id: request.parentId },
-      });
+      const created = await etn.thoughts.create(
+        requireNetworkId(),
+        buildCommentThoughtCreateInput(request),
+      );
       return { id: created.id };
     },
   };
@@ -158,9 +174,12 @@ const QUOTE_RE = /^>+/;
 const LIST_RE = /^(?:[-*+]|\d{1,9}[.)])(?=\s|$)/;
 const TASK_RE = /^\[[ xX]\](?=\s|$)/;
 const HEADING_RE = /^#{1,6}(?=\s|$)/;
+/** Строка — ATX-заголовок (с учётом ведущих цитатных `>`). */
+const HEADING_LINE_RE = /^(?:>[ \t]?)*[ \t]*#{1,6}(?=\s|$)/;
 
 /** Снимает с начала строки маркеры блочной разметки, оставляя содержимое. */
 function stripBlockPrefixes(line: string): string {
+  const heading = HEADING_LINE_RE.test(line.trim());
   let rest = line.trim();
   for (;;) {
     const before = rest;
@@ -172,6 +191,8 @@ function stripBlockPrefixes(line: string): string {
       .trimStart();
     if (rest === before) break;
   }
+  // Закрывающая последовательность `#` ATX-заголовка (`## Раздел ##` → `Раздел`).
+  if (heading) rest = rest.replace(/[ \t]+#+[ \t]*$/, '').trimEnd();
   return rest;
 }
 
