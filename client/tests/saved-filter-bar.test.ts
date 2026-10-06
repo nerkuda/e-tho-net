@@ -30,7 +30,7 @@ const BAR_TS = resolve(RENDERER, 'lib', 'saved-filter-bar.ts');
 const STRUCTURES_PANEL = resolve(RENDERER, 'screens', 'structures', 'filter-panel.ts');
 const CHRONICLE_PANEL = resolve(RENDERER, 'screens', 'chronicle', 'filter-panel.ts');
 const ACTIVITY_TS = resolve(RENDERER, 'screens', 'activity', 'activity.ts');
-const ICONS_TS = resolve(RENDERER, 'lib', 'icons.ts');
+const ICONS_TS = resolve(RENDERER, 'lib', 'ui', 'icon.ts');
 
 function readText(path: string): string {
   return readFileSync(path, 'utf8');

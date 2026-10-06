@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { createPublicationCloud } from '../src/renderer/lib/ui/publication-cloud.js';
+import { svgIcon } from '../src/renderer/lib/ui/icon.js';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -35,7 +36,11 @@ describe('lib/ui/publication-cloud', () => {
     assert.ok(icon !== null, 'значок есть');
     const svg = icon!.querySelector('svg');
     assert.ok(svg !== null, 'значок-книга — svg');
-    assert.ok(svg!.innerHTML.includes('M12 7v14'), 'использована иконка книги value-publication');
+    assert.equal(
+      svg!.innerHTML,
+      (svgIcon('value-publication', 14) as unknown as ShimElement).innerHTML,
+      'значок книги рисуется фасадом иконок (value-publication, Lucide)',
+    );
     const title = cloud.querySelector('.ui-pub-cloud-title');
     assert.equal(title?.textContent, 'Руководство');
     assert.equal(

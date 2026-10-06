@@ -42,7 +42,7 @@ const COMPONENT_TS = resolve(RENDERER, 'lib', 'property-list.ts');
 const MANAGER_TS = resolve(RENDERER, 'screens', 'property-manager.ts');
 const PICKER_TS = resolve(RENDERER, 'screens', 'type-manager.ts');
 const CATALOGUE_TS = resolve(RENDERER, 'screens', 'type-catalogue.ts');
-const ICONS_TS = resolve(RENDERER, 'lib', 'icons.ts');
+const ICONS_TS = resolve(RENDERER, 'lib', 'ui', 'icon.ts');
 
 function read(path: string): string {
   return readFileSync(path, 'utf8');

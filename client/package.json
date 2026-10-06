@@ -51,6 +51,7 @@
     "d3-selection": "^3.0.0",
     "d3-zoom": "^3.0.0",
     "electron-updater": "^6.3.9",
+    "lucide": "^1.52.0",
     "mermaid": "^11.16.1",
     "ws": "^8.21.3"
   },

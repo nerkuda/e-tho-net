@@ -76,6 +76,13 @@ export const THIRD_PARTY_COMPONENTS: readonly ThirdPartyComponent[] = [
     ],
   },
   {
+    title: 'Lucide',
+    license: 'ISC',
+    copyright: 'Lucide Contributors',
+    url: 'https://lucide.dev/',
+    packages: ['lucide'],
+  },
+  {
     title: 'Mermaid',
     license: 'MIT',
     copyright: 'Knut Sveidqvist',

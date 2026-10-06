@@ -105,11 +105,11 @@ describe('guard: закладки-переключатели экранов (3e5
 
   it('иконка «Хроника» — календарик месяца, а не часы', () => {
     assert.ok(
-      source('lib/icons.ts').includes("'calendar-month':"),
+      source('lib/ui/icon.ts').includes("'calendar-month':"),
       'в наборе иконок нет calendar-month',
     );
     assert.ok(
-      !source('lib/icons.ts').includes('\n  history:'),
+      !source('lib/ui/icon.ts').includes('\n  history:'),
       'устаревшая иконка history не удалена из набора',
     );
     const workspace = source('screens/workspace.ts');
