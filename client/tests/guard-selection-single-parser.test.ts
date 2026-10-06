@@ -34,7 +34,7 @@
  *      (см. `filePattern` ниже, ошибки `297b5477`, `292e438c`, `3c0ed3eb`):
  *      `const RE = /^#{1,6}\s/m; src.split(RE)` — та же нарезка, что и литерал
  *      в вызове, а `const RE = /^#{1,6}\s/gm; src.match(RE)` / `src.replace(RE,
- *      '')` / `RE.exec(src)` / `RE.test(src)` / `RE.search(src)` — глобальный
+ *      '')` / `RE.exec(src)` / `RE.test(src)` / `src.search(RE)` — глобальный
  *      проход по всем блокам через константу с флагом `g`.
  *
  * Санкционированный вызов импортированной `parseSelectionUnits` нарушением не
@@ -252,28 +252,32 @@ const MARKER_REGEX_CTOR_GLOBAL_DECL =
   String.raw`)[^'"\`\n]*['"\`]\s*,\s*['"\`][a-z]*g[a-z]*['"\`]`;
 
 /**
- * Проход по ВСЕМ совпадениям глобального маркерного регэкспа, вынесенного в
- * константу и применённого по имени. Две формы вызова:
- *  - константа как АРГУМЕНТ метода строки: `.match(RE)` (сбор совпадений) и
- *    `.replace(RE, …)` (замена всех блоков);
+ * Проход по совпадениям маркерного регэкспа, вынесенного в константу и
+ * применённого по имени. Две формы вызова:
+ *  - константа как АРГУМЕНТ метода строки: `.match(RE)` (сбор совпадений),
+ *    `.replace(RE, …)` (замена всех блоков), `.search(RE)` (позиция первого
+ *    блока — метод СТРОКИ; у самого регэкспа `search` нет);
  *  - константа как ПОЛУЧАТЕЛЬ метода регэкспа: `RE.exec(text)` (перебор в цикле
- *    `while (m = RE.exec(…))`), `RE.test(text)` и `RE.search(text)`
- *    (состоятельный проход: `lastIndex` глобального регэкспа сдвигается на
- *    каждом вызове).
+ *    `while (m = RE.exec(…))`) и `RE.test(text)` — состоятельный проход по
+ *    глобальному регэкспу (`lastIndex` сдвигается на каждом вызове).
  *
  * Требует `g` в объявлении константы — без него одиночный `.match`/`.replace`/
  * `.exec`/`.test`/`.search` ограничен первым совпадением и лишь классифицирует
  * один блок (`transclusion.ts`, `markdown-sections.ts`), нарезкой не является.
+ * Оговорка: `String.prototype.search` не сдвигает `lastIndex` и отдаёт лишь
+ * позицию первого совпадения, поэтому сам по себе глобальным проходом не
+ * является; он оставлен в правиле для паритета с прямым литералом
+ * `.search(/…/[gm])` (ниже), чтобы вынос регэкспа в константу не обходил сторож.
  * `ref` — обратная ссылка на группу-идентификатор в объявлении константы.
  */
 const globalPassByName = (ref: string): string =>
-  String.raw`(?:[\s\S]*?\.(?:match|replace)\s*\(\s*${ref}\b` +
-  String.raw`|[\s\S]*?${ref}\b\s*\.(?:exec|test|search)\s*\()`;
+  String.raw`(?:[\s\S]*?\.(?:match|replace|search)\s*\(\s*${ref}\b` +
+  String.raw`|[\s\S]*?${ref}\b\s*\.(?:exec|test)\s*\()`;
 
 const RULE_OWN_BLOCK_SPLIT_REGEX: GuardRule = {
   name: 'own-selection-block-split-regex',
   description:
-    'нарезка выделения на блоки регулярным выражением вне @etn/markdown: .split/.match/.matchAll/.exec по маркерам markdown-блоков, а также g/m-проход по ним через .replace/.test/.search и new RegExp; маркерный регэксп, вынесенный в именованную константу и применённый по имени в нарезке (.split/.matchAll) либо в глобальном проходе .match/.replace/.exec/.test/.search',
+    'нарезка выделения на блоки регулярным выражением вне @etn/markdown: .split/.match/.matchAll/.exec по маркерам markdown-блоков, а также g/m-проход по ним через .replace/.test/.search и new RegExp; маркерный регэксп, вынесенный в именованную константу и применённый по имени в нарезке (.split/.matchAll) либо через .match/.replace/.search (константа-аргумент) и .exec/.test (константа-получатель) при g в константе',
   pattern: new RegExp(
     // Прямое разбиение/перебор совпадений с маркером блока в теле регэкспа.
     `\\.(?:split|match|matchAll|exec)\\s*\\(\\s*\\/[^/\\n]*(?:${BLOCK_MARKER_SRC})` +
@@ -285,19 +289,20 @@ const RULE_OWN_BLOCK_SPLIT_REGEX: GuardRule = {
   /*
    * Нарезка выделения невозможна без обработки ВСЕХ блоков — это либо `.split`
    * по маркеру, либо `.matchAll`-перебор, либо (для константы с флагом `g`)
-   * `.match`/`.replace`/`.exec`/`.test`/`.search`, проходящие по всем
-   * совпадениям. Поток данных по идентификатору ведём именно к этим приёмам:
-   * одиночный `.exec`/`.test`/`.replace` без флагов по строке — законная
+   * глобальный проход `.match`/`.replace`/`.exec`/`.test` по имени-константе,
+   * а также `.search` — для паритета с прямым литералом `.search(/…/[gm])`.
+   * Поток данных по идентификатору ведём именно к этим приёмам: одиночный
+   * `.exec`/`.test`/`.replace` без флагов по строке — законная
    * проверка/классификация одного блока (разбор заголовков трансклюзий
    * `transclusion.ts`/`markdown-sections.ts`, валидация публикации `/m` в
    * `publication-validation.ts`, правка префикса строки в `record-title.ts`),
    * нарезкой не является и под правило не попадает. Объявление маркерного
    * регэкспа само по себе тоже не нарушение — нарушение даёт связка «константа
-   * + проход по всем блокам по имени»: `.split`/`.matchAll` (ошибка `297b5477`)
-   * либо `.match`/`.replace`/`.exec`/`.test`/`.search` при `g` в константе
+   * + проход по блокам по имени»: `.split`/`.matchAll` (ошибка `297b5477`)
+   * либо `.match`/`.replace`/`.search`/`.exec`/`.test` при `g` в константе
    * (ошибки `292e438c`, `3c0ed3eb`). Каждая ветка несёт свою обратную ссылку
    * (`\1`/`\2` — литерал и конструктор для нарезки, `\3`/`\4` — литерал и
-   * конструктор с `g` для глобального прохода).
+   * конструктор с `g` для константы по имени).
    */
   filePattern: new RegExp(
     `${MARKER_REGEX_LITERAL_DECL}${SPLIT_BY_NAME}\\1\\b` +
@@ -600,7 +605,7 @@ describe('сторож: разрешение построчное, а не на 
     const searchGlobal = scanFixture({
       'client/src/renderer/editor/search-global.ts':
         'const HEADING_RE = /^#{1,6}\\s/gm;\n' +
-        'export const at = (src: string): number => HEADING_RE.search(src);\n',
+        'export const at = (src: string): number => src.search(HEADING_RE);\n',
     });
     assert.ok(
       searchGlobal.some((v) => v.rule === 'own-selection-block-split-regex'),
@@ -626,7 +631,7 @@ describe('сторож: разрешение построчное, а не на 
     const searchLine = scanFixture({
       'client/src/renderer/editor/find-heading.ts':
         'const HEADING_RE = /^#{1,6}\\s/;\n' +
-        'export const at = (line: string): number => HEADING_RE.search(line);\n',
+        'export const at = (line: string): number => line.search(HEADING_RE);\n',
     });
     assert.deepEqual(searchLine, [], formatViolations(searchLine));
   });
