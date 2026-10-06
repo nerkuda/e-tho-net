@@ -8,7 +8,9 @@
  *  1. **Раскладкой команд** — элемент интерфейса «Тулбар команд поля
  *     комментария» (`1ab005ca`) и «Контекстное меню поля комментария»
  *     (`0562e0e3`): порядок кнопок, подменю, дублирование команд в меню,
- *     подменю настроек только в тулбаре.
+ *     подменю настроек только в тулбаре. Сюда же — пункты контекстного меню
+ *     блока трансклюзии (элемент `1e0fb0bd`, ТП2): шесть команд на общем
+ *     словаре пунктов, тела — в `editor/transclusion.ts`.
  *  2. **Реестром исполнителей** «команда → обработчик» — точки расширения.
  *     Сами тела команд форматирования приходят задачей `ab0c4470`; команды
  *     «как текст» — ТП2, «разделение» — ТП3. До их регистрации кнопка/пункт
@@ -329,6 +331,39 @@ export const COMMENT_COMMANDS: Readonly<Record<string, CommentCommandDef>> = Obj
     labelKey: 'comment.cmd.hotkeys',
     icon: 'settings',
   },
+  // Команды контекстного меню блока трансклюзии (ТП2, задача 955478e8;
+  // элемент интерфейса `1e0fb0bd`). Тела команд живут в `editor/transclusion.ts`
+  // (владелец режимов блока), здесь — только пункты общего словаря.
+  'transclusion.edit': {
+    id: 'transclusion.edit',
+    labelKey: 'comment.transclusion.menu.edit',
+    icon: 'pencil',
+  },
+  'transclusion.changeLink': {
+    id: 'transclusion.changeLink',
+    labelKey: 'comment.transclusion.menu.changeLink',
+    icon: 'link-edit',
+  },
+  'transclusion.openSource': {
+    id: 'transclusion.openSource',
+    labelKey: 'comment.transclusion.menu.open',
+    icon: 'external-link',
+  },
+  'transclusion.focusSource': {
+    id: 'transclusion.focusSource',
+    labelKey: 'comment.transclusion.menu.focus',
+    icon: 'focus',
+  },
+  'transclusion.copyLink': {
+    id: 'transclusion.copyLink',
+    labelKey: 'comment.transclusion.menu.copy',
+    icon: 'copy',
+  },
+  'transclusion.copyId': {
+    id: 'transclusion.copyId',
+    labelKey: 'comment.transclusion.menu.copyId',
+    icon: 'hash',
+  },
 });
 
 /** Подменю «Прочие внутристрочные». */
@@ -469,6 +504,45 @@ function isCommandDisabled(id: string, host: CommentCommandHost): boolean {
 /** Пункты контекстного меню поля комментария (без подменю настроек). */
 export function buildCommentMenuItems(host: CommentCommandHost): MenuItem[] {
   return layoutToMenuItems(COMMENT_MENU_LAYOUT, host);
+}
+
+/**
+ * Раскладка контекстного меню блока трансклюзии (ТП2, задача `955478e8`;
+ * элемент интерфейса `1e0fb0bd`): шесть команд в фиксированном порядке.
+ * Меню доступно только в режиме редактирования окружения — блок существует
+ * лишь в редакторе (владелец режимов — `editor/transclusion.ts`).
+ */
+export const TRANSCLUSION_MENU_LAYOUT: readonly string[] = Object.freeze([
+  'transclusion.edit',
+  'transclusion.changeLink',
+  'transclusion.openSource',
+  'transclusion.focusSource',
+  'transclusion.copyLink',
+  'transclusion.copyId',
+]);
+
+/**
+ * Собирает пункты контекстного меню блока трансклюзии на общем словаре
+ * пунктов (`lib/menu.ts`) и словаре команд `COMMENT_COMMANDS`. Обработчики
+ * задаёт вызывающий (`editor/transclusion.ts`) — их отсутствие делает пункт
+ * недоступным, не убирая его из меню.
+ */
+export function buildTransclusionMenuItems(
+  handlers: Readonly<Record<string, (() => void) | undefined>>,
+): MenuItem[] {
+  const items: MenuItem[] = [];
+  for (const id of TRANSCLUSION_MENU_LAYOUT) {
+    const def = COMMENT_COMMANDS[id];
+    if (def === undefined) continue;
+    const handler = handlers[id];
+    items.push(
+      menuAction(t(def.labelKey), handler, {
+        icon: renderIcon(def.icon),
+        disabled: handler === undefined,
+      }),
+    );
+  }
+  return items;
 }
 
 /** Подпись кнопки: название команды и действующее сочетание (если есть). */

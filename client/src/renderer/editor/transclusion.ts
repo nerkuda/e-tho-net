@@ -41,7 +41,14 @@
  * Появление/раскрытие блока анимировано (CSS, с учётом `prefers-reduced-motion`).
  * Просмотр поля (view-режим) разворачивает ссылки через `renderTransclusionView`.
  *
- * За границами задачи (другие работы ТП2): контекстное меню (`955478e8`), команды
+ * **Контекстное меню блока (задача `955478e8`).** Правый клик по блоку или
+ * свёрнутой ссылке открывает меню из шести команд (элемент `1e0fb0bd`):
+ * «Редактировать», «Изменить ссылку», «Открыть ссылку», «В фокус»,
+ * «Копировать», «Копировать ID». Пункты — на общем словаре `lib/menu.ts` и
+ * словаре команд `editor/comment-commands.ts`; доступно только в режиме
+ * редактирования окружения.
+ *
+ * За границами задачи (другие работы ТП2): команды
  * «как текст» (`e9f553e5`), realtime-обновление блока, свёрнутость разделов
  * внутри трансклюзий (`1b405a92`).
  */
@@ -83,6 +90,7 @@ import type { Comment } from '@etn/shared';
 import { requireNetworkId } from '../app.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
+import { showMenuAt } from '../lib/menu.js';
 import { holderName, otherHolder, subscribeLockCache } from '../lib/lock-cache.js';
 import {
   acquireOrShowBlocked,
@@ -93,6 +101,8 @@ import {
 import { notice } from '../lib/notice.js';
 import { iconButton } from '../lib/ui/button.js';
 import { svgIcon } from '../lib/ui/icon.js';
+
+import { buildTransclusionMenuItems } from './comment-commands.js';
 
 /** Корневой класс блока трансклюзии (редактирование). */
 export const TRANSCLUSION_BLOCK_CLASS = 'cm-transclusion-block';
@@ -934,6 +944,90 @@ export const transclusionClick = EditorView.domEventHandlers({
 });
 
 /* ------------------------------------------------------------------ *
+ * Контекстное меню блока трансклюзии (задача 955478e8, элемент 1e0fb0bd)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Ссылка трансклюзии под правой кнопкой: блок или свёрнутая ссылка.
+ * `null` — цель не внутри виджета трансклюзии (тогда действует меню поля).
+ */
+function transclusionWidgetRefAt(view: EditorView, target: Element | null): TransclusionRef | null {
+  const selector = `.${TRANSCLUSION_BLOCK_CLASS}, .${TRANSCLUSION_LINK_CLASS}`;
+  const el = target?.closest?.(selector);
+  if (!(el instanceof HTMLElement)) return null;
+  const from = Number(el.dataset.mdFrom);
+  if (!Number.isFinite(from)) return null;
+  return transclusionRefAt(view, from);
+}
+
+/** Копирует текст в буфер обмена; неудача — уведомление об ошибке. */
+async function copyTransclusionText(text: string, okMessage: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    notice(okMessage);
+  } catch {
+    notice(t('comment.transclusion.menu.copyError'), 'error');
+  }
+}
+
+/**
+ * Обработчики шести команд меню блока (элемент `1e0fb0bd`). «Редактировать» и
+ * «Изменить ссылку» — режимы блока (этот модуль); «Открыть ссылку»/«В фокус»
+ * уводят из поля (ленивые импорты — статический замкнул бы цикл
+ * editor ↔ transclusion); «Копировать»/«Копировать ID» — буфер обмена.
+ */
+export function transclusionMenuHandlers(
+  view: EditorView,
+  ref: TransclusionRef,
+): Record<string, () => void> {
+  const networkId = safeNetwork();
+  const key = networkId === null ? null : transclusionCacheKey(networkId, ref);
+  return {
+    'transclusion.edit': () => {
+      void beginBlockEdit(view, ref);
+    },
+    'transclusion.changeLink': () => {
+      if (key === null) return;
+      view.dispatch({ effects: setCollapsed.of({ key, collapsed: true }) });
+    },
+    'transclusion.openSource': () => {
+      void import('./editor.js').then((m) => m.openThoughtInEditor(ref.sourceId));
+    },
+    'transclusion.focusSource': () => {
+      void import('../screens/active-view.js').then((m) => m.focusThoughtOnMap(ref.sourceId));
+    },
+    'transclusion.copyLink': () => {
+      void copyTransclusionText(ref.raw, t('comment.transclusion.menu.copied'));
+    },
+    'transclusion.copyId': () => {
+      void copyTransclusionText(ref.sourceId, t('comment.transclusion.menu.copiedId'));
+    },
+  };
+}
+
+/**
+ * Контекстное меню блока трансклюзии (элемент `1e0fb0bd`): правый клик по
+ * блоку или свёрнутой ссылке в режиме правки окружения. Пока блок в правке,
+ * действует меню поля — там блок уже обычный текст. Событие гасится, чтобы не
+ * дошло до меню поля (`markdown-field` слушает `editor.dom`).
+ */
+export const transclusionContextMenu = EditorView.domEventHandlers({
+  contextmenu: (event, view) => {
+    if (isBlockEditing(view.state)) return false;
+    const ref = transclusionWidgetRefAt(view, event.target as Element | null);
+    if (ref === null) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    showMenuAt(
+      event.clientX,
+      event.clientY,
+      buildTransclusionMenuItems(transclusionMenuHandlers(view, ref)),
+    );
+    return true;
+  },
+});
+
+/* ------------------------------------------------------------------ *
  * Режим правки блока и захват источника (задача f59d24e1)
  * ------------------------------------------------------------------ */
 
@@ -1332,6 +1426,7 @@ export const transclusionExtensions: Extension[] = [
   transclusionLoader,
   transclusionAtomicRanges,
   transclusionClick,
+  transclusionContextMenu,
   ...transclusionEditGestures,
   transclusionEditPlugin,
 ];

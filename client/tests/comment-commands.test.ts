@@ -161,6 +161,46 @@ describe('команды поля комментария (editor/comment-command
     );
   });
 
+  it('меню блока трансклюзии: шесть команд в порядке макета, подписи из словаря', () => {
+    // Раскладка — точки расширения ТП2 (элемент 1e0fb0bd).
+    assert.deepEqual(
+      [...mod.TRANSCLUSION_MENU_LAYOUT],
+      [
+        'transclusion.edit',
+        'transclusion.changeLink',
+        'transclusion.openSource',
+        'transclusion.focusSource',
+        'transclusion.copyLink',
+        'transclusion.copyId',
+      ],
+    );
+    const items = mod.buildTransclusionMenuItems({});
+    assert.deepEqual(
+      items.map((item) => item.label),
+      [
+        ru['comment.transclusion.menu.edit'],
+        ru['comment.transclusion.menu.changeLink'],
+        ru['comment.transclusion.menu.open'],
+        ru['comment.transclusion.menu.focus'],
+        ru['comment.transclusion.menu.copy'],
+        ru['comment.transclusion.menu.copyId'],
+      ],
+    );
+    // Без обработчика пункт недоступен, но остаётся в меню.
+    assert.deepEqual(items.map((item) => item.disabled), [true, true, true, true, true, true]);
+  });
+
+  it('меню блока трансклюзии: заданный обработчик исполняется по клику пункта', () => {
+    const calls: string[] = [];
+    const items = mod.buildTransclusionMenuItems({
+      'transclusion.openSource': () => calls.push('openSource'),
+    });
+    const open = items[2]!;
+    assert.equal(open.disabled, false, 'пункт с обработчиком доступен');
+    open.onClick?.();
+    assert.deepEqual(calls, ['openSource']);
+  });
+
   it('реестр команд — точка расширения: без обработчика no-op, с ним исполняется', () => {
     const field = host();
     assert.equal(mod.runCommentCommand('comment.bold', field), false);

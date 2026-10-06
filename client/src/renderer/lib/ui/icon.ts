@@ -34,6 +34,7 @@ import {
   ClipboardPaste,
   Code,
   Copy,
+  Crosshair,
   Download,
   Ellipsis,
   Eraser,
@@ -171,7 +172,14 @@ export type IconName =
   | 'arrow-down'
   | 'replace'
   // Смена ссылки трансклюзии (0.12.1, задача f72a9134, ТП2).
-  | 'link-edit';
+  | 'link-edit'
+  // Команды контекстного меню блока трансклюзии (0.12.1, задача 955478e8,
+  // ТП2): «Редактировать», «Изменить ссылку», «Открыть ссылку», «В фокус»,
+  // «Копировать», «Копировать ID».
+  | 'pencil'
+  | 'external-link'
+  | 'focus'
+  | 'hash';
 
 /**
  * Значки обвязки: kebab-имя проекта → узел Lucide (`IconNode`). Именованные
@@ -246,6 +254,11 @@ const CHROME_ICONS: Record<IconName, IconNode> = {
   replace: Replace,
   // Смена ссылки трансклюзии (0.12.1, задача f72a9134).
   'link-edit': Pencil,
+  // Команды контекстного меню блока трансклюзии (0.12.1, задача 955478e8).
+  pencil: Pencil,
+  'external-link': ExternalLink,
+  focus: Crosshair,
+  hash: Hash,
 };
 
 /** Имена значков обвязки — каталог в порядке объявления. */

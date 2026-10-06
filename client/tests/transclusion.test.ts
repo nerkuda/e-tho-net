@@ -30,6 +30,7 @@ import {
   transclusionInternals,
   transclusionLabels,
   transclusionLinkLabel,
+  transclusionMenuHandlers,
   transclusionState,
   type TransclusionSource,
   type TransclusionSourceLoader,
@@ -475,4 +476,44 @@ test('isBlockEditing: Enter отдаётся родительскому keymap �
     }),
   }).state;
   assert.equal(isBlockEditing(state), true, 'в правке блока Enter отдаём родителю (перевод строки)');
+});
+
+// ---------------------------------------------------------------------------
+// Контекстное меню блока (задача 955478e8, элемент 1e0fb0bd)
+// ---------------------------------------------------------------------------
+
+test('transclusionMenuHandlers: ровно шесть команд макета', () => {
+  const src = `![[#${ID_A}]]`;
+  const ref = parseTransclusions(src)[0]!;
+  const view = { state: EditorState.create({ doc: src }) } as unknown as Parameters<
+    typeof transclusionMenuHandlers
+  >[0];
+  const handlers = transclusionMenuHandlers(view, ref);
+  assert.deepEqual(
+    Object.keys(handlers).sort(),
+    [
+      'transclusion.changeLink',
+      'transclusion.copyId',
+      'transclusion.copyLink',
+      'transclusion.edit',
+      'transclusion.focusSource',
+      'transclusion.openSource',
+    ],
+  );
+});
+
+test('transclusionMenuHandlers: «Изменить ссылку» без сети не трогает документ', () => {
+  const src = `![[#${ID_A}]]`;
+  const ref = parseTransclusions(src)[0]!;
+  let dispatches = 0;
+  const view = {
+    state: EditorState.create({ doc: src }),
+    dispatch: () => {
+      dispatches += 1;
+    },
+  } as unknown as Parameters<typeof transclusionMenuHandlers>[0];
+  const handlers = transclusionMenuHandlers(view, ref);
+  handlers['transclusion.changeLink']!();
+  // Вне сети ключ кэша не строится — сворачивание не выполняется.
+  assert.equal(dispatches, 0);
 });
