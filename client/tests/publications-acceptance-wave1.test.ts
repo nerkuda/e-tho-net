@@ -101,7 +101,9 @@ describe('5de0332d п.3: рендерер markdown — одиночный пер
   });
 
   it('версия конвейера поднята — кеш body_html перерисуется', () => {
-    assert.match(MD_INDEX, /MD_RENDER_VERSION = 'markdown-it\/7'/, 'версия рендера поднята');
+    // Значение движется вместе с конвейером: 8 — ТП1 (задача 2fc28fa2,
+    // task-списки / ==…== / <u> / скрытие HTML-комментариев).
+    assert.match(MD_INDEX, /MD_RENDER_VERSION = 'markdown-it\/8'/, 'версия рендера поднята');
   });
 });
 

@@ -358,3 +358,108 @@ test('не-строка бросает ошибку', () => {
   assert.throws(() => renderMarkdown(null));
   assert.throws(() => renderMarkdown(123));
 });
+
+// ---------------------------------------------------------------------------
+// ТП1: task-списки, ==…==, <u>, скрытие HTML-комментариев (задача 2fc28fa2)
+// ---------------------------------------------------------------------------
+
+test('task-список: `- [ ]` — снятый чекбокс, список и пункт получают классы', () => {
+  const html = renderMarkdown('- [ ] раз');
+  assert.match(html, /<ul class="contains-task-list">/);
+  assert.match(html, /<li class="task-list-item">/);
+  assert.ok(
+    html.includes('<input class="task-list-item-checkbox" type="checkbox" disabled>'),
+    html,
+  );
+  assert.ok(!html.includes('[ ]'), html);
+  assert.ok(html.includes('>раз</li>'), html);
+});
+
+test('task-список: `- [x]` и `- [X]` — отмеченный чекбокс', () => {
+  for (const src of ['- [x] два', '- [X] два']) {
+    const html = renderMarkdown(src);
+    assert.ok(html.includes('type="checkbox" disabled checked>'), html);
+    assert.ok(!html.includes('[x]') && !html.includes('[X]'), html);
+  }
+});
+
+test('task-список: нумерованный список и смешанные пункты', () => {
+  const ordered = renderMarkdown('1. [ ] раз');
+  assert.match(ordered, /<ol class="contains-task-list">/);
+  assert.ok(ordered.includes('type="checkbox" disabled>'), ordered);
+
+  const mixed = renderMarkdown('- обычный\n- [ ] задача');
+  assert.match(mixed, /<ul class="contains-task-list">/);
+  // Обычный пункт остаётся без класса задачи.
+  assert.ok(mixed.includes('<li>обычный</li>'), mixed);
+  assert.match(mixed, /<li class="task-list-item">/);
+});
+
+test('task-список: вложенный список задач независим', () => {
+  const html = renderMarkdown('- [ ] а\n  - [x] вложенный');
+  assert.equal((html.match(/class="contains-task-list"/g) ?? []).length, 2, html);
+  assert.ok(html.includes('type="checkbox" disabled checked>вложенный</li>'), html);
+});
+
+test('task-список: не-чекбокс в тексте не трогается', () => {
+  const html = renderMarkdown('просто [ ] текст');
+  assert.ok(!html.includes('task-list-item'), html);
+  assert.ok(html.includes('просто [ ] текст'), html);
+});
+
+test('==…== рендерится как <mark>, несколько вхождений и экранирование', () => {
+  assert.match(renderMarkdown('==выделение=='), /<p><mark>выделение<\/mark><\/p>/);
+  assert.match(renderMarkdown('a ==b== c ==d=='), /a <mark>b<\/mark> c <mark>d<\/mark>/);
+  const escaped = renderMarkdown('==<b>==');
+  assert.ok(escaped.includes('<mark>&lt;b&gt;</mark>'), escaped);
+});
+
+test('== без пары и внутри code span остаётся текстом', () => {
+  assert.match(renderMarkdown('== несомкнутое'), /<p>== несомкнутое<\/p>/);
+  assert.ok(renderMarkdown('`==y==`').includes('<code>==y==</code>'));
+});
+
+test('<u>…</u> рендерится как <u>, регистр тега не важен', () => {
+  assert.match(renderMarkdown('<u>подчёркнутый</u>'), /<p><u>подчёркнутый<\/u><\/p>/);
+  assert.match(renderMarkdown('<U>Заглавная</U>'), /<p><u>Заглавная<\/u><\/p>/);
+});
+
+test('<u> без пары и внутри code span экранируется, а не проходит насквозь', () => {
+  assert.ok(renderMarkdown('<u> несомкнутое').includes('&lt;u&gt; несомкнутое'));
+  assert.ok(renderMarkdown('`<u>x</u>`').includes('<code>&lt;u&gt;x&lt;/u&gt;</code>'));
+});
+
+test('HTML-комментарий-блок скрыт и не оставляет пустого абзаца', () => {
+  const html = renderMarkdown('до\n\n<!-- скрыто -->\n\nпосле');
+  assert.ok(!html.includes('скрыто'), html);
+  assert.ok(!html.includes('<!--'), html);
+  assert.equal((html.match(/<p>/g) ?? []).length, 2, html);
+});
+
+test('многострочный HTML-комментарий скрыт целиком', () => {
+  const html = renderMarkdown('<!--\nмного\nстрочный\n-->\n\nпосле');
+  assert.ok(!html.includes('много'), html);
+  assert.ok(!html.includes('-->'), html);
+  assert.ok(html.includes('<p>после</p>'), html);
+});
+
+test('HTML-комментарий в строке текста скрыт, окружающий текст сохранён', () => {
+  const html = renderMarkdown('текст <!-- скрыто --> ещё');
+  assert.ok(!html.includes('скрыто'), html);
+  assert.ok(html.includes('текст') && html.includes('ещё'), html);
+
+  const trailing = renderMarkdown('<!-- c --> текст');
+  assert.ok(!trailing.includes('<!--'), trailing);
+  assert.ok(trailing.includes('текст'), trailing);
+});
+
+test('незакрытый HTML-комментарий — обычный экранированный текст', () => {
+  const html = renderMarkdown('<!-- незакрытый');
+  assert.ok(html.includes('&lt;!-- незакрытый'), html);
+});
+
+test('HTML-комментарий внутри fenced-кода сохраняется', () => {
+  const html = renderMarkdown('```\n<!-- keep -->\n```');
+  assert.ok(html.includes('&lt;!-- keep --&gt;'), html);
+});
+

@@ -70,8 +70,14 @@ export type {
  * `markdown-it/7`: `breaks: true` — a single newline renders as `<br>` so the
  * view matches the editor (задача 5de0332d, п. 3). Cached `body_html` must
  * re-render.
+ *
+ * `markdown-it/8`: ТП1 (задача 2fc28fa2) — task-списки (`- [ ]` / `- [x]`),
+ * выделение `==…==`, подчёркивание `<u>…</u>` и скрытие HTML-комментариев
+ * (`<!-- … -->`) в просмотре/публикациях. Cached `body_html` must re-render
+ * so existing comments lose the previously escaped comments and gain the new
+ * constructs.
  */
-export const MD_RENDER_VERSION = 'markdown-it/7';
+export const MD_RENDER_VERSION = 'markdown-it/8';
 
 /** Options for {@link renderMarkdown}. */
 export interface RenderOptions {

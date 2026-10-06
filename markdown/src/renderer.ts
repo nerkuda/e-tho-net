@@ -16,8 +16,12 @@
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js/lib/common';
 
+import { htmlCommentPlugin } from './html-comment.js';
 import { imagePlugin } from './image.js';
 import { linkSafetyPlugin } from './link.js';
+import { markPlugin } from './mark.js';
+import { taskListPlugin } from './task-list.js';
+import { underlinePlugin } from './underline.js';
 import { isSafeUrl } from './url.js';
 import { wikiLinkPlugin } from './wiki-link.js';
 
@@ -57,6 +61,12 @@ export function getRenderer(): MarkdownIt {
   wikiLinkPlugin(md);
   imagePlugin(md);
   linkSafetyPlugin(md);
+  // ТП1 (задача 2fc28fa2): новые внутристрочные конструкции и скрытие
+  // HTML-комментариев — в едином рендерере, без второго парсера.
+  markPlugin(md);
+  underlinePlugin(md);
+  htmlCommentPlugin(md);
+  taskListPlugin(md);
   instance = md;
   return md;
 }

@@ -1053,6 +1053,29 @@
   margin: 6px 0;
 }
 
+/* ТП1 (задача 2fc28fa2): task-списки из единого рендерера — чекбокс вместо
+   маркера. Классы ставит @etn/markdown. */
+.comment-view ul.contains-task-list,
+.comment-view ol.contains-task-list,
+.comment-view li.task-list-item {
+  list-style: none;
+}
+
+.comment-view .task-list-item-checkbox {
+  margin-inline-end: 0.4em;
+  vertical-align: baseline;
+}
+
+/* ТП1: выделение `==…==` (`<mark>`) — тем же фоном, что подсветка поиска,
+   а не жёлтым по умолчанию Web Awesome (`@layer wa-native`). */
+.comment-view mark {
+  background: var(--mark-bg);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+
 .comment-view blockquote,
 .cm-editor .cm-line.cm-md-quote-line {
   padding-left: var(--md-quote-indent);

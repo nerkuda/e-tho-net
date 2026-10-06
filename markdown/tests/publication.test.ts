@@ -315,3 +315,22 @@ test('shortId / publicationAnchor детерминированы', () => {
   assert.equal(shortId(UUID), UUID.replace(/-/g, '').slice(0, 8));
   assert.equal(publicationAnchor(UUID), `pub-${UUID.replace(/-/g, '').slice(0, 8)}`);
 });
+
+// ---------------------------------------------------------------------------
+// ТП1: те же конструкции в текстах публикаций (задача 2fc28fa2)
+// ---------------------------------------------------------------------------
+
+test('публикация: HTML-комментарии скрыты, новые конструкции отрендерены', () => {
+  const { html } = renderPublicationFragment(
+    ['<!-- требование к разделу -->', '', '==акцент== и <u>подчёркнутое</u>', '', '- [x] готово'].join(
+      '\n',
+    ),
+    { baseLevel: 1 },
+  );
+  assert.ok(!html.includes('требование к разделу'), html);
+  assert.ok(!html.includes('<!--'), html);
+  assert.ok(html.includes('<mark>акцент</mark>'), html);
+  assert.ok(html.includes('<u>подчёркнутое</u>'), html);
+  assert.ok(html.includes('type="checkbox" disabled checked>'), html);
+});
+
