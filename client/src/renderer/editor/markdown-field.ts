@@ -107,18 +107,36 @@ export interface MdSourceSelection {
 }
 
 /**
- * Один отрезок карты смещений просмотра с трансклюзиями (ошибка 0fdd8c86).
- * `expStart`/`expEnd` — диапазон в развёрнутом тексте (в его координатах
- * рендерер размечает позиции), `srcStart` — соответствующая позиция исходника
- * `body_md`. Для развёрнутого блока трансклюзии (`chunk: true`) позиция внутри
- * отрезка не имеет 1:1-соответствия: клик по нему входит в правку на саму
- * ссылку-трансклюзию (`srcStart` — её начало).
+ * Вложенный блок трансклюзии внутри развёрнутого блока верхнего уровня
+ * (ошибка 5ecb9f0b): диапазон в развёрнутом тексте. Любая вложенность (глубина
+ * ≥ 2) целиком лежит внутри такого диапазона, поэтому глубже иерархию хранить
+ * не нужно.
+ */
+export interface NestedChunkRange {
+  expStart: number;
+  expEnd: number;
+}
+
+/**
+ * Один отрезок карты смещений просмотра с трансклюзиями (ошибки 0fdd8c86,
+ * 5ecb9f0b). `expStart`/`expEnd` — диапазон в развёрнутом тексте (в его
+ * координатах рендерер размечает позиции), `srcStart` — соответствующая позиция
+ * исходника `body_md`. Для развёрнутого блока трансклюзии (`chunk: true`)
+ * позиция внутри отрезка не имеет 1:1-соответствия: клик по нему входит в
+ * правку на саму ссылку-трансклюзию (`srcStart` — её начало).
+ *
+ * `nested` — диапазоны ВЛОЖЕННЫХ блоков внутри этого блока. Их текст приходит
+ * из исходника другой мысли, и позиции для него в `body_md` поля не существует
+ * (позиция ссылки в исходнике контейнера невосстановима из развёртки — ссылка
+ * трансклюзии в развёрнутом тексте заменена блоком). Такие позиции карта не
+ * переводит: клик внутри вложенного блока не схлопывается на внешнюю ссылку.
  */
 export interface ViewOffsetSegment {
   expStart: number;
   expEnd: number;
   srcStart: number;
   chunk?: boolean;
+  nested?: readonly NestedChunkRange[];
 }
 
 /** Карта «развёрнутый текст просмотра → исходник body_md». */
@@ -131,19 +149,31 @@ const VIEW_CHUNK_MARKER_RE = new RegExp(
   `^<!--\\s*${TRANSCLUSION_MARKER_PREFIX}\\s+(begin|end|skip|missing)\\b`,
 );
 
+/** Границы развёрнутого блока трансклюзии в тексте развёртки. */
+interface ChunkBounds {
+  /** Конец блока (эксклюзивно), с учётом замыкающего перевода строки. */
+  expEnd: number;
+  /** Начало внутреннего текста блока (после строки `begin`), либо `end` для пропуска. */
+  interiorStart: number;
+  /** Конец внутреннего текста перед строкой `end`, либо `end` для пропуска. */
+  interiorEnd: number;
+}
+
 /**
- * Конец развёрнутого блока трансклюзии, начинающегося в `start` (позиция сразу
+ * Границы развёрнутого блока трансклюзии, начинающегося в `start` (позиция сразу
  * после предыдущего неразвёрнутого фрагмента). Парсит уже готовые маркеры
  * `etn:transclusion` (ADR 85a7a01e), которые кладёт в текст развёртка: `begin`
  * сбалансирован парным `end` (счёт по строкам), `missing`/`skip` — одна строка.
- * `null` — маркер не распознан (карту строить нельзя).
+ * Возвращает и внутренний диапазон блока (`begin`…`end`), чтобы найти внутри
+ * вложенные трансклюзии (ошибка 5ecb9f0b). `null` — маркер не распознан (карту
+ * строить нельзя).
  */
-function transclusionChunkEnd(
+function transclusionChunkBounds(
   expanded: string,
   start: number,
   ref: { start: number; end: number },
   raw: string,
-): number | null {
+): ChunkBounds | null {
   let i = start;
   // wrapBlock мог вставить ведущий перевод строки, когда ссылка не на границе строки.
   if (expanded[i] === '\n') i += 1;
@@ -154,7 +184,10 @@ function transclusionChunkEnd(
   // Блок маркеров не несёт завершающего перевода строки (он идёт от самого
   // исходника); исключать надо только текст маркера.
   let end = lineEnd === -1 ? expanded.length : lineEnd;
+  let interiorStart = i;
+  let interiorEnd = i;
   if (head[1] === 'begin') {
+    interiorStart = lineEnd === -1 ? expanded.length : lineEnd + 1;
     let depth = 0;
     let pos = i;
     for (;;) {
@@ -165,6 +198,8 @@ function transclusionChunkEnd(
         if (marker[1] === 'begin') depth += 1;
         else if (marker[1] === 'end' && (depth -= 1) === 0) {
           end = le === -1 ? expanded.length : le;
+          // Между внутренним текстом и строкой `end` стоит вставленный `\n`.
+          interiorEnd = pos > 0 ? pos - 1 : 0;
           break;
         }
       }
@@ -174,15 +209,69 @@ function transclusionChunkEnd(
   }
   // wrapBlock мог вставить замыкающий перевод строки.
   if (ref.end < raw.length && raw[ref.end] !== '\n' && expanded[end] === '\n') end += 1;
-  return end;
+  return { expEnd: end, interiorStart, interiorEnd };
 }
 
 /**
- * Строит карту смещений «развёрнутый текст просмотра → исходник» (ошибка
- * 0fdd8c86). Развёртка трансклюзий заменяет каждую ссылку-трансклюзию блоком
- * маркеров с текстом источника; неразвёрнутые фрагменты переносятся в
+ * Диапазоны вложенных блоков трансклюзии внутри внутреннего текста блока
+ * верхнего уровня (ошибка 5ecb9f0b). Возвращает ВНЕШНИЕ вложенные блоки: любой
+ * блок большей глубины лежит внутри одного из них, поэтому глубже не разбираем.
+ * `missing`/`skip` — одна строка (`begin` без парного `end` не встречается).
+ */
+function nestedChunkRanges(
+  expanded: string,
+  from: number,
+  to: number,
+): NestedChunkRange[] {
+  const ranges: NestedChunkRange[] = [];
+  let pos = from;
+  while (pos < to) {
+    const nl = expanded.indexOf('\n', pos);
+    const lineEnd = nl === -1 || nl > to ? to : nl;
+    const marker = VIEW_CHUNK_MARKER_RE.exec(expanded.slice(pos, lineEnd));
+    if (marker !== null && marker[1] !== 'end') {
+      // Внешний вложенный блок: его конец — парный `end` для `begin` или конец
+      // строки для `skip`/`missing`. Блоки большей глубины лежат внутри — после
+      // него продолжаем сразу за его концом, чтобы не дублировать диапазоны.
+      let end = lineEnd;
+      if (marker[1] === 'begin') {
+        let depth = 0;
+        let scan = pos;
+        for (;;) {
+          const le = expanded.indexOf('\n', scan);
+          const at = le === -1 || le > to ? to : le;
+          const inner = VIEW_CHUNK_MARKER_RE.exec(expanded.slice(scan, at));
+          if (inner !== null) {
+            if (inner[1] === 'begin') depth += 1;
+            else if (inner[1] === 'end' && (depth -= 1) === 0) {
+              end = at;
+              break;
+            }
+          }
+          if (le === -1 || le > to) break;
+          scan = le + 1;
+        }
+      }
+      ranges.push({ expStart: pos, expEnd: end });
+      const after = expanded.indexOf('\n', end);
+      if (after === -1 || after + 1 >= to) break;
+      pos = after + 1;
+      continue;
+    }
+    if (lineEnd >= to) break;
+    pos = lineEnd + 1;
+  }
+  return ranges;
+}
+
+/**
+ * Строит карту смещений «развёрнутый текст просмотра → исходник» (ошибки
+ * 0fdd8c86, 5ecb9f0b). Развёртка трансклюзий заменяет каждую ссылку-трансклюзию
+ * блоком маркеров с текстом источника; неразвёрнутые фрагменты переносятся в
  * развёрнутый текст дословно, поэтому их позиции отображаются 1:1 (со сдвигом),
- * а блоки трансклюзий — в позицию ссылки. `null` — трансклюзий нет либо
+ * а блоки трансклюзий — в позицию ссылки. Вложенные блоки внутрь блока верхнего
+ * уровня помечаются диапазонами `nested` — их текст принадлежит другой мысли и
+ * в координатах `body_md` поля позиции не имеет. `null` — трансклюзий нет либо
  * развёрнутый текст не согласован с исходником (карта не строится, поле
  * откатывается к прежнему поведению).
  */
@@ -199,10 +288,20 @@ export function buildExpandedSourceMap(raw: string, expanded: string): ViewOffse
       segments.push({ expStart: exp, expEnd: exp + run.length, srcStart: src });
     }
     exp += run.length;
-    const chunkEnd = transclusionChunkEnd(expanded, exp, ref, raw);
-    if (chunkEnd === null) return null;
-    segments.push({ expStart: exp, expEnd: chunkEnd, srcStart: ref.start, chunk: true });
-    exp = chunkEnd;
+    const bounds = transclusionChunkBounds(expanded, exp, ref, raw);
+    if (bounds === null) return null;
+    const nested =
+      bounds.interiorEnd > bounds.interiorStart
+        ? nestedChunkRanges(expanded, bounds.interiorStart, bounds.interiorEnd)
+        : [];
+    segments.push({
+      expStart: exp,
+      expEnd: bounds.expEnd,
+      srcStart: ref.start,
+      chunk: true,
+      nested,
+    });
+    exp = bounds.expEnd;
     src = ref.end;
   }
   if (expanded.slice(exp) !== raw.slice(src)) return null;
@@ -214,17 +313,26 @@ export function buildExpandedSourceMap(raw: string, expanded: string): ViewOffse
 
 /**
  * Переводит смещение в развёрнутом тексте просмотра в позицию исходника по
- * карте (ошибка 0fdd8c86). Позиция вне карты — `null`.
+ * карте (ошибки 0fdd8c86, 5ecb9f0b). Позиция вне карты или внутри ВЛОЖЕННОГО
+ * блока — `null`: вложенный текст приходит из исходника другой мысли, и позиции
+ * для него в `body_md` поля не существует (клик не должен схлопываться на
+ * внешнюю ссылку).
  */
 export function mapViewOffsetToSource(map: ViewOffsetMap, offset: number): number | null {
-  let segment: ViewOffsetSegment | null = null;
-  for (const candidate of map.segments) {
-    if (candidate.expStart > offset) break;
-    segment = candidate;
+  for (const segment of map.segments) {
+    if (offset < segment.expStart) return null;
+    if (offset >= segment.expEnd) continue;
+    if (segment.chunk !== true) {
+      return segment.srcStart + (offset - segment.expStart);
+    }
+    if (segment.nested !== undefined) {
+      for (const nested of segment.nested) {
+        if (offset >= nested.expStart && offset < nested.expEnd) return null;
+      }
+    }
+    return segment.srcStart;
   }
-  if (segment === null) return null;
-  if (segment.chunk === true) return segment.srcStart;
-  return segment.srcStart + Math.min(offset, segment.expEnd) - segment.expStart;
+  return null;
 }
 
 /**

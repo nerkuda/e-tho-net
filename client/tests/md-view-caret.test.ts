@@ -259,3 +259,81 @@ describe('просмотр с трансклюзией: смещения раз�
     );
   });
 });
+
+/* ------------------------------------------------------------------------- *
+ * Вложенные трансклюзии: клик внутри вложенного блока (ошибка 5ecb9f0b)
+ * ------------------------------------------------------------------------- */
+
+const NESTED_A = 'aaaaaaaa-1111-4111-8111-111111111111';
+const NESTED_B = 'bbbbbbbb-2222-4222-8222-222222222222';
+const NESTED_C = 'cccccccc-3333-4333-8333-333333333333';
+
+/**
+ * Развёртка трёх уровней: комментарий ссылается на A, A — на B, B — на C.
+ * Возвращает исходник поля и развёрнутый текст с вложенными блоками.
+ */
+function expandThreeLevels(): { raw: string; expanded: string } {
+  const raw = `Перед блоком.\n\n![[#${NESTED_A}]]\n\nПосле блока.\n`;
+  const bodies: Record<string, string> = {
+    [NESTED_A]: `Внешний текст.\n\n![[#${NESTED_B}]]\n\nХвост A.\n`,
+    [NESTED_B]: `Глубокий текст.\n\n![[#${NESTED_C}]]\n\nХвост B.\n`,
+    [NESTED_C]: `Самый глубокий.\n`,
+  };
+  return {
+    raw,
+    expanded: expandTransclusions(raw, (id) => ({ found: id in bodies, body_md: bodies[id] ?? '' }), {
+      markers: true,
+    }),
+  };
+}
+
+describe('просмотр с трансклюзией: вложенные блоки (5ecb9f0b)', () => {
+  it('клик во внешней части блока ведёт к внешней ссылке, во вложенный — не схлопывается', () => {
+    const { raw, expanded } = expandThreeLevels();
+    const map = buildExpandedSourceMap(raw, expanded);
+    assert.ok(map !== null);
+    const outerRef = raw.indexOf('![[');
+    // Текст внешнего блока вне вложенных блоков — ссылка внешней трансклюзии.
+    assert.equal(mapViewOffsetToSource(map!, expanded.indexOf('Внешний текст.')), outerRef);
+    assert.equal(mapViewOffsetToSource(map!, expanded.indexOf('Хвост A.')), outerRef);
+    // Вложенный текст (2-й и 3-й уровень) в body_md поля отсутствует — позиции нет,
+    // и карта НЕ схлопывает её на внешнюю ссылку (регресс ошибки 5ecb9f0b).
+    assert.equal(raw.includes('Глубокий текст.'), false, 'развёртка заменяет вложенную ссылку блоком');
+    assert.equal(mapViewOffsetToSource(map!, expanded.indexOf('Глубокий текст.')), null);
+    assert.equal(mapViewOffsetToSource(map!, expanded.indexOf('Самый глубокий.')), null);
+    assert.equal(mapViewOffsetToSource(map!, expanded.indexOf('Хвост B.')), null);
+    // Вне блоков — прежнее поведение 1:1 (ошибка 0fdd8c86).
+    assert.equal(
+      mapViewOffsetToSource(map!, expanded.indexOf('После блока.')),
+      raw.indexOf('После блока.'),
+    );
+  });
+
+  it('двойной клик внутри вложенного блока даёт null (каретка не на внешней ссылке)', () => {
+    const { raw, expanded } = expandThreeLevels();
+    const map = buildExpandedSourceMap(raw, expanded);
+    assert.ok(map !== null);
+    const nestedStart = expanded.indexOf('Глубокий текст.');
+    const block = expandedBlock(nestedStart, 'Глубокий текст.');
+    const range = sourceRangeFromSelection(
+      { node: block.childNodes[0], offset: 0 },
+      { node: block.childNodes[0], offset: 'Глубокий'.length },
+      map!,
+    );
+    assert.equal(range, null);
+  });
+
+  it('двойной клик во внешней части блока по-прежнему входит в правку на внешней ссылке', () => {
+    const { raw, expanded } = expandThreeLevels();
+    const map = buildExpandedSourceMap(raw, expanded);
+    assert.ok(map !== null);
+    const expStart = expanded.indexOf('Внешний текст.');
+    const block = expandedBlock(expStart, 'Внешний текст.');
+    const range = sourceRangeFromSelection(
+      { node: block.childNodes[0], offset: 0 },
+      { node: block.childNodes[0], offset: 'Внешний'.length },
+      map!,
+    );
+    assert.deepEqual(range, { anchor: raw.indexOf('![['), head: raw.indexOf('![[') });
+  });
+});
