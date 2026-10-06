@@ -20,6 +20,7 @@ import {
   Activity,
   ArrowLeft,
   AtSign,
+  Bold,
   BookOpen,
   Calendar,
   CalendarDays,
@@ -27,29 +28,52 @@ import {
   ChevronDown,
   ChevronsDown,
   ChevronsUp,
+  ClipboardCopy,
+  ClipboardPaste,
+  Code,
   Copy,
   Download,
+  Ellipsis,
   Eraser,
   ExternalLink,
   Filter,
   Hash,
+  Heading1,
+  Heading2,
+  Heading3,
+  Highlighter,
+  Indent,
+  IndentDecrease,
+  Italic,
   Layers,
   Link,
+  List,
+  ListOrdered,
+  ListTodo,
   ListTree,
   Loader,
   Menu,
+  MessageSquareCode,
+  Minus,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   RotateCcw,
   Save,
+  Scissors,
   Search,
   Settings,
+  Split,
+  SquareCode,
+  Strikethrough,
+  Table,
+  TextQuote,
   ToggleLeft,
   Trash2,
   TriangleAlert,
   Type,
+  Underline,
   Undo2,
   User,
   Waypoints,
@@ -110,7 +134,33 @@ export type IconName =
   // разворот/сворачивание панели оглавления.
   | 'download'
   | 'panel-left-open'
-  | 'panel-left-close';
+  | 'panel-left-close'
+  // Значки команд поля комментария (0.12.1, задача 3d6f98cb, ТП1): тулбар и
+  // контекстное меню. Внутристрочные, блочные и команды уровня поля.
+  | 'bold'
+  | 'italic'
+  | 'underline'
+  | 'strikethrough'
+  | 'highlight'
+  | 'inline-code'
+  | 'list-bullet'
+  | 'list-ordered'
+  | 'list-task'
+  | 'indent'
+  | 'outdent'
+  | 'heading-1'
+  | 'heading-2'
+  | 'heading-3'
+  | 'quote'
+  | 'code-block'
+  | 'table'
+  | 'separator'
+  | 'html-comment'
+  | 'cut'
+  | 'paste'
+  | 'copy-text'
+  | 'split'
+  | 'ellipsis';
 
 /**
  * Значки обвязки: kebab-имя проекта → узел Lucide (`IconNode`). Именованные
@@ -154,6 +204,31 @@ const CHROME_ICONS: Record<IconName, IconNode> = {
   download: Download,
   'panel-left-open': PanelLeftOpen,
   'panel-left-close': PanelLeftClose,
+  // Команды поля комментария (0.12.1, задача 3d6f98cb, ТП1).
+  bold: Bold,
+  italic: Italic,
+  underline: Underline,
+  strikethrough: Strikethrough,
+  highlight: Highlighter,
+  'inline-code': Code,
+  'list-bullet': List,
+  'list-ordered': ListOrdered,
+  'list-task': ListTodo,
+  indent: Indent,
+  outdent: IndentDecrease,
+  'heading-1': Heading1,
+  'heading-2': Heading2,
+  'heading-3': Heading3,
+  quote: TextQuote,
+  'code-block': SquareCode,
+  table: Table,
+  separator: Minus,
+  'html-comment': MessageSquareCode,
+  cut: Scissors,
+  paste: ClipboardPaste,
+  'copy-text': ClipboardCopy,
+  split: Split,
+  ellipsis: Ellipsis,
 };
 
 /** Имена значков обвязки — каталог в порядке объявления. */

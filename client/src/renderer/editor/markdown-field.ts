@@ -19,9 +19,16 @@ import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
-import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { bindWikiCreateContext } from '../lib/wiki-create-context.js';
+import {
+  buildCommentMenuItems,
+  buildCommentToolbar,
+  enterCommentEdit,
+  guardCommentMenuFocus,
+  type CommentCommandHost,
+} from './comment-commands.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
@@ -138,6 +145,54 @@ export function createMarkdownField(opts: {
   /** Guards against a focusout fired while the editor is being rebuilt. */
   let mounting = false;
   let editor: MdEditor | null = null;
+  /** Поле сейчас в режиме правки (для контекста сочетаний команд). */
+  let editing = false;
+  /** Снятие контекста сочетаний поля; `null` — контекст не активен. */
+  let releaseCommentKeys: (() => void) | null = null;
+
+  /**
+   * Хост команд поля (ТП1 «Команды редактирования комментария», задача
+   * 3d6f98cb): тулбар и контекстное меню применяют команды к этому полю, а
+   * команды уровня поля (отмена/сохранение) исполняет сам каркас правки.
+   */
+  const commandHost: CommentCommandHost = {
+    getEditor: () => editor,
+    root,
+    runFieldCommand: (command) => {
+      if (editor === null) return false;
+      if (command === 'comment.cancel') {
+        cancelled = true;
+        editor.blur();
+        return true;
+      }
+      if (command === 'comment.save') {
+        cancelled = false;
+        editor.blur();
+        return true;
+      }
+      return false;
+    },
+  };
+  // Тулбар — верхняя панель поля; живёт внутри `area`, поэтому виден только в
+  // правке (`area` скрыта в просмотре) — требование 6f8575a5.
+  const toolbar = buildCommentToolbar(commandHost);
+
+  /** Включает контекст сочетаний поля, пока оно в правке и в фокусе. */
+  const enterCommentKeys = (): void => {
+    if (!editing) return;
+    releaseCommentKeys ??= enterCommentEdit(commandHost);
+  };
+  /** Снимает контекст сочетаний поля. */
+  const leaveCommentKeys = (): void => {
+    releaseCommentKeys?.();
+    releaseCommentKeys = null;
+  };
+  root.addEventListener('focusin', () => enterCommentKeys());
+  root.addEventListener('focusout', (event) => {
+    const next = event.relatedTarget;
+    if (next instanceof Node && root.contains(next)) return;
+    leaveCommentKeys();
+  });
 
   // Масштаб документа (M9): Ctrl+колесо над полем меняет глобальный
   // `--md-font-size` — действует на все md-поля; значение сохраняется на сеть.
@@ -216,6 +271,8 @@ export function createMarkdownField(opts: {
 
   const showView = (): void => {
     const wasEditing = editor !== null && !area.classList.contains('hidden');
+    editing = false;
+    leaveCommentKeys();
     area.classList.add('hidden');
     view.classList.remove('hidden');
     renderView();
@@ -301,19 +358,20 @@ export function createMarkdownField(opts: {
       },
       true,
     );
-    // Контекстное меню редактора: «Вставить текст шаблона из типа мысли»
-    // (08-ui-spec.md §6.4) и «Вставить ссылку на публикацию…» (0.11.1, задача
-    // 3275fd8d, требование 7f583ef9). Меню показывается, только когда есть
-    // хотя бы один применимый пункт; иначе пропускаем событие, и пользователь
-    // видит стандартное меню CM6.
+    // Контекстное меню редактора: команды форматирования поля (ТП1 «Команды
+    // редактирования комментария», задача 3d6f98cb) плюс «Вставить текст
+    // шаблона из типа мысли» (08-ui-spec.md §6.4) и «Вставить ссылку на
+    // публикацию…» (0.11.1, задача 3275fd8d, требование 7f583ef9). Раскладка
+    // команд повторяет тулбар; подменю настроек поля в меню нет (элемент
+    // 0562e0e3).
     editor.dom.addEventListener('contextmenu', (event) => {
       if (editor === null) return;
-      const items: MenuItem[] = [];
+      const items: MenuItem[] = buildCommentMenuItems(commandHost);
+      const extras: MenuItem[] = [];
       const template = opts.onInsertTemplate?.() ?? null;
       if (template !== null && template.trim() !== '') {
-        items.push({
-          label: 'Вставить текст шаблона из типа мысли',
-          onClick: () => {
+        extras.push(
+          menuAction('Вставить текст шаблона из типа мысли', () => {
             if (editor === null) return;
             if (area.classList.contains('hidden')) {
               // Поле в view-режиме: переключаем в edit и подставляем текст.
@@ -321,12 +379,11 @@ export function createMarkdownField(opts: {
             } else {
               editor.insertAtCaret(template);
             }
-          },
-        });
+          }),
+        );
       }
-      items.push({
-        label: t('publications.link.insert'),
-        onClick: () => {
+      extras.push(
+        menuAction(t('publications.link.insert'), () => {
           if (editor === null) return;
           void pickEntitiesModal({
             networkId,
@@ -344,13 +401,16 @@ export function createMarkdownField(opts: {
               })
               .catch(() => undefined);
           });
-        },
-      });
-      if (items.length === 0) return;
+        }),
+      );
+      items.push(MENU_SEPARATOR, ...extras);
       event.preventDefault();
-      showMenuAt(event.clientX, event.clientY, items);
+      const menuRoot = showMenuAt(event.clientX, event.clientY, items);
+      // Клик по пункту меню не должен снимать фокус/выделение редактора —
+      // иначе поле выйдет из правки и команда не применится к выделению.
+      guardCommentMenuFocus(menuRoot);
     });
-    area.replaceChildren(editor.dom);
+    area.replaceChildren(toolbar, editor.dom);
     mounting = false;
     editor.focusToEnd();
   };
@@ -359,7 +419,9 @@ export function createMarkdownField(opts: {
     if (md !== undefined) currentMd = md;
     view.classList.add('hidden');
     area.classList.remove('hidden');
+    editing = true;
     mountEditor();
+    enterCommentKeys();
     opts.onEditChange?.(true);
   };
 

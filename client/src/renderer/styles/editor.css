@@ -1282,6 +1282,29 @@
   line-height: var(--md-line-height);
 }
 
+/* Тулбар команд поля комментария (0.12.1, задача 3d6f98cb, ТП1): верхняя
+   панель поля, видна только в режиме правки (живёт внутри скрываемой
+   `.md-field-area`). Кнопки — словарь lib/ui (`ui-btn--ghost--s`), здесь только
+   раскладка: ряд слева направо, подменю настроек прижато к правому краю. */
+.md-field-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding-bottom: var(--space-1);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.md-field-toolbar__spacer {
+  flex: 1 1 auto;
+}
+
+/* Значки кнопок тулбара — блочные, чтобы не добавляли строчный зазор. */
+.md-field-toolbar .icon {
+  display: block;
+}
+
 /* Единый вид форм-гридов редакторов (задача 0a1a2414, требование 0dddd939):
  * таблицы-ФОРМЫ ввода (привязки свойств и типов, значения выделения, списки
  * вкладок редактора) остаются `<table>()`, но выглядят одним семейством с
