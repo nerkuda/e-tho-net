@@ -648,7 +648,7 @@ export function createMarkdownField(opts: {
     // «развёрнутый → исходник», и двойной клик вне блока трансклюзии входит в
     // правку кареткой в месте клика (ошибка 0fdd8c86). Развёрнутый текст с
     // маркерами даёт публичный шов `transclusionInternals.expandWithLoader` —
-    // тот же, что использует `renderTransclusionView`.
+    // тот же путь развёртки, что и у блоков в правке.
     if (opts.sourceMapView === true && parseTransclusions(currentMd).length > 0) {
       const seq = ++renderSeq;
       view.replaceChildren();

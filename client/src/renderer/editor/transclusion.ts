@@ -40,7 +40,10 @@
  * замена идёт блоком на весь диапазон ссылки, а клик по блоку не ставит каретку
  * внутрь (правка ссылки — кнопкой смены ссылки, правка блока — двойным кликом).
  * Появление/раскрытие блока анимировано (CSS, с учётом `prefers-reduced-motion`).
- * Просмотр поля (view-режим) разворачивает ссылки через `renderTransclusionView`.
+ * Просмотр поля (view-режим) разворачивает ссылки тем же швом
+ * `transclusionInternals.expandWithLoader` + `renderMarkdown` с `sourceMap` в
+ * `markdown-field.ts` (разметка позиций по развёрнутому тексту, ошибка
+ * `0fdd8c86`).
  *
  * **Контекстное меню блока (задача `955478e8`).** Правый клик по блоку или
  * свёрнутой ссылке открывает меню из шести команд (элемент `1e0fb0bd`):
@@ -442,22 +445,6 @@ async function loadEntry(
     html: renderTransclusionMarkdown(text),
     body_md: bodyMd,
   };
-}
-
-/**
- * Готовит HTML просмотра (view-режим поля) для markdown с трансклюзиями
- * (задача `a2b68d72`): разворачивает ссылки через общий загрузчик и отдаёт
- * HTML с блочными обёртками (глубина, ошибки). `null` — трансклюзий в тексте
- * нет, вызывающий оставляет прежний путь рендера. Экспортируется для тестов.
- */
-export async function renderTransclusionView(
-  md: string,
-  networkId: string,
-  load: TransclusionSourceLoader = defaultTransclusionLoader(networkId),
-): Promise<string | null> {
-  if (md.trim() === '' || parseTransclusions(md).length === 0) return null;
-  const { text } = await expandWithLoader(md, load);
-  return renderTransclusionMarkdown(text);
 }
 
 /* ------------------------------------------------------------------ *

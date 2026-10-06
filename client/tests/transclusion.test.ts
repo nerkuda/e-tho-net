@@ -21,7 +21,6 @@ import {
   listSectionTitles,
   mergeSectionContent,
   renderTransclusionMarkdown,
-  renderTransclusionView,
   sectionBodyForEdit,
   sectionBoundaryCrossed,
   setBlockEdit,
@@ -331,9 +330,13 @@ test('renderTransclusionMarkdown: обёртка с глубиной и исто
   assert.ok(html.includes(`data-transclusion-source="${ID}"`));
 });
 
-test('renderTransclusionView: без трансклюзий — null', async () => {
-  assert.equal(await renderTransclusionView('обычный текст', NET), null);
-  assert.equal(await renderTransclusionView('', NET), null);
+test('expandWithLoader: текст без трансклюзий возвращается как есть', async () => {
+  const { text, top } = await transclusionInternals.expandWithLoader(
+    'обычный текст',
+    loaderFrom({}),
+  );
+  assert.equal(text, 'обычный текст');
+  assert.equal(top, null);
 });
 
 test('loadEntry: развёртка даёт HTML просмотра с блоком глубины 1', async () => {
@@ -353,21 +356,26 @@ test('loadEntry: вложенный источник даёт блок глуб�
   assert.ok((entry.html ?? '').includes('data-transclusion-depth="2"'));
 });
 
-test('renderTransclusionView: разворачивает и рисует блоки с уровнями', async () => {
-  const html = await renderTransclusionView(
+test('просмотр: развёртка + рендер дают блоки с уровнями', async () => {
+  // Прод-путь просмотра `markdown-field.renderView`: expandWithLoader даёт
+  // развёрнутый текст с маркерами, renderTransclusionMarkdown — HTML с
+  // блочными обёртками (глубина/ошибки).
+  const { text } = await transclusionInternals.expandWithLoader(
     `![[#${ID_A}]]`,
-    NET,
     loaderFrom({ [ID_A]: `A ![[#${ID_B}]]`, [ID_B]: 'B' }),
   );
-  assert.ok(html !== null);
+  const html = renderTransclusionMarkdown(text);
   assert.ok(html.includes('class="md-transclusion"'));
   assert.ok(html.includes('data-transclusion-depth="1"'));
   assert.ok(html.includes('data-transclusion-depth="2"'));
 });
 
-test('renderTransclusionView: нет источника — плашка ошибки в HTML', async () => {
-  const html = await renderTransclusionView(`![[#${ID_A}]]`, NET, loaderFrom({}));
-  assert.ok(html !== null);
+test('просмотр: нет источника — плашка ошибки в HTML', async () => {
+  const { text } = await transclusionInternals.expandWithLoader(
+    `![[#${ID_A}]]`,
+    loaderFrom({}),
+  );
+  const html = renderTransclusionMarkdown(text);
   assert.ok(html.includes('md-transclusion--missing'));
   assert.ok(html.includes('md-transclusion'));
 });
