@@ -307,16 +307,17 @@ describe('панель поиска/замены в правке идёт по �
       highlightPort: { set: () => undefined, clear: () => undefined },
     });
     root.append(controller.element as unknown as ShimElement);
-    const inputs = controller.element.querySelectorAll('input');
-    const buttons = controller.element.querySelectorAll('button');
+    const panelEl = controller.element as unknown as ShimElement;
+    const inputs = panelEl.querySelectorAll('input');
+    const buttons = panelEl.querySelectorAll('button');
     return {
       controller: controller as unknown as CommentSearchShape,
       findInput: inputs[0]!,
       replaceInput: inputs[1]!,
       replaceButton: buttons[3]!,
       replaceAllButton: buttons[4]!,
-      countLabel: controller.element.querySelector('.md-field-search__count')!,
-      replaceRow: controller.element.querySelectorAll('.md-field-search__row')[1]!,
+      countLabel: panelEl.querySelector('.md-field-search__count')!,
+      replaceRow: panelEl.querySelectorAll('.md-field-search__row')[1]!,
     };
   }
 

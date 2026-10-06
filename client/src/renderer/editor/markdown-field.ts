@@ -112,6 +112,15 @@ export function sourceRangeFromSelection(
 const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
 
 /**
+ * Узел DOM ли `target` (`Window` — нет). Без `instanceof Node`: в тестовом
+ * DOM-шиме глобального `Node` нет, а `root.contains` на не-узле бросает
+ * `TypeError`.
+ */
+function isDomNode(target: EventTarget | null): target is Node {
+  return target !== null && typeof (target as Node).nodeType === 'number';
+}
+
+/**
  * Решает, коммитить ли правку при уходе фокуса из редактора: если фокус ушёл
  * на собственный элемент поля (`root` — панель поиска/замены, тулбар, кнопки
  * режима), правку НЕ коммитим. Иначе открытие панели поиска (`Ctrl+F`/`Ctrl+H`
@@ -120,7 +129,7 @@ const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
  * (ошибка 3eb4d1d5). Экспортируется для юнит-тестов (задача 045f98db).
  */
 export function editorBlurCommits(root: Node, related: EventTarget | null): boolean {
-  return related === null || !root.contains(related as Node);
+  return !isDomNode(related) || !root.contains(related);
 }
 
 /** Builds a markdown view/edit field. */
@@ -215,6 +224,13 @@ export function createMarkdownField(opts: {
   let editor: MdEditor | null = null;
   /** Поле сейчас в режиме правки (для контекста сочетаний команд). */
   let editing = false;
+  /**
+   * Коммит правки уже запущен (асинхронный `onSave`): до `showView()` поле
+   * формально ещё «в правке», поэтому второй `focusout` (редактор → наружу
+   * всплывает до `root`) не должен коммитить повторно — иначе два
+   * `comments.update`/`comments.create` (ошибка 3eb4d1d5).
+   */
+  let commitPending = false;
   /** Снятие контекста сочетаний поля; `null` — контекст не активен. */
   let releaseCommentKeys: (() => void) | null = null;
 
@@ -449,7 +465,7 @@ export function createMarkdownField(opts: {
   };
 
   const commitOrRevert = (): void => {
-    if (mounting || editor === null) return;
+    if (mounting || editor === null || commitPending) return;
     const md = editor.getValue();
     if (cancelled) {
       // Esc: the edit is dropped; restore the saved text so the field returns
@@ -469,6 +485,9 @@ export function createMarkdownField(opts: {
       showView();
       return;
     }
+    // Флаг ставится СИНХРОННО: пока `onSave` не разрешится, `editing` ещё
+    // true, и повторный коммит (см. `commitPending`) надо отсечь.
+    commitPending = true;
     void opts
       .onSave(md)
       .then((html) => {
@@ -480,6 +499,9 @@ export function createMarkdownField(opts: {
         // Save failed: revert.
         editor?.setValue(currentMd);
         showView();
+      })
+      .finally(() => {
+        commitPending = false;
       });
   };
 

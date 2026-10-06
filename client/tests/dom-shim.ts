@@ -145,6 +145,8 @@ export class ShimElement {
   static uppercaseTagNames = false;
 
   tagName: string;
+  /** `Node.ELEMENT_NODE` — код под тестами проверяет «это DOM-узел». */
+  nodeType = 1;
   className = '';
   children: ShimElement[] = [];
   parent: ShimElement | null = null;
