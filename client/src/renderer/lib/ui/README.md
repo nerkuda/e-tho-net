@@ -140,4 +140,5 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 `guard-ui-tree`, `guard-ui-empty-state`, `guard-ui-states`,
 `guard-ui-discoverability`, `guard-ui-hit-area`, `guard-ui-container`,
 `guard-ui-tokens`, `guard-ui-user-tokens`, `guard-ui-i18n`,
-`guard-ui-licenses`, `guard-ui-dialog`, `guard-keyed-lists`, `guard-list-nav`.
+`guard-ui-licenses`, `guard-ui-dialog`, `guard-ui-icons`, `guard-keyed-lists`,
+`guard-list-nav`.

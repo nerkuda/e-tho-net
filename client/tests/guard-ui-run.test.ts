@@ -44,6 +44,7 @@ const EXPECTED_GUARD_UI = [
   'guard-ui-fields.test.ts',
   'guard-ui-hit-area.test.ts',
   'guard-ui-i18n.test.ts',
+  'guard-ui-icons.test.ts',
   'guard-ui-licenses.test.ts',
   'guard-ui-popover.test.ts',
   'guard-ui-run.test.ts',
