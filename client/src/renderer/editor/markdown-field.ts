@@ -30,6 +30,11 @@ import {
   type CommentCommandHost,
 } from './comment-commands.js';
 import { commentFieldKeymapExtension } from './comment-format.js';
+import {
+  commentCollapseExtension,
+  createCommentCollapseState,
+  decorateCommentView,
+} from './comment-collapse.js';
 import { createCommentSearch } from './comment-search.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
@@ -155,6 +160,23 @@ export function createMarkdownField(opts: {
   let editing = false;
   /** Снятие контекста сочетаний поля; `null` — контекст не активен. */
   let releaseCommentKeys: (() => void) | null = null;
+
+  /**
+   * Состояние свёрнутости разделов комментария (0.12.1, задача 634f1412):
+   * локальное на клиенте, ключ «владелец поля + раздел». Владелец — комментарий
+   * (постоянный/хроно), когда он известен, иначе сущность-владелец поля; без
+   * владельца состояние живёт только в памяти поля.
+   */
+  const collapseOwnerKey = ((): string | undefined => {
+    const cc = opts.commentContext;
+    if (cc !== undefined) {
+      const commentId = cc.getCommentId();
+      return commentId !== null ? `comment:${commentId}` : `${cc.ownerType}:${cc.ownerId}`;
+    }
+    const owner = opts.attachmentsOwner;
+    return owner !== undefined ? `${owner.ownerType}:${owner.ownerId}` : undefined;
+  })();
+  const collapseState = createCommentCollapseState(requireNetworkId(), collapseOwnerKey);
 
   /**
    * Панель поиска и замены поля (0.12.1, задача 045f98db): открывается по
@@ -310,6 +332,9 @@ export function createMarkdownField(opts: {
       // `wiki-link-deleted` class) lazily at hover time, well after that
       // promise settles.
       wireCommentLinksInDom(view);
+      // Сворачивание разделов комментария (0.12.1, задача 634f1412): индикаторы
+      // и восстановление свёрнутости в просмотре.
+      decorateCommentView(view, collapseState);
     } else if (opts.placeholder !== undefined && opts.placeholder !== '') {
       // Пустой комментарий — показываем плейсхолдер (задача 8ab775d9).
       const ph = el('div', 'md-field-placeholder', opts.placeholder);
@@ -382,7 +407,7 @@ export function createMarkdownField(opts: {
       onBlur: () => commitOrRevert(),
       // Точечное Prec.high-перекрытие сочетаний команд, которые иначе
       // «съедает» CM6 (Ctrl+I/U, Ctrl+Shift+K, Tab/Shift+Tab, Alt+↑/↓).
-      extraExtensions: [commentFieldKeymapExtension()],
+      extraExtensions: [commentFieldKeymapExtension(), commentCollapseExtension(collapseState)],
     });
     // Pasting files (screenshots / copied files) saves them as server-stored
     // attachments of the owner entity and inserts a markdown reference at the

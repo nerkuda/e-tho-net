@@ -1843,3 +1843,29 @@
   font-style: italic;
 }
 
+/* Сворачивание разделов комментария (0.12.1, задача 634f1412): индикатор у
+ * начала строки заголовка/вложенного блока и скрытие тела свёрнутого раздела.
+ * Один класс обслуживает и просмотр, и виджет live preview. */
+.md-collapse-hidden {
+  display: none;
+}
+
+.md-collapse-toggle {
+  min-width: var(--hit-area);
+  min-height: var(--hit-area);
+  margin-right: var(--space-1);
+  padding: 0;
+  vertical-align: middle;
+  color: var(--text-dim);
+}
+
+.md-collapse-toggle .icon {
+  display: block;
+  transition: transform var(--transition-hover);
+}
+
+.md-collapse-toggle.is-collapsed .icon {
+  transform: rotate(-90deg);
+}
+
+

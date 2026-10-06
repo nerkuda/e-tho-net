@@ -28,6 +28,7 @@ import {
 
 import { renderMarkdown } from '@etn/markdown';
 
+import { isCollapsedHiddenAt, setCollapseEffect } from './comment-collapse.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 
 /** Корневой класс всех виджетов live preview. */
@@ -216,6 +217,10 @@ function buildDecorations(state: EditorState): DecorationSet {
 
   syntaxTree(state).iterate({
     enter(node) {
+      // Внутри тела свёрнутого раздела (задача 634f1412) декорации не строим:
+      // их диапазоны пересеклись бы с блок-заменой сворачивания.
+      if (isCollapsedHiddenAt(state, node.from)) return false;
+
       const { from, to } = node;
 
       switch (node.name) {
@@ -417,7 +422,10 @@ function buildDecorations(state: EditorState): DecorationSet {
 export const livePreview = StateField.define<DecorationSet>({
   create: (state) => buildDecorations(state),
   update: (decorations, tr) => {
-    if (tr.docChanged || tr.selection) return buildDecorations(tr.state);
+    // Переключение свёрнутости раздела (задача 634f1412) меняет набор
+    // пропускаемых узлов — декорации перестраиваются вместе с ним.
+    const collapseToggled = tr.effects.some((effect) => effect.is(setCollapseEffect));
+    if (tr.docChanged || tr.selection || collapseToggled) return buildDecorations(tr.state);
     return decorations;
   },
   provide: (field) => EditorView.decorations.from(field),
