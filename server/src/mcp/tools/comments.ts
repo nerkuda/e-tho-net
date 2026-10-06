@@ -82,8 +82,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         'Patch a comment (permanent or chronological) by `comment_id` — last-write-wins per field. ' +
         '`valid_from`/`valid_to` apply to chronological entries (permanent ignores them). ' +
         '`expected_version` enables optimistic concurrency — mismatch fails VERSION_CONFLICT. ' +
-        'Returns { id, version }. A write that drops live transclusions still applies but ' +
-        'carries a `warnings` entry (code TRANSCLUSION_LOST, требование 822a9149).',
+        'Returns { id, version }.',
       inputSchema: CommentsUpdate.schema,
     },
     (args, extra) =>

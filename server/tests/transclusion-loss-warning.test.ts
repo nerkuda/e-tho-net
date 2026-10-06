@@ -22,6 +22,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { openNetworkDb } from '../src/db/network-db.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
+import { createTypeProperty } from '../src/domain/property-service.js';
+import { createThoughtType } from '../src/domain/thought-type-service.js';
 
 import {
   buildMcpContext,
@@ -346,6 +349,183 @@ describe(
           );
           const lost = batchWarnings.find((w) => w.code === 'TRANSCLUSION_LOST')!;
           assert.deepEqual(lost.sources, [sourceId]);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.properties.add на ЖИВОМ ребре с новым комментарием предупреждает', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const linkType = createLinkType(
+          ndb,
+          { name_forward: 'TEST ed796c43 связывает', name_reverse: 'TEST ed796c43 связан' },
+          ctx.adminId,
+        );
+        const type = createThoughtType(ndb, { name: 'TEST ed796c43 носитель' }, ctx.adminId);
+        const prop = createTypeProperty(
+          ndb,
+          'thought_type',
+          type.id,
+          {
+            key: 'TEST ed796c43 связывает',
+            value_type: 'link',
+            config: { link_type_id: linkType.id, direction: 'out' },
+          },
+          ctx.adminId,
+        );
+        const key = (
+          ndb.prepare('SELECT name FROM properties_v WHERE id = ?').get(prop.property_id) as {
+            name: string;
+          }
+        ).name;
+
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const sourceId = await makeThoughtWithComment(
+            handle.client,
+            ctx.networkId,
+            'Источник',
+            'Тело источника.',
+          );
+          const owner = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Носитель',
+            type_id: type.id,
+          });
+          const target = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Цель',
+          });
+
+          // Первый add создаёт живое ребро с комментарием-трансклюзией — потерь нет.
+          const firstArgs = {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: owner.id,
+            key,
+            value: target.id,
+          };
+          const first = toolJson<{ link_id: string; created: boolean; warnings?: unknown }>(
+            await handle.client.callTool({
+              name: 'etn.properties.add',
+              arguments: { ...firstArgs, comment: `![[#${sourceId}]]` },
+            }),
+          );
+          assert.equal(first.created, true, 'первый add должен создать ребро');
+          assert.equal(first.warnings, undefined, 'ложное предупреждение при создании');
+
+          // Повторный add на ЖИВОМ ребре перезаписывает комментарий без ссылки —
+          // потеря живой трансклюзии, ребро остаётся (created: false).
+          const second = toolJson<{
+            link_id: string;
+            created: boolean;
+            warnings?: TransclusionLostWarningDto[];
+          }>(
+            await handle.client.callTool({
+              name: 'etn.properties.add',
+              arguments: { ...firstArgs, comment: 'статичный текст' },
+            }),
+          );
+          assert.equal(second.created, false, 'повторный add не создаёт ребро');
+          assert.deepEqual(second.warnings, [
+            { code: 'TRANSCLUSION_LOST', sources: [sourceId] },
+          ]);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('восстановление ребра из корзины с теряющим комментарием предупреждает', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const sourceId = await makeThoughtWithComment(
+            handle.client,
+            ctx.networkId,
+            'Источник',
+            'Тело источника.',
+          );
+          const owner = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Владелец',
+          });
+          const target = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Цель',
+          });
+
+          // Ребро с постоянным комментарием-трансклюзией.
+          const created = toolJson<{ items: Array<{ links: Array<{ id: string }> }> }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.write',
+              arguments: {
+                network_id: ctx.networkId,
+                thoughts: [
+                  {
+                    thought_id: owner.id,
+                    links: [
+                      {
+                        direction: 'child',
+                        target_id: target.id,
+                        comment: { body_md: `![[#${sourceId}]]` },
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          );
+          const linkId = created.items[0]!.links[0]!.id;
+
+          // Отправить ребро в корзину МЯГКО (постоянный комментарий сохраняется):
+          // прямое помечивание `marked_for_deletion` в базовом слое, как это
+          // делает корзина/снятие цели свойства-связи.
+          const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+          ndb
+            .prepare(
+              `UPDATE links SET marked_for_deletion = 1, marked_for_deletion_at = ?, marked_for_deletion_by = ?
+                WHERE id = ?`,
+            )
+            .run(new Date().toISOString(), ctx.adminId, linkId);
+
+          // Повторная запись той же тройки восстанавливает ребро и перезаписывает
+          // комментарий без ссылки — потеря трансклюзии (требование 822a9149).
+          const restored = toolJson<{
+            items: Array<{ warnings: TransclusionLostWarningDto[] }>;
+            warnings: TransclusionLostWarningDto[];
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.write',
+              arguments: {
+                network_id: ctx.networkId,
+                thoughts: [
+                  {
+                    thought_id: owner.id,
+                    links: [
+                      {
+                        direction: 'child',
+                        target_id: target.id,
+                        comment: { body_md: 'статичный текст' },
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          );
+          const itemLost = restored.items[0]!.warnings.find(
+            (w) => w.code === 'TRANSCLUSION_LOST',
+          );
+          assert.ok(itemLost, `нет предупреждения на элементе: ${JSON.stringify(restored.items[0])}`);
+          assert.deepEqual(itemLost.sources, [sourceId]);
+          const batchLost = restored.warnings.find((w) => w.code === 'TRANSCLUSION_LOST');
+          assert.ok(batchLost, `нет предупреждения в батче: ${JSON.stringify(restored.warnings)}`);
+          assert.deepEqual(batchLost.sources, [sourceId]);
         } finally {
           await handle.close();
         }

@@ -82,6 +82,7 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
           link_id: res.link_id,
           created: res.created,
           request_id: String(extra.requestId),
+          ...(res.warnings.length > 0 ? { warnings: res.warnings } : {}),
         };
       }),
   );

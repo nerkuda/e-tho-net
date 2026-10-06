@@ -637,6 +637,7 @@ export function writeThoughts(
             ? [targetId, pending.itemThoughtId]
             : [pending.itemThoughtId, targetId];
 
+        const linkWarnings: MutationWarning[] = [];
         const lr = createLink(
           ndb,
           {
@@ -647,7 +648,12 @@ export function writeThoughts(
             ...(linkSpec.comment !== undefined ? { comment: linkSpec.comment } : {}),
           },
           actorUserId,
+          // Комментарий ребра — markdown-поле: восстановление ребра из корзины
+          // с новым комментарием может потерять трансклюзии (требование
+          // 822a9149). Предупреждение уходит в warnings элемента и батча.
+          { warnings: linkWarnings },
         );
+        if (linkWarnings.length > 0) itemResult.warnings.push(...linkWarnings);
 
         // Read back inline knowledge attached to the link so the caller sees
         // the full picture (same trick as upsertThoughtBundle).

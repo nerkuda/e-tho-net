@@ -359,6 +359,9 @@ export function upsertThoughtBundle(
             ...(l.comment === undefined ? {} : { comment: l.comment }),
           },
           actorUserId,
+          // Комментарий ребра тоже markdown-поле: перезапись при восстановлении
+          // ребра из корзины может потерять трансклюзии (требование 822a9149).
+          { warnings: textWarnings },
         );
         // Read back the link's properties + permanent comment when the bundle
         // attached any, so the caller (and the audit/event payload) sees the

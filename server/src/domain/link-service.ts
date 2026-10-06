@@ -24,6 +24,7 @@ import {
   type LinkStyle,
   type LinkTypeFilterInput,
   type LinkUpdateInput,
+  type MutationWarning,
   type ThoughtLinkItem,
   type ThoughtLinksGrouped,
   type ThoughtRef,
@@ -366,8 +367,17 @@ export function getLinkDirections(
  *   * `VALIDATION_ERROR` (422) for a self-loop (`source_id = target_id`);
  *   * `NOT_FOUND` (404) if either endpoint or the referenced link type is unknown;
  *   * `DUPLICATE` (409) if an equivalent link already exists (typed or untyped).
+ *
+ * `options.warnings` — коллектор предупреждений записи (требование 822a9149):
+ * когда `input.comment` перезаписывает постоянный комментарий ВОССТАНОВЛЕННОГО
+ * из корзины ребра, потеря живых трансклюзий даёт `TRANSCLUSION_LOST`.
  */
-export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: string): Link {
+export function createLink(
+  ndb: NetworkDb,
+  input: LinkCreateInput,
+  actorUserId: string,
+  options: { warnings?: MutationWarning[] } = {},
+): Link {
   if (input.source_id === input.target_id) {
     throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
       source_id: input.source_id,
@@ -464,6 +474,7 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
           },
           undefined,
           actorUserId,
+          options.warnings === undefined ? {} : { warnings: options.warnings },
         );
       } else {
         createComment(
