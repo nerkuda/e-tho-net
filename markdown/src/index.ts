@@ -47,6 +47,8 @@ export {
   extractSection,
   expandTransclusions,
 } from './transclusion.js';
+export { parseSelectionUnits } from './selection.js';
+export type { MarkdownUnit, MarkdownUnitKind } from './selection.js';
 export {
   TRANSCLUSION_BLOCK_CLASS,
   TRANSCLUSION_MISSING_CLASS,
