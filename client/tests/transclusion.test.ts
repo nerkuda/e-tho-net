@@ -18,8 +18,11 @@ import { parseTransclusions } from '@etn/markdown';
 import {
   buildTransclusionDecorations,
   listSectionTitles,
+  mergeSectionContent,
   renderTransclusionMarkdown,
   renderTransclusionView,
+  sectionBodyForEdit,
+  sectionBoundaryCrossed,
   setBlockEdit,
   transclusionAtCaret,
   transclusionCacheKey,
@@ -352,4 +355,93 @@ test('renderTransclusionView: нет источника — плашка оши�
   assert.ok(html !== null);
   assert.ok(html.includes('md-transclusion--missing'));
   assert.ok(html.includes('md-transclusion'));
+});
+
+// ---------------------------------------------------------------------------
+// Вложенная правка блока с записью в источник (задача e2c14673)
+// ---------------------------------------------------------------------------
+
+test('sectionBodyForEdit: содержимое раздела без строки заголовка', () => {
+  const body = '## Раздел A\nстрока 1\n### Подраздел\nстрока 2\n## Раздел B\nx';
+  assert.equal(sectionBodyForEdit(body, 'Раздел A'), 'строка 1\n### Подраздел\nстрока 2');
+  assert.equal(sectionBodyForEdit(body, 'Раздел B'), 'x');
+  assert.equal(sectionBodyForEdit(body, 'Нет'), null);
+});
+
+test('mergeSectionContent: правка раздела не трогает соседние разделы', () => {
+  const body = '## Раздел A\nстарое\n## Раздел B\nkeep';
+  const merged = mergeSectionContent(body, 'Раздел A', 'новое');
+  assert.equal(merged, '## Раздел A\nновое\n## Раздел B\nkeep');
+  assert.equal(mergeSectionContent(body, 'Нет', 'x'), null);
+});
+
+test('sectionBoundaryCrossed: заголовок того же/высшего уровня завершает раздел', () => {
+  const body = '## Раздел A\nстарое\n### Подраздел\nx';
+  assert.equal(sectionBoundaryCrossed(body, 'Раздел A', 'текст'), false);
+  assert.equal(sectionBoundaryCrossed(body, 'Раздел A', '### вложенный'), false);
+  assert.equal(sectionBoundaryCrossed(body, 'Раздел A', '## новый раздел'), true);
+  assert.equal(sectionBoundaryCrossed(body, 'Раздел A', '# H1'), true);
+});
+
+test('transclusionState: диапазон правки блока едет за правками документа', () => {
+  const src = `до ![[#${ID_A}]] после`;
+  const ref = parseTransclusions(src)[0]!;
+  let state = EditorState.create({ doc: src, extensions: [transclusionState] });
+  const be = {
+    sourceId: ID_A,
+    section: null,
+    refRaw: ref.raw,
+    from: ref.start,
+    to: ref.start + 5,
+  };
+  state = state.update({ effects: transclusionInternals.setBlockEditRange.of(be) }).state;
+  assert.deepEqual(state.field(transclusionState).blockEdit, be);
+  // Вставка в начале диапазона расширяет его (assoc), каретка — внутри.
+  state = state.update({ changes: { from: ref.start, insert: 'X' } }).state;
+  const moved = state.field(transclusionState).blockEdit!;
+  assert.equal(moved.from, ref.start);
+  assert.equal(moved.to, ref.start + 6);
+  state = state.update({ effects: transclusionInternals.setBlockEditRange.of(null) }).state;
+  assert.equal(state.field(transclusionState).blockEdit, null);
+});
+
+test('buildTransclusionDecorations: текст блока в правке — без виджетов, с рамкой', () => {
+  const src = `до ![[#${ID_A}]] после`;
+  const { deco } = buildTransclusionDecorations(
+    src,
+    { from: 0, to: 0 },
+    new Map(),
+    NET,
+    new Set(),
+    ID_A,
+    new Map(),
+    { sourceId: ID_A, section: null, refRaw: '', from: 0, to: src.length },
+  );
+  const items = collect(deco, src.length);
+  // Ссылка внутри диапазона не заменяется виджетом — остаётся текстом; на весь
+  // диапазон наложена mark-декорация рамки.
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.from, 0);
+  assert.equal(items[0]!.to, src.length);
+  assert.equal(items[0]!.value.spec.class, 'cm-transclusion-edit-range');
+});
+
+test('buildTransclusionDecorations: ссылка вне диапазона правки — по-прежнему блок', () => {
+  const src = `![[#${ID_A}]] и ![[#${ID_B}]]`;
+  const refs = parseTransclusions(src);
+  const { deco } = buildTransclusionDecorations(
+    src,
+    { from: 0, to: 0 },
+    new Map(),
+    NET,
+    new Set(),
+    ID_A,
+    new Map(),
+    { sourceId: ID_A, section: null, refRaw: '', from: refs[0]!.start, to: refs[0]!.end },
+  );
+  const items = collect(deco, src.length);
+  // Одна mark-рамка на первый диапазон + один виджет второго (вне правки).
+  const widget = items.find((it) => it.value.spec.widget !== undefined);
+  assert.ok(widget !== undefined);
+  assert.equal(widget!.from, refs[1]!.start);
 });

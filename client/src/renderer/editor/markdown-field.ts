@@ -315,9 +315,14 @@ export function createMarkdownField(opts: {
         return true;
       }
       // Кнопки «Отменить/Сохранить трансклюзию» под полем (элемент 2b116d37,
-      // задача f59d24e1): выход из правки блока; запись в источник — e2c14673.
-      if (command === 'transclusion.cancel' || command === 'transclusion.save') {
+      // задачи f59d24e1/e2c14673): выход из правки блока; «сохранить» пишет
+      // изменения в источник.
+      if (command === 'transclusion.cancel') {
         editor.exitTransclusionEdit();
+        return true;
+      }
+      if (command === 'transclusion.save') {
+        void editor.saveTransclusionEdit();
         return true;
       }
       return false;

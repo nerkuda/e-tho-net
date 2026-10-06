@@ -1251,6 +1251,14 @@
   box-shadow: 0 0 0 1px var(--accent);
 }
 
+/* Текст блока трансклюзии в режиме правки (задача e2c14673): вставлен в поле
+   вместо ссылки и обведён рамкой облачка. */
+.cm-editor .cm-transclusion-edit-range {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: var(--radius-s, 3px);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
 /* «Замочек» блока при чужом захвате источника (задача f59d24e1). */
 .cm-editor .cm-transclusion-lock {
   position: absolute;

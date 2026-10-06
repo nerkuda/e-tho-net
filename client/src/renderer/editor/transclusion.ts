@@ -10,13 +10,18 @@
  * парсера здесь нет (сторож `markdown-single-renderer`). Резолвер источника
  * (постоянный комментарий мысли своей сети) и режимы блока живут здесь.
  *
- * **Правка блока и захват источника (задача `f59d24e1`).** Двойной клик по
- * блоку или Enter при каретке внутри ссылки переводят блок в режим правки
- * (`setBlockEdit`); с этого момента на мысль-источник ставится захват
- * существующим механизмом `lib/lock-guard.ts` (`/locks`, `edit.*`) и
- * снимается при выходе (Esc, кнопки «Отменить/Сохранить трансклюзию» под
- * полем). Чужой захват даёт на блоке «замочек» 🔒 и в правку не пускает.
- * Сама запись изменений в источник — задача `e2c14673` (граница).
+ * **Правка блока и захват источника (задачи `f59d24e1`, `e2c14673`).**
+ * Двойной клик по блоку или Enter при каретке внутри ссылки переводят блок в
+ * режим правки (`setBlockEdit`): текст источника вставляется в то же поле
+ * ВМЕСТО ссылки (диапазон `blockEdit`), поэтому на него действуют все команды и
+ * сочетания родительского редактора. С этого момента на мысль-источник ставится
+ * захват существующим механизмом `lib/lock-guard.ts` (`/locks`, `edit.*`) и
+ * снимается при выходе. Сохранение («Сохранить трансклюзию», Ctrl+Enter) пишет
+ * изменённый текст обратно в постоянный комментарий источника через существующий
+ * API (`etn.comments.update`, для раздела — слияние раздела в тело) под захватом;
+ * отмена (Esc, «Отменить трансклюзию») восстанавливает ссылку без записи. Чужой
+ * захват даёт на блоке «замочек» 🔒 и в правку не пускает; при захваченном
+ * источнике запись отклоняется сервером `409 LOCKED` (ошибка `68be6829`).
  *
  * Три режима одной ссылки в редакторе (курсор/выделение решают):
  *  1. **Правка ссылки** — выделение пересекает ссылку: виден исходный markdown,
@@ -36,9 +41,9 @@
  * Появление/раскрытие блока анимировано (CSS, с учётом `prefers-reduced-motion`).
  * Просмотр поля (view-режим) разворачивает ссылки через `renderTransclusionView`.
  *
- * За границами задачи (другие работы ТП2): контекстное меню (`955478e8`), запись
- * изменений блока в источник (`e2c14673`), realtime-обновление блока,
- * свёрнутость разделов внутри трансклюзий (`1b405a92`).
+ * За границами задачи (другие работы ТП2): контекстное меню (`955478e8`), команды
+ * «как текст» (`e9f553e5`), realtime-обновление блока, свёрнутость разделов
+ * внутри трансклюзий (`1b405a92`).
  */
 
 import {
@@ -73,6 +78,7 @@ import {
   type TransclusionRef,
   type TransclusionResolution,
 } from '@etn/markdown';
+import type { Comment } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
 import { etn } from '../lib/etn.js';
@@ -84,6 +90,7 @@ import {
   releaseHeld,
   type LockHandle,
 } from '../lib/lock-guard.js';
+import { notice } from '../lib/notice.js';
 import { iconButton } from '../lib/ui/button.js';
 import { svgIcon } from '../lib/ui/icon.js';
 
@@ -99,6 +106,8 @@ export const TRANSCLUSION_ERROR_CLASS = 'cm-transclusion-error';
 export const TRANSCLUSION_ID_CLASS = 'cm-transclusion-id';
 /** Блок в режиме правки (рамка как у облачка, задача f59d24e1). */
 export const TRANSCLUSION_EDITING_CLASS = 'cm-transclusion-block--editing';
+/** Диапазон редактируемого текста блока в режиме правки (задача e2c14673). */
+export const TRANSCLUSION_EDIT_RANGE_CLASS = 'cm-transclusion-edit-range';
 /** «Замочек» блока при чужом захвате источника (задача f59d24e1). */
 export const TRANSCLUSION_LOCK_CLASS = 'cm-transclusion-lock';
 
@@ -167,6 +176,60 @@ export function listSectionTitles(bodyMd: string): string[] {
   return out;
 }
 
+/**
+ * Уровень ATX-заголовка раздела и его содержимое без строки заголовка.
+ * `null` — заголовок раздела не найден.
+ */
+function sectionParts(body: string, section: string): { level: number; content: string } | null {
+  const extracted = extractSection(body, section);
+  if (extracted === null) return null;
+  const nl = extracted.indexOf('\n');
+  const headingLine = nl === -1 ? extracted : extracted.slice(0, nl);
+  const m = HEADING_RE.exec(headingLine.endsWith('\r') ? headingLine.slice(0, -1) : headingLine);
+  if (m === null) return null;
+  return { level: m[1]!.length, content: nl === -1 ? '' : extracted.slice(nl + 1) };
+}
+
+/**
+ * Текст раздела для вложенной правки блока: содержимое без строки заголовка
+ * (задача `e2c14673`). Заголовок живёт в ссылке `#Раздел` и правится отдельно.
+ * `null` — раздела нет.
+ */
+export function sectionBodyForEdit(body: string, section: string): string | null {
+  return sectionParts(body, section)?.content ?? null;
+}
+
+/**
+ * Сливает изменённое содержимое раздела обратно в полное тело источника,
+ * сохраняя прочие разделы (запись в источник при правке блока, задача
+ * `e2c14673`). `null` — заголовок раздела не найден в теле.
+ */
+export function mergeSectionContent(body: string, section: string, newContent: string): string | null {
+  const extracted = extractSection(body, section);
+  if (extracted === null) return null;
+  const idx = body.indexOf(extracted);
+  if (idx === -1) return null;
+  const nl = extracted.indexOf('\n');
+  const headingLine = nl === -1 ? extracted : extracted.slice(0, nl);
+  const merged = newContent === '' ? headingLine : `${headingLine}\n${newContent}`;
+  return body.slice(0, idx) + merged + body.slice(idx + extracted.length);
+}
+
+/**
+ * Появился ли в правке раздела заголовок того же или более высокого уровня —
+ * он завершает редактируемую область, при сохранении показывается
+ * предупреждение (задача `e2c14673`, элемент `2b116d37`).
+ */
+export function sectionBoundaryCrossed(body: string, section: string, newContent: string): boolean {
+  const parts = sectionParts(body, section);
+  if (parts === null) return false;
+  for (const line of newContent.split('\n')) {
+    const m = HEADING_RE.exec(line.endsWith('\r') ? line.slice(0, -1) : line);
+    if (m !== null && m[1]!.length <= parts.level) return true;
+  }
+  return false;
+}
+
 /** Метка ссылки в свёрнутом виде: имя мысли и, при наличии, раздел. */
 export function transclusionLinkLabel(title: string, section: string | null): string {
   const name = title !== '' ? title : t('comment.transclusion.untitled');
@@ -174,8 +237,17 @@ export function transclusionLinkLabel(title: string, section: string | null): st
 }
 
 /** Ключ кэша данных ссылки (сеть + источник + раздел). */
+export function transclusionCacheKeyParts(
+  networkId: string,
+  sourceId: string,
+  section: string | null,
+): string {
+  return `${networkId}:${sourceId}#${section ?? ''}`;
+}
+
+/** Ключ кэша данных ссылки (сеть + источник + раздел). */
 export function transclusionCacheKey(networkId: string, ref: TransclusionRef): string {
-  return `${networkId}:${ref.sourceId}#${ref.section ?? ''}`;
+  return transclusionCacheKeyParts(networkId, ref.sourceId, ref.section);
 }
 
 /**
@@ -216,6 +288,8 @@ export interface TransclusionEntry {
   error: TransclusionError;
   /** Отрендеренный HTML развёрнутого текста, либо `null` при ошибке. */
   html: string | null;
+  /** Исходный markdown источника (для вложенной правки блока, задача e2c14673). */
+  body_md?: string;
 }
 
 /** Загрузчик источника по умолчанию — постоянный комментарий мысли своей сети. */
@@ -282,13 +356,20 @@ async function loadEntry(
 ): Promise<TransclusionEntry> {
   const { text, top } = await expandWithLoader(ref.raw, load);
   const title = top?.title ?? '';
+  const bodyMd = top?.found === true ? top.body_md : '';
   if (top === null || !top.found) {
-    return { title, exists: false, error: 'source', html: null };
+    return { title, exists: false, error: 'source', html: null, body_md: '' };
   }
   if (ref.section !== null && extractSection(top.body_md, ref.section) === null) {
-    return { title, exists: true, error: 'section', html: null };
+    return { title, exists: true, error: 'section', html: null, body_md: bodyMd };
   }
-  return { title, exists: true, error: null, html: renderTransclusionMarkdown(text) };
+  return {
+    title,
+    exists: true,
+    error: null,
+    html: renderTransclusionMarkdown(text),
+    body_md: bodyMd,
+  };
 }
 
 /**
@@ -324,6 +405,27 @@ const setEntries = StateEffect.define<Array<{ key: string; entry: TransclusionEn
  */
 export const setBlockEdit = StateEffect.define<string | null>();
 
+/**
+ * Дескриптор активной правки блока (задача `e2c14673`): координаты вставленного
+ * в поле текста источника и исходная ссылка для восстановления при отмене.
+ */
+export interface BlockEditState {
+  sourceId: string;
+  section: string | null;
+  /** Исходный markdown ссылки-трансклюзии — восстанавливается при отмене. */
+  refRaw: string;
+  /** Начало редактируемого текста в документе. */
+  from: number;
+  /** Конец редактируемого текста (исключительно). */
+  to: number;
+}
+
+/** Эффект установки/снятия дескриптора правки блока (диапазон текста). */
+export const setBlockEditRange = StateEffect.define<BlockEditState | null>();
+
+/** Эффект сброса кэша ссылок по ключам (после записи в источник — перечитать). */
+const dropEntries = StateEffect.define<string[]>();
+
 /** Эффект обновления карты чужих захватов источников (`sourceId` → имя). */
 const setLockedSources = StateEffect.define<ReadonlyMap<string, string>>();
 
@@ -334,6 +436,8 @@ interface TransclusionStateData {
   collapsed: Set<string>;
   /** Источник в режиме правки блока, либо `null` (задача f59d24e1). */
   editingSourceId: string | null;
+  /** Дескриптор редактируемого текста блока, либо `null` (задача e2c14673). */
+  blockEdit: BlockEditState | null;
   /** Чужие захваты источников: `sourceId` → имя держателя (задача f59d24e1). */
   lockedSources: ReadonlyMap<string, string>;
   deco: DecorationSet;
@@ -514,12 +618,20 @@ export function buildTransclusionDecorations(
   editingSourceId: string | null = null,
   /** Чужие захваты источников: `sourceId` → имя держателя (задача f59d24e1). */
   lockedSources: ReadonlyMap<string, string> = NO_LOCKS,
+  /** Дескриптор редактируемого текста блока, либо `null` (задача e2c14673). */
+  blockEdit: BlockEditState | null = null,
 ): { deco: DecorationSet; atomic: RangeSet<Decoration> } {
   const parts: Array<{ from: number; to: number; value: Decoration }> = [];
   const atomParts: Array<{ from: number; to: number; value: Decoration }> = [];
   const refs = parseTransclusions(source);
+  // Диапазон активной правки блока: ссылки внутри него остаются обычным
+  // редактируемым текстом (не заменяются виджетами), а сам диапазон получает
+  // рамку-обводку (задача e2c14673).
+  const beFrom = blockEdit === null ? -1 : blockEdit.from;
+  const beTo = blockEdit === null ? -1 : blockEdit.to;
 
   for (const ref of refs) {
+    if (blockEdit !== null && ref.start >= beFrom && ref.end <= beTo) continue;
     const idFrom = ref.start + OPEN_LEN;
     const innerEnd = ref.end - 2;
     const hash2 = source.indexOf('#', idFrom + 1);
@@ -605,12 +717,25 @@ export function buildTransclusionDecorations(
     });
   }
 
+  // Рамка вокруг редактируемого текста блока (задача e2c14673): mark-декорация
+  // на весь диапазон — визуально «как у облачка, открытого в редакторе».
+  const docLen = source.length;
+  if (blockEdit !== null && blockEdit.to > blockEdit.from) {
+    const from = Math.max(0, Math.min(blockEdit.from, docLen));
+    const to = Math.max(from, Math.min(blockEdit.to, docLen));
+    parts.push({
+      from,
+      to,
+      value: Decoration.mark({ class: TRANSCLUSION_EDIT_RANGE_CLASS }),
+    });
+  }
+
   return { deco: Decoration.set(parts, true), atomic: RangeSet.of(atomParts, true) };
 }
 
 /** Заглушка данных до загрузки источника. */
 function emptyEntry(): TransclusionEntry {
-  return { title: '', exists: true, error: null, html: '' };
+  return { title: '', exists: true, error: null, html: '', body_md: '' };
 }
 
 /** Поле состояния: кэш, свёрнутые ссылки, режим правки, захваты, декорации. */
@@ -629,6 +754,7 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       cache: new Map(),
       collapsed: new Set(),
       editingSourceId: null,
+      blockEdit: null,
       lockedSources: NO_LOCKS,
       deco,
       atomic,
@@ -638,12 +764,21 @@ export const transclusionState = StateField.define<TransclusionStateData>({
     let networkId = state.networkId;
     let cache = state.cache;
     let editingSourceId = state.editingSourceId;
+    let blockEdit = state.blockEdit;
     let lockedSources = state.lockedSources;
     // Смена выделения возвращает блок из свёрнутого вида («выход за скобки —
     // снова текст блока»), кроме собственных эффектов кнопки смены ссылки.
     let collapsed = !tr.state.selection.eq(tr.startState.selection)
       ? new Set<string>()
       : state.collapsed;
+    // Диапазон правки блока едет за правками документа (задача e2c14673).
+    if (tr.docChanged && blockEdit !== null) {
+      const from = tr.changes.mapPos(blockEdit.from, -1);
+      const to = tr.changes.mapPos(blockEdit.to, 1);
+      if (from !== blockEdit.from || to !== blockEdit.to) {
+        blockEdit = { ...blockEdit, from, to };
+      }
+    }
     for (const effect of tr.effects) {
       if (effect.is(setCollapsed)) {
         collapsed = new Set(collapsed);
@@ -652,10 +787,15 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       } else if (effect.is(setEntries)) {
         if (cache === state.cache) cache = new Map(cache);
         for (const { key, entry } of effect.value) cache.set(key, entry);
+      } else if (effect.is(dropEntries)) {
+        if (cache === state.cache) cache = new Map(cache);
+        for (const key of effect.value) cache.delete(key);
       } else if (effect.is(setBlockEdit)) {
         editingSourceId = effect.value;
         // Вход в правку блока и выход из неё — всегда развёрнутое состояние.
         if (collapsed.size > 0) collapsed = new Set();
+      } else if (effect.is(setBlockEditRange)) {
+        blockEdit = effect.value;
       } else if (effect.is(setLockedSources)) {
         lockedSources = effect.value;
       }
@@ -669,6 +809,7 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       cache === state.cache &&
       collapsed === state.collapsed &&
       editingSourceId === state.editingSourceId &&
+      blockEdit === state.blockEdit &&
       lockedSources === state.lockedSources &&
       networkId === state.networkId
     ) {
@@ -682,8 +823,9 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       collapsed,
       editingSourceId,
       lockedSources,
+      blockEdit,
     );
-    return { networkId, cache, collapsed, editingSourceId, lockedSources, deco, atomic };
+    return { networkId, cache, collapsed, editingSourceId, blockEdit, lockedSources, deco, atomic };
   },
   provide: (f) => EditorView.decorations.from(f, (s) => s.deco),
 });
@@ -700,6 +842,18 @@ export const transclusionClick = EditorView.domEventHandlers({
     const target = event.target as Element | null;
     // Кнопка смены ссылки: не трогаем курсор, событие обработает кнопка.
     if (target !== null && target.closest(`.${TRANSCLUSION_CHANGE_CLASS}`) !== null) return true;
+    // Клик вне редактируемого текста блока — записать изменения блока в
+    // источник и выйти из режима правки блока (задача e2c14673, элемент
+    // 2b116d37). Курсор ставится обычным путём (return false).
+    const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
+    if (be !== null) {
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (pos === null || pos < be.from || pos > be.to) {
+        void saveBlockEdit(view);
+        return false;
+      }
+      return false;
+    }
     const block = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
     if (block instanceof HTMLElement) {
       // Неделимость блока при навигации мышью (задача a2b68d72, требование
@@ -751,14 +905,124 @@ export function transclusionEditHostExtension(host: TransclusionEditHost): Exten
   return transclusionEditHostFacet.of(host);
 }
 
-/** Идентификатор источника в ссылке под позицией `pos`, либо `null`. */
-function transclusionSourceAt(view: EditorView, pos: number): string | null {
-  return transclusionAtCaret(view.state.doc.toString(), pos)?.ref.sourceId ?? null;
+/** Ссылка трансклюзии под позицией `pos`, либо `null`. */
+function transclusionRefAt(view: EditorView, pos: number): TransclusionRef | null {
+  return transclusionAtCaret(view.state.doc.toString(), pos)?.ref ?? null;
 }
 
-/** Выход из режима правки блока трансклюзии (кнопки/Esc; записи нет — e2c14673). */
-export function exitBlockEdit(view: EditorView): void {
-  view.dispatch({ effects: setBlockEdit.of(null) });
+/** Восстанавливает исходную ссылку вместо текста блока и выходит из правки. */
+export function restoreBlockEdit(view: EditorView, be: BlockEditState): void {
+  const len = view.state.doc.length;
+  const from = Math.max(0, Math.min(be.from, len));
+  const to = Math.max(from, Math.min(be.to, len));
+  view.dispatch({
+    changes: { from, to, insert: be.refRaw },
+    effects: [setBlockEdit.of(null), setBlockEditRange.of(null)],
+  });
+}
+
+/** Выход из режима правки блока БЕЗ записи в источник (Esc, «Отменить»). */
+export function cancelBlockEdit(view: EditorView): void {
+  const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
+  if (be === null) {
+    view.dispatch({ effects: [setBlockEdit.of(null), setBlockEditRange.of(null)] });
+    return;
+  }
+  restoreBlockEdit(view, be);
+}
+
+/** Историческое имя: выход из правки блока = отмена (записи нет). */
+export const exitBlockEdit = cancelBlockEdit;
+
+/**
+ * Вход в режим правки блока (задача `e2c14673`): вместо ссылки в поле
+ * вставляется текст источника — правка идёт в том же поле, поэтому команды и
+ * сочетания родительского редактора действуют на текст блока. Раздел — только
+ * его содержимое (заголовок живёт в ссылке). Захват источника ставит плагин по
+ * смене `editingSourceId`.
+ */
+async function beginBlockEdit(view: EditorView, ref: TransclusionRef): Promise<void> {
+  const networkId = safeNetwork();
+  if (networkId === null) return;
+  const key = transclusionCacheKey(networkId, ref);
+  const cached = view.state.field(transclusionState, false)?.cache.get(key);
+  // Битый источник (нет мысли/раздела) в правку не открываем.
+  if (cached !== undefined && (cached.error !== null || !cached.exists)) return;
+  let body = cached?.body_md ?? '';
+  if (cached === undefined) {
+    const src = await defaultTransclusionLoader(networkId)(ref.sourceId).catch(() => null);
+    if (src === null || !src.found) return;
+    body = src.body_md;
+  }
+  const text = ref.section === null ? body : sectionBodyForEdit(body, ref.section);
+  if (text === null) return; // раздела нет — в правку не входим
+  // Ссылка могла исчезнуть/сдвинуться, пока грузили источник.
+  const fresh = transclusionRefAt(view, ref.start);
+  if (fresh === null || fresh.sourceId !== ref.sourceId) return;
+  view.dispatch({
+    changes: { from: fresh.start, to: fresh.end, insert: text },
+    effects: [
+      setBlockEdit.of(fresh.sourceId),
+      setBlockEditRange.of({
+        sourceId: fresh.sourceId,
+        section: fresh.section,
+        refRaw: fresh.raw,
+        from: fresh.start,
+        to: fresh.start + text.length,
+      }),
+    ],
+  });
+}
+
+/**
+ * Записывает изменённый текст блока в постоянный комментарий источника
+ * (задача `e2c14673`) через существующий API правки комментария под захватом;
+ * после записи восстанавливает ссылку. Ошибка (в т.ч. `409 LOCKED` при чужом
+ * захвате — ошибка `68be6829`) оставляет правку открытой и показывает
+ * уведомление. Предупреждение о переходе границы раздела не запрещает запись.
+ */
+export async function saveBlockEdit(view: EditorView): Promise<void> {
+  const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
+  if (be === null) return;
+  const networkId = safeNetwork();
+  if (networkId === null) return;
+  const text = view.state.doc.sliceString(be.from, be.to);
+  let perm: Comment | undefined;
+  try {
+    const comments = await etn.comments.list(networkId, 'thought', be.sourceId);
+    perm = comments.find((c) => c.kind === 'permanent');
+  } catch {
+    perm = undefined;
+  }
+  if (perm === undefined) {
+    notice(t('comment.transclusion.noSource'), 'warning');
+    return;
+  }
+  let newBody = text;
+  if (be.section !== null) {
+    const merged = mergeSectionContent(perm.body_md, be.section, text);
+    if (merged === null) {
+      notice(t('comment.transclusion.noSection'), 'warning');
+      return;
+    }
+    newBody = merged;
+    if (sectionBoundaryCrossed(perm.body_md, be.section, text)) {
+      notice(t('comment.transclusion.sectionBoundary'), 'warning');
+    }
+  }
+  try {
+    await etn.comments.update(networkId, perm.id, { body_md: newBody }, perm.version);
+  } catch {
+    // В том числе 409 LOCKED: источник захвачен другим участником.
+    notice(t('comment.transclusion.saveError'), 'error');
+    return;
+  }
+  const current = view.state.field(transclusionState, false)?.blockEdit ?? null;
+  if (current === null) return;
+  const key = transclusionCacheKeyParts(networkId, current.sourceId, current.section);
+  restoreBlockEdit(view, current);
+  // Источник изменился — сбрасываем кэш, блок в просмотре перечитывается.
+  view.dispatch({ effects: dropEntries.of([key]) });
 }
 
 /** Вход в режим правки блока: двойной клик и Enter (элемент `2b116d37`). */
@@ -770,12 +1034,21 @@ export const transclusionEditGestures = [
         run: (view) => {
           // Открытый автокомплит (мысли/разделы) обрабатывает Enter сам.
           if (completionStatus(view.state) === 'active') return false;
-          const editing = view.state.field(transclusionState, false)?.editingSourceId ?? null;
-          // Внутри правки блока Enter не вставляет перевод строки (запись — e2c14673).
-          if (editing !== null) return true;
-          const sourceId = transclusionSourceAt(view, view.state.selection.main.head);
-          if (sourceId === null) return false;
-          view.dispatch({ effects: setBlockEdit.of(sourceId) });
+          // Внутри правки блока Enter не вставляет перевод строки.
+          if (view.state.field(transclusionState, false)?.blockEdit !== null) return true;
+          const ref = transclusionRefAt(view, view.state.selection.main.head);
+          if (ref === null) return false;
+          void beginBlockEdit(view, ref);
+          return true;
+        },
+      },
+      {
+        key: 'Mod-Enter',
+        run: (view) => {
+          // Ctrl+Enter в правке блока — записать блок в источник, оставаясь в
+          // правке окружения; повторный Ctrl+Enter запишет окружение (e2c14673).
+          if (view.state.field(transclusionState, false)?.blockEdit === null) return false;
+          void saveBlockEdit(view);
           return true;
         },
       },
@@ -784,10 +1057,10 @@ export const transclusionEditGestures = [
         run: (view) => {
           // Открытый автокомплит закрывает Escape сам.
           if (completionStatus(view.state) === 'active') return false;
-          const editing = view.state.field(transclusionState, false)?.editingSourceId ?? null;
-          // Esc в правке блока выходит из неё, не отменяя правку всего поля.
-          if (editing === null) return false;
-          exitBlockEdit(view);
+          const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
+          // Esc в правке блока отменяет её, не отменяя правку всего поля.
+          if (be === null) return false;
+          cancelBlockEdit(view);
           return true;
         },
       },
@@ -797,11 +1070,11 @@ export const transclusionEditGestures = [
     dblclick: (event, view) => {
       const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
       if (coords === null) return false;
-      const sourceId = transclusionSourceAt(view, coords);
-      if (sourceId === null) return false;
-      const editing = view.state.field(transclusionState, false)?.editingSourceId ?? null;
-      if (editing === sourceId) return true;
-      view.dispatch({ effects: setBlockEdit.of(sourceId) });
+      const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
+      if (be !== null) return true;
+      const ref = transclusionRefAt(view, coords);
+      if (ref === null) return false;
+      void beginBlockEdit(view, ref);
       return true;
     },
   }),
@@ -818,8 +1091,8 @@ function sameLockMap(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, stri
 /**
  * Плагин режима правки блока: держит захват мысли-источника, пока блок в
  * правке (существующий механизм `lib/lock-guard.ts`, ADR `fdb1a271`), и ведёт
- * карту чужих захватов для «замочка» (требование `647fa34a`). Сама запись в
- * источник — задача `e2c14673`.
+ * карту чужих захватов для «замочка» (требование `647fa34a`). Запись в источник
+ * выполняет {@link saveBlockEdit} (задача `e2c14673`).
  */
 const transclusionEditPlugin = ViewPlugin.fromClass(
   class {
@@ -890,7 +1163,8 @@ const transclusionEditPlugin = ViewPlugin.fromClass(
         if (outcome.kind === 'blocked') {
           // Источник держит другой участник — в правку не входим, «замочек» уже
           // показан картой захватов (lock-guard сам уведомил пользователя).
-          this.view.dispatch({ effects: setBlockEdit.of(null) });
+          // Отменяем правку — ссылка восстанавливается (e2c14673).
+          cancelBlockEdit(this.view);
           this.refreshLocks();
         }
       });
@@ -1014,4 +1288,10 @@ export const transclusionInternals = {
   emptyEntry,
   setCollapsed,
   setEntries,
+  setBlockEditRange,
+  dropEntries,
+  sectionParts,
+  beginBlockEdit,
+  saveBlockEdit,
+  restoreBlockEdit,
 };
