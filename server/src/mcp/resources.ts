@@ -30,6 +30,7 @@ import { getNeighbors } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
 import { listTrash } from '../domain/trash-service.js';
 import { listComments } from '../domain/comment-service.js';
+import { createBodyExpander } from '../domain/transclusion-service.js';
 import { listAttachments } from '../domain/attachment-service.js';
 import { getPublication } from '../domain/publication-service.js';
 import { getThoughtType, listThoughtTypes } from '../domain/thought-type-service.js';
@@ -278,10 +279,14 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const thoughtId = requireVar(vars, 'thought_id');
         const ndb = openMemberNetwork(rt, networkId);
         const thought = getThoughtOrThrow(ndb, thoughtId);
-        return markdownContents(
-          uri.href,
-          commentsMarkdown(thought.title, listComments(ndb, 'thought', thoughtId)),
-        );
+        // MCP-ресурс комментариев разворачивает трансклюзии (ТП2, задача
+        // bcfc7eb7, ADR 85a7a01e): в базе хранится исходная ссылка.
+        const expand = createBodyExpander(ndb);
+        const comments = listComments(ndb, 'thought', thoughtId).map((c) => ({
+          ...c,
+          body_md: expand(c.body_md),
+        }));
+        return markdownContents(uri.href, commentsMarkdown(thought.title, comments));
       }),
   );
 

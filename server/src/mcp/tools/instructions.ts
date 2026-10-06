@@ -11,6 +11,7 @@ import { Instructions } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { openMemberNetwork, runTool } from '../context.js';
 import { getNetworkInstructions } from '../../domain/instructions-service.js';
+import { createBodyExpander } from '../../domain/transclusion-service.js';
 
 export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
   // ---------------------------------------------------------------------------
@@ -84,6 +85,9 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
             ...(args.limit !== undefined ? { limit: args.limit } : {}),
             ...(args.offset !== undefined ? { offset: args.offset } : {}),
           },
+          // MCP-витрина разворачивает трансклюзии в теле/превью инструкции
+          // (ТП2, задача bcfc7eb7, ADR 85a7a01e); REST-фасад — без развёртки.
+          createBodyExpander(ndb),
         );
         // Списочный режим собирает записи через общий сериализатор домена
         // (response-projection.ts) — в самом `getNetworkInstructions`. Точечный

@@ -29,6 +29,7 @@ import { EtnError, INSTRUCTIONS_PREVIEW_CHARS, buildLikePattern, parseFilterKeyw
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getPermanentFull, getPermanentPreview } from './comment-service.js';
+import type { BodyExpander } from './transclusion-service.js';
 import { projectThoughtRows } from './response-projection.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
@@ -181,6 +182,7 @@ function fetchInstructionsList(
   offset: number,
   rootsOnly: boolean,
   previewChars: number,
+  bodyTransform?: BodyExpander,
 ): InstructionsListItem[] {
   if (instructionsTypeIds.length === 0) return [];
   const placeholders = instructionsTypeIds.map(() => '?').join(',');
@@ -209,7 +211,7 @@ function fetchInstructionsList(
     title: string;
     type_id: string | null;
   }>;
-  return buildListItems(ndb, rows, previewChars);
+  return buildListItems(ndb, rows, previewChars, bodyTransform);
 }
 
 /**
@@ -221,6 +223,7 @@ function buildListItems(
   ndb: NetworkDb,
   rows: ReadonlyArray<{ id: string; title: string; type_id: string | null }>,
   previewChars: number,
+  bodyTransform?: BodyExpander,
 ): InstructionsListItem[] {
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
@@ -250,7 +253,7 @@ function buildListItems(
     // 300 символов, блок «Когда применять»); полный текст — по `instruction_id`
     // либо через `etn.comments.get`. Предел — общая норма обоих фасадов
     // (задача 65cf6074).
-    preview: getPermanentPreview(ndb, 'thought', row.id, previewChars),
+    preview: getPermanentPreview(ndb, 'thought', row.id, previewChars, bodyTransform),
     type_id: row.type_id,
   }));
 }
@@ -264,6 +267,7 @@ export function getNetworkInstructions(
   roleTypeId: string | null | undefined,
   networkId: string,
   query: NetworkInstructionsQuery,
+  bodyTransform?: BodyExpander,
 ): NetworkInstructionsResult {
   // --- Одна инструкция целиком -------------------------------------------
   if (query.instructionId !== undefined) {
@@ -310,8 +314,10 @@ export function getNetworkInstructions(
         { instruction_id: query.instructionId, network_id: networkId },
       );
     }
-    // Полное тело (без обрезки) — спека 14b0cc4f.
-    const permanent = getPermanentFull(ndb, 'thought', row.id);
+    // Полное тело (без обрезки) — спека 14b0cc4f. MCP-выдача разворачивает
+    // трансклюзии (ТП2, задача bcfc7eb7); REST фасад передаёт `bodyTransform`
+    // не заданным и получает исходный текст.
+    const permanent = getPermanentFull(ndb, 'thought', row.id, bodyTransform);
     return {
       has_instructions: true,
       instruction_id: row.id,
@@ -362,7 +368,7 @@ export function getNetworkInstructions(
       return row === undefined ? [] : [row];
     });
     const missing = requested.filter((id) => !byId.has(id));
-    const items = buildListItems(ndb, foundRows, previewChars);
+    const items = buildListItems(ndb, foundRows, previewChars, bodyTransform);
     return {
       has_instructions: true,
       instructions: projectThoughtRows(items),
@@ -405,6 +411,7 @@ export function getNetworkInstructions(
     offset,
     rootsOnly,
     previewChars,
+    bodyTransform,
   );
   return {
     has_instructions: true,

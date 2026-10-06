@@ -28,6 +28,7 @@
 import type { LinkStatEntry, LinkStats, ThoughtMeta, ThoughtMetaFull } from '@etn/shared';
 
 import { getPermanentFull, getPermanentPreview } from './comment-service.js';
+import { createBodyExpander } from './transclusion-service.js';
 import type { NetworkDb } from '../db/network-db.js';
 import { getLinkType } from './link-type-service.js';
 import { getEffectiveViewsForThought } from './thought-type-views-service.js';
@@ -154,10 +155,14 @@ export function getThoughtMeta(
   opts: ThoughtMetaOptions = {},
 ): ThoughtMeta | ThoughtMetaFull {
   const counters = buildCounters(ndb, thoughtId);
+  // MCP-фасад (этот сервис используется только MCP-инструментами и ресурсом
+  // `etn.thought`) отдаёт текст комментария с развёрнутыми трансклюзиями
+  // (ТП2, задача bcfc7eb7). Развёртка — над полным телом до обрезки превью.
+  const expand = createBodyExpander(ndb);
   const permanent =
     opts.fullPermanent === true
-      ? getPermanentFull(ndb, 'thought', thoughtId)
-      : getPermanentPreview(ndb, 'thought', thoughtId);
+      ? getPermanentFull(ndb, 'thought', thoughtId, expand)
+      : getPermanentPreview(ndb, 'thought', thoughtId, undefined, expand);
   const link_stats = getLinkStats(ndb, thoughtId);
   // `meta.views` (задача c1fa71d4, 0.7.3) — эффективный набор отборов.
   // Считается здесь же, чтобы MCP-фасады могли полагаться на

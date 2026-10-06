@@ -42,6 +42,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { createComment, getPermanentFull } from './comment-service.js';
+import { createBodyExpander } from './transclusion-service.js';
 import { listThoughtHoldingLayers } from './holding-layers.js';
 import {
   purgeThoughtDeletionDependants,
@@ -647,7 +648,9 @@ function rowToCard(
     // на карточку — двойная плата токенами. Полный `meta.permanent` без обрезки
     // остаётся прерогативой точечного `etn.thoughts.get`.
     meta: { ...getThoughtMeta(ndb, thought.id), permanent: null },
-    comment_preview: getPermanentFull(ndb, 'thought', thought.id),
+    // MCP-выдача `etn.thoughts.resolve` (единственный вызывающий этой функции)
+    // отдаёт текст с развёрнутыми трансклюзиями (ТП2, задача bcfc7eb7).
+    comment_preview: getPermanentFull(ndb, 'thought', thought.id, createBodyExpander(ndb)),
   };
 }
 

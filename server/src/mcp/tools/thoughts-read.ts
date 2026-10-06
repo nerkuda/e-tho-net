@@ -18,6 +18,7 @@ import { countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolv
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
 import { getCommentsPreview } from '../../domain/comment-service.js';
+import { createBodyExpander } from '../../domain/transclusion-service.js';
 import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolveConditionPropertyRef } from '../../domain/property-service.js';
 import { findDuplicates, resolveThoughts } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
@@ -728,17 +729,26 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             getEffectiveViewsForThought(ndb, { type_id: seed.type_id }),
           );
         }
+        // MCP-выдача подграфа отдаёт превью с развёрнутыми трансклюзиями
+        // (ТП2, задача bcfc7eb7); один expander с кешем источников на весь обход.
+        const expandComments = createBodyExpander(ndb);
         const comments =
           args.include_comments === true
             ? result.nodes.map((id) => ({
                 thought_id: id,
                 ...omitEmptyContainers(
-                  getCommentsPreview(ndb, 'thought', id, {
-                    // Требование «Бюджет ответа subgraph: max_chars», блок
-                    // «Актуализация 0.8.3»: постоянный комментарий узла —
-                    // 600 символов; хронология остаётся 2000.
-                    permanent: SUBGRAPH_PERMANENT_PREVIEW_CHARS,
-                  }),
+                  getCommentsPreview(
+                    ndb,
+                    'thought',
+                    id,
+                    {
+                      // Требование «Бюджет ответа subgraph: max_chars», блок
+                      // «Актуализация 0.8.3»: постоянный комментарий узла —
+                      // 600 символов; хронология остаётся 2000.
+                      permanent: SUBGRAPH_PERMANENT_PREVIEW_CHARS,
+                    },
+                    expandComments,
+                  ),
                 ),
               }))
             : undefined;

@@ -43,6 +43,7 @@ import { renderMarkdown } from '@etn/markdown';
 
 import { applySectionOps, type EditOp } from './markdown-sections.js';
 import { normaliseInstant } from './dates.js';
+import type { BodyExpander } from './transclusion-service.js';
 import type { NetworkDb } from '../db/network-db.js';
 import {
   deleteRowLayered,
@@ -293,6 +294,7 @@ export function getPermanentPreview(
   ownerType: CommentOwnerType,
   ownerId: string,
   previewChars: number = COMMENT_PREVIEW_CHARS,
+  bodyTransform?: BodyExpander,
 ): PermanentCommentPreview | null {
   validateOwnerType(ownerType);
   const row = ndb
@@ -313,11 +315,15 @@ export function getPermanentPreview(
   if (row === undefined) {
     return null;
   }
-  const chars_total = row.body_md.length;
+  // Трансформация — над ПОЛНЫМ телом, до обрезки превью: иначе развёрнутая
+  // трансклюзия разошлась бы с `chars_total`/`truncated` и пробила бы бюджет
+  // превью. Транспорт-агностично: REST не передаёт `bodyTransform`.
+  const body = bodyTransform === undefined ? row.body_md : bodyTransform(row.body_md);
+  const chars_total = body.length;
   const chars_returned = Math.min(chars_total, previewChars);
   return {
     id: row.id,
-    body_md: row.body_md.slice(0, chars_returned),
+    body_md: body.slice(0, chars_returned),
     chars_returned,
     chars_total,
     truncated: chars_total > chars_returned,
@@ -339,6 +345,7 @@ export function getPermanentFull(
   ndb: NetworkDb,
   ownerType: CommentOwnerType,
   ownerId: string,
+  bodyTransform?: BodyExpander,
 ): PermanentCommentFull | null {
   validateOwnerType(ownerType);
   const row = ndb
@@ -361,7 +368,7 @@ export function getPermanentFull(
   }
   return {
     id: row.id,
-    body_md: row.body_md,
+    body_md: bodyTransform === undefined ? row.body_md : bodyTransform(row.body_md),
     valid_from: row.valid_from,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -386,11 +393,12 @@ export function getCommentsPreview(
   ownerType: CommentOwnerType,
   ownerId: string,
   previewChars: { permanent?: number; chronological?: number } = {},
+  bodyTransform?: BodyExpander,
 ): CommentsPreview {
   validateOwnerType(ownerType);
   const permanentChars = previewChars.permanent ?? COMMENT_PREVIEW_CHARS;
   const chronoChars = previewChars.chronological ?? COMMENT_PREVIEW_CHARS;
-  const permanent = getPermanentPreview(ndb, ownerType, ownerId, permanentChars);
+  const permanent = getPermanentPreview(ndb, ownerType, ownerId, permanentChars, bodyTransform);
   const total = (
     ndb
       .prepare(
@@ -427,7 +435,8 @@ export function getCommentsPreview(
     created_at: string;
   }>;
   const entries = rows.map((row) => {
-    const chars_total = row.body_md.length;
+    const body = bodyTransform === undefined ? row.body_md : bodyTransform(row.body_md);
+    const chars_total = body.length;
     const chars_returned = Math.min(chars_total, chronoChars);
     return {
       id: row.id,
@@ -436,7 +445,7 @@ export function getCommentsPreview(
       valid_to: row.valid_to,
       created_by: row.created_by,
       created_at: row.created_at,
-      body_md: row.body_md.slice(0, chars_returned),
+      body_md: body.slice(0, chars_returned),
       chars_returned,
       chars_total,
       truncated: chars_total > chars_returned,
