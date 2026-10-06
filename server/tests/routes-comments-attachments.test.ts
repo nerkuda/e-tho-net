@@ -6,7 +6,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+
+import { DEFAULT_MAX_LENGTH } from '@etn/markdown';
 
 import {
   authHeaders,
@@ -213,6 +216,62 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal((after.json().data as unknown[]).length, 1);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('attachments: PUT /content over the render limit → 422, file and row unchanged (9f2e94b0)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const thoughtId = await createThought(ctx, 'Хозяин редактора');
+        const upload = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/attachments/file`,
+          headers: authHeaders(ctx),
+          payload: {
+            title: 'Заметка',
+            mime_type: 'text/markdown',
+            data_base64: Buffer.from('# старый').toString('base64'),
+          },
+        });
+        assert.equal(upload.statusCode, 201);
+        const att = upload.json().data as { id: string; file_path: string; file_size: number };
+        const contentUrl = `/api/v1/networks/${ctx.networkId}/attachments/${att.id}/content`;
+
+        // Over-limit markdown body → 422 VALIDATION_ERROR with the payload field.
+        const over = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        const rejected = await ctx.app.inject({
+          method: 'PUT',
+          url: contentUrl,
+          headers: authHeaders(ctx),
+          payload: { data_base64: Buffer.from(over).toString('base64') },
+        });
+        assert.equal(rejected.statusCode, 422);
+        const error = rejected.json().error as { code: string; details?: { field?: string } };
+        assert.equal(error.code, 'VALIDATION_ERROR');
+        assert.equal(error.details?.field, 'data_base64');
+
+        // Neither the file on disk nor the row changed.
+        assert.equal(readFileSync(att.file_path, 'utf8'), '# старый');
+        const meta = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/${att.id}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal((meta.json().data as { file_size: number }).file_size, att.file_size);
+
+        // Boundary is inclusive: exactly the limit is accepted, and a normal
+        // update still rewrites the file.
+        const exact = 'a'.repeat(DEFAULT_MAX_LENGTH);
+        const ok = await ctx.app.inject({
+          method: 'PUT',
+          url: contentUrl,
+          headers: authHeaders(ctx),
+          payload: { data_base64: Buffer.from(exact).toString('base64') },
+        });
+        assert.equal(ok.statusCode, 200);
+        assert.equal(readFileSync(att.file_path, 'utf8'), exact);
       } finally {
         await closeRestContext(ctx);
       }

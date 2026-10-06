@@ -40,7 +40,7 @@ import {
   type AttachmentUsage,
 } from '@etn/shared';
 
-import { renderMarkdown } from '@etn/markdown';
+import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
@@ -1073,7 +1073,8 @@ export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): Attach
  * `file_size`/`mime_type` in the row. Last-write-wins (no version column).
  *
  * Throws `NOT_FOUND` (404), `VALIDATION_ERROR` (422) for a non-text
- * attachment, a bad payload or an unwritable file.
+ * attachment, a bad payload, an unwritable file or a markdown body longer than
+ * the renderer limit (checked before the file/row are touched, error 9f2e94b0).
  */
 export function updateAttachmentContent(
   ndb: NetworkDb,
@@ -1112,6 +1113,28 @@ export function updateAttachmentContent(
       });
     }
 
+    const nextMime =
+      input.mime_type !== undefined && input.mime_type.trim() !== ''
+        ? input.mime_type.trim().toLowerCase()
+        : current.mime_type;
+    const text = buffer.toString('utf8');
+    const markdown = isMarkdownFile({ ...current, mime_type: nextMime });
+    // Лимит рендера проверяется ДО `renderMarkdown` (ошибка 9f2e94b0, тот же
+    // класс, что уже исправленный 2764d7bb): единый рендерер отвергает источник
+    // длиннее DEFAULT_MAX_LENGTH обычным `Error`, который глобальный обработчик
+    // мапит в 500 INTERNAL. Это клиентская ошибка ввода, а не внутренняя.
+    // Граница включительна: ровно DEFAULT_MAX_LENGTH символов допустимо.
+    if (markdown && text.length > DEFAULT_MAX_LENGTH) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `содержимое вложения превышает лимит рендера (${text.length} > ${DEFAULT_MAX_LENGTH} символов).`,
+        { field: 'data_base64', limit: DEFAULT_MAX_LENGTH },
+      );
+    }
+    // Рендер — тоже до записи: любой его сбой не должен оставлять
+    // перезаписанный файл при откатанной транзакции (рассогласование файла и БД).
+    const html = markdown ? renderMarkdown(text) : null;
+
     try {
       writeFileSync(current.file_path!, buffer);
     } catch {
@@ -1120,10 +1143,6 @@ export function updateAttachmentContent(
       });
     }
 
-    const nextMime =
-      input.mime_type !== undefined && input.mime_type.trim() !== ''
-        ? input.mime_type.trim().toLowerCase()
-        : current.mime_type;
     // Запись контента — это правка вложения: обновляем `updated_by` и
     // `updated_at_ms` (требование e6d4165e; ISO-колонки `updated_at` у
     // `attachments` исторически нет). Актор — создатель вложения; смена
@@ -1136,10 +1155,6 @@ export function updateAttachmentContent(
       )
       .run(buffer.length, nextMime, current.updated_by || current.created_by, nowMs, id, ndb.layerId);
 
-    const text = buffer.toString('utf8');
-    const html = isMarkdownFile({ ...current, mime_type: nextMime })
-      ? renderMarkdown(text)
-      : null;
     return { html };
   });
 }

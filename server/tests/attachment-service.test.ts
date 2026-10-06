@@ -11,6 +11,8 @@ import { describe, it } from 'node:test';
 
 import { EtnError } from '@etn/shared';
 
+import { DEFAULT_MAX_LENGTH } from '@etn/markdown';
+
 import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb, NetworkDb, registerMigrationHelpers } from '../src/db/network-db.js';
@@ -630,6 +632,65 @@ describe(
           () => updateAttachmentContent(ndb, md.id, { data_base64: '!!not-base64!!' }),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('updateAttachmentContent rejects markdown over the render limit without touching file or row (9f2e94b0)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-content-over', path.join(tmp, 'data.db'));
+      try {
+        const t = seedThought(ndb);
+        const md = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          {
+            title: 'Большой',
+            mime_type: 'text/markdown',
+            data_base64: Buffer.from('# старый').toString('base64'),
+          },
+          USER,
+        );
+        const before = getAttachment(ndb, md.id);
+        assert.ok(before !== null);
+
+        // Over-limit body: 422 VALIDATION_ERROR with the payload field, and
+        // neither the file on disk nor the row may change (error 9f2e94b0).
+        const over = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        assert.throws(
+          () =>
+            updateAttachmentContent(ndb, md.id, {
+              data_base64: Buffer.from(over).toString('base64'),
+            }),
+          (e: unknown) =>
+            e instanceof EtnError &&
+            e.code === 'VALIDATION_ERROR' &&
+            (e.details as { field?: string }).field === 'data_base64' &&
+            (e.details as { limit?: number }).limit === DEFAULT_MAX_LENGTH,
+        );
+        assert.equal(readFileSync(md.file_path!, 'utf8'), '# старый');
+        const after = getAttachment(ndb, md.id);
+        assert.ok(after !== null);
+        assert.equal(after.file_size, before.file_size);
+        assert.equal(after.updated_at_ms, before.updated_at_ms);
+
+        // The boundary is inclusive: exactly DEFAULT_MAX_LENGTH is accepted.
+        const exact = 'a'.repeat(DEFAULT_MAX_LENGTH);
+        const result = updateAttachmentContent(ndb, md.id, {
+          data_base64: Buffer.from(exact).toString('base64'),
+        });
+        assert.ok(result.html !== null);
+        assert.equal(readFileSync(md.file_path!, 'utf8'), exact);
+        const refreshed = getAttachment(ndb, md.id);
+        assert.ok(refreshed !== null);
+        assert.equal(refreshed.file_size, DEFAULT_MAX_LENGTH);
       } finally {
         ndb.close();
         rmSync(tmp, { recursive: true, force: true });
