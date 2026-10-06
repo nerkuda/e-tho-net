@@ -31,6 +31,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { getPermanentFull, getPermanentPreview } from './comment-service.js';
 import type { BodyExpander } from './transclusion-service.js';
 import { projectThoughtRows } from './response-projection.js';
+import { resolveThoughtId } from './thought-id.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
 /** Превью постоянного комментария (как в `meta.permanent` выборок). */
@@ -274,6 +275,20 @@ export function getNetworkInstructions(
     if (typeof roleTypeId !== 'string') {
       return { has_instructions: false, instructions: [] };
     }
+    // Короткая форма id (hex-префикс UUID) резолвится в полный id — как в
+    // `etn.thoughts.get` (ошибка 8ca8f4cc). Неоднозначный префикс даёт
+    // VALIDATION_ERROR со списком кандидатов; ненайденный — NOT_FOUND ниже.
+    // Резолв ровно одной мысли — заодно гарантия, что выдача относится ИМЕННО
+    // к запрошенной инструкции, а не к «похожей» (ошибка 50098756).
+    const resolvedId = resolveThoughtId(ndb, query.instructionId);
+    if (resolvedId === null) {
+      throw new EtnError(
+        'NOT_FOUND',
+        `Инструкция ${query.instructionId} не найдена среди активных мыслей роли «instructions». ` +
+          'Принимается полный UUID или однозначный hex-префикс id (не короче 4 символов).',
+        { instruction_id: query.instructionId, network_id: networkId },
+      );
+    }
     const instructionsTypeIds = expandTypeIdsToSubtree(ndb, 'thought_types', [roleTypeId]);
     if (instructionsTypeIds.length === 0) {
       throw new EtnError(
@@ -291,7 +306,7 @@ export function getNetworkInstructions(
           WHERE t.id = ? AND t.type_id IN (${placeholders})
           LIMIT 1`,
       )
-      .get(query.instructionId, ...instructionsTypeIds) as
+      .get(resolvedId, ...instructionsTypeIds) as
       | {
           id: string;
           title: string;
@@ -344,8 +359,33 @@ export function getNetworkInstructions(
         meta: { total: 0 },
       };
     }
-    // Порядок запроса, дубликаты схлопываются (задача 649c55e2).
-    const requested = [...new Set(query.instructionIds)];
+    // Порядок запроса, дубликаты схлопываются (задача 649c55e2). Каждый
+    // запрошенный id резолвится из короткой формы в полную — как в
+    // `etn.thoughts.get` (ошибка 8ca8f4cc): ненайденный префикс уходит в
+    // `missing`, неоднозначный даёт VALIDATION_ERROR со списком кандидатов
+    // (ложный ответ недопустим — ошибка 50098756).
+    const requested: string[] = [];
+    const missing: string[] = [];
+    const seenIds = new Set<string>();
+    for (const raw of query.instructionIds) {
+      const resolved = resolveThoughtId(ndb, raw);
+      if (resolved === null) {
+        if (!missing.includes(raw)) missing.push(raw);
+        continue;
+      }
+      if (!seenIds.has(resolved)) {
+        seenIds.add(resolved);
+        requested.push(resolved);
+      }
+    }
+    if (requested.length === 0) {
+      return {
+        has_instructions: true,
+        instructions: [],
+        missing,
+        meta: { total: 0 },
+      };
+    }
     const idPlaceholders = requested.map(() => '?').join(',');
     const placeholders = instructionsTypeIds.map(() => '?').join(',');
     const rows = ndb
@@ -367,7 +407,9 @@ export function getNetworkInstructions(
       const row = byId.get(id);
       return row === undefined ? [] : [row];
     });
-    const missing = requested.filter((id) => !byId.has(id));
+    for (const id of requested) {
+      if (!byId.has(id)) missing.push(id);
+    }
     const items = buildListItems(ndb, foundRows, previewChars, bodyTransform);
     return {
       has_instructions: true,
