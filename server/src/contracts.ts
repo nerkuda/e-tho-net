@@ -3031,6 +3031,29 @@ export const RestThoughtCreateBody = defineContract(
         };
       },
     },
+    // Постоянный комментарий, создаваемый вместе с мыслью (0.12.1, задача
+    // aa79c82d): `comment { body_md }`. Один запрос — одна транзакция,
+    // разбирается наравне с `create_link` (поле вне общей zod-схемы).
+    comment: {
+      from: { kind: 'body' },
+      parse: (raw: unknown, requestId: string) => {
+        if (raw === undefined) return undefined;
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+          throw new EtnError('VALIDATION_ERROR', 'comment должен быть объектом.', { field: 'comment' }, requestId);
+        }
+        const c = raw as Record<string, unknown>;
+        const bodyMd = c['body_md'];
+        if (typeof bodyMd !== 'string' || bodyMd.trim() === '') {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'comment.body_md обязателен и не может быть пустым.',
+            { field: 'comment.body_md' },
+            requestId,
+          );
+        }
+        return { body_md: bodyMd };
+      },
+    },
   },
 );
 

@@ -77,6 +77,7 @@ import {
   RestThoughtUpdateBody,
 } from '../contracts.js';
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
+import { listComments } from '../domain/comment-service.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
 import { assertLibraryIcon } from '../domain/icon-view.js';
 import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
@@ -212,6 +213,7 @@ function parseThoughtCreateBody(
     font_underline: out.font_underline as boolean | undefined,
     font_strike: out.font_strike as boolean | undefined,
     create_link: out.create_link as ThoughtCreateInput['create_link'],
+    comment: out.comment as ThoughtCreateInput['comment'],
   };
 }
 
@@ -388,6 +390,20 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const activity: WriteActivityEntry[] = [
             { kind: 'thought', action: 'created', thought: created },
           ];
+          // Постоянный комментарий из тела запроса (0.12.1, задача aa79c82d):
+          // создан доменом в этой же транзакции — публикуем событие и запись
+          // журнала, как это делает REST-роут комментариев. Без этого
+          // подписчики не увидели бы комментарий в реальном времени (ср.
+          // ошибка 8655842b для link-дефолтов).
+          if (input.comment !== undefined) {
+            const createdComment = listComments(ndb, 'thought', created.id).find(
+              (c) => c.kind === 'permanent',
+            );
+            if (createdComment !== undefined) {
+              events.push({ type: 'comment.created', data: { comment: createdComment } });
+              activity.push({ kind: 'comment', action: 'created', comment: createdComment });
+            }
+          }
           for (const linkId of defaultLinkIds) {
             const link = getLink(ndb, linkId);
             if (link !== null) {

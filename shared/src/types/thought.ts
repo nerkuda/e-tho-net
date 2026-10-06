@@ -81,6 +81,16 @@ export interface ThoughtCreateLink {
   type_id?: string | null;
 }
 
+/**
+ * Permanent comment seeded at thought creation (`POST /thoughts`, 0.12.1,
+ * задача aa79c82d). The server writes the thought and its permanent comment in
+ * a single transaction; `body_html` is pre-rendered by `@etn/markdown`.
+ * Takes precedence over the type's `comment_template_md`.
+ */
+export interface ThoughtCreateComment {
+  body_md: string;
+}
+
 /** Input accepted by `POST /thoughts` (03-server-api.md §6.3). */
 export interface ThoughtCreateInput {
   title: string;
@@ -96,6 +106,8 @@ export interface ThoughtCreateInput {
   font_underline?: boolean;
   font_strike?: boolean;
   create_link?: ThoughtCreateLink;
+  /** Permanent comment created atomically with the thought (0.12.1). */
+  comment?: ThoughtCreateComment;
 }
 
 /** Input accepted by `PATCH /thoughts/{id}` (03-server-api.md §6.4). Also used

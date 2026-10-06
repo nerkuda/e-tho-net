@@ -898,13 +898,23 @@ export function createThought(
         setPropertyValueById(ndb, 'thought', id, def.property_id, def.default_value, actorUserId);
       }
     }
-    // Server-side comment template application (0.4.3): a thought created with
-    // a type that carries a non-empty `comment_template_md` gets its permanent
-    // comment seeded with the template text, so agent-created cards (MCP/REST,
-    // which cannot pass a comment body on create) match the UI behaviour.
-    // `upsert_bundle` with an explicit comment overwrites this later in the
-    // same transaction.
-    if (input.type_id !== undefined && input.type_id !== null) {
+    // Server-side comment seeding: an explicit `comment.body_md` on the create
+    // input (0.12.1, задача aa79c82d) wins over the type's `comment_template_md`
+    // (0.4.3). Both are written in THIS transaction, so a client command that
+    // needs «мысль + постоянный комментарий» does one atomic request (REST
+    // `POST /thoughts` с `comment`; ADR «Создание мыслей из выделения —
+    // существующим API»). `body_html` предрендерится единым рендерером
+    // `@etn/markdown` внутри `createComment`.
+    const explicitBody = input.comment?.body_md;
+    if (explicitBody !== undefined) {
+      createComment(
+        ndb,
+        'thought',
+        id,
+        { kind: 'permanent', title: null, body_md: explicitBody },
+        actorUserId,
+      );
+    } else if (input.type_id !== undefined && input.type_id !== null) {
       const template = getThoughtType(ndb, input.type_id)?.comment_template_md;
       if (template !== null && template !== undefined && template.trim() !== '') {
         createComment(
