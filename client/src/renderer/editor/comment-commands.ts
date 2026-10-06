@@ -579,16 +579,24 @@ export interface CommentModeActions {
   readonly root: HTMLElement;
   /** Показывает кнопки режима: `true` — правка, `false` — просмотр. */
   setEditing(editing: boolean): void;
+  /**
+   * Показывает кнопки правки БЛОКА трансклюзии «Отменить/Сохранить
+   * трансклюзию» (элемент интерфейса `2b116d37`, задача f59d24e1). Пока блок в
+   * правке, кнопки правки всего поля скрыты.
+   */
+  setBlockEditing(editing: boolean): void;
 }
 
 /**
  * Собирает панель кнопок режима под полем комментария (элемент `a0e5bc2e`):
- * в просмотре — «Редактировать», в правке — «Отменить»/«Сохранить». Кнопки —
+ * в просмотре — «Редактировать», в правке — «Отменить»/«Сохранить», в правке
+ * блока трансклюзии — «Отменить трансклюзию»/«Сохранить трансклюзию». Кнопки —
  * через словарь `lib/ui` (требование `edc5faea`), строки — из словаря `t()`.
  *
  * Действия идут тем же путём, что и сочетания Esc/Ctrl+Enter: командой поля
  * через диспетчер `runCommentCommand` (`comment.edit` / `comment.cancel` /
- * `comment.save`), поэтому клик и клавиша делают ровно одно и то же.
+ * `comment.save` / `transclusion.cancel` / `transclusion.save`), поэтому клик
+ * и клавиша делают ровно одно и то же.
  */
 export function createCommentModeActions(host: CommentCommandHost): CommentModeActions {
   const edit = uiButton({
@@ -619,22 +627,55 @@ export function createCommentModeActions(host: CommentCommandHost): CommentModeA
   });
   save.dataset['action'] = 'save';
 
+  // Кнопки правки блока трансклюзии (элемент 2b116d37, задача f59d24e1):
+  // сохранение пока только выходит из правки — запись в источник в e2c14673.
+  const blockCancel = uiButton({
+    label: t('comment.transclusion.cancel'),
+    role: 'secondary',
+    size: 's',
+    onClick: () => {
+      runCommentCommand('transclusion.cancel', host);
+    },
+  });
+  blockCancel.dataset['action'] = 'transclusion-cancel';
+  const blockSave = uiButton({
+    label: t('comment.transclusion.save'),
+    role: 'primary',
+    size: 's',
+    onClick: () => {
+      runCommentCommand('transclusion.save', host);
+    },
+  });
+  blockSave.dataset['action'] = 'transclusion-save';
+
   // Клик по кнопке не должен снимать фокус/выделение редактора до обработчика:
   // иначе `blur` сохранит правку раньше, чем «Отмена» её отменит (как у строк
   // контекстного меню, `guardCommentMenuFocus`).
-  for (const btn of [edit, cancel, save]) {
+  for (const btn of [edit, cancel, save, blockCancel, blockSave]) {
     btn.addEventListener('mousedown', (event) => event.preventDefault());
   }
 
   const root = div(COMMENT_ACTIONS_CLASS);
-  root.append(edit, cancel, save);
+  root.append(edit, cancel, save, blockCancel, blockSave);
+  let mode: 'view' | 'edit' | 'block' = 'view';
+  const render = (): void => {
+    edit.hidden = mode !== 'view';
+    cancel.hidden = mode !== 'edit';
+    save.hidden = mode !== 'edit';
+    blockCancel.hidden = mode !== 'block';
+    blockSave.hidden = mode !== 'block';
+  };
   const setEditing = (editing: boolean): void => {
-    edit.hidden = editing;
-    cancel.hidden = !editing;
-    save.hidden = !editing;
+    mode = editing ? 'edit' : 'view';
+    render();
+  };
+  const setBlockEditing = (editing: boolean): void => {
+    // Выход из правки блока всегда возвращает кнопки правки поля.
+    mode = editing ? 'block' : mode === 'block' ? 'edit' : mode;
+    render();
   };
   setEditing(false);
-  return { root, setEditing };
+  return { root, setEditing, setBlockEditing };
 }
 
 /* ------------------------------------------------------------------ *

@@ -27,7 +27,7 @@ import { findMatches } from './text-search.js';
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
-import { transclusionExtensions } from './transclusion.js';
+import { exitBlockEdit, transclusionExtensions } from './transclusion.js';
 import { wikiLinkLegacyActions } from './wiki-link-legacy-actions.js';
 
 /** Callbacks of the editor (the field orchestrates view/edit modes). */
@@ -125,6 +125,11 @@ export interface MdEditor {
    * (навигация F3/Enter из панели). Фокус остаётся там, где был.
    */
   selectMatch(from: number, to: number): void;
+  /**
+   * Выход из режима правки блока трансклюзии (кнопки «Отменить/Сохранить
+   * трансклюзию» под полем, задача f59d24e1). Записи в источник нет.
+   */
+  exitTransclusionEdit(): void;
 }
 
 /** Эффект установки подсветки поиска. */
@@ -468,6 +473,7 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       // остаться активным (F3/Enter продолжают работать).
       view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
     },
+    exitTransclusionEdit: () => exitBlockEdit(view),
     destroy: () => {
       alive = false;
       listeners.clear();

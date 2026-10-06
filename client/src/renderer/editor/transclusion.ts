@@ -1,13 +1,21 @@
 /**
- * Трансклюзии комментариев в поле markdown (0.12.1, ТП2, задача `f72a9134`;
- * ADR `8c41387c`, ADR `dc1758ad`, ADR `85a7a01e`; элементы интерфейса
- * `7a479549` и `2b116d37`).
+ * Трансклюзии комментариев в поле markdown (0.12.1, ТП2, задачи `f72a9134` и
+ * `f59d24e1`; ADR `8c41387c`, ADR `dc1758ad`, ADR `85a7a01e`, ADR `fdb1a271`;
+ * элементы интерфейса `7a479549` и `2b116d37`; требование `647fa34a`).
  *
  * Узкий клиентский модуль поверх единого рендерера: разбор ссылок и развёртка
  * текста выполняются ТОЛЬКО экспортируемыми функциями `@etn/markdown`
  * (`parseTransclusions`, `expandTransclusions`, `extractSection`) — своего
  * парсера здесь нет (сторож `markdown-single-renderer`). Резолвер источника
  * (постоянный комментарий мысли своей сети) и режимы блока живут здесь.
+ *
+ * **Правка блока и захват источника (задача `f59d24e1`).** Двойной клик по
+ * блоку или Enter при каретке внутри ссылки переводят блок в режим правки
+ * (`setBlockEdit`); с этого момента на мысль-источник ставится захват
+ * существующим механизмом `lib/lock-guard.ts` (`/locks`, `edit.*`) и
+ * снимается при выходе (Esc, кнопки «Отменить/Сохранить трансклюзию» под
+ * полем). Чужой захват даёт на блоке «замочек» 🔒 и в правку не пускает.
+ * Сама запись изменений в источник — задача `e2c14673` (граница).
  *
  * Три режима одной ссылки в редакторе (курсор/выделение решают):
  *  1. **Правка ссылки** — выделение пересекает ссылку: виден исходный markdown,
@@ -19,12 +27,19 @@
  *     правку). Выход выделения за скобки возвращает блок.
  *
  * За границами задачи (другие работы ТП2): фон по уровням/анимация/неделимость
- * навигации (`a2b68d72`), захват источника (`f59d24e1`), контекстное меню
- * (`955478e8`), realtime-обновление блока.
+ * навигации (`a2b68d72`), контекстное меню (`955478e8`), запись изменений
+ * блока в источник (`e2c14673`), realtime-обновление блока.
  */
 
-import type { Completion, CompletionSource } from '@codemirror/autocomplete';
 import {
+  completionStatus,
+  type Completion,
+  type CompletionSource,
+} from '@codemirror/autocomplete';
+import {
+  EditorState,
+  Facet,
+  Prec,
   RangeSet,
   StateEffect,
   StateField,
@@ -35,6 +50,7 @@ import {
   EditorView,
   ViewPlugin,
   WidgetType,
+  keymap,
   type DecorationSet,
   type ViewUpdate,
 } from '@codemirror/view';
@@ -50,6 +66,13 @@ import {
 import { requireNetworkId } from '../app.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
+import { holderName, otherHolder, subscribeLockCache } from '../lib/lock-cache.js';
+import {
+  acquireOrShowBlocked,
+  lockHandleFromOutcome,
+  releaseHeld,
+  type LockHandle,
+} from '../lib/lock-guard.js';
 import { iconButton } from '../lib/ui/button.js';
 import { svgIcon } from '../lib/ui/icon.js';
 
@@ -63,6 +86,10 @@ export const TRANSCLUSION_CHANGE_CLASS = 'cm-transclusion-change-link';
 export const TRANSCLUSION_ERROR_CLASS = 'cm-transclusion-error';
 /** Атомарный токен `#<id>` в режиме правки ссылки. */
 export const TRANSCLUSION_ID_CLASS = 'cm-transclusion-id';
+/** Блок в режиме правки (рамка как у облачка, задача f59d24e1). */
+export const TRANSCLUSION_EDITING_CLASS = 'cm-transclusion-block--editing';
+/** «Замочек» блока при чужом захвате источника (задача f59d24e1). */
+export const TRANSCLUSION_LOCK_CLASS = 'cm-transclusion-lock';
 
 /** Длина префикса ссылки — восклицательный знак и две открывающие скобки. */
 const OPEN_LEN = 3;
@@ -245,11 +272,25 @@ const setCollapsed = StateEffect.define<{ key: string; collapsed: boolean }>();
 /** Эффект наполнения кэша данными ссылок. */
 const setEntries = StateEffect.define<Array<{ key: string; entry: TransclusionEntry }>>();
 
+/**
+ * Эффект режима правки блока трансклюзии (задача `f59d24e1`): значение —
+ * id мысли-источника, в правку которого входит пользователь, либо `null` для
+ * выхода. Захват источника ставится/снимается плагином по смене значения.
+ */
+export const setBlockEdit = StateEffect.define<string | null>();
+
+/** Эффект обновления карты чужих захватов источников (`sourceId` → имя). */
+const setLockedSources = StateEffect.define<ReadonlyMap<string, string>>();
+
 /** Состояние плагина: кэш данных, свёрнутые ссылки, декорации и атомарные токены. */
 interface TransclusionStateData {
   networkId: string | null;
   cache: Map<string, TransclusionEntry>;
   collapsed: Set<string>;
+  /** Источник в режиме правки блока, либо `null` (задача f59d24e1). */
+  editingSourceId: string | null;
+  /** Чужие захваты источников: `sourceId` → имя держателя (задача f59d24e1). */
+  lockedSources: ReadonlyMap<string, string>;
   deco: DecorationSet;
   atomic: RangeSet<Decoration>;
 }
@@ -321,6 +362,12 @@ class TransclusionBlockWidget extends WidgetType {
     readonly to: number,
     readonly entry: TransclusionEntry,
     readonly key: string,
+    /** Источник блока — для «замочка» и входа в правку. */
+    readonly sourceId: string,
+    /** Блок в режиме правки (задача f59d24e1). */
+    readonly editing: boolean,
+    /** Имя чужого держателя захвата источника, либо `null` (задача f59d24e1). */
+    readonly lockedBy: string | null,
   ) {
     super();
   }
@@ -330,6 +377,9 @@ class TransclusionBlockWidget extends WidgetType {
       other.from === this.from &&
       other.to === this.to &&
       other.key === this.key &&
+      other.sourceId === this.sourceId &&
+      other.editing === this.editing &&
+      other.lockedBy === this.lockedBy &&
       other.entry.html === this.entry.html &&
       other.entry.error === this.entry.error &&
       other.entry.title === this.entry.title &&
@@ -341,9 +391,22 @@ class TransclusionBlockWidget extends WidgetType {
     const box = document.createElement('div');
     // Без класса `md-widget`: его клик обрабатывает mdWidgetClick (md-live.ts),
     // иначе было бы двойное перемещение каретки.
-    box.className = `${TRANSCLUSION_BLOCK_CLASS} comment-view`;
+    box.className =
+      `${TRANSCLUSION_BLOCK_CLASS} comment-view` +
+      (this.editing ? ` ${TRANSCLUSION_EDITING_CLASS}` : '');
     box.dataset.mdFrom = String(this.from);
     box.dataset.mdTo = String(this.to);
+    box.dataset['transclusionSource'] = this.sourceId;
+
+    // «Замочек» при чужом захвате источника (требование 647fa34a): источник
+    // правит другой участник — вход в правку блока заблокирован.
+    if (this.lockedBy !== null) {
+      const badge = document.createElement('span');
+      badge.className = TRANSCLUSION_LOCK_CLASS;
+      badge.textContent = '🔒';
+      badge.title = t('comment.transclusion.locked', this.lockedBy);
+      box.append(badge);
+    }
 
     if (this.entry.error !== null) {
       const err = document.createElement('div');
@@ -356,18 +419,21 @@ class TransclusionBlockWidget extends WidgetType {
       return box;
     }
 
-    const button = iconButton({
-      icon: svgIcon('link-edit', 12),
-      role: 'ghost',
-      size: 's',
-      title: t('comment.transclusion.changeLink'),
-      class: TRANSCLUSION_CHANGE_CLASS,
-      onClick: () => {
-        view.dispatch({ effects: setCollapsed.of({ key: this.key, collapsed: true }) });
-      },
-    });
-    button.addEventListener('mousedown', (event) => event.preventDefault());
-    box.append(button);
+    // В режиме правки кнопка смены ссылки скрыта: сначала выходят из правки.
+    if (!this.editing) {
+      const button = iconButton({
+        icon: svgIcon('link-edit', 12),
+        role: 'ghost',
+        size: 's',
+        title: t('comment.transclusion.changeLink'),
+        class: TRANSCLUSION_CHANGE_CLASS,
+        onClick: () => {
+          view.dispatch({ effects: setCollapsed.of({ key: this.key, collapsed: true }) });
+        },
+      });
+      button.addEventListener('mousedown', (event) => event.preventDefault());
+      box.append(button);
+    }
 
     const body = document.createElement('div');
     body.innerHTML = this.entry.html ?? '';
@@ -389,6 +455,9 @@ function intersects(
   return selection.from < to && selection.to > from;
 }
 
+/** Пустая карта чужих захватов (значение по умолчанию). */
+const NO_LOCKS: ReadonlyMap<string, string> = new Map();
+
 /** Строит декорации и атомарные диапазоны для текущего состояния. */
 export function buildTransclusionDecorations(
   source: string,
@@ -396,6 +465,10 @@ export function buildTransclusionDecorations(
   cache: Map<string, TransclusionEntry>,
   networkId: string | null,
   collapsed: Set<string>,
+  /** Источник в режиме правки блока, либо `null` (задача f59d24e1). */
+  editingSourceId: string | null = null,
+  /** Чужие захваты источников: `sourceId` → имя держателя (задача f59d24e1). */
+  lockedSources: ReadonlyMap<string, string> = NO_LOCKS,
 ): { deco: DecorationSet; atomic: RangeSet<Decoration> } {
   const parts: Array<{ from: number; to: number; value: Decoration }> = [];
   const atomParts: Array<{ from: number; to: number; value: Decoration }> = [];
@@ -410,6 +483,30 @@ export function buildTransclusionDecorations(
     const entry = key === null ? undefined : cache.get(key);
     const title = entry?.title ?? '';
     const deleted = entry !== undefined && !entry.exists;
+    const lockedBy = lockedSources.get(ref.sourceId) ?? null;
+
+    // Режим правки блока перекрывает прочие режимы: блок остаётся блоком даже
+    // при каретке внутри ссылки (задача f59d24e1).
+    if (editingSourceId !== null && editingSourceId === ref.sourceId) {
+      parts.push({
+        from: ref.start,
+        to: ref.end,
+        value: Decoration.replace({
+          block: true,
+          widget: new TransclusionBlockWidget(
+            ref.start,
+            ref.end,
+            entry ?? emptyEntry(),
+            key ?? '',
+            ref.sourceId,
+            true,
+            lockedBy,
+          ),
+          inclusive: false,
+        }),
+      });
+      continue;
+    }
 
     if (intersects(selection, ref.start, ref.end)) {
       // Режим правки ссылки: токен `#<id>` — атомарный виджет с именем мысли;
@@ -449,7 +546,15 @@ export function buildTransclusionDecorations(
       to: ref.end,
       value: Decoration.replace({
         block: true,
-        widget: new TransclusionBlockWidget(ref.start, ref.end, entry ?? emptyEntry(), key ?? ''),
+        widget: new TransclusionBlockWidget(
+          ref.start,
+          ref.end,
+          entry ?? emptyEntry(),
+          key ?? '',
+          ref.sourceId,
+          false,
+          lockedBy,
+        ),
         inclusive: false,
       }),
     });
@@ -463,7 +568,7 @@ function emptyEntry(): TransclusionEntry {
   return { title: '', exists: true, error: null, html: '' };
 }
 
-/** Поле состояния: кэш, свёрнутые ссылки, декорации и атомарные токены. */
+/** Поле состояния: кэш, свёрнутые ссылки, режим правки, захваты, декорации. */
 export const transclusionState = StateField.define<TransclusionStateData>({
   create: (state) => {
     const networkId = safeNetwork();
@@ -474,11 +579,21 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       networkId,
       new Set(),
     );
-    return { networkId, cache: new Map(), collapsed: new Set(), deco, atomic };
+    return {
+      networkId,
+      cache: new Map(),
+      collapsed: new Set(),
+      editingSourceId: null,
+      lockedSources: NO_LOCKS,
+      deco,
+      atomic,
+    };
   },
   update(state, tr) {
     let networkId = state.networkId;
     let cache = state.cache;
+    let editingSourceId = state.editingSourceId;
+    let lockedSources = state.lockedSources;
     // Смена выделения возвращает блок из свёрнутого вида («выход за скобки —
     // снова текст блока»), кроме собственных эффектов кнопки смены ссылки.
     let collapsed = !tr.state.selection.eq(tr.startState.selection)
@@ -492,6 +607,12 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       } else if (effect.is(setEntries)) {
         if (cache === state.cache) cache = new Map(cache);
         for (const { key, entry } of effect.value) cache.set(key, entry);
+      } else if (effect.is(setBlockEdit)) {
+        editingSourceId = effect.value;
+        // Вход в правку блока и выход из неё — всегда развёрнутое состояние.
+        if (collapsed.size > 0) collapsed = new Set();
+      } else if (effect.is(setLockedSources)) {
+        lockedSources = effect.value;
       }
     }
     const currentNetwork = safeNetwork();
@@ -502,6 +623,8 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       !tr.selection &&
       cache === state.cache &&
       collapsed === state.collapsed &&
+      editingSourceId === state.editingSourceId &&
+      lockedSources === state.lockedSources &&
       networkId === state.networkId
     ) {
       return state;
@@ -512,8 +635,10 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       cache,
       networkId,
       collapsed,
+      editingSourceId,
+      lockedSources,
     );
-    return { networkId, cache, collapsed, deco, atomic };
+    return { networkId, cache, collapsed, editingSourceId, lockedSources, deco, atomic };
   },
   provide: (f) => EditorView.decorations.from(f, (s) => s.deco),
 });
@@ -535,6 +660,12 @@ export const transclusionClick = EditorView.domEventHandlers({
     const from = Number(el.dataset.mdFrom);
     const to = Number(el.dataset.mdTo);
     if (!Number.isFinite(from) || !Number.isFinite(to) || to - from < 2) return false;
+    // Блок в режиме правки не переводим в правку ссылки — каретка не нужна.
+    const ctx = transclusionAtCaret(view.state.doc.toString(), from + 1);
+    if (ctx !== null) {
+      const editing = view.state.field(transclusionState, false)?.editingSourceId ?? null;
+      if (editing !== null && editing === ctx.ref.sourceId) return true;
+    }
     let pos = from + 1;
     const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
     if (coords !== null && coords > from && coords < to) pos = coords;
@@ -546,6 +677,186 @@ export const transclusionClick = EditorView.domEventHandlers({
     return true;
   },
 });
+
+/* ------------------------------------------------------------------ *
+ * Режим правки блока и захват источника (задача f59d24e1)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Хост поля комментария: уведомление о входе/выходе из правки блока. Поле
+ * подменяет кнопки под полем на «Отменить/Сохранить трансклюзию»
+ * (элемент интерфейса `2b116d37`). Фасет необязателен — без хоста режим
+ * правки работает, но кнопки поля не переключаются.
+ */
+export interface TransclusionEditHost {
+  /** Режим правки блока включён (`true`) или выключен (`false`). */
+  onBlockEditChange(editing: boolean): void;
+}
+
+/** Фасет хоста поля: единственное значение (последнее — при нескольких). */
+const transclusionEditHostFacet = Facet.define<TransclusionEditHost, TransclusionEditHost | null>({
+  combine: (values) => values[values.length - 1] ?? null,
+});
+
+/** Расширение-хост для поля: уведомляет о входе/выходе из правки блока. */
+export function transclusionEditHostExtension(host: TransclusionEditHost): Extension {
+  return transclusionEditHostFacet.of(host);
+}
+
+/** Идентификатор источника в ссылке под позицией `pos`, либо `null`. */
+function transclusionSourceAt(view: EditorView, pos: number): string | null {
+  return transclusionAtCaret(view.state.doc.toString(), pos)?.ref.sourceId ?? null;
+}
+
+/** Выход из режима правки блока трансклюзии (кнопки/Esc; записи нет — e2c14673). */
+export function exitBlockEdit(view: EditorView): void {
+  view.dispatch({ effects: setBlockEdit.of(null) });
+}
+
+/** Вход в режим правки блока: двойной клик и Enter (элемент `2b116d37`). */
+export const transclusionEditGestures = [
+  Prec.high(
+    keymap.of([
+      {
+        key: 'Enter',
+        run: (view) => {
+          // Открытый автокомплит (мысли/разделы) обрабатывает Enter сам.
+          if (completionStatus(view.state) === 'active') return false;
+          const editing = view.state.field(transclusionState, false)?.editingSourceId ?? null;
+          // Внутри правки блока Enter не вставляет перевод строки (запись — e2c14673).
+          if (editing !== null) return true;
+          const sourceId = transclusionSourceAt(view, view.state.selection.main.head);
+          if (sourceId === null) return false;
+          view.dispatch({ effects: setBlockEdit.of(sourceId) });
+          return true;
+        },
+      },
+      {
+        key: 'Escape',
+        run: (view) => {
+          // Открытый автокомплит закрывает Escape сам.
+          if (completionStatus(view.state) === 'active') return false;
+          const editing = view.state.field(transclusionState, false)?.editingSourceId ?? null;
+          // Esc в правке блока выходит из неё, не отменяя правку всего поля.
+          if (editing === null) return false;
+          exitBlockEdit(view);
+          return true;
+        },
+      },
+    ]),
+  ),
+  EditorView.domEventHandlers({
+    dblclick: (event, view) => {
+      const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (coords === null) return false;
+      const sourceId = transclusionSourceAt(view, coords);
+      if (sourceId === null) return false;
+      const editing = view.state.field(transclusionState, false)?.editingSourceId ?? null;
+      if (editing === sourceId) return true;
+      view.dispatch({ effects: setBlockEdit.of(sourceId) });
+      return true;
+    },
+  }),
+] as const;
+
+/** Сравнивает карты чужих захватов (чтобы не слать лишние транзакции). */
+function sameLockMap(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const [key, value] of a) if (b.get(key) !== value) return false;
+  return true;
+}
+
+/**
+ * Плагин режима правки блока: держит захват мысли-источника, пока блок в
+ * правке (существующий механизм `lib/lock-guard.ts`, ADR `fdb1a271`), и ведёт
+ * карту чужих захватов для «замочка» (требование `647fa34a`). Сама запись в
+ * источник — задача `e2c14673`.
+ */
+const transclusionEditPlugin = ViewPlugin.fromClass(
+  class {
+    handle: LockHandle | null = null;
+    source: string | null = null;
+    host: TransclusionEditHost | null = null;
+    disposed = false;
+    /** Пересбор карты захватов уже запланирована (микрозадача). */
+    locksScheduled = false;
+    unsubscribe: () => void;
+
+    constructor(readonly view: EditorView) {
+      this.unsubscribe = subscribeLockCache(() => this.refreshLocks());
+      this.refreshLocks();
+      this.sync(this.view.state);
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.docChanged) this.refreshLocks();
+      const before = update.startState.field(transclusionState, false)?.editingSourceId ?? null;
+      const after = update.state.field(transclusionState, false)?.editingSourceId ?? null;
+      if (before !== after) this.sync(update.state);
+    }
+
+    /** Карта чужих захватов источников текущего документа. */
+    computeLocks(): Map<string, string> {
+      const next = new Map<string, string>();
+      for (const ref of parseTransclusions(this.view.state.doc.toString())) {
+        const row = otherHolder('thought', ref.sourceId);
+        if (row !== null) next.set(ref.sourceId, holderName(row));
+      }
+      return next;
+    }
+
+    /**
+     * Пересобирает карту чужих захватов источников документа. Диспатч
+     * откладывается в микрозадачу: плагин может вызываться из `update()`, где
+     * синхронный `dispatch` запрещён.
+     */
+    refreshLocks(): void {
+      if (this.disposed || this.locksScheduled) return;
+      this.locksScheduled = true;
+      queueMicrotask(() => {
+        this.locksScheduled = false;
+        if (this.disposed) return;
+        const state = this.view.state.field(transclusionState, false);
+        if (state === undefined) return;
+        const next = this.computeLocks();
+        if (sameLockMap(state.lockedSources, next)) return;
+        this.view.dispatch({ effects: setLockedSources.of(next) });
+      });
+    }
+
+    /** Реагирует на смену источника в правке: захват нового, снятие старого. */
+    sync(state: EditorState): void {
+      const next = state.field(transclusionState, false)?.editingSourceId ?? null;
+      this.host = state.facet(transclusionEditHostFacet);
+      if (next === this.source) return;
+      releaseHeld(this.handle);
+      this.handle = null;
+      this.source = next;
+      this.host?.onBlockEditChange(next !== null);
+      if (next === null) return;
+      const source = next;
+      void acquireOrShowBlocked('thought', source).then((outcome) => {
+        if (this.disposed || this.source !== source) return;
+        this.handle = lockHandleFromOutcome('thought', source, outcome);
+        if (outcome.kind === 'blocked') {
+          // Источник держит другой участник — в правку не входим, «замочек» уже
+          // показан картой захватов (lock-guard сам уведомил пользователя).
+          this.view.dispatch({ effects: setBlockEdit.of(null) });
+          this.refreshLocks();
+        }
+      });
+    }
+
+    destroy(): void {
+      this.disposed = true;
+      this.unsubscribe();
+      releaseHeld(this.handle);
+      this.handle = null;
+      this.host?.onBlockEditChange(false);
+    }
+  },
+);
 
 /** Плагин: догружает источники ссылок документа и наполняет кэш состояния. */
 const transclusionLoader = ViewPlugin.fromClass(
@@ -634,6 +945,8 @@ export const transclusionExtensions: Extension[] = [
   transclusionLoader,
   transclusionAtomicRanges,
   transclusionClick,
+  ...transclusionEditGestures,
+  transclusionEditPlugin,
 ];
 
 /** Текущая сеть или `null` (список сетей / ранний доступ). */

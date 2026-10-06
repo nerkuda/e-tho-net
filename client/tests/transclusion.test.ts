@@ -1,14 +1,16 @@
 /**
- * Unit tests трансклюзий комментариев (0.12.1, ТП2, задача f72a9134).
- * Проверяют чистые функции контекста/разделов/метки, сборку декораций трёх
- * режимов ссылки (блок, свёрнутая ссылка, правка с атомарным `#<id>`) и
- * итеративную развёртку с инжектируемым загрузчиком источников. Headless —
- * без DOM и сети.
+ * Unit tests трансклюзий комментариев (0.12.1, ТП2, задачи f72a9134 и
+ * f59d24e1). Проверяют чистые функции контекста/разделов/метки, сборку
+ * декораций трёх режимов ссылки (блок, свёрнутая ссылка, правка с атомарным
+ * `#<id>`), итеративную развёртку с инжектируемым загрузчиком источников,
+ * а также режим правки блока и «замочек» чужого захвата. Headless — без DOM и
+ * сети.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { EditorState } from '@codemirror/state';
 import { Decoration, type DecorationSet } from '@codemirror/view';
 
 import { parseTransclusions } from '@etn/markdown';
@@ -16,10 +18,12 @@ import { parseTransclusions } from '@etn/markdown';
 import {
   buildTransclusionDecorations,
   listSectionTitles,
+  setBlockEdit,
   transclusionAtCaret,
   transclusionCacheKey,
   transclusionInternals,
   transclusionLinkLabel,
+  transclusionState,
   type TransclusionSource,
   type TransclusionSourceLoader,
 } from '../src/renderer/editor/transclusion.js';
@@ -185,4 +189,102 @@ test('loadEntry: успешная развёртка отдаёт HTML без о
   assert.equal(entry.error, null);
   assert.equal(entry.exists, true);
   assert.ok((entry.html ?? '').includes('Заголовок'));
+});
+
+// ---------------------------------------------------------------------------
+// Режим правки блока и захват источника (задача f59d24e1)
+// ---------------------------------------------------------------------------
+
+/** Кэш с одним готовым блоком ссылки `ref`. */
+function cacheFor(ref: ReturnType<typeof parseTransclusions>[number]): Map<
+  string,
+  { title: string; exists: boolean; error: null; html: string }
+> {
+  return new Map([
+    [transclusionCacheKey(NET, ref), { title: 'Мысль', exists: true, error: null, html: '<p>тело</p>' }],
+  ]);
+}
+
+type BlockSpec = { block?: boolean; widget?: { editing?: boolean; sourceId?: string; lockedBy?: string | null } };
+
+test('buildTransclusionDecorations: источник в правке — блок с признаком editing', () => {
+  const src = `до ![[#${ID_A}]] после`;
+  const ref = parseTransclusions(src)[0]!;
+  // Каретка внутри ссылки — но режим правки блока перекрывает правку ссылки.
+  const inside = ref.start + 5;
+  const { deco, atomic } = buildTransclusionDecorations(
+    src,
+    { from: inside, to: inside },
+    cacheFor(ref),
+    NET,
+    new Set(),
+    ID_A,
+  );
+  const items = collect(deco, src.length);
+  assert.equal(items.length, 1);
+  const spec = items[0]!.value.spec as BlockSpec;
+  assert.equal(spec.block, true);
+  assert.equal(spec.widget?.editing, true);
+  assert.equal(spec.widget?.sourceId, ID_A);
+  assert.equal(spec.widget?.lockedBy, null);
+  assert.equal(atomic.size, 0, 'в правке блока токен #id не атомарен');
+});
+
+test('buildTransclusionDecorations: чужой захват источника — lockedBy в блоке', () => {
+  const src = `![[#${ID_A}]]`;
+  const ref = parseTransclusions(src)[0]!;
+  const { deco } = buildTransclusionDecorations(
+    src,
+    { from: 0, to: 0 },
+    cacheFor(ref),
+    NET,
+    new Set(),
+    null,
+    new Map([[ID_A, 'Алиса']]),
+  );
+  const spec = collect(deco, src.length)[0]!.value.spec as BlockSpec;
+  assert.equal(spec.widget?.lockedBy, 'Алиса');
+  assert.equal(spec.widget?.editing, false);
+});
+
+test('buildTransclusionDecorations: правка одного источника не задевает второй', () => {
+  const src = `![[#${ID_A}]] и ![[#${ID_B}]]`;
+  const refs = parseTransclusions(src);
+  const cache = new Map([
+    ...cacheFor(refs[0]!),
+    ...cacheFor(refs[1]!),
+  ]);
+  const { deco } = buildTransclusionDecorations(src, { from: 0, to: 0 }, cache, NET, new Set(), ID_A);
+  const specs = collect(deco, src.length).map((item) => item.value.spec as BlockSpec);
+  assert.equal(specs.length, 2);
+  assert.equal(specs[0]!.widget?.sourceId, ID_A);
+  assert.equal(specs[0]!.widget?.editing, true);
+  assert.equal(specs[1]!.widget?.sourceId, ID_B);
+  assert.equal(specs[1]!.widget?.editing, false);
+});
+
+test('transclusionState: setBlockEdit включает и выключает режим правки', () => {
+  const state = EditorState.create({
+    doc: `![[#${ID_A}]]`,
+    extensions: [transclusionState],
+  });
+  assert.equal(state.field(transclusionState).editingSourceId, null);
+  const entered = state.update({ effects: setBlockEdit.of(ID_A) }).state;
+  assert.equal(entered.field(transclusionState).editingSourceId, ID_A);
+  const exited = entered.update({ effects: setBlockEdit.of(null) }).state;
+  assert.equal(exited.field(transclusionState).editingSourceId, null);
+});
+
+test('transclusionState: вход в правку разворачивает свёрнутую ссылку', () => {
+  const src = `![[#${ID_A}]]`;
+  const ref = parseTransclusions(src)[0]!;
+  const key = transclusionCacheKey(NET, ref);
+  let state = EditorState.create({ doc: src, extensions: [transclusionState] });
+  state = state.update({
+    effects: transclusionInternals.setCollapsed.of({ key, collapsed: true }),
+  }).state;
+  assert.equal(state.field(transclusionState).collapsed.has(key), true);
+  state = state.update({ effects: setBlockEdit.of(ID_A) }).state;
+  assert.equal(state.field(transclusionState).collapsed.size, 0);
+  assert.equal(state.field(transclusionState).editingSourceId, ID_A);
 });

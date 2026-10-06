@@ -1188,6 +1188,23 @@
   font-weight: 500;
 }
 
+/* Правка блока трансклюзии (задача f59d24e1): рамка как у облачка, открытого
+   в редакторе; в правке кнопка смены ссылки скрыта. */
+.cm-editor .cm-transclusion-block--editing {
+  border-left-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* «Замочек» блока при чужом захвате источника (задача f59d24e1). */
+.cm-editor .cm-transclusion-lock {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: default;
+}
+
 /* Авто-упоминания мыслей в тексте комментариев (L24, 08-ui-spec.md §6.4):
    пунктирное подчёркивание отличает их от явных wiki-ссылок. */
 .thought-mention {

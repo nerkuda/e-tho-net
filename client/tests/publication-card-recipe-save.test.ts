@@ -175,6 +175,7 @@ function fakeMdEditor(initial: string): MdEditor {
     subscribe: () => () => undefined,
     setSearchHighlight: () => undefined,
     selectMatch: () => undefined,
+    exitTransclusionEdit: () => undefined,
     destroy: () => undefined,
   };
 }

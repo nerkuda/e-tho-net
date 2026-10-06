@@ -46,6 +46,7 @@ import { createCommentSearch } from './comment-search.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
+import { transclusionEditHostExtension } from './transclusion.js';
 import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
 import {
   buildCommentPasteLinks,
@@ -306,6 +307,12 @@ export function createMarkdownField(opts: {
         editor.blur();
         return true;
       }
+      // Кнопки «Отменить/Сохранить трансклюзию» под полем (элемент 2b116d37,
+      // задача f59d24e1): выход из правки блока; запись в источник — e2c14673.
+      if (command === 'transclusion.cancel' || command === 'transclusion.save') {
+        editor.exitTransclusionEdit();
+        return true;
+      }
       return false;
     },
     // Состояние кнопок тулбара обновляется по изменениям выделения/текста.
@@ -453,6 +460,9 @@ export function createMarkdownField(opts: {
 
   const showView = (): void => {
     const wasEditing = editor !== null && !area.classList.contains('hidden');
+    // Выход из правки поля снимает и режим правки блока трансклюзии (её захват
+    // источника) — иначе захват висел бы до пересборки редактора (f59d24e1).
+    if (wasEditing) editor?.exitTransclusionEdit();
     editing = false;
     deactivateFieldKeys();
     root.classList.remove('md-field--editing');
@@ -528,7 +538,15 @@ export function createMarkdownField(opts: {
       },
       // Точечное Prec.high-перекрытие сочетаний команд, которые иначе
       // «съедает» CM6 (Ctrl+I/U, Ctrl+Shift+K, Tab/Shift+Tab, Alt+↑/↓).
-      extraExtensions: [commentFieldKeymapExtension(), commentCollapseExtension(collapseState)],
+      extraExtensions: [
+        commentFieldKeymapExtension(),
+        commentCollapseExtension(collapseState),
+        // Хост правки блока трансклюзии (задача f59d24e1): пока блок в правке,
+        // под полем — кнопки «Отменить/Сохранить трансклюзию».
+        transclusionEditHostExtension({
+          onBlockEditChange: (editing) => modeActions.setBlockEditing(editing),
+        }),
+      ],
     });
     // Pasting files (screenshots / copied files) saves them as server-stored
     // attachments of the owner entity and inserts a markdown reference at the
