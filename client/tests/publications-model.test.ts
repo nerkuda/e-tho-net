@@ -375,8 +375,15 @@ describe('публикации: единая навигация, свёрнут�
     assert.equal(isShelfCollapsed('s1', new Set(['s1'])), true);
   });
 
-  it('состав меню публикации: открыть/удалить/читать/экспортировать (b51dbca4)', () => {
-    assert.deepEqual(publicationMenuCommands(), ['open', 'delete', 'read', 'exportMd', 'exportHtml']);
+  it('состав меню публикации: открыть/удалить/читать/экспортировать (b51dbca4, 178f4921)', () => {
+    assert.deepEqual(publicationMenuCommands(), [
+      'open',
+      'delete',
+      'read',
+      'exportMd',
+      'exportHtml',
+      'exportPdf',
+    ]);
   });
 
   it('состав меню полки: «Добавить публикацию» и «Удалить»', () => {

@@ -1314,20 +1314,23 @@ export interface RectLike {
 }
 
 /**
- * FLIP delta: the transform a cloud must START from so that, animating to
- * `transform: none`, it lands exactly at `after`. `sx`/`sy` scale a zone cloud
- * up into the larger focus cloud (and back). A zero-size target must not divide
- * by zero (`max(1, …)`).
+ * FLIP delta: the `translate` a cloud must START from so that, animating to
+ * `transform: none`, it lands exactly at `after` (viewport coordinates).
+ *
+ * Масштаб НЕ вычисляется вовсе (ошибка 9e1b87c9, уточнение спеки 0.11.2):
+ * переезжающие облачка с первого кадра имеют размер и вид своего НОВОГО слота,
+ * анимируется только положение. Прежний `scale()` искажал глифы, когда
+ * пропорции исходного и целевого слотов разные (фокус широкий и низкий, облачко
+ * зоны узкое и высокое — в 2–3 строки); любой единый коэффициент всё равно
+ * оставлял скачок на старте полёта. Поэтому функция отдаёт только сдвиг
+ * `dx/dy` — ровно то, чем ограничивается хореография (`canvas/transition.ts`).
+ * Ширина/высота входа не используются, но остаются в {@link RectLike}: дельта
+ * считается по прямоугольникам целиком, а нулевые размеры безопасны.
  */
-export function flipTransform(
-  before: RectLike,
-  after: RectLike,
-): { dx: number; dy: number; sx: number; sy: number } {
+export function flipTransform(before: RectLike, after: RectLike): { dx: number; dy: number } {
   return {
     dx: before.left - after.left,
     dy: before.top - after.top,
-    sx: before.width / Math.max(1, after.width),
-    sy: before.height / Math.max(1, after.height),
   };
 }
 

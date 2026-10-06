@@ -33,6 +33,8 @@ const FIXTURE: NetworkStats = {
   properties: 7,
   thoughts: { total: 12, active: 9, inactive: 2, trashed: 1 },
   links: { total: 20, active: 18, inactive: 1, trashed: 1 },
+  publications: { total: 6, active: 4, inactive: 1, trashed: 1 },
+  shelves: 3,
   layers: 2,
   attachments: { total: 5, files: 2, file_size_bytes: 1536 },
 };
@@ -100,23 +102,41 @@ describe('модель строк статистики (c69b078d)', () => {
     const rows = buildStatisticsRows(FIXTURE);
     assert.deepEqual(
       rows.map((r) => r.label),
-      ['Типы мыслей', 'Типы связей', 'Свойства мыслей', 'Мысли', 'Связи', 'Слои'],
+      [
+        'Типы мыслей',
+        'Типы связей',
+        'Свойства мыслей',
+        'Мысли',
+        'Связи',
+        'Публикации',
+        'Полки',
+        'Слои',
+      ],
     );
     assert.deepEqual(
       rows.map((r) => r.key),
-      ['thought_types', 'link_types', 'properties', 'thoughts', 'links', 'layers'],
+      [
+        'thought_types',
+        'link_types',
+        'properties',
+        'thoughts',
+        'links',
+        'publications',
+        'shelves',
+        'layers',
+      ],
     );
   });
 
-  it('разбивка заполнена только у мыслей и связей, у онтологии и слоёв — пусто', () => {
-    const [thoughtTypes, , properties, thoughts, links, layers] =
-      buildStatisticsRows(FIXTURE);
-    for (const row of [thoughtTypes!, properties!, layers!]) {
-      assert.equal(row.active, null);
+  it('разбивка заполнена только у мыслей, связей и публикаций; у онтологии, полок и слоёв — пусто', () => {
+    const byKey = new Map(buildStatisticsRows(FIXTURE).map((r) => [r.key, r]));
+    for (const key of ['thought_types', 'properties', 'shelves', 'layers']) {
+      const row = byKey.get(key)!;
+      assert.equal(row.active, null, `${key}: нет разбивки`);
       assert.equal(row.inactive, null);
       assert.equal(row.trashed, null);
     }
-    assert.deepEqual(thoughts, {
+    assert.deepEqual(byKey.get('thoughts'), {
       key: 'thoughts',
       label: 'Мысли',
       total: 12,
@@ -124,13 +144,29 @@ describe('модель строк статистики (c69b078d)', () => {
       inactive: 2,
       trashed: 1,
     });
-    assert.deepEqual(links, {
+    assert.deepEqual(byKey.get('links'), {
       key: 'links',
       label: 'Связи',
       total: 20,
       active: 18,
       inactive: 1,
       trashed: 1,
+    });
+    assert.deepEqual(byKey.get('publications'), {
+      key: 'publications',
+      label: 'Публикации',
+      total: 6,
+      active: 4,
+      inactive: 1,
+      trashed: 1,
+    });
+    assert.deepEqual(byKey.get('shelves'), {
+      key: 'shelves',
+      label: 'Полки',
+      total: 3,
+      active: null,
+      inactive: null,
+      trashed: null,
     });
   });
 

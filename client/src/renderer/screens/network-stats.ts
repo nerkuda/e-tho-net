@@ -2,8 +2,8 @@
  * Диалог «Статистика мыслесети» (задача c69b078d, версия 0.9.1).
  *
  * Показывает объём данных открытой мыслесети: типы мыслей/связей, свойства,
- * мысли и связи с разбивкой «всего / актуальные / неактуальные / в корзине»,
- * слои и вложения. Числа приходят одним запросом
+ * мысли, связи и публикации с разбивкой «всего / актуальные / неактуальные /
+ * в корзине», полки, слои и вложения. Числа приходят одним запросом
  * `GET /networks/{id}/statistics` и суммируются по всем слоям сети (в т.ч.
  * теневые копии слоёв — это объём хранения, а не число видимых сущностей).
  *
@@ -59,8 +59,8 @@ function breakdownRow(
 
 /**
  * Строки таблицы статистики в порядке отображения: типы мыслей, типы связей,
- * свойства, мысли, связи, слои. У онтологии и слоёв разбивки нет — в колонках
- * актуальности остаются пустые ячейки (не «—»).
+ * свойства, мысли, связи, публикации, полки, слои. У онтологии, полок и слоёв
+ * разбивки нет — в колонках актуальности остаются пустые ячейки (не «—»).
  */
 export function buildStatisticsRows(stats: NetworkStats): StatRow[] {
   return [
@@ -90,6 +90,15 @@ export function buildStatisticsRows(stats: NetworkStats): StatRow[] {
     },
     breakdownRow('thoughts', t('stats.row.thoughts'), stats.thoughts),
     breakdownRow('links', t('stats.row.links'), stats.links),
+    breakdownRow('publications', t('stats.row.publications'), stats.publications),
+    {
+      key: 'shelves',
+      label: t('stats.row.shelves'),
+      total: stats.shelves,
+      active: null,
+      inactive: null,
+      trashed: null,
+    },
     {
       key: 'layers',
       label: t('stats.row.layers'),

@@ -42,9 +42,9 @@ import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
+import { addLinkPropertyValue } from '../lib/link-property-write.js';
 import { notice } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
-import { signalPublicationCompositionChanged } from '../lib/live/index.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdLookupQuery, isNotFoundError } from '../lib/pure.js';
 import { buildEntityCombo, loadCrossNetworkCandidates, type LinkPropertyPick } from '../lib/entity-picker.js';
 import {
@@ -272,37 +272,6 @@ export async function openAddDialog(ctx: {
   });
   if (result === null) return;
   await insertIntoCanvas(networkId, ctx, result);
-}
-
-/**
- * Добавляет якорь в набор значения свойства-связи добавляемой мысли (ошибка
- * 1dd08949). Ключ записи — display-имя выбранной стороны; направление ребра
- * сервер выводит из имени сам, поэтому связь ложится в типизированное свойство.
- * Существующие цели набора ЧИТАЮТСЯ и объединяются с якорем: `properties.set`
- * заменяет набор целиком, а добавление связи не должно молча терять уже
- * проставленные значения (паритет с прежним аддитивным `ensureLink`).
- */
-async function addLinkPropertyValue(
-  networkId: string,
-  ownerId: string,
-  pick: LinkPropertyPick,
-  anchorId: string,
-): Promise<void> {
-  let existing: string[] = [];
-  try {
-    const values = await etn.properties.get(networkId, 'thought', ownerId);
-    const entry = values.find((v) => 'values' in v && v.property_id === pick.propertyId);
-    if (entry !== undefined && 'values' in entry) {
-      existing = entry.values.map((it) => it.target_id);
-    }
-  } catch {
-    /* набор не прочитался — пишем только якорь (лучше связь, чем отказ) */
-  }
-  const targets = existing.includes(anchorId) ? existing : [...existing, anchorId];
-  await etn.properties.set(networkId, 'thought', ownerId, pick.key, targets);
-  // Своё значение свойства-связи меняет состав публикации: сигнал слоя (до B1)
-  // с владельцем и якорем.
-  signalPublicationCompositionChanged([ownerId, anchorId]);
 }
 
 /** Creates/links every picked item (the old insertAll flow, L19 focus). */

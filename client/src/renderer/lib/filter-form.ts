@@ -52,6 +52,7 @@ import {
 } from './period-editor.js';
 import { todayLocal } from './dates.js';
 import type { ThoughtCloudInput } from './thought-cloud.js';
+import { registerThoughtDropField } from './thought-drop.js';
 import {
   FILTER_ORDERS,
   FILTER_SORTS,
@@ -369,6 +370,8 @@ export interface EntityChipSectionOptions {
 export interface EntityChipSection extends FilterSection {
   /** Перерисовать чипы (например, после догрузки облачков выбранных значений). */
   fieldRefresh: () => void;
+  /** Корень чип-поля — точка регистрации приёмника дропа мысли (d144ef71). */
+  fieldRoot: HTMLElement;
 }
 
 /** Секция выбора сущностей по общему чип-листу. */
@@ -392,7 +395,7 @@ export function buildEntityChipSection(ctx: FilterFormContext, opts: EntityChipS
   });
   if (opts.tooltip !== undefined) setTooltip(field.root, opts.tooltip);
   section.body.append(field.root);
-  return { ...section, fieldRefresh: field.refresh };
+  return { ...section, fieldRefresh: field.refresh, fieldRoot: field.root };
 }
 
 /**
@@ -482,6 +485,23 @@ export function buildParentThoughtsSection(
     ...(opts.picker !== undefined ? { picker: opts.picker } : {}),
   });
   sectionRef = section;
+  // Приёмник pointer-дропа мысли (d144ef71): мысль, брошенная из карты/панели/
+  // поля редактора на чип-лист корней, добавляется в «Родительские мысли» —
+  // ровно так же, как drop на панель «Хроники» (`chronicleFilterAdd`). Единая
+  // трактовка для всех панелей отбора: Структуры, Хроника, отбор типа мысли,
+  // рецепт публикации (все собирают эту секцию общим фасадом).
+  registerThoughtDropField(section.fieldRoot, {
+    kind: 'filter',
+    accept: (id: string): boolean => {
+      const values = ctx.getState().parentIds;
+      if (values.includes(id)) return false;
+      ctx.getState().parentIds = [...values, id];
+      resolveClouds();
+      ctx.touch();
+      section.fieldRefresh();
+      return true;
+    },
+  });
   resolveClouds();
   return { ...section, resolveClouds };
 }

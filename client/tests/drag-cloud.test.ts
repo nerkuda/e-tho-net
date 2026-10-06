@@ -1,8 +1,9 @@
 /**
- * Unit tests for the pure link-search helpers of the canvas drag module
- * (client/src/renderer/canvas/drag-cloud.ts). The DOM-driven drag/hit logic is
- * covered by manual/E2E checks; these tests pin down the directed-link lookup
- * that `linkToThought`/`moveFocusDirection` rely on.
+ * Unit tests for the canvas drag module (client/src/renderer/canvas/drag-cloud.ts).
+ * The pure link-search helpers (`flattenLinks`/`findDirectedLink`) are checked
+ * directly; the pointer-gesture contract is driven on the shared DOM shim
+ * (`dom-shim.ts`) — a mousedown on a drag source must suppress the native
+ * default so Chromium never starts a page-text selection (ошибка 036bdbe6).
  */
 
 import assert from 'node:assert/strict';
@@ -10,7 +11,13 @@ import { describe, it } from 'node:test';
 
 import type { Link, ThoughtLinksGrouped, ThoughtRef } from '@etn/shared';
 
-import { findDirectedLink, flattenLinks } from '../src/renderer/canvas/drag-cloud.js';
+import {
+  findDirectedLink,
+  flattenLinks,
+  wireCloudDrag,
+  wireExternalDragSource,
+} from '../src/renderer/canvas/drag-cloud.js';
+import { ShimElement } from './dom-shim.js';
 
 function link(id: string, sourceId: string, targetId: string, typeId: string | null = null): Link {
   return {
@@ -97,5 +104,95 @@ describe('findDirectedLink', () => {
 
   it('returns undefined for a non-existent pair', () => {
     assert.equal(findDirectedLink(grouped, 'X', 'Y'), undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Нативное выделение текста (ошибка 036bdbe6)
+// ---------------------------------------------------------------------------
+
+/** Ставит шим-`window` глобалью и отдаёт его (жест вешает слушатели окна). */
+function withWindow(): ShimElement {
+  const win = new ShimElement('window');
+  (globalThis as { window?: unknown }).window = win;
+  return win;
+}
+
+/**
+ * Шлёт `mousedown` на элементе. ShimElement не считает `defaultPrevented` сам,
+ * поэтому передаём собственный объект события с `preventDefault`, фиксирующий
+ * вызов (конвенция `dom-shim.ts`).
+ */
+function fireMouseDown(
+  el: ShimElement,
+  init: { button?: number; target?: ShimElement } = {},
+): { defaultPrevented: boolean } {
+  const state = { defaultPrevented: false };
+  el.emit('mousedown', {
+    button: init.button ?? 0,
+    clientX: 0,
+    clientY: 0,
+    target: init.target ?? el,
+    preventDefault: () => {
+      state.defaultPrevented = true;
+    },
+    stopPropagation: () => undefined,
+    shiftKey: false,
+    ctrlKey: false,
+    metaKey: false,
+  });
+  return state;
+}
+
+/** Завершает жест, чтобы модульный `gesture` не остался занятым. */
+function endGesture(win: ShimElement): void {
+  win.emit('mouseup', { clientX: 0, clientY: 0, shiftKey: false });
+}
+
+describe('жест перетаскивания гасит нативное выделение текста (ошибка 036bdbe6)', () => {
+  it('mousedown на чипе значения гасит дефолт и возвращает фокус чипу', () => {
+    const win = withWindow();
+    const chip = new ShimElement('div', 'prop-ref-cloud');
+    wireExternalDragSource(chip as unknown as HTMLElement, 'A', 'field-chip');
+
+    const result = fireMouseDown(chip);
+
+    assert.equal(
+      result.defaultPrevented,
+      true,
+      'дефолт не погашен — Chromium начнёт выделение текста страницы',
+    );
+    assert.equal(chip.focused, true, 'preventDefault снимает фокус мышью — его нужно вернуть');
+    endGesture(win);
+  });
+
+  it('mousedown на облачке карты (цель внутри .cloud) гасит дефолт', () => {
+    const win = withWindow();
+    const host = new ShimElement('div');
+    const cloud = new ShimElement('div', 'cloud');
+    cloud.dataset['id'] = 'A';
+    const inner = new ShimElement('span');
+    cloud.append(inner);
+    host.append(cloud);
+    wireCloudDrag(host as unknown as HTMLElement, { getZoneOrder: () => [] });
+
+    const result = fireMouseDown(host, { target: inner });
+
+    assert.equal(result.defaultPrevented, true);
+    assert.equal(cloud.focused, true);
+    endGesture(win);
+  });
+
+  it('нажатие, не начинающее жест, дефолт не гасит', () => {
+    withWindow();
+    const chip = new ShimElement('div', 'prop-ref-cloud');
+    wireExternalDragSource(chip as unknown as HTMLElement, 'A', 'field-chip');
+    assert.equal(fireMouseDown(chip, { button: 2 }).defaultPrevented, false);
+
+    const host = new ShimElement('div');
+    const free = new ShimElement('span');
+    host.append(free);
+    wireCloudDrag(host as unknown as HTMLElement, { getZoneOrder: () => [] });
+    assert.equal(fireMouseDown(host, { target: free }).defaultPrevented, false);
   });
 });

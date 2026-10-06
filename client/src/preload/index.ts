@@ -199,6 +199,7 @@ function buildApi(): EtnBridgeApi {
       usage: (networkId, thoughtId, query) =>
         invoke('publications.usage', networkId, thoughtId, query),
       export: (networkId, id, request) => invoke('publications.export', networkId, id, request),
+      exportPdf: (networkId, id) => invoke('publications.exportPdf', networkId, id),
       listShelves: (networkId) => invoke('publications.listShelves', networkId),
       createShelf: (networkId, input) => invoke('publications.createShelf', networkId, input),
       updateShelf: (networkId, id, input) => invoke('publications.updateShelf', networkId, id, input),

@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
@@ -23,6 +23,7 @@ import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
 import type { AppInfo, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
 import { classifyOpenTarget } from './open-target.js';
+import { printHtmlToPdf, type PdfPrintWindow } from '../print-pdf.js';
 import { errText } from '../../renderer/lib/dom.js';
 
 /** Shared state owned by the main process, injected into handlers. */
@@ -826,6 +827,84 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         request: Parameters<RestClient['exportPublication']>[2],
       ) => requireRest(deps).exportPublication(networkId, id, request),
     ),
+  );
+  /**
+   * Экспорт публикации в PDF (0.11.2, задача 178f4921): печатный HTML с сервера
+   * → скрытое окно Electron → `printToPDF` → диалог сохранения. Сервер PDF не
+   * формирует; формат «pdf» перехватывает клиент (ADR клиентской печати).
+   */
+  handlers.set(
+    'publications.exportPdf',
+    bind(async (networkId: string, id: string) => {
+      let html: string;
+      let slug: string;
+      try {
+        ({ html, slug } = await requireRest(deps).getPublicationPrintHtml(networkId, id));
+      } catch (err) {
+        return { saved_path: null, cancelled: false, error: errText(err) };
+      }
+
+      let pdf: Buffer;
+      try {
+        const { BrowserWindow } = await import('electron');
+        pdf = await printHtmlToPdf(html, {
+          createWindow: (): PdfPrintWindow => {
+            // Скрытое окно: не показывается и не перехватывает фокус.
+            const win = new BrowserWindow({
+              show: false,
+              webPreferences: { sandbox: false, contextIsolation: true, nodeIntegration: false },
+            });
+            return {
+              loadURL: (url) => win.loadURL(url),
+              webContents: {
+                printToPDF: (options) => win.webContents.printToPDF(options),
+                executeJavaScript: (code, userGesture) =>
+                  win.webContents.executeJavaScript(code, userGesture),
+              },
+              destroy: () => win.destroy(),
+            };
+          },
+          writeTempHtml: (content): string => {
+            const filePath = path.join(os.tmpdir(), `etn-pub-print-${randomUUID()}.html`);
+            writeFileSync(filePath, content, 'utf8');
+            return filePath;
+          },
+          removeFile: (filePath): void => {
+            try {
+              unlinkSync(filePath);
+            } catch {
+              // уже удалён — не ошибка
+            }
+          },
+        });
+      } catch (err) {
+        return { saved_path: null, cancelled: false, error: errText(err) };
+      }
+
+      const { dialog, BrowserWindow } = await import('electron');
+      const defaultName = `${slug !== '' ? slug : 'publication'}.pdf`;
+      const win = BrowserWindow.getFocusedWindow();
+      const save = win
+        ? await dialog.showSaveDialog(win, {
+            title: 'Сохранить PDF',
+            defaultPath: defaultName,
+            filters: [{ name: 'PDF', extensions: ['pdf'] }],
+          })
+        : await dialog.showSaveDialog({
+            title: 'Сохранить PDF',
+            defaultPath: defaultName,
+            filters: [{ name: 'PDF', extensions: ['pdf'] }],
+          });
+      if (save.canceled || save.filePath === undefined || save.filePath === '') {
+        return { saved_path: null, cancelled: true };
+      }
+      try {
+        writeFileSync(save.filePath, pdf);
+      } catch (err) {
+        return { saved_path: null, cancelled: false, error: errText(err) };
+      }
+      return { saved_path: save.filePath, cancelled: false };
+    }),
   );
   handlers.set(
     'publications.listShelves',

@@ -31,6 +31,7 @@ import {
   type PublicationExportEntry,
   type PublicationExportFormat,
   type PublicationExportReport,
+  type PublicationPrint,
 } from '@etn/shared';
 import {
   buildToc,
@@ -70,6 +71,13 @@ const ASSETS_DIR = 'assets';
 
 /** Размер короткого хеша содержимого ассета (hex-символов). */
 const ASSET_HASH_LENGTH = 8;
+
+/**
+ * Водяной знак печатного представления публикации (0.11.2, задача 178f4921).
+ * Полупрозрачный, повторяется на каждой печатной странице (CSS `position:
+ * fixed`), в обычный HTML-экспорт НЕ попадает — только в печать в PDF.
+ */
+export const PUBLICATION_PRINT_WATERMARK = 'Документ сгенерирован в ETN';
 
 /**
  * Потолок уровня заголовка: за H6 заголовок обезглавливается в абзац с жирным
@@ -195,13 +203,25 @@ function renderMarkdownSection(
 // HTML
 // ---------------------------------------------------------------------------
 
-/** Standalone printable HTML document (title, TOC, styles, sections). */
+/**
+ * Standalone printable HTML document (title, TOC, styles, sections).
+ *
+ * `watermark` (необязательно) добавляет полупрозрачный водяной знак на КАЖДУЮ
+ * печатную страницу (элемент с `position: fixed` повторяется Chromium при
+ * печати). Экспорт в файл передаёт `null`; печать в PDF — {@link
+ * PUBLICATION_PRINT_WATERMARK} (0.11.2, задача 178f4921).
+ */
 function renderHtmlDocument(
   document: PublicationExportDocument,
   coverSrc: string | null,
+  watermark: string | null = null,
 ): string {
   const { title } = document;
   const head = `<!doctype html>\n<html lang="ru">\n<head>\n<meta charset="utf-8">\n<title>${escapeHtml(title.title)}</title>\n<style>${PUBLICATION_HTML_STYLES}</style>\n</head>\n<body>\n`;
+  const watermarkHtml =
+    watermark === null
+      ? ''
+      : `<div class="pub-watermark" aria-hidden="true">${escapeHtml(watermark)}</div>\n`;
   const header: string[] = ['<header class="pub-title">'];
   if (coverSrc !== null) {
     header.push(`<img class="pub-cover" src="${escapeHtml(coverSrc)}" alt="">`);
@@ -224,7 +244,7 @@ function renderHtmlDocument(
   const toc = renderToc(buildToc(document.headings));
   const main = document.sections.map((s) => renderHtmlSection(s)).join('\n');
 
-  return `${head}${header.join('\n')}\n<nav class="pub-toc"><h2>Оглавление</h2>${toc}</nav>\n<main class="pub-body">\n${main}\n</main>\n</body>\n</html>\n`;
+  return `${head}${watermarkHtml}${header.join('\n')}\n<nav class="pub-toc"><h2>Оглавление</h2>${toc}</nav>\n<main class="pub-body">\n${main}\n</main>\n</body>\n</html>\n`;
 }
 
 /** Nested TOC list from the flat heading tree (`buildToc`). */
@@ -281,6 +301,8 @@ const PUBLICATION_HTML_STYLES = [
   '.pub-text{margin:1rem 0}',
   '.pub-extra{border-left:3px solid #d0d7de;padding-left:1rem;color:#57606a}',
   'img{max-width:100%}',
+  // Водяной знак печати: fixed → Chromium повторяет его на каждой странице PDF.
+  '.pub-watermark{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:3rem;font-weight:700;color:#000;opacity:.07;white-space:nowrap;pointer-events:none;z-index:2147483647}',
 ].join('');
 
 // ---------------------------------------------------------------------------
@@ -420,6 +442,142 @@ function applyAssetReplacements(text: string, replacements: Map<string, string>)
   let out = text;
   for (const [from, to] of replacements) out = out.split(from).join(to);
   return out;
+}
+
+/** MIME картинок-вложений, встраиваемых в печатный HTML как data-URI. */
+const INLINE_IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  ico: 'image/x-icon',
+};
+
+/** data-URI картинки-вложения или `null`, если файл прочитать не удалось. */
+function assetDataUri(absPath: string): string | null {
+  try {
+    const ext = path.extname(absPath).toLowerCase().replace('.', '');
+    const mime = INLINE_IMAGE_MIME[ext] ?? 'application/octet-stream';
+    return `data:${mime};base64,${readFileSync(absPath).toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Инлайн-встраивание серверных картинок в печатный HTML: каждый `etnimg://`
+ * URL из источников заменяется на data-URI (0.11.2, задача 178f4921).
+ * Отличие от {@link collectAssets} — картинки не копируются в `assets/`, а
+ * вклеиваются в документ, чтобы скрытое окно печати не зависело ни от схемы
+ * `etnimg`, ни от файлов на диске. Недоступное вложение — предупреждение, не
+ * падение (как в zip-экспорте).
+ */
+function collectInlineAssets(
+  ndb: NetworkDb,
+  sources: readonly string[],
+): { replacements: Map<string, string>; warnings: string[] } {
+  const replacements = new Map<string, string>();
+  const warnings: string[] = [];
+  const dir = attachmentsDir(ndb);
+  for (const url of collectEtnimgUrls(sources)) {
+    const abs = decodeEtnimgUrl(url);
+    if (abs === null) {
+      warnings.push(`вложение недоступно: не разобран URL ${url}`);
+      continue;
+    }
+    if (!isInsideAttachments(dir, abs)) {
+      warnings.push(`вложение недоступно: путь вне каталога сервера (${path.basename(abs)})`);
+      continue;
+    }
+    if (!existsSync(abs)) {
+      warnings.push(`вложение недоступно: файл не найден на сервере (${path.basename(abs)})`);
+      continue;
+    }
+    const uri = assetDataUri(abs);
+    if (uri === null) {
+      warnings.push(`вложение недоступно: не удалось прочитать файл (${path.basename(abs)})`);
+      continue;
+    }
+    replacements.set(url, uri);
+  }
+  return { replacements, warnings };
+}
+
+/**
+ * Обложка печатного HTML: внешний URL — как есть; вложение — data-URI (иначе
+ * `null` с предупреждением). Печатный аналог {@link resolveCoverSource}.
+ */
+function resolveCoverDataUri(
+  ndb: NetworkDb,
+  document: PublicationExportDocument,
+  warnings: string[],
+): string | null {
+  const { cover } = document.title;
+  if (cover.kind === 'url') return cover.ref;
+  if (cover.kind !== 'attachment' || cover.ref === null) return null;
+
+  const attachment = getAttachment(ndb, cover.ref);
+  if (attachment === null || attachment.kind !== 'file' || attachment.file_path === null) {
+    warnings.push('обложка-вложение недоступна');
+    return null;
+  }
+  const abs = attachment.file_path;
+  if (!isInsideAttachments(attachmentsDir(ndb), abs) || !existsSync(abs)) {
+    warnings.push(`обложка-вложение недоступна (${path.basename(abs)})`);
+    return null;
+  }
+  const uri = assetDataUri(abs);
+  if (uri === null) {
+    warnings.push(`обложка-вложение недоступна (${path.basename(abs)})`);
+    return null;
+  }
+  return uri;
+}
+
+/**
+ * Печатное представление публикации (0.11.2, задача 178f4921): тот же
+ * самодостаточный HTML, что у HTML-экспорта {@link renderHtmlDocument}
+ * (единый рендер — «превью и файл не расходятся»), плюс картинки-вложения,
+ * встроенные как data-URI, и водяной знак {@link PUBLICATION_PRINT_WATERMARK}.
+ * PDF формирует КЛИЕНТ скрытым окном Electron (`webContents.printToPDF`),
+ * сервер печатать не умеет (ADR клиентской печати; серверный PDF вне объёма).
+ *
+ * @returns `html` — готовый к печати документ, `slug` — детерминированное имя
+ *   файла публикации (клиент предложит `<slug>.pdf`), `warnings` — сборка.
+ */
+export function renderPublicationPrintHtml(
+  ndb: NetworkDb,
+  publicationId: string,
+  userId: string,
+  resolveUserName: (userId: string) => string | null,
+): PublicationPrint & { warnings: string[] } {
+  const pub = getPublication(ndb, publicationId);
+  if (pub === null) {
+    throw new EtnError('NOT_FOUND', `publication ${publicationId} not found`, {
+      entity: 'publication',
+      id: publicationId,
+    });
+  }
+  const document = buildPublicationExportDocument(ndb, publicationId, userId, resolveUserName);
+  const sources: string[] = [document.title.summary_md];
+  for (const section of flattenExportSections(document.sections)) {
+    sources.push(section.preamble_md);
+    for (const text of section.texts) sources.push(text.body_md);
+  }
+
+  const warnings = [...document.warnings];
+  const assets = collectInlineAssets(ndb, sources);
+  warnings.push(...assets.warnings);
+  const coverSrc = resolveCoverDataUri(ndb, document, warnings);
+  const rendered = renderHtmlDocument(document, coverSrc, PUBLICATION_PRINT_WATERMARK);
+  return {
+    html: applyAssetReplacements(rendered, assets.replacements),
+    slug: publicationSlug(pub.title),
+    warnings,
+  };
 }
 
 // ---------------------------------------------------------------------------

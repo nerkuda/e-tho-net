@@ -1,8 +1,9 @@
 /**
  * Интеграционные тесты `GET /networks/:id/statistics` (задача c69b078d, 0.9.1).
  *
- * Проверяются все счётчики сводки: онтология (типы/свойства), мысли и связи с
- * разбивкой «всего/актуальные/неактуальные/в корзине», слои и вложения.
+ * Проверяются все счётчики сводки: онтология (типы/свойства), мысли, связи и
+ * публикации с разбивкой «всего/актуальные/неактуальные/в корзине», полки,
+ * слои и вложения.
  * Ключевое свойство — числа суммируются ПО ВСЕМ слоям: теневая строка слоя
  * добавляется к «всего», надгробие — нет; сервисные (резервные) слои в счёт
  * слоёв не входят. Абсолютные значения онтологии зависят от сидинга сети,
@@ -87,7 +88,7 @@ describe(
   'GET /networks/:id/statistics',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
-    it('считает онтологию, мысли/связи с разбивкой, слои и вложения (сумма по слоям)', async () => {
+    it('считает онтологию, мысли/связи/публикации с разбивкой, полки, слои и вложения (сумма по слоям)', async () => {
       const ctx = await buildRestContext();
       try {
         // Базовая сводка: сеть только что создана (HOME + сидинг онтологии).
@@ -150,6 +151,83 @@ describe(
           now,
         );
 
+        // --- Публикации и полки: разбивка, сумма по слоям ------------------
+        const activePublication = randomUUID();
+        rawExec(
+          ctx,
+          `INSERT INTO publications (id, layer_id, title, active, deleted, marked_for_deletion,
+             base_version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, ?, 'Актуальная публикация', 1, 0, 0, 0, ?, 'u', ?, 'u')`,
+          activePublication,
+          BASE_LAYER_ID,
+          now,
+          now,
+        );
+        rawExec(
+          ctx,
+          `INSERT INTO publications (id, layer_id, title, active, deleted, marked_for_deletion,
+             base_version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, ?, 'Неактуальная публикация', 0, 0, 0, 0, ?, 'u', ?, 'u')`,
+          randomUUID(),
+          BASE_LAYER_ID,
+          now,
+          now,
+        );
+        rawExec(
+          ctx,
+          `INSERT INTO publications (id, layer_id, title, active, deleted, marked_for_deletion,
+             base_version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, ?, 'Публикация в корзине', 1, 0, 1, 0, ?, 'u', ?, 'u')`,
+          randomUUID(),
+          BASE_LAYER_ID,
+          now,
+          now,
+        );
+        // Живая теневая копия публикации в рабочем слое — «всего» растёт на 1.
+        rawExec(
+          ctx,
+          `INSERT INTO publications (id, layer_id, title, active, deleted, marked_for_deletion,
+             base_version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, ?, 'Актуальная публикация (слой)', 1, 0, 0, 1, ?, 'u', ?, 'u')`,
+          activePublication,
+          userLayer,
+          now,
+          now,
+        );
+        // Надгробие публикации в слое — скрытая строка, в счёт не входит.
+        rawExec(
+          ctx,
+          `INSERT INTO publications (id, layer_id, title, active, deleted, marked_for_deletion,
+             base_version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, ?, 'Надгробие публикации', 1, 1, 0, 1, ?, 'u', ?, 'u')`,
+          randomUUID(),
+          userLayer,
+          now,
+          now,
+        );
+        // Живая полка и её надгробие: считается только живая строка.
+        // Имя уникально (в сети уже есть дефолтная полка «Полка»).
+        rawExec(
+          ctx,
+          `INSERT INTO shelves (id, layer_id, title, title_key, position, deleted,
+             created_at, created_by, updated_at, updated_by)
+           VALUES (?, ?, 'Тестовая полка', 'тестовая полка', 1, 0, ?, 'u', ?, 'u')`,
+          randomUUID(),
+          BASE_LAYER_ID,
+          now,
+          now,
+        );
+        rawExec(
+          ctx,
+          `INSERT INTO shelves (id, layer_id, title, title_key, position, deleted,
+             created_at, created_by, updated_at, updated_by)
+           VALUES (?, ?, 'Тестовая полка-надгробие', 'тестовая полка-надгробие', 2, 1, ?, 'u', ?, 'u')`,
+          randomUUID(),
+          userLayer,
+          now,
+          now,
+        );
+
         // --- Связи: одна актуальная, одна в корзине ------------------------
         await setDescendants(ctx, ctx.homeId, [activeThought, inactiveThought]);
         await setDescendants(ctx, ctx.homeId, [activeThought]);
@@ -186,6 +264,15 @@ describe(
         assert.equal(after.data.links.active - base.data.links.active, 1);
         assert.equal(after.data.links.inactive - base.data.links.inactive, 0);
         assert.equal(after.data.links.trashed - base.data.links.trashed, 1);
+
+        // Публикации: +3 живых в основе +1 теневой слой (надгробие не считается).
+        assert.equal(after.data.publications.total - base.data.publications.total, 4);
+        assert.equal(after.data.publications.active - base.data.publications.active, 2);
+        assert.equal(after.data.publications.inactive - base.data.publications.inactive, 1);
+        assert.equal(after.data.publications.trashed - base.data.publications.trashed, 1);
+
+        // Полки: живая считается, надгробие — нет.
+        assert.equal(after.data.shelves - base.data.shelves, 1);
 
         // Слои: пользовательский считается, сервисный — нет.
         assert.equal(after.data.layers - base.data.layers, 1);

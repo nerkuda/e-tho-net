@@ -1326,12 +1326,13 @@ function openPublicationMenu(ev: MouseEvent, publication: Publication): void {
  * Пункты контекстного меню публикации (карточки полки и строки списка) —
  * ЕДИНЫЕ для обоих видов и обеих задач (55ee3c85, b51dbca4). Состав задаёт
  * чистая модель `publicationMenuCommands` (покрыта тестом): «Открыть»,
- * «Удалить», «Читать» и «Экспортировать» (подменю md/html).
+ * «Удалить», «Читать» и «Экспортировать» (подменю md/html/pdf). PDF собирает
+ * клиент печатью печатного HTML (0.11.2, задача 178f4921).
  */
 function publicationMenuItems(publication: Publication): MenuItem[] {
   const commands = publicationMenuCommands();
   const items: MenuItem[] = [];
-  let exportItems: MenuItem[] = [];
+  const exportItems: MenuItem[] = [];
   for (const command of commands) {
     switch (command) {
       case 'open':
@@ -1348,8 +1349,11 @@ function publicationMenuItems(publication: Publication): MenuItem[] {
         break;
       case 'exportHtml':
         exportItems.push(menuAction(t('publications.menu.exportHtml'), () => void runExport(publication.id, 'html')));
-        items.push(menuSubmenu(t('publications.menu.export'), exportItems), MENU_SEPARATOR);
-        exportItems = [];
+        break;
+      case 'exportPdf':
+        exportItems.push(
+          menuAction(t('publications.menu.exportPdf'), () => void runPdfExport(publication.id)),
+        );
         break;
       case 'delete':
         items.push(
@@ -1359,6 +1363,9 @@ function publicationMenuItems(publication: Publication): MenuItem[] {
         );
         break;
     }
+  }
+  if (exportItems.length > 0) {
+    items.push(menuSubmenu(t('publications.menu.export'), exportItems), MENU_SEPARATOR);
   }
   return items;
 }
@@ -1579,7 +1586,30 @@ function openWorkspaceExportMenu(publicationId: string, ev: MouseEvent): void {
   showMenuAt(ev.clientX, ev.clientY, [
     menuAction(t('publications.menu.exportMd'), () => void runExport(publicationId, 'md')),
     menuAction(t('publications.menu.exportHtml'), () => void runExport(publicationId, 'html')),
+    menuAction(t('publications.menu.exportPdf'), () => void runPdfExport(publicationId)),
   ]);
+}
+
+/**
+ * Экспорт публикации в PDF (0.11.2, задача 178f4921): печать самодостаточного
+ * HTML в PDF и сохранение — целиком в основном процессе
+ * (`publications.exportPdf`). Здесь только вызов и тост-уведомление о
+ * результате, в том же стиле, что `runExport`.
+ */
+async function runPdfExport(publicationId: string): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  try {
+    const result = await etn.publications.exportPdf(networkId, publicationId);
+    if (result.cancelled) return;
+    if (result.error !== undefined && result.error !== '') {
+      notice(t('publications.export.saveFailed', result.error), 'error');
+      return;
+    }
+    notice(t('publications.export.saved', result.saved_path ?? 'publication.pdf'), 'success');
+  } catch (err) {
+    notice(t('publications.export.failedReason', errText(err)), 'error');
+  }
 }
 
 /** Экспорт документа публикации: старт джобы → ожидание → сохранение zip. */

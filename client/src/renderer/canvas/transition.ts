@@ -8,6 +8,12 @@
  * by {@link captureClouds}. Inside a phase every movement starts at once; phase 2
  * starts strictly after phase 1 has finished.
  *
+ * Every mover (a clone or a real cloud) already carries the size and view of its
+ * NEW slot from the first frame — the size/view change happens instantaneously at
+ * the start of the move, and ONLY THE POSITION animates (clean `translate`, no
+ * `scale`; ошибка 9e1b87c9, уточнение спеки 0.11.2). Scaling a cloud distorted
+ * its glyphs whenever the old and new slots had different proportions.
+ *
  *   Phase 1 — simultaneous move (`--anim-focus-flight`). One clone of the new
  *     focus cloud flies from the selected cloud's old slot into the centre. At
  *     the SAME time the former focus leaves the centre — its held clone glides
@@ -283,15 +289,20 @@ function toLocal(hostRect: RectLike, r: RectLike): RectLike {
   return { left: r.left - hostRect.left, top: r.top - hostRect.top, width: r.width, height: r.height };
 }
 
-/** FLIP start transform as a CSS `transform` string. */
+/** FLIP start transform as a CSS `transform` string. Только перенос (ошибка
+ *  9e1b87c9, уточнение спеки 0.11.2): переезжающие облачка не меняют размер и
+ *  вид в полёте — клон уже стоит в целевом слоте в целевом размере, поэтому
+ *  анимируется одно положение. Прежний `scale()` искажал глифы при разной
+ *  форме старого и нового слотов. */
 function flipTo(before: RectLike, after: RectLike): string {
-  const { dx, dy, sx, sy } = flipTransform(before, after);
-  return `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+  const { dx, dy } = flipTransform(before, after);
+  return `translate(${dx}px, ${dy}px)`;
 }
 
 /** Transform placing an element that currently sits at `from` so it reads at
- *  `to` (the counterpart of {@link flipTo}'s start transform for a travel that
- *  is expressed as an END keyframe — the departing former-focus clone). */
+ *  `to` — the counterpart of {@link flipTo}'s start transform for a travel that
+ *  is expressed as a START keyframe while the clone already stands on the TARGET
+ *  rect (the departing former-focus clone and cross-zone clones). */
 function moveTo(from: RectLike, to: RectLike): string {
   return flipTo(to, from);
 }
@@ -533,43 +544,53 @@ export function playFocusTransition(
     const releasedAfter =
       plan.releasedFocus === null ? undefined : afterMap.get(plan.releasedFocus);
 
-    // Former focus: a clone of its old focus cloud starts in the centre and
+    // Former focus: a clone of its NEW-ZONE cloud (the same thought already in
+    // the size/view it will have at its destination) starts in the centre and
     // leaves in phase 1 — gliding into the former focus's new zone, or
     // dissolving in place when the thought is gone from the new layout. It
     // departs SIMULTANEOUSLY with the flyer (no waiting for the landing); the
     // real zone cloud stays hidden until the swap reveals it at the clone's
-    // landing spot, so no frame shows the same thought twice.
+    // landing spot, so no frame shows the same thought twice. Only the position
+    // animates (ошибка 9e1b87c9): the size/view swaps in the very first frame.
     if (plan.focusChanged && oldFocus !== undefined) {
-      overlay = oldFocus.el.cloneNode(true) as HTMLElement;
-      setStyle(overlay, 'opacity', '1');
-      placeClone(overlay, toLocal(hostRect, oldFocus));
-      layer.append(overlay);
       if (releasedAfter !== undefined) {
-        // `fill: 'forwards'` holds the end keyframe (the clone at its zone)
-        // until the swap reveals the real cloud: the baseline transform of the
-        // clone is the centre, so without the hold a race between the animation
-        // end and `setTimeout(swap, flight)` could flash it back into the centre.
+        overlay = releasedAfter.el.cloneNode(true) as HTMLElement;
+        setStyle(overlay, 'opacity', '1');
+        placeClone(overlay, toLocal(hostRect, releasedAfter));
+        layer.append(overlay);
+        // `fill: 'forwards'` holds the end keyframe (the clone at `transform:
+        // none`, its zone rect) until the swap reveals the real cloud: the
+        // clone's baseline is its zone rect, so without the hold a race between
+        // the animation end and `setTimeout(swap, flight)` could flash it back
+        // to the centre.
         play(
           overlay,
-          [{ transform: 'none' }, { transform: moveTo(oldFocus, releasedAfter) }],
+          [{ transform: moveTo(releasedAfter, oldFocus) }, { transform: 'none' }],
           tokens.flight,
           tokens.ease,
           0,
           'forwards',
         );
-      } else if (tokens.fade > 0) {
-        const el = overlay;
-        play(el, [{ opacity: '1' }, { opacity: '0' }], tokens.fade, 'ease-out', 0, 'forwards');
-        schedule(() => {
-          if (overlay === el) overlay = null;
-          el.remove();
-        }, tokens.fade);
+      } else {
+        overlay = oldFocus.el.cloneNode(true) as HTMLElement;
+        setStyle(overlay, 'opacity', '1');
+        placeClone(overlay, toLocal(hostRect, oldFocus));
+        layer.append(overlay);
+        if (tokens.fade > 0) {
+          const el = overlay;
+          play(el, [{ opacity: '1' }, { opacity: '0' }], tokens.fade, 'ease-out', 0, 'forwards');
+          schedule(() => {
+            if (overlay === el) overlay = null;
+            el.remove();
+          }, tokens.fade);
+        }
       }
     }
 
     // Flyer: a clone of the NEW focus cloud starting exactly where the
     // selection was — the selected cloud's old slot, or the clicked panel
-    // element (external origin), growing into the focus slot.
+    // element (external origin). It already carries the focus slot's size/view
+    // (no scaling); only its position animates into the centre (ошибка 9e1b87c9).
     if (plan.focusChanged && newFocus !== undefined && flightOrigin !== null && tokens.flight > 0) {
       flyer = newFocus.el.cloneNode(true) as HTMLElement;
       setStyle(flyer, 'opacity', '1');
@@ -619,16 +640,18 @@ export function playFocusTransition(
       if (tokens.flight <= 0) continue;
       const clone = a.el.cloneNode(true) as HTMLElement;
       setStyle(clone, 'opacity', '1');
-      placeClone(clone, toLocal(hostRect, b));
+      // The clone already carries its new slot's size/view and sits on the NEW
+      // rect; only its position animates from the old slot (ошибка 9e1b87c9).
+      placeClone(clone, toLocal(hostRect, a));
       layer.append(clone);
       remember(a.el);
       setStyle(a.el, 'opacity', '0');
       zoneClones.push({ clone, real: a.el });
-      // `fill: 'forwards'` holds the landed frame until `swap` removes the clone
-      // and reveals the real cloud at the very same spot.
+      // `fill: 'forwards'` holds the landed frame (`transform: none`) until
+      // `swap` removes the clone and reveals the real cloud at the very same spot.
       play(
         clone,
-        [{ transform: 'none' }, { transform: moveTo(b, a) }],
+        [{ transform: moveTo(a, b) }, { transform: 'none' }],
         tokens.flight,
         tokens.ease,
         0,

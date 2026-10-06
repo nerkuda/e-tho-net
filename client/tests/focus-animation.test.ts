@@ -272,13 +272,70 @@ describe('transition: плавная смена фокуса (задача e9f0a
       assert.equal(m.options.delay, 0, 'в фазе 1 движения стартуют одновременно');
       assert.equal(m.options.duration, 400, 'фаза 1 идёт по токену flight');
     }
-    // Базовый transform уезжающего клона — центр (старт), поэтому конечный кадр
-    // обязан удерживаться до свопа: иначе гонка конца анимации с
+    // Уезжающий клон бывшего фокуса уже стоит на целевом прямоугольнике своей
+    // зоны и стартует переносом к центру, приземляясь в `transform: none`.
+    // Конечный кадр обязан удерживаться до свопа: иначе гонка конца анимации с
     // `setTimeout(swap, flight)` может на кадр вернуть клон в центр.
-    const depart = created.find((a) => a.keyframes[0]?.transform === 'none');
+    const depart = created.find(
+      (a) => a.el.dataset['id'] === 'f' && a.keyframes[1]?.transform === 'none',
+    );
     assert.ok(depart !== undefined, 'уезжающий клон бывшего фокуса');
+    assert.equal(depart.keyframes[0]?.transform, 'translate(300px, 0px)', 'стартует из центра переносом');
     assert.equal(depart.options.fill, 'forwards', 'конечный кадр удержан до свопа');
     assert.equal(created.filter((a) => a.options.delay > 0).length, 0, 'входа нет — фазы 2 нет');
+  });
+
+  it('перелёты — чистый перенос без масштаба, клоны несут целевой размер/вид (ошибка 9e1b87c9)', async () => {
+    const T = await load();
+    // Фокус широкий и низкий; выбранное облачко зоны — узкое и высокое.
+    // Пропорции старого и нового слотов РАЗНЫЕ — прежний scale() искажал глифы.
+    const host = makeHost([
+      cloud('f', 'focus', rect(400, 100, 200, 80)),
+      cloud('a', 'children', rect(100, 500, 150, 120)),
+    ]);
+    const before = T.captureClouds(host as unknown as HTMLElement);
+    relayout(host, [
+      cloud('a', 'focus', rect(400, 100, 300, 60)),
+      cloud('f', 'children', rect(100, 500, 150, 120)),
+    ]);
+
+    T.playFocusTransition(host as unknown as HTMLElement, before);
+
+    // (а) Ни один transform перелёта не содержит `scale(` — только translate.
+    const transforms = created.flatMap((a) =>
+      a.keyframes.map((k) => String(k.transform)).filter((t) => t !== 'undefined' && t !== 'none'),
+    );
+    assert.ok(transforms.length >= 2, 'есть transform-анимации перелёта');
+    for (const t of transforms) {
+      assert.equal(t.includes('scale('), false, `transform без scale: ${t}`);
+      assert.match(t, /^translate\(-?[\d.]+px, -?[\d.]+px\)$/, `чистый перенос: ${t}`);
+    }
+
+    // Клон выбранной мысли летит из старого слота (100,500) в целевой фокус
+    // (400,100): dx = −300, dy = 400.
+    const flyer = created.find(
+      (a) => a.el.dataset['id'] === 'a' && a.keyframes[1]?.transform === 'none',
+    );
+    assert.ok(flyer !== undefined, 'клон выбранной мысли летит в центр');
+    assert.equal(flyer.keyframes[0]?.transform, 'translate(-300px, 400px)', 'только перенос');
+
+    // (б) Клон бывшего фокуса несёт ЦЕЛЕВОЙ прямоугольник/вид (облачко зоны
+    // 150×120), а не старый фокус-слот 200×80: он уже стоит в целевом размере
+    // и уезжает из центра домой переносом.
+    const overlay = layer(host)?.querySelectorAll('.cloud').find((c) => c.dataset['id'] === 'f');
+    assert.ok(overlay !== undefined, 'клон бывшего фокуса — облачко его новой зоны');
+    assert.equal(overlay?.style.getPropertyValue('width'), '150px', 'ширина — целевого слота');
+    assert.equal(overlay?.style.getPropertyValue('height'), '120px', 'высота — целевого слота');
+    const depart = created.find((a) => a.el === overlay);
+    assert.ok(depart !== undefined, 'анимация уезжающего клона');
+    assert.equal(
+      depart?.keyframes[0]?.transform,
+      'translate(300px, -400px)',
+      'старт-кадр — перенос к центру (oldFocus − releasedAfter)',
+    );
+    assert.equal(depart?.keyframes[1]?.transform, 'none', 'приземляется в свою зону');
+    assert.equal(depart?.options.fill, 'forwards', 'конечный кадр удержан до свопа');
+    T.finishFocusTransition();
   });
 
   it('фаза 1: перестановка внутри зоны без смены зоны тоже анимируется', async () => {
@@ -346,12 +403,13 @@ describe('transition: плавная смена фокуса (задача e9f0a
       'реальное облачко скрыто на новом слоте до свопа',
     );
     // Клон летит из старого слота (children 220,500) в новый (siblings 700,100):
-    // dx = 480, dy = -400, масштаб 1. Конечный кадр удержан до свопа.
+    // dx = −480, dy = 400, без масштаба (клон уже целевого размера). Конечный
+    // кадр удержан до свопа.
     const cloneAnims = created.filter((a) => a.el === clone);
     assert.equal(cloneAnims.length, 1, 'ровно одна transform-анимация клона');
     const move = cloneAnims[0]!;
-    assert.equal(move.keyframes[0]?.transform, 'none', 'клон стартует из старого слота');
-    assert.equal(move.keyframes[1]?.transform, 'translate(480px, -400px) scale(1, 1)');
+    assert.equal(move.keyframes[0]?.transform, 'translate(-480px, 400px)', 'клон стартует из старого слота');
+    assert.equal(move.keyframes[1]?.transform, 'none', 'приземляется на новом слоте');
     assert.equal(move.options.duration, 400, 'фаза 1 идёт по токену flight');
     assert.equal(move.options.delay, 0, 'переезд одновременен с остальными видимыми');
     assert.equal(move.options.fill, 'forwards', 'конечный кадр удержан до свопа');
@@ -424,14 +482,14 @@ describe('transition: плавная смена фокуса (задача e9f0a
       assert.equal(e.keyframes[1]?.opacity, '1');
       assert.equal(e.options.delay > 0, true, 'фаза 2 не стартует раньше фазы 1');
     }
-    // Стартовые трансформы: предок/потомок — из облачка фокуса «a»
-    // (scale 2,2 — фокус вдвое больше зоны), родственник — из облачка своего
-    // предка «p» (scale 1,1 — размеры совпадают).
+    // Стартовые трансформы: предок/потомок — из облачка фокуса «a», родственник
+    // — из облачка своего предка «p». Только перенос, целевой размер у каждого
+    // своего слота (масштаба нет — ошибка 9e1b87c9).
     const starts = entries.map((e) => String(e.keyframes[0]?.transform)).sort();
     assert.deepEqual(starts, [
-      'translate(-600px, 0px) scale(1, 1)',
-      'translate(300px, -400px) scale(2, 2)',
-      'translate(300px, 0px) scale(2, 2)',
+      'translate(-600px, 0px)',
+      'translate(300px, -400px)',
+      'translate(300px, 0px)',
     ].sort());
     T.finishFocusTransition();
   });
@@ -445,7 +503,8 @@ describe('transition: плавная смена фокуса (задача e9f0a
     T.playFocusTransition(host as unknown as HTMLElement, before);
     const entering = created.find((a) => a.options.delay === 400);
     assert.ok(entering !== undefined, 'новое облачко проявляется');
-    assert.match(String(entering.keyframes[0]?.transform), /scale\(2, 2\)/);
+    assert.equal(String(entering.keyframes[0]?.transform), 'translate(300px, -400px)', 'только перенос из облачка фокуса');
+    assert.equal(String(entering.keyframes[0]?.transform).includes('scale('), false, 'без масштаба');
     T.finishFocusTransition();
   });
 

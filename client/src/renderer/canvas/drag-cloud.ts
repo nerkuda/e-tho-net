@@ -34,6 +34,10 @@
  * drags in several ways (Alt+drag is link selection, a lone Alt focuses the
  * menu bar), and a gesture reads the modifiers live mid-drag anyway. The
  * per-zone ellipse-drag gesture (canvas.ts, `wireEllipseDrag`) is untouched.
+ * Every source suppresses the native default on mousedown (like the ellipse
+ * gesture), so the press selects no page text; a focusable source (value chip,
+ * cloud — `tabIndex = 0`) gets its mouse focus restored explicitly (ошибка
+ * 036bdbe6).
  *
  * Existing links are reused (server 409 → no-op); the reverse link, if any, is
  * removed first and its type carried over to the new link.
@@ -54,13 +58,18 @@ import {
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { store } from '../state.js';
 import { TABLE_ROW_KEY_ATTR } from '../lib/ui/table.js';
+import {
+  openLinkPropertyDropDialog,
+  resolveFieldDrop,
+  resolveThoughtDropField,
+} from '../lib/thought-drop.js';
 import { DRAG_THRESHOLD_PX, requestZoneAnimation, suppressNextCanvasClick } from './canvas.js';
 
 type OrderableDir = 'parents' | 'children';
 type ZoneDir = 'parents' | 'children' | 'siblings';
 type LinkMode = 'parent' | 'child';
 /** Where the drag started: a zone cloud or a thought list (selection/history/pinned/chronicle). */
-type DragOrigin = 'cloud' | 'selection' | 'history' | 'pinned' | 'chronicle';
+type DragOrigin = 'cloud' | 'selection' | 'history' | 'pinned' | 'chronicle' | 'field-chip';
 
 interface DraggedCloud {
   id: string;
@@ -81,6 +90,8 @@ type DropKind =
   | 'chronicle-attach'
   | 'chronicle-new'
   | 'chronicle-filter'
+  | 'field-add'
+  | 'link-dialog'
   | 'none';
 
 interface DropTarget {
@@ -95,6 +106,8 @@ interface DropTarget {
   zoneDir?: ZoneDir;
   /** Insertion index into the zone's order without the dragged id (reorder). */
   insertIndex?: number;
+  /** Field container the drop lands in (field-add) — resolved at drop time. */
+  fieldEl?: HTMLElement;
   /** Element to highlight and the class to apply. */
   highlightEl?: HTMLElement;
   highlightCls?: string;
@@ -107,6 +120,11 @@ interface CloudDragGesture {
   origin: DragOrigin;
   /** True when the gesture started on a dropdown row — the menu must close on drop. */
   fromMenu?: boolean;
+  /** Field container the drag started in (origin `field`) — a plain move between
+   *  two DIFFERENT fields removes the thought from the source (Shift — copy). */
+  sourceField?: HTMLElement;
+  /** Removes the thought from the field it was dragged out of (move, no Shift). */
+  removeFromSource?: () => void;
   startX: number;
   startY: number;
   active: boolean;
@@ -184,20 +202,38 @@ export function wireCloudDrag(host: HTMLElement, acc: DragAccessors): void {
  * dropdown row) as a drag source of the same gesture. A list entry has no zone
  * of origin: Ctrl+Shift reorder is unavailable, and a drop on the parents/
  * children zones links it to the focused thought instead of flipping a link.
+ *
+ * The same entry point serves a **link-property value field** (`origin: 'field-chip'`,
+ * задача d144ef71): the chip passes its field container (`sourceField`) and the
+ * callback that removes the thought from that field (`removeFromSource`), so a
+ * plain drop into ANOTHER field moves the value while Shift copies it.
  */
 export function wireExternalDragSource(
   el: HTMLElement,
   id: string,
   origin: Exclude<DragOrigin, 'cloud'>,
-  opts?: { fromMenu?: boolean },
+  opts?: { fromMenu?: boolean; sourceField?: HTMLElement; removeFromSource?: () => void },
 ): void {
   el.addEventListener('mousedown', (event) => {
     if (event.button !== 0 || gesture !== null) return;
+    // Suppress the native default for the whole gesture (mousedown → mouseup).
+    // This is a pointer gesture, not HTML5 drag-n-drop, so without it Chromium
+    // starts a native text selection that ends where the pointer is released —
+    // invisible on the canvas (`user-select: none`), clearly visible in the
+    // editor, where the value chip sits among selectable text (ошибка 036bdbe6,
+    // регрессия задачи d144ef71). `preventDefault` also drops the mouse focus of
+    // a focusable source, so it is restored explicitly (`el` is `tabIndex = 0`
+    // with its own keydown handlers). The same idiom guards the ellipse gesture
+    // (canvas.ts, `wireEllipseDrag`), but only once the gesture truly starts.
+    event.preventDefault();
+    el.focus({ preventScroll: true });
     gesture = {
       id,
       dir: undefined,
       origin,
       fromMenu: opts?.fromMenu === true,
+      ...(opts?.sourceField !== undefined ? { sourceField: opts.sourceField } : {}),
+      ...(opts?.removeFromSource !== undefined ? { removeFromSource: opts.removeFromSource } : {}),
       startX: event.clientX,
       startY: event.clientY,
       active: false,
@@ -229,6 +265,13 @@ function onCloudMouseDown(event: MouseEvent): void {
   const rawDir = cloud.dataset['dir'];
   const dir: OrderableDir | undefined =
     rawDir === 'parents' || rawDir === 'children' ? rawDir : undefined;
+  // Suppress the native default for the whole gesture (mousedown → mouseup) —
+  // a pointer drag is not HTML5 DnD, so Chromium would otherwise start a native
+  // text selection (ошибка 036bdbe6, регрессия задачи d144ef71); the cloud keeps
+  // its mouse focus (same idiom as the ellipse gesture). Only after the checks
+  // above — an unrelated press inside the host stays untouched.
+  event.preventDefault();
+  cloud.focus({ preventScroll: true });
   gesture = {
     id,
     dir,
@@ -329,6 +372,27 @@ function onCloudMouseUp(event: MouseEvent): void {
       break;
     case 'chronicle-filter':
       dropActions.chronicleFilterAdd?.(g.id);
+      break;
+    case 'field-add': {
+      // Add to the field under the cursor. A plain move out of a DIFFERENT
+      // LINK-VALUE field then removes the thought from its source (Shift —
+      // copy); a drop into a filter field (parent thoughts / filter panel) only
+      // adds — the property value in the editor must not be lost (d144ef71).
+      const fieldEl = target.fieldEl!;
+      const field = resolveThoughtDropField(fieldEl);
+      const accepted = field?.handlers.accept(g.id) ?? false;
+      const plan = resolveFieldDrop({
+        accepted,
+        originIsField: g.origin === 'field-chip',
+        sameField: g.sourceField !== undefined && g.sourceField === fieldEl,
+        copy: event.shiftKey,
+        targetMovable: field?.handlers.kind === 'link-value',
+      });
+      if (plan.removeFromSource) g.removeFromSource?.();
+      break;
+    }
+    case 'link-dialog':
+      void openLinkPropertyDropDialog({ draggedId: g.id, targetId: target.targetThoughtId! });
       break;
     default:
       // A Ctrl+Shift drop that ends in a no-op usually means the zone is not
@@ -431,6 +495,20 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
     };
   }
 
+  // Link-property value fields (editor) and the «Родительские мысли» fields of
+  // the filter panels register themselves as thought drop fields (задача
+  // d144ef71). Checked before the cloud/zone branches so a drop onto a CHIP
+  // inside such a field means "add to this field", not "link to this cloud".
+  const fieldTarget = resolveThoughtDropField(el);
+  if (fieldTarget !== null) {
+    return {
+      kind: 'field-add',
+      fieldEl: fieldTarget.el,
+      highlightEl: fieldTarget.el,
+      highlightCls: 'drop-target-add',
+    };
+  }
+
   // The chronicle view (L20): drops inside its own DOM. A row attaches the
   // dragged thought to that row's comment; the table head/empty space starts a
   // new comment; the filter panel adds the thought to the «мысли» field.
@@ -480,6 +558,24 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
     return { kind: 'open-history', highlightEl: historyBar, highlightCls: 'drop-target-add' };
   }
 
+  // A thought dragged OUT of a link-property field dropped on ANY cloud opens
+  // the link-property chooser instead of the zone semantics below: the user
+  // picks the property (and thus the edge direction) explicitly (d144ef71).
+  // Chips inside a REGISTERED field are caught by the field check above; here we
+  // cover the remaining thought representations — map/zones/lists (`.cloud`) and
+  // chips outside link fields (`.prop-ref-cloud`, e.g. entity combos).
+  if (dragged.origin === 'field-chip') {
+    const dropCloud = el.closest<HTMLElement>('.cloud[data-id], .prop-ref-cloud[data-id]');
+    if (dropCloud !== null && dropCloud.dataset['id'] !== dragged.id) {
+      return {
+        kind: 'link-dialog',
+        targetThoughtId: dropCloud.dataset['id'],
+        highlightEl: dropCloud,
+        highlightCls: 'drop-target-link',
+      };
+    }
+  }
+
   const cloud = el.closest<HTMLElement>('.cloud');
   if (cloud !== null && cloud.dataset['id'] !== undefined && cloud.dataset['id'] !== dragged.id) {
     const targetThoughtId = cloud.dataset['id'];
@@ -523,6 +619,11 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
   if (zone !== null) {
     const zdir = zone.dataset['dir'];
     if (zdir === 'siblings') return { kind: 'none' };
+    // A thought dragged from a link-property field has no zone of origin: the
+    // move/reorder semantics below would flip a link to the focused thought,
+    // which reads as an accidental edit — the field drag only targets fields,
+    // panels and clouds (d144ef71).
+    if (dragged.origin === 'field-chip') return { kind: 'none' };
     if (zdir === 'parents' || zdir === 'children') {
       // A plain (or Ctrl) drag never reorders: a drop inside the dragged's own
       // zone is a no-op; a drop on the other zone flips the link direction.

@@ -59,6 +59,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history and tags: the notes step reads the previous tag and the
+          # annotated tag message.
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -66,8 +70,21 @@ jobs:
           # artifact of build-push-action must not reach the release.
           pattern: etn-*
           merge-multiple: true
+      - name: Prepare release notes
+        id: notes
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          prev_tag="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+          title="$(git tag -l --format='%(contents:subject)' "${tag}")"
+          if [ -z "${title}" ]; then title="ETN ${version}"; fi
+          args=(--version "${version}" --out release-body.md)
+          if [ -n "${prev_tag}" ]; then args+=(--prev-tag "${prev_tag}"); fi
+          node server/scripts/release-notes.mjs "${args[@]}"
+          echo "name=${title}" >> "${GITHUB_OUTPUT}"
       - uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
+          name: ${{ steps.notes.outputs.name }}
+          body_path: release-body.md
           files: |
             artifacts/*
