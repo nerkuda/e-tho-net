@@ -24,6 +24,7 @@ import {
   updateComment,
 } from '../src/domain/comment-service.js';
 import { renderMarkdown } from '@etn/markdown';
+import { acquireLock } from '../src/domain/lock-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -520,6 +521,64 @@ describe(
         };
         assert.equal(updated.owner_id, home.id, 'comment re-attached to HOME');
         assert.equal(listComments(ndb, 'thought', home.id).length, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+
+describe(
+  'comment-service: захват владельца блокирует запись (ошибка 68be6829)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    const ALICE = '00000000-0000-4000-8000-00000000a11ce';
+    const BOB = '00000000-0000-4000-8000-00000000b0b00';
+
+    it('правка чужого комментария при захвате мысли-владельца — 409 LOCKED', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Источник');
+        const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: 'исходный' }, ALICE);
+        acquireLock(ndb, { entityType: 'thought', entityId: t, userId: ALICE, clientId: 'alice-cli' });
+        assert.throws(
+          () => updateComment(ndb, c.id, { body_md: 'правка Боба' }, undefined, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.equal(getCommentsPreview(ndb, 'thought', t).permanent?.body_md, 'исходный');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('правка комментария держателем захвата проходит', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Источник');
+        const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: 'исходный' }, ALICE);
+        acquireLock(ndb, { entityType: 'thought', entityId: t, userId: ALICE, clientId: 'alice-cli' });
+        const updated = updateComment(ndb, c.id, { body_md: 'правка Алисы' }, undefined, ALICE);
+        assert.equal(updated.body_md, 'правка Алисы');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('создание и удаление комментария при чужом захвате — 409 LOCKED', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Источник');
+        const c = createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'x' }, ALICE);
+        acquireLock(ndb, { entityType: 'thought', entityId: t, userId: ALICE, clientId: 'alice-cli' });
+        assert.throws(
+          () => createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'новая' }, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.throws(
+          () => deleteComment(ndb, c.id, undefined, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.equal(listComments(ndb, 'thought', t).length, 1, 'комментарий не удалён');
       } finally {
         ndb.close();
       }

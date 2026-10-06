@@ -43,6 +43,7 @@ import { renderMarkdown } from '@etn/markdown';
 
 import { applySectionOps, type EditOp } from './markdown-sections.js';
 import { normaliseInstant } from './dates.js';
+import { enforceLock } from './lock-service.js';
 import type { BodyExpander } from './transclusion-service.js';
 import type { NetworkDb } from '../db/network-db.js';
 import {
@@ -186,6 +187,31 @@ function hasBindingOutsideHome(ndb: NetworkDb, targets: readonly CommentTarget[]
   const home = homeThoughtId(ndb);
   if (home === null) return targets.length > 0;
   return targets.some((t) => !(t.owner_type === 'thought' && t.owner_id === home));
+}
+
+/**
+ * Object-lock enforcement for comment writes (ошибка 68be6829, требование
+ * `647fa34a`, ADR `fdb1a271`). Комментарий — часть содержимого своего
+ * владельца, поэтому запись в комментарий (создание/правка/удаление) обязана
+ * подчиняться тому же захвату, что и правка самой мысли: пока владелец-мысль
+ * захвачен другим участником, сервер отвечает `409 LOCKED`. Ранее `enforceLock`
+ * вызывался только в `thought-service` — правка комментария захваченной мысли
+ * проходила мимо блокировки, из-за чего запись блока трансклюзии в источник не
+ * отклонялась.
+ *
+ * Проверяются все цели комментария (`comment_targets`, L20): блокировка любой
+ * из них запрещает запись. Ребро-владелец (инлайн-комментарий связи) тоже
+ * проверяется — тип сущности берётся из цели. `actorUserId = null` пропускает
+ * проверку (системные операции), как и в {@link enforceLock}.
+ */
+function enforceCommentLocks(
+  ndb: NetworkDb,
+  targets: readonly CommentTarget[],
+  actorUserId: string | null,
+): void {
+  for (const t of targets) {
+    enforceLock(ndb, t.owner_type, t.owner_id, actorUserId);
+  }
 }
 
 /**
@@ -569,6 +595,8 @@ export function createCommentWithTargets(
     for (const t of targets) {
       ensureOwnerExists(ndb, t.owner_type, t.owner_id);
     }
+    // Захват владельца запрещает запись комментария (ошибка 68be6829).
+    enforceCommentLocks(ndb, targets, actorUserId);
 
     const primary = targets[0];
     if (primary === undefined) {
@@ -681,6 +709,9 @@ export function updateComment(
 ): Comment {
   return ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, id);
+    // Захват владельца запрещает правку его комментария (ошибка 68be6829;
+    // требование 647fa34a/ADR fdb1a271 для записи блока трансклюзии в источник).
+    enforceCommentLocks(ndb, current.targets, actorUserId);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
         entity: 'comment',
@@ -867,6 +898,8 @@ export function deleteComment(
 ): void {
   ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, id);
+    // Захват владельца запрещает удаление его комментария (ошибка 68be6829).
+    enforceCommentLocks(ndb, current.targets, actorUserId);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
         entity: 'comment',
