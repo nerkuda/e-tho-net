@@ -22,15 +22,20 @@
  *      `MarkdownUnit` / `MarkdownUnitKind` / `SelectionUnit*` / `ItemPart` вне
  *      пакета (второй сегментатор неизбежно приносит свою модель);
  *   3. **нарезке выделения регулярным выражением** — `.split(...)` /
- *      `.match(...)` / `.matchAll(...)` с регэкспом, распознающим маркеры
- *      markdown-блоков (заголовок `#{1,6}`, ограда кода ``` ```, маркер списка
- *      `[-*+]` / `\d+[.)]`), вне пакета.
+ *      `.match(...)` / `.matchAll(...)` / `.exec(...)` с регэкспом, распознающим
+ *      маркеры markdown-блоков (заголовок `#{1,6}`, ограда кода ``` ```,
+ *      маркер списка `[-*+]` / `\d+[.)]`); а также глобальный/многострочный
+ *      (`g`/`m`) проход по тем же маркерам через `.replace`/`.test`/`.search`
+ *      и `new RegExp(...)` — нарезка на блоки невозможна без обработки ВСЕХ
+ *      совпадений. Одиночная правка префикса строки (`body.replace(/^#{1,6} /,
+ *      '')`, `.test` без флагов) — не сегментация и под правило не попадает.
  *
  * Санкционированный вызов импортированной `parseSelectionUnits` нарушением не
  * считается: правило 1 смотрит на ОБЪЯВЛЕНИЕ, а не на вызов, а `allow`
- * дополнительно пропускает файл, который тянет разбор из `@etn/markdown`
- * (тонкая обёртка-делегат — не второй сегментатор). Копия `selection.ts`,
- * перенесённая в клиент/сервер без импорта пакета, остаётся красной.
+ * построчно пропускает импорт/реэкспорт из `@etn/markdown` (тонкая
+ * обёртка-делегат — не второй сегментатор). Разрешение именно построчное:
+ * файл, который тянет пакет, но рядом объявляет СВОЮ копию сегментатора или
+ * модели единиц, остаётся красным.
  *
  * Правила покрывают и серверные исходники (`server/src/**`): единая функция
  * разбора обща у сервера и клиента, поэтому сторож, живущий в клиентском
@@ -45,12 +50,20 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { parseSelectionUnits } from '@etn/markdown';
 
-import { assertGuardClean, type GuardRule, type GuardScanOptions } from './guard-helpers.js';
+import {
+  assertGuardClean,
+  collectViolations,
+  formatViolations,
+  type GuardRule,
+  type GuardScanOptions,
+  type GuardViolation,
+} from './guard-helpers.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 
@@ -65,6 +78,24 @@ const inSrc = (rel: string): boolean => SRC_PREFIXES.some((p) => rel.startsWith(
  * разрешены: это и есть дом разбора выделения.
  */
 const inMarkdownPackage = (rel: string): boolean => rel.startsWith('markdown/');
+
+/** Строка-комментарий (строчного или внутри блочного) — объявления не несёт. */
+const isCommentLine = (line: string): boolean => /^\s*(?:\/\/|\/\*|\*)/.test(line);
+
+/**
+ * Строка импорта или реэкспорта — санкционированное «тянет разбор из пакета».
+ * Объявления (`export function parseSelectionUnits`, `export const …`,
+ * `export type MarkdownUnit = …`, `export interface MarkdownUnit`) сюда НЕ
+ * попадают: реэкспорт отличает `{`/`*` сразу после `export` (или `type {`).
+ * Вызов импортированной функции правилами и так не ловится — они смотрят на
+ * объявление.
+ */
+const isImportOrReexport = (line: string): boolean =>
+  /^\s*import\b/.test(line) || /^\s*export\s+(?:\*|\{|type\s*\{)/.test(line);
+
+/** Разрешение для правил 1–2: дом разбора, импорт/реэкспорт, строка-комментарий. */
+const allowDelegationOrImport = (rel: string, line: string): boolean =>
+  inMarkdownPackage(rel) || isCommentLine(line) || isImportOrReexport(line);
 
 /** Крупные не-исходные каталоги: не читать их содержимое вовсе. */
 const SCAN_OPTIONS: GuardScanOptions = {
@@ -84,9 +115,6 @@ const SCAN_OPTIONS: GuardScanOptions = {
 // ---------------------------------------------------------------------------
 // Статические запреты: разбор выделения — только в @etn/markdown
 // ---------------------------------------------------------------------------
-
-/** Единственная функция разбора выделения — экспорт `@etn/markdown`. */
-const PACKAGE_PARSER = 'parseSelectionUnits';
 
 /** Имена, которыми обозначают сегментатор выделения (копия сохраняет имя). */
 const SELECTION_PARSER_NAMES = [
@@ -120,7 +148,7 @@ const RULE_OWN_SELECTION_PARSER: GuardRule = {
       `|(?:export\\s+)?(?:const|let|var)\\s+(?:${SELECTION_PARSER_NAMES})\\s*[=:]`,
   ),
   include: inSrc,
-  allow: (rel) => inMarkdownPackage(rel) || delegatesToSelectionParser(rel),
+  allow: allowDelegationOrImport,
 };
 
 /** Имена модели единиц разбора — второй сегментатор приносит свою модель. */
@@ -148,51 +176,48 @@ const RULE_OWN_UNIT_MODEL: GuardRule = {
       `|(?:export\\s+)?(?:const|let|var)\\s+(?:${UNIT_MODEL_NAMES})\\s*[=:]`,
   ),
   include: inSrc,
-  allow: (rel) => inMarkdownPackage(rel) || delegatesToSelectionParser(rel),
+  allow: allowDelegationOrImport,
 };
 
 /**
  * 3. Нарезка выделения регулярным выражением вне пакета.
  *
- * Регэксп, распознающий маркеры markdown-блоков, применённый через
- * `.split`/`.match`/`.matchAll`/`.exec`: заголовок `#{1,6}`, ограда кода
- * ``` ``` ``` или маркер списка `[-*+]` / `\d+[.)]`. Простое деление по
- * строкам (`split(/\r?\n/)`) и по пробелам (`split(/\s+/)`) — не сегментация
- * блоков и под правило не попадает.
+ * Регэксп, распознающий маркеры markdown-блоков, применённый для разбора ВСЕХ
+ * блоков: заголовок `#{1,6}`, ограда кода ``` ``` ``` / `~~~`, маркер списка
+ * `[-*+]` / `\d+[.)]` / `\d{1,9}[.)]`. Ловятся:
+ *  - прямое `.split`/`.match`/`.matchAll`/`.exec` по маркеру блока;
+ *  - `.replace`/`.test`/`.search` по маркеру с флагом `g` или `m` — без флагов
+ *    такая обработка не покрывает все блоки и нарезкой не является;
+ *  - `new RegExp('…маркер…', '…g|m…')` — конструктор с тем же признаком.
+ *
+ * Простое деление по строкам (`split(/\r?\n/)`), по пробелам (`split(/\s+/)`),
+ * одиночная правка префикса строки (`body.replace(/^#{1,6} /, '')`, `.test`
+ * без флагов) — не сегментация блоков и под правило не попадают.
  */
+const BLOCK_MARKER_SRC =
+  String.raw`#\{1,6\}` +
+  '|```|~~~|' +
+  String.raw`\[-\*\+\]` +
+  '|' +
+  String.raw`\\d\+\[\.\)\]` +
+  '|' +
+  String.raw`\\d\{1,9\}\[\.\)\]`;
+
 const RULE_OWN_BLOCK_SPLIT_REGEX: GuardRule = {
   name: 'own-selection-block-split-regex',
   description:
-    'нарезка выделения на блоки регулярным выражением вне @etn/markdown: .split/.match/.matchAll/.exec по маркерам markdown-блоков (заголовок, ограда кода, маркер списка)',
-  pattern:
-    /\.(?:split|match|matchAll|exec)\s*\(\s*\/[^/\n]*(?:#\{1,6\}|```|\[-\*\+\]|\\d\+\[\.\)\])/,
+    'нарезка выделения на блоки регулярным выражением вне @etn/markdown: .split/.match/.matchAll/.exec по маркерам markdown-блоков, а также g/m-проход по ним через .replace/.test/.search и new RegExp',
+  pattern: new RegExp(
+    // Прямое разбиение/перебор совпадений с маркером блока в теле регэкспа.
+    `\\.(?:split|match|matchAll|exec)\\s*\\(\\s*\\/[^/\\n]*(?:${BLOCK_MARKER_SRC})` +
+      // Нарезка заменой/проверкой — только с флагом g/m (по всем блокам).
+      `|\\.(?:replace|test|search)\\s*\\(\\s*\\/[^/\\n]*(?:${BLOCK_MARKER_SRC})[^/\\n]*\\/[a-z]*[gm]` +
+      // То же через конструктор RegExp: строковый шаблон и флаг g/m.
+      `|new\\s+RegExp\\s*\\(\\s*['"\`][^'"\`\\n]*(?:${BLOCK_MARKER_SRC})[^'"\`\\n]*['"\`]\\s*,\\s*['"\`][^'"\`\\n]*[gm]`,
+  ),
   include: inSrc,
   allow: (rel) => inMarkdownPackage(rel),
 };
-
-/** Кэш «файл тянет разбор выделения из пакета» — для правил 1 и 2. */
-const delegationCache = new Map<string, boolean>();
-
-/**
- * Тонкая обёртка над единым разбором — НЕ второй сегментатор: файл импортирует
- * из `@etn/markdown` и пользуется функцией пакета. Такие файлы правилами 1–2 не
- * краснятся (объявленная рядом оркестровка — вызов пакета, а не своя нарезка);
- * всё, что не тянет пакет, — краснится.
- */
-function delegatesToSelectionParser(rel: string): boolean {
-  const cached = delegationCache.get(rel);
-  if (cached !== undefined) return cached;
-  let ok = false;
-  try {
-    const content = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
-    ok =
-      /from\s+['"]@etn\/markdown['"]/.test(content) && new RegExp(`\\b${PACKAGE_PARSER}\\b`).test(content);
-  } catch {
-    ok = false;
-  }
-  delegationCache.set(rel, ok);
-  return ok;
-}
 
 describe('сторож: разбор выделения — только в @etn/markdown (01ec1467, 1e6ea5c1)', () => {
   it('собственного сегментатора выделения нет в клиенте, сервере и shared', () => {
@@ -226,3 +251,107 @@ describe('сторож: единый разбор @etn/markdown покрывае
     assert.equal(units[0]!.children.length, 1, 'подраздел — ребёнок раздела');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Регресс правила: построчный allow ловит копию-сегментатор, но щадит делегата
+// ---------------------------------------------------------------------------
+
+describe('сторож: разрешение построчное, а не на файл (e7545827)', () => {
+  /** Прогоняет три правила по временному дереву с путями относительно репозитория. */
+  const scanFixture = (files: Record<string, string>): GuardViolation[] => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-selection-'));
+    try {
+      for (const [rel, content] of Object.entries(files)) {
+        const abs = path.join(root, rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, content);
+      }
+      return collectViolations(
+        root,
+        [RULE_OWN_SELECTION_PARSER, RULE_OWN_UNIT_MODEL, RULE_OWN_BLOCK_SPLIT_REGEX],
+        SCAN_OPTIONS,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  it('своя копия сегментатора в файле с ЛЮБЫМ импортом @etn/markdown краснеет', () => {
+    const violations = scanFixture({
+      'client/src/renderer/editor/evil.ts':
+        "import { renderMarkdown } from '@etn/markdown';\n" +
+        'export function parseSelectionUnits(src: string): string[] {\n' +
+        '  return src.split(/\\n/);\n' +
+        '}\n',
+    });
+    assert.ok(
+      violations.some((v) => v.rule === 'own-selection-parser-outside-package'),
+      `ожидалось нарушение правила 1:\n${formatViolations(violations)}`,
+    );
+  });
+
+  it('легитимный делегат (импорт + вызов parseSelectionUnits) зелёный', () => {
+    const violations = scanFixture({
+      'client/src/renderer/editor/delegate.ts':
+        "import { parseSelectionUnits, type MarkdownUnit } from '@etn/markdown';\n" +
+        'export function splitAll(text: string): MarkdownUnit[] {\n' +
+        '  return parseSelectionUnits(text);\n' +
+        '}\n',
+    });
+    assert.deepEqual(violations, [], formatViolations(violations));
+  });
+
+  it('своя модель единиц краснеет, импорт типа и комментарий — нет', () => {
+    const own = scanFixture({
+      'client/src/renderer/editor/model.ts': 'export interface MarkdownUnit { kind: string }\n',
+    });
+    assert.ok(
+      own.some((v) => v.rule === 'own-unit-model-outside-package'),
+      `ожидалось нарушение правила 2:\n${formatViolations(own)}`,
+    );
+
+    const imported = scanFixture({
+      'client/src/renderer/editor/model.ts':
+        "import { type MarkdownUnit } from '@etn/markdown';\n" +
+        '// type MarkdownUnit — модель единиц живёт в пакете\n' +
+        'export const all: MarkdownUnit[] = [];\n',
+    });
+    assert.deepEqual(imported, [], formatViolations(imported));
+  });
+
+  it('g/m-проход по маркерам блока краснеет, одиночная правка префикса — нет', () => {
+    const split = scanFixture({
+      'client/src/renderer/editor/split.ts':
+        'export const f = (s: string): string[] => s.split(/^#{1,6}\\s/m);\n',
+    });
+    assert.ok(
+      split.some((v) => v.rule === 'own-selection-block-split-regex'),
+      `ожидалось нарушение правила 3 (.split):\n${formatViolations(split)}`,
+    );
+
+    const replace = scanFixture({
+      'client/src/renderer/editor/split2.ts':
+        "export const f = (s: string): string => s.replace(/^#{1,6}\\s/gm, '');\n",
+    });
+    assert.ok(
+      replace.some((v) => v.rule === 'own-selection-block-split-regex'),
+      `ожидалось нарушение правила 3 (.replace + g/m):\n${formatViolations(replace)}`,
+    );
+
+    const ctor = scanFixture({
+      'client/src/renderer/editor/split3.ts':
+        "export const f = (s: string): string[] => s.split(new RegExp('(?:#{1,6} )', 'gm'));\n",
+    });
+    assert.ok(
+      ctor.some((v) => v.rule === 'own-selection-block-split-regex'),
+      `ожидалось нарушение правила 3 (new RegExp + g/m):\n${formatViolations(ctor)}`,
+    );
+
+    const prefix = scanFixture({
+      'client/src/renderer/editor/prefix.ts':
+        "export const f = (s: string): string => s.replace(/^#{1,6} /, '');\n",
+    });
+    assert.deepEqual(prefix, [], formatViolations(prefix));
+  });
+});
+
