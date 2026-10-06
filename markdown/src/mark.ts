@@ -40,7 +40,11 @@ export function markPlugin(md: MarkdownIt): void {
     const oldMax = state.posMax;
     state.pos = openEnd;
     state.posMax = close;
+    // Source range of the visible text (between the `==` delimiters), relative
+    // to the inline content; the source-map core rule turns it into an absolute
+    // `data-md-start`/`data-md-end` pair (задача ba68771d).
     state.push('mark_open', 'mark', 1).markup = '==';
+    state.tokens[state.tokens.length - 1]!.meta = { mdRelative: { start: openEnd, end: close } };
     md.inline.tokenize(state);
     state.pos = close + 2;
     state.posMax = oldMax;

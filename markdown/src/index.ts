@@ -15,6 +15,17 @@ export { parseAltSize } from './image.js';
 export { isSafeUrl } from './url.js';
 export { DEFAULT_MAX_LENGTH } from './renderer.js';
 export {
+  MD_SOURCE_START_ATTR,
+  MD_SOURCE_END_ATTR,
+  TEXT_NODE,
+  ELEMENT_NODE,
+  computeLineStarts,
+  parseSourceRange,
+  nearestSourceRange,
+  sourceOffsetFromCaret,
+} from './source-map.js';
+export type { SourceRange, SourceMapNode } from './source-map.js';
+export {
   WIKI_LINK_CLASS,
   WIKI_LINK_TARGET_ATTR,
   WIKI_LINK_ID_ATTR,
@@ -83,6 +94,12 @@ export const MD_RENDER_VERSION = 'markdown-it/8';
 export interface RenderOptions {
   /** Maximum input length in characters before rendering is refused. */
   maxLength?: number;
+  /**
+   * Annotate the rendered nodes with their source character ranges
+   * (`data-md-start` / `data-md-end`, see `source-map.ts`). Off by default, so
+   * the plain render output is byte-for-byte unchanged.
+   */
+  sourceMap?: boolean;
 }
 
 /**
@@ -98,5 +115,8 @@ export function renderMarkdown(source: unknown, opts: RenderOptions = {}): strin
   if (source.length > maxLength) {
     throw new Error(`renderMarkdown: source exceeds ${maxLength} characters`);
   }
-  return getRenderer().render(source);
+  return getRenderer().render(source, {
+    sourceMap: opts.sourceMap === true,
+    sourceMapSource: opts.sourceMap === true ? source : undefined,
+  });
 }

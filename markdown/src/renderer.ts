@@ -20,6 +20,7 @@ import { htmlCommentPlugin } from './html-comment.js';
 import { imagePlugin } from './image.js';
 import { linkSafetyPlugin } from './link.js';
 import { markPlugin } from './mark.js';
+import { sourceMapPlugin } from './source-map.js';
 import { taskListPlugin } from './task-list.js';
 import { underlinePlugin } from './underline.js';
 import { isSafeUrl } from './url.js';
@@ -67,6 +68,9 @@ export function getRenderer(): MarkdownIt {
   underlinePlugin(md);
   htmlCommentPlugin(md);
   taskListPlugin(md);
+  // ТП1 (задача ba68771d): разметка отрендеренных узлов диапазонами исходных
+  // смещений — opt-in через env.sourceMap, вне него вывод не меняется.
+  sourceMapPlugin(md);
   instance = md;
   return md;
 }

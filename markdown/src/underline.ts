@@ -58,7 +58,11 @@ export function underlinePlugin(md: MarkdownIt): void {
     const oldMax = state.posMax;
     state.pos = openEnd;
     state.posMax = close;
+    // Source range of the visible text (between `<u>` and `</u>`), relative to
+    // the inline content; resolved to absolute offsets by the source-map rule
+    // (задача ba68771d).
     state.push('u_open', 'u', 1).markup = '<u>';
+    state.tokens[state.tokens.length - 1]!.meta = { mdRelative: { start: openEnd, end: close } };
     md.inline.tokenize(state);
     state.pos = close + 4;
     state.posMax = oldMax;

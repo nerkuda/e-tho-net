@@ -23,6 +23,8 @@
 import type MarkdownIt from 'markdown-it';
 import type Token from 'markdown-it/lib/token.mjs';
 
+import { MD_SOURCE_END_ATTR, MD_SOURCE_START_ATTR, type SourceRange } from './source-map.js';
+
 /** Class of the rendered span (matched by the client's click handler). */
 export const WIKI_LINK_CLASS = 'wiki-link';
 /** Data attribute holding the raw target name (`[[target|alias]]` → `target`). */
@@ -63,6 +65,32 @@ export interface WikiLinkMeta {
   targetId: string | null;
   /** Network id for kind='cross'. */
   networkId: string | null;
+  /**
+   * Source range of the visible text (alias, or the target name when there is
+   * no alias), relative to the inline content. The source-map rule
+   * (задача ba68771d) converts it into an absolute `data-md-*` pair; `null`
+   * (or absent) when the span has no visible text of its own.
+   */
+  mdRelative?: SourceRange | null;
+}
+
+/** Relative range of the visible text of a wiki link inside its inline source. */
+function visibleRelativeRange(
+  content: string,
+  linkStart: number,
+  pipe: number,
+  alias: string | null,
+  target: string,
+): SourceRange {
+  if (alias !== null && pipe !== -1) {
+    const rawAlias = content.slice(pipe + 1);
+    const lead = rawAlias.length - rawAlias.trimStart().length;
+    const start = linkStart + 2 + pipe + 1 + lead;
+    return { start, end: start + alias.length };
+  }
+  const lead = content.length - content.trimStart().length;
+  const start = linkStart + 2 + lead;
+  return { start, end: start + target.length };
 }
 
 /** A parsed wiki link handed to a publication resolver. */
@@ -155,8 +183,15 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     }
 
     if (!silent) {
+      // Range of the visible text for the source-position mapping (задача
+      // ba68771d): the alias, the target name, or nothing for a bare id span.
+      const visible = kind === 'name' ? (alias ?? target) : alias;
+      const mdRelative =
+        visible === null
+          ? null
+          : visibleRelativeRange(content, start, pipe, alias, target);
       const token = state.push('wiki_link', 'span', 0);
-      token.meta = { target, alias, kind, targetId, networkId } satisfies WikiLinkMeta;
+      token.meta = { target, alias, kind, targetId, networkId, mdRelative } satisfies WikiLinkMeta;
     }
     state.pos = close + 2;
     return true;
@@ -192,6 +227,13 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     }
 
     const attrs: string[] = [`class="${WIKI_LINK_CLASS}"`];
+    // Absolute source range resolved by the source-map core rule (задача
+    // ba68771d); present only when the render opted into position mapping.
+    const mdRange = (meta as WikiLinkMeta & { mdRange?: SourceRange }).mdRange;
+    if (mdRange !== undefined) {
+      attrs.push(`${MD_SOURCE_START_ATTR}="${mdRange.start}"`);
+      attrs.push(`${MD_SOURCE_END_ATTR}="${mdRange.end}"`);
+    }
 
     if (meta.kind === 'id' || meta.kind === 'cross') {
       // ID-based form: the span carries the id in its data-attributes; the
