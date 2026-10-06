@@ -897,7 +897,16 @@ const RECORD_CLASS_SQL = `CASE WHEN EXISTS (
 export function queryChronicle(
   ndb: NetworkDb,
   request: ChronicleQueryRequest,
-  opts: { userId?: string; now?: () => Date } = {},
+  opts: {
+    userId?: string;
+    now?: () => Date;
+    /**
+     * Транспорт-агностичный transform `body_md` → `body_html` (MCP-фасад
+     * передаёт пересборку из развёрнутого текста — ошибка a6da3d37; REST не
+     * передаёт ничего и получает кешированный `body_html`).
+     */
+    bodyHtmlTransform?: (body_md: string) => string;
+  } = {},
 ): ChronicleQueryResponse {
   const userId = opts.userId ?? '';
   // Токены периода раскрываются в момент применения отбора (требование
@@ -1027,6 +1036,8 @@ export function queryChronicle(
   const withSnippets = rows.map((row) => ({
     ...row,
     snippet: makeSnippet(row.body_md, includeWords),
+    body_html:
+      opts.bodyHtmlTransform === undefined ? row.body_html : opts.bodyHtmlTransform(row.body_md),
   }));
   return { rows: buildRows(ndb, withSnippets, refs, linkTargets), total };
 }

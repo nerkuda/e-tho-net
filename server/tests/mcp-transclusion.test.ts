@@ -36,6 +36,7 @@ import {
   closeMcpContext,
   connectMcpClient,
   createThoughtViaWrite,
+  addChronicleViaWrite,
   nativeAvailable,
   toolJson,
   toolText,
@@ -60,6 +61,7 @@ async function makeThoughtWithComment(
 interface PermanentRow {
   id: string;
   body_md: string;
+  body_html?: string;
 }
 
 interface CommentsGetByThought {
@@ -109,6 +111,76 @@ describe('MCP-развёртка трансклюзий (bcfc7eb7, ADR 85a7a01e)
           }),
         );
         assert.equal(byComment.body_md, body);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.comments.get и etn.chronicle.query отдают body_html, согласованный с развёрнутым body_md (ошибка a6da3d37)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const sourceId = await makeThoughtWithComment(
+          handle.client,
+          ctx.networkId,
+          'Источник HTML',
+          'Текст источника с **жирным**.',
+        );
+        const boxId = await makeThoughtWithComment(
+          handle.client,
+          ctx.networkId,
+          'Контейнер HTML',
+          `Начало.\n\n![[#${sourceId}]]\n\nКонец.`,
+        );
+        // Хронологическая запись с трансклюзией — для etn.chronicle.query.
+        await addChronicleViaWrite(
+          handle.client,
+          ctx.networkId,
+          boxId,
+          `Дневниковая заметка. ![[#${sourceId}]]`,
+          '2026-10-06',
+        );
+
+        // comments.get: body_md развёрнут, body_html — из развёрнутого текста.
+        const byThought = toolJson<CommentsGetByThought>(
+          await handle.client.callTool({
+            name: 'etn.comments.get',
+            arguments: { network_id: ctx.networkId, thought_id: boxId },
+          }),
+        );
+        const md = byThought.permanent?.body_md ?? '';
+        const html = byThought.permanent?.body_html ?? '';
+        assert.ok(md.includes('Текст источника'), 'body_md не развёрнут');
+        assert.ok(!html.includes('![[#'), `body_html содержит литерал ссылки: ${html}`);
+        assert.ok(html.includes('Текст источника'), `body_html не развёрнут: ${html}`);
+        assert.ok(
+          !html.includes('etn:transclusion'),
+          `маркеры границ не должны попадать в HTML: ${html}`,
+        );
+        // Разметка источника отрендерена (markdown, а не литерал).
+        assert.ok(html.includes('<strong>жирным</strong>'), `источник не отрендерен: ${html}`);
+
+        // chronicle.query: body_html строки тоже собран из развёрнутого текста.
+        const chron = toolJson<{ rows: Array<{ body_md?: string; body_html: string }> }>(
+          await handle.client.callTool({
+            name: 'etn.chronicle.query',
+            arguments: { network_id: ctx.networkId, thought_ids: [boxId], limit: 50 },
+          }),
+        );
+        const row = chron.rows.find((r) => r.body_html.includes('Дневниковая заметка'));
+        assert.ok(row !== undefined, 'строка хроники не найдена');
+        assert.ok(
+          !row.body_html.includes('![[#'),
+          `chronicle body_html содержит литерал ссылки: ${row.body_html}`,
+        );
+        assert.ok(
+          row.body_html.includes('Текст источника'),
+          `chronicle body_html не развёрнут: ${row.body_html}`,
+        );
       } finally {
         await handle.close();
       }

@@ -19,7 +19,12 @@
  * in the ТП2 permanent comment.
  */
 
-import { expandTransclusions, parseTransclusions, type TransclusionResolver } from '@etn/markdown';
+import {
+  expandTransclusions,
+  parseTransclusions,
+  renderMarkdown,
+  type TransclusionResolver,
+} from '@etn/markdown';
 import type { TransclusionLostWarning } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
@@ -30,6 +35,12 @@ import type { NetworkDb } from '../db/network-db.js';
  * domain comment readers stay transport-agnostic (REST passes nothing).
  */
 export type BodyExpander = (body_md: string) => string;
+
+/** Развёрнутое тело комментария в паре `body_md`/`body_html` (MCP-выдача). */
+export interface PresentedBody {
+  body_md: string;
+  body_html: string;
+}
 
 /**
  * Build a {@link TransclusionResolver} over one network connection. Called by
@@ -71,6 +82,29 @@ export function createTransclusionResolver(ndb: NetworkDb): TransclusionResolver
 export function createBodyExpander(ndb: NetworkDb): BodyExpander {
   const resolve = createTransclusionResolver(ndb);
   return (body_md: string): string => expandTransclusions(body_md, resolve);
+}
+
+/**
+ * Презентер тела комментария для MCP-инструментов, отдающих РЯДОМ `body_md` и
+ * `body_html` (`etn.comments.get`, `etn.chronicle.query`): разворачивает
+ * трансклюзии (как {@link createBodyExpander}) и пересобирает `body_html` из
+ * РАЗВЁРНУТОГО текста тем же единым рендерером `@etn/markdown`, каким собран
+ * кеш при записи (`comment-service`). Иначе кешированный `body_html` остаётся
+ * собранным из исходного текста и показывает литерал `![[#<id>]]` (ошибка
+ * `a6da3d37`).
+ *
+ * Маркеры границ ADR `85a7a01e` — HTML-комментарии, поэтому рендер их скрывает
+ * и пользовательского текста они не касаются. Рендер идёт без ограничения
+ * длины: развёрнутый текст (до 5 уровней) может превысить дефолтный лимит
+ * `renderMarkdown`, и чтение упало бы — тогда как сам `body_md` агенту нужен
+ * целиком.
+ */
+export function createBodyPresenter(ndb: NetworkDb): (body_md: string) => PresentedBody {
+  const expand = createBodyExpander(ndb);
+  return (body_md: string): PresentedBody => {
+    const expanded = expand(body_md);
+    return { body_md: expanded, body_html: renderMarkdown(expanded, { maxLength: Infinity }) };
+  };
 }
 
 /**

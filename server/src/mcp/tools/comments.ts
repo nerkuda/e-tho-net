@@ -20,7 +20,7 @@ import {
   listComments,
   updateComment,
 } from '../../domain/comment-service.js';
-import { createBodyExpander } from '../../domain/transclusion-service.js';
+import { createBodyPresenter } from '../../domain/transclusion-service.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
@@ -49,14 +49,16 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetwork(rt, args.network_id);
         // MCP-выдача отдаёт `body_md` с развёрнутыми трансклюзиями и маркерами
         // границ (ТП2, задача bcfc7eb7, ADR 85a7a01e); в базе хранится
-        // исходная ссылка, REST-ответы её сохраняют.
-        const expand = createBodyExpander(ndb);
+        // исходная ссылка, REST-ответы её сохраняют. `body_html` пересобирается
+        // из развёрнутого текста — иначе кеш показывает литерал `![[#…]]`
+        // (ошибка a6da3d37).
+        const present = createBodyPresenter(ndb);
         if (args.comment_id !== undefined) {
           const comment = getComment(ndb, args.comment_id);
           if (comment === null) {
             throw new Error(`ETN error [NOT_FOUND]: comment ${args.comment_id} not found`);
           }
-          return { ...comment, body_md: expand(comment.body_md) };
+          return { ...comment, ...present(comment.body_md) };
         }
         // The refine guarantees exactly one of the two; TS needs an explicit check.
         if (args.thought_id === undefined) {
@@ -67,7 +69,7 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
           listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ?? null;
         return {
           thought_id: args.thought_id,
-          permanent: permanent === null ? null : { ...permanent, body_md: expand(permanent.body_md) },
+          permanent: permanent === null ? null : { ...permanent, ...present(permanent.body_md) },
         };
       }),
   );
