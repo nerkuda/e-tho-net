@@ -174,7 +174,9 @@ describe('MCP-развёртка трансклюзий (bcfc7eb7, ADR 85a7a01e)
         );
         assert.ok(
           (missing.permanent?.body_md ?? '').includes(
-            `<!-- etn:transclusion missing source=${MISSING} -->`,
+            // Уточнение 0.12.1 (задача a2b68d72, ADR 85a7a01e): missing-маркер
+            // несёт обязательный `reason=<source|section>` последним атрибутом.
+            `<!-- etn:transclusion missing source=${MISSING} reason=source -->`,
           ),
           'missing-маркер не найден',
         );
