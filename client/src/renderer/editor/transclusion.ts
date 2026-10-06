@@ -1,8 +1,9 @@
 /**
  * Трансклюзии комментариев в поле markdown (0.12.1, ТП2, задачи `f72a9134`,
- * `f59d24e1` и `a2b68d72`; ADR `8c41387c`, ADR `dc1758ad`, ADR `85a7a01e`,
- * ADR `fdb1a271`, ADR `c425202a`; элементы интерфейса `7a479549` и `2b116d37`;
- * требования `647fa34a`, `29a3c17a`, `fc60d763`).
+ * `f59d24e1`, `a2b68d72` и `1b405a92`; ADR `8c41387c`, ADR `dc1758ad`,
+ * ADR `85a7a01e`, ADR `fdb1a271`, ADR `c425202a`; элементы интерфейса
+ * `7a479549` и `2b116d37`; требования `647fa34a`, `29a3c17a`, `fc60d763`,
+ * `e04d84f7`).
  *
  * Узкий клиентский модуль поверх единого рендерера: разбор ссылок и развёртка
  * текста выполняются ТОЛЬКО экспортируемыми функциями `@etn/markdown`
@@ -48,9 +49,15 @@
  * словаре команд `editor/comment-commands.ts`; доступно только в режиме
  * редактирования окружения.
  *
+ * **Свёрнутость разделов внутри блока (задача `1b405a92`, требование
+ * `e04d84f7`).** Виджет блока декорирует своё содержимое через
+ * `decorateCommentView` с состоянием своего пути вставки (фабрика из
+ * `collapseScopeFacet`, ставит `markdown-field`): один и тот же источник в
+ * разных контейнерах хранит свёрнутость раздельно. Просмотр идёт тем же путём
+ * (обход `.md-transclusion` в `decorateCommentView`).
+ *
  * За границами задачи (другие работы ТП2): команды
- * «как текст» (`e9f553e5`), realtime-обновление блока, свёрнутость разделов
- * внутри трансклюзий (`1b405a92`).
+ * «как текст» (`e9f553e5`), realtime-обновление блока.
  */
 
 import {
@@ -103,6 +110,7 @@ import { iconButton } from '../lib/ui/button.js';
 import { svgIcon } from '../lib/ui/icon.js';
 
 import { buildTransclusionMenuItems } from './comment-commands.js';
+import { collapseScopeFacet, decorateCommentView } from './comment-collapse.js';
 
 /** Корневой класс блока трансклюзии (редактирование). */
 export const TRANSCLUSION_BLOCK_CLASS = 'cm-transclusion-block';
@@ -641,6 +649,15 @@ class TransclusionBlockWidget extends WidgetType {
     const body = document.createElement('div');
     body.innerHTML = this.entry.html ?? '';
     box.append(body);
+
+    // Сворачивание разделов внутри блока — своим состоянием на путь вставки
+    // (ТП2, задача 1b405a92, требование e04d84f7): в правке блок показывает
+    // готовый HTML, поэтому декорируем своё содержимое как область просмотра.
+    const factory = view.state.facet(collapseScopeFacet);
+    if (factory !== null) {
+      const path = [this.sourceId];
+      decorateCommentView(body, factory(path), factory, path);
+    }
     return box;
   }
 

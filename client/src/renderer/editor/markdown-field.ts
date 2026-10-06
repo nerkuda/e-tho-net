@@ -43,9 +43,12 @@ import {
 } from './comment-commands.js';
 import { commentFieldKeymapExtension } from './comment-format.js';
 import {
+  collapseScopeExtension,
   commentCollapseExtension,
   createCommentCollapseState,
   decorateCommentView,
+  transclusionCollapseOwnerKey,
+  type CommentCollapseState,
 } from './comment-collapse.js';
 import { createCommentSearch } from './comment-search.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
@@ -260,6 +263,20 @@ export function createMarkdownField(opts: {
   const collapseState = createCommentCollapseState(requireNetworkId(), collapseOwnerKey);
 
   /**
+   * Состояние свёрнутости блока трансклюзии по пути вставки (ТП2, требование
+   * e04d84f7): владелец — «владелец поля (мысль-контейнер) + путь вставки».
+   * Один и тот же источник в разных контейнерах (и на разных путях вставки)
+   * хранит свёрнутость разделов раздельно; на сервер не едет.
+   */
+  const collapseScopeFor = (path: readonly string[]): CommentCollapseState =>
+    createCommentCollapseState(
+      requireNetworkId(),
+      collapseOwnerKey === undefined
+        ? undefined
+        : transclusionCollapseOwnerKey(collapseOwnerKey, path),
+    );
+
+  /**
    * Панель поиска и замены поля (0.12.1, задача 045f98db): открывается по
    * Ctrl+F и в просмотре, и в правке, замена — только в правке.
    */
@@ -461,8 +478,9 @@ export function createMarkdownField(opts: {
       // promise settles.
       wireCommentLinksInDom(view);
       // Сворачивание разделов комментария (0.12.1, задача 634f1412): индикаторы
-      // и восстановление свёрнутости в просмотре.
-      decorateCommentView(view, collapseState);
+      // и восстановление свёрнутости в просмотре. Блоки трансклюзий — своим
+      // состоянием на путь вставки (ТП2, задача 1b405a92, требование e04d84f7).
+      decorateCommentView(view, collapseState, collapseScopeFor);
     } else if (opts.placeholder !== undefined && opts.placeholder !== '') {
       // Пустой комментарий — показываем плейсхолдер (задача 8ab775d9).
       const ph = el('div', 'md-field-placeholder', opts.placeholder);
@@ -574,6 +592,9 @@ export function createMarkdownField(opts: {
       extraExtensions: [
         commentFieldKeymapExtension(),
         commentCollapseExtension(collapseState),
+        // Фабрика состояний свёрнутости блоков трансклюзий (ТП2, задача
+        // 1b405a92): виджеты блоков читают её и декорируют своё содержимое.
+        collapseScopeExtension(collapseScopeFor),
         // Хост правки блока трансклюзии (задача f59d24e1): пока блок в правке,
         // под полем — кнопки «Отменить/Сохранить трансклюзию».
         transclusionEditHostExtension({

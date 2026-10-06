@@ -1,6 +1,6 @@
 /**
- * Сворачивание разделов комментария (0.12.1, задача 634f1412; элемент
- * интерфейса 826c4423, требования b482b36b и e04d84f7).
+ * Сворачивание разделов комментария (0.12.1, задачи 634f1412 и 1b405a92;
+ * элемент интерфейса 826c4423, требования b482b36b и e04d84f7).
  *
  * **Что сворачивается.**
  * - Заголовки H1–H6 — своё содержимое до следующего заголовка того же или
@@ -18,14 +18,25 @@
  *
  * **Состояние** хранится ЛОКАЛЬНО на клиенте (localStorage, ключ
  * «сеть + владелец поля + раздел») и переживает переоткрытие поля; на сервер
- * не едет (требование b482b36b). Распространение на блоки трансклюзий — ТП2.
+ * не едет (требование b482b36b).
  *
  * Владелец поля — сущность-владелец комментария (мысль/связь/публикация), а
  * для записи хроно-комментария — сам комментарий (иначе все записи одной
  * мысли делили бы одно состояние свёрнутости). Осознанное уточнение ключа
- * требования b482b36b («мысль-владелец поля»): при ТП2 ключ расширяется
- * мыслью-контейнером и путём вставки, комментарий-владелец остаётся частью
- * идентичности поля.
+ * требования b482b36b («мысль-владелец поля»): комментарий-владелец остаётся
+ * частью идентичности поля.
+ *
+ * **Трансклюзии в разрезе контейнера (ТП2, задача `1b405a92`, требование
+ * `e04d84f7`).** Блоки трансклюзий размечаются СОБСТВЕННЫМ состоянием на
+ * каждый путь вставки: владелец состояния — «владелец поля (мысль-контейнер)
+ * + путь вставки» (`#<источник>…#<источник>`, {@link
+ * transclusionCollapseOwnerKey}). Поэтому сворачивание раздела в комментарии
+ * Б, вставленном в А, не влияет на просмотр Б вне А. Внутри блока счётчики
+ * разделов/вложенных блоков начинаются заново (свой namespace), а сами блоки
+ * для внешней области — границы: их заголовки не участвуют в нумерации
+ * контейнера. Блоки трансклюзий декорируются {@link decorateCommentView} с
+ * фабрикой `factory` — в просмотре (обход `.md-transclusion`) и в правке
+ * (виджет блока читает фабрику из {@link collapseScopeFacet}).
  *
  * «Раздел» идентифицируется позиционно: `h{уровень}#{n}` — n-й по счёту
  * заголовок этого уровня в документе, `n#{m}` — m-й по счёту вложенный блок.
@@ -39,6 +50,7 @@
 
 import { syntaxTree } from '@codemirror/language';
 import {
+  Facet,
   StateEffect,
   StateField,
   type EditorState,
@@ -51,6 +63,7 @@ import {
   WidgetType,
   type DecorationSet,
 } from '@codemirror/view';
+import { TRANSCLUSION_BLOCK_CLASS, TRANSCLUSION_SOURCE_ATTR } from '@etn/markdown';
 
 import { t } from '../lib/i18n.js';
 import { iconButton } from '../lib/ui/button.js';
@@ -112,6 +125,19 @@ export interface CommentCollapseState {
   all(): string[];
 }
 
+/**
+ * Ключ владельца состояния для блока трансклюзии: «владелец поля
+ * (мысль-контейнер) + путь вставки» (требование `e04d84f7`). Путь — цепочка
+ * мыслей-источников от контейнера до блока через `#` (`#B`, `#B#C`); пустой
+ * путь — собственные разделы поля (владелец без расширения).
+ */
+export function transclusionCollapseOwnerKey(
+  ownerKey: string,
+  path: readonly string[],
+): string {
+  return path.length === 0 ? ownerKey : `${ownerKey}|${path.map((id) => `#${id}`).join('')}`;
+}
+
 /** Создаёт состояние свёрнутости поля. */
 export function createCommentCollapseState(
   networkId: string,
@@ -150,6 +176,26 @@ export function createCommentCollapseState(
     },
     all: () => [...collapsed],
   };
+}
+
+/**
+ * Фабрика производного состояния для блока трансклюзии: по пути вставки
+ * (цепочке мыслей-источников) отдаёт состояние свёрнутости этого блока.
+ */
+export type CollapseScopeFactory = (path: readonly string[]) => CommentCollapseState;
+
+/**
+ * Фасет фабрики производных состояний: виджет блока трансклюзии в режиме
+ * правки читает её из состояния редактора и декорирует своё содержимое с
+ * состоянием своего пути вставки. Последнее значение — при нескольких.
+ */
+export const collapseScopeFacet = Facet.define<CollapseScopeFactory, CollapseScopeFactory | null>({
+  combine: (values) => values[values.length - 1] ?? null,
+});
+
+/** Расширение-носитель фабрики производных состояний (для `md-editor.ts`). */
+export function collapseScopeExtension(factory: CollapseScopeFactory): Extension {
+  return collapseScopeFacet.of(factory);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +248,46 @@ function walkElements(
   step(root);
 }
 
+/** id мысли-источника блока трансклюзии (`data-transclusion-source`), либо `null`. */
+function transclusionSourceId(node: HTMLElement): string | null {
+  // Реальный DOM отдаёт camelCase-ключ `transclusionSource`; DOM-шим тестов
+  // кладёт ещё и полное имя атрибута — читаем оба варианта.
+  const ds = node.dataset as Record<string, string | undefined>;
+  const id = ds['transclusionSource'] ?? ds[TRANSCLUSION_SOURCE_ATTR];
+  return id === undefined || id === '' ? null : id;
+}
+
+/** Блок трансклюзии разметки `@etn/markdown` (граница области сворачивания). */
+function isTransclusionBlock(node: HTMLElement): boolean {
+  return node.classList.contains(TRANSCLUSION_BLOCK_CLASS) && transclusionSourceId(node) !== null;
+}
+
+/**
+ * Обход элементов области сворачивания: как {@link walkElements}, но блоки
+ * трансклюзий не раскрываются — они отдаются `onChild` (рекурсия с отдельным
+ * состоянием) и НЕ участвуют в нумерации разделов текущей области.
+ */
+function walkScope(
+  root: HTMLElement,
+  visit: (node: HTMLElement, parent: HTMLElement, siblings: HTMLElement[], index: number) => void,
+  onChild: (node: HTMLElement) => void,
+): void {
+  const step = (parent: HTMLElement): void => {
+    const siblings = Array.from(parent.children).filter(
+      (child): child is HTMLElement => child instanceof HTMLElement,
+    );
+    siblings.forEach((child, index) => {
+      if (isTransclusionBlock(child)) {
+        onChild(child);
+        return;
+      }
+      visit(child, parent, siblings, index);
+      step(child);
+    });
+  };
+  step(root);
+}
+
 /** Один сворачиваемый раздел просмотра: индикатор и скрываемые элементы. */
 interface ViewSection {
   id: string;
@@ -213,9 +299,22 @@ interface ViewSection {
  * Навешивает сворачивание на отрендеренный HTML комментария. Идемпотентна:
  * прежние индикаторы и классы скрытия снимаются — функция вызывается на
  * каждом рендере просмотра.
+ *
+ * `factory` (ТП2, требование `e04d84f7`) расширяет сворачивание на блоки
+ * трансклюзий: каждый блок `.md-transclusion` получает собственное состояние
+ * своего пути вставки (рекурсивно, счётчики разделов внутри начинаются заново),
+ * а его заголовки не участвуют в нумерации объемлющей области. Без `factory`
+ * блоки трансклюзий обрабатываются как обычное содержимое (поведение ТП1).
+ * `basePath` — путь вставки текущей области от мысли-контейнера (для рекурсии).
  */
-export function decorateCommentView(view: HTMLElement, state: CommentCollapseState): void {
-  // Идемпотентность: снять прежнюю разметку сворачивания.
+export function decorateCommentView(
+  view: HTMLElement,
+  state: CommentCollapseState,
+  factory?: CollapseScopeFactory,
+  basePath: readonly string[] = [],
+): void {
+  // Идемпотентность: снять прежнюю разметку сворачивания во всём поддереве
+  // (включая блоки трансклюзий — их разметку перестроит рекурсия ниже).
   const existing: HTMLElement[] = [];
   walkElements(view, (node) => existing.push(node));
   for (const node of existing) {
@@ -225,7 +324,13 @@ export function decorateCommentView(view: HTMLElement, state: CommentCollapseSta
 
   const headings: Array<{ node: HTMLElement; siblings: HTMLElement[]; index: number }> = [];
   const nestedBlocks: HTMLElement[] = [];
-  walkElements(view, (node, parent, siblings, index) => {
+  const childBlocks: HTMLElement[] = [];
+  const visit = (
+    node: HTMLElement,
+    parent: HTMLElement,
+    siblings: HTMLElement[],
+    index: number,
+  ): void => {
     const level = headingLevel(node);
     if (level > 0) headings.push({ node, siblings, index });
     const tag = node.tagName.toUpperCase();
@@ -236,7 +341,9 @@ export function decorateCommentView(view: HTMLElement, state: CommentCollapseSta
     ) {
       nestedBlocks.push(node);
     }
-  });
+  };
+  if (factory === undefined) walkElements(view, visit);
+  else walkScope(view, visit, (child) => childBlocks.push(child));
 
   const sections: ViewSection[] = [];
   const levelCounters = new Map<number, number>();
@@ -308,6 +415,18 @@ export function decorateCommentView(view: HTMLElement, state: CommentCollapseSta
   }
 
   apply();
+
+  // Блоки трансклюзий — своё состояние на каждый путь вставки (требование
+  // e04d84f7): рекурсия декорирует блок отдельной областью, счётчики разделов
+  // внутри начинаются заново, а их заголовки не считались внешней областью.
+  if (factory !== undefined) {
+    for (const block of childBlocks) {
+      const sourceId = transclusionSourceId(block);
+      if (sourceId === null) continue;
+      const childPath = [...basePath, sourceId];
+      decorateCommentView(block, factory(childPath), factory, childPath);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

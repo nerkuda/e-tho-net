@@ -307,6 +307,116 @@ describe('сворачивание разделов комментария (edit
     assert.equal(p.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true);
   });
 
+  it('трансклюзии: ключ владельца «контейнер + путь вставки» разделяет состояние', async () => {
+    installShim();
+    const storage = installStorage();
+    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
+
+    // Пустой путь — собственные разделы поля (владелец не расширяется).
+    assert.equal(mod.transclusionCollapseOwnerKey('comment:cA', []), 'comment:cA');
+    // Прямая вставка Б в А и вложенная C-в-Б-в-А — разные ключи (требование e04d84f7).
+    assert.equal(mod.transclusionCollapseOwnerKey('comment:cA', ['B']), 'comment:cA|#B');
+    assert.equal(mod.transclusionCollapseOwnerKey('comment:cA', ['B', 'C']), 'comment:cA|#B#C');
+
+    // Свёртка раздела в Б, вставленном в А, живёт под ключом А+путь…
+    const inA = mod.createCommentCollapseState(
+      'net',
+      mod.transclusionCollapseOwnerKey('comment:cA', ['B']),
+    );
+    inA.setCollapsed('h2#1', true);
+    assert.equal(storage.getItem('comment.collapse.net.comment:cA|#B'), '["h2#1"]');
+
+    // …не влияет на просмотр Б вне А (другой владелец)…
+    const outside = mod.createCommentCollapseState('net', 'comment:cB');
+    assert.equal(outside.isCollapsed('h2#1'), false);
+
+    // …не влияет на вложенный путь C-в-Б-в-А…
+    const nested = mod.createCommentCollapseState(
+      'net',
+      mod.transclusionCollapseOwnerKey('comment:cA', ['B', 'C']),
+    );
+    assert.equal(nested.isCollapsed('h2#1'), false);
+
+    // …и переживает переоткрытие поля (новое состояние видит свёртку).
+    const reopened = mod.createCommentCollapseState(
+      'net',
+      mod.transclusionCollapseOwnerKey('comment:cA', ['B']),
+    );
+    assert.equal(reopened.isCollapsed('h2#1'), true);
+  });
+
+  it('просмотр: сворачивание в трансклюзиях — своё состояние и нумерация на путь вставки', async () => {
+    installShim();
+    installStorage();
+    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
+
+    // Дерево: собственный H2 поля, блок B (H2+тело) и вложенный в него блок C.
+    const view = new ShimElement('div');
+    const ownH2 = new ShimElement('h2');
+    const ownP = new ShimElement('p');
+    view.append(ownH2, ownP);
+
+    const bBlock = new ShimElement('div', 'md-transclusion');
+    bBlock.dataset.transclusionSource = 'B';
+    const bH2 = new ShimElement('h2');
+    const bP = new ShimElement('p');
+    bBlock.append(bH2, bP);
+
+    const cBlock = new ShimElement('div', 'md-transclusion');
+    cBlock.dataset.transclusionSource = 'C';
+    const cH2 = new ShimElement('h2');
+    const cP = new ShimElement('p');
+    cBlock.append(cH2, cP);
+
+    view.append(bBlock);
+    // Блок C вставлен внутрь блока B (путь вставки B→C).
+    bBlock.append(cBlock);
+
+    const paths: string[] = [];
+    const stateB = mod.createCommentCollapseState(
+      'net',
+      mod.transclusionCollapseOwnerKey('comment:cA', ['B']),
+    );
+    const stateC = mod.createCommentCollapseState(
+      'net',
+      mod.transclusionCollapseOwnerKey('comment:cA', ['B', 'C']),
+    );
+    const ownState = mod.createCommentCollapseState('net', 'comment:cA');
+    const factoryFor = (path: readonly string[]): ReturnType<Module['createCommentCollapseState']> => {
+      paths.push(path.join('#'));
+      if (path.length === 1) return stateB;
+      return stateC;
+    };
+
+    ownState.setCollapsed('h2#1', true);
+    mod.decorateCommentView(view as unknown as HTMLElement, ownState, factoryFor);
+
+    // Блоки трансклюзий декорированы как отдельные области (пути B и B#C).
+    assert.deepEqual(paths.sort(), ['B', 'B#C']);
+    // Нумерация разделов внутри каждой области начинается заново: h2#1 в трёх областях.
+    const bToggles = bBlock.findAll(mod.COLLAPSE_TOGGLE_CLASS);
+    assert.equal(bToggles[0]?.dataset['collapseId'], 'h2#1', 'раздел B — h2#1 в своей области');
+    assert.equal(bToggles[1]?.dataset['collapseId'], 'h2#1', 'раздел C — h2#1 в своей области');
+    assert.equal(
+      elementChildren(ownH2)[0]?.dataset['collapseId'],
+      'h2#1',
+      'свой H2 поля — тоже h2#1 (заголовки трансклюзий не сдвинули нумерацию)',
+    );
+
+    // Свёртка раздела в C прячет тело C, не трогая тело B.
+    stateC.setCollapsed('h2#1', true);
+    mod.decorateCommentView(view as unknown as HTMLElement, ownState, factoryFor);
+    assert.equal(cP.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true, 'тело C скрыто');
+    assert.equal(bP.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false, 'тело B не тронуто');
+
+    // Свёртка того же id (h2#1) в B прячет тело B, не трогая тело C.
+    stateC.setCollapsed('h2#1', false);
+    stateB.setCollapsed('h2#1', true);
+    mod.decorateCommentView(view as unknown as HTMLElement, ownState, factoryFor);
+    assert.equal(bP.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true, 'тело B скрыто');
+    assert.equal(cP.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false, 'тело C не тронуто');
+  });
+
   it('регресс: состояние не едет на сервер', async () => {
     installShim();
     installStorage();
