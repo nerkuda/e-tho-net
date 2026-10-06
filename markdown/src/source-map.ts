@@ -8,8 +8,12 @@
  * of the ADR). The contract has two halves:
  *
  * 1. **Rendered side.** With the opt-in `sourceMap` render option every block
- *    element and every inline construct the renderer owns (`==…==`, `<u>`,
- *    wiki-link) carries source offsets as `data-`attributes:
+ *    element and every inline construct carries source offsets as `data-`
+ *    attributes. Renderer-owned constructs (`==…==`, `<u>`, wiki-link) and the
+ *    standard markdown-it inline constructs (`**strong**`, `*em*`, `` `code` ``,
+ *    `~~s~~`) are all annotated — the latter by capturing the delimiter
+ *    positions the built-in inline rules consume, still without a second parse
+ *    (задача `86598085`). The attributes are:
  *    {@link MD_SOURCE_START_ATTR} / {@link MD_SOURCE_END_ATTR} — the range of
  *    the construct's VISIBLE text (a click inside maps into it 1:1);
  *    {@link MD_SOURCE_AFTER_ATTR} — the offset right AFTER the construct
@@ -28,10 +32,18 @@
  *
  * Granularity. Block ranges are exact for their content start (line-leading
  * markup — heading hashes, list bullets, quotes, task boxes — is skipped).
- * Inline constructs owned by the renderer get exact ranges and after-anchors.
- * Inline emphasis/links are NOT annotated (markdown-it does not expose their
- * spans without a second parser, which the ADR forbids): text after such a
- * construct inside one block therefore keeps the block-anchored approximation.
+ * Inline constructs owned by the renderer AND the standard emphasis / code /
+ * strikethrough spans get exact ranges and after-anchors; the delimiter
+ * positions are captured from the built-in inline rules as they tokenize, so
+ * no second parser is introduced. Markdown links and images are still NOT
+ * annotated (their rendered text is a label that may differ from the source
+ * label coordinates); text after such a construct inside one block therefore
+ * keeps the block-anchored approximation.
+ *
+ * A construct is marked `data-md-leaf` (verbatim 1:1 text) only when it has no
+ * annotated descendants: nested constructs (`==a [[Мысль]] b==`,
+ * `**a *b* c**`) are handled through their descendants' after-anchors instead
+ * (задача `86598085`, замечание верификатора проверки `ba68771d`).
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -213,8 +225,33 @@ const RANGE_BLOCK_TYPES = new Set<string>([
   'code_block',
 ]);
 
-/** Inline construct token types whose text is a verbatim source slice. */
-const LEAF_INLINE_TYPES = new Set<string>(['mark_open', 'u_open', 'wiki_link']);
+/**
+ * Inline construct token types that MAY carry {@link MD_SOURCE_LEAF_ATTR} —
+ * their visible text is a verbatim source slice when they own no annotated
+ * descendants. `wiki_link` is absent on purpose: its renderer emits the leaf
+ * attribute itself (the span body is always verbatim).
+ */
+const LEAF_INLINE_TYPES = new Set<string>([
+  'mark_open',
+  'u_open',
+  'strong_open',
+  'em_open',
+  's_open',
+  'code_inline',
+]);
+
+/** True when `token` owns an annotated descendant among `children` after `i`. */
+function hasAnnotatedDescendant(children: readonly Token[], i: number): boolean {
+  const level = children[i]!.level;
+  for (let j = i + 1; j < children.length; j++) {
+    const other = children[j]!;
+    if (other.level <= level) break;
+    const meta = other.meta as RangeCarrier | null;
+    if (meta?.mdRange !== undefined) return true;
+  }
+  return false;
+}
+
 
 /** Absolute content range of a block token (start at first rendered char). */
 function blockRange(
@@ -355,14 +392,14 @@ function stampRanges(state: { src: string; tokens: Token[] }, input: string): vo
     if (token.type !== 'inline' || token.children === null) continue;
     const cm = inlineContentMap(src, lineStarts, token);
     let breaks = 0;
-    for (const child of token.children) {
+    const children = token.children;
+    for (const child of children) {
       const meta = (child.meta ?? (child.meta = {})) as RangeCarrier;
       const relative = meta.mdRelative;
       if (relative !== undefined && relative !== null) {
         const range: SourceRange = { start: cm.absOf(relative.start), end: cm.absOf(relative.end) };
         meta.mdRange = range;
         setRangeAttrs(child, range);
-        if (LEAF_INLINE_TYPES.has(child.type)) child.attrSet(MD_SOURCE_LEAF_ATTR, '1');
       }
       const relativeAfter = meta.mdRelativeAfter;
       if (relativeAfter !== undefined && relativeAfter !== null) {
@@ -376,6 +413,16 @@ function stampRanges(state: { src: string; tokens: Token[] }, input: string): vo
         meta.mdAfter = after;
         child.attrSet(MD_SOURCE_AFTER_ATTR, String(after));
       }
+    }
+    // A construct is a leaf only when it owns no annotated descendant: with a
+    // nested construct (`==a [[Мысль]] b==`, `**a *b* c**`) the verbatim
+    // assumption breaks, and mapping must go through the descendant anchors.
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i]!;
+      if (!LEAF_INLINE_TYPES.has(child.type)) continue;
+      const meta = child.meta as RangeCarrier | null;
+      if (meta?.mdRange === undefined) continue;
+      if (!hasAnnotatedDescendant(children, i)) child.attrSet(MD_SOURCE_LEAF_ATTR, '1');
     }
   }
 }
@@ -396,8 +443,207 @@ function injectRangeAttrs(html: string, range: SourceRange): string {
   return html;
 }
 
+// ---------------------------------------------------------------------------
+// Inline position capture for markdown-it's own constructs
+// (strong / em / code_inline / strikethrough, задача 86598085)
+// ---------------------------------------------------------------------------
+
+/** Marker run of a delimiter-based inline construct (emphasis/strikethrough). */
+interface RecordedMarker {
+  /** Relative offset of the marker run start inside the inline content. */
+  start: number;
+  /** Number of source characters this marker token covers. */
+  length: number;
+}
+
+/** Emphasis-like delimiter entry from markdown-it's inline state. */
+interface InlineDelimiter {
+  marker: number;
+  token: number;
+  end: number;
+}
+
+/**
+ * Minimal structural view of markdown-it's `StateInline` the capture hooks need
+ * (a real state satisfies it; kept local so the package stays DOM/parser-free).
+ */
+interface InlineStateLike {
+  src: string;
+  pos: number;
+  posMax: number;
+  env: unknown;
+  tokens: Token[];
+  delimiters: InlineDelimiter[];
+  tokens_meta: Array<{ delimiters?: InlineDelimiter[] } | null>;
+}
+
+/** A markdown-it inline rule function. */
+type InlineRuleFn = (state: InlineStateLike, silent: boolean) => boolean;
+
+/** One entry of markdown-it's `ruler.__rules__` (internal but stable). */
+interface InlineRuleEntry {
+  name: string;
+  fn: InlineRuleFn;
+}
+
+/**
+ * Replaces a built-in inline rule with a wrapper, keeping its position in the
+ * chain. markdown-it exposes no getter for a rule, so the internal rule list is
+ * read directly (its shape is documented in `ruler.mjs`).
+ */
+function wrapInlineRule(
+  md: MarkdownIt,
+  name: string,
+  wrap: (orig: InlineRuleFn) => InlineRuleFn,
+): void {
+  const ruler = md.inline.ruler as unknown as {
+    __rules__: InlineRuleEntry[];
+    __cache__: unknown;
+  };
+  const entry = ruler.__rules__.find((rule) => rule.name === name);
+  if (entry === undefined) return;
+  entry.fn = wrap(entry.fn);
+  ruler.__cache__ = null;
+}
+
+/** The marker character a delimiter rule is starting on, or null. */
+function delimiterMarker(state: InlineStateLike): string | null {
+  const code = state.src.charCodeAt(state.pos);
+  if (code === 0x2a /* * */ || code === 0x5f /* _ */ || code === 0x7e /* ~ */) {
+    return String.fromCharCode(code);
+  }
+  return null;
+}
+
+/**
+ * Records the source position of every delimiter marker token the just-run
+ * rule pushed. The rule consumes a contiguous run of identical marker
+ * characters starting at `start`; marker tokens are the only `text` tokens in
+ * the range that begin with that character (plain text never does — `*`, `_`
+ * and `~` are terminator characters), so the running cursor stays exact.
+ */
+function recordMarkerPositions(
+  state: InlineStateLike,
+  start: number,
+  beforeTokens: number,
+  beforeDelims: number,
+  marker: string,
+  out: WeakMap<Token, RecordedMarker>,
+): void {
+  const delimiterTokens = new Set<number>();
+  let last = -1;
+  for (let i = beforeDelims; i < state.delimiters.length; i++) {
+    const delimiter = state.delimiters[i]!;
+    delimiterTokens.add(delimiter.token);
+    if (delimiter.token > last) last = delimiter.token;
+  }
+  if (last < 0) return;
+  let cursor = start;
+  for (let i = beforeTokens; i <= last; i++) {
+    const token = state.tokens[i];
+    if (token === undefined || token.type !== 'text') continue;
+    const content = token.content;
+    if (content === '' || content[0] !== marker) continue;
+    if (delimiterTokens.has(i)) out.set(token, { start: cursor, length: content.length });
+    cursor += content.length;
+  }
+}
+
+/**
+ * Converts the recorded marker positions of matched delimiter pairs into
+ * relative source ranges on the OPEN token. Runs in `ruler2` right after the
+ * emphasis/strikethrough post-processing has turned marker tokens into
+ * `strong_open` / `em_open` / `s_open`.
+ */
+function applyDelimiterPairs(
+  state: InlineStateLike,
+  positions: WeakMap<Token, RecordedMarker>,
+): void {
+  const lists: InlineDelimiter[][] = [state.delimiters];
+  for (const meta of state.tokens_meta) {
+    if (meta?.delimiters !== undefined) lists.push(meta.delimiters);
+  }
+  for (const list of lists) {
+    for (const delimiter of list) {
+      if (delimiter.end === -1) continue;
+      const closeDelimiter = list[delimiter.end];
+      if (closeDelimiter === undefined) continue;
+      const open = state.tokens[delimiter.token];
+      const close = state.tokens[closeDelimiter.token];
+      if (open === undefined || close === undefined) continue;
+      const openPos = positions.get(open);
+      const closePos = positions.get(close);
+      if (openPos === undefined || closePos === undefined) continue;
+      const markupLength = open.markup.length;
+      if (markupLength === 0) continue;
+      // A merged `**` open token is the SECOND of two adjacent single-char
+      // marker tokens, so its markup run starts one char earlier.
+      const runStart = openPos.start - Math.max(0, markupLength - openPos.length);
+      const visibleStart = runStart + markupLength;
+      if (visibleStart > closePos.start) continue;
+      const meta = (open.meta ?? (open.meta = {})) as RangeCarrier;
+      meta.mdRelative = { start: visibleStart, end: closePos.start };
+      meta.mdRelativeAfter = closePos.start + markupLength;
+    }
+  }
+}
+
+/** Registers position capture for emphasis-like and code-span inline rules. */
+function installInlineCapture(md: MarkdownIt): void {
+  const positions = new WeakMap<Token, RecordedMarker>();
+
+  for (const name of ['emphasis', 'strikethrough'] as const) {
+    wrapInlineRule(md, name, (orig) => (state, silent) => {
+      const start = state.pos;
+      const beforeTokens = state.tokens.length;
+      const beforeDelims = state.delimiters.length;
+      const marker = silent || !sourceMapEnabled(state.env) ? null : delimiterMarker(state);
+      const ok = orig(state, silent);
+      if (ok && marker !== null) {
+        recordMarkerPositions(state, start, beforeTokens, beforeDelims, marker, positions);
+      }
+      return ok;
+    });
+  }
+
+  wrapInlineRule(md, 'backticks', (orig) => (state, silent) => {
+    const start = state.pos;
+    const before = state.tokens.length;
+    const ok = orig(state, silent);
+    if (silent || !ok || !sourceMapEnabled(state.env)) return ok;
+    const token = state.tokens[state.tokens.length - 1];
+    if (token === undefined || token.type !== 'code_inline' || state.tokens.length <= before) {
+      return ok;
+    }
+    const markupLength = token.markup.length;
+    const end = state.pos;
+    let visibleStart = start + markupLength;
+    let visibleEnd = end - markupLength;
+    // markdown-it strips one leading AND trailing space of a code span when
+    // both are present (CommonMark); mirror it so the range is the visible text.
+    if (/^ (.+) $/.test(state.src.slice(visibleStart, visibleEnd))) {
+      visibleStart += 1;
+      visibleEnd -= 1;
+    }
+    if (visibleStart <= visibleEnd) {
+      const meta = (token.meta ?? (token.meta = {})) as RangeCarrier;
+      meta.mdRelative = { start: visibleStart, end: visibleEnd };
+      meta.mdRelativeAfter = end;
+    }
+    return ok;
+  });
+
+  md.inline.ruler2.after('emphasis', 'source_map_inline', (state) => {
+    if (!sourceMapEnabled(state.env)) return true;
+    applyDelimiterPairs(state as unknown as InlineStateLike, positions);
+    return true;
+  });
+}
+
 /** Registers the source-map rule on the shared renderer. */
 export function sourceMapPlugin(md: MarkdownIt): void {
+  installInlineCapture(md);
+
   md.core.ruler.after('inline', 'source_map', (state) => {
     if (!sourceMapEnabled(state.env)) return;
     const stateArg = state as unknown as { src: string; tokens: Token[] };

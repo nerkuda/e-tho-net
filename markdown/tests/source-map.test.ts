@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   ELEMENT_NODE,
   MD_SOURCE_END_ATTR,
+  MD_SOURCE_LEAF_ATTR,
   MD_SOURCE_START_ATTR,
   TEXT_NODE,
   computeLineStarts,
@@ -398,12 +399,13 @@ test('клик после hardbreak двумя пробелами и обрат�
   assert.equal(clickOffset(slash, 'b', 'b'), slash.indexOf('b'));
 });
 
-test('**bold** остаётся блок-анкерным — задокументированное ADR-ограничение', () => {
-  // Сильный акцент markdown-it не отдаёт позиции без второго парсера (ADR
-  // ee4e721b), поэтому текст после него мапится от начала блока. Фиксируем
-  // текущее поведение явно, чтобы ограничение не потерялось.
+test('**bold** имеет точный диапазон и анкер (задача 86598085)', () => {
+  // Раньше сильный акцент не аннотировался (ADR-ограничение) и текст после него
+  // мапился от начала блока. Теперь позиции маркеров снимаются со встроенного
+  // правила markdown-it без второго парсера.
   const src = '**bold** текст';
-  assert.equal(clickOffset(src, 'текст', 'т'), 5);
+  assert.equal(clickOffset(src, 'текст', 'т'), src.indexOf('текст'));
+  assert.equal(clickOffset(src, 'bold', 'l'), src.indexOf('bold') + 'bold'.indexOf('l'));
 });
 
 // ---------------------------------------------------------------------------
@@ -454,3 +456,124 @@ test('data-md-end заголовка не захватывает закрыва�
   const range = firstRange(html, 'h1');
   assert.deepEqual(range, [src.indexOf('Заголовок'), src.indexOf('Заголовок') + 'Заголовок'.length]);
 });
+
+// ---------------------------------------------------------------------------
+// Задача 86598085: точные якоря для strong/em/code_inline/s и вложенность
+// ---------------------------------------------------------------------------
+
+/** Ожидает: клик `char` внутри `word` даёт исходное смещение этого символа. */
+function assertClickInText(src: string, word: string, char: string): void {
+  const at = word.indexOf(char);
+  assert.notEqual(at, -1, `символ ${char} не найден в ${word}`);
+  assert.equal(clickOffset(src, word, char), src.indexOf(word) + at);
+}
+
+test('strong: диапазон, клик внутри и клик после', () => {
+  const src = 'абзац с **жирным** хвост';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.deepEqual(firstRange(html, 'strong'), [
+    src.indexOf('жирным'),
+    src.indexOf('жирным') + 'жирным'.length,
+  ]);
+  assertClickInText(src, 'жирным', 'н');
+  assert.equal(clickOffset(src, ' хвост', 'х'), src.indexOf('хвост'));
+});
+
+test('em: диапазон, клик внутри и клик после', () => {
+  const src = 'абзац с *курсивом* хвост';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.deepEqual(firstRange(html, 'em'), [
+    src.indexOf('курсивом'),
+    src.indexOf('курсивом') + 'курсивом'.length,
+  ]);
+  assertClickInText(src, 'курсивом', 'с');
+  assert.equal(clickOffset(src, ' хвост', 'х'), src.indexOf('хвост'));
+});
+
+test('code_inline: диапазон, клик внутри и клик после', () => {
+  const src = 'пред `код` после';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.deepEqual(firstRange(html, 'code'), [
+    src.indexOf('код'),
+    src.indexOf('код') + 'код'.length,
+  ]);
+  assertClickInText(src, 'код', 'о');
+  assert.equal(clickOffset(src, ' после', 'п'), src.indexOf('после'));
+});
+
+test('code_inline: снимается выравнивающий пробел по краям (CommonMark)', () => {
+  const src = '` код `';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.deepEqual(firstRange(html, 'code'), [2, 5]);
+  assertClickInText(src, 'код', 'о');
+});
+
+test('s (зачёркивание): диапазон, клик внутри и клик после', () => {
+  const src = 'абзац ~~зачёркнутым~~ хвост';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.deepEqual(firstRange(html, 's'), [
+    src.indexOf('зачёркнутым'),
+    src.indexOf('зачёркнутым') + 'зачёркнутым'.length,
+  ]);
+  assertClickInText(src, 'зачёркнутым', 'ч');
+  assert.equal(clickOffset(src, ' хвост', 'х'), src.indexOf('хвост'));
+});
+
+test('вложенный mark внутри strong не делает strong листом', () => {
+  const src = '**a ==b== c**';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const strong = /<strong([^>]*)>/.exec(html)?.[1] ?? '';
+  assert.ok(strong.includes(MD_SOURCE_START_ATTR), html);
+  assert.ok(!strong.includes(MD_SOURCE_LEAF_ATTR), html);
+  // Клик по тексту после вложенного ==b== идёт через его анкер.
+  assertClickInText(src, 'a ', 'a');
+  assertClickInText(src, ' c', 'c');
+  assertClickInText(src, 'b', 'b');
+});
+
+test('wiki-ссылка внутри mark: mark не лист, клики точны (замечание верификатора)', () => {
+  const src = '==a [[Мысль]] b==';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const mark = /<mark([^>]*)>/.exec(html)?.[1] ?? '';
+  assert.ok(mark.includes(MD_SOURCE_START_ATTR), html);
+  assert.ok(!mark.includes(MD_SOURCE_LEAF_ATTR), html);
+  assert.ok(mark.includes(MD_SOURCE_END_ATTR), html);
+  assertClickInText(src, 'a ', 'a');
+  assertClickInText(src, ' b', 'b');
+  assertClickInText(src, 'Мысль', 'ы');
+});
+
+test('вложенные ***x***: em не лист, strong лист, клик по x точен', () => {
+  const src = '***x***';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const em = /<em([^>]*)>/.exec(html)?.[1] ?? '';
+  const strong = /<strong([^>]*)>/.exec(html)?.[1] ?? '';
+  assert.ok(!em.includes(MD_SOURCE_LEAF_ATTR), html);
+  assert.ok(strong.includes(MD_SOURCE_LEAF_ATTR), html);
+  assertClickInText(src, 'x', 'x');
+});
+
+test('вложенные **a *b* c**: strong не лист, em лист, клики точны', () => {
+  const src = '**a *b* c**';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const strong = /<strong([^>]*)>/.exec(html)?.[1] ?? '';
+  const em = /<em([^>]*)>/.exec(html)?.[1] ?? '';
+  assert.ok(!strong.includes(MD_SOURCE_LEAF_ATTR), html);
+  assert.ok(em.includes(MD_SOURCE_LEAF_ATTR), html);
+  assertClickInText(src, 'a ', 'a');
+  assertClickInText(src, 'b', 'b');
+  assertClickInText(src, ' c', 'c');
+});
+
+test('байт-паритет: вне sourceMap вывод стандартных конструкций не меняется', () => {
+  assert.equal(renderMarkdown('**жирным**'), '<p><strong>жирным</strong></p>\n');
+  assert.equal(renderMarkdown('*курсивом*'), '<p><em>курсивом</em></p>\n');
+  assert.equal(renderMarkdown('`кодом`'), '<p><code>кодом</code></p>\n');
+  assert.equal(renderMarkdown('~~зачёркнутым~~'), '<p><s>зачёркнутым</s></p>\n');
+  assert.equal(
+    renderMarkdown('**a ==b== c**'),
+    '<p><strong>a <mark>b</mark> c</strong></p>\n',
+  );
+  assert.equal(renderMarkdown('***x***'), '<p><em><strong>x</strong></em></p>\n');
+});
+
