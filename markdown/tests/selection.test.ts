@@ -248,15 +248,85 @@ test('границы: глубокая вложенность списка', () 
   assertDisjointRanges(src, units);
 });
 
-test('инвариант: текст единицы (кроме многоабзацного элемента списка) — срез своего диапазона', () => {
-  const src = 'вступление\n\n- один\n- два\n  - вложенный\n\n# Раздел\nтело\n\n## Подраздел\nтело 2';
+test('инвариант: текст ЛЮБОЙ единицы (включая списки) — точный срез своего диапазона', () => {
+  const src =
+    'вступление\n\n- один\n- два\n  - вложенный\n\n# Раздел\nтело\n\n## Подраздел\nтело 2';
   const units = parseSelectionUnits(src);
   const check = (u: MarkdownUnit): void => {
-    if (u.kind !== 'list') assert.equal(u.text, src.slice(u.start, u.end));
+    assert.equal(u.text, src.slice(u.start, u.end), `text !== slice для ${u.kind}`);
     u.children.forEach(check);
   };
   units.forEach(check);
   assertDisjointRanges(src, units);
+});
+
+// ---------------------------------------------------------------------------
+// Хвост после вложенного списка: диапазоны родителя и детей не пересекаются
+// ---------------------------------------------------------------------------
+
+test('содержимое после вложенного списка: родитель до ребёнка, хвост — абзац-ребёнок', () => {
+  const src = '- a\n\n  - b\n\n  c';
+  const units = parseSelectionUnits(src);
+  assert.deepEqual(shape(units), [
+    {
+      kind: 'list',
+      text: '- a',
+      children: [
+        { kind: 'list', text: '  - b', children: [] },
+        { kind: 'paragraph', text: '  c', children: [] },
+      ],
+    },
+  ]);
+  assert.deepEqual(ranges(units).sort((a, b) => a[0] - b[0]), [
+    [0, 3],
+    [5, 10],
+    [12, 15],
+  ]);
+  assertDisjointRanges(src, units);
+});
+
+test('содержимое после вложенного списка: длинный пункт и фенс в хвосте', () => {
+  const withText = '- пункт первый\n\n  - вложенный\n\n  хвост пункта';
+  const units = parseSelectionUnits(withText);
+  assert.deepEqual(shape(units), [
+    {
+      kind: 'list',
+      text: '- пункт первый',
+      children: [
+        { kind: 'list', text: '  - вложенный', children: [] },
+        { kind: 'paragraph', text: '  хвост пункта', children: [] },
+      ],
+    },
+  ]);
+  assertDisjointRanges(withText, units);
+
+  const withFence = '- a\n\n  - b\n\n  ```\n  code\n  ```';
+  const fenced = parseSelectionUnits(withFence);
+  assert.deepEqual(shape(fenced), [
+    {
+      kind: 'list',
+      text: '- a',
+      children: [
+        { kind: 'list', text: '  - b', children: [] },
+        { kind: 'paragraph', text: '  ```\n  code\n  ```', children: [] },
+      ],
+    },
+  ]);
+  assertDisjointRanges(withFence, fenced);
+});
+
+test('многоабзацный пункт без вложенности: text сохраняет пустую строку', () => {
+  const src = '- первый абзац\n\n  второй абзац';
+  const units = parseSelectionUnits(src);
+  assert.equal(units.length, 1);
+  assert.equal(units[0]!.kind, 'list');
+  assert.equal(units[0]!.text, src);
+  assert.equal(units[0]!.text, src.slice(units[0]!.start, units[0]!.end));
+});
+
+test('пустой пункт единицы не даёт', () => {
+  const units = parseSelectionUnits('-\n- второй');
+  assert.deepEqual(shape(units), [{ kind: 'list', text: '- второй', children: [] }]);
 });
 
 test('не-строка отвергается', () => {

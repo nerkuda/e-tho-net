@@ -13,7 +13,10 @@
  * Модель ЕДИНИЦЫ (требование `f5695a1e`):
  *
  * - `list` — маркерный/нумерованный список режется иерархически: каждый
- *   элемент списка — единица, вложенный список — её `children` (правило 1);
+ *   элемент списка — единица, вложенный список — её `children` (правило 1).
+ *   Единица родителя покрывает собственное содержимое элемента ДО первого
+ *   вложенного списка; собственное содержимое ПОСЛЕ него («хвост») — отдельные
+ *   единицы-`paragraph` в `children`; пустой элемент единицы не даёт;
  * - `section` — заголовок (любого уровня) и текст до СЛЕДУЮЩЕГО заголовка;
  *   вложенные разделы — `children` по уровням заголовков, тела разделов не
  *   пересекаются (правило 2 + правило 5 «после первого заголовка — по
@@ -27,12 +30,13 @@
  * собой: выделение разбирается как самостоятельный документ, поэтому неполная
  * часть становится отдельной единицей-абзацем.
  *
- * Каждая единица несёт `text` (сырой markdown собственного содержимого, БЕЗ
- * вложенных единиц) и полуинтервал `[start, end)` в переданной строке
- * выделения — единицы не пересекаются, поэтому на месте каждой можно
- * поставить трансклюзию, сохранив текст между ними. Имя мысли («первая
- * значимая строка», обрезка до 250) вычисляет потребитель по требованию
- * `f64f5893` — разбор его не навязывает.
+ * Каждая единица несёт `text` — ТОЧНЫЙ срез источника по её полуинтервалу
+ * `[start, end)` (`text === source.slice(start, end)`, пустые строки внутри
+ * сохраняются) — и вложенные единицы `children`. Диапазоны ВСЕХ единиц попарно
+ * не пересекаются: родитель заканчивается раньше первого ребёнка, поэтому на
+ * месте каждой единицы можно поставить трансклюзию, а текст между единицами
+ * останется нетронутым. Имя мысли («первая значимая строка», обрезка до 250)
+ * вычисляет потребитель по требованию `f64f5893` — разбор его не навязывает.
  */
 
 import type Token from 'markdown-it/lib/token.mjs';
@@ -273,7 +277,7 @@ function listUnits(
     if (token.level <= listLevel) break;
     if (token.type === 'list_item_open' && token.level === listLevel + 1) {
       const close = matchingClose(tokens, i);
-      units.push(listItemUnit(tokens, i, close, src, lineStarts));
+      units.push(...listItemUnits(tokens, i, close, src, lineStarts));
       i = close + 1;
       continue;
     }
@@ -282,27 +286,42 @@ function listUnits(
   return units;
 }
 
+/** Прямой child элемента списка: собственный блок либо вложенный список. */
+interface ItemPart {
+  kind: 'own' | 'list';
+  start: number;
+  end: number;
+  /** Единицы вложенного списка (для `kind === 'list'`). */
+  units: MarkdownUnit[];
+}
+
 /**
- * Единица одного элемента списка: собственные блоки — `text`, вложенные списки —
- * `children`. Диапазон покрывает только собственное содержимое, поэтому
- * родительская и дочерние единицы не пересекаются.
+ * Единицы одного элемента списка (правило 1). Контракт непересечения диапазонов
+ * держится так: единица родителя покрывает собственное содержимое ОТ НАЧАЛА
+ * элемента до начала первого вложенного списка (ребёнок внутрь не попадает), а
+ * собственное содержимое ПОСЛЕ первого вложенного списка («хвост») становится
+ * отдельными единицами-абзацами в `children` — в порядке документа, после
+ * вложенных элементов. Элемент без вложенных списков — одна единица на весь
+ * свой диапазон (пустые строки между абзацами сохраняются).
+ *
+ * Возвращает массив, потому что элемент без собственного содержимого («пустой
+ * пункт» или пункт, начинающийся сразу с вложенного списка) своей единицы не
+ * даёт — остаются только вложенные.
  */
-function listItemUnit(
+function listItemUnits(
   tokens: readonly Token[],
   openIndex: number,
   closeIndex: number,
   src: string,
   lineStarts: readonly number[],
-): MarkdownUnit {
+): MarkdownUnit[] {
   const open = tokens[openIndex]!;
   const itemLevel = open.level;
   const itemRange = blockRange(open, src, lineStarts);
+  if (itemRange === null) return [];
 
-  const children: MarkdownUnit[] = [];
-  const segments: string[] = [];
-  let ownStart = -1;
-  let ownEnd = -1;
-
+  // Прямые children элемента в порядке документа: собственные блоки и списки.
+  const parts: ItemPart[] = [];
   let i = openIndex + 1;
   while (i < closeIndex) {
     const token = tokens[i]!;
@@ -313,13 +332,14 @@ function listItemUnit(
     if (token.nesting === 1) {
       const close = matchingClose(tokens, i);
       if (token.type === 'bullet_list_open' || token.type === 'ordered_list_open') {
-        children.push(...listUnits(tokens, i, src, lineStarts));
+        const range = blockRange(token, src, lineStarts);
+        if (range !== null) {
+          parts.push({ kind: 'list', start: range.start, end: range.end, units: listUnits(tokens, i, src, lineStarts) });
+        }
       } else {
         const range = blockRange(token, src, lineStarts);
         if (range !== null) {
-          if (ownStart === -1) ownStart = range.start;
-          ownEnd = range.end;
-          segments.push(src.slice(range.start, range.end));
+          parts.push({ kind: 'own', start: range.start, end: range.end, units: [] });
         }
       }
       i = close + 1;
@@ -328,18 +348,41 @@ function listItemUnit(
     if (token.nesting === 0) {
       const range = blockRange(token, src, lineStarts);
       if (range !== null) {
-        if (ownStart === -1) ownStart = range.start;
-        ownEnd = range.end;
-        segments.push(src.slice(range.start, range.end));
+        parts.push({ kind: 'own', start: range.start, end: range.end, units: [] });
       }
     }
     i++;
   }
 
-  const fallbackStart = itemRange?.start ?? ownStart;
-  const start = ownStart === -1 ? fallbackStart : ownStart;
-  const end = ownEnd === -1 ? start : ownEnd;
-  return { kind: 'list', text: segments.join('\n'), start, end, children };
+  if (parts.length === 0) return [];
+
+  const firstListIndex = parts.findIndex((part) => part.kind === 'list');
+  if (firstListIndex === -1) {
+    // Элемент без вложенности — одна единица на весь свой диапазон.
+    const text = src.slice(itemRange.start, itemRange.end);
+    if (text.trim() === '') return [];
+    return [{ kind: 'list', text, start: itemRange.start, end: itemRange.end, children: [] }];
+  }
+
+  // Собственное содержимое после первого вложенного списка — единицы-абзацы.
+  const children: MarkdownUnit[] = [];
+  for (let j = firstListIndex; j < parts.length; j++) {
+    const part = parts[j]!;
+    if (part.kind === 'list') {
+      children.push(...part.units);
+      continue;
+    }
+    const text = src.slice(part.start, part.end);
+    if (text.trim() === '') continue;
+    children.push({ kind: 'paragraph', text, start: part.start, end: part.end, children: [] });
+  }
+
+  // Единица родителя — от начала элемента до первого вложенного списка.
+  const parentStart = itemRange.start;
+  const parentEnd = trimRangeEnd(src, parentStart, parts[firstListIndex]!.start);
+  const parentText = parentStart < parentEnd ? src.slice(parentStart, parentEnd) : '';
+  if (parentText.trim() === '') return children;
+  return [{ kind: 'list', text: parentText, start: parentStart, end: parentEnd, children }];
 }
 
 /**
