@@ -31,10 +31,11 @@
  *      '')`, `.test` без флагов) — не сегментация и под правило не попадает.
  *      Маркерный регэксп, вынесенный в именованную константу и применённый по
  *      имени в нарезке, ловится отдельно — по потоку данных на идентификатор
- *      (см. `filePattern` ниже, ошибки `297b5477` и `292e438c`): `const RE =
- *      /^#{1,6}\s/m; src.split(RE)` — та же нарезка, что и литерал в вызове, а
- *      `const RE = /^#{1,6}\s/gm; src.match(RE)` / `src.replace(RE, '')` —
- *      глобальный проход по всем блокам через константу с флагом `g`.
+ *      (см. `filePattern` ниже, ошибки `297b5477`, `292e438c`, `3c0ed3eb`):
+ *      `const RE = /^#{1,6}\s/m; src.split(RE)` — та же нарезка, что и литерал
+ *      в вызове, а `const RE = /^#{1,6}\s/gm; src.match(RE)` / `src.replace(RE,
+ *      '')` / `RE.exec(src)` / `RE.test(src)` / `RE.search(src)` — глобальный
+ *      проход по всем блокам через константу с флагом `g`.
  *
  * Санкционированный вызов импортированной `parseSelectionUnits` нарушением не
  * считается: правило 1 смотрит на ОБЪЯВЛЕНИЕ, а не на вызов, а `allow`
@@ -196,9 +197,9 @@ const RULE_OWN_UNIT_MODEL: GuardRule = {
  *    такая обработка не покрывает все блоки и нарезкой не является;
  *  - `new RegExp('…маркер…', '…g|m…')` — конструктор с тем же признаком;
  *  - маркерный регэксп за именованной константой, применённый по имени: в
- *    `.split`/`.matchAll` (нарезка, ошибка `297b5477`) и в `.match`/`.replace`
- *    при глобальном (`g`) регэкспе в константе — проход по ВСЕМ совпадениям
- *    (ошибка `292e438c`).
+ *    `.split`/`.matchAll` (нарезка, ошибка `297b5477`) и в `.match`/`.replace`/
+ *    `.exec`/`.test`/`.search` при глобальном (`g`) регэкспе в константе —
+ *    проход по ВСЕМ совпадениям (ошибки `292e438c`, `3c0ed3eb`).
  *
  * Простое деление по строкам (`split(/\r?\n/)`), по пробелам (`split(/\s+/)`),
  * одиночная правка префикса строки (`body.replace(/^#{1,6} /, '')`, `.test`
@@ -251,17 +252,28 @@ const MARKER_REGEX_CTOR_GLOBAL_DECL =
   String.raw`)[^'"\`\n]*['"\`]\s*,\s*['"\`][a-z]*g[a-z]*['"\`]`;
 
 /**
- * Приём, проходящий по ВСЕМ совпадениям глобального регэкспа, применённый к
- * константе по имени: `.replace(RE, …)` (замена всех блоков) и `.match(RE)`
- * (сбор всех совпадений). Требует `g` в объявлении константы — без него замена
- * и сбор ограничены первым совпадением и нарезкой блоков не являются.
+ * Проход по ВСЕМ совпадениям глобального маркерного регэкспа, вынесенного в
+ * константу и применённого по имени. Две формы вызова:
+ *  - константа как АРГУМЕНТ метода строки: `.match(RE)` (сбор совпадений) и
+ *    `.replace(RE, …)` (замена всех блоков);
+ *  - константа как ПОЛУЧАТЕЛЬ метода регэкспа: `RE.exec(text)` (перебор в цикле
+ *    `while (m = RE.exec(…))`), `RE.test(text)` и `RE.search(text)`
+ *    (состоятельный проход: `lastIndex` глобального регэкспа сдвигается на
+ *    каждом вызове).
+ *
+ * Требует `g` в объявлении константы — без него одиночный `.match`/`.replace`/
+ * `.exec`/`.test`/`.search` ограничен первым совпадением и лишь классифицирует
+ * один блок (`transclusion.ts`, `markdown-sections.ts`), нарезкой не является.
+ * `ref` — обратная ссылка на группу-идентификатор в объявлении константы.
  */
-const MATCH_OR_REPLACE_BY_NAME = String.raw`[\s\S]*?\.(?:match|replace)\s*\(\s*`;
+const globalPassByName = (ref: string): string =>
+  String.raw`(?:[\s\S]*?\.(?:match|replace)\s*\(\s*${ref}\b` +
+  String.raw`|[\s\S]*?${ref}\b\s*\.(?:exec|test|search)\s*\()`;
 
 const RULE_OWN_BLOCK_SPLIT_REGEX: GuardRule = {
   name: 'own-selection-block-split-regex',
   description:
-    'нарезка выделения на блоки регулярным выражением вне @etn/markdown: .split/.match/.matchAll/.exec по маркерам markdown-блоков, а также g/m-проход по ним через .replace/.test/.search и new RegExp; маркерный регэксп, вынесенный в именованную константу и применённый по имени в нарезке (.split/.matchAll) либо в глобальном проходе .match/.replace',
+    'нарезка выделения на блоки регулярным выражением вне @etn/markdown: .split/.match/.matchAll/.exec по маркерам markdown-блоков, а также g/m-проход по ним через .replace/.test/.search и new RegExp; маркерный регэксп, вынесенный в именованную константу и применённый по имени в нарезке (.split/.matchAll) либо в глобальном проходе .match/.replace/.exec/.test/.search',
   pattern: new RegExp(
     // Прямое разбиение/перебор совпадений с маркером блока в теле регэкспа.
     `\\.(?:split|match|matchAll|exec)\\s*\\(\\s*\\/[^/\\n]*(?:${BLOCK_MARKER_SRC})` +
@@ -273,24 +285,25 @@ const RULE_OWN_BLOCK_SPLIT_REGEX: GuardRule = {
   /*
    * Нарезка выделения невозможна без обработки ВСЕХ блоков — это либо `.split`
    * по маркеру, либо `.matchAll`-перебор, либо (для константы с флагом `g`)
-   * `.match`/`.replace`, проходящие по всем совпадениям. Поток данных по
-   * идентификатору ведём именно к этим приёмам: одиночный `.exec`/`.test`/
-   * `.replace` без флагов по строке — законная проверка/классификация одного
-   * блока (разбор заголовков трансклюзий `transclusion.ts`/`markdown-sections.ts`,
-   * валидация публикации `/m` в `publication-validation.ts`, правка префикса
-   * строки в `record-title.ts`), нарезкой не является и под правило не попадает.
-   * Объявление маркерного регэкспа само по себе тоже не нарушение — нарушение
-   * даёт связка «константа + проход по всем блокам по имени»: `.split`/`.matchAll`
-   * (ошибка `297b5477`) либо `.match`/`.replace` при `g` в константе (ошибка
-   * `292e438c`). Каждая ветка несёт свою обратную ссылку (`\1`/`\2` — литерал и
-   * конструктор для нарезки, `\3`/`\4` — литерал и конструктор с `g` для
-   * глобального прохода).
+   * `.match`/`.replace`/`.exec`/`.test`/`.search`, проходящие по всем
+   * совпадениям. Поток данных по идентификатору ведём именно к этим приёмам:
+   * одиночный `.exec`/`.test`/`.replace` без флагов по строке — законная
+   * проверка/классификация одного блока (разбор заголовков трансклюзий
+   * `transclusion.ts`/`markdown-sections.ts`, валидация публикации `/m` в
+   * `publication-validation.ts`, правка префикса строки в `record-title.ts`),
+   * нарезкой не является и под правило не попадает. Объявление маркерного
+   * регэкспа само по себе тоже не нарушение — нарушение даёт связка «константа
+   * + проход по всем блокам по имени»: `.split`/`.matchAll` (ошибка `297b5477`)
+   * либо `.match`/`.replace`/`.exec`/`.test`/`.search` при `g` в константе
+   * (ошибки `292e438c`, `3c0ed3eb`). Каждая ветка несёт свою обратную ссылку
+   * (`\1`/`\2` — литерал и конструктор для нарезки, `\3`/`\4` — литерал и
+   * конструктор с `g` для глобального прохода).
    */
   filePattern: new RegExp(
     `${MARKER_REGEX_LITERAL_DECL}${SPLIT_BY_NAME}\\1\\b` +
       `|${MARKER_REGEX_CTOR_DECL}${SPLIT_BY_NAME}\\2\\b` +
-      `|${MARKER_REGEX_LITERAL_GLOBAL_DECL}${MATCH_OR_REPLACE_BY_NAME}\\3\\b` +
-      `|${MARKER_REGEX_CTOR_GLOBAL_DECL}${MATCH_OR_REPLACE_BY_NAME}\\4\\b`,
+      `|${MARKER_REGEX_LITERAL_GLOBAL_DECL}${globalPassByName('\\3')}` +
+      `|${MARKER_REGEX_CTOR_GLOBAL_DECL}${globalPassByName('\\4')}`,
   ),
   include: inSrc,
   allow: (rel, line) => inMarkdownPackage(rel) || isCommentLine(line),
@@ -541,6 +554,81 @@ describe('сторож: разрешение построчное, а не на 
         'export const hasHeading = (t: string): boolean => MARKDOWN_ATX_HEADING.test(t);\n',
     });
     assert.deepEqual(testMultiline, [], formatViolations(testMultiline));
+  });
+
+  it('маркерный регэксп в константе с флагом g, применённый в .exec/.test/.search, краснеет (3c0ed3eb)', () => {
+    const execLoop = scanFixture({
+      'client/src/renderer/editor/exec-loop.ts':
+        'const HEADING_RE = /^#{1,6}\\s/gm;\n' +
+        'export function cut(src: string): string[] {\n' +
+        '  const out: string[] = [];\n' +
+        '  let m: RegExpExecArray | null;\n' +
+        '  while ((m = HEADING_RE.exec(src)) !== null) out.push(m[0]);\n' +
+        '  return out;\n' +
+        '}\n',
+    });
+    assert.ok(
+      execLoop.some((v) => v.rule === 'own-selection-block-split-regex'),
+      `ожидалось нарушение правила 3 (константа с g + .exec в цикле):\n${formatViolations(execLoop)}`,
+    );
+
+    const ctorExec = scanFixture({
+      'client/src/renderer/editor/ctor-exec.ts':
+        "const HEADING_RE = new RegExp('^#{1,6}\\\\s', 'gm');\n" +
+        'export function cut(src: string): string[] {\n' +
+        '  const out: string[] = [];\n' +
+        '  let m: RegExpExecArray | null;\n' +
+        '  while ((m = HEADING_RE.exec(src)) !== null) out.push(m[0]);\n' +
+        '  return out;\n' +
+        '}\n',
+    });
+    assert.ok(
+      ctorExec.some((v) => v.rule === 'own-selection-block-split-regex'),
+      `ожидалось нарушение правила 3 (конструктор с g + .exec):\n${formatViolations(ctorExec)}`,
+    );
+
+    const testGlobal = scanFixture({
+      'client/src/renderer/editor/test-global.ts':
+        'const HEADING_RE = /^#{1,6}\\s/gm;\n' +
+        'export const hasHeading = (src: string): boolean => HEADING_RE.test(src);\n',
+    });
+    assert.ok(
+      testGlobal.some((v) => v.rule === 'own-selection-block-split-regex'),
+      `ожидалось нарушение правила 3 (константа с g + .test):\n${formatViolations(testGlobal)}`,
+    );
+
+    const searchGlobal = scanFixture({
+      'client/src/renderer/editor/search-global.ts':
+        'const HEADING_RE = /^#{1,6}\\s/gm;\n' +
+        'export const at = (src: string): number => HEADING_RE.search(src);\n',
+    });
+    assert.ok(
+      searchGlobal.some((v) => v.rule === 'own-selection-block-split-regex'),
+      `ожидалось нарушение правила 3 (константа с g + .search):\n${formatViolations(searchGlobal)}`,
+    );
+  });
+
+  it('одиночный .exec/.test/.search по неглобальной константе остаётся зелёным (3c0ed3eb)', () => {
+    const execLine = scanFixture({
+      'client/src/renderer/editor/parse-ref.ts':
+        'const HEADING_RE = /^(#{1,6})\\s+(.+)$/;\n' +
+        'export const h = (line: string) => HEADING_RE.exec(line);\n',
+    });
+    assert.deepEqual(execLine, [], formatViolations(execLine));
+
+    const testMultiline = scanFixture({
+      'server/src/domain/validate.ts':
+        'const MARKDOWN_ATX_HEADING = /^\\s{0,3}#{1,6}\\s+\\S/m;\n' +
+        'export const hasHeading = (t: string): boolean => MARKDOWN_ATX_HEADING.test(t);\n',
+    });
+    assert.deepEqual(testMultiline, [], formatViolations(testMultiline));
+
+    const searchLine = scanFixture({
+      'client/src/renderer/editor/find-heading.ts':
+        'const HEADING_RE = /^#{1,6}\\s/;\n' +
+        'export const at = (line: string): number => HEADING_RE.search(line);\n',
+    });
+    assert.deepEqual(searchLine, [], formatViolations(searchLine));
   });
 });
 
