@@ -20,6 +20,7 @@ import {
   parseTransclusions,
   renderMarkdown,
   sourceOffsetFromCaret,
+  TRANSCLUSION_MARKER_PREFIX,
   type SourceMapNode,
 } from '@etn/markdown';
 
@@ -54,7 +55,12 @@ import { createCommentSearch } from './comment-search.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
-import { transclusionEditHostExtension, renderTransclusionView } from './transclusion.js';
+import {
+  defaultTransclusionLoader,
+  transclusionEditHostExtension,
+  transclusionInternals,
+  transclusionLabels,
+} from './transclusion.js';
 import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
 import {
   buildCommentPasteLinks,
@@ -101,20 +107,150 @@ export interface MdSourceSelection {
 }
 
 /**
+ * Один отрезок карты смещений просмотра с трансклюзиями (ошибка 0fdd8c86).
+ * `expStart`/`expEnd` — диапазон в развёрнутом тексте (в его координатах
+ * рендерер размечает позиции), `srcStart` — соответствующая позиция исходника
+ * `body_md`. Для развёрнутого блока трансклюзии (`chunk: true`) позиция внутри
+ * отрезка не имеет 1:1-соответствия: клик по нему входит в правку на саму
+ * ссылку-трансклюзию (`srcStart` — её начало).
+ */
+export interface ViewOffsetSegment {
+  expStart: number;
+  expEnd: number;
+  srcStart: number;
+  chunk?: boolean;
+}
+
+/** Карта «развёрнутый текст просмотра → исходник body_md». */
+export interface ViewOffsetMap {
+  segments: readonly ViewOffsetSegment[];
+}
+
+/** Граница маркерной строки трансклюзии в развёрнутом тексте. */
+const VIEW_CHUNK_MARKER_RE = new RegExp(
+  `^<!--\\s*${TRANSCLUSION_MARKER_PREFIX}\\s+(begin|end|skip|missing)\\b`,
+);
+
+/**
+ * Конец развёрнутого блока трансклюзии, начинающегося в `start` (позиция сразу
+ * после предыдущего неразвёрнутого фрагмента). Парсит уже готовые маркеры
+ * `etn:transclusion` (ADR 85a7a01e), которые кладёт в текст развёртка: `begin`
+ * сбалансирован парным `end` (счёт по строкам), `missing`/`skip` — одна строка.
+ * `null` — маркер не распознан (карту строить нельзя).
+ */
+function transclusionChunkEnd(
+  expanded: string,
+  start: number,
+  ref: { start: number; end: number },
+  raw: string,
+): number | null {
+  let i = start;
+  // wrapBlock мог вставить ведущий перевод строки, когда ссылка не на границе строки.
+  if (expanded[i] === '\n') i += 1;
+  const lineEnd = expanded.indexOf('\n', i);
+  const line = expanded.slice(i, lineEnd === -1 ? expanded.length : lineEnd);
+  const head = VIEW_CHUNK_MARKER_RE.exec(line);
+  if (head === null) return null;
+  // Блок маркеров не несёт завершающего перевода строки (он идёт от самого
+  // исходника); исключать надо только текст маркера.
+  let end = lineEnd === -1 ? expanded.length : lineEnd;
+  if (head[1] === 'begin') {
+    let depth = 0;
+    let pos = i;
+    for (;;) {
+      const le = expanded.indexOf('\n', pos);
+      const at = le === -1 ? expanded.length : le;
+      const marker = VIEW_CHUNK_MARKER_RE.exec(expanded.slice(pos, at));
+      if (marker !== null) {
+        if (marker[1] === 'begin') depth += 1;
+        else if (marker[1] === 'end' && (depth -= 1) === 0) {
+          end = le === -1 ? expanded.length : le;
+          break;
+        }
+      }
+      if (le === -1) return null;
+      pos = le + 1;
+    }
+  }
+  // wrapBlock мог вставить замыкающий перевод строки.
+  if (ref.end < raw.length && raw[ref.end] !== '\n' && expanded[end] === '\n') end += 1;
+  return end;
+}
+
+/**
+ * Строит карту смещений «развёрнутый текст просмотра → исходник» (ошибка
+ * 0fdd8c86). Развёртка трансклюзий заменяет каждую ссылку-трансклюзию блоком
+ * маркеров с текстом источника; неразвёрнутые фрагменты переносятся в
+ * развёрнутый текст дословно, поэтому их позиции отображаются 1:1 (со сдвигом),
+ * а блоки трансклюзий — в позицию ссылки. `null` — трансклюзий нет либо
+ * развёрнутый текст не согласован с исходником (карта не строится, поле
+ * откатывается к прежнему поведению).
+ */
+export function buildExpandedSourceMap(raw: string, expanded: string): ViewOffsetMap | null {
+  const refs = parseTransclusions(raw);
+  if (refs.length === 0) return null;
+  const segments: ViewOffsetSegment[] = [];
+  let src = 0;
+  let exp = 0;
+  for (const ref of refs) {
+    const run = raw.slice(src, ref.start);
+    if (expanded.slice(exp, exp + run.length) !== run) return null;
+    if (run.length > 0) {
+      segments.push({ expStart: exp, expEnd: exp + run.length, srcStart: src });
+    }
+    exp += run.length;
+    const chunkEnd = transclusionChunkEnd(expanded, exp, ref, raw);
+    if (chunkEnd === null) return null;
+    segments.push({ expStart: exp, expEnd: chunkEnd, srcStart: ref.start, chunk: true });
+    exp = chunkEnd;
+    src = ref.end;
+  }
+  if (expanded.slice(exp) !== raw.slice(src)) return null;
+  if (src < raw.length) {
+    segments.push({ expStart: exp, expEnd: expanded.length, srcStart: src });
+  }
+  return { segments };
+}
+
+/**
+ * Переводит смещение в развёрнутом тексте просмотра в позицию исходника по
+ * карте (ошибка 0fdd8c86). Позиция вне карты — `null`.
+ */
+export function mapViewOffsetToSource(map: ViewOffsetMap, offset: number): number | null {
+  let segment: ViewOffsetSegment | null = null;
+  for (const candidate of map.segments) {
+    if (candidate.expStart > offset) break;
+    segment = candidate;
+  }
+  if (segment === null) return null;
+  if (segment.chunk === true) return segment.srcStart;
+  return segment.srcStart + Math.min(offset, segment.expEnd) - segment.expStart;
+}
+
+/**
  * Переводит выделение в просмотре (узлы и смещения DOM) в диапазон исходника
  * markdown через разметку позиций единого рендерера `@etn/markdown`
- * (`sourceOffsetFromCaret`, ADR ee4e721b). `null` — узлы вне размеченного
- * рендера (просмотр без `sourceMap`): вызывающий откатывается к прежнему
- * поведению. Экспортируется для юнит-тестов (задача 189da39e).
+ * (`sourceOffsetFromCaret`, ADR ee4e721b). `map` — карта смещений для просмотра
+ * с развёрнутыми трансклюзиями (ошибка 0fdd8c86): разметка идёт в координатах
+ * развёрнутого текста, карта переводит их в исходник. `null` — узлы вне
+ * размеченного рендера (просмотр без `sourceMap`): вызывающий откатывается к
+ * прежнему поведению. Экспортируется для юнит-тестов (задача 189da39e).
  */
 export function sourceRangeFromSelection(
   anchor: { node: Node | null; offset: number },
   focus: { node: Node | null; offset: number },
+  map?: ViewOffsetMap,
 ): MdSourceSelection | null {
   if (anchor.node === null || focus.node === null) return null;
   const from = sourceOffsetFromCaret(anchor.node as unknown as SourceMapNode, anchor.offset);
   const to = sourceOffsetFromCaret(focus.node as unknown as SourceMapNode, focus.offset);
   if (from === null || to === null) return null;
+  if (map !== undefined) {
+    const anchorSource = mapViewOffsetToSource(map, from);
+    const focusSource = mapViewOffsetToSource(map, to);
+    if (anchorSource === null || focusSource === null) return null;
+    return { anchor: anchorSource, head: focusSource };
+  }
   return { anchor: from, head: to };
 }
 
@@ -242,6 +378,13 @@ export function createMarkdownField(opts: {
   let commitPending = false;
   /** Счётчик рендеров просмотра — защита от гонок асинхронной развёртки трансклюзий (a2b68d72). */
   let renderSeq = 0;
+  /**
+   * Карта смещений текущего просмотра с развёрнутыми трансклюзиями (ошибка
+   * 0fdd8c86): разметка позиций идёт в координатах развёрнутого текста, карта
+   * переводит клик в исходник. `null` — просмотр без развёртки (обычный
+   * `sourceMap`-рендер или серверный HTML).
+   */
+  let viewMap: ViewOffsetMap | null = null;
   /** Снятие контекста сочетаний поля; `null` — контекст не активен. */
   let releaseCommentKeys: (() => void) | null = null;
 
@@ -499,19 +642,38 @@ export function createMarkdownField(opts: {
     // разворачиваются общим механизмом `@etn/markdown`, а рендер рисует блоки с
     // фоном по уровням и плашками ошибок источника. Асинхронно (нужны тексты
     // источников) — с защитой от гонок по счётчику и режиму правки.
+    //
+    // Разметка позиций ведётся по РАЗВЁРНУТОМУ тексту (sourceMap), поэтому
+    // смещения не совпадают с `body_md`; `buildExpandedSourceMap` строит карту
+    // «развёрнутый → исходник», и двойной клик вне блока трансклюзии входит в
+    // правку кареткой в месте клика (ошибка 0fdd8c86). Развёрнутый текст с
+    // маркерами даёт публичный шов `transclusionInternals.expandWithLoader` —
+    // тот же, что использует `renderTransclusionView`.
     if (opts.sourceMapView === true && parseTransclusions(currentMd).length > 0) {
       const seq = ++renderSeq;
       view.replaceChildren();
-      void renderTransclusionView(currentMd, networkId)
-        .then((html) => {
-          if (seq === renderSeq && !editing && html !== null) paintView(html);
+      const md = currentMd;
+      void transclusionInternals
+        .expandWithLoader(md, defaultTransclusionLoader(networkId))
+        .then(({ text }) => {
+          if (seq !== renderSeq || editing) return;
+          const html = renderMarkdown(text, {
+            sourceMap: true,
+            transclusion: { labels: transclusionLabels() },
+          });
+          viewMap = buildExpandedSourceMap(md, text);
+          paintView(html);
         })
         .catch(() => {
-          if (seq === renderSeq && !editing) paintView(currentHtml);
+          if (seq === renderSeq && !editing) {
+            viewMap = null;
+            paintView(currentHtml);
+          }
         });
       return;
     }
     renderSeq += 1;
+    viewMap = null;
     paintView(viewHtml());
   };
 
@@ -716,7 +878,9 @@ export function createMarkdownField(opts: {
   /**
    * Выделение в просмотре → диапазон исходника (задача 189da39e): двойной
    * клик по слову переводит выделение браузера в позиции markdown через
-   * разметку позиций рендерера. `undefined` — разметки нет (просмотр без
+   * разметку позиций рендерера. Для просмотра с развёрнутыми трансклюзиями
+   * смещения разметки — в координатах развёрнутого текста и переводятся картой
+   * `viewMap` (ошибка 0fdd8c86). `undefined` — разметки нет (просмотр без
    * `sourceMapView`) или выделение вне поля — тогда вход в правку без офсета.
    */
   const selectionInView = (): MdSourceSelection | undefined => {
@@ -734,6 +898,7 @@ export function createMarkdownField(opts: {
       sourceRangeFromSelection(
         { node: selection.anchorNode, offset: selection.anchorOffset },
         { node: selection.focusNode, offset: selection.focusOffset },
+        viewMap ?? undefined,
       ) ?? undefined
     );
   };

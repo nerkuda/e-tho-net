@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  expandTransclusions,
   MD_SOURCE_AFTER_ATTR,
   MD_SOURCE_END_ATTR,
   MD_SOURCE_LEAF_ATTR,
@@ -54,7 +55,9 @@ function shimDom(): void {
 }
 
 shimDom();
-const { sourceRangeFromSelection } = await import('../src/renderer/editor/markdown-field.js');
+const { buildExpandedSourceMap, mapViewOffsetToSource, sourceRangeFromSelection } = await import(
+  '../src/renderer/editor/markdown-field.js'
+);
 
 /** Текстовый узел структурной модели резолвера. */
 function textNode(value: string): any {
@@ -136,6 +139,101 @@ describe('маппинг выделения просмотра в исходни
     assert.equal(
       sourceRangeFromSelection({ node: null, offset: 0 }, { node: null, offset: 0 }),
       null,
+    );
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Просмотр с трансклюзиями (ошибка 0fdd8c86)
+ * ------------------------------------------------------------------------- */
+
+const TR_ID = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+
+/** Развёрнутый текст просмотра с маркерами (как его строит поле: expandWithLoader). */
+function expandOnce(raw: string, body: string): string {
+  return expandTransclusions(raw, () => ({ found: true, body_md: body }), { markers: true });
+}
+
+/**
+ * Блок `<p>` с разметкой позиций развёрнутого текста над `text`: имитирует
+ * узел рендера просмотра, по которому пришёл двойной клик.
+ */
+function expandedBlock(expStart: number, text: string): any {
+  return element(
+    { [MD_SOURCE_START_ATTR]: String(expStart), [MD_SOURCE_END_ATTR]: String(expStart + text.length) },
+    [textNode(text)],
+  );
+}
+
+describe('просмотр с трансклюзией: смещения развёртки → исходник (0fdd8c86)', () => {
+  const raw = `Перед блоком.\n\n![[#${TR_ID}]]\n\nПосле блока.\n`;
+  const expanded = expandOnce(raw, 'Текст источника.\n\nВторой абзац источника.');
+
+  it('без трансклюзий карта не строится (прежнее поведение)', () => {
+    const plain = 'Просто текст без развёртки.\n';
+    assert.equal(buildExpandedSourceMap(plain, plain), null);
+    assert.equal(buildExpandedSourceMap('', ''), null);
+  });
+
+  it('неразвёрнутый фрагмент переводится 1:1 (в место клика)', () => {
+    const map = buildExpandedSourceMap(raw, expanded);
+    assert.ok(map !== null);
+    const expStart = expanded.indexOf('После блока.');
+    const srcStart = raw.indexOf('После блока.');
+    assert.ok(expStart > raw.indexOf('После блока.'), 'развёртка сдвигает позицию хвоста');
+    for (let k = 0; k <= 'После блока.'.length; k += 1) {
+      assert.equal(mapViewOffsetToSource(map!, expStart + k), srcStart + k);
+    }
+  });
+
+  it('двойной клик по хвосту входит в правку с кареткой в месте клика', () => {
+    const map = buildExpandedSourceMap(raw, expanded);
+    assert.ok(map !== null);
+    const expStart = expanded.indexOf('После блока.');
+    // «блока» — 2-й и последующие символы слова; клик на границе символов слова.
+    const word = 'блока';
+    const expWordStart = expStart + 'После '.length;
+    const block = expandedBlock(expStart, 'После блока.');
+    const range = sourceRangeFromSelection(
+      { node: block.childNodes[0], offset: 'После '.length },
+      { node: block.childNodes[0], offset: 'После '.length + word.length },
+      map!,
+    );
+    assert.deepEqual(range, {
+      anchor: raw.indexOf('После блока.') + 'После '.length,
+      head: raw.indexOf('После блока.') + 'После '.length + word.length,
+    });
+    // и без карты смещение осталось бы в координатах развёртки (регресс не вернулся)
+    assert.equal(expWordStart, expStart + 'После '.length);
+  });
+
+  it('клик внутри развёрнутого блока ведёт к ссылке-трансклюзии', () => {
+    const map = buildExpandedSourceMap(raw, expanded);
+    assert.ok(map !== null);
+    const refStart = raw.indexOf('![[');
+    const inside = expanded.indexOf('Текст источника');
+    assert.equal(mapViewOffsetToSource(map!, inside), refStart);
+    assert.equal(mapViewOffsetToSource(map!, inside + 3), refStart);
+  });
+
+  it('вложенные трансклюзии и отсутствующий источник разбираются', () => {
+    const inner = `Внутренний.\n\n![[#${TR_ID}]]\n`;
+    const nested = expandOnce(raw, inner);
+    const mapNested = buildExpandedSourceMap(raw, nested);
+    assert.ok(mapNested !== null);
+    assert.equal(
+      mapViewOffsetToSource(mapNested!, nested.indexOf('После блока.')),
+      raw.indexOf('После блока.'),
+    );
+
+    const missing = expandTransclusions(raw, () => ({ found: false, body_md: '' }), {
+      markers: true,
+    });
+    const mapMissing = buildExpandedSourceMap(raw, missing);
+    assert.ok(mapMissing !== null);
+    assert.equal(
+      mapViewOffsetToSource(mapMissing!, missing.indexOf('После блока.')),
+      raw.indexOf('После блока.'),
     );
   });
 });
