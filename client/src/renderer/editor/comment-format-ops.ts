@@ -35,15 +35,21 @@ export type TextEdit = MdEditorEdit;
  * Актуальные границы выделения для правки, позиции которой сняты ДО
  * асинхронного ожидания (чтение/запись буфера обмена, разворот трансклюзий).
  *
- * Возвращает `{ from, to }` ТЕКУЩЕГО выделения, если оно всё ещё содержит тот
- * же текст, что и выделение снимка `before`; иначе `null` — контекст изменился
- * и правку применять нельзя (ошибка `486d0ef1`).
+ * Возвращает `{ from, to }` ТЕКУЩЕГО выделения, если оно по-прежнему стоит на
+ * том же месте, что и выделение снимка `before`; иначе `null` — контекст
+ * изменился и правку применять нельзя (ошибки `486d0ef1`, `253b0dd3`).
  *
  * Абсолютные офсеты `before` после ожидания могли сместиться: правки, вставшие
  * ДО выделения, редактор (CM6) перепрокладывает вместе с выделением, поэтому
- * сверять одни числа нельзя — сверяется содержимое. У пустого выделения
- * (каретка) содержимого нет, поэтому для него возвращается текущая каретка:
- * вставка идёт туда, где каретка стоит сейчас.
+ * сверять одни числа нельзя. Одного среза текста тоже мало: перестановка
+ * выделения на ИДЕНТИЧНЫЙ по тексту фрагмент дала бы тот же срез, и правка ушла
+ * бы не на то вхождение (`253b0dd3`). Поэтому выделение отображается через
+ * фактическую правку документа (разница снимков `before`/`after` = общий
+ * префикс + общий суффикс) и сверяется с текущими границами `after`: «тем же
+ * выделением» считается только то же место с учётом сдвига.
+ *
+ * У пустого выделения (каретка) содержимого нет, поэтому для него возвращается
+ * текущая каретка: вставка идёт туда, где каретка стоит сейчас (приём `486d0ef1`).
  */
 export function relocatedSelection(
   before: EditorSnapshot,
@@ -51,7 +57,50 @@ export function relocatedSelection(
 ): { from: number; to: number } | null {
   const selected = before.text.slice(before.from, before.to);
   if (after.text.slice(after.from, after.to) !== selected) return null;
+  if (before.from === before.to) return { from: after.from, to: after.to };
+  const mapped = mapSpanThroughEdits(before.text, before.from, before.to, after.text);
+  if (mapped === null) return null;
+  if (mapped.from !== after.from || mapped.to !== after.to) return null;
   return { from: after.from, to: after.to };
+}
+
+/**
+ * Отображает диапазон `[from, to)` текста `before` на текст `after` по
+ * единственной охватывающей правке (её границы — с точностью до общего
+ * префикса/суффикса снимков). Позиции до правки остаются на месте, после —
+ * сдвигаются на её дельту; позиция строго внутри заменяемого участка
+ * неопределима, тогда результат `null` — правку применять нельзя.
+ */
+function mapSpanThroughEdits(
+  before: string,
+  from: number,
+  to: number,
+  after: string,
+): { from: number; to: number } | null {
+  const maxPrefix = Math.min(before.length, after.length);
+  let prefix = 0;
+  while (prefix < maxPrefix && before[prefix] === after[prefix]) prefix += 1;
+  let suffix = 0;
+  const maxSuffix = maxPrefix - prefix;
+  while (
+    suffix < maxSuffix &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  const changeFrom = prefix;
+  const changeTo = before.length - suffix;
+  const delta = after.length - before.length;
+  const shift = (pos: number): number | null => {
+    if (pos < changeFrom) return pos;
+    if (pos >= changeTo) return pos + delta;
+    if (pos === changeFrom) return pos;
+    return null;
+  };
+  const mappedFrom = shift(from);
+  const mappedTo = shift(to);
+  if (mappedFrom === null || mappedTo === null) return null;
+  return { from: mappedFrom, to: mappedTo };
 }
 
 /* ------------------------------------------------------------------ *

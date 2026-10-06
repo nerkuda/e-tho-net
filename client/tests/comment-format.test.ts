@@ -495,3 +495,61 @@ describe('comment-format: буфер обмена и устаревшие поз
     assert.deepEqual(editor.edits[0]?.selection, { anchor: 5, head: 5 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Перестановка выделения на идентичный фрагмент (ошибка 253b0dd3)
+// ---------------------------------------------------------------------------
+
+describe('comment-format: идентичные фрагменты и устаревшие позиции (253b0dd3)', () => {
+  beforeEach(async () => {
+    installShim();
+    commands = (await import('../src/renderer/editor/comment-commands.js')) as Commands;
+    commands.commentCommandsInternals.reset();
+    format = (await import('../src/renderer/editor/comment-format.js')) as Format;
+    format.setCommentClipboardPort(null);
+    format.setTransclusionTextPort(null);
+    format.installCommentFormatCommands();
+  });
+
+  it('вырезать: выделение переставлено на идентичный фрагмент — правка отменяется', async () => {
+    const text = 'foo bar foo';
+    const editor = fakeEditor(text, 0, 3); // первое «foo»
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(''),
+      writeText: () => {
+        // Документ не менялся, но выделение переставили на ВТОРОЕ «foo»
+        // (идентичное по тексту) — правку применять нельзя.
+        editor.mutate(text, 8, 11);
+        return Promise.resolve();
+      },
+    });
+
+    commands.runCommentCommand('comment.cut', host(editor));
+    await flush();
+
+    assert.equal(editor.edits.length, 0, 'идентичный фрагмент не должен быть вырезан');
+  });
+
+  it('вырезать: сдвиг документа оставляет правку на ИСХОДНОМ вхождении', async () => {
+    const text = 'foo bar foo';
+    const editor = fakeEditor(text, 0, 3); // первое «foo»
+    format.setCommentClipboardPort({
+      readText: () => Promise.resolve(''),
+      writeText: () => {
+        // Вставка «X » в начало: CM6 сдвинул выделение на +2, но это по-прежнему
+        // ПЕРВОЕ «foo», а не идентичное второе.
+        editor.mutate(`X ${text}`, 2, 5);
+        return Promise.resolve();
+      },
+    });
+
+    commands.runCommentCommand('comment.cut', host(editor));
+    await flush();
+
+    assert.deepEqual(
+      editor.edits[0]?.changes,
+      [{ from: 2, to: 5, insert: '' }],
+      'удаляется исходное вхождение по актуальным позициям',
+    );
+  });
+});

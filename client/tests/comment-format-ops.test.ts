@@ -22,6 +22,7 @@ import {
   isHeadingActive,
   isInlineActive,
   moveLine,
+  relocatedSelection,
   toggleBlockquote,
   toggleBulletList,
   toggleHeading,
@@ -221,5 +222,35 @@ describe('comment-format-ops: перемещение строк и сдвиг', 
     assert.equal(apply('  a', indentLines(snap('  a', 0), 'out').changes), 'a');
     assert.equal(canOutdent(snap('  a', 0)), true);
     assert.equal(canOutdent(snap('a', 0)), false);
+  });
+});
+
+describe('comment-format-ops: перепрокладка выделения (486d0ef1, 253b0dd3)', () => {
+  it('сдвиг документа: выделение отображается на тот же фрагмент по смещению', () => {
+    // Вставка «X » перед текстом: CM6 сдвинул выделение на +2.
+    assert.deepEqual(
+      relocatedSelection(snap('foo bar foo', 0, 3), snap('X foo bar foo', 2, 5)),
+      { from: 2, to: 5 },
+    );
+  });
+
+  it('перестановка на идентичный фрагмент: то же содержимое, другое место — null', () => {
+    // Документ не менялся, но выделение переставлено на второй «foo».
+    assert.equal(relocatedSelection(snap('foo bar foo', 0, 3), snap('foo bar foo', 8, 11)), null);
+  });
+
+  it('изменившееся содержимое выделения — null', () => {
+    assert.equal(relocatedSelection(snap('abc def', 4, 7), snap('abc def', 0, 3)), null);
+  });
+
+  it('каретка: возвращается текущее положение (вставка идёт туда, где каретка)', () => {
+    assert.deepEqual(relocatedSelection(snap('ab', 1, 1), snap('Qab', 2, 2)), { from: 2, to: 2 });
+    assert.deepEqual(relocatedSelection(snap('ab', 1, 1), snap('ab', 0, 0)), { from: 0, to: 0 });
+  });
+
+  it('правка внутри выделения делает отображение неопределимым — null', () => {
+    // Замена 'XYbZ' → 'QYbR' охватывает выделение 'Y' (позиция внутри участка),
+    // содержимое при этом совпадает — позицию по сдвигу определить нельзя.
+    assert.equal(relocatedSelection(snap('aXYbZc', 2, 3), snap('aQYbRc', 2, 3)), null);
   });
 });
