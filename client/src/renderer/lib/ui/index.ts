@@ -393,6 +393,7 @@ export {
   buildIconCatalog,
   loadIconCatalog,
   searchIconCatalog,
+  renderLibraryIcon,
 } from './icon.js';
 export type { IconName, IconOptions, IconCatalog } from './icon.js';
 

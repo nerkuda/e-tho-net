@@ -35,7 +35,7 @@ import type { IconKind, ThoughtRef } from '@etn/shared';
 import { store } from '../state.js';
 import { div, el, renderHighlightedText, setTooltip, span } from './dom.js';
 import { noteFocusOrigin } from './focus-origin.js';
-import { svgIcon } from './ui/icon.js';
+import { renderLibraryIcon, svgIcon } from './ui/icon.js';
 import { contrastText } from './pure.js';
 import { resolveThoughtTypeVisual } from './type-tree.js';
 import { logUiEvent } from './ui-log.js';
@@ -125,10 +125,12 @@ export function resolveThoughtIcon(thought: {
 
 /**
  * Renders a thought's resolved icon into an element: an `<img>` for an
- * `image`-kind icon, otherwise the glyph (own/type default, else 💭). When the
- * icon is backed by an attachment (L16), the `<img>` carries the thought and
- * attachment ids so the Ctrl-hover magnifier shows the attachment's full
- * picture instead of the icon-sized preview.
+ * `image`-kind icon, a Lucide glyph from the facade for an `icon`-kind icon
+ * (requirement ead91183; the full catalog is fetched lazily), otherwise the
+ * emoji glyph (own/type default, else 💭). When the icon is backed by an
+ * attachment (L16), the `<img>` carries the thought and attachment ids so the
+ * Ctrl-hover magnifier shows the attachment's full picture instead of the
+ * icon-sized preview.
  */
 export function applyThoughtIcon(
   iconBox: HTMLElement,
@@ -152,6 +154,11 @@ export function applyThoughtIcon(
       img.dataset['zoomAttachment'] = thought.icon_attachment_id ?? '';
     }
     iconBox.append(img);
+  } else if (ic.kind === 'icon' && ic.icon !== null) {
+    // Библиотечная иконка (icon_kind='icon') — имя в каталоге Lucide, значок
+    // рисует фасад (отложенно: полный каталог грузится лениво). Неизвестное
+    // имя (устаревшие данные) — заглушка, как у отсутствующего глифа.
+    void renderLibraryIcon(iconBox, ic.icon, { size: 24 }, '💭');
   } else {
     iconBox.textContent = ic.icon ?? '💭';
   }

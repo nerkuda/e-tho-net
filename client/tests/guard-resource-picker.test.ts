@@ -4,7 +4,8 @@
  * Правило: диалог выбора ресурса (иконка мысли/типа, обложка публикации,
  * будущие картинки в полях) собирается ТОЛЬКО каркасом
  * `editor/resource-picker.ts` (`createResourcePicker` + источники
- * `emojiSourceTab`/`thoughtIconSourceTab`/`urlSourceTab`/`fileImageSourceTab`).
+ * `emojiSourceTab`/`libraryIconSourceTab`/`thoughtIconSourceTab`/`urlSourceTab`/
+ * `fileImageSourceTab`).
  * Второй самодельный диалог под ту же роль — нарушение.
  *
  * Что проверяется грепом:
@@ -70,10 +71,11 @@ describe('сторож: единый диалог выбора ресурса (d
       {
         name: 'single-resource-sources',
         description:
-          '`createResourcePicker`/`emojiSourceTab`/`thoughtIconSourceTab`/' +
-          'urlSourceTab`/`fileImageSourceTab` — API универсального диалога; ' +
+          '`createResourcePicker`/`emojiSourceTab`/`libraryIconSourceTab`/' +
+          '`thoughtIconSourceTab`/`urlSourceTab`/`fileImageSourceTab` — API ' +
+          'универсального диалога; ' +
           'второй потребитель вне каркаса и адаптеров — второе семейство диалогов.',
-        pattern: /createResourcePicker|emojiSourceTab|thoughtIconSourceTab|urlSourceTab|fileImageSourceTab/,
+        pattern: /createResourcePicker|emojiSourceTab|libraryIconSourceTab|thoughtIconSourceTab|urlSourceTab|fileImageSourceTab/,
         allow: (rel) => SOURCE_CONSUMERS.has(rel),
       },
     ]);

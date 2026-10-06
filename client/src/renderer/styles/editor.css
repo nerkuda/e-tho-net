@@ -589,6 +589,13 @@
   object-fit: contain;
 }
 
+/* Библиотечная иконка (icon_kind='icon') в квадрате редактора — значок Lucide
+   из фасада масштабируется по font-size квадрата (как эмодзи-глиф). */
+.editor-icon-box svg.icon {
+  width: 1em;
+  height: 1em;
+}
+
 /* Editor preloader (0.5.6, bug 9d1d27c9). The icon slot of a freshly-targeted
    thought becomes a small spinning gear while the entity is in flight —
    long loads on heavy thoughts stay visibly "in progress" instead of showing
@@ -735,6 +742,40 @@
 }
 
 .icon-type-cell:hover {
+  background: var(--accent-soft);
+}
+
+/* Библиотечная иконка типа (icon_kind='icon') — значок каталога из фасада
+   lib/ui/icon.ts; масштаб как у эмодзи-глифа ячейки. */
+.icon-type-cell svg.icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Вкладка «Библиотека» диалога иконки (задача 4b80a1b3): живой поиск +
+   сетка значков каталога. Значок рисует фасад lib/ui/icon.ts, ячейка —
+   обёртка-кнопка. */
+.icon-library-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.icon-library-cell {
+  aspect-ratio: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-library-cell:hover {
   background: var(--accent-soft);
 }
 

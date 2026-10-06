@@ -4,7 +4,8 @@
  * Единственный каркас всех диалогов выбора ресурса клиента — иконки мысли/типа,
  * обложки публикации, будущих картинок в полях. Вместо семейства похожих
  * диалогов: общий КАРКАС (вкладки-источники + нижние кнопки) и набор готовых
- * ИСТОЧНИКОВ ресурса (эмодзи, иконки мыслей, URL, файл-картинка). Новый тип
+ * ИСТОЧНИКОВ ресурса (эмодзи, значки библиотеки, иконки мыслей, URL,
+ * файл-картинка). Новый тип
  * ресурса — новая вкладка-источник ({@link ResourceSourceTab}) без правки
  * каркаса; так закрыто требование «точки расширения».
  *
@@ -33,6 +34,13 @@ import { notice } from '../lib/notice.js';
 import { uiButton } from '../lib/ui/button.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { fieldInput } from '../lib/ui/field.js';
+import {
+  loadIconCatalog,
+  renderLibraryIcon,
+  searchIconCatalog,
+  type IconCatalog,
+} from '../lib/ui/icon.js';
+import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 
 /** Оригинал файла-картинки, выбранного системным диалогом (несётся вызывающему). */
 export interface ResourceFileSource {
@@ -228,6 +236,59 @@ export function emojiSourceTab(
 }
 
 /**
+ * Источник «Библиотека» — значки иконочной библиотеки (Lucide) с ЖИВЫМ
+ * поиском по каталогу имён. Клик применяет выбор немедленно
+ * (`icon_kind='icon'`, `icon` = имя значка), как у «Эмодзи»: `apply` у
+ * источника нет, применяет и закрывает диалог обработчик `onPick`. Полный
+ * каталог грузится ЛЕНИВО при первом построении панели (первое открытие
+ * вкладки); до загрузки — подсказка, сетка наполняется `reconcileKeyed` по
+ * фильтру поиска (стандарт инкрементального рендера списков).
+ */
+export function libraryIconSourceTab(
+  onPick: (name: string, ctx: ResourceSourceContext) => void | Promise<void>,
+): ResourceSourceTab {
+  return {
+    id: 'library',
+    label: t('icons.library.tab'),
+    build: (ctx) => {
+      const box = div('icon-source');
+      const row = div('icon-source-row');
+      const input = fieldInput({ type: 'search', placeholder: t('icons.library.search') });
+      row.append(input);
+
+      const hint = el('p', 'muted', t('icons.library.loading'));
+      const grid = div('icon-library-grid');
+      box.append(row, hint, grid);
+
+      let catalog: IconCatalog | null = null;
+      const render = (): void => {
+        if (catalog === null) return;
+        const matched = searchIconCatalog(catalog.names, input.value);
+        const empty = matched.length === 0;
+        hint.textContent = empty ? t('icons.library.empty') : '';
+        hint.style.display = empty ? '' : 'none';
+        reconcileKeyed(grid, matched, {
+          key: (name) => name,
+          build: (name) => {
+            const cell = button('', () => void onPick(name, ctx), 'icon-library-cell');
+            cell.title = name;
+            void renderLibraryIcon(cell, name, { size: 20 });
+            return cell;
+          },
+          update: () => {},
+        });
+      };
+      input.addEventListener('input', render);
+      void loadIconCatalog().then((loaded) => {
+        catalog = loaded;
+        render();
+      });
+      return box;
+    },
+  };
+}
+
+/**
  * Источник «Иконки мыслей» — сетка иконок типов мыслей. Немедленный: клик
  * применяет иконку типа сразу; пустой набор — подсказка.
  */
@@ -258,6 +319,10 @@ export function thoughtIconSourceTab(opts: {
           img.src = type.icon;
           img.alt = '';
           cell.append(img);
+        } else if (type.icon_kind === 'icon' && type.icon !== null) {
+          // Библиотечная иконка типа (icon_kind='icon') — значок каталога
+          // рисует фасад, отложенно (каталог грузится лениво).
+          void renderLibraryIcon(cell, type.icon, { size: 20 }, '💭');
         } else {
           cell.textContent = type.icon ?? '💭';
         }

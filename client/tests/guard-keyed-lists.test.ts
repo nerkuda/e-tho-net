@@ -88,6 +88,11 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
       '(items), выделение синхронизируется точечно (syncSelection)',
   ],
   ['lib/ui/collapsible.ts', 'одиночный слот тела секции'],
+  [
+    'lib/ui/icon.ts',
+    'одиночный слот библиотечного значка (icon_kind=icon): renderLibraryIcon ' +
+      'кладёт один <svg> в иконный узел, это не коллекция списка',
+  ],
   // screens — монтирование экранов, слоты форм/панелей.
   ['screens/screens.ts', 'монтирование экрана целиком (смена сущности)'],
   ['screens/workspace.ts', 'точечная метка масштаба холста'],

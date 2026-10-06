@@ -301,3 +301,33 @@ export function searchIconCatalog(names: readonly string[], query: string): stri
     return tokens.every((token) => lower.includes(token));
   });
 }
+
+/** Номер поколения отложенной отрисовки по узлу — гасит устаревший ответ. */
+const libraryIconGeneration = new WeakMap<HTMLElement, number>();
+
+/**
+ * Рисует значок КАТАЛОГА по имени в узел `host` ОТЛОЖЕННО: полный каталог
+ * достаётся лениво ({@link loadIconCatalog}), поэтому `<svg>` появляется,
+ * когда каталог доступен. Узел при этом становится ОДИНОЧНЫМ слотом значка:
+ * пока каталог не пришёл, он остаётся пустым; имя не из каталога — в слот
+ * кладётся `fallbackText`. Ответ устаревшего вызова (узел уже перерисован
+ * следующим) отбрасывается, поэтому частые перерисовки не накапливаются.
+ */
+export function renderLibraryIcon(
+  host: HTMLElement,
+  name: string,
+  options: IconOptions = {},
+  fallbackText = '',
+): Promise<void> {
+  const generation = (libraryIconGeneration.get(host) ?? 0) + 1;
+  libraryIconGeneration.set(host, generation);
+  return loadIconCatalog().then((catalog) => {
+    if (libraryIconGeneration.get(host) !== generation) return;
+    const node = catalog.node(name);
+    if (node === null) {
+      host.textContent = fallbackText;
+      return;
+    }
+    host.replaceChildren(renderIconNode(node, options));
+  });
+}

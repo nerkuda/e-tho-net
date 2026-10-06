@@ -49,6 +49,7 @@ const ALLOWED_RAW_BUTTON_CLASSES = [
   'settings-md-tab', // вкладки markdown-настроек
   'icon-type-cell', // ячейки выбора иконки
   'emoji-cell', // ячейки эмодзи
+  'icon-library-cell', // ячейки сетки значков вкладки «Библиотека»
   'notice-close', // крестик уведомления (компонент сообщений, T6)
   'history-more', // «остальная история» (компонент истории)
   'pinned-more', // «остальные закреплённые»

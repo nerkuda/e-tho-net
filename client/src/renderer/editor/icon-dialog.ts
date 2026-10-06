@@ -7,10 +7,12 @@
  * закрытие) живёт в {@link createResourcePicker}, а здесь остаётся только
  * конфигурация под иконку и мостик к прежнему контракту `onPick`.
  *
- * Источники: «Эмодзи» (полный набор Unicode 16.0), «Иконки мыслей» (сетка
- * иконок типов), «Файл» (системный выбор картинки с превью ≤256 КиБ) и «URL»
- * (адрес с предпросмотром). «Эмодзи»/«Иконки мыслей» применяются сразу по
- * клику; «Файл»/«URL» — нижней «Применить».
+ * Источники: «Эмодзи» (полный набор Unicode 16.0), «Библиотека» (значки
+ * иконочной библиотеки с поиском), «Иконки мыслей» (сетка иконок типов),
+ * «Файл» (системный выбор картинки с превью ≤256 КиБ) и «URL» (адрес с
+ * предпросмотром). «Эмодзи»/«Библиотека»/«Иконки мыслей» применяются сразу по
+ * клику; «Файл»/«URL» — нижней «Применить». Порядок вкладок: «Эмодзи» —
+ * первая, «Библиотека» — следующая (элемент интерфейса 91367509).
  */
 
 import type { IconKind } from '@etn/shared';
@@ -20,6 +22,7 @@ import {
   createResourcePicker,
   emojiSourceTab,
   fileImageSourceTab,
+  libraryIconSourceTab,
   thoughtIconSourceTab,
   urlSourceTab,
   type ResourceFileSource,
@@ -67,6 +70,7 @@ export function showIconDialog(opts: {
     },
     tabs: [
       emojiSourceTab((glyph, ctx) => submit({ icon: glyph, kind: 'emoji' })(ctx)),
+      libraryIconSourceTab((name, ctx) => submit({ icon: name, kind: 'icon' })(ctx)),
       thoughtIconSourceTab({
         types: store.state.thoughtTypes,
         onPick: (icon, kind, ctx) => submit({ icon, kind })(ctx),
