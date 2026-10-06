@@ -44,7 +44,10 @@ export function markPlugin(md: MarkdownIt): void {
     // to the inline content; the source-map core rule turns it into an absolute
     // `data-md-start`/`data-md-end` pair (задача ba68771d).
     state.push('mark_open', 'mark', 1).markup = '==';
-    state.tokens[state.tokens.length - 1]!.meta = { mdRelative: { start: openEnd, end: close } };
+    state.tokens[state.tokens.length - 1]!.meta = {
+      mdRelative: { start: openEnd, end: close },
+      mdRelativeAfter: close + 2,
+    };
     md.inline.tokenize(state);
     state.pos = close + 2;
     state.posMax = oldMax;

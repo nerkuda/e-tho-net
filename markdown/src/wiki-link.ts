@@ -23,7 +23,13 @@
 import type MarkdownIt from 'markdown-it';
 import type Token from 'markdown-it/lib/token.mjs';
 
-import { MD_SOURCE_END_ATTR, MD_SOURCE_START_ATTR, type SourceRange } from './source-map.js';
+import {
+  MD_SOURCE_AFTER_ATTR,
+  MD_SOURCE_END_ATTR,
+  MD_SOURCE_LEAF_ATTR,
+  MD_SOURCE_START_ATTR,
+  type SourceRange,
+} from './source-map.js';
 
 /** Class of the rendered span (matched by the client's click handler). */
 export const WIKI_LINK_CLASS = 'wiki-link';
@@ -72,6 +78,11 @@ export interface WikiLinkMeta {
    * (or absent) when the span has no visible text of its own.
    */
   mdRelative?: SourceRange | null;
+  /**
+   * Offset right after the closing `]]`, relative to the inline content. Used
+   * as the after-anchor (`data-md-after`) for the text that follows the link.
+   */
+  mdRelativeAfter?: number | null;
 }
 
 /** Relative range of the visible text of a wiki link inside its inline source. */
@@ -191,7 +202,16 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
           ? null
           : visibleRelativeRange(content, start, pipe, alias, target);
       const token = state.push('wiki_link', 'span', 0);
-      token.meta = { target, alias, kind, targetId, networkId, mdRelative } satisfies WikiLinkMeta;
+      token.meta = {
+        target,
+        alias,
+        kind,
+        targetId,
+        networkId,
+        mdRelative,
+        // `]]` closes the link.
+        mdRelativeAfter: close + 2,
+      } satisfies WikiLinkMeta;
     }
     state.pos = close + 2;
     return true;
@@ -227,12 +247,16 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     }
 
     const attrs: string[] = [`class="${WIKI_LINK_CLASS}"`];
-    // Absolute source range resolved by the source-map core rule (задача
+    // Absolute source ranges resolved by the source-map core rule (задача
     // ba68771d); present only when the render opted into position mapping.
-    const mdRange = (meta as WikiLinkMeta & { mdRange?: SourceRange }).mdRange;
-    if (mdRange !== undefined) {
-      attrs.push(`${MD_SOURCE_START_ATTR}="${mdRange.start}"`);
-      attrs.push(`${MD_SOURCE_END_ATTR}="${mdRange.end}"`);
+    const carrier = meta as WikiLinkMeta & { mdRange?: SourceRange; mdAfter?: number };
+    if (carrier.mdRange !== undefined) {
+      attrs.push(`${MD_SOURCE_START_ATTR}="${carrier.mdRange.start}"`);
+      attrs.push(`${MD_SOURCE_END_ATTR}="${carrier.mdRange.end}"`);
+      attrs.push(`${MD_SOURCE_LEAF_ATTR}="1"`);
+    }
+    if (carrier.mdAfter !== undefined) {
+      attrs.push(`${MD_SOURCE_AFTER_ATTR}="${carrier.mdAfter}"`);
     }
 
     if (meta.kind === 'id' || meta.kind === 'cross') {

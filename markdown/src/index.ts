@@ -17,6 +17,8 @@ export { DEFAULT_MAX_LENGTH } from './renderer.js';
 export {
   MD_SOURCE_START_ATTR,
   MD_SOURCE_END_ATTR,
+  MD_SOURCE_AFTER_ATTR,
+  MD_SOURCE_LEAF_ATTR,
   TEXT_NODE,
   ELEMENT_NODE,
   computeLineStarts,

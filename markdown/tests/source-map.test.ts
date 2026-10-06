@@ -57,6 +57,111 @@ function textNode(data: string): SourceMapNode {
 }
 
 // ---------------------------------------------------------------------------
+// Tiny HTML parser: builds a real-structure DOM out of the rendered HTML, so
+// the resolver is exercised against genuine nesting, text nodes and attributes
+// (synthetic nodes with matching lengths hid the resolver drift).
+// ---------------------------------------------------------------------------
+
+const VOID_TAGS = new Set(['br', 'input', 'img', 'hr', 'meta', 'link']);
+
+interface ParsedNode extends SourceMapNode {
+  readonly children: ParsedNode[];
+}
+
+function mkEl(attrs: Record<string, string>): ParsedNode {
+  const kids: ParsedNode[] = [];
+  return {
+    nodeType: ELEMENT_NODE,
+    parentNode: null,
+    get childNodes(): ParsedNode[] {
+      return kids;
+    },
+    get textContent(): string {
+      return kids.map((k) => k.textContent ?? '').join('');
+    },
+    getAttribute(name: string): string | null {
+      return attrs[name] ?? null;
+    },
+    get children(): ParsedNode[] {
+      return kids;
+    },
+  };
+}
+
+function mkText(data: string): ParsedNode {
+  return {
+    nodeType: TEXT_NODE,
+    textContent: data,
+    parentNode: null,
+    childNodes: [],
+  } as unknown as ParsedNode;
+}
+
+function parseHtml(html: string): ParsedNode {
+  const root = mkEl({});
+  const stack: ParsedNode[] = [root];
+  const push = (node: ParsedNode): void => {
+    const parent = stack[stack.length - 1]!;
+    (parent.children as ParsedNode[]).push(node);
+    Object.defineProperty(node, 'parentNode', { value: parent, configurable: true, writable: true });
+  };
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf('<', i);
+    if (lt === -1) {
+      if (i < html.length) push(mkText(html.slice(i)));
+      break;
+    }
+    if (lt > i) push(mkText(html.slice(i, lt)));
+    const gt = html.indexOf('>', lt);
+    const raw = html.slice(lt + 1, gt);
+    i = gt + 1;
+    if (raw.startsWith('/')) {
+      stack.pop();
+      continue;
+    }
+    const name = raw.split(/[\s/>]/)[0]!;
+    const attrs: Record<string, string> = {};
+    const re = /([a-zA-Z-]+)="([^"]*)"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw)) !== null) attrs[m[1]!] = m[2]!;
+    const el = mkEl(attrs);
+    push(el);
+    if (!VOID_TAGS.has(name) && !raw.endsWith('/')) stack.push(el);
+  }
+  return root;
+}
+
+/** Finds the text node whose content contains `needle`. */
+function findText(node: SourceMapNode, needle: string): SourceMapNode | null {
+  if (node.nodeType === TEXT_NODE) return (node.textContent ?? '').includes(needle) ? node : null;
+  const kids = node.childNodes;
+  if (kids !== null) {
+    for (let i = 0; i < kids.length; i++) {
+      const found = findText(kids[i]!, needle);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
+/** Source offset of clicking `char` inside the text node containing `needle`. */
+function clickOffset(src: string, needle: string, char: string): number | null {
+  const root = parseHtml(renderMarkdown(src, { sourceMap: true }));
+  const target = findText(root, needle);
+  if (target === null) return null;
+  const at = (target.textContent ?? '').indexOf(char);
+  return sourceOffsetFromCaret(target, at === -1 ? 0 : at);
+}
+
+/** `[start, end)` of the first `<tag … data-md-start data-md-end …>`. */
+function firstRange(html: string, tag: string): [number, number] | null {
+  const re = new RegExp(`<${tag}[^>]*data-md-start="(\\d+)"[^>]*data-md-end="(\\d+)"`);
+  const m = re.exec(html);
+  return m === null ? null : [Number(m[1]), Number(m[2])];
+}
+
+// ---------------------------------------------------------------------------
 // Default output is unchanged
 // ---------------------------------------------------------------------------
 
@@ -255,4 +360,97 @@ test('смещения считаются в исходной строке с CR
   const html = renderMarkdown(src, { sourceMap: true });
   const start = src.indexOf('Заголовок');
   assert.match(html, new RegExp(`data-md-start="${start}"`), html);
+});
+
+// ---------------------------------------------------------------------------
+// Резолвер: клики ПОСЛЕ inline-конструкций (анкеры data-md-after)
+// ---------------------------------------------------------------------------
+
+test('клик по тексту после ==метка== даёт исходное смещение (анкер)', () => {
+  const src = 'абзац с ==меткой== хвост';
+  assert.equal(clickOffset(src, ' хвост', 'х'), src.indexOf('хвост'));
+});
+
+test('клик по тексту после <u>подч</u> даёт исходное смещение', () => {
+  const src = 'абзац <u>подч</u> хвост';
+  assert.equal(clickOffset(src, ' хвост', 'х'), src.indexOf('хвост'));
+});
+
+test('клик по тексту после wiki-ссылки даёт исходное смещение', () => {
+  const src = 'см. [[Мысль|алиас]] тут';
+  assert.equal(clickOffset(src, ' тут', 'т'), src.indexOf('тут'));
+});
+
+test('клик ВНУТРИ ==метка== по-прежнему точен', () => {
+  const src = 'абзац с ==меткой== хвост';
+  assert.equal(clickOffset(src, 'меткой', 'т'), src.indexOf('меткой') + 2);
+});
+
+test('клик после softbreak (одиночный перенос) даёт исходное смещение', () => {
+  const src = 'x\ny';
+  assert.equal(clickOffset(src, 'y', 'y'), src.indexOf('y'));
+});
+
+test('клик после hardbreak двумя пробелами и обратным слэшем', () => {
+  const bs = 'a  \nb';
+  assert.equal(clickOffset(bs, 'b', 'b'), bs.indexOf('b'));
+  const slash = 'a' + String.fromCharCode(92) + '\nb';
+  assert.equal(clickOffset(slash, 'b', 'b'), slash.indexOf('b'));
+});
+
+test('**bold** остаётся блок-анкерным — задокументированное ADR-ограничение', () => {
+  // Сильный акцент markdown-it не отдаёт позиции без второго парсера (ADR
+  // ee4e721b), поэтому текст после него мапится от начала блока. Фиксируем
+  // текущее поведение явно, чтобы ограничение не потерялось.
+  const src = '**bold** текст';
+  assert.equal(clickOffset(src, 'текст', 'т'), 5);
+});
+
+// ---------------------------------------------------------------------------
+// Blocker 2: база inline-смещений на CRLF и строках-продолжениях
+// ---------------------------------------------------------------------------
+
+test('CRLF: диапазон ==м== и wiki-ссылки считается в исходной строке', () => {
+  const markSrc = 'первый\r\n==м==';
+  assert.deepEqual(firstRange(renderMarkdown(markSrc, { sourceMap: true }), 'mark'), [
+    markSrc.indexOf('м'),
+    markSrc.indexOf('м') + 1,
+  ]);
+  const wikiSrc = 'x\r\n[[Мысль]]';
+  assert.deepEqual(firstRange(renderMarkdown(wikiSrc, { sourceMap: true }), 'span'), [
+    wikiSrc.indexOf('Мысль'),
+    wikiSrc.indexOf('Мысль') + 'Мысль'.length,
+  ]);
+});
+
+test('строка-продолжение цитаты: диапазон конструкции не смещается', () => {
+  const src = '> первая\n> вторая ==м==';
+  assert.deepEqual(firstRange(renderMarkdown(src, { sourceMap: true }), 'mark'), [
+    src.indexOf('м'),
+    src.indexOf('м') + 1,
+  ]);
+});
+
+test('строка-продолжение списка: диапазон конструкции не смещается', () => {
+  const src = '- item a\n  продолжение ==м==';
+  assert.deepEqual(firstRange(renderMarkdown(src, { sourceMap: true }), 'mark'), [
+    src.indexOf('м'),
+    src.indexOf('м') + 1,
+  ]);
+});
+
+test('клик по тексту после конструкции на строке-продолжении цитаты', () => {
+  const src = '> первая\n> вторая ==м== хвост';
+  assert.equal(clickOffset(src, ' хвост', 'х'), src.indexOf('хвост'));
+});
+
+// ---------------------------------------------------------------------------
+// [на усмотрение] end заголовка не захватывает закрывающие «##»
+// ---------------------------------------------------------------------------
+
+test('data-md-end заголовка не захватывает закрывающие «##»', () => {
+  const src = '# Заголовок ##';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const range = firstRange(html, 'h1');
+  assert.deepEqual(range, [src.indexOf('Заголовок'), src.indexOf('Заголовок') + 'Заголовок'.length]);
 });

@@ -62,7 +62,11 @@ export function underlinePlugin(md: MarkdownIt): void {
     // the inline content; resolved to absolute offsets by the source-map rule
     // (задача ba68771d).
     state.push('u_open', 'u', 1).markup = '<u>';
-    state.tokens[state.tokens.length - 1]!.meta = { mdRelative: { start: openEnd, end: close } };
+    state.tokens[state.tokens.length - 1]!.meta = {
+      mdRelative: { start: openEnd, end: close },
+      // `</u>` is four characters.
+      mdRelativeAfter: close + 4,
+    };
     md.inline.tokenize(state);
     state.pos = close + 4;
     state.posMax = oldMax;
