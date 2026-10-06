@@ -8,7 +8,10 @@
  * keep the primary (first) attachment. Two kinds exist:
  *   * `permanent` — at most **one** per owner (enforced by the partial unique
  *     index `idx_comments_permanent_one`) and always exactly one target;
- *     `valid_from = created_at`, `valid_to = NULL`.
+ *     `valid_from = created_at`, `valid_to = NULL`. Уникальность — ПО ЦЕПОЧКЕ
+ *     слоёв: логический id выводится детерминированно от владельца
+ *     (`db/comment-permanent-id.ts`, ошибка 46b93145), поэтому слой и основа
+ *     сходятся в один id, а не заводят по строке.
  *   * `chronological` — unrestricted count; carries `valid_from`/`valid_to`
  *     (always full UTC instants; `valid_to` is never empty — unset equals
  *     `valid_from`, 0.10.1) and 1..N targets. Detaching the last target
@@ -48,6 +51,7 @@ import { enforceLock } from './lock-service.js';
 import type { BodyExpander } from './transclusion-service.js';
 import { transclusionLossWarning } from './transclusion-service.js';
 import type { NetworkDb } from '../db/network-db.js';
+import { permanentCommentId } from '../db/comment-permanent-id.js';
 import {
   deleteRowLayered,
   isBaseContext,
@@ -675,6 +679,12 @@ export function createCommentWithTargets(
     if (kind === 'permanent') {
       // Enforce the "one permanent per owner" invariant ahead of the unique
       // index so we can raise the canonical DUPLICATE error explicitly.
+      // Проверка идёт по `comments_v` (видимые строки цепочки слоёв): из
+      // контекста, где постоянный комментарий владельца уже виден, вторая
+      // попытка отвергается. Из контекста, который строку не видит
+      // (основа при строке в дочернем слое), запись не блокируется, но
+      // сходится с ней в ОДИН логический id (см. `id` ниже) — кросс-слойная
+      // уникальность постоянного комментария (ошибка 46b93145).
       const existing = ndb
         .prepare(
           `SELECT 1 FROM comments_v
@@ -689,7 +699,14 @@ export function createCommentWithTargets(
       }
     }
 
-    const id = randomUUID();
+    // Постоянный комментарий уникален ПО ЦЕПОЧКЕ слоёв (ошибка 46b93145):
+    // его логический id детерминирован от владельца, поэтому независимая
+    // «первая запись» из основы при уже заведённой одноимённой строке в
+    // невидимом дочернем слое сходится с ней в ОДИН id — «ближайший слой
+    // побеждает» отдаёт ровно один видимый постоянный комментарий, а не два
+    // (см. db/comment-permanent-id.ts). Хронологическая запись сохраняет
+    // случайный id: её идентичность — не владелец.
+    const id = kind === 'permanent' ? permanentCommentId(primary.owner_type, primary.owner_id) : randomUUID();
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
     const title = input.title === undefined ? null : input.title;

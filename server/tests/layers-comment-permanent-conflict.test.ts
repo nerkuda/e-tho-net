@@ -1,20 +1,30 @@
 /**
- * Repro/regression test for bug a7d3ef19 (version 0.12.1):
- * "Поиск постоянного комментария LIMIT 1 без ORDER BY — недетерминирован при
- * двух видимых комментариях мысли в цепочке слоёв".
+ * Regression tests for permanent comments across the layer chain.
  *
- * Scenario: a permanent comment is created for a thought in a child layer "A"
- * FIRST (nothing exists anywhere yet), then a permanent comment for the SAME
- * owner is created from the base layer. The base cannot see A's row, so its
- * duplicate check (over `comments_v`) passes and it independently mints a
- * second logical id — `idx_comments_permanent_one` is unique only PER
- * (owner_type, owner_id, layer_id), not along the layer chain.
+ * Bug 46b93145 (version 0.12.1): "Дублирующий постоянный комментарий владельца
+ * на стыке слоёв: защита от дубля и уникальный индекс не действуют по цепочке
+ * слоёв".
  *
- * Back in layer A the connection's chain is `[A, base]`, so `comments_v`
- * reports BOTH rows (different logical ids, one winner each). The old
- * `SELECT … LIMIT 1` without `ORDER BY` picked one arbitrarily; the fix
- * orders by `layer_chain.depth ASC`, so the row from the nearest layer — the
- * version actually visible from this context — wins deterministically.
+ * Root cause. `idx_comments_permanent_one` is unique only PER
+ * `(owner_type, owner_id, layer_id)`, and the duplicate check in
+ * `createCommentWithTargets` reads `comments_v` (visible rows of the current
+ * context). A child layer "A" and the base cannot see each other's rows, so
+ * each independently minted a permanent comment for the SAME owner with a
+ * DIFFERENT random logical id. Back in layer A the connection's chain is
+ * `[A, base]`, so `comments_v` reported BOTH — two visible permanent comments.
+ *
+ * Two covers:
+ *   * write side (the fix): the permanent comment's logical id is derived
+ *     deterministically from the owner natural key
+ *     (`db/comment-permanent-id.ts`, like `property_values` / bug dc119240), so
+ *     an independent "first write" from the base converges with the row already
+ *     held by an invisible child layer into ONE id — exactly one visible winner
+ *     per context, "nearest layer wins" (13-layers.md §4.1).
+ *   * read side (bug a7d3ef19): `getPermanentRow` deterministically picks the
+ *     nearest-layer row even when TWO logical ids for the same owner exist. That
+ *     state is no longer reachable through the API after the write-side fix, so
+ *     it is seeded directly (physical rows) to keep the read-side regression
+ *     covered.
  *
  * Skipped when the `better-sqlite3` native binding is unavailable.
  */
@@ -25,9 +35,10 @@ import { describe, it } from 'node:test';
 
 import DatabaseConstructor from 'better-sqlite3';
 
-import { BASE_LAYER_ID } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
+import { permanentCommentId } from '../src/db/comment-permanent-id.js';
 import {
   createComment,
   getCommentsPreview,
@@ -71,7 +82,33 @@ function seedThought(ndb: NetworkDb, title = 'Владелец'): string {
   return id;
 }
 
-/** Physical `comments` rows of the owner (bypasses `*_v`; audit of both layers). */
+/**
+ * Physically insert a permanent comment row into a specific layer, bypassing
+ * the domain guard (used to synthesise the pre-fix "two logical ids" state that
+ * the read-side fix must still resolve).
+ */
+function seedPhysicalPermanent(
+  ndb: NetworkDb,
+  ownerId: string,
+  layerId: string,
+  bodyMd: string,
+): string {
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  ndb
+    .prepare(
+      `INSERT INTO comments (id, layer_id, deleted, base_version, owner_type, owner_id,
+                             kind, title, body_md, body_html, valid_from, valid_to, use_time,
+                             version, created_at, updated_at, created_by, updated_by,
+                             created_at_ms, updated_at_ms)
+       VALUES (?, ?, 0, 0, 'thought', ?, 'permanent', NULL, ?, '', ?, NULL, 0,
+               1, ?, ?, 'u', 'u', 0, 0)`,
+    )
+    .run(id, layerId, ownerId, bodyMd, bodyMd, now, now);
+  return id;
+}
+
+/** Live physical permanent rows of the owner (both layers; audit). */
 function physicalPermanentBodies(ndb: NetworkDb, ownerId: string): string[] {
   return (
     ndb
@@ -83,17 +120,30 @@ function physicalPermanentBodies(ndb: NetworkDb, ownerId: string): string[] {
   ).map((r) => r.body_md);
 }
 
+/** Visible permanent winners of the owner in the current connection context. */
+function visiblePermanentCount(ndb: NetworkDb, ownerId: string): number {
+  return (
+    ndb
+      .prepare(
+        `SELECT COUNT(*) AS c FROM comments_v
+         WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'permanent'`,
+      )
+      .get(ownerId) as { c: number }
+  ).c;
+}
+
 describe(
-  'permanent comment across layers — deterministic visible winner (bug a7d3ef19)',
+  'permanent comment across layers (bugs 46b93145 / a7d3ef19)',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
     const USER = 'user-1';
 
-    it('nearest layer wins when a layer and the base both hold a permanent comment', () => {
+    it('write side: layer and base converge on ONE logical id (no twin winner)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         insertLayerA(ndb);
         const ownerId = seedThought(ndb);
+        const expectedId = permanentCommentId('thought', ownerId);
 
         // 1. Layer A: the first permanent comment ever for this owner.
         ndb.useLayer(LAYER_A);
@@ -104,9 +154,11 @@ describe(
           { kind: 'permanent', body_md: 'версия слоя' },
           USER,
         );
+        assert.equal(layerComment.id, expectedId, 'id is deterministic from the owner');
 
-        // 2. Base: cannot see A's row, so its duplicate check over `comments_v`
-        // passes — an independent second permanent comment is minted.
+        // 2. Base: cannot see A's row, so the visibility-based duplicate check
+        // passes — but the deterministic id makes it the SAME logical row, not
+        // a second one.
         ndb.useLayer(BASE_LAYER_ID);
         const baseComment = createComment(
           ndb,
@@ -115,36 +167,72 @@ describe(
           { kind: 'permanent', body_md: 'версия основы' },
           USER,
         );
-        assert.notEqual(layerComment.id, baseComment.id);
+        assert.equal(baseComment.id, layerComment.id, 'the twin converges on one logical id');
         assert.deepEqual(physicalPermanentBodies(ndb, ownerId).sort(), [
           'версия основы',
           'версия слоя',
         ]);
 
+        // Base context sees its own (only) winner.
+        assert.equal(visiblePermanentCount(ndb, ownerId), 1);
+        assert.equal(getPermanentFull(ndb, 'thought', ownerId)?.body_md, 'версия основы');
+
+        // 3. Back in layer A the chain is [A, base]: one logical id, nearest
+        // layer wins — exactly one visible permanent comment.
+        ndb.useLayer(LAYER_A);
+        assert.equal(visiblePermanentCount(ndb, ownerId), 1, 'no duplicate winner in layer A');
+        assert.equal(getPermanentFull(ndb, 'thought', ownerId)?.body_md, 'версия слоя');
+        assert.equal(getPermanentPreview(ndb, 'thought', ownerId)?.id, layerComment.id);
+        assert.equal(getCommentsPreview(ndb, 'thought', ownerId).permanent?.body_md, 'версия слоя');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('write side: a second permanent comment visible in the context is rejected', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        insertLayerA(ndb);
+        const ownerId = seedThought(ndb);
+
+        ndb.useLayer(LAYER_A);
+        createComment(ndb, 'thought', ownerId, { kind: 'permanent', body_md: 'версия слоя' }, USER);
+
+        assert.throws(
+          () =>
+            createComment(ndb, 'thought', ownerId, { kind: 'permanent', body_md: 'ещё' }, USER),
+          (err: unknown) => err instanceof EtnError && err.code === 'DUPLICATE',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('read side (a7d3ef19): nearest layer wins among two legacy logical ids', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        insertLayerA(ndb);
+        const ownerId = seedThought(ndb);
+
+        // Synthesise the pre-fix diverged state: two DISTINCT ids, one per layer.
+        const layerId = seedPhysicalPermanent(ndb, ownerId, LAYER_A, 'версия слоя');
+        seedPhysicalPermanent(ndb, ownerId, BASE_LAYER_ID, 'версия основы');
+
         // From the base context only its own row is visible.
         assert.equal(getPermanentFull(ndb, 'thought', ownerId)?.body_md, 'версия основы');
 
-        // 3. Back in layer A the chain is [A, base] — both logical ids are
-        // visible winners for the same owner (the precondition of the bug).
+        // In layer A both logical ids are visible winners for the same owner.
         ndb.useLayer(LAYER_A);
-        const visibleCount = (
-          ndb
-            .prepare(
-              `SELECT COUNT(*) AS c FROM comments_v
-               WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'permanent'`,
-            )
-            .get(ownerId) as { c: number }
-        ).c;
-        assert.equal(visibleCount, 2, 'both permanent comments must be visible in layer A');
+        assert.equal(visiblePermanentCount(ndb, ownerId), 2);
 
         // The visible version (nearest layer) wins, deterministically.
         assert.equal(getPermanentFull(ndb, 'thought', ownerId)?.body_md, 'версия слоя');
-        assert.equal(getPermanentPreview(ndb, 'thought', ownerId)?.id, layerComment.id);
+        assert.equal(getPermanentPreview(ndb, 'thought', ownerId)?.id, layerId);
         assert.equal(getCommentsPreview(ndb, 'thought', ownerId).permanent?.body_md, 'версия слоя');
 
         // Repeat reads stay stable (no order-dependent flip-flop).
         for (let i = 0; i < 5; i += 1) {
-          assert.equal(getPermanentFull(ndb, 'thought', ownerId)?.id, layerComment.id);
+          assert.equal(getPermanentFull(ndb, 'thought', ownerId)?.id, layerId);
         }
       } finally {
         ndb.close();
