@@ -76,6 +76,28 @@ function fakeEditor(text: string, from: number, to: number = from) {
   };
 }
 
+/**
+ * Редактор с изменяемым снимком: тест меняет документ/выделение из порта
+ * создания, воспроизводя правку пользователя во время сетевого `await`
+ * (ошибка `da5e74b0`).
+ */
+function mutableEditor(text: string, from: number, to: number = from) {
+  const state = { text, from, to };
+  const edits: any[] = [];
+  return {
+    snapshot: () => ({ ...state }),
+    applyEdit: (edit: any) => {
+      edits.push(edit);
+    },
+    set: (text2: string, from2: number, to2: number = from2): void => {
+      state.text = text2;
+      state.from = from2;
+      state.to = to2;
+    },
+    edits,
+  };
+}
+
 /** Хост поля с редактором и владельцем комментария. */
 function host(editor: unknown, owner: unknown = { ownerType: 'thought', ownerId: PARENT_ID }) {
   return {
@@ -190,6 +212,27 @@ describe('план: название и тело (правило f64f5893)', () 
     const text = '# A\n\nтело A\n\n# B\n\nтело B';
     const plan = create.planFromSection({ text, from: 5, to: text.length });
     assert.equal(plan, null);
+  });
+
+  it('«из раздела»: каретка на хвостовой пустой строке в конце — раздел предыдущий', () => {
+    // Ошибка 10aa8cd7: parseSelectionUnits обрезает завершающий `\n`, поэтому
+    // каретка в самом конце документа выпадала из диапазона раздела.
+    const text = '# Раздел\n\nтело\n';
+    assert.equal(text.length, 15);
+    for (const caret of [14, text.length]) {
+      const plan = create.planFromSection({ text, from: caret, to: caret });
+      assert.equal(plan?.title, 'Раздел', `каретка ${caret}: команда доступна`);
+      assert.equal(plan?.bodyMd, 'тело');
+      assert.equal(plan?.start, 0);
+      assert.equal(plan?.end, 14, 'замена раздела без хвостового перевода строки');
+    }
+  });
+
+  it('«из раздела»: каретка в конце документа относится к последнему подразделу', () => {
+    const text = '# A\n\n## B\n\nтело B\n';
+    const plan = create.planFromSection({ text, from: text.length, to: text.length });
+    assert.equal(plan?.title, 'B', 'самый вложенный из последних разделов');
+    assert.equal(plan?.bodyMd, 'тело B');
   });
 });
 
@@ -319,6 +362,36 @@ describe('доступность команд (требование 93c0eb7d)', 
       true,
       'вне раздела команда неактивна',
     );
+  });
+
+  it('«из раздела» активна по каретке на завершающем переводе строки (ошибка 10aa8cd7)', () => {
+    const doc = '# Раздел\n\nтело\n';
+    assert.equal(
+      commands.commentCommandState(create.CREATE_FROM_SECTION_COMMAND, {
+        text: doc,
+        from: doc.length,
+        to: doc.length,
+      }).disabled,
+      false,
+    );
+  });
+
+  it('«из выделенного» отключена для выделения без значимой строки (уточнение 93c0eb7d)', () => {
+    // Осознанный контракт (ошибка 10aa8cd7): название обязательно (f64f5893),
+    // поэтому выделение из одних пробелов или маркеров разметки мысли не даёт.
+    for (const [label, doc, from, to] of [
+      ['одни пробелы', '   \n  ', 0, 7],
+      ['только маркеры списка', '-\n-', 0, 3],
+      ['только ограждение кода', '```', 0, 3],
+    ] as const) {
+      assert.equal(create.planFromSelection({ text: doc, from, to }), null, `${label}: плана нет`);
+      assert.equal(
+        commands.commentCommandState(create.CREATE_FROM_SELECTION_COMMAND, { text: doc, from, to })
+          .disabled,
+        true,
+        `${label}: команда отключена`,
+      );
+    }
   });
 });
 
@@ -610,6 +683,113 @@ describe('разделение: доступность и исполнение',
       bodyMd: 'текст B',
     });
     assert.deepEqual(full.comment, { body_md: 'текст B' });
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Гонка позиций после асинхронного создания (ошибка da5e74b0).
+ * ------------------------------------------------------------------ */
+
+describe('перепрокладка правки после await создания (ошибка da5e74b0)', () => {
+  it('из выделенного: правка уходит на сдвинутый диапазон, текст не портится', async () => {
+    const text = 'до\n\nвыделение\n\nпосле';
+    const from = text.indexOf('выделение');
+    const to = from + 'выделение'.length;
+    const editor = mutableEditor(text, from, to);
+    const requests: CommentThoughtCreateRequest[] = [];
+    create.setCommentThoughtCreatePort({
+      resolveParent: async () => PARENT_ID,
+      create: async (request) => {
+        requests.push(request);
+        // Пользователь вставил символ в начало — выделение (CM6) сдвинулось на +1.
+        editor.set(`X${text}`, from + 1, to + 1);
+        return { id: NEW_ID };
+      },
+    });
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(requests.length, 1);
+    assert.deepEqual(editor.edits[0].changes[0], {
+      from: from + 1,
+      to: to + 1,
+      insert: `![[#${NEW_ID}]]`,
+    });
+    assert.equal(editor.edits[0].selection.anchor, from + 1 + `![[#${NEW_ID}]]`.length);
+  });
+
+  it('из раздела: замена всего раздела по актуальным позициям', async () => {
+    const text = '# Раздел\n\nтело';
+    const caret = text.indexOf('тело') + 2;
+    const editor = mutableEditor(text, caret);
+    const requests: CommentThoughtCreateRequest[] = [];
+    create.setCommentThoughtCreatePort({
+      resolveParent: async () => PARENT_ID,
+      create: async (request) => {
+        requests.push(request);
+        // Правка ДО раздела (целая строка) сдвигает и каретку, и границы
+        // раздела на +2, не ломая заголовок.
+        editor.set(`X\n${text}`, caret + 2);
+        return { id: NEW_ID };
+      },
+    });
+
+    commands.runCommentCommand(create.CREATE_FROM_SECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(requests.length, 1);
+    assert.deepEqual(editor.edits[0].changes[0], {
+      from: 2,
+      to: text.length + 2,
+      insert: `![[#${NEW_ID}]]`,
+    });
+  });
+
+  it('контекст изменился (правка внутри выделения) — правка отменяется', async () => {
+    const text = 'до\n\nвыделение\n\nпосле';
+    const from = text.indexOf('выделение');
+    const to = from + 'выделение'.length;
+    const editor = mutableEditor(text, from, to);
+    create.setCommentThoughtCreatePort({
+      resolveParent: async () => PARENT_ID,
+      create: async () => {
+        // Пользователь изменил сам выделенный текст — перепрокладка невозможна.
+        editor.set(text.replace('выделение', 'ДРУГОЕ!!'), from, from + 'ДРУГОЕ!!'.length);
+        return { id: NEW_ID };
+      },
+    });
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(editor.edits.length, 0, 'устаревшую правку не применяем');
+  });
+
+  it('разделение: все трансклюзии уезжают по сдвинутым позициям', async () => {
+    const text = 'абзац один\n\nабзац два';
+    const editor = mutableEditor(text, 0, text.length);
+    let mutated = false;
+    const { port } = sequencePort();
+    create.setCommentThoughtCreatePort({
+      ...port,
+      create: async (request: CommentThoughtCreateRequest) => {
+        if (!mutated) {
+          mutated = true;
+          // Первая из нескольких сетевых ступеней: сдвиг документа на +2.
+          editor.set(`X ${text}`, 2, text.length + 2);
+        }
+        return (await port.create(request)) as { id: string };
+      },
+    });
+
+    commands.runCommentCommand('comment.split', host(editor));
+    await flush();
+
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 2, to: 12, insert: `![[#${UNIT_IDS[0]}]]` },
+      { from: 14, to: 23, insert: `![[#${UNIT_IDS[1]}]]` },
+    ]);
   });
 });
 

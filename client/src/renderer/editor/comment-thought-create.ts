@@ -46,6 +46,7 @@ import {
   type CommentCommandContext,
   type CommentOwnerRef,
 } from './comment-commands.js';
+import { relocatedSelection } from './comment-format-ops.js';
 import type { MdEditor, MdEditorSnapshot } from './md-editor.js';
 
 /** Идентификатор команды «Создать мысль из раздела». */
@@ -250,9 +251,20 @@ export function sectionBody(text: string): string {
  * Единица-раздел, содержащая позицию `pos` (по всему тексту документа):
  * самая глубокая из разделов, в чей диапазон `[start, end]` попадает позиция;
  * `null` — позиция вне разделов (например, до первого заголовка).
+ *
+ * Хвостовые пустые строки в конце документа `parseSelectionUnits` обрезает
+ * (диапазон раздела не включает завершающий перевод строки), поэтому каретка на
+ * обычном завершающем `\n` выпадала из всех диапазонов и команда молча
+ * отключалась. Такую позицию относим к последнему разделу (ошибка `10aa8cd7`).
  */
 export function findSectionUnitAt(text: string, pos: number): MarkdownUnit | null {
-  return searchSection(parseSelectionUnits(text), pos);
+  const units = parseSelectionUnits(text);
+  const found = searchSection(units, pos);
+  if (found !== null) return found;
+  const tail = /[ \t\r\n]*$/.exec(text)?.[0] ?? '';
+  const regionEnd = text.length - tail.length;
+  if (pos >= regionEnd && pos <= text.length) return lastSection(units);
+  return null;
 }
 
 function searchSection(units: readonly MarkdownUnit[], pos: number): MarkdownUnit | null {
@@ -261,6 +273,16 @@ function searchSection(units: readonly MarkdownUnit[], pos: number): MarkdownUni
     const nested = searchSection(unit.children, pos);
     if (nested !== null) return nested;
     return unit.kind === 'section' ? unit : null;
+  }
+  return null;
+}
+
+/** Последний (самый вложенный из последних) раздел леса; `null` — разделов нет. */
+function lastSection(units: readonly MarkdownUnit[]): MarkdownUnit | null {
+  for (let i = units.length - 1; i >= 0; i--) {
+    const unit = units[i]!;
+    if (unit.kind !== 'section') continue;
+    return lastSection(unit.children) ?? unit;
   }
   return null;
 }
@@ -280,7 +302,13 @@ export function planFromSection(snap: MdEditorSnapshot): CommentThoughtPlan | nu
 
 /**
  * План команды «Создать мысль из выделенного»: одна мысль из всего выделения.
- * `null` — выделения нет или оно пустое/без значимой строки.
+ * `null` — выделения нет, оно пустое, либо в нём нет значимой строки для
+ * названия (выделение из одних пробелов/маркеров разметки).
+ *
+ * Выделение без значимой строки команда осознанно не создаёт: название мысли
+ * обязательно (правило `f64f5893` — первая значимая строка), а придумывать
+ * запасное имя вне правил нельзя. Требование `93c0eb7d` уточнено: «при любом
+ * непустом выделении, из которого строится название» (ошибка `10aa8cd7`).
  */
 export function planFromSelection(snap: MdEditorSnapshot): CommentThoughtPlan | null {
   if (snap.from === snap.to) return null;
@@ -377,13 +405,45 @@ export function planSplitSelection(snap: MdEditorSnapshot): SplitSelectionNode[]
  * Тела команд.
  * ------------------------------------------------------------------ */
 
+/** Строитель плана команды по снимку редактора (`из раздела`/`из выделенного`). */
+export type CommentThoughtPlanBuilder = (
+  snap: MdEditorSnapshot,
+) => CommentThoughtPlan | null;
+
+/**
+ * Перепрокладывает план на актуальное состояние документа после асинхронного
+ * создания мыслей (ошибка `da5e74b0`, приём исправления `486d0ef1`).
+ *
+ * Позиции `plan.start`/`plan.end` сняты ДО сетевого ожидания и к моменту правки
+ * могли устареть (CM6 смещает выделение вместе с чужими правками, но не наши
+ * сохранённые офсеты). {@link relocatedSelection} даёт актуальные границы
+ * выделения, если его текст не изменился; по ним план строится заново. Возврат
+ * `null` — контекст изменился (текст выделения/раздела другой), правку применять
+ * нельзя: команда безопасно отменяется, чтобы не испортить текст.
+ */
+function relocatePlan(
+  before: MdEditorSnapshot,
+  after: MdEditorSnapshot,
+  build: CommentThoughtPlanBuilder,
+  plan: CommentThoughtPlan,
+): CommentThoughtPlan | null {
+  const sel = relocatedSelection(before, after);
+  if (sel === null) return null;
+  const next = build({ text: after.text, from: sel.from, to: sel.to });
+  if (next === null) return null;
+  if (next.title !== plan.title || next.bodyMd !== plan.bodyMd) return null;
+  return next;
+}
+
 /** Создаёт мысль по плану и ставит трансклюзию на месте фрагмента. */
 async function createAndReplace(
   editor: MdEditor,
   plan: CommentThoughtPlan,
+  build: CommentThoughtPlanBuilder,
   owner: CommentOwnerRef,
 ): Promise<void> {
   const port = commentThoughtCreatePort();
+  const before = editor.snapshot();
   try {
     const parentId = await port.resolveParent(owner);
     if (parentId === null) {
@@ -391,10 +451,12 @@ async function createAndReplace(
       return;
     }
     const created = await port.create({ parentId, title: plan.title, bodyMd: plan.bodyMd });
+    const next = relocatePlan(before, editor.snapshot(), build, plan);
+    if (next === null) return; // документ изменился — правку не применяем
     const insert = formatTransclusionRef(created.id);
     editor.applyEdit({
-      changes: [{ from: plan.start, to: plan.end, insert }],
-      selection: { anchor: plan.start + insert.length },
+      changes: [{ from: next.start, to: next.end, insert }],
+      selection: { anchor: next.start + insert.length },
     });
   } catch (err) {
     notice(`${t('comment.create.error')}: ${errText(err)}`, 'error');
@@ -402,14 +464,12 @@ async function createAndReplace(
 }
 
 /** Общий ход команды: план → владелец → асинхронное создание. */
-function runCreate(
-  ctx: CommentCommandContext,
-  plan: CommentThoughtPlan | null,
-): boolean {
+function runCreate(ctx: CommentCommandContext, build: CommentThoughtPlanBuilder): boolean {
+  const plan = build(ctx.editor.snapshot());
   if (plan === null) return false;
   const owner = ctx.getCommentOwner();
   if (owner === null) return false;
-  void createAndReplace(ctx.editor, plan, owner);
+  void createAndReplace(ctx.editor, plan, build, owner);
   return true;
 }
 
@@ -418,12 +478,47 @@ function runCreate(
  * ------------------------------------------------------------------ */
 
 /**
+ * Собирает узлы леса в порядке документа (pre-order) — сверка и правки идут по
+ * одному порядку, поэтому id созданных мыслей сопоставляются позициям по индексу.
+ */
+function flattenSplit(nodes: readonly SplitSelectionNode[]): SplitSelectionNode[] {
+  const flat: SplitSelectionNode[] = [];
+  const walk = (list: readonly SplitSelectionNode[]): void => {
+    for (const node of list) {
+      flat.push(node);
+      walk(node.children);
+    }
+  };
+  walk(nodes);
+  return flat;
+}
+
+/** Совпадает ли лес единиц до и после ожидания (структура, названия, тела). */
+function sameSplitShape(
+  a: readonly SplitSelectionNode[],
+  b: readonly SplitSelectionNode[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.title !== y.title || x.bodyMd !== y.bodyMd) return false;
+    if (!sameSplitShape(x.children, y.children)) return false;
+  }
+  return true;
+}
+
+/**
  * Создаёт по мысли на каждую единицу плана и заменяет каждую единицу её
  * трансклюзией. Обход — в порядке документа, родитель создаётся прежде
  * ребёнка: под-мысль вложенной единицы получает родителем id мысли-родителя,
  * а не текущую мысль контейнера (элемент интерфейса `2a21c27e`). Правки
  * диапазонов не пересекаются (`parseSelectionUnits`), поэтому уезжают одной
  * транзакцией редактора; текст вне единиц остаётся на месте.
+ *
+ * Создание мыслей — сетевые `await`; после них план перепрокладывается по
+ * актуальному документу, а при расхождении контекста правка отменяется
+ * (ошибка `da5e74b0`, приём `486d0ef1`).
  */
 async function splitAndReplace(
   editor: MdEditor,
@@ -431,14 +526,15 @@ async function splitAndReplace(
   owner: CommentOwnerRef,
 ): Promise<void> {
   const port = commentThoughtCreatePort();
+  const before = editor.snapshot();
   try {
     const parentId = await port.resolveParent(owner);
     if (parentId === null) {
       notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`, 'error');
       return;
     }
-    const changes: Array<{ from: number; to: number; insert: string }> = [];
-    let caret: number | null = null;
+    // id созданных мыслей в порядке документа (pre-order) — сверяется с планом.
+    const ids: string[] = [];
     const walk = async (
       list: readonly SplitSelectionNode[],
       parent: string,
@@ -449,14 +545,29 @@ async function splitAndReplace(
           title: node.title,
           bodyMd: node.bodyMd,
         });
-        const insert = formatTransclusionRef(created.id);
-        changes.push({ from: node.start, to: node.end, insert });
-        if (caret === null) caret = node.start + insert.length;
+        ids.push(created.id);
         await walk(node.children, created.id);
       }
     };
     await walk(nodes, parentId);
-    editor.applyEdit({ changes, selection: { anchor: caret ?? 0 } });
+
+    // Позиции плана сняты ДО сетевых await — перепрокладываем по актуальному
+    // выделению; расхождение контекста отменяет правку (`da5e74b0`).
+    const after = editor.snapshot();
+    const sel = relocatedSelection(before, after);
+    const next =
+      sel === null ? null : planSplitSelection({ text: after.text, from: sel.from, to: sel.to });
+    if (next === null || !sameSplitShape(nodes, next)) return;
+    const flat = flattenSplit(next);
+    if (flat.length !== ids.length) return;
+    const inserts = ids.map((id) => formatTransclusionRef(id));
+    const changes = flat.map((node, i) => ({
+      from: node.start,
+      to: node.end,
+      insert: inserts[i]!,
+    }));
+    const caret = flat[0] === undefined ? 0 : flat[0].start + inserts[0]!.length;
+    editor.applyEdit({ changes, selection: { anchor: caret } });
   } catch (err) {
     notice(`${t('comment.create.error')}: ${errText(err)}`, 'error');
   }
@@ -481,11 +592,11 @@ function runSplit(ctx: CommentCommandContext): boolean {
  */
 export function installCommentThoughtCreateCommands(): void {
   registerCommentCommand('comment.createFromSection', {
-    run: (ctx) => runCreate(ctx, planFromSection(ctx.editor.snapshot())),
+    run: (ctx) => runCreate(ctx, planFromSection),
     state: (snap) => ({ disabled: planFromSection(snap) === null }),
   });
   registerCommentCommand('comment.createFromSelection', {
-    run: (ctx) => runCreate(ctx, planFromSelection(ctx.editor.snapshot())),
+    run: (ctx) => runCreate(ctx, planFromSelection),
     state: (snap) => ({ disabled: planFromSelection(snap) === null }),
   });
   registerCommentCommand('comment.split', {
