@@ -352,8 +352,10 @@ function hasAnnotatedDescendant(children: readonly Token[], i: number): boolean 
  * itself rather than by a `text` child — but a delta is only RECORDED for runs
  * at the construct's own text level. A run inside a nested construct belongs to
  * that construct's own map / `data-md-after` anchor, so recording it here too
- * would double-count it when the anchor is the base. Constructs that own none
- * of these runs (a link/image label) are honest limits (see the module head).
+ * would double-count it when the anchor is the base. A link/autolink label is
+ * annotated too and its runs are counted here like any other construct (ошибка
+ * `809fb567`); only an image owns none of these runs, because its label renders
+ * to the `alt` attribute rather than to characters.
  *
  * `hidden` marks a run that renders ZERO characters but occupies source — the
  * `text_special` marker the `html_comment` inline rule leaves for an embedded
