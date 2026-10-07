@@ -139,6 +139,10 @@ export const TRANSCLUSION_ID_CLASS = 'cm-transclusion-id';
 export const TRANSCLUSION_EDITING_CLASS = 'cm-transclusion-block--editing';
 /** Диапазон редактируемого текста блока в режиме правки (задача e2c14673). */
 export const TRANSCLUSION_EDIT_RANGE_CLASS = 'cm-transclusion-edit-range';
+/** Первая строка вложенного поля правки блока (ошибка 9c2e077a). */
+export const TRANSCLUSION_EDIT_FIRST_CLASS = 'cm-transclusion-edit-range--first';
+/** Последняя строка вложенного поля правки блока (ошибка 9c2e077a). */
+export const TRANSCLUSION_EDIT_LAST_CLASS = 'cm-transclusion-edit-range--last';
 /** «Замочек» блока при чужом захвате источника (задача f59d24e1). */
 export const TRANSCLUSION_LOCK_CLASS = 'cm-transclusion-lock';
 
@@ -675,6 +679,27 @@ function intersects(
 /** Пустая карта чужих захватов (значение по умолчанию). */
 const NO_LOCKS: ReadonlyMap<string, string> = new Map();
 
+/** Офсеты начал строк текста — для линейных декораций рамки правки блока. */
+function lineStartOffsets(source: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source.charCodeAt(i) === 10) starts.push(i + 1);
+  }
+  return starts;
+}
+
+/** Индекс строки, содержащей позицию `pos` (двоичный поиск по началам строк). */
+function lineIndexAt(starts: readonly number[], pos: number): number {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid]! <= pos) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
 /** Строит декорации и атомарные диапазоны для текущего состояния. */
 export function buildTransclusionDecorations(
   source: string,
@@ -794,17 +819,30 @@ export function buildTransclusionDecorations(
     });
   }
 
-  // Рамка вокруг редактируемого текста блока (задача e2c14673): mark-декорация
-  // на весь диапазон — визуально «как у облачка, открытого в редакторе».
-  const docLen = source.length;
+  // Вложенное поле правки блока (ошибка 9c2e077a): рамку рисуем ЛИНЕЙНЫМИ
+  // декорациями на каждой строке диапазона — получается одно сплошное
+  // прямоугольное поле внутри окружения. Прежняя одна inline-`mark` на весь
+  // диапазон рвала рамку по строкам (каждая строка — свой box-shadow), отсюда
+  // «обведённые рамкой строки» вместо вложенного поля.
   if (blockEdit !== null && blockEdit.to > blockEdit.from) {
+    const docLen = source.length;
     const from = Math.max(0, Math.min(blockEdit.from, docLen));
     const to = Math.max(from, Math.min(blockEdit.to, docLen));
-    parts.push({
-      from,
-      to,
-      value: Decoration.mark({ class: TRANSCLUSION_EDIT_RANGE_CLASS }),
-    });
+    if (to > from) {
+      const starts = lineStartOffsets(source);
+      const firstLine = lineIndexAt(starts, from);
+      const lastLine = lineIndexAt(starts, to - 1);
+      for (let line = firstLine; line <= lastLine; line += 1) {
+        const classes = [TRANSCLUSION_EDIT_RANGE_CLASS];
+        if (line === firstLine) classes.push(TRANSCLUSION_EDIT_FIRST_CLASS);
+        if (line === lastLine) classes.push(TRANSCLUSION_EDIT_LAST_CLASS);
+        parts.push({
+          from: starts[line]!,
+          to: starts[line]!,
+          value: Decoration.line({ class: classes.join(' ') }),
+        });
+      }
+    }
   }
 
   return { deco: Decoration.set(parts, true), atomic: RangeSet.of(atomParts, true) };

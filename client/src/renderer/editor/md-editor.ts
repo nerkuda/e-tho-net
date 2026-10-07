@@ -27,7 +27,7 @@ import { findMatches } from './text-search.js';
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
-import { cancelBlockEdit, saveBlockEdit, transclusionExtensions } from './transclusion.js';
+import { cancelBlockEdit, isBlockEditing, saveBlockEdit, transclusionExtensions } from './transclusion.js';
 import { wikiLinkLegacyActions } from './wiki-link-legacy-actions.js';
 
 /** Callbacks of the editor (the field orchestrates view/edit modes). */
@@ -136,6 +136,13 @@ export interface MdEditor {
    * Ctrl+Enter; задача e2c14673). После успеха восстанавливает ссылку.
    */
   saveTransclusionEdit(): Promise<void>;
+  /**
+   * Идёт ли правка блока трансклюзии (в поле вставлен текст источника вместо
+   * ссылки). Пока `true`, поле НЕЛЬЗЯ коммитить целиком: в документе лежит
+   * вставленный текст источника, и сохранение контейнера увековечило бы его
+   * вместо ссылки (порча данных, ошибка `3c51aee8`).
+   */
+  isTransclusionEditing(): boolean;
 }
 
 /** Эффект установки подсветки поиска. */
@@ -352,7 +359,12 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
           },
           {
             key: 'Mod-Enter',
-            run: () => {
+            run: (v) => {
+              // Правку блока трансклюзии записывает её собственный
+              // Prec.high-обработчик (transclusion.ts). Если он почему-то не
+              // перехватил, контейнер коммитить всё равно нельзя — в документе
+              // вставленный текст источника вместо ссылки (ошибка 3c51aee8).
+              if (isBlockEditing(v.state)) return false;
               cb.onCommit?.();
               return true;
             },
@@ -481,6 +493,7 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
     },
     exitTransclusionEdit: () => cancelBlockEdit(view),
     saveTransclusionEdit: () => saveBlockEdit(view),
+    isTransclusionEditing: () => isBlockEditing(view.state),
     destroy: () => {
       alive = false;
       listeners.clear();

@@ -74,4 +74,19 @@ describe('guard: визуальные слои блока трансклюзии
       'токен не обнулён при prefers-reduced-motion — анимация не учла бы reduce-motion',
     );
   });
+
+  it('вложенное поле правки блока — сплошная рамка по строкам (ошибка 9c2e077a)', () => {
+    // Рамка вложенного поля строится ЛИНЕЙНЫМИ декорациями: боковые границы на
+    // каждой строке, верх/низ — на первой/последней. Одна inline-рамка с
+    // box-shadow обводила каждую строку отдельно («обведённые строки»).
+    const base = ruleBody('.cm-editor .cm-transclusion-edit-range');
+    assert.ok(base !== '', 'не найдено правило .cm-transclusion-edit-range');
+    assert.match(base, /border-left:/, 'боковая граница поля слева');
+    assert.match(base, /border-right:/, 'боковая граница поля справа');
+    assert.doesNotMatch(base, /box-shadow/, 'per-line inline-рамка недопустима');
+    const first = ruleBody('.cm-editor .cm-transclusion-edit-range--first');
+    assert.match(first, /border-top:/, 'верхняя граница — на первой строке поля');
+    const last = ruleBody('.cm-editor .cm-transclusion-edit-range--last');
+    assert.match(last, /border-bottom:/, 'нижняя граница — на последней строке поля');
+  });
 });

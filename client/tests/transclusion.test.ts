@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { EditorState, RangeSet } from '@codemirror/state';
-import { Decoration, type DecorationSet } from '@codemirror/view';
+import { Decoration, keymap, runScopeHandlers, type DecorationSet, type EditorView } from '@codemirror/view';
 
 import { parseTransclusions } from '@etn/markdown';
 
@@ -26,6 +26,7 @@ import {
   setBlockEdit,
   transclusionAtCaret,
   transclusionCacheKey,
+  transclusionExtensions,
   transclusionInternals,
   transclusionLabels,
   transclusionLinkLabel,
@@ -428,7 +429,7 @@ test('transclusionState: диапазон правки блока едет за 
   assert.equal(state.field(transclusionState).blockEdit, null);
 });
 
-test('buildTransclusionDecorations: текст блока в правке — без виджетов, с рамкой', () => {
+test('buildTransclusionDecorations: текст блока в правке — линейные декорации поля, без виджетов', () => {
   const src = `до ![[#${ID_A}]] после`;
   const { deco } = buildTransclusionDecorations(
     src,
@@ -441,12 +442,41 @@ test('buildTransclusionDecorations: текст блока в правке — б
     { sourceId: ID_A, section: null, refRaw: '', from: 0, to: src.length },
   );
   const items = collect(deco, src.length);
-  // Ссылка внутри диапазона не заменяется виджетом — остаётся текстом; на весь
-  // диапазон наложена mark-декорация рамки.
+  // Ссылка внутри диапазона не заменяется виджетом — остаётся текстом; рамка
+  // вложенного поля — ЛИНЕЙНЫЕ декорации (ошибка 9c2e077a): одна строка даёт
+  // одну линию с ролью и первого, и последнего ряда.
   assert.equal(items.length, 1);
-  assert.equal(items[0]!.from, 0);
-  assert.equal(items[0]!.to, src.length);
-  assert.equal(items[0]!.value.spec.class, 'cm-transclusion-edit-range');
+  assert.equal(items[0]!.from, items[0]!.to, 'рамка поля — линейная декорация');
+  assert.equal(
+    items[0]!.value.spec.class,
+    'cm-transclusion-edit-range cm-transclusion-edit-range--first cm-transclusion-edit-range--last',
+  );
+  assert.equal(items[0]!.value.spec.widget, undefined, 'вложенное поле — не виджет');
+});
+
+test('buildTransclusionDecorations: многострочное поле правки — сплошная рамка (first/mid/last)', () => {
+  const ID = ID_A;
+  const src = 'до\n' + 'строка источника 1\nстрока источника 2\nстрока источника 3' + '\nпосле';
+  const from = src.indexOf('строка источника 1');
+  const to = src.indexOf('\nпосле');
+  const { deco } = buildTransclusionDecorations(
+    src,
+    { from: 0, to: 0 },
+    new Map(),
+    NET,
+    new Set(),
+    ID,
+    new Map(),
+    { sourceId: ID, section: null, refRaw: '', from, to },
+  );
+  const items = collect(deco, src.length);
+  assert.equal(items.length, 3, 'три строки поля — три линейные декорации');
+  const classes = items.map((it) => it.value.spec.class as string);
+  assert.ok(classes[0]!.includes('cm-transclusion-edit-range--first'));
+  assert.ok(!classes[0]!.includes('--last'));
+  assert.ok(classes[1]!.includes('cm-transclusion-edit-range') && !classes[1]!.includes('--first') && !classes[1]!.includes('--last'));
+  assert.ok(classes[2]!.includes('cm-transclusion-edit-range--last'));
+  assert.ok(!classes[2]!.includes('--first'));
 });
 
 test('buildTransclusionDecorations: ссылка вне диапазона правки — по-прежнему блок', () => {
@@ -524,4 +554,163 @@ test('transclusionMenuHandlers: «Изменить ссылку» без сет�
   handlers['transclusion.changeLink']!();
   // Вне сети ключ кэша не строится — сворачивание не выполняется.
   assert.equal(dispatches, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Ctrl+Enter и Enter в правке блока: запись в источник, контейнер не коммитится
+// (ошибки 3c51aee8, 9c2e077a; задача e2c14673)
+// ---------------------------------------------------------------------------
+
+const NET_ID = 'c4f9a3b2-1111-2222-3333-444455556666';
+
+/** Минимальное событие клавиатуры для `runScopeHandlers`. */
+function keyEvent(init: { key: string; code: string; ctrl?: boolean }): KeyboardEvent {
+  return {
+    key: init.key,
+    code: init.code,
+    keyCode: init.key === 'Enter' ? 13 : 0,
+    ctrlKey: init.ctrl === true,
+    shiftKey: false,
+    altKey: false,
+    metaKey: false,
+    repeat: false,
+    defaultPrevented: false,
+    preventDefault(): void {},
+  } as unknown as KeyboardEvent;
+}
+
+/** Фейковый EditorView: настоящий EditorState + dispatch, применяющий транзакции. */
+interface FakeView {
+  state: EditorState;
+  dispatch(spec: unknown): void;
+}
+
+function makeView(initial: EditorState): FakeView {
+  const view: FakeView = {
+    state: initial,
+    dispatch(spec: unknown): void {
+      view.state = view.state.update(spec as never).state;
+    },
+  };
+  return view;
+}
+
+/** Заполняет `view.state` правкой блока: ссылка заменена текстом источника. */
+function enterBlockEdit(
+  raw: string,
+  inlined: string,
+): { view: FakeView; containerDoc: string; from: number; to: number } {
+  const containerDoc = `вступление ${raw} окончание`;
+  const ref = parseTransclusions(containerDoc)[0]!;
+  const doc = containerDoc.slice(0, ref.start) + inlined + containerDoc.slice(ref.end);
+  let state = EditorState.create({ doc, extensions: [transclusionState] });
+  const from = ref.start;
+  const to = ref.start + inlined.length;
+  state = state.update({
+    effects: transclusionInternals.setBlockEditRange.of({
+      sourceId: ID_A,
+      section: null,
+      refRaw: raw,
+      from,
+      to,
+    }),
+  }).state;
+  return { view: makeView(state), containerDoc, from, to };
+}
+
+test('Mod-Enter в правке блока пишет в источник и НЕ коммитит окружение', async () => {
+  const updates: Array<{ id: string; body: string }> = [];
+  (globalThis as unknown as { etn: unknown }).etn = {
+    comments: {
+      list: async () => [
+        { id: 'perm-src', kind: 'permanent', body_md: 'старое', body_html: '', version: 3 },
+      ],
+      update: async (_n: string, id: string, changes: { body_md: string }) => {
+        updates.push({ id, body: changes.body_md });
+        return { id, kind: 'permanent', body_md: changes.body_md, body_html: '', version: 4 };
+      },
+    },
+    thoughts: { resolve: async () => [] },
+  };
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+
+  let commitCalls = 0;
+  const raw = `![[#${ID_A}]]`;
+  const inlined = 'ИЗМЕНЁННЫЙ ТЕКСТ';
+  const base = enterBlockEdit(raw, inlined);
+  // Собираем поле как прод: ниже по приоритету — «коммит окружения»
+  // родительского keymap (как в md-editor), выше — жесты трансклюзии.
+  let state = EditorState.create({
+    doc: base.view.state.doc.toString(),
+    extensions: [
+      keymap.of([
+        {
+          key: 'Mod-Enter',
+          run: () => {
+            commitCalls += 1;
+            return true;
+          },
+        },
+      ]),
+      transclusionState,
+      ...transclusionExtensions,
+    ],
+  });
+  state = state.update({
+    effects: transclusionInternals.setBlockEditRange.of({
+      sourceId: ID_A,
+      section: null,
+      refRaw: raw,
+      from: base.from,
+      to: base.to,
+    }),
+  }).state;
+  const view = makeView(state);
+
+  runScopeHandlers(view as unknown as EditorView, keyEvent({ key: 'Enter', code: 'Enter', ctrl: true }), 'editor');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(commitCalls, 0, 'окружение не коммитится, пока идёт правка блока');
+  assert.deepEqual(updates, [{ id: 'perm-src', body: inlined }], 'правка ушла в источник');
+  assert.equal(view.state.doc.toString(), base.containerDoc, 'ссылка на месте, текст окружения не изменён');
+  assert.equal(view.state.field(transclusionState)!.blockEdit, null, 'правка блока завершена');
+});
+
+test('Enter в правке блока отдаётся родительскому редактору (перевод строки)', () => {
+  let newlineCalls = 0;
+  const raw = `![[#${ID_A}]]`;
+  const base = enterBlockEdit(raw, 'текст');
+  let state = EditorState.create({
+    doc: base.view.state.doc.toString(),
+    extensions: [
+      keymap.of([
+        {
+          key: 'Enter',
+          run: () => {
+            newlineCalls += 1;
+            return true;
+          },
+        },
+      ]),
+      transclusionState,
+      ...transclusionExtensions,
+    ],
+  });
+  state = state.update({
+    effects: transclusionInternals.setBlockEditRange.of({
+      sourceId: ID_A,
+      section: null,
+      refRaw: raw,
+      from: base.from,
+      to: base.to,
+    }),
+  }).state;
+  const view = makeView(state);
+
+  runScopeHandlers(view as unknown as EditorView, keyEvent({ key: 'Enter', code: 'Enter' }), 'editor');
+
+  assert.equal(newlineCalls, 1, 'Enter в правке блока обрабатывает родительский keymap');
+  assert.ok(view.state.field(transclusionState)!.blockEdit !== null, 'правка блока не завершена');
 });

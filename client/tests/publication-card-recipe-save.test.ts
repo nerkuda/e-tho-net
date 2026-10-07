@@ -177,6 +177,7 @@ function fakeMdEditor(initial: string): MdEditor {
     selectMatch: () => undefined,
     exitTransclusionEdit: () => undefined,
     saveTransclusionEdit: () => Promise.resolve(),
+    isTransclusionEditing: () => false,
     destroy: () => undefined,
   };
 }

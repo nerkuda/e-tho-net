@@ -779,6 +779,31 @@
   background: var(--accent-soft);
 }
 
+/* Цвет символа иконки на вкладке «Библиотека» (0.12.1, задача 4105bd6a):
+   тумблер «свой цвет» + поле выбора цвета. */
+.icon-color-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+/* Вкладка «Иконки мыслей» на всю высоту панели (0.12.1, задача 4105bd6a):
+   обёртка-панель занимает высоту панели вкладок, сетка прокручивается внутри. */
+.icon-type-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.icon-type-panel > .icon-type-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
 .icon-pick-row {
   display: flex;
   gap: 6px;
@@ -1251,12 +1276,31 @@
   box-shadow: 0 0 0 1px var(--accent);
 }
 
-/* Текст блока трансклюзии в режиме правки (задача e2c14673): вставлен в поле
-   вместо ссылки и обведён рамкой облачка. */
+/* Вложенное поле правки блока трансклюзии (задача e2c14673; вид — ошибка
+   9c2e077a). Рамка рисуется на КАЖДОЙ строке диапазона (`.cm-line` несёт
+   класс), поэтому получается одно сплошное прямоугольное поле внутри
+   окружения: боковые границы на всех строках, верх/низ — на первой/последней.
+   Прежняя одна inline-рамка обводила каждую строку отдельно. */
 .cm-editor .cm-transclusion-edit-range {
-  box-shadow: inset 0 0 0 1px var(--accent);
-  border-radius: var(--radius-s, 3px);
   background: color-mix(in srgb, var(--accent) 5%, transparent);
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.cm-editor .cm-transclusion-edit-range--first {
+  border-top: 1px solid var(--accent);
+  border-top-left-radius: var(--radius-s, 3px);
+  border-top-right-radius: var(--radius-s, 3px);
+  padding-top: 2px;
+}
+
+.cm-editor .cm-transclusion-edit-range--last {
+  border-bottom: 1px solid var(--accent);
+  border-bottom-left-radius: var(--radius-s, 3px);
+  border-bottom-right-radius: var(--radius-s, 3px);
+  padding-bottom: 2px;
 }
 
 /* «Замочек» блока при чужом захвате источника (задача f59d24e1). */

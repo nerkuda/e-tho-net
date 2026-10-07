@@ -838,6 +838,24 @@ export function createMarkdownField(opts: {
 
   const commitOrRevert = (): void => {
     if (mounting || editor === null || commitPending) return;
+    // Правка блока трансклюзии: пока в поле лежит вставленный текст источника
+    // вместо ссылки, коммит контейнера увековечил бы его (порча данных, ошибка
+    // 3c51aee8). Сначала пишем блок в источник и восстанавливаем ссылку; сбой
+    // записи откатывает блок (ссылка возвращается), и контейнер коммитится
+    // неизменным.
+    if (editor.isTransclusionEditing()) {
+      const current = editor;
+      commitPending = true;
+      void current
+        .saveTransclusionEdit()
+        .catch(() => undefined)
+        .finally(() => {
+          commitPending = false;
+          if (current.isTransclusionEditing()) current.exitTransclusionEdit();
+          commitOrRevert();
+        });
+      return;
+    }
     const md = editor.getValue();
     if (cancelled) {
       // Esc: the edit is dropped; restore the saved text so the field returns
