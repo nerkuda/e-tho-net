@@ -119,7 +119,7 @@ import type { Comment } from '@etn/shared';
 import { requireNetworkId } from '../app.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
-import { showMenuAt } from '../lib/menu.js';
+import { guardMenuFocus, showMenuAt } from '../lib/menu.js';
 import { holderName, otherHolder, subscribeLockCache } from '../lib/lock-cache.js';
 import {
   acquireOrShowBlocked,
@@ -1175,11 +1175,16 @@ export function transclusionContextMenuHandler(event: MouseEvent, view: EditorVi
   if (ref === null) return false;
   event.preventDefault();
   event.stopPropagation();
-  showMenuAt(
+  const menuRoot = showMenuAt(
     event.clientX,
     event.clientY,
     buildTransclusionMenuItems(transclusionMenuHandlers(view, ref)),
   );
+  // Общая защита фокуса строк меню (ошибка 64b18420): клик по строке не должен
+  // уводить фокус из CodeMirror → focusout → onBlur → поле уходит в просмотр
+  // (ошибка 1b847110). Делегированный обработчик на контейнере гасит mousedown
+  // по любой строке, включая лениво построенные подменю.
+  guardMenuFocus(menuRoot);
   return true;
 }
 

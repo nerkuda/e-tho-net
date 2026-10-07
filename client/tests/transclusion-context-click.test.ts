@@ -182,3 +182,39 @@ describe('контекстное меню ссылки открывается п
     assert.equal(body.children.length, 0, 'меню не открывается');
   });
 });
+
+/**
+ * Меню блока защищено общей `guardMenuFocus` (ошибка `1b847110`): клик по
+ * строке не забирает фокус, поэтому поле не уходит из правки в просмотр
+ * (`focusout` → `onBlur` → `showView`), а команда применяется к блоку.
+ */
+describe('меню блока защищено от потери фокуса (1b847110)', () => {
+  it('mousedown по строке открытого меню гасится (guardMenuFocus применён)', () => {
+    const view = fakeView(SRC);
+    const openEvent = mouse(2, widget(TRANSCLUSION_BLOCK_CLASS, REF));
+    transclusionContextMenuHandler(openEvent as any, view as any);
+    const body = (globalThis as any).document.body as ShimElement;
+    const menuRoot = body.children[body.children.length - 1]!;
+    assert.ok(menuRoot !== undefined, 'меню добавлено в документ');
+
+    const row = menuRoot.querySelector('.menu-item');
+    assert.ok(row !== null, 'в меню есть хотя бы одна строка-команда');
+
+    const down: any = {
+      type: 'mousedown',
+      button: 0,
+      target: row,
+      defaultPrevented: false,
+      preventDefault(): void {
+        this.defaultPrevented = true;
+      },
+      stopPropagation(): void {},
+    };
+    menuRoot.emit('mousedown', down);
+    assert.equal(
+      down.defaultPrevented,
+      true,
+      'клик по строке меню блока не должен забирать фокус (иначе поле уходит в просмотр)',
+    );
+  });
+});
