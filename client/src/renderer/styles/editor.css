@@ -1208,17 +1208,31 @@
 }
 
 /* Блок целиком покрыт выделением (ошибка 39553204): для пользователя блок —
-   единое целое, поэтому выделение показывается РАМКОЙ ВОКРУГ блока (токен
-   темы --selection), а нативная подсветка текста и пробелов внутри подавлена.
-   Без этого подсветка ложилась на содержимое. Рамка — outline (не border):
-   появление не сдвигает содержимое блока. */
+   единое целое, поэтому выделение рисуется РАМКОЙ ВОКРУГ блока, а подсветка
+   текста и пробелов внутри НЕ показывается.
+
+   Источник подсветки (живая проверка 2026-10-07): блок — replace-виджет
+   `block: true`, и CodeMirror (`addBlockWidget`) кладёт его ПРЯМЫМ потомком
+   `.cm-content`, а НЕ внутрь `.cm-line`. Поэтому и тема CM (hideNativeSelection,
+   `.cm-line ::selection`), и прежнее правило подавления с `.cm-line` в селекторе
+   до текста блока не доставали — браузер рисовал нативное выделение цветом
+   `.comment-view ::selection` (--selection-bg). Слой `.cm-selectionLayer` тут ни
+   при чём: прямоугольники выделения блочного виджета нулевой ширины и слой лежит
+   под непрозрачным фоном блока.
+
+   Рамка — inset box-shadow от токена темы: рисуется внутри бокса блока, видна
+   со всех четырёх сторон и не обрезается overflow контейнера (внешний outline
+   с outline-offset уходил за край поля — ошибка 39553204). Появление рамки не
+   сдвигает содержимое. */
 .cm-editor .cm-transclusion-block--covered {
-  outline: 2px solid var(--selection, var(--accent));
-  outline-offset: 1px;
+  box-shadow: inset 0 0 0 2px var(--selection, var(--accent));
 }
 
-.cm-editor .cm-line .cm-transclusion-block--covered ::selection,
-.cm-editor .cm-line .cm-transclusion-block--covered::selection {
+/* Нативная подсветка текста/пробелов внутри покрытого блока подавлена; селектор
+   намеренно БЕЗ `.cm-line` — блочный виджет лежит в `.cm-content` (ошибка
+   39553204: прежняя привязка к `.cm-line` не матчила блок). */
+.cm-editor .cm-transclusion-block--covered ::selection,
+.cm-editor .cm-transclusion-block--covered::selection {
   background-color: transparent !important;
 }
 

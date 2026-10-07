@@ -16,8 +16,9 @@
  *      якорь (`position: relative`) для абсолютного индикатора (ошибка
  *      `f60f99e0`).
  *   5. выделенный целиком блок (`cm-transclusion-block--covered`) рисует рамку
- *      ВОКРУГ блока из токена темы и подавляет нативную подсветку текста
- *      внутри (ошибка `39553204`).
+ *      из токена темы ВНУТРИ поля (inset) и подавляет нативную подсветку
+ *      текста внутри; правило подавления матчит блок БЕЗ `.cm-line` (блочный
+ *      виджет лежит в `.cm-content` — ошибка `39553204`).
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -140,16 +141,24 @@ describe('guard: визуальные слои блока трансклюзии
     assert.match(last, /border-bottom:/, 'нижняя граница — на последней строке поля');
   });
 
-  it('выделенный целиком блок — рамка вокруг и подавление подсветки текста (39553204)', () => {
+  it('выделенный целиком блок — рамка внутри поля и подавление нативной подсветки (39553204)', () => {
     // Пользователь видит блок трансклюзии единым целым: при полном покрытии
     // выделением вокруг блока рисуется РАМКА из токена темы, а нативная
-    // подсветка текста/пробелов внутри подавлена (иначе выделялся текст).
+    // подсветка текста/пробелов внутри подавлена.
+    //
+    // Диагноз (живая проверка 2026-10-07): блок — replace-виджет `block: true`,
+    // в DOM он ПРЯМОЙ потомок `.cm-content`, а НЕ внутри `.cm-line`
+    // (`addBlockWidget` в CodeMirror). Поэтому правило подавления обязано
+    // матчить блок БЕЗ `.cm-line` в селекторе — иначе оно не применяется и
+    // браузер рисует нативное выделение цветом `.comment-view ::selection`
+    // (именно на этом ошибся коммит 477293fb). Рамка — inset box-shadow: внешний
+    // outline с offset уходил за край поля и обрезался overflow.
     const frame = ruleBody('.cm-editor .cm-transclusion-block--covered');
     assert.ok(frame !== '', 'не найдено правило .cm-transclusion-block--covered');
     assert.match(
       frame,
-      /outline:\s*2px solid var\(--selection/,
-      'рамка вокруг блока обязана идти от токена темы --selection',
+      /box-shadow:\s*inset 0 0 0 2px var\(--selection/,
+      'рамка обязана быть inset от токена темы --selection (видна со всех сторон, не обрезается overflow)',
     );
     assert.ok(
       !/#[0-9a-fA-F]{3,8}\b/.test(frame),
@@ -157,7 +166,17 @@ describe('guard: визуальные слои блока трансклюзии
     );
     assert.match(
       CSS,
-      /\.cm-transclusion-block--covered\s*::selection[\s\S]{0,200}background-color:\s*transparent\s*!important/,
+      /\.cm-editor \.cm-transclusion-block--covered ::selection/,
+      'нет правила подавления ::selection для покрытого блока',
+    );
+    assert.doesNotMatch(
+      CSS,
+      /\.cm-editor \.cm-line \.cm-transclusion-block--covered/,
+      'селектор подавления привязан к `.cm-line`, но блочный виджет лежит в `.cm-content` — правило не матчит блок',
+    );
+    assert.match(
+      CSS,
+      /\.cm-editor \.cm-transclusion-block--covered ::selection[\s\S]{0,140}background-color:\s*transparent\s*!important/,
       'нативная подсветка текста/пробелов внутри выделенного блока обязана быть подавлена',
     );
   });
