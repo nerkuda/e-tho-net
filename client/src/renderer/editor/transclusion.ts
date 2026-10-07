@@ -24,6 +24,14 @@
  * захват даёт на блоке «замочек» 🔒 и в правку не пускает; при захваченном
  * источнике запись отклоняется сервером `409 LOCKED` (ошибка `68be6829`).
  *
+ * **Вложенный блок из просмотра (ошибка `23570aef`).** Позиции ссылки
+ * ВЛОЖЕННОГО источника в `body_md` контейнера не существует (разные исходники
+ * дают одинаковую развёртку — см. ошибку `5ecb9f0b`), поэтому двойной клик
+ * внутри вложенного блока в просмотре открывает правку блока вложенного
+ * источника ({@link beginNestedBlockEdit}): текст источника вставляется на
+ * месте ВНЕШНЕЙ ссылки, а её исходник сохраняется в `refRaw` и возвращается при
+ * сохранении/отмене — контейнер не портится (вектор ошибки `3c51aee8` закрыт).
+ *
  * Три режима одной ссылки в редакторе (курсор/выделение решают):
  *  1. **Правка ссылки** — выделение пересекает ссылку: виден исходный markdown,
  *     токен `#<id>` заменён атомарным виджетом с именем мысли (не правится
@@ -1175,44 +1183,88 @@ export function cancelBlockEdit(view: EditorView): void {
 /** Историческое имя: выход из правки блока = отмена (записи нет). */
 export const exitBlockEdit = cancelBlockEdit;
 
+/** Источник и раздел, текст которых открывается в правку блока. */
+export interface BlockEditTarget {
+  sourceId: string;
+  /** Раздел источника, либо `null` — весь постоянный комментарий. */
+  section: string | null;
+}
+
 /**
- * Вход в режим правки блока (задача `e2c14673`): вместо ссылки в поле
- * вставляется текст источника — правка идёт в том же поле, поэтому команды и
+ * Вход в режим правки блока: вместо ссылки `replaceRef` в поле вставляется
+ * текст источника `target` — правка идёт в том же поле, поэтому команды и
  * сочетания родительского редактора действуют на текст блока. Раздел — только
  * его содержимое (заголовок живёт в ссылке). Захват источника ставит плагин по
  * смене `editingSourceId`.
+ *
+ * Для обычного блока (задача `e2c14673`) `replaceRef` и `target` описывают
+ * одну и ту же ссылку; для ВЛОЖЕННОГО блока из просмотра (ошибка `23570aef`)
+ * замена идёт на месте ВНЕШНЕЙ ссылки контейнера, а текст берётся из вложенного
+ * источника — ссылка возвращается при сохранении/отмене (`refRaw`), поэтому
+ * контейнер не портится.
  */
-async function beginBlockEdit(view: EditorView, ref: TransclusionRef): Promise<void> {
+async function startBlockEdit(
+  view: EditorView,
+  replaceRef: TransclusionRef,
+  target: BlockEditTarget,
+  placeCaret: boolean,
+): Promise<void> {
   const networkId = safeNetwork();
   if (networkId === null) return;
-  const key = transclusionCacheKey(networkId, ref);
+  const key = transclusionCacheKeyParts(networkId, target.sourceId, target.section);
   const cached = view.state.field(transclusionState, false)?.cache.get(key);
   // Битый источник (нет мысли/раздела) в правку не открываем.
   if (cached !== undefined && (cached.error !== null || !cached.exists)) return;
   let body = cached?.body_md ?? '';
   if (cached === undefined) {
-    const src = await defaultTransclusionLoader(networkId)(ref.sourceId).catch(() => null);
+    const src = await defaultTransclusionLoader(networkId)(target.sourceId).catch(() => null);
     if (src === null || !src.found) return;
     body = src.body_md;
   }
-  const text = ref.section === null ? body : sectionBodyForEdit(body, ref.section);
+  const text = target.section === null ? body : sectionBodyForEdit(body, target.section);
   if (text === null) return; // раздела нет — в правку не входим
   // Ссылка могла исчезнуть/сдвинуться, пока грузили источник.
-  const fresh = transclusionRefAt(view, ref.start);
-  if (fresh === null || fresh.sourceId !== ref.sourceId) return;
+  const fresh = transclusionRefAt(view, replaceRef.start);
+  if (fresh === null || fresh.sourceId !== replaceRef.sourceId) return;
   view.dispatch({
     changes: { from: fresh.start, to: fresh.end, insert: text },
+    // Открытие вложенного блока из просмотра переводит каретку в начало
+    // вставленного текста: пользователь сразу попадает в правку блока.
+    ...(placeCaret ? { selection: { anchor: fresh.start } } : {}),
     effects: [
-      setBlockEdit.of(fresh.sourceId),
+      setBlockEdit.of(target.sourceId),
       setBlockEditRange.of({
-        sourceId: fresh.sourceId,
-        section: fresh.section,
+        sourceId: target.sourceId,
+        section: target.section,
         refRaw: fresh.raw,
         from: fresh.start,
         to: fresh.start + text.length,
       }),
     ],
   });
+}
+
+/**
+ * Вход в правку блока по ссылке контейнера (задача `e2c14673`): текст берётся
+ * из самого источника ссылки.
+ */
+async function beginBlockEdit(view: EditorView, ref: TransclusionRef): Promise<void> {
+  await startBlockEdit(view, ref, { sourceId: ref.sourceId, section: ref.section }, false);
+}
+
+/**
+ * Вход в правку блока ВЛОЖЕННОГО источника из просмотра (ошибка `23570aef`).
+ * Позиции вложенной ссылки в `body_md` контейнера не существует (текст приходит
+ * из источника другой мысли), поэтому на месте ВНЕШНЕЙ ссылки `outerRef`
+ * вставляется текст вложенного источника `target`, а `outerRef.raw` сохраняется
+ * для восстановления — контейнер при этом не меняется.
+ */
+export async function beginNestedBlockEdit(
+  view: EditorView,
+  outerRef: TransclusionRef,
+  target: BlockEditTarget,
+): Promise<void> {
+  await startBlockEdit(view, outerRef, target, true);
 }
 
 /**
@@ -1260,10 +1312,17 @@ export async function saveBlockEdit(view: EditorView): Promise<void> {
   }
   const current = view.state.field(transclusionState, false)?.blockEdit ?? null;
   if (current === null) return;
-  const key = transclusionCacheKeyParts(networkId, current.sourceId, current.section);
+  // Источник изменился — сбрасываем кэш, блок в просмотре перечитывается. Для
+  // вложенного блока (ошибка 23570aef) ещё и внешняя ссылка контейнера: её блок
+  // содержит отредактированный текст источника.
+  const keys = new Set<string>([
+    transclusionCacheKeyParts(networkId, current.sourceId, current.section),
+  ]);
+  for (const outer of parseTransclusions(current.refRaw)) {
+    keys.add(transclusionCacheKeyParts(networkId, outer.sourceId, outer.section));
+  }
   restoreBlockEdit(view, current);
-  // Источник изменился — сбрасываем кэш, блок в просмотре перечитывается.
-  view.dispatch({ effects: dropEntries.of([key]) });
+  view.dispatch({ effects: dropEntries.of([...keys]) });
 }
 
 /** Вход в режим правки блока: двойной клик и Enter (элемент `2b116d37`). */
@@ -1536,6 +1595,7 @@ export const transclusionInternals = {
   dropEntries,
   sectionParts,
   beginBlockEdit,
+  beginNestedBlockEdit,
   saveBlockEdit,
   restoreBlockEdit,
 };

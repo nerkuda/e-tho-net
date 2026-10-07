@@ -56,8 +56,15 @@ function shimDom(): void {
 }
 
 shimDom();
-const { buildExpandedSourceMap, mapViewOffsetToSource, sourceRangeFromSelection, viewSelectionToSourceRange } =
-  await import('../src/renderer/editor/markdown-field.js');
+const {
+  buildExpandedSourceMap,
+  mapViewOffsetToSource,
+  outerRefStartForNested,
+  sourceRangeFromSelection,
+  transclusionBlockInfo,
+  viewSelectionOffsets,
+  viewSelectionToSourceRange,
+} = await import('../src/renderer/editor/markdown-field.js');
 const { transclusionInternals } = await import('../src/renderer/editor/transclusion.js');
 
 /** Текстовый узел структурной модели резолвера. */
@@ -355,6 +362,67 @@ describe('просмотр с трансклюзией: вложенные бл�
       map!,
     );
     assert.deepEqual(range, { anchor: raw.indexOf('![['), head: raw.indexOf('![[') });
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Вложенный блок из просмотра: вход в правку источника (ошибка 23570aef)
+ * ------------------------------------------------------------------------- */
+
+describe('просмотр с трансклюзией: двойной клик по вложенному блоку (23570aef)', () => {
+  it('клик во вложенном блоке даёт позицию ВНЕШНЕЙ ссылки (2-й и 3-й уровень)', () => {
+    const { raw, expanded } = expandThreeLevels();
+    const map = buildExpandedSourceMap(raw, expanded);
+    assert.ok(map !== null);
+    const outerRef = raw.indexOf('![[');
+    // Внешняя часть внешнего блока — не вложенный: прежнее поведение.
+    assert.equal(outerRefStartForNested(map!, expanded.indexOf('Внешний текст.')), null);
+    assert.equal(outerRefStartForNested(map!, expanded.indexOf('Хвост A.')), null);
+    // 2-й и 3-й уровень — вложенные блоки: дают позицию внешней ссылки контейнера.
+    assert.equal(outerRefStartForNested(map!, expanded.indexOf('Глубокий текст.')), outerRef);
+    assert.equal(outerRefStartForNested(map!, expanded.indexOf('Самый глубокий.')), outerRef);
+    assert.equal(outerRefStartForNested(map!, expanded.indexOf('Хвост B.')), outerRef);
+    // Вне блоков — прежнее поведение 1:1.
+    assert.equal(outerRefStartForNested(map!, expanded.indexOf('После блока.')), null);
+  });
+
+  it('смещения выделения просмотра дают координаты развёртки для вложенного блока', () => {
+    const { raw, expanded } = expandThreeLevels();
+    void raw;
+    const nestedStart = expanded.indexOf('Глубокий текст.');
+    const block = expandedBlock(nestedStart, 'Глубокий текст.');
+    const view = viewWithSelection(
+      { node: block.childNodes[0], offset: 0 },
+      { node: block.childNodes[0], offset: 'Глубокий'.length },
+    );
+    const offsets = viewSelectionOffsets(view);
+    assert.deepEqual(offsets, { from: nestedStart, to: nestedStart + 'Глубокий'.length });
+    const map = buildExpandedSourceMap(raw, expanded);
+    assert.equal(outerRefStartForNested(map!, offsets!.from), raw.indexOf('![['));
+  });
+
+  it('transclusionBlockInfo читает источник, раздел и глубину обёртки', () => {
+    const el = new ShimElement('div');
+    el.setAttribute('data-transclusion-source', NESTED_B);
+    el.setAttribute('data-transclusion-depth', '2');
+    el.setAttribute('data-transclusion-section', 'Раздел B');
+    assert.deepEqual(transclusionBlockInfo(el as unknown as Element), {
+      sourceId: NESTED_B,
+      section: 'Раздел B',
+      depth: 2,
+    });
+    // Внешний блок без раздела — глубина 1, раздел null.
+    const outer = new ShimElement('div');
+    outer.setAttribute('data-transclusion-source', NESTED_A);
+    outer.setAttribute('data-transclusion-depth', '1');
+    assert.deepEqual(transclusionBlockInfo(outer as unknown as Element), {
+      sourceId: NESTED_A,
+      section: null,
+      depth: 1,
+    });
+    // Не обёртка блока трансклюзии.
+    assert.equal(transclusionBlockInfo(new ShimElement('div') as unknown as Element), null);
+    assert.equal(transclusionBlockInfo(null), null);
   });
 });
 

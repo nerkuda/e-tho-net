@@ -20,7 +20,11 @@ import {
   parseTransclusions,
   renderMarkdown,
   sourceOffsetFromCaret,
+  TRANSCLUSION_BLOCK_CLASS,
+  TRANSCLUSION_DEPTH_ATTR,
   TRANSCLUSION_MARKER_PREFIX,
+  TRANSCLUSION_SECTION_ATTR,
+  TRANSCLUSION_SOURCE_ATTR,
   type SourceMapNode,
 } from '@etn/markdown';
 
@@ -104,6 +108,21 @@ interface MarkdownFieldHandle {
 export interface MdSourceSelection {
   anchor: number;
   head: number;
+}
+
+/**
+ * Цель входа в правку блока ВЛОЖЕННОГО источника из просмотра (ошибка
+ * `23570aef`): при двойном клике внутри вложенного блока правка открывается не
+ * кареткой в контейнер (позиции вложенной ссылки там нет — ошибка `5ecb9f0b`),
+ * а блоком вложенного источника.
+ */
+export interface NestedBlockOpen {
+  /** Id мысли-источника вложенного блока. */
+  sourceId: string;
+  /** Раздел вложенного источника, либо `null`. */
+  section: string | null;
+  /** Позиция ВНЕШНЕЙ ссылки-трансклюзии в исходнике поля (место замены). */
+  outerFrom: number;
 }
 
 /**
@@ -336,6 +355,84 @@ export function mapViewOffsetToSource(map: ViewOffsetMap, offset: number): numbe
 }
 
 /**
+ * Позиция ВНЕШНЕЙ ссылки-трансклюзии в исходнике поля для клика внутри
+ * ВЛОЖЕННОГО блока развёртки (ошибка `23570aef`). Вложенный текст приходит из
+ * источника другой мысли, поэтому `mapViewOffsetToSource` его позиции не знает
+ * (ошибка `5ecb9f0b`); но клиент может определить, что клик попал во вложенный
+ * блок (диапазон `nested`), и открыть правку блока вложенного источника — на
+ * месте внешней ссылки, позицию которой и даёт эта функция.
+ *
+ * `null` — смещение вне развёрнутого блока или во внешней его части: там
+ * действует прежнее поведение (`mapViewOffsetToSource`).
+ */
+export function outerRefStartForNested(map: ViewOffsetMap, offset: number): number | null {
+  for (const segment of map.segments) {
+    if (offset < segment.expStart) return null;
+    if (offset >= segment.expEnd) continue;
+    if (segment.chunk === true && segment.nested !== undefined) {
+      for (const nested of segment.nested) {
+        if (offset >= nested.expStart && offset < nested.expEnd) return segment.srcStart;
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+/** Блок трансклюзии по DOM-обёртке (атрибуты разметки единого рендерера). */
+export interface ViewTransclusionBlock {
+  /** Id мысли-источника блока. */
+  sourceId: string;
+  /** Имя раздела источника, либо `null`. */
+  section: string | null;
+  /** Глубина вложенности (1 — внешний блок). */
+  depth: number;
+}
+
+/**
+ * Читает данные блока трансклюзии с DOM-обёртки `.md-transclusion` (ошибка
+ * `23570aef`): источник, раздел и глубину. `null` — элемент не обёртка блока
+ * или источник не размечен.
+ */
+export function transclusionBlockInfo(el: Element | null): ViewTransclusionBlock | null {
+  if (el === null || typeof el.getAttribute !== 'function') return null;
+  const sourceId = el.getAttribute(TRANSCLUSION_SOURCE_ATTR);
+  if (sourceId === null || sourceId === '') return null;
+  const depth = Number.parseInt(el.getAttribute(TRANSCLUSION_DEPTH_ATTR) ?? '', 10);
+  return {
+    sourceId,
+    section: el.getAttribute(TRANSCLUSION_SECTION_ATTR),
+    depth: Number.isFinite(depth) && depth > 0 ? depth : 1,
+  };
+}
+
+/**
+ * Позиция внешней ссылки в исходнике поля по DOM-предку вложенного блока —
+ * запасной путь к `outerRefStartForNested`, когда разметки смещений нет:
+ * поднимаемся до самого внешнего `.md-transclusion` и ищем ссылку контейнера
+ * по источнику и разделу. `null` — внешний блок/ссылка не найдены.
+ */
+function outerRefStartFromDom(nestedEl: Element, md: string): number | null {
+  let cur: Element | null = nestedEl;
+  let outer: Element | null = null;
+  while (cur !== null) {
+    if (
+      typeof cur.classList?.contains === 'function' &&
+      cur.classList.contains(TRANSCLUSION_BLOCK_CLASS)
+    ) {
+      outer = cur;
+    }
+    cur = cur.parentElement ?? null;
+  }
+  const info = transclusionBlockInfo(outer);
+  if (info === null) return null;
+  const ref = parseTransclusions(md).find(
+    (r) => r.sourceId === info.sourceId && r.section === info.section,
+  );
+  return ref?.start ?? null;
+}
+
+/**
  * Переводит выделение в просмотре (узлы и смещения DOM) в диапазон исходника
  * markdown через разметку позиций единого рендерера `@etn/markdown`
  * (`sourceOffsetFromCaret`, ADR ee4e721b). `map` — карта смещений для просмотра
@@ -378,23 +475,48 @@ export function viewSelectionToSourceRange(
   view: HTMLElement,
   viewMap: ViewOffsetMap | null,
 ): MdSourceSelection | undefined {
+  const nodes = viewSelectionNodes(view);
+  if (nodes === null) return undefined;
+  return sourceRangeFromSelection(nodes.anchor, nodes.focus, viewMap ?? undefined) ?? undefined;
+}
+
+/**
+ * Узлы выделения документа просмотра, оба конца которого внутри поля.
+ * `null` — выделения нет или оно выходит за пределы поля.
+ */
+function viewSelectionNodes(
+  view: HTMLElement,
+): { anchor: { node: Node; offset: number }; focus: { node: Node; offset: number } } | null {
   const selection = view.ownerDocument.getSelection?.() ?? null;
-  if (selection === null || selection.rangeCount === 0) return undefined;
+  if (selection === null || selection.rangeCount === 0) return null;
   if (
     selection.anchorNode === null ||
     selection.focusNode === null ||
     !view.contains(selection.anchorNode) ||
     !view.contains(selection.focusNode)
   ) {
-    return undefined;
+    return null;
   }
-  return (
-    sourceRangeFromSelection(
-      { node: selection.anchorNode, offset: selection.anchorOffset },
-      { node: selection.focusNode, offset: selection.focusOffset },
-      viewMap ?? undefined,
-    ) ?? undefined
-  );
+  return {
+    anchor: { node: selection.anchorNode, offset: selection.anchorOffset },
+    focus: { node: selection.focusNode, offset: selection.focusOffset },
+  };
+}
+
+/**
+ * Смещения выделения просмотра в координатах РАЗВЁРНУТОГО текста (`sourceMap`
+ * единого рендерера), до перевода картой `viewMap` (ошибка `23570aef`). Нужны,
+ * чтобы отличить клик внутри вложенного блока от клика во внешней части:
+ * `mapViewOffsetToSource` для вложенного текста возвращает `null`. `null` —
+ * разметки/выделения нет.
+ */
+export function viewSelectionOffsets(view: HTMLElement): { from: number; to: number } | null {
+  const nodes = viewSelectionNodes(view);
+  if (nodes === null) return null;
+  const from = sourceOffsetFromCaret(nodes.anchor.node as unknown as SourceMapNode, nodes.anchor.offset);
+  const to = sourceOffsetFromCaret(nodes.focus.node as unknown as SourceMapNode, nodes.focus.offset);
+  if (from === null || to === null) return null;
+  return { from, to };
 }
 
 const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
@@ -896,7 +1018,7 @@ export function createMarkdownField(opts: {
   };
 
   /** Mounts a fresh editor for the current markdown. */
-  const mountEditor = (locate?: MdSourceSelection): void => {
+  const mountEditor = (locate?: MdSourceSelection, nested?: NestedBlockOpen): void => {
     mounting = true;
     editor?.destroy();
     cancelled = false;
@@ -1027,16 +1149,21 @@ export function createMarkdownField(opts: {
     // вход (кнопка, восстановление черновика) — каретка в конец (как раньше).
     if (locate !== undefined) editor.setSelection(locate.anchor, locate.head);
     else editor.focusToEnd();
+    // Вложенный блок из просмотра (ошибка 23570aef): сразу открываем правку
+    // блока вложенного источника — позиции его ссылки в контейнере нет.
+    if (nested !== undefined) {
+      editor.beginNestedTransclusionEdit(nested.outerFrom, nested.sourceId, nested.section);
+    }
   };
 
-  const showEdit = (md?: string, locate?: MdSourceSelection): void => {
+  const showEdit = (md?: string, locate?: MdSourceSelection, nested?: NestedBlockOpen): void => {
     if (md !== undefined) currentMd = md;
     view.classList.add('hidden');
     area.classList.remove('hidden');
     editing = true;
     root.classList.add('md-field--editing');
     modeActions.setEditing(true);
-    mountEditor(locate);
+    mountEditor(locate, nested);
     activateFieldKeys();
     search.refresh();
     opts.onEditChange?.(true);
@@ -1055,7 +1182,41 @@ export function createMarkdownField(opts: {
    */
   const selectionInView = (): MdSourceSelection | undefined =>
     viewSelectionToSourceRange(view, viewMap);
-  view.addEventListener('dblclick', () => showEdit(undefined, selectionInView()));
+
+  /**
+   * Двойной клик в просмотре внутри ВЛОЖЕННОГО блока трансклюзии (ошибка
+   * `23570aef`): ссылки вложенного источника в `body_md` контейнера нет (текст
+   * приходит из источника другой мысли — ошибка `5ecb9f0b`), поэтому вместо
+   * каретки в контейнер открываем правку блока вложенного источника на месте
+   * ВНЕШНЕЙ ссылки. `null` — внешний блок или вне блоков: прежнее поведение.
+   */
+  const nestedBlockOpen = (event: MouseEvent): NestedBlockOpen | null => {
+    const target = event.target as Element | null;
+    const blockEl =
+      target !== null && typeof target.closest === 'function'
+        ? target.closest(`.${TRANSCLUSION_BLOCK_CLASS}`)
+        : null;
+    const block = transclusionBlockInfo(blockEl);
+    // Внешний блок в просмотре — прежнее поведение (каретка на внешнюю ссылку).
+    if (block === null || blockEl === null || block.depth <= 1) return null;
+    let outerFrom: number | null = null;
+    const offsets = viewSelectionOffsets(view);
+    if (offsets !== null && viewMap !== null) {
+      outerFrom = outerRefStartForNested(viewMap, offsets.from);
+    }
+    if (outerFrom === null) outerFrom = outerRefStartFromDom(blockEl, currentMd);
+    if (outerFrom === null) return null;
+    return { sourceId: block.sourceId, section: block.section, outerFrom };
+  };
+
+  view.addEventListener('dblclick', (event) => {
+    const nested = nestedBlockOpen(event);
+    if (nested !== null) {
+      showEdit(undefined, undefined, nested);
+      return;
+    }
+    showEdit(undefined, selectionInView());
+  });
 
   handles.set(root, {
     showEdit,

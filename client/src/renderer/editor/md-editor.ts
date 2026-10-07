@@ -27,7 +27,14 @@ import { findMatches } from './text-search.js';
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
-import { cancelBlockEdit, isBlockEditing, saveBlockEdit, transclusionExtensions } from './transclusion.js';
+import {
+  beginNestedBlockEdit,
+  cancelBlockEdit,
+  isBlockEditing,
+  saveBlockEdit,
+  transclusionAtCaret,
+  transclusionExtensions,
+} from './transclusion.js';
 import { wikiLinkLegacyActions } from './wiki-link-legacy-actions.js';
 
 /** Callbacks of the editor (the field orchestrates view/edit modes). */
@@ -143,6 +150,13 @@ export interface MdEditor {
    * вместо ссылки (порча данных, ошибка `3c51aee8`).
    */
   isTransclusionEditing(): boolean;
+  /**
+   * Открывает правку блока ВЛОЖЕННОГО источника из просмотра (ошибка
+   * `23570aef`): на месте внешней ссылки (`outerFrom` — её позиция в исходнике
+   * поля) вставляется текст источника `sourceId` (при `section` — его раздела).
+   * Позиции вложенной ссылки в контейнере нет, поэтому правится источник.
+   */
+  beginNestedTransclusionEdit(outerFrom: number, sourceId: string, section: string | null): void;
 }
 
 /** Эффект установки подсветки поиска. */
@@ -494,6 +508,11 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
     exitTransclusionEdit: () => cancelBlockEdit(view),
     saveTransclusionEdit: () => saveBlockEdit(view),
     isTransclusionEditing: () => isBlockEditing(view.state),
+    beginNestedTransclusionEdit: (outerFrom, sourceId, section) => {
+      const ref = transclusionAtCaret(view.state.doc.toString(), outerFrom)?.ref ?? null;
+      if (ref === null) return;
+      void beginNestedBlockEdit(view, ref, { sourceId, section });
+    },
     destroy: () => {
       alive = false;
       listeners.clear();

@@ -39,6 +39,7 @@ import { wikiPrefixAt } from '../src/renderer/editor/wiki-link.js';
 
 const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const ID_B = '11111111-2222-3333-4444-555555555555';
+const ID_C = '99999999-8888-4777-8666-555555555555';
 const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
 
 /** Собирает плоский список декораций набора (декорации или атомарные диапазоны). */
@@ -713,4 +714,140 @@ test('Enter в правке блока отдаётся родительском
 
   assert.equal(newlineCalls, 1, 'Enter в правке блока обрабатывает родительский keymap');
   assert.ok(view.state.field(transclusionState)!.blockEdit !== null, 'правка блока не завершена');
+});
+
+// ---------------------------------------------------------------------------
+// Правка блока ВЛОЖЕННОГО источника из просмотра (ошибка 23570aef)
+// ---------------------------------------------------------------------------
+
+/** Микрозадача: даёт осесть асинхронной загрузке источника/записи. */
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Заглушка моста `etn`: постоянный комментарий с заданным телом. */
+function stubEtn(body: string): { updates: Array<{ id: string; body: string }> } {
+  const updates: Array<{ id: string; body: string }> = [];
+  (globalThis as unknown as { etn: unknown }).etn = {
+    comments: {
+      list: async () => [
+        { id: 'perm-src', kind: 'permanent', body_md: body, body_html: '', version: 1 },
+      ],
+      update: async (_n: string, id: string, changes: { body_md: string }) => {
+        updates.push({ id, body: changes.body_md });
+        return { id, kind: 'permanent', body_md: changes.body_md, body_html: '', version: 2 };
+      },
+    },
+    thoughts: { resolve: async () => [] },
+  };
+  return { updates };
+}
+
+/**
+ * Состояние редактора с родительским keymap «коммит окружения» (ниже по
+ * приоритету) и жестами трансклюзии — как собирает поле комментария.
+ */
+function nestedEditorState(doc: string, onCommit: () => void): EditorState {
+  return EditorState.create({
+    doc,
+    extensions: [
+      keymap.of([
+        {
+          key: 'Mod-Enter',
+          run: () => {
+            onCommit();
+            return true;
+          },
+        },
+      ]),
+      transclusionState,
+      ...transclusionExtensions,
+    ],
+  });
+}
+
+test('beginNestedBlockEdit: на месте внешней ссылки — текст вложенного источника (23570aef)', async () => {
+  stubEtn('ТЕЛО B');
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+
+  const raw = `вступление ![[#${ID_A}]] окончание`;
+  const outerRef = parseTransclusions(raw)[0]!;
+  const view = makeView(EditorState.create({ doc: raw, extensions: [transclusionState] }));
+
+  await transclusionInternals.beginNestedBlockEdit(view, outerRef, { sourceId: ID_B, section: null });
+
+  const field = view.state.field(transclusionState)!;
+  assert.ok(field.blockEdit !== null, 'открыта правка блока вложенного источника');
+  assert.equal(field.blockEdit!.sourceId, ID_B, 'пишем во вложенный источник, а не в контейнер');
+  assert.equal(field.editingSourceId, ID_B);
+  assert.equal(field.blockEdit!.refRaw, `![[#${ID_A}]]`, 'внешняя ссылка сохранена для восстановления');
+  // В поле временно лежит текст вложенного источника на месте внешней ссылки.
+  assert.equal(view.state.doc.toString(), 'вступление ТЕЛО B окончание');
+});
+
+test('beginNestedBlockEdit: 3-й уровень вложенности правится так же (23570aef)', async () => {
+  stubEtn('САМЫЙ ГЛУБОКИЙ');
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+
+  const raw = `вступление ![[#${ID_A}]] окончание`;
+  const outerRef = parseTransclusions(raw)[0]!;
+  const view = makeView(EditorState.create({ doc: raw, extensions: [transclusionState] }));
+
+  await transclusionInternals.beginNestedBlockEdit(view, outerRef, { sourceId: ID_C, section: null });
+
+  const field = view.state.field(transclusionState)!;
+  assert.equal(field.blockEdit!.sourceId, ID_C, 'глубина клика не ограничивает правку источника');
+  assert.equal(field.blockEdit!.refRaw, `![[#${ID_A}]]`);
+  assert.equal(view.state.doc.toString(), 'вступление САМЫЙ ГЛУБОКИЙ окончание');
+});
+
+test('beginNestedBlockEdit с разделом берёт содержимое без заголовка (23570aef)', async () => {
+  stubEtn('## Раздел B\nстрока раздела\n## Другой\nx');
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+
+  const raw = `вступление ![[#${ID_A}]] окончание`;
+  const outerRef = parseTransclusions(raw)[0]!;
+  const view = makeView(EditorState.create({ doc: raw, extensions: [transclusionState] }));
+
+  await transclusionInternals.beginNestedBlockEdit(view, outerRef, {
+    sourceId: ID_B,
+    section: 'Раздел B',
+  });
+
+  const field = view.state.field(transclusionState)!;
+  assert.equal(field.blockEdit!.section, 'Раздел B');
+  assert.equal(view.state.doc.toString(), 'вступление строка раздела окончание');
+});
+
+test('Mod-Enter в правке вложенного блока пишет в источник и не трогает контейнер (23570aef)', async () => {
+  const { updates } = stubEtn('старое B');
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+
+  let commitCalls = 0;
+  const raw = `вступление ![[#${ID_A}]] окончание`;
+  const outerRef = parseTransclusions(raw)[0]!;
+  const view = makeView(nestedEditorState(raw, () => {
+    commitCalls += 1;
+  }));
+
+  await transclusionInternals.beginNestedBlockEdit(view, outerRef, { sourceId: ID_B, section: null });
+  const be = view.state.field(transclusionState)!.blockEdit!;
+  view.dispatch({ changes: { from: be.from, to: be.to, insert: 'ИЗМЕНЁННЫЙ B' } });
+
+  runScopeHandlers(
+    view as unknown as EditorView,
+    keyEvent({ key: 'Enter', code: 'Enter', ctrl: true }),
+    'editor',
+  );
+  await tick();
+  await tick();
+
+  assert.equal(commitCalls, 0, 'окружение не коммитится, пока идёт правка блока');
+  assert.deepEqual(updates, [{ id: 'perm-src', body: 'ИЗМЕНЁННЫЙ B' }], 'правка ушла во вложенный источник');
+  assert.equal(view.state.doc.toString(), raw, 'внешняя ссылка восстановлена — контейнер не изменён');
+  assert.equal(view.state.field(transclusionState)!.blockEdit, null, 'правка блока завершена');
 });

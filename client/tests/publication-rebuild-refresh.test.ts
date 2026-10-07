@@ -199,6 +199,7 @@ function fakeMdEditor(initial: string): MdEditor {
     exitTransclusionEdit: () => undefined,
     saveTransclusionEdit: () => Promise.resolve(),
     isTransclusionEditing: () => false,
+    beginNestedTransclusionEdit: () => undefined,
     destroy: () => undefined,
   };
 }
