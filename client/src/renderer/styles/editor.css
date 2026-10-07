@@ -658,7 +658,7 @@
 
 .style-color-caption {
   font-size: 12px;
-  color: var(--text-muted, var(--text));
+  color: var(--text-dim);
 }
 
 /* Icon picker dialog (08-ui-spec.md §6.8). Полоса вкладок — общий механизм
@@ -693,7 +693,7 @@
   padding: 6px 8px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-dim);
   user-select: none;
 }
 
@@ -708,7 +708,7 @@
 
 .icon-section-title {
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-dim);
   margin-bottom: 6px;
 }
 
@@ -1178,7 +1178,7 @@
 
 /* Удалённая мысль в любом режиме — серый курсив без плейсхолдера. */
 .wiki-link-deleted {
-  color: var(--muted, #888);
+  color: var(--text-faint);
   font-style: italic;
 }
 
@@ -1237,7 +1237,7 @@
    нераскрытая ссылка (цикл/предел глубины). */
 .md-transclusion--missing,
 .md-transclusion--skipped {
-  color: var(--muted, var(--text-dim));
+  color: var(--text-dim);
   font-style: italic;
 }
 
@@ -1264,7 +1264,7 @@
 }
 
 .cm-editor .cm-transclusion-error {
-  color: var(--muted, #888);
+  color: var(--text-dim);
   font-style: italic;
 }
 

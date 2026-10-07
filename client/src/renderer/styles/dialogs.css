@@ -804,7 +804,7 @@ button.ui-btn--icon.trash-act {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--muted);
+  color: var(--text-dim);
 }
 
 .settings-section-title-spaced {
@@ -854,7 +854,7 @@ button.ui-btn--icon.trash-act {
   max-width: 100%;
   overflow-wrap: anywhere;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-dim);
 }
 
 .settings-log-files td {
@@ -887,7 +887,7 @@ button.ui-btn--icon.trash-act {
 }
 
 .settings-footer-hint {
-  color: var(--muted);
+  color: var(--text-dim);
   font-size: 12px;
   flex: 1 1 auto;
   min-width: 0;
