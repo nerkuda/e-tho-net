@@ -11,7 +11,8 @@
  * Модель индикатора (0.12.1, ошибки ce8e9f67/6007a6ec): индикатор живёт в
  * зарезервированной полосе-гаттере и НЕ участвует в потоке текста (правка —
  * CM6-гаттер, просмотр — полоса `.md-collapse-rail` в хосте). Тесты
- * фиксируют, что индикатора нет среди детей строки, а маркеры лежат в полосе.
+ * фиксируют, что индикатора нет среди детей строки, а маркеры лежат в полосе;
+ * якорь вложенного блока — РОДИТЕЛЬСКИЙ пункт (ошибка 6007a6ec).
  */
 
 import assert from 'node:assert/strict';
@@ -179,6 +180,11 @@ describe('сворачивание разделов комментария (edit
     outer.append(li);
     view.append(outer);
 
+    // Разные вертикальные позиции родительского пункта и вложенного блока:
+    // маркер вложенного блока должен встать на строку РОДИТЕЛЯ (6007a6ec).
+    li.rect = { left: 0, top: 40, right: 100, bottom: 60, width: 100, height: 20 };
+    inner.rect = { left: 0, top: 60, right: 100, bottom: 80, width: 100, height: 20 };
+
     const state = mod.createCommentCollapseState('net', 'comment:c1');
     mod.decorateCommentView(view as unknown as HTMLElement, state);
 
@@ -198,6 +204,11 @@ describe('сворачивание разделов комментария (edit
     );
     assert.equal(markerById(view, 'h2#1')?.parent, hostRail);
     assert.equal(markerById(view, 'n#1')?.parent, hostRail);
+    assert.equal(
+      markerById(view, 'n#1')?.style.top,
+      '40px',
+      'маркер вложенного блока — на строке родительского пункта, а не вложенного',
+    );
 
     // Идемпотентность: повторный вызов не плодит индикаторы и полосы.
     mod.decorateCommentView(view as unknown as HTMLElement, state);
@@ -219,13 +230,14 @@ describe('сворачивание разделов комментария (edit
       'индикатор вложенного заголовка скрыт вместе с телом родителя',
     );
 
-    // Свёрнутый вложенный блок скрывает своё содержимое.
+    // Свёрнутый вложенный блок (якорь — родительский пункт `li`) скрывает ВЕСЬ
+    // вложенный список, оставляя родительский пункт видимым (ошибка 6007a6ec).
     state.setCollapsed('h2#1', false);
     state.setCollapsed('n#1', true);
     mod.decorateCommentView(view as unknown as HTMLElement, state);
-    assert.equal(innerLi.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true);
-    assert.equal(inner.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false);
+    assert.equal(inner.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true);
     assert.equal(outer.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false);
+    assert.equal(li.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false, 'родительский пункт виден');
   });
 
   it('редактор: декорации заголовков и вложенных блоков, пропуск скрытых md-live', async () => {
@@ -312,6 +324,23 @@ describe('сворачивание разделов комментария (edit
         mod.commentCollapseExtension(collapse),
       ],
     });
+
+    // Индикатор вложенного блока — у строки РОДИТЕЛЬСКОГО пункта (`- один`),
+    // а не у первой строки вложенного списка (ошибка 6007a6ec).
+    const listSection = mod.commentCollapseInternals
+      .collectSections(state)
+      .find((s) => s.id === 'n#1');
+    assert.ok(listSection, 'раздел вложенного списка собран');
+    assert.equal(
+      listSection.anchorFrom,
+      doc.indexOf('- один'),
+      'якорь — строка родительского пункта',
+    );
+    assert.equal(
+      listSection.bodyFrom,
+      doc.indexOf('  - вложенный'),
+      'скрываемое тело начинается со строки вложенного списка',
+    );
 
     assert.equal(mod.isCollapsedHiddenAt(state, doc.indexOf('вложенный')), false);
     const collapsed = state.update({

@@ -6,8 +6,9 @@
  * - Заголовки H1–H6 — своё содержимое до следующего заголовка того же или
  *   более высокого уровня.
  * - Вложенные блоки — под-списки (`ul`/`ol` внутри элемента списка или
- *   цитаты) и вложенные цитаты: сворачивается содержимое блока, сам блок с
- *   индикатором остаётся виден.
+ *   цитаты) и вложенные цитаты. Индикатор — у РОДИТЕЛЬСКОГО пункта (элемента
+ *   списка/цитаты, под которым лежат сдвинутые вправо блоки); сворачивание
+ *   скрывает сам вложенный блок целиком.
  *
  * **Где работает.** И в просмотре (HTML из `@etn/markdown`), и в
  * редактировании (live preview CodeMirror 6) — `decorateCommentView` и
@@ -363,7 +364,7 @@ function parentOf(element: HTMLElement): HTMLElement | null {
 /** Один сворачиваемый раздел просмотра: якорь индикатора и скрываемые элементы. */
 interface ViewSection {
   id: string;
-  /** Элемент, напротив первой строки которого встаёт маркер в полосе-гаттере. */
+  /** Элемент, напротив первой строки которого встаёт маркер (заголовок или родительский пункт). */
   anchor: HTMLElement;
   hide: HTMLElement[];
 }
@@ -507,7 +508,7 @@ export function decorateCommentView(
     path: readonly string[],
   ): void => {
     const headings: Array<{ node: HTMLElement; siblings: HTMLElement[]; index: number }> = [];
-    const nestedBlocks: HTMLElement[] = [];
+    const nestedBlocks: Array<{ block: HTMLElement; anchor: HTMLElement }> = [];
     const childBlocks: HTMLElement[] = [];
     const visit = (
       node: HTMLElement,
@@ -523,7 +524,9 @@ export function decorateCommentView(
         (tag === 'UL' || tag === 'OL' || tag === 'BLOCKQUOTE') &&
         (parentTag === 'LI' || parentTag === 'BLOCKQUOTE')
       ) {
-        nestedBlocks.push(node);
+        // Индикатор — у РОДИТЕЛЬСКОГО пункта, под которым лежит вложенный блок
+        // (ошибка 6007a6ec); сворачивание скрывает сам вложенный блок.
+        nestedBlocks.push({ block: node, anchor: parent });
       }
     };
     if (factory === undefined) walkElements(scope, visit);
@@ -549,16 +552,12 @@ export function decorateCommentView(
       addSection({ id: `h${level}#${n}`, anchor: node, hide }, scopeState, path.join('#'));
     }
 
-    // Вложенные блоки: скрывается содержимое блока, индикатор — у его начала.
-    // Счётчик также растёт для каждого обнаруженного блока (см. выше).
+    // Вложенные блоки: счётчик растёт для каждого обнаруженного блока (как в
+    // правке), маркер — у родительского пункта, скрывается весь блок.
     let nested = 0;
-    for (const block of nestedBlocks) {
+    for (const { block, anchor } of nestedBlocks) {
       nested += 1;
-      const hide = Array.from(block.children).filter(
-        (child): child is HTMLElement => child instanceof HTMLElement,
-      );
-      if (hide.length === 0) continue;
-      addSection({ id: `n#${nested}`, anchor: block, hide }, scopeState, path.join('#'));
+      addSection({ id: `n#${nested}`, anchor, hide: [block] }, scopeState, path.join('#'));
     }
 
     // Блоки трансклюзий — своё состояние на каждый путь вставки (требование
@@ -670,23 +669,31 @@ interface RawHeading {
 interface RawBlock {
   from: number;
   to: number;
+  /** Позиция родительского пункта (ListItem/Blockquote) — строка-якорь индикатора. */
+  anchorFrom: number;
 }
 
-/** Минимум узла дерева, нужный проверке вложенности (SyntaxNode подходит). */
+/** Минимум узла дерева, нужный поиску родителя (SyntaxNode подходит). */
 interface TreeNodeLike {
   name: string;
+  from: number;
   parent: TreeNodeLike | null;
 }
 
-/** Вложенный ли блочный узел дерева (внутри ListItem/Blockquote). */
-function isNestedNode(node: { parent: TreeNodeLike | null }): boolean {
+/**
+ * Ближайший родительский пункт блочного узла — `ListItem` или `Blockquote`
+ * (ошибка `6007a6ec`): индикатор сворачивания вложенного блока встаёт у НЕГО,
+ * а не у первой строки самого вложенного списка/цитаты. `null` — узел не
+ * вложен (до `Document` не встретилось ни списка, ни цитаты).
+ */
+function enclosingItem(node: { parent: TreeNodeLike | null }): TreeNodeLike | null {
   let current: TreeNodeLike | null = node.parent;
   while (current !== null) {
-    if (current.name === 'Document') return false;
-    if (current.name === 'ListItem' || current.name === 'Blockquote') return true;
+    if (current.name === 'Document') return null;
+    if (current.name === 'ListItem' || current.name === 'Blockquote') return current;
     current = current.parent;
   }
-  return false;
+  return null;
 }
 
 /**
@@ -740,14 +747,17 @@ function buildSections(
     });
   });
 
-  // Вложенные блоки: тело — весь блок, индикатор — у его первой строки.
+  // Вложенные блоки: тело — весь блок, индикатор — у строки РОДИТЕЛЬСКОГО
+  // пункта, под которым лежит блок (ошибка 6007a6ec), а не у первой строки
+  // самого вложенного списка/цитаты.
   let nested = 0;
   for (const block of blocks) {
     nested += 1;
+    const anchorFrom = doc.lineAt(block.anchorFrom).from;
     const bodyFrom = doc.lineAt(block.from).from;
     const bodyTo = doc.lineAt(block.to).to;
     if (bodyTo <= bodyFrom) continue;
-    sections.push({ id: `n#${nested}`, anchorFrom: bodyFrom, bodyFrom, bodyTo, path });
+    sections.push({ id: `n#${nested}`, anchorFrom, bodyFrom, bodyTo, path });
   }
 
   return sections;
@@ -783,8 +793,9 @@ function collectSections(
         return;
       }
       if (name === 'BulletList' || name === 'OrderedList' || name === 'Blockquote') {
-        if (!isNestedNode(node.node)) return;
-        const block = { from: node.from, to: node.to };
+        const parent = enclosingItem(node.node);
+        if (parent === null) return;
+        const block = { from: node.from, to: node.to, anchorFrom: parent.from };
         (inRegion(node.from) ? scopedBlocks : containerBlocks).push(block);
       }
     },
