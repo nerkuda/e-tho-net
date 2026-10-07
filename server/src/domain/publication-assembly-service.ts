@@ -881,6 +881,13 @@ function renderSection(
         });
 
   const sectionTexts = node.repeatOf === null ? (ctx.textsBySection.get(node.thoughtId) ?? []) : [];
+  // Страница для клиента (`GET /publications/{id}/assembly`, а также MCP
+  // `publications.assembly`) размечает текст позициями `data-md-*` относительно
+  // `body_md`: двойной клик в ленте резолвится общим `sourceOffsetFromCaret`
+  // (задача 59774016). Экспортный/печатный HTML (`exportSink`) намеренно
+  // собирается без разметки — это статичный артефакт, атрибуты маппинга ему не
+  // нужны, и превью/файл не должны расходиться по содержимому (ADR 06874c5d).
+  const sourceMap = ctx.exportSink === undefined;
   const textRenders = sectionTexts.map((t) => {
     const body = ctx.comments.get(t.thoughtId) ?? '';
     const result =
@@ -890,15 +897,17 @@ function renderSection(
             baseLevel: headingNumber,
             headingAnchor: headingAnchorFor(t.thoughtId),
             resolveLink: ctx.resolver,
+            ...(sourceMap ? { sourceMap: true } : {}),
           });
     return { text: t, body, result };
   });
 
-  const texts: PublicationAssemblyText[] = textRenders.map(({ text, result }) => ({
+  const texts: PublicationAssemblyText[] = textRenders.map(({ text, body, result }) => ({
     thought_id: text.thoughtId,
     anchor: publicationAnchor(text.thoughtId),
     edge_id: text.edgeId,
     body_html: result.html,
+    body_md: body,
   }));
 
   let extra = ctx.extraCache.get(node.thoughtId);

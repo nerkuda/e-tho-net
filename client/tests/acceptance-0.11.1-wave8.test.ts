@@ -86,9 +86,9 @@ describe('волна 8, п.1: новый текст — последним в г
   it('порядок, посчитанный keysAppendedLast+positionsFor, ставит новый текст последним (PUT order)', () => {
     const asm = assembly([
       section('A', [
-        { thought_id: 'N', anchor: 'pub-N', edge_id: 'e:N', body_html: '' },
-        { thought_id: 'T1', anchor: 'pub-T1', edge_id: 'e:T1', body_html: 'один' },
-        { thought_id: 'T2', anchor: 'pub-T2', edge_id: 'e:T2', body_html: 'два' },
+        { thought_id: 'N', anchor: 'pub-N', edge_id: 'e:N', body_html: '', body_md: '' },
+        { thought_id: 'T1', anchor: 'pub-T1', edge_id: 'e:T1', body_html: 'один', body_md: 'один' },
+        { thought_id: 'T2', anchor: 'pub-T2', edge_id: 'e:T2', body_html: 'два', body_md: 'два' },
       ]),
     ]);
     const keys = ['e:N', 'e:T1', 'e:T2'];
@@ -112,9 +112,9 @@ describe('волна 8, п.1: новый текст — последним в г
     // ВСЕЙ группы, а не «за текстами первого свойства».
     const asm = assembly([
       section('A', [
-        { thought_id: 'N', anchor: 'pub-N', edge_id: 'e:N', body_html: '' },
-        { thought_id: 'TFull', anchor: 'pub-TFull', edge_id: 'e:TFull', body_html: 'полный' },
-        { thought_id: 'TEmpty', anchor: 'pub-TEmpty', edge_id: 'e:TEmpty', body_html: '' },
+        { thought_id: 'N', anchor: 'pub-N', edge_id: 'e:N', body_html: '', body_md: '' },
+        { thought_id: 'TFull', anchor: 'pub-TFull', edge_id: 'e:TFull', body_html: 'полный', body_md: 'полный' },
+        { thought_id: 'TEmpty', anchor: 'pub-TEmpty', edge_id: 'e:TEmpty', body_html: '', body_md: '' },
       ]),
     ]);
     const keys = ['e:N', 'e:TFull', 'e:TEmpty'];
@@ -163,7 +163,7 @@ describe('волна 8, п.2: автовыбор и автооткрытие д�
     );
     assert.match(
       WS,
-      /function openTextCommentEditById\(thoughtId: string, findText\?: string\): void \{[\s\S]*?mod\.openThoughtCommentEditor\(thoughtId, findText\)/,
+      /function openTextCommentEditById\([\s\S]*?selection\?: FeedSourceSelection,[\s\S]*?mod\.openThoughtCommentEditor\(thoughtId, findText, selection\)/,
       'текст открывается на вкладке «Комментарий» в режиме правки',
     );
   });

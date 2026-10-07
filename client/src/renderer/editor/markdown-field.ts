@@ -99,6 +99,14 @@ interface MarkdownFieldHandle {
    * недостижим — курсор идёт по вхождению кликнутого слова.
    */
   focusAt(findText?: string): void;
+  /**
+   * Переключает поле в правку и ставит каретку по ТОЧНОМУ диапазону исходника
+   * (задача 59774016): двойной клик по слову в ленте публикаций резолвится в
+   * смещение `body_md` общим `sourceOffsetFromCaret`, поэтому вхождение под
+   * кликом сохраняется даже при повторах слова (в отличие от {@link focusAt},
+   * который берёт первое вхождение текста).
+   */
+  focusAtSelection(selection: MdSourceSelection): void;
 }
 
 /**
@@ -1240,6 +1248,11 @@ export function createMarkdownField(opts: {
       if (position >= 0) editor.setSelection(position, position + needle.length);
       else editor.setCaret(0);
     },
+    focusAtSelection: (selection) => {
+      // Точный диапазон исходника (задача 59774016): `showEdit` с `locate`
+      // включает правку и выделяет ровно переданные позиции `body_md`.
+      showEdit(undefined, selection);
+    },
   });
 
   // Комментарийный контекст (карточка ETN 34ffbd75): после замены legacy-ссылок
@@ -1275,6 +1288,17 @@ export function editMarkdownField(root: HTMLElement, md?: string): void {
  */
 export function focusMarkdownFieldAt(root: HTMLElement, findText?: string): void {
   handles.get(root)?.focusAt(findText);
+}
+
+/**
+ * Переключает поле в правку и выделяет ТОЧНЫЙ диапазон исходника (задача
+ * 59774016): диапазон приходит от резолвера ленты публикаций
+ * (`feedSelectionFromDom` → `sourceOffsetFromCaret`) и адресует вхождение под
+ * двойным кликом, а не первое вхождение слова. Точка входа двойного клика по
+ * тексту публикации.
+ */
+export function focusMarkdownFieldSelection(root: HTMLElement, selection: MdSourceSelection): void {
+  handles.get(root)?.focusAtSelection(selection);
 }
 
 /** Updates an already-built field's content (e.g. after an external change). */

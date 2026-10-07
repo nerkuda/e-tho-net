@@ -446,6 +446,39 @@ describe('publication-assembly-service: тексты и исключения', {
     }
   });
 
+  it('размечает body_html текста позициями и отдаёт body_md для точной каретки (59774016)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const plain = createThoughtType(ndb, { name: 'Plain' }, USER);
+      const a = seedThought(ndb, 'A', type.id);
+      const t1 = seedThought(ndb, 'T1', plain.id);
+      const prop = seedTextProperty(ndb, type.id);
+      const lt = ndb
+        .prepare('SELECT config FROM properties_v WHERE id = ?')
+        .get(prop) as { config: string };
+      const linkTypeId = (JSON.parse(lt.config) as { link_type_id: string }).link_type_id;
+      seedLink(ndb, a, t1, linkTypeId, 0);
+      const body = 'слово раз слово два';
+      seedComment(ndb, t1, body);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(type.id), text_sources: [prop] },
+        USER,
+      );
+
+      const doc = assemblePublication(ndb, pub.id, USER);
+      const text = doc.sections.find((s) => s.thought_id === a)!.texts[0]!;
+      // Исходный фрагмент отдан рядом с HTML — координаты разметки в body_md.
+      assert.equal(text.body_md, body);
+      // Абзац размечен диапазоном всего исходника: каретка резолвится 1:1.
+      assert.match(text.body_html, /data-md-start="0"/);
+      assert.match(text.body_html, new RegExp(`data-md-end="${body.length}"`));
+    } finally {
+      ndb.close();
+    }
+  });
+
   it('скрывает исключённые разделы в чтении и показывает в редакторе', () => {
     const ndb = createInMemoryNetworkDb();
     try {

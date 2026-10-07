@@ -147,7 +147,7 @@ describe('волна 7, п.1: клик по разделу/тексту — по
 describe('волна 7, п.2: пустые мысли-тексты видны блоками', () => {
   it('пустой текст остаётся блоком документа (DTO body_html = "")', () => {
     const asm = assembly([
-      section('A', [{ thought_id: 'T', anchor: 'pub-T', edge_id: 'e:T', body_html: '' }]),
+      section('A', [{ thought_id: 'T', anchor: 'pub-T', edge_id: 'e:T', body_html: '', body_md: '' }]),
     ]);
     const blocks = documentBlocks(asm, publication());
     const text = blocks.find((block) => block.kind === 'text');

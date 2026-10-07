@@ -85,6 +85,16 @@ export interface PublicationRenderOptions {
   resolveLink?: WikiLinkResolver;
   /** Maximum input length in characters (default 256 KiB). */
   maxLength?: number;
+  /**
+   * Annotate the rendered nodes with their source character ranges against
+   * `source` (the `data-md-*` attributes of the single renderer's source map,
+   * see `source-map.ts`). Opt-in: without it the fragment HTML is byte-for-byte
+   * identical to the plain publication render. The mapping MECHANISM is shared
+   * with {@link renderMarkdown} — this only lets the publication pipeline opt
+   * into it, so a client can map a click inside a feed block back to an offset
+   * in `body_md` (задача 59774016).
+   */
+  sourceMap?: boolean;
 }
 
 /** Result of {@link renderPublicationFragment}. */
@@ -299,6 +309,12 @@ export function renderPublicationFragment(
       resolveLink: opts.resolveLink,
       headings: [],
     } satisfies PublicationEnv,
+    // Opt-in source-position annotation (задача 59774016). The source-map
+    // plugin reads these two top-level env keys; `sourceMapSource` keeps the
+    // caller's ORIGINAL string (CRLF included) so offsets stay in `body_md`
+    // coordinates, exactly as {@link renderMarkdown} does.
+    sourceMap: opts.sourceMap === true,
+    sourceMapSource: opts.sourceMap === true ? source : undefined,
   };
   const html = md.render(source, env);
   return { html, headings: env.pub.headings };

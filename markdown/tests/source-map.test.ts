@@ -18,6 +18,7 @@ import {
   nearestSourceRange,
   parseSourceRange,
   renderMarkdown,
+  renderPublicationFragment,
   sourceOffsetFromCaret,
   type SourceMapNode,
 } from '../src/index.js';
@@ -851,5 +852,41 @@ test('байт-паритет: вне sourceMap вывод стандартны�
     '<p><strong>a <mark>b</mark> c</strong></p>\n',
   );
   assert.equal(renderMarkdown('***x***'), '<p><em><strong>x</strong></em></p>\n');
+});
+
+// ---------------------------------------------------------------------------
+// Публикационный фрагмент: opt-in sourceMap (задача 59774016)
+// ---------------------------------------------------------------------------
+
+test('публикационный фрагмент: без sourceMap вывод не размечается', () => {
+  const src = 'aaa bbb aaa ccc';
+  const html = renderPublicationFragment(src).html;
+  assert.ok(!html.includes(MD_SOURCE_START_ATTR), html);
+  assert.ok(!html.includes(MD_SOURCE_END_ATTR), html);
+});
+
+test('публикационный фрагмент: opt-in sourceMap размечает позиции относительно body_md', () => {
+  const src = 'aaa bbb aaa ccc';
+  const html = renderPublicationFragment(src, { sourceMap: true }).html;
+  assert.match(html, new RegExp(`<p data-md-start="0" data-md-end="${src.length}"`));
+});
+
+test('публикационный фрагмент: сдвиг заголовка сохраняет разметку позиций', () => {
+  const src = '# Заголовок\n\nтекст';
+  const html = renderPublicationFragment(src, { baseLevel: 1, sourceMap: true }).html;
+  const start = src.indexOf('Заголовок');
+  // Заголовок сдвинут на уровень ниже (H1 → H2), разметка осталась на тексте.
+  assert.match(html, new RegExp(`<h2[^>]*data-md-start="${start}"`));
+});
+
+test('повтор слова: каретка во втором вхождении даёт ЕГО позицию, а не первого', () => {
+  const src = 'aaa bbb aaa ccc';
+  const second = src.lastIndexOf('aaa');
+  const root = parseHtml(renderPublicationFragment(src, { sourceMap: true }).html);
+  const target = findText(root, 'aaa');
+  assert.ok(target !== null);
+  // Ориентир по первому вхождению дал бы 0; разметка позиций даёт место клика.
+  assert.equal(sourceOffsetFromCaret(target, second), second);
+  assert.notEqual(second, 0);
 });
 

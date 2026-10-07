@@ -69,6 +69,11 @@ import {
 } from '../../lib/ui/drag-list.js';
 import { buildCover } from './cover.js';
 import {
+  feedSelectionFromDom,
+  type DomSelectionLike,
+  type FeedSourceSelection,
+} from './feed-selection.js';
+import {
   applyPublicationOrder,
   assemblyDateLabel,
   blockSignature,
@@ -1715,16 +1720,22 @@ export function mountPublicationWorkspace(
   }
 
   /**
-   * Двойной клик по тексту (пункт 4; уточнено задачей 189da39e): мысль
-   * открывается в редакторе на вкладке «Комментарий» в режиме правки, а
-   * каретка/выделение встают по вхождению кликнутого слова. Точный офсет
-   * рендер-узла ленты к markdown недостижим: текст собирает
-   * `renderPublicationFragment` (сдвиг заголовков, подстановка ссылок), а не
-   * `renderMarkdown` по `body_md`, — поэтому ориентир — выделенное слово, а
-   * при его отсутствии — начало кликнутого абзаца.
+   * Двойной клик по тексту (пункт 4; уточнено задачами 189da39e и 59774016):
+   * мысль открывается в редакторе на вкладке «Комментарий» в режиме правки, а
+   * каретка/выделение встают по вхождению кликнутого слова. `body_html` ленты
+   * размечен серверной сборкой (`data-md-*` относительно `body_md`), поэтому
+   * выделение двойного клика резолвится в ТОЧНЫЙ диапазон источника общим
+   * `sourceOffsetFromCaret` — позиция попадает именно во вхождение под кликом,
+   * а не в первое вхождение слова. Резолвер недоступен — прежний фолбэк:
+   * ориентир — выделенное слово, затем начало кликнутого абзаца.
    */
   function openTextCommentEdit(ev: MouseEvent, block: DocBlock): void {
     if (block.kind !== 'text') return;
+    const selection = feedSelectionFromDom(getDomSelection());
+    if (selection !== null) {
+      openTextCommentEditById(block.thoughtId, undefined, selection);
+      return;
+    }
     const word = (window.getSelection?.()?.toString() ?? '').trim();
     if (word !== '') {
       openTextCommentEditById(block.thoughtId, word);
@@ -1736,13 +1747,25 @@ export function mountPublicationWorkspace(
     openTextCommentEditById(block.thoughtId, text === '' ? undefined : text);
   }
 
+  /** Текущее DOM-выделение в структурном виде резолвера (или `null`). */
+  function getDomSelection(): DomSelectionLike | null {
+    const selection = window.getSelection?.();
+    if (selection === null || selection === undefined) return null;
+    return selection as unknown as DomSelectionLike;
+  }
+
   /**
-   * Открыть мысль-текст в редакторе на вкладке «Комментарий» в режиме правки
-   * (`findText` — каретка/выделение по вхождению, иначе каретка в конец).
+   * Открыть мысль-текст в редакторе на вкладке «Комментарий» в режиме правки:
+   * точный диапазон `selection` (задача 59774016) либо вхождение `findText`
+   * (каретка/выделение по вхождению), иначе каретка в конец.
    */
-  function openTextCommentEditById(thoughtId: string, findText?: string): void {
+  function openTextCommentEditById(
+    thoughtId: string,
+    findText?: string,
+    selection?: FeedSourceSelection,
+  ): void {
     void import('../../editor/editor.js').then((mod) =>
-      mod.openThoughtCommentEditor(thoughtId, findText),
+      mod.openThoughtCommentEditor(thoughtId, findText, selection),
     );
   }
 

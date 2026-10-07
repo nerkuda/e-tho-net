@@ -189,6 +189,7 @@ describe('модель рабочей области: применение ло�
     anchor: `pub-${id}`,
     edge_id: `e:${id}`,
     body_html: `<p>${id}</p>`,
+    body_md: id,
   });
   const nested = (id: string): PublicationAssemblySection => ({ ...section(id), level: 2 });
 
@@ -434,6 +435,7 @@ describe('модель рабочей области: сворачивание �
     anchor: `pub-${id}`,
     edge_id: `e:${id}`,
     body_html: `<p>${id}</p>`,
+    body_md: id,
   });
 
   /** A (предисловие + текст) → B (текст); C — пустой корневой раздел. */
