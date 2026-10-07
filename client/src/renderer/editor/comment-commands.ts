@@ -37,6 +37,7 @@ import {
   type KeyBindingDef,
 } from '../lib/keymap.js';
 import {
+  guardMenuFocus,
   MENU_SEPARATOR,
   menuAction,
   menuSubmenu,
@@ -602,17 +603,6 @@ function commandTitle(id: string, def: CommentCommandDef): string {
   return chord === null ? label : `${label} (${chord})`;
 }
 
-/**
- * Удерживает фокус и выделение редактора при клике по строке меню: кнопки
- * меню не забирают фокус на mousedown, поэтому поле не выходит из правки и
- * команда применяется к текущему выделению.
- */
-export function guardCommentMenuFocus(menuRoot: HTMLElement): void {
-  for (const row of menuRoot.querySelectorAll('.menu-item')) {
-    row.addEventListener('mousedown', (event) => event.preventDefault());
-  }
-}
-
 function openToolbarSubmenu(
   anchor: HTMLElement,
   node: CommentLayoutSubmenu,
@@ -620,7 +610,9 @@ function openToolbarSubmenu(
 ): void {
   const rect = anchor.getBoundingClientRect();
   const menuRoot = showMenuAt(rect.left, rect.bottom + 2, layoutToMenuItems(node.items, host));
-  guardCommentMenuFocus(menuRoot);
+  // Защита фокуса — общий механизм меню (`lib/menu.ts`): делегированный
+  // обработчик покрывает и лениво построенные строки подменю (ошибка 64b18420).
+  guardMenuFocus(menuRoot);
 }
 
 function commandButton(id: string, host: CommentCommandHost): HTMLButtonElement {
@@ -771,7 +763,7 @@ export function createCommentModeActions(host: CommentCommandHost): CommentModeA
 
   // Клик по кнопке не должен снимать фокус/выделение редактора до обработчика:
   // иначе `blur` сохранит правку раньше, чем «Отмена» её отменит (как у строк
-  // контекстного меню, `guardCommentMenuFocus`).
+  // контекстного меню, `guardMenuFocus`).
   for (const btn of [edit, cancel, save, blockCancel, blockSave]) {
     btn.addEventListener('mousedown', (event) => event.preventDefault());
   }

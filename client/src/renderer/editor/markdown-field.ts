@@ -35,7 +35,7 @@ import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
-import { showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
+import { guardMenuFocus, showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { bindWikiCreateContext } from '../lib/wiki-create-context.js';
 import {
@@ -43,7 +43,6 @@ import {
   buildCommentToolbar,
   createCommentModeActions,
   enterCommentEdit,
-  guardCommentMenuFocus,
   type CommentCommandHost,
 } from './comment-commands.js';
 import { commentFieldKeymapExtension } from './comment-format.js';
@@ -1145,7 +1144,9 @@ export function createMarkdownField(opts: {
       const menuRoot = showMenuAt(event.clientX, event.clientY, items);
       // Клик по пункту меню не должен снимать фокус/выделение редактора —
       // иначе поле выйдет из правки и команда не применится к выделению.
-      guardCommentMenuFocus(menuRoot);
+      // Общий механизм меню: делегированный обработчик покрывает и лениво
+      // построенные строки подменю (ошибка 64b18420).
+      guardMenuFocus(menuRoot);
     });
     // Тулбар — верхняя панель поля; живёт внутри `area`, поэтому виден только в
     // правке (`area` скрыта в просмотре) — требование 6f8575a5. Собирается
