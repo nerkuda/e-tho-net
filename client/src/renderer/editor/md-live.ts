@@ -245,8 +245,11 @@ function buildDecorations(state: EditorState): DecorationSet {
     empty?: boolean;
   }> = [];
 
-  /** Стек пунктов task-списка: маркер `[ ]`/`[x]` «принадлежит» своему `Task`. */
-  const taskStack: Array<{ from: number; to: number }> = [];
+  /**
+   * Стек пунктов списка: маркер списка (`-`/`N.`) и task-маркер (`[ ]`/`[x]`)
+   * «принадлежат» своему `ListItem` — его диапазон задаёт активность обоих.
+   */
+  const listItemStack: Array<{ from: number; to: number }> = [];
 
   syntaxTree(state).iterate({
     enter(node) {
@@ -373,17 +376,32 @@ function buildDecorations(state: EditorState): DecorationSet {
           }
           break;
         }
-        // Task-список (`- [ ]` / `- [x]`): вне активного пункта маркер `[ ]`/
-        // `[x]` заменяется чекбоксом. Сам `-` (ListMark) не трогаем — live
-        // preview не скрывает маркеры и обычных списков. Активность — по
-        // диапазону `Task` (каретка внутри/вплотную к пункту показывает исходник).
-        case 'Task': {
-          taskStack.push({ from, to });
+        // Пункт списка: его диапазон «владеет» маркером списка (`-`/`N.`) и
+        // task-маркером (`[ ]`/`[x]`). Пока каретка внутри пункта или вплотную
+        // к нему — исходные маркеры видны; вне — маркер списка скрывается, а
+        // task-маркер заменяется чекбоксом (паритет с просмотром и публикацией,
+        // где `-` не виден: ошибка 9d611f5f).
+        case 'ListItem': {
+          listItemStack.push({ from, to });
           break;
         }
+        // Маркер списка (`-`, `*`, `+`, `1.`, `1)`): вне активного пункта
+        // скрывается вместе с пробелом-разделителем — пункт отрисован как в
+        // просмотре. Общий для обычных и task-списков.
+        case 'ListMark': {
+          const item = listItemStack[listItemStack.length - 1];
+          if (item !== undefined && !isNearInline(ranges, item.from, item.to)) {
+            const extra = state.sliceDoc(to, to + 1) === ' ' ? 1 : 0;
+            hide(from, to + extra);
+          }
+          break;
+        }
+        // Task-маркер (`[ ]`/`[x]`): вне активного пункта заменяется чекбоксом.
+        // Активность — по диапазону `ListItem` (как у маркера списка), чтобы
+        // весь пункт раскрывался исходником одновременно.
         case 'TaskMarker': {
-          const task = taskStack[taskStack.length - 1];
-          if (task !== undefined && !isNearInline(ranges, task.from, task.to)) {
+          const item = listItemStack[listItemStack.length - 1];
+          if (item !== undefined && !isNearInline(ranges, item.from, item.to)) {
             const checked = /[xX]/.test(state.sliceDoc(from + 1, to - 1));
             parts.push({
               from,
@@ -494,8 +512,8 @@ function buildDecorations(state: EditorState): DecorationSet {
         case 'InlineCode':
           inlineStack.pop();
           break;
-        case 'Task':
-          taskStack.pop();
+        case 'ListItem':
+          listItemStack.pop();
           break;
         default:
           break;

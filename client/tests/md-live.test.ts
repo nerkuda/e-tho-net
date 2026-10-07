@@ -229,18 +229,43 @@ test('жирный/курсив не сломаны: маркеры вне ск�
   assert.equal(hasHiddenMark(buildState(ital, 1), 0, 1), false, '`*` внутри виден');
 });
 
-test('task-список: вне — маркер `[ ]` заменён чекбоксом; внутри — исходный маркер', () => {
+test('task-список: вне — маркер `[ ]` заменён чекбоксом, `-` скрыт; внутри — исходные маркеры', () => {
   const doc = '- [ ] todo\n\nпара';
-  // Каретка вне пункта (во второй строке): чекбокс на месте `[ ]`.
+  // Каретка вне пункта (во второй строке): чекбокс на месте `[ ]`, дефис скрыт.
   const away = buildState(doc, doc.length);
   const checkbox = allSpecs(away).find(
     (r) => r.from === 2 && r.to === 5 && r.spec.widget !== undefined,
   );
   assert.ok(checkbox, 'маркер `[ ]` заменён виджетом-чекбоксом');
-  // Каретка внутри пункта: исходный `[ ]`, виджета нет.
+  assert.equal(hasHiddenMark(away, 0, 1), true, 'маркер списка `-` скрыт вне пункта');
+  // Каретка внутри пункта: исходные маркеры видны, виджета нет.
   const inside = buildState(doc, 3);
   assert.equal(allSpecs(inside).some((r) => r.spec.widget !== undefined), false);
+  assert.equal(hasHiddenMark(inside, 0, 1), false, 'маркер списка `-` виден');
   assert.equal(hasHiddenMark(inside, 2, 5), false, 'маркер `[ ]` виден');
+});
+
+test('маркированный список: вне — `-` скрыт; внутри и вплотную — виден', () => {
+  // ListItem [0,6), ListMark [0,1); «пара» отделена пустой строкой от списка.
+  const doc = '- item\n\nпара';
+  // Вне пункта: маркер списка скрыт (пункт отрисован как в просмотре).
+  assert.equal(hasHiddenMark(buildState(doc, doc.length), 0, 1), true, '`-` скрыт вне');
+  // Внутри пункта: исходный маркер виден.
+  assert.equal(hasHiddenMark(buildState(doc, 3), 0, 1), false, '`-` виден внутри');
+  // Вплотную (перед маркером): исходный маркер виден.
+  assert.equal(hasHiddenMark(buildState(doc, 0), 0, 1), false, '`-` виден вплотную');
+});
+
+test('нумерованный список: `N.` скрыт вне пункта, виден внутри — по каждому пункту отдельно', () => {
+  // "1. one\n2. two\n\nпара": ListItem1 [0,6) ListMark [0,2); ListItem2 [7,13) ListMark [7,9).
+  const doc = '1. one\n2. two\n\nпара';
+  const away = buildState(doc, doc.length);
+  assert.equal(hasHiddenMark(away, 0, 2), true, '`1.` первого пункта скрыт вне');
+  assert.equal(hasHiddenMark(away, 7, 9), true, '`2.` второго пункта скрыт вне');
+  // Внутри первого пункта: его маркер виден, маркер соседнего пункта — скрыт.
+  const insideFirst = buildState(doc, 3);
+  assert.equal(hasHiddenMark(insideFirst, 0, 2), false, '`1.` виден внутри своего пункта');
+  assert.equal(hasHiddenMark(insideFirst, 7, 9), true, '`2.` соседнего пункта остаётся скрыт');
 });
 
 test('task-список: отмеченный `[x]` даёт чекбокс с checked', () => {
