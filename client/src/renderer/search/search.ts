@@ -52,6 +52,7 @@ import { div, el, renderHtml, setTooltip, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { isInsideDialog } from '../lib/dialog.js';
+import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
@@ -133,6 +134,12 @@ let restored = false;
 let lastSelectedKey: string | null = null;
 /** Flat navigation index over group headers + hits of expanded groups. */
 let cursor: number | null = null;
+/** Счётчик монтирований строки поиска: уникальные id контекстов диспетчера. */
+let searchContextSeq = 0;
+/** Снятие контекста поля поиска (пока фокус в поле). */
+let releaseSearchFieldContext: (() => void) | null = null;
+/** Снятие контекста панели (пока панель видима). */
+let releaseSearchPanelContext: (() => void) | null = null;
 
 /**
  * Активация строки результата — ровно то, что выполнит клик по ней (одна
@@ -195,6 +202,8 @@ export function mountSearch(next: SearchChrome): () => void {
   chrome = next;
 
   const { host, input } = next;
+  const fieldContextId = `search-field-${(searchContextSeq += 1)}`;
+  const panelContextId = `search-panel-${(searchContextSeq += 1)}`;
   host.replaceChildren();
 
   const toggle = iconButton({
@@ -233,6 +242,9 @@ export function mountSearch(next: SearchChrome): () => void {
     positionPanel();
     applySettingsPlacement();
     host.classList.remove('hidden');
+    // Пока панель видима, её контекст на стеке диспетчера: Escape закрывает
+    // панель, даже если фокус ушёл из поля (ADR b420b08c, задача fd3d84f4).
+    releaseSearchPanelContext ??= pushKeyContext(panelContextId);
     if (!restored) {
       restored = true;
       void restoreState();
@@ -243,9 +255,10 @@ export function mountSearch(next: SearchChrome): () => void {
     if (searchTimer !== null) window.clearTimeout(searchTimer);
     searchTimer = window.setTimeout(() => void run(), 250);
   });
-  input.addEventListener('keydown', (event) => {
+  // Клавиатура поля поиска — через общеклиентский диспетчер: пока фокус в поле,
+  // его контекст на вершине стека (ADR b420b08c, задача fd3d84f4).
+  const handleFieldKey = (event: KeyboardEvent): boolean => {
     if (event.key === 'Enter') {
-      event.preventDefault();
       if (searchTimer !== null) window.clearTimeout(searchTimer);
       const rows = collectNavRows();
       const row = cursor === null ? undefined : rows[cursor];
@@ -257,26 +270,49 @@ export function mountSearch(next: SearchChrome): () => void {
         // рекомендует её для крупных сетей).
         void run();
       }
+      return true;
     } else if (event.ctrlKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
       // Ctrl+↑/↓ jump to the first/last row (Enter — with or without Ctrl —
       // activates the selected row above).
       const rows = collectNavRows();
-      if (rows.length === 0) return;
-      event.preventDefault();
+      if (rows.length === 0) return false;
       cursor = event.key === 'ArrowUp' ? 0 : rows.length - 1;
       rows.forEach((row, i) => row.el.classList.toggle('selected', i === cursor));
       rows[cursor]!.el.scrollIntoView({ block: 'nearest' });
+      return true;
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       const rows = collectNavRows();
-      if (rows.length === 0) return;
-      event.preventDefault();
+      if (rows.length === 0) return false;
       moveCursor(event.key === 'ArrowDown' ? 1 : -1);
+      return true;
     } else if (event.key === 'Escape') {
       if (searchTimer !== null) window.clearTimeout(searchTimer);
       hidePanel();
       input.blur();
+      return true;
     }
+    return false;
+  };
+  defineKeyContext({
+    id: fieldContextId,
+    bindings: [
+      { command: 'search.enter', chord: 'Enter', run: handleFieldKey },
+      { command: 'search.first', chord: 'Ctrl+ArrowUp', run: handleFieldKey },
+      { command: 'search.last', chord: 'Ctrl+ArrowDown', run: handleFieldKey },
+      { command: 'search.up', chord: 'ArrowUp', run: handleFieldKey },
+      { command: 'search.down', chord: 'ArrowDown', run: handleFieldKey },
+      { command: 'search.escape', chord: 'Escape', run: handleFieldKey },
+    ],
   });
+  const onFieldFocusIn = (): void => {
+    releaseSearchFieldContext ??= pushKeyContext(fieldContextId);
+  };
+  const onFieldFocusOut = (): void => {
+    releaseSearchFieldContext?.();
+    releaseSearchFieldContext = null;
+  };
+  input.addEventListener('focusin', onFieldFocusIn as EventListener);
+  input.addEventListener('focusout', onFieldFocusOut as EventListener);
 
   // Keep the dropdown anchored to the input while the search row/window
   // resizes; the same resize re-decides where the settings zone goes (right of
@@ -312,13 +348,24 @@ export function mountSearch(next: SearchChrome): () => void {
     hidePanel();
   };
   document.addEventListener('pointerdown', onDocumentPointerDown);
-  const onDocumentKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape' && !host.classList.contains('hidden')) {
-      if (searchTimer !== null) window.clearTimeout(searchTimer);
-      hidePanel();
-    }
-  };
-  document.addEventListener('keydown', onDocumentKeyDown);
+  // Контекст панели: Escape при видимой панели, даже когда фокус не в поле
+  // (раньше — document-слушатель; ADR b420b08c, задача fd3d84f4).
+  defineKeyContext({
+    id: panelContextId,
+    bindings: [
+      {
+        command: 'search.panel.escape',
+        chord: 'Escape',
+        run: (event) => {
+          if (event.key === 'Escape' && !host.classList.contains('hidden')) {
+            if (searchTimer !== null) window.clearTimeout(searchTimer);
+            hidePanel();
+          }
+          return true;
+        },
+      },
+    ],
+  });
 
   // Release the global listeners/observer on workspace teardown — they live on
   // `window`/`document`, not on the host element, so wiping the DOM does not
@@ -326,7 +373,12 @@ export function mountSearch(next: SearchChrome): () => void {
   return () => {
     window.removeEventListener('resize', onWindowResize);
     document.removeEventListener('pointerdown', onDocumentPointerDown);
-    document.removeEventListener('keydown', onDocumentKeyDown);
+    input.removeEventListener('focusin', onFieldFocusIn as EventListener);
+    input.removeEventListener('focusout', onFieldFocusOut as EventListener);
+    releaseSearchFieldContext?.();
+    releaseSearchFieldContext = null;
+    releaseSearchPanelContext?.();
+    releaseSearchPanelContext = null;
     panelObserver.disconnect();
     chrome = null;
   };
@@ -396,6 +448,8 @@ function positionPanel(): void {
 /** Hides the drop panel (query, results and the selected row are kept). */
 export function hidePanel(): void {
   if (chrome !== null) chrome.host.classList.add('hidden');
+  releaseSearchPanelContext?.();
+  releaseSearchPanelContext = null;
   cursor = null;
 }
 

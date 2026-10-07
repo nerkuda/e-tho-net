@@ -24,6 +24,7 @@
 import { setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { currentThoughtId } from '../history.js';
+import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { notice } from '../lib/notice.js';
 import { pickSpatialTarget, shouldDrawCurrentFrame } from '../lib/ui/nav-core.js';
 import { store } from '../state.js';
@@ -71,6 +72,58 @@ export function pickSpatialCandidate(
 let hostEl: HTMLElement | null = null;
 /** Thought id under the keyboard cursor; null — no cursor (starts at focus). */
 let cursorId: string | null = null;
+/** Счётчик установок навигации: уникальный id контекста (переустановка хоста). */
+let kbdNavContextSeq = 0;
+
+/** Клавиатурная команда карты; `true` — событие обработано (см. диспетчер). */
+function handleHostKey(event: KeyboardEvent): boolean {
+  if (store.state.activeView !== 'map') return false;
+  // Tab walks the same cursor as the arrows (DOM tab order would highlight
+  // a different cloud — the virtualization's slot order, not the visual one).
+  if (event.key === 'Tab') {
+    void step(event.shiftKey ? -1 : 1, 0, true);
+    return true;
+  }
+  if (event.ctrlKey || event.metaKey) {
+    if (event.key === 'Enter') {
+      focusCursor();
+      return true;
+    }
+    if (event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      void reorderCursor(event.key === 'ArrowLeft' ? -1 : 1);
+      return true;
+    }
+    return false; // other Ctrl-combos (zoom, search) keep their global handlers
+  }
+  switch (event.key) {
+    case 'ArrowUp':
+      void step(0, -1, true);
+      return true;
+    case 'ArrowDown':
+      void step(0, 1, true);
+      return true;
+    case 'ArrowLeft':
+      void step(-1, 0, true);
+      return true;
+    case 'ArrowRight':
+      void step(1, 0, true);
+      return true;
+    case 'Home':
+      void jumpToEdge(true);
+      return true;
+    case 'End':
+      void jumpToEdge(false);
+      return true;
+    case 'Enter':
+      openCursorInEditor();
+      return true;
+    case 'Escape':
+      setCursor(null);
+      return true;
+    default:
+      return false;
+  }
+}
 
 /** Wires the keyboard navigation onto the canvas host. */
 export function initKbdNav(host: HTMLElement): void {
@@ -86,64 +139,40 @@ export function initKbdNav(host: HTMLElement): void {
     event.preventDefault();
     host.focus({ preventScroll: true });
   });
-  host.addEventListener('keydown', (event) => {
-    if (store.state.activeView !== 'map') return;
-    // Tab walks the same cursor as the arrows (DOM tab order would highlight
-    // a different cloud — the virtualization's slot order, not the visual one).
-    if (event.key === 'Tab') {
-      event.preventDefault();
-      void step(event.shiftKey ? -1 : 1, 0, true);
-      return;
-    }
-    if (event.ctrlKey || event.metaKey) {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        focusCursor();
-        return;
-      }
-      if (event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-        event.preventDefault();
-        void reorderCursor(event.key === 'ArrowLeft' ? -1 : 1);
-        return;
-      }
-      return; // other Ctrl-combos (zoom, search) keep their global handlers
-    }
-    switch (event.key) {
-      case 'ArrowUp':
-        event.preventDefault();
-        void step(0, -1, true);
-        break;
-      case 'ArrowDown':
-        event.preventDefault();
-        void step(0, 1, true);
-        break;
-      case 'ArrowLeft':
-        event.preventDefault();
-        void step(-1, 0, true);
-        break;
-      case 'ArrowRight':
-        event.preventDefault();
-        void step(1, 0, true);
-        break;
-      case 'Home':
-        event.preventDefault();
-        void jumpToEdge(true);
-        break;
-      case 'End':
-        event.preventDefault();
-        void jumpToEdge(false);
-        break;
-      case 'Enter':
-        event.preventDefault();
-        openCursorInEditor();
-        break;
-      case 'Escape':
-        setCursor(null);
-        break;
-      default:
-        break;
-    }
+  // Клавиатура карты — через общеклиентский диспетчер: пока фокус внутри хоста,
+  // его контекст на вершине стека (ADR b420b08c, задача fd3d84f4).
+  const contextId = `canvas-kbd-nav-${(kbdNavContextSeq += 1)}`;
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'canvas.tab', chord: 'Tab', run: handleHostKey },
+      { command: 'canvas.tab.prev', chord: 'Shift+Tab', run: handleHostKey },
+      { command: 'canvas.focusCursor', chord: 'Ctrl+Enter', run: handleHostKey },
+      { command: 'canvas.focusCursor.meta', chord: 'Meta+Enter', run: handleHostKey },
+      { command: 'canvas.reorderPrev', chord: 'Ctrl+Shift+ArrowLeft', run: handleHostKey },
+      { command: 'canvas.reorderPrev.meta', chord: 'Meta+Shift+ArrowLeft', run: handleHostKey },
+      { command: 'canvas.reorderNext', chord: 'Ctrl+Shift+ArrowRight', run: handleHostKey },
+      { command: 'canvas.reorderNext.meta', chord: 'Meta+Shift+ArrowRight', run: handleHostKey },
+      { command: 'canvas.up', chord: 'ArrowUp', run: handleHostKey },
+      { command: 'canvas.down', chord: 'ArrowDown', run: handleHostKey },
+      { command: 'canvas.left', chord: 'ArrowLeft', run: handleHostKey },
+      { command: 'canvas.right', chord: 'ArrowRight', run: handleHostKey },
+      { command: 'canvas.home', chord: 'Home', run: handleHostKey },
+      { command: 'canvas.end', chord: 'End', run: handleHostKey },
+      { command: 'canvas.open', chord: 'Enter', run: handleHostKey },
+      { command: 'canvas.escape', chord: 'Escape', run: handleHostKey },
+    ],
   });
+  let releaseContext: (() => void) | null = null;
+  const onFocusIn = (): void => {
+    releaseContext ??= pushKeyContext(contextId);
+  };
+  const onFocusOut = (): void => {
+    releaseContext?.();
+    releaseContext = null;
+  };
+  host.addEventListener('focusin', onFocusIn as EventListener);
+  host.addEventListener('focusout', onFocusOut as EventListener);
 }
 
 /** Drops the cursor (focus change, network reset — the old cloud may be gone). */

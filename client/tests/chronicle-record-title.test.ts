@@ -11,9 +11,13 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура правки идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /** Минимальный DOM-шим, нужный компоненту и фасадам `lib/ui`. */
 function installShim(): void {
@@ -57,19 +61,22 @@ async function makeTitle(opts: Record<string, unknown>): Promise<TitleHandle> {
 }
 
 function pressEnter(node: ShimElement): void {
-  node.emit('keydown', {
+  // Контекст правки уже на стеке (beginEdit кладёт его сразу).
+  keymap.dispatchKeyEvent({
     key: 'Enter',
+    target: node,
     preventDefault: () => undefined,
     stopPropagation: () => undefined,
-  });
+  } as unknown as KeyboardEvent);
 }
 
 function pressEscape(node: ShimElement): void {
-  node.emit('keydown', {
+  keymap.dispatchKeyEvent({
     key: 'Escape',
+    target: node,
     preventDefault: () => undefined,
     stopPropagation: () => undefined,
-  });
+  } as unknown as KeyboardEvent);
 }
 
 /** Последний текстовый узел кнопки-заголовка — её надпись (после replaceChildren). */

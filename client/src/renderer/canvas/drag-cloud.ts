@@ -47,6 +47,7 @@ import { type Link, type ThoughtLinksGrouped } from '@etn/shared';
 
 import { etn } from '../lib/etn.js';
 import { closeMenu } from '../lib/menu.js';
+import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { notice } from '../lib/notice.js';
 import {
   ensureLink,
@@ -151,6 +152,43 @@ let accessors: DragAccessors | null = null;
 /** Panel actions, registered by the selection/history modules at mount. */
 let dropActions: ListDropActions = {};
 
+/**
+ * Контекст Escape во время жеста перетаскивания — через общеклиентский
+ * диспетчер (ADR b420b08c, задача fd3d84f4). Кладётся на стек на время жеста
+ * и снимается при его завершении/отмене; `preventDefault` диспетчера помечает
+ * нажатие съеденным, чтобы глобальный Escape не закрыл меню/диалог за жестом.
+ */
+const DRAG_CONTEXT_ID = 'canvas-cloud-drag';
+/** Снятие контекста жеста (`null` — контекст не активен). */
+let releaseDragContext: (() => void) | null = null;
+
+function acquireDragContext(): void {
+  releaseDragContext ??= pushKeyContext(DRAG_CONTEXT_ID);
+}
+
+function releaseDragContextOnEnd(): void {
+  releaseDragContext?.();
+  releaseDragContext = null;
+}
+
+defineKeyContext({
+  id: DRAG_CONTEXT_ID,
+  bindings: [
+    {
+      command: 'canvas.drag.cancel',
+      chord: 'Escape',
+      run: (event) => {
+        // A held Esc (auto-repeat) is ignored so the drag is cancelled exactly
+        // once per press.
+        if (event.repeat) return false;
+        if (gesture === null) return false;
+        cancelCloudDrag();
+        return true;
+      },
+    },
+  ],
+});
+
 /** Drop actions provided by the thought list panels (selection, history, pins). */
 export interface ListDropActions {
   addToSelection?: (ids: string[]) => void;
@@ -244,7 +282,7 @@ export function wireExternalDragSource(
     window.addEventListener('mousemove', onCloudMouseMove);
     window.addEventListener('mouseup', onCloudMouseUp);
     window.addEventListener('blur', cancelCloudDrag);
-    window.addEventListener('keydown', onCloudKeyDown);
+    acquireDragContext();
   });
 }
 
@@ -286,7 +324,7 @@ function onCloudMouseDown(event: MouseEvent): void {
   window.addEventListener('mousemove', onCloudMouseMove);
   window.addEventListener('mouseup', onCloudMouseUp);
   window.addEventListener('blur', cancelCloudDrag);
-  window.addEventListener('keydown', onCloudKeyDown);
+  acquireDragContext();
 }
 
 function onCloudMouseMove(event: MouseEvent): void {
@@ -318,7 +356,7 @@ function onCloudMouseUp(event: MouseEvent): void {
   window.removeEventListener('mousemove', onCloudMouseMove);
   window.removeEventListener('mouseup', onCloudMouseUp);
   window.removeEventListener('blur', cancelCloudDrag);
-  window.removeEventListener('keydown', onCloudKeyDown);
+  releaseDragContextOnEnd();
   if (!g.active) return; // a plain click — the cloud's own click handler runs
   document.body.classList.remove('cloud-dragging');
   g.source.classList.remove('drag-source');
@@ -418,7 +456,7 @@ function cancelCloudDrag(): void {
   window.removeEventListener('mousemove', onCloudMouseMove);
   window.removeEventListener('mouseup', onCloudMouseUp);
   window.removeEventListener('blur', cancelCloudDrag);
-  window.removeEventListener('keydown', onCloudKeyDown);
+  releaseDragContextOnEnd();
   if (g.fromMenu === true) closeMenu();
   if (g.active) {
     document.body.classList.remove('cloud-dragging');
@@ -427,21 +465,6 @@ function cancelCloudDrag(): void {
     clearHighlight();
     dropActions.onDragEnd?.();
   }
-}
-
-/**
- * Esc during a drag aborts the gesture (no drop, no side effects, ghost/highlight
- * cleaned up). `preventDefault` marks the press as consumed so the global Escape
- * handler (`initKeyboard` in app.ts, bubble phase) does not also try to close
- * a menu/dialog behind the drag; a held Esc (auto-repeat) is ignored so the
- * drag is cancelled exactly once per press.
- */
-function onCloudKeyDown(event: KeyboardEvent): void {
-  if (event.key !== 'Escape') return;
-  if (event.repeat) return;
-  if (gesture === null) return;
-  event.preventDefault();
-  cancelCloudDrag();
 }
 
 /** A clone of the source cloud, fixed to the viewport, following the cursor. */

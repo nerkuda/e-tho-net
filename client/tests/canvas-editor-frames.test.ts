@@ -18,6 +18,7 @@ import { before, beforeEach, describe, it } from 'node:test';
 
 import type { FocusResponse, Thought } from '@etn/shared';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 
@@ -187,6 +188,7 @@ before(async () => {
 });
 
 beforeEach(async () => {
+  keymap.keymapInternals.reset();
   installEtn();
   store.update({ networkId: NETWORK_ID, focus: null, editorTarget: null, selectedLinkId: null, canvasZoom: 1, cloudWidth: 180 });
 });
@@ -216,13 +218,17 @@ describe('карта: Enter на фокусной мысли гасит пунк
     assert.deepEqual(cursorIds(), [], 'пунктир фокуса подавлен (открытая = фокусная)');
     // Enter на фокусной: openThoughtInEditor выходит рано (editorTarget=null),
     // но рамки пересчитываются — пунктира по-прежнему нет.
-    currentHost?.emit('keydown', { key: 'Enter', target: currentHost, preventDefault: (): void => undefined });
+    currentHost?.emit('focusin', {});
+    keymap.dispatchKeyEvent({ key: 'Enter', target: currentHost, preventDefault: (): void => undefined } as unknown as KeyboardEvent);
+    currentHost?.emit('focusout', {});
     assert.deepEqual(cursorIds(), [], 'после Enter на фокусе пунктира нет');
     // Книжка/родитель как текущая: пунктир есть (открытая = фокус, текущая ≠).
     kbdNav.setCursor(PARENT_ID);
     assert.deepEqual(cursorIds(), [PARENT_ID], 'текущая ≠ открытая — пунктир виден');
     // Enter на родителе открывает его → пунктир гаснет (остаётся только гало).
-    currentHost?.emit('keydown', { key: 'Enter', target: currentHost, preventDefault: (): void => undefined });
+    currentHost?.emit('focusin', {});
+    keymap.dispatchKeyEvent({ key: 'Enter', target: currentHost, preventDefault: (): void => undefined } as unknown as KeyboardEvent);
+    currentHost?.emit('focusout', {});
     assert.deepEqual(cursorIds(), [], 'открытая = текущая — пунктир гаснет');
     assert.deepEqual(haloIds(), [PARENT_ID], 'гало на открытой мысли');
     dispose();

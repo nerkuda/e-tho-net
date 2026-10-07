@@ -34,6 +34,7 @@ import { etn } from '../../lib/etn.js';
 import { notice } from '../../lib/notice.js';
 import { svgIcon } from '../../lib/ui/icon.js';
 import { errorDialog, promptDialog } from '../../lib/dialog.js';
+import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
 import { openEntityDeleteDialog } from '../../lib/delete-dialog.js';
 import {
   MENU_SEPARATOR,
@@ -1503,6 +1504,9 @@ function dropShelfFilter(shelfId: string): void {
 // Inline-переименование полки (задача 00160da1)
 // ---------------------------------------------------------------------------
 
+/** Счётчик inline-правок имени полки: уникальный id контекста клавиатуры. */
+let shelfRenameSeq = 0;
+
 /**
  * Двойной клик по имени полки/группы: заголовок заменяется полем ввода с
  * текущим именем. Enter или потеря фокуса — сохранить (PATCH), Esc — отменить
@@ -1529,10 +1533,17 @@ function startShelfRename(
   input.select();
 
   let finished = false;
+  // Клавиатура inline-правки — через общеклиентский диспетчер (ADR b420b08c,
+  // задача fd3d84f4). Поле уже в фокусе (focus() выше), поэтому контекст
+  // кладём сразу, а снимаем при завершении правки.
+  const contextId = `pub-shelf-rename-${(shelfRenameSeq += 1)}`;
+  let releaseRenameContext: (() => void) | null = null;
   const finish = (save: boolean): void => {
     if (finished) return;
     finished = true;
     renamingShelfId = null;
+    releaseRenameContext?.();
+    releaseRenameContext = null;
     const title = save ? nextShelfTitle(shelf.title, input.value) : null;
     input.remove();
     hideEl.classList.remove('hidden');
@@ -1540,16 +1551,14 @@ function startShelfRename(
     titleEl.textContent = title;
     void commitShelfRename(shelf, title);
   };
-
-  input.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') {
-      ev.preventDefault();
-      finish(true);
-    } else if (ev.key === 'Escape') {
-      ev.preventDefault();
-      finish(false);
-    }
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'publications.shelf.rename.commit', chord: 'Enter', run: (ev) => (ev.key === 'Enter' ? finish(true) : false) },
+      { command: 'publications.shelf.rename.cancel', chord: 'Escape', run: (ev) => (ev.key === 'Escape' ? finish(false) : false) },
+    ],
   });
+  releaseRenameContext = pushKeyContext(contextId);
   input.addEventListener('blur', () => finish(true));
 }
 

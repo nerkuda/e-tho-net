@@ -20,9 +20,23 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура правки идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
+
+/** Нажатие через диспетчер (контекст правки уже на стеке после beginEdit). */
+function pressViaKeymap(node: ShimElement, key: string): void {
+  keymap.dispatchKeyEvent({
+    key,
+    target: node,
+    preventDefault: () => undefined,
+    stopPropagation: () => undefined,
+  } as unknown as KeyboardEvent);
+}
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 
@@ -182,11 +196,7 @@ describe('сторож: единая шапка записи «Дневника�
     assert.ok(root.children[1] === title.node(), 'в правке на той же строке — поле компонента');
     assert.equal(title.node().tagName, 'input', 'правка — поле ввода');
     title.node().value = 'Заголовок';
-    title.node().emit('keydown', {
-      key: 'Enter',
-      preventDefault: () => undefined,
-      stopPropagation: () => undefined,
-    });
+    pressViaKeymap(title.node(), 'Enter');
     assert.equal(commits, 1, 'Enter завершает правку и коммитит значение');
     assert.equal(root.children[1]!.tagName, 'button', 'вернулась кнопка-группа');
   });
@@ -238,11 +248,7 @@ describe('сторож: единая шапка записи «Дневника�
     byEnter.beginEdit();
     assert.equal(byEnter.node().tagName, 'input', 'правка открыта');
     byEnter.node().value = 'B';
-    byEnter.node().emit('keydown', {
-      key: 'Enter',
-      preventDefault: () => undefined,
-      stopPropagation: () => undefined,
-    });
+    pressViaKeymap(byEnter.node(), 'Enter');
     assert.equal(byEnter.isEditing(), false, 'Enter завершил правку');
     assert.equal(byEnter.node().tagName, 'button', 'вернулась кнопка-группа, а не «ничего»');
     assert.deepEqual(entered, ['B'], 'значение закоммичено');
@@ -260,11 +266,7 @@ describe('сторож: единая шапка записи «Дневника�
     );
     byEscape.beginEdit();
     byEscape.node().value = 'C';
-    byEscape.node().emit('keydown', {
-      key: 'Escape',
-      preventDefault: () => undefined,
-      stopPropagation: () => undefined,
-    });
+    pressViaKeymap(byEscape.node(), 'Escape');
     assert.equal(byEscape.isEditing(), false, 'Escape завершил правку');
     assert.deepEqual(commits, [], 'Escape не коммитит');
     assert.equal(cancelled.n, 1, 'отмена замечена');

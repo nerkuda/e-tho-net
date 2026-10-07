@@ -1335,12 +1335,6 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   // Порядок эллипсов — как на холсте: верхний перед значком, нижний в конце.
   cloud.prepend(topEllipse);
   cloud.append(bottomEllipse);
-
-  // Click opens the editor without moving the canvas focus; Ctrl toggles the
-  // shared selection (unit gestures already mounted by the factory).
-  cloud.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void openStructuresThought(row.thoughtId);
-  });
   return cloud;
 }
 

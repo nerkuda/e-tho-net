@@ -32,6 +32,7 @@ import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js
 import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
 import { div, fmtDate } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
+import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
 import {
   filterEntityOptions,
   linkTypeEntityOptions,
@@ -632,6 +633,9 @@ function renderPanel(): void {
   });
 }
 
+/** Счётчик установок шортката «Дневника»: уникальный id контекста. */
+let chronicleApplySeq = 0;
+
 /**
  * Global Ctrl+Enter shortcut for the diary view (hosted by the feed).
  *
@@ -643,16 +647,38 @@ export function wireChronicleApplyShortcut(
   container: HTMLElement,
   onApply: () => void = () => actions.apply(),
 ): void {
-  container.addEventListener('keydown', (event) => {
-    if (!event.ctrlKey || event.key !== 'Enter') return;
-    // Клавишу уже поглотил внутренний редактор записи (CM6 keymap Mod-Enter →
-    // коммит правки, M10) — не применяем отбор второй раз (ошибка f5809943).
-    if (event.defaultPrevented) return;
-    // Источник — редактор ЗАПИСИ ленты (комментарий/заголовок): молчим.
-    // Панель отбора сюда не попадает — Ctrl+Enter в её полях применяет отбор
-    // (спека «Горячие клавиши», 50bb672a).
-    if (isFeedRecordEditorTarget(event.target as HTMLElement | null)) return;
-    event.preventDefault();
-    onApply();
+  // Клавиатура вида — через общеклиентский диспетчер (ADR b420b08c, задача
+  // fd3d84f4): пока фокус внутри контейнера, его контекст на вершине стека.
+  const contextId = `chronicle-apply-${(chronicleApplySeq += 1)}`;
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      {
+        command: 'chronicle.apply',
+        chord: 'Ctrl+Enter',
+        run: (event) => {
+          // Клавишу уже поглотил внутренний редактор записи (CM6 keymap Mod-Enter
+          // → коммит правки, M10) — не применяем отбор второй раз (ошибка
+          // f5809943). Проверка нужна и при прямом `dispatchKeyEvent` в тестах.
+          if (event.defaultPrevented) return false;
+          // Источник — редактор ЗАПИСИ ленты (комментарий/заголовок): молчим.
+          // Панель отбора сюда не попадает — Ctrl+Enter в её полях применяет
+          // отбор (спека «Горячие клавиши», 50bb672a).
+          if (isFeedRecordEditorTarget(event.target as HTMLElement | null)) return false;
+          onApply();
+          return true;
+        },
+      },
+    ],
   });
+  let releaseContext: (() => void) | null = null;
+  const onFocusIn = (): void => {
+    releaseContext ??= pushKeyContext(contextId);
+  };
+  const onFocusOut = (): void => {
+    releaseContext?.();
+    releaseContext = null;
+  };
+  container.addEventListener('focusin', onFocusIn as EventListener);
+  container.addEventListener('focusout', onFocusOut as EventListener);
 }

@@ -22,12 +22,16 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+// Клавиатура диалога идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /**
  * Элемент ли это кнопки словаря (`ui-btn`). В футере диалога рядом с кнопками
@@ -73,6 +77,13 @@ function pressEscape(): void {
   for (const { type, listener } of [...windowListeners]) {
     if (type === 'keydown') listener(event);
   }
+}
+
+/** Нажатие через диспетчер контекстов: фокус кладёт контекст элемента на стек. */
+function press(target: ShimElement, event: any): void {
+  target.emit('focusin', {});
+  keymap.dispatchKeyEvent(event as unknown as KeyboardEvent);
+  target.emit('focusout', {});
 }
 
 /**
@@ -202,9 +213,9 @@ describe('pickThoughtsDialog mode switch (карточка ETN 24ad9b0e)', () =>
     const ui = await openDialog();
     checkRadio(ui.multiRadio, ui.singleRadio);
     ui.input.value = 'Первая';
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
     ui.input.value = 'Вторая';
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
     assert.deepEqual(ui.lineTitles(), ['Первая', 'Вторая'], 'multi mode queued two lines');
 
     checkRadio(ui.singleRadio, ui.multiRadio);
@@ -225,12 +236,12 @@ describe('pickThoughtsDialog mode switch (карточка ETN 24ad9b0e)', () =>
     const ui = await openDialog();
     checkRadio(ui.multiRadio, ui.singleRadio);
     ui.input.value = 'Старая';
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
 
     checkRadio(ui.singleRadio, ui.multiRadio);
     ui.input.value = 'Новая';
     const enter = key('Enter');
-    ui.input.emit('keydown', enter);
+    press(ui.input, enter);
     assert.ok(enter.defaultPrevented, 'Enter is consumed by the input');
     const result = await ui.promise;
     assert.equal(result?.items.length, 1);
@@ -241,13 +252,13 @@ describe('pickThoughtsDialog mode switch (карточка ETN 24ad9b0e)', () =>
     const ui = await openDialog();
     checkRadio(ui.multiRadio, ui.singleRadio);
     ui.input.value = 'Была одна';
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
 
     checkRadio(ui.singleRadio, ui.multiRadio);
     checkRadio(ui.multiRadio, ui.singleRadio);
     assert.deepEqual(ui.lineTitles(), [], 'no ghost rows after the round trip');
     ui.input.value = 'Теперь другая';
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
     assert.deepEqual(ui.lineTitles(), ['Теперь другая'], 'multi mode keeps queueing normally');
     ui.cancelBtn.click();
     assert.equal(await ui.promise, null);
@@ -257,9 +268,9 @@ describe('pickThoughtsDialog mode switch (карточка ETN 24ad9b0e)', () =>
     const ui = await openDialog();
     checkRadio(ui.multiRadio, ui.singleRadio);
     ui.input.value = 'Раз';
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
     ui.input.value = 'Два';
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
     ui.primaryBtn.click();
     const result = await ui.promise;
     assert.deepEqual(
@@ -365,7 +376,7 @@ describe('pickThoughtsDialog prefillText (карточка ETN 34ffbd75, при�
       ['Имя из ссылки', 'Алиас'],
     );
 
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
     const result = await ui.promise;
     assert.equal(result?.items.length, 1, 'exactly one thought is created');
     assert.deepEqual(result?.items[0], {
@@ -380,7 +391,7 @@ describe('pickThoughtsDialog prefillText (карточка ETN 34ffbd75, при�
     const ui = await openDialog({ prefillText: 'Имя' });
     checkRadio(ui.multiRadio, ui.singleRadio);
     ui.input.value = 'Имя';
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
     assert.deepEqual(ui.lineTitles(), ['Имя'], 'the prefilled name can be queued in multi mode');
     ui.cancelBtn.click();
     assert.equal(await ui.promise, null);
@@ -637,7 +648,7 @@ describe('pickThoughtsDialog: отмена любым путём закрыти�
     const ui = await openDialog();
     checkRadio(ui.multiRadio, ui.singleRadio);
     ui.input.value = 'Раз';
-    ui.input.emit('keydown', key('Enter'));
+    press(ui.input, key('Enter'));
     footerButton(openBackdrop(), 'Добавить').click();
     const { value } = await resolvesTo(ui.promise);
     assert.deepEqual(
@@ -914,7 +925,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     await choosePropertySide(formStack, SIDE_FORWARD);
     const input = formStack.querySelector('textarea')!;
     input.value = 'Задача';
-    input.emit('keydown', key('Enter'));
+    press(input, key('Enter'));
     await done;
     assert.deepEqual(
       writes,
@@ -931,7 +942,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     await choosePropertySide(formStack, SIDE_REVERSE);
     const input = formStack.querySelector('textarea')!;
     input.value = 'Задача';
-    input.emit('keydown', key('Enter'));
+    press(input, key('Enter'));
     await done;
     assert.deepEqual(writes, [['n1', 'thought', 'new1', SIDE_REVERSE, ['A']]]);
   });
@@ -941,7 +952,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     const { done, formStack } = await openCanvasDialog();
     const input = formStack.querySelector('textarea')!;
     input.value = 'Задача';
-    input.emit('keydown', key('Enter'));
+    press(input, key('Enter'));
     await done;
     assert.equal(writes.length, 0, 'свойство не пишется');
     assert.deepEqual(

@@ -19,11 +19,15 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { isFeedRecordEditorTarget } from '../src/renderer/screens/chronicle/feed-nav.js';
 import { wireChronicleApplyShortcut } from '../src/renderer/screens/chronicle/filter-panel.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура вида идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /** Приведение шима к `HTMLElement` — общий приём DOM-тестов проекта. */
 const asEl = (el: ShimElement): HTMLElement => el as unknown as HTMLElement;
@@ -84,7 +88,10 @@ function press(
       event.prevented = true;
     },
   };
-  harness.host.emit('keydown', event);
+  // Фокус внутри контейнера кладёт его контекст на вершину стека диспетчера.
+  harness.host.emit('focusin', {});
+  keymap.dispatchKeyEvent(event as unknown as KeyboardEvent);
+  harness.host.emit('focusout', {});
   return event;
 }
 
@@ -128,20 +135,22 @@ describe('Ctrl+Enter в «Дневнике»: редактор записи vs �
 
   it('другие комбинации и клавиши шорткат не трогает', () => {
     const h = buildHarness();
-    h.host.emit('keydown', {
+    h.host.emit('focusin', {});
+    keymap.dispatchKeyEvent({
       ctrlKey: false,
       key: 'Enter',
       target: h.filterInput,
       defaultPrevented: false,
       preventDefault(): void {},
-    });
-    h.host.emit('keydown', {
+    } as unknown as KeyboardEvent);
+    keymap.dispatchKeyEvent({
       ctrlKey: true,
       key: 'a',
       target: h.filterInput,
       defaultPrevented: false,
       preventDefault(): void {},
-    });
+    } as unknown as KeyboardEvent);
+    h.host.emit('focusout', {});
     assert.equal(h.applies, 0);
   });
 

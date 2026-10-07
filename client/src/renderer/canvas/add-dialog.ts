@@ -37,6 +37,7 @@ import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
 // строки) — собственной разметки списка нет (требование d1cd2095).
 import { buildSuggestRow, type SuggestEntry } from '../lib/suggest-dropdown.js';
 import { showDialog } from '../lib/dialog.js';
+import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -354,6 +355,9 @@ async function insertIntoCanvas(
   if (result.focusFirst && firstAddedId !== null) void setFocus(firstAddedId);
 }
 
+/** Счётчик диалогов добавления: уникальные id контекстов диспетчера. */
+let addDialogContextSeq = 0;
+
 /**
  * The universal dialog itself. Accumulates existing/new thoughts in a list
  * (Enter / candidate click adds; multi-line paste batches new lines) and
@@ -646,39 +650,130 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       });
     }
 
-    input.addEventListener('keydown', (event) => {
+    // Клавиатура диалога добавления — через общеклиентский диспетчер контекстов
+    // (ADR b420b08c, задача fd3d84f4). Контекст поля: ArrowDown уводит в список
+    // найденных мыслей, Enter добавляет/создаёт, Ctrl+Enter применяет список.
+    const inputContextId = `add-dialog-input-${(addDialogContextSeq += 1)}`;
+    const candidatesContextId = `add-dialog-candidates-${(addDialogContextSeq += 1)}`;
+    /** Строка списка кандидатов → её запись (делегированная клавиатура). */
+    const candidateRowMap = new WeakMap<HTMLElement, DuplicateHit>();
+
+    const handleInputKey = (event: KeyboardEvent): boolean => {
       // ↓ moves into the found-thoughts list (keyboard path of picking a
       // candidate); Tab reaches it as the next tab stop.
       if (event.key === 'ArrowDown') {
         const first = candidates.querySelector<HTMLElement>('.type-combo-item');
-        if (first !== null) {
-          event.preventDefault();
-          first.focus();
-        }
-        return;
+        if (first !== null) first.focus();
+        return first !== null;
       }
-      if (event.key !== 'Enter') return;
-      event.preventDefault();
+      if (event.key !== 'Enter') return false;
       // Ctrl+Enter applies the whole list (Shift additionally focuses the
       // first inserted item, L19); the dialog-level Ctrl+Enter does the same
       // without Shift via the primary button.
       if (event.ctrlKey) {
         apply(event.shiftKey);
-        return;
+        return true;
       }
       const raw = input.value.trim();
-      if (raw === '') return;
+      if (raw === '') return true;
       if (multi) {
         addLineFromInput(raw);
         input.value = '';
         scheduleSearch();
-        return;
+        return true;
       }
       // Single mode: a new thought is queued when allowed — a listed
       // candidate is picked explicitly (click/Enter on its row, 08-ui-spec.md
       // §4.3); otherwise the strongest match is taken.
       finishSingle(lineFromInput(raw, allowCreate ? false : true));
+      return true;
+    };
+    defineKeyContext({
+      id: inputContextId,
+      bindings: [
+        { command: 'addDialog.input.down', chord: 'ArrowDown', run: handleInputKey },
+        { command: 'addDialog.input.enter', chord: 'Enter', run: handleInputKey },
+        { command: 'addDialog.input.apply', chord: 'Ctrl+Enter', run: handleInputKey },
+      ],
     });
+    let releaseInputContext: (() => void) | null = null;
+    const onInputFocusIn = (): void => {
+      releaseInputContext ??= pushKeyContext(inputContextId);
+    };
+    const onInputFocusOut = (): void => {
+      releaseInputContext?.();
+      releaseInputContext = null;
+    };
+    input.addEventListener('focusin', onInputFocusIn as EventListener);
+    input.addEventListener('focusout', onInputFocusOut as EventListener);
+
+    // Клавиатура строк списка кандидатов — делегированием на контейнере: пока
+    // фокус внутри списка, его контекст на вершине стека.
+    const handleCandidateKey = (event: KeyboardEvent): boolean => {
+      const target = event.target;
+      if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false;
+      const row =
+        target.classList.contains('type-combo-item')
+          ? target
+          : target.closest<HTMLElement>('.type-combo-item');
+      if (row === null) return false;
+      const candidate = candidateRowMap.get(row);
+      if (candidate === undefined) return false;
+      if (event.key === 'Enter' && event.shiftKey) {
+        // Shift+Enter composes a compound name: the candidate's full name
+        // replaces the input text, a dot is appended and the caret lands
+        // right after it (08-ui-spec.md §4.3).
+        input.value = `${candidate.title}.`;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        scheduleSearch();
+        return true;
+      }
+      if (event.key === 'Enter') {
+        pickCandidate(candidate);
+        return true;
+      }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        const next = event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+        if (
+          typeof HTMLElement !== 'undefined' &&
+          next instanceof HTMLElement &&
+          next.classList.contains('type-combo-item')
+        ) {
+          next.focus();
+          next.scrollIntoView({ block: 'nearest' });
+        } else if (event.key === 'ArrowUp') {
+          // Above the first row the caret returns to the name input.
+          input.focus();
+        }
+        return true;
+      }
+      if (event.key === 'Escape') {
+        input.focus();
+        return true;
+      }
+      return false;
+    };
+    defineKeyContext({
+      id: candidatesContextId,
+      bindings: [
+        { command: 'addDialog.row.enter', chord: 'Enter', run: handleCandidateKey },
+        { command: 'addDialog.row.compose', chord: 'Shift+Enter', run: handleCandidateKey },
+        { command: 'addDialog.row.down', chord: 'ArrowDown', run: handleCandidateKey },
+        { command: 'addDialog.row.up', chord: 'ArrowUp', run: handleCandidateKey },
+        { command: 'addDialog.row.escape', chord: 'Escape', run: handleCandidateKey },
+      ],
+    });
+    let releaseCandidatesContext: (() => void) | null = null;
+    const onCandidatesFocusIn = (): void => {
+      releaseCandidatesContext ??= pushKeyContext(candidatesContextId);
+    };
+    const onCandidatesFocusOut = (): void => {
+      releaseCandidatesContext?.();
+      releaseCandidatesContext = null;
+    };
+    candidates.addEventListener('focusin', onCandidatesFocusIn as EventListener);
+    candidates.addEventListener('focusout', onCandidatesFocusOut as EventListener);
 
     /** Shows/hides the accumulated-list UI. */
     function applyMode(): void {
@@ -875,39 +970,9 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           entry.trailing = { text: candidate.parent_title, tooltip: candidate.parent_title };
         }
         const row = buildSuggestRow(entry, { cloudProfile: 'tree', focusable: true });
+        candidateRowMap.set(row, candidate);
         row.addEventListener('click', () => {
           pickCandidate(candidate);
-        });
-        row.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter' && event.shiftKey) {
-            // Shift+Enter composes a compound name: the candidate's full name
-            // replaces the input text, a dot is appended and the caret lands
-            // right after it (08-ui-spec.md §4.3).
-            event.preventDefault();
-            input.value = `${candidate.title}.`;
-            input.focus();
-            input.setSelectionRange(input.value.length, input.value.length);
-            scheduleSearch();
-            return;
-          }
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            pickCandidate(candidate);
-          } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            event.preventDefault();
-            const next =
-              event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
-            if (next instanceof HTMLElement && next.classList.contains('type-combo-item')) {
-              next.focus();
-              next.scrollIntoView({ block: 'nearest' });
-            } else if (event.key === 'ArrowUp') {
-              // Above the first row the caret returns to the name input.
-              input.focus();
-            }
-          } else if (event.key === 'Escape') {
-            event.preventDefault();
-            input.focus();
-          }
         });
         candidates.append(row);
       }

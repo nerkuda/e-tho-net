@@ -23,9 +23,13 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура заголовка идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -181,7 +185,12 @@ function createRecord(host: ShimElement): void {
   const input = host.querySelector('.diary-record-title-input');
   assert.ok(input, 'поле заголовка слота смонтировано');
   input!.value = 'Тест';
-  input!.fire('keydown', { key: 'Enter', preventDefault() {} });
+  // Контекст правки на стеке (beginEdit кладёт его сразу) — шлём через диспетчер.
+  keymap.dispatchKeyEvent({
+    key: 'Enter',
+    target: input,
+    preventDefault() {},
+  } as unknown as KeyboardEvent);
 }
 
 describe('guard: HOME «Дневника» привязан к сети (ошибка ab4e499f)', () => {

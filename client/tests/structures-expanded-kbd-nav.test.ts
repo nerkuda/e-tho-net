@@ -15,8 +15,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import {
   initStructuresKbdNav,
   resetStructuresCursor,
@@ -24,6 +25,9 @@ import {
 } from '../src/renderer/screens/structures/kbd-nav.js';
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура дерева идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /** Одна строка дерева: `data-key` (уникальный путь), `data-id` (мысль), `data-root`. */
 function row(key: string, id: string, root = 'r'): ShimElement {
@@ -59,7 +63,15 @@ function mount(host: ShimElement): Spy {
 }
 
 function press(host: ShimElement, key: string, ctrl = false): void {
-  host.emit('keydown', { key, ctrlKey: ctrl, target: host, preventDefault: (): void => undefined });
+  // Фокус внутри хоста кладёт его контекст на вершину стека диспетчера.
+  host.emit('focusin', {});
+  keymap.dispatchKeyEvent({
+    key,
+    ctrlKey: ctrl,
+    target: host,
+    preventDefault: (): void => undefined,
+  } as unknown as KeyboardEvent);
+  host.emit('focusout', {});
 }
 
 describe('«Структуры»: ↑/↓ по всем видимым строкам, включая раскрытые (e80da89f п.3)', () => {

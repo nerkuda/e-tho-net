@@ -23,6 +23,7 @@
  */
 
 import { currentThoughtId } from '../../history.js';
+import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
 import { shouldDrawCurrentFrame } from '../../lib/ui/nav-core.js';
 import { store } from '../../state.js';
 
@@ -30,6 +31,8 @@ import { store } from '../../state.js';
 const CURSOR_CLS = 'kbd-cursor';
 
 let hostEl: HTMLElement | null = null;
+/** Счётчик установок навигации: уникальный id контекста (переустановка хоста). */
+let structuresKbdNavSeq = 0;
 /**
  * KEY rendered row under the keyboard cursor (unique per row: path key
  * `root/child`, `root^parent`); null — no cursor (starts on the first arrow
@@ -57,6 +60,64 @@ interface NavRow {
   rootId: string;
 }
 
+/** Клавиатурная команда дерева; `true` — событие обработано (см. диспетчер). */
+function handleHostKey(event: KeyboardEvent): boolean {
+  if (store.state.activeView !== 'structures') return false;
+  if (event.key === 'Tab') {
+    step(event.shiftKey ? -1 : 1);
+    return true;
+  }
+  if (event.ctrlKey || event.metaKey) {
+    if (event.key === 'ArrowUp') {
+      toggleCursorExpansion('parents');
+      return true;
+    }
+    if (event.key === 'ArrowDown') {
+      toggleCursorExpansion('children');
+      return true;
+    }
+    return false; // other Ctrl-combos keep their global handlers
+  }
+  switch (event.key) {
+    case 'ArrowUp':
+      step(-1);
+      return true;
+    case 'ArrowDown':
+      step(1);
+      return true;
+    case 'ArrowRight':
+      stepRight();
+      return true;
+    case 'ArrowLeft':
+      stepLeft();
+      return true;
+    case 'Home':
+      jumpToEdge(true);
+      return true;
+    case 'End':
+      jumpToEdge(false);
+      return true;
+    case 'Enter': {
+      // Enter открывает мысль строки под курсором; если фокус стоит на клике
+      // внутри строки (её фокусируемом потомке) — мысль ИМЕННО этой строки
+      // (прежний element-слушатель облачка, задача fd3d84f4).
+      let row = cursorKey === null ? null : navRowOf(cursorKey);
+      const target = event.target;
+      if (typeof HTMLElement !== 'undefined' && target instanceof HTMLElement) {
+        const key = target.closest<HTMLElement>('.st-row')?.dataset['key'];
+        if (key !== undefined) row = navRowOf(key) ?? row;
+      }
+      if (row !== null) callbacks?.openThought(row.id);
+      return true;
+    }
+    case 'Escape':
+      setCursor(null);
+      return true;
+    default:
+      return false;
+  }
+}
+
 /** Wires the keyboard navigation onto the results host. */
 export function initStructuresKbdNav(host: HTMLElement, cb: StructuresKbdNavCallbacks): void {
   hostEl = host;
@@ -69,65 +130,38 @@ export function initStructuresKbdNav(host: HTMLElement, cb: StructuresKbdNavCall
     if (key !== undefined) setCursor(key);
   });
 
-  host.addEventListener('keydown', (event) => {
-    if (store.state.activeView !== 'structures') return;
-    if (event.key === 'Tab') {
-      event.preventDefault();
-      step(event.shiftKey ? -1 : 1);
-      return;
-    }
-    if (event.ctrlKey || event.metaKey) {
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        toggleCursorExpansion('parents');
-        return;
-      }
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        toggleCursorExpansion('children');
-        return;
-      }
-      return; // other Ctrl-combos keep their global handlers
-    }
-    switch (event.key) {
-      case 'ArrowUp':
-        event.preventDefault();
-        step(-1);
-        break;
-      case 'ArrowDown':
-        event.preventDefault();
-        step(1);
-        break;
-      case 'ArrowRight':
-        event.preventDefault();
-        stepRight();
-        break;
-      case 'ArrowLeft':
-        event.preventDefault();
-        stepLeft();
-        break;
-      case 'Home':
-        event.preventDefault();
-        jumpToEdge(true);
-        break;
-      case 'End':
-        event.preventDefault();
-        jumpToEdge(false);
-        break;
-      case 'Enter':
-        event.preventDefault();
-        {
-          const row = cursorKey === null ? null : navRowOf(cursorKey);
-          if (row !== null) callbacks?.openThought(row.id);
-        }
-        break;
-      case 'Escape':
-        setCursor(null);
-        break;
-      default:
-        break;
-    }
+  // Клавиатура дерева — через общеклиентский диспетчер: пока фокус внутри хоста,
+  // его контекст на вершине стека (ADR b420b08c, задача fd3d84f4).
+  const contextId = `structures-kbd-nav-${(structuresKbdNavSeq += 1)}`;
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'structures.tab', chord: 'Tab', run: handleHostKey },
+      { command: 'structures.tab.prev', chord: 'Shift+Tab', run: handleHostKey },
+      { command: 'structures.parents', chord: 'Ctrl+ArrowUp', run: handleHostKey },
+      { command: 'structures.parents.meta', chord: 'Meta+ArrowUp', run: handleHostKey },
+      { command: 'structures.children', chord: 'Ctrl+ArrowDown', run: handleHostKey },
+      { command: 'structures.children.meta', chord: 'Meta+ArrowDown', run: handleHostKey },
+      { command: 'structures.up', chord: 'ArrowUp', run: handleHostKey },
+      { command: 'structures.down', chord: 'ArrowDown', run: handleHostKey },
+      { command: 'structures.right', chord: 'ArrowRight', run: handleHostKey },
+      { command: 'structures.left', chord: 'ArrowLeft', run: handleHostKey },
+      { command: 'structures.home', chord: 'Home', run: handleHostKey },
+      { command: 'structures.end', chord: 'End', run: handleHostKey },
+      { command: 'structures.open', chord: 'Enter', run: handleHostKey },
+      { command: 'structures.escape', chord: 'Escape', run: handleHostKey },
+    ],
   });
+  let releaseContext: (() => void) | null = null;
+  const onFocusIn = (): void => {
+    releaseContext ??= pushKeyContext(contextId);
+  };
+  const onFocusOut = (): void => {
+    releaseContext?.();
+    releaseContext = null;
+  };
+  host.addEventListener('focusin', onFocusIn as EventListener);
+  host.addEventListener('focusout', onFocusOut as EventListener);
 }
 
 /** Drops the cursor (new query, network switch — the old cloud may be gone). */

@@ -28,6 +28,7 @@
  */
 
 import { fieldInput } from '../../lib/ui/field.js';
+import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
 import { uiButton } from '../../lib/ui/button.js';
 import { svgIcon } from '../../lib/ui/icon.js';
 import { deferSingleClick } from '../../lib/thought-cloud.js';
@@ -91,6 +92,9 @@ export function setRecordTitleLabel(view: HTMLElement, label: string): void {
   view.replaceChildren(icon, label);
 }
 
+/** Счётчик правок заголовка записи: уникальный id контекста клавиатуры. */
+let recordTitleEditSeq = 0;
+
 /** Создать компонент заголовка записи. */
 export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
   const collapsible = opts.collapsible !== false;
@@ -98,6 +102,8 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
   let value = opts.value ?? '';
   let label = opts.label;
   let field: HTMLInputElement | null = null;
+  /** Снятие контекста клавиатуры активной правки (null — правки нет). */
+  let releaseEditContext: (() => void) | null = null;
   let pendingClick: { cancel: () => void } | null = null;
 
   function buildView(): HTMLButtonElement {
@@ -152,16 +158,26 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
     next.value = value;
     next.placeholder = opts.placeholder;
     next.maxLength = maxLength;
-    next.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        endEdit(true, true);
-      } else if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        endEdit(false, true);
-      }
+    // Клавиатура правки — через общеклиентский диспетчер (ADR b420b08c,
+    // задача fd3d84f4). Поле фокусируется ниже, поэтому контекст кладём сразу,
+    // а снимаем в `endEdit`.
+    const contextId = `record-title-edit-${(recordTitleEditSeq += 1)}`;
+    defineKeyContext({
+      id: contextId,
+      bindings: [
+        {
+          command: 'recordTitle.commit',
+          chord: 'Enter',
+          run: (event) => (event.key === 'Enter' ? endEdit(true, true) : false),
+        },
+        {
+          command: 'recordTitle.cancel',
+          chord: 'Escape',
+          run: (event) => (event.key === 'Escape' ? endEdit(false, true) : false),
+        },
+      ],
     });
+    releaseEditContext = pushKeyContext(contextId);
     next.addEventListener('blur', () => endEdit(true, false));
     node.replaceWith(next);
     field = next;
@@ -174,6 +190,8 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
     const current = field;
     if (current === null) return;
     field = null;
+    releaseEditContext?.();
+    releaseEditContext = null;
     if (commit) {
       value = current.value;
       label = opts.onCommit !== undefined ? opts.onCommit(value) : value;
