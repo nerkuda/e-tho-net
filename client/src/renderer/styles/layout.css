@@ -161,7 +161,9 @@
 }
 
 .tab:hover {
-  background: var(--surface-3, var(--surface));
+  /* Канонический фон hover органов-хрома (меню, строки списков). Токен
+     `--surface-3`, которым этот hover был задуман, никогда не объявлялся. */
+  background: var(--bg-hover);
 }
 
 .tab.tab-active {

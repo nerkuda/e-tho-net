@@ -115,7 +115,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  box-shadow: var(--shadow-2, 0 4px 12px rgba(0, 0, 0, 0.25));
+  box-shadow: var(--shadow);
 }
 
 .st-f-dropdown-item {
@@ -537,7 +537,9 @@
 }
 
 .st-f-checks {
-  height: var(--st-checks-h, 132px);
+  /* Высота списка-чеклиста задана раскладкой (число строк × строка), от темы не
+     зависит и из JS не выставляется — литерал, а не токен. */
+  height: 132px;
   overflow-y: auto;
   column-gap: 14px;
   padding-right: 4px;

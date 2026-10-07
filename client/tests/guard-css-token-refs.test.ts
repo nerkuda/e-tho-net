@@ -13,14 +13,11 @@
  * `.md-transclusion`), поэтому «объявленность» собирается по ВСЕМ CSS-модулям
  * рендерера, а не только по `tokens.css`.
  *
- * Allow-списки (осознанные, минимизированы, не разрастаются сами — есть тест
- * на отсутствие «мёртвых» записей):
+ * Allow-список (осознанный, минимизирован, не разрастается сам — есть тест на
+ * отсутствие «мёртвых» записей):
  *   • RUNTIME_TOKENS — кастом-свойства, которые выставляются из JS
  *     (`style.setProperty`/`getComputedStyle`) и потому не могут быть
- *     объявлены в CSS;
- *   • LEGACY_UNDEFINED_TOKENS — известные токены-наследие, ссылки на которые
- *     подлежат отдельному исправлению (ошибка 014bb4c1). Список закрыт:
- *     НОВЫЙ неопределённый токен сюда не попадёт — сторож покраснеет.
+ *     объявлены в CSS.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -66,23 +63,6 @@ const RUNTIME_TOKENS = new Set([
   '--st-indent',
   // screens/publications/workspace.ts
   '--pub-doc-width',
-]);
-
-/**
- * Известные неопределённые токены-наследие (подлежат отдельному исправлению —
- * ошибка 014bb4c1). Все используются с fallback. Размер списка сторожится
- * тестом «нет мёртвых записей»: исправишь токен — убери его отсюда.
- */
-const LEGACY_UNDEFINED_TOKENS = new Set([
-  '--mono',
-  '--font-mono',
-  '--surface-alt',
-  '--surface-3',
-  '--bg-soft',
-  '--shadow-2',
-  '--st-checks-h',
-  '--fp-size-side',
-  '--fp-size-top',
 ]);
 
 const TOKENS_CSS = path.join(RENDERER_ROOT, 'styles', 'tokens.css');
@@ -135,10 +115,7 @@ describe('guard: ссылки на CSS-токены рендерера', () => {
   it('каждый var(--token) объявлен в CSS или выставляется из JS', () => {
     const declared = declaredTokens();
     const violations = usedTokens().filter(
-      (u) =>
-        !declared.has(u.token) &&
-        !RUNTIME_TOKENS.has(u.token) &&
-        !LEGACY_UNDEFINED_TOKENS.has(u.token),
+      (u) => !declared.has(u.token) && !RUNTIME_TOKENS.has(u.token),
     );
     if (violations.length > 0) {
       const list = violations
@@ -147,7 +124,7 @@ describe('guard: ссылки на CSS-токены рендерера', () => {
       throw new Error(
         `CSS рендерера ссылается на неопределённые токены (${violations.length}):\n${list}\n\n` +
           'Объяви токен в CSS либо из JS (тогда добавь в RUNTIME_TOKENS осознанно). ' +
-          'Осознанное исключение — только RUNTIME_TOKENS/LEGACY_UNDEFINED_TOKENS.',
+          'Осознанное исключение — только RUNTIME_TOKENS.',
       );
     }
   });
@@ -172,12 +149,12 @@ describe('guard: ссылки на CSS-токены рендерера', () => {
     }
   });
 
-  it('allow-списки не содержат мёртвых записей', () => {
+  it('allow-список RUNTIME_TOKENS не содержит мёртвых записей', () => {
     const usedNames = new Set(usedTokens().map((u) => u.token));
-    const stale = [...RUNTIME_TOKENS, ...LEGACY_UNDEFINED_TOKENS].filter((t) => !usedNames.has(t));
+    const stale = [...RUNTIME_TOKENS].filter((t) => !usedNames.has(t));
     if (stale.length > 0) {
       throw new Error(
-        `Записи allow-списков больше не используются в CSS — удали их: ${stale.join(', ')}`,
+        `Записи allow-списка больше не используются в CSS — удали их: ${stale.join(', ')}`,
       );
     }
   });

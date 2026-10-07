@@ -57,7 +57,7 @@
   gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--border);
-  background: var(--surface-alt, var(--surface));
+  background: var(--surface-2);
 }
 
 .pub-body {
@@ -86,7 +86,7 @@
   padding: var(--space-2) var(--space-3) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
-  background: var(--surface-alt, var(--surface));
+  background: var(--surface-2);
 }
 
 /* Заголовок полки-группы — ОБЩИЙ для обоих видов (кнопка фасада `uiButton`,
@@ -124,7 +124,7 @@
 }
 
 .pub-group-head.pub-drop {
-  background: var(--accent-soft, var(--surface-alt, var(--surface)));
+  background: var(--accent-soft);
   outline: 1px dashed var(--accent);
 }
 
@@ -217,7 +217,7 @@
 .pub-cover {
   overflow: hidden;
   border-radius: var(--radius-s);
-  background: var(--surface-alt, var(--surface));
+  background: var(--surface-2);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -276,7 +276,7 @@
 }
 
 .pub-list-section > .pub-group-head {
-  background: var(--surface-alt, var(--surface));
+  background: var(--surface-2);
 }
 
 .pub-list-count {
@@ -311,7 +311,7 @@
 }
 
 .pub-entry:hover {
-  background: var(--surface-alt, var(--surface));
+  background: var(--surface-2);
 }
 
 .pub-entry.pub-inactive {
@@ -796,7 +796,7 @@
 }
 
 .pub-ws-card:hover {
-  background: var(--surface-alt, var(--surface));
+  background: var(--surface-2);
 }
 
 /* Правая группа шапки: ползунок ширины текста над рядом кнопок, прижато вправо
@@ -958,18 +958,18 @@
 }
 
 .pub-toc-line:hover {
-  background: var(--surface-alt, var(--surface));
+  background: var(--surface-2);
 }
 
 .pub-toc-line.pub-toc-current {
-  background: var(--accent-soft, var(--surface-alt, var(--surface)));
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
 /* Выбранная клавиатурой строка оглавления (общий компонент списка): ручка
    ручного порядка видна всегда, не только на hover (задача d13fd645). */
 .pub-toc-line.pub-toc-selected {
-  background: var(--surface-alt, var(--surface));
+  background: var(--surface-2);
   color: var(--accent);
 }
 
@@ -1307,7 +1307,7 @@
 .pub-doc-preamble:hover,
 .pub-doc-text:hover,
 .pub-doc-heading:hover {
-  background: var(--surface-alt, var(--surface));
+  background: var(--surface-2);
 }
 
 /* Мысль-текст без комментария — видимая пустая строка нормальной высоты

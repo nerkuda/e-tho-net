@@ -185,7 +185,7 @@
 
 .activity-layer {
   max-width: 90px;
-  font-family: var(--mono, monospace);
+  font-family: var(--md-mono);
   font-size: 11px;
 }
 
@@ -217,7 +217,7 @@
   font: inherit;
   font-size: 12px;
   padding: 2px 6px;
-  font-family: var(--mono, monospace);
+  font-family: var(--md-mono);
   white-space: nowrap;
 }
 .st-f-token-btn:hover {

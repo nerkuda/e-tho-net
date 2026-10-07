@@ -184,12 +184,12 @@ describe('размер панели перетаскиванием границ�
     const css = readText(STYLES_CSS);
     assert.match(
       css,
-      /\.fp-host\.fp-side > \.fp-panel \{\s*flex-basis: var\(--fp-size-side/,
+      /\.fp-host\.fp-side > \.fp-panel \{\s*flex-basis: 300px;/,
       'боковое положение задаёт ширину панели',
     );
     assert.match(
       css,
-      /\.fp-host\.fp-top > \.fp-panel \{\s*flex-basis: var\(--fp-size-top/,
+      /\.fp-host\.fp-top > \.fp-panel \{\s*flex-basis: 240px;/,
       'верхнее положение задаёт высоту панели',
     );
     assert.match(css, /\.fp-host > \.fp-splitter\.fp-side \{\s*cursor: col-resize;/, 'слева граница тянется по горизонтали');

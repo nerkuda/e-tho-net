@@ -39,14 +39,17 @@
   container-name: filter-panel;
 }
 
+/* Размер панели по умолчанию — до первого перетаскивания: значение задаёт
+   раскладка (каркас панели перезаписывает `flex-basis` сохранённым размером),
+   а не тема, поэтому это литералы, а не токены. */
 .fp-host.fp-side > .fp-panel {
-  flex-basis: var(--fp-size-side, 300px);
+  flex-basis: 300px;
   border-right: 1px solid var(--border);
   border-bottom: none;
 }
 
 .fp-host.fp-top > .fp-panel {
-  flex-basis: var(--fp-size-top, 240px);
+  flex-basis: 240px;
   border-bottom: 1px solid var(--border);
   border-right: none;
 }

@@ -1102,7 +1102,7 @@ button.ui-btn--icon.trash-act {
 
 .comment-hotkeys-row__chord {
   min-width: 8em;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--md-mono);
 }
 
 .comment-hotkeys-row--recording .comment-hotkeys-row__label {
