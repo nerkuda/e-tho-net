@@ -13,9 +13,13 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура ленты — через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /** Сборка фрагмента ленты: день → заголовок + список карточек записей. */
 interface FakeFeed {
@@ -79,14 +83,16 @@ async function navModule(): Promise<typeof import('../src/renderer/screens/chron
 /** Нажатие клавиши на ленте; `target` — узел, где случилось событие. */
 function press(root: ShimElement, key: string, target?: ShimElement, shift = false): void {
   let prevented = false;
-  root.emit('keydown', {
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     shiftKey: shift,
     target: target ?? root,
     preventDefault: () => {
       prevented = true;
     },
-  });
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
   void prevented;
 }
 

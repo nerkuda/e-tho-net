@@ -41,6 +41,10 @@
  */
 
 import { el } from '../dom.js';
+import { defineKeyContext, pushKeyContext } from '../keymap.js';
+
+/** Счётчик экземпляров: у каждого грифа свой контекст сочетаний (замыкание сессии). */
+let splitterContextSeq = 0;
 
 /** Класс любого разделителя, созданного компонентом. */
 export const SPLITTER_CLASS = 'ui-splitter';
@@ -198,11 +202,15 @@ export function wireSplitter(element: HTMLElement, options: SplitterDragOptions)
     options.commit?.(session.value, session.plan, session.moved);
   };
 
-  element.addEventListener('keydown', (event: KeyboardEvent) => {
+  /**
+   * Клавиатурная команда грифа. Возвращает `true`, если событие обработано
+   * (диспетчер вызовет `preventDefault`); `false` — сочетание не наше (стрелка
+   * поперёк оси, `Enter`/`Esc` без сессии) — событие идёт по стеку ниже.
+   */
+  const handleKey = (event: KeyboardEvent): boolean => {
     const key = event.key;
     if (key === 'Enter' || key === 'Escape') {
-      if (keyboard === null) return;
-      event.preventDefault();
+      if (keyboard === null) return false;
       const session = keyboard;
       keyboard = null;
       if (key === 'Enter') {
@@ -213,14 +221,14 @@ export function wireSplitter(element: HTMLElement, options: SplitterDragOptions)
         options.apply(session.plan.start, session.plan, event);
         options.commit?.(session.plan.start, session.plan, false);
       }
-      return;
+      return true;
     }
     const isArrow =
       key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown';
-    if (!isArrow && key !== 'Home' && key !== 'End') return;
+    if (!isArrow && key !== 'Home' && key !== 'End') return false;
     if (keyboard === null) {
       const started = startKeyboard();
-      if (started === null) return;
+      if (started === null) return false;
       keyboard = started;
     }
     const session = keyboard;
@@ -241,17 +249,42 @@ export function wireSplitter(element: HTMLElement, options: SplitterDragOptions)
     if (key === 'Home') target = session.min;
     else if (key === 'End') target = session.max;
     else if (alongAxis !== 0) target = session.value + alongAxis * step * session.sign;
-    else return; // стрелка поперёк оси драга — не наша
+    else return false; // стрелка поперёк оси драга — не наша
 
-    if (!Number.isFinite(target)) return; // край без границы не достижим
-    event.preventDefault();
+    if (!Number.isFinite(target)) return false; // край без границы не достижим
     session.value = clampToPlan(target, session.plan);
     session.moved = true;
     options.apply(session.value, session.plan, event);
+    return true;
+  };
+
+  // Клавиатура грифа — через общеклиентский диспетчер: пока гриф в фокусе,
+  // его контекст на вершине стека; события обрабатывает один слушатель
+  // `lib/keymap.ts` (ADR b420b08c, задача fd3d84f4).
+  const contextId = `splitter-${(splitterContextSeq += 1)}`;
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'splitter.commit', chord: 'Enter', run: handleKey },
+      { command: 'splitter.cancel', chord: 'Escape', run: handleKey },
+      { command: 'splitter.left', chord: 'ArrowLeft', run: handleKey },
+      { command: 'splitter.right', chord: 'ArrowRight', run: handleKey },
+      { command: 'splitter.up', chord: 'ArrowUp', run: handleKey },
+      { command: 'splitter.down', chord: 'ArrowDown', run: handleKey },
+      { command: 'splitter.home', chord: 'Home', run: handleKey },
+      { command: 'splitter.end', chord: 'End', run: handleKey },
+    ],
+  });
+  let releaseContext: (() => void) | null = null;
+  element.addEventListener('focus', () => {
+    releaseContext ??= pushKeyContext(contextId);
   });
 
-  // Потеря фокуса завершает сессию: размер, выставленный клавиатурой, коммитится.
+  // Потеря фокуса снимает контекст и завершает сессию: размер, выставленный
+  // клавиатурой, коммитится.
   element.addEventListener('blur', () => {
+    releaseContext?.();
+    releaseContext = null;
     if (keyboard === null) return;
     const session = keyboard;
     keyboard = null;

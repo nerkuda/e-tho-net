@@ -16,8 +16,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
 import {
   isEditingTarget,
@@ -28,6 +29,9 @@ import {
   shouldDrawCurrentFrame,
 } from '../src/renderer/lib/ui/nav-core.js';
 import { createListNav, type ListNavAdapter, type ListNavHandle } from '../src/renderer/lib/ui/list.js';
+
+// Клавиатура списка идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 // ---------------------------------------------------------------------------
 // Чистое ядро
@@ -253,7 +257,14 @@ function mount(root: ShimElement): { nav: ListNavHandle<GroupedEntry>; spy: NavS
 }
 
 function press(root: ShimElement, key: string, target?: ShimElement): void {
-  root.emit('keydown', { key, target: target ?? root, preventDefault: (): void => undefined });
+  // Фокус внутри списка кладёт его контекст на вершину стека диспетчера.
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
+    key,
+    target: target ?? root,
+    preventDefault: (): void => undefined,
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
 }
 
 function currentKey(root: ShimElement): string | null {

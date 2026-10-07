@@ -98,7 +98,6 @@ export interface FieldControlOptions {
   bare?: boolean;
   onInput?: (value: string, event: Event) => void;
   onChange?: (value: string, event: Event) => void;
-  onKeydown?: (event: KeyboardEvent) => void;
 }
 
 /** Опции однострочного/числового контрола. */
@@ -140,9 +139,6 @@ function applyCommon(
   if (o.spellcheck !== undefined) node.spellcheck = o.spellcheck;
   if (o.onInput !== undefined) node.addEventListener('input', (e) => o.onInput!(node.value, e));
   if (o.onChange !== undefined) node.addEventListener('change', (e) => o.onChange!(node.value, e));
-  if (o.onKeydown !== undefined) {
-    node.addEventListener('keydown', o.onKeydown as EventListener);
-  }
 }
 
 /**

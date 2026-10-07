@@ -28,6 +28,10 @@
  */
 
 import { div, el } from '../dom.js';
+import { defineKeyContext, pushKeyContext } from '../keymap.js';
+
+/** Счётчик полос вкладок: у каждой свой контекст сочетаний (замыкание индекса). */
+let tabsContextSeq = 0;
 
 /** Одна вкладка: подпись и содержимое панели. */
 export interface TabSpec {
@@ -151,6 +155,44 @@ export function uiTabs(opts: TabsOptions): TabsHandle {
     buttons.get(target.id)?.focus();
   };
 
+  // Клавиатурный контракт WAI-ARIA Tabs — через общеклиентский диспетчер:
+  // пока кнопка вкладки в фокусе, контекст полосы на вершине стека (ADR
+  // b420b08c, задача fd3d84f4). Стрелки двигают выбор, Home/End — крайние
+  // вкладки; фокус уезжает вместе с выбором.
+  const contextId = `ui-tabs-${(tabsContextSeq += 1)}`;
+  let focusedIndex = -1;
+  let releaseContext: (() => void) | null = null;
+  const handleTabKey = (event: KeyboardEvent): boolean => {
+    if (focusedIndex < 0) return false;
+    const key = event.key;
+    if (key === 'ArrowRight') {
+      focusAt(focusedIndex + 1);
+      return true;
+    }
+    if (key === 'ArrowLeft') {
+      focusAt(focusedIndex - 1);
+      return true;
+    }
+    if (key === 'Home') {
+      focusAt(0);
+      return true;
+    }
+    if (key === 'End') {
+      focusAt(opts.tabs.length - 1);
+      return true;
+    }
+    return false;
+  };
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'tabs.next', chord: 'ArrowRight', run: handleTabKey },
+      { command: 'tabs.prev', chord: 'ArrowLeft', run: handleTabKey },
+      { command: 'tabs.first', chord: 'Home', run: handleTabKey },
+      { command: 'tabs.last', chord: 'End', run: handleTabKey },
+    ],
+  });
+
   opts.tabs.forEach((spec, index) => {
     const tabId = `${uid}-tab-${index}`;
     const paneId = `${uid}-panel-${index}`;
@@ -167,22 +209,13 @@ export function uiTabs(opts: TabsOptions): TabsHandle {
     btn.setAttribute('role', 'tab');
     btn.setAttribute('aria-controls', paneId);
     btn.addEventListener('click', () => activate(spec.id, true));
-    btn.addEventListener('keydown', (event) => {
-      // Клавиатурный контракт WAI-ARIA Tabs: стрелки двигают выбор,
-      // Home/End — крайние вкладки; фокус уезжает вместе с выбором.
-      if (event.key === 'ArrowRight') {
-        event.preventDefault();
-        focusAt(index + 1);
-      } else if (event.key === 'ArrowLeft') {
-        event.preventDefault();
-        focusAt(index - 1);
-      } else if (event.key === 'Home') {
-        event.preventDefault();
-        focusAt(0);
-      } else if (event.key === 'End') {
-        event.preventDefault();
-        focusAt(opts.tabs.length - 1);
-      }
+    btn.addEventListener('focus', () => {
+      focusedIndex = index;
+      releaseContext ??= pushKeyContext(contextId);
+    });
+    btn.addEventListener('blur', () => {
+      releaseContext?.();
+      releaseContext = null;
     });
     buttons.set(spec.id, btn);
     tablist.append(btn);

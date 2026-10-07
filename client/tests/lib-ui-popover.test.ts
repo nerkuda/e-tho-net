@@ -17,9 +17,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Escape по панели идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /** Событие, доставленное делегированному слушателю компонента. */
 type Fired = { target?: unknown; key?: string };
@@ -202,7 +206,10 @@ describe('lib/ui/popover: жизненный цикл панели', () => {
       });
     const first = mk();
     const second = mk();
-    doc.fire('keydown', { key: 'Escape' });
+    keymap.dispatchKeyEvent({
+      key: 'Escape',
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
     assert.equal(mounted(second.element as unknown as ShimElement), false, 'верхняя закрыта');
     assert.equal(mounted(first.element as unknown as ShimElement), true, 'нижняя осталась');
     first.close();

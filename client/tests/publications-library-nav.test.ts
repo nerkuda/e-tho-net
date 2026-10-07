@@ -10,8 +10,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import {
   attachLibraryNav,
   LIB_GROUP_CLASS,
@@ -23,14 +24,19 @@ import {
 } from '../src/renderer/screens/publications/library-nav.js';
 import { ShimElement } from './dom-shim.js';
 
+// Клавиатура библиотеки — через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
+
 /** Вызов клавиши на корне библиотеки. */
 function press(root: ShimElement, key: string, target?: ShimElement, ctrlKey = false): void {
-  root.emit('keydown', {
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     ctrlKey,
     target: target ?? root,
     preventDefault: (): void => undefined,
-  });
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
 }
 
 /** Секция-группа полки с заголовком и публикациями. */

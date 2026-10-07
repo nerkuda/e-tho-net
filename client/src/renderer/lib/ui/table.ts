@@ -94,6 +94,7 @@
 
 import { div, span } from '../dom.js';
 import { t } from '../i18n.js';
+import { defineKeyContext, pushKeyContext } from '../keymap.js';
 import { showMenuAt, type MenuItem } from '../menu.js';
 import { emptyState, type EmptyStateOptions, type StateAction } from './empty-state.js';
 import { FOCUS_ANCHOR_ATTR } from './focus-anchor.js';
@@ -108,6 +109,9 @@ import {
 
 /** Корневой класс обёртки таблицы. */
 export const TABLE_CLASS = 'ui-table';
+
+/** Счётчик таблиц: у каждой свой контекст сочетаний (замыкание навигации). */
+let tableContextSeq = 0;
 
 /** Класс обёртки пустого состояния таблицы (внутри — общий `emptyState`). */
 export const TABLE_EMPTY_CLASS = 'ui-table-empty';
@@ -777,48 +781,75 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     event.preventDefault();
     wrapper.focus();
   });
-  wrapper.addEventListener('keydown', (event) => {
-    const key = event as KeyboardEvent;
+  // Клавиатура грида — через общеклиентский диспетчер: пока фокус на обёртке,
+  // её контекст на вершине стека (ADR b420b08c, задача fd3d84f4).
+  const handleTableKey = (key: KeyboardEvent): boolean => {
     if (key.ctrlKey || key.metaKey) {
       if (key.key === 'c' || key.key === 'C') {
-        key.preventDefault();
         copy();
+        return true;
       }
-      return; // прочие Ctrl-сочетания — глобальным обработчикам
+      return false; // прочие Ctrl-сочетания — глобальным обработчикам
     }
     if (nav === 'cell' && (key.key === 'ArrowRight' || key.key === 'ArrowLeft' || key.key === 'Tab')) {
-      key.preventDefault();
       moveCell(key.key === 'ArrowRight' ? 1 : key.key === 'ArrowLeft' ? -1 : 'tab');
-      return;
+      return true;
     }
     if (isNavKey(key.key)) {
-      key.preventDefault();
       const data = ordered();
       const from = nav === 'cell' ? cellCursor.row : currentIndexOf(data);
       const target = nextRowIndex(key.key, from, data.length, pageStep);
       if (target >= 0) applyCurrent(target, true, true); // стрелки подводят строку к видимой
-      return;
+      return true;
     }
     if (key.key === 'Enter') {
-      key.preventDefault();
       if (nav === 'cell') {
         activateCell();
-        return;
+        return true;
       }
       activate(currentIndexOf(ordered()));
-      return;
+      return true;
     }
-    if (key.key === ' ' && multi) {
-      key.preventDefault();
+    if ((key.key === ' ' || key.code === 'Space') && multi) {
       const index = currentIndexOf(ordered());
       const data = ordered();
       const row = data[index];
-      if (row === undefined) return;
+      if (row === undefined) return true;
       const id = spec.rowKey(row, index);
       if (selected.has(id)) selected.delete(id);
       else selected.add(id);
       syncSelection();
+      return true;
     }
+    return false;
+  };
+
+  const contextId = `ui-table-${(tableContextSeq += 1)}`;
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'table.copy', chord: 'Ctrl+C', run: handleTableKey },
+      { command: 'table.copy.meta', chord: 'Meta+C', run: handleTableKey },
+      { command: 'table.left', chord: 'ArrowLeft', run: handleTableKey },
+      { command: 'table.right', chord: 'ArrowRight', run: handleTableKey },
+      { command: 'table.up', chord: 'ArrowUp', run: handleTableKey },
+      { command: 'table.down', chord: 'ArrowDown', run: handleTableKey },
+      { command: 'table.home', chord: 'Home', run: handleTableKey },
+      { command: 'table.end', chord: 'End', run: handleTableKey },
+      { command: 'table.pageUp', chord: 'PageUp', run: handleTableKey },
+      { command: 'table.pageDown', chord: 'PageDown', run: handleTableKey },
+      { command: 'table.activate', chord: 'Enter', run: handleTableKey },
+      { command: 'table.tab', chord: 'Tab', run: handleTableKey },
+      { command: 'table.toggle', chord: 'Space', run: handleTableKey },
+    ],
+  });
+  let releaseContext: (() => void) | null = null;
+  wrapper.addEventListener('focus', () => {
+    releaseContext ??= pushKeyContext(contextId);
+  });
+  wrapper.addEventListener('blur', () => {
+    releaseContext?.();
+    releaseContext = null;
   });
 
   // --- Сортировка ---

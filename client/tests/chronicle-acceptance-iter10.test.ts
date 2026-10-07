@@ -21,11 +21,15 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
 import type { ChronicleTarget, ThoughtRef } from '@etn/shared';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура ленты — через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 // ---------------------------------------------------------------------------
 // Каркас ленты на DOM-шиме
@@ -79,12 +83,14 @@ async function navModule(): Promise<typeof import('../src/renderer/screens/chron
 }
 
 function press(root: ShimElement, key: string, target?: ShimElement, shift = false): void {
-  root.emit('keydown', {
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     shiftKey: shift,
     target: target ?? root,
     preventDefault: () => undefined,
-  });
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
 }
 
 // ---------------------------------------------------------------------------

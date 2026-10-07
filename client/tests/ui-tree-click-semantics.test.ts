@@ -17,8 +17,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура дерева идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /** Минимальный DOM-шим для конструкторов дерева. */
 function shimDom(): void {
@@ -74,6 +78,12 @@ function key(keyName: string, extra: Record<string, unknown> = {}): Record<strin
   return { key: keyName, preventDefault: (): void => undefined, ...extra };
 }
 
+/** Нажатие клавиши на корне дерева: фокус кладёт контекст, событие — диспетчеру. */
+function press(root: ShimElement, event: Record<string, unknown>): void {
+  root.focus();
+  keymap.dispatchKeyEvent(event as unknown as KeyboardEvent);
+}
+
 describe('lib/ui/tree: семантика клика (правило 6, требование 11ddd910)', () => {
   it('список (не выбор): клик ставит текущую строку, двойной клик открывает редактор', async () => {
     const T = await treeModule();
@@ -102,7 +112,7 @@ describe('lib/ui/tree: семантика клика (правило 6, треб
     assert.deepEqual(events.edited, ['b'], 'двойной клик открывает редактор');
     assert.deepEqual(events.activated, [], 'двойной клик не дублирует активацию');
 
-    (tree.root as unknown as ShimElement).emit('keydown', key('Enter'));
+    press(tree.root as unknown as ShimElement, key('Enter'));
     assert.deepEqual(events.activated, ['b'], 'Enter активирует строку');
   });
 
@@ -126,7 +136,7 @@ describe('lib/ui/tree: семантика клика (правило 6, треб
     assert.deepEqual(activated, ['c'], 'двойной клик подтверждает выбор');
 
     // Enter — то же подтверждение текущей строки.
-    (tree.root as unknown as ShimElement).emit('keydown', key('Enter'));
+    press(tree.root as unknown as ShimElement, key('Enter'));
     assert.deepEqual(activated, ['c', 'c'], 'Enter подтверждает выбор текущей строки');
   });
 

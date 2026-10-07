@@ -8,8 +8,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import {
   attachFeedNav,
   FEED_NAV_CURRENT_CLASS,
@@ -17,6 +18,9 @@ import {
 } from '../src/renderer/screens/chronicle/feed-nav.js';
 import { applyRecordCollapsed } from '../src/renderer/screens/chronicle/record-groups.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура ленты — через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 interface Feed {
   root: ShimElement;
@@ -54,12 +58,14 @@ function buildFeed(collapsed = false): Feed {
 }
 
 function press(root: ShimElement, key: string, shift = false): void {
-  root.emit('keydown', {
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     shiftKey: shift,
     target: root,
     preventDefault: () => undefined,
-  });
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
 }
 
 /** Дойти стрелками до записи и войти в режим полей (курсор на «дата/период»). */
@@ -201,12 +207,14 @@ function buildFeed2(): Feed2 {
 
 /** Нажатие с произвольной целью (для проверки режима правки текста). */
 function pressKey(root: ShimElement, key: string, target?: ShimElement): void {
-  root.emit('keydown', {
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     shiftKey: false,
     target: target ?? root,
     preventDefault: () => undefined,
-  });
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
 }
 
 describe('запись целиком: ←/→ сворачивают/разворачивают из навигации (9cdede6b)', () => {

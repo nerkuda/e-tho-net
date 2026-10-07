@@ -44,9 +44,9 @@ interface LegacyKeydownSite {
 }
 
 /**
- * Инвентарь легаси-мест на момент постановки задачи fd3d84f4 (53 слушателя в
- * 36 файлах). Белый список — временный: каждое место переводится на диспетчер
- * волнами задачи, после чего удаляется отсюда.
+ * Инвентарь легаси-мест на момент постановки задачи fd3d84f4. Белый список —
+ * временный: каждое место переводится на диспетчер волнами задачи, после чего
+ * удаляется отсюда. `lib/ui/splitter.ts` уже переведён (волна 1).
  */
 const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
   // --- boundary: каталог editor/** вне границ задачи fd3d84f4 ---------------
@@ -129,54 +129,6 @@ const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
   },
 
   // --- element: клавиатурный контракт виджета на его элементе ---------------
-  {
-    file: 'lib/ui/list.ts',
-    count: 1,
-    category: 'element',
-    reason: 'ARIA-навигация списка на его корне (фокусируемый элемент, стрелки/Enter/Home/End).',
-  },
-  {
-    file: 'lib/ui/tree.ts',
-    count: 1,
-    category: 'element',
-    reason: 'ARIA-навигация дерева на его корне (стрелки/раскрытие/Home/End/Enter).',
-  },
-  {
-    file: 'lib/ui/table.ts',
-    count: 1,
-    category: 'element',
-    reason: 'Навигация по ячейкам таблицы-грида на её обёртке.',
-  },
-  {
-    file: 'lib/ui/tabs.ts',
-    count: 1,
-    category: 'element',
-    reason: 'ARIA-контракт вкладок: стрелки/Home/End на кнопке вкладки.',
-  },
-  {
-    file: 'lib/ui/splitter.ts',
-    count: 1,
-    category: 'element',
-    reason: 'Клавиатурный ресайз грифа-разделителя (стрелки/Home/End/Enter/Escape) на самом грифе.',
-  },
-  {
-    file: 'lib/ui/field.ts',
-    count: 1,
-    category: 'element',
-    reason: 'Проброс `onKeydown` поля ввода (element-scoped контракт фасада).',
-  },
-  {
-    file: 'lib/ui/drag-list.ts',
-    count: 1,
-    category: 'element',
-    reason: 'Клавиатурная навигация/перестановка строк списка на его корне.',
-  },
-  {
-    file: 'lib/ui/popover.ts',
-    count: 1,
-    category: 'element',
-    reason: 'Делегированный Escape закрытия верхней панели (порядок с каркасом диалога).',
-  },
   {
     file: 'lib/entity-picker.ts',
     count: 1,

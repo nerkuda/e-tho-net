@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { Attachment, Publication } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { store } from '../src/renderer/state.js';
 import { invalidateQueries, queryKeys } from '../src/renderer/lib/live/index.js';
 
@@ -210,12 +211,15 @@ function previewSrc(): string {
 }
 
 function pressList(list: ShimElement, key: string, ctrl = false): void {
-  list.emit('keydown', {
+  // Фокус внутри списка кладёт его контекст на вершину стека диспетчера.
+  list.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     ctrlKey: ctrl,
     target: list,
     preventDefault: () => undefined,
-  });
+  } as unknown as KeyboardEvent);
+  list.emit('focusout', {});
 }
 
 /** Ждёт срабатывания debounce сохранения карточки (400 мс). */
@@ -280,6 +284,7 @@ describe('диалог обложки: навигация синхронизир
 
   beforeEach(() => {
     mod = null;
+    keymap.keymapInternals.reset();
   });
 
   afterEach(async () => {

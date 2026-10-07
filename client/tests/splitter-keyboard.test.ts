@@ -13,9 +13,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура грифа идёт через диспетчер контекстов: между тестами стек
+// контекстов сбрасываем, иначе контекст прошлого грифа перехватит событие.
+beforeEach(() => keymap.keymapInternals.reset());
 
 function shimDom(): void {
   (globalThis as any).document = {
@@ -74,7 +79,12 @@ function harness(mod: SplitterModule, axis: 'x' | 'y'): Harness {
     element,
     applied,
     commits,
-    press: (key) => (element as any).emit('keydown', keydown(key)),
+    press: (key) => {
+      // Фокус кладёт контекст грифа на вершину стека, событие идёт через
+      // единственный слушатель диспетчера (`lib/keymap.ts`).
+      (element as any).focus();
+      return keymap.dispatchKeyEvent(keydown(key) as KeyboardEvent);
+    },
     blur: () => (element as any).emit('blur', {}),
   };
 }
