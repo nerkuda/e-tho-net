@@ -499,6 +499,10 @@ export function moveLine(snap: EditorSnapshot, direction: 'up' | 'down'): TextEd
   return {
     changes: [{ from: 0, to: snap.text.length, insert: newText }],
     selection: { anchor: shift(snap.from), head: shift(snap.to) },
+    // Замена документа целиком рушит якорь прокрутки поля, и оно прыгает к
+    // началу; прокручиваем к каретке, оставшейся на перемещённой строке
+    // (ошибка `ffb49898`).
+    scrollIntoView: true,
   };
 }
 

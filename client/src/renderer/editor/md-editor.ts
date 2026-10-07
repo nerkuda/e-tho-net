@@ -84,6 +84,14 @@ export interface MdEditorChange {
 export interface MdEditorEdit {
   changes: MdEditorChange | readonly MdEditorChange[];
   selection?: { anchor: number; head?: number };
+  /**
+   * Прокрутить поле к итоговому выделению (`scrollIntoView` CM6). Нужно
+   * командам, чья правка заменяет документ целиком (например, перемещение
+   * строк `moveLine`): такая замена рушит якорь прокрутки контейнера, и без
+   * явного прокручивания к каретке поле «прыгает» к началу документа
+   * (ошибка `ffb49898`). Прочие команды оставляют флаг не выставленным.
+   */
+  scrollIntoView?: boolean;
 }
 
 /**
@@ -540,7 +548,11 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
     },
     applyEdit: (edit) => {
       if (!alive) return;
-      view.dispatch({ changes: edit.changes, selection: edit.selection });
+      view.dispatch({
+        changes: edit.changes,
+        selection: edit.selection,
+        scrollIntoView: edit.scrollIntoView,
+      });
     },
     subscribe: (listener) => {
       listeners.add(listener);

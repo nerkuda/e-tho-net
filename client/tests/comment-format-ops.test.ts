@@ -217,6 +217,15 @@ describe('comment-format-ops: перемещение строк и сдвиг', 
     assert.equal(moveLine(snap('a\nb\n', 2), 'down'), null);
   });
 
+  it('просит прокрутить к каретке после замены документа (ffb49898)', () => {
+    // Перемещение строк заменяет документ целиком и без `scrollIntoView`
+    // сбрасывало прокрутку поля к началу. Флаг должен стоять только у
+    // перемещения — прочие правки якорь прокрутки не рушат.
+    assert.equal(moveLine(snap('a\nb\nc', 4), 'up')?.scrollIntoView, true);
+    assert.equal(moveLine(snap('a\nb\nc', 0), 'down')?.scrollIntoView, true);
+    assert.equal(indentLines(snap('a', 0), 'in').scrollIntoView, undefined);
+  });
+
   it('сдвиг вправо/влево и применимость снятия отступа', () => {
     assert.equal(apply('a', indentLines(snap('a', 0), 'in').changes), '  a');
     assert.equal(apply('  a', indentLines(snap('  a', 0), 'out').changes), 'a');
