@@ -361,8 +361,32 @@ function inputMirrorText(state: EditorState): string | null {
   return isBlockEditing(state) ? null : state.doc.toString();
 }
 
-/** Test seam: the panel-scroll handler and the `onInput` gate of the editor. */
-export const mdEditorInternals = { scrollCaretIntoView, inputMirrorText };
+/**
+ * Минимум `ViewUpdate`, нужный обвязке `onInput` (реальный `ViewUpdate` CM6
+ * структурно ему удовлетворяет). Вынесено отдельным типом, чтобы обвязку
+ * можно было прогонять юнит-тестом без настоящего `EditorView`.
+ */
+export interface MdInputUpdate {
+  docChanged: boolean;
+  state: EditorState;
+}
+
+/**
+ * Обвязка `onInput` редактора: единственное место, где текст документа уходит
+ * владельцу. Пока идёт правка блока трансклюзии, `inputMirrorText` даёт `null` и
+ * вызова НЕ происходит (ошибка 59d9b5f3); вне правки блока владелец получает
+ * markdown поля. Именно эту функцию вызывает `EditorView.updateListener` — тест
+ * бьёт по ней, поэтому снятие гейта (или `inputMirrorText`) краснит регресс.
+ */
+function notifyMdInput(update: MdInputUpdate, onInput?: (md: string) => void): void {
+  if (!update.docChanged) return;
+  const md = inputMirrorText(update.state);
+  if (md === null) return;
+  onInput?.(md);
+}
+
+/** Test seam: the panel-scroll handler and the `onInput` wiring of the editor. */
+export const mdEditorInternals = { scrollCaretIntoView, inputMirrorText, notifyMdInput };
 
 /** Creates a markdown editor for the given initial document. */
 export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdEditor {
@@ -415,13 +439,10 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         EditorView.lineWrapping,
         syntaxHighlighting(mdHighlightStyle, { fallback: true }),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            // Правка блока трансклюзии: текст документа — вставленный источник,
-            // а не markdown поля (см. `inputMirrorText`). Владельцу не сообщаем
-            // (ошибка 59d9b5f3).
-            const md = inputMirrorText(update.state);
-            if (md !== null) cb.onInput?.(md);
-          }
+          // Обвязка `onInput` — единственная точка, где документ уходит
+          // владельцу; правка блока трансклюзии подавляется внутри неё
+          // (ошибка 59d9b5f3).
+          notifyMdInput(update, cb.onInput);
           if (update.docChanged || update.selectionSet) {
             for (const listener of listeners) listener();
           }
