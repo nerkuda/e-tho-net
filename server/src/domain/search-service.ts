@@ -551,14 +551,19 @@ function joinClauses(clauses: Array<Clause | null>): { where: string; params: un
 
 /**
  * LIKE-fallback clause for one `by_names` short/anchor-less word (Tier 1,
- * bug 0258fd9d): `title_norm`/`synonym_norm` are already NFC+lowercase, so
- * this is correct for Cyrillic without any custom case-folding — the exact
- * pattern already proven in {@link findDuplicates} (same escaping, same
- * `ESCAPE '\'` — copied deliberately rather than re-derived, see the bug's
- * chronological comment on why re-deriving it went wrong last time).
+ * bug 0258fd9d): `title_norm`/`synonym_norm` are already NFC+lowercase, so the
+ * typed word MUST be lower-cased before it becomes a pattern (bug
+ * 6bba224b-9899-4f7e-a37c-ff2067ac0a6c — a `%Н%` pattern can never match the
+ * normalized column, so a short query typed with a capital letter returned
+ * nothing; the same `toLowerCase()` every other `buildLikePattern` caller in
+ * the domain uses). After folding, this is correct for Cyrillic without any
+ * custom case-folding — the exact pattern already proven in
+ * {@link findDuplicates} (same escaping, same `ESCAPE '\'` — copied
+ * deliberately rather than re-derived, see the bug's chronological comment on
+ * why re-deriving it went wrong last time).
  */
 function buildShortWordNameClause(word: string, negate: boolean): Clause {
-  const pattern = buildLikePattern(word);
+  const pattern = buildLikePattern(word.toLowerCase());
   const sql =
     "(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
     " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
@@ -1290,7 +1295,13 @@ export function findDuplicates(
       const conditions: string[] = [];
       const params: unknown[] = [];
       const push = (word: string, negate: boolean): void => {
-        const pattern = buildLikePattern(word);
+        // `title_norm`/`synonym_norm` are stored NFC+lowercase (001_thoughts.sql),
+        // so the fragment must be folded before it becomes a pattern. The
+        // caller already feeds these words through `norm()` (NFC+trim+lower) —
+        // bug 6bba224b-… — but folding explicitly here keeps the pattern
+        // correct if that upstream normalisation ever changes and matches the
+        // neighbouring `buildLikePattern(word.toLowerCase())` callers.
+        const pattern = buildLikePattern(word.toLowerCase());
         const clause =
           "(title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
           " WHERE ts.thought_id = thoughts.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";

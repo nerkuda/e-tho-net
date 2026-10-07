@@ -772,6 +772,59 @@ describe(
       }
     });
 
+    it('search by_names LIKE fallback case-folds a short capitalised Cyrillic prefix (bug 6bba224b)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Новиков');
+        // A short (1–2 char) include word never reaches the trigram index, so
+        // it is filtered by the LIKE fallback against `title_norm`. That
+        // column is lowercase, and the bug left the pattern un-folded
+        // (`%Н%`), so a query typed with a capital letter returned nothing.
+        assert.deepEqual(
+          search(ndb, { q: 'Н' }).by_names.map((h) => h.title),
+          ['Новиков'],
+          'a 1-char capitalised prefix matches through the LIKE fallback',
+        );
+        assert.deepEqual(
+          search(ndb, { q: 'Но' }).by_names.map((h) => h.title),
+          ['Новиков'],
+          'a 2-char capitalised prefix matches through the LIKE fallback',
+        );
+        // Case must not change the result set.
+        assert.deepEqual(
+          search(ndb, { q: 'н' }).by_names.map((h) => h.thought_id),
+          search(ndb, { q: 'Н' }).by_names.map((h) => h.thought_id),
+          'upper- and lower-case short prefixes return the same thoughts',
+        );
+        // The fallback also covers synonyms.
+        seedSynonym(ndb, seedThought(ndb, 'Иван Петрович'), 'Новик');
+        assert.ok(
+          search(ndb, { q: 'Н' }).by_names.some((h) => h.title === 'Иван Петрович'),
+          'a short capitalised prefix matches a synonym through title_norm/synonym_norm',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findDuplicates partial tier case-folds a capitalised word (bug 6bba224b)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Иван Новиков');
+        assert.ok(
+          findDuplicates(ndb, 'Новиков').some((h) => h.id === t && h.matched_on === 'partial'),
+          'a capitalised word still yields the partial candidate',
+        );
+        assert.deepEqual(
+          findDuplicates(ndb, 'Новиков').map((h) => h.id),
+          findDuplicates(ndb, 'новиков').map((h) => h.id),
+          'case does not change the partial-candidate set',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('search by_texts/by_links/by_chrono do not filter on fragments shorter than 3 chars (Tier 1 scope)', () => {
       // Documented limitation (bug 0258fd9d, Tier 1): comments.body_md has no
       // normalized column to power a Cyrillic-correct LIKE fallback, so a
