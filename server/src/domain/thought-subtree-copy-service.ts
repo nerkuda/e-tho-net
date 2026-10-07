@@ -36,8 +36,6 @@
  *   * Одна транзакция, одна запись write-бюджета.
  */
 
-import path from 'node:path';
-
 import {
   EtnError,
   MCP_MAX_THOUGHTS_PER_WRITE,
@@ -66,7 +64,6 @@ import { getThought } from './thought-service.js';
 import {
   copyThoughtsBatch,
   linkIdentity,
-  makeCopyFileCopier,
   resolveCopyLinkTypeId,
 } from './thought-copy-service.js';
 import { getLinkType } from './link-type-service.js';
@@ -91,6 +88,14 @@ export interface CopySubtreeParams {
   target_parent_thought_id: string;
   /** id актора для `created_by` / `updated_by`. */
   actor_user_id: string;
+  /**
+   * Планировщик физического копирования файлов вложений при межсетевом
+   * копировании (ошибка b83a7d89). Создаётся и коммитится ВЫЗЫВАЮЩИМ
+   * (фасад), причём `commit()` — ПОСЛЕ фиксации внешней транзакции, иначе
+   * при её откате останутся файлы-сироты. `null`/не задан — файлы вложений
+   * не копируются (внутрисетевое копирование, шаринг единственного файла).
+   */
+  fileCopier?: AttachmentFileCopier | null;
 }
 
 /** Сводка, которую возвращает `copySubtree`. */
@@ -208,15 +213,13 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
   //
   // Файлы вложений при межсетевом копировании переносятся физически. Один
   // общий планировщик на всю операцию (мысли + переиспользованные вложения):
-  // дедуп одного исходного файла и общая нумерация копий. `commit()` — ПОСЛЕ
-  // фиксации транзакции, поэтому при откате осиротевших файлов не остаётся.
-  const fileCopier = makeCopyFileCopier(
-    target_ndb,
-    built.copyInput,
-    path.join(path.dirname(source_ndb.dbPath), 'attachments'),
-  );
+  // дедуп одного исходного файла и общая нумерация копий. Планировщик
+  // приходит от вызывающего и коммитится ИМ после фиксации внешней
+  // транзакции — сам `copySubtree` файлы не пишет (иначе при откате внешней
+  // транзакции остался бы файл-сирота, регресс b83a7d89).
+  const fileCopier = params.fileCopier ?? null;
 
-  const summary = target_ndb.transaction(() => {
+  return target_ndb.transaction(() => {
     const base: ThoughtCopyResult =
       built.copyInput.thoughts.length > 0
         ? copyThoughtsBatch(target_ndb, built.copyInput, actor_user_id, { fileCopier })
@@ -247,8 +250,6 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
       conflicts: built.conflicts,
     };
   });
-  fileCopier?.commit();
-  return summary;
 }
 
 // ---------------------------------------------------------------------------

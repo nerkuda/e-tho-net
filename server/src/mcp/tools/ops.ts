@@ -20,6 +20,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import path from 'node:path';
 import { z } from 'zod';
 
 import { BASE_LAYER_ID, EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, validateTypeRoles } from '@etn/shared';
@@ -85,6 +86,7 @@ import {
   releaseLock,
 } from '../../domain/lock-service.js';
 import {
+  AttachmentFileCopier,
   copyAttachment,
   createAttachmentFromInput,
   deleteAttachment,
@@ -952,6 +954,19 @@ const HANDLERS: Record<string, OpHandler> = {
       const targetNdb = openMemberNetwork(rt, a.target_network_id);
       const fx = mcpWriteFx(rt, a.target_network_id, extra.requestId);
       const parentId = a.target_parent_thought_id ?? '';
+      // Межсетевое копирование: файлы вложений (мыслей и связей) физически
+      // переносятся в сеть-получатель. Планировщик создаётся ЗДЕСЬ и
+      // коммитится ПОСЛЕ фиксации `runWrite` — иначе при откате внешней
+      // транзакции в каталоге целевой сети остался бы файл-сирота, хотя строки
+      // БД откатились (регресс b83a7d89). Внутри сети файл шарится как есть.
+      const fileCopier =
+        a.source_network_id !== a.target_network_id
+          ? new AttachmentFileCopier(
+              targetNdb,
+              path.join(path.dirname(sourceNdb.dbPath), 'attachments'),
+              (message, details) => rt.deps.logger.warn({ ...details }, message),
+            )
+          : null;
       const summary = runWrite(targetNdb, fx, () => {
         const copied = copySubtreeFn({
           source_ndb: sourceNdb,
@@ -962,6 +977,7 @@ const HANDLERS: Record<string, OpHandler> = {
           duplicate_policy: a.duplicate_policy ?? 'fail',
           target_parent_thought_id: parentId,
           actor_user_id: rt.deps.auth.userId,
+          fileCopier,
         });
         const events: AnyWriteEvent[] = [];
         const activity: WriteActivityEntry[] = [];
@@ -997,6 +1013,8 @@ const HANDLERS: Record<string, OpHandler> = {
           },
         };
       });
+      // Файлы вложений — только после успешного коммита внешней транзакции.
+      fileCopier?.commit();
       const layer = resolveRuntimeLayer(rt, a.target_network_id);
       const includeRemap = a.id_remap !== false;
       return {
