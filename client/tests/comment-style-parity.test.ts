@@ -1,13 +1,22 @@
 /**
  * Сторож единого источника типографики markdown-контента (ошибка 45989471
- * «Комментарии: стили просмотра и живого редактирования различаются»).
+ * «Комментарии: стили просмотра и живого редактирования различаются»; отступы
+ * блоков кода и цитат — ошибка 333aa879).
  *
  * Просмотр рендерит HTML единым `@etn/markdown` внутрь `.comment-view`; живое
  * редактирование показывает текст исходником и размечает его строками/марками
- * CodeMirror (`.cm-md-*`). Раньше размеры/отступы заголовков, цитаты и
- * inline-кода были ПРОДУБЛИРОВАНЫ в теме CodeMirror (`editor/md-editor.ts`) и
- * расходились со стилями просмотра. Теперь значение объявлено один раз в
- * `styles/editor.css` парным селектором, и оба режима берут его оттуда.
+ * CodeMirror (`.cm-md-*`), а целые блоки (fenced-код, таблица, картинка) —
+ * DOM-виджетами live preview (`.md-widget.comment-view`). Раньше
+ * размеры/отступы заголовков, цитаты и inline-кода были ПРОДУБЛИРОВАНЫ в теме
+ * CodeMirror (`editor/md-editor.ts`) и расходились со стилями просмотра. Теперь
+ * значение объявлено один раз в `styles/editor.css` парным селектором, и оба
+ * режима берут его оттуда.
+ *
+ * Отдельно сторожатся ВЕРТИКАЛЬНЫЕ отступы блоков, у которых режимы устроены
+ * по-разному: fenced-код в правке обёрнут виджетом (обёртка не должна
+ * добавлять вертикальных полей — иначе паддинг блока удвоится), а цитата в
+ * правке — это строки с паддингом первой/последней (внешний margin просмотра
+ * дал бы расхождение). Значение зазора — из одного токена `--md-quote-gap`.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -53,6 +62,50 @@ function topLevelRules(css: string): string[] {
   return preludes;
 }
 
+interface CssRule {
+  prelude: string;
+  body: string;
+  selectors: string[];
+}
+
+/** Правила верхнего уровня с телом и разобранными селекторами. */
+function parseRules(css: string): CssRule[] {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules: CssRule[] = [];
+  let i = 0;
+  while (i < text.length) {
+    while (i < text.length && /\s/.test(text[i]!)) i++;
+    if (i >= text.length) break;
+    const open = text.indexOf('{', i);
+    if (open === -1) break;
+    const prelude = text.slice(i, open).trim();
+    let depth = 1;
+    let j = open + 1;
+    while (j < text.length && depth > 0) {
+      if (text[j] === '{') depth++;
+      else if (text[j] === '}') depth--;
+      j++;
+    }
+    rules.push({
+      prelude,
+      body: text.slice(open + 1, j - 1),
+      selectors: prelude
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    });
+    i = j;
+  }
+  return rules;
+}
+
+/** Тела всех правил верхнего уровня, где есть селектор `selector` целиком. */
+function bodiesFor(css: string, selector: string): string[] {
+  return parseRules(css)
+    .filter((r) => r.selectors.includes(selector))
+    .map((r) => r.body);
+}
+
 describe('единый источник стилей markdown: просмотр и редактор (45989471)', () => {
   it('у каждой пары «элемент просмотра ↔ класс редактора» правило общее', () => {
     const rules = topLevelRules(readRendererCss());
@@ -85,5 +138,70 @@ describe('единый источник стилей markdown: просмотр 
           'правь общее правило в styles/editor.css',
       );
     }
+  });
+});
+
+describe('вертикальные отступы блоков кода и цитат совпадают (333aa879)', () => {
+  it('fenced-код: обёртка-виджет не добавляет вертикальных полей блоку', () => {
+    const css = readRendererCss();
+    // Блок кода берёт вертикальный отступ из ОДНОГО правила `.comment-view pre`
+    // в обоих режимах: в правке pre лежит внутри виджета, несущего класс
+    // `comment-view`, — то же правило просмотра и применяется.
+    const prePad = bodiesFor(css, '.comment-view pre')
+      .map((b) => /padding:\s*([^;]+)/.exec(b)?.[1]?.trim())
+      .find((v) => v !== undefined);
+    assert.equal(
+      prePad,
+      '8px',
+      'общий отступ блока кода задаёт `.comment-view pre { padding: 8px }` — он должен существовать',
+    );
+
+    // Обёртка блочного HTML-виджета (`.md-widget.comment-view`) вертикальных
+    // полей добавлять не должна: иначе к паддингу pre прибавился бы паддинг
+    // обёртки, и отступ блока кода в правке разошёлся бы с просмотром.
+    const wrapperPadRules = parseRules(css).filter(
+      (r) =>
+        r.selectors.some((s) => /\.cm-editor \.md-widget\b/.test(s)) &&
+        /padding/.test(r.body),
+    );
+    assert.ok(wrapperPadRules.length > 0, 'есть правило паддинга виджетов живого просмотра');
+    for (const r of wrapperPadRules) {
+      assert.ok(
+        /:not\(\.comment-view\)/.test(r.prelude),
+        `паддинг обёртки .md-widget не должен применяться к блочным ` +
+          `.comment-view-виджетам (fenced-код, таблица, картинка): ${r.prelude.trim()}`,
+      );
+    }
+  });
+
+  it('цитата: вертикальный зазор задан padding-ом в обоих режимах, без внешнего margin', () => {
+    const css = readRendererCss();
+
+    const viewBodies = bodiesFor(css, '.comment-view blockquote');
+    assert.ok(
+      viewBodies.some((b) => /padding-block:\s*var\(--md-quote-gap\)/.test(b)),
+      'просмотр: вертикальный зазор цитаты — padding-block из --md-quote-gap',
+    );
+    for (const b of viewBodies) {
+      const m = /margin-block\s*:\s*([^;]+)/.exec(b);
+      assert.ok(
+        m === null || /^0(?:px)?$/.test(m[1]!.trim()),
+        'просмотр: внешний margin-block цитаты должен быть обнулён — иначе зазор ' +
+          'расходится с padding-только правкой',
+      );
+    }
+
+    assert.ok(
+      bodiesFor(css, '.cm-editor .cm-line.cm-md-quote-first').some((b) =>
+        /padding-top:\s*var\(--md-quote-gap\)/.test(b),
+      ),
+      'правка: верхний зазор цитаты — padding-top первой строки из того же токена',
+    );
+    assert.ok(
+      bodiesFor(css, '.cm-editor .cm-line.cm-md-quote-last').some((b) =>
+        /padding-bottom:\s*var\(--md-quote-gap\)/.test(b),
+      ),
+      'правка: нижний зазор цитаты — padding-bottom последней строки из того же токена',
+    );
   });
 });
