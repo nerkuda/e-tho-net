@@ -1,7 +1,8 @@
 /**
  * Сторож единого источника типографики markdown-контента (ошибка 45989471
  * «Комментарии: стили просмотра и живого редактирования различаются»; отступы
- * блоков кода и цитат — ошибка 333aa879).
+ * блоков кода и цитат — ошибка 333aa879; отступ горизонтальной линейки —
+ * ошибка 47bce601).
  *
  * Просмотр рендерит HTML единым `@etn/markdown` внутрь `.comment-view`; живое
  * редактирование показывает текст исходником и размечает его строками/марками
@@ -16,7 +17,10 @@
  * по-разному: fenced-код в правке обёрнут виджетом (обёртка не должна
  * добавлять вертикальных полей — иначе паддинг блока удвоится), а цитата в
  * правке — это строки с паддингом первой/последней (внешний margin просмотра
- * дал бы расхождение). Значение зазора — из одного токена `--md-quote-gap`.
+ * дал бы расхождение). Значение зазора цитаты — из одного токена
+ * `--md-quote-gap`; у горизонтальной линейки виджет-обёртка даёт тот же зазор,
+ * что `margin: 6px 0` просмотра, но padding-ом (высотная карта), а линию рисует
+ * внутренний `hr`.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -38,6 +42,11 @@ const PAIRS: Array<{ view: string; editor: string; what: string }> = [
     view: '.comment-view blockquote',
     editor: '.cm-editor .cm-line.cm-md-quote-line',
     what: 'цитата',
+  },
+  {
+    view: '.comment-view hr',
+    editor: '.cm-editor .md-widget.md-hr .md-hr-line',
+    what: 'горизонтальная линейка',
   },
   { view: '.comment-view code', editor: '.cm-editor .cm-line .cm-md-inline-code', what: 'inline-код' },
 ];
@@ -106,6 +115,15 @@ function bodiesFor(css: string, selector: string): string[] {
     .map((r) => r.body);
 }
 
+/** Общее правило вертикального паддинга виджетов live preview (`.md-widget`). */
+function genericWidgetPadRule(css: string): CssRule | undefined {
+  return parseRules(css).find(
+    (r) =>
+      r.selectors.some((s) => /\.cm-editor \.md-widget\b/.test(s)) &&
+      /padding:\s*2px 0/.test(r.body),
+  );
+}
+
 describe('единый источник стилей markdown: просмотр и редактор (45989471)', () => {
   it('у каждой пары «элемент просмотра ↔ класс редактора» правило общее', () => {
     const rules = topLevelRules(readRendererCss());
@@ -159,19 +177,14 @@ describe('вертикальные отступы блоков кода и ци�
     // Обёртка блочного HTML-виджета (`.md-widget.comment-view`) вертикальных
     // полей добавлять не должна: иначе к паддингу pre прибавился бы паддинг
     // обёртки, и отступ блока кода в правке разошёлся бы с просмотром.
-    const wrapperPadRules = parseRules(css).filter(
-      (r) =>
-        r.selectors.some((s) => /\.cm-editor \.md-widget\b/.test(s)) &&
-        /padding/.test(r.body),
+    const generic = genericWidgetPadRule(css);
+    assert.ok(generic !== undefined, 'есть общее правило паддинга виджетов живого просмотра');
+    assert.match(
+      generic.prelude,
+      /:not\(\.comment-view\)/,
+      `паддинг обёртки .md-widget не должен применяться к блочным ` +
+        `.comment-view-виджетам (fenced-код, таблица, картинка): ${generic.prelude.trim()}`,
     );
-    assert.ok(wrapperPadRules.length > 0, 'есть правило паддинга виджетов живого просмотра');
-    for (const r of wrapperPadRules) {
-      assert.ok(
-        /:not\(\.comment-view\)/.test(r.prelude),
-        `паддинг обёртки .md-widget не должен применяться к блочным ` +
-          `.comment-view-виджетам (fenced-код, таблица, картинка): ${r.prelude.trim()}`,
-      );
-    }
   });
 
   it('цитата: вертикальный зазор задан padding-ом в обоих режимах, без внешнего margin', () => {
@@ -202,6 +215,45 @@ describe('вертикальные отступы блоков кода и ци�
         /padding-bottom:\s*var\(--md-quote-gap\)/.test(b),
       ),
       'правка: нижний зазор цитаты — padding-bottom последней строки из того же токена',
+    );
+  });
+
+  it('горизонтальная линейка: вертикальный отступ — padding виджета, значение как в просмотре', () => {
+    const css = readRendererCss();
+
+    // Просмотр: зазор вокруг линии — внешние поля `margin: 6px 0`.
+    const viewBody = bodiesFor(css, '.comment-view hr').find((b) => /margin/.test(b));
+    assert.ok(viewBody !== undefined, 'просмотр: `.comment-view hr` задаёт внешние поля');
+    const viewVertical = /margin:\s*([^;]+)/.exec(viewBody)![1]!.trim().split(/\s+/)[0];
+    assert.equal(viewVertical, '6px', 'просмотр: вертикальный зазор линейки — 6px');
+
+    // Правка: зазор — padding обёртки-виджета, margin нет (высотная карта
+    // CodeMirror не учитывает margin у виджета). Значение то же, что в просмотре.
+    const widgetBody = bodiesFor(css, '.cm-editor .md-widget.md-hr')[0];
+    assert.ok(widgetBody !== undefined, 'есть правило `.cm-editor .md-widget.md-hr`');
+    const margins = [...widgetBody.matchAll(/margin[^:]*:\s*([^;]+)/g)].map((m) => m[1]!.trim());
+    for (const v of margins) {
+      assert.match(
+        v,
+        /^0(?:px)?$/,
+        'правка: у виджета линейки нет вертикального margin — только padding',
+      );
+    }
+    const editVertical = /padding-block:\s*([^;]+)/.exec(widgetBody)?.[1]?.trim();
+    assert.equal(
+      editVertical,
+      viewVertical,
+      'вертикальный padding виджета линейки равен зазору просмотра (6px)',
+    );
+
+    // Общий паддинг виджетов к линейке не применяется — иначе к 6px добавились
+    // бы ещё 2px и отступ разошёлся бы с просмотром.
+    const generic = genericWidgetPadRule(css);
+    assert.ok(generic !== undefined, 'есть общее правило паддинга виджетов');
+    assert.match(
+      generic.prelude,
+      /:not\(\.md-hr\)/,
+      `общий паддинг виджетов не должен применяться к линейке: ${generic.prelude.trim()}`,
     );
   });
 });

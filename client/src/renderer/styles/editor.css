@@ -1072,9 +1072,16 @@
   white-space: pre-wrap;
 }
 
-.comment-view hr {
+/* Горизонтальная линейка: линия — единый вид в просмотре (`.comment-view hr`)
+   и в виджете live preview (внутренний `hr` обёртки, `editor/md-live.ts`).
+   Обёртка виджета несёт только вертикальный отступ. */
+.comment-view hr,
+.cm-editor .md-widget.md-hr .md-hr-line {
   border: none;
   border-top: 1px solid var(--border-strong);
+}
+
+.comment-view hr {
   margin: 6px 0;
 }
 
@@ -1361,15 +1368,26 @@
    (`pre`/`table`/`img`), и в просмотре, и в правке — виджет несёт класс
    `comment-view`, поэтому блок берёт те же правила просмотра. Иначе к паддингу
    блока прибавлялся бы паддинг обёртки и отступ fenced-кода в правке расходился
-   бы с просмотром (ошибка 333aa879). */
-.cm-editor .md-widget:not(.comment-view) {
+   бы с просмотром (ошибка 333aa879). Виджет линейки (`.md-hr`) тоже задаёт
+   вертикальный отступ сам — общее правило к нему не применяется. */
+.cm-editor .md-widget:not(.comment-view):not(.md-hr) {
   padding: 2px 0;
 }
 
+/* Виджет горизонтальной линейки (ошибка 47bce601): вертикальный отступ —
+   padding обёртки, не margin (margin не входит в getBoundingClientRect() и
+   искажает карту высот CodeMirror — см. шапку блока). Зазор 6px сверху и снизу
+   от линии — как `margin: 6px 0` у `.comment-view hr` в просмотре; саму линию
+   рисует внутренний `hr` (общее правило выше), поэтому она стоит по центру
+   паддинга. */
 .cm-editor .md-widget.md-hr {
-  border: none;
-  border-top: 1px solid var(--border-strong);
-  margin: 6px 0;
+  margin: 0;
+  padding-block: 6px;
+}
+
+.cm-editor .md-widget.md-hr .md-hr-line {
+  display: block;
+  margin: 0;
 }
 
 .cm-editor .md-widget.wiki-link {

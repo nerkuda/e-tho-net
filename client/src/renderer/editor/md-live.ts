@@ -138,11 +138,18 @@ class HrWidget extends WidgetType {
   }
 
   override toDOM(): HTMLElement {
-    const hr = document.createElement('hr');
-    hr.className = `${MD_WIDGET_CLASS} md-hr`;
-    hr.dataset.mdFrom = String(this.from);
-    hr.dataset.mdTo = String(this.to);
-    return hr;
+    // Обёртка несёт вертикальный отступ (padding, не margin — см. шапку
+    // `.md-widget` в styles/editor.css), а линию рисует внутренний `hr`: так
+    // зазор 6px сверху и снизу совпадает с `margin: 6px 0` у `.comment-view hr`
+    // в просмотре (ошибка 47bce601).
+    const box = document.createElement('div');
+    box.className = `${MD_WIDGET_CLASS} md-hr`;
+    box.dataset.mdFrom = String(this.from);
+    box.dataset.mdTo = String(this.to);
+    const line = document.createElement('hr');
+    line.className = 'md-hr-line';
+    box.append(line);
+    return box;
   }
 
   override ignoreEvent(): boolean {
