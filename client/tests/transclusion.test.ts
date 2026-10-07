@@ -1094,3 +1094,107 @@ test('Delete на выделенном блоке удаляет его (5312142
   assert.equal(handled, true);
   assert.equal(view.state.doc.toString(), 'до  после', 'ссылка-блок удалена целиком');
 });
+
+// ---------------------------------------------------------------------------
+// Завершение правки блока: каретка за блоком, блок сразу в просмотре (640c0ade)
+// ---------------------------------------------------------------------------
+
+/**
+ * Поле завершения правки блока (ошибка `640c0ade`): восстановление ссылки,
+ * закрытие режима правки, постановка каретки ЗА блок и сброс кэша источника
+ * обязаны уехать ОДНОЙ транзакцией. Иначе каретка остаётся на позиции прежнего
+ * текста (визуально над блоком), а `transclusionLoader` (ViewPlugin, в headless
+ * не инстанцируется) не перепланируется: его `update` видит `docChanged` только
+ * когда кэш уже сброшен — тогда он перечитывает источник и блок отрисовывается
+ * сразу. Счётчик транзакций — headless-прокси этого условия: одна транзакция ⇒
+ * загрузчик при пересчёте видит и изменение документа, и пустой кэш.
+ */
+function countingView(initial: EditorState): { view: FakeView; count: () => number } {
+  let n = 0;
+  const view: FakeView = {
+    state: initial,
+    dispatch(spec: unknown): void {
+      n += 1;
+      view.state = view.state.update(spec as never).state;
+    },
+  };
+  return { view, count: () => n };
+}
+
+/** Проверяет контракт завершения правки блока: каретка за блоком, блок-виджет в просмотре. */
+function assertBlockFinished(
+  state: EditorState,
+  containerDoc: string,
+  ref: ReturnType<typeof parseTransclusions>[number],
+): void {
+  assert.equal(state.field(transclusionState)!.blockEdit, null, 'режим правки блока закрыт');
+  assert.equal(state.doc.toString(), containerDoc, 'ссылка восстановлена, текст окружения цел');
+  assert.equal(
+    state.selection.main.head,
+    ref.end,
+    'каретка стоит ЗА блоком, а не над ним',
+  );
+  const block = collect(state.field(transclusionState)!.deco, containerDoc.length).find(
+    (item) => item.from === ref.start && item.to === ref.end && item.value.spec.block === true,
+  );
+  assert.ok(block !== undefined, 'блок сразу в просмотре — replace-виджет присутствует');
+}
+
+test('Ctrl+Enter: каретка за блоком и блок в просмотре сразу (640c0ade)', async () => {
+  stubEtn('старое');
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+
+  const raw = `![[#${ID_A}]]`;
+  const inlined = 'ИЗМЕНЁННЫЙ ТЕКСТ';
+  const base = enterBlockEdit(raw, inlined);
+  const ref = parseTransclusions(base.containerDoc)[0]!;
+  let state = EditorState.create({
+    doc: base.view.state.doc.toString(),
+    extensions: [
+      keymap.of([
+        {
+          key: 'Mod-Enter',
+          run: () => true,
+        },
+      ]),
+      ...transclusionExtensions,
+    ],
+  });
+  state = state.update({
+    effects: transclusionInternals.setBlockEditRange.of({
+      sourceId: ID_A,
+      section: null,
+      refRaw: raw,
+      from: base.from,
+      to: base.to,
+    }),
+  }).state;
+  const { view, count } = countingView(state);
+
+  runScopeHandlers(
+    view as unknown as EditorView,
+    keyEvent({ key: 'Enter', code: 'Enter', ctrl: true }),
+    'editor',
+  );
+  await tick();
+  await tick();
+
+  assert.equal(count(), 1, 'завершение правки — ОДНА транзакция (иначе загрузчик не перепланируется)');
+  assertBlockFinished(view.state, base.containerDoc, ref);
+});
+
+test('«Сохранить трансклюзию»: каретка за блоком и блок в просмотре сразу (640c0ade)', async () => {
+  stubEtn('старое');
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+
+  const base = enterBlockEdit(`![[#${ID_A}]]`, 'ИЗМЕНЁННЫЙ ТЕКСТ');
+  const ref = parseTransclusions(base.containerDoc)[0]!;
+  const { view, count } = countingView(base.view.state);
+
+  await transclusionInternals.saveBlockEdit(view as unknown as EditorView);
+
+  assert.equal(count(), 1, 'кнопка «Сохранить трансклюзию» завершает правку одной транзакцией');
+  assertBlockFinished(view.state, base.containerDoc, ref);
+});

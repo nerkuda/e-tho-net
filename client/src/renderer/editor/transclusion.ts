@@ -1409,14 +1409,31 @@ export function isBlockEditing(state: EditorState): boolean {
   return state.field(transclusionState, false)?.blockEdit != null;
 }
 
-/** Восстанавливает исходную ссылку вместо текста блока и выходит из правки. */
-export function restoreBlockEdit(view: EditorView, be: BlockEditState): void {
+/**
+ * Восстанавливает исходную ссылку вместо текста блока и выходит из правки.
+ *
+ * Каретку ставим ЗА восстановленным блоком (ошибка `640c0ade`): при
+ * автоматическом отображении позиции она оставалась на месте прежнего текста —
+ * визуально над блоком, а блок не перерисовывался. Явная позиция на правой
+ * границе блока (границы {@link transclusionAtCaret} исключающие) сразу
+ * оставляет блок в режиме просмотра. Дополнительные эффекты (`extraEffects`,
+ * например сброс кэша источника) применяются ТОЙ ЖЕ транзакцией — тогда
+ * пересчёт декораций и перепланирование загрузчика идут сразу, без движения
+ * каретки.
+ */
+export function restoreBlockEdit(
+  view: EditorView,
+  be: BlockEditState,
+  extraEffects: readonly StateEffect<unknown>[] = [],
+): void {
   const len = view.state.doc.length;
   const from = Math.max(0, Math.min(be.from, len));
   const to = Math.max(from, Math.min(be.to, len));
   view.dispatch({
     changes: { from, to, insert: be.refRaw },
-    effects: [setBlockEdit.of(null), setBlockEditRange.of(null)],
+    selection: { anchor: from + be.refRaw.length },
+    scrollIntoView: true,
+    effects: [setBlockEdit.of(null), setBlockEditRange.of(null), ...extraEffects],
   });
 }
 
@@ -1564,15 +1581,17 @@ export async function saveBlockEdit(view: EditorView): Promise<void> {
   if (current === null) return;
   // Источник изменился — сбрасываем кэш, блок в просмотре перечитывается. Для
   // вложенного блока (ошибка 23570aef) ещё и внешняя ссылка контейнера: её блок
-  // содержит отредактированный текст источника.
+  // содержит отредактированный текст источника. Восстановление ссылки, закрытие
+  // правки, постановка каретки за блок и сброс кэша идут ОДНОЙ транзакцией
+  // (ошибка 640c0ade): иначе каретка оставалась над блоком, а декорации/загрузчик
+  // не пересчитывались без движения каретки.
   const keys = new Set<string>([
     transclusionCacheKeyParts(networkId, current.sourceId, current.section),
   ]);
   for (const outer of parseTransclusions(current.refRaw)) {
     keys.add(transclusionCacheKeyParts(networkId, outer.sourceId, outer.section));
   }
-  restoreBlockEdit(view, current);
-  view.dispatch({ effects: dropEntries.of([...keys]) });
+  restoreBlockEdit(view, current, [dropEntries.of([...keys])]);
 }
 
 /**
