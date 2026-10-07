@@ -346,8 +346,23 @@ function scrollCaretIntoView(
   return handled;
 }
 
-/** Test seam: the panel-scroll handler of the auto-height markdown editor. */
-export const mdEditorInternals = { scrollCaretIntoView };
+/**
+ * Markdown, который редактор отдаёт владельцу в `onInput`, либо `null` — если
+ * сообщать нечего. Пока идёт правка блока трансклюзии, документ содержит текст
+ * источника ВМЕСТО ссылки-трансклюзии (`transclusion.ts`, диапазон `blockEdit`) —
+ * это не markdown поля, и отдавать наружу его нельзя: владелец (черновик
+ * постоянного комментария, `comments.ts` → `scheduleDraft`) записал бы
+ * «растворённую» трансклюзию и после аварийного закрытия предложил бы её к
+ * восстановлению (ошибка 59d9b5f3, риск порчи данных). После выхода из правки
+ * блок восстанавливает ссылку и `onInput` сообщает корректный текст —
+ * обычная запись черновика продолжает работать.
+ */
+function inputMirrorText(state: EditorState): string | null {
+  return isBlockEditing(state) ? null : state.doc.toString();
+}
+
+/** Test seam: the panel-scroll handler and the `onInput` gate of the editor. */
+export const mdEditorInternals = { scrollCaretIntoView, inputMirrorText };
 
 /** Creates a markdown editor for the given initial document. */
 export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdEditor {
@@ -400,7 +415,13 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         EditorView.lineWrapping,
         syntaxHighlighting(mdHighlightStyle, { fallback: true }),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) cb.onInput?.(update.state.doc.toString());
+          if (update.docChanged) {
+            // Правка блока трансклюзии: текст документа — вставленный источник,
+            // а не markdown поля (см. `inputMirrorText`). Владельцу не сообщаем
+            // (ошибка 59d9b5f3).
+            const md = inputMirrorText(update.state);
+            if (md !== null) cb.onInput?.(md);
+          }
           if (update.docChanged || update.selectionSet) {
             for (const listener of listeners) listener();
           }
