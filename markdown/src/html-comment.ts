@@ -15,6 +15,16 @@
  *
  * Fenced/inline code is tokenized separately, so a `<!-- -->` inside a code
  * block or a code span stays literal.
+ *
+ * Source map (ошибка `29aa3108`). Under `env.sourceMap` the inline rule ALSO
+ * pushes a zero-length `text_special` marker token (`content: ''`,
+ * `markup: <comment source>`) where the comment stood. It renders nothing
+ * (`text_join` merges the empty content away), so the default output stays
+ * byte-for-byte, but the token-based shift map of `source-map.ts` now SEES the
+ * comment's source run and can compensate the missing characters — the same
+ * mechanism it already uses for escapes/entities. The transclusion markers are
+ * HTML comments on their own lines and are consumed by the BLOCK rule (or by
+ * `transclusion-block.ts`), so this inline path never touches them.
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -22,6 +32,11 @@ import type MarkdownIt from 'markdown-it';
 /** Marker consumed at the current position when a comment starts here. */
 const OPEN = '<!--';
 const CLOSE = '-->';
+
+/** True when the current render opts into the source map (`env.sourceMap`). */
+function sourceMapEnabled(env: unknown): boolean {
+  return (env as { sourceMap?: boolean } | null | undefined)?.sourceMap === true;
+}
 
 export function htmlCommentPlugin(md: MarkdownIt): void {
   md.block.ruler.before('paragraph', 'html_comment', (state, startLine, endLine, silent) => {
@@ -57,6 +72,15 @@ export function htmlCommentPlugin(md: MarkdownIt): void {
     if (silent) {
       state.pos = end + CLOSE.length;
       return true;
+    }
+    // Source map (ошибка 29aa3108): leave a zero-length marker token so the
+    // shift map sees the comment's source run. `content: ''` renders nothing —
+    // `text_join` merges it into the neighbouring text without adding output,
+    // so the default pipeline is byte-for-byte unchanged.
+    if (sourceMapEnabled(state.env)) {
+      const marker = state.push('text_special', '', 0);
+      marker.content = '';
+      marker.markup = state.src.slice(state.pos, end + CLOSE.length);
     }
     state.pos = end + CLOSE.length;
     return true;

@@ -66,17 +66,23 @@
  * text — only one more `data-` attribute under `sourceMap`, so the default
  * output stays byte-for-byte.
  *
+ * An embedded inline HTML comment (`**a <!-- c --> b**`) is dropped by the
+ * `html_comment` inline rule, but under `sourceMap` that rule leaves a
+ * zero-length `text_special` marker token where the comment stood (ошибка
+ * `29aa3108`). Its `markup` holds the comment source and its `content` is empty,
+ * so `constructShiftEntries` records a `hidden` entry whose delta is the comment
+ * length, while `text_join` merges the empty content away and the output stays
+ * unchanged. Because the run renders ZERO characters, its boundary can coincide
+ * with the base anchor, so a hidden entry is applied inclusively at `at` (see
+ * {@link sourceOffsetFromCaret}). The block element likewise gets its own
+ * `data-md-shift` for escaped/entity/comment runs in ordinary text outside any
+ * construct, where it is the nearest annotated ancestor.
+ *
  * Honest limits (out of scope of the source map, задача `ba68771d`):
  *
  * - A markdown link or image inside a construct (`**[a](u)**`) renders as its
  *   label, which is neither annotated nor counted as a text run, so the
  *   mapping stays approximate there.
- * - An inline HTML comment `<!-- … -->` inside a construct is dropped by the
- *   `html_comment` inline rule WITHOUT emitting a token, so its source run is
- *   invisible to the token-based shift map and no delta can be derived; the
- *   construct stays leaf and the click after the comment drifts by the comment
- *   length. Compensating it would need a hidden marker token (a renderer
- *   change) — not done here (замечание верификатора ошибки `1b9cf949`).
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -91,10 +97,12 @@ export const MD_SOURCE_AFTER_ATTR = 'data-md-after';
 /** `data-`attribute marking a node whose text is a verbatim source slice. */
 export const MD_SOURCE_LEAF_ATTR = 'data-md-leaf';
 /**
- * `data-`attribute on an annotated inline construct carrying its rendered→source
- * shift map: a comma-separated list of `<renderedBoundary>:<delta>` entries
- * compensating escapes / HTML entities whose source run is longer than the
- * rendered text (задача `86598085`, ошибки `1b9cf949`, `d2ad1345`).
+ * `data-`attribute on an annotated inline construct or block carrying its
+ * rendered→source shift map: a comma-separated list of `<renderedBoundary>:<delta>`
+ * entries compensating escapes / HTML entities (and, with a trailing `!`, hidden
+ * zero-render runs such as embedded HTML comments) whose source run is longer
+ * than the rendered text (задача `86598085`, ошибки `1b9cf949`, `d2ad1345`,
+ * `29aa3108`).
  */
 export const MD_SOURCE_SHIFT_ATTR = 'data-md-shift';
 
@@ -126,6 +134,23 @@ interface RangeCarrier {
   mdRange?: SourceRange;
   /** Absolute after-anchor, resolved by the core rule. */
   mdAfter?: number;
+}
+
+/**
+ * One rendered→source shift entry of {@link MD_SOURCE_SHIFT_ATTR}: `at` is the
+ * rendered offset right after the shortened run, `delta` the source characters
+ * it hides, `hidden` true for a run that renders zero characters (an embedded
+ * HTML comment marker — its delta must apply AT `at`, not strictly after).
+ */
+interface ShiftEntry {
+  at: number;
+  delta: number;
+  hidden: boolean;
+}
+
+/** Serializes shift entries into the `data-md-shift` attribute value. */
+function serializeShiftEntries(entries: readonly ShiftEntry[]): string {
+  return entries.map((e) => (e.hidden ? `${e.at}:${e.delta}!` : `${e.at}:${e.delta}`)).join(',');
 }
 
 /** Per-render flag read from the render `env`. */
@@ -304,25 +329,59 @@ function hasAnnotatedDescendant(children: readonly Token[], i: number): boolean 
  * renders escapes (`\*` → `*`) and HTML entities (`&amp;` → `&`) as
  * `text_special` tokens whose `markup` (source run) is longer than their
  * `content` (rendered text), so the construct's rendered length is smaller than
- * its source slice. Returns ascending `{ at, delta }` entries — `at` is the
- * rendered offset right after the shortened run, `delta` the number of source
- * characters hidden there.
+ * its source slice. Returns ascending `{ at, delta, hidden }` entries — `at` is
+ * the rendered offset right after the shortened run, `delta` the number of
+ * source characters hidden there.
  *
  * The rendered cursor counts every run that contributes visible text to the
  * construct: `text` / `text_special` (including those of nested constructs, as
  * the loop walks all descendants) plus nested `code_inline` / `wiki_link`
  * children, whose visible text is held by the token itself rather than by a
- * `text` child. Constructs that own none of these (a link/image label, an HTML
- * comment) are honest limits (see the module head).
+ * `text` child. Constructs that own none of these (a link/image label) are
+ * honest limits (see the module head).
+ *
+ * `hidden` marks a run that renders ZERO characters but occupies source — the
+ * `text_special` marker the `html_comment` inline rule leaves for an embedded
+ * HTML comment (ошибка `29aa3108`). Such a run sits at the same rendered
+ * boundary as whatever precedes it, so the resolver must apply its delta at the
+ * boundary INCLUSIVELY, unlike an escape whose non-zero rendered length always
+ * puts `at` strictly past the base anchor.
  */
 function constructShiftEntries(
   children: readonly Token[],
   i: number,
-): Array<{ at: number; delta: number }> {
-  const level = children[i]!.level;
-  const entries: Array<{ at: number; delta: number }> = [];
+): ShiftEntry[] {
+  return accumulateShiftEntries(children, i + 1, children[i]!.level);
+}
+
+/**
+ * Shift entries of a BLOCK's inline content (ошибка `29aa3108`): escapes,
+ * entities and embedded HTML comments in ordinary text outside any construct
+ * are shortened too, but no inline construct carries their shift — the block
+ * element is the nearest annotated ancestor then. The walk covers the WHOLE
+ * inline content (all descendants, `level = -1`) so the rendered cursor matches
+ * the resolver's coordinates exactly; entries that fall inside a nested
+ * construct are absorbed there by its own `data-md-shift` / `data-md-after` and
+ * are dropped by the base-anchor rule, not here.
+ */
+function blockShiftEntries(children: readonly Token[]): ShiftEntry[] {
+  return accumulateShiftEntries(children, 0, -1);
+}
+
+/**
+ * Walks `children` from `start`, accumulating rendered and source lengths of
+ * every text-contributing run (`text` / `text_special` / `code_inline` /
+ * `wiki_link`) while `child.level > level`, and records a shift entry wherever
+ * the source run is longer than the rendered text.
+ */
+function accumulateShiftEntries(
+  children: readonly Token[],
+  start: number,
+  level: number,
+): ShiftEntry[] {
+  const entries: ShiftEntry[] = [];
   let rendered = 0;
-  for (let j = i + 1; j < children.length; j++) {
+  for (let j = start; j < children.length; j++) {
     const other = children[j]!;
     if (other.level <= level) break;
     let renderedLength = 0;
@@ -348,7 +407,11 @@ function constructShiftEntries(
     }
     rendered += renderedLength;
     if (sourceLength > renderedLength) {
-      entries.push({ at: rendered, delta: sourceLength - renderedLength });
+      entries.push({
+        at: rendered,
+        delta: sourceLength - renderedLength,
+        hidden: renderedLength === 0,
+      });
     }
   }
   return entries;
@@ -481,7 +544,8 @@ function setRangeAttrs(token: Token, range: SourceRange): void {
 function stampRanges(state: { src: string; tokens: Token[] }, input: string): void {
   const src = input;
   const lineStarts = computeLineStarts(src);
-  for (const token of state.tokens) {
+  for (let ti = 0; ti < state.tokens.length; ti++) {
+    const token = state.tokens[ti]!;
     if (RANGE_BLOCK_TYPES.has(token.type)) {
       const range = blockRange(src, lineStarts, token);
       if (range !== null) {
@@ -532,7 +596,18 @@ function stampRanges(state: { src: string; tokens: Token[] }, input: string): vo
       }
       const shifts = constructShiftEntries(children, i);
       if (shifts.length > 0) {
-        child.attrSet(MD_SOURCE_SHIFT_ATTR, shifts.map((e) => `${e.at}:${e.delta}`).join(','));
+        child.attrSet(MD_SOURCE_SHIFT_ATTR, serializeShiftEntries(shifts));
+      }
+    }
+    // The block element is the nearest annotated ancestor of ordinary text
+    // outside any construct, so it needs its own shift map for escapes/entities
+    // and embedded HTML comments there (ошибка `29aa3108`). The open token is
+    // the one right before the inline token and already carries the block range.
+    const open = state.tokens[ti - 1];
+    if (open !== undefined && open.attrGet(MD_SOURCE_START_ATTR) !== null) {
+      const blockShifts = blockShiftEntries(children);
+      if (blockShifts.length > 0) {
+        open.attrSet(MD_SOURCE_SHIFT_ATTR, serializeShiftEntries(blockShifts));
       }
     }
   }
@@ -865,16 +940,21 @@ function clamp(value: number, range: SourceRange): number {
   return value;
 }
 
-/** Parses a leaf shift map (`<renderedBoundary>:<delta>,…`) into entries. */
-function parseShiftEntries(raw: string | null): Array<{ at: number; delta: number }> {
+/** Parses a shift map (`<renderedBoundary>:<delta>[!],…`) into entries. */
+function parseShiftEntries(raw: string | null): ShiftEntry[] {
   if (raw === null || raw === '') return [];
-  const entries: Array<{ at: number; delta: number }> = [];
-  for (const part of raw.split(',')) {
+  const entries: ShiftEntry[] = [];
+  for (const rawPart of raw.split(',')) {
+    let part = rawPart;
+    const hidden = part.endsWith('!');
+    if (hidden) part = part.slice(0, -1);
     const sep = part.indexOf(':');
     if (sep === -1) continue;
     const at = Number(part.slice(0, sep));
     const delta = Number(part.slice(sep + 1));
-    if (Number.isFinite(at) && Number.isFinite(delta) && delta > 0) entries.push({ at, delta });
+    if (Number.isFinite(at) && Number.isFinite(delta) && delta > 0) {
+      entries.push({ at, delta, hidden });
+    }
   }
   return entries;
 }
@@ -941,7 +1021,10 @@ function collectAnchors(ancestor: SourceMapNode): RenderedAnchor[] {
  * the count. Escapes/entities shorten the rendered text, so the
  * {@link MD_SOURCE_SHIFT_ATTR} deltas whose boundary falls strictly after the
  * anchor and no later than the caret are added on top (for a leaf construct,
- * i.e. with no anchor, the anchor is the construct start, boundary `0`).
+ * i.e. with no anchor, the anchor is the construct start, boundary `0`). A
+ * hidden delta (a zero-render run, marked with a trailing `!` in the map) is
+ * added inclusively AT its boundary as well, since nothing was rendered to
+ * absorb it (ошибка `29aa3108`).
  *
  * Returns `null` when no annotated ancestor exists (mapping not rendered).
  */
@@ -968,16 +1051,20 @@ export function sourceOffsetFromCaret(
     baseSource = best.after;
   }
 
-  // Compensate escapes/entities: the source run is longer than the rendered
-  // text, so a delta applies once the caret passes the shortened run — but only
-  // for runs after the base anchor, since an anchor already absorbs the shift
-  // of everything up to it (and a nested construct's own map covers its inside).
+  // Compensate escapes/entities and hidden HTML comments: the source run is
+  // longer than the rendered text, so a delta applies once the caret passes the
+  // shortened run — but only for runs after the base anchor, since an anchor
+  // already absorbs the shift of everything up to it (and a nested construct's
+  // own map covers its inside). A hidden run (zero rendered characters, e.g. an
+  // embedded HTML comment) sits AT the anchor boundary, so its delta applies
+  // inclusively there — nothing was rendered to absorb it (ошибка `29aa3108`).
   let shift = 0;
   const raw = typeof found.node.getAttribute === 'function'
     ? found.node.getAttribute(MD_SOURCE_SHIFT_ATTR)
     : null;
   for (const entry of parseShiftEntries(raw)) {
-    if (entry.at > baseRendered && entry.at <= caret) shift += entry.delta;
+    const applies = entry.hidden ? entry.at >= baseRendered : entry.at > baseRendered;
+    if (applies && entry.at <= caret) shift += entry.delta;
   }
   return clamp(baseSource + (caret - baseRendered) + shift, found.range);
 }

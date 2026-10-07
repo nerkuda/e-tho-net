@@ -146,6 +146,26 @@ describe('маппинг выделения просмотра в исходни
     assert.deepEqual(range, { anchor: 19, head: 24 });
   });
 
+  it('скрытый прогон (HTML-комментарий) на границе анкера компенсируется включительно (29aa3108)', () => {
+    // `**a ==c==<!--x--> b**`: скрытый прогон рендерится нулём символов и
+    // начинается ровно на границе анкера вложенной конструкции, поэтому его
+    // сдвиг применяется в т.ч. при `at === baseRendered`.
+    const tail = textNode('cd');
+    const anchored = element({ [MD_SOURCE_AFTER_ATTR]: '10' }, []);
+    const paragraph = element(
+      {
+        [MD_SOURCE_START_ATTR]: '0',
+        [MD_SOURCE_END_ATTR]: '30',
+        [MD_SOURCE_SHIFT_ATTR]: '2:5!',
+      },
+      [textNode('ab'), anchored, tail],
+    );
+    element({}, [paragraph]);
+    const range = sourceRangeFromSelection({ node: tail, offset: 1 }, { node: tail, offset: 1 });
+    // base=10, caret=3, baseRendered=2 → 10 + 1 + 5 = 16.
+    assert.deepEqual(range, { anchor: 16, head: 16 });
+  });
+
   it('узлы вне размеченного рендера дают null (откат к каретке в конец)', () => {
     const plain = element({}, [textNode('обычный html')]);
     assert.equal(

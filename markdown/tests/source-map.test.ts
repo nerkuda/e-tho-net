@@ -732,6 +732,69 @@ test('ограничение: markdown-ссылка внутри констру�
   assert.notEqual(clickOffset(src, 'хвост', 'хвост'), src.indexOf('хвост'));
 });
 
+// ---------------------------------------------------------------------------
+// Ошибка 29aa3108: inline HTML-комментарий внутри конструкции/абзаца
+// ---------------------------------------------------------------------------
+
+test('HTML-комментарий внутри strong: клик после него точен (29aa3108)', () => {
+  const src = '**a <!-- c --> b**';
+  assert.equal(src.indexOf('b'), 15);
+  assert.equal(clickOffset(src, 'b', 'b'), 15);
+});
+
+test('HTML-комментарий в начале strong: клик по тексту после него точен (29aa3108)', () => {
+  const src = '**<!--c--> a**';
+  assert.equal(clickOffset(src, 'a', 'a'), src.indexOf('a'));
+});
+
+test('HTML-комментарий вне конструкции (в абзаце): клик после него точен (29aa3108)', () => {
+  const src = 'a <!--c--> b';
+  assert.equal(src.indexOf('b'), 11);
+  assert.equal(clickOffset(src, 'b', 'b'), 11);
+});
+
+test('HTML-комментарий у границы анкера (не-leaf): клик точен (29aa3108)', () => {
+  // Комментарий стоит вплотную после вложенного ==b==, поэтому его скрытый
+  // прогон начинается ровно на границе анкера и должен примениться включительно.
+  const src = '**a ==b==<!--c--> d**';
+  assert.equal(clickOffset(src, 'd', 'd'), src.indexOf('d'));
+});
+
+test('комментарий и entity внутри strong: клик после обоих точен (29aa3108)', () => {
+  const src = '**a <!-- c --> &amp; b**';
+  assert.equal(clickOffset(src, 'b', 'b'), src.indexOf('b'));
+});
+
+test('карта сдвига помечает скрытый прогон комментария «!» (29aa3108)', () => {
+  const html = renderMarkdown('**a <!-- c --> b**', { sourceMap: true });
+  const strong = /<strong([^>]*)>/.exec(html)?.[1] ?? '';
+  assert.match(strong, new RegExp(`${MD_SOURCE_SHIFT_ATTR}="2:10!"`), html);
+});
+
+test('байт-паритет: комментарий внутри конструкции без sourceMap не меняет вывод', () => {
+  assert.equal(renderMarkdown('**a <!-- c --> b**'), '<p><strong>a  b</strong></p>\n');
+});
+
+test('escape в абзаце после вложенной конструкции: клик точен (блочная карта сдвига)', () => {
+  // Блочная карта сдвига должна считать видимый текст вложенной конструкции,
+  // иначе её границы разъезжаются с координатами резолвера (ошибка 29aa3108).
+  const bs = String.fromCharCode(92);
+  const src = '==xxxxx== ' + bs + '* d';
+  assert.equal(clickOffset(src, 'd', 'd'), src.indexOf('d'));
+  const src2 = 'a ' + bs + '* b ==c== d';
+  assert.equal(clickOffset(src2, 'd', 'd'), src2.indexOf('d'));
+});
+
+test('маркеры трансклюзий остаются скрытыми и без sourceMap, и с ним (29aa3108)', () => {
+  const marker = '<!-- etn:transclusion begin depth=1 source="x" -->';
+  const src = `до\n\n${marker}\n\nпосле`;
+  for (const html of [renderMarkdown(src), renderMarkdown(src, { sourceMap: true })]) {
+    assert.ok(!html.includes('etn:transclusion'), html);
+    assert.ok(!html.includes('<!--'), html);
+    assert.ok(html.includes('до') && html.includes('после'), html);
+  }
+});
+
 test('байт-паритет: вне sourceMap вывод стандартных конструкций не меняется', () => {
   assert.equal(renderMarkdown('**жирным**'), '<p><strong>жирным</strong></p>\n');
   assert.equal(renderMarkdown('*курсивом*'), '<p><em>курсивом</em></p>\n');
