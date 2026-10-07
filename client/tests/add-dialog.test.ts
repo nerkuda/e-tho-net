@@ -22,7 +22,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import * as keymap from '../src/renderer/lib/keymap.js';
 import { store } from '../src/renderer/state.js';
@@ -738,6 +738,109 @@ async function choosePropertySide(formStack: ShimElement, label: string): Promis
   assert.ok(row !== undefined, `в списке есть пункт «${label}»`);
   row!.click();
 }
+
+/**
+ * Модификаторные Enter в диалоге добавления (задача fd3d84f4): прежние
+ * локальные обработчики реагировали на `event.key === 'Enter'` НЕЗАВИСИМО от
+ * модификаторов — поле добавляло строку (Ctrl+Enter применяло список), строка
+ * кандидата выбирала кандидата (Shift+Enter — составное имя). После перевода
+ * на диспетчер сочетаний эти нажатия восстановлены через `modifierChordVariants`.
+ */
+describe('add-dialog: модификаторные Enter поля и кандидатов (задача fd3d84f4)', () => {
+  // Клавиатура строк кандидатов работает через `instanceof HTMLElement`
+  // (проверка цели события) — даём шиму глобальный конструктор на время сьюта.
+  beforeEach(() => {
+    (globalThis as any).HTMLElement = ShimElement;
+  });
+  afterEach(() => {
+    delete (globalThis as any).HTMLElement;
+  });
+
+  /** Хит дубля-кандидата в форме, которую читает диалог. */
+  function hit(id: string, title: string, parentTitle: string | null = null): any {
+    return {
+      id,
+      network_id: 'n1',
+      title,
+      synonyms: [],
+      matched_on: 'title',
+      type_id: null,
+      icon: null,
+      icon_kind: 'emoji',
+      fg_color: null,
+      bg_color: null,
+      font_bold: null,
+      font_italic: null,
+      font_underline: null,
+      font_strike: null,
+      parent_title: parentTitle,
+    };
+  }
+
+  it('Shift/Alt/Meta+Enter в поле добавляют строку, как прежде', async () => {
+    const ui = await openDialog();
+    checkRadio(ui.multiRadio, ui.singleRadio);
+    ui.input.value = 'Раз';
+    press(ui.input, key('Enter', { shiftKey: true }));
+    ui.input.value = 'Два';
+    press(ui.input, key('Enter', { altKey: true }));
+    ui.input.value = 'Три';
+    press(ui.input, key('Enter', { metaKey: true }));
+    assert.deepEqual(
+      ui.lineTitles(),
+      ['Раз', 'Два', 'Три'],
+      'каждый модификаторный Enter добавляет строку (прежде — любой Enter)',
+    );
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+  });
+
+  it('Ctrl+Enter на строке кандидата выбирает кандидата', async () => {
+    (globalThis as any).window.etn.thoughts.findDuplicates = async () => [
+      hit('E1', 'Существующая', 'Родитель'),
+    ];
+    const ui = await openDialog();
+    checkRadio(ui.multiRadio, ui.singleRadio);
+    ui.input.value = 'Существующая';
+    ui.input.emit('input');
+    await settle();
+    const candidatesEl = ui.formStack.querySelector('.add-candidates');
+    assert.ok(candidatesEl !== null, 'контейнер кандидатов отрисован');
+    const row = candidatesEl!.querySelectorAll('.type-combo-item')[0];
+    assert.ok(row !== undefined, 'кандидат найден');
+    // Ctrl+Enter на строке прежде ВЫБИРАЛ кандидата (не применял список).
+    const ev = key('Enter', { ctrlKey: true });
+    ev.target = row;
+    press(candidatesEl!, ev);
+    assert.deepEqual(
+      ui.lineTitles(),
+      ['Существующая'],
+      'Ctrl+Enter на кандидате выбрал его (строка в списке выбранного)',
+    );
+    const state = await resolvesTo(ui.promise);
+    assert.equal(state.settled, false, 'Ctrl+Enter выбрал кандидата, а не применил список');
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+  });
+
+  it('Shift+Enter на строке кандидата по-прежнему составляет составное имя', async () => {
+    (globalThis as any).window.etn.thoughts.findDuplicates = async () => [hit('E2', 'Родитель')];
+    const ui = await openDialog();
+    checkRadio(ui.multiRadio, ui.singleRadio);
+    ui.input.value = 'Род';
+    ui.input.emit('input');
+    await settle();
+    const candidatesEl = ui.formStack.querySelector('.add-candidates')!;
+    const row = candidatesEl.querySelectorAll('.type-combo-item')[0]!;
+    const ev = key('Enter', { shiftKey: true });
+    ev.target = row;
+    press(candidatesEl, ev);
+    assert.equal(ui.input.value, 'Родитель.', 'Shift+Enter подставил составное имя');
+    assert.deepEqual(ui.lineTitles(), [], 'составное имя не выбирает кандидата');
+    ui.cancelBtn.click();
+    assert.equal(await ui.promise, null);
+  });
+});
 
 describe('openAddDialog: поле «Свойство связи» (ошибка 1dd08949, доработка dc175a5b)', () => {
   const writes: any[][] = [];

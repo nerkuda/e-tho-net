@@ -29,6 +29,7 @@
 
 import { fieldInput } from '../../lib/ui/field.js';
 import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
+import { modifierChordVariants } from '../../lib/keymap-chords.js';
 import { uiButton } from '../../lib/ui/button.js';
 import { svgIcon } from '../../lib/ui/icon.js';
 import { deferSingleClick } from '../../lib/thought-cloud.js';
@@ -165,11 +166,13 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
     defineKeyContext({
       id: contextId,
       bindings: [
-        {
+        // Прежний обработчик завершал правку на Enter НЕЗАВИСИМО от модификаторов —
+        // набор выражен привязками (`lib/keymap-chords.ts`).
+        ...modifierChordVariants('Enter').map((chord) => ({
           command: 'recordTitle.commit',
-          chord: 'Enter',
-          run: (event) => (event.key === 'Enter' ? endEdit(true, true) : false),
-        },
+          chord,
+          run: (event: KeyboardEvent) => (event.key === 'Enter' ? endEdit(true, true) : false),
+        })),
         {
           command: 'recordTitle.cancel',
           chord: 'Escape',

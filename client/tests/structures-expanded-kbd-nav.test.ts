@@ -62,12 +62,21 @@ function mount(host: ShimElement): Spy {
   return spy;
 }
 
-function press(host: ShimElement, key: string, ctrl = false): void {
+function press(
+  host: ShimElement,
+  key: string,
+  ctrl = false,
+  mods: Record<string, boolean> = {},
+): void {
   // Фокус внутри хоста кладёт его контекст на вершину стека диспетчера.
   host.emit('focusin', {});
   keymap.dispatchKeyEvent({
     key,
     ctrlKey: ctrl,
+    shiftKey: false,
+    altKey: false,
+    metaKey: false,
+    ...mods,
     target: host,
     preventDefault: (): void => undefined,
   } as unknown as KeyboardEvent);
@@ -141,6 +150,24 @@ describe('«Структуры»: ↑/↓ по всем видимым стро�
       { key: 'b/p', id: 'idX', root: 'b2', dir: 'children' },
       { key: 'b/p', id: 'idX', root: 'b2', dir: 'parents' },
     ]);
+  });
+
+  it('модификаторные Enter (Shift/Alt) открывают мысль, как прежде; Ctrl+Enter — нет', () => {
+    const host = new ShimElement('div', 'st-results');
+    host.append(row('a', 'idA'), row('b', 'idB'));
+    const spy = mount(host);
+    press(host, 'ArrowDown'); // a
+    press(host, 'ArrowDown'); // b
+    assert.deepEqual(cursorKeys(host), ['b']);
+
+    // Прежний обработчик открывал мысль на ЛЮБОМ Enter без Ctrl/Meta.
+    press(host, 'Enter', false, { shiftKey: true });
+    press(host, 'Enter', false, { altKey: true });
+    assert.deepEqual(spy.opened, ['idB', 'idB'], 'Shift/Alt+Enter открывают строку под курсором');
+
+    // С Ctrl/Meta Enter прежний обработчик молчал — глобальные сочетания целы.
+    press(host, 'Enter', true);
+    assert.deepEqual(spy.opened, ['idB', 'idB'], 'Ctrl+Enter не открывает строку, как и раньше');
   });
 
   it('свёртывание блока: пропавшая строка курсора снимает пунктир', () => {

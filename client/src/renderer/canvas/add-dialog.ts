@@ -38,6 +38,7 @@ import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
 import { buildSuggestRow, type SuggestEntry } from '../lib/suggest-dropdown.js';
 import { showDialog } from '../lib/dialog.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
+import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -692,8 +693,16 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       id: inputContextId,
       bindings: [
         { command: 'addDialog.input.down', chord: 'ArrowDown', run: handleInputKey },
-        { command: 'addDialog.input.enter', chord: 'Enter', run: handleInputKey },
-        { command: 'addDialog.input.apply', chord: 'Ctrl+Enter', run: handleInputKey },
+        // Прежний обработчик реагировал на ЛЮБОЙ Enter (`event.key === 'Enter'`
+        // без учёта модификаторов: Ctrl+Enter применял список, прочие — добавляли
+        // строку). Диспетчер сопоставляет набор модификаторов точно, поэтому
+        // нажатие выражено привязкой на каждое подмножество (`lib/keymap-chords.ts`)
+        // — обработчик сам различает Ctrl+Enter (apply) и обычный Enter.
+        ...modifierChordVariants('Enter').map((chord) => ({
+          command: 'addDialog.input.enter',
+          chord,
+          run: handleInputKey,
+        })),
       ],
     });
     let releaseInputContext: (() => void) | null = null;
@@ -757,8 +766,15 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     defineKeyContext({
       id: candidatesContextId,
       bindings: [
-        { command: 'addDialog.row.enter', chord: 'Enter', run: handleCandidateKey },
-        { command: 'addDialog.row.compose', chord: 'Shift+Enter', run: handleCandidateKey },
+        // Прежний обработчик реагировал на ЛЮБОЙ Enter на строке кандидата:
+        // Shift+Enter — составное имя (compose), прочие (в т.ч. Ctrl+Enter) —
+        // выбор кандидата. Набор модификаторов выражен привязками
+        // (`lib/keymap-chords.ts`); различение — внутри обработчика.
+        ...modifierChordVariants('Enter').map((chord) => ({
+          command: 'addDialog.row.enter',
+          chord,
+          run: handleCandidateKey,
+        })),
         { command: 'addDialog.row.down', chord: 'ArrowDown', run: handleCandidateKey },
         { command: 'addDialog.row.up', chord: 'ArrowUp', run: handleCandidateKey },
         { command: 'addDialog.row.escape', chord: 'Escape', run: handleCandidateKey },

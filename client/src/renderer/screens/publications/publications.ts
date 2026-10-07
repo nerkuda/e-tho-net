@@ -35,6 +35,7 @@ import { notice } from '../../lib/notice.js';
 import { svgIcon } from '../../lib/ui/icon.js';
 import { errorDialog, promptDialog } from '../../lib/dialog.js';
 import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
+import { modifierChordVariants } from '../../lib/keymap-chords.js';
 import { openEntityDeleteDialog } from '../../lib/delete-dialog.js';
 import {
   MENU_SEPARATOR,
@@ -1554,7 +1555,13 @@ function startShelfRename(
   defineKeyContext({
     id: contextId,
     bindings: [
-      { command: 'publications.shelf.rename.commit', chord: 'Enter', run: (ev) => (ev.key === 'Enter' ? finish(true) : false) },
+      // Прежний обработчик сохранял имя на Enter НЕЗАВИСИМО от модификаторов —
+      // набор выражен привязками (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'publications.shelf.rename.commit',
+        chord,
+        run: (ev: KeyboardEvent) => (ev.key === 'Enter' ? finish(true) : false),
+      })),
       { command: 'publications.shelf.rename.cancel', chord: 'Escape', run: (ev) => (ev.key === 'Escape' ? finish(false) : false) },
     ],
   });

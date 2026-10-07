@@ -35,6 +35,7 @@ import { errorLine as panelErrorLine, operationError } from '../../lib/ui/messag
 import { etn } from '../../lib/etn.js';
 import { isInBaseLayer } from '../../lib/layer-base.js';
 import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
+import { modifierChordVariants } from '../../lib/keymap-chords.js';
 import { notice } from '../../lib/notice.js';
 import { asRealtimeCause, onQueryInvalidated } from '../../lib/live/index.js';
 
@@ -167,7 +168,13 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     bindings: [
       { command: 'viewsTab.down', chord: 'ArrowDown', run: handleNavKey },
       { command: 'viewsTab.up', chord: 'ArrowUp', run: handleNavKey },
-      { command: 'viewsTab.open', chord: 'Enter', run: handleNavKey },
+      // Прежний обработчик открывал отбор на Enter НЕЗАВИСИМО от модификаторов —
+      // набор выражен привязками (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'viewsTab.open',
+        chord,
+        run: handleNavKey,
+      })),
     ],
   });
   let releaseContext: (() => void) | null = null;

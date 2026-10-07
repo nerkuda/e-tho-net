@@ -25,6 +25,7 @@ import { setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { currentThoughtId } from '../history.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
+import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { notice } from '../lib/notice.js';
 import { pickSpatialTarget, shouldDrawCurrentFrame } from '../lib/ui/nav-core.js';
 import { store } from '../state.js';
@@ -147,8 +148,14 @@ export function initKbdNav(host: HTMLElement): void {
     bindings: [
       { command: 'canvas.tab', chord: 'Tab', run: handleHostKey },
       { command: 'canvas.tab.prev', chord: 'Shift+Tab', run: handleHostKey },
-      { command: 'canvas.focusCursor', chord: 'Ctrl+Enter', run: handleHostKey },
-      { command: 'canvas.focusCursor.meta', chord: 'Meta+Enter', run: handleHostKey },
+      // Enter: прежний обработчик на Ctrl/Meta+Enter фокусировал курсор, на любом
+      // прочем Enter (в т.ч. Shift/Alt) — открывал мысль. Набор модификаторов
+      // выражен привязками, различение — в handleHostKey (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: chord.includes('Ctrl+') || chord.includes('Meta+') ? 'canvas.focusCursor' : 'canvas.open',
+        chord,
+        run: handleHostKey,
+      })),
       { command: 'canvas.reorderPrev', chord: 'Ctrl+Shift+ArrowLeft', run: handleHostKey },
       { command: 'canvas.reorderPrev.meta', chord: 'Meta+Shift+ArrowLeft', run: handleHostKey },
       { command: 'canvas.reorderNext', chord: 'Ctrl+Shift+ArrowRight', run: handleHostKey },
@@ -159,7 +166,6 @@ export function initKbdNav(host: HTMLElement): void {
       { command: 'canvas.right', chord: 'ArrowRight', run: handleHostKey },
       { command: 'canvas.home', chord: 'Home', run: handleHostKey },
       { command: 'canvas.end', chord: 'End', run: handleHostKey },
-      { command: 'canvas.open', chord: 'Enter', run: handleHostKey },
       { command: 'canvas.escape', chord: 'Escape', run: handleHostKey },
     ],
   });

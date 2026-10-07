@@ -53,6 +53,7 @@ import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { isInsideDialog } from '../lib/dialog.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
+import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
@@ -296,7 +297,15 @@ export function mountSearch(next: SearchChrome): () => void {
   defineKeyContext({
     id: fieldContextId,
     bindings: [
-      { command: 'search.enter', chord: 'Enter', run: handleFieldKey },
+      // Прежний обработчик срабатывал на Enter НЕЗАВИСИМО от модификаторов
+      // (комментарий старого кода: «Enter — with or without Ctrl — activates the
+      // selected row above») — нажатие выражено привязкой на каждое подмножество
+      // (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'search.enter',
+        chord,
+        run: handleFieldKey,
+      })),
       { command: 'search.first', chord: 'Ctrl+ArrowUp', run: handleFieldKey },
       { command: 'search.last', chord: 'Ctrl+ArrowDown', run: handleFieldKey },
       { command: 'search.up', chord: 'ArrowUp', run: handleFieldKey },

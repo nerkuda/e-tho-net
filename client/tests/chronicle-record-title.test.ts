@@ -60,10 +60,15 @@ async function makeTitle(opts: Record<string, unknown>): Promise<TitleHandle> {
   return createRecordTitle(opts as never) as unknown as TitleHandle;
 }
 
-function pressEnter(node: ShimElement): void {
+function pressEnter(node: ShimElement, mods: Record<string, boolean> = {}): void {
   // Контекст правки уже на стеке (beginEdit кладёт его сразу).
   keymap.dispatchKeyEvent({
     key: 'Enter',
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    metaKey: false,
+    ...mods,
     target: node,
     preventDefault: () => undefined,
     stopPropagation: () => undefined,
@@ -132,6 +137,28 @@ describe('компонент заголовка записи: просмотр �
     assert.equal(handle.node().firstChild!.tagName, 'svg', 'стрелка-индикатор на месте');
     assert.equal(labelOf(handle.node()), 'Дневник', 'надпись обновилась');
     assert.equal(handle.node().focused, true, 'фокус вернулся в просмотр');
+  });
+
+  it('модификаторный Enter (Ctrl/Alt/Meta) тоже завершает правку, как прежде', async () => {
+    const committed: string[] = [];
+    const handle = await makeTitle({
+      value: 'Старый',
+      label: 'Старый',
+      editHint: 'Правка',
+      placeholder: 'Заголовок',
+      onCommit: (next: string) => {
+        committed.push(next);
+        return next;
+      },
+    });
+    const host = new ShimElement('div');
+    host.append(handle.node());
+
+    handle.beginEdit();
+    handle.node().value = 'Новый';
+    pressEnter(handle.node(), { ctrlKey: true });
+    assert.deepEqual(committed, ['Новый'], 'Ctrl+Enter завершил правку и закоммитил значение (задача fd3d84f4)');
+    assert.equal(handle.isEditing(), false, 'правка завершена');
   });
 
   it('Escape отменяет правку: значение не коммитится, надпись прежняя', async () => {

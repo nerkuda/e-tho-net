@@ -41,6 +41,7 @@ import {
 import { errorDialog, showDialog } from '../lib/dialog.js';
 import { div, span } from '../lib/dom.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
+import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { colorField } from '../lib/ui/color-field.js';
 import { fieldInput, fieldRow, fieldTextarea } from '../lib/ui/field.js';
 import { emptyState, errorState, loadingState } from '../lib/ui/empty-state.js';
@@ -874,7 +875,14 @@ const DIFF_ROW_CONTEXT_ID = 'layers-diff-row';
 defineKeyContext({
   id: DIFF_ROW_CONTEXT_ID,
   bindings: [
-    { command: 'layers.diff.open', chord: 'Enter', run: handleDiffRowKey },
+    // Прежний обработчик открывал строку на Enter (и Space) НЕЗАВИСИМО от
+    // модификаторов. Для Enter набор выражен привязками (`lib/keymap-chords.ts`);
+    // Space оставлен как прежде — вне Enter-скоупа задачи.
+    ...modifierChordVariants('Enter').map((chord) => ({
+      command: 'layers.diff.open',
+      chord,
+      run: handleDiffRowKey,
+    })),
     { command: 'layers.diff.open.space', chord: 'Space', run: handleDiffRowKey },
   ],
 });

@@ -233,6 +233,32 @@ describe('карта: Enter на фокусной мысли гасит пунк
     assert.deepEqual(haloIds(), [PARENT_ID], 'гало на открытой мысли');
     dispose();
   });
+  it('Shift/Alt+Enter на курсоре открывают мысль, как обычный Enter (задача fd3d84f4)', async () => {
+    for (const mod of [{ shiftKey: true }, { altKey: true }] as const) {
+      const dispose = await mount();
+      kbdNav.setCursor(PARENT_ID);
+      assert.deepEqual(cursorIds(), [PARENT_ID], 'пунктир на родителе до нажатия');
+      currentHost?.emit('focusin', {});
+      keymap.dispatchKeyEvent({
+        key: 'Enter',
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        ...mod,
+        target: currentHost,
+        preventDefault: (): void => undefined,
+      } as unknown as KeyboardEvent);
+      currentHost?.emit('focusout', {});
+      assert.deepEqual(
+        cursorIds(),
+        [],
+        `модификаторный Enter (${JSON.stringify(mod)}) открыл мысль — прежняя семантика`,
+      );
+      assert.deepEqual(haloIds(), [PARENT_ID], 'гало на открытой мысли');
+      dispose();
+    }
+  });
 });
 
 /** Пустой элемент внутри зоны — цель клика «по пустому месту» карты. */

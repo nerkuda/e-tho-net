@@ -24,6 +24,7 @@
 
 import { currentThoughtId } from '../../history.js';
 import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
+import { modifierChordVariants } from '../../lib/keymap-chords.js';
 import { shouldDrawCurrentFrame } from '../../lib/ui/nav-core.js';
 import { store } from '../../state.js';
 
@@ -148,7 +149,15 @@ export function initStructuresKbdNav(host: HTMLElement, cb: StructuresKbdNavCall
       { command: 'structures.left', chord: 'ArrowLeft', run: handleHostKey },
       { command: 'structures.home', chord: 'Home', run: handleHostKey },
       { command: 'structures.end', chord: 'End', run: handleHostKey },
-      { command: 'structures.open', chord: 'Enter', run: handleHostKey },
+      // Прежний обработчик открывал мысль на любом Enter без Ctrl/Meta (в т.ч.
+      // Shift/Alt); с Ctrl/Meta Enter уходил глобальным обработчикам. Набор
+      // модификаторов выражен привязками, различение — в handleHostKey
+      // (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'structures.open',
+        chord,
+        run: handleHostKey,
+      })),
       { command: 'structures.escape', chord: 'Escape', run: handleHostKey },
     ],
   });
