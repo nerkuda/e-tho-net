@@ -15,6 +15,9 @@
  *      просмотра в ОДНОМ правиле, а блок просмотра (`.md-transclusion`) —
  *      якорь (`position: relative`) для абсолютного индикатора (ошибка
  *      `f60f99e0`).
+ *   5. выделенный целиком блок (`cm-transclusion-block--covered`) рисует рамку
+ *      ВОКРУГ блока из токена темы и подавляет нативную подсветку текста
+ *      внутри (ошибка `39553204`).
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -135,5 +138,27 @@ describe('guard: визуальные слои блока трансклюзии
     assert.match(first, /border-top:/, 'верхняя граница — на первой строке поля');
     const last = ruleBody('.cm-editor .cm-transclusion-edit-range--last');
     assert.match(last, /border-bottom:/, 'нижняя граница — на последней строке поля');
+  });
+
+  it('выделенный целиком блок — рамка вокруг и подавление подсветки текста (39553204)', () => {
+    // Пользователь видит блок трансклюзии единым целым: при полном покрытии
+    // выделением вокруг блока рисуется РАМКА из токена темы, а нативная
+    // подсветка текста/пробелов внутри подавлена (иначе выделялся текст).
+    const frame = ruleBody('.cm-editor .cm-transclusion-block--covered');
+    assert.ok(frame !== '', 'не найдено правило .cm-transclusion-block--covered');
+    assert.match(
+      frame,
+      /outline:\s*2px solid var\(--selection/,
+      'рамка вокруг блока обязана идти от токена темы --selection',
+    );
+    assert.ok(
+      !/#[0-9a-fA-F]{3,8}\b/.test(frame),
+      'в рамке выделенного блока есть hex-цвет — ADR c425202a запрещает захардкоженные цвета',
+    );
+    assert.match(
+      CSS,
+      /\.cm-transclusion-block--covered\s*::selection[\s\S]{0,200}background-color:\s*transparent\s*!important/,
+      'нативная подсветка текста/пробелов внутри выделенного блока обязана быть подавлена',
+    );
   });
 });

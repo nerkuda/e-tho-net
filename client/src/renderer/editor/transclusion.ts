@@ -47,8 +47,11 @@
  * источника приходят из рендера (`fc60d763`). Блок неделим при навигации:
  * замена идёт блоком на весь диапазон ссылки, а сам блок ВЫДЕЛЯЕТСЯ как единое
  * целое — кликом и стрелкой, входящей в него (ошибка `5312142d`); внутрь блока
- * каретка не встаёт. Правка ссылки — кнопкой смены ссылки (свёрнутая ссылка),
- * правка блока — двойным кликом или Enter на выделенном блоке.
+ * каретка не встаёт. Выделение блока целиком показывается РАМКОЙ ВОКРУГ него
+ * (класс `cm-transclusion-block--covered`), а не подсветкой текста/пробелов
+ * внутри (ошибка `39553204`). Правка ссылки — кнопкой смены ссылки
+ * (свёрнутая ссылка), правка блока — двойным кликом или Enter на выделенном
+ * блоке.
  * Появление/раскрытие блока анимировано (CSS, с учётом `prefers-reduced-motion`).
  * Просмотр поля (view-режим) разворачивает ссылки тем же швом
  * `transclusionInternals.expandWithLoader` + `renderMarkdown` с `sourceMap` в
@@ -152,6 +155,12 @@ export const TRANSCLUSION_ERROR_CLASS = 'cm-transclusion-error';
 export const TRANSCLUSION_ID_CLASS = 'cm-transclusion-id';
 /** Блок в режиме правки (рамка как у облачка, задача f59d24e1). */
 export const TRANSCLUSION_EDITING_CLASS = 'cm-transclusion-block--editing';
+/**
+ * Блок целиком покрыт выделением (ошибка `39553204`): пользователь видит блок
+ * как единое целое — CSS рисует рамку ВОКРУГ блока и подавляет нативную
+ * подсветку текста/пробелов внутри (выделение блока как атома, `5312142d`).
+ */
+export const TRANSCLUSION_COVERED_CLASS = 'cm-transclusion-block--covered';
 /** Диапазон редактируемого текста блока в режиме правки (задача e2c14673). */
 export const TRANSCLUSION_EDIT_RANGE_CLASS = 'cm-transclusion-edit-range';
 /** Первая строка вложенного поля правки блока (ошибка 9c2e077a). */
@@ -682,6 +691,8 @@ class TransclusionBlockWidget extends WidgetType {
     readonly editing: boolean,
     /** Имя чужого держателя захвата источника, либо `null` (задача f59d24e1). */
     readonly lockedBy: string | null,
+    /** Выделение покрывает блок целиком (ошибка 39553204). */
+    readonly covered: boolean,
   ) {
     super();
   }
@@ -694,6 +705,7 @@ class TransclusionBlockWidget extends WidgetType {
       other.sourceId === this.sourceId &&
       other.editing === this.editing &&
       other.lockedBy === this.lockedBy &&
+      other.covered === this.covered &&
       other.entry.html === this.entry.html &&
       other.entry.error === this.entry.error &&
       other.entry.title === this.entry.title &&
@@ -707,7 +719,8 @@ class TransclusionBlockWidget extends WidgetType {
     // иначе было бы двойное перемещение каретки.
     box.className =
       `${TRANSCLUSION_BLOCK_CLASS} comment-view` +
-      (this.editing ? ` ${TRANSCLUSION_EDITING_CLASS}` : '');
+      (this.editing ? ` ${TRANSCLUSION_EDITING_CLASS}` : '') +
+      (this.covered ? ` ${TRANSCLUSION_COVERED_CLASS}` : '');
     box.dataset.mdFrom = String(this.from);
     box.dataset.mdTo = String(this.to);
     box.dataset['transclusionSource'] = this.sourceId;
@@ -847,6 +860,10 @@ export function buildTransclusionDecorations(
     const title = entry?.title ?? '';
     const deleted = entry !== undefined && !entry.exists;
     const lockedBy = lockedSources.get(ref.sourceId) ?? null;
+    // Выделение покрывает диапазон ссылки целиком — блок показывается как
+    // выделенное единое целое (ошибка 39553204): рамка вокруг, без подсветки
+    // внутреннего текста (неделимость блока — ошибка 5312142d).
+    const covered = coversRef(selection, ref.start, ref.end);
 
     // Режим правки блока перекрывает прочие режимы: блок остаётся блоком даже
     // при каретке внутри ссылки (задача f59d24e1).
@@ -867,6 +884,7 @@ export function buildTransclusionDecorations(
             ref.sourceId,
             true,
             lockedBy,
+            covered,
           ),
           inclusive: false,
         }),
@@ -926,6 +944,7 @@ export function buildTransclusionDecorations(
           ref.sourceId,
           false,
           lockedBy,
+          covered,
         ),
         inclusive: false,
       }),

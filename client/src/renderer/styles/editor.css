@@ -1207,6 +1207,21 @@
   animation: md-transclusion-in var(--md-transclusion-anim, 160ms) ease;
 }
 
+/* Блок целиком покрыт выделением (ошибка 39553204): для пользователя блок —
+   единое целое, поэтому выделение показывается РАМКОЙ ВОКРУГ блока (токен
+   темы --selection), а нативная подсветка текста и пробелов внутри подавлена.
+   Без этого подсветка ложилась на содержимое. Рамка — outline (не border):
+   появление не сдвигает содержимое блока. */
+.cm-editor .cm-transclusion-block--covered {
+  outline: 2px solid var(--selection, var(--accent));
+  outline-offset: 1px;
+}
+
+.cm-editor .cm-line .cm-transclusion-block--covered ::selection,
+.cm-editor .cm-line .cm-transclusion-block--covered::selection {
+  background-color: transparent !important;
+}
+
 /* Блоки развёрнутых трансклюзий (задача a2b68d72, ADR c425202a, требование
    29a3c17a): оттенок фона вычисляется от базового токена темы по глубине —
    в тёмной теме светлее, в светлой темнее. Уровней до 5; цвета не

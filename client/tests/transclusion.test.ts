@@ -19,6 +19,7 @@ import { parseTransclusions } from '@etn/markdown';
 import { ShimElement } from './dom-shim.js';
 import {
   TRANSCLUSION_BLOCK_CLASS,
+  TRANSCLUSION_COVERED_CLASS,
   buildTransclusionDecorations,
   isBlockEditing,
   listSectionTitles,
@@ -230,7 +231,10 @@ function cacheFor(ref: ReturnType<typeof parseTransclusions>[number]): Map<
   ]);
 }
 
-type BlockSpec = { block?: boolean; widget?: { editing?: boolean; sourceId?: string; lockedBy?: string | null } };
+type BlockSpec = {
+  block?: boolean;
+  widget?: { editing?: boolean; sourceId?: string; lockedBy?: string | null; covered?: boolean };
+};
 
 test('buildTransclusionDecorations: источник в правке — блок с признаком editing', () => {
   const src = `до ![[#${ID_A}]] после`;
@@ -926,6 +930,67 @@ test('buildTransclusionDecorations: выделение внутри ссылки
   );
   const widget = collect(deco, src.length)[0]!.value.spec as BlockSpec;
   assert.equal(widget.widget?.constructor.name, 'TransclusionIdWidget', 'частичное выделение — сырой markdown');
+});
+
+test('buildTransclusionDecorations: полное покрытие выделением — блок помечен covered (39553204)', () => {
+  const src = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(src)[0]!;
+  const { deco } = buildTransclusionDecorations(
+    src,
+    { from: ref.start, to: ref.end },
+    cacheFor(ref),
+    NET,
+    new Set(),
+  );
+  const spec = collect(deco, src.length)[0]!.value.spec as BlockSpec;
+  assert.equal(spec.block, true, 'блок не разобран');
+  assert.equal(spec.widget?.covered, true, 'блок целиком покрыт выделением — класс «выделен целиком»');
+});
+
+test('buildTransclusionDecorations: без/вне выделения блок не covered (39553204)', () => {
+  const src = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(src)[0]!;
+  const widgetOf = (sel: { from: number; to: number }): BlockSpec =>
+    collect(buildTransclusionDecorations(src, sel, cacheFor(ref), NET, new Set()).deco, src.length)[0]!
+      .value.spec as BlockSpec;
+  assert.equal(widgetOf({ from: 0, to: 0 }).widget?.covered, false, 'без выделения блок не помечен');
+  const beforeRef = widgetOf({ from: 0, to: 2 });
+  assert.equal(beforeRef.block, true, 'выделение рядом с блоком его не задевает');
+  assert.equal(beforeRef.widget?.covered, false, 'выделение вне блока не помечает его');
+});
+
+test('TransclusionBlockWidget.eq учитывает флаг covered — перерисовка (39553204)', () => {
+  const src = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(src)[0]!;
+  const cache = cacheFor(ref);
+  const widgetOf = (sel: { from: number; to: number }) =>
+    (collect(buildTransclusionDecorations(src, sel, cache, NET, new Set()).deco, src.length)[0]!.value
+      .spec as BlockSpec).widget as unknown as { eq(other: unknown): boolean };
+  const plain = widgetOf({ from: 0, to: 0 });
+  const covered = widgetOf({ from: ref.start, to: ref.end });
+  assert.equal(plain.eq(covered), false, 'разный covered — виджет перерисовывается');
+  const coveredAgain = widgetOf({ from: ref.start, to: ref.end });
+  assert.equal(covered.eq(coveredAgain), true, 'тот же covered — виджет переиспользуется');
+});
+
+test('TransclusionBlockWidget.toDOM: покрытый блок несёт класс «выделен целиком» (39553204)', () => {
+  (globalThis as unknown as { HTMLElement: unknown }).HTMLElement = ShimElement;
+  (globalThis as unknown as { document: unknown }).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: { style: {} },
+    querySelectorAll: () => [],
+  };
+  const src = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(src)[0]!;
+  const widgetOf = (sel: { from: number; to: number }) =>
+    (collect(buildTransclusionDecorations(src, sel, cacheFor(ref), NET, new Set()).deco, src.length)[0]!.value
+      .spec as BlockSpec).widget as unknown as { toDOM(view: unknown): ShimElement };
+  const view = { state: EditorState.create({ doc: src, extensions: [transclusionState] }) };
+  const covered = widgetOf({ from: ref.start, to: ref.end }).toDOM(view);
+  assert.ok(covered.classList.contains(TRANSCLUSION_COVERED_CLASS), 'класс покрытия на элементе блока');
+  const plain = widgetOf({ from: 0, to: 0 }).toDOM(view);
+  assert.ok(!plain.classList.contains(TRANSCLUSION_COVERED_CLASS), 'обычный блок класса покрытия не несёт');
 });
 
 test('стрелка вправо в начале блока выделяет блок целиком (5312142d)', () => {
