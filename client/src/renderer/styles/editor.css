@@ -990,9 +990,11 @@
 
    Отличие применения отступа: у нормального потока просмотра это `margin`, у
    строк CodeMirror — `padding` (margin не входит в `getBoundingClientRect()` и
-   сбивает карту высот редактора — стрелки вверх/вниз «прыгали»). Значение
-   задано одной переменной `--md-block-gap` на общем селекторе, применяется
-   каждый своим свойством — источник значения по-прежнему один.
+   сбивает карту высот редактора — стрелки вверх/вниз «прыгали»). Значения
+   вертикальных отступов объявлены ОДИН раз токенами в `styles/tokens.css`
+   (`--md-block-gap`, `--md-heading-gap`, `--md-quote-gap`, `--md-hr-gap`,
+   `--md-widget-gap` — единая шкала, ошибка ad6e62ef), а каждый режим применяет
+   их своим свойством — источник значения по-прежнему один.
    ------------------------------------------------------------------------- */
 
 /* Заголовки h1–h6: размеры/насыщенность/межстрочный — браузерные (просмотр их
@@ -1019,18 +1021,20 @@
   text-wrap: initial;
 }
 
+/* Зазор заголовка — своя шкала по уровням (в `em` от кегля заголовка, как
+   браузерные поля UA), отдельная от базового межблочного `--md-block-gap`. */
 .comment-view h1,
-.cm-editor .cm-line.cm-md-h1 { font-size: 2em;    --md-block-gap: 0.67em; }
+.cm-editor .cm-line.cm-md-h1 { font-size: 2em;    --md-heading-gap: 0.67em; }
 .comment-view h2,
-.cm-editor .cm-line.cm-md-h2 { font-size: 1.5em;  --md-block-gap: 0.83em; }
+.cm-editor .cm-line.cm-md-h2 { font-size: 1.5em;  --md-heading-gap: 0.83em; }
 .comment-view h3,
-.cm-editor .cm-line.cm-md-h3 { font-size: 1.17em; --md-block-gap: 1em; }
+.cm-editor .cm-line.cm-md-h3 { font-size: 1.17em; --md-heading-gap: 1em; }
 .comment-view h4,
-.cm-editor .cm-line.cm-md-h4 { font-size: 1em;    --md-block-gap: 1.33em; }
+.cm-editor .cm-line.cm-md-h4 { font-size: 1em;    --md-heading-gap: 1.33em; }
 .comment-view h5,
-.cm-editor .cm-line.cm-md-h5 { font-size: 0.83em; --md-block-gap: 1.67em; }
+.cm-editor .cm-line.cm-md-h5 { font-size: 0.83em; --md-heading-gap: 1.67em; }
 .comment-view h6,
-.cm-editor .cm-line.cm-md-h6 { font-size: 0.67em; --md-block-gap: 2.33em; }
+.cm-editor .cm-line.cm-md-h6 { font-size: 0.67em; --md-heading-gap: 2.33em; }
 
 /* Применение отступа: просмотр — внешние поля (как UA у h1–h6), редактор —
    внутренние отступы строки (см. шапку блока). */
@@ -1040,11 +1044,36 @@
 .comment-view h4,
 .comment-view h5,
 .comment-view h6 {
-  margin-block: var(--md-block-gap);
+  margin-block: var(--md-heading-gap);
 }
 
 .cm-editor .cm-line:is(.cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6) {
-  padding-block: var(--md-block-gap);
+  padding-block: var(--md-heading-gap);
+}
+
+/* Абзацы и списки: раньше парных правил не было — зазор в просмотре брался из
+   прозы Web Awesome (`@layer wa-native`: `margin-block-end:
+   var(--wa-content-spacing)` = 24px у любого блока с соседом), а в правке — из
+   пустой строки строкового ритма CodeMirror. Источники расходились (ошибка
+   ad6e62ef). Теперь оба режима берут ОДИН токен `--md-block-gap`, выведенный из
+   `--md-line-height`: в правке разделитель блоков — ровно одна пустая строка
+   этого ритма, в просмотре — внешнее поле. `--wa-content-spacing` внутри
+   `.comment-view` переопределён тем же токеном, чтобы проза WA не подмешивала
+   свои 24px для прочих блоков (pre/table); заголовки и цитата задают свой зазор
+   явными правилами выше/ниже. */
+.comment-view {
+  --wa-content-spacing: var(--md-block-gap);
+}
+
+.comment-view p,
+.comment-view ul,
+.comment-view ol,
+.comment-view li {
+  margin-block: 0;
+}
+
+.comment-view :is(p, ul, ol):has(+ *) {
+  margin-block-end: var(--md-block-gap);
 }
 
 .comment-view code,
@@ -1082,7 +1111,7 @@
 }
 
 .comment-view hr {
-  margin: 6px 0;
+  margin: var(--md-hr-gap) 0;
 }
 
 /* ТП1 (задача 2fc28fa2): task-списки из единого рендерера — чекбокс вместо
@@ -1201,7 +1230,7 @@
   border-left: 2px solid var(--border-strong, var(--border));
   background: var(--surface, rgba(127, 127, 127, 0.06));
   border-radius: 3px;
-  padding: 4px 6px 4px 8px;
+  padding: var(--md-transclusion-pad);
   /* Содержимое блока — готовый HTML единого рендерера (`transclusion.ts`,
      `body.innerHTML = entry.html`) и лежит прямым потомком `.cm-content`.
      Базовая тема CodeMirror задаёт контейнеру свойство `white-space: pre` (при
@@ -1265,7 +1294,7 @@
   );
   border-left: 2px solid var(--border-strong, var(--border));
   border-radius: 3px;
-  padding: 4px 6px 4px 8px;
+  padding: var(--md-transclusion-pad);
   animation: md-transclusion-in var(--md-transclusion-anim, 160ms) ease;
 }
 
@@ -1412,7 +1441,7 @@
    бы с просмотром (ошибка 333aa879). Виджет линейки (`.md-hr`) тоже задаёт
    вертикальный отступ сам — общее правило к нему не применяется. */
 .cm-editor .md-widget:not(.comment-view):not(.md-hr) {
-  padding: 2px 0;
+  padding: var(--md-widget-gap) 0;
 }
 
 /* Виджет горизонтальной линейки (ошибка 47bce601): вертикальный отступ —
@@ -1423,7 +1452,7 @@
    паддинга. */
 .cm-editor .md-widget.md-hr {
   margin: 0;
-  padding-block: 6px;
+  padding-block: var(--md-hr-gap);
 }
 
 .cm-editor .md-widget.md-hr .md-hr-line {

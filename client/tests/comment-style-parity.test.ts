@@ -2,7 +2,8 @@
  * Сторож единого источника типографики markdown-контента (ошибка 45989471
  * «Комментарии: стили просмотра и живого редактирования различаются»; отступы
  * блоков кода и цитат — ошибка 333aa879; отступ горизонтальной линейки —
- * ошибка 47bce601).
+ * ошибка 47bce601; единая шкала вертикальных отступов абзацев/списков/линейки/
+ * виджетов/трансклюзий — ошибка ad6e62ef).
  *
  * Просмотр рендерит HTML единым `@etn/markdown` внутрь `.comment-view`; живое
  * редактирование показывает текст исходником и размечает его строками/марками
@@ -10,8 +11,8 @@
  * DOM-виджетами live preview (`.md-widget.comment-view`). Раньше
  * размеры/отступы заголовков, цитаты и inline-кода были ПРОДУБЛИРОВАНЫ в теме
  * CodeMirror (`editor/md-editor.ts`) и расходились со стилями просмотра. Теперь
- * значение объявлено один раз в `styles/editor.css` парным селектором, и оба
- * режима берут его оттуда.
+ * значение объявлено один раз в `styles/tokens.css` (`--md-*`) парным
+ * селектором, и оба режима берут его оттуда.
  *
  * Отдельно сторожатся ВЕРТИКАЛЬНЫЕ отступы блоков, у которых режимы устроены
  * по-разному: fenced-код в правке обёрнут виджетом (обёртка не должна
@@ -120,7 +121,7 @@ function genericWidgetPadRule(css: string): CssRule | undefined {
   return parseRules(css).find(
     (r) =>
       r.selectors.some((s) => /\.cm-editor \.md-widget\b/.test(s)) &&
-      /padding:\s*2px 0/.test(r.body),
+      /padding:\s*var\(--md-widget-gap\) 0/.test(r.body),
   );
 }
 
@@ -218,17 +219,21 @@ describe('вертикальные отступы блоков кода и ци�
     );
   });
 
-  it('горизонтальная линейка: вертикальный отступ — padding виджета, значение как в просмотре', () => {
+  it('горизонтальная линейка: вертикальный отступ — токен --md-hr-gap в обоих режимах', () => {
     const css = readRendererCss();
 
-    // Просмотр: зазор вокруг линии — внешние поля `margin: 6px 0`.
+    // Просмотр: зазор вокруг линии — внешние поля `margin: var(--md-hr-gap) 0`.
     const viewBody = bodiesFor(css, '.comment-view hr').find((b) => /margin/.test(b));
     assert.ok(viewBody !== undefined, 'просмотр: `.comment-view hr` задаёт внешние поля');
     const viewVertical = /margin:\s*([^;]+)/.exec(viewBody)![1]!.trim().split(/\s+/)[0];
-    assert.equal(viewVertical, '6px', 'просмотр: вертикальный зазор линейки — 6px');
+    assert.equal(
+      viewVertical,
+      'var(--md-hr-gap)',
+      'просмотр: вертикальный зазор линейки — из токена --md-hr-gap',
+    );
 
     // Правка: зазор — padding обёртки-виджета, margin нет (высотная карта
-    // CodeMirror не учитывает margin у виджета). Значение то же, что в просмотре.
+    // CodeMirror не учитывает margin у виджета). Значение — тот же токен.
     const widgetBody = bodiesFor(css, '.cm-editor .md-widget.md-hr')[0];
     assert.ok(widgetBody !== undefined, 'есть правило `.cm-editor .md-widget.md-hr`');
     const margins = [...widgetBody.matchAll(/margin[^:]*:\s*([^;]+)/g)].map((m) => m[1]!.trim());
@@ -243,11 +248,11 @@ describe('вертикальные отступы блоков кода и ци�
     assert.equal(
       editVertical,
       viewVertical,
-      'вертикальный padding виджета линейки равен зазору просмотра (6px)',
+      'вертикальный padding виджета линейки — тот же токен, что зазор просмотра',
     );
 
-    // Общий паддинг виджетов к линейке не применяется — иначе к 6px добавились
-    // бы ещё 2px и отступ разошёлся бы с просмотром.
+    // Общий паддинг виджетов к линейке не применяется — иначе к зазору линейки
+    // добавился бы ещё и паддинг виджета, и отступ разошёлся бы с просмотром.
     const generic = genericWidgetPadRule(css);
     assert.ok(generic !== undefined, 'есть общее правило паддинга виджетов');
     assert.match(
@@ -255,5 +260,95 @@ describe('вертикальные отступы блоков кода и ци�
       /:not\(\.md-hr\)/,
       `общий паддинг виджетов не должен применяться к линейке: ${generic.prelude.trim()}`,
     );
+  });
+});
+
+describe('единая шкала вертикальных отступов блоков (ad6e62ef)', () => {
+  it('базовый межблочный зазор — токен из строкового ритма правки', () => {
+    const tokens = readFileSync(
+      resolve(CLIENT_ROOT, 'src', 'renderer', 'styles', 'tokens.css'),
+      'utf8',
+    );
+    assert.match(
+      tokens,
+      /--md-block-gap:\s*calc\(var\(--md-line-height\)\s*\*\s*1em\)/,
+      '--md-block-gap обязан выводиться из --md-line-height: в правке разделитель ' +
+        'блоков — одна пустая строка этого ритма, зазор просмотра должен ей равняться',
+    );
+    for (const [name, re] of [
+      ['--md-hr-gap', /--md-hr-gap:\s*6px/],
+      ['--md-widget-gap', /--md-widget-gap:\s*2px/],
+      ['--md-transclusion-pad', /--md-transclusion-pad:\s*4px 6px 4px 8px/],
+    ] as const) {
+      assert.match(tokens, re, `токен ${name} объявлен в tokens.css`);
+    }
+  });
+
+  it('абзацы и списки: просмотр берёт зазор из --md-block-gap', () => {
+    const css = readRendererCss();
+    // Проза Web Awesome задавала зазор сама (24px) — теперь источник один:
+    // переменная WA внутри .comment-view переопределена нашим токеном.
+    assert.ok(
+      bodiesFor(css, '.comment-view').some((b) =>
+        /--wa-content-spacing:\s*var\(--md-block-gap\)/.test(b),
+      ),
+      'в .comment-view --wa-content-spacing переопределён на --md-block-gap',
+    );
+    assert.ok(
+      parseRules(css).some(
+        (r) =>
+          r.prelude.includes(':is(p, ul, ol):has(+ *)') &&
+          /margin-block-end:\s*var\(--md-block-gap\)/.test(r.body),
+      ),
+      'абзацы/списки: внешнее поле просмотра — из --md-block-gap',
+    );
+    assert.ok(
+      parseRules(css).some(
+        (r) =>
+          r.selectors.includes('.comment-view p') &&
+          r.selectors.includes('.comment-view ul') &&
+          r.selectors.includes('.comment-view ol') &&
+          r.selectors.includes('.comment-view li') &&
+          /margin-block:\s*0/.test(r.body),
+      ),
+      'внешние поля абзацев/списков/пунктов в просмотре обнулены (зазор задаёт :has(+ *))',
+    );
+  });
+
+  it('горизонтальная линейка и виджеты: значения — из токенов', () => {
+    const css = readRendererCss();
+    const tokens = readFileSync(
+      resolve(CLIENT_ROOT, 'src', 'renderer', 'styles', 'tokens.css'),
+      'utf8',
+    );
+    assert.match(tokens, /--md-hr-gap:\s*6px/);
+    assert.ok(
+      bodiesFor(css, '.comment-view hr').some((b) => /margin:\s*var\(--md-hr-gap\) 0/.test(b)),
+      'просмотр: зазор линейки — var(--md-hr-gap)',
+    );
+    assert.ok(
+      bodiesFor(css, '.cm-editor .md-widget.md-hr').some((b) =>
+        /padding-block:\s*var\(--md-hr-gap\)/.test(b),
+      ),
+      'правка: зазор линейки — var(--md-hr-gap)',
+    );
+    const generic = genericWidgetPadRule(css);
+    assert.ok(
+      generic !== undefined,
+      'общий паддинг виджетов задан токеном --md-widget-gap (а не литералом 2px)',
+    );
+  });
+
+  it('паддинг блока трансклюзии — один токен на все режимы и уровни (ad6e62ef)', () => {
+    const css = readRendererCss();
+    // Просмотр (.md-transclusion) и правка (.cm-transclusion-block) обязаны
+    // брать паддинг из ОДНОГО токена: иначе уровни вложенности накапливали бы
+    // расхождение между режимами.
+    for (const selector of ['.md-transclusion', '.cm-editor .cm-transclusion-block']) {
+      assert.ok(
+        bodiesFor(css, selector).some((b) => /padding:\s*var\(--md-transclusion-pad\)/.test(b)),
+        `${selector}: паддинг — из токена --md-transclusion-pad`,
+      );
+    }
   });
 });
