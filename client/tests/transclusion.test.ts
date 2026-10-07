@@ -12,10 +12,13 @@ import assert from 'node:assert/strict';
 
 import { EditorState, RangeSet } from '@codemirror/state';
 import { Decoration, keymap, runScopeHandlers, type DecorationSet, type EditorView } from '@codemirror/view';
+import { deleteCharForward } from '@codemirror/commands';
 
 import { parseTransclusions } from '@etn/markdown';
 
+import { ShimElement } from './dom-shim.js';
 import {
+  TRANSCLUSION_BLOCK_CLASS,
   buildTransclusionDecorations,
   isBlockEditing,
   listSectionTitles,
@@ -26,11 +29,13 @@ import {
   setBlockEdit,
   transclusionAtCaret,
   transclusionCacheKey,
+  transclusionDblClick,
   transclusionExtensions,
   transclusionInternals,
   transclusionLabels,
   transclusionLinkLabel,
   transclusionMenuHandlers,
+  transclusionRefStartingAt,
   transclusionState,
   type TransclusionSource,
   type TransclusionSourceLoader,
@@ -850,4 +855,242 @@ test('Mod-Enter в правке вложенного блока пишет в и
   assert.deepEqual(updates, [{ id: 'perm-src', body: 'ИЗМЕНЁННЫЙ B' }], 'правка ушла во вложенный источник');
   assert.equal(view.state.doc.toString(), raw, 'внешняя ссылка восстановлена — контейнер не изменён');
   assert.equal(view.state.field(transclusionState)!.blockEdit, null, 'правка блока завершена');
+});
+
+// ---------------------------------------------------------------------------
+// Блок-атом: выделение, навигация, Enter (ошибка 5312142d)
+// ---------------------------------------------------------------------------
+
+const BLOCK_RAW = `![[#${ID_A}]]`;
+
+/** Состояние редактора с жестами трансклюзии и заданным выделением. */
+function gestureState(doc: string, anchor: number, head = anchor): EditorState {
+  return EditorState.create({ doc, extensions: [...transclusionExtensions] }).update({
+    selection: { anchor, head },
+  }).state;
+}
+
+/** Событие стрелки для `runScopeHandlers` (CM6 выводит имя из `event.key`). */
+function arrowEvent(key: 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown'): KeyboardEvent {
+  return keyEvent({ key, code: key });
+}
+
+/** Выделение главного диапазона как `[from, to]`. */
+function mainRange(state: EditorState): [number, number] {
+  const sel = state.selection.main;
+  return [sel.from, sel.to];
+}
+
+test('transclusionAtCaret: границы исключающие — позиция на start/end не внутри (5312142d)', () => {
+  const src = `до ![[#${ID_A}]] после`;
+  const ref = parseTransclusions(src)[0]!;
+  assert.equal(transclusionAtCaret(src, ref.start), null, 'start — не внутри ссылки');
+  assert.equal(transclusionAtCaret(src, ref.end), null, 'end — не внутри ссылки');
+  assert.ok(transclusionAtCaret(src, ref.start + 1) !== null, 'строго внутри — ссылка найдена');
+});
+
+test('transclusionRefStartingAt: ссылка по началу диапазона найдена (5312142d)', () => {
+  const src = `до ![[#${ID_A}]] после`;
+  const ref = parseTransclusions(src)[0]!;
+  assert.equal(transclusionRefStartingAt(src, ref.start)?.sourceId, ID_A);
+  assert.equal(transclusionRefStartingAt(src, ref.start + 1), null);
+});
+
+test('buildTransclusionDecorations: выделение покрывает блок целиком — остаётся блок (5312142d)', () => {
+  const src = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(src)[0]!;
+  const { deco, atomic } = buildTransclusionDecorations(
+    src,
+    { from: ref.start, to: ref.end },
+    cacheFor(ref),
+    NET,
+    new Set(),
+  );
+  const items = collect(deco, src.length);
+  assert.equal(items.length, 1);
+  const spec = items[0]!.value.spec as BlockSpec;
+  assert.equal(spec.block, true, 'блок не разбирается в markdown при полном выделении');
+  assert.equal(spec.widget?.constructor.name, 'TransclusionBlockWidget');
+  assert.equal(atomic.size, 1, 'блок остаётся единым атомом');
+});
+
+test('buildTransclusionDecorations: выделение внутри ссылки — режим правки ссылки (#id) (5312142d)', () => {
+  const src = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(src)[0]!;
+  const { deco } = buildTransclusionDecorations(
+    src,
+    { from: ref.start + 2, to: ref.end },
+    cacheFor(ref),
+    NET,
+    new Set(),
+  );
+  const widget = collect(deco, src.length)[0]!.value.spec as BlockSpec;
+  assert.equal(widget.widget?.constructor.name, 'TransclusionIdWidget', 'частичное выделение — сырой markdown');
+});
+
+test('стрелка вправо в начале блока выделяет блок целиком (5312142d)', () => {
+  const doc = `до${BLOCK_RAW}`;
+  const ref = parseTransclusions(doc)[0]!;
+  const view = makeView(gestureState(doc, ref.start));
+  const handled = runScopeHandlers(view as unknown as EditorView, arrowEvent('ArrowRight'), 'editor');
+  assert.equal(handled, true, 'стрелка, входящая в блок, обрабатывается трансклюзией');
+  assert.deepEqual(mainRange(view.state), [ref.start, ref.end]);
+});
+
+test('стрелка влево в конце блока выделяет блок целиком (5312142d)', () => {
+  const doc = `${BLOCK_RAW} после`;
+  const ref = parseTransclusions(doc)[0]!;
+  const view = makeView(gestureState(doc, ref.end));
+  const handled = runScopeHandlers(view as unknown as EditorView, arrowEvent('ArrowLeft'), 'editor');
+  assert.equal(handled, true);
+  assert.deepEqual(mainRange(view.state), [ref.start, ref.end]);
+});
+
+test('стрелка вниз со строки перед блоком выделяет блок целиком (5312142d)', () => {
+  const doc = `вступление\n${BLOCK_RAW}\nокончание`;
+  const ref = parseTransclusions(doc)[0]!;
+  const view = makeView(gestureState(doc, 5));
+  const handled = runScopeHandlers(view as unknown as EditorView, arrowEvent('ArrowDown'), 'editor');
+  assert.equal(handled, true);
+  assert.deepEqual(mainRange(view.state), [ref.start, ref.end]);
+});
+
+test('стрелка вверх со строки после блока выделяет блок целиком (5312142d)', () => {
+  const doc = `вступление\n${BLOCK_RAW}\nокончание`;
+  const ref = parseTransclusions(doc)[0]!;
+  const view = makeView(gestureState(doc, ref.end + 1));
+  const handled = runScopeHandlers(view as unknown as EditorView, arrowEvent('ArrowUp'), 'editor');
+  assert.equal(handled, true);
+  assert.deepEqual(mainRange(view.state), [ref.start, ref.end]);
+});
+
+test('следующая стрелка уводит каретку за выделенный блок (5312142d)', () => {
+  const doc = `${BLOCK_RAW}\nпосле`;
+  const ref = parseTransclusions(doc)[0]!;
+  const view = makeView(gestureState(doc, ref.start, ref.end));
+  const handled = runScopeHandlers(view as unknown as EditorView, arrowEvent('ArrowDown'), 'editor');
+  assert.equal(handled, true);
+  assert.deepEqual(mainRange(view.state), [ref.end, ref.end], 'каретка за блоком, блок не разобран');
+});
+
+test('Enter на строке перед блоком — обычный перевод строки, блок не открывается (5312142d)', () => {
+  let newlineCalls = 0;
+  const doc = `вступление\n${BLOCK_RAW}\nокончание`;
+  let state = EditorState.create({
+    doc,
+    extensions: [
+      keymap.of([
+        {
+          key: 'Enter',
+          run: () => {
+            newlineCalls += 1;
+            return true;
+          },
+        },
+      ]),
+      ...transclusionExtensions,
+    ],
+  });
+  state = state.update({ selection: { anchor: 5 } }).state;
+  const view = makeView(state);
+  const handled = runScopeHandlers(view as unknown as EditorView, keyEvent({ key: 'Enter', code: 'Enter' }), 'editor');
+  assert.equal(handled, true);
+  assert.equal(newlineCalls, 1, 'Enter ушёл родительскому keymap — рядом с блоком вставляется строка');
+  assert.equal(view.state.field(transclusionState)!.blockEdit, null, 'блок в правку не вошёл');
+});
+
+test('Enter ровно на границе блока (start/end) — перевод строки, не правка (5312142d)', () => {
+  const doc = `вступление ${BLOCK_RAW} окончание`;
+  const ref = parseTransclusions(doc)[0]!;
+  for (const boundary of [ref.start, ref.end]) {
+    let newlineCalls = 0;
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        keymap.of([
+          {
+            key: 'Enter',
+            run: () => {
+              newlineCalls += 1;
+              return true;
+            },
+          },
+        ]),
+        ...transclusionExtensions,
+      ],
+    });
+    state = state.update({ selection: { anchor: boundary } }).state;
+    const view = makeView(state);
+    const handled = runScopeHandlers(view as unknown as EditorView, keyEvent({ key: 'Enter', code: 'Enter' }), 'editor');
+    assert.equal(handled, true, `на границе ${boundary} Enter не перехвачен трансклюзией`);
+    assert.equal(newlineCalls, 1, `на границе ${boundary} вставляется строка`);
+    assert.equal(view.state.field(transclusionState)!.blockEdit, null, `граница ${boundary}: блок не открылся`);
+  }
+});
+
+test('Enter на выделенном блоке переводит его в правку (5312142d)', async () => {
+  stubEtn('ТЕЛО ИСТОЧНИКА');
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+
+  let newlineCalls = 0;
+  const doc = `вступление ${BLOCK_RAW} окончание`;
+  const ref = parseTransclusions(doc)[0]!;
+  let state = EditorState.create({
+    doc,
+    extensions: [
+      keymap.of([
+        {
+          key: 'Enter',
+          run: () => {
+            newlineCalls += 1;
+            return true;
+          },
+        },
+      ]),
+      ...transclusionExtensions,
+    ],
+  });
+  state = state.update({ selection: { anchor: ref.start, head: ref.end } }).state;
+  const view = makeView(state);
+
+  const handled = runScopeHandlers(view as unknown as EditorView, keyEvent({ key: 'Enter', code: 'Enter' }), 'editor');
+  assert.equal(handled, true, 'Enter на выделенном блоке перехвачен (вход в правку)');
+  assert.equal(newlineCalls, 0, 'вставки строки нет — блок переходит в правку');
+  await tick();
+  await tick();
+  assert.ok(view.state.field(transclusionState)!.blockEdit !== null, 'блок открыт в правке');
+});
+
+test('двойной клик НА блоке открывает правку блока (5312142d)', async () => {
+  stubEtn('ТЕЛО ИСТОЧНИКА');
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+
+  (globalThis as unknown as { HTMLElement: unknown }).HTMLElement = ShimElement;
+  const doc = `вступление ${BLOCK_RAW} окончание`;
+  const ref = parseTransclusions(doc)[0]!;
+  const view = makeView(EditorState.create({ doc, extensions: [...transclusionExtensions] }));
+
+  const el = new ShimElement('div');
+  el.className = TRANSCLUSION_BLOCK_CLASS;
+  el.dataset['mdFrom'] = String(ref.start);
+  el.dataset['mdTo'] = String(ref.end);
+  (el as unknown as { closest: (s: string) => ShimElement | null }).closest = (s) =>
+    s.includes(TRANSCLUSION_BLOCK_CLASS) ? el : null;
+
+  const handled = transclusionDblClick({ target: el } as unknown as MouseEvent, view as unknown as EditorView);
+  assert.equal(handled, true, 'двойной клик по блоку обработан');
+  await tick();
+  await tick();
+  assert.ok(view.state.field(transclusionState)!.blockEdit !== null, 'блок открыт в правке');
+});
+
+test('Delete на выделенном блоке удаляет его (5312142d)', () => {
+  const doc = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(doc)[0]!;
+  const view = makeView(gestureState(doc, ref.start, ref.end));
+  const handled = deleteCharForward(view as unknown as EditorView);
+  assert.equal(handled, true);
+  assert.equal(view.state.doc.toString(), 'до  после', 'ссылка-блок удалена целиком');
 });

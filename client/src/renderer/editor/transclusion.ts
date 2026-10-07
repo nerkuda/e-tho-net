@@ -45,8 +45,10 @@
  * блочными обёртками `@etn/markdown` (`data-transclusion-depth`), поэтому фон
  * подкрашивается по уровню вложенности (ADR `c425202a`), а плашки ошибок
  * источника приходят из рендера (`fc60d763`). Блок неделим при навигации:
- * замена идёт блоком на весь диапазон ссылки, а клик по блоку не ставит каретку
- * внутрь (правка ссылки — кнопкой смены ссылки, правка блока — двойным кликом).
+ * замена идёт блоком на весь диапазон ссылки, а сам блок ВЫДЕЛЯЕТСЯ как единое
+ * целое — кликом и стрелкой, входящей в него (ошибка `5312142d`); внутрь блока
+ * каретка не встаёт. Правка ссылки — кнопкой смены ссылки (свёрнутая ссылка),
+ * правка блока — двойным кликом или Enter на выделенном блоке.
  * Появление/раскрытие блока анимировано (CSS, с учётом `prefers-reduced-motion`).
  * Просмотр поля (view-режим) разворачивает ссылки тем же швом
  * `transclusionInternals.expandWithLoader` + `renderMarkdown` с `sourceMap` в
@@ -180,10 +182,15 @@ export interface TransclusionContext {
   inSection: boolean;
 }
 
-/** Находит ссылку трансклюзии, содержащую позицию, и размечает её части. */
+/**
+ * Находит ссылку трансклюзии, внутри которой стоит позиция, и размечает её
+ * части. Границы ИСКЛЮЧАЮЩИЕ (ошибка `5312142d`): позиция ровно на `start` или
+ * `end` ссылки «внутри» не считается — иначе Enter на строке перед/после блока
+ * попадал бы в правку блока, а не ставил новую строку.
+ */
 export function transclusionAtCaret(source: string, pos: number): TransclusionContext | null {
   for (const ref of parseTransclusions(source)) {
-    if (pos < ref.start || pos > ref.end) continue;
+    if (pos <= ref.start || pos >= ref.end) continue;
     const idFrom = ref.start + OPEN_LEN; // на `#`
     const innerEnd = ref.end - 2; // перед `]]`
     const hash2 = source.indexOf('#', idFrom + 1);
@@ -198,6 +205,20 @@ export function transclusionAtCaret(source: string, pos: number): TransclusionCo
       inId: pos >= idFrom && pos <= idTo,
       inSection: hasSection && pos >= hash2 + 1 && pos <= innerEnd,
     };
+  }
+  return null;
+}
+
+/**
+ * Ссылка трансклюзии, начинающаяся ровно в позиции `start` (ошибка `5312142d`).
+ * Нужна там, где известна точка НАЧАЛА диапазона ссылки (атрибут виджета
+ * `data-md-from`, внешняя ссылка контейнера при вложенной правке), а не позиция
+ * каретки: с исключающими границами {@link transclusionAtCaret} на `start`
+ * ссылка уже не находится.
+ */
+export function transclusionRefStartingAt(source: string, start: number): TransclusionRef | null {
+  for (const ref of parseTransclusions(source)) {
+    if (ref.start === start) return ref;
   }
   return null;
 }
@@ -753,6 +774,21 @@ function intersects(
   return selection.from < to && selection.to > from;
 }
 
+/** Выделение покрывает весь диапазон ссылки `[from, to]` (блок выделен целиком). */
+function coversRef(selection: { from: number; to: number }, from: number, to: number): boolean {
+  return selection.from <= from && selection.to >= to;
+}
+
+/**
+ * Режим правки ССЫЛКИ (сырой markdown с атомарным `#<id>`): выделение задевает
+ * ссылку, но НЕ покрывает её целиком. Полное покрытие оставляет блок-атом
+ * выделенным как единое целое, а не разбирает его на markdown (ошибка
+ * `5312142d`).
+ */
+function linkEditMode(selection: { from: number; to: number }, from: number, to: number): boolean {
+  return intersects(selection, from, to) && !coversRef(selection, from, to);
+}
+
 /** Пустая карта чужих захватов (значение по умолчанию). */
 const NO_LOCKS: ReadonlyMap<string, string> = new Map();
 
@@ -838,7 +874,7 @@ export function buildTransclusionDecorations(
       continue;
     }
 
-    if (intersects(selection, ref.start, ref.end)) {
+    if (linkEditMode(selection, ref.start, ref.end)) {
       // Режим правки ссылки: токен `#<id>` — атомарный виджет с именем мысли;
       // раздел остаётся редактируемым текстом.
       const label = title !== '' ? title : '…';
@@ -1032,17 +1068,133 @@ export const transclusionState = StateField.define<TransclusionStateData>({
   ],
 });
 
-/** Атомарные токены `#<id>` в режиме правки ссылки. */
+/**
+ * Атомарные диапазоны CM6: токен `#<id>` в правке ссылки, а также целые
+ * диапазоны блока и свёрнутой ссылки (ошибка `5312142d` — блок единым атомом,
+ * каретка внутрь не встаёт).
+ */
 export const transclusionAtomicRanges = EditorView.atomicRanges.of((view) => {
   const state = view.state.field(transclusionState, false);
   return state === undefined ? RangeSet.empty : state.atomic;
 });
 
+/** Диапазон блока-атома документа (выделяется целиком) вместе с его ссылкой. */
+interface BlockRange {
+  from: number;
+  to: number;
+  ref: TransclusionRef;
+}
+
+/**
+ * Диапазоны блоков-атомов документа в текущем состоянии — те же ссылки, что
+ * рисуются replace-виджетом блока (не режим правки ссылки и не свёрнутая
+ * ссылка). Нужны навигации-выделению (ошибка `5312142d`).
+ */
+function blockRanges(state: EditorState): BlockRange[] {
+  const field = state.field(transclusionState, false);
+  if (field === undefined) return [];
+  const selection = state.selection.main;
+  const out: BlockRange[] = [];
+  for (const ref of parseTransclusions(state.doc.toString())) {
+    if (field.editingSourceId !== null && field.editingSourceId === ref.sourceId) {
+      out.push({ from: ref.start, to: ref.end, ref });
+      continue;
+    }
+    if (linkEditMode(selection, ref.start, ref.end)) continue;
+    const key = field.networkId === null ? null : transclusionCacheKey(field.networkId, ref);
+    if (key !== null && field.collapsed.has(key)) continue;
+    out.push({ from: ref.start, to: ref.end, ref });
+  }
+  return out;
+}
+
+/** Ссылка, покрытая выделением целиком (`[start, end]` == выделение), либо `null`. */
+function refCoveringSelection(
+  state: EditorState,
+  selection: { from: number; to: number },
+): TransclusionRef | null {
+  if (selection.from >= selection.to) return null;
+  for (const ref of parseTransclusions(state.doc.toString())) {
+    if (ref.start === selection.from && ref.end === selection.to) return ref;
+  }
+  return null;
+}
+
+/** Блок-атом, начинающийся в позиции `pos`. */
+function blockStartingAt(blocks: readonly BlockRange[], pos: number): BlockRange | null {
+  return blocks.find((block) => block.from === pos) ?? null;
+}
+
+/** Блок-атом, заканчивающийся в позиции `pos`. */
+function blockEndingAt(blocks: readonly BlockRange[], pos: number): BlockRange | null {
+  return blocks.find((block) => block.to === pos) ?? null;
+}
+
+/** Блок-атом, занимающий ЦЕЛИКОМ строку, следующую за строкой позиции `pos`. */
+function blockOnLineAfter(
+  state: EditorState,
+  blocks: readonly BlockRange[],
+  pos: number,
+): BlockRange | null {
+  const line = state.doc.lineAt(pos);
+  if (line.to >= state.doc.length) return null;
+  const next = state.doc.lineAt(line.to + 1);
+  return blocks.find((block) => block.from === next.from && block.to === next.to) ?? null;
+}
+
+/** Блок-атом, занимающий ЦЕЛИКОМ строку, предшествующую строке позиции `pos`. */
+function blockOnLineBefore(
+  state: EditorState,
+  blocks: readonly BlockRange[],
+  pos: number,
+): BlockRange | null {
+  const line = state.doc.lineAt(pos);
+  if (line.from === 0) return null;
+  const prev = state.doc.lineAt(line.from - 1);
+  return blocks.find((block) => block.from === prev.from && block.to === prev.to) ?? null;
+}
+
+/**
+ * Навигация-выделение блока-атома стрелками (ошибка `5312142d`). Стрелка,
+ * входящая в блок из позиции перед/после, выделяет блок ЦЕЛИКОМ одним шагом;
+ * следующее нажатие уводит каретку за его границу (блок остаётся единым).
+ * Возвращает `true`, если нажатие обработано (иначе стрелку отдаём CM6).
+ */
+export function transclusionBlockArrow(
+  view: EditorView,
+  dir: 'left' | 'right' | 'up' | 'down',
+): boolean {
+  const state = view.state;
+  const sel = state.selection.main;
+  const blocks = blockRanges(state);
+  if (!sel.empty) {
+    // Блок выделен целиком — шаг уводит каретку за границу, не разбирая блок.
+    const covering = blocks.find((block) => block.from === sel.from && block.to === sel.to) ?? null;
+    if (covering === null) return false;
+    const target = dir === 'left' || dir === 'up' ? covering.from : covering.to;
+    view.dispatch({ selection: { anchor: target }, scrollIntoView: true, userEvent: 'select' });
+    return true;
+  }
+  const pos = sel.head;
+  let block: BlockRange | null = null;
+  if (dir === 'right') block = blockStartingAt(blocks, pos);
+  else if (dir === 'left') block = blockEndingAt(blocks, pos);
+  else if (dir === 'down') block = blockOnLineAfter(state, blocks, pos);
+  else block = blockOnLineBefore(state, blocks, pos);
+  if (block === null) return false;
+  view.dispatch({
+    selection: { anchor: block.from, head: block.to },
+    scrollIntoView: true,
+    userEvent: 'select',
+  });
+  return true;
+}
+
 /**
  * Обработчик `mousedown` трансклюзий: клик по свёрнутой ссылке уводит каретку
- * внутрь неё (режим правки ссылки), клик по блоку не ставит каретку
- * (неделимость блока, задача `a2b68d72`), клик вне правки блока завершает её
- * записью в источник (задача `e2c14673`).
+ * внутрь неё (режим правки ссылки), клик по блоку ВЫДЕЛЯЕТ его целиком как
+ * единый атом (ошибка `5312142d`), клик вне правки блока завершает её записью в
+ * источник (задача `e2c14673`).
  *
  * Реагирует только на ОСНОВНУЮ кнопку мыши (`event.button === 0`): правый и
  * средний клик — жесты вызова контекстного меню, они не должны менять
@@ -1070,11 +1222,20 @@ export function transclusionMouseDown(event: MouseEvent, view: EditorView): bool
   }
   const block = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
   if (block instanceof HTMLElement) {
-    // Неделимость блока при навигации мышью (задача a2b68d72, требование
-    // 29a3c17a/элемент 2b116d37): клик по блоку НЕ ставит каретку внутрь
-    // ссылки — блок остаётся целым (иначе он распадался бы в исходный
-    // markdown и стрелки шли бы сквозь него). Правка ссылки — кнопкой
-    // смены ссылки (свёрнутая ссылка), правка блока — двойным кликом/Enter.
+    // Блок выделяется как ЕДИНОЕ ЦЕЛОЕ (ошибка 5312142d): клик ставит выделение
+    // на весь диапазон блока, а не каретку внутрь ссылки (иначе блок распался бы
+    // в исходный markdown) и не «поглощается» молча, как раньше. Диапазон берём
+    // из атрибутов виджета; каретка внутрь атомарного диапазона не встаёт.
+    const from = Number(block.dataset['mdFrom']);
+    const to = Number(block.dataset['mdTo']);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return true;
+    const sel = view.state.selection.main;
+    if (sel.from === from && sel.to === to) return true; // уже выделен — не трогаем
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      scrollIntoView: false,
+      userEvent: 'select',
+    });
     return true;
   }
   const el = target?.closest?.(`.${TRANSCLUSION_LINK_CLASS}`);
@@ -1112,7 +1273,22 @@ function transclusionWidgetRefAt(view: EditorView, target: Element | null): Tran
   if (!(el instanceof HTMLElement)) return null;
   const from = Number(el.dataset.mdFrom);
   if (!Number.isFinite(from)) return null;
-  return transclusionRefAt(view, from);
+  // Ищем ссылку по НАЧАЛУ диапазона (`data-md-from`), а не по каретке: с
+  // исключающими границами `transclusionAtCaret` на `start` ссылка не находится.
+  return transclusionRefStartingAt(view.state.doc.toString(), from);
+}
+
+/**
+ * Ссылка-БЛОК под целью события (`.cm-transclusion-block`). Для двойного клика
+ * (вход в правку) — только блок, не свёрнутая ссылка: у свёрнутой ссылки вход в
+ * правку делает одиночный клик (каретка внутрь ссылки).
+ */
+function transclusionBlockRefAt(view: EditorView, target: Element | null): TransclusionRef | null {
+  const el = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
+  if (!(el instanceof HTMLElement)) return null;
+  const from = Number(el.dataset.mdFrom);
+  if (!Number.isFinite(from)) return null;
+  return transclusionRefStartingAt(view.state.doc.toString(), from);
 }
 
 /** Копирует текст в буфер обмена; неудача — уведомление об ошибке. */
@@ -1298,7 +1474,7 @@ async function startBlockEdit(
   const text = target.section === null ? body : sectionBodyForEdit(body, target.section);
   if (text === null) return; // раздела нет — в правку не входим
   // Ссылка могла исчезнуть/сдвинуться, пока грузили источник.
-  const fresh = transclusionRefAt(view, replaceRef.start);
+  const fresh = transclusionRefStartingAt(view.state.doc.toString(), replaceRef.start);
   if (fresh === null || fresh.sourceId !== replaceRef.sourceId) return;
   view.dispatch({
     changes: { from: fresh.start, to: fresh.end, insert: text },
@@ -1399,6 +1575,22 @@ export async function saveBlockEdit(view: EditorView): Promise<void> {
   view.dispatch({ effects: dropEntries.of([...keys]) });
 }
 
+/**
+ * Двойной клик НА блоке открывает правку блока (ошибка `5312142d`). Ссылку
+ * берём из DOM-элемента блока, а не из координат: у блока-виджета позиция под
+ * мышью лежит на его границе, где {@link transclusionAtCaret} (исключающие
+ * границы) ссылку уже не находит. У свёрнутой ссылки вход в правку делает
+ * одиночный клик — здесь обрабатываем только блок.
+ */
+export function transclusionDblClick(event: MouseEvent, view: EditorView): boolean {
+  const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
+  if (be !== null) return true;
+  const ref = transclusionBlockRefAt(view, event.target as Element | null);
+  if (ref === null) return false;
+  void beginBlockEdit(view, ref);
+  return true;
+}
+
 /** Вход в режим правки блока: двойной клик и Enter (элемент `2b116d37`). */
 export const transclusionEditGestures = [
   Prec.high(
@@ -1412,6 +1604,14 @@ export const transclusionEditGestures = [
           // родительский keymap (defaultKeymap/markdown). Иначе клавиша «мертва»
           // и хоткеи родительского редактора не действуют на текст блока.
           if (isBlockEditing(view.state)) return false;
+          // Блок выделен целиком — Enter переводит его в режим правки
+          // (ошибка 5312142d). На строке ПЕРЕД/ПОСЛЕ блока каретка на границе
+          // ссылки, покрытия нет — Enter остаётся обычным переводом строки.
+          const covering = refCoveringSelection(view.state, view.state.selection.main);
+          if (covering !== null) {
+            void beginBlockEdit(view, covering);
+            return true;
+          }
           const ref = transclusionRefAt(view, view.state.selection.main.head);
           if (ref === null) return false;
           void beginBlockEdit(view, ref);
@@ -1440,19 +1640,17 @@ export const transclusionEditGestures = [
           return true;
         },
       },
+      // Навигация-выделение блока-атома стрелками (ошибка 5312142d): стрелка,
+      // входящая в блок из позиции перед/после, выделяет его целиком; обычные
+      // шаги вне блока отдаём CM6 (обработчик возвращает false).
+      { key: 'ArrowRight', run: (view) => transclusionBlockArrow(view, 'right') },
+      { key: 'ArrowLeft', run: (view) => transclusionBlockArrow(view, 'left') },
+      { key: 'ArrowDown', run: (view) => transclusionBlockArrow(view, 'down') },
+      { key: 'ArrowUp', run: (view) => transclusionBlockArrow(view, 'up') },
     ]),
   ),
   EditorView.domEventHandlers({
-    dblclick: (event, view) => {
-      const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
-      if (coords === null) return false;
-      const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
-      if (be !== null) return true;
-      const ref = transclusionRefAt(view, coords);
-      if (ref === null) return false;
-      void beginBlockEdit(view, ref);
-      return true;
-    },
+    dblclick: transclusionDblClick,
   }),
 ] as const;
 

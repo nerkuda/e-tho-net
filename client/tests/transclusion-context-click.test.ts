@@ -12,7 +12,8 @@
  *  - правый/средний клик по свёрнутой ссылке не перехватывается и не меняет
  *    выделение (dispatch не вызывается) — состояние блока сохраняется;
  *  - левый клик по свёрнутой ссылке — прежнее поведение (каретка внутрь);
- *  - левый клик по блоку — блок неделим (dispatch не вызывается);
+ *  - левый клик по блоку выделяет блок целым диапазоном (ошибка 5312142d), не
+ *    ставя каретку внутрь;
  *  - правый клик по ссылке открывает контекстное меню блока (обработчик
  *    `contextmenu` не тронут и работает поверх прежнего состояния).
  *
@@ -151,14 +152,15 @@ describe('правый клик по свёрнутой ссылке транс�
     assert.deepEqual(view.events[0]!.selection, { anchor: REF.start + 1 });
   });
 
-  it('левый клик по блоку оставляет блок неделимым', () => {
+  it('левый клик по блоку выделяет блок целиком (ошибка 5312142d)', () => {
     const view = fakeView(SRC);
     const handled = transclusionMouseDown(
       mouse(0, widget(TRANSCLUSION_BLOCK_CLASS, REF)),
       view as any,
     );
-    assert.equal(handled, true);
-    assert.equal(view.events.length, 0, 'клик по блоку не ставит каретку внутрь');
+    assert.equal(handled, true, 'левый клик по блоку обрабатывается трансклюзией');
+    assert.equal(view.events.length, 1, 'клик ставит выделение на весь блок');
+    assert.deepEqual(view.events[0]!.selection, { anchor: REF.start, head: REF.end });
   });
 });
 

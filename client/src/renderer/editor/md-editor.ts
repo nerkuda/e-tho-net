@@ -32,8 +32,8 @@ import {
   cancelBlockEdit,
   isBlockEditing,
   saveBlockEdit,
-  transclusionAtCaret,
   transclusionExtensions,
+  transclusionRefStartingAt,
 } from './transclusion.js';
 import { wikiLinkLegacyActions } from './wiki-link-legacy-actions.js';
 
@@ -551,7 +551,7 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
     saveTransclusionEdit: () => saveBlockEdit(view),
     isTransclusionEditing: () => isBlockEditing(view.state),
     beginNestedTransclusionEdit: (outerFrom, sourceId, section) => {
-      const ref = transclusionAtCaret(view.state.doc.toString(), outerFrom)?.ref ?? null;
+      const ref = transclusionRefStartingAt(view.state.doc.toString(), outerFrom);
       if (ref === null) return;
       void beginNestedBlockEdit(view, ref, { sourceId, section });
     },
