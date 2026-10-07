@@ -397,6 +397,14 @@ installCommentFormatCommands();
  * Команды, чьи сочетания перехватывает сам CM6 (до window-диспетчера),
  * поэтому им нужна привязка `Prec.high` в keymap редактора. Сочетания берутся
  * из единого источника `COMMENT_KEYMAP_DEFAULTS` (реестр аудита `2ec4058b`).
+ *
+ * `comment.fold`/`comment.unfold` здесь из-за macOS: `defaultKeymap` CM6 на
+ * macOS вешает `Ctrl-ArrowUp`/`Ctrl-ArrowDown` на `cursorPageUp`/`cursorPageDown`
+ * ({@link https://codemirror.net/6/docs/ref/#commands.defaultKeymap}). Без
+ * перекрытия `Prec.high` наше сочетание до window-диспетчера на macOS не
+ * доходило, и сворачивание/разворачивание не работало (замечание тестировщика
+ * по задаче 558cac34). На целевой Windows-платформе конфликта нет — привязка
+ * там безвредна (см. `chordToCm6Keys`: без Mod-алиаса).
  */
 const CM6_OVERRIDE_COMMANDS: readonly string[] = [
   'comment.italic',
@@ -406,6 +414,8 @@ const CM6_OVERRIDE_COMMANDS: readonly string[] = [
   'comment.outdentList',
   'comment.moveLineUp',
   'comment.moveLineDown',
+  'comment.fold',
+  'comment.unfold',
 ];
 
 /** Имя клавиши в нотации CM6 (`I` → `i`, `ArrowUp` → `ArrowUp`, `Tab` → `Tab`). */
@@ -428,7 +438,11 @@ export function chordToCm6Keys(chord: string): string[] {
   }
   // Ctrl и Mod дают две эквивалентные привязки (Mod = Ctrl на Windows/Linux,
   // Cmd на macOS) — как и просит аудит `2ec4058b` («Ctrl+I / Mod-i»).
-  const ctrlTokens = hasCtrl ? ['Ctrl', 'Mod'] : [''];
+  // Mod-алиас — только для односимвольных клавиш (буква/цифра): на macOS
+  // `Ctrl-‹клавиша›` и `Cmd-‹клавиша›` синонимичны для текстовых команд, а вот
+  // стрелки и прочие именованные клавиши — НЕТ (`Ctrl-ArrowUp` = pageUp,
+  // `Cmd-ArrowUp` = docStart). Алиас на них перехватил бы чужой штатный жест.
+  const ctrlTokens = hasCtrl ? (key.length === 1 ? ['Ctrl', 'Mod'] : ['Ctrl']) : [''];
   const name = cm6KeyName(key);
   return ctrlTokens.map((ctrl) => {
     const tokens = [ctrl, ...mods].filter((token) => token !== '');
@@ -439,28 +453,44 @@ export function chordToCm6Keys(chord: string): string[] {
 /** Команды сдвига списка — не должны мешать автодополнению по Tab. */
 const TAB_COMMANDS = new Set(['comment.indentList', 'comment.outdentList']);
 
+/** Одна привязка CM6-перекрытия: команда поля и её клавиша в нотации CM6. */
+export interface CommentFieldKeymapBinding {
+  command: string;
+  key: string;
+}
+
+/**
+ * Привязки `Prec.high`-перекрытия: команды `CM6_OVERRIDE_COMMANDS` с их
+ * умолчальными сочетаниями в нотации CM6. Вынесены отдельно (чистая функция)
+ * ради проверки: покрыты ли сочетания, которые перехватывает `defaultKeymap`.
+ */
+export function commentFieldKeymapBindings(): CommentFieldKeymapBinding[] {
+  return CM6_OVERRIDE_COMMANDS.flatMap((command) => {
+    const chord = COMMENT_KEYMAP_DEFAULTS[command];
+    if (chord === undefined) return [];
+    return chordToCm6Keys(chord).map((key) => ({ command, key }));
+  });
+}
+
 /**
  * Расширение keymap поля комментария: точечно перекрывает сочетания,
  * забираемые CM6. Возвращает `false`, когда команда не зарегистрирована или
  * (для Tab) открыт список автодополнения — тогда работает штатное поведение.
  */
 export function commentFieldKeymapExtension(): Extension {
-  const bindings = CM6_OVERRIDE_COMMANDS.flatMap((command) => {
-    const chord = COMMENT_KEYMAP_DEFAULTS[command];
-    if (chord === undefined) return [];
-    return chordToCm6Keys(chord).map((key) => ({
-      key,
-      run: (view: EditorView): boolean => {
-        if (TAB_COMMANDS.has(command) && completionStatus(view.state) === 'active') return false;
-        // Пользовательское переопределение сочетания (задача d534eb35):
-        // расширение привязано к УМОЛЧАЛЬНОМУ сочетанию статически, поэтому
-        // проверяем, что команда всё ещё закреплена за ним. Переопределил
-        // пользователь — умолчальное сочетание уступает штатному поведению CM6,
-        // а команду вызывает новое сочетание через диспетчер `lib/keymap.ts`.
-        if (effectiveChord(command) !== chord) return false;
-        return runCommentCommand(command);
-      },
-    }));
-  });
+  const bindings = commentFieldKeymapBindings().map(({ command, key }) => ({
+    key,
+    run: (view: EditorView): boolean => {
+      if (TAB_COMMANDS.has(command) && completionStatus(view.state) === 'active') return false;
+      // Пользовательское переопределение сочетания (задача d534eb35):
+      // расширение привязано к УМОЛЧАЛЬНОМУ сочетанию статически, поэтому
+      // проверяем, что команда всё ещё закреплена за ним. Переопределил
+      // пользователь — умолчальное сочетание уступает штатному поведению CM6,
+      // а команду вызывает новое сочетание через диспетчер `lib/keymap.ts`.
+      const chord = COMMENT_KEYMAP_DEFAULTS[command];
+      if (chord === undefined || effectiveChord(command) !== chord) return false;
+      return runCommentCommand(command);
+    },
+  }));
   return Prec.high(keymap.of(bindings));
 }

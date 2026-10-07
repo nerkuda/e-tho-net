@@ -220,6 +220,30 @@ describe('comment-format: регистрация тел команд', () => {
     assert.deepEqual(format.chordToCm6Keys('Alt+ArrowUp'), ['Alt-ArrowUp']);
     assert.deepEqual(format.chordToCm6Keys('Tab'), ['Tab']);
     assert.deepEqual(format.chordToCm6Keys('Shift+Tab'), ['Shift-Tab']);
+    // Стрелки — без Mod-алиаса: на macOS `Ctrl-Arrow*` и `Cmd-Arrow*` — разные
+    // жесты (pageUp/pageDown против docStart/docEnd), алиас перехватил бы чужой.
+    assert.deepEqual(format.chordToCm6Keys('Ctrl+ArrowUp'), ['Ctrl-ArrowUp']);
+    assert.deepEqual(format.chordToCm6Keys('Ctrl+ArrowDown'), ['Ctrl-ArrowDown']);
+  });
+
+  it('сворачивание/разворачивание перекрывают Ctrl-Arrow*, которые CM6 берёт на macOS', () => {
+    const bindings = format.commentFieldKeymapBindings();
+    const keysOf = (command: string): string[] =>
+      bindings.filter((b) => b.command === command).map((b) => b.key);
+
+    // Prec.high-привязка встаёт ровно на то сочетанием, что defaultKeymap CM6
+    // вешает на cursorPageUp/cursorPageDown (`mac: "Ctrl-ArrowUp"`) — значит
+    // штатный обработчик CM6 уступает нашей команде (замечание по 558cac34).
+    assert.deepEqual(keysOf('comment.fold'), ['Ctrl-ArrowUp']);
+    assert.deepEqual(keysOf('comment.unfold'), ['Ctrl-ArrowDown']);
+    assert.equal(
+      keysOf('comment.fold').some((k) => k.startsWith('Mod-')),
+      false,
+      'без Mod-алиаса: Cmd-ArrowUp (docStart) не перехватываем',
+    );
+    // Прочие конфликтные команды остаются покрытыми.
+    assert.deepEqual(keysOf('comment.moveLineUp'), ['Alt-ArrowUp']);
+    assert.deepEqual(keysOf('comment.indentList'), ['Tab']);
   });
 
   it('расширение перекрытия собирается без ошибок', () => {
