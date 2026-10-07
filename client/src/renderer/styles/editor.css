@@ -1447,6 +1447,31 @@
   line-height: var(--md-line-height);
 }
 
+/* Документ редактора — отдельный контейнер прокрутки (ошибка f65add20). В
+   растущем поле он растёт по содержимому (прокрутки нет); в ограниченном по
+   высоте поле (оболочка `--fill`) прокручивается только текст, а тулбар и
+   панель кнопок режима остаются на месте. */
+.md-field-scroll {
+  overflow: auto;
+}
+
+/* Область правки в ограниченном по высоте поле (оболочка комментария `--fill`):
+   заполняет остаток высоты, редактор прокручивается ВНУТРИ неё. Без этого
+   `.md-field-area` как flex-элемент ужималась до минимума (5 строк), редактор
+   переполнял её, а панель кнопок (`.md-field-actions`) вставала посреди текста
+   и уезжала вместе с ним при прокрутке (ошибка f65add20). */
+.ui-comment--fill > .ui-comment__body > .md-field > .md-field-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ui-comment--fill > .ui-comment__body > .md-field > .md-field-area > .md-field-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 /* Тулбар команд поля комментария (0.12.1, задача 3d6f98cb, ТП1): верхняя
    панель поля, видна только в режиме правки (живёт внутри скрываемой
    `.md-field-area`). Кнопки — словарь lib/ui (`ui-btn--ghost--s`), здесь только
@@ -1502,6 +1527,7 @@
 /* Правка: кнопки режима — в потоке под полем, видны постоянно. */
 .md-field--editing > .md-field-actions {
   position: static;
+  flex: 0 0 auto;
   justify-content: flex-end;
   margin-top: var(--space-1);
   opacity: 1;
