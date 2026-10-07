@@ -35,6 +35,7 @@ import type { Logger } from '../logger.js';
 import { networkDbPath, networkDir, networkMigrationsDir, systemDbPath } from '../paths.js';
 import { runMigrations } from './migrator.js';
 import { rebuildLayerSnapshot, setupLayerContext, type LayerContext } from './layer-chain.js';
+import { permanentCommentId } from './comment-permanent-id.js';
 import { propertyValueId } from './property-value-id.js';
 import { applyConnectionPragmas } from './pragmas.js';
 
@@ -300,6 +301,14 @@ export class NetworkDb {
 export interface MigrationHelpersContext {
   /** Id of the root administrator (`users.is_first_user = 1`). Empty when unknown. */
   firstUserId?: string;
+  /**
+   * Sink for non-fatal migration warnings (`etn_migration_warn`, migration 048).
+   * The runner already logs one line per applied file; this carries the finer
+   * detail a migration cannot express in DDL — e.g. a row it deliberately left
+   * untouched because its deterministic id was already taken in the same layer.
+   * Absent in tests / contexts without a logger: warnings are then dropped.
+   */
+  warn?: (message: string) => void;
 }
 
 /**
@@ -360,6 +369,15 @@ export function registerQueryFunctions(db: Database.Database): void {
  *     disagree on an id. Registered WITH the `deterministic` flag: the
  *     function is pure, and unlike `gen_uuid` folding it into a constant per
  *     statement is exactly the desired semantics.
+ *   * `etn_comment_permanent_id(owner_type, owner_id)` is the same bridge for
+ *     the permanent-comment id (bug 086cb735, migration 048): it delegates to
+ *     the domain's `permanentCommentId` (db/comment-permanent-id.ts), so the
+ *     legacy-duplicate normalisation writes exactly the id the write path now
+ *     mints. Deterministic, like `etn_pv_id`.
+ *   * `etn_migration_warn(text)` records a non-fatal migration warning into
+ *     {@link MigrationHelpersContext.warn} and returns NULL — the only channel
+ *     a pure-SQL migration has to report a row it chose to leave alone instead
+ *     of failing the whole transaction (migration 048's conflict guard).
  *
  * Migrations also use `type_name_key` (017, 021, 032, 042), so this function
  * delegates to {@link registerQueryFunctions} and existing tests that apply
@@ -384,6 +402,20 @@ export function registerMigrationHelpers(
         ? propertyValueId(ownerType, ownerId, propertyId)
         : null,
   );
+  db.function(
+    'etn_comment_permanent_id',
+    { deterministic: true },
+    (ownerType: unknown, ownerId: unknown) =>
+      typeof ownerType === 'string' && typeof ownerId === 'string'
+        ? permanentCommentId(ownerType, ownerId)
+        : null,
+  );
+  db.function('etn_migration_warn', (message: unknown) => {
+    if (typeof message === 'string') {
+      ctx.warn?.(message);
+    }
+    return null;
+  });
 }
 
 /**
@@ -456,7 +488,10 @@ export function openNetworkDb(
   // Единый профиль прагм соединения сети (ADR ff2ee606, требование bc312576):
   // кэш, mmap, temp_store, synchronous, busy_timeout — в одной точке открытия.
   applyConnectionPragmas(db);
-  registerMigrationHelpers(db, { firstUserId: readFirstUserId(dataDir) });
+  registerMigrationHelpers(db, {
+    firstUserId: readFirstUserId(dataDir),
+    warn: (message) => log?.warn(message),
+  });
 
   const migrationResult = runMigrations(db, networkMigrationsDir(), log);
 
