@@ -156,6 +156,76 @@ test('inline-код: плашка cm-md-inline-code всегда; бэктики
   assert.equal(hasClass(inside, 'cm-md-inline-code', 1, 2), true);
 });
 
+test('выделение ==…==: вне — маркеры скрыты и содержимое подсвечено; внутри — маркеры видны', () => {
+  const doc = '==m== text';
+  const away = buildState(doc, doc.length);
+  assert.equal(hasHiddenMark(away, 0, 2), true, 'открывающий `==` скрыт');
+  assert.equal(hasHiddenMark(away, 3, 5), true, 'закрывающий `==` скрыт');
+  assert.equal(hasClass(away, 'cm-md-mark', 2, 3), true, 'содержимое подсвечено (как <mark>)');
+  // Каретка внутри: маркеры видны, подсветка содержимого остаётся.
+  const inside = buildState(doc, 2);
+  assert.equal(hasHiddenMark(inside, 0, 2), false, 'открывающий `==` виден');
+  assert.equal(hasHiddenMark(inside, 3, 5), false, 'закрывающий `==` виден');
+  assert.equal(hasClass(inside, 'cm-md-mark', 2, 3), true, 'содержимое подсвечено и при активности');
+});
+
+test('подчёркивание <u>…</u>: вне — маркеры скрыты и содержимое подчёркнуто; внутри — маркеры видны', () => {
+  const doc = '<u>u</u> text';
+  const away = buildState(doc, doc.length);
+  assert.equal(hasHiddenMark(away, 0, 3), true, '`<u>` скрыт');
+  assert.equal(hasHiddenMark(away, 4, 8), true, '`</u>` скрыт');
+  assert.equal(hasClass(away, 'cm-md-underline', 3, 4), true, 'содержимое подчёркнуто');
+  const inside = buildState(doc, 3);
+  assert.equal(hasHiddenMark(inside, 0, 3), false, '`<u>` виден');
+  assert.equal(hasHiddenMark(inside, 4, 8), false, '`</u>` виден');
+  assert.equal(hasClass(inside, 'cm-md-underline', 3, 4), true, 'подчёркивание остаётся и при активности');
+});
+
+test('зачёркивание ~~…~~: вне — маркеры скрыты; внутри — видны (как жирный)', () => {
+  const doc = '~~s~~ text';
+  const away = buildState(doc, doc.length);
+  assert.equal(hasHiddenMark(away, 0, 2), true, 'открывающий `~~` скрыт');
+  assert.equal(hasHiddenMark(away, 3, 5), true, 'закрывающий `~~` скрыт');
+  const inside = buildState(doc, 3);
+  assert.equal(hasHiddenMark(inside, 0, 2), false, 'открывающий `~~` виден');
+  assert.equal(hasHiddenMark(inside, 3, 5), false, 'закрывающий `~~` виден');
+});
+
+test('жирный/курсив не сломаны: маркеры вне скрыты, внутри видны', () => {
+  const bold = '**b** text';
+  assert.equal(hasHiddenMark(buildState(bold, bold.length), 0, 2), true, '`**` вне скрыт');
+  assert.equal(hasHiddenMark(buildState(bold, bold.length), 3, 5), true, '`**` вне скрыт');
+  assert.equal(hasHiddenMark(buildState(bold, 2), 0, 2), false, '`**` внутри виден');
+
+  const ital = '*i* text';
+  assert.equal(hasHiddenMark(buildState(ital, ital.length), 0, 1), true, '`*` вне скрыт');
+  assert.equal(hasHiddenMark(buildState(ital, ital.length), 2, 3), true, '`*` вне скрыт');
+  assert.equal(hasHiddenMark(buildState(ital, 1), 0, 1), false, '`*` внутри виден');
+});
+
+test('task-список: вне — маркер `[ ]` заменён чекбоксом; внутри — исходный маркер', () => {
+  const doc = '- [ ] todo\n\nпара';
+  // Каретка вне пункта (во второй строке): чекбокс на месте `[ ]`.
+  const away = buildState(doc, doc.length);
+  const checkbox = allSpecs(away).find(
+    (r) => r.from === 2 && r.to === 5 && r.spec.widget !== undefined,
+  );
+  assert.ok(checkbox, 'маркер `[ ]` заменён виджетом-чекбоксом');
+  // Каретка внутри пункта: исходный `[ ]`, виджета нет.
+  const inside = buildState(doc, 3);
+  assert.equal(allSpecs(inside).some((r) => r.spec.widget !== undefined), false);
+  assert.equal(hasHiddenMark(inside, 2, 5), false, 'маркер `[ ]` виден');
+});
+
+test('task-список: отмеченный `[x]` даёт чекбокс с checked', () => {
+  const doc = '- [x] todo\n\nпара';
+  const away = buildState(doc, doc.length);
+  const checkbox = allSpecs(away).find((r) => r.from === 2 && r.to === 5);
+  assert.ok(checkbox, 'маркер `[x]` заменён виджетом');
+  const widget = checkbox.spec.widget as { checked?: boolean } | undefined;
+  assert.equal(widget?.checked, true, 'чекбокс отмечен');
+});
+
 test('wiki-ссылка: вне — виджет; внутри — исходник без виджета', () => {
   const doc = '[[Мысль]] x';
   // Каретка после ссылки (за пределами «перед/после»): ссылка — виджет.

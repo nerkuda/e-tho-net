@@ -28,6 +28,7 @@ import {
 
 import { renderMarkdown } from '@etn/markdown';
 
+import { choiceControl } from '../lib/ui/choice-row.js';
 import { isCollapsedHiddenAt, setCollapseEffect } from './comment-collapse.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 
@@ -149,6 +150,29 @@ class HrWidget extends WidgetType {
   }
 }
 
+/** Чекбокс task-списка (`- [ ]` / `- [x]`): заменяет маркер вне активного пункта. */
+class TaskCheckboxWidget extends WidgetType {
+  constructor(readonly checked: boolean) {
+    super();
+  }
+
+  override eq(other: TaskCheckboxWidget): boolean {
+    return other.checked === this.checked;
+  }
+
+  override toDOM(): HTMLElement {
+    // Контрол строит фасад дизайн-системы (сторож `guard-ui-fields`):
+    // голый `<input>` в обход `choiceControl` запрещён.
+    const input = choiceControl('checkbox', { checked: this.checked, disabled: true });
+    input.classList.add('cm-md-task-checkbox');
+    return input;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
 /** Разбор `[[target|alias]]` для виджета wiki-ссылки (пустой алиас = имя). */
 export function wikiLabel(source: string): { target: string; label: string } | null {
   const m = /^\[\[([^[\]\n|]+)(?:\|([^\]\n]*))?\]\]$/.exec(source.trim());
@@ -214,6 +238,9 @@ function buildDecorations(state: EditorState): DecorationSet {
    * зависят от дерева-объекта, а не от узла).
    */
   const inlineStack: Array<{ kind: 'link' | 'emphasis' | 'code'; from: number; to: number }> = [];
+
+  /** Стек пунктов task-списка: маркер `[ ]`/`[x]` «принадлежит» своему `Task`. */
+  const taskStack: Array<{ from: number; to: number }> = [];
 
   syntaxTree(state).iterate({
     enter(node) {
@@ -282,6 +309,26 @@ function buildDecorations(state: EditorState): DecorationSet {
           inlineStack.push({ kind: 'emphasis', from, to });
           break;
         }
+        // ТП1: выделение `==…==` и подчёркивание `<u>…</u>` — инлайн-родители
+        // (узлы задаёт `wiki-link.ts`). Содержимое отрисовано всегда, как текст
+        // жирного: выделение — фоном, подчёркивание — линией; маркеры скрывает
+        // обработка `MarkMark`/`UnderlineMark` ниже (по активности родителя).
+        case 'Mark':
+        case 'Underline': {
+          inlineStack.push({ kind: 'emphasis', from, to });
+          const openLen = node.name === 'Mark' ? 2 : 3;
+          const closeLen = node.name === 'Mark' ? 2 : 4;
+          if (to - from > openLen + closeLen) {
+            parts.push({
+              from: from + openLen,
+              to: to - closeLen,
+              value: Decoration.mark({
+                class: node.name === 'Mark' ? 'cm-md-mark' : 'cm-md-underline',
+              }),
+            });
+          }
+          break;
+        }
         case 'InlineCode': {
           inlineStack.push({ kind: 'code', from, to });
           // Плашка как у <code> в просмотре — mark на весь узел: скрытые
@@ -294,6 +341,8 @@ function buildDecorations(state: EditorState): DecorationSet {
         // непосредственно перед/после него.
         case 'EmphasisMark':
         case 'StrikethroughMark':
+        case 'MarkMark':
+        case 'UnderlineMark':
         case 'CodeMark': {
           const parent = inlineStack[inlineStack.length - 1];
           if (
@@ -310,6 +359,26 @@ function buildDecorations(state: EditorState): DecorationSet {
           const link = [...inlineStack].reverse().find((p) => p.kind === 'link');
           if (link !== undefined && !isNearInline(ranges, link.from, link.to)) {
             hide(from - 1, link.to);
+          }
+          break;
+        }
+        // Task-список (`- [ ]` / `- [x]`): вне активного пункта маркер `[ ]`/
+        // `[x]` заменяется чекбоксом. Сам `-` (ListMark) не трогаем — live
+        // preview не скрывает маркеры и обычных списков. Активность — по
+        // диапазону `Task` (каретка внутри/вплотную к пункту показывает исходник).
+        case 'Task': {
+          taskStack.push({ from, to });
+          break;
+        }
+        case 'TaskMarker': {
+          const task = taskStack[taskStack.length - 1];
+          if (task !== undefined && !isNearInline(ranges, task.from, task.to)) {
+            const checked = /[xX]/.test(state.sliceDoc(from + 1, to - 1));
+            parts.push({
+              from,
+              to,
+              value: Decoration.replace({ widget: new TaskCheckboxWidget(checked) }),
+            });
           }
           break;
         }
@@ -409,8 +478,13 @@ function buildDecorations(state: EditorState): DecorationSet {
         case 'Emphasis':
         case 'StrongEmphasis':
         case 'Strikethrough':
+        case 'Mark':
+        case 'Underline':
         case 'InlineCode':
           inlineStack.pop();
+          break;
+        case 'Task':
+          taskStack.pop();
           break;
         default:
           break;

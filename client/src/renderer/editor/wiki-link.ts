@@ -13,7 +13,7 @@
 import { autocompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
 import type { Extension } from '@codemirror/state';
 import { tags } from '@lezer/highlight';
-import type { MarkdownExtension } from '@lezer/markdown';
+import type { DelimiterType, MarkdownExtension } from '@lezer/markdown';
 
 import { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR, WIKI_LINK_ID_ATTR, WIKI_LINK_NETWORK_ATTR } from '@etn/markdown';
 import type { Thought } from '@etn/shared';
@@ -82,8 +82,72 @@ const wikiLinkMarkdownExt: MarkdownExtension = {
 
 /** Language extension for `markdown({ extensions: […] })`. */
 export function wikiLinkLanguage(): MarkdownExtension {
-  return wikiLinkMarkdownExt;
+  // Модуль задаёт ВСЕ собственные инлайн-узлы языка редактора: wiki-ссылки
+  // и конструкции ТП1 (`==…==`, `<u>…</u>`). Живой просмотр (`md-live.ts`)
+  // скрывает их маркеры по правилу «как с жирным».
+  return [wikiLinkMarkdownExt, inlineFormatMarkdownExt];
 }
+
+// ---------------------------------------------------------------------------
+// ТП1 (задача 2fc28fa2): выделение `==…==` и подчёркивание `<u>…</u>`.
+//
+// Лексер не знает этих конструкций: `==` — просто текст, а `<u>` разбирается
+// как HTMLTag. Узлы описаны здесь (единственный дом инлайн-узлов редактора —
+// правка `md-editor.ts` запрещена), чтобы живой просмотр мог различать
+// маркеры и содержимое. Механика — как у GFM-зачёркивания: делимитеры
+// пары `==`/`==` и `<u>`/`</u>` разрешаются в узлы `Mark`/`Underline`,
+// содержимое между ними парсится обычным конвейером (вложенный `**` и т.п.).
+// ---------------------------------------------------------------------------
+
+/** Делимитеры `==…==`: пара даёт узел `Mark` и два `MarkMark`. */
+const markDelim: DelimiterType = { resolve: 'Mark', mark: 'MarkMark' };
+
+/** Делимитеры `<u>…</u>`: узел `Underline` и два `UnderlineMark`. */
+const underlineDelim: DelimiterType = { resolve: 'Underline', mark: 'UnderlineMark' };
+
+/** Сравнение кода буквы с `u`/`U` (как в едином рендерере). */
+function isUChar(code: number): boolean {
+  return (code | 0x20) === 0x75;
+}
+
+const inlineFormatMarkdownExt: MarkdownExtension = {
+  defineNodes: [
+    { name: 'Mark' },
+    { name: 'MarkMark', style: tags.processingInstruction },
+    { name: 'Underline' },
+    { name: 'UnderlineMark', style: tags.processingInstruction },
+  ],
+  parseInline: [
+    {
+      name: 'Mark',
+      // Как GFM Strikethrough — после Emphasis, чтобы `==` не мешал `*`/`_`.
+      after: 'Emphasis',
+      parse(cx, next, pos) {
+        if (next !== 0x3d /* = */ || cx.char(pos + 1) !== 0x3d) return -1;
+        // `==` может и открывать, и закрывать — пару разрешает лексер.
+        return cx.addDelimiter(markDelim, pos, pos + 2, true, true);
+      },
+    },
+    {
+      name: 'Underline',
+      // До HTMLTag: иначе `<u>`/`</u>` поглощаются как HTML-теги.
+      before: 'HTMLTag',
+      parse(cx, next, pos) {
+        if (next !== 0x3c /* < */) return -1;
+        const second = cx.char(pos + 1);
+        // Открывающий `<u>` — три символа, имя тега регистронезависимо.
+        if (isUChar(second) && cx.char(pos + 2) === 0x3e /* > */) {
+          return cx.addDelimiter(underlineDelim, pos, pos + 3, true, false);
+        }
+        // Закрывающий `</u>` — четыре символа.
+        if (second === 0x2f /* / */ && isUChar(cx.char(pos + 2)) && cx.char(pos + 3) === 0x3e) {
+          return cx.addDelimiter(underlineDelim, pos, pos + 4, false, true);
+        }
+        return -1;
+      },
+    },
+  ],
+};
 
 /** Short cache of search results per prefix (thought lists change rarely). */
 const COMPLETION_TTL_MS = 10_000;

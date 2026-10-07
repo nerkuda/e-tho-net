@@ -1,0 +1,27 @@
+/*
+ * Инлайн-оформление ТП1 в живом просмотре редактора (ошибка 475fc35e).
+ *
+ * Парные правила к просмотру (`styles/editor.css`: `.comment-view mark`,
+ * `.comment-view .task-list-item-checkbox`) живут здесь, а не в editor.css,
+ * потому что editor.css занят другой правкой. Классы `cm-md-mark` /
+ * `cm-md-underline` / `cm-md-task-checkbox` ставит `editor/md-live.ts`.
+ */
+
+/* Выделение `==…==` — тем же фоном, что <mark> в просмотре комментария. */
+.cm-editor .cm-line .cm-md-mark {
+  background: var(--mark-bg);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+/* Подчёркивание `<u>…</u>`. */
+.cm-editor .cm-line .cm-md-underline {
+  text-decoration: underline;
+}
+
+/* Чекбокс task-списка вместо маркера `[ ]`/`[x]` вне активного пункта. */
+.cm-editor .cm-line .cm-md-task-checkbox {
+  margin-inline-end: 0.4em;
+  vertical-align: baseline;
+}
