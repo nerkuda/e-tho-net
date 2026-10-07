@@ -38,6 +38,7 @@ import { fieldInput } from './ui/field.js';
 import { operationError } from './ui/messages.js';
 import { isInsideDialog } from './dialog.js';
 import { isInsideSuggestDropdown } from './suggest-dropdown.js';
+import { defineKeyContext, pushKeyContext } from './keymap.js';
 import { watchOutsideTap } from './ui/popover.js';
 import { searchPanelClosesOnTap, searchSettingsPlacement } from './pure.js';
 
@@ -145,6 +146,9 @@ interface HitRow {
  * класс `record-search`; в него кладутся поле ввода и выпадающая панель
  * результатов (позиционируется CSS-ом относительно контейнера).
  */
+/** Счётчик панелей поиска записей: у каждой свой набор контекстов сочетаний. */
+let recordSearchSeq = 0;
+
 export function mountRecordSearch(
   container: HTMLElement,
   opts: RecordSearchOptions,
@@ -154,6 +158,10 @@ export function mountRecordSearch(
   let cursor: number | null = null;
   let lastQuery = '';
   let destroyed = false;
+  /** Идентификатор контекста панели результатов (Escape при открытой панели). */
+  const panelContextId = `record-search-panel-${(recordSearchSeq += 1)}`;
+  /** Снятие контекста панели результатов (пока панель открыта). */
+  let releasePanelContext: (() => void) | null = null;
 
   const input = fieldInput({ extraClass: 'record-search-input', bare: true });
   input.type = 'text';
@@ -228,6 +236,9 @@ export function mountRecordSearch(
   const openPanel = (): void => {
     applySettingsPlacement();
     panel.classList.remove('hidden');
+    // Пока панель открыта, её контекст на стеке: Escape закрывает панель, даже
+    // если фокус ушёл из поля (ADR b420b08c, задача fd3d84f4).
+    releasePanelContext ??= pushKeyContext(panelContextId);
     if (!settingsLoaded) {
       settingsLoaded = true;
       void loadSettings();
@@ -247,6 +258,8 @@ export function mountRecordSearch(
   function hidePanel(): void {
     panel.classList.add('hidden');
     cursor = null;
+    releasePanelContext?.();
+    releasePanelContext = null;
   }
 
   /** Запись строки: пометить выбранной, спрятать панель, отдать хосту. */
@@ -297,30 +310,56 @@ export function mountRecordSearch(
       void run();
     }, RECORD_SEARCH_DEBOUNCE_MS);
   });
-  input.addEventListener('keydown', (event) => {
+  // Клавиатура поля поиска — через общеклиентский диспетчер (ADR b420b08c,
+  // задача fd3d84f4): пока фокус в поле, его контекст на вершине стека.
+  const contextId = `record-search-field-${(recordSearchSeq += 1)}`;
+  const handleFieldKey = (event: KeyboardEvent): boolean => {
     if (event.key === 'Enter') {
-      event.preventDefault();
       if (timer !== null) window.clearTimeout(timer);
       const hit = activeRow();
       if (hit !== undefined) pick(hit.row, hit.el);
       else void run();
+      return true;
     } else if (event.key === 'Escape') {
       if (timer !== null) window.clearTimeout(timer);
       hidePanel();
       input.blur();
+      return true;
     } else if (event.ctrlKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
       const rows = hitRows();
-      if (rows.length === 0) return;
-      event.preventDefault();
+      if (rows.length === 0) return false;
       cursor = event.key === 'ArrowUp' ? 0 : rows.length - 1;
       rows.forEach((hit, index) => hit.el.classList.toggle('selected', index === cursor));
       rows[cursor]?.el.scrollIntoView?.({ block: 'nearest' });
+      return true;
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      if (hitRows().length === 0) return;
-      event.preventDefault();
+      if (hitRows().length === 0) return false;
       moveCursor(event.key === 'ArrowDown' ? 1 : -1);
+      return true;
     }
+    return false;
+  };
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'recordSearch.enter', chord: 'Enter', run: handleFieldKey },
+      { command: 'recordSearch.escape', chord: 'Escape', run: handleFieldKey },
+      { command: 'recordSearch.first', chord: 'Ctrl+ArrowUp', run: handleFieldKey },
+      { command: 'recordSearch.last', chord: 'Ctrl+ArrowDown', run: handleFieldKey },
+      { command: 'recordSearch.up', chord: 'ArrowUp', run: handleFieldKey },
+      { command: 'recordSearch.down', chord: 'ArrowDown', run: handleFieldKey },
+    ],
   });
+  let releaseFieldContext: (() => void) | null = null;
+  const onFieldFocusIn = (): void => {
+    releaseFieldContext ??= pushKeyContext(contextId);
+  };
+  const onFieldFocusOut = (): void => {
+    releaseFieldContext?.();
+    releaseFieldContext = null;
+  };
+  input.addEventListener('focusin', onFieldFocusIn as EventListener);
+  input.addEventListener('focusout', onFieldFocusOut as EventListener);
 
   // Закрытие кликом вне — общая механика `lib/ui` (`watchOutsideTap`), политика
   // «что удерживает панель» — общий предикат `searchPanelClosesOnTap`: клик по
@@ -336,8 +375,20 @@ export function mountRecordSearch(
       if (!panel.classList.contains('hidden')) hidePanel();
     },
   );
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !panel.classList.contains('hidden')) hidePanel();
+  // Контекст панели: Escape при открытой панели, даже когда фокус не в поле
+  // (раньше — document-слушатель; ADR b420b08c, задача fd3d84f4).
+  defineKeyContext({
+    id: panelContextId,
+    bindings: [
+      {
+        command: 'recordSearch.panel.escape',
+        chord: 'Escape',
+        run: () => {
+          if (!panel.classList.contains('hidden')) hidePanel();
+          return true;
+        },
+      },
+    ],
   });
   window.addEventListener('resize', applySettingsPlacement);
 
@@ -421,6 +472,10 @@ export function mountRecordSearch(
     destroy: () => {
       destroyed = true;
       if (timer !== null) window.clearTimeout(timer);
+      releaseFieldContext?.();
+      releaseFieldContext = null;
+      releasePanelContext?.();
+      releasePanelContext = null;
       window.removeEventListener('resize', applySettingsPlacement);
       stopOutsideTap();
     },

@@ -127,38 +127,15 @@ const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
     reason:
       'Глобальный жест лупы: `Escape`/нажатие `Ctrl` без сочетания + парный `keyup`; диспетчер модификатор-онли события не резолвит.',
   },
-
-  // --- element: клавиатурный контракт виджета на его элементе ---------------
-  {
-    file: 'lib/entity-picker.ts',
-    count: 1,
-    category: 'element',
-    reason: 'Клавиатура поля выбора сущностей (Enter/Escape/стрелки/Backspace на чипе/поле).',
-  },
-  {
-    file: 'lib/filter-form.ts',
-    count: 1,
-    category: 'element',
-    reason: 'Клавиатура поля конструктора отбора.',
-  },
   {
     file: 'lib/month-calendar.ts',
-    count: 2,
-    category: 'element',
-    reason: 'Навигация календаря (поле года и сетка дней) на его элементах.',
-  },
-  {
-    file: 'lib/saved-filter-bar.ts',
     count: 1,
-    category: 'element',
-    reason: 'Клавиатура строки поиска сохранённых отборов + проброс события в таблицу.',
+    category: 'mechanism',
+    reason:
+      'Capture-Escape поля года (`window`, capture-фаза): должен обогнать capture-Escape каркаса диалога, зарегистрированный позже, и погасить нажатие до него. Диспетчер — один bubble-слушатель на window и capture-порядок не выражает. Поле года (Enter/Escape) переведено на диспетчер (волна 2).',
   },
-  {
-    file: 'lib/record-search.ts',
-    count: 2,
-    category: 'element',
-    reason: 'Клавиатура поля поиска записей и document-Escape закрытия панели.',
-  },
+
+  // --- element: клавиатурный контракт виджета на его элементе ---------------
   {
     file: 'search/search.ts',
     count: 2,

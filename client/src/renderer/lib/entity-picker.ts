@@ -68,6 +68,7 @@ import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
 import { div, el, span } from './dom.js';
 import { etn } from './etn.js';
+import { defineKeyContext, pushKeyContext } from './keymap.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import {
   buildLinkEndIcon,
@@ -1170,6 +1171,9 @@ function restoreKeyboardFocus(
  * автор/редактор) сохраняют смешение литералов и токенов. Отдельная сборка
  * чипов вне общих модулей запрещена сторожем `guard-value-editor`.
  */
+/** Счётчик чип-полей: у каждого свой контекст сочетаний (замыкание `commit`). */
+let chipFieldContextSeq = 0;
+
 export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipField {
   const root = div('entity-chip-field st-f-fieldrow');
   // Разметку чип-поля даёт общая `.link-value-wrap/field/corner` — та же, что
@@ -1234,17 +1238,35 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   const sources: SuggestSource[] = [source, ...(opts.extraSources ?? [])];
   wireSuggest(input, {
     sources,
-    // Свободный текст фиксирует обработчик `keydown` ниже; Enter над
+    // Свободный текст фиксирует клавиатурная команда контекста ниже; Enter над
     // выделенной строкой выбирает её (общая выпадашка гасит событие).
     pickFirstOnEnter: false,
     onPick: (entry) => commit(entry.value),
   });
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.defaultPrevented) {
-      event.preventDefault();
-      commit(input.value);
-    }
+  // Клавиатура поля — через общеклиентский диспетчер: пока фокус внутри поля,
+  // его контекст на вершине стека (ADR b420b08c, задача fd3d84f4). Общая
+  // выпадашка подсказок гасит Enter над выделенной строкой (`defaultPrevented`),
+  // и диспетчер такую команду не исполняет — прежний порядок сохранён.
+  const contextId = `entity-chip-field-${(chipFieldContextSeq += 1)}`;
+  const handleCommitKey = (event: KeyboardEvent): boolean => {
+    if (event.key !== 'Enter' || event.shiftKey) return false;
+    commit(input.value);
+    return true;
+  };
+  defineKeyContext({
+    id: contextId,
+    bindings: [{ command: 'entityChip.commit', chord: 'Enter', run: handleCommitKey }],
   });
+  let releaseContext: (() => void) | null = null;
+  const onFocusIn = (): void => {
+    releaseContext ??= pushKeyContext(contextId);
+  };
+  const onFocusOut = (): void => {
+    releaseContext?.();
+    releaseContext = null;
+  };
+  field.addEventListener('focusin', onFocusIn as EventListener);
+  field.addEventListener('focusout', onFocusOut as EventListener);
   field.addEventListener('click', (event) => {
     if (event.target === field) input.focus();
   });
