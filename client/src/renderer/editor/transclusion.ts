@@ -87,6 +87,9 @@
 
 import {
   completionStatus,
+  currentCompletions,
+  selectedCompletion,
+  startCompletion,
   type Completion,
   type CompletionSource,
 } from '@codemirror/autocomplete';
@@ -111,6 +114,7 @@ import {
 import {
   extractSection,
   expandTransclusions,
+  formatTransclusionRef,
   parseTransclusions,
   renderMarkdown,
   // Классы блока/атрибут источника в HTML просмотра (ошибка f60f99e0):
@@ -1681,6 +1685,10 @@ export const transclusionEditGestures = [
           return true;
         },
       },
+      // `#` при открытом списке мыслей трансклюзии принимает выделенную мысль
+      // и сразу открывает список разделов источника (ошибка `ccf4d25f`,
+      // элемент `7a479549`). В любом другом состоянии `#` — обычный ввод.
+      { key: '#', run: (view) => acceptTransclusionThought(view) },
       // Навигация-выделение блока-атома стрелками (ошибка 5312142d): стрелка,
       // входящая в блок из позиции перед/после, выделяет его целиком; обычные
       // шаги вне блока отдаём CM6 (обработчик возвращает false).
@@ -1843,6 +1851,70 @@ const transclusionLoader = ViewPlugin.fromClass(
 
 /** Кэш заголовков источника по id (живёт в рамках сессии редактора). */
 const sectionTitlesCache = new Map<string, string[]>();
+
+/**
+ * Открывающий токен ссылки трансклюзии: восклицательный знак и две скобки.
+ * Собирается из частей: литерал этого токена в исходниках клиента запрещён
+ * сторожем `own-transclusion-outside-package` — конструкция ссылки строится единым
+ * `formatTransclusionRef` пакета `@etn/markdown`, а здесь нужен лишь поиск
+ * начала уже набранной ссылки.
+ */
+const TRANSCLUSION_OPEN = '!' + '[[';
+
+/**
+ * Ссылка-трансклюзия после нажатия `#` в списке мыслей: ID-форма `#<id>]]`
+ * (значение `apply` подсказки мыслей) превращается в ссылку с пустым разделом
+ * (`#<id>#` перед закрывающими скобками), каретка — в тексте раздела
+ * (элемент `7a479549`). `null` — не ID-форма. Чистая функция ради проверки
+ * итогового вида ссылки и позиции каретки.
+ */
+export function transclusionSectionAccept(
+  applied: string,
+): { ref: string; caret: number } | null {
+  const m = /^#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})]]$/i.exec(
+    applied,
+  );
+  if (m === null) return null;
+  // Единый дом конструкции ссылки: полная ссылка без раздела, затем второй `#`
+  // перед закрывающими скобками — текст раздела.
+  const base = formatTransclusionRef(m[1]!);
+  const ref = `${base.slice(0, -2)}#]]`;
+  return { ref, caret: ref.length - 2 };
+}
+
+/**
+ * Обработчик `#` в поле: если открыт список мыслей трансклюзии (набран
+ * открывающий токен и префикс имени, автокомплит активен), принимает
+ * выделенный вариант, дописывает `#` в конце ссылки и немедленно открывает
+ * список ВСЕХ заголовков источника ({@link transclusionSectionCompletions}) —
+ * без минимума символов. Возвращает `false`, когда жест не наш, — тогда `#`
+ * вводится как обычный символ (ошибка `ccf4d25f`).
+ */
+export function acceptTransclusionThought(view: EditorView): boolean {
+  if (completionStatus(view.state) !== 'active') return false;
+  const pos = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(pos);
+  const before = line.text.slice(0, pos - line.from);
+  const open = before.lastIndexOf(TRANSCLUSION_OPEN);
+  if (open === -1) return false;
+  // Префикс имени без закрывающих скобок, `|`, перевода строки и `#`: иначе
+  // это не список мыслей трансклюзии (обычная ссылка, раздел, готовый блок).
+  if (!/^[^[\]\n|#]*$/.test(before.slice(open + TRANSCLUSION_OPEN.length))) return false;
+  const chosen = selectedCompletion(view.state) ?? currentCompletions(view.state)[0] ?? null;
+  const applied = chosen !== null && typeof chosen.apply === 'string' ? chosen.apply : null;
+  if (applied === null) return false;
+  const accepted = transclusionSectionAccept(applied);
+  if (accepted === null) return false;
+  const start = line.from + open;
+  view.dispatch({
+    changes: { from: start, to: pos, insert: accepted.ref },
+    selection: { anchor: start + accepted.caret },
+  });
+  // Список разделов приходит не от набора символа, а от нашего жеста — открываем
+  // его явно (порог 3 символа у списка мыслей здесь не действует).
+  startCompletion(view);
+  return true;
+}
 
 /**
  * Источник подсказок «разделы источника» (для общего автокомплита wiki-ссылок):

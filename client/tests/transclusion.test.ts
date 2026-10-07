@@ -37,6 +37,7 @@ import {
   transclusionLinkLabel,
   transclusionMenuHandlers,
   transclusionRefStartingAt,
+  transclusionSectionAccept,
   transclusionState,
   type TransclusionSource,
   type TransclusionSourceLoader,
@@ -1262,4 +1263,24 @@ test('«Сохранить трансклюзию»: каретка за бло�
 
   assert.equal(count(), 1, 'кнопка «Сохранить трансклюзию» завершает правку одной транзакцией');
   assertBlockFinished(view.state, base.containerDoc, ref);
+});
+
+// ---------------------------------------------------------------------------
+// Нажатие `#` в списке мыслей (ошибка ccf4d25f, элемент 7a479549)
+// ---------------------------------------------------------------------------
+
+test('принятие мысли по `#`: ссылка переходит в режим текста раздела', () => {
+  const accepted = transclusionSectionAccept(`#${ID_A}]]`);
+  assert.ok(accepted !== null);
+  // Полная ссылка без раздела + второй `#` перед закрывающими скобками; каретка
+  // в пустом тексте раздела (перед `]]`), чтобы сразу открыть список заголовков.
+  assert.equal(accepted.ref, `![[#${ID_A}#]]`);
+  assert.equal(accepted.caret, accepted.ref.length - 2);
+  assert.equal(accepted.ref.slice(accepted.caret), ']]');
+});
+
+test('принятие мысли по `#`: не-ID форма не трогается', () => {
+  assert.equal(transclusionSectionAccept('какое-то имя'), null);
+  assert.equal(transclusionSectionAccept(`#${ID_A}`), null);
+  assert.equal(transclusionSectionAccept(''), null);
 });
