@@ -20,6 +20,7 @@
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
+import path from 'node:path';
 
 import {
   EtnError,
@@ -77,6 +78,7 @@ import {
   RestThoughtUpdateBody,
 } from '../contracts.js';
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
+import { networkDir } from '../paths.js';
 import { listComments } from '../domain/comment-service.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
 import { assertLibraryIcon } from '../domain/icon-view.js';
@@ -103,7 +105,7 @@ import {
   resolveThoughts,
   updateThought,
 } from '../domain/thought-service.js';
-import { copyThoughtsBatch } from '../domain/thought-copy-service.js';
+import { copyThoughtsBatch, makeCopyFileCopier } from '../domain/thought-copy-service.js';
 import {
   applyBulkThoughtOp,
   BULK_THOUGHT_OPS,
@@ -821,8 +823,18 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const input = parseThoughtCopyBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Межсетевое копирование: файлы вложений физически переносятся в
+        // сеть-получатель (ошибка b83a7d89). `path.basename` отсекает
+        // traversal в `source_network_id` — у реального id (UUID) это no-op.
+        const sourceAttachmentsDir = path.join(
+          networkDir(deps.dataDir, path.basename(input.source_network_id)),
+          'attachments',
+        );
+        const fileCopier = makeCopyFileCopier(ndb, input, sourceAttachmentsDir, (message, details) =>
+          app.appLogger.warn({ ...details }, message),
+        );
         const result = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
-          const copied = copyThoughtsBatch(ndb, input, req.auth!.user.id);
+          const copied = copyThoughtsBatch(ndb, input, req.auth!.user.id, { fileCopier });
           const events: AnyWriteEvent[] = [];
           const activity: WriteActivityEntry[] = [];
           // Real-time: emit a `thought.created` for every new thought and a
@@ -840,6 +852,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           }
           return { result: copied, events, activity };
         });
+        // Файлы вложений пишутся после успешного коммита БД: при откате
+        // транзакции осиротевших файлов не остаётся (ошибка b83a7d89).
+        fileCopier?.commit();
         sendSuccess(reply, result);
       },
     );

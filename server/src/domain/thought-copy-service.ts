@@ -33,6 +33,7 @@ import {
   type LinkStyle,
   type PropertyValueValue,
   type Thought,
+  type ThoughtCopyAttachment,
   type ThoughtCopyInput,
   type ThoughtCopyItem,
   type ThoughtCopyLink,
@@ -41,7 +42,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { createAttachment } from './attachment-service.js';
+import { AttachmentFileCopier, createAttachment } from './attachment-service.js';
 import { createComment } from './comment-service.js';
 import { createLink } from './link-service.js';
 import { resolveLinkTypeIdByName } from './link-type-service.js';
@@ -141,6 +142,37 @@ function resolveProperties(
 // ---------------------------------------------------------------------------
 
 /**
+ * Options of {@link copyThoughtsBatch}.
+ */
+export interface CopyBatchOptions {
+  /**
+   * Планировщик физического копирования файлов при **межсетевом** копировании
+   * ({@link AttachmentFileCopier}, ошибка b83a7d89). Задан — `kind='file'`
+   * вложения получают уникальные копии в целевой сети; вызывающий обязан
+   * вызвать `fileCopier.commit()` ПОСЛЕ фиксации БД. Не задан — пути вложений
+   * переносятся как есть (внутрисетевое копирование, единственный файл шарится).
+   */
+  fileCopier?: AttachmentFileCopier | null;
+}
+
+/**
+ * Собрать планировщик копирования файлов для операции копирования: `null`,
+ * когда копирование внутри одной сети (`input.source_network_id` совпадает с
+ * целевой) или каталог вложений источника неизвестен. Единая точка принятия
+ * решения «межсетевое ли копирование» — по `source_network_id`, без эвристик.
+ */
+export function makeCopyFileCopier(
+  ndb: NetworkDb,
+  input: ThoughtCopyInput,
+  sourceAttachmentsDir: string | undefined,
+  warn?: (message: string, details?: Record<string, unknown>) => void,
+): AttachmentFileCopier | null {
+  if (sourceAttachmentsDir === undefined) return null;
+  if (input.source_network_id === ndb.networkId) return null;
+  return new AttachmentFileCopier(ndb, sourceAttachmentsDir, warn);
+}
+
+/**
  * Materialise a clipboard snapshot inside `ndb`. Throws on the parent-thought
  * validation only — individual thought failures (type unmappable, attachment
  * failure) degrade silently per the spec (the field is cleared, the rest of
@@ -150,6 +182,7 @@ export function copyThoughtsBatch(
   ndb: NetworkDb,
   input: ThoughtCopyInput,
   actorUserId: string,
+  options: CopyBatchOptions = {},
 ): ThoughtCopyResult {
   // Если parent_thought_id задан, проверяем его существование up-front —
   // каждая новая мысль получает parent-link к нему и мы хотим точный 404,
@@ -159,6 +192,11 @@ export function copyThoughtsBatch(
   if (input.parent_thought_id !== '') {
     getThoughtOrThrow(ndb, input.parent_thought_id);
   }
+
+  // Межсетевое копирование определяется строго по сети-источнику снапшота
+  // (см. makeCopyFileCopier). Файлы вложений копируются физически только в этом
+  // случае; внутри сети единственный экземпляр файла шарится между строками.
+  const copier = options.fileCopier ?? null;
 
   return ndb.transaction(() => {
     const thoughtIdMap: Record<string, string> = {};
@@ -187,7 +225,7 @@ export function copyThoughtsBatch(
     }
 
     for (const item of input.thoughts) {
-      const created = createOneThought(ndb, item, actorUserId, createdAttachments);
+      const created = createOneThought(ndb, item, actorUserId, createdAttachments, copier);
       if (created === null) continue;
       const { sourceId, thought } = created;
       thoughtIdMap[sourceId] = thought.id;
@@ -212,7 +250,7 @@ export function copyThoughtsBatch(
     }
 
     for (const link of input.links) {
-      const newLink = createOneLink(ndb, link, thoughtIdMap, actorUserId, createdAttachments);
+      const newLink = createOneLink(ndb, link, thoughtIdMap, actorUserId, createdAttachments, copier);
       if (newLink === null) continue;
       linkIdMap[linkIdentity(link)] = newLink.id;
       createdLinks.push(newLink);
@@ -262,6 +300,7 @@ function createOneThought(
   item: ThoughtCopyItem,
   actorUserId: string,
   createdAttachments: Attachment[],
+  copier: AttachmentFileCopier | null,
 ): { sourceId: string; thought: Thought; defaultLinkIds: string[] } | null {
   const snap = item.thought;
   const trimmedTitle = snap.title.trim();
@@ -332,7 +371,7 @@ function createOneThought(
           {
             kind: a.kind,
             url: a.url ?? null,
-            file_path: a.file_path ?? null,
+            file_path: resolveCopyFilePath(a, copier),
             file_size: a.file_size ?? null,
             mime_type: a.mime_type ?? null,
             title: a.title ?? null,
@@ -389,6 +428,7 @@ function createOneLink(
   thoughtIdMap: Record<string, string>,
   actorUserId: string,
   createdAttachments: Attachment[],
+  copier: AttachmentFileCopier | null,
 ): Link | null {
   const sourceId = thoughtIdMap[link.source_id];
   const targetId = thoughtIdMap[link.target_id];
@@ -436,7 +476,7 @@ function createOneLink(
           {
             kind: a.kind,
             url: a.url ?? null,
-            file_path: a.file_path ?? null,
+            file_path: resolveCopyFilePath(a, copier),
             file_size: a.file_size ?? null,
             mime_type: a.mime_type ?? null,
             title: a.title ?? null,
@@ -451,6 +491,21 @@ function createOneLink(
     }
   }
   return created;
+}
+
+/**
+ * `file_path` для копии вложения. При межсетевом копировании (`copier` задан)
+ * файл `kind='file'` из каталога сети-источника ставится в очередь на
+ * физическое копирование в сеть-получатель и получает уникальное имя; иначе
+ * путь переносится как есть. `kind='url'` файлового пути не имеет.
+ */
+function resolveCopyFilePath(
+  a: ThoughtCopyAttachment,
+  copier: AttachmentFileCopier | null,
+): string | null {
+  const filePath = a.file_path ?? null;
+  if (filePath === null || copier === null || a.kind !== 'file') return filePath;
+  return copier.resolveFilePath(filePath);
 }
 
 /** Re-read a freshly created link so its `version`/`updated_at` are exact. */

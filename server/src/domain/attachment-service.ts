@@ -14,7 +14,15 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -549,6 +557,125 @@ export function createAttachmentFromInput(
     },
     actorUserId,
   );
+}
+
+/**
+ * Планировщик физического копирования файлов вложений при **межсетевом**
+ * копировании (ошибка b83a7d89 «При копировании мысли между мыслесетями
+ * теряются вложения»).
+ *
+ * Файл-источник лежит в каталоге вложений СЕТИ-ИСТОЧНИКА; ссылка на него в
+ * сети-получателе не работает — `getAttachmentRawByPath` отдаёт только файлы
+ * внутри каталога ТЕКУЩЕЙ (целевой) сети, отсюда HTTP 404 «файл вложения не
+ * найден». Поэтому при межсетевом копировании файл физически дублируется в
+ * `<target net>/attachments/`, а копия вложения ссылается на дубль. При
+ * копировании внутри одной сети файл НЕ дублируется (`file_path` переносится
+ * как есть) — единственный экземпляр сохраняется.
+ *
+ * **Схема имён копий** (в духе импортёра `.etnx`, docs/02 §9.3 п.7, и
+ * `createAttachmentFile`): `<stem>-<n><ext>`, где `n` — наименьшее целое ≥ 2,
+ * при котором имени ещё нет ни среди зарезервированных в этом батче, ни в
+ * каталоге целевой сети. Исходный файл остаётся «версией 1», первая копия —
+ * «-2», следующая — «-3» и т.д. Схема детерминирована (зависит только от
+ * состояния каталога) и не даёт столкновений.
+ *
+ * **Отсутствующий исходный файл** (метаданные есть, файла нет) — не ошибка:
+ * {@link resolveFilePath} возвращает исходный путь без изменений (метаданные
+ * как есть) и зовёт `warn`, чтобы дефект был наблюдаем в логе.
+ *
+ * **Транзакционность.** `resolveFilePath` только РЕЗЕРВИРУЕТ будущее имя и
+ * копит пары «источник → назначение»; физическая запись идёт в {@link commit},
+ * который вызывающий выполняет ПОСЛЕ успешной фиксации БД. При откате
+ * транзакции файлы ещё не созданы — осиротевших файлов не остаётся, удалять
+ * ничего не нужно.
+ */
+export class AttachmentFileCopier {
+  /** sourceResolvedPath → destPath (дедуп: один файл — одна копия на батч). */
+  private readonly copied = new Map<string, string>();
+  /** Отложенные записи: источник → назначение. */
+  private readonly pending: Array<{ source: string; dest: string }> = [];
+  /** Имена, уже занятые в этом батче (проверяются до `existsSync`). */
+  private readonly reserved = new Set<string>();
+
+  constructor(
+    private readonly ndb: NetworkDb,
+    /** Абсолютный каталог вложений СЕТИ-ИСТОЧНИКА. */
+    private readonly sourceDir: string,
+    /** Приёмник нефатальных замечаний (отсутствующий файл, сбой записи). */
+    private readonly warn?: (message: string, details?: Record<string, unknown>) => void,
+  ) {}
+
+  /** Каталог вложений целевой сети (рядом с её `data.db`). */
+  private targetDir(): string {
+    return path.join(path.dirname(this.ndb.dbPath), 'attachments');
+  }
+
+  /**
+   * Путь для копии вложения. Файл из каталога сети-источника ставится в
+   * очередь на копирование и получает уникальное имя в целевой сети; всё
+   * прочее (клиентский локальный путь, отсутствующий файл) возвращается как
+   * есть.
+   */
+  resolveFilePath(filePath: string): string {
+    const resolvedSource = path.resolve(filePath);
+    const resolvedSourceDir = path.resolve(this.sourceDir);
+    const cached = this.copied.get(resolvedSource);
+    if (cached !== undefined) return cached;
+    // Переносим только файлы, реально лежащие в каталоге вложений источника
+    // (та же граница безопасности, что у `getAttachmentRawByPath`): чужой
+    // путь не читаем, метаданные остаются как есть.
+    if (!resolvedSource.startsWith(resolvedSourceDir + path.sep)) return filePath;
+    if (!isResolvableFile(resolvedSource)) {
+      // Кэшируем и «не найден», чтобы один и тот же файл не сыпал warn'ами
+      // при нескольких строках вложений.
+      this.copied.set(resolvedSource, filePath);
+      this.warn?.('вложение: исходный файл не найден, копия не создана', {
+        file_path: filePath,
+      });
+      return filePath;
+    }
+    const dest = this.reserveName(path.basename(resolvedSource));
+    this.copied.set(resolvedSource, dest);
+    this.pending.push({ source: resolvedSource, dest });
+    return dest;
+  }
+
+  /**
+   * Записать все отложенные копии. Вызывать ПОСЛЕ фиксации БД. Best-effort: сбой
+   * отдельного файла логируется и не роняет операцию (строка вложения уже
+   * создана; недостачу видно в логе).
+   */
+  commit(): void {
+    if (this.pending.length === 0) return;
+    mkdirSync(this.targetDir(), { recursive: true });
+    for (const { source, dest } of this.pending) {
+      try {
+        copyFileSync(source, dest);
+      } catch (err) {
+        this.warn?.('вложение: не удалось скопировать файл в целевую сеть', {
+          source,
+          dest,
+          error: String(err),
+        });
+      }
+    }
+    this.pending.length = 0;
+  }
+
+  /** Наименьшее свободное имя `<stem>-<n><ext>` (n ≥ 2) в целевом каталоге. */
+  private reserveName(basename: string): string {
+    const targetDir = this.targetDir();
+    const ext = path.extname(basename);
+    const stem = safeNameBase(basename.slice(0, basename.length - ext.length)) || 'file';
+    const safeExt = ext.replace(/[^a-zA-Z0-9.]/g, '');
+    for (let n = 2; ; n += 1) {
+      const name = `${stem}-${n}${safeExt}`;
+      if (this.reserved.has(name)) continue;
+      if (existsSync(path.join(targetDir, name))) continue;
+      this.reserved.add(name);
+      return path.join(targetDir, name);
+    }
+  }
 }
 
 /**

@@ -13,6 +13,8 @@
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import {
@@ -31,7 +33,7 @@ import { createThought } from '../src/domain/thought-service.js';
 import { createLink } from '../src/domain/link-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
-import { createAttachment, listAttachments } from '../src/domain/attachment-service.js';
+import { createAttachment, createAttachmentFile, listAttachments } from '../src/domain/attachment-service.js';
 import { createComment } from '../src/domain/comment-service.js';
 import {
   createNetworkProperty,
@@ -847,6 +849,48 @@ describe('etn.import.* + etn.export.subgraph { format: "etnx" } (0.7.2 P3)', {
       }
     } finally {
       await closeMcpContext(ctx);
+    }
+  });
+});
+
+// Регресс ошибки b83a7d89: при межсетевом копировании подграфа файл вложения
+// должен физически переноситься в сеть-получатель (MCP-путь copy_subtree).
+describe('etn.thoughts.copy_subtree — вложения (b83a7d89)', { skip: !nativeAvailable() }, () => {
+  it('переносит файл вложения в целевую сеть', async () => {
+    const w = await buildPair();
+    try {
+      const srcNdb = openNetworkDb(w.src.dataDir, w.src.networkId);
+      const root = createThought(srcNdb, { title: 'Вложение-корень' }, w.src.adminId).id;
+      const stored = createAttachmentFile(
+        srcNdb,
+        'thought',
+        root,
+        { title: 'Файл', mime_type: 'text/plain', data_base64: Buffer.from('subtree bytes').toString('base64') },
+        w.src.adminId,
+      );
+      assert.ok(existsSync(stored.file_path!));
+
+      const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [root],
+        max_depth: 1,
+        duplicate_policy: 'create_always',
+        include: ['thought', 'attachments'],
+      });
+      assert.equal(result.isError, undefined, toolText(result));
+
+      const dstNdb = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+      const dstId = toolJson<{ thought_id_map: Record<string, string> }>(result).thought_id_map[root]!;
+      const atts = listAttachments(dstNdb, 'thought', dstId);
+      assert.equal(atts.length, 1);
+      const copied = atts[0]!;
+      assert.notEqual(copied.file_path, stored.file_path);
+      assert.equal(path.dirname(copied.file_path!), path.join(w.dst.dataDir, 'networks', w.dst.networkId, 'attachments'));
+      assert.ok(existsSync(copied.file_path!), 'файл копии должен существовать');
+      assert.equal(readFileSync(copied.file_path!).toString(), 'subtree bytes');
+    } finally {
+      await w.closeAll();
     }
   });
 });
