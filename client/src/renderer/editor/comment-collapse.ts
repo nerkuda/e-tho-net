@@ -552,12 +552,20 @@ export function decorateCommentView(
       addSection({ id: `h${level}#${n}`, anchor: node, hide }, scopeState, path.join('#'));
     }
 
-    // Вложенные блоки: счётчик растёт для каждого обнаруженного блока (как в
-    // правке), маркер — у родительского пункта, скрывается весь блок.
-    let nested = 0;
+    // Вложенные блоки: один РОДИТЕЛЬСКИЙ пункт может держать несколько
+    // вложенных блоков — на него ставится РОВНО ОДИН индикатор (дедуп по
+    // якорю, как в правке), который скрывает ВСЕ эти блоки. Иначе маркеры
+    // перекрылись бы в одной точке (коллизия якоря).
+    const nestedByAnchor = new Map<HTMLElement, HTMLElement[]>();
     for (const { block, anchor } of nestedBlocks) {
+      const list = nestedByAnchor.get(anchor);
+      if (list === undefined) nestedByAnchor.set(anchor, [block]);
+      else list.push(block);
+    }
+    let nested = 0;
+    for (const [anchor, blocks] of nestedByAnchor) {
       nested += 1;
-      addSection({ id: `n#${nested}`, anchor, hide: [block] }, scopeState, path.join('#'));
+      addSection({ id: `n#${nested}`, anchor, hide: blocks }, scopeState, path.join('#'));
     }
 
     // Блоки трансклюзий — своё состояние на каждый путь вставки (требование
@@ -747,17 +755,30 @@ function buildSections(
     });
   });
 
-  // Вложенные блоки: тело — весь блок, индикатор — у строки РОДИТЕЛЬСКОГО
-  // пункта, под которым лежит блок (ошибка 6007a6ec), а не у первой строки
-  // самого вложенного списка/цитаты.
-  let nested = 0;
+  // Вложенные блоки: индикатор — у строки РОДИТЕЛЬСКОГО пункта, под которым
+  // лежат блоки (ошибка 6007a6ec). У одного пункта может быть НЕСКОЛЬКО
+  // вложенных блоков (под-список и цитата и т.п.) — на пункт ставится РОВНО
+  // ОДИН индикатор (дедуп по строке-якорю), который скрывает объединение тел
+  // всех этих блоков. Иначе несколько маркеров встали бы в одну точку и
+  // перекрылись бы / залезли на текст (коллизия якоря).
+  const nestedByAnchor = new Map<number, { bodyFrom: number; bodyTo: number }>();
   for (const block of blocks) {
-    nested += 1;
     const anchorFrom = doc.lineAt(block.anchorFrom).from;
     const bodyFrom = doc.lineAt(block.from).from;
     const bodyTo = doc.lineAt(block.to).to;
     if (bodyTo <= bodyFrom) continue;
-    sections.push({ id: `n#${nested}`, anchorFrom, bodyFrom, bodyTo, path });
+    const existing = nestedByAnchor.get(anchorFrom);
+    if (existing === undefined) {
+      nestedByAnchor.set(anchorFrom, { bodyFrom, bodyTo });
+    } else {
+      existing.bodyFrom = Math.min(existing.bodyFrom, bodyFrom);
+      existing.bodyTo = Math.max(existing.bodyTo, bodyTo);
+    }
+  }
+  let nested = 0;
+  for (const [anchorFrom, body] of nestedByAnchor) {
+    nested += 1;
+    sections.push({ id: `n#${nested}`, anchorFrom, bodyFrom: body.bodyFrom, bodyTo: body.bodyTo, path });
   }
 
   return sections;

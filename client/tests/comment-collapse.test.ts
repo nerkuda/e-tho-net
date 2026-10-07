@@ -240,6 +240,86 @@ describe('сворачивание разделов комментария (edit
     assert.equal(li.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false, 'родительский пункт виден');
   });
 
+  it('просмотр: несколько вложенных блоков в одном пункте → один маркер (6007a6ec)', async () => {
+    installShim();
+    installStorage();
+    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
+
+    // Пункт `- один` держит ДВА вложенных блока: под-список и цитату.
+    const view = new ShimElement('div');
+    const outer = new ShimElement('ul');
+    const li = new ShimElement('li');
+    const inner = new ShimElement('ul');
+    const innerLi = new ShimElement('li');
+    inner.append(innerLi);
+    const quote = new ShimElement('blockquote');
+    const quoteP = new ShimElement('p');
+    quote.append(quoteP);
+    li.append(inner, quote);
+    outer.append(li);
+    view.append(outer);
+
+    const state = mod.createCommentCollapseState('net', 'comment:c1');
+    mod.decorateCommentView(view as unknown as HTMLElement, state);
+
+    // Ровно ОДИН маркер на родительском пункте — без коллизии/перекрытия.
+    assert.equal(countByClass(view, mod.COLLAPSE_TOGGLE_CLASS), 1);
+    const marker = markerById(view, 'n#1');
+    assert.ok(marker, 'маркер n#1 существует');
+    assert.equal(marker?.parent, rail(view), 'маркер в полосе-гаттере');
+
+    // Единственный маркер сворачивает ОБА вложенных блока, пункт виден.
+    state.setCollapsed('n#1', true);
+    mod.decorateCommentView(view as unknown as HTMLElement, state);
+    assert.equal(inner.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true, 'под-список скрыт');
+    assert.equal(quote.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true, 'цитата скрыта');
+    assert.equal(li.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false, 'пункт виден');
+    assert.equal(outer.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false);
+  });
+
+  it('редактор: несколько вложенных блоков в одном пункте → один маркер (6007a6ec)', async () => {
+    installShim();
+    installStorage();
+    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
+
+    const doc = '- один\n  - вложенный\n  > цитата в пункте\n';
+    const collapse = mod.createCommentCollapseState('net', undefined);
+    const state = EditorState.create({
+      doc,
+      extensions: [
+        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+        mod.commentCollapseExtension(collapse),
+      ],
+    });
+
+    // Один раздел n#1 на родительский пункт; тело — объединение обоих блоков.
+    const sections = mod.commentCollapseInternals.collectSections(state);
+    assert.deepEqual(
+      sections.map((s) => s.id),
+      ['n#1'],
+      'два вложенных блока одного пункта слиты в один раздел',
+    );
+    const section = sections[0];
+    assert.equal(section?.anchorFrom, doc.indexOf('- один'), 'якорь — строка родителя');
+    assert.equal(section?.bodyFrom, doc.indexOf('  - вложенный'), 'тело — с под-списка');
+    assert.equal(
+      section?.bodyTo,
+      doc.indexOf('цитата в пункте') + 'цитата в пункте'.length,
+      'тело — до конца цитаты (объединение)',
+    );
+
+    // Один маркер гаттера (без коллизии).
+    assert.equal(gutterMarkerCount(state), 1);
+
+    // Сворачивание скрывает ОБА вложенных блока, родительскую строку — нет.
+    const collapsed = state.update({
+      effects: mod.setCollapseEffect.of({ id: 'n#1', collapsed: true }),
+    }).state;
+    assert.equal(mod.isCollapsedHiddenAt(collapsed, doc.indexOf('вложенный')), true);
+    assert.equal(mod.isCollapsedHiddenAt(collapsed, doc.indexOf('цитата')), true);
+    assert.equal(mod.isCollapsedHiddenAt(collapsed, doc.indexOf('- один')), false);
+  });
+
   it('редактор: декорации заголовков и вложенных блоков, пропуск скрытых md-live', async () => {
     installShim();
     installStorage();
