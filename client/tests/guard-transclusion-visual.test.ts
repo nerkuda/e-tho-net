@@ -10,7 +10,11 @@
  *   2. уровней ровно пять (глубина ADR 1..5) — селекторы
  *      `[data-transclusion-depth="1".."5"]`;
  *   3. анимация блока/ссылки идёт через токен `--md-transclusion-anim`, а сам
- *      токен обнуляется при `prefers-reduced-motion: reduce`.
+ *      токен обнуляется при `prefers-reduced-motion: reduce`;
+ *   4. индикатор-«замочек» (`cm-transclusion-lock`) — парное правило правки и
+ *      просмотра в ОДНОМ правиле, а блок просмотра (`.md-transclusion`) —
+ *      якорь (`position: relative`) для абсолютного индикатора (ошибка
+ *      `f60f99e0`).
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -29,6 +33,26 @@ function ruleBody(selector: string): string {
   const open = CSS.indexOf('{', at);
   const close = CSS.indexOf('}', open);
   return CSS.slice(open + 1, close);
+}
+
+/** Прелюдии (селекторы) правил верхнего уровня собранного CSS. */
+function topLevelPreludes(css: string): string[] {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const preludes: string[] = [];
+  let depth = 0;
+  let buffer = '';
+  for (const ch of text) {
+    if (ch === '{') {
+      if (depth === 0) preludes.push(buffer);
+      depth++;
+    } else if (ch === '}') {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) buffer = '';
+    } else if (depth === 0) {
+      buffer += ch;
+    }
+  }
+  return preludes;
 }
 
 describe('guard: визуальные слои блока трансклюзии (a2b68d72, ADR c425202a)', () => {
@@ -72,6 +96,29 @@ describe('guard: визуальные слои блока трансклюзии
       reduced,
       /--md-transclusion-anim\s*:\s*0ms/,
       'токен не обнулён при prefers-reduced-motion — анимация не учла бы reduce-motion',
+    );
+  });
+
+  it('«замочек» — парное правило правки и просмотра, блок просмотра якорный (f60f99e0)', () => {
+    // Индикатор-«замочек» обязан быть ОДНИМ правилом на оба режима (паритет с
+    // парными правилами `.cm-md-*` ↔ `.comment-view`, сторож
+    // comment-style-parity): правка внутри `.cm-editor`, просмотр внутри
+    // `.comment-view`. Разные правила разошлись бы видом.
+    const shared = topLevelPreludes(CSS).find(
+      (prelude) =>
+        prelude.includes('.cm-editor .cm-transclusion-lock') &&
+        prelude.includes('.comment-view .cm-transclusion-lock'),
+    );
+    assert.ok(
+      shared !== undefined,
+      'правило .cm-transclusion-lock обязано быть парным: .cm-editor и .comment-view в одном правиле',
+    );
+    // Индикатор позиционируется абсолютно внутри блока — у блока просмотра
+    // обязан быть якорь (`position: relative`), иначе «замочек» уедет наружу.
+    assert.match(
+      ruleBody('.md-transclusion'),
+      /position:\s*relative/,
+      'блок просмотра .md-transclusion обязан быть якорем (position: relative) для «замочка»',
     );
   });
 
