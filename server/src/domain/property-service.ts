@@ -3851,7 +3851,7 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     .prepare(
       `SELECT pv.property_id AS property_id, p.name AS property_key,
               t.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,
-              t.active,
+              t.icon_color, t.active,
               t.fg_color, t.bg_color, t.font_bold, t.font_italic,
               t.font_underline, t.font_strike, t.font_manual
        FROM property_values_v pv
@@ -3870,6 +3870,7 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    icon_color: string | null;
     active: number;
     fg_color: string | null;
     bg_color: string | null;
@@ -3902,7 +3903,7 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     const linkRows = ndb
       .prepare(
         `SELECT t.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,
-                t.active, t.fg_color, t.bg_color, t.font_bold, t.font_italic,
+                t.icon_color, t.active, t.fg_color, t.bg_color, t.font_bold, t.font_italic,
                 t.font_underline, t.font_strike, t.font_manual
            FROM links_v l
            JOIN thoughts_v t ON t.id = l.${refCol}

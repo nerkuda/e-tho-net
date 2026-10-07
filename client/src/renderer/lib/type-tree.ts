@@ -191,6 +191,11 @@ export function expandTypeIdsToSubtree(
 export interface ResolvedThoughtVisual {
   icon: string | null;
   icon_kind: ThoughtType['icon_kind'];
+  /**
+   * Цвет символа иконки, унаследованный ВМЕСТЕ с иконкой: берётся у того типа
+   * цепочки, что дал иконку (0.12.1, задача 4105bd6a). `null` — цвет не задан.
+   */
+  icon_color: string | null;
   fg_color: string | null;
   bg_color: string | null;
   font_bold: boolean | null;
@@ -214,6 +219,8 @@ export function resolveThoughtTypeVisual(
   return {
     icon: withIcon?.icon ?? null,
     icon_kind: withIcon?.icon_kind ?? 'emoji',
+    // Цвет наследуется ВМЕСТЕ с иконкой — у того же типа, что дал иконку.
+    icon_color: withIcon?.icon_color ?? null,
     fg_color: chain.find((t) => t.fg_color !== null)?.fg_color ?? null,
     bg_color: chain.find((t) => t.bg_color !== null)?.bg_color ?? null,
     font_bold: chain.find((t) => t.font_bold !== null)?.font_bold ?? null,

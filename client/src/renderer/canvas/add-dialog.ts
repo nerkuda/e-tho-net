@@ -205,6 +205,7 @@ function thoughtToCandidate(thought: Thought): DuplicateHit {
     type_id: thought.type_id,
     icon: thought.icon,
     icon_kind: thought.icon_kind,
+    icon_color: thought.icon_color,
     fg_color: thought.fg_color,
     bg_color: thought.bg_color,
     font_bold: thought.font_bold,

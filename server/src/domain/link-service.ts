@@ -127,6 +127,8 @@ interface IncidentLinkRow {
   other_icon: string | null;
   other_icon_kind: string;
   other_icon_attachment_id: string | null;
+  /** HEX-цвет символа иконки противоположной мысли (задача 4105bd6a). */
+  other_icon_color: string | null;
   other_active: number;
   other_marked_for_deletion: number;
   other_fg_color: string | null;
@@ -150,6 +152,7 @@ function incidentRowToRef(row: IncidentLinkRow): ThoughtRef {
     icon: row.other_icon,
     icon_kind: row.other_icon_kind as IconKind,
     icon_attachment_id: row.other_icon_attachment_id,
+    icon_color: row.other_icon_color,
     active: row.other_active === 1,
     marked_for_deletion: row.other_marked_for_deletion === 1,
     fg_color: row.other_fg_color,
@@ -851,6 +854,7 @@ export function listLinksByThought(
               CASE WHEN l.target_id = ? THEN l.source_id ELSE l.target_id END AS other_id,
               t.title AS other_title, t.type_id AS other_type_id, t.icon AS other_icon,
               t.icon_kind AS other_icon_kind, t.icon_attachment_id AS other_icon_attachment_id,
+              t.icon_color AS other_icon_color,
               t.active AS other_active,
               t.marked_for_deletion AS other_marked_for_deletion,
               t.fg_color AS other_fg_color, t.bg_color AS other_bg_color,

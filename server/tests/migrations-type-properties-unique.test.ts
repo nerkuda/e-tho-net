@@ -42,7 +42,6 @@ import { BASE_LAYER_ID } from '@etn/shared';
 import { NetworkDb, registerMigrationHelpers } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
-import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { networkMigrationsDir } from '../src/paths.js';
 import { networkMigrationFilesFrom } from './migration-files.js';
 
@@ -125,6 +124,22 @@ function pre043Db(): { db: Database.Database; ndb: NetworkDb } {
 
 /** Идентификатор живой привязки — цель `ON CONFLICT` в доменном коде. */
 const ON_CONFLICT_TARGET = 'owner_type, owner_id, property_id, layer_id';
+
+/**
+ * Сеет тип мысли сырым INSERT. Доменный `createThoughtType` тут не годится:
+ * он пишет колонки, добавленные миграциями ПОСЛЕ 043 (например, `icon_color`
+ * миграции 049), которых в схеме «до 043» ещё нет. Миграционному тесту нужна
+ * лишь валидная строка-владелец привязки — состав колонок несуществен.
+ */
+function seedThoughtType(db: Database.Database, id: string, name: string): { id: string } {
+  db.prepare(
+    `INSERT INTO thought_types (id, layer_id, name, name_key, parent_id, is_root,
+                                icon_kind, version, created_at, updated_at, created_by)
+     VALUES (?, ?, ?, ?, NULL, 0, 'emoji', 1,
+             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)`,
+  ).run(id, BASE_LAYER_ID, name, name.toLowerCase(), ACTOR);
+  return { id };
+}
 
 /** Список табличных UNIQUE-ограничений `type_properties` (нормализованный). */
 function uniqueKeys(db: Database.Database): string[] {
@@ -230,7 +245,7 @@ describe('migration 043: канонический UNIQUE-ключ type_propertie
   it('регрессия e7dfb36a: «пострадавший» ключ ломает привязку, 043 её чинит', () => {
     const { db, ndb } = pre043Db();
     try {
-      const type = createThoughtType(ndb, { name: 'Тип-репро' }, ACTOR);
+      const type = seedThoughtType(db, ACTOR, 'Тип-репро');
       toAffectedShape(db);
 
       // Симптом: SQLite не находит цель ON CONFLICT — это SQLITE_ERROR, а не
@@ -275,7 +290,7 @@ describe('migration 043: канонический UNIQUE-ключ type_propertie
   it('каноничная база: пересборка не меняет ни строк, ни колонок, ни ограничений, ни индексов', () => {
     const { db, ndb } = pre043Db();
     try {
-      const type = createThoughtType(ndb, { name: 'Тип-канон' }, ACTOR);
+      const type = seedThoughtType(db, ACTOR, 'Тип-канон');
       const scalar = createTypeProperty(
         ndb,
         'thought_type',
@@ -307,9 +322,9 @@ describe('migration 043: канонический UNIQUE-ключ type_propertie
   });
 
   it('дедупликация: выживает source, иначе target, иначе минимальный pk', () => {
-    const { db, ndb } = pre043Db();
+    const { db } = pre043Db();
     try {
-      const type = createThoughtType(ndb, { name: 'Тип-дубли' }, ACTOR);
+      const type = seedThoughtType(db, ACTOR, 'Тип-дубли');
       toAffectedShape(db);
 
       // Группа 1: target с меньшим pk и source с большим — побеждает source
@@ -361,7 +376,7 @@ describe('migration 043: канонический UNIQUE-ключ type_propertie
     try {
       // `new NetworkDb` в pre043Db уже создал temp-представления `*_v` —
       // повторяем прогон файла на этом же соединении.
-      const type = createThoughtType(ndb, { name: 'Тип-слой' }, ACTOR);
+      const type = seedThoughtType(db, ACTOR, 'Тип-слой');
       createTypeProperty(ndb, 'thought_type', type.id, { key: 'поле', value_type: 'text' }, ACTOR);
       const before = snapshot(db);
 

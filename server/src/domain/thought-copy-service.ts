@@ -281,6 +281,7 @@ function createOneThought(
       type_id: typeId,
       icon,
       icon_kind: iconKind,
+      icon_color: snap.icon_color,
       active: snap.active,
       fg_color: snap.fg_color,
       bg_color: snap.bg_color,

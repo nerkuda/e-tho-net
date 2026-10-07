@@ -2470,7 +2470,7 @@ function openThoughtSettings(thought: Thought): void {
  */
 function changeThoughtIcon(thought: Thought): void {
   void showIconDialog({
-    current: { icon: thought.icon, kind: thought.icon_kind },
+    current: { icon: thought.icon, kind: thought.icon_kind, color: thought.icon_color ?? null },
     onPick: (result) => savePickedIcon(thought, result),
   });
 }
@@ -2502,6 +2502,7 @@ async function savePickedIcon(thought: Thought, result: IconPickResult): Promise
   return saveThought({
     icon: result.icon,
     icon_kind: result.kind,
+    icon_color: result.color,
     icon_attachment_id: attachmentId,
   });
 }

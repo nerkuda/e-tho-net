@@ -32,17 +32,23 @@ import {
 /** The original picked file, carried to the caller for the attachment upload. */
 export type IconPickSource = ResourceFileSource;
 
-/** Outcome of the dialog: an icon + kind (+ original file), or `null` to clear. */
+/** Outcome of the dialog: an icon + kind + colour (+ original file), or `null` to clear. */
 export interface IconPickResult {
   icon: string | null;
   kind: IconKind;
+  /**
+   * Цвет символа иконки (HEX `#rrggbb`) или `null` — цвет не задан
+   * (0.12.1, задача 4105bd6a). Задаётся только на вкладке «Библиотека»; для
+   * остальных видов и «Очистить» сбрасывается в `null`.
+   */
+  color: string | null;
   /** Present when the icon came from the OS file picker (L16). */
   source?: IconPickSource;
 }
 
 /** Opens the icon picker. `onPick` should persist the result and return success. */
 export function showIconDialog(opts: {
-  current: { icon: string | null; kind: IconKind };
+  current: { icon: string | null; kind: IconKind; color: string | null };
   onPick: (result: IconPickResult) => Promise<boolean>;
 }): void {
   const { current, onPick } = opts;
@@ -64,27 +70,31 @@ export function showIconDialog(opts: {
     noneDanger: true,
     nonePlacement: 'leading',
     onNone: (close) => {
-      void onPick({ icon: null, kind: 'emoji' }).then((ok) => {
+      void onPick({ icon: null, kind: 'emoji', color: null }).then((ok) => {
         if (ok) close();
       });
     },
     tabs: [
-      emojiSourceTab((glyph, ctx) => submit({ icon: glyph, kind: 'emoji' })(ctx)),
-      libraryIconSourceTab((name, ctx) => submit({ icon: name, kind: 'icon' })(ctx)),
+      emojiSourceTab((glyph, ctx) => submit({ icon: glyph, kind: 'emoji', color: null })(ctx)),
+      libraryIconSourceTab({
+        initialColor: current.color,
+        onPick: (name, color, ctx) => submit({ icon: name, kind: 'icon', color })(ctx),
+      }),
       thoughtIconSourceTab({
         types: store.state.thoughtTypes,
-        onPick: (icon, kind, ctx) => submit({ icon, kind })(ctx),
+        fill: true,
+        onPick: (icon, kind, color, ctx) => submit({ icon, kind, color })(ctx),
       }),
       fileImageSourceTab({
         types: store.state.thoughtTypes,
-        onTypeIcon: (icon, kind, ctx) => submit({ icon, kind })(ctx),
+        onTypeIcon: (icon, kind, color, ctx) => submit({ icon, kind, color })(ctx),
         onFile: (preview, source, ctx) =>
-          submit({ icon: preview, kind: 'image', source })(ctx),
+          submit({ icon: preview, kind: 'image', color: null, source })(ctx),
       }),
       urlSourceTab({
         placeholder: 'URL изображения',
         previewHint: 'Предпросмотр',
-        onApply: (url, ctx) => submit({ icon: url, kind: 'image' })(ctx),
+        onApply: (url, ctx) => submit({ icon: url, kind: 'image', color: null })(ctx),
       }),
     ],
   });

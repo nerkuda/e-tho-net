@@ -129,6 +129,7 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
     icon: null,
     icon_kind: 'emoji' as const,
     icon_attachment_id: null,
+    icon_color: null,
     active: true,
     marked_for_deletion: false,
     fg_color: null,

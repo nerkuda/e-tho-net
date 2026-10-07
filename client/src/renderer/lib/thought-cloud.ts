@@ -112,15 +112,18 @@ export function resolveThoughtIcon(thought: {
   icon: string | null;
   icon_kind: IconKind;
   type_id: string | null;
-}): { icon: string | null; kind: IconKind } {
+  icon_color?: string | null;
+}): { icon: string | null; kind: IconKind; color: string | null } {
   if (thought.icon !== null) {
-    return { icon: thought.icon, kind: thought.icon_kind };
+    // Цвет берётся с ТЕМ ЖЕ источником, что иконка: своя иконка — свой цвет
+    // (0.12.1, задача 4105bd6a), унаследованная — цвет давшего её типа.
+    return { icon: thought.icon, kind: thought.icon_kind, color: thought.icon_color ?? null };
   }
   const type = resolveThoughtTypeVisual(store.state.thoughtTypes, thought.type_id);
   if (type.icon !== null) {
-    return { icon: type.icon, kind: type.icon_kind };
+    return { icon: type.icon, kind: type.icon_kind, color: type.icon_color };
   }
-  return { icon: null, kind: 'emoji' };
+  return { icon: null, kind: 'emoji', color: null };
 }
 
 /**
@@ -138,6 +141,12 @@ export function applyThoughtIcon(
     icon: string | null;
     icon_kind: IconKind;
     type_id: string | null;
+    /**
+     * Цвет символа иконки (0.12.1, задача 4105bd6a). Применяется ТОЛЬКО к
+     * библиотечному виду `icon` (SVG со `stroke`); эмодзи и картинка цвет не
+     * принимают — для них значение игнорируется (обратная совместимость).
+     */
+    icon_color?: string | null;
     /** Thought id — required together with {@link icon_attachment_id} for zoom. */
     id?: string;
     icon_attachment_id?: string | null;
@@ -157,8 +166,11 @@ export function applyThoughtIcon(
   } else if (ic.kind === 'icon' && ic.icon !== null) {
     // Библиотечная иконка (icon_kind='icon') — имя в каталоге Lucide, значок
     // рисует фасад (отложенно: полный каталог грузится лениво). Неизвестное
-    // имя (устаревшие данные) — заглушка, как у отсутствующего глифа.
-    void renderLibraryIcon(iconBox, ic.icon, { size: 24 }, '💭');
+    // имя (устаревшие данные) — заглушка, как у отсутствующего глифа. Цвет
+    // символа передаётся фасаду (пусто — прежний `currentColor`).
+    const iconOptions: { size: number; color?: string } = { size: 24 };
+    if (ic.color !== null) iconOptions.color = ic.color;
+    void renderLibraryIcon(iconBox, ic.icon, iconOptions, '💭');
   } else {
     iconBox.textContent = ic.icon ?? '💭';
   }
@@ -318,6 +330,8 @@ export interface ThoughtCloudInput {
   icon?: string | null;
   icon_kind?: IconKind;
   icon_attachment_id?: string | null;
+  /** Цвет символа иконки (HEX или `null`), задача 4105bd6a. */
+  icon_color?: string | null;
   type_id?: string | null;
   fg_color?: string | null;
   bg_color?: string | null;
@@ -562,6 +576,7 @@ export function createThoughtCloud(
     icon: input.icon ?? null,
     icon_kind: input.icon_kind ?? 'emoji',
     type_id: input.type_id ?? null,
+    icon_color: input.icon_color ?? null,
     id: input.id,
     icon_attachment_id: input.icon_attachment_id ?? null,
   });

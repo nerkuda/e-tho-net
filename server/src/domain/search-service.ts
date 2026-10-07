@@ -616,6 +616,7 @@ function searchNames(
     .prepare(
       `SELECT t.id AS thought_id, t.title AS title, t.icon AS icon,
               t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id,
+              t.icon_color AS icon_color,
               t.fg_color AS fg_color, t.bg_color AS bg_color,
               t.font_bold AS font_bold, t.font_italic AS font_italic,
               t.font_underline AS font_underline, t.font_strike AS font_strike,
@@ -632,6 +633,7 @@ function searchNames(
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    icon_color: string | null;
     fg_color: string | null;
     bg_color: string | null;
     font_bold: number;
@@ -651,6 +653,7 @@ function searchNames(
         icon: r.icon,
         icon_kind: r.icon_kind as IconKind,
         icon_attachment_id: r.icon_attachment_id,
+        icon_color: r.icon_color,
         fg_color: r.fg_color,
         bg_color: r.bg_color,
         font_bold: readFont(r.font_manual, FONT_BOLD_BIT, r.font_bold),
@@ -705,13 +708,14 @@ function searchTexts(
   const rows = ndb
     .prepare(
       `SELECT comment_id, thought_id, title, body, icon, icon_kind,
-              icon_attachment_id, fg_color, bg_color,
+              icon_attachment_id, icon_color, fg_color, bg_color,
               font_bold, font_italic, font_underline, font_strike,
               font_manual, type_id, active
        FROM (
          SELECT c.id AS comment_id, f.thought_id AS thought_id, t.title AS title,
                 c.body_md AS body, t.icon AS icon, t.icon_kind AS icon_kind,
                 t.icon_attachment_id AS icon_attachment_id,
+                t.icon_color AS icon_color,
                 t.fg_color AS fg_color, t.bg_color AS bg_color,
                 t.font_bold AS font_bold, t.font_italic AS font_italic,
                 t.font_underline AS font_underline, t.font_strike AS font_strike,
@@ -736,6 +740,7 @@ function searchTexts(
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    icon_color: string | null;
     fg_color: string | null;
     bg_color: string | null;
     font_bold: number;
@@ -755,6 +760,7 @@ function searchTexts(
         icon: r.icon,
         icon_kind: r.icon_kind as IconKind,
         icon_attachment_id: r.icon_attachment_id,
+        icon_color: r.icon_color,
         fg_color: r.fg_color,
         bg_color: r.bg_color,
         font_bold: readFont(r.font_manual, FONT_BOLD_BIT, r.font_bold),
@@ -1109,7 +1115,7 @@ export function findDuplicates(
   const byId = new Map<string, DuplicateHit>();
 
   /** The row columns shared by every candidate query below. */
-  const DUP_COLUMNS = `id, title, type_id, icon, icon_kind, fg_color, bg_color,
+  const DUP_COLUMNS = `id, title, type_id, icon, icon_kind, icon_color, fg_color, bg_color,
        font_bold, font_italic, font_underline, font_strike, font_manual`;
 
   const ensure = (row: {
@@ -1118,6 +1124,7 @@ export function findDuplicates(
     type_id: string | null;
     icon: string | null;
     icon_kind: string;
+    icon_color: string | null;
     fg_color: string | null;
     bg_color: string | null;
     font_bold: number;
@@ -1142,6 +1149,7 @@ export function findDuplicates(
         // библиотечный вид `icon` не должен схлопываться в `emoji`.
         icon_kind:
           row.icon_kind === 'image' || row.icon_kind === 'icon' ? row.icon_kind : 'emoji',
+        icon_color: row.icon_color,
         fg_color: row.fg_color,
         bg_color: row.bg_color,
         font_bold: readFont(row.font_manual, FONT_BOLD_BIT, row.font_bold),
@@ -1168,7 +1176,7 @@ export function findDuplicates(
   const wildSynRows = ndb
     .prepare(
       `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
-              t.icon AS icon, t.icon_kind AS icon_kind,
+              t.icon AS icon, t.icon_kind AS icon_kind, t.icon_color AS icon_color,
               t.fg_color AS fg_color, t.bg_color AS bg_color,
               t.font_bold AS font_bold, t.font_italic AS font_italic,
               t.font_underline AS font_underline, t.font_strike AS font_strike,
@@ -1183,6 +1191,7 @@ export function findDuplicates(
     type_id: string | null;
     icon: string | null;
     icon_kind: string;
+    icon_color: string | null;
     fg_color: string | null;
     bg_color: string | null;
     font_bold: number;
@@ -1207,6 +1216,7 @@ export function findDuplicates(
       type_id: string | null;
       icon: string | null;
       icon_kind: string;
+      icon_color: string | null;
       fg_color: string | null;
       bg_color: string | null;
       font_bold: number;
@@ -1222,7 +1232,7 @@ export function findDuplicates(
     const synRows = ndb
       .prepare(
         `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
-                t.icon AS icon, t.icon_kind AS icon_kind,
+                t.icon AS icon, t.icon_kind AS icon_kind, t.icon_color AS icon_color,
                 t.fg_color AS fg_color, t.bg_color AS bg_color,
                 t.font_bold AS font_bold, t.font_italic AS font_italic,
                 t.font_underline AS font_underline, t.font_strike AS font_strike,
@@ -1237,6 +1247,7 @@ export function findDuplicates(
       type_id: string | null;
       icon: string | null;
       icon_kind: string;
+      icon_color: string | null;
       fg_color: string | null;
       bg_color: string | null;
       font_bold: number;
@@ -1304,6 +1315,7 @@ export function findDuplicates(
         type_id: string | null;
         icon: string | null;
         icon_kind: string;
+        icon_color: string | null;
         fg_color: string | null;
         bg_color: string | null;
         font_bold: number;

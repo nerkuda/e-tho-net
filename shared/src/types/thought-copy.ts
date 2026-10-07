@@ -52,6 +52,8 @@ export interface ThoughtCopySnapshot {
   };
   icon: string | null;
   icon_kind: IconKind;
+  /** Цвет символа иконки (HEX `#rrggbb` или `null`, задача 4105bd6a). */
+  icon_color?: string | null;
   active: boolean;
   fg_color: string | null;
   bg_color: string | null;

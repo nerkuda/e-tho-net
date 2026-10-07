@@ -785,6 +785,7 @@ export type CompactThought = Omit<
   Thought,
   | 'fg_color'
   | 'bg_color'
+  | 'icon_color'
   | 'font_bold'
   | 'font_italic'
   | 'font_underline'
@@ -798,13 +799,14 @@ export type CompactThought = Omit<
 /**
  * Drop-in replacement of {@link ThoughtRef} for the neighbours catalogue and
  * `etn.thoughts.usage`. The reference already only carries style fields
- * (`fg_color`, `bg_color`, `font_*`, `icon_attachment_id`), so the compact
- * projection strips those and keeps the identity / lifecycle subset.
+ * (`fg_color`, `bg_color`, `icon_color`, `font_*`, `icon_attachment_id`), so
+ * the compact projection strips those and keeps the identity / lifecycle subset.
  */
 export type CompactThoughtRef = Omit<
   ThoughtRef,
   | 'fg_color'
   | 'bg_color'
+  | 'icon_color'
   | 'font_bold'
   | 'font_italic'
   | 'font_underline'
@@ -837,13 +839,14 @@ export interface CompactThoughtUsage
 
 /**
  * Ширина «визуальных» полей стиля, которые compact-проекция выносит из
- * списочных ответов MCP: цвет текста и фона, ручные флаги шрифта, вид иконки
- * и вложение-подложка иконки. `icon` (само значение emoji/ссылки) остаётся —
- * оно семантично. Список — единый источник для всех compact-проекций.
+ * списочных ответов MCP: цвет текста/фона/символа иконки, ручные флаги шрифта,
+ * вид иконки и вложение-подложка иконки. `icon` (само значение emoji/ссылки)
+ * остаётся — оно семантично. Список — единый источник для всех compact-проекций.
  */
 export type CompactVisualFieldKeys =
   | 'fg_color'
   | 'bg_color'
+  | 'icon_color'
   | 'font_bold'
   | 'font_italic'
   | 'font_underline'

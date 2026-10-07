@@ -59,6 +59,7 @@ import {
   setPropertyValueById,
 } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
+import { assertIconColor } from './icon-view.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
 import { resolveThoughtId } from './thought-id.js';
 
@@ -87,6 +88,8 @@ interface ThoughtRow {
   icon: string | null;
   icon_kind: string;
   icon_attachment_id: string | null;
+  /** HEX-цвет символа иконки (0.12.1, задача 4105bd6a). */
+  icon_color: string | null;
   active: number;
   is_protected: number;
   is_root: number;
@@ -118,6 +121,8 @@ interface NeighborRow {
   title: string;
   type_id: string | null;
   icon: string | null;
+  /** HEX-цвет символа иконки соседа (задача 4105bd6a). */
+  icon_color: string | null;
   active: number;
   link_id: string;
   link_type_id: string | null;
@@ -142,6 +147,7 @@ function rowToThought(row: ThoughtRow, synonyms: string[]): Thought {
     icon: row.icon,
     icon_kind: row.icon_kind as IconKind,
     icon_attachment_id: row.icon_attachment_id,
+    icon_color: row.icon_color,
     active: row.active === 1,
     is_protected: row.is_protected === 1,
     is_root: row.is_root === 1,
@@ -178,6 +184,8 @@ export function rowToThoughtRef(row: {
   icon_kind: string;
   /** Optional — SELECTs that do not carry the column yield `null`. */
   icon_attachment_id?: string | null;
+  /** Optional — SELECTs без колонки отдают `null` (задача 4105bd6a). */
+  icon_color?: string | null;
   active: number;
   /** Optional — SELECTs that do not carry the column yield `false` (S13). */
   marked_for_deletion?: number;
@@ -197,6 +205,7 @@ export function rowToThoughtRef(row: {
     icon: row.icon,
     icon_kind: row.icon_kind as IconKind,
     icon_attachment_id: row.icon_attachment_id ?? null,
+    icon_color: row.icon_color ?? null,
     active: row.active === 1,
     marked_for_deletion: row.marked_for_deletion === 1,
     fg_color: row.fg_color,
@@ -215,6 +224,7 @@ function rowToNeighbor(row: NeighborRow): FocusNeighbor {
     title: row.title,
     type_id: row.type_id,
     icon: row.icon,
+    icon_color: row.icon_color,
     active: row.active === 1,
     link_id: row.link_id,
     link_type_id: row.link_type_id,
@@ -412,7 +422,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
   const placeholders = capped.map(() => '?').join(',');
   const rows = ndb
     .prepare(
-      `SELECT id, title, type_id, icon, icon_kind, icon_attachment_id, active,
+      `SELECT id, title, type_id, icon, icon_kind, icon_attachment_id, icon_color, active,
               marked_for_deletion,
               fg_color, bg_color,
               font_bold, font_italic, font_underline, font_strike, font_manual
@@ -425,6 +435,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    icon_color: string | null;
     active: number;
     marked_for_deletion: number;
     fg_color: string | null;
@@ -507,7 +518,7 @@ export function getThoughtsByIdsResolved(
   const placeholders = capped.map(() => '?').join(',');
   const rows = ndb
     .prepare(
-      `SELECT id, title, type_id, icon, icon_kind, icon_attachment_id, active,
+      `SELECT id, title, type_id, icon, icon_kind, icon_attachment_id, icon_color, active,
               marked_for_deletion, marked_for_deletion_at, marked_for_deletion_by,
               fg_color, bg_color,
               font_bold, font_italic, font_underline, font_strike, font_manual,
@@ -522,6 +533,7 @@ export function getThoughtsByIdsResolved(
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    icon_color: string | null;
     active: number;
     marked_for_deletion: number;
     marked_for_deletion_at: string | null;
@@ -565,6 +577,7 @@ function rowToCard(
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    icon_color: string | null;
     active: number;
     marked_for_deletion: number;
     marked_for_deletion_at: string | null;
@@ -594,6 +607,7 @@ function rowToCard(
     icon: row.icon,
     icon_kind: row.icon_kind as IconKind,
     icon_attachment_id: row.icon_attachment_id,
+    icon_color: row.icon_color,
     active: row.active === 1,
     is_protected: false,
     is_root: false,
@@ -628,6 +642,7 @@ function rowToCard(
     icon: thought.icon,
     icon_kind: thought.icon_kind,
     icon_attachment_id: thought.icon_attachment_id,
+    icon_color: thought.icon_color,
     active: thought.active,
     marked_for_deletion: thought.marked_for_deletion,
     fg_color: thought.fg_color,
@@ -794,6 +809,8 @@ export function createThought(
   const now = new Date(nowMs).toISOString();
   const synonyms = parseSynonyms(input.synonyms);
   const iconKind: IconKind = input.icon_kind ?? 'emoji';
+  // Цвет символа иконки: пусто или HEX `#rrggbb` (0.12.1, задача 4105bd6a).
+  assertIconColor(input.icon_color);
 
   return ndb.transaction(() => {
     // The root type is never assignable — its settings apply to untyped
@@ -810,11 +827,11 @@ export function createThought(
     ndb
       .prepare(
         `INSERT INTO thoughts (id, layer_id, title, title_norm, type_id, icon, icon_kind, active,
-                             is_protected, is_root, fg_color, bg_color,
+                             is_protected, is_root, fg_color, bg_color, icon_color,
                              font_bold, font_italic, font_underline, font_strike, font_manual,
                              version, created_at, created_by, updated_at, updated_by,
                              created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -827,6 +844,7 @@ export function createThought(
         input.active === false ? 0 : 1,
         input.fg_color ?? null,
         input.bg_color ?? null,
+        input.icon_color ?? null,
         input.font_bold ? 1 : 0,
         input.font_italic ? 1 : 0,
         input.font_underline ? 1 : 0,
@@ -1055,6 +1073,12 @@ export function updateThought(
     if (changes.fg_color !== undefined) {
       sets.push('fg_color = ?');
       args.push(changes.fg_color);
+    }
+    if (changes.icon_color !== undefined) {
+      // Цвет символа иконки: пусто или HEX `#rrggbb` (0.12.1, задача 4105bd6a).
+      assertIconColor(changes.icon_color);
+      sets.push('icon_color = ?');
+      args.push(changes.icon_color);
     }
     if (changes.bg_color !== undefined) {
       sets.push('bg_color = ?');
@@ -1439,7 +1463,7 @@ function buildNeighborsQuery(
   const useManualJoin = sort === 'manual' && dir !== 'siblings' && !!userId;
 
   const select =
-    'SELECT t.id, t.title, t.type_id, t.icon, t.active, t.created_at' +
+    'SELECT t.id, t.title, t.type_id, t.icon, t.icon_color, t.active, t.created_at' +
     (useViewedJoin ? ', tv.last_viewed_at' : '') +
     // Alias is required: rowToNeighbor reads `manual_position` by name.
     (useManualJoin ? ', ufo.position AS manual_position' : '') +

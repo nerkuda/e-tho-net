@@ -33,6 +33,8 @@ import { t } from '../lib/i18n.js';
 import { notice } from '../lib/notice.js';
 import { uiButton } from '../lib/ui/button.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
+import { colorField } from '../lib/ui/color-field.js';
+import { checkboxRow } from '../lib/ui/choice-row.js';
 import { fieldInput } from '../lib/ui/field.js';
 import {
   loadIconCatalog,
@@ -244,21 +246,54 @@ export function emojiSourceTab(
  * вкладки); до загрузки — подсказка, сетка наполняется `reconcileKeyed` по
  * фильтру поиска (стандарт инкрементального рендера списков).
  */
-export function libraryIconSourceTab(
-  onPick: (name: string, ctx: ResourceSourceContext) => void | Promise<void>,
-): ResourceSourceTab {
+export function libraryIconSourceTab(opts: {
+  /**
+   * Начальный цвет символа (`null` — прежнее поведение, `currentColor`).
+   * Заполняет поле цвета (0.12.1, задача 4105bd6a).
+   */
+  initialColor?: string | null;
+  /**
+   * Выбор значка: имя каталога + выбранный цвет символа (`null` — не задан).
+   * `apply` у источника нет, применяет и закрывает диалог обработчик `onPick`.
+   */
+  onPick: (
+    name: string,
+    color: string | null,
+    ctx: ResourceSourceContext,
+  ) => void | Promise<void>;
+}): ResourceSourceTab {
   return {
     id: 'library',
     label: t('icons.library.tab'),
     build: (ctx) => {
       const box = div('icon-source');
+
+      // Цвет символа (0.12.1, задача 4105bd6a): тумблер «свой цвет» + поле
+      // выбора. Выключен — цвет не задан (`null`, значок наследует цвет текста).
+      let color: string | null = opts.initialColor ?? null;
+      const colorRow = div('icon-color-row');
+      const colorControl = colorField({ value: color ?? '#20242d' });
+      colorControl.picker.disabled = color === null;
+      const colorToggle = checkboxRow({
+        label: t('icons.library.color'),
+        checked: color !== null,
+        onChange: (on) => {
+          colorControl.picker.disabled = !on;
+          color = on ? colorControl.value() : null;
+        },
+      });
+      colorControl.picker.addEventListener('input', () => {
+        if (color !== null) color = colorControl.value();
+      });
+      colorRow.append(colorToggle.row, colorControl.root);
+
       const row = div('icon-source-row');
       const input = fieldInput({ type: 'search', placeholder: t('icons.library.search') });
       row.append(input);
 
       const hint = el('p', 'muted', t('icons.library.loading'));
       const grid = div('icon-library-grid');
-      box.append(row, hint, grid);
+      box.append(colorRow, row, hint, grid);
 
       let catalog: IconCatalog | null = null;
       const render = (): void => {
@@ -270,7 +305,7 @@ export function libraryIconSourceTab(
         reconcileKeyed(grid, matched, {
           key: (name) => name,
           build: (name) => {
-            const cell = button('', () => void onPick(name, ctx), 'icon-library-cell');
+            const cell = button('', () => void opts.onPick(name, color, ctx), 'icon-library-cell');
             cell.title = name;
             void renderLibraryIcon(cell, name, { size: 20 });
             return cell;
@@ -295,8 +330,26 @@ export function libraryIconSourceTab(
 export function thoughtIconSourceTab(opts: {
   types: readonly ThoughtType[];
   emptyHint?: string;
-  onPick: (icon: string, kind: IconKind, ctx: ResourceSourceContext) => void | Promise<void>;
+  /**
+   * Растянуть сетку на всю доступную высоту панели (0.12.1, задача 4105bd6a):
+   * `true` — вкладка «Иконки мыслей» диалога иконки; `false`/не задано —
+   * встроенный быстрый выбор внутри вкладки «Файл» (компактный предел высоты).
+   */
+  fill?: boolean;
+  onPick: (
+    icon: string,
+    kind: IconKind,
+    color: string | null,
+    ctx: ResourceSourceContext,
+  ) => void | Promise<void>;
 }): ResourceSourceTab {
+  /** Оборачивает сетку растягивающим контейнером, когда нужна вся высота. */
+  const wrap = (grid: HTMLElement): HTMLElement => {
+    if (opts.fill !== true) return grid;
+    const panel = div('icon-type-panel');
+    panel.append(grid);
+    return panel;
+  };
   return {
     id: 'thought-icons',
     label: 'Иконки мыслей',
@@ -305,12 +358,12 @@ export function thoughtIconSourceTab(opts: {
       const types = opts.types.filter((type) => type.icon !== null && type.icon !== '');
       if (types.length === 0) {
         grid.append(el('p', 'muted', opts.emptyHint ?? 'Типы мыслей с иконками не заданы.'));
-        return grid;
+        return wrap(grid);
       }
       for (const type of types) {
         const cell = button(
           '',
-          () => void opts.onPick(type.icon ?? '', type.icon_kind, ctx),
+          () => void opts.onPick(type.icon ?? '', type.icon_kind, type.icon_color ?? null, ctx),
           'icon-type-cell',
         );
         cell.title = `Иконка типа «${type.name}»`;
@@ -321,14 +374,17 @@ export function thoughtIconSourceTab(opts: {
           cell.append(img);
         } else if (type.icon_kind === 'icon' && type.icon !== null) {
           // Библиотечная иконка типа (icon_kind='icon') — значок каталога
-          // рисует фасад, отложенно (каталог грузится лениво).
-          void renderLibraryIcon(cell, type.icon, { size: 20 }, '💭');
+          // рисует фасад, отложенно (каталог грузится лениво). Цвет символа —
+          // как у типа (0.12.1, задача 4105bd6a).
+          const iconOptions: { size: number; color?: string } = { size: 20 };
+          if (type.icon_color !== null) iconOptions.color = type.icon_color;
+          void renderLibraryIcon(cell, type.icon, iconOptions, '💭');
         } else {
           cell.textContent = type.icon ?? '💭';
         }
         grid.append(cell);
       }
-      return grid;
+      return wrap(grid);
     },
   };
 }
@@ -415,8 +471,13 @@ export function urlSourceTab(opts: {
 export function fileImageSourceTab(opts: {
   types: readonly ThoughtType[];
   emptyHint?: string;
-  /** Немедленный выбор иконки типа. */
-  onTypeIcon: (icon: string, kind: IconKind, ctx: ResourceSourceContext) => void | Promise<void>;
+  /** Немедленный выбор иконки типа (последний аргумент — цвет символа). */
+  onTypeIcon: (
+    icon: string,
+    kind: IconKind,
+    color: string | null,
+    ctx: ResourceSourceContext,
+  ) => void | Promise<void>;
   /** Применение системного выбора файла (превью + оригинал). */
   onFile: (
     preview: string,

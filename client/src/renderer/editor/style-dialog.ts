@@ -40,6 +40,8 @@ export interface ResolvedThoughtStyle {
  */
 export interface ThoughtStylePatch {
   icon?: string | null;
+  /** Цвет символа иконки (0.12.1, задача 4105bd6a). */
+  icon_color?: string | null;
   fg_color?: string | null;
   bg_color?: string | null;
   font_bold?: boolean | null;
@@ -136,6 +138,7 @@ export function showThoughtStyleDialog(opts: {
           // the application defaults).
           void onApply({
             icon: null,
+            icon_color: null,
             fg_color: null,
             bg_color: null,
             font_bold: null,

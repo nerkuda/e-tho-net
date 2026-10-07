@@ -205,6 +205,7 @@ function parseThoughtCreateBody(
     type_id: (out.type_id ?? null) as string | null,
     icon: (out.icon ?? null) as string | null,
     icon_kind: iconKind,
+    icon_color: (out.icon_color ?? null) as string | null,
     active: out.active as boolean | undefined,
     fg_color: (out.fg_color ?? null) as string | null,
     bg_color: (out.bg_color ?? null) as string | null,
@@ -236,6 +237,7 @@ function parseThoughtUpdateBody(
   if (changes.icon_kind === 'image') {
     assertImageIcon(changes.icon, requestId);
   }
+  if (out.icon_color !== undefined) changes.icon_color = out.icon_color as string | null;
   if (out.active !== undefined) changes.active = out.active as boolean;
   if (out.marked_for_deletion !== undefined)
     changes.marked_for_deletion = out.marked_for_deletion as boolean;

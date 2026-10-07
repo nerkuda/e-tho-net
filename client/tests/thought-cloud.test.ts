@@ -591,6 +591,7 @@ describe('канон стиля/значка', () => {
     assert.deepEqual(resolveThoughtIcon({ icon: null, icon_kind: 'emoji', type_id: null }), {
       icon: null,
       kind: 'emoji',
+      color: null,
     });
   });
 

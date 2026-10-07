@@ -356,6 +356,7 @@ function collectSnapshot(
         },
         icon: t.icon,
         icon_kind: t.icon_kind,
+        icon_color: t.icon_color,
         active: t.active,
         fg_color: t.fg_color,
         bg_color: t.bg_color,

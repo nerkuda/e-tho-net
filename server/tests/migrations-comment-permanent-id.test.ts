@@ -37,9 +37,16 @@ import { permanentCommentId } from '../src/db/comment-permanent-id.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { getPermanentFull } from '../src/domain/comment-service.js';
 import { networkMigrationsDir } from '../src/paths.js';
+import { networkMigrationFilesFrom } from './migration-files.js';
 
-/** Migration file under test (the last one in the catalogue). */
+/** Migration file under test. */
 const MIGRATION = '048_comment_permanent_deterministic_id.sql';
+
+/**
+ * Ожидание первого прогона из состояния «строго до 048» — сам файл 048 и все
+ * последующие (сейчас 049), выводится из каталога (задача 8816c01f).
+ */
+const EXPECTED_APPLIED_FROM_048 = networkMigrationFilesFrom(MIGRATION);
 
 const LAYER_A = '11111111-1111-4111-8111-111111111111';
 const OWNER = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -163,7 +170,7 @@ describe(
         seedActivity(db, baseId);
 
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, [MIGRATION]);
+        assert.deepEqual(res.applied, EXPECTED_APPLIED_FROM_048);
 
         const det = permanentCommentId('thought', OWNER);
         const rows = db
@@ -262,7 +269,7 @@ describe(
       try {
         const before = db.prepare('SELECT COUNT(*) AS c FROM comments').get() as { c: number };
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, [MIGRATION]);
+        assert.deepEqual(res.applied, EXPECTED_APPLIED_FROM_048);
         const after = db.prepare('SELECT COUNT(*) AS c FROM comments').get() as { c: number };
         assert.deepEqual(after, before);
         assert.equal(warnings.length, 0);
@@ -289,7 +296,7 @@ describe(
         seedActivity(db, legacyId);
 
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, [MIGRATION]);
+        assert.deepEqual(res.applied, EXPECTED_APPLIED_FROM_048);
 
         const permanent = db
           .prepare("SELECT id FROM comments WHERE owner_id = ? AND kind = 'permanent'")

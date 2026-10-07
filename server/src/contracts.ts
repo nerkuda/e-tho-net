@@ -74,7 +74,12 @@ import {
   type ThoughtRef,
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
-import { LIBRARY_ICON_MESSAGE, libraryIconValid } from './domain/icon-view.js';
+import {
+  ICON_COLOR_MESSAGE,
+  LIBRARY_ICON_MESSAGE,
+  iconColorValid,
+  libraryIconValid,
+} from './domain/icon-view.js';
 import {
   numberingRangeInvalid,
   recipeOverlap,
@@ -1429,6 +1434,7 @@ const OntologyWriteThoughtTypeFields = z
     description: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     fg_color: z.string().nullable().optional(),
     bg_color: z.string().nullable().optional(),
     font_bold: z.boolean().nullable().optional(),
@@ -1439,7 +1445,9 @@ const OntologyWriteThoughtTypeFields = z
   })
   .strict()
   // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
-  .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] });
+  .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+  // Цвет символа иконки: пусто или HEX `#rrggbb` (задача 4105bd6a).
+  .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] });
 const OntologyWriteLinkTypeFields = z
   .object({
     ref: z.string().min(1).optional(),
@@ -2975,6 +2983,7 @@ export const RestThoughtCreateBody = defineContract(
     type_id: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     active: z.boolean().optional(),
     fg_color: z.string().nullable().optional(),
     bg_color: z.string().nullable().optional(),
@@ -2984,13 +2993,15 @@ export const RestThoughtCreateBody = defineContract(
     font_strike: z.boolean().optional(),
   })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
-    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] }),
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+    .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
     title: { from: { kind: 'body' }, msg: 'title обязателен и не может быть пустым.' },
     synonyms: { from: { kind: 'body' } },
     type_id: { from: { kind: 'body' } },
     icon: { from: { kind: 'body' } },
     icon_kind: { from: { kind: 'body' } },
+    icon_color: { from: { kind: 'body' } },
     active: { from: { kind: 'body' } },
     fg_color: { from: { kind: 'body' } },
     bg_color: { from: { kind: 'body' } },
@@ -3066,6 +3077,7 @@ export const RestThoughtUpdateBody = defineContract(
     type_id: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     icon_attachment_id: z.string().nullable().optional(),
     active: z.boolean().optional(),
     marked_for_deletion: z.boolean().optional(),
@@ -3077,13 +3089,15 @@ export const RestThoughtUpdateBody = defineContract(
     font_strike: z.boolean().nullable().optional(),
   })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
-    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] }),
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+    .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
     title: { from: { kind: 'body' } },
     synonyms: { from: { kind: 'body' } },
     type_id: { from: { kind: 'body' } },
     icon: { from: { kind: 'body' } },
     icon_kind: { from: { kind: 'body' } },
+    icon_color: { from: { kind: 'body' } },
     icon_attachment_id: { from: { kind: 'body' } },
     active: { from: { kind: 'body' } },
     marked_for_deletion: { from: { kind: 'body' } },
@@ -3339,6 +3353,7 @@ export const RestThoughtTypeCreateBody = defineContract(
     parent_id: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     fg_color: z.string().nullable().optional(),
     bg_color: z.string().nullable().optional(),
     font_bold: z.boolean().nullable().optional(),
@@ -3349,7 +3364,8 @@ export const RestThoughtTypeCreateBody = defineContract(
     comment_template_md: z.string().nullable().optional(),
   })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
-    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] }),
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+    .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
     name: { from: { kind: 'body' }, msg: 'name обязателен и не может быть пустым.' },
     parent_id: {
@@ -3358,6 +3374,7 @@ export const RestThoughtTypeCreateBody = defineContract(
     },
     icon: { from: { kind: 'body' } },
     icon_kind: { from: { kind: 'body' } },
+    icon_color: { from: { kind: 'body' } },
     fg_color: { from: { kind: 'body' } },
     bg_color: { from: { kind: 'body' } },
     font_bold: { from: { kind: 'body' } },
@@ -3377,6 +3394,7 @@ export const RestThoughtTypeUpdateBody = defineContract(
     parent_id: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     fg_color: z.string().nullable().optional(),
     bg_color: z.string().nullable().optional(),
     font_bold: z.boolean().nullable().optional(),
@@ -3393,12 +3411,14 @@ export const RestThoughtTypeUpdateBody = defineContract(
     confirmed: z.boolean().optional(),
   })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
-    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] }),
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+    .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
     name: { from: { kind: 'body' } },
     parent_id: { from: { kind: 'body' }, parse: (raw: unknown) => (raw === '' ? null : raw) },
     icon: { from: { kind: 'body' } },
     icon_kind: { from: { kind: 'body' } },
+    icon_color: { from: { kind: 'body' } },
     fg_color: { from: { kind: 'body' } },
     bg_color: { from: { kind: 'body' } },
     font_bold: { from: { kind: 'body' } },

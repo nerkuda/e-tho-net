@@ -139,6 +139,7 @@ interface ResolvedThoughtType {
   description: string | null | undefined;
   icon: string | null | undefined;
   icon_kind: IconKind | undefined;
+  icon_color: string | null | undefined;
   fg_color: string | null | undefined;
   bg_color: string | null | undefined;
   font_bold: boolean | null | undefined;
@@ -409,6 +410,7 @@ function resolveThoughtTypes(
       description: item.description,
       icon: item.icon,
       icon_kind: item.icon_kind,
+      icon_color: item.icon_color,
       fg_color: item.fg_color,
       bg_color: item.bg_color,
       font_bold: item.font_bold,
@@ -1051,6 +1053,7 @@ export function writeOntology(
           ...(item.parent.kind === 'existing' ? { parent_id: item.parent.id } : {}),
           ...(item.icon !== undefined ? { icon: item.icon } : {}),
           ...(item.icon_kind !== undefined ? { icon_kind: item.icon_kind } : {}),
+          ...(item.icon_color !== undefined ? { icon_color: item.icon_color } : {}),
           ...(item.fg_color !== undefined ? { fg_color: item.fg_color } : {}),
           ...(item.bg_color !== undefined ? { bg_color: item.bg_color } : {}),
           ...(item.font_bold !== undefined ? { font_bold: item.font_bold } : {}),
@@ -1092,6 +1095,9 @@ export function writeOntology(
         }
         if (item.fg_color !== undefined && item.fg_color !== existing.fg_color) {
           updateInput.fg_color = item.fg_color;
+        }
+        if (item.icon_color !== undefined && item.icon_color !== existing.icon_color) {
+          updateInput.icon_color = item.icon_color;
         }
         if (item.bg_color !== undefined && item.bg_color !== existing.bg_color) {
           updateInput.bg_color = item.bg_color;

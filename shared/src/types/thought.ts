@@ -24,6 +24,12 @@ export interface Thought {
    * preview (workplan L16). `null` — the icon has no backing attachment.
    */
   icon_attachment_id: string | null;
+  /**
+   * HEX-цвет (`#rrggbb`) символа иконки. Помечено `?` ради клиентских
+   * фикстур и лёгких проекций (прецедент `updated_by?`); сервер всегда
+   * заполняет. `null`/отсутствие — прежнее поведение (`currentColor`).
+   */
+  icon_color?: string | null;
   active: boolean;
   /** Protected thoughts (HOME) cannot be deleted. */
   is_protected: boolean;
@@ -98,6 +104,8 @@ export interface ThoughtCreateInput {
   type_id?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
+  /** Цвет символа иконки (HEX `#rrggbb` или `null`) — см. {@link Thought.icon_color}. */
+  icon_color?: string | null;
   active?: boolean;
   fg_color?: string | null;
   bg_color?: string | null;
@@ -118,6 +126,8 @@ export interface ThoughtUpdateInput {
   type_id?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
+  /** Цвет символа иконки (HEX `#rrggbb` или `null`); `null` сбрасывает на наследование. */
+  icon_color?: string | null;
   /** Attachment shown by Ctrl-hover over the icon; `null` clears the link (L16). */
   icon_attachment_id?: string | null;
   active?: boolean;
@@ -200,6 +210,8 @@ export interface ThoughtRef {
   icon_kind: IconKind;
   /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
   icon_attachment_id: string | null;
+  /** HEX-цвет символа иконки или `null` (см. {@link Thought.icon_color}). */
+  icon_color?: string | null;
   active: boolean;
   /** In the trash, awaiting physical deletion (S13, 02-data-model.md §3.1.2). */
   marked_for_deletion: boolean;
@@ -283,6 +295,8 @@ export interface FocusNeighbor {
   title: string;
   type_id: string | null;
   icon: string | null;
+  /** HEX-цвет символа иконки соседа или `null` (задача 4105bd6a). */
+  icon_color?: string | null;
   active: boolean;
   /** Id of the link connecting the focused thought to this neighbour. */
   link_id: string;
@@ -638,6 +652,7 @@ export interface ThoughtCard {
   icon: string | null;
   icon_kind: IconKind;
   icon_attachment_id: string | null;
+  icon_color?: string | null;
   active: boolean;
   marked_for_deletion: boolean;
   fg_color: string | null;

@@ -52,6 +52,8 @@ export interface OntologyWriteThoughtType {
   description?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
+  /** Цвет символа иконки типа (HEX `#rrggbb` или `null`, задача 4105bd6a). */
+  icon_color?: string | null;
   fg_color?: string | null;
   bg_color?: string | null;
   font_bold?: boolean | null;

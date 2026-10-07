@@ -49,3 +49,38 @@ export function assertLibraryIcon(
     throw new EtnError('VALIDATION_ERROR', LIBRARY_ICON_MESSAGE, { field: 'icon' }, requestId);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Цвет символа иконки (0.12.1, задача 4105bd6a)
+// ---------------------------------------------------------------------------
+
+/** Канонический текст ошибки цвета символа иконки (REST и MCP — один). */
+export const ICON_COLOR_MESSAGE = 'icon_color должен быть HEX-цветом вида #rrggbb.';
+
+/** Допустимый HEX-цвет `#rrggbb` (регистр любой) — как у цвета слоя. */
+const ICON_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * Тело запроса: `icon_color` — `null`/`undefined` (цвет не задан) либо строка
+ * `#rrggbb`. Иначе `false` — контракт отвергает значение `VALIDATION_ERROR`.
+ */
+export function iconColorValid(value: { icon_color?: unknown }): boolean {
+  const v = value.icon_color;
+  if (v === undefined || v === null) return true;
+  return typeof v === 'string' && ICON_COLOR_RE.test(v);
+}
+
+/**
+ * Итоговое состояние (создание/частичная правка, слитая с сохранённой
+ * записью): `icon_color` пуст или `#rrggbb`; иначе `VALIDATION_ERROR`.
+ * Единая точка для домена — REST-схема проверяет вход, домен страхует инвариант.
+ */
+export function assertIconColor(
+  iconColor: string | null | undefined,
+  requestId?: string,
+): void {
+  if (iconColor === undefined || iconColor === null) return;
+  if (!ICON_COLOR_RE.test(iconColor)) {
+    throw new EtnError('VALIDATION_ERROR', ICON_COLOR_MESSAGE, { field: 'icon_color' }, requestId);
+  }
+}

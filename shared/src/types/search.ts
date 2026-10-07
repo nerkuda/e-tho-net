@@ -61,6 +61,8 @@ export interface SearchNameHit {
   icon_kind: IconKind;
   /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
   icon_attachment_id: string | null;
+  /** HEX-цвет символа иконки или `null` (задача 4105bd6a). */
+  icon_color?: string | null;
   /** Visual style of the thought (matches the cloud on the canvas). */
   fg_color: string | null;
   bg_color: string | null;
@@ -88,6 +90,8 @@ export interface SearchTextHit {
   icon_kind: IconKind;
   /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
   icon_attachment_id: string | null;
+  /** HEX-цвет символа иконки или `null` (задача 4105bd6a). */
+  icon_color?: string | null;
   /** Visual style of the thought (matches the cloud on the canvas). */
   fg_color: string | null;
   bg_color: string | null;
