@@ -55,6 +55,7 @@ import { div, el, span } from '../dom.js';
 import { t } from '../i18n.js';
 import { showMenuAt, type MenuItem } from '../menu.js';
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
+import { modifierChordVariants } from '../keymap-chords.js';
 import { badge } from './badge.js';
 import { choiceControl } from './choice-row.js';
 import { emptyState, type StateAction } from './empty-state.js';
@@ -1009,7 +1010,13 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
       { command: 'tree.collapse', chord: 'ArrowLeft', run: handleTreeKey },
       { command: 'tree.expand', chord: 'ArrowRight', run: handleTreeKey },
       { command: 'tree.toggle', chord: 'Space', run: handleTreeKey },
-      { command: 'tree.activate', chord: 'Enter', run: handleTreeKey },
+      // Прежний обработчик активировал строку на Enter НЕЗАВИСИМО от
+      // модификаторов — набор выражен привязками (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'tree.activate',
+        chord,
+        run: handleTreeKey,
+      })),
     ],
   });
   let releaseContext: (() => void) | null = null;

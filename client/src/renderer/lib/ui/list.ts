@@ -43,6 +43,7 @@
  */
 
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
+import { modifierChordVariants } from '../keymap-chords.js';
 import {
   isEditingTarget as coreIsEditingTarget,
   listTargetIndex,
@@ -467,8 +468,15 @@ export function createListNav<E>(
       { command: 'list.end', chord: 'End', run: handleKeyDown },
       { command: 'list.home.global', chord: 'Ctrl+Home', run: handleKeyDown },
       { command: 'list.end.global', chord: 'Ctrl+End', run: handleKeyDown },
-      { command: 'list.activate', chord: 'Enter', run: handleKeyDown },
-      { command: 'list.activate.ctrl', chord: 'Ctrl+Enter', run: handleKeyDown },
+      // Прежний обработчик активировал текущую сущность на Enter независимо от
+      // модификаторов, КРОМЕ Alt (`resolveNavAction(key, { altKey })` при Alt даёт
+      // null) — набор выражен привязками (`lib/keymap-chords.ts`). Ctrl+Enter
+      // по-прежнему сперва отдаётся адаптеру (`adapter.onKey`).
+      ...modifierChordVariants('Enter', ['Ctrl', 'Shift', 'Meta']).map((chord) => ({
+        command: 'list.activate',
+        chord,
+        run: handleKeyDown,
+      })),
       // Tab/Shift+Tab/Escape — расширение ядра (`adapter.onKey`, режим полей
       // «Дневника» и Ctrl+Enter-Ctrl-расширения потребителей).
       { command: 'list.tab', chord: 'Tab', run: handleKeyDown },

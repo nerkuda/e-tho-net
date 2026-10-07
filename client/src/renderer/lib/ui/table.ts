@@ -95,6 +95,7 @@
 import { div, span } from '../dom.js';
 import { t } from '../i18n.js';
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
+import { modifierChordVariants } from '../keymap-chords.js';
 import { showMenuAt, type MenuItem } from '../menu.js';
 import { emptyState, type EmptyStateOptions, type StateAction } from './empty-state.js';
 import { FOCUS_ANCHOR_ATTR } from './focus-anchor.js';
@@ -838,7 +839,15 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
       { command: 'table.end', chord: 'End', run: handleTableKey },
       { command: 'table.pageUp', chord: 'PageUp', run: handleTableKey },
       { command: 'table.pageDown', chord: 'PageDown', run: handleTableKey },
-      { command: 'table.activate', chord: 'Enter', run: handleTableKey },
+      // Прежний обработчик активировал строку/ячейку на Enter без Ctrl/Meta
+      // (Ctrl/Meta-сочетания, кроме Ctrl+C, уходили глобальным обработчикам
+      // ранним `return`); Shift/Alt-варианты выражены привязками
+      // (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter', ['Shift', 'Alt']).map((chord) => ({
+        command: 'table.activate',
+        chord,
+        run: handleTableKey,
+      })),
       { command: 'table.tab', chord: 'Tab', run: handleTableKey },
       { command: 'table.toggle', chord: 'Space', run: handleTableKey },
     ],

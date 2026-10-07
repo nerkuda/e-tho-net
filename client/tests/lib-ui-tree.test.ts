@@ -87,6 +87,14 @@ function key(key: string): { key: string; code?: string; preventDefault: () => v
   return { key, ...(key === ' ' ? { code: 'Space' } : {}), preventDefault: () => undefined };
 }
 
+/** Событие клавиатуры с явными модификаторами (задача fd3d84f4, волна 1). */
+function keyMods(
+  key: string,
+  mods: Record<string, boolean>,
+): { key: string; preventDefault: () => void } {
+  return { key, ...mods, preventDefault: () => undefined };
+}
+
 /** Нажатие клавиши на корне дерева: фокус кладёт контекст, событие — диспетчеру. */
 function press(root: ShimElement, event: { key: string; preventDefault: () => void }): void {
   root.focus();
@@ -325,6 +333,24 @@ describe('lib/ui/tree: флажок, клик, клавиатура', () => {
     assert.deepEqual(events.checked, ['a'], 'Space переключил флажок');
     press(root, key('Enter'));
     assert.deepEqual(events.activated, ['a'], 'Enter активировал строку');
+  });
+
+  it('модификаторный Enter (Ctrl/Shift/Alt/Meta) активирует строку, как прежде', async () => {
+    const T = await treeModule();
+    const host = new ShimElement('div');
+    const events = { checked: [] as string[], activated: [] as string[] };
+    const tree = buildTree(T, events, host);
+    const root = tree.root as unknown as ShimElement;
+    press(root, key('ArrowDown')); // текущая 'a'
+    press(root, keyMods('Enter', { ctrlKey: true }));
+    press(root, keyMods('Enter', { shiftKey: true }));
+    press(root, keyMods('Enter', { altKey: true }));
+    press(root, keyMods('Enter', { metaKey: true }));
+    assert.deepEqual(
+      events.activated,
+      ['a', 'a', 'a', 'a'],
+      'прежний `case Enter` в switch игнорировал модификаторы',
+    );
   });
 
   it('клавиатура: ← сворачивает/уходит к родителю, → раскрывает/идёт к потомку', async () => {

@@ -151,13 +151,15 @@ const ROWS: Row[] = [
   { id: 'c', name: 'Гамма', size: 20 },
 ];
 
-function keyEvent(key: string, ctrl = false): any {
+function keyEvent(key: string, ctrl = false, mods: Record<string, boolean> = {}): any {
   return {
     key,
     ...(key === ' ' ? { code: 'Space' } : {}),
     ctrlKey: ctrl,
     metaKey: false,
     shiftKey: false,
+    altKey: false,
+    ...mods,
     preventDefault: () => undefined,
     stopPropagation: () => undefined,
   };
@@ -370,6 +372,29 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
     press(wrapper, keyEvent('ArrowDown')); // текущая 'a'
     press(wrapper, keyEvent('Enter'));
     assert.deepEqual(activated, ['a']);
+  });
+
+  it('модификаторный Enter: Shift/Alt активируют строку; Ctrl/Meta — нет, как прежде', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const activated: string[] = [];
+    const t = table.createTable<Row>({
+      columns: COLUMNS,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      onActivate: (row) => activated.push(row.id),
+    });
+    const wrapper = t.element as unknown as ShimElement;
+    press(wrapper, keyEvent('ArrowDown')); // текущая 'a'
+    press(wrapper, keyEvent('Enter', false, { shiftKey: true }));
+    press(wrapper, keyEvent('Enter', false, { altKey: true }));
+    assert.deepEqual(activated, ['a', 'a'], 'Shift/Alt+Enter активируют строку');
+    // Прежний обработчик на Ctrl/Meta (кроме Ctrl+C) делал ранний `return` —
+    // активации не было; так же и теперь.
+    press(wrapper, keyEvent('Enter', true)); // Ctrl+Enter
+    press(wrapper, keyEvent('Enter', false, { metaKey: true }));
+    assert.deepEqual(activated, ['a', 'a'], 'Ctrl/Meta+Enter строку не активируют');
   });
 
   it('клик и двойной клик по строке: текущая, onRowClick, onActivate', async () => {

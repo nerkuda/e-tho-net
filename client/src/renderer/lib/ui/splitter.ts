@@ -42,6 +42,7 @@
 
 import { el } from '../dom.js';
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
+import { modifierChordVariants } from '../keymap-chords.js';
 
 /** Счётчик экземпляров: у каждого грифа свой контекст сочетаний (замыкание сессии). */
 let splitterContextSeq = 0;
@@ -265,7 +266,13 @@ export function wireSplitter(element: HTMLElement, options: SplitterDragOptions)
   defineKeyContext({
     id: contextId,
     bindings: [
-      { command: 'splitter.commit', chord: 'Enter', run: handleKey },
+      // Прежний обработчик коммитил размер на Enter НЕЗАВИСИМО от модификаторов
+      // — набор выражен привязками (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'splitter.commit',
+        chord,
+        run: handleKey,
+      })),
       { command: 'splitter.cancel', chord: 'Escape', run: handleKey },
       { command: 'splitter.left', chord: 'ArrowLeft', run: handleKey },
       { command: 'splitter.right', chord: 'ArrowRight', run: handleKey },

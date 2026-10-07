@@ -267,6 +267,22 @@ function press(root: ShimElement, key: string, target?: ShimElement): void {
   root.emit('focusout', {});
 }
 
+/** Нажатие с явными модификаторами (задача fd3d84f4, волна 1). */
+function pressMods(root: ShimElement, key: string, mods: Record<string, boolean>): void {
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
+    key,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    metaKey: false,
+    ...mods,
+    target: root,
+    preventDefault: (): void => undefined,
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
+}
+
 function currentKey(root: ShimElement): string | null {
   const el = root.querySelectorAll('.current')[0];
   return el === undefined ? null : (el.getAttribute('data-item') ?? el.parent?.getAttribute('data-group') ?? null);
@@ -338,6 +354,24 @@ describe('lib/ui/list: навигация компонента списка', ()
     press(root, 'ArrowDown');
     press(root, 'Enter');
     assert.deepEqual(spy.activations, ['group:g1', 'item:a']);
+    nav.destroy();
+  });
+
+  it('модификаторный Enter (Ctrl/Shift/Meta) активирует; Alt+Enter — нет, как прежде', () => {
+    const root = buildList([{ group: 'g1', items: ['a'] }]);
+    const { nav, spy } = mount(root);
+    press(root, 'ArrowDown'); // текущая — группа g1
+    pressMods(root, 'Enter', { ctrlKey: true });
+    pressMods(root, 'Enter', { shiftKey: true });
+    pressMods(root, 'Enter', { metaKey: true });
+    assert.deepEqual(
+      spy.activations,
+      ['group:g1', 'group:g1', 'group:g1'],
+      'Ctrl/Shift/Meta+Enter активируют текущую сущность (прежний обработчик игнорировал модификаторы)',
+    );
+    // Прежний `resolveNavAction(key, { altKey })` при Alt даёт null — Alt+Enter не активировал.
+    pressMods(root, 'Enter', { altKey: true });
+    assert.equal(spy.activations.length, 3, 'Alt+Enter активации не даёт, как и раньше');
     nav.destroy();
   });
 
