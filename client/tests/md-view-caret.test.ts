@@ -440,14 +440,19 @@ function viewWithSelection(
   anchor: { node: any; offset: number },
   focus: { node: any; offset: number },
   inside = true,
+  selectedText?: string,
 ): any {
-  const selection = {
+  const selection: any = {
     rangeCount: 1,
     anchorNode: anchor.node,
     anchorOffset: anchor.offset,
     focusNode: focus.node,
     focusOffset: focus.offset,
+    isCollapsed: selectedText === '',
   };
+  // Текст выделения доступен только когда задан явно: без него шов ведёт себя
+  // как прежде (пробельность не определяется — ошибка 0e39d301).
+  if (selectedText !== undefined) selection.toString = () => selectedText;
   return { contains: () => inside, ownerDocument: { getSelection: () => selection } };
 }
 
@@ -520,5 +525,67 @@ describe('просмотр с трансклюзией: склейка viewMap �
       anchor: start,
       head: start + 'текст'.length,
     });
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Пустое/пробельное выделение просмотра (ошибка 0e39d301)
+ * ------------------------------------------------------------------------- */
+
+describe('двойной клик по пустому месту: каретка без выделения (0e39d301)', () => {
+  it('двойной клик по слову выделяет диапазон слова', () => {
+    const start = 10;
+    const block = expandedBlock(start, 'слово хвост');
+    const view = viewWithSelection(
+      { node: block.childNodes[0], offset: 0 },
+      { node: block.childNodes[0], offset: 'слово'.length },
+      true,
+      'слово',
+    );
+
+    assert.deepEqual(viewSelectionToSourceRange(view, null), {
+      anchor: start,
+      head: start + 'слово'.length,
+    });
+  });
+
+  it('двойной клик по пробелам даёт пустое выделение (каретка в месте клика)', () => {
+    const start = 10;
+    const block = expandedBlock(start, 'слово  хвост');
+    // Браузер выделил прогон из двух пробелов (индексы 5..7).
+    const view = viewWithSelection(
+      { node: block.childNodes[0], offset: 5 },
+      { node: block.childNodes[0], offset: 7 },
+      true,
+      '  ',
+    );
+
+    assert.deepEqual(viewSelectionToSourceRange(view, null), { anchor: start + 5, head: start + 5 });
+  });
+
+  it('двойной клик по переводам строк тоже схлопывает выделение', () => {
+    const start = 40;
+    const block = expandedBlock(start, 'a\n\nb');
+    const view = viewWithSelection(
+      { node: block.childNodes[0], offset: 1 },
+      { node: block.childNodes[0], offset: 3 },
+      true,
+      '\n\n',
+    );
+
+    assert.deepEqual(viewSelectionToSourceRange(view, null), { anchor: start + 1, head: start + 1 });
+  });
+
+  it('пустое (collapsed) выделение остаётся кареткой без выделения', () => {
+    const start = 20;
+    const block = expandedBlock(start, 'текст');
+    const view = viewWithSelection(
+      { node: block.childNodes[0], offset: 2 },
+      { node: block.childNodes[0], offset: 2 },
+      true,
+      '',
+    );
+
+    assert.deepEqual(viewSelectionToSourceRange(view, null), { anchor: start + 2, head: start + 2 });
   });
 });

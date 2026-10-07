@@ -472,9 +472,11 @@ export function sourceRangeFromSelection(
  * Выделение DOM-просмотра → диапазон исходника с учётом карты развёрнутых
  * трансклюзий (ошибка 0fdd8c86). Читает выделение документа просмотра,
  * проверяет, что оба его конца внутри поля, и переводит позиции картой
- * `viewMap`, построенной `renderView` (`buildExpandedSourceMap`). `undefined` —
- * выделения нет, оно вне поля или у разметки нет офсета: тогда вход в правку
- * идёт без офсета (откат к каретке в конец).
+ * `viewMap`, построенной `renderView` (`buildExpandedSourceMap`). Пустое или
+ * пробельное выделение даёт схлопнутый диапазон (каретка в месте клика без
+ * выделения) — ошибка `0e39d301`. `undefined` — выделения нет, оно вне поля или
+ * у разметки нет офсета: тогда вход в правку идёт без офсета (откат к каретке в
+ * конец).
  *
  * Вынесено из `selectionInView` отдельной функцией-швом (задача 3e74715f):
  * иначе склейку «развёртка → `viewMap` → выделение просмотра» можно было
@@ -486,7 +488,31 @@ export function viewSelectionToSourceRange(
 ): MdSourceSelection | undefined {
   const nodes = viewSelectionNodes(view);
   if (nodes === null) return undefined;
-  return sourceRangeFromSelection(nodes.anchor, nodes.focus, viewMap ?? undefined) ?? undefined;
+  const range = sourceRangeFromSelection(nodes.anchor, nodes.focus, viewMap ?? undefined);
+  if (range === null) return undefined;
+  // Пустое/пробельное выделение (ошибка 0e39d301): двойной клик по пробелам,
+  // табам или пустым строкам браузер оформляет в выделение из одних пробельных
+  // символов. Переводить его в диапазон исходника нельзя — иначе в правке
+  // выделяется пустой участок. Вход в правку ставит каретку в начало выделения
+  // (`anchor` — место двойного клика) БЕЗ выделения; выделение слова проходит
+  // как есть.
+  if (isBlankViewSelection(view)) return { anchor: range.anchor, head: range.anchor };
+  return range;
+}
+
+/**
+ * Выделение просмотра пустое (`isCollapsed`) или состоит только из пробельных
+ * символов — пробелов, табов, переводов строк (ошибка `0e39d301`). Нужно, чтобы
+ * двойной клик по пустому месту не тащил в правку выделение пустого участка.
+ * Если текст выделения недоступен (в DOM-шиме нет `toString`) — считается
+ * непустым, прежнее поведение сохраняется.
+ */
+export function isBlankViewSelection(view: HTMLElement): boolean {
+  const selection = view.ownerDocument.getSelection?.() ?? null;
+  if (selection === null || selection.rangeCount === 0) return true;
+  if (selection.isCollapsed === true) return true;
+  if (typeof selection.toString !== 'function') return false;
+  return selection.toString().trim() === '';
 }
 
 /**
