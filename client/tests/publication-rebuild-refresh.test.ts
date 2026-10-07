@@ -200,6 +200,7 @@ function fakeMdEditor(initial: string): MdEditor {
     saveTransclusionEdit: () => Promise.resolve(),
     isTransclusionEditing: () => false,
     beginNestedTransclusionEdit: () => undefined,
+    toggleCollapseAtCaret: () => false,
     destroy: () => undefined,
   };
 }

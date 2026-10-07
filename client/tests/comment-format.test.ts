@@ -122,6 +122,30 @@ describe('comment-format: регистрация тел команд', () => {
     }
   });
 
+  it('тела команд сворачивания зовут метод редактора с нужным режимом (558cac34)', () => {
+    assert.equal(commands.hasCommentCommandRunner('comment.fold'), true);
+    assert.equal(commands.hasCommentCommandRunner('comment.unfold'), true);
+
+    const modes: string[] = [];
+    const editor = {
+      snapshot: () => ({ text: '', from: 0, to: 0 }),
+      toggleCollapseAtCaret: (mode: string) => {
+        modes.push(mode);
+        return true;
+      },
+    };
+    assert.equal(commands.runCommentCommand('comment.fold', host(editor)), true);
+    assert.equal(commands.runCommentCommand('comment.unfold', host(editor)), true);
+    assert.deepEqual(modes, ['fold', 'unfold']);
+
+    // Возврат `false` редактором (нет раздела под каретой) — команда уступает.
+    const noopEditor = {
+      snapshot: () => ({ text: '', from: 0, to: 0 }),
+      toggleCollapseAtCaret: () => false,
+    };
+    assert.equal(commands.runCommentCommand('comment.fold', host(noopEditor)), false);
+  });
+
   it('команда форматирования применяет правку к снимку редактора', () => {
     const editor = fakeEditor('hello', 0, 5);
     assert.equal(commands.runCommentCommand('comment.bold', host(editor)), true);

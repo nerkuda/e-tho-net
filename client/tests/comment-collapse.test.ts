@@ -21,7 +21,8 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { EditorState } from '@codemirror/state';
+import { EditorState, type TransactionSpec } from '@codemirror/state';
+import type { EditorView } from '@codemirror/view';
 
 import { ShimElement } from './dom-shim.js';
 import { wikiLinkLanguage } from '../src/renderer/editor/wiki-link.js';
@@ -113,6 +114,28 @@ function gutterMarkerCount(state: EditorState): number {
     it.next();
   }
   return count;
+}
+
+/** Минимальный CM6-«view» для toggleCollapseAtCaret: состояние + dispatch. */
+interface FakeView {
+  state: EditorState;
+  dispatch(spec: TransactionSpec): void;
+}
+
+/** Создаёт фейковый view (реальный EditorView в проекте недоступен — нет jsdom). */
+function fakeView(state: EditorState): EditorView {
+  const view: FakeView = {
+    state,
+    dispatch(spec) {
+      view.state = view.state.update(spec).state;
+    },
+  };
+  return view as unknown as EditorView;
+}
+
+/** Ставит каретку на позицию (для команд «под кареткой»). */
+function caretAt(view: EditorView, pos: number): void {
+  (view as unknown as FakeView).dispatch({ selection: { anchor: pos } });
 }
 
 describe('сворачивание разделов комментария (editor/comment-collapse.ts)', () => {
@@ -663,6 +686,120 @@ describe('сворачивание разделов комментария (edit
     assert.equal(mod.isCollapsedHiddenAt(toggled, doc.indexOf('текст А')), false, 'А не тронут');
     assert.equal(container.isCollapsed('h2#1'), false, 'в состояние контейнера не писали');
     assert.equal(storage.getItem('comment.collapse.net.comment:cA|#B'), '["h2#1"]');
+  });
+
+  it('команды Ctrl+Up/Down: сворачивание/разворачивание раздела под кареткой (558cac34)', async () => {
+    installShim();
+    installStorage();
+    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
+
+    const doc = '## Раздел\n\nтекст\n\n### Подраздел\n\nподтекст\n\n## Второй\n\nещё\n';
+    const makeState = (): EditorState =>
+      EditorState.create({
+        doc,
+        extensions: [
+          markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+          mod.commentCollapseExtension(mod.createCommentCollapseState('net', undefined)),
+        ],
+      });
+
+    // Каретка на строке заголовка H2#1 — Ctrl+Up сворачивает его тело.
+    const view = fakeView(makeState());
+    caretAt(view, doc.indexOf('## Раздел') + 2);
+    const body = doc.indexOf('текст\n');
+    assert.equal(mod.toggleCollapseAtCaret(view, 'fold'), true, 'раздел под кареткой найден');
+    assert.equal(mod.isCollapsedHiddenAt(view.state, body), true, 'Ctrl+Up свернул раздел');
+    // Идемпотентность: повторный Ctrl+Up оставляет раздел свёрнутым.
+    assert.equal(mod.toggleCollapseAtCaret(view, 'fold'), true);
+    assert.equal(mod.isCollapsedHiddenAt(view.state, body), true, 'повторный fold — no-op по состоянию');
+    // Ctrl+Down разворачивает.
+    assert.equal(mod.toggleCollapseAtCaret(view, 'unfold'), true);
+    assert.equal(mod.isCollapsedHiddenAt(view.state, body), false, 'Ctrl+Down развернул раздел');
+
+    // Каретка внутри тела — сворачивается самый ВЛОЖЕННЫЙ раздел (H3#1, не H2#1).
+    caretAt(view, doc.indexOf('подтекст'));
+    assert.equal(mod.toggleCollapseAtCaret(view, 'fold'), true);
+    assert.equal(mod.isCollapsedHiddenAt(view.state, doc.indexOf('подтекст')), true, 'H3#1 свёрнут');
+    assert.equal(
+      mod.isCollapsedHiddenAt(view.state, doc.indexOf('текст\n')),
+      false,
+      'внешний H2#1 не тронут — выбран вложенный раздел',
+    );
+
+    // `toggle` переключает то же состояние.
+    const tView = fakeView(makeState());
+    caretAt(tView, doc.indexOf('## Второй') + 2);
+    assert.equal(mod.toggleCollapseAtCaret(tView, 'toggle'), true);
+    assert.equal(mod.isCollapsedHiddenAt(tView.state, doc.indexOf('ещё')), true);
+    assert.equal(mod.toggleCollapseAtCaret(tView, 'toggle'), true);
+    assert.equal(mod.isCollapsedHiddenAt(tView.state, doc.indexOf('ещё')), false);
+  });
+
+  it('no-op, когда под кареткой нет сворачиваемого раздела или расширения нет (558cac34)', async () => {
+    installShim();
+    installStorage();
+    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
+
+    // Текст без заголовков/вложенных блоков — сворачивать нечего.
+    const plain = EditorState.create({
+      doc: 'просто текст без разметки\n',
+      extensions: [
+        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+        mod.commentCollapseExtension(mod.createCommentCollapseState('net', undefined)),
+      ],
+    });
+    assert.equal(mod.toggleCollapseAtCaret(fakeView(plain), 'fold'), false);
+    assert.equal(mod.toggleCollapseAtCaret(fakeView(plain), 'unfold'), false);
+
+    // Расширение сворачивания к редактору не подключено (поле другого вида).
+    const bare = EditorState.create({
+      doc: '## Заголовок\nтело\n',
+      extensions: [markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] })],
+    });
+    assert.equal(
+      mod.toggleCollapseAtCaret(fakeView(bare), 'fold'),
+      false,
+      'без расширения сворачивания — no-op, не падение',
+    );
+  });
+
+  it('раздел блока трансклюзии под кареткой пишет в своё состояние (558cac34)', async () => {
+    installShim();
+    installStorage();
+    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
+
+    const doc = '## Свой\nтекст А\n\n## Раздел Б\nтекст Б\n';
+    const region = { from: doc.indexOf('## Раздел Б'), to: doc.length, sourceId: 'B' };
+    const container = mod.createCommentCollapseState('net', 'comment:cA');
+    const scopedB = mod.createCommentCollapseState(
+      'net',
+      mod.transclusionCollapseOwnerKey('comment:cA', ['B']),
+    );
+    const factoryFor = (path: readonly string[]): ReturnType<Module['createCommentCollapseState']> =>
+      path.length === 1 && path[0] === 'B'
+        ? scopedB
+        : mod.createCommentCollapseState('net', undefined);
+
+    const state = EditorState.create({
+      doc,
+      extensions: [
+        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+        mod.commentCollapseExtension(container),
+        mod.collapseScopeExtension(factoryFor),
+        mod.blockEditCollapseFacet.of(region),
+      ],
+    });
+    const view = fakeView(state);
+    // Каретка в теле правящегося блока Б — раздел принадлежит пути #B.
+    caretAt(view, doc.indexOf('текст Б'));
+    assert.equal(mod.toggleCollapseAtCaret(view, 'fold'), true);
+    assert.equal(scopedB.isCollapsed('h2#1'), true, 'свёртка ушла в состояние пути #B');
+    assert.equal(container.isCollapsed('h2#1'), false, 'состояние контейнера не тронуто');
+    assert.equal(mod.isCollapsedHiddenAt(view.state, doc.indexOf('текст Б')), true);
+
+    assert.equal(mod.toggleCollapseAtCaret(view, 'unfold'), true);
+    assert.equal(scopedB.isCollapsed('h2#1'), false);
+    assert.equal(mod.isCollapsedHiddenAt(view.state, doc.indexOf('текст Б')), false);
   });
 
   it('регресс: состояние не едет на сервер', async () => {

@@ -999,3 +999,66 @@ export function commentCollapseExtension(state: CommentCollapseState): Extension
 
 /** Тестовый шов: разбор разделов и поле декораций редактора. */
 export const commentCollapseInternals = { collectSections, collapseDecoField };
+
+/* ---------------------------------------------------------------------------
+ * Сворачивание раздела под кареткой (задача 558cac34).
+ * ------------------------------------------------------------------------- */
+
+/** Режим команды сворачивания/разворачивания раздела под кареткой. */
+export type CollapseToggleMode = 'fold' | 'unfold' | 'toggle';
+
+/**
+ * Раздел под кареткой: среди разделов, содержащих позицию (строка-якорь или
+ * тело), — самый вложенный (наибольший `anchorFrom`). `null` — сворачиваемого
+ * раздела под кареткой нет.
+ */
+function sectionAtCaret(state: EditorState, pos: number): EditorSection | null {
+  const region = state.facet(blockEditCollapseFacet);
+  let found: EditorSection | null = null;
+  for (const section of collectSections(state, region)) {
+    if (pos < section.anchorFrom || pos > section.bodyTo) continue;
+    if (found === null || section.anchorFrom > found.anchorFrom) found = section;
+  }
+  return found;
+}
+
+/** Свёрнут ли раздел: поле-контейнер — по своему полю, блок — по своему пути. */
+function isSectionCollapsed(state: EditorState, section: EditorSection): boolean {
+  if (section.path === null) return state.field(collapseSetField).has(section.id);
+  const factory = state.facet(collapseScopeFacet);
+  return factory?.(section.path)?.isCollapsed(section.id) ?? false;
+}
+
+/** Целевое состояние раздела по режиму команды. */
+function targetCollapsed(mode: CollapseToggleMode, current: boolean): boolean {
+  if (mode === 'fold') return true;
+  if (mode === 'unfold') return false;
+  return !current;
+}
+
+/**
+ * Сворачивает/разворачивает раздел (заголовок H1–H6 или родительский пункт
+ * вложенного блока) под кареткой. `fold` — свернуть, `unfold` — развернуть,
+ * `toggle` — переключить. Возвращает `false` как no-op, если под кареткой нет
+ * сворачиваемого раздела либо расширение сворачивания к редактору не подключено
+ * (поле другого вида) — падения/порчи состояния не допускается.
+ */
+export function toggleCollapseAtCaret(view: EditorView, mode: CollapseToggleMode): boolean {
+  const state = view.state;
+  if (state.field(collapseSetField, false) === undefined) return false;
+  const section = sectionAtCaret(state, state.selection.main.head);
+  if (section === null) return false;
+  const next = targetCollapsed(mode, isSectionCollapsed(state, section));
+  if (section.path === null) {
+    view.dispatch({ effects: setCollapseEffect.of({ id: section.id, collapsed: next }) });
+    return true;
+  }
+  // Раздел блока трансклюзии пишет в своё производное состояние (состояние
+  // поля-контейнера не трогаем); декорации пересобирает refresh-эффект — как
+  // у кнопки-маркера гаттера (ошибка 4204e34c).
+  const factory = state.facet(collapseScopeFacet);
+  if (factory === null) return false;
+  factory(section.path).setCollapsed(section.id, next);
+  view.dispatch({ effects: refreshCollapseEffect.of(null) });
+  return true;
+}

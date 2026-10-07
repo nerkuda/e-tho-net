@@ -359,6 +359,79 @@ describe('команды поля комментария (editor/comment-command
     assert.equal(keymap.dispatchKeyEvent(second as KeyboardEvent), false);
     assert.equal(calls, 1, 'вне правки контекст поля снят');
   });
+
+  it('Ctrl+Up / Ctrl+Down маршрутизируются в сворачивание/разворачивание (558cac34)', () => {
+    assert.equal(keymap.COMMENT_KEYMAP_DEFAULTS['comment.fold'], 'Ctrl+ArrowUp');
+    assert.equal(keymap.COMMENT_KEYMAP_DEFAULTS['comment.unfold'], 'Ctrl+ArrowDown');
+
+    const modes: string[] = [];
+    const editor: any = {
+      snapshot: () => ({ text: '', from: 0, to: 0 }),
+      toggleCollapseAtCaret: (mode: string) => {
+        modes.push(mode);
+        return true;
+      },
+    };
+    mod.registerCommentCommand('comment.fold', {
+      run: (ctx) => ctx.editor.toggleCollapseAtCaret('fold'),
+    });
+    mod.registerCommentCommand('comment.unfold', {
+      run: (ctx) => ctx.editor.toggleCollapseAtCaret('unfold'),
+    });
+    const release = mod.enterCommentEdit(host(editor));
+
+    const up = keyEvent({ key: 'ArrowUp', code: 'ArrowUp', ctrlKey: true });
+    assert.equal(keymap.dispatchKeyEvent(up as KeyboardEvent), true);
+    assert.equal(up.defaultPrevented, true);
+    const down = keyEvent({ key: 'ArrowDown', code: 'ArrowDown', ctrlKey: true });
+    assert.equal(keymap.dispatchKeyEvent(down as KeyboardEvent), true);
+    assert.deepEqual(modes, ['fold', 'unfold'], 'комбинации идут через общий диспетчер');
+
+    release();
+  });
+
+  it('переопределение сочетаний меняет маршрут команд сворачивания (558cac34)', () => {
+    const modes: string[] = [];
+    const editor: any = {
+      snapshot: () => ({ text: '', from: 0, to: 0 }),
+      toggleCollapseAtCaret: (mode: string) => {
+        modes.push(mode);
+        return true;
+      },
+    };
+    mod.registerCommentCommand('comment.fold', {
+      run: (ctx) => ctx.editor.toggleCollapseAtCaret('fold'),
+    });
+    const release = mod.enterCommentEdit(host(editor));
+
+    // Пользователь переназначил Ctrl+Up на Ctrl+Shift+U (как из слоя настроек).
+    keymap.setKeymapOverrides({ 'comment.fold': 'Ctrl+Shift+U' });
+    assert.equal(
+      keymap.dispatchKeyEvent(keyEvent({ key: 'ArrowUp', code: 'ArrowUp', ctrlKey: true }) as KeyboardEvent),
+      false,
+      'старое сочетание больше не срабатывает',
+    );
+    assert.equal(
+      keymap.dispatchKeyEvent(
+        keyEvent({ key: 'u', code: 'KeyU', ctrlKey: true, shiftKey: true }) as KeyboardEvent,
+      ),
+      true,
+      'новое сочетание срабатывает',
+    );
+    assert.deepEqual(modes, ['fold'], 'команда исполнена по новому сочетанию');
+
+    keymap.setKeymapOverrides({});
+    release();
+  });
+
+  it('команды сворачивания видны в словаре команд с осмысленными подписями', () => {
+    for (const id of ['comment.fold', 'comment.unfold']) {
+      const def = mod.COMMENT_COMMANDS[id];
+      assert.ok(def !== undefined, `нет описания команды ${id}`);
+      const label = String((ru as Record<string, string>)[def.labelKey]);
+      assert.ok(label.length > 0 && label !== def.labelKey, `подпись команды ${id} из словаря`);
+    }
+  });
 });
 
 /**

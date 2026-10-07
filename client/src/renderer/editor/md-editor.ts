@@ -24,6 +24,10 @@ import {
 import { Decoration, drawSelection, EditorView, keymap, type DecorationSet } from '@codemirror/view';
 
 import { findMatches } from './text-search.js';
+import {
+  toggleCollapseAtCaret as runCollapseToggle,
+  type CollapseToggleMode,
+} from './comment-collapse.js';
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
@@ -157,6 +161,14 @@ export interface MdEditor {
    * Позиции вложенной ссылки в контейнере нет, поэтому правится источник.
    */
   beginNestedTransclusionEdit(outerFrom: number, sourceId: string, section: string | null): void;
+  /**
+   * Сворачивает/разворачивает раздел под кареткой в режиме правки (команды
+   * `comment.fold`/`comment.unfold`, умолчания Ctrl+Up / Ctrl+Down; задача
+   * 558cac34). `fold` — свернуть, `unfold` — развернуть, `toggle` —
+   * переключить. Возвращает `false` как no-op, если под кареткой нет
+   * сворачиваемого раздела.
+   */
+  toggleCollapseAtCaret(mode: CollapseToggleMode): boolean;
 }
 
 /** Эффект установки подсветки поиска. */
@@ -555,6 +567,7 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       if (ref === null) return;
       void beginNestedBlockEdit(view, ref, { sourceId, section });
     },
+    toggleCollapseAtCaret: (mode) => runCollapseToggle(view, mode),
     destroy: () => {
       alive = false;
       listeners.clear();

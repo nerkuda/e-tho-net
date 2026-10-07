@@ -203,6 +203,23 @@ describe('диалог настройки сочетаний клавиш (edito
     assert.equal(resetBtn?.disabled, true);
   });
 
+  it('команды сворачивания/разворачивания есть в диалоге со своими умолчаниями (558cac34)', () => {
+    dialog.showCommentHotkeysDialog();
+    const rows = listRows();
+
+    const fold = rows.find((row) => row.dataset['command'] === 'comment.fold');
+    assert.ok(fold !== undefined, 'строка «Свернуть раздел под курсором» в списке');
+    assert.equal(fold.querySelector('[data-chord]')?.textContent, 'Ctrl+ArrowUp');
+    assert.equal(
+      fold.querySelector('.comment-hotkeys-row__label')?.textContent,
+      'Свернуть раздел под курсором',
+    );
+
+    const unfold = rows.find((row) => row.dataset['command'] === 'comment.unfold');
+    assert.ok(unfold !== undefined, 'строка «Развернуть раздел под курсором» в списке');
+    assert.equal(unfold.querySelector('[data-chord]')?.textContent, 'Ctrl+ArrowDown');
+  });
+
   it('пользовательское переопределение отражается в строке диалога', () => {
     keymap.setKeymapOverrides({ 'comment.bold': 'Ctrl+Alt+B' });
     dialog.showCommentHotkeysDialog();

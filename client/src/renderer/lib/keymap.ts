@@ -82,6 +82,10 @@ export const COMMENT_KEYMAP_DEFAULTS: Readonly<Record<string, string>> = Object.
   'comment.codeBlock': 'Ctrl+Shift+K',
   'comment.moveLineUp': 'Alt+ArrowUp',
   'comment.moveLineDown': 'Alt+ArrowDown',
+  // Сворачивание/разворачивание раздела под кареткой (задача 558cac34):
+  // команды идут через общий диспетчер контекста поля комментария.
+  'comment.fold': 'Ctrl+ArrowUp',
+  'comment.unfold': 'Ctrl+ArrowDown',
   'comment.indentList': 'Tab',
   'comment.outdentList': 'Shift+Tab',
   'comment.find': 'Ctrl+F',

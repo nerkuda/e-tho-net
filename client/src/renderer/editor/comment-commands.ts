@@ -348,6 +348,19 @@ export const COMMENT_COMMANDS: Readonly<Record<string, CommentCommandDef>> = Obj
     icon: 'arrow-down',
     showChordInMenu: true,
   },
+  // Сворачивание/разворачивание раздела под кареткой в режиме правки (задача
+  // 558cac34). В тулбар/меню не выносятся — только команды и их настраиваемые
+  // сочетания (диалог сочетаний строится из `COMMENT_KEYMAP_DEFAULTS`).
+  'comment.fold': {
+    id: 'comment.fold',
+    labelKey: 'comment.cmd.fold',
+    icon: 'chevrons-up',
+  },
+  'comment.unfold': {
+    id: 'comment.unfold',
+    labelKey: 'comment.cmd.unfold',
+    icon: 'chevrons-down',
+  },
   'comment.split': { id: 'comment.split', labelKey: 'comment.cmd.split', icon: 'split' },
   // Команды создания мыслей из выделения (ТП3, задача 5f854e7a; элемент
   // интерфейса `2a21c27e`). Тела команд живут в `editor/comment-thought-create.ts`.

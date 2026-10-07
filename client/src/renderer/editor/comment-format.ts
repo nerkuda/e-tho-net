@@ -216,6 +216,16 @@ export function installCommentFormatCommands(): void {
     state: (snap) => ({ disabled: !canMoveLine(snap, 'down') }),
   });
 
+  // Сворачивание/разворачивание раздела под кареткой (задача 558cac34): тела —
+  // в CM6-расширении сворачивания (`MdEditor.toggleCollapseAtCaret`). `false`
+  // означает «под кареткой нет сворачиваемого раздела» — команда уступает.
+  registerCommentCommand('comment.fold', {
+    run: (ctx) => ctx.editor.toggleCollapseAtCaret('fold'),
+  });
+  registerCommentCommand('comment.unfold', {
+    run: (ctx) => ctx.editor.toggleCollapseAtCaret('unfold'),
+  });
+
   registerClipboardCommands();
   registerClipboardAsTextCommands();
   // Команда подменю настроек «Сочетания клавиш» открывает диалог настройки

@@ -302,6 +302,8 @@ describe('lib/keymap: умолчания команд комментария (р
       'comment.codeBlock': 'Ctrl+Shift+K',
       'comment.moveLineUp': 'Alt+ArrowUp',
       'comment.moveLineDown': 'Alt+ArrowDown',
+      'comment.fold': 'Ctrl+ArrowUp',
+      'comment.unfold': 'Ctrl+ArrowDown',
       'comment.indentList': 'Tab',
       'comment.outdentList': 'Shift+Tab',
       'comment.find': 'Ctrl+F',
