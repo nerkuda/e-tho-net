@@ -36,10 +36,12 @@
  * Inline constructs owned by the renderer AND the standard emphasis / code /
  * strikethrough spans get exact ranges and after-anchors; the delimiter
  * positions are captured from the built-in inline rules as they tokenize, so
- * no second parser is introduced. Markdown links and images are still NOT
- * annotated (their rendered text is a label that may differ from the source
- * label coordinates); text after such a construct inside one block therefore
- * keeps the block-anchored approximation.
+ * no second parser is introduced. Markdown links, autolinks and images get
+ * their label range / after-anchor too (ошибка `809fb567`): the label bounds
+ * are read from the first nested `tokenize` call of markdown-it's `link` rule,
+ * autolink coordinates come from its angle brackets, and an image contributes
+ * only an after-anchor (its label renders to the `alt` attribute, not to
+ * characters).
  *
  * A construct is marked `data-md-leaf` (verbatim 1:1 text) only when it has no
  * annotated descendant: nested constructs (`==a [[Мысль]] b==`,
@@ -88,13 +90,9 @@
  *
  * Honest limits (out of scope of the source map, задача `ba68771d`):
  *
- * - A markdown link or image inside a construct (`**[a](u)**`) renders as its
- *   label, which is neither annotated nor counted as a text run, so the
- *   mapping stays approximate there. The same holds for a shortened run
- *   (escape/entity, embedded HTML comment) inside a link/image label or an
- *   autolink — those constructs carry no `data-md-*` annotation at all, so the
- *   nearest annotated ancestor is the block and the label markup drifts
- *   (отдельная ошибка `809fb567`).
+ * - A link whose URL is rejected by the safety allow-list renders as plain text
+ *   (its `<a>` and attributes are dropped), so the label markup of that
+ *   construct is not compensated — the nearest annotated ancestor is the block.
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -305,8 +303,10 @@ const RANGE_BLOCK_TYPES = new Set<string>([
 /**
  * Inline construct token types that MAY carry {@link MD_SOURCE_LEAF_ATTR} —
  * their visible text is a verbatim source slice when they own no annotated
- * descendants. `wiki_link` is absent on purpose: its renderer emits the leaf
- * attribute itself (the span body is always verbatim).
+ * descendants. `link_open` is included since its label renders 1:1 (the label
+ * range is captured by the wrapper below, ошибка `809fb567`); `wiki_link` is
+ * absent on purpose: its renderer emits the leaf attribute itself (the span
+ * body is always verbatim).
  */
 const LEAF_INLINE_TYPES = new Set<string>([
   'mark_open',
@@ -315,6 +315,7 @@ const LEAF_INLINE_TYPES = new Set<string>([
   'em_open',
   's_open',
   'code_inline',
+  'link_open',
 ]);
 
 /**
@@ -688,6 +689,7 @@ interface InlineStateLike {
   tokens: Token[];
   delimiters: InlineDelimiter[];
   tokens_meta: Array<{ delimiters?: InlineDelimiter[] } | null>;
+  md: { inline: { tokenize(state: InlineStateLike): void } };
 }
 
 /** A markdown-it inline rule function. */
@@ -717,6 +719,15 @@ function wrapInlineRule(
   if (entry === undefined) return;
   entry.fn = wrap(entry.fn);
   ruler.__cache__ = null;
+}
+
+/** First token of `type` at or after `from` (the rule may flush pending text first). */
+function firstTokenOfType(tokens: readonly Token[], from: number, type: string): Token | undefined {
+  for (let i = from; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.type === type) return token;
+  }
+  return undefined;
 }
 
 /** The marker character a delimiter rule is starting on, or null. */
@@ -846,6 +857,83 @@ function installInlineCapture(md: MarkdownIt): void {
     return ok;
   });
 
+  // Markdown links, images and autolinks (ошибка 809fb567). Without annotation
+  // their label rendered as ordinary text whose source markup (and any shortened
+  // run inside — escape / entity / embedded HTML comment marker) was invisible
+  // to the shift map, so a click after them drifted. markdown-it's `link` rule
+  // keeps no label bounds, so the FIRST nested `tokenize` call it makes (with
+  // `pos`/`posMax` set exactly to the label) is intercepted for the duration of
+  // the rule; deeper calls (a `==…==` inside the label) are ignored.
+  wrapInlineRule(md, 'link', (orig) => (state, silent) => {
+    if (silent || !sourceMapEnabled(state.env)) return orig(state, silent);
+    const before = state.tokens.length;
+    const tokenizer = state.md.inline;
+    const origTokenize = tokenizer.tokenize;
+    let label: RelativeSourceRange | null = null;
+    let depth = 0;
+    tokenizer.tokenize = (inner) => {
+      if (depth === 0 && label === null) label = { start: inner.pos, end: inner.posMax };
+      depth++;
+      try {
+        return origTokenize.call(tokenizer, inner);
+      } finally {
+        depth--;
+      }
+    };
+    let ok: boolean;
+    try {
+      ok = orig(state, silent);
+    } finally {
+      tokenizer.tokenize = origTokenize;
+    }
+    if (ok && label !== null) {
+      // `state.push` flushes pending plain text before the token, so the rule
+      // may have inserted a `text` token at `before` — look the opener up.
+      const open = firstTokenOfType(state.tokens, before, 'link_open');
+      if (open !== undefined) {
+        const meta = (open.meta ?? (open.meta = {})) as RangeCarrier;
+        meta.mdRelative = label;
+        meta.mdRelativeAfter = state.pos;
+      }
+    }
+    return ok;
+  });
+
+  wrapInlineRule(md, 'image', (orig) => (state, silent) => {
+    if (silent || !sourceMapEnabled(state.env)) return orig(state, silent);
+    const before = state.tokens.length;
+    const ok = orig(state, silent);
+    if (ok) {
+      const token = firstTokenOfType(state.tokens, before, 'image');
+      if (token !== undefined) {
+        // An image label renders to the `alt` ATTRIBUTE, not to characters, so
+        // only the after-anchor is meaningful: the `<img>` occupies zero
+        // rendered characters and the text after it starts at its source end.
+        const meta = (token.meta ?? (token.meta = {})) as RangeCarrier;
+        meta.mdRelativeAfter = state.pos;
+      }
+    }
+    return ok;
+  });
+
+  wrapInlineRule(md, 'autolink', (orig) => (state, silent) => {
+    if (silent || !sourceMapEnabled(state.env)) return orig(state, silent);
+    const before = state.tokens.length;
+    const start = state.pos;
+    const ok = orig(state, silent);
+    if (ok) {
+      const open = firstTokenOfType(state.tokens, before, 'link_open');
+      const end = state.pos;
+      if (open !== undefined) {
+        // `<url>` — the visible text is the URL between the angle brackets.
+        const meta = (open.meta ?? (open.meta = {})) as RangeCarrier;
+        meta.mdRelative = { start: start + 1, end: end - 1 };
+        meta.mdRelativeAfter = end;
+      }
+    }
+    return ok;
+  });
+
   md.inline.ruler2.after('emphasis', 'source_map_inline', (state) => {
     if (!sourceMapEnabled(state.env)) return true;
     applyDelimiterPairs(state as unknown as InlineStateLike, positions);
@@ -891,6 +979,31 @@ export function sourceMapPlugin(md: MarkdownIt): void {
       // (no source character), so drop it — otherwise it shifts the rendered
       // offset of the text after the break (задача ba68771d).
       return html.replace('<br', `<br ${MD_SOURCE_AFTER_ATTR}="${after}"`).replace(/\n$/, '');
+    };
+  }
+
+  // The image renderer builds its `<img … />` tag by hand and never emits token
+  // attributes, so inject the captured source coordinates (an after-anchor and,
+  // when present, the label range) into the emitted tag under `sourceMap` only
+  // (ошибка `809fb567`).
+  const baseImage = md.renderer.rules.image;
+  if (baseImage !== undefined) {
+    md.renderer.rules.image = (tokens, idx, options, env, self) => {
+      const html = baseImage(tokens, idx, options, env, self);
+      if (!sourceMapEnabled(env)) return html;
+      const meta = tokens[idx]!.meta as RangeCarrier | null;
+      const attrs: string[] = [];
+      if (meta?.mdRange !== undefined) {
+        attrs.push(
+          `${MD_SOURCE_START_ATTR}="${meta.mdRange.start}"`,
+          `${MD_SOURCE_END_ATTR}="${meta.mdRange.end}"`,
+        );
+      }
+      if (meta?.mdAfter !== undefined) attrs.push(`${MD_SOURCE_AFTER_ATTR}="${meta.mdAfter}"`);
+      // A rejected URL renders as plain alt text (no `<img>`) — nothing to inject.
+      if (attrs.length === 0 || !html.startsWith('<img')) return html;
+      const insertAt = html.endsWith(' />') ? html.length - 3 : html.length - 1;
+      return `${html.slice(0, insertAt)} ${attrs.join(' ')}${html.slice(insertAt)}`;
     };
   }
 }

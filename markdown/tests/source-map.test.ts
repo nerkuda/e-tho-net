@@ -725,12 +725,78 @@ test('байт-паритет: не-leaf конструкции с escape вне
   assert.equal(renderMarkdown('**b ' + bs + '* d ==c==**'), '<p><strong>b * d <mark>c</mark></strong></p>\n');
 });
 
-test('ограничение: markdown-ссылка внутри конструкции смещает leaf-клик', () => {
-  // Ссылка рендерится меткой (не аннотируется и не считается текстовым
-  // прогоном), поэтому карта сдвига её не компенсирует — честное ограничение
-  // задокументировано в шапке source-map.ts.
+// ---------------------------------------------------------------------------
+// Ошибка 809fb567: метки ссылок / картинок / autolink аннотируются
+// ---------------------------------------------------------------------------
+
+test('ссылка без сокращений: диапазон метки, клик внутри и после точен', () => {
+  const src = 'см [метка](http://e) хвост';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const start = src.indexOf('метка');
+  assert.match(
+    html,
+    new RegExp(`<a [^>]*data-md-start="${start}"[^>]*data-md-end="${start + 'метка'.length}"`),
+    html,
+  );
+  assert.match(html, /<a [^>]*data-md-after="\d+"/, html);
+  assertClickInText(src, 'метка', 'т');
+  assert.equal(clickOffset(src, ' хвост', 'х'), src.indexOf('хвост'));
+});
+
+test('autolink: диапазон URL, клик внутри и после точен', () => {
+  const src = 'см <http://e> хвост';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const start = src.indexOf('http://e');
+  assert.match(
+    html,
+    new RegExp(`<a [^>]*data-md-start="${start}"[^>]*data-md-end="${start + 'http://e'.length}"`),
+    html,
+  );
+  assertClickInText(src, 'http://e', 'p');
+  assert.equal(clickOffset(src, ' хвост', 'х'), src.indexOf('хвост'));
+});
+
+test('картинка: текст после неё мапится через анкер <img>', () => {
+  const src = 'до ![a](http://e) после';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.match(html, /<img [^>]*data-md-after="\d+"/, html);
+  assert.equal(clickOffset(src, ' после', 'п'), src.indexOf('после'));
+});
+
+test('ссылка: HTML-комментарий в метке компенсируется, клик точен (809fb567)', () => {
+  const src = '[a<!--c-->b](http://x) c';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.match(html, /<a [^>]*data-md-shift="\d+:\d+!"/, html);
+  assert.equal(src.indexOf('b'), 10);
+  assert.equal(clickOffset(src, 'ab', 'b'), 10);
+  // текст после ссылки — через её анкер
+  assert.equal(clickOffset(src, ' c', 'c'), src.indexOf(' c') + 1);
+});
+
+test('картинка: комментарий в метке не мешает тексту после неё (809fb567)', () => {
+  const src = '![a<!--c-->b](http://x) e';
+  assert.equal(src.indexOf(' e'), 23);
+  assert.equal(clickOffset(src, ' e', 'e'), src.indexOf(' e') + 1);
+});
+
+test('autolink: комментарий после него компенсируется, клик точен (809fb567)', () => {
+  const src = '<http://x> a<!--c-->b';
+  assert.equal(src.indexOf('b'), 20);
+  assert.equal(clickOffset(src, 'ab', 'b'), 20);
+});
+
+test('ссылка внутри конструкции: аннотирована, клик внутри и после точен (809fb567)', () => {
+  // Бывшее честное ограничение: ссылка не аннотировалась и не считалась
+  // текстовым прогоном, поэтому клик после неё внутри strong смещался.
   const src = '**[метка](http://e) хвост**';
-  assert.notEqual(clickOffset(src, 'хвост', 'хвост'), src.indexOf('хвост'));
+  assert.equal(clickOffset(src, 'хвост', 'х'), src.indexOf('хвост'));
+  assertClickInText(src, 'метка', 'е');
+});
+
+test('байт-паритет: ссылки/картинки/autolink без sourceMap не меняются', () => {
+  assert.equal(renderMarkdown('[метка](http://e) хвост'), '<p><a href="http://e">метка</a> хвост</p>\n');
+  assert.equal(renderMarkdown('<http://e> хвост'), '<p><a href="http://e">http://e</a> хвост</p>\n');
+  assert.equal(renderMarkdown('![a](http://e) после'), '<p><img src="http://e" alt="a" /> после</p>\n');
 });
 
 // ---------------------------------------------------------------------------
