@@ -84,6 +84,19 @@ function findByClass(root: ShimElement, className: string): ShimElement | undefi
   return undefined;
 }
 
+/**
+ * Ожидаемая подпись пункта меню с сочетанием: базовая подпись из словаря плюс
+ * действующее сочетание (как `commandTitle` — `effectiveChord` с откатом на
+ * умолчание реестра).
+ */
+function menuLabel(id: string): string {
+  const def = (mod as any).COMMENT_COMMANDS[id];
+  const chord =
+    (keymap as any).effectiveChord(id) ?? (keymap as any).COMMENT_KEYMAP_DEFAULTS[id] ?? null;
+  const base = String((ru as Record<string, string>)[def.labelKey]);
+  return chord === null ? base : `${base} (${chord})`;
+}
+
 describe('команды поля комментария (editor/comment-commands.ts)', () => {
   beforeEach(async () => {
     installShim();
@@ -151,17 +164,20 @@ describe('команды поля комментария (editor/comment-command
     assert.ok(labels.includes('Разделить выделение на мысли'));
     assert.ok(labels.includes('Отмена'));
     assert.ok(labels.includes('Сохранить'));
-    // Перемещение строк — в контекстном меню с сочетаниями в подписи, но НЕ в
+    // Перемещение строк — в контекстном меню с сочетанием в подписи, но НЕ в
     // тулбаре (элемент 0562e0e3; решение пользователя по ошибке ea97b0a1).
-    assert.ok(labels.includes(ru['comment.cmd.moveLineUp']));
-    assert.ok(labels.includes(ru['comment.cmd.moveLineDown']));
-    assert.ok(ru['comment.cmd.moveLineUp'].includes('Alt+↑'));
-    assert.ok(ru['comment.cmd.moveLineDown'].includes('Alt+↓'));
+    assert.ok(labels.includes(menuLabel('comment.moveLineUp')));
+    assert.ok(labels.includes(menuLabel('comment.moveLineDown')));
     assert.ok(
-      labels.indexOf(ru['comment.cmd.moveLineUp']) > labels.indexOf('Разделить выделение на мысли'),
+      labels.indexOf(menuLabel('comment.moveLineUp')) > labels.indexOf('Разделить выделение на мысли'),
       'перемещение строк идёт после «разделения»',
     );
-    assert.ok(labels.indexOf(ru['comment.cmd.moveLineDown']) < labels.indexOf('Отмена'));
+    assert.ok(labels.indexOf(menuLabel('comment.moveLineDown')) < labels.indexOf('Отмена'));
+
+    // Соседние пункты (copy/cut/paste/find) сочетаний в подписи не несут —
+    // их тема отдельная, здесь только перемещение строк.
+    assert.ok(labels.includes('Копировать'));
+    assert.ok(labels.includes('Поиск'));
 
     const submenuIds = items
       .filter((item) => item.submenu !== undefined)
@@ -185,7 +201,7 @@ describe('команды поля комментария (editor/comment-command
     });
     const up = mod
       .buildCommentMenuItems(host())
-      .find((item) => item.label === ru['comment.cmd.moveLineUp']);
+      .find((item) => item.label === menuLabel('comment.moveLineUp'));
     assert.ok(up !== undefined, 'пункт «переместить строку выше» обязан быть в меню');
     assert.equal(up.disabled, false);
     up.onClick?.();
@@ -198,9 +214,35 @@ describe('команды поля комментария (editor/comment-command
     });
     const down = mod
       .buildCommentMenuItems(host())
-      .find((item) => item.label === ru['comment.cmd.moveLineDown']);
+      .find((item) => item.label === menuLabel('comment.moveLineDown'));
     assert.ok(down !== undefined);
     assert.equal(down.disabled, true);
+  });
+
+  it('подпись пункта меню перемещения строки отражает действующее сочетание', () => {
+    const def = mod.COMMENT_COMMANDS['comment.moveLineUp']!;
+    const base = String((ru as Record<string, string>)[def.labelKey]);
+
+    // (а) дефолтное сочетание из единого реестра умолчаний.
+    const byDefault = mod
+      .buildCommentMenuItems(host())
+      .find((item) => item.label.startsWith(base));
+    assert.equal(byDefault?.label, menuLabel('comment.moveLineUp'));
+    assert.equal(byDefault?.label, `${base} (${keymap.COMMENT_KEYMAP_DEFAULTS['comment.moveLineUp']})`);
+
+    // (б) после переопределения подпись несёт НОВОЕ сочетание, а не хардкод.
+    keymap.setKeymapOverrides({ 'comment.moveLineUp': 'Ctrl+Alt+M' });
+    const overridden = mod
+      .buildCommentMenuItems(host())
+      .find((item) => item.label.startsWith(base));
+    assert.equal(overridden?.label, `${base} (Ctrl+Alt+M)`);
+    keymap.setKeymapOverrides({});
+
+    // (в) диалог настройки берёт базовую подпись без сочетания (колонка
+    // сочетания — отдельно), поэтому дублирования нет.
+    assert.equal(base, ru['comment.cmd.moveLineUp']);
+    assert.equal(base.includes('('), false);
+    assert.equal(base.includes('Alt+'), false);
   });
 
   it('меню блока трансклюзии: шесть команд в порядке макета, подписи из словаря', () => {

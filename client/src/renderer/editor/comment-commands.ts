@@ -200,6 +200,13 @@ export interface CommentCommandDef {
   id: string;
   labelKey: MessageKey;
   icon: IconName;
+  /**
+   * Показывать действующее сочетание в подписи пункта контекстного меню
+   * (динамически, как у кнопок тулбара). По умолчанию — нет: словарь
+   * `lib/menu.ts` не несёт отдельного поля сочетания, а пункты с сочетанием
+   * перечисляет элемент `0562e0e3` (перемещение строк).
+   */
+  showChordInMenu?: boolean;
 }
 
 /** Команда-лист раскладки. */
@@ -332,11 +339,13 @@ export const COMMENT_COMMANDS: Readonly<Record<string, CommentCommandDef>> = Obj
     id: 'comment.moveLineUp',
     labelKey: 'comment.cmd.moveLineUp',
     icon: 'arrow-up',
+    showChordInMenu: true,
   },
   'comment.moveLineDown': {
     id: 'comment.moveLineDown',
     labelKey: 'comment.cmd.moveLineDown',
     icon: 'arrow-down',
+    showChordInMenu: true,
   },
   'comment.split': { id: 'comment.split', labelKey: 'comment.cmd.split', icon: 'split' },
   // Команды создания мыслей из выделения (ТП3, задача 5f854e7a; элемент
@@ -458,7 +467,8 @@ export const COMMENT_TOOLBAR_LAYOUT: readonly CommentLayoutNode[] = Object.freez
  * и «разделение» (ТП3) присутствуют как точки расширения — их исполнение
  * регистрируют соответствующие под-проекты. «Переместить строку выше/ниже»
  * (Alt+↑/↓) — в меню, но не в тулбаре (решение пользователя по ошибке
- * `ea97b0a1`, 2026-10-07); сочетания к подписям добавлены в словаре `ru.ts`.
+ * `ea97b0a1`, 2026-10-07); сочетание в подписи — динамическое
+ * (`commandTitle`/`effectiveChord`), как у кнопок тулбара.
  */
 export const COMMENT_MENU_LAYOUT: readonly CommentLayoutNode[] = Object.freeze([
   { kind: 'command', id: 'comment.bold' },
@@ -517,7 +527,10 @@ function layoutToMenuItems(
     if (def === undefined) continue;
     items.push(
       menuAction(
-        t(def.labelKey),
+        // Пункты с сочетанием (элемент `0562e0e3`) несут действующее сочетание
+        // динамически — тем же `commandTitle`, что и кнопка тулбара, поэтому
+        // переопределение в диспетчере сочетаний сразу видно в меню.
+        def.showChordInMenu === true ? commandTitle(node.id, def) : t(def.labelKey),
         () => {
           runCommentCommand(node.id, host);
         },
@@ -579,7 +592,7 @@ export function buildTransclusionMenuItems(
   return items;
 }
 
-/** Подпись кнопки: название команды и действующее сочетание (если есть). */
+/** Подпись команды (кнопки тулбара или пункта меню): название и действующее сочетание. */
 function commandTitle(id: string, def: CommentCommandDef): string {
   const label = t(def.labelKey);
   // Действующее сочетание: пользовательское переопределение или сочетание из
