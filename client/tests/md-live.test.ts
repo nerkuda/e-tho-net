@@ -245,27 +245,38 @@ test('task-список: вне — маркер `[ ]` заменён чекбо
   assert.equal(hasHiddenMark(inside, 2, 5), false, 'маркер `[ ]` виден');
 });
 
-test('маркированный список: вне — `-` скрыт; внутри и вплотную — виден', () => {
+/** Текст виджета-маркера списка на диапазоне `[from,to)` (или null). */
+function listMarker(state: EditorState, from: number, to: number): string | null {
+  const r = allSpecs(state).find((x) => x.from === from && x.to === to);
+  const w = r?.spec.widget as { marker?: string } | undefined;
+  return w?.marker ?? null;
+}
+
+test('маркированный список: вне — отрисован маркер `•`; внутри и вплотную — исходный `-`', () => {
   // ListItem [0,6), ListMark [0,1); «пара» отделена пустой строкой от списка.
   const doc = '- item\n\nпара';
-  // Вне пункта: маркер списка скрыт (пункт отрисован как в просмотре).
-  assert.equal(hasHiddenMark(buildState(doc, doc.length), 0, 1), true, '`-` скрыт вне');
-  // Внутри пункта: исходный маркер виден.
-  assert.equal(hasHiddenMark(buildState(doc, 3), 0, 1), false, '`-` виден внутри');
-  // Вплотную (перед маркером): исходный маркер виден.
-  assert.equal(hasHiddenMark(buildState(doc, 0), 0, 1), false, '`-` виден вплотную');
+  // Вне пункта: `-` заменён отрисованным маркером списка (как `•` в просмотре),
+  // не скрыт и не оставлен исходником.
+  const away = buildState(doc, doc.length);
+  assert.equal(listMarker(away, 0, 1), '•', '`-` заменён маркером `•`');
+  assert.equal(hasHiddenMark(away, 0, 1), false, 'маркер не «скрыт» — он отрисован');
+  // Внутри пункта и вплотную: исходный `-`, виджета нет.
+  assert.equal(listMarker(buildState(doc, 3), 0, 1), null, 'внутри — исходник');
+  assert.equal(listMarker(buildState(doc, 0), 0, 1), null, 'вплотную — исходник');
 });
 
-test('нумерованный список: `N.` скрыт вне пункта, виден внутри — по каждому пункту отдельно', () => {
-  // "1. one\n2. two\n\nпара": ListItem1 [0,6) ListMark [0,2); ListItem2 [7,13) ListMark [7,9).
-  const doc = '1. one\n2. two\n\nпара';
+test('нумерованный список: вне — номер `N.` отрисован (не теряется); внутри — исходник', () => {
+  // "1. one\n2) two\n\nпара": ListItem1 [0,6) ListMark [0,2); ListItem2 [7,13) ListMark [7,9).
+  const doc = '1. one\n2) two\n\nпара';
   const away = buildState(doc, doc.length);
-  assert.equal(hasHiddenMark(away, 0, 2), true, '`1.` первого пункта скрыт вне');
-  assert.equal(hasHiddenMark(away, 7, 9), true, '`2.` второго пункта скрыт вне');
-  // Внутри первого пункта: его маркер виден, маркер соседнего пункта — скрыт.
+  // Номер сохраняется как в просмотре; `2)` нормализуется к `2.` (decimal).
+  assert.equal(listMarker(away, 0, 2), '1.', 'номер первого пункта отрисован');
+  assert.equal(listMarker(away, 7, 9), '2.', 'номер второго пункта отрисован (2) → 2.)');
+  assert.equal(hasHiddenMark(away, 0, 2), false, 'номер не скрыт');
+  // Внутри первого пункта: исходник без виджета; маркер соседнего пункта отрисован.
   const insideFirst = buildState(doc, 3);
-  assert.equal(hasHiddenMark(insideFirst, 0, 2), false, '`1.` виден внутри своего пункта');
-  assert.equal(hasHiddenMark(insideFirst, 7, 9), true, '`2.` соседнего пункта остаётся скрыт');
+  assert.equal(listMarker(insideFirst, 0, 2), null, '`1.` внутри — исходник');
+  assert.equal(listMarker(insideFirst, 7, 9), '2.', 'соседний пункт вне каретки — отрисован');
 });
 
 test('task-список: отмеченный `[x]` даёт чекбокс с checked', () => {

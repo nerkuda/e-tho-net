@@ -173,6 +173,33 @@ class TaskCheckboxWidget extends WidgetType {
   }
 }
 
+/**
+ * Отрисованный маркер списка: заменяет исходный `ListMark` вне активного
+ * пункта — `•` для маркированного, `N.` для нумерованного (паритет с
+ * просмотром, где `<ul>`/`<ol>` рисуют disc/decimal). Пробел-разделитель
+ * остаётся в документе, поэтому маркер идёт перед текстом как в просмотре.
+ */
+class ListMarkerWidget extends WidgetType {
+  constructor(readonly marker: string) {
+    super();
+  }
+
+  override eq(other: ListMarkerWidget): boolean {
+    return other.marker === this.marker;
+  }
+
+  override toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-md-list-marker';
+    span.textContent = this.marker;
+    return span;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
 /** Разбор `[[target|alias]]` для виджета wiki-ссылки (пустой алиас = имя). */
 export function wikiLabel(source: string): { target: string; label: string } | null {
   const m = /^\[\[([^[\]\n|]+)(?:\|([^\]\n]*))?\]\]$/.exec(source.trim());
@@ -378,21 +405,35 @@ function buildDecorations(state: EditorState): DecorationSet {
         }
         // Пункт списка: его диапазон «владеет» маркером списка (`-`/`N.`) и
         // task-маркером (`[ ]`/`[x]`). Пока каретка внутри пункта или вплотную
-        // к нему — исходные маркеры видны; вне — маркер списка скрывается, а
-        // task-маркер заменяется чекбоксом (паритет с просмотром и публикацией,
-        // где `-` не виден: ошибка 9d611f5f).
+        // к нему — исходные маркеры видны; вне — пункт отрисован как в просмотре
+        // (ошибка 9d611f5f).
         case 'ListItem': {
           listItemStack.push({ from, to });
           break;
         }
-        // Маркер списка (`-`, `*`, `+`, `1.`, `1)`): вне активного пункта
-        // скрывается вместе с пробелом-разделителем — пункт отрисован как в
-        // просмотре. Общий для обычных и task-списков.
+        // Маркер списка (`-`, `*`, `+`, `1.`, `1)`) вне активного пункта.
+        // Task-пункт (есть ребёнок `Task`) — маркер скрывается: в просмотре у
+        // task-списка маркера нет (`list-style: none`), а `[ ]` заменяет
+        // чекбокс. Обычный пункт — вместо исходного маркера отрисовывается
+        // маркер списка (`•` / `N.`), как `<ul>`/`<ol>` в просмотре.
         case 'ListMark': {
           const item = listItemStack[listItemStack.length - 1];
           if (item !== undefined && !isNearInline(ranges, item.from, item.to)) {
-            const extra = state.sliceDoc(to, to + 1) === ' ' ? 1 : 0;
-            hide(from, to + extra);
+            const isTask = node.node.parent?.getChild('Task') != null;
+            if (isTask) {
+              const extra = state.sliceDoc(to, to + 1) === ' ' ? 1 : 0;
+              hide(from, to + extra);
+            } else {
+              const src = state.sliceDoc(from, to);
+              const num = /^(\d+)[.)]$/.exec(src);
+              parts.push({
+                from,
+                to,
+                value: Decoration.replace({
+                  widget: new ListMarkerWidget(num !== null ? `${num[1]}.` : '•'),
+                }),
+              });
+            }
           }
           break;
         }
