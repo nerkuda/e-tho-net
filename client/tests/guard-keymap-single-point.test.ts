@@ -1,12 +1,28 @@
 /**
  * Сторож единственной точки перехвата `keydown` (ADR `b420b08c`, задача
- * e7bf87e3, ТП1).
+ * e7bf87e3 — диспетчер; задача fd3d84f4 — перевод потребителей).
  *
- * Правило: глобальный перехват клавиш приложения живёт в общеклиентском
- * диспетчере контекстов `lib/keymap.ts` (`installKeymap`), а `app.ts` только
- * регистрирует свои команды в диспетчере. Свой `window.addEventListener(
- * 'keydown')` в `app.ts` — нарушение: он завёл бы вторую точку перехвата и
- * обошёл приоритет контекстов (диалог поверх поля и т. п.).
+ * Правило: перехват клавиш клиента принадлежит общеклиентскому диспетчеру
+ * контекстов `lib/keymap.ts` (`installKeymap`). Любой другой
+ * `addEventListener('keydown')` в `client/src/renderer` — либо нарушение, либо
+ * явно объявленное легаси-место из инвентаря ниже с обоснованием.
+ *
+ * Сторож сканирует ВЕСЬ `client/src/renderer` (не только `app.ts`): новый
+ * локальный слушатель в любом файле краснит тест. Инвентарь — белый список
+ * «оставшихся легаси-мест», который по мере перевода потребителей на диспетчер
+ * (задача fd3d84f4) обязан СОКРАЩАТЬСЯ: сторож сверяет и наличие файла в
+ * списке, и точное число слушателей в нём, поэтому переведённый файл нельзя
+ * молча оставить в инвентаре, а новый/лишний слушатель — молча спрятать.
+ *
+ * Категории инвентаря:
+ *  - `boundary`   — вне границ задачи fd3d84f4 (каталог `editor/**`).
+ *  - `mechanism`  — механизм диспетчера (заморожен) физически не выражает
+ *                   событие: capture-фаза (порядок обгона `defaultPrevented`),
+ *                   событие без не-модификаторной клавиши (`Ctrl`-press),
+ *                   `keyup`, element-scoped `stopPropagation`.
+ *  - `element`    — клавиатурный контракт WAI-ARIA самого виджета: событие
+ *                   принадлежит его фокусируемому элементу и обрабатывается на
+ *                   нём (кандидат на миграцию в волнах fd3d84f4).
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -17,31 +33,350 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 const RENDERER_ROOT = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
+const KEYMAP_REL = 'lib/keymap.ts';
 
-const APP = fs.readFileSync(path.join(RENDERER_ROOT, 'app.ts'), 'utf8');
-const KEYMAP = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'keymap.ts'), 'utf8');
-const MAIN = fs.readFileSync(path.join(RENDERER_ROOT, 'main.ts'), 'utf8');
+/** Легаси-место: путь (posix, от `renderer/`), число слушателей и обоснование. */
+interface LegacyKeydownSite {
+  file: string;
+  count: number;
+  category: 'boundary' | 'mechanism' | 'element';
+  reason: string;
+}
 
-describe('сторож: единственная точка перехвата keydown в keymap', () => {
-  it('app.ts не заводит собственный слушатель keydown', () => {
+/**
+ * Инвентарь легаси-мест на момент постановки задачи fd3d84f4 (53 слушателя в
+ * 36 файлах). Белый список — временный: каждое место переводится на диспетчер
+ * волнами задачи, после чего удаляется отсюда.
+ */
+const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
+  // --- boundary: каталог editor/** вне границ задачи fd3d84f4 ---------------
+  {
+    file: 'editor/value-editor.ts',
+    count: 4,
+    category: 'boundary',
+    reason: 'Поля-редакторы значений (CM6/keymap.of, чипы, облачка связей) — задача явно исключает editor/**.',
+  },
+  {
+    file: 'editor/editor.ts',
+    count: 2,
+    category: 'boundary',
+    reason: 'Заголовок и синонимы карточки мысли (CM6-расширения поля) — задача исключает editor/**.',
+  },
+  {
+    file: 'editor/publication-card.ts',
+    count: 1,
+    category: 'boundary',
+    reason: 'Заголовок карточки публикации — задача исключает editor/**.',
+  },
+  {
+    file: 'editor/mini-graph.ts',
+    count: 1,
+    category: 'boundary',
+    reason: 'Навигация мини-графа связей — задача исключает editor/**.',
+  },
+  {
+    file: 'editor/links-tab.ts',
+    count: 1,
+    category: 'boundary',
+    reason: 'Навигация облачка связей вкладки — задача исключает editor/**.',
+  },
+  {
+    file: 'editor/comment-hotkeys-dialog.ts',
+    count: 1,
+    category: 'boundary',
+    reason: 'Capture-перехват нажатия для записи сочетания — задача исключает editor/**.',
+  },
+
+  // --- mechanism: механизм диспетчера не выражает событие -------------------
+  {
+    file: 'lib/dialog.ts',
+    count: 7,
+    category: 'mechanism',
+    reason:
+      'Каркас модального диалога: capture-Escape стопки, Ctrl+Enter/Shift+Enter/Ctrl+Shift+Enter, focus-trap Tab, стрелки по кнопкам. Порядок задаёт capture-фаза и обгон через defaultPrevented; диспетчер — один bubble-слушатель на window и не выражает capture/стопку.',
+  },
+  {
+    file: 'lib/menu.ts',
+    count: 1,
+    category: 'mechanism',
+    reason: 'Capture-Escape закрытия контекстного меню (порядок относительно capture-каркаса диалога).',
+  },
+  {
+    file: 'lib/suggest-dropdown.ts',
+    count: 3,
+    category: 'mechanism',
+    reason: 'Window capture-слушатель выпадашки подсказок плюс element-scoped обработчики поля.',
+  },
+  {
+    file: 'screens/publications/workspace.ts',
+    count: 2,
+    category: 'mechanism',
+    reason: 'Capture-слушатель на docHost документа публикации плюс document-слушатель.',
+  },
+  {
+    file: 'lib/hover-preview.ts',
+    count: 1,
+    category: 'mechanism',
+    reason:
+      'Глобальный жест предпросмотра: `Escape`/нажатие `Ctrl` БЕЗ не-модификаторной клавиши (у диспетчера такое событие не даёт ни одного сочетания) плюс парный `keyup`.',
+  },
+  {
+    file: 'lib/image-zoom.ts',
+    count: 1,
+    category: 'mechanism',
+    reason:
+      'Глобальный жест лупы: `Escape`/нажатие `Ctrl` без сочетания + парный `keyup`; диспетчер модификатор-онли события не резолвит.',
+  },
+
+  // --- element: клавиатурный контракт виджета на его элементе ---------------
+  {
+    file: 'lib/ui/list.ts',
+    count: 1,
+    category: 'element',
+    reason: 'ARIA-навигация списка на его корне (фокусируемый элемент, стрелки/Enter/Home/End).',
+  },
+  {
+    file: 'lib/ui/tree.ts',
+    count: 1,
+    category: 'element',
+    reason: 'ARIA-навигация дерева на его корне (стрелки/раскрытие/Home/End/Enter).',
+  },
+  {
+    file: 'lib/ui/table.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Навигация по ячейкам таблицы-грида на её обёртке.',
+  },
+  {
+    file: 'lib/ui/tabs.ts',
+    count: 1,
+    category: 'element',
+    reason: 'ARIA-контракт вкладок: стрелки/Home/End на кнопке вкладки.',
+  },
+  {
+    file: 'lib/ui/splitter.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Клавиатурный ресайз грифа-разделителя (стрелки/Home/End/Enter/Escape) на самом грифе.',
+  },
+  {
+    file: 'lib/ui/field.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Проброс `onKeydown` поля ввода (element-scoped контракт фасада).',
+  },
+  {
+    file: 'lib/ui/drag-list.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Клавиатурная навигация/перестановка строк списка на его корне.',
+  },
+  {
+    file: 'lib/ui/popover.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Делегированный Escape закрытия верхней панели (порядок с каркасом диалога).',
+  },
+  {
+    file: 'lib/entity-picker.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Клавиатура поля выбора сущностей (Enter/Escape/стрелки/Backspace на чипе/поле).',
+  },
+  {
+    file: 'lib/filter-form.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Клавиатура поля конструктора отбора.',
+  },
+  {
+    file: 'lib/month-calendar.ts',
+    count: 2,
+    category: 'element',
+    reason: 'Навигация календаря (поле года и сетка дней) на его элементах.',
+  },
+  {
+    file: 'lib/saved-filter-bar.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Клавиатура строки поиска сохранённых отборов + проброс события в таблицу.',
+  },
+  {
+    file: 'lib/record-search.ts',
+    count: 2,
+    category: 'element',
+    reason: 'Клавиатура поля поиска записей и document-Escape закрытия панели.',
+  },
+  {
+    file: 'search/search.ts',
+    count: 2,
+    category: 'element',
+    reason: 'Клавиатура поля глобального поиска и document-Escape закрытия панели.',
+  },
+  {
+    file: 'canvas/add-dialog.ts',
+    count: 2,
+    category: 'element',
+    reason: 'Клавиатура поля и строк диалога добавления мысли.',
+  },
+  {
+    file: 'canvas/kbd-nav.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Пространственная навигация по карте мыслей на фокусируемом хосте холста.',
+  },
+  {
+    file: 'canvas/drag-cloud.ts',
+    count: 2,
+    category: 'element',
+    reason: 'Escape отмены жеста перетаскивания облачка (window-слушатель на время жеста).',
+  },
+  {
+    file: 'screens/structures/kbd-nav.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Навигация по дереву результатов «Структуры» на фокусируемом хосте.',
+  },
+  {
+    file: 'screens/structures/structures.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Навигация облачка структуры (element-scoped).',
+  },
+  {
+    file: 'screens/thought-type/views-tab.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Навигация таблицы отборов типа мысли (element-scoped).',
+  },
+  {
+    file: 'screens/publications/publications.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Клавиатура поля в экране публикаций (element-scoped).',
+  },
+  {
+    file: 'screens/layers.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Навигация узла дерева слоёв (element-scoped).',
+  },
+  {
+    file: 'screens/chronicle/record-title.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Клавиатура заголовка записи хроники (element-scoped).',
+  },
+  {
+    file: 'screens/chronicle/filter-panel.ts',
+    count: 1,
+    category: 'element',
+    reason: 'Клавиатура фильтр-панели хроники (element-scoped).',
+  },
+];
+
+/** Установка keydown-слушателя: `addEventListener('keydown'` и
+ *  `addEventListener?.('keydown'` (optional-chaining у `lib/ui/drag-list`). */
+const KEYDOWN_INSTALL_RE = /addEventListener\??\.?\(\s*['"]keydown['"]/g;
+
+/** Рекурсивно собирает `.ts`-файлы под каталогом (posix-пути от корня). */
+function collectTsFiles(dir: string, base = ''): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = base === '' ? entry.name : `${base}/${entry.name}`;
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...collectTsFiles(abs, rel));
+    else if (entry.isFile() && entry.name.endsWith('.ts')) out.push(rel);
+  }
+  return out;
+}
+
+/** Число установок keydown-слушателя в исходнике. */
+function countKeydownListeners(source: string): number {
+  return source.match(KEYDOWN_INSTALL_RE)?.length ?? 0;
+}
+
+const FILES = collectTsFiles(RENDERER_ROOT);
+const SOURCES = new Map(FILES.map((rel) => [rel, fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8')]));
+
+describe('сторож: единственная точка перехвата keydown в клиенте', () => {
+  it('диспетчер владеет единственным слушателем keydown', () => {
+    const keymap = SOURCES.get(KEYMAP_REL);
+    assert.ok(keymap !== undefined, `есть ${KEYMAP_REL}`);
     assert.equal(
-      APP.includes("addEventListener('keydown'"),
-      false,
-      'app.ts должен регистрировать команды в диспетчере, а не слушать keydown сам',
+      countKeydownListeners(keymap),
+      1,
+      'lib/keymap.ts — единственное место установки keydown-слушателя диспетчера',
+    );
+    assert.ok(keymap.includes('installKeymap'), 'диспетчер выставляет installKeymap');
+  });
+
+  it('вне инвентаря нет ни одного локального слушателя keydown', () => {
+    const listed = new Map(LEGACY_KEYDOWN_SITES.map((s) => [s.file, s]));
+    const offenders: string[] = [];
+    for (const [rel, source] of SOURCES) {
+      if (rel === KEYMAP_REL) continue;
+      const count = countKeydownListeners(source);
+      const entry = listed.get(rel);
+      if (entry === undefined) {
+        if (count > 0) offenders.push(`${rel} (${count} шт.)`);
+        continue;
+      }
+      if (count !== entry.count) {
+        offenders.push(
+          `${rel}: в инвентаре ${entry.count}, в коде ${count} — обнови инвентарь ` +
+            '(переведённый слушатель из списка убирают, новый — не добавляют)',
+        );
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `локальный keydown-перехват возможен только через диспетчер; белый список: ${offenders.join('; ')}`,
     );
   });
 
-  it('app.ts устанавливает диспетчер и регистрирует глобальный контекст', () => {
-    assert.ok(APP.includes('installKeymap()'), 'initKeyboard ставит lib/keymap-диспетчер');
-    assert.ok(APP.includes('GLOBAL_CONTEXT_ID'), 'app.ts регистрирует глобальный контекст');
+  it('в инвентаре нет устаревших записей', () => {
+    const stale: string[] = [];
+    for (const site of LEGACY_KEYDOWN_SITES) {
+      const source = SOURCES.get(site.file);
+      if (source === undefined) {
+        stale.push(`${site.file}: файла нет`);
+        continue;
+      }
+      const count = countKeydownListeners(source);
+      if (count === 0) {
+        stale.push(`${site.file}: слушателей не осталось — убери из инвентаря`);
+      }
+    }
+    assert.deepEqual(stale, [], `устаревшие записи белого списка: ${stale.join('; ')}`);
   });
 
-  it('диспетчер владеет слушателем keydown', () => {
-    const occurrences = KEYMAP.split("addEventListener('keydown'").length - 1;
-    assert.equal(occurrences, 1, 'lib/keymap.ts — единственное место установки keydown-слушателя');
+  it('каждая запись инвентаря обоснована', () => {
+    for (const site of LEGACY_KEYDOWN_SITES) {
+      assert.ok(site.reason.trim().length > 0, `${site.file}: обоснование не пустое`);
+      assert.ok(
+        ['boundary', 'mechanism', 'element'].includes(site.category),
+        `${site.file}: категория из набора`,
+      );
+    }
+  });
+
+  it('app.ts не заводит собственный слушатель keydown', () => {
+    const app = SOURCES.get('app.ts');
+    assert.ok(app !== undefined, 'есть app.ts');
+    assert.equal(
+      countKeydownListeners(app),
+      0,
+      'app.ts регистрирует команды в диспетчере, а не слушает keydown сам',
+    );
+    assert.ok(app.includes('installKeymap()'), 'initKeyboard ставит lib/keymap-диспетчер');
+    assert.ok(app.includes('GLOBAL_CONTEXT_ID'), 'app.ts регистрирует глобальный контекст');
   });
 
   it('main.ts поднимает клавиатуру через initKeyboard', () => {
-    assert.ok(MAIN.includes('initKeyboard()'), 'main.ts вызывает initKeyboard');
+    const main = SOURCES.get('main.ts');
+    assert.ok(main !== undefined, 'есть main.ts');
+    assert.ok(main.includes('initKeyboard()'), 'main.ts вызывает initKeyboard');
   });
 });
