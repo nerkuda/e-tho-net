@@ -127,10 +127,16 @@ function wikiLinkCompletions(): CompletionSource {
       cache.set(hit.prefix, cached);
     }
     if (cached.options.length === 0) return null;
+    // Без `validFor`: источник должен вызываться заново на каждый новый
+    // символ префикса (кэш по префиксу выше это и обеспечивает). Широкий
+    // `validFor` (WIKI_PREFIX_RE совпадает с любым продолжением) заставлял
+    // CM6 фильтровать уже полученные `limit: 20` результатов локально, не
+    // перезапрашивая сервер, — поэтому `[[новиков` не находил ничего, если
+    // при односимвольном префиксе мысль не попала в первые 20
+    // (ошибка 6bba224b-9899-4f7e-a37c-ff2067ac0a6c).
     return {
       from: line.from + hit.open + 2,
       options: cached.options,
-      validFor: WIKI_PREFIX_RE,
     };
   };
 }
