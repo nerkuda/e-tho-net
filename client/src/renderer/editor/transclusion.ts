@@ -216,7 +216,11 @@ export function transclusionAtCaret(source: string, pos: number): TransclusionCo
     const idFrom = ref.start + OPEN_LEN; // на `#`
     const innerEnd = ref.end - 2; // перед `]]`
     const hash2 = source.indexOf('#', idFrom + 1);
-    const hasSection = ref.section !== null && hash2 !== -1 && hash2 < innerEnd;
+    // Раздел — по НАЛИЧИЮ второго `#`, а не по `ref.section`: единый парсер
+    // (`@etn/markdown`) сворачивает ПУСТОЙ раздел в `section: null`, но каретка
+    // сразу после второго `#` — уже «в разделе». Без этого список заголовков не
+    // открывался немедленно после жеста `#` (ошибка `ccf4d25f`).
+    const hasSection = hash2 !== -1 && hash2 < innerEnd;
     const idTo = hasSection ? hash2 : innerEnd;
     return {
       ref,

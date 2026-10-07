@@ -40,6 +40,7 @@ import {
   transclusionMenuHandlers,
   transclusionRefStartingAt,
   transclusionSectionAccept,
+  transclusionSectionCompletions,
   transclusionState,
   type TransclusionSource,
   type TransclusionSourceLoader,
@@ -1335,4 +1336,64 @@ test('принятие мысли по `#`: не-ID форма не трогае
   assert.equal(transclusionSectionAccept('какое-то имя'), null);
   assert.equal(transclusionSectionAccept(`#${ID_A}`), null);
   assert.equal(transclusionSectionAccept(''), null);
+});
+
+// ---------------------------------------------------------------------------
+// Пустой раздел после жеста `#`: контекст и источник разделов (ccf4d25f)
+// ---------------------------------------------------------------------------
+
+test('transclusionAtCaret: пустой раздел — каретка «в разделе» (ccf4d25f)', () => {
+  // Парсер сворачивает пустой раздел `![[#id#]]` в `section: null`, но каретка
+  // сразу после второго `#` обязана считаться «в разделе», иначе список
+  // заголовков не открывается немедленно после жеста `#`.
+  const doc = `![[#${ID_A}#]]`;
+  const caret = doc.length - 2;
+  const ctx = transclusionAtCaret(doc, caret);
+  assert.ok(ctx !== null);
+  assert.equal(ctx!.ref.section, null, 'парсер сворачивает пустой раздел в null');
+  assert.equal(ctx!.sectionFrom, caret, 'начало текста раздела — сразу после второго #');
+  assert.equal(ctx!.inSection, true, 'пустой раздел — каретка в разделе');
+  // Контроль: ссылка без второго `#` — каретка не в разделе.
+  const plainDoc = `![[#${ID_A}]]`;
+  assert.equal(transclusionAtCaret(plainDoc, plainDoc.length - 2)!.inSection, false);
+});
+
+test('transclusionSectionCompletions: пустой раздел — все заголовки источника (ccf4d25f)', async () => {
+  const ID = 'a1b2c3d4-1111-4222-8333-444455556666';
+  stubEtn('## Альфа\nтекст\n## Бета\nтекст');
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+  try {
+    // Ссылка в состоянии ровно после accept из жеста `#` (пустой раздел).
+    const accepted = transclusionSectionAccept(`#${ID}]]`);
+    assert.ok(accepted !== null);
+    const doc = accepted.ref;
+    const caret = accepted.caret;
+    const state = EditorState.create({ doc });
+    const context = { state, pos: caret } as unknown as Parameters<
+      ReturnType<typeof transclusionSectionCompletions>
+    >[0];
+    const result = await transclusionSectionCompletions()(context);
+    assert.ok(result !== null, 'список разделов открывается сразу, без минимума символов');
+    assert.deepEqual(
+      result!.options.map((o) => o.label).sort(),
+      ['Альфа', 'Бета'],
+      'показаны ВСЕ заголовки источника (пустой префикс)',
+    );
+    assert.equal(result!.from, caret, 'замена идёт с начала текста раздела');
+  } finally {
+    store.update({ networkId: null });
+  }
+});
+
+test('keymap трансклюзий: # привязан к приёму мысли со списком разделов (ccf4d25f)', () => {
+  // Жест `#` живёт в keymap трансклюзий; после accept обработчик явно вызывает
+  // `startCompletion` — вне DOM/EditorView это не наблюдаемо, но факт привязки
+  // жеста к полю проверяем (плюс источник разделов покрыт тестом выше).
+  const state = EditorState.create({ doc: 'x', extensions: [...transclusionExtensions] });
+  const bindings = state.facet(keymap).flatMap((group) => group);
+  assert.ok(
+    bindings.some((binding) => binding.key === '#' && typeof binding.run === 'function'),
+    'клавиша # привязана к обработчику в keymap трансклюзий',
+  );
 });
