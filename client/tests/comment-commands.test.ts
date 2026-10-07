@@ -151,6 +151,17 @@ describe('команды поля комментария (editor/comment-command
     assert.ok(labels.includes('Разделить выделение на мысли'));
     assert.ok(labels.includes('Отмена'));
     assert.ok(labels.includes('Сохранить'));
+    // Перемещение строк — в контекстном меню с сочетаниями в подписи, но НЕ в
+    // тулбаре (элемент 0562e0e3; решение пользователя по ошибке ea97b0a1).
+    assert.ok(labels.includes(ru['comment.cmd.moveLineUp']));
+    assert.ok(labels.includes(ru['comment.cmd.moveLineDown']));
+    assert.ok(ru['comment.cmd.moveLineUp'].includes('Alt+↑'));
+    assert.ok(ru['comment.cmd.moveLineDown'].includes('Alt+↓'));
+    assert.ok(
+      labels.indexOf(ru['comment.cmd.moveLineUp']) > labels.indexOf('Разделить выделение на мысли'),
+      'перемещение строк идёт после «разделения»',
+    );
+    assert.ok(labels.indexOf(ru['comment.cmd.moveLineDown']) < labels.indexOf('Отмена'));
 
     const submenuIds = items
       .filter((item) => item.submenu !== undefined)
@@ -161,6 +172,35 @@ describe('команды поля комментария (editor/comment-command
       false,
       'подменю настроек в контекстном меню отсутствует (элемент 0562e0e3)',
     );
+  });
+
+  it('пункт меню перемещения строки исполняет команду и несёт disabled-состояние', () => {
+    // Пункт меню вызывает ту же команду, что и сочетание Alt+↑/↓.
+    let ran = 0;
+    mod.registerCommentCommand('comment.moveLineUp', {
+      run: () => {
+        ran += 1;
+        return true;
+      },
+    });
+    const up = mod
+      .buildCommentMenuItems(host())
+      .find((item) => item.label === ru['comment.cmd.moveLineUp']);
+    assert.ok(up !== undefined, 'пункт «переместить строку выше» обязан быть в меню');
+    assert.equal(up.disabled, false);
+    up.onClick?.();
+    assert.equal(ran, 1);
+
+    // disabled-логика — из состояния команды, как у соседних команд правки.
+    mod.registerCommentCommand('comment.moveLineDown', {
+      run: () => false,
+      state: () => ({ disabled: true }),
+    });
+    const down = mod
+      .buildCommentMenuItems(host())
+      .find((item) => item.label === ru['comment.cmd.moveLineDown']);
+    assert.ok(down !== undefined);
+    assert.equal(down.disabled, true);
   });
 
   it('меню блока трансклюзии: шесть команд в порядке макета, подписи из словаря', () => {

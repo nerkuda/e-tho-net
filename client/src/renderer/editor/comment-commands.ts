@@ -456,7 +456,9 @@ export const COMMENT_TOOLBAR_LAYOUT: readonly CommentLayoutNode[] = Object.freez
  * Раскладка контекстного меню (элемент `0562e0e3`): повторяет тулбар без
  * подменю настроек и добавляет команды уровня поля. Команды «как текст» (ТП2)
  * и «разделение» (ТП3) присутствуют как точки расширения — их исполнение
- * регистрируют соответствующие под-проекты.
+ * регистрируют соответствующие под-проекты. «Переместить строку выше/ниже»
+ * (Alt+↑/↓) — в меню, но не в тулбаре (решение пользователя по ошибке
+ * `ea97b0a1`, 2026-10-07); сочетания к подписям добавлены в словаре `ru.ts`.
  */
 export const COMMENT_MENU_LAYOUT: readonly CommentLayoutNode[] = Object.freeze([
   { kind: 'command', id: 'comment.bold' },
@@ -482,6 +484,8 @@ export const COMMENT_MENU_LAYOUT: readonly CommentLayoutNode[] = Object.freeze([
   { kind: 'command', id: 'comment.createFromSection' },
   { kind: 'command', id: 'comment.createFromSelection' },
   { kind: 'command', id: 'comment.split' },
+  { kind: 'command', id: 'comment.moveLineUp' },
+  { kind: 'command', id: 'comment.moveLineDown' },
   { kind: 'separator' },
   { kind: 'command', id: 'comment.cancel' },
   { kind: 'command', id: 'comment.save' },
