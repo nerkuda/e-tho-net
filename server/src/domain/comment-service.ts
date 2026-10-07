@@ -327,6 +327,14 @@ function getCommentOrThrow(ndb: NetworkDb, id: string): Comment {
  * `owner_type/owner_id` pair plus every m2m attachment in `comment_targets`
  * (L20). The permanent comment (if any) sorts first, then chronological
  * comments ordered by `valid_from` ascending.
+ *
+ * Среди нескольких видимых постоянных комментариев владельца побеждает
+ * строка БЛИЖАЙШЕГО слоя цепочки (ошибка ec9918b3): у легаси-данных, где
+ * слой и основа завели каждая свою случайную строку, `comments_v` отдаёт два
+ * победителя, и прежний порядок (`valid_from`/`created_at`) выбирал
+ * произвольную редакцию — «витрины», читающие `listComments(...).find(permanent)`,
+ * могли показать устаревший текст. Тот же детерминированный выбор, что в
+ * {@link getPermanentRow}.
  */
 export function listComments(
   ndb: NetworkDb,
@@ -342,7 +350,11 @@ export function listComments(
             SELECT 1 FROM comment_targets_v ct
             WHERE ct.comment_id = c.id AND ct.owner_type = ? AND ct.owner_id = ?
           )
-       ORDER BY (c.kind <> 'permanent'), c.valid_from ASC, c.created_at ASC`,
+       ORDER BY (c.kind <> 'permanent'),
+                CASE WHEN c.kind = 'permanent'
+                     THEN (SELECT lc.depth FROM layer_chain lc WHERE lc.layer_id = c.layer_id)
+                     ELSE 0 END ASC,
+                c.valid_from ASC, c.created_at ASC`,
     )
     .all(ownerType, ownerId, ownerType, ownerId) as CommentRow[];
   const targets = loadTargets(ndb, rows);
@@ -460,6 +472,51 @@ export function getPermanentFull(
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+/**
+ * Полностью материализованный ВИДИМЫЙ постоянный комментарий владельца
+ * (ошибка ec9918b3) — строка ближайшего слоя цепочки, выбранная
+ * {@link getPermanentRow}, в форме {@link Comment} (со `version`, `targets`,
+ * `valid_from`/`valid_to`). `null`, когда постоянного комментария нет.
+ *
+ * Логическая идентичность постоянного комментария — его владелец
+ * (`db/comment-permanent-id.ts`), а не суррогатный `id`. У легаси-данных
+ * слой и основа могли завести каждая свою строку с РАЗНЫМИ случайными id
+ * (до фикса 46b93145) — тогда «витрины» (`etn.instructions`, `meta.permanent`)
+ * и по-id чтение (`etn.comments.get { comment_id }`) обязаны сойтись на одной
+ * видимой редакции. Возврат именно этой формы позволяет читающим фасадам
+ * (MCP/REST) отдать её без второго «сырого» чтения по id.
+ */
+export function getPermanentComment(
+  ndb: NetworkDb,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+): Comment | null {
+  validateOwnerType(ownerType);
+  const row = getPermanentRow(ndb, ownerType, ownerId);
+  if (row === undefined) {
+    return null;
+  }
+  return getComment(ndb, row.id);
+}
+
+/**
+ * Видимый комментарий по id для ЧИТАЮЩИХ фасадов (ошибка ec9918b3). Для
+ * хронологической записи идентичность — сам `id`, поэтому возвращается строка
+ * как есть. Для постоянного комментария идентичность — владелец: если по
+ * запрошенному id видна лишь устаревшая легаси-строка (другой логический ряд
+ * того же владельца), отдаётся видимая редакция владельца
+ * ({@link getPermanentComment}). Пишущие пути (`updateComment`/`editComment`/
+ * `deleteComment`/targets) по-прежнему работают с точным id через
+ * {@link getComment} — правка не должна молча уезжать на «чужую» строку.
+ */
+export function getVisibleComment(ndb: NetworkDb, id: string): Comment | null {
+  const comment = getComment(ndb, id);
+  if (comment === null || comment.kind !== 'permanent') {
+    return comment;
+  }
+  return getPermanentComment(ndb, comment.owner_type, comment.owner_id) ?? comment;
 }
 
 /**

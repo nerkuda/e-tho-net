@@ -39,6 +39,7 @@ import {
   createCommentWithTargets,
   deleteComment,
   getComment,
+  getVisibleComment,
   listComments,
   removeCommentTarget,
   updateComment,
@@ -151,7 +152,9 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestCommentById, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const comment = getComment(ndb, input.comment_id);
+        // Паритет с MCP `etn.comments.get` (ошибка ec9918b3): по-id чтение
+        // постоянного комментария отдаёт видимую редакцию владельца.
+        const comment = getVisibleComment(ndb, input.comment_id);
         if (comment === null) {
           throw new EtnError(
             'NOT_FOUND',

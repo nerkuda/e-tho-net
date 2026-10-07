@@ -17,6 +17,8 @@ import {
 import {
   editComment,
   getComment,
+  getPermanentComment,
+  getVisibleComment,
   listComments,
   updateComment,
 } from '../../domain/comment-service.js';
@@ -54,7 +56,11 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
         // трансклюзию как обычный текст (ошибка a6da3d37).
         const present = createBodyPresenter(ndb);
         if (args.comment_id !== undefined) {
-          const comment = getComment(ndb, args.comment_id);
+          // Ошибка ec9918b3: для постоянного комментария идентичность — его
+          // владелец, поэтому по-id чтение отдаёт ВИДИМУЮ редакцию (ближайший
+          // слой) — ту же, что `etn.instructions`/`meta.permanent`. Без этого
+          // устаревший легаси-id возвращал старый текст инструкции.
+          const comment = getVisibleComment(ndb, args.comment_id);
           if (comment === null) {
             throw new Error(`ETN error [NOT_FOUND]: comment ${args.comment_id} not found`);
           }
@@ -65,8 +71,9 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
           throw new Error('ETN error [VALIDATION_ERROR]: thought_id required');
         }
         getThoughtOrThrow(ndb, args.thought_id);
-        const permanent =
-          listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ?? null;
+        // Видимый постоянный комментарий по владельцу (ошибка ec9918b3) —
+        // та же редакция, что в `etn.instructions`.
+        const permanent = getPermanentComment(ndb, 'thought', args.thought_id);
         return {
           thought_id: args.thought_id,
           permanent: permanent === null ? null : { ...permanent, ...present(permanent.body_md) },
