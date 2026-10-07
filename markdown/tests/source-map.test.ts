@@ -842,6 +842,32 @@ test('скрытая запись самого блока (комментари�
   assert.equal(clickOffset(src, 'b', 'b'), src.indexOf('b'));
 });
 
+// ---------------------------------------------------------------------------
+// Ошибка 2c6a6f64: блочная карта сдвига в tight-списке (скрытый paragraph_open)
+// ---------------------------------------------------------------------------
+
+test('tight-список: блочная карта сдвига садится на <li>, клик по хвосту точен (2c6a6f64)', () => {
+  const src = '- a <!--c--> b';
+  const html = renderMarkdown(src, { sourceMap: true });
+  // В tight-списке hidden `paragraph_open` рендерер не выводит, поэтому карта
+  // сдвига должна остаться на отрендеренном `<li>`, а не потеряться.
+  assert.match(html, /<li[^>]*data-md-shift/, html);
+  assert.match(html, /<li[^>]*data-md-start/, html);
+  assert.equal(clickOffset(src, 'b', 'b'), src.indexOf('b'));
+  assert.notEqual(src.indexOf('b'), 5);
+});
+
+test('tight-нумерованный список: карта сдвига на <li>, клик точен (2c6a6f64)', () => {
+  const src = '1. a <!--c--> b';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.match(html, /<li[^>]*data-md-shift/, html);
+  assert.equal(clickOffset(src, 'b', 'b'), src.indexOf('b'));
+});
+
+test('байт-паритет: tight-список с комментарием без sourceMap не меняется', () => {
+  assert.equal(renderMarkdown('- a <!--c--> b'), '<ul>\n<li>a  b</li>\n</ul>\n');
+});
+
 test('байт-паритет: вне sourceMap вывод стандартных конструкций не меняется', () => {
   assert.equal(renderMarkdown('**жирным**'), '<p><strong>жирным</strong></p>\n');
   assert.equal(renderMarkdown('*курсивом*'), '<p><em>курсивом</em></p>\n');

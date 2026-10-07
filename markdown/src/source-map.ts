@@ -622,9 +622,15 @@ function stampRanges(state: { src: string; tokens: Token[] }, input: string): vo
     }
     // The block element is the nearest annotated ancestor of ordinary text
     // outside any construct, so it needs its own shift map for escapes/entities
-    // and embedded HTML comments there (ошибка `29aa3108`). The open token is
-    // the one right before the inline token and already carries the block range.
-    const open = state.tokens[ti - 1];
+    // and embedded HTML comments there (ошибка `29aa3108`). The open token sits
+    // right before the inline token and already carries the block range — but in
+    // a TIGHT list markdown-it marks that `paragraph_open` `hidden`, so its
+    // renderer emits no tag and the attributes would be LOST. Fall back to the
+    // nearest non-hidden preceding token that carries a range (the enclosing
+    // `list_item_open` / `blockquote_open`), which IS rendered (ошибка `2c6a6f64`).
+    let oi = ti - 1;
+    while (oi >= 0 && state.tokens[oi]!.hidden) oi--;
+    const open = oi >= 0 ? state.tokens[oi] : undefined;
     if (open !== undefined && open.attrGet(MD_SOURCE_START_ATTR) !== null) {
       const blockShifts = blockShiftEntries(children);
       if (blockShifts.length > 0) {
