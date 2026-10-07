@@ -1086,18 +1086,27 @@
   list-style: none;
 }
 
-.comment-view .task-list-item-checkbox {
+.comment-view .task-list-item-checkbox,
+.cm-editor .cm-line .cm-md-task-checkbox {
   margin-inline-end: 0.4em;
   vertical-align: baseline;
 }
 
 /* ТП1: выделение `==…==` (`<mark>`) — тем же фоном, что подсветка поиска,
-   а не жёлтым по умолчанию Web Awesome (`@layer wa-native`). */
-.comment-view mark {
+   а не жёлтым по умолчанию Web Awesome (`@layer wa-native`). Класс
+   `cm-md-mark` в правке ставит `editor/md-live.ts`. */
+.comment-view mark,
+.cm-editor .cm-line .cm-md-mark {
   background: var(--mark-bg);
   color: inherit;
   padding: 0 2px;
   border-radius: 3px;
+}
+
+/* ТП1: подчёркивание `<u>…</u>` в правке (`cm-md-underline`, md-live.ts) —
+   как `<u>` в просмотре (подчёркивание по умолчанию браузера). */
+.cm-editor .cm-line .cm-md-underline {
+  text-decoration: underline;
 }
 
 

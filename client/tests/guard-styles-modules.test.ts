@@ -42,7 +42,6 @@ const EXPECTED_MODULES = [
   'styles/layout.css',
   'styles/canvas.css',
   'styles/editor.css',
-  'styles/markdown.css',
   'styles/screens/search.css',
   'styles/screens/selection.css',
   'styles/screens/structures.css',

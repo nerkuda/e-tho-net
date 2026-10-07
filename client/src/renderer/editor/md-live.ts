@@ -237,7 +237,13 @@ function buildDecorations(state: EditorState): DecorationSet {
    * при входе в узел (метод Tree.getChildren не подходит: его координаты
    * зависят от дерева-объекта, а не от узла).
    */
-  const inlineStack: Array<{ kind: 'link' | 'emphasis' | 'code'; from: number; to: number }> = [];
+  const inlineStack: Array<{
+    kind: 'link' | 'emphasis' | 'code';
+    from: number;
+    to: number;
+    /** Пустое содержимое пары (`====`, `<u></u>`) — маркеры не скрываются. */
+    empty?: boolean;
+  }> = [];
 
   /** Стек пунктов task-списка: маркер `[ ]`/`[x]` «принадлежит» своему `Task`. */
   const taskStack: Array<{ from: number; to: number }> = [];
@@ -315,10 +321,14 @@ function buildDecorations(state: EditorState): DecorationSet {
         // обработка `MarkMark`/`UnderlineMark` ниже (по активности родителя).
         case 'Mark':
         case 'Underline': {
-          inlineStack.push({ kind: 'emphasis', from, to });
           const openLen = node.name === 'Mark' ? 2 : 3;
           const closeLen = node.name === 'Mark' ? 2 : 4;
-          if (to - from > openLen + closeLen) {
+          // Пустая пара (`====`, `<u></u>`) в рендерер не проходит — там
+          // остаётся литерал (markdown/src/mark.ts, underline.ts). Такой же
+          // узел лексера содержимого не имеет: маркеры не скрываем.
+          const empty = to - from <= openLen + closeLen;
+          inlineStack.push({ kind: 'emphasis', from, to, empty });
+          if (!empty) {
             parts.push({
               from: from + openLen,
               to: to - closeLen,
@@ -348,6 +358,7 @@ function buildDecorations(state: EditorState): DecorationSet {
           if (
             parent !== undefined &&
             parent.kind !== 'link' &&
+            parent.empty !== true &&
             !isNearInline(ranges, parent.from, parent.to)
           ) {
             hide(from, to);

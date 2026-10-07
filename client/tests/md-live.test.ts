@@ -181,6 +181,32 @@ test('подчёркивание <u>…</u>: вне — маркеры скры�
   assert.equal(hasClass(inside, 'cm-md-underline', 3, 4), true, 'подчёркивание остаётся и при активности');
 });
 
+test('пустые пары `====` и `<u></u>` — маркеры НЕ скрываются (паритет с рендерером)', () => {
+  // Рендерер пустую пару оставляет литералом (`markdown/src/mark.ts`,
+  // `underline.ts` — `close === openEnd → false`), правка не должна её стирать.
+  const markEmpty = buildState('==== text', 9);
+  assert.deepEqual(allSpecs(markEmpty), [], 'пустая пара `====` — без декораций');
+  const markInline = buildState('x ==== y', 8);
+  assert.equal(hasHiddenMark(markInline, 2, 4), false, 'открывающий `==` не скрыт');
+  assert.equal(hasHiddenMark(markInline, 4, 6), false, 'закрывающий `==` не скрыт');
+  // `========` — четыре пары, обе пары пустые: текст не стирается.
+  const eight = buildState('========', 8);
+  for (const [f, t] of [[0, 2], [2, 4], [4, 6], [6, 8]] as const) {
+    assert.equal(hasHiddenMark(eight, f, t), false, `восемь «=»: [${f},${t})`);
+  }
+  const uEmpty = buildState('<u></u> text', 10);
+  assert.deepEqual(allSpecs(uEmpty), [], 'пустая пара `<u></u>` — без декораций');
+  const uInline = buildState('x <u></u> y', 11);
+  assert.equal(hasHiddenMark(uInline, 2, 5), false, '`<u>` не скрыт');
+  assert.equal(hasHiddenMark(uInline, 5, 9), false, '`</u>` не скрыт');
+});
+
+test('несбалансированные пары `==`/`<u>` — литерал без декораций', () => {
+  for (const doc of ['== x', 'x ==', 'x == y', '<u>u', 'u</u>']) {
+    assert.deepEqual(allSpecs(buildState(doc, doc.length)), [], `литерал: ${JSON.stringify(doc)}`);
+  }
+});
+
 test('зачёркивание ~~…~~: вне — маркеры скрыты; внутри — видны (как жирный)', () => {
   const doc = '~~s~~ text';
   const away = buildState(doc, doc.length);
