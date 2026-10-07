@@ -156,6 +156,12 @@ export const TRANSCLUSION_BLOCK_CLASS = 'cm-transclusion-block';
 export const TRANSCLUSION_LINK_CLASS = 'cm-transclusion-link';
 /** Кнопка-всплывашка смены ссылки (правый верхний угол блока). */
 export const TRANSCLUSION_CHANGE_CLASS = 'cm-transclusion-change-link';
+/**
+ * Контейнер ховер-кнопок блока (правый верхний угол, элемент `7a479549`):
+ * «Редактировать трансклюзию» и «Редактировать ссылку» показываются вместе на
+ * наведении в режиме редактирования окружения.
+ */
+export const TRANSCLUSION_ACTIONS_CLASS = 'cm-transclusion-actions';
 /** Плашка ошибки источника/раздела. */
 export const TRANSCLUSION_ERROR_CLASS = 'cm-transclusion-error';
 /** Атомарный токен `#<id>` в режиме правки ссылки. */
@@ -749,20 +755,39 @@ class TransclusionBlockWidget extends WidgetType {
       return box;
     }
 
-    // В режиме правки кнопка смены ссылки скрыта: сначала выходят из правки.
+    // В режиме правки блока ховер-кнопки скрыты: сначала выходят из правки.
+    // Две кнопки в правом верхнем углу (элемент 7a479549): «Редактировать
+    // трансклюзию» — вход в правку блока (как двойной клик/Enter), «Редактировать
+    // ссылку» — сворачивание блока в текст ссылки для правки. Иконки — из фасада
+    // `lib/ui`, подсказки — через i18n.
     if (!this.editing) {
-      const button = iconButton({
+      const actions = document.createElement('div');
+      actions.className = TRANSCLUSION_ACTIONS_CLASS;
+      const editBlock = iconButton({
+        icon: svgIcon('pencil', 12),
+        role: 'ghost',
+        size: 's',
+        title: t('comment.transclusion.editBlock'),
+        onClick: () => {
+          const ref = transclusionRefStartingAt(view.state.doc.toString(), this.from);
+          if (ref !== null) void beginBlockEdit(view, ref);
+        },
+      });
+      const changeLink = iconButton({
         icon: svgIcon('link-edit', 12),
         role: 'ghost',
         size: 's',
-        title: t('comment.transclusion.changeLink'),
+        title: t('comment.transclusion.editLink'),
         class: TRANSCLUSION_CHANGE_CLASS,
         onClick: () => {
           view.dispatch({ effects: setCollapsed.of({ key: this.key, collapsed: true }) });
         },
       });
-      button.addEventListener('mousedown', (event) => event.preventDefault());
-      box.append(button);
+      for (const button of [editBlock, changeLink]) {
+        button.addEventListener('mousedown', (event) => event.preventDefault());
+      }
+      actions.append(editBlock, changeLink);
+      box.append(actions);
     }
 
     const body = document.createElement('div');
@@ -811,6 +836,29 @@ function linkEditMode(selection: { from: number; to: number }, from: number, to:
 
 /** Пустая карта чужих захватов (значение по умолчанию). */
 const NO_LOCKS: ReadonlyMap<string, string> = new Map();
+
+/**
+ * Оставляет в наборе свёрнутых ссылок только те, чьё выделение по-прежнему
+ * пересекает скобки ссылки: «выход за скобки — снова текст блока» (элемент
+ * `7a479549`). Ключи, которых больше нет в документе (ссылка заменена/удалена),
+ * тоже отсеиваются. Набор не меняется — возвращается тот же экземпляр (сравнение
+ * по ссылке в `update` не рассылает лишних транзакций). Сеть неизвестна — набор
+ * пуст по построению (ключи строятся только при известной сети).
+ */
+function pruneCollapsed(
+  collapsed: Set<string>,
+  state: EditorState,
+  networkId: string | null,
+): Set<string> {
+  if (networkId === null) return collapsed;
+  const selection = state.selection.main;
+  const kept = new Set<string>();
+  for (const ref of parseTransclusions(state.doc.toString())) {
+    const key = transclusionCacheKey(networkId, ref);
+    if (collapsed.has(key) && intersects(selection, ref.start, ref.end)) kept.add(key);
+  }
+  return kept.size === collapsed.size ? collapsed : kept;
+}
 
 /** Офсеты начал строк текста — для линейных декораций рамки правки блока. */
 function lineStartOffsets(source: string): number[] {
@@ -1020,11 +1068,15 @@ export const transclusionState = StateField.define<TransclusionStateData>({
     let editingSourceId = state.editingSourceId;
     let blockEdit = state.blockEdit;
     let lockedSources = state.lockedSources;
-    // Смена выделения возвращает блок из свёрнутого вида («выход за скобки —
-    // снова текст блока»), кроме собственных эффектов кнопки смены ссылки.
-    let collapsed = !tr.state.selection.eq(tr.startState.selection)
-      ? new Set<string>()
-      : state.collapsed;
+    // Свёрнутость ссылки («снова текст блока» на выходе за скобки) НЕ сбрасывается
+    // любым движением каретки: режим держится, пока выделение остаётся внутри
+    // скобок, и снимается по ключу, от которого каретка ушла (ошибка `5accebab`).
+    // Раньше набор чистился целиком на любой смене выделения — подход курсора к
+    // свёрнутой ссылке возвращал блок, и ссылку было не отредактировать.
+    let collapsed = state.collapsed;
+    // Признак «в этой транзакции свёрнутость включили»: вход в режим не должен
+    // тут же отменяться проверкой выделения того же шага.
+    let collapsedEntered = false;
     // Диапазон правки блока едет за правками документа (задача e2c14673).
     if (tr.docChanged && blockEdit !== null) {
       const from = tr.changes.mapPos(blockEdit.from, -1);
@@ -1036,8 +1088,12 @@ export const transclusionState = StateField.define<TransclusionStateData>({
     for (const effect of tr.effects) {
       if (effect.is(setCollapsed)) {
         collapsed = new Set(collapsed);
-        if (effect.value.collapsed) collapsed.add(effect.value.key);
-        else collapsed.delete(effect.value.key);
+        if (effect.value.collapsed) {
+          collapsed.add(effect.value.key);
+          collapsedEntered = true;
+        } else {
+          collapsed.delete(effect.value.key);
+        }
       } else if (effect.is(setEntries)) {
         if (cache === state.cache) cache = new Map(cache);
         for (const { key, entry } of effect.value) cache.set(key, entry);
@@ -1056,6 +1112,16 @@ export const transclusionState = StateField.define<TransclusionStateData>({
     }
     const currentNetwork = safeNetwork();
     if (currentNetwork !== null && currentNetwork !== networkId) networkId = currentNetwork;
+
+    // Снять свёрнутость ссылок, от которых каретка ушла (или которых больше нет
+    // в документе), сохранив те, где выделение по-прежнему внутри скобок.
+    if (
+      !collapsedEntered &&
+      collapsed.size > 0 &&
+      (tr.docChanged || !tr.state.selection.eq(tr.startState.selection))
+    ) {
+      collapsed = pruneCollapsed(collapsed, tr.state, networkId);
+    }
 
     if (
       !tr.docChanged &&
@@ -1232,8 +1298,8 @@ export function transclusionBlockArrow(
 export function transclusionMouseDown(event: MouseEvent, view: EditorView): boolean {
   if (event.button !== 0) return false;
   const target = event.target as Element | null;
-  // Кнопка смены ссылки: не трогаем курсор, событие обработает кнопка.
-  if (target !== null && target.closest(`.${TRANSCLUSION_CHANGE_CLASS}`) !== null) return true;
+  // Ховер-кнопки блока: не трогаем курсор, событие обработает сама кнопка.
+  if (target !== null && target.closest(`.${TRANSCLUSION_ACTIONS_CLASS}`) !== null) return true;
   // Клик вне редактируемого текста блока — записать изменения блока в
   // источник и выйти из режима правки блока (задача e2c14673, элемент
   // 2b116d37). Курсор ставится обычным путём (return false).

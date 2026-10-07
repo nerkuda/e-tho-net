@@ -18,7 +18,9 @@ import { parseTransclusions } from '@etn/markdown';
 
 import { ShimElement } from './dom-shim.js';
 import {
+  TRANSCLUSION_ACTIONS_CLASS,
   TRANSCLUSION_BLOCK_CLASS,
+  TRANSCLUSION_CHANGE_CLASS,
   TRANSCLUSION_COVERED_CLASS,
   buildTransclusionDecorations,
   isBlockEditing,
@@ -305,6 +307,26 @@ test('transclusionState: setBlockEdit включает и выключает р�
   assert.equal(entered.field(transclusionState).editingSourceId, ID_A);
   const exited = entered.update({ effects: setBlockEdit.of(null) }).state;
   assert.equal(exited.field(transclusionState).editingSourceId, null);
+});
+
+test('collapsed: режим держится внутри скобок и снимается за ними (5accebab)', async () => {
+  const { store } = await import('../src/renderer/state.js');
+  store.update({ networkId: NET_ID });
+  const src = `![[#${ID_A}]]`;
+  const ref = parseTransclusions(src)[0]!;
+  const key = transclusionCacheKey(NET_ID, ref);
+  let state = EditorState.create({ doc: src, extensions: [transclusionState] });
+  // Вход в режим правки ссылки — сворачивание без движения каретки.
+  state = state.update({ effects: transclusionInternals.setCollapsed.of({ key, collapsed: true }) }).state;
+  assert.equal(state.field(transclusionState).collapsed.has(key), true);
+  // Каретка движется ВНУТРЬ скобок — режим не сбрасывается (правку не выбивает).
+  state = state.update({ selection: { anchor: ref.start + 4 } }).state;
+  assert.equal(state.field(transclusionState).collapsed.has(key), true);
+  // Каретка ушла за скобки — снова текст блока.
+  state = state.update({ selection: { anchor: 0 } }).state;
+  assert.equal(state.field(transclusionState).collapsed.size, 0);
+  // Не оставляем сеть в store: иначе последующие тесты файла видят активную сеть.
+  store.update({ networkId: null });
 });
 
 test('transclusionState: вход в правку разворачивает свёрнутую ссылку', () => {
@@ -992,6 +1014,36 @@ test('TransclusionBlockWidget.toDOM: покрытый блок несёт кла
   assert.ok(covered.classList.contains(TRANSCLUSION_COVERED_CLASS), 'класс покрытия на элементе блока');
   const plain = widgetOf({ from: 0, to: 0 }).toDOM(view);
   assert.ok(!plain.classList.contains(TRANSCLUSION_COVERED_CLASS), 'обычный блок класса покрытия не несёт');
+});
+
+test('TransclusionBlockWidget.toDOM: две ховер-кнопки правки (5accebab, 7a479549)', () => {
+  (globalThis as unknown as { HTMLElement: unknown }).HTMLElement = ShimElement;
+  (globalThis as unknown as { document: unknown }).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: { style: {} },
+    querySelectorAll: () => [],
+  };
+  const src = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(src)[0]!;
+  const widget = (
+    collect(buildTransclusionDecorations(src, { from: 0, to: 0 }, cacheFor(ref), NET, new Set()).deco, src.length)[0]!
+      .value.spec as BlockSpec
+  ).widget as unknown as { toDOM(view: unknown): ShimElement };
+  const view = { state: EditorState.create({ doc: src, extensions: [transclusionState] }) };
+  const el = widget.toDOM(view);
+  const actions = el.querySelectorAll(`.${TRANSCLUSION_ACTIONS_CLASS}`);
+  assert.equal(actions.length, 1, 'один контейнер ховер-кнопок');
+  const buttons = actions[0]!.querySelectorAll('.ui-btn');
+  assert.equal(buttons.length, 2, 'ровно две кнопки правки');
+  const titles = buttons.map((button) => button.title);
+  assert.ok(titles.includes('Редактировать трансклюзию'), 'есть кнопка правки трансклюзии');
+  assert.ok(titles.includes('Редактировать ссылку'), 'есть кнопка правки ссылки');
+  assert.equal(
+    actions[0]!.querySelectorAll(`.${TRANSCLUSION_CHANGE_CLASS}`).length,
+    1,
+    'кнопка правки ссылки несёт класс, по которому mousedown не двигает каретку',
+  );
 });
 
 test('стрелка вправо в начале блока выделяет блок целиком (5312142d)', () => {
