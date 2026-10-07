@@ -13,8 +13,17 @@
  * редактировании (live preview CodeMirror 6) — `decorateCommentView` и
  * `commentCollapseExtension` соответственно.
  *
- * **Индикатор** — управляющий элемент у начала строки заголовка/блока
- * (кнопка-шеврон из `lib/ui`).
+ * **Индикатор и поле-гаттер (ошибка `ce8e9f67`).** Индикатор — кнопка-шеврон
+ * из `lib/ui`, но размещается он НЕ в потоке строки, а в зарезервированной
+ * пустой полосе слева от текста (гаттер, как поле под закладки в IDE). Текст
+ * вправо не сдвигается: место зарезервировано ВСЕГДА, независимо от наличия
+ * символа, а символ лишь появляется/исчезает в своей полосе.
+ * - Правка: CM6-гаттер `gutter()` с зарезервированной шириной (маркеры —
+ *   `CollapseGutterMarker` на строке-якоре раздела).
+ * - Просмотр: полоса-гаттер `md-collapse-rail` внутри хоста
+ *   (`md-collapse-host`): маркеры позиционируются в ней абсолютно, колонкой,
+ *   на высоте своей строки. Полосы правки и просмотра совпадают по ширине и
+ *   положению столбца (`--hit-area`).
  *
  * **Состояние** хранится ЛОКАЛЬНО на клиенте (localStorage, ключ
  * «сеть + владелец поля + раздел») и переживает переоткрытие поля; на сервер
@@ -60,6 +69,7 @@
 import { syntaxTree } from '@codemirror/language';
 import {
   Facet,
+  RangeSet,
   StateEffect,
   StateField,
   type EditorState,
@@ -70,7 +80,8 @@ import {
 import {
   Decoration,
   EditorView,
-  WidgetType,
+  GutterMarker,
+  gutter,
   type DecorationSet,
 } from '@codemirror/view';
 import { TRANSCLUSION_BLOCK_CLASS, TRANSCLUSION_SOURCE_ATTR } from '@etn/markdown';
@@ -84,6 +95,18 @@ export const COLLAPSE_TOGGLE_CLASS = 'md-collapse-toggle';
 
 /** Класс скрытого элемента в режиме просмотра. */
 export const COLLAPSE_HIDDEN_CLASS = 'md-collapse-hidden';
+
+/**
+ * Класс хоста поля-гаттера в просмотре: резервирует полосу слева
+ * (`padding-inline-start`) и служит системой координат для маркеров.
+ */
+export const COLLAPSE_HOST_CLASS = 'md-collapse-host';
+
+/** Класс полосы-гаттера в просмотре: в ней колонкой лежат маркеры. */
+export const COLLAPSE_RAIL_CLASS = 'md-collapse-rail';
+
+/** Класс CM6-гаттера правки (маркеры разделов на строках-якорях). */
+export const COLLAPSE_GUTTER_CLASS = 'cm-md-collapse-gutter';
 
 // ---------------------------------------------------------------------------
 // Локальное хранилище состояния (localStorage, на сервер не едет)
@@ -255,6 +278,9 @@ function createToggleButton(collapsed: boolean, onToggle: () => void): HTMLButto
   });
   btn.classList.toggle('is-collapsed', collapsed);
   btn.setAttribute('aria-expanded', String(!collapsed));
+  // Нажатие не должно уводить фокус/каретку: в правке кнопка живёт в гаттере
+  // вне содержимого, в просмотре — поверх полосы-гаттера.
+  btn.addEventListener('mousedown', (event) => event.preventDefault());
   return btn;
 }
 
@@ -325,17 +351,52 @@ function walkScope(
   step(root);
 }
 
-/** Один сворачиваемый раздел просмотра: индикатор и скрываемые элементы. */
+/** Родитель элемента (реальный DOM `parentElement`, шим тестов — `parent`). */
+function parentOf(element: HTMLElement): HTMLElement | null {
+  const node = element as unknown as {
+    parentElement?: HTMLElement | null;
+    parent?: HTMLElement | null;
+  };
+  return node.parentElement ?? node.parent ?? null;
+}
+
+/** Один сворачиваемый раздел просмотра: якорь индикатора и скрываемые элементы. */
 interface ViewSection {
   id: string;
+  /** Элемент, напротив первой строки которого встаёт маркер в полосе-гаттере. */
   anchor: HTMLElement;
   hide: HTMLElement[];
+}
+
+/** Раздел просмотра вместе со своим состоянием, маркером и якорем. */
+interface ViewRecord {
+  id: string;
+  state: CommentCollapseState;
+  anchor: HTMLElement;
+  button: HTMLButtonElement;
+}
+
+/** Отписка от наблюдения за переразметкой хоста (async-контент). */
+const hostWatchers = new WeakMap<HTMLElement, () => void>();
+
+/** Снимает прежнюю полосу-гаттер хоста и её наблюдение (идемпотентность). */
+function removeRail(host: HTMLElement): void {
+  hostWatchers.get(host)?.();
+  hostWatchers.delete(host);
+  for (const child of Array.from(host.children)) {
+    if (child.classList.contains(COLLAPSE_RAIL_CLASS)) child.remove();
+  }
 }
 
 /**
  * Навешивает сворачивание на отрендеренный HTML комментария. Идемпотентна:
  * прежние индикаторы и классы скрытия снимаются — функция вызывается на
  * каждом рендере просмотра.
+ *
+ * Индикаторы живут в полосе-гаттере (`md-collapse-rail`) абсолютными
+ * элементами, колонкой, на высоте своей строки-якоря; хост резервирует под неё
+ * `padding-inline-start` (`md-collapse-host`), поэтому текст вправо не сдвигается
+ * (ошибка `ce8e9f67`). Маркеры не участвуют в потоке текста.
  *
  * `factory` (ТП2, требование `e04d84f7`) расширяет сворачивание на блоки
  * трансклюзий: каждый блок `.md-transclusion` получает собственное состояние
@@ -350,120 +411,194 @@ export function decorateCommentView(
   factory?: CollapseScopeFactory,
   basePath: readonly string[] = [],
 ): void {
+  // Хост — корень поля: держит резервную полосу и служит системой координат
+  // для маркеров всех областей (включая блоки трансклюзий) — одна колонка.
+  const host = view;
+  removeRail(host);
+
   // Идемпотентность: снять прежнюю разметку сворачивания во всём поддереве
   // (включая блоки трансклюзий — их разметку перестроит рекурсия ниже).
   const existing: HTMLElement[] = [];
-  walkElements(view, (node) => existing.push(node));
+  walkElements(host, (node) => existing.push(node));
   for (const node of existing) {
     if (node.classList.contains(COLLAPSE_TOGGLE_CLASS)) node.remove();
     else node.classList.remove(COLLAPSE_HIDDEN_CLASS);
   }
 
-  const headings: Array<{ node: HTMLElement; siblings: HTMLElement[]; index: number }> = [];
-  const nestedBlocks: HTMLElement[] = [];
-  const childBlocks: HTMLElement[] = [];
-  const visit = (
-    node: HTMLElement,
-    parent: HTMLElement,
-    siblings: HTMLElement[],
-    index: number,
-  ): void => {
-    const level = headingLevel(node);
-    if (level > 0) headings.push({ node, siblings, index });
-    const tag = node.tagName.toUpperCase();
-    const parentTag = parent.tagName.toUpperCase();
-    if (
-      (tag === 'UL' || tag === 'OL' || tag === 'BLOCKQUOTE') &&
-      (parentTag === 'LI' || parentTag === 'BLOCKQUOTE')
-    ) {
-      nestedBlocks.push(node);
-    }
-  };
-  if (factory === undefined) walkElements(view, visit);
-  else walkScope(view, visit, (child) => childBlocks.push(child));
+  host.classList.add(COLLAPSE_HOST_CLASS);
+  const rail = document.createElement('div');
+  rail.className = COLLAPSE_RAIL_CLASS;
+  host.prepend(rail);
 
-  const sections: ViewSection[] = [];
-  const levelCounters = new Map<number, number>();
+  /** Кто кого скрывает: элемент виден, пока не свёрнут ни один из его разделов. */
+  const owners = new Map<HTMLElement, ViewRecord[]>();
+  const records: ViewRecord[] = [];
 
-  // Заголовки: тело — сиблинги до следующего заголовка того же/высшего уровня.
-  // Идентификатор присваивается КАЖДОМУ заголовку (счётчик уровня растёт всегда),
-  // даже когда видимого тела нет (например, тело — только HTML-комментарий,
-  // невидимый в просмотре): иначе нумерация разошлась бы с редактором, который
-  // считает телом строку комментария, и id указывал бы на разные разделы.
-  for (const { node, siblings, index } of headings) {
-    const level = headingLevel(node);
-    const n = (levelCounters.get(level) ?? 0) + 1;
-    levelCounters.set(level, n);
-    const hide: HTMLElement[] = [];
-    for (const sib of siblings.slice(index + 1)) {
-      const sibLevel = headingLevel(sib);
-      if (sibLevel !== 0 && sibLevel <= level) break;
-      hide.push(sib);
+  /** Якорь скрыт или лежит внутри скрытого элемента (маркер тоже прячем). */
+  function isInsideHidden(element: HTMLElement): boolean {
+    let current: HTMLElement | null = element;
+    while (current !== null && current !== host) {
+      if (current.classList.contains(COLLAPSE_HIDDEN_CLASS)) return true;
+      current = parentOf(current);
     }
-    if (hide.length === 0) continue; // сворачивать нечего (id всё равно присвоен)
-    sections.push({ id: `h${level}#${n}`, anchor: node, hide });
+    return false;
   }
 
-  // Вложенные блоки: скрывается содержимое блока, индикатор — у его начала.
-  // Счётчик также растёт для каждого обнаруженного блока (см. выше).
-  let nested = 0;
-  for (const block of nestedBlocks) {
-    const hide = Array.from(block.children).filter(
-      (child): child is HTMLElement => child instanceof HTMLElement,
-    );
-    nested += 1;
-    if (hide.length === 0) continue;
-    sections.push({ id: `n#${nested}`, anchor: block, hide });
+  /** Расставляет маркеры в полосе по высоте их якорей (координаты содержимого). */
+  function relayout(): void {
+    const hostRect = host.getBoundingClientRect();
+    const scroll = host.scrollTop;
+    for (const record of records) {
+      const rect = record.anchor.getBoundingClientRect();
+      const top = rect.top - hostRect.top + scroll;
+      record.button.style.top = `${Math.round(top)}px`;
+    }
   }
 
-  // Кто кого скрывает: элемент виден, пока не свёрнут ни один из его разделов.
-  const owners = new Map<HTMLElement, string[]>();
-  const toggles = new Map<string, HTMLButtonElement>();
-  const apply = (): void => {
-    for (const [element, ids] of owners) {
+  /** Прячет тела свёрнутых разделов и обновляет вид/позицию маркеров. */
+  function apply(): void {
+    for (const [element, list] of owners) {
       element.classList.toggle(
         COLLAPSE_HIDDEN_CLASS,
-        ids.some((id) => state.isCollapsed(id)),
+        list.some((record) => record.state.isCollapsed(record.id)),
       );
     }
-    for (const [id, btn] of toggles) {
-      const isCollapsed = state.isCollapsed(id);
-      btn.classList.toggle('is-collapsed', isCollapsed);
-      btn.setAttribute('aria-expanded', String(!isCollapsed));
-      btn.title = isCollapsed ? t('comment.collapse.expand') : t('comment.collapse.collapse');
+    for (const record of records) {
+      const isCollapsed = record.state.isCollapsed(record.id);
+      record.button.classList.toggle('is-collapsed', isCollapsed);
+      record.button.setAttribute('aria-expanded', String(!isCollapsed));
+      record.button.title = isCollapsed
+        ? t('comment.collapse.expand')
+        : t('comment.collapse.collapse');
+      record.button.classList.toggle(COLLAPSE_HIDDEN_CLASS, isInsideHidden(record.anchor));
     }
-  };
+    relayout();
+  }
 
-  for (const section of sections) {
-    for (const element of section.hide) {
-      const ids = owners.get(element);
-      if (ids === undefined) owners.set(element, [section.id]);
-      else ids.push(section.id);
-    }
-    const btn = createToggleButton(state.isCollapsed(section.id), () => {
-      state.setCollapsed(section.id, !state.isCollapsed(section.id));
+  const addSection = (
+    section: ViewSection,
+    sectionState: CommentCollapseState,
+    scopeKey: string,
+  ): void => {
+    const btn = createToggleButton(sectionState.isCollapsed(section.id), () => {
+      sectionState.setCollapsed(section.id, !sectionState.isCollapsed(section.id));
       apply();
     });
     btn.dataset.collapseId = section.id;
+    // Ключ области сворачивания (путь вставки; пусто — своё поле): id разделов
+    // позиционные и повторяются между блоками трансклюзий — различает их область.
+    btn.dataset.collapseScope = scopeKey;
     // Двойной клик по индикатору не должен переводить поле в правку.
     btn.addEventListener('dblclick', (event) => event.stopPropagation());
-    section.anchor.prepend(btn);
-    toggles.set(section.id, btn);
-  }
+    rail.append(btn);
+    const record: ViewRecord = { id: section.id, state: sectionState, anchor: section.anchor, button: btn };
+    records.push(record);
+    for (const element of section.hide) {
+      const list = owners.get(element);
+      if (list === undefined) owners.set(element, [record]);
+      else list.push(record);
+    }
+  };
 
+  // Разделы одной области сворачивания (поле-контейнер или блок трансклюзии).
+  const decorateScope = (
+    scope: HTMLElement,
+    scopeState: CommentCollapseState,
+    path: readonly string[],
+  ): void => {
+    const headings: Array<{ node: HTMLElement; siblings: HTMLElement[]; index: number }> = [];
+    const nestedBlocks: HTMLElement[] = [];
+    const childBlocks: HTMLElement[] = [];
+    const visit = (
+      node: HTMLElement,
+      parent: HTMLElement,
+      siblings: HTMLElement[],
+      index: number,
+    ): void => {
+      const level = headingLevel(node);
+      if (level > 0) headings.push({ node, siblings, index });
+      const tag = node.tagName.toUpperCase();
+      const parentTag = parent.tagName.toUpperCase();
+      if (
+        (tag === 'UL' || tag === 'OL' || tag === 'BLOCKQUOTE') &&
+        (parentTag === 'LI' || parentTag === 'BLOCKQUOTE')
+      ) {
+        nestedBlocks.push(node);
+      }
+    };
+    if (factory === undefined) walkElements(scope, visit);
+    else walkScope(scope, visit, (child) => childBlocks.push(child));
+
+    // Заголовки: тело — сиблинги до следующего заголовка того же/высшего уровня.
+    // Идентификатор присваивается КАЖДОМУ заголовку (счётчик уровня растёт всегда),
+    // даже когда видимого тела нет (например, тело — только HTML-комментарий,
+    // невидимый в просмотре): иначе нумерация разошлась бы с редактором, который
+    // считает телом строку комментария, и id указывал бы на разные разделы.
+    const levelCounters = new Map<number, number>();
+    for (const { node, siblings, index } of headings) {
+      const level = headingLevel(node);
+      const n = (levelCounters.get(level) ?? 0) + 1;
+      levelCounters.set(level, n);
+      const hide: HTMLElement[] = [];
+      for (const sib of siblings.slice(index + 1)) {
+        const sibLevel = headingLevel(sib);
+        if (sibLevel !== 0 && sibLevel <= level) break;
+        hide.push(sib);
+      }
+      if (hide.length === 0) continue; // сворачивать нечего (id всё равно присвоен)
+      addSection({ id: `h${level}#${n}`, anchor: node, hide }, scopeState, path.join('#'));
+    }
+
+    // Вложенные блоки: скрывается содержимое блока, индикатор — у его начала.
+    // Счётчик также растёт для каждого обнаруженного блока (см. выше).
+    let nested = 0;
+    for (const block of nestedBlocks) {
+      nested += 1;
+      const hide = Array.from(block.children).filter(
+        (child): child is HTMLElement => child instanceof HTMLElement,
+      );
+      if (hide.length === 0) continue;
+      addSection({ id: `n#${nested}`, anchor: block, hide }, scopeState, path.join('#'));
+    }
+
+    // Блоки трансклюзий — своё состояние на каждый путь вставки (требование
+    // e04d84f7): рекурсия декорирует блок отдельной областью, счётчики разделов
+    // внутри начинаются заново, а их заголовки не считались внешней областью.
+    if (factory !== undefined) {
+      for (const block of childBlocks) {
+        const sourceId = transclusionSourceId(block);
+        if (sourceId === null) continue;
+        const childPath = [...path, sourceId];
+        decorateScope(block, factory(childPath), childPath);
+      }
+    }
+  };
+
+  decorateScope(view, state, basePath);
   apply();
 
-  // Блоки трансклюзий — своё состояние на каждый путь вставки (требование
-  // e04d84f7): рекурсия декорирует блок отдельной областью, счётчики разделов
-  // внутри начинаются заново, а их заголовки не считались внешней областью.
-  if (factory !== undefined) {
-    for (const block of childBlocks) {
-      const sourceId = transclusionSourceId(block);
-      if (sourceId === null) continue;
-      const childPath = [...basePath, sourceId];
-      decorateCommentView(block, factory(childPath), factory, childPath);
-    }
+  // Переразметка при асинхронном изменении содержимого (mermaid, картинки):
+  // высоты якорей меняются — маркеры пересчитываются в следующем кадре и по
+  // мутациям поддерева (childList; правки стилей маркеров наблюдателя не будят).
+  const offs: Array<() => void> = [];
+  const raf = (globalThis as { requestAnimationFrame?: (cb: () => void) => number })
+    .requestAnimationFrame;
+  if (typeof raf === 'function') {
+    const frame = raf(() => relayout());
+    const cancel = (globalThis as { cancelAnimationFrame?: (id: number) => void })
+      .cancelAnimationFrame;
+    if (typeof cancel === 'function') offs.push(() => cancel(frame));
   }
+  const MutationObserverCtor = (globalThis as { MutationObserver?: typeof MutationObserver })
+    .MutationObserver;
+  if (typeof MutationObserverCtor === 'function') {
+    const observer = new MutationObserverCtor(() => relayout());
+    observer.observe(host, { childList: true, subtree: true });
+    offs.push(() => observer.disconnect());
+  }
+  hostWatchers.set(host, () => {
+    for (const off of offs) off();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -506,6 +641,8 @@ interface CollapseDecoState {
   setRef: Set<string> | null;
   ranges: CollapsedRange[];
   deco: DecorationSet;
+  /** Маркеры гаттера: точка-индикатор на строке-якоре каждого раздела. */
+  markers: RangeSet<GutterMarker>;
 }
 
 /** Раздел редактора: позиция индикатора и диапазон скрываемого тела. */
@@ -670,8 +807,12 @@ function collectSections(
   return sections.sort((a, b) => a.bodyFrom - b.bodyFrom);
 }
 
-/** Кнопка-индикатор в редакторе как виджет CM6. */
-class CollapseToggleWidget extends WidgetType {
+/**
+ * Маркер гаттера правки: кнопка-индикатор раздела на строке-якоре. Живёт в
+ * CM6-гаттере (вне потока текста), поэтому текст вправо не сдвигается
+ * (ошибка `ce8e9f67`).
+ */
+class CollapseGutterMarker extends GutterMarker {
   constructor(
     readonly id: string,
     readonly collapsed: boolean,
@@ -681,7 +822,7 @@ class CollapseToggleWidget extends WidgetType {
     super();
   }
 
-  override eq(other: CollapseToggleWidget): boolean {
+  override eq(other: CollapseGutterMarker): boolean {
     return (
       other.id === this.id &&
       other.collapsed === this.collapsed &&
@@ -705,13 +846,8 @@ class CollapseToggleWidget extends WidgetType {
         effects: setCollapseEffect.of({ id: this.id, collapsed: !this.collapsed }),
       });
     });
-    btn.classList.add('cm-md-collapse-toggle');
+    btn.dataset.collapseId = this.id;
     return btn;
-  }
-
-  override ignoreEvent(): boolean {
-    // Кнопка сама обрабатывает клик; редактор событие не должен трогать.
-    return true;
   }
 }
 
@@ -722,13 +858,14 @@ function samePath(a: readonly string[] | null, b: readonly string[] | null): boo
   return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
-/** Строит декорации и список скрытых диапазонов для текущего состояния. */
+/** Строит декорации (скрытые тела) и маркеры гаттера для текущего состояния. */
 function buildDecorations(state: EditorState): CollapseDecoState {
   const collapsed = state.field(collapseSetField);
   const region = state.facet(blockEditCollapseFacet);
   const factory = state.facet(collapseScopeFacet);
   const ranges: CollapsedRange[] = [];
   const parts: Array<Range<Decoration>> = [];
+  const markerParts: Array<Range<GutterMarker>> = [];
 
   // Производные состояния областей трансклюзий — по одной на путь вставки.
   const scopedStates = new Map<string, CommentCollapseState>();
@@ -751,11 +888,11 @@ function buildDecorations(state: EditorState): CollapseDecoState {
     // Раздел внутри тела уже свёрнутого раздела скрыт родителем — не строим.
     if (ranges.some((r) => section.anchorFrom >= r.from && section.anchorFrom < r.to)) continue;
     const sectionCollapsed = isCollapsed(section);
-    parts.push(
-      Decoration.widget({
-        widget: new CollapseToggleWidget(section.id, sectionCollapsed, section.path),
-        side: -1,
-      }).range(section.anchorFrom),
+    // Индикатор — маркер гаттера на строке-якоре (вне потока текста).
+    markerParts.push(
+      new CollapseGutterMarker(section.id, sectionCollapsed, section.path).range(
+        section.anchorFrom,
+      ),
     );
     if (sectionCollapsed) {
       ranges.push({ from: section.bodyFrom, to: section.bodyTo });
@@ -767,6 +904,7 @@ function buildDecorations(state: EditorState): CollapseDecoState {
     setRef: collapsed,
     ranges,
     deco: Decoration.set(parts, true),
+    markers: RangeSet.of(markerParts, true),
   };
 }
 
@@ -795,6 +933,19 @@ export function isCollapsedHiddenAt(state: EditorState, pos: number): boolean {
 }
 
 /**
+ * Гаттер правки: зарезервированная слева полоса, в которой колонкой стоят
+ * маркеры-индикаторы разделов (ошибка `ce8e9f67`). Маркеры берутся из поля
+ * декораций — при смене набора свёрнутых (или refresh-эффекте) поле
+ * пересобирается, и гаттер перерисовывает элементы.
+ */
+function commentCollapseGutter(): Extension {
+  return gutter({
+    class: COLLAPSE_GUTTER_CLASS,
+    markers: (view) => view.state.field(collapseDecoField).markers,
+  });
+}
+
+/**
  * Расширение редактора: набор свёрнутых разделов поля (инициализируется из
  * локального состояния) плюс запись переключений в то же состояние.
  */
@@ -802,6 +953,7 @@ export function commentCollapseExtension(state: CommentCollapseState): Extension
   return [
     collapseSetField.init(() => new Set(state.all())),
     collapseDecoField,
+    commentCollapseGutter(),
     EditorView.updateListener.of((update) => {
       for (const tr of update.transactions) {
         for (const effect of tr.effects) {

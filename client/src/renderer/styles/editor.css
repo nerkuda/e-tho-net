@@ -2168,9 +2168,13 @@
   font-style: italic;
 }
 
-/* Сворачивание разделов комментария (0.12.1, задача 634f1412): индикатор у
- * начала строки заголовка/вложенного блока и скрытие тела свёрнутого раздела.
- * Один класс обслуживает и просмотр, и виджет live preview. */
+/* Сворачивание разделов комментария (0.12.1, задача 634f1412): индикатор в
+ * зарезервированной полосе-гаттере слева и скрытие тела свёрнутого раздела.
+ * Один класс индикатора обслуживает и просмотр (полоса-гаттер
+ * `.md-collapse-rail`), и правку (CM6-гаттер `.cm-md-collapse-gutter`).
+ * Ширина полосы в обоих режимах — `--hit-area`, поэтому столбец совпадает, а
+ * текст вправо не сдвигается от появления/исчезновения символа (ошибка
+ * ce8e9f67). */
 .md-collapse-hidden {
   display: none;
 }
@@ -2178,9 +2182,9 @@
 .md-collapse-toggle {
   min-width: var(--hit-area);
   min-height: var(--hit-area);
-  margin-right: var(--space-1);
-  padding: 0;
-  vertical-align: middle;
+  /* Плотность ghost-иконочной кнопки снята: в гаттере индикатор — глиф в узкой
+     полосе. Специфичность правил `.ui-btn--*` выше — гасим padding точечно. */
+  padding: 0 !important;
   color: var(--text-dim);
 }
 
@@ -2191,6 +2195,45 @@
 
 .md-collapse-toggle.is-collapsed .icon {
   transform: rotate(-90deg);
+}
+
+/* Просмотр: хост резервирует полосу слева, маркеры лежат в ней абсолютно и не
+   участвуют в потоке текста. `top` маркера выставляет скрипт по высоте якоря. */
+.md-collapse-host {
+  position: relative;
+  padding-inline-start: var(--hit-area);
+}
+
+.md-collapse-rail {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: var(--hit-area);
+  pointer-events: none;
+}
+
+.md-collapse-rail .md-collapse-toggle {
+  position: absolute;
+  inset-inline-start: 0;
+  margin: 0;
+  pointer-events: auto;
+}
+
+/* Правка: CM6-гаттер — та же полоса шириной `--hit-area`, без фона и рамки
+   темы (это пустое место под индикаторы, а не нумерация строк). */
+.cm-md-collapse-gutter {
+  width: var(--hit-area);
+}
+
+.cm-md-collapse-gutter .cm-gutterElement {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.md-field-area .cm-editor .cm-gutters.cm-gutters-before {
+  background: transparent;
+  border-right: 0;
 }
 
 

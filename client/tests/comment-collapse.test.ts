@@ -3,10 +3,15 @@
  * элемент интерфейса 826c4423, требования b482b36b/e04d84f7).
  *
  * Проверяются: локальное хранение состояния (localStorage, на сервер не едет),
- * разметка просмотра (индикаторы и скрытие тела), декорации live preview
- * CodeMirror 6, согласованный пропуск декораций внутри свёрнутого тела,
- * независимость сворачивания в правке блока трансклюзии (ошибка 4204e34c) и
- * регресс-тест «на сервер не едет».
+ * разметка просмотра (индикаторы в полосе-гаттере, скрытие тела), маркеры
+ * гаттера live preview CodeMirror 6, согласованный пропуск декораций внутри
+ * свёрнутого тела, независимость сворачивания в правке блока трансклюзии
+ * (ошибка 4204e34c) и регресс-тест «на сервер не едет».
+ *
+ * Модель индикатора (0.12.1, ошибки ce8e9f67/6007a6ec): индикатор живёт в
+ * зарезервированной полосе-гаттере и НЕ участвует в потоке текста (правка —
+ * CM6-гаттер, просмотр — полоса `.md-collapse-rail` в хосте). Тесты
+ * фиксируют, что индикатора нет среди детей строки, а маркеры лежат в полосе.
  */
 
 import assert from 'node:assert/strict';
@@ -85,6 +90,30 @@ function elementChildren(node: ShimElement): ShimElement[] {
   return node.children.filter((child) => child.tagName !== '#text');
 }
 
+/** Маркер-индикатор раздела по id (все маркеры хоста лежат в полосе-гаттере). */
+function markerById(root: ShimElement, id: string): ShimElement | undefined {
+  return root
+    .findAll(mod.COLLAPSE_TOGGLE_CLASS)
+    .find((btn) => btn.dataset['collapseId'] === id);
+}
+
+/** Полоса-гаттер хоста просмотра. */
+function rail(root: ShimElement): ShimElement | undefined {
+  return root.findAll(mod.COLLAPSE_RAIL_CLASS)[0];
+}
+
+/** Число маркеров в гаттере редактора (поле декораций). */
+function gutterMarkerCount(state: EditorState): number {
+  const field = mod.commentCollapseInternals.collapseDecoField;
+  let count = 0;
+  const it = state.field(field).markers.iter();
+  while (it.value !== null) {
+    count += 1;
+    it.next();
+  }
+  return count;
+}
+
 describe('сворачивание разделов комментария (editor/comment-collapse.ts)', () => {
   it('чистые функции хранилища: ключ, разбор, сериализация', async () => {
     installShim();
@@ -155,12 +184,25 @@ describe('сворачивание разделов комментария (edit
 
     // 3 заголовка с непустым телом + 1 вложенный список.
     assert.equal(countByClass(view, mod.COLLAPSE_TOGGLE_CLASS), 4);
-    assert.equal(elementChildren(h2)[0]?.className.includes(mod.COLLAPSE_TOGGLE_CLASS), true);
-    assert.equal(elementChildren(inner)[0]?.className.includes(mod.COLLAPSE_TOGGLE_CLASS), true);
 
-    // Идемпотентность: повторный вызов не плодит индикаторы.
+    // Гашение потока текста (ошибка ce8e9f67): хост резервирует полосу, а
+    // маркеры лежат в ней, а НЕ первым ребёнком строки (текст вправо не едет).
+    assert.equal(view.classList.contains(mod.COLLAPSE_HOST_CLASS), true);
+    const hostRail = rail(view);
+    assert.ok(hostRail, 'полоса-гаттер создана в хосте');
+    assert.equal(countByClass(hostRail as ShimElement, mod.COLLAPSE_TOGGLE_CLASS), 4);
+    assert.equal(
+      elementChildren(h2).some((child) => child.classList.contains(mod.COLLAPSE_TOGGLE_CLASS)),
+      false,
+      'маркер не лежит в строке заголовка (текст вправо не сдвигается)',
+    );
+    assert.equal(markerById(view, 'h2#1')?.parent, hostRail);
+    assert.equal(markerById(view, 'n#1')?.parent, hostRail);
+
+    // Идемпотентность: повторный вызов не плодит индикаторы и полосы.
     mod.decorateCommentView(view as unknown as HTMLElement, state);
     assert.equal(countByClass(view, mod.COLLAPSE_TOGGLE_CLASS), 4);
+    assert.equal(countByClass(view, mod.COLLAPSE_RAIL_CLASS), 1);
 
     // Свёрнутый H2#1 скрывает p1, h3, p2 — но не h2b и не вложенный список.
     state.setCollapsed('h2#1', true);
@@ -169,12 +211,20 @@ describe('сворачивание разделов комментария (edit
     assert.equal(h3.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true);
     assert.equal(p2.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true);
     assert.equal(h2b.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false);
-    assert.equal(innerLi.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false);
+    assert.equal(inner.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false);
+    // Маркер скрытого раздела (h3#1, якорь внутри тела h2#1) прячется.
+    assert.equal(
+      markerById(view, 'h3#1')?.classList.contains(mod.COLLAPSE_HIDDEN_CLASS),
+      true,
+      'индикатор вложенного заголовка скрыт вместе с телом родителя',
+    );
 
     // Свёрнутый вложенный блок скрывает своё содержимое.
+    state.setCollapsed('h2#1', false);
     state.setCollapsed('n#1', true);
     mod.decorateCommentView(view as unknown as HTMLElement, state);
     assert.equal(innerLi.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), true);
+    assert.equal(inner.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false);
     assert.equal(outer.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false);
   });
 
@@ -200,17 +250,15 @@ describe('сворачивание разделов комментария (edit
     };
 
     const field = mod.commentCollapseInternals.collapseDecoField;
-    const counts = (state: EditorState): { widgets: number; replaces: number } => {
-      let widgets = 0;
-      let replaces = 0;
+    const replaces = (state: EditorState): number => {
+      let count = 0;
       const it = state.field(field).deco.iter();
       while (it.value !== null) {
-        const spec = (it.value as unknown as { spec?: { widget?: unknown; block?: boolean } }).spec ?? {};
-        if (spec.widget !== undefined) widgets += 1;
-        if (spec.block === true) replaces += 1;
+        const spec = (it.value as unknown as { spec?: { block?: boolean } }).spec ?? {};
+        if (spec.block === true) count += 1;
         it.next();
       }
-      return { widgets, replaces };
+      return count;
     };
 
     const sections = mod.commentCollapseInternals.collectSections(makeState());
@@ -220,13 +268,17 @@ describe('сворачивание разделов комментария (edit
     );
 
     const open = makeState();
-    assert.deepEqual(counts(open), { widgets: 3, replaces: 0 });
+    // Индикаторы — маркеры гаттера, а НЕ inline-виджеты в тексте (ce8e9f67):
+    // в декорациях содержимого нет ни одного виджета.
+    assert.equal(gutterMarkerCount(open), 3);
+    assert.equal(replaces(open), 0);
 
     // Свёрнут H2#1: его тело — блок-замена, вложенный H3 внутри не строится.
     const collapsed = open.update({
       effects: mod.setCollapseEffect.of({ id: 'h2#1', collapsed: true }),
     }).state;
-    assert.deepEqual(counts(collapsed), { widgets: 2, replaces: 1 });
+    assert.equal(gutterMarkerCount(collapsed), 2);
+    assert.equal(replaces(collapsed), 1);
 
     // Точка скрытого диапазона распознаётся (для пропуска в md-live).
     const bodyPos = doc.indexOf('подтекст');
@@ -266,6 +318,8 @@ describe('сворачивание разделов комментария (edit
       effects: mod.setCollapseEffect.of({ id: 'n#1', collapsed: true }),
     }).state;
     assert.equal(mod.isCollapsedHiddenAt(collapsed, doc.indexOf('вложенный')), true);
+    // Родительская строка не скрывается — прячется только вложенный блок.
+    assert.equal(mod.isCollapsedHiddenAt(collapsed, doc.indexOf('- один')), false);
   });
 
   it('инвариант: id разделов совпадают в просмотре и правке при теле из HTML-комментария', async () => {
@@ -394,15 +448,18 @@ describe('сворачивание разделов комментария (edit
 
     // Блоки трансклюзий декорированы как отдельные области (пути B и B#C).
     assert.deepEqual(paths.sort(), ['B', 'B#C']);
-    // Нумерация разделов внутри каждой области начинается заново: h2#1 в трёх областях.
-    const bToggles = bBlock.findAll(mod.COLLAPSE_TOGGLE_CLASS);
-    assert.equal(bToggles[0]?.dataset['collapseId'], 'h2#1', 'раздел B — h2#1 в своей области');
-    assert.equal(bToggles[1]?.dataset['collapseId'], 'h2#1', 'раздел C — h2#1 в своей области');
-    assert.equal(
-      elementChildren(ownH2)[0]?.dataset['collapseId'],
-      'h2#1',
-      'свой H2 поля — тоже h2#1 (заголовки трансклюзий не сдвинули нумерацию)',
+    // Маркеры всех областей лежат в ОДНОЙ полосе-гаттере хоста (одна колонка,
+    // ошибка ce8e9f67) и различаются ключом области (путь вставки).
+    assert.ok(rail(view), 'полоса-гаттер хоста');
+    const markers = view.findAll(mod.COLLAPSE_TOGGLE_CLASS);
+    assert.deepEqual(
+      markers
+        .map((m) => `${m.dataset['collapseScope']}:${m.dataset['collapseId']}`)
+        .sort(),
+      [':h2#1', 'B#C:h2#1', 'B:h2#1'],
+      'нумерация начинается заново в каждой области; маркеры — в полосе хоста',
     );
+    for (const m of markers) assert.equal(m.parent, rail(view), 'маркер лежит в полосе');
 
     // Свёртка раздела в C прячет тело C, не трогая тело B.
     stateC.setCollapsed('h2#1', true);
@@ -450,18 +507,16 @@ describe('сворачивание разделов комментария (edit
       });
 
     const field = mod.commentCollapseInternals.collapseDecoField;
-    const counts = (state: EditorState): { widgets: number; replaces: number } => {
-      let widgets = 0;
-      let replaces = 0;
+    const replaces = (state: EditorState): number => {
+      let count = 0;
       const it = state.field(field).deco.iter();
       while (it.value !== null) {
         const spec =
-          (it.value as unknown as { spec?: { widget?: unknown; block?: boolean } }).spec ?? {};
-        if (spec.widget !== undefined) widgets += 1;
-        if (spec.block === true) replaces += 1;
+          (it.value as unknown as { spec?: { block?: boolean } }).spec ?? {};
+        if (spec.block === true) count += 1;
         it.next();
       }
-      return { widgets, replaces };
+      return count;
     };
 
     // Нумерация: собственный H2 контейнера — h2#1, раздел блока — тоже h2#1, но
@@ -476,7 +531,8 @@ describe('сворачивание разделов комментария (edit
     // НЕ сворачивается: состояния контейнера и блока независимы.
     container.setCollapsed('h2#1', true);
     const containerCollapsed = makeState();
-    assert.deepEqual(counts(containerCollapsed), { widgets: 2, replaces: 1 });
+    assert.equal(gutterMarkerCount(containerCollapsed), 2);
+    assert.equal(replaces(containerCollapsed), 1);
     assert.equal(mod.isCollapsedHiddenAt(containerCollapsed, doc.indexOf('текст А')), true);
     assert.equal(
       mod.isCollapsedHiddenAt(containerCollapsed, doc.indexOf('текст Б')),
@@ -488,10 +544,12 @@ describe('сворачивание разделов комментария (edit
     // пересобирает декорации), собственные разделы А не тронуты.
     container.setCollapsed('h2#1', false);
     const open = makeState();
-    assert.deepEqual(counts(open), { widgets: 2, replaces: 0 });
+    assert.equal(gutterMarkerCount(open), 2);
+    assert.equal(replaces(open), 0);
     scopedB.setCollapsed('h2#1', true);
     const toggled = open.update({ effects: mod.refreshCollapseEffect.of(null) }).state;
-    assert.deepEqual(counts(toggled), { widgets: 2, replaces: 1 });
+    assert.equal(gutterMarkerCount(toggled), 2);
+    assert.equal(replaces(toggled), 1);
     assert.equal(mod.isCollapsedHiddenAt(toggled, doc.indexOf('текст Б')), true, 'блок свёрнут');
     assert.equal(mod.isCollapsedHiddenAt(toggled, doc.indexOf('текст А')), false, 'А не тронут');
     assert.equal(container.isCollapsed('h2#1'), false, 'в состояние контейнера не писали');
