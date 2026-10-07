@@ -775,7 +775,7 @@ test('beginNestedBlockEdit: на месте внешней ссылки — те
   const outerRef = parseTransclusions(raw)[0]!;
   const view = makeView(EditorState.create({ doc: raw, extensions: [transclusionState] }));
 
-  await transclusionInternals.beginNestedBlockEdit(view, outerRef, { sourceId: ID_B, section: null });
+  await transclusionInternals.beginNestedBlockEdit(view as unknown as EditorView, outerRef, { sourceId: ID_B, section: null });
 
   const field = view.state.field(transclusionState)!;
   assert.ok(field.blockEdit !== null, 'открыта правка блока вложенного источника');
@@ -795,7 +795,7 @@ test('beginNestedBlockEdit: 3-й уровень вложенности прав�
   const outerRef = parseTransclusions(raw)[0]!;
   const view = makeView(EditorState.create({ doc: raw, extensions: [transclusionState] }));
 
-  await transclusionInternals.beginNestedBlockEdit(view, outerRef, { sourceId: ID_C, section: null });
+  await transclusionInternals.beginNestedBlockEdit(view as unknown as EditorView, outerRef, { sourceId: ID_C, section: null });
 
   const field = view.state.field(transclusionState)!;
   assert.equal(field.blockEdit!.sourceId, ID_C, 'глубина клика не ограничивает правку источника');
@@ -812,7 +812,7 @@ test('beginNestedBlockEdit с разделом берёт содержимое �
   const outerRef = parseTransclusions(raw)[0]!;
   const view = makeView(EditorState.create({ doc: raw, extensions: [transclusionState] }));
 
-  await transclusionInternals.beginNestedBlockEdit(view, outerRef, {
+  await transclusionInternals.beginNestedBlockEdit(view as unknown as EditorView, outerRef, {
     sourceId: ID_B,
     section: 'Раздел B',
   });
@@ -834,7 +834,7 @@ test('Mod-Enter в правке вложенного блока пишет в и
     commitCalls += 1;
   }));
 
-  await transclusionInternals.beginNestedBlockEdit(view, outerRef, { sourceId: ID_B, section: null });
+  await transclusionInternals.beginNestedBlockEdit(view as unknown as EditorView, outerRef, { sourceId: ID_B, section: null });
   const be = view.state.field(transclusionState)!.blockEdit!;
   view.dispatch({ changes: { from: be.from, to: be.to, insert: 'ИЗМЕНЁННЫЙ B' } });
 
