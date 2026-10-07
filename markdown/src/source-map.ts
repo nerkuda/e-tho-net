@@ -78,11 +78,23 @@
  * `data-md-shift` for escaped/entity/comment runs in ordinary text outside any
  * construct, where it is the nearest annotated ancestor.
  *
+ * A shift entry is recorded ONLY for a run at the map owner's own text level:
+ * the rendered cursor walks nested constructs too (to stay aligned with the
+ * resolver), but a run inside a nested construct is left to that construct's
+ * own `data-md-shift` / `data-md-after` anchor. Recording it in the outer map as
+ * well would double-count it whenever the nested anchor is the base — most
+ * visibly for a zero-render `hidden` comment at the end of a nested construct
+ * (регресс проверки `0602db42`: `**a <!--c-->** tail` давало 23 вместо 15).
+ *
  * Honest limits (out of scope of the source map, задача `ba68771d`):
  *
  * - A markdown link or image inside a construct (`**[a](u)**`) renders as its
  *   label, which is neither annotated nor counted as a text run, so the
- *   mapping stays approximate there.
+ *   mapping stays approximate there. The same holds for a shortened run
+ *   (escape/entity, embedded HTML comment) inside a link/image label or an
+ *   autolink — those constructs carry no `data-md-*` annotation at all, so the
+ *   nearest annotated ancestor is the block and the label markup drifts
+ *   (отдельная ошибка `809fb567`).
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -333,51 +345,60 @@ function hasAnnotatedDescendant(children: readonly Token[], i: number): boolean 
  * the rendered offset right after the shortened run, `delta` the number of
  * source characters hidden there.
  *
- * The rendered cursor counts every run that contributes visible text to the
- * construct: `text` / `text_special` (including those of nested constructs, as
- * the loop walks all descendants) plus nested `code_inline` / `wiki_link`
- * children, whose visible text is held by the token itself rather than by a
- * `text` child. Constructs that own none of these (a link/image label) are
- * honest limits (see the module head).
+ * The rendered cursor counts every run that contributes visible text anywhere
+ * inside the construct — `text` / `text_special` (nested constructs included)
+ * plus `code_inline` / `wiki_link`, whose visible text is held by the token
+ * itself rather than by a `text` child — but a delta is only RECORDED for runs
+ * at the construct's own text level. A run inside a nested construct belongs to
+ * that construct's own map / `data-md-after` anchor, so recording it here too
+ * would double-count it when the anchor is the base. Constructs that own none
+ * of these runs (a link/image label) are honest limits (see the module head).
  *
  * `hidden` marks a run that renders ZERO characters but occupies source — the
  * `text_special` marker the `html_comment` inline rule leaves for an embedded
  * HTML comment (ошибка `29aa3108`). Such a run sits at the same rendered
  * boundary as whatever precedes it, so the resolver must apply its delta at the
  * boundary INCLUSIVELY, unlike an escape whose non-zero rendered length always
- * puts `at` strictly past the base anchor.
+ * puts `at` strictly past the base anchor. Inclusive application is safe because
+ * only runs of the element's OWN text level are recorded, so a hidden run of a
+ * nested construct can never be re-applied through the outer map.
  */
 function constructShiftEntries(
   children: readonly Token[],
   i: number,
 ): ShiftEntry[] {
-  return accumulateShiftEntries(children, i + 1, children[i]!.level);
+  const level = children[i]!.level;
+  return accumulateShiftEntries(children, i + 1, level, level + 1);
 }
 
 /**
  * Shift entries of a BLOCK's inline content (ошибка `29aa3108`): escapes,
  * entities and embedded HTML comments in ordinary text outside any construct
  * are shortened too, but no inline construct carries their shift — the block
- * element is the nearest annotated ancestor then. The walk covers the WHOLE
- * inline content (all descendants, `level = -1`) so the rendered cursor matches
- * the resolver's coordinates exactly; entries that fall inside a nested
- * construct are absorbed there by its own `data-md-shift` / `data-md-after` and
- * are dropped by the base-anchor rule, not here.
+ * element is the nearest annotated ancestor then. Rendered coordinates are
+ * accumulated over the WHOLE inline content (nested constructs included) so the
+ * cursor matches the resolver, while a delta is recorded only for the block's
+ * own runs (`level === 0`): a run inside a nested construct is absorbed by that
+ * construct's `data-md-shift` / `data-md-after` and must not leak into the
+ * block map (регресс проверки: комментарий в конце конструкции задваивался).
  */
 function blockShiftEntries(children: readonly Token[]): ShiftEntry[] {
-  return accumulateShiftEntries(children, 0, -1);
+  return accumulateShiftEntries(children, 0, -1, 0);
 }
 
 /**
- * Walks `children` from `start`, accumulating rendered and source lengths of
- * every text-contributing run (`text` / `text_special` / `code_inline` /
- * `wiki_link`) while `child.level > level`, and records a shift entry wherever
- * the source run is longer than the rendered text.
+ * Walks `children` from `start` while `child.level > level`, accumulating the
+ * rendered length of every text-contributing run (`text` / `text_special` /
+ * `code_inline` / `wiki_link`) and recording a shift entry wherever the source
+ * run is longer than the rendered text. Entries are recorded only for runs at
+ * `emitLevel` (the map owner's own text level); deeper runs only advance the
+ * rendered cursor.
  */
 function accumulateShiftEntries(
   children: readonly Token[],
   start: number,
   level: number,
+  emitLevel: number,
 ): ShiftEntry[] {
   const entries: ShiftEntry[] = [];
   let rendered = 0;
@@ -406,7 +427,7 @@ function accumulateShiftEntries(
       continue;
     }
     rendered += renderedLength;
-    if (sourceLength > renderedLength) {
+    if (sourceLength > renderedLength && other.level === emitLevel) {
       entries.push({
         at: rendered,
         delta: sourceLength - renderedLength,

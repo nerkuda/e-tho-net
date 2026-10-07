@@ -795,6 +795,52 @@ test('маркеры трансклюзий остаются скрытыми и
   }
 });
 
+// Регресс проверки 0602db42: скрытая запись вложенной конструкции не должна
+// протекать в блочную карту (иначе дельта применяется повторно поверх анкера).
+
+test('комментарий в КОНЦЕ strong: клик по тексту снаружи точен (регресс 0602db42)', () => {
+  const src = '**a <!--c-->** tail more text here';
+  assert.equal(clickOffset(src, 'tail', 't'), src.indexOf('tail'));
+});
+
+test('комментарий в КОНЦЕ em: клик снаружи точен', () => {
+  const src = '*a <!--c-->* x';
+  assert.equal(clickOffset(src, ' x', 'x'), src.indexOf('x'));
+});
+
+test('комментарий в конце strong и текст сразу после: клик точен', () => {
+  const src = '**a <!--c-->** x';
+  assert.equal(clickOffset(src, ' x', 'x'), src.indexOf('x'));
+});
+
+test('два комментария подряд (в конструкции и вне): клик точен', () => {
+  const src = '**a <!--c-->**<!--d--> x';
+  assert.equal(clickOffset(src, ' x', 'x'), src.indexOf('x'));
+});
+
+test('комментарий в конце вложенной конструкции: клик по хвосту внешней точен', () => {
+  const src = '**x *a <!--c-->* tail**';
+  assert.equal(clickOffset(src, 'tail', 't'), src.indexOf('tail'));
+  const src2 = '**a ==b<!--c-->== tail**';
+  assert.equal(clickOffset(src2, 'tail', 't'), src2.indexOf('tail'));
+});
+
+test('блочная карта не дублирует скрытую запись вложенной конструкции', () => {
+  const html = renderMarkdown('**a <!--c-->** tail', { sourceMap: true });
+  const p = /<p([^>]*)>/.exec(html)?.[1] ?? '';
+  assert.ok(!p.includes(MD_SOURCE_SHIFT_ATTR), html);
+  const strong = /<strong([^>]*)>/.exec(html)?.[1] ?? '';
+  assert.ok(strong.includes(MD_SOURCE_SHIFT_ATTR), html);
+});
+
+test('скрытая запись самого блока (комментарий вне конструкции) сохраняется', () => {
+  const src = 'a <!--c--> b';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const p = /<p([^>]*)>/.exec(html)?.[1] ?? '';
+  assert.ok(p.includes(MD_SOURCE_SHIFT_ATTR), html);
+  assert.equal(clickOffset(src, 'b', 'b'), src.indexOf('b'));
+});
+
 test('байт-паритет: вне sourceMap вывод стандартных конструкций не меняется', () => {
   assert.equal(renderMarkdown('**жирным**'), '<p><strong>жирным</strong></p>\n');
   assert.equal(renderMarkdown('*курсивом*'), '<p><em>курсивом</em></p>\n');
