@@ -1202,6 +1202,18 @@
   background: var(--surface, rgba(127, 127, 127, 0.06));
   border-radius: 3px;
   padding: 4px 6px 4px 8px;
+  /* Содержимое блока — готовый HTML единого рендерера (`transclusion.ts`,
+     `body.innerHTML = entry.html`) и лежит прямым потомком `.cm-content`.
+     Базовая тема CodeMirror задаёт контейнеру свойство `white-space: pre` (при
+     `EditorView.lineWrapping` — `break-spaces`), и это значение НАСЛЕДОВАЛОСЬ в
+     HTML блока: переводы строк между блочными тегами (`</p>` и следующий `<p>`)
+     рисовались пустыми строками, и вертикальные отступы внутри блока
+     раздувались, тогда как в просмотре (`.md-field-view.comment-view`, обычный
+     `white-space`) они схлопываются (ошибка 4453f2e4). Сбрасываем наследование
+     на самом блоке — новые строки HTML схлопываются как в просмотре. Обычные
+     строки редактора и их перенос (`lineWrapping`) не затронуты: селектор
+     ограничен блоком. */
+  white-space: normal;
   /* Появление/раскрытие блока анимировано (ADR c425202a); при
      prefers-reduced-motion токен обнулён — появление мгновенное. */
   animation: md-transclusion-in var(--md-transclusion-anim, 160ms) ease;
