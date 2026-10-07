@@ -69,6 +69,7 @@ import { showDialog, type DialogButton } from './dialog.js';
 import { div, el, span } from './dom.js';
 import { etn } from './etn.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { modifierChordVariants } from './keymap-chords.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import {
   buildLinkEndIcon,
@@ -1246,7 +1247,10 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   // Клавиатура поля — через общеклиентский диспетчер: пока фокус внутри поля,
   // его контекст на вершине стека (ADR b420b08c, задача fd3d84f4). Общая
   // выпадашка подсказок гасит Enter над выделенной строкой (`defaultPrevented`),
-  // и диспетчер такую команду не исполняет — прежний порядок сохранён.
+  // и диспетчер такую команду не исполняет — прежний порядок сохранён. Прежняя
+  // семантика — любой Enter КРОМЕ Shift+Enter (`event.key === 'Enter' &&
+  // !event.shiftKey`); набор модификаторов (кроме Shift) выражен привязками —
+  // `lib/keymap-chords.ts`.
   const contextId = `entity-chip-field-${(chipFieldContextSeq += 1)}`;
   const handleCommitKey = (event: KeyboardEvent): boolean => {
     if (event.key !== 'Enter' || event.shiftKey) return false;
@@ -1255,7 +1259,11 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   };
   defineKeyContext({
     id: contextId,
-    bindings: [{ command: 'entityChip.commit', chord: 'Enter', run: handleCommitKey }],
+    bindings: modifierChordVariants('Enter', ['Ctrl', 'Alt', 'Meta']).map((chord) => ({
+      command: 'entityChip.commit',
+      chord,
+      run: handleCommitKey,
+    })),
   });
   let releaseContext: (() => void) | null = null;
   const onFocusIn = (): void => {

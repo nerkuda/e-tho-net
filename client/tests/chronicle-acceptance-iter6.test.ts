@@ -348,6 +348,20 @@ describe('приёмка №6, п.5: год — инлайн-поле (4 циф�
     } as unknown as KeyboardEvent);
     again.emit('focusout', {});
     assert.equal(yearBtn.textContent, '2027', 'год применён по Enter');
+
+    // Ctrl+Enter — тоже применение: прежний обработчик срабатывал на
+    // `event.key === 'Enter'` независимо от модификаторов (блокер задачи fd3d84f4).
+    yearBtn.click();
+    const modified = byClass(root, 'cal-year-input')!;
+    modified.value = '2029';
+    modified.emit('focusin', {});
+    keymap.dispatchKeyEvent({
+      key: 'Enter',
+      ctrlKey: true,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    modified.emit('focusout', {});
+    assert.equal(yearBtn.textContent, '2029', 'год применён и по Ctrl+Enter');
   });
 });
 

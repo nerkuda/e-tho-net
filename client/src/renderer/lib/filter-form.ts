@@ -42,6 +42,7 @@ import { emptyState } from './ui/empty-state.js';
 import { clear, div, el, setTooltip, span } from './dom.js';
 import { buildEntityChipField, thoughtEntityOption, type EntityOption } from './entity-picker.js';
 import { etn } from './etn.js';
+import { modifierChordVariants } from './keymap-chords.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
 import { collapsibleSection } from './ui/collapsible.js';
 import { DPD_DEFAULT_TIME, openDatePeriodDialog } from './date-period-dialog.js';
@@ -247,13 +248,19 @@ export function buildKeywordsSection(ctx: FilterFormContext, opts: KeywordsSecti
   }
   if (opts.onEnter !== undefined) {
     // Клавиатура поля — через общеклиентский диспетчер: пока фокус в поле, его
-    // контекст на вершине стека (ADR b420b08c, задача fd3d84f4). Сочетание —
-    // чистый Enter: модификаторные варианты (Ctrl+Enter и т.п.) оставлены
-    // каркасу диалога, как и у остальных полей фильтра.
+    // контекст на вершине стека (ADR b420b08c, задача fd3d84f4). Прежний
+    // обработчик срабатывал на `event.key === 'Enter'` НЕЗАВИСИМО от
+    // модификаторов (Ctrl+Enter применяет отбор в панели «Структур»), поэтому
+    // нажатие выражено привязкой на каждое подмножество модификаторов —
+    // `lib/keymap-chords.ts`.
     const contextId = `filter-keywords-${(keywordsContextSeq += 1)}`;
     defineKeyContext({
       id: contextId,
-      bindings: [{ command: 'filterKeywords.enter', chord: 'Enter', run: () => opts.onEnter!() }],
+      bindings: modifierChordVariants('Enter').map((chord) => ({
+        command: 'filterKeywords.enter',
+        chord,
+        run: () => opts.onEnter!(),
+      })),
     });
     let releaseContext: (() => void) | null = null;
     const onFocusIn = (): void => {

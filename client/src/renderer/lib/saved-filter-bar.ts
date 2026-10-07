@@ -31,6 +31,7 @@ import { confirmDialog, errorDialog, promptDialog, showDialog } from './dialog.j
 import { t } from './i18n.js';
 import { div, el, span } from './dom.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { modifierChordVariants } from './keymap-chords.js';
 import { svgIcon } from './ui/icon.js';
 import { menuAction, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
@@ -460,7 +461,13 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
     bindings: [
       { command: 'savedFilter.search.down', chord: 'ArrowDown', run: handleSearchKey },
       { command: 'savedFilter.search.up', chord: 'ArrowUp', run: handleSearchKey },
-      { command: 'savedFilter.search.enter', chord: 'Enter', run: handleSearchKey },
+      // Прежний обработчик срабатывал на Enter независимо от модификаторов —
+      // нажатие выражено привязкой на каждое подмножество (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'savedFilter.search.enter',
+        chord,
+        run: handleSearchKey,
+      })),
     ],
   });
   let releaseSearchContext: (() => void) | null = null;

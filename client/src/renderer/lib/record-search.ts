@@ -39,6 +39,7 @@ import { operationError } from './ui/messages.js';
 import { isInsideDialog } from './dialog.js';
 import { isInsideSuggestDropdown } from './suggest-dropdown.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { modifierChordVariants } from './keymap-chords.js';
 import { watchOutsideTap } from './ui/popover.js';
 import { searchPanelClosesOnTap, searchSettingsPlacement } from './pure.js';
 
@@ -342,7 +343,13 @@ export function mountRecordSearch(
   defineKeyContext({
     id: contextId,
     bindings: [
-      { command: 'recordSearch.enter', chord: 'Enter', run: handleFieldKey },
+      // Прежний обработчик срабатывал на Enter независимо от модификаторов —
+      // нажатие выражено привязкой на каждое подмножество (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'recordSearch.enter',
+        chord,
+        run: handleFieldKey,
+      })),
       { command: 'recordSearch.escape', chord: 'Escape', run: handleFieldKey },
       { command: 'recordSearch.first', chord: 'Ctrl+ArrowUp', run: handleFieldKey },
       { command: 'recordSearch.last', chord: 'Ctrl+ArrowDown', run: handleFieldKey },

@@ -36,6 +36,7 @@
 import { div, el, span } from './dom.js';
 import { buildMonthWeeks, firstOfMonth, todayLocal, type CalendarWeek } from './dates.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { modifierChordVariants } from './keymap-chords.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 import { openPopover, type PopoverHandle } from './ui/popover.js';
@@ -393,7 +394,14 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   defineKeyContext({
     id: yearContextId,
     bindings: [
-      { command: 'calendar.year.commit', chord: 'Enter', run: handleYearKey },
+      // Прежний обработчик применял год на `event.key === 'Enter'` НЕЗАВИСИМО
+      // от модификаторов — нажатие выражено привязкой на каждое подмножество
+      // (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'calendar.year.commit',
+        chord,
+        run: handleYearKey,
+      })),
       { command: 'calendar.year.cancel', chord: 'Escape', run: handleYearKey },
     ],
   });
