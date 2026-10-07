@@ -397,8 +397,14 @@ describe('кнопки режима под полем (createCommentModeActions)
     assert.equal(save.hidden, true, '«Сохранить» скрыта в просмотре');
 
     // Строки и роли — из словарей (требования edc5faea, 0e5ff1c6): самодельных
-    // классов и литералов быть не должно.
-    assert.equal(edit.textContent, ru['comment.action.edit']);
+    // классов и литералов быть не должно. Кнопка входа в правку — ИКОНОЧНАЯ
+    // (ошибка de14e6d2): иконка `pencil` вместо надписи, подсказка/`aria-label`
+    // «Редактировать текст» — из словаря.
+    assert.equal(edit.textContent, '', 'у иконочной «Редактировать» нет текстовой надписи');
+    assert.ok(edit.className.split(' ').includes('ui-btn--icon'), 'кнопка — иконочная (ui-btn--icon)');
+    assert.equal(edit.title, ru['comment.action.editTooltip'], 'тултип — из словаря');
+    assert.equal(edit.getAttribute('aria-label'), ru['comment.action.editTooltip'], 'aria-label дублирует тултип');
+    assert.ok(edit.querySelector('svg') !== null, 'в кнопке — иконка (svg)');
     assert.equal(cancel.textContent, ru['comment.cmd.cancel']);
     assert.equal(save.textContent, ru['comment.cmd.save']);
     assert.ok(edit.className.split(' ').includes('ui-btn--secondary'));

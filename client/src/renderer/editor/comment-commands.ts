@@ -702,9 +702,10 @@ export interface CommentModeActions {
 
 /**
  * Собирает панель кнопок режима под полем комментария (элемент `a0e5bc2e`):
- * в просмотре — «Редактировать», в правке — «Отменить»/«Сохранить», в правке
- * блока трансклюзии — «Отменить трансклюзию»/«Сохранить трансклюзию». Кнопки —
- * через словарь `lib/ui` (требование `edc5faea`), строки — из словаря `t()`.
+ * в просмотре — иконочная кнопка «Редактировать» (иконка `pencil`, подсказка
+ * «Редактировать текст»), в правке — «Отменить»/«Сохранить», в правке блока
+ * трансклюзии — «Отменить трансклюзию»/«Сохранить трансклюзию». Кнопки — через
+ * словарь `lib/ui` (требование `edc5faea`), строки — из словаря `t()`.
  *
  * Действия идут тем же путём, что и сочетания Esc/Ctrl+Enter: командой поля
  * через диспетчер `runCommentCommand` (`comment.edit` / `comment.cancel` /
@@ -712,8 +713,12 @@ export interface CommentModeActions {
  * и клавиша делают ровно одно и то же.
  */
 export function createCommentModeActions(host: CommentCommandHost): CommentModeActions {
-  const edit = uiButton({
-    label: t('comment.action.edit'),
+  // Кнопка входа в правку — иконочная (подсказка «Редактировать текст»): в
+  // правом верхнем углу поля она не должна занимать ширину текста (ошибка
+  // de14e6d2). Иконочная кнопка словаря сама ставит `aria-label` из `title`.
+  const edit = iconButton({
+    icon: renderIcon('pencil'),
+    title: t('comment.action.editTooltip'),
     role: 'secondary',
     size: 's',
     onClick: () => {
