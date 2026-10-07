@@ -105,6 +105,11 @@ import {
   expandTransclusions,
   parseTransclusions,
   renderMarkdown,
+  // Классы блока/атрибут источника в HTML просмотра (ошибка f60f99e0):
+  // внешние и вложенные блоки в просмотре — это `.md-transclusion` единого
+  // рендерера; одноимённая константа правки (`cm-transclusion-block`) ниже.
+  TRANSCLUSION_BLOCK_CLASS as MD_TRANSCLUSION_BLOCK_CLASS,
+  TRANSCLUSION_SOURCE_ATTR as MD_TRANSCLUSION_SOURCE_ATTR,
   type TransclusionLabels,
   type TransclusionRef,
   type TransclusionResolution,
@@ -575,6 +580,74 @@ class TransclusionLinkWidget extends WidgetType {
   }
 }
 
+/**
+ * Индикатор-«замочек» блока при чужом захвате источника: тот же класс/вид, что
+ * и в правке. Общий для режима правки ({@link TransclusionBlockWidget}) и
+ * режима просмотра ({@link decorateViewTransclusionLocks}) — ошибка `f60f99e0`.
+ */
+export function createTransclusionLockBadge(holder: string): HTMLElement {
+  const badge = document.createElement('span');
+  badge.className = TRANSCLUSION_LOCK_CLASS;
+  badge.textContent = '🔒';
+  badge.title = t('comment.transclusion.locked', holder);
+  return badge;
+}
+
+/** id мысли-источника блока трансклюзии просмотра (`data-transclusion-source`). */
+function viewBlockSourceId(block: HTMLElement): string | null {
+  // Реальный DOM отдаёт camelCase-ключ `transclusionSource`; DOM-шим тестов
+  // кладёт ещё и полное имя атрибута — читаем оба варианта.
+  const ds = block.dataset as Record<string, string | undefined>;
+  const id = ds['transclusionSource'] ?? ds[MD_TRANSCLUSION_SOURCE_ATTR];
+  return id === undefined || id === '' ? null : id;
+}
+
+/**
+ * Размечает «замочки» чужих захватов на блоках трансклюзий РЕЖИМА ПРОСМОТРА
+ * (ошибка `f60f99e0`): обходит внешние и вложенные `.md-transclusion` единого
+ * рендерера, и на каждый блок с чужим захватом источника вешает индикатор
+ * {@link createTransclusionLockBadge} (тот же вид, что в правке). Идемпотентна:
+ * прежние замочки блока снимаются перед разметкой, поэтому снятый захват
+ * убирает индикатор при следующем вызове.
+ */
+export function decorateViewTransclusionLocks(view: HTMLElement): void {
+  const blocks = view.querySelectorAll<HTMLElement>(
+    `.${MD_TRANSCLUSION_BLOCK_CLASS}[${MD_TRANSCLUSION_SOURCE_ATTR}]`,
+  );
+  for (const block of blocks) {
+    for (const child of Array.from(block.children)) {
+      if (child instanceof HTMLElement && child.classList.contains(TRANSCLUSION_LOCK_CLASS)) {
+        child.remove();
+      }
+    }
+    const sourceId = viewBlockSourceId(block);
+    if (sourceId === null) continue;
+    const row = otherHolder('thought', sourceId);
+    if (row === null) continue;
+    block.prepend(createTransclusionLockBadge(holderName(row)));
+  }
+}
+
+let viewLocksWired = false;
+
+/**
+ * Подключает перерисовку «замочков» просмотра к кэшу захватов: на каждый
+ * переход кэша (`edit.*`) обновляет индикаторы во всех ЖИВЫХ полях просмотра
+ * (`.md-field-view`). Подписка одна на приложение и держит только связь с
+ * `document`, а не с конкретным полем: поля комментария пересоздаются на каждой
+ * пересборке редактора, и подписка «на поле» накапливала бы слушателей
+ * (текла) — ошибка `f60f99e0`. Идемпотентна.
+ */
+export function wireViewTransclusionLocks(): void {
+  if (viewLocksWired) return;
+  viewLocksWired = true;
+  subscribeLockCache(() => {
+    for (const root of document.querySelectorAll<HTMLElement>('.md-field-view')) {
+      decorateViewTransclusionLocks(root);
+    }
+  });
+}
+
 /** Блок трансклюзии с развёрнутым текстом и кнопкой-всплывашкой смены ссылки. */
 class TransclusionBlockWidget extends WidgetType {
   constructor(
@@ -621,11 +694,7 @@ class TransclusionBlockWidget extends WidgetType {
     // «Замочек» при чужом захвате источника (требование 647fa34a): источник
     // правит другой участник — вход в правку блока заблокирован.
     if (this.lockedBy !== null) {
-      const badge = document.createElement('span');
-      badge.className = TRANSCLUSION_LOCK_CLASS;
-      badge.textContent = '🔒';
-      badge.title = t('comment.transclusion.locked', this.lockedBy);
-      box.append(badge);
+      box.append(createTransclusionLockBadge(this.lockedBy));
     }
 
     if (this.entry.error !== null) {

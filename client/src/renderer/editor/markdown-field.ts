@@ -60,10 +60,12 @@ import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import {
+  decorateViewTransclusionLocks,
   defaultTransclusionLoader,
   transclusionEditHostExtension,
   transclusionInternals,
   transclusionLabels,
+  wireViewTransclusionLocks,
 } from './transclusion.js';
 import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
 import {
@@ -903,6 +905,12 @@ export function createMarkdownField(opts: {
       // и восстановление свёрнутости в просмотре. Блоки трансклюзий — своим
       // состоянием на путь вставки (ТП2, задача 1b405a92, требование e04d84f7).
       decorateCommentView(view, collapseState, collapseScopeFor);
+      // «Замочки» чужих захватов источников трансклюзий в просмотре (ошибка
+      // f60f99e0): та же карта захватов (`lock-cache`), что у правки. Разметка
+      // идемпотентна (её повторяет подписка на переходы кэша), подписка одна на
+      // приложение — поля пересоздаются, «подписка на поле» текла бы.
+      decorateViewTransclusionLocks(view);
+      wireViewTransclusionLocks();
     } else if (opts.placeholder !== undefined && opts.placeholder !== '') {
       // Пустой комментарий — показываем плейсхолдер (задача 8ab775d9).
       const ph = el('div', 'md-field-placeholder', opts.placeholder);

@@ -1203,6 +1203,9 @@
 .md-transclusion {
   --md-transclusion-step: 7%;
   --md-transclusion-level: 1;
+  /* Якорь для «замочка» чужого захвата источника (ошибка f60f99e0): в просмотре
+     индикатор позиционируется абсолютно внутри блока. */
+  position: relative;
   background: color-mix(
     in srgb,
     var(--text) calc(var(--md-transclusion-step) * var(--md-transclusion-level)),
@@ -1312,8 +1315,11 @@
   padding-bottom: 2px;
 }
 
-/* «Замочек» блока при чужом захвате источника (задача f59d24e1). */
-.cm-editor .cm-transclusion-lock {
+/* «Замочек» блока при чужом захвате источника (задача f59d24e1; просмотр —
+   ошибка f60f99e0). Парный селектор: индикатор тот же и в правке
+   (`.cm-editor`), и в просмотре (`.comment-view`). */
+.cm-editor .cm-transclusion-lock,
+.comment-view .cm-transclusion-lock {
   position: absolute;
   top: 2px;
   right: 6px;
