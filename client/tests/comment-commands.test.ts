@@ -245,13 +245,13 @@ describe('команды поля комментария (editor/comment-command
     assert.equal(base.includes('Alt+'), false);
   });
 
-  it('меню блока трансклюзии: пять команд в порядке макета, подписи из словаря', () => {
+  it('меню блока трансклюзии: четыре команды навигации, подписи из словаря', () => {
     // Раскладка — точки расширения ТП2 (элемент 1e0fb0bd); «Изменить ссылку»
-    // убрано задачей 68591b8a (ссылка правится чипом-шапкой и поповером).
+    // убрано задачей 68591b8a, «Редактировать» — задачей 73ae1d4b (ссылка
+    // правится чипом-шапкой, вход в блок — кареткой).
     assert.deepEqual(
       [...mod.TRANSCLUSION_MENU_LAYOUT],
       [
-        'transclusion.edit',
         'transclusion.openSource',
         'transclusion.focusSource',
         'transclusion.copyLink',
@@ -272,7 +272,6 @@ describe('команды поля комментария (editor/comment-command
     assert.deepEqual(
       items.map((item) => item.label),
       [
-        ru['comment.transclusion.menu.edit'],
         ru['comment.transclusion.menu.open'],
         ru['comment.transclusion.menu.focus'],
         ru['comment.transclusion.menu.copy'],
@@ -280,7 +279,7 @@ describe('команды поля комментария (editor/comment-command
       ],
     );
     // Без обработчика пункт недоступен, но остаётся в меню.
-    assert.deepEqual(items.map((item) => item.disabled), [true, true, true, true, true]);
+    assert.deepEqual(items.map((item) => item.disabled), [true, true, true, true]);
   });
 
   it('меню блока трансклюзии: заданный обработчик исполняется по клику пункта', () => {
@@ -288,7 +287,7 @@ describe('команды поля комментария (editor/comment-command
     const items = mod.buildTransclusionMenuItems({
       'transclusion.openSource': () => calls.push('openSource'),
     });
-    const open = items[1]!;
+    const open = items[0]!;
     assert.equal(open.disabled, false, 'пункт с обработчиком доступен');
     open.onClick?.();
     assert.deepEqual(calls, ['openSource']);

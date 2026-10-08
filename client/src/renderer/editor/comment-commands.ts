@@ -384,14 +384,9 @@ export const COMMENT_COMMANDS: Readonly<Record<string, CommentCommandDef>> = Obj
   },
   // Команды контекстного меню блока трансклюзии (ТП2, задача 955478e8;
   // элемент интерфейса `1e0fb0bd`). Тела команд живут в `editor/transclusion.ts`
-  // (владелец режимов блока), здесь — только пункты общего словаря. Прежнего
-  // «Изменить ссылку» нет (задача `68591b8a`): ссылка правится чипом-шапкой и
-  // поповером, а не сворачиванием блока.
-  'transclusion.edit': {
-    id: 'transclusion.edit',
-    labelKey: 'comment.transclusion.menu.edit',
-    icon: 'pencil',
-  },
+  // (владелец блока), здесь — только пункты общего словаря. Прежних «Изменить
+  // ссылку» и «Редактировать» нет: ссылка правится чипом-шапкой, а вход в блок —
+  // кареткой (клик/стрелки/Enter; задача `73ae1d4b`).
   'transclusion.openSource': {
     id: 'transclusion.openSource',
     labelKey: 'comment.transclusion.menu.open',
@@ -566,14 +561,11 @@ export function buildCommentMenuItems(host: CommentCommandHost): MenuItem[] {
 }
 
 /**
- * Раскладка контекстного меню блока трансклюзии (ТП2, задача `955478e8`;
- * элемент интерфейса `1e0fb0bd`) в правке: «Редактировать» (вход в правку
- * блока) плюс четыре команды навигации. Раскладка доступна только в режиме
- * редактирования окружения — блок существует лишь в редакторе (владелец
- * режимов — `editor/transclusion.ts`).
+ * Раскладка контекстного меню блока трансклюзии (ТП2, задача 955478e8;
+ * элемент интерфейса `1e0fb0bd`) в правке: четыре команды навигации. Пункта
+ * «Редактировать» нет — вход в блок идёт кареткой (задача `73ae1d4b`).
  */
 export const TRANSCLUSION_MENU_LAYOUT: readonly string[] = Object.freeze([
-  'transclusion.edit',
   'transclusion.openSource',
   'transclusion.focusSource',
   'transclusion.copyLink',
@@ -716,25 +708,17 @@ export interface CommentModeActions {
   readonly root: HTMLElement;
   /** Показывает кнопки режима: `true` — правка, `false` — просмотр. */
   setEditing(editing: boolean): void;
-  /**
-   * Показывает кнопки правки БЛОКА трансклюзии «Отменить/Сохранить
-   * трансклюзию» (элемент интерфейса `2b116d37`, задача f59d24e1). Пока блок в
-   * правке, кнопки правки всего поля скрыты.
-   */
-  setBlockEditing(editing: boolean): void;
 }
 
 /**
  * Собирает панель кнопок режима под полем комментария (элемент `a0e5bc2e`):
  * в просмотре — иконочная кнопка «Редактировать» (иконка `pencil`, подсказка
- * «Редактировать текст»), в правке — «Отменить»/«Сохранить», в правке блока
- * трансклюзии — «Отменить трансклюзию»/«Сохранить трансклюзию». Кнопки — через
+ * «Редактировать текст»), в правке — «Отменить»/«Сохранить». Кнопки — через
  * словарь `lib/ui` (требование `edc5faea`), строки — из словаря `t()`.
  *
  * Действия идут тем же путём, что и сочетания Esc/Ctrl+Enter: командой поля
  * через диспетчер `runCommentCommand` (`comment.edit` / `comment.cancel` /
- * `comment.save` / `transclusion.cancel` / `transclusion.save`), поэтому клик
- * и клавиша делают ровно одно и то же.
+ * `comment.save`), поэтому клик и клавиша делают ровно одно и то же.
  */
 export function createCommentModeActions(host: CommentCommandHost): CommentModeActions {
   // Кнопка входа в правку — иконочная (подсказка «Редактировать текст»): в
@@ -769,55 +753,27 @@ export function createCommentModeActions(host: CommentCommandHost): CommentModeA
   });
   save.dataset['action'] = 'save';
 
-  // Кнопки правки блока трансклюзии (элемент 2b116d37, задача f59d24e1):
-  // сохранение пока только выходит из правки — запись в источник в e2c14673.
-  const blockCancel = uiButton({
-    label: t('comment.transclusion.cancel'),
-    role: 'secondary',
-    size: 's',
-    onClick: () => {
-      runCommentCommand('transclusion.cancel', host);
-    },
-  });
-  blockCancel.dataset['action'] = 'transclusion-cancel';
-  const blockSave = uiButton({
-    label: t('comment.transclusion.save'),
-    role: 'primary',
-    size: 's',
-    onClick: () => {
-      runCommentCommand('transclusion.save', host);
-    },
-  });
-  blockSave.dataset['action'] = 'transclusion-save';
-
   // Клик по кнопке не должен снимать фокус/выделение редактора до обработчика:
   // иначе `blur` сохранит правку раньше, чем «Отмена» её отменит (как у строк
   // контекстного меню, `guardMenuFocus`).
-  for (const btn of [edit, cancel, save, blockCancel, blockSave]) {
+  for (const btn of [edit, cancel, save]) {
     btn.addEventListener('mousedown', (event) => event.preventDefault());
   }
 
   const root = div(COMMENT_ACTIONS_CLASS);
-  root.append(edit, cancel, save, blockCancel, blockSave);
-  let mode: 'view' | 'edit' | 'block' = 'view';
+  root.append(edit, cancel, save);
+  let mode: 'view' | 'edit' = 'view';
   const render = (): void => {
     edit.hidden = mode !== 'view';
     cancel.hidden = mode !== 'edit';
     save.hidden = mode !== 'edit';
-    blockCancel.hidden = mode !== 'block';
-    blockSave.hidden = mode !== 'block';
   };
   const setEditing = (editing: boolean): void => {
     mode = editing ? 'edit' : 'view';
     render();
   };
-  const setBlockEditing = (editing: boolean): void => {
-    // Выход из правки блока всегда возвращает кнопки правки поля.
-    mode = editing ? 'block' : mode === 'block' ? 'edit' : mode;
-    render();
-  };
   setEditing(false);
-  return { root, setEditing, setBlockEditing };
+  return { root, setEditing };
 }
 
 /* ------------------------------------------------------------------ *

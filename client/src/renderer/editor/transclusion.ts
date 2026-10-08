@@ -11,26 +11,27 @@
  * парсера здесь нет (сторож `markdown-single-renderer`). Резолвер источника
  * (постоянный комментарий мысли своей сети) и режимы блока живут здесь.
  *
- * **Правка блока и захват источника (задачи `f59d24e1`, `e2c14673`).**
- * Двойной клик по блоку или Enter при каретке внутри ссылки переводят блок в
- * режим правки (`setBlockEdit`): текст источника вставляется в то же поле
- * ВМЕСТО ссылки (диапазон `blockEdit`), поэтому на него действуют все команды и
- * сочетания родительского редактора. С этого момента на мысль-источник ставится
- * захват существующим механизмом `lib/lock-guard.ts` (`/locks`, `edit.*`) и
- * снимается при выходе. Сохранение («Сохранить трансклюзию», Ctrl+Enter) пишет
- * изменённый текст обратно в постоянный комментарий источника через существующий
- * API (`etn.comments.update`, для раздела — слияние раздела в тело) под захватом;
- * отмена (Esc, «Отменить трансклюзию») восстанавливает ссылку без записи. Чужой
- * захват даёт на блоке «замочек» 🔒 и в правку не пускает; при захваченном
- * источнике запись отклоняется сервером `409 LOCKED` (ошибка `68be6829`).
+ * **Живой блок: вложенный редактор вместо растворения (задача `73ae1d4b`).**
+ * Блок — блочный виджет с шапкой-чипом и развёрнутым текстом источника; вход
+ * каретки (клик, стрелки, Enter на блоке) лениво монтирует ВНУТРИ виджета
+ * отдельный `EditorView` на том же стеке расширений ({@link NestedEditorStore} в
+ * `transclusion-nested.ts`), с текстом раздела (`sectionBodyForEdit`) и
+ * собственной историей undo. Печать идёт в документ вложенного редактора и НЕ
+ * меняет документ контейнера; блок остаётся атомарным диапазоном контейнера
+ * ({@link transclusionAtomicRanges}). Вложенные трансклюзии внутри блока
+ * работают рекурсивно до глубины `MAX_NESTED_DEPTH`. Изменение блока помечает
+ * его «грязным» сигналом в хост ({@link blockEditorHostFacet}) — для будущей
+ * задачи «Единая запись» (`e9dfc2df`); сама запись в источник здесь не делается.
+ * Семантика выхода (шаг до задачи «Единая запись»): выход из блока, клик вне и
+ * `Ctrl+Enter` внутри — выход из вложенного редактора с СОХРАНЕНИЕМ текста в его
+ * состоянии; `Esc` — откат вложенного редактора к загруженному тексту.
+ * Прежнего «растворения» текста источника в документ контейнера и связанных
+ * режимов (кнопки «Отменить/Сохранить трансклюзию», линейная рамка) больше нет.
  *
- * **Вложенный блок из просмотра (ошибка `23570aef`).** Позиции ссылки
- * ВЛОЖЕННОГО источника в `body_md` контейнера не существует (разные исходники
- * дают одинаковую развёртку — см. ошибку `5ecb9f0b`), поэтому двойной клик
- * внутри вложенного блока в просмотре открывает правку блока вложенного
- * источника ({@link beginNestedBlockEdit}): текст источника вставляется на
- * месте ВНЕШНЕЙ ссылки, а её исходник сохраняется в `refRaw` и возвращается при
- * сохранении/отмене — контейнер не портится (вектор ошибки `3c51aee8` закрыт).
+ * **Замочек чужого захвата.** Источник, захваченный другим участником, делает
+ * блок только для чтения: вход каретки вложенный редактор НЕ монтирует
+ * (проверка через `lib/lock-cache`). Сам захват источника при входе — задача
+ * «Единая запись» (`e9dfc2df`), здесь он не берётся.
  *
  * Два состояния одной ссылки в редакторе (курсор/выделение решают):
  *  1. **Блок** — ссылка заменена блоком с шапкой-чипом «имя · раздел» и
@@ -49,15 +50,14 @@
  * блочными обёртками `@etn/markdown` (`data-transclusion-depth`), поэтому фон
  * подкрашивается по уровню вложенности (ADR `c425202a`), а плашки ошибок
  * источника приходят из рендера (`fc60d763`). Блок неделим при навигации:
- * замена идёт блоком на весь диапазон ссылки, а сам блок ВЫДЕЛЯЕТСЯ как единое
- * целое — кликом и стрелкой, входящей в него (ошибка `5312142d`); внутрь блока
- * каретка не встаёт. Выделение блока целиком показывается РАМКОЙ ВОКРУГ него
- * (класс `cm-transclusion-block--covered`), а не подсветкой текста/пробелов
- * внутри (ошибка `39553204`). Блок — replace-виджет `block: true`, в DOM он
- * лежит прямым потомком `.cm-content` (вне `.cm-line`), поэтому подавление
- * нативного выделения внутри — селектором БЕЗ `.cm-line` (иначе не матчит).
- * Ссылка правится чипом и поповером (элемент `7a479549`), правка блока —
- * двойным кликом или Enter на выделенном блоке.
+ * замена идёт блоком на весь диапазон ссылки; каретка контейнера внутрь блока не
+ * встаёт (вход открывает вложенный редактор). Выделение блока целиком (например,
+ * перетаскиванием) показывается РАМКОЙ ВОКРУГ него (класс
+ * `cm-transclusion-block--covered`), а не подсветкой текста/пробелов внутри
+ * (ошибка `39553204`). Блок — replace-виджет `block: true`, в DOM он лежит
+ * прямым потомком `.cm-content` (вне `.cm-line`), поэтому подавление нативного
+ * выделения внутри — селектором БЕЗ `.cm-line` (иначе не матчит). Ссылка
+ * правится чипом и поповером (элемент `7a479549`).
  * Появление/раскрытие блока анимировано (CSS, с учётом `prefers-reduced-motion`).
  * Просмотр поля (view-режим) разворачивает ссылки тем же швом
  * `transclusionInternals.expandWithLoader` + `renderMarkdown` с `sourceMap` в
@@ -73,17 +73,13 @@
  * команды навигации ({@link transclusionNavHandlers}).
  *
  * **Свёрнутость разделов внутри блока (задача `1b405a92`, требование
- * `e04d84f7`).** Виджет блока декорирует своё содержимое через
+ * `e04d84f7`).** Неактивный блок декорирует своё HTML-содержимое через
  * `decorateCommentView` с состоянием своего пути вставки (фабрика из
  * `collapseScopeFacet`, ставит `markdown-field`): один и тот же источник в
- * разных контейнерах хранит свёрнутость раздельно. Просмотр идёт тем же путём
- * (обход `.md-transclusion` в `decorateCommentView`).
- *
- * **Правка блока (ошибка `4204e34c`).** Пока текст источника вставлен в поле
- * вместо ссылки (`blockEdit`), `transclusionState` отдаёт диапазон правки
- * фасетом `blockEditCollapseFacet`: заголовки блока в CM6 нумеруются своим
- * namespace и сворачиваются состоянием пути вставки, не трогая собственные
- * разделы поля-контейнера.
+ * разных контейнерах хранит свёрнутость раздельно. В активном блоке текст живёт
+ * во вложенном редакторе — свёрнутость его разделов это состояние самого
+ * вложенного инстанса (свой стек расширений), поля-контейнера она не трогает.
+ * Просмотр идёт тем же путём обхода `.md-transclusion` в `decorateCommentView`.
  *
  * За границами задачи (другие работы ТП2): команды
  * «как текст» (`e9f553e5`), realtime-обновление блока.
@@ -131,7 +127,7 @@ import {
   type TransclusionRef,
   type TransclusionResolution,
 } from '@etn/markdown';
-import type { AnyRealtimeEvent, Comment } from '@etn/shared';
+import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
 import { div, el } from '../lib/dom.js';
@@ -140,12 +136,6 @@ import { t } from '../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../lib/live/index.js';
 import { guardMenuFocus, showMenuAt } from '../lib/menu.js';
 import { holderName, otherHolder, subscribeLockCache } from '../lib/lock-cache.js';
-import {
-  acquireOrShowBlocked,
-  lockHandleFromOutcome,
-  releaseHeld,
-  type LockHandle,
-} from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
 import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
@@ -159,11 +149,14 @@ import {
 } from '../lib/suggest-dropdown.js';
 
 import { buildTransclusionMenuItems, TRANSCLUSION_NAV_MENU_LAYOUT } from './comment-commands.js';
+import { collapseScopeFacet, decorateCommentView } from './comment-collapse.js';
 import {
-  blockEditCollapseFacet,
-  collapseScopeFacet,
-  decorateCommentView,
-} from './comment-collapse.js';
+  MAX_NESTED_DEPTH,
+  NestedEditorStore,
+  blockEditorStoreFacet,
+  nestedDepthFacet,
+  type NestedExitReason,
+} from './transclusion-nested.js';
 
 /** Корневой класс блока трансклюзии (редактирование). */
 export const TRANSCLUSION_BLOCK_CLASS = 'cm-transclusion-block';
@@ -176,17 +169,11 @@ export const TRANSCLUSION_BLOCK_CLASS = 'cm-transclusion-block';
 export const TRANSCLUSION_HEAD_CLASS = 'transclusion-head';
 /** Чип шапки блока — кнопка словаря `lib/ui` с подписью «имя · раздел». */
 export const TRANSCLUSION_CHIP_CLASS = 'transclusion-chip';
-/**
- * Контейнер ховер-кнопки блока (правый верхний угол, элемент `7a479549`):
- * «Редактировать трансклюзию» показывается на наведении в режиме правки
- * окружения. Правка ССЫЛКИ идёт чипом-шапкой, отдельной кнопки нет.
- */
-export const TRANSCLUSION_ACTIONS_CLASS = 'cm-transclusion-actions';
 /** Плашка ошибки источника/раздела. */
 export const TRANSCLUSION_ERROR_CLASS = 'cm-transclusion-error';
 /** Атомарный токен `#<id>` при вводе ссылки (создание ссылки не меняется). */
 export const TRANSCLUSION_ID_CLASS = 'cm-transclusion-id';
-/** Блок в режиме правки (рамка как у облачка, задача f59d24e1). */
+/** Блок активен — внутри смонтирован вложенный редактор (задача 73ae1d4b). */
 export const TRANSCLUSION_EDITING_CLASS = 'cm-transclusion-block--editing';
 /**
  * Блок целиком покрыт выделением (ошибка `39553204`): пользователь видит блок
@@ -194,13 +181,7 @@ export const TRANSCLUSION_EDITING_CLASS = 'cm-transclusion-block--editing';
  * подсветку текста/пробелов внутри (выделение блока как атома, `5312142d`).
  */
 export const TRANSCLUSION_COVERED_CLASS = 'cm-transclusion-block--covered';
-/** Диапазон редактируемого текста блока в режиме правки (задача e2c14673). */
-export const TRANSCLUSION_EDIT_RANGE_CLASS = 'cm-transclusion-edit-range';
-/** Первая строка вложенного поля правки блока (ошибка 9c2e077a). */
-export const TRANSCLUSION_EDIT_FIRST_CLASS = 'cm-transclusion-edit-range--first';
-/** Последняя строка вложенного поля правки блока (ошибка 9c2e077a). */
-export const TRANSCLUSION_EDIT_LAST_CLASS = 'cm-transclusion-edit-range--last';
-/** «Замочек» блока при чужом захвате источника (задача f59d24e1). */
+/** «Замочек» блока при чужом захвате источника. */
 export const TRANSCLUSION_LOCK_CLASS = 'cm-transclusion-lock';
 
 /** Длина префикса ссылки — восклицательный знак и две открывающие скобки. */
@@ -699,32 +680,20 @@ async function loadEntry(
 const setEntries = StateEffect.define<Array<{ key: string; entry: TransclusionEntry }>>();
 
 /**
- * Эффект режима правки блока трансклюзии (задача `f59d24e1`): значение —
- * id мысли-источника, в правку которого входит пользователь, либо `null` для
- * выхода. Захват источника ставится/снимается плагином по смене значения.
+ * Ключ блока (трансклюзии) в состоянии редактора и хранилище вложенных
+ * инстансов: `sourceId#section` (`#` без раздела). Один блок = одна запись
+ * вложенного редактора (задача `73ae1d4b`).
  */
-export const setBlockEdit = StateEffect.define<string | null>();
-
-/**
- * Дескриптор активной правки блока (задача `e2c14673`): координаты вставленного
- * в поле текста источника и исходная ссылка для восстановления при отмене.
- */
-export interface BlockEditState {
-  sourceId: string;
-  section: string | null;
-  /** Исходный markdown ссылки-трансклюзии — восстанавливается при отмене. */
-  refRaw: string;
-  /** Начало редактируемого текста в документе. */
-  from: number;
-  /** Конец редактируемого текста (исключительно). */
-  to: number;
+export function blockEditorKey(sourceId: string, section: string | null): string {
+  return `${sourceId}#${section ?? ''}`;
 }
 
-/** Эффект установки/снятия дескриптора правки блока (диапазон текста). */
-export const setBlockEditRange = StateEffect.define<BlockEditState | null>();
-
-/** Эффект сброса кэша ссылок по ключам (после записи в источник — перечитать). */
-const dropEntries = StateEffect.define<string[]>();
+/**
+ * Эффект активного блока (задача `73ae1d4b`): ключ блока, в который вошла
+ * каретка (внутри смонтирован вложенный редактор), либо `null` при выходе.
+ * Заменяет прежний `setBlockEdit` (растворение текста источника в контейнер).
+ */
+export const setActiveBlock = StateEffect.define<string | null>();
 
 /** Эффект обновления карты чужих захватов источников (`sourceId` → имя). */
 const setLockedSources = StateEffect.define<ReadonlyMap<string, string>>();
@@ -733,11 +702,9 @@ const setLockedSources = StateEffect.define<ReadonlyMap<string, string>>();
 interface TransclusionStateData {
   networkId: string | null;
   cache: Map<string, TransclusionEntry>;
-  /** Источник в режиме правки блока, либо `null` (задача f59d24e1). */
-  editingSourceId: string | null;
-  /** Дескриптор редактируемого текста блока, либо `null` (задача e2c14673). */
-  blockEdit: BlockEditState | null;
-  /** Чужие захваты источников: `sourceId` → имя держателя (задача f59d24e1). */
+  /** Ключ активного блока (внутри — вложенный редактор), либо `null`. */
+  activeKey: string | null;
+  /** Чужие захваты источников: `sourceId` → имя держателя. */
   lockedSources: ReadonlyMap<string, string>;
   deco: DecorationSet;
   atomic: RangeSet<Decoration>;
@@ -886,11 +853,13 @@ class TransclusionBlockWidget extends WidgetType {
     readonly to: number,
     readonly entry: TransclusionEntry,
     readonly key: string,
-    /** Источник блока — для «замочка» и входа в правку. */
+    /** Источник блока — для «замочка» и входа во вложенный редактор. */
     readonly sourceId: string,
-    /** Блок в режиме правки (задача f59d24e1). */
-    readonly editing: boolean,
-    /** Имя чужого держателя захвата источника, либо `null` (задача f59d24e1). */
+    /** Ключ блока в состоянии (`sourceId#section`). */
+    readonly editorKey: string,
+    /** Блок активен — внутри смонтирован вложенный редактор (задача 73ae1d4b). */
+    readonly active: boolean,
+    /** Имя чужого держателя захвата источника, либо `null`. */
     readonly lockedBy: string | null,
     /** Выделение покрывает блок целиком (ошибка 39553204). */
     readonly covered: boolean,
@@ -906,7 +875,8 @@ class TransclusionBlockWidget extends WidgetType {
       other.to === this.to &&
       other.key === this.key &&
       other.sourceId === this.sourceId &&
-      other.editing === this.editing &&
+      other.editorKey === this.editorKey &&
+      other.active === this.active &&
       other.lockedBy === this.lockedBy &&
       other.covered === this.covered &&
       other.section === this.section &&
@@ -923,14 +893,15 @@ class TransclusionBlockWidget extends WidgetType {
     // иначе было бы двойное перемещение каретки.
     box.className =
       `${TRANSCLUSION_BLOCK_CLASS} comment-view` +
-      (this.editing ? ` ${TRANSCLUSION_EDITING_CLASS}` : '') +
+      (this.active ? ` ${TRANSCLUSION_EDITING_CLASS}` : '') +
       (this.covered ? ` ${TRANSCLUSION_COVERED_CLASS}` : '');
     box.dataset.mdFrom = String(this.from);
     box.dataset.mdTo = String(this.to);
     box.dataset['transclusionSource'] = this.sourceId;
 
     // «Замочек» при чужом захвате источника (требование 647fa34a): источник
-    // правит другой участник — вход в правку блока заблокирован.
+    // правит другой участник — блок только для чтения, вход в блок не монтирует
+    // вложенный редактор (сам захват делает задача «Единая запись»).
     if (this.lockedBy !== null) {
       box.append(createTransclusionLockBadge(this.lockedBy));
     }
@@ -956,35 +927,29 @@ class TransclusionBlockWidget extends WidgetType {
       }),
     );
 
-    // Ховер-кнопка в правом верхнем углу (элемент 7a479549): «Редактировать
-    // трансклюзию» — вход в правку блока (как двойной клик/Enter). Правка
-    // ССЫЛКИ идёт чипом-шапкой, прежней кнопки «Редактировать ссылку» нет.
-    // В режиме правки блока кнопка скрыта: сначала выходят из правки.
-    if (!this.editing) {
-      const actions = document.createElement('div');
-      actions.className = TRANSCLUSION_ACTIONS_CLASS;
-      const editBlock = iconButton({
-        icon: svgIcon('pencil', 12),
-        role: 'ghost',
-        size: 's',
-        title: t('comment.transclusion.editBlock'),
-        onClick: () => {
-          const ref = transclusionRefStartingAt(view.state.doc.toString(), this.from);
-          if (ref !== null) void beginBlockEdit(view, ref);
-        },
-      });
-      editBlock.addEventListener('mousedown', (event) => event.preventDefault());
-      actions.append(editBlock);
-      box.append(actions);
+    // Активный блок отдаёт место вложенному редактору: его DOM монтируется
+    // внутрь виджета (задача `73ae1d4b`). Инстанс живёт в общем хранилище поля
+    // (`NestedEditorStore`) и переживает пересборку виджета; DOM переставляется
+    // как есть — вложенный редактор НЕ пересоздаётся. Пока инстанс ещё не
+    // загружен (идёт асинхронное чтение источника) или залочен — рисуем HTML.
+    const store = view.state.facet(blockEditorStoreFacet);
+    const nestedDom = this.active && this.lockedBy === null ? store?.dom(this.editorKey) ?? null : null;
+    if (nestedDom !== null) {
+      box.append(nestedDom);
+      // DOM инстанса подключён — применяем отложенный фокус входа в блок.
+      store?.applyPendingFocus(this.editorKey);
+      return box;
     }
 
     const body = document.createElement('div');
     body.innerHTML = this.entry.html ?? '';
     box.append(body);
 
-    // Сворачивание разделов внутри блока — своим состоянием на путь вставки
-    // (ТП2, задача 1b405a92, требование e04d84f7): в правке блок показывает
+    // Сворачивание разделов внутри неактивного блока — своим состоянием на путь
+    // вставки (ТП2, задача 1b405a92, требование e04d84f7): блок показывает
     // готовый HTML, поэтому декорируем своё содержимое как область просмотра.
+    // В активном блоке текст живёт во вложенном редакторе — свёрнутость там
+    // состояние самого инстанса (свой стек расширений).
     const factory = view.state.facet(collapseScopeFacet);
     if (factory !== null) {
       const path = [this.sourceId];
@@ -1029,51 +994,22 @@ function linkDraftMode(selection: { from: number; to: number }, from: number, to
 /** Пустая карта чужих захватов (значение по умолчанию). */
 const NO_LOCKS: ReadonlyMap<string, string> = new Map();
 
-/** Офсеты начал строк текста — для линейных декораций рамки правки блока. */
-function lineStartOffsets(source: string): number[] {
-  const starts = [0];
-  for (let i = 0; i < source.length; i += 1) {
-    if (source.charCodeAt(i) === 10) starts.push(i + 1);
-  }
-  return starts;
-}
-
-/** Индекс строки, содержащей позицию `pos` (двоичный поиск по началам строк). */
-function lineIndexAt(starts: readonly number[], pos: number): number {
-  let lo = 0;
-  let hi = starts.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (starts[mid]! <= pos) lo = mid;
-    else hi = mid - 1;
-  }
-  return lo;
-}
-
 /** Строит декорации и атомарные диапазоны для текущего состояния. */
 export function buildTransclusionDecorations(
   source: string,
   selection: { from: number; to: number },
   cache: Map<string, TransclusionEntry>,
   networkId: string | null,
-  /** Источник в режиме правки блока, либо `null` (задача f59d24e1). */
-  editingSourceId: string | null = null,
-  /** Чужие захваты источников: `sourceId` → имя держателя (задача f59d24e1). */
+  /** Ключ активного блока (внутри — вложенный редактор), либо `null`. */
+  activeKey: string | null = null,
+  /** Чужие захваты источников: `sourceId` → имя держателя. */
   lockedSources: ReadonlyMap<string, string> = NO_LOCKS,
-  /** Дескриптор редактируемого текста блока, либо `null` (задача e2c14673). */
-  blockEdit: BlockEditState | null = null,
 ): { deco: DecorationSet; atomic: RangeSet<Decoration> } {
   const parts: Array<{ from: number; to: number; value: Decoration }> = [];
   const atomParts: Array<{ from: number; to: number; value: Decoration }> = [];
   const refs = parseTransclusions(source);
-  // Диапазон активной правки блока: ссылки внутри него остаются обычным
-  // редактируемым текстом (не заменяются виджетами), а сам диапазон получает
-  // рамку-обводку (задача e2c14673).
-  const beFrom = blockEdit === null ? -1 : blockEdit.from;
-  const beTo = blockEdit === null ? -1 : blockEdit.to;
 
   for (const ref of refs) {
-    if (blockEdit !== null && ref.start >= beFrom && ref.end <= beTo) continue;
     const idFrom = ref.start + OPEN_LEN;
     const innerEnd = ref.end - 2;
     const hash2 = source.indexOf('#', idFrom + 1);
@@ -1083,38 +1019,12 @@ export function buildTransclusionDecorations(
     const title = entry?.title ?? '';
     const deleted = entry !== undefined && !entry.exists;
     const lockedBy = lockedSources.get(ref.sourceId) ?? null;
+    const editorKey = blockEditorKey(ref.sourceId, ref.section);
+    const active = activeKey !== null && activeKey === editorKey;
     // Выделение покрывает диапазон ссылки целиком — блок показывается как
     // выделенное единое целое (ошибка 39553204): рамка вокруг, без подсветки
     // внутреннего текста (неделимость блока — ошибка 5312142d).
     const covered = coversRef(selection, ref.start, ref.end);
-
-    // Режим правки блока перекрывает прочие режимы: блок остаётся блоком даже
-    // при каретке внутри ссылки (задача f59d24e1).
-    if (editingSourceId !== null && editingSourceId === ref.sourceId) {
-      // Неделимость блока при навигации стрелками (задача a2b68d72): диапазон
-      // целиком атомарен — курсор не заходит внутрь развёрнутого блока.
-      atomParts.push({ from: ref.start, to: ref.end, value: Decoration.mark({}) });
-      parts.push({
-        from: ref.start,
-        to: ref.end,
-        value: Decoration.replace({
-          block: true,
-          widget: new TransclusionBlockWidget(
-            ref.start,
-            ref.end,
-            entry ?? emptyEntry(),
-            key ?? '',
-            ref.sourceId,
-            true,
-            lockedBy,
-            covered,
-            ref.section,
-          ),
-          inclusive: false,
-        }),
-      });
-      continue;
-    }
 
     if (linkDraftMode(selection, ref.start, ref.end)) {
       // Черновик ссылки при вводе: токен `#<id>` — атомарный виджет с именем
@@ -1135,7 +1045,8 @@ export function buildTransclusionDecorations(
 
     // Развёрнутый блок: диапазон атомарен (задача a2b68d72) — иначе Right/Left
     // заводят каретку внутрь, декорации пересобираются в черновик ссылки и
-    // блок распадается в исходный markdown (блокер верификатора).
+    // блок распадается в исходный markdown (блокер верификатора). Вход в блок
+    // монтирует вложенный редактор (задача 73ae1d4b), а не растворение текста.
     atomParts.push({ from: ref.start, to: ref.end, value: Decoration.mark({}) });
     parts.push({
       from: ref.start,
@@ -1148,7 +1059,8 @@ export function buildTransclusionDecorations(
           entry ?? emptyEntry(),
           key ?? '',
           ref.sourceId,
-          false,
+          editorKey,
+          active,
           lockedBy,
           covered,
           ref.section,
@@ -1156,32 +1068,6 @@ export function buildTransclusionDecorations(
         inclusive: false,
       }),
     });
-  }
-
-  // Вложенное поле правки блока (ошибка 9c2e077a): рамку рисуем ЛИНЕЙНЫМИ
-  // декорациями на каждой строке диапазона — получается одно сплошное
-  // прямоугольное поле внутри окружения. Прежняя одна inline-`mark` на весь
-  // диапазон рвала рамку по строкам (каждая строка — свой box-shadow), отсюда
-  // «обведённые рамкой строки» вместо вложенного поля.
-  if (blockEdit !== null && blockEdit.to > blockEdit.from) {
-    const docLen = source.length;
-    const from = Math.max(0, Math.min(blockEdit.from, docLen));
-    const to = Math.max(from, Math.min(blockEdit.to, docLen));
-    if (to > from) {
-      const starts = lineStartOffsets(source);
-      const firstLine = lineIndexAt(starts, from);
-      const lastLine = lineIndexAt(starts, to - 1);
-      for (let line = firstLine; line <= lastLine; line += 1) {
-        const classes = [TRANSCLUSION_EDIT_RANGE_CLASS];
-        if (line === firstLine) classes.push(TRANSCLUSION_EDIT_FIRST_CLASS);
-        if (line === lastLine) classes.push(TRANSCLUSION_EDIT_LAST_CLASS);
-        parts.push({
-          from: starts[line]!,
-          to: starts[line]!,
-          value: Decoration.line({ class: classes.join(' ') }),
-        });
-      }
-    }
   }
 
   return { deco: Decoration.set(parts, true), atomic: RangeSet.of(atomParts, true) };
@@ -1192,7 +1078,7 @@ function emptyEntry(): TransclusionEntry {
   return { title: '', exists: true, error: null, html: '', body_md: '' };
 }
 
-/** Поле состояния: кэш данных, режим правки блока, захваты, декорации. */
+/** Поле состояния: кэш данных, активный блок, захваты, декорации. */
 export const transclusionState = StateField.define<TransclusionStateData>({
   create: (state) => {
     const networkId = safeNetwork();
@@ -1205,8 +1091,7 @@ export const transclusionState = StateField.define<TransclusionStateData>({
     return {
       networkId,
       cache: new Map(),
-      editingSourceId: null,
-      blockEdit: null,
+      activeKey: null,
       lockedSources: NO_LOCKS,
       deco,
       atomic,
@@ -1215,28 +1100,14 @@ export const transclusionState = StateField.define<TransclusionStateData>({
   update(state, tr) {
     let networkId = state.networkId;
     let cache = state.cache;
-    let editingSourceId = state.editingSourceId;
-    let blockEdit = state.blockEdit;
+    let activeKey = state.activeKey;
     let lockedSources = state.lockedSources;
-    // Диапазон правки блока едет за правками документа (задача e2c14673).
-    if (tr.docChanged && blockEdit !== null) {
-      const from = tr.changes.mapPos(blockEdit.from, -1);
-      const to = tr.changes.mapPos(blockEdit.to, 1);
-      if (from !== blockEdit.from || to !== blockEdit.to) {
-        blockEdit = { ...blockEdit, from, to };
-      }
-    }
     for (const effect of tr.effects) {
       if (effect.is(setEntries)) {
         if (cache === state.cache) cache = new Map(cache);
         for (const { key, entry } of effect.value) cache.set(key, entry);
-      } else if (effect.is(dropEntries)) {
-        if (cache === state.cache) cache = new Map(cache);
-        for (const key of effect.value) cache.delete(key);
-      } else if (effect.is(setBlockEdit)) {
-        editingSourceId = effect.value;
-      } else if (effect.is(setBlockEditRange)) {
-        blockEdit = effect.value;
+      } else if (effect.is(setActiveBlock)) {
+        activeKey = effect.value;
       } else if (effect.is(setLockedSources)) {
         lockedSources = effect.value;
       }
@@ -1248,8 +1119,7 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       !tr.docChanged &&
       !tr.selection &&
       cache === state.cache &&
-      editingSourceId === state.editingSourceId &&
-      blockEdit === state.blockEdit &&
+      activeKey === state.activeKey &&
       lockedSources === state.lockedSources &&
       networkId === state.networkId
     ) {
@@ -1260,23 +1130,12 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       tr.state.selection.main,
       cache,
       networkId,
-      editingSourceId,
+      activeKey,
       lockedSources,
-      blockEdit,
     );
-    return { networkId, cache, editingSourceId, blockEdit, lockedSources, deco, atomic };
+    return { networkId, cache, activeKey, lockedSources, deco, atomic };
   },
-  provide: (f) => [
-    EditorView.decorations.from(f, (s) => s.deco),
-    // Активная правка блока — отдельная область сворачивания для CM6
-    // (ошибка 4204e34c): её заголовки адресуются состоянию пути вставки блока,
-    // а не состоянию поля-контейнера.
-    blockEditCollapseFacet.from(f, (s) =>
-      s.blockEdit === null
-        ? null
-        : { from: s.blockEdit.from, to: s.blockEdit.to, sourceId: s.blockEdit.sourceId },
-    ),
-  ],
+  provide: (f) => [EditorView.decorations.from(f, (s) => s.deco)],
 });
 
 /**
@@ -1298,8 +1157,8 @@ interface BlockRange {
 
 /**
  * Диапазоны блоков-атомов документа в текущем состоянии — те же ссылки, что
- * рисуются replace-виджетом блока (не режим правки ссылки и не свёрнутая
- * ссылка). Нужны навигации-выделению (ошибка `5312142d`).
+ * рисуются replace-виджетом блока (не черновик ссылки при вводе). Нужны
+ * навигации/входу в блок (задача `73ae1d4b`).
  */
 function blockRanges(state: EditorState): BlockRange[] {
   const field = state.field(transclusionState, false);
@@ -1307,10 +1166,6 @@ function blockRanges(state: EditorState): BlockRange[] {
   const selection = state.selection.main;
   const out: BlockRange[] = [];
   for (const ref of parseTransclusions(state.doc.toString())) {
-    if (field.editingSourceId !== null && field.editingSourceId === ref.sourceId) {
-      out.push({ from: ref.start, to: ref.end, ref });
-      continue;
-    }
     if (linkDraftMode(selection, ref.start, ref.end)) continue;
     out.push({ from: ref.start, to: ref.end, ref });
   }
@@ -1364,10 +1219,11 @@ function blockOnLineBefore(
 }
 
 /**
- * Навигация-выделение блока-атома стрелками (ошибка `5312142d`). Стрелка,
- * входящая в блок из позиции перед/после, выделяет блок ЦЕЛИКОМ одним шагом;
- * следующее нажатие уводит каретку за его границу (блок остаётся единым).
- * Возвращает `true`, если нажатие обработано (иначе стрелку отдаём CM6).
+ * Навигация/вход в блок стрелками (задача `73ae1d4b`). Стрелка, входящая в блок
+ * из позиции перед/после, монтирует вложенный редактор и переносит в него фокус
+ * (по краям — каретка в начало/конец текста блока). Если блок уже выделен
+ * (например, перетаскиванием) — шаг уводит каретку за его границу, не разбирая
+ * блок. Возвращает `true`, если нажатие обработано (иначе стрелку отдаём CM6).
  */
 export function transclusionBlockArrow(
   view: EditorView,
@@ -1391,70 +1247,56 @@ export function transclusionBlockArrow(
   else if (dir === 'down') block = blockOnLineAfter(state, blocks, pos);
   else block = blockOnLineBefore(state, blocks, pos);
   if (block === null) return false;
-  view.dispatch({
-    selection: { anchor: block.from, head: block.to },
-    scrollIntoView: true,
-    userEvent: 'select',
-  });
+  // Вход в блок: стрелка «вперёд» (вправо/вниз) — каретка в начало текста,
+  // «назад» (влево/вверх) — в конец.
+  enterBlock(view, block.ref, dir === 'left' || dir === 'up');
   return true;
 }
 
 /**
- * Обработчик `mousedown` трансклюзий: клик по блоку ВЫДЕЛЯЕТ его целиком как
- * единый атом (ошибка `5312142d`), клик по шапке-чипу открывает поповер правки
- * ссылки (каретку не двигает), клик вне правки блока завершает её записью в
- * источник (задача `e2c14673`).
+ * Обработчик `mousedown` трансклюзий (задача `73ae1d4b`): клик по блоку монтирует
+ * вложенный редактор и переносит фокус внутрь; клик по шапке-чипу открывает
+ * поповер правки ссылки; клик по заблокированному (чужой захват) блоку лишь
+ * выделяет его целиком — блок только для чтения. Клики ВНУТРИ вложенного
+ * редактора сюда не относятся (обрабатывает сам инстанс).
  *
  * Реагирует только на ОСНОВНУЮ кнопку мыши (`event.button === 0`): правый и
  * средний клик — жесты вызова контекстного меню, они не должны менять
- * выделение (ошибка `27b95e60`). Событие при этом не гасим — `contextmenu`
- * открывает меню поверх прежнего состояния. Родной обработчик CM6 на неосновных
- * кнопках выделение не двигает (`view/dist/index.js`: basicMouseSelection —
- * только при `button == 0`).
+ * выделение (ошибка `27b95e60`).
  */
 export function transclusionMouseDown(event: MouseEvent, view: EditorView): boolean {
   if (event.button !== 0) return false;
   const target = event.target as Element | null;
+  if (target === null) return false;
   // Шапка-чип блока (элемент 7a479549): клик открывает поповер правки ссылки,
   // каретку не двигаем — событие обработает сам чип (`createTransclusionHead`
   // гасит `mousedown`, сохраняя фокус редактора).
-  if (target !== null && target.closest(`.${TRANSCLUSION_HEAD_CLASS}`) !== null) return true;
-  // Ховер-кнопка блока: не трогаем курсор, событие обработает сама кнопка.
-  if (target !== null && target.closest(`.${TRANSCLUSION_ACTIONS_CLASS}`) !== null) return true;
-  // Клик вне редактируемого текста блока — записать изменения блока в
-  // источник и выйти из режима правки блока (задача e2c14673, элемент
-  // 2b116d37). Курсор ставится обычным путём (return false).
-  const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
-  if (be !== null) {
-    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-    if (pos === null || pos < be.from || pos > be.to) {
-      void saveBlockEdit(view);
-      return false;
-    }
-    return false;
-  }
-  const block = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
-  if (block instanceof HTMLElement) {
-    // Блок выделяется как ЕДИНОЕ ЦЕЛОЕ (ошибка 5312142d): клик ставит выделение
-    // на весь диапазон блока, а не каретку внутрь ссылки (иначе блок распался бы
-    // в исходный markdown) и не «поглощается» молча, как раньше. Диапазон берём
-    // из атрибутов виджета; каретка внутрь атомарного диапазона не встаёт.
-    const from = Number(block.dataset['mdFrom']);
-    const to = Number(block.dataset['mdTo']);
-    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return true;
+  if (target.closest(`.${TRANSCLUSION_HEAD_CLASS}`) !== null) return true;
+  // Клик внутри вложенного редактора (его корень `.cm-editor` — не корень
+  // контейнера): жест принадлежит инстансу, контейнер его не перехватывает.
+  const editorRoot = target.closest('.cm-editor');
+  if (editorRoot !== null && editorRoot !== view.dom) return false;
+  const block = target.closest(`.${TRANSCLUSION_BLOCK_CLASS}`);
+  if (!(block instanceof HTMLElement)) return false;
+  const from = Number(block.dataset['mdFrom']);
+  const to = Number(block.dataset['mdTo']);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return false;
+  const ref = transclusionRefStartingAt(view.state.doc.toString(), from);
+  if (ref === null) return true;
+  // Источник захвачен другим участником — блок только для чтения: выделяем
+  // целиком (атом), вложенный редактор не монтируем (требование 647fa34a).
+  if (otherHolder('thought', ref.sourceId) !== null) {
     const sel = view.state.selection.main;
-    if (sel.from === from && sel.to === to) return true; // уже выделен — не трогаем
-    view.dispatch({
-      selection: { anchor: from, head: to },
-      scrollIntoView: false,
-      userEvent: 'select',
-    });
+    if (sel.from !== from || sel.to !== to) {
+      view.dispatch({ selection: { anchor: from, head: to }, userEvent: 'select' });
+    }
     return true;
   }
-  return false;
+  enterBlock(view, ref, false);
+  return true;
 }
 
-/** Клики по блоку: выделение блока целиком; шапка/кнопка обрабатывают себя сами. */
+/** Клики по блоку: вход во вложенный редактор; шапка/чип обрабатывают себя. */
 export const transclusionClick = EditorView.domEventHandlers({
   mousedown: transclusionMouseDown,
 });
@@ -1474,18 +1316,6 @@ function transclusionWidgetRefAt(view: EditorView, target: Element | null): Tran
   if (!Number.isFinite(from)) return null;
   // Ищем ссылку по НАЧАЛУ диапазона (`data-md-from`), а не по каретке: с
   // исключающими границами `transclusionAtCaret` на `start` ссылка не находится.
-  return transclusionRefStartingAt(view.state.doc.toString(), from);
-}
-
-/**
- * Ссылка-БЛОК под целью события (`.cm-transclusion-block`) — для двойного
- * клика (вход в правку блока).
- */
-function transclusionBlockRefAt(view: EditorView, target: Element | null): TransclusionRef | null {
-  const el = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
-  if (!(el instanceof HTMLElement)) return null;
-  const from = Number(el.dataset.mdFrom);
-  if (!Number.isFinite(from)) return null;
   return transclusionRefStartingAt(view.state.doc.toString(), from);
 }
 
@@ -1526,33 +1356,27 @@ export function transclusionNavHandlers(
 }
 
 /**
- * Обработчики меню блока (элемент `1e0fb0bd`): «Редактировать» — вход в правку
- * блока (режим этого модуля) плюс четыре команды навигации
- * ({@link transclusionNavHandlers}). Прежних «Изменить ссылку» и сворачивания
- * блока нет — ссылка правится чипом-шапкой и поповером.
+ * Обработчики меню блока (элемент `1e0fb0bd`): четыре команды навигации
+ * ({@link transclusionNavHandlers}). Пункта «Редактировать» больше нет — вход в
+ * блок идёт кареткой (клик/стрелки/Enter), ссылка правится чипом-шапкой.
  */
 export function transclusionMenuHandlers(
-  view: EditorView,
+  _view: EditorView,
   ref: TransclusionRef,
 ): Record<string, () => void> {
   return {
-    'transclusion.edit': () => {
-      void beginBlockEdit(view, ref);
-    },
     ...transclusionNavHandlers(ref.sourceId, ref.raw),
   };
 }
 
 /**
  * Контекстное меню блока трансклюзии (элемент `1e0fb0bd`): правый клик по блоку
- * в режиме правки окружения. Пока блок в правке, действует меню поля — там блок
- * уже обычный текст. Событие гасится, чтобы не дошло до меню поля
+ * в режиме правки окружения. Событие гасится, чтобы не дошло до меню поля
  * (`markdown-field` слушает `editor.dom`). Открывается поверх текущего
  * состояния: `mousedown` по неосновной кнопке выделение не двигает (см.
  * {@link transclusionMouseDown}, ошибка `27b95e60`).
  */
 export function transclusionContextMenuHandler(event: MouseEvent, view: EditorView): boolean {
-  if (isBlockEditing(view.state)) return false;
   const ref = transclusionWidgetRefAt(view, event.target as Element | null);
   if (ref === null) return false;
   event.preventDefault();
@@ -1847,28 +1671,46 @@ export function decorateViewTransclusionChips(
 }
 
 /* ------------------------------------------------------------------ *
- * Режим правки блока и захват источника (задача f59d24e1)
+ * Вход/выход вложенного редактора блока (задача 73ae1d4b)
  * ------------------------------------------------------------------ */
 
 /**
- * Хост поля комментария: уведомление о входе/выходе из правки блока. Поле
- * подменяет кнопки под полем на «Отменить/Сохранить трансклюзию»
- * (элемент интерфейса `2b116d37`). Фасет необязателен — без хоста режим
- * правки работает, но кнопки поля не переключаются.
+ * Хост поля комментария: единственное уведомление — изменение текста блока
+ * («грязный» сигнал). Это точка для будущей задачи «Единая запись»
+ * (`e9dfc2df`): сама запись в источник пока не выполняется. Фасет
+ * необязателен — без хоста вход/выход работает, сигнал просто игнорируется.
  */
-export interface TransclusionEditHost {
-  /** Режим правки блока включён (`true`) или выключен (`false`). */
-  onBlockEditChange(editing: boolean): void;
+export interface BlockEditorHost {
+  /** Текст блока `key` изменён (отличается от загруженного). */
+  onBlockDirty(key: string): void;
 }
 
 /** Фасет хоста поля: единственное значение (последнее — при нескольких). */
-const transclusionEditHostFacet = Facet.define<TransclusionEditHost, TransclusionEditHost | null>({
+const blockEditorHostFacet = Facet.define<BlockEditorHost, BlockEditorHost | null>({
   combine: (values) => values[values.length - 1] ?? null,
 });
 
-/** Расширение-хост для поля: уведомляет о входе/выходе из правки блока. */
-export function transclusionEditHostExtension(host: TransclusionEditHost): Extension {
-  return transclusionEditHostFacet.of(host);
+/** Расширение-хост для поля: уведомляет об изменении текста блока. */
+export function blockEditorHostExtension(host: BlockEditorHost): Extension {
+  return blockEditorHostFacet.of(host);
+}
+
+/** Хранилище вложенных редакторов текущего поля, либо `null` (нет фасета). */
+function editorStore(view: EditorView): NestedEditorStore | null {
+  return view.state.facet(blockEditorStoreFacet);
+}
+
+/** Глубина вложенного редактора, который откроется для блока текущего поля. */
+function nextDepth(state: EditorState): number {
+  return (state.facet(nestedDepthFacet) ?? 0) + 1;
+}
+
+/** Ссылка блока по ключу его вложенного редактора в текущем документе. */
+function refForKey(state: EditorState, key: string): TransclusionRef | null {
+  for (const ref of parseTransclusions(state.doc.toString())) {
+    if (blockEditorKey(ref.sourceId, ref.section) === key) return ref;
+  }
+  return null;
 }
 
 /** Ссылка трансклюзии под позицией `pos`, либо `null`. */
@@ -1877,292 +1719,82 @@ function transclusionRefAt(view: EditorView, pos: number): TransclusionRef | nul
 }
 
 /**
- * Активна ли правка блока (есть редактируемый текст источника). Пока она
- * активна, `Enter` НЕ перехватывается: его обрабатывает родительский keymap
- * (перевод строки/список), иначе клавиша «мертва» и хоткеи родительского
- * редактора не действуют на текст блока.
+ * Вход в блок: монтирует (лениво) вложенный редактор с текстом раздела и
+ * переносит в него фокус. Повторный вход в уже смонтированный блок лишь
+ * активирует его и фокусирует (текст правки сохранён в состоянии инстанса).
+ * Заблокированный источник (чужой захват) и превышение глубины — no-op: блок
+ * остаётся только для чтения. Захват источника здесь НЕ берётся (задача
+ * «Единая запись», `e9dfc2df`).
  */
-export function isBlockEditing(state: EditorState): boolean {
-  return state.field(transclusionState, false)?.blockEdit != null;
-}
-
-/**
- * Восстанавливает исходную ссылку вместо текста блока и выходит из правки.
- *
- * Каретку ставим ЗА восстановленным блоком (ошибка `640c0ade`): при
- * автоматическом отображении позиции она оставалась на месте прежнего текста —
- * визуально над блоком, а блок не перерисовывался. Явная позиция на правой
- * границе блока (границы {@link transclusionAtCaret} исключающие) сразу
- * оставляет блок в режиме просмотра. Дополнительные эффекты (`extraEffects`,
- * например сброс кэша источника) применяются ТОЙ ЖЕ транзакцией — тогда
- * пересчёт декораций и перепланирование загрузчика идут сразу, без движения
- * каретки.
- */
-export function restoreBlockEdit(
-  view: EditorView,
-  be: BlockEditState,
-  extraEffects: readonly StateEffect<unknown>[] = [],
-): void {
-  const len = view.state.doc.length;
-  const from = Math.max(0, Math.min(be.from, len));
-  const to = Math.max(from, Math.min(be.to, len));
-  view.dispatch({
-    changes: { from, to, insert: be.refRaw },
-    selection: { anchor: from + be.refRaw.length },
-    scrollIntoView: true,
-    effects: [setBlockEdit.of(null), setBlockEditRange.of(null), ...extraEffects],
-  });
-}
-
-/** Выход из режима правки блока БЕЗ записи в источник (Esc, «Отменить»). */
-export function cancelBlockEdit(view: EditorView): void {
-  const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
-  if (be === null) {
-    view.dispatch({ effects: [setBlockEdit.of(null), setBlockEditRange.of(null)] });
+export function enterBlock(view: EditorView, ref: TransclusionRef, caretAtEnd = false): void {
+  const store = editorStore(view);
+  if (store === null) return;
+  if (otherHolder('thought', ref.sourceId) !== null) return;
+  if (nextDepth(view.state) > MAX_NESTED_DEPTH) return;
+  const key = blockEditorKey(ref.sourceId, ref.section);
+  if (store.has(key)) {
+    view.dispatch({ effects: setActiveBlock.of(key) });
+    store.focus(key, caretAtEnd ? 'end' : 'start');
     return;
   }
-  restoreBlockEdit(view, be);
+  const depth = nextDepth(view.state);
+  void loadNestedBlock(view, store, ref, key, depth, caretAtEnd);
 }
 
-/** Историческое имя: выход из правки блока = отмена (записи нет). */
-export const exitBlockEdit = cancelBlockEdit;
-
-/** Источник и раздел, текст которых открывается в правку блока. */
-export interface BlockEditTarget {
-  sourceId: string;
-  /** Раздел источника, либо `null` — весь постоянный комментарий. */
-  section: string | null;
-}
-
-/**
- * Вход в режим правки блока: вместо ссылки `replaceRef` в поле вставляется
- * текст источника `target` — правка идёт в том же поле, поэтому команды и
- * сочетания родительского редактора действуют на текст блока. Раздел — только
- * его содержимое (заголовок живёт в ссылке). Захват источника ставит плагин по
- * смене `editingSourceId`.
- *
- * Для обычного блока (задача `e2c14673`) `replaceRef` и `target` описывают
- * одну и ту же ссылку; для ВЛОЖЕННОГО блока из просмотра (ошибка `23570aef`)
- * замена идёт на месте ВНЕШНЕЙ ссылки контейнера, а текст берётся из вложенного
- * источника — ссылка возвращается при сохранении/отмене (`refRaw`), поэтому
- * контейнер не портится.
- */
-async function startBlockEdit(
+/** Асинхронная загрузка источника и монтаж инстанса вложенного редактора. */
+async function loadNestedBlock(
   view: EditorView,
-  replaceRef: TransclusionRef,
-  target: BlockEditTarget,
-  placeCaret: boolean,
+  store: NestedEditorStore,
+  ref: TransclusionRef,
+  key: string,
+  depth: number,
+  caretAtEnd: boolean,
 ): Promise<void> {
   const networkId = safeNetwork();
   if (networkId === null) return;
-  const key = transclusionCacheKeyParts(networkId, target.sourceId, target.section);
-  const cached = view.state.field(transclusionState, false)?.cache.get(key);
-  // Битый источник (нет мысли/раздела) в правку не открываем.
-  if (cached !== undefined && (cached.error !== null || !cached.exists)) return;
-  let body = cached?.body_md ?? '';
-  if (cached === undefined) {
-    // Вход в правку читает источник ВСЕГДА свежим (без общего кэша сети):
-    // пользователь правит текущий текст источника, а не то, что когда-то
-    // отрисовал другой инстанс. Общий кэш ({@link cachedTransclusionLoader})
-    // обслуживает отрисовку блоков и подсказки разделов.
-    const src = await defaultTransclusionLoader(networkId)(target.sourceId).catch(() => null);
-    if (src === null || !src.found) return;
-    body = src.body_md;
+  const src = await defaultTransclusionLoader(networkId)(ref.sourceId).catch(() => null);
+  if (src === null || !src.found) return;
+  const text = ref.section === null ? src.body_md : sectionBodyForEdit(src.body_md, ref.section);
+  if (text === null) return;
+  // Ссылка могла сдвинуться/исчезнуть, пока грузили источник.
+  const fresh = transclusionRefStartingAt(view.state.doc.toString(), ref.start);
+  if (fresh === null || fresh.sourceId !== ref.sourceId) return;
+  if (!store.has(key)) {
+    const host = view.state.facet(blockEditorHostFacet);
+    store.mount(key, text, {
+      depth,
+      onDirty: (k) => host?.onBlockDirty(k),
+      onExit: (k, reason) => exitBlock(view, k, reason),
+      onRollback: (k) => store.rollback(k),
+    });
   }
-  const text = target.section === null ? body : sectionBodyForEdit(body, target.section);
-  if (text === null) return; // раздела нет — в правку не входим
-  // Ссылка могла исчезнуть/сдвинуться, пока грузили источник.
-  const fresh = transclusionRefStartingAt(view.state.doc.toString(), replaceRef.start);
-  if (fresh === null || fresh.sourceId !== replaceRef.sourceId) return;
+  view.dispatch({ effects: setActiveBlock.of(key) });
+  store.focus(key, caretAtEnd ? 'end' : 'start');
+}
+
+/**
+ * Выход из блока: снимает активность (инстанс с текстом остаётся в хранилище —
+ * семантика «сохранить в состоянии» до задачи «Единая запись»). При выходе
+ * клавишей (`up`/`left`/`down`/`right`/`ctrl-enter`) фокус возвращается в
+ * контейнер на границу блока; при уходе фокуса (`blur`) фокус не навязывается.
+ */
+export function exitBlock(view: EditorView, key: string, reason: NestedExitReason): void {
+  const active = view.state.field(transclusionState, false)?.activeKey ?? null;
+  if (active !== key) return;
+  const ref = refForKey(view.state, key);
+  const back = reason === 'up' || reason === 'left';
+  const anchor = ref === null ? null : back ? ref.start : ref.end;
   view.dispatch({
-    changes: { from: fresh.start, to: fresh.end, insert: text },
-    // Открытие вложенного блока из просмотра переводит каретку в начало
-    // вставленного текста: пользователь сразу попадает в правку блока.
-    ...(placeCaret ? { selection: { anchor: fresh.start } } : {}),
-    effects: [
-      setBlockEdit.of(target.sourceId),
-      setBlockEditRange.of({
-        sourceId: target.sourceId,
-        section: target.section,
-        refRaw: fresh.raw,
-        from: fresh.start,
-        to: fresh.start + text.length,
-      }),
-    ],
+    effects: setActiveBlock.of(null),
+    ...(anchor === null ? {} : { selection: { anchor } }),
   });
+  if (anchor !== null) view.focus();
 }
 
-/**
- * Вход в правку блока по ссылке контейнера (задача `e2c14673`): текст берётся
- * из самого источника ссылки.
- */
-async function beginBlockEdit(view: EditorView, ref: TransclusionRef): Promise<void> {
-  await startBlockEdit(view, ref, { sourceId: ref.sourceId, section: ref.section }, false);
+/** Выход из активного блока без причины (например, поле выходит из правки). */
+export function exitActiveBlock(view: EditorView): void {
+  view.dispatch({ effects: setActiveBlock.of(null) });
 }
-
-/**
- * Вход в правку блока ВЛОЖЕННОГО источника из просмотра (ошибка `23570aef`).
- * Позиции вложенной ссылки в `body_md` контейнера не существует (текст приходит
- * из источника другой мысли), поэтому на месте ВНЕШНЕЙ ссылки `outerRef`
- * вставляется текст вложенного источника `target`, а `outerRef.raw` сохраняется
- * для восстановления — контейнер при этом не меняется.
- */
-export async function beginNestedBlockEdit(
-  view: EditorView,
-  outerRef: TransclusionRef,
-  target: BlockEditTarget,
-): Promise<void> {
-  await startBlockEdit(view, outerRef, target, true);
-}
-
-/**
- * Записывает изменённый текст блока в постоянный комментарий источника
- * (задача `e2c14673`) через существующий API правки комментария под захватом;
- * после записи восстанавливает ссылку. Ошибка (в т.ч. `409 LOCKED` при чужом
- * захвате — ошибка `68be6829`) оставляет правку открытой и показывает
- * уведомление. Предупреждение о переходе границы раздела не запрещает запись.
- */
-export async function saveBlockEdit(view: EditorView): Promise<void> {
-  const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
-  if (be === null) return;
-  const networkId = safeNetwork();
-  if (networkId === null) return;
-  const text = view.state.doc.sliceString(be.from, be.to);
-  let perm: Comment | undefined;
-  try {
-    const comments = await etn.comments.list(networkId, 'thought', be.sourceId);
-    perm = comments.find((c) => c.kind === 'permanent');
-  } catch {
-    perm = undefined;
-  }
-  if (perm === undefined) {
-    notice(t('comment.transclusion.noSource'), 'warning');
-    return;
-  }
-  let newBody = text;
-  if (be.section !== null) {
-    const merged = mergeSectionContent(perm.body_md, be.section, text);
-    if (merged === null) {
-      notice(t('comment.transclusion.noSection'), 'warning');
-      return;
-    }
-    newBody = merged;
-    if (sectionBoundaryCrossed(perm.body_md, be.section, text)) {
-      notice(t('comment.transclusion.sectionBoundary'), 'warning');
-    }
-  }
-  try {
-    await etn.comments.update(networkId, perm.id, { body_md: newBody }, perm.version);
-  } catch {
-    // В том числе 409 LOCKED: источник захвачен другим участником.
-    notice(t('comment.transclusion.saveError'), 'error');
-    return;
-  }
-  const current = view.state.field(transclusionState, false)?.blockEdit ?? null;
-  if (current === null) return;
-  // Источник изменился — сбрасываем кэш, блок в просмотре перечитывается. Для
-  // вложенного блока (ошибка 23570aef) ещё и внешняя ссылка контейнера: её блок
-  // содержит отредактированный текст источника. Восстановление ссылки, закрытие
-  // правки, постановка каретки за блок и сброс кэша идут ОДНОЙ транзакцией
-  // (ошибка 640c0ade): иначе каретка оставалась над блоком, а декорации/загрузчик
-  // не пересчитывались без движения каретки.
-  const keys = new Set<string>([
-    transclusionCacheKeyParts(networkId, current.sourceId, current.section),
-  ]);
-  for (const outer of parseTransclusions(current.refRaw)) {
-    keys.add(transclusionCacheKeyParts(networkId, outer.sourceId, outer.section));
-  }
-  // Записанный источник больше не актуален — сбрасываем его из ОБЩЕГО кэша
-  // сети, иначе повторная загрузка вернула бы старое тело (источник виден всем
-  // инстансам, включая вложенные редакторы).
-  invalidateTransclusionSource(networkId, current.sourceId);
-  restoreBlockEdit(view, current, [dropEntries.of([...keys])]);
-}
-
-/**
- * Двойной клик НА блоке открывает правку блока (ошибка `5312142d`). Ссылку
- * берём из DOM-элемента блока, а не из координат: у блока-виджета позиция под
- * мышью лежит на его границе, где {@link transclusionAtCaret} (исключающие
- * границы) ссылку уже не находит. Двойной клик по шапке-чипу правку блока НЕ
- * открывает — чип обрабатывает себя сам (открытие поповера).
- */
-export function transclusionDblClick(event: MouseEvent, view: EditorView): boolean {
-  const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
-  if (be !== null) return true;
-  const target = event.target as Element | null;
-  if (target !== null && target.closest?.(`.${TRANSCLUSION_HEAD_CLASS}`) != null) return true;
-  const ref = transclusionBlockRefAt(view, target);
-  if (ref === null) return false;
-  void beginBlockEdit(view, ref);
-  return true;
-}
-
-/** Вход в режим правки блока: двойной клик и Enter (элемент `2b116d37`). */
-export const transclusionEditGestures = [
-  Prec.high(
-    keymap.of([
-      {
-        key: 'Enter',
-        run: (view) => {
-          // Открытый автокомплит (мысли/разделы) обрабатывает Enter сам.
-          if (completionStatus(view.state) === 'active') return false;
-          // В правке блока Enter — обычный перевод строки: не перекрываем
-          // родительский keymap (defaultKeymap/markdown). Иначе клавиша «мертва»
-          // и хоткеи родительского редактора не действуют на текст блока.
-          if (isBlockEditing(view.state)) return false;
-          // Блок выделен целиком — Enter переводит его в режим правки
-          // (ошибка 5312142d). На строке ПЕРЕД/ПОСЛЕ блока каретка на границе
-          // ссылки, покрытия нет — Enter остаётся обычным переводом строки.
-          const covering = refCoveringSelection(view.state, view.state.selection.main);
-          if (covering !== null) {
-            void beginBlockEdit(view, covering);
-            return true;
-          }
-          const ref = transclusionRefAt(view, view.state.selection.main.head);
-          if (ref === null) return false;
-          void beginBlockEdit(view, ref);
-          return true;
-        },
-      },
-      {
-        key: 'Mod-Enter',
-        run: (view) => {
-          // Ctrl+Enter в правке блока — записать блок в источник, оставаясь в
-          // правке окружения; повторный Ctrl+Enter запишет окружение (e2c14673).
-          if (view.state.field(transclusionState, false)?.blockEdit === null) return false;
-          void saveBlockEdit(view);
-          return true;
-        },
-      },
-      {
-        key: 'Escape',
-        run: (view) => {
-          // Открытый автокомплит закрывает Escape сам.
-          if (completionStatus(view.state) === 'active') return false;
-          const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
-          // Esc в правке блока отменяет её, не отменяя правку всего поля.
-          if (be === null) return false;
-          cancelBlockEdit(view);
-          return true;
-        },
-      },
-      // `#` при открытом списке мыслей трансклюзии принимает выделенную мысль
-      // и сразу открывает список разделов источника (ошибка `ccf4d25f`,
-      // элемент `7a479549`). В любом другом состоянии `#` — обычный ввод.
-      { key: '#', run: (view) => acceptTransclusionThought(view) },
-      // Навигация-выделение блока-атома стрелками (ошибка 5312142d): стрелка,
-      // входящая в блок из позиции перед/после, выделяет его целиком; обычные
-      // шаги вне блока отдаём CM6 (обработчик возвращает false).
-      { key: 'ArrowRight', run: (view) => transclusionBlockArrow(view, 'right') },
-      { key: 'ArrowLeft', run: (view) => transclusionBlockArrow(view, 'left') },
-      { key: 'ArrowDown', run: (view) => transclusionBlockArrow(view, 'down') },
-      { key: 'ArrowUp', run: (view) => transclusionBlockArrow(view, 'up') },
-    ]),
-  ),
-  EditorView.domEventHandlers({
-    dblclick: transclusionDblClick,
-  }),
-] as const;
 
 /** Сравнивает карты чужих захватов (чтобы не слать лишние транзакции). */
 function sameLockMap(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean {
@@ -2173,16 +1805,13 @@ function sameLockMap(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, stri
 }
 
 /**
- * Плагин режима правки блока: держит захват мысли-источника, пока блок в
- * правке (существующий механизм `lib/lock-guard.ts`, ADR `fdb1a271`), и ведёт
- * карту чужих захватов для «замочка» (требование `647fa34a`). Запись в источник
- * выполняет {@link saveBlockEdit} (задача `e2c14673`).
+ * Плагин «замочков»: ведёт карту чужих захватов источников документа для
+ * индикатора 🔒 (требование `647fa34a`). Своих захватов не ставит — вход в блок
+ * лишь проверяет `lock-cache` ({@link enterBlock}); пакетный захват источников
+ * делает задача «Единая запись» (`e9dfc2df`, ADR `fdb1a271`).
  */
-const transclusionEditPlugin = ViewPlugin.fromClass(
+const transclusionLockPlugin = ViewPlugin.fromClass(
   class {
-    handle: LockHandle | null = null;
-    source: string | null = null;
-    host: TransclusionEditHost | null = null;
     disposed = false;
     /** Пересбор карты захватов уже запланирована (микрозадача). */
     locksScheduled = false;
@@ -2191,14 +1820,10 @@ const transclusionEditPlugin = ViewPlugin.fromClass(
     constructor(readonly view: EditorView) {
       this.unsubscribe = subscribeLockCache(() => this.refreshLocks());
       this.refreshLocks();
-      this.sync(this.view.state);
     }
 
     update(update: ViewUpdate): void {
       if (update.docChanged) this.refreshLocks();
-      const before = update.startState.field(transclusionState, false)?.editingSourceId ?? null;
-      const after = update.state.field(transclusionState, false)?.editingSourceId ?? null;
-      if (before !== after) this.sync(update.state);
     }
 
     /** Карта чужих захватов источников текущего документа. */
@@ -2230,39 +1855,54 @@ const transclusionEditPlugin = ViewPlugin.fromClass(
       });
     }
 
-    /** Реагирует на смену источника в правке: захват нового, снятие старого. */
-    sync(state: EditorState): void {
-      const next = state.field(transclusionState, false)?.editingSourceId ?? null;
-      this.host = state.facet(transclusionEditHostFacet);
-      if (next === this.source) return;
-      releaseHeld(this.handle);
-      this.handle = null;
-      this.source = next;
-      this.host?.onBlockEditChange(next !== null);
-      if (next === null) return;
-      const source = next;
-      void acquireOrShowBlocked('thought', source).then((outcome) => {
-        if (this.disposed || this.source !== source) return;
-        this.handle = lockHandleFromOutcome('thought', source, outcome);
-        if (outcome.kind === 'blocked') {
-          // Источник держит другой участник — в правку не входим, «замочек» уже
-          // показан картой захватов (lock-guard сам уведомил пользователя).
-          // Отменяем правку — ссылка восстанавливается (e2c14673).
-          cancelBlockEdit(this.view);
-          this.refreshLocks();
-        }
-      });
-    }
-
     destroy(): void {
       this.disposed = true;
       this.unsubscribe();
-      releaseHeld(this.handle);
-      this.handle = null;
-      this.host?.onBlockEditChange(false);
     }
   },
 );
+
+/**
+ * Жесты трансклюзий: вход в блок кареткой и создание ссылки. Вход монтирует
+ * вложенный редактор (задача `73ae1d4b`); `Mod-Enter`/`Escape` намеренно НЕ
+ * перехватываются — их обрабатывает поле (коммит/отмена окружения), а внутри
+ * блока — стек вложенного редактора.
+ */
+export const transclusionEditGestures = [
+  Prec.high(
+    keymap.of([
+      {
+        key: 'Enter',
+        run: (view) => {
+          // Открытый автокомплит (мысли/разделы) обрабатывает Enter сам.
+          if (completionStatus(view.state) === 'active') return false;
+          // Enter вводит в блок только когда он выделен целиком (перетаскиванием)
+          // или каретка строго внутри ссылки (после входа стрелкой). На строке
+          // перед/после блока каретка на границе — Enter остаётся переводом строки.
+          const covering = refCoveringSelection(view.state, view.state.selection.main);
+          if (covering !== null) {
+            enterBlock(view, covering);
+            return true;
+          }
+          const ref = transclusionRefAt(view, view.state.selection.main.head);
+          if (ref === null) return false;
+          enterBlock(view, ref);
+          return true;
+        },
+      },
+      // `#` при открытом списке мыслей трансклюзии принимает выделенную мысль
+      // и сразу открывает список разделов источника (ошибка `ccf4d25f`,
+      // элемент `7a479549`). В любом другом состоянии `#` — обычный ввод.
+      { key: '#', run: (view) => acceptTransclusionThought(view) },
+      // Стрелка, входящая в блок, монтирует вложенный редактор и уводит фокус
+      // внутрь (задача 73ae1d4b); обычные шаги вне блока отдаём CM6.
+      { key: 'ArrowRight', run: (view) => transclusionBlockArrow(view, 'right') },
+      { key: 'ArrowLeft', run: (view) => transclusionBlockArrow(view, 'left') },
+      { key: 'ArrowDown', run: (view) => transclusionBlockArrow(view, 'down') },
+      { key: 'ArrowUp', run: (view) => transclusionBlockArrow(view, 'up') },
+    ]),
+  ),
+] as const;
 
 /** Плагин: догружает источники ссылок документа и наполняет кэш состояния. */
 const transclusionLoader = ViewPlugin.fromClass(
@@ -2422,7 +2062,7 @@ export const transclusionExtensions: Extension[] = [
   transclusionClick,
   transclusionContextMenu,
   ...transclusionEditGestures,
-  transclusionEditPlugin,
+  transclusionLockPlugin,
 ];
 
 /** Текущая сеть или `null` (список сетей / ранний доступ). */
@@ -2447,13 +2087,13 @@ export const transclusionInternals = {
   /** Очистка общего (на сеть) кэша источников — изоляция прогонов тестов. */
   clearSourceCache: () => sourceCache.clear(),
   setEntries,
-  setBlockEditRange,
-  dropEntries,
+  setActiveBlock,
   sectionParts,
-  beginBlockEdit,
-  beginNestedBlockEdit,
-  saveBlockEdit,
-  restoreBlockEdit,
+  enterBlock,
+  exitBlock,
+  exitActiveBlock,
+  refForKey,
+  blockEditorKey,
   loadThoughtEntries,
   sourceSectionTitles,
 };

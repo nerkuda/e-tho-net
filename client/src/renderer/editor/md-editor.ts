@@ -31,14 +31,7 @@ import {
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
-import {
-  beginNestedBlockEdit,
-  cancelBlockEdit,
-  isBlockEditing,
-  saveBlockEdit,
-  transclusionExtensions,
-  transclusionRefStartingAt,
-} from './transclusion.js';
+import { exitActiveBlock, transclusionExtensions } from './transclusion.js';
 import { wikiLinkLegacyActions } from './wiki-link-legacy-actions.js';
 
 /** Callbacks of the editor (the field orchestrates view/edit modes). */
@@ -144,31 +137,6 @@ export interface MdEditor {
    * (навигация F3/Enter из панели). Фокус остаётся там, где был.
    */
   selectMatch(from: number, to: number): void;
-  /**
-   * Выход из режима правки блока трансклюзии БЕЗ записи в источник: ссылка
-   * восстанавливается (кнопка «Отменить трансклюзию», Esc, уход поля из правки;
-   * задачи f59d24e1/e2c14673).
-   */
-  exitTransclusionEdit(): void;
-  /**
-   * Запись правки блока трансклюзии в источник (кнопка «Сохранить трансклюзию»,
-   * Ctrl+Enter; задача e2c14673). После успеха восстанавливает ссылку.
-   */
-  saveTransclusionEdit(): Promise<void>;
-  /**
-   * Идёт ли правка блока трансклюзии (в поле вставлен текст источника вместо
-   * ссылки). Пока `true`, поле НЕЛЬЗЯ коммитить целиком: в документе лежит
-   * вставленный текст источника, и сохранение контейнера увековечило бы его
-   * вместо ссылки (порча данных, ошибка `3c51aee8`).
-   */
-  isTransclusionEditing(): boolean;
-  /**
-   * Открывает правку блока ВЛОЖЕННОГО источника из просмотра (ошибка
-   * `23570aef`): на месте внешней ссылки (`outerFrom` — её позиция в исходнике
-   * поля) вставляется текст источника `sourceId` (при `section` — его раздела).
-   * Позиции вложенной ссылки в контейнере нет, поэтому правится источник.
-   */
-  beginNestedTransclusionEdit(outerFrom: number, sourceId: string, section: string | null): void;
   /**
    * Сворачивает/разворачивает раздел под кареткой в режиме правки (команды
    * `comment.fold`/`comment.unfold`, умолчания Ctrl+Up / Ctrl+Down; задача
@@ -366,47 +334,8 @@ function scrollCaretIntoView(
   return handled;
 }
 
-/**
- * Markdown, который редактор отдаёт владельцу в `onInput`, либо `null` — если
- * сообщать нечего. Пока идёт правка блока трансклюзии, документ содержит текст
- * источника ВМЕСТО ссылки-трансклюзии (`transclusion.ts`, диапазон `blockEdit`) —
- * это не markdown поля, и отдавать наружу его нельзя: владелец (черновик
- * постоянного комментария, `comments.ts` → `scheduleDraft`) записал бы
- * «растворённую» трансклюзию и после аварийного закрытия предложил бы её к
- * восстановлению (ошибка 59d9b5f3, риск порчи данных). После выхода из правки
- * блок восстанавливает ссылку и `onInput` сообщает корректный текст —
- * обычная запись черновика продолжает работать.
- */
-function inputMirrorText(state: EditorState): string | null {
-  return isBlockEditing(state) ? null : state.doc.toString();
-}
-
-/**
- * Минимум `ViewUpdate`, нужный обвязке `onInput` (реальный `ViewUpdate` CM6
- * структурно ему удовлетворяет). Вынесено отдельным типом, чтобы обвязку
- * можно было прогонять юнит-тестом без настоящего `EditorView`.
- */
-export interface MdInputUpdate {
-  docChanged: boolean;
-  state: EditorState;
-}
-
-/**
- * Обвязка `onInput` редактора: единственное место, где текст документа уходит
- * владельцу. Пока идёт правка блока трансклюзии, `inputMirrorText` даёт `null` и
- * вызова НЕ происходит (ошибка 59d9b5f3); вне правки блока владелец получает
- * markdown поля. Именно эту функцию вызывает `EditorView.updateListener` — тест
- * бьёт по ней, поэтому снятие гейта (или `inputMirrorText`) краснит регресс.
- */
-function notifyMdInput(update: MdInputUpdate, onInput?: (md: string) => void): void {
-  if (!update.docChanged) return;
-  const md = inputMirrorText(update.state);
-  if (md === null) return;
-  onInput?.(md);
-}
-
-/** Test seam: the panel-scroll handler and the `onInput` wiring of the editor. */
-export const mdEditorInternals = { scrollCaretIntoView, inputMirrorText, notifyMdInput };
+/** Test seam: прокрутка каретки к видимой части контейнера. */
+export const mdEditorInternals = { scrollCaretIntoView };
 
 /**
  * Стек расширений markdown-редактора: язык с wiki-ссылками и трансклюзиями,
@@ -445,12 +374,7 @@ export function mdEditorExtensions(
       },
       {
         key: 'Mod-Enter',
-        run: (v) => {
-          // Правку блока трансклюзии записывает её собственный
-          // Prec.high-обработчик (transclusion.ts). Если он почему-то не
-          // перехватил, контейнер коммитить всё равно нельзя — в документе
-          // вставленный текст источника вместо ссылки (ошибка 3c51aee8).
-          if (isBlockEditing(v.state)) return false;
+        run: () => {
           cb.onCommit?.();
           return true;
         },
@@ -472,10 +396,10 @@ export function mdEditorExtensions(
     EditorView.lineWrapping,
     syntaxHighlighting(mdHighlightStyle, { fallback: true }),
     EditorView.updateListener.of((update) => {
-      // Обвязка `onInput` — единственная точка, где документ уходит
-      // владельцу; правка блока трансклюзии подавляется внутри неё
-      // (ошибка 59d9b5f3).
-      notifyMdInput(update, cb.onInput);
+      // Единственная точка, где markdown документа уходит владельцу поля.
+      // Текст блоков трансклюзий живёт во ВЛОЖЕННЫХ редакторах и в документ
+      // контейнера не попадает — гейт подавления больше не нужен.
+      if (update.docChanged) cb.onInput?.(update.state.doc.toString());
       if (update.docChanged || update.selectionSet) {
         for (const listener of listeners) listener();
       }
@@ -567,7 +491,15 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         scrollIntoView: true,
       });
     },
-    blur: () => view.contentDOM.blur(),
+    blur: () => {
+      // Если фокус во вложенном редакторе блока, `contentDOM.blur()` контейнера
+      // — no-op (фокус не у него), и поле не ушло бы в просмотр. Сначала
+      // возвращаем фокус контейнеру (вложенный редактор при этом выходит из
+      // блока своим `focusout`), затем отпускаем фокус контейнера.
+      view.focus();
+      exitActiveBlock(view);
+      view.contentDOM.blur();
+    },
     snapshot: () => {
       const { state } = view;
       const sel = state.selection.main;
@@ -597,14 +529,6 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       // Фокус НЕ забираем: навигация идёт из панели поиска, её поле должно
       // остаться активным (F3/Enter продолжают работать).
       view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
-    },
-    exitTransclusionEdit: () => cancelBlockEdit(view),
-    saveTransclusionEdit: () => saveBlockEdit(view),
-    isTransclusionEditing: () => isBlockEditing(view.state),
-    beginNestedTransclusionEdit: (outerFrom, sourceId, section) => {
-      const ref = transclusionRefStartingAt(view.state.doc.toString(), outerFrom);
-      if (ref === null) return;
-      void beginNestedBlockEdit(view, ref, { sourceId, section });
     },
     toggleCollapseAtCaret: (mode) => runCollapseToggle(view, mode),
     destroy: () => {

@@ -60,14 +60,15 @@ import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import {
+  blockEditorHostExtension,
   decorateViewTransclusionChips,
   decorateViewTransclusionLocks,
   defaultTransclusionLoader,
-  transclusionEditHostExtension,
   transclusionInternals,
   transclusionLabels,
   wireViewTransclusionLocks,
 } from './transclusion.js';
+import { NestedEditorStore, blockEditorStoreFacet } from './transclusion-nested.js';
 import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
 import {
   buildCommentPasteLinks,
@@ -119,21 +120,6 @@ interface MarkdownFieldHandle {
 export interface MdSourceSelection {
   anchor: number;
   head: number;
-}
-
-/**
- * Цель входа в правку блока ВЛОЖЕННОГО источника из просмотра (ошибка
- * `23570aef`): при двойном клике внутри вложенного блока правка открывается не
- * кареткой в контейнер (позиции вложенной ссылки там нет — ошибка `5ecb9f0b`),
- * а блоком вложенного источника.
- */
-export interface NestedBlockOpen {
-  /** Id мысли-источника вложенного блока. */
-  sourceId: string;
-  /** Раздел вложенного источника, либо `null`. */
-  section: string | null;
-  /** Позиция ВНЕШНЕЙ ссылки-трансклюзии в исходнике поля (место замены). */
-  outerFrom: number;
 }
 
 /**
@@ -677,6 +663,12 @@ export function createMarkdownField(opts: {
   /** Guards against a focusout fired while the editor is being rebuilt. */
   let mounting = false;
   let editor: MdEditor | null = null;
+  /**
+   * Хранилище вложенных редакторов блоков трансклюзий текущей правки (задача
+   * `73ae1d4b`): создаётся на монтаж редактора, живёт до выхода из правки.
+   * Инстансы сохраняют текст правок блоков между входами/выходами.
+   */
+  let nestedStore: NestedEditorStore | null = null;
   /** Поле сейчас в режиме правки (для контекста сочетаний команд). */
   let editing = false;
   /**
@@ -788,17 +780,6 @@ export function createMarkdownField(opts: {
       if (command === 'comment.save') {
         cancelled = false;
         editor.blur();
-        return true;
-      }
-      // Кнопки «Отменить/Сохранить трансклюзию» под полем (элемент 2b116d37,
-      // задачи f59d24e1/e2c14673): выход из правки блока; «сохранить» пишет
-      // изменения в источник.
-      if (command === 'transclusion.cancel') {
-        editor.exitTransclusionEdit();
-        return true;
-      }
-      if (command === 'transclusion.save') {
-        void editor.saveTransclusionEdit();
         return true;
       }
       return false;
@@ -999,9 +980,11 @@ export function createMarkdownField(opts: {
 
   const showView = (): void => {
     const wasEditing = editor !== null && !area.classList.contains('hidden');
-    // Выход из правки поля снимает и режим правки блока трансклюзии (её захват
-    // источника) — иначе захват висел бы до пересборки редактора (f59d24e1).
-    if (wasEditing) editor?.exitTransclusionEdit();
+    // Выход из правки поля закрывает вложенные редакторы блоков: их инстансы
+    // живут ровно столько, сколько открыта правка (состояние правок блоков —
+    // задача «Черновики», `e9dfc2df`).
+    if (wasEditing) nestedStore?.dispose();
+    nestedStore = null;
     editing = false;
     deactivateFieldKeys();
     root.classList.remove('md-field--editing');
@@ -1015,24 +998,10 @@ export function createMarkdownField(opts: {
 
   const commitOrRevert = (): void => {
     if (mounting || editor === null || commitPending) return;
-    // Правка блока трансклюзии: пока в поле лежит вставленный текст источника
-    // вместо ссылки, коммит контейнера увековечил бы его (порча данных, ошибка
-    // 3c51aee8). Сначала пишем блок в источник и восстанавливаем ссылку; сбой
-    // записи откатывает блок (ссылка возвращается), и контейнер коммитится
-    // неизменным.
-    if (editor.isTransclusionEditing()) {
-      const current = editor;
-      commitPending = true;
-      void current
-        .saveTransclusionEdit()
-        .catch(() => undefined)
-        .finally(() => {
-          commitPending = false;
-          if (current.isTransclusionEditing()) current.exitTransclusionEdit();
-          commitOrRevert();
-        });
-      return;
-    }
+    // Текст блоков трансклюзий живёт во вложенных редакторах и в документ
+    // контейнера не попадает, поэтому отдельной развязки коммита больше нет:
+    // контейнер коммитится как обычно. Запись правок блоков — задача «Единая
+    // запись» (`e9dfc2df`).
     const md = editor.getValue();
     if (cancelled) {
       // Esc: the edit is dropped; restore the saved text so the field returns
@@ -1073,9 +1042,14 @@ export function createMarkdownField(opts: {
   };
 
   /** Mounts a fresh editor for the current markdown. */
-  const mountEditor = (locate?: MdSourceSelection, nested?: NestedBlockOpen): void => {
+  const mountEditor = (locate?: MdSourceSelection): void => {
     mounting = true;
     editor?.destroy();
+    // Свежее хранилище вложенных редакторов: прежние инстансы принадлежали
+    // предыдущей сборке поля.
+    nestedStore?.dispose();
+    nestedStore = new NestedEditorStore();
+    const store = nestedStore;
     cancelled = false;
     editor = createMdEditor(currentMd, {
       onInput: (md) => opts.onInput?.(md),
@@ -1101,11 +1075,13 @@ export function createMarkdownField(opts: {
         // Фабрика состояний свёрнутости блоков трансклюзий (ТП2, задача
         // 1b405a92): виджеты блоков читают её и декорируют своё содержимое.
         collapseScopeExtension(collapseScopeFor),
-        // Хост правки блока трансклюзии (задача f59d24e1): пока блок в правке,
-        // под полем — кнопки «Отменить/Сохранить трансклюзию».
-        transclusionEditHostExtension({
-          onBlockEditChange: (editing) => modeActions.setBlockEditing(editing),
-        }),
+        // Хранилище вложенных редакторов блоков (задача 73ae1d4b): виджет блока
+        // берёт из него DOM активного инстанса.
+        blockEditorStoreFacet.of(store),
+        // Хост поля: единственный сигнал — изменение текста блока («грязный»).
+        // Пока это только точка подключения: запись правок блоков в источники —
+        // задача «Единая запись» (e9dfc2df).
+        blockEditorHostExtension({ onBlockDirty: () => undefined }),
       ],
     });
     // Pasting files (screenshots / copied files) saves them as server-stored
@@ -1206,21 +1182,16 @@ export function createMarkdownField(opts: {
     // вход (кнопка, восстановление черновика) — каретка в конец (как раньше).
     if (locate !== undefined) editor.setSelection(locate.anchor, locate.head);
     else editor.focusToEnd();
-    // Вложенный блок из просмотра (ошибка 23570aef): сразу открываем правку
-    // блока вложенного источника — позиции его ссылки в контейнере нет.
-    if (nested !== undefined) {
-      editor.beginNestedTransclusionEdit(nested.outerFrom, nested.sourceId, nested.section);
-    }
   };
 
-  const showEdit = (md?: string, locate?: MdSourceSelection, nested?: NestedBlockOpen): void => {
+  const showEdit = (md?: string, locate?: MdSourceSelection): void => {
     if (md !== undefined) currentMd = md;
     view.classList.add('hidden');
     area.classList.remove('hidden');
     editing = true;
     root.classList.add('md-field--editing');
     modeActions.setEditing(true);
-    mountEditor(locate, nested);
+    mountEditor(locate);
     activateFieldKeys();
     search.refresh();
     opts.onEditChange?.(true);
@@ -1241,13 +1212,14 @@ export function createMarkdownField(opts: {
     viewSelectionToSourceRange(view, viewMap);
 
   /**
-   * Двойной клик в просмотре внутри ВЛОЖЕННОГО блока трансклюзии (ошибка
-   * `23570aef`): ссылки вложенного источника в `body_md` контейнера нет (текст
-   * приходит из источника другой мысли — ошибка `5ecb9f0b`), поэтому вместо
-   * каретки в контейнер открываем правку блока вложенного источника на месте
-   * ВНЕШНЕЙ ссылки. `null` — внешний блок или вне блоков: прежнее поведение.
+   * Позиция ВНЕШНЕЙ ссылки-трансклюзии в `body_md` для двойного клика в
+   * просмотре внутри ВЛОЖЕННОГО блока (ошибка `23570aef`): ссылки вложенного
+   * источника в контейнере нет (текст приходит из источника другой мысли —
+   * ошибка `5ecb9f0b`). Вход в правку ставит каретку на внешний блок — далее
+   * вложенный редактор открывается входом кареткой (задача `73ae1d4b`).
+   * `null` — внешний блок или вне блоков: прежнее поведение по карте смещений.
    */
-  const nestedBlockOpen = (event: MouseEvent): NestedBlockOpen | null => {
+  const nestedOuterRefStart = (event: MouseEvent): number | null => {
     const target = event.target as Element | null;
     const blockEl =
       target !== null && typeof target.closest === 'function'
@@ -1262,14 +1234,13 @@ export function createMarkdownField(opts: {
       outerFrom = outerRefStartForNested(viewMap, offsets.from);
     }
     if (outerFrom === null) outerFrom = outerRefStartFromDom(blockEl, currentMd);
-    if (outerFrom === null) return null;
-    return { sourceId: block.sourceId, section: block.section, outerFrom };
+    return outerFrom;
   };
 
   view.addEventListener('dblclick', (event) => {
-    const nested = nestedBlockOpen(event);
-    if (nested !== null) {
-      showEdit(undefined, undefined, nested);
+    const outerFrom = nestedOuterRefStart(event);
+    if (outerFrom !== null) {
+      showEdit(undefined, { anchor: outerFrom, head: outerFrom });
       return;
     }
     showEdit(undefined, selectionInView());

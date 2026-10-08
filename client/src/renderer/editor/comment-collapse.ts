@@ -48,14 +48,11 @@
  * фабрикой `factory` — в просмотре (обход `.md-transclusion`) и в правке
  * (виджет блока читает фабрику из {@link collapseScopeFacet}).
  *
- * **Правка блока (ошибка `4204e34c`).** Пока блок трансклюзии открыт на правку,
- * текст источника вставлен в то же поле вместо ссылки (`editor/transclusion.ts`
- * `beginBlockEdit`), и CM6-путь обязан адресовать его заголовки состоянию ЭТОГО
- * блока, а не контейнера. Границы и путь вставки правки приходят из
- * {@link blockEditCollapseFacet} (его ставит поле `transclusionState`): диапазон
- * правки для CM6 — отдельная область сворачивания со своим namespace нумерации
- * и своим состоянием (фабрика). Собственные разделы контейнера при этом не
- * смешиваются с разделями блока: тексты блока — граница их тел.
+ * **Текст блока трансклюзии (задача `73ae1d4b`).** В активном блоке текст живёт
+ * во ВЛОЖЕННОМ редакторе (свой стек расширений, `editor/transclusion-nested.ts`)
+ * — его свёрнутость это состояние самого инстанса, поля-контейнера она не
+ * трогает. Прежний фасет диапазона правки блока удалён вместе с «растворением»
+ * текста источника в контейнер.
  *
  * «Раздел» идентифицируется позиционно: `h{уровень}#{n}` — n-й по счёту
  * заголовок этого уровня в документе, `n#{m}` — m-й по счёту вложенный блок.
@@ -231,33 +228,6 @@ export const collapseScopeFacet = Facet.define<CollapseScopeFactory, CollapseSco
 export function collapseScopeExtension(factory: CollapseScopeFactory): Extension {
   return collapseScopeFacet.of(factory);
 }
-
-/**
- * Диапазон активной правки блока трансклюзии в документе (ошибка `4204e34c`):
- * пока блок открыт на правку, его текст лежит прямо в поле вместо ссылки, и
- * сворачивание заголовков этого текста должно адресоваться состоянию пути
- * вставки блока, а не состоянию поля-контейнера. Провайдер — поле
- * `transclusionState` (см. `editor/transclusion.ts`).
- */
-export interface BlockEditCollapseRegion {
-  /** Начало вставленного текста блока в документе. */
-  from: number;
-  /** Конец вставленного текста блока (исключительно). */
-  to: number;
-  /** id мысли-источника правящегося блока — путь вставки (`[sourceId]`). */
-  sourceId: string;
-}
-
-/**
- * Фасет диапазона правки блока: `null` — правка блока не активна. Значения
- * приходят от поля `transclusionState`; последнее значение — при нескольких.
- */
-export const blockEditCollapseFacet = Facet.define<
-  BlockEditCollapseRegion | null,
-  BlockEditCollapseRegion | null
->({
-  combine: (values) => values[values.length - 1] ?? null,
-});
 
 // ---------------------------------------------------------------------------
 // Индикатор
@@ -784,59 +754,30 @@ function buildSections(
   return sections;
 }
 
-/**
- * Собирает сворачиваемые разделы документа по дереву синтаксиса. При активной
- * правке блока трансклюзии (`region`) его текст образует отдельную область:
- * заголовки/вложенные блоки внутри нумеруются своим namespace и адресуются
- * состоянию пути вставки (`[sourceId]`), а тела собственных разделов поля не
- * заходят на текст блока (ошибка `4204e34c`).
- */
-function collectSections(
-  state: EditorState,
-  region: BlockEditCollapseRegion | null = null,
-): EditorSection[] {
+/** Собирает сворачиваемые разделы документа по дереву синтаксиса. */
+function collectSections(state: EditorState): EditorSection[] {
   const doc = state.doc;
-  const regionFrom = region === null ? -1 : Math.max(0, Math.min(region.from, doc.length));
-  const regionTo = region === null ? -1 : Math.max(regionFrom, Math.min(region.to, doc.length));
-  const inRegion = (pos: number): boolean => region !== null && pos >= regionFrom && pos < regionTo;
-
   const containerHeadings: RawHeading[] = [];
-  const scopedHeadings: RawHeading[] = [];
   const containerBlocks: RawBlock[] = [];
-  const scopedBlocks: RawBlock[] = [];
 
   syntaxTree(state).iterate({
     enter(node) {
       const name = node.name;
       if (/^ATXHeading[1-6]$/.test(name) || /^SetextHeading[12]$/.test(name)) {
-        const heading = { level: Number(name.slice(-1)), from: node.from, to: node.to };
-        (inRegion(node.from) ? scopedHeadings : containerHeadings).push(heading);
+        containerHeadings.push({ level: Number(name.slice(-1)), from: node.from, to: node.to });
         return;
       }
       if (name === 'BulletList' || name === 'OrderedList' || name === 'Blockquote') {
         const parent = enclosingItem(node.node);
         if (parent === null) return;
-        const block = { from: node.from, to: node.to, anchorFrom: parent.from };
-        (inRegion(node.from) ? scopedBlocks : containerBlocks).push(block);
+        containerBlocks.push({ from: node.from, to: node.to, anchorFrom: parent.from });
       }
     },
   });
 
-  const sections = buildSections(
-    doc,
-    containerHeadings,
-    containerBlocks,
-    doc.length,
-    null,
-    // Текст блока — граница тел собственных разделов контейнера.
-    region === null ? [] : [{ from: regionFrom }],
+  return buildSections(doc, containerHeadings, containerBlocks, doc.length, null, []).sort(
+    (a, b) => a.bodyFrom - b.bodyFrom,
   );
-  if (region !== null) {
-    sections.push(
-      ...buildSections(doc, scopedHeadings, scopedBlocks, regionTo, [region.sourceId], []),
-    );
-  }
-  return sections.sort((a, b) => a.bodyFrom - b.bodyFrom);
 }
 
 /**
@@ -893,7 +834,6 @@ function samePath(a: readonly string[] | null, b: readonly string[] | null): boo
 /** Строит декорации (скрытые тела) и маркеры гаттера для текущего состояния. */
 function buildDecorations(state: EditorState): CollapseDecoState {
   const collapsed = state.field(collapseSetField);
-  const region = state.facet(blockEditCollapseFacet);
   const factory = state.facet(collapseScopeFacet);
   const ranges: CollapsedRange[] = [];
   const parts: Array<Range<Decoration>> = [];
@@ -916,7 +856,7 @@ function buildDecorations(state: EditorState): CollapseDecoState {
       ? collapsed.has(section.id)
       : (scopedState(section.path)?.isCollapsed(section.id) ?? false);
 
-  for (const section of collectSections(state, region)) {
+  for (const section of collectSections(state)) {
     // Раздел внутри тела уже свёрнутого раздела скрыт родителем — не строим.
     if (ranges.some((r) => section.anchorFrom >= r.from && section.anchorFrom < r.to)) continue;
     const sectionCollapsed = isCollapsed(section);
@@ -1013,9 +953,8 @@ export type CollapseToggleMode = 'fold' | 'unfold' | 'toggle';
  * раздела под кареткой нет.
  */
 function sectionAtCaret(state: EditorState, pos: number): EditorSection | null {
-  const region = state.facet(blockEditCollapseFacet);
   let found: EditorSection | null = null;
-  for (const section of collectSections(state, region)) {
+  for (const section of collectSections(state)) {
     if (pos < section.anchorFrom || pos > section.bodyTo) continue;
     if (found === null || section.anchorFrom > found.anchorFrom) found = section;
   }

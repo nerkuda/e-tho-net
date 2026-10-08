@@ -607,87 +607,6 @@ describe('сворачивание разделов комментария (edit
     assert.equal(cP.classList.contains(mod.COLLAPSE_HIDDEN_CLASS), false, 'тело C не тронуто');
   });
 
-  it('правка блока трансклюзии: сворачивание своим состоянием, не состоянием контейнера', async () => {
-    installShim();
-    const storage = installStorage();
-    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
-
-    // Контейнер А: собственный раздел «Свой» и вставленный блок Б (его текст
-    // лежит в поле вместо ссылки, пока блок открыт на правку).
-    const doc = '## Свой\nтекст А\n\n## Раздел Б\nтекст Б\n';
-    const region = { from: doc.indexOf('## Раздел Б'), to: doc.length, sourceId: 'B' };
-
-    const container = mod.createCommentCollapseState('net', 'comment:cA');
-    const scopedB = mod.createCommentCollapseState(
-      'net',
-      mod.transclusionCollapseOwnerKey('comment:cA', ['B']),
-    );
-    const factoryFor = (path: readonly string[]): ReturnType<Module['createCommentCollapseState']> =>
-      path.length === 1 && path[0] === 'B'
-        ? scopedB
-        : mod.createCommentCollapseState('net', undefined);
-
-    const makeState = (): EditorState =>
-      EditorState.create({
-        doc,
-        extensions: [
-          markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-          mod.commentCollapseExtension(container),
-          mod.collapseScopeExtension(factoryFor),
-          mod.blockEditCollapseFacet.of(region),
-        ],
-      });
-
-    const field = mod.commentCollapseInternals.collapseDecoField;
-    const replaces = (state: EditorState): number => {
-      let count = 0;
-      const it = state.field(field).deco.iter();
-      while (it.value !== null) {
-        const spec =
-          (it.value as unknown as { spec?: { block?: boolean } }).spec ?? {};
-        if (spec.block === true) count += 1;
-        it.next();
-      }
-      return count;
-    };
-
-    // Нумерация: собственный H2 контейнера — h2#1, раздел блока — тоже h2#1, но
-    // в своём namespace (путь B): заголовки блока не сдвигают нумерацию А.
-    const sections = mod.commentCollapseInternals.collectSections(makeState(), region);
-    assert.deepEqual(
-      sections.map((s) => `${s.id}:${s.path === null ? 'A' : s.path.join('#')}`).sort(),
-      ['h2#1:A', 'h2#1:B'],
-    );
-
-    // Свёрнут собственный раздел контейнера (h2#1) — раздел блока с тем же id
-    // НЕ сворачивается: состояния контейнера и блока независимы.
-    container.setCollapsed('h2#1', true);
-    const containerCollapsed = makeState();
-    assert.equal(gutterMarkerCount(containerCollapsed), 2);
-    assert.equal(replaces(containerCollapsed), 1);
-    assert.equal(mod.isCollapsedHiddenAt(containerCollapsed, doc.indexOf('текст А')), true);
-    assert.equal(
-      mod.isCollapsedHiddenAt(containerCollapsed, doc.indexOf('текст Б')),
-      false,
-      'состояние А не сворачивает блок',
-    );
-
-    // Обратно: сворачивание раздела блока пишет в путь #B (refresh-эффект
-    // пересобирает декорации), собственные разделы А не тронуты.
-    container.setCollapsed('h2#1', false);
-    const open = makeState();
-    assert.equal(gutterMarkerCount(open), 2);
-    assert.equal(replaces(open), 0);
-    scopedB.setCollapsed('h2#1', true);
-    const toggled = open.update({ effects: mod.refreshCollapseEffect.of(null) }).state;
-    assert.equal(gutterMarkerCount(toggled), 2);
-    assert.equal(replaces(toggled), 1);
-    assert.equal(mod.isCollapsedHiddenAt(toggled, doc.indexOf('текст Б')), true, 'блок свёрнут');
-    assert.equal(mod.isCollapsedHiddenAt(toggled, doc.indexOf('текст А')), false, 'А не тронут');
-    assert.equal(container.isCollapsed('h2#1'), false, 'в состояние контейнера не писали');
-    assert.equal(storage.getItem('comment.collapse.net.comment:cA|#B'), '["h2#1"]');
-  });
-
   it('команды Ctrl+Up/Down: сворачивание/разворачивание раздела под кареткой (558cac34)', async () => {
     installShim();
     installStorage();
@@ -763,44 +682,6 @@ describe('сворачивание разделов комментария (edit
     );
   });
 
-  it('раздел блока трансклюзии под кареткой пишет в своё состояние (558cac34)', async () => {
-    installShim();
-    installStorage();
-    mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
-
-    const doc = '## Свой\nтекст А\n\n## Раздел Б\nтекст Б\n';
-    const region = { from: doc.indexOf('## Раздел Б'), to: doc.length, sourceId: 'B' };
-    const container = mod.createCommentCollapseState('net', 'comment:cA');
-    const scopedB = mod.createCommentCollapseState(
-      'net',
-      mod.transclusionCollapseOwnerKey('comment:cA', ['B']),
-    );
-    const factoryFor = (path: readonly string[]): ReturnType<Module['createCommentCollapseState']> =>
-      path.length === 1 && path[0] === 'B'
-        ? scopedB
-        : mod.createCommentCollapseState('net', undefined);
-
-    const state = EditorState.create({
-      doc,
-      extensions: [
-        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-        mod.commentCollapseExtension(container),
-        mod.collapseScopeExtension(factoryFor),
-        mod.blockEditCollapseFacet.of(region),
-      ],
-    });
-    const view = fakeView(state);
-    // Каретка в теле правящегося блока Б — раздел принадлежит пути #B.
-    caretAt(view, doc.indexOf('текст Б'));
-    assert.equal(mod.toggleCollapseAtCaret(view, 'fold'), true);
-    assert.equal(scopedB.isCollapsed('h2#1'), true, 'свёртка ушла в состояние пути #B');
-    assert.equal(container.isCollapsed('h2#1'), false, 'состояние контейнера не тронуто');
-    assert.equal(mod.isCollapsedHiddenAt(view.state, doc.indexOf('текст Б')), true);
-
-    assert.equal(mod.toggleCollapseAtCaret(view, 'unfold'), true);
-    assert.equal(scopedB.isCollapsed('h2#1'), false);
-    assert.equal(mod.isCollapsedHiddenAt(view.state, doc.indexOf('текст Б')), false);
-  });
 
   it('регресс: состояние не едет на сервер', async () => {
     installShim();

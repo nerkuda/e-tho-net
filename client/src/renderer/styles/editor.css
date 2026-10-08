@@ -1394,23 +1394,6 @@
   border-top: 1px solid var(--border);
 }
 
-/* Ховер-кнопка блока трансклюзии (элемент 7a479549): «Редактировать
-   трансклюзию» в правом верхнем углу, видна на наведении. Кнопка — из словаря
-   lib/ui (`.ui-btn`), контейнер задаёт раскладку. */
-.cm-editor .cm-transclusion-block .cm-transclusion-actions {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-}
-
-.cm-editor .cm-transclusion-block:hover .cm-transclusion-actions,
-.cm-editor .cm-transclusion-block .cm-transclusion-actions:focus-within {
-  opacity: 1;
-}
-
 .cm-editor .cm-transclusion-error {
   color: var(--text-dim);
   font-style: italic;
@@ -1421,38 +1404,11 @@
   font-weight: 500;
 }
 
-/* Правка блока трансклюзии (задача f59d24e1): рамка как у облачка, открытого
-   в редакторе; в правке кнопка смены ссылки скрыта. */
+/* Активный блок трансклюзии (задача 73ae1d4b): внутри смонтирован вложенный
+   редактор — блок выделяется рамкой, как облачко, открытое в редакторе. */
 .cm-editor .cm-transclusion-block--editing {
   border-left-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
-}
-
-/* Вложенное поле правки блока трансклюзии (задача e2c14673; вид — ошибка
-   9c2e077a). Рамка рисуется на КАЖДОЙ строке диапазона (`.cm-line` несёт
-   класс), поэтому получается одно сплошное прямоугольное поле внутри
-   окружения: боковые границы на всех строках, верх/низ — на первой/последней.
-   Прежняя одна inline-рамка обводила каждую строку отдельно. */
-.cm-editor .cm-transclusion-edit-range {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
-  border-left: 1px solid var(--accent);
-  border-right: 1px solid var(--accent);
-  padding-left: 6px;
-  padding-right: 6px;
-}
-
-.cm-editor .cm-transclusion-edit-range--first {
-  border-top: 1px solid var(--accent);
-  border-top-left-radius: var(--radius-s, 3px);
-  border-top-right-radius: var(--radius-s, 3px);
-  padding-top: 2px;
-}
-
-.cm-editor .cm-transclusion-edit-range--last {
-  border-bottom: 1px solid var(--accent);
-  border-bottom-left-radius: var(--radius-s, 3px);
-  border-bottom-right-radius: var(--radius-s, 3px);
-  padding-bottom: 2px;
 }
 
 /* «Замочек» блока при чужом захвате источника (задача f59d24e1; просмотр —

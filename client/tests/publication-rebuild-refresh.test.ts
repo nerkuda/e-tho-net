@@ -196,10 +196,6 @@ function fakeMdEditor(initial: string): MdEditor {
     subscribe: () => () => undefined,
     setSearchHighlight: () => undefined,
     selectMatch: () => undefined,
-    exitTransclusionEdit: () => undefined,
-    saveTransclusionEdit: () => Promise.resolve(),
-    isTransclusionEditing: () => false,
-    beginNestedTransclusionEdit: () => undefined,
     toggleCollapseAtCaret: () => false,
     destroy: () => undefined,
   };
