@@ -151,6 +151,31 @@ describe('кнопки мыши по блоку трансклюзии (27b95e60
     assert.equal(handled, true, 'клик по чипу перехвачен трансклюзией (не доходит до выделения)');
     assert.equal(view.events.length, 0, 'каретку/выделение не двигаем — откроется поповер');
   });
+
+  it('левый клик внутри смонтированного вложенного редактора не гасится контейнером (e2c6c66c)', () => {
+    const view = fakeView(SRC);
+    // Корень контейнера — свой `.cm-editor`; вложенный редактор — ДРУГОЙ корень.
+    const containerRoot = new ShimElement('div');
+    containerRoot.className = 'cm-editor';
+    (view as any).dom = containerRoot;
+    const nestedRoot = new ShimElement('div');
+    nestedRoot.className = 'cm-editor';
+    const nestedContent = new ShimElement('div');
+    nestedContent.className = 'cm-content';
+    nestedRoot.append(nestedContent);
+    (nestedContent as any).closest = (selector: string): ShimElement | null =>
+      selector === '.cm-editor' ? nestedRoot : null;
+
+    const event = mouse(0, nestedContent);
+    const handled = transclusionMouseDown(event, view as any);
+    assert.equal(handled, true, 'жест принадлежит вложенному инстансу');
+    assert.equal(
+      event.defaultPrevented,
+      true,
+      'событие погашено, чтобы встроенный mousedown CM6 контейнера не снял фокус вложенного редактора',
+    );
+    assert.equal(view.events.length, 0, 'выделение контейнера не двигается');
+  });
 });
 
 describe('контекстное меню блока открывается правым кликом', () => {

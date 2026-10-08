@@ -1483,10 +1483,21 @@ export function transclusionMouseDown(event: MouseEvent, view: EditorView): bool
   // каретку не двигаем — событие обработает сам чип (`createTransclusionHead`
   // гасит `mousedown`, сохраняя фокус редактора).
   if (target.closest(`.${TRANSCLUSION_HEAD_CLASS}`) !== null) return true;
-  // Клик внутри вложенного редактора (его корень `.cm-editor` — не корень
-  // контейнера): жест принадлежит инстансу, контейнер его не перехватывает.
+  // Клик внутри СМОНТИРОВАННОГО вложенного редактора (его корень `.cm-editor` —
+  // не корень контейнера): жест уже обработан самим инстансом (его обработчик
+  // на вложенном `contentDOM` срабатывает раньше, при всплытии). Контейнеру
+  // надо НЕ просто отдать событие дальше, а погасить его: иначе встроенный
+  // `mousedown`-обработчик CM6 у контейнера выполнит своё выделение и на
+  // `mustFocus` вызовет `active.blur()` для активного элемента (вложенного
+  // редактора) — клики по блоку гасились, каретка не ставилась (ошибка
+  // `e2c6c66c`). `preventDefault()` останавливает конвейер обработчиков CM6
+  // (он пропускает оставшиеся после `defaultPrevented`), вложенный инстанс
+  // свой жест уже получил.
   const editorRoot = target.closest('.cm-editor');
-  if (editorRoot !== null && editorRoot !== view.dom) return false;
+  if (editorRoot !== null && editorRoot !== view.dom) {
+    event.preventDefault();
+    return true;
+  }
   const block = target.closest(`.${TRANSCLUSION_BLOCK_CLASS}`);
   if (!(block instanceof HTMLElement)) return false;
   const from = Number(block.dataset['mdFrom']);
