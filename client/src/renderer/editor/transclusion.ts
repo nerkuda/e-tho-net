@@ -32,14 +32,18 @@
  * месте ВНЕШНЕЙ ссылки, а её исходник сохраняется в `refRaw` и возвращается при
  * сохранении/отмене — контейнер не портится (вектор ошибки `3c51aee8` закрыт).
  *
- * Три режима одной ссылки в редакторе (курсор/выделение решают):
- *  1. **Правка ссылки** — выделение пересекает ссылку: виден исходный markdown,
- *     токен `#<id>` заменён атомарным виджетом с именем мысли (не правится
- *     посимвольно, удаляется целиком), раздел правится посимвольно.
- *  2. **Блок** — выделение вне ссылки: вся ссылка заменена блоком с развёрнутым
- *     текстом источника и кнопкой-всплывашкой смены ссылки.
- *  3. **Ссылка** — блок свёрнут кнопкой: показано имя мысли (клик — вход в
- *     правку). Выход выделения за скобки возвращает блок.
+ * Два состояния одной ссылки в редакторе (курсор/выделение решают):
+ *  1. **Блок** — ссылка заменена блоком с шапкой-чипом «имя · раздел» и
+ *     развёрнутым текстом источника. Диапазон атомарен: каретка внутрь не
+ *     встаёт, блок выделяется как единое целое.
+ *  2. **Черновик ссылки при вводе** — выделение пересекает ссылку: виден
+ *     исходный markdown, токен `#<id>` заменён атомарным виджетом с именем
+ *     мысли. Этот путь нужен ТОЛЬКО созданию ссылки (открывающий токен +
+ *     автокомплит + жест `#`) — к готовым блокам он не применяется.
+ * Ссылка существующего блока правится кликом по чипу: поповер выбора мысли и
+ * раздела применяет смену ОДНОЙ транзакцией замены диапазона
+ * (`formatTransclusionRef`). Прежних режимов «правка ссылки» (сворачивание
+ * блока в сырой markdown) и «свёрнутая ссылка» больше нет (задача `68591b8a`).
  *
  * **Визуальные слои блока (задача `a2b68d72`).** Развёрнутый текст рендерится с
  * блочными обёртками `@etn/markdown` (`data-transclusion-depth`), поэтому фон
@@ -52,21 +56,21 @@
  * внутри (ошибка `39553204`). Блок — replace-виджет `block: true`, в DOM он
  * лежит прямым потомком `.cm-content` (вне `.cm-line`), поэтому подавление
  * нативного выделения внутри — селектором БЕЗ `.cm-line` (иначе не матчит).
- * Правка ссылки — кнопкой смены ссылки
- * (свёрнутая ссылка), правка блока — двойным кликом или Enter на выделенном
- * блоке.
+ * Ссылка правится чипом и поповером (элемент `7a479549`), правка блока —
+ * двойным кликом или Enter на выделенном блоке.
  * Появление/раскрытие блока анимировано (CSS, с учётом `prefers-reduced-motion`).
  * Просмотр поля (view-режим) разворачивает ссылки тем же швом
  * `transclusionInternals.expandWithLoader` + `renderMarkdown` с `sourceMap` в
  * `markdown-field.ts` (разметка позиций по развёрнутому тексту, ошибка
- * `0fdd8c86`).
+ * `0fdd8c86`), а шапки-чипы на блоки просмотра вешает
+ * {@link decorateViewTransclusionChips} по карте имён той же развёртки.
  *
- * **Контекстное меню блока (задача `955478e8`).** Правый клик по блоку или
- * свёрнутой ссылке открывает меню из шести команд (элемент `1e0fb0bd`):
- * «Редактировать», «Изменить ссылку», «Открыть ссылку», «В фокус»,
- * «Копировать», «Копировать ID». Пункты — на общем словаре `lib/menu.ts` и
- * словаре команд `editor/comment-commands.ts`; доступно только в режиме
- * редактирования окружения.
+ * **Контекстное меню блока (задача `955478e8`).** Правый клик по блоку
+ * открывает меню из пяти команд (элемент `1e0fb0bd`): «Редактировать»,
+ * «Открыть ссылку», «В фокус», «Копировать», «Копировать ID». Пункты — на общем
+ * словаре `lib/menu.ts` и словаре команд `editor/comment-commands.ts`; доступно
+ * только в режиме редактирования окружения. Чип в просмотре открывает четыре
+ * команды навигации ({@link transclusionNavHandlers}).
  *
  * **Свёрнутость разделов внутри блока (задача `1b405a92`, требование
  * `e04d84f7`).** Виджет блока декорирует своё содержимое через
@@ -122,6 +126,7 @@ import {
   // рендерера; одноимённая константа правки (`cm-transclusion-block`) ниже.
   TRANSCLUSION_BLOCK_CLASS as MD_TRANSCLUSION_BLOCK_CLASS,
   TRANSCLUSION_SOURCE_ATTR as MD_TRANSCLUSION_SOURCE_ATTR,
+  TRANSCLUSION_SECTION_ATTR as MD_TRANSCLUSION_SECTION_ATTR,
   type TransclusionLabels,
   type TransclusionRef,
   type TransclusionResolution,
@@ -129,6 +134,7 @@ import {
 import type { AnyRealtimeEvent, Comment } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
+import { div, el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../lib/live/index.js';
@@ -141,10 +147,18 @@ import {
   type LockHandle,
 } from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
-import { iconButton } from '../lib/ui/button.js';
-import { svgIcon } from '../lib/ui/icon.js';
+import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
+import { fieldInput } from '../lib/ui/field.js';
+import { svgIcon, type IconName } from '../lib/ui/icon.js';
+import { reconcileKeyed } from '../lib/ui/keyed-list.js';
+import { openPopover, watchOutsideTap } from '../lib/ui/popover.js';
+import {
+  isInsideSuggestDropdown,
+  wireSuggest,
+  type SuggestEntry,
+} from '../lib/suggest-dropdown.js';
 
-import { buildTransclusionMenuItems } from './comment-commands.js';
+import { buildTransclusionMenuItems, TRANSCLUSION_NAV_MENU_LAYOUT } from './comment-commands.js';
 import {
   blockEditCollapseFacet,
   collapseScopeFacet,
@@ -153,19 +167,24 @@ import {
 
 /** Корневой класс блока трансклюзии (редактирование). */
 export const TRANSCLUSION_BLOCK_CLASS = 'cm-transclusion-block';
-/** Класс свёрнутой ссылки трансклюзии. */
-export const TRANSCLUSION_LINK_CLASS = 'cm-transclusion-link';
-/** Кнопка-всплывашка смены ссылки (правый верхний угол блока). */
-export const TRANSCLUSION_CHANGE_CLASS = 'cm-transclusion-change-link';
 /**
- * Контейнер ховер-кнопок блока (правый верхний угол, элемент `7a479549`):
- * «Редактировать трансклюзию» и «Редактировать ссылку» показываются вместе на
- * наведении в режиме редактирования окружения.
+ * Шапка блока с чипом «имя · раздел» (элемент `7a479549`, задача `68591b8a`) —
+ * парный вид правки и просмотра (`.cm-editor` / `.comment-view`). Чип всегда
+ * виден (не hover-only) и открывает поповер правки ссылки в правке и меню
+ * команд навигации в просмотре.
+ */
+export const TRANSCLUSION_HEAD_CLASS = 'transclusion-head';
+/** Чип шапки блока — кнопка словаря `lib/ui` с подписью «имя · раздел». */
+export const TRANSCLUSION_CHIP_CLASS = 'transclusion-chip';
+/**
+ * Контейнер ховер-кнопки блока (правый верхний угол, элемент `7a479549`):
+ * «Редактировать трансклюзию» показывается на наведении в режиме правки
+ * окружения. Правка ССЫЛКИ идёт чипом-шапкой, отдельной кнопки нет.
  */
 export const TRANSCLUSION_ACTIONS_CLASS = 'cm-transclusion-actions';
 /** Плашка ошибки источника/раздела. */
 export const TRANSCLUSION_ERROR_CLASS = 'cm-transclusion-error';
-/** Атомарный токен `#<id>` в режиме правки ссылки. */
+/** Атомарный токен `#<id>` при вводе ссылки (создание ссылки не меняется). */
 export const TRANSCLUSION_ID_CLASS = 'cm-transclusion-id';
 /** Блок в режиме правки (рамка как у облачка, задача f59d24e1). */
 export const TRANSCLUSION_EDITING_CLASS = 'cm-transclusion-block--editing';
@@ -248,6 +267,34 @@ export function transclusionRefStartingAt(source: string, start: number): Transc
     if (ref.start === start) return ref;
   }
   return null;
+}
+
+/**
+ * Спека ОДНОЙ транзакции замены диапазона ссылки на новую (задача `68591b8a`):
+ * смена мысли/раздела из поповера применяется заменой диапазона ссылки
+ * (`formatTransclusionRef`), а не правкой тела документа. `null` — ссылка
+ * сдвинулась или её источник изменился, пока
+ * поповер был открыт (менять вслепую нельзя), либо новая ссылка совпала с
+ * прежней. `expectedSourceId` — источник, которым ссылка обладала до смены;
+ * `sourceId`/`section` — новые значения. Чистая (без DOM) — под тестами.
+ */
+export function transclusionLinkChange(
+  doc: string,
+  anchorStart: number,
+  expectedSourceId: string,
+  sourceId: string,
+  section: string | null,
+): { from: number; to: number; insert: string } | null {
+  const fresh = transclusionRefStartingAt(doc, anchorStart);
+  if (fresh === null || fresh.sourceId !== expectedSourceId) return null;
+  let next: string;
+  try {
+    next = formatTransclusionRef(sourceId, section);
+  } catch {
+    return null;
+  }
+  if (next === fresh.raw) return null;
+  return { from: fresh.start, to: fresh.end, insert: next };
 }
 
 /** ATX-заголовок: уровень и текст (закрывающие `#` срезаны). */
@@ -518,8 +565,8 @@ async function expandRounds(
   raw: string,
   load: TransclusionSourceLoader,
   markers: boolean,
-): Promise<{ text: string; topId: string | null }> {
-  const bodies = new Map<string, string | null>();
+): Promise<{ text: string; topId: string | null; titles: Map<string, string> }> {
+  const bodies = new Map<string, { body_md: string; title: string } | null>();
   const topId = parseTransclusions(raw)[0]?.sourceId ?? null;
   let text = raw;
   for (let round = 0; round < 8; round += 1) {
@@ -532,29 +579,36 @@ async function expandRounds(
       const body = bodies.get(id);
       return body === null || body === undefined
         ? { found: false, body_md: '' }
-        : { found: true, body_md: body };
+        : { found: true, body_md: body.body_md };
     };
     text = expandTransclusions(raw, resolver, { markers });
     if (pending.size === 0) break;
     const fetched = await Promise.all(
-      [...pending].map(async (id): Promise<readonly [string, string | null]> => {
+      [...pending].map(async (id): Promise<readonly [string, { body_md: string; title: string } | null]> => {
         const src = await load(id);
-        return [id, src !== null && src.found ? src.body_md : null] as const;
+        return [id, src !== null && src.found ? { body_md: src.body_md, title: src.title } : null] as const;
       }),
     );
     for (const [id, body] of fetched) bodies.set(id, body);
   }
-  return { text, topId };
+  // Имена источников собираются тем же проходом загрузки, что и тела (задача
+  // `68591b8a`): шапка-чип блока просмотра получает «имя · раздел» без
+  // ВТОРОГО сетевого запроса — развёртка уже сходила за источником.
+  const titles = new Map<string, string>();
+  for (const [id, body] of bodies) {
+    if (body !== null) titles.set(id, body.title);
+  }
+  return { text, topId, titles };
 }
 
 /** Разворачивает текст ссылки с маркерами и подтягивает данные верхнего источника. */
 async function expandWithLoader(
   raw: string,
   load: TransclusionSourceLoader,
-): Promise<{ text: string; top: TransclusionSource | null }> {
-  const { text, topId } = await expandRounds(raw, load, true);
+): Promise<{ text: string; top: TransclusionSource | null; titles: Map<string, string> }> {
+  const { text, topId, titles } = await expandRounds(raw, load, true);
   const top = topId === null ? null : await load(topId);
-  return { text, top };
+  return { text, top, titles };
 }
 
 /**
@@ -617,9 +671,6 @@ async function loadEntry(
  * Декорации CM6
  * ------------------------------------------------------------------ */
 
-/** Эффект установки/снятия свёрнутости ссылки (кнопка смены ссылки). */
-const setCollapsed = StateEffect.define<{ key: string; collapsed: boolean }>();
-
 /** Эффект наполнения кэша данными ссылок. */
 const setEntries = StateEffect.define<Array<{ key: string; entry: TransclusionEntry }>>();
 
@@ -654,11 +705,10 @@ const dropEntries = StateEffect.define<string[]>();
 /** Эффект обновления карты чужих захватов источников (`sourceId` → имя). */
 const setLockedSources = StateEffect.define<ReadonlyMap<string, string>>();
 
-/** Состояние плагина: кэш данных, свёрнутые ссылки, декорации и атомарные токены. */
+/** Состояние плагина: кэш данных, декорации и атомарные токены. */
 interface TransclusionStateData {
   networkId: string | null;
   cache: Map<string, TransclusionEntry>;
-  collapsed: Set<string>;
   /** Источник в режиме правки блока, либо `null` (задача f59d24e1). */
   editingSourceId: string | null;
   /** Дескриптор редактируемого текста блока, либо `null` (задача e2c14673). */
@@ -669,7 +719,7 @@ interface TransclusionStateData {
   atomic: RangeSet<Decoration>;
 }
 
-/** Атомарный виджет токена `#<id>` в режиме правки ссылки. */
+/** Атомарный виджет токена `#<id>` при вводе ссылки. */
 class TransclusionIdWidget extends WidgetType {
   constructor(
     readonly label: string,
@@ -695,37 +745,45 @@ class TransclusionIdWidget extends WidgetType {
   }
 }
 
-/** Свёрнутая ссылка: имя мысли (раздел — уточнением), клик — вход в правку. */
-class TransclusionLinkWidget extends WidgetType {
-  constructor(
-    readonly from: number,
-    readonly to: number,
-    readonly label: string,
-    readonly deleted: boolean,
-  ) {
-    super();
-  }
+/**
+ * Шапка блока с чипом «имя · раздел» (элемент `7a479549`, задача `68591b8a`).
+ * Один вид для правки и просмотра: кнопка словаря `lib/ui` с модификатором
+ * `transclusion-chip`. Чип всегда виден (не hover-only) — обнаружимость
+ * открытия поповера не зависит от наведения мыши. `onClick` получает событие
+ * (клик в просмотре открывает меню команд в точке клика); `mousedown` гасится,
+ * чтобы клик по чипу не двигал каретку редактора и не забирал фокус.
+ */
+export function createTransclusionHead(label: string, onClick: (event: MouseEvent) => void): HTMLElement {
+  const head = div(TRANSCLUSION_HEAD_CLASS);
+  const chip = uiButton({
+    label,
+    role: 'ghost',
+    size: 's',
+    class: TRANSCLUSION_CHIP_CLASS,
+    title: t('comment.transclusion.chip.tooltip'),
+  });
+  chip.addEventListener('mousedown', (event) => event.preventDefault());
+  // Двойной клик по чипу не должен уходить наружу: в правке он открыл бы
+  // правку блока, в просмотре — вход в правку поля. Чип обрабатывает себя сам.
+  chip.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  chip.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onClick(event);
+  });
+  head.append(chip);
+  return head;
+}
 
-  override eq(other: TransclusionLinkWidget): boolean {
-    return (
-      other.from === this.from &&
-      other.to === this.to &&
-      other.label === this.label &&
-      other.deleted === this.deleted
-    );
-  }
-
-  override toDOM(): HTMLElement {
-    const span = document.createElement('span');
-    span.className = `${TRANSCLUSION_LINK_CLASS}${this.deleted ? ' wiki-link-deleted' : ''}`;
-    span.dataset.mdFrom = String(this.from);
-    span.dataset.mdTo = String(this.to);
-    span.textContent = this.label;
-    return span;
-  }
-
-  override ignoreEvent(): boolean {
-    return false;
+/** Убирает прежнюю шапку блока (идемпотентная разметка просмотра). */
+function clearTransclusionHead(block: HTMLElement): void {
+  for (const child of Array.from(block.children)) {
+    if (child instanceof HTMLElement && child.classList.contains(TRANSCLUSION_HEAD_CLASS)) {
+      child.remove();
+    }
   }
 }
 
@@ -797,7 +855,7 @@ export function wireViewTransclusionLocks(): void {
   });
 }
 
-/** Блок трансклюзии с развёрнутым текстом и кнопкой-всплывашкой смены ссылки. */
+/** Блок трансклюзии: шапка-чип «имя · раздел» и развёрнутый текст источника. */
 class TransclusionBlockWidget extends WidgetType {
   constructor(
     readonly from: number,
@@ -812,6 +870,8 @@ class TransclusionBlockWidget extends WidgetType {
     readonly lockedBy: string | null,
     /** Выделение покрывает блок целиком (ошибка 39553204). */
     readonly covered: boolean,
+    /** Раздел источника (для шапки-чипа), либо `null` — весь комментарий. */
+    readonly section: string | null,
   ) {
     super();
   }
@@ -825,6 +885,7 @@ class TransclusionBlockWidget extends WidgetType {
       other.editing === this.editing &&
       other.lockedBy === this.lockedBy &&
       other.covered === this.covered &&
+      other.section === this.section &&
       other.entry.html === this.entry.html &&
       other.entry.error === this.entry.error &&
       other.entry.title === this.entry.title &&
@@ -861,11 +922,20 @@ class TransclusionBlockWidget extends WidgetType {
       return box;
     }
 
-    // В режиме правки блока ховер-кнопки скрыты: сначала выходят из правки.
-    // Две кнопки в правом верхнем углу (элемент 7a479549): «Редактировать
-    // трансклюзию» — вход в правку блока (как двойной клик/Enter), «Редактировать
-    // ссылку» — сворачивание блока в текст ссылки для правки. Иконки — из фасада
-    // `lib/ui`, подсказки — через i18n.
+    // Шапка-чип «имя · раздел» (элемент `7a479549`, задача `68591b8a`): всегда
+    // видна, клик открывает поповер правки ссылки (выбор мысли и раздела,
+    // команды навигации) — сырой правки ссылки и сворачивания блока больше нет.
+    box.append(
+      createTransclusionHead(transclusionLinkLabel(this.entry.title, this.section), (event) => {
+        const ref = transclusionRefStartingAt(view.state.doc.toString(), this.from);
+        if (ref !== null) openTransclusionLinkPopover(view, ref, event.currentTarget as HTMLElement);
+      }),
+    );
+
+    // Ховер-кнопка в правом верхнем углу (элемент 7a479549): «Редактировать
+    // трансклюзию» — вход в правку блока (как двойной клик/Enter). Правка
+    // ССЫЛКИ идёт чипом-шапкой, прежней кнопки «Редактировать ссылку» нет.
+    // В режиме правки блока кнопка скрыта: сначала выходят из правки.
     if (!this.editing) {
       const actions = document.createElement('div');
       actions.className = TRANSCLUSION_ACTIONS_CLASS;
@@ -879,20 +949,8 @@ class TransclusionBlockWidget extends WidgetType {
           if (ref !== null) void beginBlockEdit(view, ref);
         },
       });
-      const changeLink = iconButton({
-        icon: svgIcon('link-edit', 12),
-        role: 'ghost',
-        size: 's',
-        title: t('comment.transclusion.editLink'),
-        class: TRANSCLUSION_CHANGE_CLASS,
-        onClick: () => {
-          view.dispatch({ effects: setCollapsed.of({ key: this.key, collapsed: true }) });
-        },
-      });
-      for (const button of [editBlock, changeLink]) {
-        button.addEventListener('mousedown', (event) => event.preventDefault());
-      }
-      actions.append(editBlock, changeLink);
+      editBlock.addEventListener('mousedown', (event) => event.preventDefault());
+      actions.append(editBlock);
       box.append(actions);
     }
 
@@ -931,40 +989,21 @@ function coversRef(selection: { from: number; to: number }, from: number, to: nu
 }
 
 /**
- * Режим правки ССЫЛКИ (сырой markdown с атомарным `#<id>`): выделение задевает
- * ссылку, но НЕ покрывает её целиком. Полное покрытие оставляет блок-атом
- * выделенным как единое целое, а не разбирает его на markdown (ошибка
- * `5312142d`).
+ * Черновик ссылки при вводе (сырой markdown с атомарным `#<id>`): выделение
+ * задевает ссылку, но НЕ покрывает её целиком. Нужен ТОЛЬКО созданию ссылки
+ * (открывающий токен + автокомплит + жест `#`): пока каретка внутри набираемой
+ * ссылки, показываем её текст, а токен `#<id>` — атомарным виджетом.
+ * Существующий блок целиком атомарен (ошибка `5312142d`), каретка внутрь него
+ * не встаёт, поэтому к готовым блокам этот путь не применяется. Полное покрытие
+ * выделением оставляет блок-атом выделенным как единое целое, а не разбирает его
+ * на markdown.
  */
-function linkEditMode(selection: { from: number; to: number }, from: number, to: number): boolean {
+function linkDraftMode(selection: { from: number; to: number }, from: number, to: number): boolean {
   return intersects(selection, from, to) && !coversRef(selection, from, to);
 }
 
 /** Пустая карта чужих захватов (значение по умолчанию). */
 const NO_LOCKS: ReadonlyMap<string, string> = new Map();
-
-/**
- * Оставляет в наборе свёрнутых ссылок только те, чьё выделение по-прежнему
- * пересекает скобки ссылки: «выход за скобки — снова текст блока» (элемент
- * `7a479549`). Ключи, которых больше нет в документе (ссылка заменена/удалена),
- * тоже отсеиваются. Набор не меняется — возвращается тот же экземпляр (сравнение
- * по ссылке в `update` не рассылает лишних транзакций). Сеть неизвестна — набор
- * пуст по построению (ключи строятся только при известной сети).
- */
-function pruneCollapsed(
-  collapsed: Set<string>,
-  state: EditorState,
-  networkId: string | null,
-): Set<string> {
-  if (networkId === null) return collapsed;
-  const selection = state.selection.main;
-  const kept = new Set<string>();
-  for (const ref of parseTransclusions(state.doc.toString())) {
-    const key = transclusionCacheKey(networkId, ref);
-    if (collapsed.has(key) && intersects(selection, ref.start, ref.end)) kept.add(key);
-  }
-  return kept.size === collapsed.size ? collapsed : kept;
-}
 
 /** Офсеты начал строк текста — для линейных декораций рамки правки блока. */
 function lineStartOffsets(source: string): number[] {
@@ -993,7 +1032,6 @@ export function buildTransclusionDecorations(
   selection: { from: number; to: number },
   cache: Map<string, TransclusionEntry>,
   networkId: string | null,
-  collapsed: Set<string>,
   /** Источник в режиме правки блока, либо `null` (задача f59d24e1). */
   editingSourceId: string | null = null,
   /** Чужие захваты источников: `sourceId` → имя держателя (задача f59d24e1). */
@@ -1046,6 +1084,7 @@ export function buildTransclusionDecorations(
             true,
             lockedBy,
             covered,
+            ref.section,
           ),
           inclusive: false,
         }),
@@ -1053,9 +1092,10 @@ export function buildTransclusionDecorations(
       continue;
     }
 
-    if (linkEditMode(selection, ref.start, ref.end)) {
-      // Режим правки ссылки: токен `#<id>` — атомарный виджет с именем мысли;
-      // раздел остаётся редактируемым текстом.
+    if (linkDraftMode(selection, ref.start, ref.end)) {
+      // Черновик ссылки при вводе: токен `#<id>` — атомарный виджет с именем
+      // мысли; раздел остаётся редактируемым текстом (создание ссылки не
+      // меняется).
       const label = title !== '' ? title : '…';
       atomParts.push({ from: idFrom, to: idTo, value: Decoration.mark({}) });
       parts.push({
@@ -1069,27 +1109,8 @@ export function buildTransclusionDecorations(
       continue;
     }
 
-    if (key !== null && collapsed.has(key)) {
-      // Свёрнутая ссылка — тоже единый элемент: диапазон атомарен при стрелках.
-      atomParts.push({ from: ref.start, to: ref.end, value: Decoration.mark({}) });
-      parts.push({
-        from: ref.start,
-        to: ref.end,
-        value: Decoration.replace({
-          widget: new TransclusionLinkWidget(
-            ref.start,
-            ref.end,
-            transclusionLinkLabel(title, ref.section),
-            deleted,
-          ),
-          inclusive: false,
-        }),
-      });
-      continue;
-    }
-
     // Развёрнутый блок: диапазон атомарен (задача a2b68d72) — иначе Right/Left
-    // заводят каретку внутрь, декорации пересобираются в режим правки ссылки и
+    // заводят каретку внутрь, декорации пересобираются в черновик ссылки и
     // блок распадается в исходный markdown (блокер верификатора).
     atomParts.push({ from: ref.start, to: ref.end, value: Decoration.mark({}) });
     parts.push({
@@ -1106,6 +1127,7 @@ export function buildTransclusionDecorations(
           false,
           lockedBy,
           covered,
+          ref.section,
         ),
         inclusive: false,
       }),
@@ -1146,7 +1168,7 @@ function emptyEntry(): TransclusionEntry {
   return { title: '', exists: true, error: null, html: '', body_md: '' };
 }
 
-/** Поле состояния: кэш, свёрнутые ссылки, режим правки, захваты, декорации. */
+/** Поле состояния: кэш данных, режим правки блока, захваты, декорации. */
 export const transclusionState = StateField.define<TransclusionStateData>({
   create: (state) => {
     const networkId = safeNetwork();
@@ -1155,12 +1177,10 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       state.selection.main,
       new Map(),
       networkId,
-      new Set(),
     );
     return {
       networkId,
       cache: new Map(),
-      collapsed: new Set(),
       editingSourceId: null,
       blockEdit: null,
       lockedSources: NO_LOCKS,
@@ -1174,15 +1194,6 @@ export const transclusionState = StateField.define<TransclusionStateData>({
     let editingSourceId = state.editingSourceId;
     let blockEdit = state.blockEdit;
     let lockedSources = state.lockedSources;
-    // Свёрнутость ссылки («снова текст блока» на выходе за скобки) НЕ сбрасывается
-    // любым движением каретки: режим держится, пока выделение остаётся внутри
-    // скобок, и снимается по ключу, от которого каретка ушла (ошибка `5accebab`).
-    // Раньше набор чистился целиком на любой смене выделения — подход курсора к
-    // свёрнутой ссылке возвращал блок, и ссылку было не отредактировать.
-    let collapsed = state.collapsed;
-    // Признак «в этой транзакции свёрнутость включили»: вход в режим не должен
-    // тут же отменяться проверкой выделения того же шага.
-    let collapsedEntered = false;
     // Диапазон правки блока едет за правками документа (задача e2c14673).
     if (tr.docChanged && blockEdit !== null) {
       const from = tr.changes.mapPos(blockEdit.from, -1);
@@ -1192,15 +1203,7 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       }
     }
     for (const effect of tr.effects) {
-      if (effect.is(setCollapsed)) {
-        collapsed = new Set(collapsed);
-        if (effect.value.collapsed) {
-          collapsed.add(effect.value.key);
-          collapsedEntered = true;
-        } else {
-          collapsed.delete(effect.value.key);
-        }
-      } else if (effect.is(setEntries)) {
+      if (effect.is(setEntries)) {
         if (cache === state.cache) cache = new Map(cache);
         for (const { key, entry } of effect.value) cache.set(key, entry);
       } else if (effect.is(dropEntries)) {
@@ -1208,8 +1211,6 @@ export const transclusionState = StateField.define<TransclusionStateData>({
         for (const key of effect.value) cache.delete(key);
       } else if (effect.is(setBlockEdit)) {
         editingSourceId = effect.value;
-        // Вход в правку блока и выход из неё — всегда развёрнутое состояние.
-        if (collapsed.size > 0) collapsed = new Set();
       } else if (effect.is(setBlockEditRange)) {
         blockEdit = effect.value;
       } else if (effect.is(setLockedSources)) {
@@ -1219,21 +1220,10 @@ export const transclusionState = StateField.define<TransclusionStateData>({
     const currentNetwork = safeNetwork();
     if (currentNetwork !== null && currentNetwork !== networkId) networkId = currentNetwork;
 
-    // Снять свёрнутость ссылок, от которых каретка ушла (или которых больше нет
-    // в документе), сохранив те, где выделение по-прежнему внутри скобок.
-    if (
-      !collapsedEntered &&
-      collapsed.size > 0 &&
-      (tr.docChanged || !tr.state.selection.eq(tr.startState.selection))
-    ) {
-      collapsed = pruneCollapsed(collapsed, tr.state, networkId);
-    }
-
     if (
       !tr.docChanged &&
       !tr.selection &&
       cache === state.cache &&
-      collapsed === state.collapsed &&
       editingSourceId === state.editingSourceId &&
       blockEdit === state.blockEdit &&
       lockedSources === state.lockedSources &&
@@ -1246,12 +1236,11 @@ export const transclusionState = StateField.define<TransclusionStateData>({
       tr.state.selection.main,
       cache,
       networkId,
-      collapsed,
       editingSourceId,
       lockedSources,
       blockEdit,
     );
-    return { networkId, cache, collapsed, editingSourceId, blockEdit, lockedSources, deco, atomic };
+    return { networkId, cache, editingSourceId, blockEdit, lockedSources, deco, atomic };
   },
   provide: (f) => [
     EditorView.decorations.from(f, (s) => s.deco),
@@ -1267,9 +1256,9 @@ export const transclusionState = StateField.define<TransclusionStateData>({
 });
 
 /**
- * Атомарные диапазоны CM6: токен `#<id>` в правке ссылки, а также целые
- * диапазоны блока и свёрнутой ссылки (ошибка `5312142d` — блок единым атомом,
- * каретка внутрь не встаёт).
+ * Атомарные диапазоны CM6: токен `#<id>` при вводе ссылки, а также целые
+ * диапазоны блока (ошибка `5312142d` — блок единым атомом, каретка внутрь
+ * не встаёт).
  */
 export const transclusionAtomicRanges = EditorView.atomicRanges.of((view) => {
   const state = view.state.field(transclusionState, false);
@@ -1298,9 +1287,7 @@ function blockRanges(state: EditorState): BlockRange[] {
       out.push({ from: ref.start, to: ref.end, ref });
       continue;
     }
-    if (linkEditMode(selection, ref.start, ref.end)) continue;
-    const key = field.networkId === null ? null : transclusionCacheKey(field.networkId, ref);
-    if (key !== null && field.collapsed.has(key)) continue;
+    if (linkDraftMode(selection, ref.start, ref.end)) continue;
     out.push({ from: ref.start, to: ref.end, ref });
   }
   return out;
@@ -1389,22 +1376,26 @@ export function transclusionBlockArrow(
 }
 
 /**
- * Обработчик `mousedown` трансклюзий: клик по свёрнутой ссылке уводит каретку
- * внутрь неё (режим правки ссылки), клик по блоку ВЫДЕЛЯЕТ его целиком как
- * единый атом (ошибка `5312142d`), клик вне правки блока завершает её записью в
+ * Обработчик `mousedown` трансклюзий: клик по блоку ВЫДЕЛЯЕТ его целиком как
+ * единый атом (ошибка `5312142d`), клик по шапке-чипу открывает поповер правки
+ * ссылки (каретку не двигает), клик вне правки блока завершает её записью в
  * источник (задача `e2c14673`).
  *
  * Реагирует только на ОСНОВНУЮ кнопку мыши (`event.button === 0`): правый и
  * средний клик — жесты вызова контекстного меню, они не должны менять
- * выделение и разворачивать свёрнутую ссылку (ошибка `27b95e60`). Событие при
- * этом не гасим — `contextmenu` открывает меню поверх прежнего состояния.
- * Родной обработчик CM6 на неосновных кнопках выделение не двигает
- * (`view/dist/index.js`: basicMouseSelection — только при `button == 0`).
+ * выделение (ошибка `27b95e60`). Событие при этом не гасим — `contextmenu`
+ * открывает меню поверх прежнего состояния. Родной обработчик CM6 на неосновных
+ * кнопках выделение не двигает (`view/dist/index.js`: basicMouseSelection —
+ * только при `button == 0`).
  */
 export function transclusionMouseDown(event: MouseEvent, view: EditorView): boolean {
   if (event.button !== 0) return false;
   const target = event.target as Element | null;
-  // Ховер-кнопки блока: не трогаем курсор, событие обработает сама кнопка.
+  // Шапка-чип блока (элемент 7a479549): клик открывает поповер правки ссылки,
+  // каретку не двигаем — событие обработает сам чип (`createTransclusionHead`
+  // гасит `mousedown`, сохраняя фокус редактора).
+  if (target !== null && target.closest(`.${TRANSCLUSION_HEAD_CLASS}`) !== null) return true;
+  // Ховер-кнопка блока: не трогаем курсор, событие обработает сама кнопка.
   if (target !== null && target.closest(`.${TRANSCLUSION_ACTIONS_CLASS}`) !== null) return true;
   // Клик вне редактируемого текста блока — записать изменения блока в
   // источник и выйти из режима правки блока (задача e2c14673, элемент
@@ -1436,23 +1427,10 @@ export function transclusionMouseDown(event: MouseEvent, view: EditorView): bool
     });
     return true;
   }
-  const el = target?.closest?.(`.${TRANSCLUSION_LINK_CLASS}`);
-  if (!(el instanceof HTMLElement)) return false;
-  const from = Number(el.dataset.mdFrom);
-  const to = Number(el.dataset.mdTo);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to - from < 2) return false;
-  let pos = from + 1;
-  const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
-  if (coords !== null && coords > from && coords < to) pos = coords;
-  view.dispatch({
-    selection: { anchor: Math.min(pos, to - 1) },
-    scrollIntoView: false,
-    userEvent: 'select',
-  });
-  return true;
+  return false;
 }
 
-/** Клики по блоку/ссылке: вход в правку ссылки; кнопка обрабатывает себя сама. */
+/** Клики по блоку: выделение блока целиком; шапка/кнопка обрабатывают себя сами. */
 export const transclusionClick = EditorView.domEventHandlers({
   mousedown: transclusionMouseDown,
 });
@@ -1462,12 +1440,11 @@ export const transclusionClick = EditorView.domEventHandlers({
  * ------------------------------------------------------------------ */
 
 /**
- * Ссылка трансклюзии под правой кнопкой: блок или свёрнутая ссылка.
- * `null` — цель не внутри виджета трансклюзии (тогда действует меню поля).
+ * Ссылка трансклюзии под правой кнопкой: блок трансклюзии.
+ * `null` — цель не внутри блока (тогда действует меню поля).
  */
 function transclusionWidgetRefAt(view: EditorView, target: Element | null): TransclusionRef | null {
-  const selector = `.${TRANSCLUSION_BLOCK_CLASS}, .${TRANSCLUSION_LINK_CLASS}`;
-  const el = target?.closest?.(selector);
+  const el = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
   if (!(el instanceof HTMLElement)) return null;
   const from = Number(el.dataset.mdFrom);
   if (!Number.isFinite(from)) return null;
@@ -1477,9 +1454,8 @@ function transclusionWidgetRefAt(view: EditorView, target: Element | null): Tran
 }
 
 /**
- * Ссылка-БЛОК под целью события (`.cm-transclusion-block`). Для двойного клика
- * (вход в правку) — только блок, не свёрнутая ссылка: у свёрнутой ссылки вход в
- * правку делает одиночный клик (каретка внутрь ссылки).
+ * Ссылка-БЛОК под целью события (`.cm-transclusion-block`) — для двойного
+ * клика (вход в правку блока).
  */
 function transclusionBlockRefAt(view: EditorView, target: Element | null): TransclusionRef | null {
   const el = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
@@ -1500,48 +1476,56 @@ async function copyTransclusionText(text: string, okMessage: string): Promise<vo
 }
 
 /**
- * Обработчики шести команд меню блока (элемент `1e0fb0bd`). «Редактировать» и
- * «Изменить ссылку» — режимы блока (этот модуль); «Открыть ссылку»/«В фокус»
- * уводят из поля (ленивые импорты — статический замкнул бы цикл
- * editor ↔ transclusion); «Копировать»/«Копировать ID» — буфер обмена.
+ * Обработчики четырёх команд навигации блока (элемент `1e0fb0bd`): «Открыть
+ * ссылку»/«В фокус» уводят из поля (ленивые импорты — статический замкнул бы
+ * цикл editor ↔ transclusion); «Копировать»/«Копировать ID» — буфер обмена.
+ * Общие для контекстного меню правки и меню чипа в просмотре.
  */
-export function transclusionMenuHandlers(
-  view: EditorView,
-  ref: TransclusionRef,
+export function transclusionNavHandlers(
+  sourceId: string,
+  raw: string,
 ): Record<string, () => void> {
-  const networkId = safeNetwork();
-  const key = networkId === null ? null : transclusionCacheKey(networkId, ref);
   return {
-    'transclusion.edit': () => {
-      void beginBlockEdit(view, ref);
-    },
-    'transclusion.changeLink': () => {
-      if (key === null) return;
-      view.dispatch({ effects: setCollapsed.of({ key, collapsed: true }) });
-    },
     'transclusion.openSource': () => {
-      void import('./editor.js').then((m) => m.openThoughtInEditor(ref.sourceId));
+      void import('./editor.js').then((m) => m.openThoughtInEditor(sourceId));
     },
     'transclusion.focusSource': () => {
-      void import('../screens/active-view.js').then((m) => m.focusThoughtOnMap(ref.sourceId));
+      void import('../screens/active-view.js').then((m) => m.focusThoughtOnMap(sourceId));
     },
     'transclusion.copyLink': () => {
-      void copyTransclusionText(ref.raw, t('comment.transclusion.menu.copied'));
+      void copyTransclusionText(raw, t('comment.transclusion.menu.copied'));
     },
     'transclusion.copyId': () => {
-      void copyTransclusionText(ref.sourceId, t('comment.transclusion.menu.copiedId'));
+      void copyTransclusionText(sourceId, t('comment.transclusion.menu.copiedId'));
     },
   };
 }
 
 /**
- * Контекстное меню блока трансклюзии (элемент `1e0fb0bd`): правый клик по
- * блоку или свёрнутой ссылке в режиме правки окружения. Пока блок в правке,
- * действует меню поля — там блок уже обычный текст. Событие гасится, чтобы не
- * дошло до меню поля (`markdown-field` слушает `editor.dom`). Открывается
- * поверх текущего состояния: `mousedown` по неосновной кнопке выделение не
- * двигает (см. {@link transclusionMouseDown}, ошибка `27b95e60`), поэтому
- * свёрнутая ссылка остаётся свёрнутой.
+ * Обработчики меню блока (элемент `1e0fb0bd`): «Редактировать» — вход в правку
+ * блока (режим этого модуля) плюс четыре команды навигации
+ * ({@link transclusionNavHandlers}). Прежних «Изменить ссылку» и сворачивания
+ * блока нет — ссылка правится чипом-шапкой и поповером.
+ */
+export function transclusionMenuHandlers(
+  view: EditorView,
+  ref: TransclusionRef,
+): Record<string, () => void> {
+  return {
+    'transclusion.edit': () => {
+      void beginBlockEdit(view, ref);
+    },
+    ...transclusionNavHandlers(ref.sourceId, ref.raw),
+  };
+}
+
+/**
+ * Контекстное меню блока трансклюзии (элемент `1e0fb0bd`): правый клик по блоку
+ * в режиме правки окружения. Пока блок в правке, действует меню поля — там блок
+ * уже обычный текст. Событие гасится, чтобы не дошло до меню поля
+ * (`markdown-field` слушает `editor.dom`). Открывается поверх текущего
+ * состояния: `mousedown` по неосновной кнопке выделение не двигает (см.
+ * {@link transclusionMouseDown}, ошибка `27b95e60`).
  */
 export function transclusionContextMenuHandler(event: MouseEvent, view: EditorView): boolean {
   if (isBlockEditing(view.state)) return false;
@@ -1566,6 +1550,277 @@ export function transclusionContextMenuHandler(event: MouseEvent, view: EditorVi
 export const transclusionContextMenu = EditorView.domEventHandlers({
   contextmenu: transclusionContextMenuHandler,
 });
+
+/* ------------------------------------------------------------------ *
+ * Чип-шапка и поповер правки ссылки (задача 68591b8a, элемент 7a479549)
+ * ------------------------------------------------------------------ */
+
+/** Корень тела поповера правки ссылки (вид — `styles/editor.css`). */
+export const TRANSCLUSION_POPOVER_CLASS = 'transclusion-popover';
+/** Строка-подпись группы поповера («Мысль», «Раздел»). */
+const TRANSCLUSION_POPOVER_LABEL_CLASS = 'transclusion-popover-label';
+/** Прокручиваемый список разделов источника. */
+const TRANSCLUSION_POPOVER_SECTIONS_CLASS = 'transclusion-popover-sections';
+/** Ряд команд навигации поповера. */
+const TRANSCLUSION_POPOVER_COMMANDS_CLASS = 'transclusion-popover-commands';
+/** Строка списка разделов (кнопка словаря с модификатором раскладки). */
+const TRANSCLUSION_POPOVER_ROW_CLASS = 'transclusion-popover-row';
+
+/**
+ * Источник подсказок «мысль» поповера (задача `68591b8a`): живой поиск по
+ * именам и синонимам тем же серверным механизмом, что и выпадашка пикера
+ * сущностей (`etn.thoughts.findDuplicates`), — второго поиска не заводим.
+ * Пустой запрос ничего не отдаёт (живой поиск начинается с ввода).
+ */
+async function loadThoughtEntries(networkId: string, query: string): Promise<SuggestEntry[]> {
+  const trimmed = query.trim();
+  if (trimmed === '') return [];
+  try {
+    const hits = await etn.thoughts.findDuplicates(networkId, trimmed, [], []);
+    return hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } }));
+  } catch {
+    return [];
+  }
+}
+
+/** Заголовки разделов источника (пусто, если источник не найден). */
+async function sourceSectionTitles(networkId: string, sourceId: string): Promise<string[]> {
+  const src = await cachedTransclusionLoader(networkId)(sourceId).catch(() => null);
+  return src !== null && src.found ? listSectionTitles(src.body_md) : [];
+}
+
+/**
+ * Поповер правки ссылки блока (задача `68591b8a`, элемент `7a479549`): выбор
+ * мысли живым поиском, выбор раздела источника целиком сразу и четыре команды
+ * навигации. Смена ссылки применяется ОДНОЙ транзакцией замены диапазона
+ * ссылки (`formatTransclusionRef`) — прежней сырой правки ссылки и сворачивания
+ * блока нет. Поповер и его закрытие — общий компонент `lib/ui`; выпадашка
+ * поиска мыслей — общий `wireSuggest`; «клик вне» закрывает через
+ * `watchOutsideTap` (подсказки считаются «своими», как в строке поиска).
+ */
+export function openTransclusionLinkPopover(
+  view: EditorView,
+  ref: TransclusionRef,
+  anchor: HTMLElement,
+): void {
+  const networkId = safeNetwork();
+  if (networkId === null) return;
+  const anchorStart = ref.start;
+  let currentSourceId = ref.sourceId;
+  let currentSection = ref.section;
+  /** Снятие делегированного «клика вне»; назначается после открытия панели. */
+  let stopOutside: () => void = () => {};
+
+  const body = div(TRANSCLUSION_POPOVER_CLASS);
+  const input = fieldInput({
+    extraClass: 'transclusion-popover-input',
+    placeholder: t('comment.transclusion.popover.search'),
+  });
+  input.autocomplete = 'off';
+  const sectionList = div(TRANSCLUSION_POPOVER_SECTIONS_CLASS);
+  const commands = div(TRANSCLUSION_POPOVER_COMMANDS_CLASS);
+  body.append(
+    el('div', TRANSCLUSION_POPOVER_LABEL_CLASS, t('comment.transclusion.popover.thought')),
+    input,
+    el('div', TRANSCLUSION_POPOVER_LABEL_CLASS, t('comment.transclusion.popover.section')),
+    sectionList,
+    el('div', TRANSCLUSION_POPOVER_LABEL_CLASS, t('comment.transclusion.popover.commands')),
+    commands,
+  );
+
+  const close = (): void => popover.close();
+
+  /** Исходник ссылки текущего выбора (для «Копировать»); сбой сборки — прежний. */
+  const currentRaw = (): string => {
+    try {
+      return formatTransclusionRef(currentSourceId, currentSection);
+    } catch {
+      return ref.raw;
+    }
+  };
+
+  /** Применяет смену ссылки одной транзакцией замены диапазона. */
+  const apply = (sourceId: string, section: string | null): void => {
+    const change = transclusionLinkChange(
+      view.state.doc.toString(),
+      anchorStart,
+      currentSourceId,
+      sourceId,
+      section,
+    );
+    if (change === null) {
+      // Ссылка сдвинулась/заменена или выбор не изменился — закрываем панель,
+      // ничего не меняя (слепая замена испортила бы документ).
+      if (transclusionRefStartingAt(view.state.doc.toString(), anchorStart) === null) close();
+      return;
+    }
+    currentSourceId = sourceId;
+    currentSection = section;
+    view.dispatch({
+      changes: change,
+      selection: { anchor: change.from + change.insert.length },
+      userEvent: 'input',
+    });
+    void renderSections();
+  };
+
+  /** Строка списка разделов (ключ — имя раздела; `null` — весь комментарий). */
+  interface SectionRow {
+    key: string;
+    label: string;
+    section: string | null;
+    active: boolean;
+  }
+
+  /** Перерисовывает список разделов текущего источника (целиком сразу). */
+  const renderSections = async (): Promise<void> => {
+    const sourceId = currentSourceId;
+    const titles = await sourceSectionTitles(networkId, sourceId);
+    if (sourceId !== currentSourceId) return;
+    const rows: SectionRow[] = [
+      {
+        key: '\u0000whole',
+        label: t('comment.transclusion.popover.whole'),
+        section: null,
+        active: currentSection === null,
+      },
+    ];
+    if (currentSection !== null && !titles.includes(currentSection)) {
+      // Текущий раздел не найден в источнике — показываем строкой, чтобы выбор
+      // не «терялся» на глазах пользователя.
+      rows.push({ key: currentSection, label: currentSection, section: currentSection, active: true });
+    }
+    for (const title of titles) {
+      rows.push({ key: title, label: title, section: title, active: currentSection === title });
+    }
+    // Инкрементальная сверка по ключу (стандарт «Списки рендерятся
+    // инкрементально»): смена активного раздела обновляет строку, не снося
+    // прокрутку/фокус списка.
+    reconcileKeyed(sectionList, rows, {
+      key: (row) => row.key,
+      equals: (a, b) => a.key === b.key && a.label === b.label && a.active === b.active,
+      build: (row) => {
+        const btn = uiButton({
+          label: row.label,
+          role: 'ghost',
+          size: 's',
+          class: TRANSCLUSION_POPOVER_ROW_CLASS,
+          title: row.label,
+          onClick: () => apply(currentSourceId, row.section),
+        });
+        setButtonActive(btn, row.active);
+        return btn;
+      },
+      update: (el, row) => {
+        el.textContent = row.label;
+        el.title = row.label;
+        setButtonActive(el as HTMLButtonElement, row.active);
+      },
+    });
+  };
+
+  const commandButton = (
+    icon: IconName,
+    title: string,
+    onClick: () => void,
+  ): HTMLButtonElement =>
+    iconButton({ icon: svgIcon(icon, 14), role: 'ghost', size: 's', title, onClick });
+
+  commands.append(
+    commandButton('external-link', t('comment.transclusion.menu.open'), () => {
+      close();
+      void import('./editor.js').then((m) => m.openThoughtInEditor(currentSourceId));
+    }),
+    commandButton('focus', t('comment.transclusion.menu.focus'), () => {
+      close();
+      void import('../screens/active-view.js').then((m) => m.focusThoughtOnMap(currentSourceId));
+    }),
+    commandButton('copy', t('comment.transclusion.menu.copy'), () => {
+      const raw = currentRaw();
+      close();
+      void copyTransclusionText(raw, t('comment.transclusion.menu.copied'));
+    }),
+    commandButton('hash', t('comment.transclusion.menu.copyId'), () => {
+      close();
+      void copyTransclusionText(currentSourceId, t('comment.transclusion.menu.copiedId'));
+    }),
+  );
+
+  const handle = wireSuggest(input, {
+    // Живой поиск мыслей — та же выпадашка, что у пикера сущностей.
+    sources: [{ when: 'typed', load: (query) => loadThoughtEntries(networkId, query) }],
+    minWidth: 280,
+    onPick: (entry) => apply(entry.value, null),
+  });
+
+  const popover = openPopover({
+    anchor: { element: anchor },
+    content: {
+      title: t('comment.transclusion.popover.title'),
+      body,
+      maxHeightPx: 360,
+    },
+    // Клик вне закрывает вручную через `watchOutsideTap` (подсказки мыслей
+    // живут в общем слое вне панели — их клик «свой», а не внешний).
+    closeOnOutsideClick: false,
+    onClose: () => {
+      handle.dispose();
+      stopOutside();
+    },
+  });
+  stopOutside = watchOutsideTap(
+    (target) => popover.contains(target) || isInsideSuggestDropdown(target),
+    () => popover.close(),
+  );
+  void renderSections();
+}
+
+/** Меню команд навигации чипа в просмотре (в точке клика). */
+function openViewChipMenu(event: MouseEvent, sourceId: string, section: string | null): void {
+  let raw: string;
+  try {
+    raw = formatTransclusionRef(sourceId, section);
+  } catch {
+    raw = '';
+  }
+  const menuRoot = showMenuAt(
+    event.clientX,
+    event.clientY,
+    buildTransclusionMenuItems(
+      transclusionNavHandlers(sourceId, raw),
+      TRANSCLUSION_NAV_MENU_LAYOUT,
+    ),
+  );
+  guardMenuFocus(menuRoot);
+}
+
+/**
+ * Размечает шапки-чипы «имя · раздел» на блоках трансклюзий ПРОСМОТРА (задача
+ * `68591b8a`): обходит внешние и вложенные `.md-transclusion` единого рендерера
+ * и на каждый блок вешает чип `createTransclusionHead`. Имена приходят картой
+ * `titles` — тем же проходом развёртки, что рисовал блок (`expandWithLoader`),
+ * без второго сетевого запроса. Идемпотентна: прежняя шапка снимается.
+ */
+export function decorateViewTransclusionChips(
+  view: HTMLElement,
+  titles: ReadonlyMap<string, string>,
+): void {
+  const blocks = view.querySelectorAll<HTMLElement>(
+    `.${MD_TRANSCLUSION_BLOCK_CLASS}[${MD_TRANSCLUSION_SOURCE_ATTR}]`,
+  );
+  for (const block of blocks) {
+    clearTransclusionHead(block);
+    const sourceId = viewBlockSourceId(block);
+    if (sourceId === null) continue;
+    const section = block.getAttribute(MD_TRANSCLUSION_SECTION_ATTR);
+    const title = titles.get(sourceId) ?? '';
+    block.prepend(
+      createTransclusionHead(transclusionLinkLabel(title, section), (event) => {
+        openViewChipMenu(event, sourceId, section);
+      }),
+    );
+  }
+}
 
 /* ------------------------------------------------------------------ *
  * Режим правки блока и захват источника (задача f59d24e1)
@@ -1804,13 +2059,15 @@ export async function saveBlockEdit(view: EditorView): Promise<void> {
  * Двойной клик НА блоке открывает правку блока (ошибка `5312142d`). Ссылку
  * берём из DOM-элемента блока, а не из координат: у блока-виджета позиция под
  * мышью лежит на его границе, где {@link transclusionAtCaret} (исключающие
- * границы) ссылку уже не находит. У свёрнутой ссылки вход в правку делает
- * одиночный клик — здесь обрабатываем только блок.
+ * границы) ссылку уже не находит. Двойной клик по шапке-чипу правку блока НЕ
+ * открывает — чип обрабатывает себя сам (открытие поповера).
  */
 export function transclusionDblClick(event: MouseEvent, view: EditorView): boolean {
   const be = view.state.field(transclusionState, false)?.blockEdit ?? null;
   if (be !== null) return true;
-  const ref = transclusionBlockRefAt(view, event.target as Element | null);
+  const target = event.target as Element | null;
+  if (target !== null && target.closest?.(`.${TRANSCLUSION_HEAD_CLASS}`) != null) return true;
+  const ref = transclusionBlockRefAt(view, target);
   if (ref === null) return false;
   void beginBlockEdit(view, ref);
   return true;
@@ -2164,7 +2421,6 @@ export const transclusionInternals = {
   sourceKeyForCommentEvent,
   /** Очистка общего (на сеть) кэша источников — изоляция прогонов тестов. */
   clearSourceCache: () => sourceCache.clear(),
-  setCollapsed,
   setEntries,
   setBlockEditRange,
   dropEntries,
@@ -2173,4 +2429,6 @@ export const transclusionInternals = {
   beginNestedBlockEdit,
   saveBlockEdit,
   restoreBlockEdit,
+  loadThoughtEntries,
+  sourceSectionTitles,
 };

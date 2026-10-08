@@ -37,6 +37,7 @@ import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
 import { guardMenuFocus, showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { isInsidePopover } from '../lib/ui/popover.js';
 import { bindWikiCreateContext } from '../lib/wiki-create-context.js';
 import {
   buildCommentMenuItems,
@@ -59,6 +60,7 @@ import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import {
+  decorateViewTransclusionChips,
   decorateViewTransclusionLocks,
   defaultTransclusionLoader,
   transclusionEditHostExtension,
@@ -568,13 +570,21 @@ function isDomNode(target: EventTarget | null): target is Node {
 /**
  * Решает, коммитить ли правку при уходе фокуса из редактора: если фокус ушёл
  * на собственный элемент поля (`root` — панель поиска/замены, тулбар, кнопки
- * режима), правку НЕ коммитим. Иначе открытие панели поиска (`Ctrl+F`/`Ctrl+H`
- * ставит фокус в её поле) выбивало поле из правки: `onBlur` → `commitOrRevert`
- * → `showView`, и поиск начинал идти по тексту просмотра, а замена блокировалась
- * (ошибка 3eb4d1d5). Экспортируется для юнит-тестов (задача 045f98db).
+ * режима) или во всплывающую панель `lib/ui` (`isInsidePopover` — поповер правки
+ * ссылки трансклюзии с полем поиска), правку НЕ коммитим. Иначе открытие панели
+ * выбивало поле из правки: `onBlur` → `commitOrRevert` → `showView`, и действие
+ * терялось (ошибка 3eb4d1d5; поповер — задача 68591b8a). Экспортируется для
+ * юнит-тестов (задача 045f98db).
  */
 export function editorBlurCommits(root: Node, related: EventTarget | null): boolean {
-  return !isDomNode(related) || !root.contains(related);
+  if (!isDomNode(related)) return true;
+  if (root.contains(related)) return false;
+  // Фокус ушёл во всплывающую панель `lib/ui` (поповер правки ссылки
+  // трансклюзии: поле живого поиска мыслей) — правку НЕ коммитим. Клик по чипу
+  // открывает поповер, его поле забирает фокус у CodeMirror; без этой ветки
+  // `focusout` → `commitOrRevert` → `showView` выбивал бы поле из правки
+  // (задача 68591b8a).
+  return !isInsidePopover(related);
 }
 
 /** Builds a markdown view/edit field. */
@@ -907,7 +917,7 @@ export function createMarkdownField(opts: {
   };
 
   /** Рисует просмотр из готового HTML (общий путь обычного и трансклюзийного рендера). */
-  const paintView = (html: string): void => {
+  const paintView = (html: string, transclusionTitles?: ReadonlyMap<string, string>): void => {
     view.replaceChildren();
     if (html.trim() !== '') {
       renderHtml(view, html);
@@ -930,6 +940,10 @@ export function createMarkdownField(opts: {
       // и восстановление свёрнутости в просмотре. Блоки трансклюзий — своим
       // состоянием на путь вставки (ТП2, задача 1b405a92, требование e04d84f7).
       decorateCommentView(view, collapseState, collapseScopeFor);
+      // Шапки-чипы «имя · раздел» блоков трансклюзий в просмотре (задача
+      // 68591b8a): имена — из карты того же прохода развёртки, что нарисовал
+      // блок. Идемпотентно (прежняя шапка снимается).
+      decorateViewTransclusionChips(view, transclusionTitles ?? new Map());
       // «Замочки» чужих захватов источников трансклюзий в просмотре (ошибка
       // f60f99e0): та же карта захватов (`lock-cache`), что у правки. Разметка
       // идемпотентна (её повторяет подписка на переходы кэша), подписка одна на
@@ -961,14 +975,14 @@ export function createMarkdownField(opts: {
       const md = currentMd;
       void transclusionInternals
         .expandWithLoader(md, defaultTransclusionLoader(networkId))
-        .then(({ text }) => {
+        .then(({ text, titles }) => {
           if (seq !== renderSeq || editing) return;
           const html = renderMarkdown(text, {
             sourceMap: true,
             transclusion: { labels: transclusionLabels() },
           });
           viewMap = buildExpandedSourceMap(md, text);
-          paintView(html);
+          paintView(html, titles);
         })
         .catch(() => {
           if (seq === renderSeq && !editing) {

@@ -1223,7 +1223,7 @@
 }
 
 /* Трансклюзии комментариев в редакторе (0.12.1, ТП2, задача f72a9134):
-   блок развёрнутого текста, свёрнутая ссылка и кнопка смены ссылки.
+   блок развёрнутого текста с шапкой-чипом «имя · раздел» (задача 68591b8a).
    Фон по уровням, анимация и неделимость навигации — задача a2b68d72. */
 .cm-editor .cm-transclusion-block {
   position: relative;
@@ -1332,9 +1332,71 @@
   }
 }
 
-/* Ховер-кнопки блока трансклюзии (элемент 7a479549): «Редактировать
-   трансклюзию» и «Редактировать ссылку» в правом верхнем углу, обе видны на
-   наведении. Кнопки — из словаря lib/ui (`.ui-btn`), контейнер задаёт раскладку. */
+/* Шапка-чип блока «имя · раздел» (задача 68591b8a, элемент 7a479549): чип
+   словаря `lib/ui` с модификатором раскладки. Правило ПАРНОЕ для правки
+   (`.cm-editor`) и просмотра (`.comment-view`) — вид один, как у «замочка».
+   Чип всегда виден (не hover-only): открытие поповера правки ссылки не
+   зависит от наведения мыши. */
+.cm-editor .transclusion-head,
+.comment-view .transclusion-head {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: var(--md-widget-gap, 6px);
+}
+
+.cm-editor .transclusion-head .transclusion-chip,
+.comment-view .transclusion-head .transclusion-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs, 11px);
+}
+
+/* Тело поповера правки ссылки трансклюзии (задача 68591b8a): группы «Мысль»/
+   «Раздел»/«Команды», прокручиваемый список разделов и ряд иконочных команд.
+   Панель и её вид — компонент `lib/ui` (`openPopover`); здесь только раскладка
+   содержимого. */
+.transclusion-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 4px);
+}
+
+.transclusion-popover-label {
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs, 11px);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.transclusion-popover-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1, 2px);
+  max-height: 180px;
+  overflow: auto;
+}
+
+.transclusion-popover-row {
+  justify-content: flex-start;
+  text-align: left;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.transclusion-popover-commands {
+  display: flex;
+  gap: var(--space-1, 2px);
+  padding-top: var(--space-1, 2px);
+  border-top: 1px solid var(--border);
+}
+
+/* Ховер-кнопка блока трансклюзии (элемент 7a479549): «Редактировать
+   трансклюзию» в правом верхнем углу, видна на наведении. Кнопка — из словаря
+   lib/ui (`.ui-btn`), контейнер задаёт раскладку. */
 .cm-editor .cm-transclusion-block .cm-transclusion-actions {
   position: absolute;
   top: 2px;
@@ -1352,14 +1414,6 @@
 .cm-editor .cm-transclusion-error {
   color: var(--text-dim);
   font-style: italic;
-}
-
-.cm-editor .cm-transclusion-link {
-  color: var(--accent);
-  cursor: pointer;
-  text-decoration: none;
-  border-bottom: 1px dotted currentColor;
-  animation: md-transclusion-in var(--md-transclusion-anim, 160ms) ease;
 }
 
 .cm-editor .cm-transclusion-id {

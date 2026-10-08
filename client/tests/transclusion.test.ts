@@ -1,10 +1,10 @@
 /**
- * Unit tests трансклюзий комментариев (0.12.1, ТП2, задачи f72a9134 и
- * f59d24e1). Проверяют чистые функции контекста/разделов/метки, сборку
- * декораций трёх режимов ссылки (блок, свёрнутая ссылка, правка с атомарным
- * `#<id>`), итеративную развёртку с инжектируемым загрузчиком источников,
- * а также режим правки блока и «замочек» чужого захвата. Headless — без DOM и
- * сети.
+ * Unit tests трансклюзий комментариев (0.12.1, ТП2, задачи f72a9134,
+ * f59d24e1 и 68591b8a). Проверяют чистые функции контекста/разделов/метки,
+ * сборку декораций (блок с шапкой-чипом; черновик ссылки с атомарным `#<id>`
+ * при вводе), замену ссылки одной транзакцией, итеративную развёртку с
+ * инжектируемым загрузчиком источников, а также режим правки блока и «замочек»
+ * чужого захвата. Headless — без DOM и сети.
  */
 
 import { test } from 'node:test';
@@ -20,9 +20,11 @@ import { ShimElement } from './dom-shim.js';
 import {
   TRANSCLUSION_ACTIONS_CLASS,
   TRANSCLUSION_BLOCK_CLASS,
-  TRANSCLUSION_CHANGE_CLASS,
+  TRANSCLUSION_CHIP_CLASS,
   TRANSCLUSION_COVERED_CLASS,
+  TRANSCLUSION_HEAD_CLASS,
   buildTransclusionDecorations,
+  createTransclusionHead,
   isBlockEditing,
   listSectionTitles,
   mergeSectionContent,
@@ -36,8 +38,10 @@ import {
   transclusionExtensions,
   transclusionInternals,
   transclusionLabels,
+  transclusionLinkChange,
   transclusionLinkLabel,
   transclusionMenuHandlers,
+  transclusionNavHandlers,
   transclusionRefStartingAt,
   transclusionSectionAccept,
   transclusionSectionCompletions,
@@ -124,7 +128,7 @@ test('wikiPrefixAt: трансклюзия помечается флагом', (
 });
 
 // ---------------------------------------------------------------------------
-// Декорации трёх режимов
+// Декорации: блок и черновик ссылки при вводе
 // ---------------------------------------------------------------------------
 
 test('buildTransclusionDecorations: курсор вне — блок с развёрнутым текстом', () => {
@@ -132,7 +136,7 @@ test('buildTransclusionDecorations: курсор вне — блок с разв
   const refs = parseTransclusions(src);
   const key = transclusionCacheKey(NET, refs[0]!);
   const cache = new Map([[key, { title: 'Мысль', exists: true, error: null, html: '<p>тело</p>' }]]);
-  const { deco, atomic } = buildTransclusionDecorations(src, { from: 0, to: 0 }, cache, NET, new Set());
+  const { deco, atomic } = buildTransclusionDecorations(src, { from: 0, to: 0 }, cache, NET);
   const items = collect(deco, src.length);
   assert.equal(items.length, 1);
   assert.equal(items[0]!.from, refs[0]!.start);
@@ -146,34 +150,19 @@ test('buildTransclusionDecorations: курсор вне — блок с разв
   ]);
 });
 
-test('buildTransclusionDecorations: курсор внутри — атомарный #id, раздел свободен', () => {
+test('buildTransclusionDecorations: курсор внутри — атомарный #id при вводе ссылки', () => {
   const src = `![[#${ID_A}#Раздел]]`;
   const ref = parseTransclusions(src)[0]!;
   const key = transclusionCacheKey(NET, ref);
   const cache = new Map([[key, { title: 'Мысль', exists: true, error: null, html: null }]]);
   const inside = ref.start + 5;
-  const { deco, atomic } = buildTransclusionDecorations(src, { from: inside, to: inside }, cache, NET, new Set());
+  const { deco, atomic } = buildTransclusionDecorations(src, { from: inside, to: inside }, cache, NET);
   const items = collect(deco, src.length);
   assert.equal(items.length, 1);
   assert.equal(items[0]!.from, ref.start + 3); // `#`
   assert.equal(items[0]!.to, ref.start + 3 + 1 + ID_A.length);
   assert.deepEqual(items[0]!.value.spec.widget?.constructor.name, 'TransclusionIdWidget');
   assert.equal(atomic.size, 1, 'токен #id атомарен');
-});
-
-test('buildTransclusionDecorations: свёрнутая ссылка — виджет-ссылка без block', () => {
-  const src = `![[#${ID_A}]]`;
-  const ref = parseTransclusions(src)[0]!;
-  const key = transclusionCacheKey(NET, ref);
-  const cache = new Map([[key, { title: 'Мысль', exists: true, error: null, html: '<p>тело</p>' }]]);
-  const { deco, atomic } = buildTransclusionDecorations(src, { from: 0, to: 0 }, cache, NET, new Set([key]));
-  const items = collect(deco, src.length);
-  assert.equal(items.length, 1);
-  assert.notEqual(items[0]!.value.spec.block, true);
-  assert.equal(items[0]!.value.spec.widget?.constructor.name, 'TransclusionLinkWidget');
-  // Свёрнутая ссылка — тоже единый атомарный элемент.
-  assert.equal(atomic.size, 1);
-  assert.deepEqual(collect(atomic, src.length).map((a) => [a.from, a.to]), [[ref.start, ref.end]]);
 });
 
 // ---------------------------------------------------------------------------
@@ -250,7 +239,6 @@ test('buildTransclusionDecorations: источник в правке — бло�
     { from: inside, to: inside },
     cacheFor(ref),
     NET,
-    new Set(),
     ID_A,
   );
   const items = collect(deco, src.length);
@@ -273,7 +261,6 @@ test('buildTransclusionDecorations: чужой захват источника �
     { from: 0, to: 0 },
     cacheFor(ref),
     NET,
-    new Set(),
     null,
     new Map([[ID_A, 'Алиса']]),
   );
@@ -289,7 +276,7 @@ test('buildTransclusionDecorations: правка одного источника
     ...cacheFor(refs[0]!),
     ...cacheFor(refs[1]!),
   ]);
-  const { deco } = buildTransclusionDecorations(src, { from: 0, to: 0 }, cache, NET, new Set(), ID_A);
+  const { deco } = buildTransclusionDecorations(src, { from: 0, to: 0 }, cache, NET, ID_A);
   const specs = collect(deco, src.length).map((item) => item.value.spec as BlockSpec);
   assert.equal(specs.length, 2);
   assert.equal(specs[0]!.widget?.sourceId, ID_A);
@@ -308,40 +295,6 @@ test('transclusionState: setBlockEdit включает и выключает р�
   assert.equal(entered.field(transclusionState).editingSourceId, ID_A);
   const exited = entered.update({ effects: setBlockEdit.of(null) }).state;
   assert.equal(exited.field(transclusionState).editingSourceId, null);
-});
-
-test('collapsed: режим держится внутри скобок и снимается за ними (5accebab)', async () => {
-  const { store } = await import('../src/renderer/state.js');
-  store.update({ networkId: NET_ID });
-  const src = `![[#${ID_A}]]`;
-  const ref = parseTransclusions(src)[0]!;
-  const key = transclusionCacheKey(NET_ID, ref);
-  let state = EditorState.create({ doc: src, extensions: [transclusionState] });
-  // Вход в режим правки ссылки — сворачивание без движения каретки.
-  state = state.update({ effects: transclusionInternals.setCollapsed.of({ key, collapsed: true }) }).state;
-  assert.equal(state.field(transclusionState).collapsed.has(key), true);
-  // Каретка движется ВНУТРЬ скобок — режим не сбрасывается (правку не выбивает).
-  state = state.update({ selection: { anchor: ref.start + 4 } }).state;
-  assert.equal(state.field(transclusionState).collapsed.has(key), true);
-  // Каретка ушла за скобки — снова текст блока.
-  state = state.update({ selection: { anchor: 0 } }).state;
-  assert.equal(state.field(transclusionState).collapsed.size, 0);
-  // Не оставляем сеть в store: иначе последующие тесты файла видят активную сеть.
-  store.update({ networkId: null });
-});
-
-test('transclusionState: вход в правку разворачивает свёрнутую ссылку', () => {
-  const src = `![[#${ID_A}]]`;
-  const ref = parseTransclusions(src)[0]!;
-  const key = transclusionCacheKey(NET, ref);
-  let state = EditorState.create({ doc: src, extensions: [transclusionState] });
-  state = state.update({
-    effects: transclusionInternals.setCollapsed.of({ key, collapsed: true }),
-  }).state;
-  assert.equal(state.field(transclusionState).collapsed.has(key), true);
-  state = state.update({ effects: setBlockEdit.of(ID_A) }).state;
-  assert.equal(state.field(transclusionState).collapsed.size, 0);
-  assert.equal(state.field(transclusionState).editingSourceId, ID_A);
 });
 
 // ---------------------------------------------------------------------------
@@ -470,7 +423,6 @@ test('buildTransclusionDecorations: текст блока в правке — л
     { from: 0, to: 0 },
     new Map(),
     NET,
-    new Set(),
     ID_A,
     new Map(),
     { sourceId: ID_A, section: null, refRaw: '', from: 0, to: src.length },
@@ -498,7 +450,6 @@ test('buildTransclusionDecorations: многострочное поле прав
     { from: 0, to: 0 },
     new Map(),
     NET,
-    new Set(),
     ID,
     new Map(),
     { sourceId: ID, section: null, refRaw: '', from, to },
@@ -521,7 +472,6 @@ test('buildTransclusionDecorations: ссылка вне диапазона пр�
     { from: 0, to: 0 },
     new Map(),
     NET,
-    new Set(),
     ID_A,
     new Map(),
     { sourceId: ID_A, section: null, refRaw: '', from: refs[0]!.start, to: refs[0]!.end },
@@ -554,7 +504,7 @@ test('isBlockEditing: Enter отдаётся родительскому keymap �
 // Контекстное меню блока (задача 955478e8, элемент 1e0fb0bd)
 // ---------------------------------------------------------------------------
 
-test('transclusionMenuHandlers: ровно шесть команд макета', () => {
+test('transclusionMenuHandlers: пять команд макета (правка + навигация), без «Изменить ссылку»', () => {
   const src = `![[#${ID_A}]]`;
   const ref = parseTransclusions(src)[0]!;
   const view = { state: EditorState.create({ doc: src }) } as unknown as Parameters<
@@ -564,7 +514,6 @@ test('transclusionMenuHandlers: ровно шесть команд макета'
   assert.deepEqual(
     Object.keys(handlers).sort(),
     [
-      'transclusion.changeLink',
       'transclusion.copyId',
       'transclusion.copyLink',
       'transclusion.edit',
@@ -572,22 +521,46 @@ test('transclusionMenuHandlers: ровно шесть команд макета'
       'transclusion.openSource',
     ],
   );
+  assert.equal('transclusion.changeLink' in handlers, false, 'сворачивания блока больше нет');
 });
 
-test('transclusionMenuHandlers: «Изменить ссылку» без сети не трогает документ', () => {
-  const src = `![[#${ID_A}]]`;
-  const ref = parseTransclusions(src)[0]!;
-  let dispatches = 0;
-  const view = {
-    state: EditorState.create({ doc: src }),
-    dispatch: () => {
-      dispatches += 1;
-    },
-  } as unknown as Parameters<typeof transclusionMenuHandlers>[0];
-  const handlers = transclusionMenuHandlers(view, ref);
-  handlers['transclusion.changeLink']!();
-  // Вне сети ключ кэша не строится — сворачивание не выполняется.
-  assert.equal(dispatches, 0);
+test('transclusionNavHandlers: четыре команды навигации без правки ссылки', () => {
+  const handlers = transclusionNavHandlers(ID_A, `![[#${ID_A}]]`);
+  assert.deepEqual(Object.keys(handlers).sort(), [
+    'transclusion.copyId',
+    'transclusion.copyLink',
+    'transclusion.focusSource',
+    'transclusion.openSource',
+  ]);
+});
+
+test('transclusionLinkChange: одна транзакция замены ссылки, защита от сдвига/совпадения', () => {
+  const raw = `до ![[#${ID_A}#Раздел]] после`;
+  const ref = parseTransclusions(raw)[0]!;
+  // Смена раздела — диапазон прежней ссылки, новая ссылка.
+  assert.deepEqual(
+    transclusionLinkChange(raw, ref.start, ID_A, ID_A, 'Другой'),
+    { from: ref.start, to: ref.end, insert: `![[#${ID_A}#Другой]]` },
+  );
+  // Смена мысли.
+  assert.deepEqual(
+    transclusionLinkChange(raw, ref.start, ID_A, ID_B, null),
+    { from: ref.start, to: ref.end, insert: `![[#${ID_B}]]` },
+  );
+  // Ссылка совпала с прежней — менять нечего.
+  assert.equal(transclusionLinkChange(raw, ref.start, ID_A, ID_A, 'Раздел'), null);
+  // Источник под началом диапазона сменился, пока поповер был открыт, —
+  // слепая замена запрещена.
+  assert.equal(transclusionLinkChange(raw, ref.start, ID_B, ID_A, null), null);
+  // Ссылки по этому смещению нет вовсе.
+  assert.equal(transclusionLinkChange(raw, 0, ID_A, ID_A, null), null);
+  // Одна транзакция даёт ожидаемый документ и каретку за ссылкой.
+  const change = transclusionLinkChange(raw, ref.start, ID_A, ID_B, 'Раздел X')!;
+  const state = EditorState.create({ doc: raw }).update({
+    changes: change,
+    selection: { anchor: change.from + change.insert.length },
+  }).state;
+  assert.equal(state.doc.toString(), `до ![[#${ID_B}#Раздел X]] после`);
 });
 
 // ---------------------------------------------------------------------------
@@ -932,7 +905,6 @@ test('buildTransclusionDecorations: выделение покрывает бло
     { from: ref.start, to: ref.end },
     cacheFor(ref),
     NET,
-    new Set(),
   );
   const items = collect(deco, src.length);
   assert.equal(items.length, 1);
@@ -942,7 +914,7 @@ test('buildTransclusionDecorations: выделение покрывает бло
   assert.equal(atomic.size, 1, 'блок остаётся единым атомом');
 });
 
-test('buildTransclusionDecorations: выделение внутри ссылки — режим правки ссылки (#id) (5312142d)', () => {
+test('buildTransclusionDecorations: выделение внутри ссылки — черновик ссылки с #id (5312142d)', () => {
   const src = `до ${BLOCK_RAW} после`;
   const ref = parseTransclusions(src)[0]!;
   const { deco } = buildTransclusionDecorations(
@@ -950,7 +922,6 @@ test('buildTransclusionDecorations: выделение внутри ссылки
     { from: ref.start + 2, to: ref.end },
     cacheFor(ref),
     NET,
-    new Set(),
   );
   const widget = collect(deco, src.length)[0]!.value.spec as BlockSpec;
   assert.equal(widget.widget?.constructor.name, 'TransclusionIdWidget', 'частичное выделение — сырой markdown');
@@ -964,7 +935,6 @@ test('buildTransclusionDecorations: полное покрытие выделен
     { from: ref.start, to: ref.end },
     cacheFor(ref),
     NET,
-    new Set(),
   );
   const spec = collect(deco, src.length)[0]!.value.spec as BlockSpec;
   assert.equal(spec.block, true, 'блок не разобран');
@@ -975,7 +945,7 @@ test('buildTransclusionDecorations: без/вне выделения блок н
   const src = `до ${BLOCK_RAW} после`;
   const ref = parseTransclusions(src)[0]!;
   const widgetOf = (sel: { from: number; to: number }): BlockSpec =>
-    collect(buildTransclusionDecorations(src, sel, cacheFor(ref), NET, new Set()).deco, src.length)[0]!
+    collect(buildTransclusionDecorations(src, sel, cacheFor(ref), NET).deco, src.length)[0]!
       .value.spec as BlockSpec;
   assert.equal(widgetOf({ from: 0, to: 0 }).widget?.covered, false, 'без выделения блок не помечен');
   const beforeRef = widgetOf({ from: 0, to: 2 });
@@ -988,7 +958,7 @@ test('TransclusionBlockWidget.eq учитывает флаг covered — пер�
   const ref = parseTransclusions(src)[0]!;
   const cache = cacheFor(ref);
   const widgetOf = (sel: { from: number; to: number }) =>
-    (collect(buildTransclusionDecorations(src, sel, cache, NET, new Set()).deco, src.length)[0]!.value
+    (collect(buildTransclusionDecorations(src, sel, cache, NET).deco, src.length)[0]!.value
       .spec as BlockSpec).widget as unknown as { eq(other: unknown): boolean };
   const plain = widgetOf({ from: 0, to: 0 });
   const covered = widgetOf({ from: ref.start, to: ref.end });
@@ -1008,7 +978,7 @@ test('TransclusionBlockWidget.toDOM: покрытый блок несёт кла
   const src = `до ${BLOCK_RAW} после`;
   const ref = parseTransclusions(src)[0]!;
   const widgetOf = (sel: { from: number; to: number }) =>
-    (collect(buildTransclusionDecorations(src, sel, cacheFor(ref), NET, new Set()).deco, src.length)[0]!.value
+    (collect(buildTransclusionDecorations(src, sel, cacheFor(ref), NET).deco, src.length)[0]!.value
       .spec as BlockSpec).widget as unknown as { toDOM(view: unknown): ShimElement };
   const view = { state: EditorState.create({ doc: src, extensions: [transclusionState] }) };
   const covered = widgetOf({ from: ref.start, to: ref.end }).toDOM(view);
@@ -1017,7 +987,7 @@ test('TransclusionBlockWidget.toDOM: покрытый блок несёт кла
   assert.ok(!plain.classList.contains(TRANSCLUSION_COVERED_CLASS), 'обычный блок класса покрытия не несёт');
 });
 
-test('TransclusionBlockWidget.toDOM: две ховер-кнопки правки (5accebab, 7a479549)', () => {
+test('TransclusionBlockWidget.toDOM: шапка-чип и одна ховер-кнопка правки блока (7a479549)', () => {
   (globalThis as unknown as { HTMLElement: unknown }).HTMLElement = ShimElement;
   (globalThis as unknown as { document: unknown }).document = {
     createElement: (tag: string) => new ShimElement(tag),
@@ -1028,23 +998,46 @@ test('TransclusionBlockWidget.toDOM: две ховер-кнопки правки
   const src = `до ${BLOCK_RAW} после`;
   const ref = parseTransclusions(src)[0]!;
   const widget = (
-    collect(buildTransclusionDecorations(src, { from: 0, to: 0 }, cacheFor(ref), NET, new Set()).deco, src.length)[0]!
+    collect(buildTransclusionDecorations(src, { from: 0, to: 0 }, cacheFor(ref), NET).deco, src.length)[0]!
       .value.spec as BlockSpec
   ).widget as unknown as { toDOM(view: unknown): ShimElement };
   const view = { state: EditorState.create({ doc: src, extensions: [transclusionState] }) };
   const el = widget.toDOM(view);
+  // Шапка-чип «имя · раздел» (задача 68591b8a) — всегда видна, одна на блок.
+  const heads = el.querySelectorAll(`.${TRANSCLUSION_HEAD_CLASS}`);
+  assert.equal(heads.length, 1, 'одна шапка-чип на блок');
+  const chip = heads[0]!.querySelector(`.${TRANSCLUSION_CHIP_CLASS}`);
+  assert.ok(chip !== null, 'шапка несёт чип-кнопку');
+  assert.equal(chip!.textContent, 'Мысль', 'чип подписан именем источника');
+  // Ховер-кнопок ровно одна — «Редактировать трансклюзию»; прежней «Редактировать
+  // ссылку» нет (ссылка правится чипом).
   const actions = el.querySelectorAll(`.${TRANSCLUSION_ACTIONS_CLASS}`);
   assert.equal(actions.length, 1, 'один контейнер ховер-кнопок');
   const buttons = actions[0]!.querySelectorAll('.ui-btn');
-  assert.equal(buttons.length, 2, 'ровно две кнопки правки');
-  const titles = buttons.map((button) => button.title);
-  assert.ok(titles.includes('Редактировать трансклюзию'), 'есть кнопка правки трансклюзии');
-  assert.ok(titles.includes('Редактировать ссылку'), 'есть кнопка правки ссылки');
-  assert.equal(
-    actions[0]!.querySelectorAll(`.${TRANSCLUSION_CHANGE_CLASS}`).length,
-    1,
-    'кнопка правки ссылки несёт класс, по которому mousedown не двигает каретку',
-  );
+  assert.equal(buttons.length, 1, 'ровно одна кнопка правки блока');
+  assert.equal(buttons[0]!.title, 'Редактировать трансклюзию');
+});
+
+test('createTransclusionHead: чип-кнопка словаря с подписью и гашением mousedown', () => {
+  (globalThis as unknown as { HTMLElement: unknown }).HTMLElement = ShimElement;
+  (globalThis as unknown as { document: unknown }).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: { style: {} },
+    querySelectorAll: () => [],
+  };
+  let clicked = 0;
+  const head = createTransclusionHead('Мысль · Раздел', () => {
+    clicked += 1;
+  });
+  const chip = head.querySelector(`.${TRANSCLUSION_CHIP_CLASS}`) as ShimElement | null;
+  assert.ok(chip !== null, 'чип собран');
+  assert.equal(chip!.textContent, 'Мысль · Раздел');
+  const down = { defaultPrevented: false, preventDefault(): void { this.defaultPrevented = true; } };
+  chip!.emit('mousedown', down);
+  assert.equal(down.defaultPrevented, true, 'mousedown по чипу не двигает каретку/фокус');
+  chip!.click();
+  assert.equal(clicked, 1, 'клик по чипу вызывает обработчик');
 });
 
 test('стрелка вправо в начале блока выделяет блок целиком (5312142d)', () => {

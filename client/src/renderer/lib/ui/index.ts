@@ -135,6 +135,8 @@ export {
   placeUnderAnchor,
   placeAtCursor,
   openPopover,
+  watchOutsideTap,
+  isInsidePopover,
 } from './popover.js';
 export type {
   RectLike,

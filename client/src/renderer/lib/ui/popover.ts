@@ -308,6 +308,19 @@ export function watchOutsideTap(
 }
 
 /**
+ * Лежит ли узел внутри всплывающей панели (`.ui-popover`) — решений «свой ли
+ * узел держит фокус/нажатие» для полей, которые при уходе фокуса коммитят
+ * правку. Клик в панель (например, поле живого поиска) не должен трактоваться
+ * как выход из поля: `markdown-field.editorBlurCommits` считает такой фокус
+ * «внутри поля».
+ */
+export function isInsidePopover(node: Node | null): boolean {
+  const el = node as (Element & { closest?(selector: string): Element | null }) | null;
+  if (el === null || typeof el !== 'object' || typeof el.closest !== 'function') return false;
+  return el.closest(`.${POPOVER_CLASS}`) !== null;
+}
+
+/**
  * Показывает панель с контентом у якоря. Панель монтируется в `document.body`
  * (fixed-позиционирование — не режется `overflow` контейнеров) и сразу
  * ставится по месту.

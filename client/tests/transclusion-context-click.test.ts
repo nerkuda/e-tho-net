@@ -1,21 +1,19 @@
 /**
- * Регресс-тест ошибки `27b95e60` «Правый клик по свёрнутой ссылке трансклюзии
- * меняет выделение и разворачивает её» (0.12.1, ТП2).
+ * Регресс-тест ошибки `27b95e60` «Правый клик по ссылке трансклюзии меняет
+ * выделение» (0.12.1, ТП2). Свёрнутой ссылки после задачи `68591b8a` нет —
+ * ссылка правится чипом-шапкой, — но контракт кнопок мыши сохранён: правый и
+ * средний клик по БЛОКУ трансклюзии — жест контекстного меню, выделение не
+ * меняется; левый клик по блоку выделяет его целиком (ошибка 5312142d).
  *
- * Причина: обработчик `mousedown` (`transclusionMouseDown`) не различал кнопки
- * мыши — на свёрнутой ссылке он диспатчил выделение внутрь неё при любой
- * кнопке. Смена выделения сбрасывает состояние свёрнутости (так задумано для
- * «выхода за скобки»), поэтому правый клик разворачивал ссылку и сбивал
- * выделение, хотя жест — вызов контекстного меню.
+ * Дополнительно: шапка-чип блока (элемент `7a479549`) на `mousedown` не двигает
+ * каретку — клик открывает поповер, а не переставляет выделение.
  *
  * Проверяется контракт:
- *  - правый/средний клик по свёрнутой ссылке не перехватывается и не меняет
- *    выделение (dispatch не вызывается) — состояние блока сохраняется;
- *  - левый клик по свёрнутой ссылке — прежнее поведение (каретка внутрь);
- *  - левый клик по блоку выделяет блок целым диапазоном (ошибка 5312142d), не
- *    ставя каретку внутрь;
- *  - правый клик по ссылке открывает контекстное меню блока (обработчик
- *    `contextmenu` не тронут и работает поверх прежнего состояния).
+ *  - правый/средний клик по блоку не перехватывается и не меняет выделение
+ *    (dispatch не вызывается);
+ *  - левый клик по блоку выделяет блок целиком;
+ *  - клик по шапке-чипу не меняет выделение (чип обрабатывает себя сам);
+ *  - правый клик по блоку открывает контекстное меню блока; вне блока — нет.
  *
  * DOM-shimmed, как соседние lib-ui-тесты (`comment-commands.test.ts`).
  */
@@ -30,7 +28,7 @@ import { parseTransclusions, type TransclusionRef } from '@etn/markdown';
 import { ShimElement } from './dom-shim.js';
 import {
   TRANSCLUSION_BLOCK_CLASS,
-  TRANSCLUSION_LINK_CLASS,
+  TRANSCLUSION_HEAD_CLASS,
   transclusionContextMenuHandler,
   transclusionMouseDown,
 } from '../src/renderer/editor/transclusion.js';
@@ -78,11 +76,11 @@ function fakeView(doc: string): {
 }
 
 /**
- * Виджет трансклюзии. Селектор близости задаётся явно: шим не разбирает
- * составной CSS-селектор `.a, .b`, который использует `transclusionWidgetRefAt`.
+ * Виджет трансклюзии с заданным классом. Селектор близости задаётся явно: шим
+ * не разбирает составной CSS-селектор.
  */
 function widget(className: string, ref: TransclusionRef): ShimElement {
-  const el = new ShimElement('span');
+  const el = new ShimElement('div');
   el.className = className;
   el.dataset.mdFrom = String(ref.start);
   el.dataset.mdTo = String(ref.end);
@@ -116,66 +114,54 @@ beforeEach(() => {
   installShim();
 });
 
-describe('правый клик по свёрнутой ссылке трансклюзии (27b95e60)', () => {
+describe('кнопки мыши по блоку трансклюзии (27b95e60)', () => {
   it('правый клик не перехватывается и не меняет выделение', () => {
     const view = fakeView(SRC);
-    const handled = transclusionMouseDown(
-      mouse(2, widget(TRANSCLUSION_LINK_CLASS, REF)),
-      view as any,
-    );
+    const handled = transclusionMouseDown(mouse(2, widget(TRANSCLUSION_BLOCK_CLASS, REF)), view as any);
     assert.equal(handled, false, 'mousedown по неосновной кнопке не перехватываем');
-    assert.equal(
-      view.events.length,
-      0,
-      'правый клик не диспатчит выделение — свёрнутая ссылка остаётся свёрнутой',
-    );
+    assert.equal(view.events.length, 0, 'правый клик не диспатчит выделение');
   });
 
   it('средний клик ведёт себя так же, как правый', () => {
     const view = fakeView(SRC);
-    const handled = transclusionMouseDown(
-      mouse(1, widget(TRANSCLUSION_LINK_CLASS, REF)),
-      view as any,
-    );
+    const handled = transclusionMouseDown(mouse(1, widget(TRANSCLUSION_BLOCK_CLASS, REF)), view as any);
     assert.equal(handled, false);
     assert.equal(view.events.length, 0);
   });
 
-  it('левый клик по свёрнутой ссылке — прежнее поведение (каретка внутрь)', () => {
-    const view = fakeView(SRC);
-    const handled = transclusionMouseDown(
-      mouse(0, widget(TRANSCLUSION_LINK_CLASS, REF)),
-      view as any,
-    );
-    assert.equal(handled, true, 'левый клик обрабатывается трансклюзией');
-    assert.equal(view.events.length, 1);
-    assert.deepEqual(view.events[0]!.selection, { anchor: REF.start + 1 });
-  });
-
   it('левый клик по блоку выделяет блок целиком (ошибка 5312142d)', () => {
     const view = fakeView(SRC);
-    const handled = transclusionMouseDown(
-      mouse(0, widget(TRANSCLUSION_BLOCK_CLASS, REF)),
-      view as any,
-    );
+    const handled = transclusionMouseDown(mouse(0, widget(TRANSCLUSION_BLOCK_CLASS, REF)), view as any);
     assert.equal(handled, true, 'левый клик по блоку обрабатывается трансклюзией');
     assert.equal(view.events.length, 1, 'клик ставит выделение на весь блок');
     assert.deepEqual(view.events[0]!.selection, { anchor: REF.start, head: REF.end });
   });
+
+  it('левый клик по шапке-чипу выделение не меняет (чип обрабатывает себя сам)', () => {
+    const view = fakeView(SRC);
+    // Цель — чип внутри шапки: closest('.transclusion-head') не пуст.
+    const target = new ShimElement('button');
+    target.className = 'ui-btn transclusion-chip';
+    (target as any).closest = (selector: string): ShimElement | null =>
+      selector.includes(TRANSCLUSION_HEAD_CLASS) ? new ShimElement('div') : null;
+    const handled = transclusionMouseDown(mouse(0, target), view as any);
+    assert.equal(handled, true, 'клик по чипу перехвачен трансклюзией (не доходит до выделения)');
+    assert.equal(view.events.length, 0, 'каретку/выделение не двигаем — откроется поповер');
+  });
 });
 
-describe('контекстное меню ссылки открывается правым кликом (27b95e60)', () => {
-  it('contextmenu по свёрнутой ссылке открывает меню блока', () => {
+describe('контекстное меню блока открывается правым кликом', () => {
+  it('contextmenu по блоку открывает меню блока', () => {
     const view = fakeView(SRC);
-    const event = mouse(2, widget(TRANSCLUSION_LINK_CLASS, REF));
+    const event = mouse(2, widget(TRANSCLUSION_BLOCK_CLASS, REF));
     const handled = transclusionContextMenuHandler(event as any, view as any);
-    assert.equal(handled, true, 'правый клик по ссылке перехвачен меню блока');
+    assert.equal(handled, true, 'правый клик по блоку перехвачен меню блока');
     assert.equal(event.defaultPrevented, true, 'родное меню поля погашено');
     const body = (globalThis as any).document.body as ShimElement;
     assert.ok(body.children.length > 0, 'меню добавлено в документ');
   });
 
-  it('contextmenu вне виджета трансклюзии не перехватывается', () => {
+  it('contextmenu вне блока не перехватывается', () => {
     const view = fakeView(SRC);
     const event = mouse(2, null);
     const handled = transclusionContextMenuHandler(event as any, view as any);

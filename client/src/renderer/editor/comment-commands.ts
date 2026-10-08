@@ -9,8 +9,9 @@
  *     комментария» (`1ab005ca`) и «Контекстное меню поля комментария»
  *     (`0562e0e3`): порядок кнопок, подменю, дублирование команд в меню,
  *     подменю настроек только в тулбаре. Сюда же — пункты контекстного меню
- *     блока трансклюзии (элемент `1e0fb0bd`, ТП2): шесть команд на общем
- *     словаре пунктов, тела — в `editor/transclusion.ts`.
+ *     блока трансклюзии (элемент `1e0fb0bd`, ТП2): пять команд на общем
+ *     словаре пунктов (правка + навигация; меню чипа в просмотре — четыре
+ *     навигационные), тела — в `editor/transclusion.ts`.
  *  2. **Реестром исполнителей** «команда → обработчик» — точки расширения.
  *     Сами тела команд форматирования приходят задачей `ab0c4470`; команды
  *     «как текст» — ТП2, «разделение» — ТП3. До их регистрации кнопка/пункт
@@ -383,16 +384,13 @@ export const COMMENT_COMMANDS: Readonly<Record<string, CommentCommandDef>> = Obj
   },
   // Команды контекстного меню блока трансклюзии (ТП2, задача 955478e8;
   // элемент интерфейса `1e0fb0bd`). Тела команд живут в `editor/transclusion.ts`
-  // (владелец режимов блока), здесь — только пункты общего словаря.
+  // (владелец режимов блока), здесь — только пункты общего словаря. Прежнего
+  // «Изменить ссылку» нет (задача `68591b8a`): ссылка правится чипом-шапкой и
+  // поповером, а не сворачиванием блока.
   'transclusion.edit': {
     id: 'transclusion.edit',
     labelKey: 'comment.transclusion.menu.edit',
     icon: 'pencil',
-  },
-  'transclusion.changeLink': {
-    id: 'transclusion.changeLink',
-    labelKey: 'comment.transclusion.menu.changeLink',
-    icon: 'link-edit',
   },
   'transclusion.openSource': {
     id: 'transclusion.openSource',
@@ -569,13 +567,24 @@ export function buildCommentMenuItems(host: CommentCommandHost): MenuItem[] {
 
 /**
  * Раскладка контекстного меню блока трансклюзии (ТП2, задача `955478e8`;
- * элемент интерфейса `1e0fb0bd`): шесть команд в фиксированном порядке.
- * Меню доступно только в режиме редактирования окружения — блок существует
- * лишь в редакторе (владелец режимов — `editor/transclusion.ts`).
+ * элемент интерфейса `1e0fb0bd`) в правке: «Редактировать» (вход в правку
+ * блока) плюс четыре команды навигации. Раскладка доступна только в режиме
+ * редактирования окружения — блок существует лишь в редакторе (владелец
+ * режимов — `editor/transclusion.ts`).
  */
 export const TRANSCLUSION_MENU_LAYOUT: readonly string[] = Object.freeze([
   'transclusion.edit',
-  'transclusion.changeLink',
+  'transclusion.openSource',
+  'transclusion.focusSource',
+  'transclusion.copyLink',
+  'transclusion.copyId',
+]);
+
+/**
+ * Раскладка меню чипа блока в ПРОСМОТРЕ (задача `68591b8a`): только команды
+ * навигации — просмотр не пишет, смены ссылки здесь нет.
+ */
+export const TRANSCLUSION_NAV_MENU_LAYOUT: readonly string[] = Object.freeze([
   'transclusion.openSource',
   'transclusion.focusSource',
   'transclusion.copyLink',
@@ -586,13 +595,15 @@ export const TRANSCLUSION_MENU_LAYOUT: readonly string[] = Object.freeze([
  * Собирает пункты контекстного меню блока трансклюзии на общем словаре
  * пунктов (`lib/menu.ts`) и словаре команд `COMMENT_COMMANDS`. Обработчики
  * задаёт вызывающий (`editor/transclusion.ts`) — их отсутствие делает пункт
- * недоступным, не убирая его из меню.
+ * недоступным, не убирая его из меню. `layout` — раскладка (по умолчанию меню
+ * правки; просмотр передаёт {@link TRANSCLUSION_NAV_MENU_LAYOUT}).
  */
 export function buildTransclusionMenuItems(
   handlers: Readonly<Record<string, (() => void) | undefined>>,
+  layout: readonly string[] = TRANSCLUSION_MENU_LAYOUT,
 ): MenuItem[] {
   const items: MenuItem[] = [];
-  for (const id of TRANSCLUSION_MENU_LAYOUT) {
+  for (const id of layout) {
     const def = COMMENT_COMMANDS[id];
     if (def === undefined) continue;
     const handler = handlers[id];
