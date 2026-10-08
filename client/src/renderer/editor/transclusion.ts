@@ -73,7 +73,11 @@
  * «Открыть ссылку», «В фокус», «Копировать», «Копировать ID». Пункты — на общем
  * словаре `lib/menu.ts` и словаре команд `editor/comment-commands.ts`; доступно
  * только в режиме редактирования окружения. Чип в просмотре открывает четыре
- * команды навигации ({@link transclusionNavHandlers}).
+ * команды навигации ({@link transclusionNavHandlers}). В поповере чипа (правка)
+ * к командам навигации добавлена «Удалить блок» — удаление ссылки ОДНОЙ
+ * транзакцией с кареткой на место блока, без подтверждения (задача `c11b82ee`).
+ * `Shift`+клик по блоку выделяет его целиком (атомарный диапазон, рамка
+ * `--covered`) для Delete/Ctrl+C — вход кареткой остаётся за обычным кликом.
  *
  * **Свёрнутость разделов внутри блока (задача `1b405a92`, требование
  * `e04d84f7`).** Неактивный блок декорирует своё HTML-содержимое через
@@ -285,6 +289,18 @@ export function transclusionLinkChange(
   }
   if (next === fresh.raw) return null;
   return { from: fresh.start, to: fresh.end, insert: next };
+}
+
+/**
+ * Диапазон удаления блока по началу его ссылки (задача `c11b82ee`): каретка
+ * ставится на место блока. `null` — ссылка сдвинулась/исчезла (удалять нечего).
+ */
+export function transclusionBlockRemoval(
+  doc: string,
+  start: number,
+): { from: number; to: number } | null {
+  const ref = transclusionRefStartingAt(doc, start);
+  return ref === null ? null : { from: ref.start, to: ref.end };
 }
 
 /** ATX-заголовок: уровень и текст (закрывающие `#` срезаны). */
@@ -1454,6 +1470,10 @@ export function transclusionBlockArrow(
  * Реагирует только на ОСНОВНУЮ кнопку мыши (`event.button === 0`): правый и
  * средний клик — жесты вызова контекстного меню, они не должны менять
  * выделение (ошибка `27b95e60`).
+ *
+ * `Shift`+клик по блоку выделяет его ЦЕЛИКОМ (атомарный диапазон + рамка
+ * `--covered`) для Delete/Ctrl+C, в блок НЕ входит; обычный клик — вход
+ * кареткой, как раньше (задача `c11b82ee`, решение пользователя 2026-10-08).
  */
 export function transclusionMouseDown(event: MouseEvent, view: EditorView): boolean {
   if (event.button !== 0) return false;
@@ -1474,6 +1494,16 @@ export function transclusionMouseDown(event: MouseEvent, view: EditorView): bool
   if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return false;
   const ref = transclusionRefStartingAt(view.state.doc.toString(), from);
   if (ref === null) return true;
+  // Shift+клик — выделить блок целиком (атомарный диапазон, рамка `--covered`),
+  // в блок не входим: дальше Delete удалит ссылку, Ctrl+C скопирует (задача
+  // `c11b82ee`). Выделение — единственная транзакция выбора.
+  if (event.shiftKey) {
+    const sel = view.state.selection.main;
+    if (sel.from !== from || sel.to !== to) {
+      view.dispatch({ selection: { anchor: from, head: to }, userEvent: 'select' });
+    }
+    return true;
+  }
   // Источник захвачен другим участником — блок только для чтения: выделяем
   // целиком (атом), вложенный редактор не монтируем (требование 647fa34a).
   if (otherHolder('thought', ref.sourceId) !== null) {
@@ -1765,6 +1795,22 @@ export function openTransclusionLinkPopover(
   ): HTMLButtonElement =>
     iconButton({ icon: svgIcon(icon, 14), role: 'ghost', size: 's', title, onClick });
 
+  /**
+   * Удаляет ссылку блока одной транзакцией, каретка — на место блока (задача
+   * `c11b82ee`). Без диалога подтверждения: откат — undo контейнера. Если
+   * ссылка сдвинулась/исчезла, пока поповер был открыт, — ничего не меняем.
+   */
+  const removeBlock = (): void => {
+    const range = transclusionBlockRemoval(view.state.doc.toString(), anchorStart);
+    close();
+    if (range === null) return;
+    view.dispatch({
+      changes: { from: range.from, to: range.to, insert: '' },
+      selection: { anchor: range.from },
+      userEvent: 'delete',
+    });
+  };
+
   commands.append(
     commandButton('external-link', t('comment.transclusion.menu.open'), () => {
       close();
@@ -1783,6 +1829,9 @@ export function openTransclusionLinkPopover(
       close();
       void copyTransclusionText(currentSourceId, t('comment.transclusion.menu.copiedId'));
     }),
+    // «Удалить блок» — удаление ссылки одной транзакцией, каретка на место
+    // блока; без подтверждения (откат — undo контейнера).
+    commandButton('trash', t('comment.transclusion.menu.delete'), removeBlock),
   );
 
   const handle = wireSuggest(input, {
@@ -2303,4 +2352,5 @@ export const transclusionInternals = {
   dirtyBlockSaves,
   commitTransclusionEdit,
   TransclusionLockSet,
+  transclusionBlockRemoval,
 };

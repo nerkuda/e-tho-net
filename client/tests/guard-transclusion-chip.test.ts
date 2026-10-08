@@ -24,6 +24,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { listSourceFiles } from './guard-helpers.js';
+
 const RENDERER_ROOT = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
 const TRANSCLUSION = fs.readFileSync(
   path.join(RENDERER_ROOT, 'editor', 'transclusion.ts'),
@@ -34,6 +36,11 @@ const COMMENT_COMMANDS = fs.readFileSync(
   'utf8',
 );
 const RU = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'locales', 'ru.ts'), 'utf8');
+
+/** Исходники рендерера БЕЗ каталога локалей — места фактического использования ключей. */
+const RENDERER_SOURCES = listSourceFiles(RENDERER_ROOT, { exclude: ['lib/locales'] })
+  .map((file) => fs.readFileSync(file, 'utf8'))
+  .join('\n');
 
 /** Удалённые режимные идентификаторы (в исходнике не должно быть вовсе). */
 const REMOVED = [
@@ -97,5 +104,16 @@ describe('guard: чип-шапка и поповер вместо режимов
       TRANSCLUSION.includes('class TransclusionIdWidget'),
       'атомарный виджет #<id> при вводе ссылки удалён — создание ссылки сломано',
     );
+  });
+
+  it('нет осиротевших ключей локали блока трансклюзии (c11b82ee)', () => {
+    const keys = [...RU.matchAll(/'((?:comment\.transclusion)\.[A-Za-z.]+)'/g)].map((m) => m[1]!);
+    assert.ok(keys.length > 0, 'в каталоге ru не найдено ни одного ключа трансклюзий');
+    for (const key of keys) {
+      assert.ok(
+        RENDERER_SOURCES.includes(key),
+        `ключ локали «${key}» не используется в коде — осиротел`,
+      );
+    }
   });
 });

@@ -162,7 +162,11 @@ describe('поповер правки ссылки (68591b8a)', () => {
       const commandsBox = body.querySelector('.transclusion-popover-commands');
       assert.ok(commandsBox !== null, 'есть ряд команд');
       const commands = commandsBox!.children.filter((child) => child.classList.contains('ui-btn'));
-      assert.equal(commands.length, 4, 'четыре команды навигации');
+      assert.equal(commands.length, 5, 'четыре навигации + «Удалить блок» (c11b82ee)');
+      assert.ok(
+        commands.some((child) => (child as { title?: string }).title === 'Удалить блок'),
+        'в поповере есть команда «Удалить блок»',
+      );
     } finally {
       store.update({ networkId: null });
     }
