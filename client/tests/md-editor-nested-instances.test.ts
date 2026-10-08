@@ -76,6 +76,24 @@ function commentEvent(
   } as unknown as AnyRealtimeEvent;
 }
 
+/** Realtime-событие мысли минимальной формы (проверка сброса по `thought.deleted`). */
+function thoughtEvent(
+  type: 'thought.deleted' | 'thought.updated',
+  id: string,
+  seq: number,
+): AnyRealtimeEvent {
+  return {
+    type,
+    seq,
+    ts: '2026-10-08T00:00:00.000Z',
+    actor: { user_id: 'u1', client_id: 'c1' },
+    network_id: NET,
+    audience: 'network',
+    layer_id: '00000000-0000-0000-0000-000000000000',
+    data: { id },
+  } as unknown as AnyRealtimeEvent;
+}
+
 /** Метки подсказок источника разделов (или `null`, если источник не сработал). */
 async function sectionLabels(
   source: ReturnType<typeof transclusionSectionCompletions>,
@@ -203,6 +221,29 @@ test('sourceKeyForCommentEvent: кэш трогают только постоя�
     null,
     'удаление комментария связи источник не трогает',
   );
+  assert.equal(
+    key(thoughtEvent('thought.deleted', ID_A, 7)),
+    `${NET}:${ID_A}`,
+    'удаление мысли-источника сбрасывает источник (746e4e59)',
+  );
+});
+
+test('realtime thought.deleted сбрасывает источник: блок покажет «нет источника» (746e4e59)', async () => {
+  const stub = stubEtn();
+  transclusionInternals.clearSourceCache();
+  initTransclusionSourceCache();
+  const load = transclusionInternals.cachedTransclusionLoader(NET);
+
+  await load(ID_A);
+  assert.equal(stub.fetches(), 1, 'источник загружен и закэширован');
+
+  // Удаление мысли-источника: сервер эмитит только `thought.deleted` (постоянный
+  // комментарий сносится каскадом без `comment.deleted`). Кэш обязан сброситься,
+  // иначе повторная отрисовка блока вернула бы старое тело.
+  resetEventRouter();
+  routeRealtimeEvent(thoughtEvent('thought.deleted', ID_A, 100));
+  await load(ID_A);
+  assert.equal(stub.fetches(), 2, 'событие сбросило источник — сеть перечитана');
 });
 
 test('realtime comment.updated сбрасывает источник (обычная правка/черновик/чужая запись)', async () => {

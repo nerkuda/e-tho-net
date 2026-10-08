@@ -455,9 +455,20 @@ export function invalidateTransclusionSource(networkId: string, sourceId: string
  * Ключ источника, который надо сбросить по realtime-событию комментария, либо
  * `null`. Тело источника трансклюзии — ПОСТОЯННЫЙ комментарий мысли, поэтому
  * кэш трогают только создания/правки/удаления постоянных комментариев
- * владельца-мысли; хроно-комментарии и владельцы-связи — нет.
+ * владельца-мысли; хроно-комментарии и владельцы-связи — нет. Удаление самой
+ * мысли-источника (`thought.deleted`) тоже сбрасывает ключ: её постоянный
+ * комментарий сносится каскадом, а отдельного `comment.deleted` сервер не шлёт
+ * (ошибка `746e4e59`).
  */
 function sourceKeyForCommentEvent(evt: AnyRealtimeEvent): string | null {
+  // Удаление мысли-источника (ошибка `746e4e59`): постоянный комментарий
+  // сносится каскадом, но маршрут эмитит только `thought.deleted`
+  // (`server/src/routes/thoughts.ts`) без `comment.deleted` — без этой ветки
+  // кэш держал бы тело удалённого источника и блок показывал бы его вместо
+  // «нет источника трансклюзии».
+  if (evt.type === 'thought.deleted') {
+    return sourceCacheKey(evt.network_id, evt.data.id);
+  }
   if (evt.type === 'comment.updated') {
     return evt.data.kind === 'permanent'
       ? sourceCacheKey(evt.network_id, evt.data.owner_id)
