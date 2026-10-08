@@ -36,10 +36,14 @@ import {
 import {
   TransclusionLockSet,
   blockEditorKey,
+  cachedTransclusionLoader,
   commitTransclusionEdit,
   dirtyBlockSaves,
   parseBlockEditorKey,
+  reportCommitFailures,
+  transclusionBlockLabel,
   transclusionSourceIds,
+  type TransclusionCommitResult,
 } from '../src/renderer/editor/transclusion.js';
 import { __resetForTests, __setForTests } from '../src/renderer/lib/lock-cache.js';
 import type { LockRow } from '@etn/shared';
@@ -103,6 +107,15 @@ test('transclusionSourceIds: уникальные источники в поря
   const doc = `до ![[#${ID_A}]] и ![[#${ID_B}#Раздел]] и снова ![[#${ID_A}]]`;
   assert.deepEqual(transclusionSourceIds(doc), [ID_A, ID_B]);
   assert.deepEqual(transclusionSourceIds('текст без ссылок'), []);
+});
+
+// Ошибка 7399c9ec: обычная wiki-ссылка `[[#id]]` (автокомплит по `[[`) НЕ
+// является трансклюзией — блоков у поля нет, значит и блок-сообщений быть не
+// должно. Трансклюзия отличается ведущим `!`.
+test('transclusionSourceIds: wiki-ссылка [[#id]] не считается трансклюзией (7399c9ec)', () => {
+  assert.deepEqual(transclusionSourceIds(`до [[#${ID_A}|имя]] после`), []);
+  assert.deepEqual(transclusionSourceIds(`до [[#${ID_A}]] после`), []);
+  assert.deepEqual(transclusionSourceIds(`до ![[#${ID_A}]] после`), [ID_A]);
 });
 
 test('parseBlockEditorKey: источник и раздел из ключа инстанса', () => {
@@ -308,8 +321,102 @@ test('commitTransclusionEdit: сбой окружения — envOk false, ис�
     },
   });
   assert.equal(result.envOk, false, 'сбой окружения отражён');
+  assert.ok(result.envError instanceof Error, 'ошибку окружения сохранили для сообщения (7399c9ec)');
   assert.deepEqual(result.savedKeys, [keyA], 'источник записан независимо');
   assert.equal(stub.updates.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Сообщения о сбоях единой записи (ошибка 7399c9ec): поле без трансклюзий не
+// должно получать блок-специфичное сообщение; сбойные блоки называются по имени
+// и разделу. Шов `reportCommitFailures` — чистый, с инъекцией `notify`.
+// ---------------------------------------------------------------------------
+
+test('reportCommitFailures: простое поле (без блоков) записано — сообщений нет (7399c9ec)', async () => {
+  let envWrites = 0;
+  const result = await commitTransclusionEdit({
+    networkId: NET,
+    saves: [],
+    writeEnv: async () => {
+      envWrites += 1;
+      return '<p>ok</p>';
+    },
+  });
+  const notices: string[] = [];
+  reportCommitFailures({ networkId: NET, result, notify: (m) => notices.push(m) });
+  assert.equal(envWrites, 1, 'окружение записано');
+  assert.equal(result.envOk, true);
+  assert.deepEqual(result.failedKeys, [], 'блоков нет — сбойных нет');
+  assert.deepEqual(notices, [], 'никаких блок-уведомлений при записи простого поля');
+});
+
+test('reportCommitFailures: сбой окружения без блоков — своё сообщение, не блок-текст (7399c9ec)', async () => {
+  const result = await commitTransclusionEdit({
+    networkId: NET,
+    saves: [],
+    writeEnv: async () => {
+      throw new EtnError('VERSION_CONFLICT', 'конфликт версии комментария');
+    },
+  });
+  assert.equal(result.envOk, false);
+  const notices: string[] = [];
+  reportCommitFailures({ networkId: NET, result, notify: (m) => notices.push(m) });
+  assert.equal(notices.length, 1, 'ровно одно сообщение о сбое окружения');
+  assert.match(notices[0]!, /Не удалось сохранить комментарий/);
+  assert.match(notices[0]!, /конфликт версии комментария/, 'названа причина');
+  assert.ok(
+    !/исправьте помеченные блоки/i.test(notices[0]!),
+    'блок-текст не показывается при нуле сбойных блоков',
+  );
+});
+
+test('reportCommitFailures: сбой блока называет имя и раздел (7399c9ec)', async () => {
+  // Прогреваем кэш имён источников тем же загрузчиком, что рисует блоки.
+  (globalThis as unknown as { etn: unknown }).etn = {
+    thoughts: {
+      resolve: async (_net: string, ids: string[]) =>
+        ids.map((id) => ({ id, title: 'Источник А', synonyms: [], type_id: null })),
+    },
+    comments: {
+      list: async () => [
+        { id: 'perm', kind: 'permanent', body_md: '## Раздел A\nстарое', version: 1 },
+      ],
+    },
+  };
+  await cachedTransclusionLoader(NET)(ID_A);
+  const key = blockEditorKey(ID_A, 'Раздел A');
+  assert.equal(transclusionBlockLabel(NET, key), 'Источник А · Раздел A');
+
+  const result: TransclusionCommitResult = {
+    envOk: true,
+    envHtml: '<p>env</p>',
+    savedKeys: [],
+    failedKeys: [key],
+    failedSourceIds: [ID_A],
+    envError: null,
+  };
+  const notices: string[] = [];
+  reportCommitFailures({ networkId: NET, result, notify: (m) => notices.push(m) });
+  assert.equal(notices.length, 1, 'только блок-сообщение (окружение записано)');
+  assert.match(notices[0]!, /Источник А · Раздел A/, 'назван конкретный блок');
+  assert.match(notices[0]!, /исправьте помеченные блоки/i);
+});
+
+test('reportCommitFailures: сбой блока и окружения — оба сообщения (7399c9ec)', () => {
+  const key = blockEditorKey(ID_B, null);
+  const result: TransclusionCommitResult = {
+    envOk: false,
+    envHtml: null,
+    savedKeys: [],
+    failedKeys: [key],
+    failedSourceIds: [ID_B],
+    envError: new Error('сеть недоступна'),
+  };
+  const notices: string[] = [];
+  reportCommitFailures({ networkId: NET, result, notify: (m) => notices.push(m) });
+  assert.equal(notices.length, 2, 'два разных сбоя — два разных сообщения');
+  assert.ok(notices.some((m) => /Не удалось сохранить комментарий/.test(m)), 'сообщение о сбое окружения');
+  assert.ok(notices.some((m) => /исправьте помеченные блоки/i.test(m)), 'сообщение о сбойных блоках');
 });
 
 // ---------------------------------------------------------------------------
@@ -380,6 +487,10 @@ test('markdown-field: проводка пакетного захвата и ед
     [/store\?\.rollbackAll\(\)/.test(src), 'Esc откатывает вложенные редакторы'],
     [/markSaved\(key\)/.test(src), 'успешные блоки помечаются записанными'],
     [/markError\(key\)/.test(src), 'сбойные блоки помечаются визуально'],
+    [
+      /reportCommitFailures\(\{/.test(src) && !/comment\.transclusion\.savePartial/.test(src),
+      'сообщения о сбоях различают окружение и блоки (7399c9ec)',
+    ],
     [/onCommitEdit:/.test(src) && /onCancelEdit:/.test(src), 'хост блока связан с единой записью и отменой'],
     [/onBlockMounted:/.test(src), 'монтирование вложенного блока догружает захват источника'],
   ];

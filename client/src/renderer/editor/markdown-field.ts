@@ -69,6 +69,7 @@ import {
   decorateViewTransclusionLocks,
   defaultTransclusionLoader,
   parseBlockEditorKey,
+  reportCommitFailures,
   transclusionInternals,
   transclusionLabels,
   TransclusionLockSet,
@@ -1216,12 +1217,20 @@ export function createMarkdownField(opts: {
           showView();
           return;
         }
-        // Частичный сбой (версия/LOCKED/нет источника): редактор остаётся
-        // открытым, сбойные блоки помечены (`markError`) — повторите запись.
-        notice(t('comment.transclusion.savePartial'), 'error');
+        // Сбой записи: называем конкретные сбойные блоки (если они есть) и/или
+        // причину сбоя окружения. Блок-специфичное сообщение не показывается при
+        // нуле блоков — поле без трансклюзий получает своё сообщение об ошибке
+        // записи окружения (ошибка `7399c9ec`). Редактор остаётся открытым,
+        // сбойные блоки помечены (`markError`) — повторите запись.
+        reportCommitFailures({
+          networkId,
+          result,
+          notify: (message, level) => notice(message, level),
+        });
       })
-      .catch(() => {
-        notice(t('comment.transclusion.savePartial'), 'error');
+      .catch((err) => {
+        // Неожиданный сбой самого коммита (не записи окружения/блоков).
+        notice(t('comment.save.failed', errText(err)), 'error');
       })
       .finally(() => {
         commitPending = false;

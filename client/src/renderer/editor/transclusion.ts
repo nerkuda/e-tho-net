@@ -136,7 +136,7 @@ import {
 import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
-import { div, el } from '../lib/dom.js';
+import { div, el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../lib/live/index.js';
@@ -523,6 +523,13 @@ export interface TransclusionCommitResult {
   failedKeys: string[];
   /** id источников, запись которых сорвалась (для уведомления). */
   failedSourceIds: string[];
+  /**
+   * Ошибка записи окружения (для сообщения пользователю), `null` при успехе.
+   * Раньше сбой окружения был безымянным (`envOk: false`), из-за чего вызывающий
+   * не мог отличить его от сбоя блоков и показывал блок-специфичное сообщение на
+   * поле без трансклюзий (ошибка `7399c9ec`).
+   */
+  envError: unknown;
 }
 
 /**
@@ -553,20 +560,66 @@ export async function commitTransclusionEdit(params: {
   }
   let envOk = true;
   let envHtml: string | null = null;
+  let envError: unknown = null;
   if (params.writeEnv !== null) {
     try {
       envHtml = await params.writeEnv();
-    } catch {
+    } catch (err) {
       envOk = false;
+      envError = err;
     }
   }
-  return { envOk, envHtml, savedKeys, failedKeys, failedSourceIds };
+  return { envOk, envHtml, savedKeys, failedKeys, failedSourceIds, envError };
 }
 
 /** Метка ссылки в свёрнутом виде: имя мысли и, при наличии, раздел. */
 export function transclusionLinkLabel(title: string, section: string | null): string {
   const name = title !== '' ? title : t('comment.transclusion.untitled');
   return section === null ? name : `${name} · ${section}`;
+}
+
+/**
+ * Метка блока-источника по ключу инстанса (`sourceId#section`) для сообщения о
+ * сбое записи (ошибка `7399c9ec`): имя мысли берётся из общего кэша источников
+ * сети ({@link sourceCache}), раздел — из ключа. Показывается как шапка-чип
+ * «имя · раздел»; имя из кэша синхронно доступно, потому что сбойный блок уже
+ * был отрисован (источник загружен).
+ */
+export function transclusionBlockLabel(networkId: string, key: string): string {
+  const { sourceId, section } = parseBlockEditorKey(key);
+  const title = sourceCache.get(sourceCacheKey(networkId, sourceId))?.title ?? '';
+  return transclusionLinkLabel(title, section);
+}
+
+/**
+ * Сообщает пользователю о сбоях ЕДИНОЙ записи (ошибка `7399c9ec`). Ничего не
+ * сообщает при полном успехе. Сбойные блоки (если есть) называются конкретно
+ * именем и разделом — сообщение про «помеченные блоки» показывается ТОЛЬКО при
+ * их наличии. Сбой записи окружения даёт СВОЁ сообщение (не блок-специфичное),
+ * поэтому поле без трансклюзий больше не показывает текст про блоки. Сбой
+ * окружения и блоков одновременно отражается обоими сообщениями — это честнее
+ * одной сводки. Вынесено чистым швом с инъекцией `notify` — под юнит-тестами
+ * без поднятия поля (реальный `EditorView` в DOM-шиме не живёт).
+ */
+export function reportCommitFailures(params: {
+  networkId: string;
+  result: TransclusionCommitResult;
+  notify: (message: string, level: 'error') => void;
+}): void {
+  const { result } = params;
+  if (result.failedKeys.length > 0) {
+    const labels = result.failedKeys.map((key) => transclusionBlockLabel(params.networkId, key));
+    params.notify(t('comment.transclusion.savePartial', labels.join(', ')), 'error');
+  }
+  if (!result.envOk) {
+    const reason = errText(result.envError);
+    params.notify(
+      reason === ''
+        ? t('comment.save.failedUnknown')
+        : t('comment.save.failed', reason),
+      'error',
+    );
+  }
 }
 
 /** Ключ кэша данных ссылки (сеть + источник + раздел). */
