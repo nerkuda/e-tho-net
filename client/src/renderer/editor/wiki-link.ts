@@ -108,6 +108,10 @@ async function loadCompletions(networkId: string, prefix: string): Promise<Compl
 }
 
 function wikiLinkCompletions(): CompletionSource {
+  // Кэш ПО-ИНСТАНСНЫЙ: своё замыкание на каждый вызов `wikiLinkCompletions()`,
+  // а вызов — один на редактор (в `wikiLinkAutocompletion()`). Два инстанса
+  // редактора (поле-контейнер и вложенный блок, ТП «Живой блок») кэшируют
+  // результаты поиска независимо и не видят чужих записей.
   const cache = new Map<string, { expires: number; options: Completion[] }>();
   return async (context) => {
     const line = context.state.doc.lineAt(context.pos);

@@ -406,6 +406,51 @@ export function defaultTransclusionLoader(networkId: string): TransclusionSource
 }
 
 /**
+ * Кэш данных источников трансклюзий: ОДИН на сеть, общий для ВСЕХ инстансов
+ * редактора (поле-контейнер комментария и вложенные редакторы блоков —
+ * ТП «Живой блок»). Ключ — `networkId:sourceId`. Здесь лежат только данные
+ * источника (имя и тело постоянного комментария) — они одинаковы для всех
+ * инстансов сети, поэтому второй редактор с тем же источником не повторяет
+ * сетевой запрос (кэш НЕ дублируется по инстансам). Состояние ПОКАЗА (кэш
+ * декораций, свёрнутость, режим правки, захваты) остаётся в
+ * `transclusionState` — у каждого инстанса своё.
+ *
+ * Кэшируются только успешно загруженные источники (`found: true`): ошибка сети
+ * и отсутствие постоянного комментария не закрепляются, чтобы источник можно
+ * было дочитать позже. Запись в источник сбрасывает его из кэша
+ * ({@link invalidateTransclusionSource}).
+ */
+const sourceCache = new Map<string, TransclusionSource>();
+
+/** Ключ общего кэша источников (сеть + id мысли-источника). */
+function sourceCacheKey(networkId: string, sourceId: string): string {
+  return `${networkId}:${sourceId}`;
+}
+
+/**
+ * Загрузчик источника поверх общего кэша сети: результат тот же, что у
+ * {@link defaultTransclusionLoader}, но повторный запрос к сети не делается,
+ * пока данные источника лежат в {@link sourceCache}. Новый вызов на инстанс —
+ * общий кэш один.
+ */
+export function cachedTransclusionLoader(networkId: string): TransclusionSourceLoader {
+  const load = defaultTransclusionLoader(networkId);
+  return async (sourceId) => {
+    const key = sourceCacheKey(networkId, sourceId);
+    const cached = sourceCache.get(key);
+    if (cached !== undefined) return cached;
+    const result = await load(sourceId);
+    if (result !== null && result.found) sourceCache.set(key, result);
+    return result;
+  };
+}
+
+/** Сбрасывает данные источника из общего кэша сети (после записи в источник). */
+export function invalidateTransclusionSource(networkId: string, sourceId: string): void {
+  sourceCache.delete(sourceCacheKey(networkId, sourceId));
+}
+
+/**
  * Разворачивает текст, итеративно дозагружая источники. Рекурсия, глубина (5)
  * и защита от циклов — внутри `expandTransclusions` (`@etn/markdown`); здесь
  * лишь наполняем резолвер текстами и повторяем развёртку, пока остаются
@@ -1580,6 +1625,10 @@ async function startBlockEdit(
   if (cached !== undefined && (cached.error !== null || !cached.exists)) return;
   let body = cached?.body_md ?? '';
   if (cached === undefined) {
+    // Вход в правку читает источник ВСЕГДА свежим (без общего кэша сети):
+    // пользователь правит текущий текст источника, а не то, что когда-то
+    // отрисовал другой инстанс. Общий кэш ({@link cachedTransclusionLoader})
+    // обслуживает отрисовку блоков и подсказки разделов.
     const src = await defaultTransclusionLoader(networkId)(target.sourceId).catch(() => null);
     if (src === null || !src.found) return;
     body = src.body_md;
@@ -1687,6 +1736,10 @@ export async function saveBlockEdit(view: EditorView): Promise<void> {
   for (const outer of parseTransclusions(current.refRaw)) {
     keys.add(transclusionCacheKeyParts(networkId, outer.sourceId, outer.section));
   }
+  // Записанный источник больше не актуален — сбрасываем его из ОБЩЕГО кэша
+  // сети, иначе повторная загрузка вернула бы старое тело (источник виден всем
+  // инстансам, включая вложенные редакторы).
+  invalidateTransclusionSource(networkId, current.sourceId);
   restoreBlockEdit(view, current, [dropEntries.of([...keys])]);
 }
 
@@ -1898,7 +1951,7 @@ const transclusionLoader = ViewPlugin.fromClass(
       );
       if (todo.length === 0) return;
       this.inflight = true;
-      const load = defaultTransclusionLoader(networkId);
+      const load = cachedTransclusionLoader(networkId);
       void Promise.all(
         todo.map(async (ref) => ({
           key: transclusionCacheKey(networkId, ref),
@@ -1918,9 +1971,6 @@ const transclusionLoader = ViewPlugin.fromClass(
 /* ------------------------------------------------------------------ *
  * Автокомплит разделов
  * ------------------------------------------------------------------ */
-
-/** Кэш заголовков источника по id (живёт в рамках сессии редактора). */
-const sectionTitlesCache = new Map<string, string[]>();
 
 /**
  * Открывающий токен ссылки трансклюзии: восклицательный знак и две скобки.
@@ -1989,8 +2039,16 @@ export function acceptTransclusionThought(view: EditorView): boolean {
 /**
  * Источник подсказок «разделы источника» (для общего автокомплита wiki-ссылок):
  * активен, когда каретка стоит в тексте раздела ссылки трансклюзии.
+ *
+ * Кэш заголовков — ПО-ИНСТАНСНЫЙ: замыкание своё на каждый вызов (как кэш
+ * автокомплита мыслей, `wikiLinkCompletions`). Показ разделов зависит от
+ * текущего текста источника, который может править ВЛОЖЕННЫЙ редактор другого
+ * инстанса, — общий кэш вернул бы устаревший список. Сетевой запрос при этом
+ * не дублируется: тела источников кэширует ОБЩИЙ кэш сети
+ * ({@link cachedTransclusionLoader}).
  */
 export function transclusionSectionCompletions(): CompletionSource {
+  const sectionTitlesCache = new Map<string, string[]>();
   return async (context) => {
     const ctx = transclusionAtCaret(context.state.doc.toString(), context.pos);
     if (ctx === null || !ctx.inSection || ctx.sectionFrom === null) return null;
@@ -1999,7 +2057,7 @@ export function transclusionSectionCompletions(): CompletionSource {
     const cacheKey = `${networkId}:${ctx.ref.sourceId}`;
     let titles = sectionTitlesCache.get(cacheKey);
     if (titles === undefined) {
-      const load = defaultTransclusionLoader(networkId);
+      const load = cachedTransclusionLoader(networkId);
       const src = await load(ctx.ref.sourceId).catch(() => null);
       titles = src !== null && src.found ? listSectionTitles(src.body_md) : [];
       sectionTitlesCache.set(cacheKey, titles);
@@ -2044,6 +2102,10 @@ export const transclusionInternals = {
   expandWithLoader,
   loadEntry,
   emptyEntry,
+  cachedTransclusionLoader,
+  invalidateTransclusionSource,
+  /** Очистка общего (на сеть) кэша источников — изоляция прогонов тестов. */
+  clearSourceCache: () => sourceCache.clear(),
   setCollapsed,
   setEntries,
   setBlockEditRange,

@@ -408,6 +408,102 @@ function notifyMdInput(update: MdInputUpdate, onInput?: (md: string) => void): v
 /** Test seam: the panel-scroll handler and the `onInput` wiring of the editor. */
 export const mdEditorInternals = { scrollCaretIntoView, inputMirrorText, notifyMdInput };
 
+/**
+ * Стек расширений markdown-редактора: язык с wiki-ссылками и трансклюзиями,
+ * автокомплит (мысли и разделы источников), live preview, свёрнутость разделов,
+ * клавиатурные контексты поля (`lib/keymap` через `wikiLinkLegacyActions`),
+ * поиск, трансклюзии и тема.
+ *
+ * Вынесен отдельной функцией, чтобы markdown-редактор можно было поднять
+ * ЛЮБЫМ числом НЕЗАВИСИМЫХ инстансов одним стеком (поле-контейнер комментария и
+ * вложенные редакторы блоков трансклюзий — ТП «Живой блок»). Каждому инстансу
+ * нужен СВОЙ вызов: часть расширений несёт по-инстансные замыкания (кэш
+ * автокомплита `wikiLinkCompletions`, кэш разделов
+ * `transclusionSectionCompletions`) — общий массив на два редактора сцепил бы
+ * их кэши.
+ *
+ * `listeners` — подписчики на изменения текста/выделения (состояние кнопок
+ * тулбара); свой набор на инстанс. `cb.extraExtensions` идут последними,
+ * приоритет задаёт само расширение (`Prec.high`) — задача ab0c4470.
+ */
+export function mdEditorExtensions(
+  cb: MdEditorCallbacks = {},
+  listeners: Set<() => void> = new Set(),
+): Extension[] {
+  return [
+    // Esc cancels the edit (unless the autocomplete dropdown is open —
+    // then the completion keymap closes it first). Ctrl/Cmd+Enter
+    // commits and returns to the view (M10).
+    keymap.of([
+      {
+        key: 'Escape',
+        run: (v) => {
+          if (completionStatus(v.state) === 'active') return false;
+          cb.onEscape?.();
+          return true;
+        },
+      },
+      {
+        key: 'Mod-Enter',
+        run: (v) => {
+          // Правку блока трансклюзии записывает её собственный
+          // Prec.high-обработчик (transclusion.ts). Если он почему-то не
+          // перехватил, контейнер коммитить всё равно нельзя — в документе
+          // вставленный текст источника вместо ссылки (ошибка 3c51aee8).
+          if (isBlockEditing(v.state)) return false;
+          cb.onCommit?.();
+          return true;
+        },
+      },
+      indentWithTab,
+    ]),
+    history(),
+    drawSelection(),
+    // Прокрутка каретки к видимой в контейнере панели, а не в самом поле
+    // (поле растёт по содержимому) — см. scrollCaretIntoView.
+    EditorView.scrollHandler.of(scrollCaretIntoView),
+    // Нативная проверка орфографии (задача 1e373ac7). CodeMirror 6 в
+    // updateAttrs() принудительно ставит `spellcheck="false"` на contentDOM,
+    // поэтому ошибки в комментарии не подчёркивались, в отличие от обычных
+    // полей (`lib/ui/field.ts`, spellcheck по умолчанию true). Фасет
+    // contentAttributes применяется после и возвращает атрибуту true; языки
+    // спеллчекера задаёт главный процесс (client/src/main/index.ts).
+    EditorView.contentAttributes.of({ spellcheck: 'true' }),
+    EditorView.lineWrapping,
+    syntaxHighlighting(mdHighlightStyle, { fallback: true }),
+    EditorView.updateListener.of((update) => {
+      // Обвязка `onInput` — единственная точка, где документ уходит
+      // владельцу; правка блока трансклюзии подавляется внутри неё
+      // (ошибка 59d9b5f3).
+      notifyMdInput(update, cb.onInput);
+      if (update.docChanged || update.selectionSet) {
+        for (const listener of listeners) listener();
+      }
+    }),
+    // The markdown keymap (Enter/Backspace list handling) must outrank
+    // the default keymap below.
+    markdown({
+      base: markdownLanguage,
+      addKeymap: true,
+      codeLanguages,
+      extensions: [wikiLinkLanguage()],
+    }),
+    keymap.of([...historyKeymap, ...completionKeymap, ...defaultKeymap]),
+    wikiLinkAutocompletion(),
+    ...wikiIdExtensions,
+    ...transclusionExtensions,
+    wikiLinkLegacyActions,
+    livePreview,
+    mdWidgetClick,
+    mdSearchField,
+    mdTheme,
+    // Дополнительные расширения вызывающего (точечные перекрытия сочетаний
+    // команд поля — задача ab0c4470). Идут последними; приоритет задаётся
+    // самим расширением (`Prec.high`), а не порядком подключения.
+    ...(cb.extraExtensions ?? []),
+  ];
+}
+
 /** Creates a markdown editor for the given initial document. */
 export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdEditor {
   /** Подписчики на изменения (текст/выделение) — состояние кнопок тулбара. */
@@ -417,78 +513,9 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
   const view = new EditorView({
     state: EditorState.create({
       doc: initial,
-      extensions: [
-        // Esc cancels the edit (unless the autocomplete dropdown is open —
-        // then the completion keymap closes it first). Ctrl/Cmd+Enter
-        // commits and returns to the view (M10).
-        keymap.of([
-          {
-            key: 'Escape',
-            run: (v) => {
-              if (completionStatus(v.state) === 'active') return false;
-              cb.onEscape?.();
-              return true;
-            },
-          },
-          {
-            key: 'Mod-Enter',
-            run: (v) => {
-              // Правку блока трансклюзии записывает её собственный
-              // Prec.high-обработчик (transclusion.ts). Если он почему-то не
-              // перехватил, контейнер коммитить всё равно нельзя — в документе
-              // вставленный текст источника вместо ссылки (ошибка 3c51aee8).
-              if (isBlockEditing(v.state)) return false;
-              cb.onCommit?.();
-              return true;
-            },
-          },
-          indentWithTab,
-        ]),
-        history(),
-        drawSelection(),
-        // Прокрутка каретки к видимой в контейнере панели, а не в самом поле
-        // (поле растёт по содержимому) — см. scrollCaretIntoView.
-        EditorView.scrollHandler.of(scrollCaretIntoView),
-        // Нативная проверка орфографии (задача 1e373ac7). CodeMirror 6 в
-        // updateAttrs() принудительно ставит `spellcheck="false"` на contentDOM,
-        // поэтому ошибки в комментарии не подчёркивались, в отличие от обычных
-        // полей (`lib/ui/field.ts`, spellcheck по умолчанию true). Фасет
-        // contentAttributes применяется после и возвращает атрибуту true; языки
-        // спеллчекера задаёт главный процесс (client/src/main/index.ts).
-        EditorView.contentAttributes.of({ spellcheck: 'true' }),
-        EditorView.lineWrapping,
-        syntaxHighlighting(mdHighlightStyle, { fallback: true }),
-        EditorView.updateListener.of((update) => {
-          // Обвязка `onInput` — единственная точка, где документ уходит
-          // владельцу; правка блока трансклюзии подавляется внутри неё
-          // (ошибка 59d9b5f3).
-          notifyMdInput(update, cb.onInput);
-          if (update.docChanged || update.selectionSet) {
-            for (const listener of listeners) listener();
-          }
-        }),
-        // The markdown keymap (Enter/Backspace list handling) must outrank
-        // the default keymap below.
-        markdown({
-          base: markdownLanguage,
-          addKeymap: true,
-          codeLanguages,
-          extensions: [wikiLinkLanguage()],
-        }),
-        keymap.of([...historyKeymap, ...completionKeymap, ...defaultKeymap]),
-        wikiLinkAutocompletion(),
-        ...wikiIdExtensions,
-        ...transclusionExtensions,
-        wikiLinkLegacyActions,
-        livePreview,
-        mdWidgetClick,
-        mdSearchField,
-        mdTheme,
-        // Дополнительные расширения вызывающего (точечные перекрытия сочетаний
-        // команд поля — задача ab0c4470). Идут последними; приоритет задаётся
-        // самим расширением (`Prec.high`), а не порядком подключения.
-        ...(cb.extraExtensions ?? []),
-      ],
+      // Стек расширений общий для поля-контейнера и вложенных редакторов;
+      // каждый инстанс получает СВОЙ вызов (по-инстансные кэши расширений).
+      extensions: mdEditorExtensions(cb, listeners),
     }),
   });
 
