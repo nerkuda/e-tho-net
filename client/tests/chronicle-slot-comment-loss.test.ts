@@ -155,20 +155,26 @@ describe('псевдо-запись: проводка фикса в экране
     );
   });
 
-  it('слот не подменяется карточкой, пока фокус внутри', () => {
+  it('слот не подменяется карточкой, пока открыт живой редактор поля', () => {
     // Вид поля фокусируем — уход заголовка в комментарий остаётся внутри слота.
     assert.match(
       CHRONICLE,
       /\.md-field-view'\)\?\.setAttribute\('tabindex', '-1'\)/,
       'вид комментария фокусируем',
     );
-    // Конвертация только при уходе фокуса из слота (или явном convert).
+    // Конвертация — при явном convert (жест записи) либо когда слот покинут И
+    // живой редактор поля закрыт (иначе transient blur терял текст, d60f61b5).
     assert.match(
       CHRONICLE,
-      /if \(opts\.convert === true \|\| !slotFocusInside\) \{\s*await insertCreatedRecord\(localRow\);/,
-      'insertCreatedRecord вызывается лишь когда фокус покинул слот',
+      /if \(opts\.convert === true \|\| \(!slotFocusInside && !slotFieldEditing\(state\)\)\) \{\s*await insertCreatedRecord\(localRow\);/,
+      'insertCreatedRecord вызывается лишь когда редактор поля закрыт',
     );
-    // Уход фокуса — единственная точка сохранения/конвертации.
+    assert.match(
+      CHRONICLE,
+      /function slotFieldEditing\(state: SlotState\): boolean \{[\s\S]*?\}/,
+      'состояние правки поля определяется по классу каркаса',
+    );
+    // Уход фокуса — точка сохранения черновика.
     assert.match(CHRONICLE, /root\.addEventListener\('focusout'/, 'уход из слота отслеживается');
     assert.match(
       CHRONICLE,
@@ -190,10 +196,13 @@ describe('псевдо-запись: проводка фикса в экране
       /void ensureSlot\(\{ title: next \}\)/,
       'blur/Enter заголовка по-прежнему сохраняет черновик',
     );
+    // Сохранения сериализуются очередью (`enqueueSlotSave`): второй вызов не
+    // подменяется промисом первого (иначе терялось содержимое, ошибка d60f61b5),
+    // а выполняется после него и обновляет уже созданную запись (дубля нет).
     assert.match(
       CHRONICLE,
-      /if \(slotBusy !== null\) return slotBusy;/,
-      'параллельные сохранения не создают дубль',
+      /enqueueSlotSave\(slotBusy, \(\) => runEnsureSlot\(opts\)\)/,
+      'параллельные сохранения сериализуются, дубль не создаётся',
     );
   });
 });

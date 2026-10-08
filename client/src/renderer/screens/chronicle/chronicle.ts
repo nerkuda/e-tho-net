@@ -103,6 +103,7 @@ import {
   compareDays,
   dayInPeriod,
   dayPeriod,
+  enqueueSlotSave,
   formatDayLabel,
   groupByLocalDays,
   hasRowId,
@@ -1791,7 +1792,17 @@ function startSlot(day?: string, presetThoughtIds: string[] = []): void {
       ? { attachmentsOwner: { ownerType: 'thought' as const, ownerId: slotOwnerId } }
       : {}),
     onSave: async (md) => {
-      const created = await ensureSlot({ body: md });
+      // Запись поля — всегда явный жест выхода из правки (Ctrl+Enter, кнопка
+      // «Записать», клик вне): конвертируем слот сразу, не дожидаясь ухода
+      // фокуса (ошибка d60f61b5 — иначе слот зависал, запись не создавалась).
+      const created = await ensureSlot({ body: md, convert: true });
+      // Сбой сохранения (или потерянный слот) не должен молча уходить в
+      // просмотр, теряя набранный текст: бросаем — единая запись покажет причину
+      // и оставит поле открытым для повторного коммита (ошибка d60f61b5).
+      // Пустой черновик (`md` из пробелов) — не сбой, сохранять нечего.
+      if (created === null && md.trim() !== '') {
+        throw new Error(t('diary.slotNotSaved'));
+      }
       return created?.body_html ?? md;
     },
     onEditChange: (editing) => slotShell.setMode(editing ? 'edit' : 'view'),
@@ -1928,16 +1939,31 @@ async function ensureSlot(opts: {
   convert?: boolean;
 }): Promise<Comment | null> {
   // Гонка путей сохранения (blur заголовка, commit редактора, focusout ухода из
-  // слота): сохраняет только первый вызов, остальные ждут его результата —
-  // иначе создался бы дубль записи.
-  if (slotBusy !== null) return slotBusy;
-  const run = runEnsureSlot(opts);
+  // слота): сохранения выполняются ПОСЛЕДОВАТЕЛЬНО (`enqueueSlotSave`), а не
+  // подменяются промисом первого. Раньше «ждущий» вызов возвращал результат уже
+  // идущего сохранения и терял переданное содержимое: уход фокуса из слота
+  // (`ensureSlot({})`, план `none`) успевал занять страж раньше настоящего
+  // сохранения тела, и текст записи без заголовка не долетал до сервера —
+  // запись не создавалась (ошибка d60f61b5). Очередь сохраняет защиту от дубля:
+  // второй вызов видит проставленный `state.commentId` и ОБНОВЛЯЕТ запись
+  // (ошибка 0757cd08).
+  const run = enqueueSlotSave(slotBusy, () => runEnsureSlot(opts));
   slotBusy = run;
   try {
     return await run;
   } finally {
     if (slotBusy === run) slotBusy = null;
   }
+}
+
+/**
+ * Открыт ли живой редактор markdown-поля слота. Класс каркаса правки
+ * (`md-field--editing`) появляется на входе в правку и снимается при выходе в
+ * просмотр — по нему решается конвертация слота, не по одному лишь фокусу
+ * (ошибка d60f61b5: `blur` с `relatedTarget = null` ошибочно считался уходом).
+ */
+function slotFieldEditing(state: SlotState): boolean {
+  return state.root.querySelector('.md-field--editing') !== null;
 }
 
 async function runEnsureSlot(opts: {
@@ -2004,7 +2030,13 @@ async function runEnsureSlot(opts: {
       syncCalendar();
       return comment;
     }
-    if (opts.convert === true || !slotFocusInside) {
+    // Слот подменяется карточкой только когда ЖИВОЙ РЕДАКТОР поля закрыт
+    // (ошибка 0757cd08). Вход в правку тела из заголовка на миг уводит фокус
+    // (`blur` с `relatedTarget = null`), и по одному лишь фокусу слот считался
+    // покинутым: редактор отсоединялся, а последующий текст терялся (ошибка
+    // d60f61b5). Пока поле в правке — не конвертируем даже при «ушедшем»
+    // фокусе; явный `convert` (Ctrl+Enter и прочие жесты записи) конвертирует.
+    if (opts.convert === true || (!slotFocusInside && !slotFieldEditing(state))) {
       await insertCreatedRecord(localRow);
     }
     syncCalendar();
