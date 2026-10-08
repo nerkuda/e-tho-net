@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { EditorState, type TransactionSpec } from '@codemirror/state';
+import { ensureSyntaxTree } from '@codemirror/language';
 import type { EditorView } from '@codemirror/view';
 
 import { ShimElement } from './dom-shim.js';
@@ -354,7 +355,7 @@ describe('сворачивание разделов комментария (edit
     const doc = '## Раздел\n\nтекст\n\n### Подраздел\n\nподтекст\n\n## Второй\n\nещё\n';
     const makeState = (): EditorState => {
       const collapse = mod.createCommentCollapseState('net', undefined);
-      return EditorState.create({
+      const state = EditorState.create({
         doc,
         extensions: [
           markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
@@ -362,6 +363,12 @@ describe('сворачивание разделов комментария (edit
           mod.commentCollapseExtension(collapse),
         ],
       });
+      // Полный разбор до конца документа: `collectSections` читает `syntaxTree`,
+      // который без явного `ensureSyntaxTree` может вернуть неполное дерево —
+      // тогда разделы теряются (флейк `c543ea79`: 1 раздел вместо 3). Прогон
+      // разбора до `doc.length` изолирует тест от тайминга/порядка парсера.
+      ensureSyntaxTree(state, state.doc.length, 5_000);
+      return state;
     };
 
     const field = mod.commentCollapseInternals.collapseDecoField;
