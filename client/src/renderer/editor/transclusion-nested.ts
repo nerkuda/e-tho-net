@@ -174,8 +174,6 @@ export interface NestedEditorHandle {
 /** Хранилище вложенных инстансов редактора блока (на инстанс поля). */
 export class NestedEditorStore {
   private readonly entries = new Map<string, NestedEntry>();
-  /** Запрошенный, но ещё не применённый фокус (для момента подключения DOM). */
-  private pendingFocus: { key: string; where: 'start' | 'end' | 'keep' } | null = null;
 
   constructor(
     private readonly createView: NestedViewFactory = defaultNestedViewFactory,
@@ -259,6 +257,11 @@ export class NestedEditorStore {
   /**
    * Фокусирует инстанс (если смонтирован) и ставит каретку в начало или конец
    * текста — вход в блок кареткой с нужного края (`keep` — не трогать выделение).
+   *
+   * Вызывается ПОСЛЕ транзакции активации блока (`setActiveBlock`): виджет
+   * активного блока монтирует DOM инстанса синхронно внутри `dispatch`, поэтому
+   * к моменту вызова DOM уже подключён и прямой `focus()` работает без
+   * отложенных микрозадач (упрощение входа, ошибка `ce46723d`).
    */
   focus(key: string, where: 'start' | 'end' | 'keep' = 'keep'): void {
     const view = this.entries.get(key)?.view;
@@ -267,24 +270,26 @@ export class NestedEditorStore {
       const anchor = where === 'start' ? 0 : view.state.doc.length;
       view.dispatch({ selection: { anchor } });
     }
-    this.pendingFocus = { key, where: 'keep' };
-    // Виджет активного блока монтирует DOM инстанса при отрисовке транзакции —
-    // фокусировать до подключения к документу бессмысленно. Если DOM уже в
-    // документе, фокусируем сразу; иначе виджет вызовет {@link applyPendingFocus}
-    // после вставки. Микрозадача — страховка для уже подключённого DOM.
-    if (view.dom?.isConnected === true) this.applyPendingFocus(key);
-    else queueMicrotask(() => this.applyPendingFocus(key));
+    view.focus();
   }
 
   /**
-   * Применяет отложенный фокус, если он ждёт для инстанса `key`. Вызывается
-   * виджетом блока сразу после монтирования DOM инстанса.
+   * Подставляет черновик правки источника в УЖЕ смонтированный инстанс —
+   * асинхронный путь входа: монтаж не ждёт чтения черновика из локального
+   * хранилища (задача `6a085e01`, упрощение входа `ce46723d`). Применяется
+   * ТОЛЬКО пока пользователь не тронул текст (инстанс чист и его текст
+   * совпадает с загруженным источником) — иначе правка пользователя
+   * приоритетна и черновик отбрасывается. Возвращает `true`, если применён.
    */
-  applyPendingFocus(key: string): void {
-    if (this.pendingFocus === null || this.pendingFocus.key !== key) return;
-    const view = this.entries.get(key)?.view;
-    this.pendingFocus = null;
-    view?.focus();
+  applyDraft(key: string, draft: string | null): boolean {
+    if (draft === null) return false;
+    const entry = this.entries.get(key);
+    if (entry === undefined || entry.view === null) return false;
+    if (entry.dirty || textOfEntry(entry) !== entry.initialText) return false;
+    if (draft === entry.initialText) return false;
+    setViewText(entry.view, draft);
+    entry.dirty = true;
+    return true;
   }
 
   /** Откат `Esc`: текст возвращается к загруженному, «грязность» снимается. */

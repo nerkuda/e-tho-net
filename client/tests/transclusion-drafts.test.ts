@@ -389,7 +389,12 @@ test('markdown-field: проводка черновиков источников
 test('transclusion: монтаж блока передаёт черновик в хранилище (6a085e01)', () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, '../src/renderer/editor/transclusion.ts'), 'utf8');
-  assert.ok(/host\.getBlockDraft\(ref\.sourceId, ref\.section\)/.test(src), 'блок спрашивает черновик у хоста');
+  assert.ok(/\.getBlockDraft\(ref\.sourceId, ref\.section\)/.test(src), 'блок спрашивает черновик у хоста');
   assert.ok(/store\.mount\(/.test(src), 'монтаж идёт через store.mount');
-  assert.ok(/draft,\s*\n\s*\)/.test(src) || /draft,/.test(src), 'черновик передан в mount');
+  // Вход синхронен (ошибка `ce46723d`): монтаж не ждёт локального чтения
+  // черновика — он подставляется в уже смонтированный инстанс до первого ввода.
+  assert.ok(
+    /store\.applyDraft\(key, draft\)/.test(src),
+    'черновик подставляется в хранилище после синхронного монтажа',
+  );
 });

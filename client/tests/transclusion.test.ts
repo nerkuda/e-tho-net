@@ -608,6 +608,73 @@ test('TransclusionBlockWidget.toDOM: шапка-чип без ховер-кно�
   assert.equal(el.querySelectorAll('.ui-btn').length, 1, 'на блоке ровно одна кнопка — чип');
 });
 
+test('TransclusionBlockWidget.updateDOM: косметика не переносит DOM вложенного редактора (ce46723d)', () => {
+  (globalThis as unknown as { HTMLElement: unknown }).HTMLElement = ShimElement;
+  (globalThis as unknown as { document: unknown }).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: { style: {} },
+    querySelectorAll: () => [],
+  };
+  const src = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(src)[0]!;
+  const key = blockEditorKey(ID_A, null);
+  const registry = new Map<string, FakeNestedView>();
+  const store = new NestedEditorStore(fakeFactory(registry));
+  store.mount(key, 'ТЕЛО', {
+    depth: 1,
+    onDirty: () => undefined,
+    onExit: () => undefined,
+    onCommit: () => undefined,
+    onCancel: () => undefined,
+  });
+  const view = {
+    state: EditorState.create({
+      doc: src,
+      extensions: [transclusionState, blockEditorStoreFacet.of(store)],
+    }),
+  } as unknown as EditorView;
+
+  interface WidgetProbe {
+    toDOM(v: unknown): ShimElement;
+    updateDOM(dom: unknown, v: unknown): boolean;
+    eq(other: unknown): boolean;
+  }
+  const widgetOf = (
+    sel: { from: number; to: number },
+    cache: Map<string, { title: string; exists: boolean; error: null; html: string }>,
+  ): WidgetProbe =>
+    (collect(buildTransclusionDecorations(src, sel, cache, NET, key, new Map()).deco, src.length)[0]!
+      .value.spec as { widget: WidgetProbe }).widget;
+
+  const active = widgetOf({ from: 0, to: 0 }, cacheFor(ref));
+  const box = active.toDOM(view);
+  const nested = store.dom(key)! as unknown as ShimElement;
+  assert.ok(box.children.includes(nested), 'активный блок отрисовал DOM вложенного редактора');
+
+  // Косметика covered: false → true. Виджет не равен — но DOM обновляется НА МЕСТЕ.
+  const covered = widgetOf({ from: ref.start, to: ref.end }, cacheFor(ref));
+  assert.equal(active.eq(covered), false, 'флаг covered отличает виджеты (триггер updateDOM)');
+  assert.equal(covered.updateDOM(box, view), true, 'updateDOM сообщает об обновлении на месте');
+  assert.ok(box.classList.contains(TRANSCLUSION_COVERED_CLASS), 'класс покрытия отражён в DOM');
+  assert.ok(box.children.includes(nested), 'DOM вложенного редактора НЕ перенесён при смене covered');
+
+  // Обновление подписи чипа (имя источника) — тоже без переноса вложенного DOM.
+  const renamedCache = cacheFor(ref);
+  renamedCache.set(transclusionCacheKey(NET, ref), {
+    title: 'Новое имя',
+    exists: true,
+    error: null,
+    html: '<p>тело</p>',
+  });
+  const renamed = widgetOf({ from: 0, to: 0 }, renamedCache);
+  assert.equal(covered.eq(renamed), false, 'смена имени отличает виджеты');
+  renamed.updateDOM(box, view);
+  const chip = box.querySelector(`.${TRANSCLUSION_CHIP_CLASS}`);
+  assert.equal(chip?.textContent, 'Новое имя', 'подпись чипа обновлена на месте');
+  assert.ok(box.children.includes(nested), 'DOM вложенного редактора по-прежнему на месте');
+});
+
 test('createTransclusionHead: чип-кнопка словаря с подписью и гашением mousedown', () => {
   (globalThis as unknown as { HTMLElement: unknown }).HTMLElement = ShimElement;
   (globalThis as unknown as { document: unknown }).document = {
@@ -675,6 +742,9 @@ function tick(): Promise<void> {
 
 /** Заглушка моста `etn`: тела источников (по id либо одно на все). */
 function stubEtn(bodies: string | Record<string, string>): void {
+  // Изоляция прогонов: вход в блок читает тело из ОБЩЕГО кэша сети, а стаб
+  // меняет тело без realtime-инвалидации — чистим кэш перед каждым стабом.
+  transclusionInternals.clearSourceCache();
   const bodyFor = (id: string): string =>
     typeof bodies === 'string' ? bodies : bodies[id] ?? '';
   (globalThis as unknown as { etn: unknown }).etn = {
@@ -848,6 +918,64 @@ test('вход в блок стрелками симметричен с обеи
     true,
     'ArrowRight с верхней границы входит в блок',
   );
+});
+
+test('вход в блок синхронен: монтаж из кэша источника, без сети (ce46723d)', async () => {
+  stubEtn('ТЕЛО');
+  const { store: appStore } = await import('../src/renderer/state.js');
+  appStore.update({ networkId: NET_ID });
+  const registry = new Map<string, FakeNestedView>();
+  const store = new NestedEditorStore(fakeFactory(registry));
+  const doc = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(doc)[0]!;
+  const view = makeView(withStore(doc, store));
+
+  // Тело уже загружено для отрисовки блока (общий кэш сети наполняет loader).
+  await transclusionInternals.cachedTransclusionLoader(NET_ID)(ID_A);
+
+  // Первое нажатие обязано смонтировать инстанс и отдать фокус СИНХРОННО —
+  // без ожидания сети и микрозадач (иначе каретка теряется, ce46723d).
+  transclusionInternals.enterBlock(view as unknown as EditorView, ref);
+  const key = blockEditorKey(ID_A, null);
+  assert.ok(store.has(key), 'инстанс смонтирован в том же тике, что и вход');
+  assert.equal(registry.get(key)!.focused, true, 'фокус во вложенном редакторе получен синхронно');
+  assert.equal(view.state.field(transclusionState)!.activeKey, key, 'блок активирован синхронно');
+});
+
+test('повторные стрелки при промахе кэша не запускают вторую дозагрузку (ce46723d)', async () => {
+  // Кэш пуст, стаб считает сетевые загрузки источника.
+  let fetches = 0;
+  (globalThis as unknown as { etn: unknown }).etn = {
+    thoughts: {
+      resolve: async (_n: string, ids: string[]) => {
+        fetches += 1;
+        return ids.map((id) => ({ id, title: 'Источник' }));
+      },
+    },
+    comments: {
+      list: async () => [
+        { id: 'perm', kind: 'permanent', body_md: 'ТЕЛО', body_html: '', version: 1 },
+      ],
+    },
+  };
+  transclusionInternals.clearSourceCache();
+  const { store: appStore } = await import('../src/renderer/state.js');
+  appStore.update({ networkId: NET_ID });
+  const registry = new Map<string, FakeNestedView>();
+  const store = new NestedEditorStore(fakeFactory(registry));
+  const doc = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(doc)[0]!;
+  const view = makeView(withStore(doc, store));
+
+  // Три нажатия до завершения загрузки: дедупликация держит один запрос.
+  transclusionInternals.enterBlock(view as unknown as EditorView, ref);
+  transclusionInternals.enterBlock(view as unknown as EditorView, ref);
+  transclusionInternals.enterBlock(view as unknown as EditorView, ref);
+  await tick();
+  await tick();
+  const key = blockEditorKey(ID_A, null);
+  assert.ok(store.has(key), 'блок смонтирован после дозагрузки');
+  assert.equal(fetches, 1, 'сетевой запрос за источником сделан ровно один раз');
 });
 
 test('изменение текста блока: «грязный» сигнал наружу, контейнер не меняется (73ae1d4b)', async () => {

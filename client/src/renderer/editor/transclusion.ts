@@ -168,6 +168,8 @@ import {
   blockEditorHostFacet,
   blockEditorStoreFacet,
   nestedDepthFacet,
+  type BlockEditorHost,
+  type NestedEditorOptions,
   type NestedExitReason,
 } from './transclusion-nested.js';
 
@@ -985,6 +987,14 @@ function clearTransclusionHead(block: HTMLElement): void {
   }
 }
 
+/** Прямой потомок `parent` с классом `cls`, либо `null` (без обхода вглубь). */
+function directChildByClass(parent: HTMLElement, cls: string): HTMLElement | null {
+  for (const child of Array.from(parent.children)) {
+    if (child instanceof HTMLElement && child.classList.contains(cls)) return child;
+  }
+  return null;
+}
+
 /**
  * Индикатор-«замочек» блока при чужом захвате источника: тот же класс/вид, что
  * и в правке. Общий для режима правки ({@link TransclusionBlockWidget}) и
@@ -1096,6 +1106,28 @@ class TransclusionBlockWidget extends WidgetType {
 
   override toDOM(view: EditorView): HTMLElement {
     const box = document.createElement('div');
+    this.render(box, view);
+    return box;
+  }
+
+  /**
+   * Обновляет существующий DOM блока вместо его пересоздания (WidgetType API):
+   * косметические пересборки (класс `--covered`, «замочек», подпись чипа, смена
+   * активного блока) НЕ переносят DOM вложенного редактора — иначе
+   * `remove`+`insert` сбрасывал бы фокус и каретку (ошибка `ce46723d`). Всегда
+   * возвращает `true`: DOM пригоден к обновлению на месте.
+   */
+  override updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    this.render(dom, view);
+    return true;
+  }
+
+  /**
+   * Идемпотентная отрисовка блока в существующий `box`. Держит на месте уже
+   * подключённый DOM активного вложенного редактора (не переставляет его) —
+   * фокус вложенного инстанса сохраняется при любой пересборке декораций.
+   */
+  private render(box: HTMLElement, view: EditorView): void {
     // Без класса `md-widget`: его клик обрабатывает mdWidgetClick (md-live.ts),
     // иначе было бы двойное перемещение каретки.
     box.className =
@@ -1108,9 +1140,62 @@ class TransclusionBlockWidget extends WidgetType {
 
     // «Замочек» при чужом захвате источника (требование 647fa34a): источник
     // правит другой участник — блок только для чтения, вход в блок не монтирует
-    // вложенный редактор (сам захват делает задача «Единая запись»).
+    // вложенный редактор. Обновляется на месте (появление/снятие захвата).
+    let badge = directChildByClass(box, TRANSCLUSION_LOCK_CLASS);
     if (this.lockedBy !== null) {
-      box.append(createTransclusionLockBadge(this.lockedBy));
+      if (badge === null) {
+        badge = createTransclusionLockBadge(this.lockedBy);
+        box.prepend(badge);
+      } else {
+        badge.title = t('comment.transclusion.locked', this.lockedBy);
+      }
+    } else if (badge !== null) {
+      badge.remove();
+      badge = null;
+    }
+
+    // Шапка-чип «имя · раздел» (элемент `7a479549`, задача `68591b8a`): всегда
+    // видна, клик открывает поповер правки ссылки (выбор мысли и раздела,
+    // команды навигации). У блока с ошибкой шапки нет (паритет с прежним видом);
+    // подпись чипа обновляется на месте — имя могло смениться realtime-событием.
+    let head: HTMLElement | null = null;
+    if (this.entry.error !== null) {
+      clearTransclusionHead(box);
+    } else {
+      const label = transclusionLinkLabel(this.entry.title, this.section);
+      head = directChildByClass(box, TRANSCLUSION_HEAD_CLASS);
+      if (head === null) {
+        head = createTransclusionHead(label, (event) => {
+          const ref = transclusionRefStartingAt(view.state.doc.toString(), this.from);
+          if (ref !== null) openTransclusionLinkPopover(view, ref, event.currentTarget as HTMLElement);
+        });
+        box.append(head);
+      } else {
+        const chip = head.querySelector(`.${TRANSCLUSION_CHIP_CLASS}`);
+        if (chip !== null && chip.textContent !== label) chip.textContent = label;
+      }
+    }
+
+    // Область содержимого: ошибка / вложенный редактор / HTML источника.
+    // DOM активного вложенного редактора НЕ переставляем — иначе `remove`+`insert`
+    // сбросил бы фокус (ошибка `ce46723d`); устаревшее содержимое убираем, а уже
+    // подключённый `nestedDom` оставляем на месте.
+    const store = view.state.facet(blockEditorStoreFacet);
+    const nestedDom =
+      this.active && this.lockedBy === null ? store?.dom(this.editorKey) ?? null : null;
+    let nestedAttached = false;
+    for (const child of Array.from(box.children)) {
+      if (child === badge || child === head) continue;
+      if (child === nestedDom) {
+        nestedAttached = true;
+        continue;
+      }
+      child.remove();
+    }
+
+    if (nestedDom !== null) {
+      if (!nestedAttached) box.append(nestedDom);
+      return;
     }
 
     if (this.entry.error !== null) {
@@ -1121,31 +1206,7 @@ class TransclusionBlockWidget extends WidgetType {
           ? t('comment.transclusion.noSource')
           : t('comment.transclusion.noSection');
       box.append(err);
-      return box;
-    }
-
-    // Шапка-чип «имя · раздел» (элемент `7a479549`, задача `68591b8a`): всегда
-    // видна, клик открывает поповер правки ссылки (выбор мысли и раздела,
-    // команды навигации) — сырой правки ссылки и сворачивания блока больше нет.
-    box.append(
-      createTransclusionHead(transclusionLinkLabel(this.entry.title, this.section), (event) => {
-        const ref = transclusionRefStartingAt(view.state.doc.toString(), this.from);
-        if (ref !== null) openTransclusionLinkPopover(view, ref, event.currentTarget as HTMLElement);
-      }),
-    );
-
-    // Активный блок отдаёт место вложенному редактору: его DOM монтируется
-    // внутрь виджета (задача `73ae1d4b`). Инстанс живёт в общем хранилище поля
-    // (`NestedEditorStore`) и переживает пересборку виджета; DOM переставляется
-    // как есть — вложенный редактор НЕ пересоздаётся. Пока инстанс ещё не
-    // загружен (идёт асинхронное чтение источника) или залочен — рисуем HTML.
-    const store = view.state.facet(blockEditorStoreFacet);
-    const nestedDom = this.active && this.lockedBy === null ? store?.dom(this.editorKey) ?? null : null;
-    if (nestedDom !== null) {
-      box.append(nestedDom);
-      // DOM инстанса подключён — применяем отложенный фокус входа в блок.
-      store?.applyPendingFocus(this.editorKey);
-      return box;
+      return;
     }
 
     const body = document.createElement('div');
@@ -1162,7 +1223,6 @@ class TransclusionBlockWidget extends WidgetType {
       const path = [this.sourceId];
       decorateCommentView(body, factory(path), factory, path);
     }
-    return box;
   }
 
   override ignoreEvent(): boolean {
@@ -2004,9 +2064,19 @@ function transclusionRefAt(view: EditorView, pos: number): TransclusionRef | nul
 }
 
 /**
- * Вход в блок: монтирует (лениво) вложенный редактор с текстом раздела и
- * переносит в него фокус. Повторный вход в уже смонтированный блок лишь
- * активирует его и фокусирует (текст правки сохранён в состоянии инстанса).
+ * Вход в блок: монтирует вложенный редактор с текстом раздела и переносит в него
+ * фокус. Повторный вход в уже смонтированный блок лишь активирует его и
+ * фокусирует (текст правки сохранён в состоянии инстанса).
+ *
+ * **Вход СИНХРОНЕН (ошибка `ce46723d`).** Тело источника уже загружено для
+ * отрисовки блока (общий кэш сети {@link sourceCache}), поэтому вложенный
+ * редактор монтируется В ТОМ ЖЕ ТИКЕ, что и нажатие, — без сети и микрозадач:
+ * каретка не теряется, повторные стрелки не уводят её за блок. Сеть — только при
+ * промахе кэша, с дедупликацией дозагрузки ({@link loadNestedBlock}). Свежесть
+ * источника обеспечивают инвалидация кэша по realtime (`comment.*` /
+ * `thought.deleted`, {@link sourceKeyForCommentEvent}) и `expected_version` при
+ * единой записи.
+ *
  * Заблокированный источник (чужой захват) и превышение глубины — no-op: блок
  * остаётся только для чтения. Пакетный захват источников берётся полем при
  * входе в правку ({@link TransclusionLockSet}), здесь он не ставится.
@@ -2015,18 +2085,102 @@ export function enterBlock(view: EditorView, ref: TransclusionRef, caretAtEnd = 
   const store = editorStore(view);
   if (store === null) return;
   if (otherHolder('thought', ref.sourceId) !== null) return;
-  if (nextDepth(view.state) > MAX_NESTED_DEPTH) return;
+  const depth = nextDepth(view.state);
+  if (depth > MAX_NESTED_DEPTH) return;
   const key = blockEditorKey(ref.sourceId, ref.section);
   if (store.has(key)) {
-    view.dispatch({ effects: setActiveBlock.of(key) });
-    store.focus(key, caretAtEnd ? 'end' : 'start');
+    activateNestedBlock(view, store, key, caretAtEnd);
     return;
   }
-  const depth = nextDepth(view.state);
+  const networkId = safeNetwork();
+  if (networkId === null) return;
+  const cached = sourceCache.get(sourceCacheKey(networkId, ref.sourceId));
+  if (cached !== undefined) {
+    // Синхронный монтёж из уже загруженного тела — блок им и отрисован.
+    mountNestedBlock(view, store, ref, key, depth, cached, caretAtEnd);
+    return;
+  }
+  // Промах кэша: единственная точка сетевого чтения — дозагрузка с
+  // дедупликацией (повторные нажатия до монтажа не запускают второй запрос).
   void loadNestedBlock(view, store, ref, key, depth, caretAtEnd);
 }
 
-/** Асинхронная загрузка источника и монтаж инстанса вложенного редактора. */
+/** Активирует смонтированный блок и переносит в него фокус (синхронно). */
+function activateNestedBlock(
+  view: EditorView,
+  store: NestedEditorStore,
+  key: string,
+  caretAtEnd: boolean,
+): void {
+  view.dispatch({ effects: setActiveBlock.of(key) });
+  store.focus(key, caretAtEnd ? 'end' : 'start');
+}
+
+/** Опции вложенного инстанса блока: хост поля, грязность и жесты выхода. */
+function nestedBlockOptions(
+  view: EditorView,
+  key: string,
+  host: BlockEditorHost | null,
+  depth: number,
+): NestedEditorOptions {
+  return {
+    depth,
+    // Хост пробрасывается в стек инстанса (задача `e9dfc2df`): блок любой
+    // глубины догружает захват СВОЕГО источника при монтировании и проводит
+    // Ctrl+Enter/Esc в единую запись/отмену поля.
+    host,
+    onDirty: (k) => host?.onBlockDirty(k),
+    onExit: (k, reason) => exitBlock(view, k, reason),
+    onCommit: () => host?.onCommitEdit?.(key),
+    onCancel: () => host?.onCancelEdit?.(key),
+  };
+}
+
+/**
+ * СИНХРОННЫЙ монтаж вложенного редактора из уже загруженного источника
+ * (ошибка `ce46723d`): тело берётся из кэша, инстанс создаётся и активируется в
+ * том же тике. Черновик правки источника (задача `6a085e01`) читается из
+ * локального хранилища АСИНХРОННО и подставляется до первого ввода
+ * ({@link NestedEditorStore.applyDraft}) — монтаж его не ждёт.
+ */
+function mountNestedBlock(
+  view: EditorView,
+  store: NestedEditorStore,
+  ref: TransclusionRef,
+  key: string,
+  depth: number,
+  src: TransclusionSource,
+  caretAtEnd: boolean,
+): void {
+  const text = ref.section === null ? src.body_md : sectionBodyForEdit(src.body_md, ref.section);
+  if (text === null) return;
+  const host = view.state.facet(blockEditorHostFacet);
+  store.mount(key, text, nestedBlockOptions(view, key, host, depth));
+  // Блок смонтирован — источник входит в набор правки: поле берёт на него
+  // пакетный захват (задача `e9dfc2df`). Вложенные источники (в т.ч. внутри
+  // блока) попадают в набор по мере монтирования.
+  host?.onBlockMounted?.(ref.sourceId);
+  activateNestedBlock(view, store, key, caretAtEnd);
+  if (host?.getBlockDraft !== undefined) {
+    void host
+      .getBlockDraft(ref.sourceId, ref.section)
+      .then((draft) => {
+        store.applyDraft(key, draft);
+      })
+      .catch(() => undefined);
+  }
+}
+
+/** Промахи кэша, чья дозагрузка источника уже идёт (ключ сети + блок). */
+const nestedBlockLoads = new Set<string>();
+
+/**
+ * Асинхронная дозагрузка источника при ПРОМАХЕ кэша и монтаж инстанса.
+ * Дедуплицирована по ключу (сеть + блок): повторные нажатия, пока идёт
+ * загрузка, второго запроса не делают (ошибка `ce46723d`). Загрузка идёт через
+ * общий кэш сети ({@link cachedTransclusionLoader}) — после неё повторный вход
+ * синхронен.
+ */
 async function loadNestedBlock(
   view: EditorView,
   store: NestedEditorStore,
@@ -2037,45 +2191,24 @@ async function loadNestedBlock(
 ): Promise<void> {
   const networkId = safeNetwork();
   if (networkId === null) return;
-  const src = await defaultTransclusionLoader(networkId)(ref.sourceId).catch(() => null);
-  if (src === null || !src.found) return;
-  const text = ref.section === null ? src.body_md : sectionBodyForEdit(src.body_md, ref.section);
-  if (text === null) return;
-  // Ссылка могла сдвинуться/исчезнуть, пока грузили источник.
-  const fresh = transclusionRefStartingAt(view.state.doc.toString(), ref.start);
-  if (fresh === null || fresh.sourceId !== ref.sourceId) return;
-  if (!store.has(key)) {
-    const host = view.state.facet(blockEditorHostFacet);
-    // Черновик правки источника (задача `6a085e01`): сохранённый текст правки
-    // возвращается вместо загруженного, вложенный редактор монтируется сразу
-    // «грязным». Ошибка чтения черновика не мешает монтированию — берём источник.
-    const draft =
-      host?.getBlockDraft === undefined
-        ? null
-        : await host.getBlockDraft(ref.sourceId, ref.section).catch(() => null);
-    store.mount(
-      key,
-      text,
-      {
-        depth,
-        // Хост пробрасывается в стек инстанса (задача `e9dfc2df`): блок любой
-        // глубины догружает захват СВОЕГО источника при монтировании и проводит
-        // Ctrl+Enter/Esc в единую запись/отмену поля.
-        host,
-        onDirty: (k) => host?.onBlockDirty(k),
-        onExit: (k, reason) => exitBlock(view, k, reason),
-        onCommit: () => host?.onCommitEdit?.(key),
-        onCancel: () => host?.onCancelEdit?.(key),
-      },
-      draft,
-    );
-    // Блок смонтирован — источник входит в набор правки: поле берёт на него
-    // пакетный захват (задача `e9dfc2df`). Вложенные источники (в т.ч. внутри
-    // блока) попадают в набор по мере монтирования.
-    host?.onBlockMounted?.(ref.sourceId);
+  const loadKey = `${networkId}#${key}`;
+  if (nestedBlockLoads.has(loadKey)) return;
+  nestedBlockLoads.add(loadKey);
+  try {
+    const src = await cachedTransclusionLoader(networkId)(ref.sourceId).catch(() => null);
+    if (src === null || !src.found) return;
+    // Ссылка могла сдвинуться/исчезнуть, пока грузили источник.
+    const fresh = transclusionRefStartingAt(view.state.doc.toString(), ref.start);
+    if (fresh === null || fresh.sourceId !== ref.sourceId) return;
+    if (store.has(key)) {
+      // Пока грузили — блок уже смонтирован другим путём: просто активируем.
+      activateNestedBlock(view, store, key, caretAtEnd);
+      return;
+    }
+    mountNestedBlock(view, store, ref, key, depth, src, caretAtEnd);
+  } finally {
+    nestedBlockLoads.delete(loadKey);
   }
-  view.dispatch({ effects: setActiveBlock.of(key) });
-  store.focus(key, caretAtEnd ? 'end' : 'start');
 }
 
 /**
