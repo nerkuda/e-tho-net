@@ -72,6 +72,43 @@ export interface NestedEditorOptions {
    * `e9dfc2df`, требование «Esc — отмена всего»).
    */
   onCancel: (key: string) => void;
+  /**
+   * Хост поля (задача `e9dfc2df`): пробрасывается в СТЕК вложенного инстанса
+   * фасетом {@link blockEditorHostFacet}, поэтому блок ЛЮБОЙ глубины видит хост
+   * и догружает захват своего источника при монтировании (`onBlockMounted`), а
+   * также проводит `Ctrl+Enter`/`Esc` в единую запись/отмену поля. `null`/нет —
+   * инстанс без хоста (тесты/ранний доступ).
+   */
+  host?: BlockEditorHost | null;
+}
+
+/**
+ * Хост поля комментария, получающий события вложенных редакторов (задача
+ * «Единая запись», `e9dfc2df`): изменение текста блока, запрос единой записи
+ * (`Ctrl+Enter` внутри блока), отмена всей правки (`Esc` внутри блока) и
+ * монтирование блока (для пакетного захвата его источника). Живёт здесь, рядом
+ * с {@link NestedEditorStore}, и пробрасывается в стек вложенного инстанса
+ * фасетом, чтобы блок любой глубины видел хост.
+ */
+export interface BlockEditorHost {
+  /** Текст блока `key` изменён (отличается от загруженного). */
+  onBlockDirty(key: string): void;
+  /** `Ctrl+Enter` в блоке — единая запись всего поля (опционально). */
+  onCommitEdit?(key: string): void;
+  /** `Esc` в блоке — отмена всей правки поля (опционально). */
+  onCancelEdit?(key: string): void;
+  /** Блок смонтирован — поле может взять захват источника (опционально). */
+  onBlockMounted?(sourceId: string): void;
+}
+
+/** Фасет хоста поля: единственное значение (последнее — при нескольких). */
+export const blockEditorHostFacet = Facet.define<BlockEditorHost, BlockEditorHost | null>({
+  combine: (values) => values[values.length - 1] ?? null,
+});
+
+/** Расширение-хост для поля: уведомляет о событиях вложенных блоков. */
+export function blockEditorHostExtension(host: BlockEditorHost): Extension {
+  return blockEditorHostFacet.of(host);
 }
 
 /** Глубина текущего инстанса редактора (нет фасета — контейнер, глубина 0). */
@@ -310,6 +347,13 @@ function nestedExtensions(
     // Вложенный инстанс сам умеет монтировать детей: его виджеты берут то же
     // хранилище и видят свою глубину (рекурсия до MAX_NESTED_DEPTH).
     blockEditorStoreFacet.of(store),
+    // Хост поля пробрасывается в стек инстанса (задача e9dfc2df): блок ЛЮБОЙ
+    // глубины видит хост — догружает захват источника при монтировании
+    // (`onBlockMounted`) и проводит Ctrl+Enter/Esc в единую запись/отмену поля.
+    // Без этого у блока внутри блока `host === null` и захват не брался.
+    ...(options.host === undefined || options.host === null
+      ? []
+      : [blockEditorHostFacet.of(options.host)]),
     Prec.highest(
       keymap.of([
         // `Esc` внутри блока — отмена ВСЕЙ правки поля (окружение и все блоки),

@@ -102,7 +102,6 @@ import {
 } from '@codemirror/autocomplete';
 import {
   EditorState,
-  Facet,
   Prec,
   RangeSet,
   StateEffect,
@@ -166,6 +165,7 @@ import { collapseScopeFacet, decorateCommentView } from './comment-collapse.js';
 import {
   MAX_NESTED_DEPTH,
   NestedEditorStore,
+  blockEditorHostFacet,
   blockEditorStoreFacet,
   nestedDepthFacet,
   type NestedExitReason,
@@ -1915,31 +1915,12 @@ export function decorateViewTransclusionChips(
  * ------------------------------------------------------------------ */
 
 /**
- * Хост поля комментария (задача «Единая запись», `e9dfc2df`). Поле-контейнер
- * даёт блоку три точки: изменение текста блока («грязный» сигнал), запрос
- * единой записи (`Ctrl+Enter` внутри блока) и отмену всей правки (`Esc` внутри
- * блока). Фасет необязателен — без хоста блок работает, команды игнорируются.
+ * Хост поля комментария (задача «Единая запись», `e9dfc2df`). Тип, фасет и
+ * расширение живут рядом с {@link NestedEditorStore} (`transclusion-nested.ts`):
+ * фасет пробрасывается в стек вложенного инстанса, поэтому блок ЛЮБОЙ глубины
+ * видит хост. Реэкспорт сохранён ради прежней точки импорта (`transclusion.js`).
  */
-export interface BlockEditorHost {
-  /** Текст блока `key` изменён (отличается от загруженного). */
-  onBlockDirty(key: string): void;
-  /** `Ctrl+Enter` в блоке — единая запись всего поля (опционально). */
-  onCommitEdit?(key: string): void;
-  /** `Esc` в блоке — отмена всей правки поля (опционально). */
-  onCancelEdit?(key: string): void;
-  /** Блок смонтирован — поле может взять захват источника (опционально). */
-  onBlockMounted?(sourceId: string): void;
-}
-
-/** Фасет хоста поля: единственное значение (последнее — при нескольких). */
-const blockEditorHostFacet = Facet.define<BlockEditorHost, BlockEditorHost | null>({
-  combine: (values) => values[values.length - 1] ?? null,
-});
-
-/** Расширение-хост для поля: уведомляет об изменении текста блока. */
-export function blockEditorHostExtension(host: BlockEditorHost): Extension {
-  return blockEditorHostFacet.of(host);
-}
+export { blockEditorHostExtension, type BlockEditorHost } from './transclusion-nested.js';
 
 /** Хранилище вложенных редакторов текущего поля, либо `null` (нет фасета). */
 function editorStore(view: EditorView): NestedEditorStore | null {
@@ -2009,6 +1990,10 @@ async function loadNestedBlock(
     const host = view.state.facet(blockEditorHostFacet);
     store.mount(key, text, {
       depth,
+      // Хост пробрасывается в стек инстанса (задача `e9dfc2df`): блок любой
+      // глубины догружает захват СВОЕГО источника при монтировании и проводит
+      // Ctrl+Enter/Esc в единую запись/отмену поля.
+      host,
       onDirty: (k) => host?.onBlockDirty(k),
       onExit: (k, reason) => exitBlock(view, k, reason),
       onCommit: () => host?.onCommitEdit?.(key),

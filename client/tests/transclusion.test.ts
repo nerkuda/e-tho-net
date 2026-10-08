@@ -940,6 +940,50 @@ test('рекурсия: вложенная трансклюзия внутри �
   assert.equal(registry.get(keyB)!.state.facet(nestedDepthFacet), 2, 'глубина инстанса — 2');
 });
 
+test('пакетный захват: блок глубины ≥2 догружает захват своего источника (e9dfc2df)', async () => {
+  const ID_C = '22222222-3333-4444-5555-666666666666';
+  stubEtn({ [ID_A]: `![[#${ID_B}]]`, [ID_B]: `![[#${ID_C}]]`, [ID_C]: 'ВНУТРЕННИЙ' });
+  const { store: appStore } = await import('../src/renderer/state.js');
+  appStore.update({ networkId: NET_ID });
+  const registry = new Map<string, FakeNestedView>();
+  const store = new NestedEditorStore(fakeFactory(registry));
+  const mounted: string[] = [];
+  const doc = `до ${BLOCK_RAW} после`;
+  const refA = parseTransclusions(doc)[0]!;
+  const view = makeView(
+    withStore(doc, store, [
+      blockEditorHostExtension({
+        onBlockDirty: () => undefined,
+        onBlockMounted: (id) => mounted.push(id),
+      }),
+    ]),
+  );
+
+  // Глубина 1.
+  transclusionInternals.enterBlock(view as unknown as EditorView, refA);
+  await tick();
+  await tick();
+  assert.deepEqual(mounted, [ID_A], 'источник блока глубины 1 захвачен');
+  const outerA = registry.get(blockEditorKey(ID_A, null))!;
+
+  // Глубина 2 — блок ВНУТРИ блока: хост обязан быть проброшен в стек инстанса,
+  // иначе захват источника не брался (блокер проверки e9dfc2df).
+  const refB = parseTransclusions(outerA.state.doc.toString())[0]!;
+  transclusionInternals.enterBlock(outerA as unknown as EditorView, refB);
+  await tick();
+  await tick();
+  assert.ok(store.has(blockEditorKey(ID_B, null)), 'инстанс глубины 2 смонтирован');
+  assert.deepEqual(mounted, [ID_A, ID_B], 'источник блока глубины 2 тоже захвачен');
+  const outerB = registry.get(blockEditorKey(ID_B, null))!;
+
+  // Глубина 3.
+  const refC = parseTransclusions(outerB.state.doc.toString())[0]!;
+  transclusionInternals.enterBlock(outerB as unknown as EditorView, refC);
+  await tick();
+  await tick();
+  assert.deepEqual(mounted, [ID_A, ID_B, ID_C], 'источник блока глубины 3 захвачен');
+});
+
 // ---------------------------------------------------------------------------
 // Нажатие `#` в списке мыслей (ошибка ccf4d25f, элемент 7a479549)
 // ---------------------------------------------------------------------------
