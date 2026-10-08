@@ -126,11 +126,12 @@ import {
   type TransclusionRef,
   type TransclusionResolution,
 } from '@etn/markdown';
-import type { Comment } from '@etn/shared';
+import type { AnyRealtimeEvent, Comment } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
+import { onRoutedRealtimeEvent } from '../lib/live/index.js';
 import { guardMenuFocus, showMenuAt } from '../lib/menu.js';
 import { holderName, otherHolder, subscribeLockCache } from '../lib/lock-cache.js';
 import {
@@ -448,6 +449,51 @@ export function cachedTransclusionLoader(networkId: string): TransclusionSourceL
 /** Сбрасывает данные источника из общего кэша сети (после записи в источник). */
 export function invalidateTransclusionSource(networkId: string, sourceId: string): void {
   sourceCache.delete(sourceCacheKey(networkId, sourceId));
+}
+
+/**
+ * Ключ источника, который надо сбросить по realtime-событию комментария, либо
+ * `null`. Тело источника трансклюзии — ПОСТОЯННЫЙ комментарий мысли, поэтому
+ * кэш трогают только создания/правки/удаления постоянных комментариев
+ * владельца-мысли; хроно-комментарии и владельцы-связи — нет.
+ */
+function sourceKeyForCommentEvent(evt: AnyRealtimeEvent): string | null {
+  if (evt.type === 'comment.updated') {
+    return evt.data.kind === 'permanent'
+      ? sourceCacheKey(evt.network_id, evt.data.owner_id)
+      : null;
+  }
+  if (evt.type === 'comment.created') {
+    const comment = evt.data.comment;
+    return comment.kind === 'permanent' && comment.owner_type === 'thought'
+      ? sourceCacheKey(evt.network_id, comment.owner_id)
+      : null;
+  }
+  if (evt.type === 'comment.deleted') {
+    return evt.data.owner_type === 'thought'
+      ? sourceCacheKey(evt.network_id, evt.data.owner_id)
+      : null;
+  }
+  return null;
+}
+
+let sourceCacheWired = false;
+
+/**
+ * Центральная инвалидация общего кэша источников по realtime (подключается из
+ * `app.ts` при старте, рядом с `initLockCache`). ЛЮБАЯ запись постоянного
+ * комментария-источника — обычная правка комментария, черновик, хроно-путь, MCP,
+ * чужая правка — приходит из main в рендерер событием `comment.*`, в том числе
+ * автору записи (broadcast-to-all), поэтому ОДНА подписка покрывает все пути
+ * записи: отдельные вызовы `etn.comments.update` ловить не нужно. Идемпотентно.
+ */
+export function initTransclusionSourceCache(): void {
+  if (sourceCacheWired) return;
+  sourceCacheWired = true;
+  onRoutedRealtimeEvent((evt) => {
+    const key = sourceKeyForCommentEvent(evt);
+    if (key !== null) sourceCache.delete(key);
+  });
 }
 
 /**
@@ -2104,6 +2150,7 @@ export const transclusionInternals = {
   emptyEntry,
   cachedTransclusionLoader,
   invalidateTransclusionSource,
+  sourceKeyForCommentEvent,
   /** Очистка общего (на сеть) кэша источников — изоляция прогонов тестов. */
   clearSourceCache: () => sourceCache.clear(),
   setCollapsed,

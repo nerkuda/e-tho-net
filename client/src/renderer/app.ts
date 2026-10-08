@@ -61,6 +61,7 @@ import { initLang } from './lib/lang.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache } from './lib/lock-cache.js';
+import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
@@ -628,6 +629,11 @@ export async function boot(): Promise<void> {
   // its colours or the theme change.
   initLayerTheme();
   initLockCache();
+  // Центральная инвалидация кэша источников трансклюзий по событиям `comment.*`
+  // (задача a4f4113d): правка постоянного комментария-источника любой веткой —
+  // своя или чужая — сбрасывает закэшированное тело, чтобы отрисовка блока не
+  // показывала устаревший текст.
+  initTransclusionSourceCache();
   initRealtime();
   setRealtimeEffects({
     onStale: () => scheduleRefresh(),

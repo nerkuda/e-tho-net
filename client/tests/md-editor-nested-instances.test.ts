@@ -8,7 +8,8 @@
  *    расширения трансклюзий), и вызывается на инстанс;
  * 2. два markdown-редактора НЕЗАВИСИМЫ — правка документа одного не меняет
  *    документ другого;
- * 3. кэш данных источников — ОДИН на сеть, не дублируется по инстансам;
+ * 3. кэш данных источников — ОДИН на сеть, не дублируется по инстансам и
+ *    сбрасывается записью постоянного комментария-источника (в т.ч. realtime);
  * 4. кэш заголовков разделов изолирован по инстансу.
  *
  * Headless: настоящий `EditorView` (DOM) в шиме не поднимается (см.
@@ -20,10 +21,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import type { AnyRealtimeEvent } from '@etn/shared';
 import { EditorState } from '@codemirror/state';
 
 import { mdEditorExtensions } from '../src/renderer/editor/md-editor.js';
 import {
+  initTransclusionSourceCache,
   transclusionAtomicRanges,
   transclusionExtensions,
   transclusionInternals,
@@ -31,6 +34,7 @@ import {
   transclusionSectionCompletions,
   transclusionState,
 } from '../src/renderer/editor/transclusion.js';
+import { resetEventRouter, routeRealtimeEvent } from '../src/renderer/lib/live/index.js';
 
 const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
@@ -52,6 +56,24 @@ function stubEtn(): { fetches: () => number; setBody: (body: string) => void } {
     },
   };
   return { fetches: () => fetches, setBody: (next) => (body = next) };
+}
+
+/** Realtime-событие комментария минимальной формы (для проверки инвалидации). */
+function commentEvent(
+  type: 'comment.updated' | 'comment.created' | 'comment.deleted',
+  data: Record<string, unknown>,
+  seq: number,
+): AnyRealtimeEvent {
+  return {
+    type,
+    seq,
+    ts: '2026-10-08T00:00:00.000Z',
+    actor: { user_id: 'u1', client_id: 'c1' },
+    network_id: NET,
+    audience: 'network',
+    layer_id: '00000000-0000-0000-0000-000000000000',
+    data,
+  } as unknown as AnyRealtimeEvent;
 }
 
 /** Метки подсказок источника разделов (или `null`, если источник не сработал). */
@@ -130,7 +152,7 @@ test('кэш источников один на сеть: два инстанс�
   assert.equal(stub.fetches(), 2, 'кэш ключуется сетью: другой сети — свой запрос');
 });
 
-test('запись в источник сбрасывает его из общего кэша сети', async () => {
+test('запись в источник самим полем сбрасывает его из общего кэша сети', async () => {
   const stub = stubEtn();
   transclusionInternals.clearSourceCache();
   const load = transclusionInternals.cachedTransclusionLoader(NET);
@@ -140,12 +162,72 @@ test('запись в источник сбрасывает его из обще
 
   stub.setBody('## Бета\nновое тело');
   await load(ID_A);
-  assert.equal(stub.fetches(), 1, 'повторная загрузка — из кэша');
+  assert.equal(stub.fetches(), 1, 'пока сброса нет — повторная загрузка из кэша');
 
+  // Тот же путь, что и в `saveBlockEdit` (прямой сброс до перезагрузки блока).
   transclusionInternals.invalidateTransclusionSource(NET, ID_A);
   const fresh = await load(ID_A);
   assert.equal(stub.fetches(), 2, 'после сброса источник перечитан');
   assert.equal(fresh?.body_md, '## Бета\nновое тело', 'вернулось свежее тело источника');
+});
+
+test('sourceKeyForCommentEvent: кэш трогают только постоянные комментарии мысли', () => {
+  const key = transclusionInternals.sourceKeyForCommentEvent;
+  assert.equal(
+    key(commentEvent('comment.updated', { id: 'c1', owner_id: ID_A, kind: 'permanent', changes: {}, version: 2 }, 1)),
+    `${NET}:${ID_A}`,
+    'правка постоянного комментария мысли сбрасывает источник',
+  );
+  assert.equal(
+    key(commentEvent('comment.updated', { id: 'c1', owner_id: ID_A, kind: 'chronological', changes: {}, version: 2 }, 2)),
+    null,
+    'хроно-комментарий источник не трогает',
+  );
+  assert.equal(
+    key(commentEvent('comment.created', { comment: { id: 'c1', kind: 'permanent', owner_type: 'thought', owner_id: ID_A } }, 3)),
+    `${NET}:${ID_A}`,
+    'создание постоянного комментария мысли сбрасывает источник',
+  );
+  assert.equal(
+    key(commentEvent('comment.created', { comment: { id: 'c1', kind: 'permanent', owner_type: 'link', owner_id: 'l1' } }, 4)),
+    null,
+    'владелец-связь источником трансклюзии не является',
+  );
+  assert.equal(
+    key(commentEvent('comment.deleted', { owner_type: 'thought', owner_id: ID_A, id: 'c1' }, 5)),
+    `${NET}:${ID_A}`,
+    'удаление комментария мысли сбрасывает источник',
+  );
+  assert.equal(
+    key(commentEvent('comment.deleted', { owner_type: 'link', owner_id: 'l1', id: 'c1' }, 6)),
+    null,
+    'удаление комментария связи источник не трогает',
+  );
+});
+
+test('realtime comment.updated сбрасывает источник (обычная правка/черновик/чужая запись)', async () => {
+  const stub = stubEtn();
+  transclusionInternals.clearSourceCache();
+  initTransclusionSourceCache();
+  const load = transclusionInternals.cachedTransclusionLoader(NET);
+
+  await load(ID_A);
+  assert.equal(stub.fetches(), 1, 'источник загружен и закэширован');
+
+  // Симуляция пути обычной правки комментария: запись → сервер → realtime-эхо
+  // (`comment.updated`) в рендерер (в т.ч. автору — broadcast-to-all).
+  stub.setBody('## Бета\nправка обычным путём');
+  resetEventRouter();
+  routeRealtimeEvent(
+    commentEvent(
+      'comment.updated',
+      { id: 'perm-src', owner_id: ID_A, kind: 'permanent', changes: {}, version: 2 },
+      100,
+    ),
+  );
+  const after = await load(ID_A);
+  assert.equal(stub.fetches(), 2, 'событие сбросило источник — сеть перечитана');
+  assert.equal(after?.body_md, '## Бета\nправка обычным путём', 'отрисовка получит свежее тело');
 });
 
 // ---------------------------------------------------------------------------
