@@ -164,9 +164,13 @@ test('Shift+клик выделяет блок целиком и НЕ входи
   const doc = `до ${BLOCK_RAW} после`;
   const ref = parseTransclusions(doc)[0]!;
   const view = makeView(withStore(doc, store));
+  // Блок-виджет лежит ВНУТРИ DOM редактора-контейнера (как в реальном поле):
+  // обработчик пропускает только «свои» блоки (ошибка e2c6c66c, раунд 2).
+  const target = blockElement(ref);
+  view.dom.append(target);
 
   const handled = transclusionMouseDown(
-    { button: 0, shiftKey: true, target: blockElement(ref) } as unknown as MouseEvent,
+    { button: 0, shiftKey: true, target } as unknown as MouseEvent,
     view as unknown as EditorView,
   );
   assert.equal(handled, true, 'Shift+клик по блоку обработан');
@@ -193,9 +197,11 @@ test('обычный клик по блоку по-прежнему входит
   const doc = `до ${BLOCK_RAW} после`;
   const ref = parseTransclusions(doc)[0]!;
   const view = makeView(withStore(doc, store));
+  const target = blockElement(ref);
+  view.dom.append(target);
 
   transclusionMouseDown(
-    { button: 0, shiftKey: false, target: blockElement(ref) } as unknown as MouseEvent,
+    { button: 0, shiftKey: false, target } as unknown as MouseEvent,
     view as unknown as EditorView,
   );
   await tick();

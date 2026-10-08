@@ -1195,15 +1195,6 @@ function coversRef(selection: { from: number; to: number }, from: number, to: nu
  * на markdown.
  */
 function linkDraftMode(selection: { from: number; to: number }, from: number, to: number): boolean {
-  // Каретка на ГРАНИЦЕ ссылки (перед открывающей парой или после закрывающей —
-  // `]]`-хвоста) — не черновик: блок остаётся блоком. Иначе блок был доступен
-  // только с левой границы (`intersects` строгий), и стрелки/вход через правую
-  // границу не срабатывали — асимметрия навигации (ошибка ea9c76d3). Черновик —
-  // только выделение, заходящее ВНУТРЬ ссылки (набор открытой трансклюзионной
-  // ссылки до автокомплита) или частично её покрывающее, но не полное покрытие.
-  if (selection.from === selection.to && (selection.from === from || selection.from === to)) {
-    return false;
-  }
   return intersects(selection, from, to) && !coversRef(selection, from, to);
 }
 
@@ -1476,6 +1467,23 @@ export function transclusionBlockArrow(
 }
 
 /**
+ * Лежит ли элемент блока-трансклюзии ВНУТРИ DOM этого редактора. Стек
+ * вложенного инстанса содержит те же расширения трансклюзий
+ * (`transclusion-nested.ts` → `md-editor.ts` `...transclusionExtensions` →
+ * `transclusionClick`/`transclusionContextMenu`), поэтому от текста ВНУТРИ
+ * блока обработчики вложенного редактора срабатывают первыми, и `closest`
+ * находит ВНЕШНИЙ блок-виджет (предок вложенного редактора, чужие координаты
+ * `data-md-from/to`): трактовать его как цель нельзя — жест принадлежит
+ * собственному тексту вложенного инстанса (ошибка `e2c6c66c`, раунд 2).
+ * У тестовых дублёров без `dom` проверка неприменима (считаем «внутри»).
+ */
+function blockInViewDom(view: EditorView, block: HTMLElement): boolean {
+  if (view.dom === undefined || view.dom === null) return true;
+  if (typeof view.dom.contains !== 'function') return true;
+  return view.dom.contains(block);
+}
+
+/**
  * Обработчик `mousedown` трансклюзий (задача `73ae1d4b`): клик по блоку монтирует
  * вложенный редактор и переносит фокус внутрь; клик по шапке-чипу открывает
  * поповер правки ссылки; клик по заблокированному (чужой захват) блоку лишь
@@ -1515,6 +1523,8 @@ export function transclusionMouseDown(event: MouseEvent, view: EditorView): bool
   }
   const block = target.closest(`.${TRANSCLUSION_BLOCK_CLASS}`);
   if (!(block instanceof HTMLElement)) return false;
+  // Блок обязан лежать ВНУТРИ DOM этого редактора (см. `blockInViewDom`).
+  if (!blockInViewDom(view, block)) return false;
   const from = Number(block.dataset['mdFrom']);
   const to = Number(block.dataset['mdTo']);
   if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return false;
@@ -1559,6 +1569,10 @@ export const transclusionClick = EditorView.domEventHandlers({
 function transclusionWidgetRefAt(view: EditorView, target: Element | null): TransclusionRef | null {
   const el = target?.closest?.(`.${TRANSCLUSION_BLOCK_CLASS}`);
   if (!(el instanceof HTMLElement)) return null;
+  // Внешний блок-виджет из вложенного инстанса целью не является (см.
+  // `blockInViewDom`): иначе правый клик в блоке открывал бы меню чужого
+  // (внешнего) блока с координатами контейнера (ошибка `e2c6c66c`).
+  if (!blockInViewDom(view, el)) return null;
   const from = Number(el.dataset.mdFrom);
   if (!Number.isFinite(from)) return null;
   // Ищем ссылку по НАЧАЛУ диапазона (`data-md-from`), а не по каретке: с

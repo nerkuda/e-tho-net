@@ -176,6 +176,78 @@ describe('кнопки мыши по блоку трансклюзии (27b95e60
     );
     assert.equal(view.events.length, 0, 'выделение контейнера не двигается');
   });
+
+  it('клик по СВОЕМУ тексту вложенного редактора не трактует внешний блок как цель (e2c6c66c, раунд 2)', () => {
+    // Вложенный инстанс: стек трансклюзий тот же, `closest` от его текста находит
+    // ВНЕШНИЙ блок-виджет (предок), но это чужая цель — жест обязан уйти
+    // собственному тексту вложенного CM, контейнерный preventDefault не нужен.
+    const outerBlock = widget(TRANSCLUSION_BLOCK_CLASS, REF);
+    const nestedRoot = new ShimElement('div');
+    nestedRoot.className = 'cm-editor';
+    const nestedContent = new ShimElement('div');
+    nestedContent.className = 'cm-content';
+    nestedRoot.append(nestedContent);
+    outerBlock.append(nestedRoot); // внешний блок — предок вложенного редактора
+
+    const view: any = fakeView('строка один\nстрока два\nстрока три');
+    view.dom = nestedRoot;
+    (nestedContent as any).closest = (selector: string): ShimElement | null => {
+      if (selector === '.cm-editor') return nestedRoot;
+      if (selector === `.${TRANSCLUSION_BLOCK_CLASS}`) return outerBlock;
+      return null;
+    };
+
+    const event = mouse(0, nestedContent);
+    const handled = transclusionMouseDown(event, view);
+    assert.equal(handled, false, 'собственный текст вложенного редактора — жест не контейнерный');
+    assert.equal(event.defaultPrevented, false, 'выделение вложенного CM не глушится');
+    assert.equal(view.events.length, 0, 'внешний блок как цель не выделяется и не активируется');
+  });
+
+  it('клик по блоку ВНУТРИ самого вложенного редактора обрабатывается (e2c6c66c, раунд 2)', () => {
+    // Обратный край: блок, лежащий внутри DOM вложенного инстанса, — своя цель.
+    const nestedRoot = new ShimElement('div');
+    nestedRoot.className = 'cm-editor';
+    const innerBlock = new ShimElement('div');
+    innerBlock.className = TRANSCLUSION_BLOCK_CLASS;
+    innerBlock.dataset.mdFrom = String(REF.start);
+    innerBlock.dataset.mdTo = String(REF.end);
+    nestedRoot.append(innerBlock);
+
+    const view: any = fakeView(SRC);
+    view.dom = nestedRoot;
+    (innerBlock as any).closest = (selector: string): ShimElement | null => {
+      if (selector === '.cm-editor') return nestedRoot;
+      if (selector === `.${TRANSCLUSION_BLOCK_CLASS}`) return innerBlock;
+      return null;
+    };
+
+    const handled = transclusionMouseDown(mouse(0, innerBlock), view);
+    assert.equal(handled, true, 'свой блок вложенного редактора — цель обрабатывается');
+  });
+
+  it('правый клик в тексте вложенного редактора не открывает меню внешнего блока (e2c6c66c, раунд 2)', () => {
+    const outerBlock = widget(TRANSCLUSION_BLOCK_CLASS, REF);
+    const nestedRoot = new ShimElement('div');
+    nestedRoot.className = 'cm-editor';
+    const nestedContent = new ShimElement('div');
+    nestedRoot.append(nestedContent);
+    outerBlock.append(nestedRoot);
+
+    const view: any = fakeView('строка один\nстрока два');
+    view.dom = nestedRoot;
+    (nestedContent as any).closest = (selector: string): ShimElement | null => {
+      if (selector === `.${TRANSCLUSION_BLOCK_CLASS}`) return outerBlock;
+      return null;
+    };
+
+    const event = mouse(0, nestedContent);
+    assert.equal(
+      transclusionContextMenuHandler(event, view),
+      false,
+      'внешний блок меню не открывает — обрабатывает поле',
+    );
+  });
 });
 
 describe('контекстное меню блока открывается правым кликом', () => {
