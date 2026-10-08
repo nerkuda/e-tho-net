@@ -1988,17 +1988,29 @@ async function loadNestedBlock(
   if (fresh === null || fresh.sourceId !== ref.sourceId) return;
   if (!store.has(key)) {
     const host = view.state.facet(blockEditorHostFacet);
-    store.mount(key, text, {
-      depth,
-      // Хост пробрасывается в стек инстанса (задача `e9dfc2df`): блок любой
-      // глубины догружает захват СВОЕГО источника при монтировании и проводит
-      // Ctrl+Enter/Esc в единую запись/отмену поля.
-      host,
-      onDirty: (k) => host?.onBlockDirty(k),
-      onExit: (k, reason) => exitBlock(view, k, reason),
-      onCommit: () => host?.onCommitEdit?.(key),
-      onCancel: () => host?.onCancelEdit?.(key),
-    });
+    // Черновик правки источника (задача `6a085e01`): сохранённый текст правки
+    // возвращается вместо загруженного, вложенный редактор монтируется сразу
+    // «грязным». Ошибка чтения черновика не мешает монтированию — берём источник.
+    const draft =
+      host?.getBlockDraft === undefined
+        ? null
+        : await host.getBlockDraft(ref.sourceId, ref.section).catch(() => null);
+    store.mount(
+      key,
+      text,
+      {
+        depth,
+        // Хост пробрасывается в стек инстанса (задача `e9dfc2df`): блок любой
+        // глубины догружает захват СВОЕГО источника при монтировании и проводит
+        // Ctrl+Enter/Esc в единую запись/отмену поля.
+        host,
+        onDirty: (k) => host?.onBlockDirty(k),
+        onExit: (k, reason) => exitBlock(view, k, reason),
+        onCommit: () => host?.onCommitEdit?.(key),
+        onCancel: () => host?.onCancelEdit?.(key),
+      },
+      draft,
+    );
     // Блок смонтирован — источник входит в набор правки: поле берёт на него
     // пакетный захват (задача `e9dfc2df`). Вложенные источники (в т.ч. внутри
     // блока) попадают в набор по мере монтирования.

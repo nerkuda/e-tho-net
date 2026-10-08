@@ -19,7 +19,7 @@ import { isConnected } from './realtime.js';
 import { store } from './state.js';
 
 /** Draft entity types supported by the retry loop. */
-export type DraftKind = 'comment' | 'comment-new' | 'thought';
+export type DraftKind = 'comment' | 'comment-new' | 'thought' | 'transclusion';
 
 /** A pending draft as returned by `ui.draftList`. */
 export interface DraftRecord {
@@ -138,6 +138,120 @@ export function canSave(): boolean {
   return isConnected();
 }
 
+/* ------------------------------------------------------------------ *
+ * Черновики правок источников трансклюзий (задача 6a085e01)
+ *
+ * Ключ черновика = владелец поля + источник + раздел: `entityType` =
+ * `'transclusion'`, `entityId` = ключ владельца поля (`ownerKey`), `field` =
+ * `sourceId#section` — тот же формат, что у ключа вложенного редактора блока
+ * (`blockEditorKey`), поэтому потоки «правка блока» и «черновик» сходятся без
+ * преобразований. Хранилище — существующая таблица `drafts` (тот же механизм,
+ * что у черновиков комментария/заголовка); отдельного хранилища нет.
+ * ------------------------------------------------------------------ */
+
+/** Поле-компонент ключа черновика источника: `sourceId#section` (ключ блока). */
+export function sourceDraftField(sourceId: string, section: string | null): string {
+  return `${sourceId}#${section ?? ''}`;
+}
+
+/** Разбирает поле черновика источника обратно на источник и раздел. */
+export function parseSourceDraftField(field: string): { sourceId: string; section: string | null } {
+  const at = field.indexOf('#');
+  if (at <= 0) return { sourceId: field, section: null };
+  const section = field.slice(at + 1);
+  return { sourceId: field.slice(0, at), section: section === '' ? null : section };
+}
+
+/** Черновик правки источника трансклюзии (владелец поля + источник + раздел). */
+export interface SourceDraftRecord {
+  id: string;
+  sourceId: string;
+  section: string | null;
+  value: string;
+  baseVersion: number | null;
+}
+
+/**
+ * Сохраняет (upsert) черновик текста источника трансклюзии. Возвращает id
+ * строки — для адресной очистки после успешной записи.
+ */
+export async function saveSourceDraft(input: {
+  networkId: string;
+  ownerKey: string;
+  sourceId: string;
+  section: string | null;
+  value: string;
+  baseVersion?: number | null;
+}): Promise<string> {
+  return saveDraft({
+    networkId: input.networkId,
+    entityType: 'transclusion',
+    entityId: input.ownerKey,
+    field: sourceDraftField(input.sourceId, input.section),
+    value: input.value,
+    baseVersion: input.baseVersion ?? null,
+  });
+}
+
+/** Все черновики источников поля (`ownerKey`), в порядке хранения. */
+export async function listSourceDrafts(
+  networkId: string,
+  ownerKey: string,
+): Promise<SourceDraftRecord[]> {
+  let drafts: DraftRecord[];
+  try {
+    drafts = (await etn.ui.draftList(networkId)) as DraftRecord[];
+  } catch {
+    return [];
+  }
+  return drafts
+    .filter((d) => d.entityType === 'transclusion' && d.entityId === ownerKey && d.value !== null)
+    .map((d) => ({
+      id: d.id,
+      ...parseSourceDraftField(d.field),
+      value: d.value as string,
+      baseVersion: d.baseVersion,
+    }));
+}
+
+/**
+ * Черновик конкретного блока (владелец поля + источник + раздел), либо `null`.
+ * Нужен восстановлению: при монтаже вложенного редактора источник проверяется
+ * на черновик — текст черновика возвращается вместо загруженного.
+ */
+export async function findSourceDraft(
+  networkId: string,
+  ownerKey: string,
+  sourceId: string,
+  section: string | null,
+): Promise<{ id: string; value: string; baseVersion: number | null } | null> {
+  const field = sourceDraftField(sourceId, section);
+  const hits = (await listSourceDrafts(networkId, ownerKey)).filter(
+    (d) => sourceDraftField(d.sourceId, d.section) === field,
+  );
+  const hit = hits.at(-1);
+  return hit === undefined ? null : { id: hit.id, value: hit.value, baseVersion: hit.baseVersion };
+}
+
+/**
+ * Удаляет черновики источников поля. Без `keys` — все черновики владельца
+ * (`Esc`: правка отброшена целиком); с `keys` (ключи блоков `sourceId#section`)
+ * — только перечисленные (успешно записанные источники при частичном сбое
+ * «Единой записи»).
+ */
+export async function clearSourceDrafts(
+  networkId: string,
+  ownerKey: string,
+  keys?: readonly string[],
+): Promise<void> {
+  const all = await listSourceDrafts(networkId, ownerKey);
+  const wanted = keys === undefined ? null : new Set(keys);
+  for (const draft of all) {
+    if (wanted !== null && !wanted.has(sourceDraftField(draft.sourceId, draft.section))) continue;
+    await etn.ui.draftDelete(draft.id).catch(() => undefined);
+  }
+}
+
 /** Blocks a save while offline: notifies and keeps the draft. */
 export function offlineNotice(): void {
   notice(
@@ -200,6 +314,14 @@ async function sendDraft(draft: DraftRecord): Promise<void> {
       await etn.ui.draftDelete(draft.id);
       break;
     }
+    case 'transclusion':
+      // Черновики правок источников трансклюзий НЕ переотправляются этим
+      // циклом: правка источника — это правка раздела тела постоянного
+      // комментария, её надо писать в контексте блока («Единая запись»,
+      // `commitTransclusionEdit`). Строка остаётся в хранилище и
+      // восстанавливается при следующем входе в правку поля; удаляется там же —
+      // после успешной единой записи (или по `Esc`).
+      break;
     default:
       break;
   }

@@ -29,6 +29,7 @@ import {
 } from '@etn/markdown';
 
 import { requireNetworkId } from '../app.js';
+import { canSave, clearSourceDrafts, findSourceDraft, offlineNotice, saveSourceDraft } from '../drafts.js';
 import { invalidateQueries, queryKeys } from '../lib/live/index.js';
 import { div, el, errText, renderHtml } from '../lib/dom.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
@@ -66,11 +67,13 @@ import {
   decorateViewTransclusionChips,
   decorateViewTransclusionLocks,
   defaultTransclusionLoader,
+  parseBlockEditorKey,
   transclusionInternals,
   transclusionLabels,
   TransclusionLockSet,
   transclusionSourceIds,
   wireViewTransclusionLocks,
+  type TransclusionBlockSave,
 } from './transclusion.js';
 import { NestedEditorStore, blockEditorStoreFacet } from './transclusion-nested.js';
 import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
@@ -1011,6 +1014,52 @@ export function createMarkdownField(opts: {
     if (wasEditing) opts.onEditChange?.(false);
   };
 
+  /**
+   * Отложенная (debounce) запись черновиков правок источников трансклюзий
+   * (задача `6a085e01`): «грязный» блок зеркалится в локальное хранилище
+   * черновиков тем же механизмом, что и правка окружения (`drafts.ts`), и
+   * переживает перезапуск. Ключ — владелец поля + источник + раздел.
+   */
+  const sourceDraftTimers = new Map<string, number>();
+  const scheduleSourceDraft = (key: string): void => {
+    if (collapseOwnerKey === undefined) return;
+    const ownerKey = collapseOwnerKey;
+    const pending = sourceDraftTimers.get(key);
+    if (pending !== undefined) window.clearTimeout(pending);
+    sourceDraftTimers.set(
+      key,
+      window.setTimeout(() => {
+        sourceDraftTimers.delete(key);
+        const text = nestedStore?.text(key);
+        if (text === null || text === undefined) return;
+        const { sourceId, section } = parseBlockEditorKey(key);
+        // Лучшее усилие: сбой локального хранилища не должен ломать правку.
+        void saveSourceDraft({ networkId, ownerKey, sourceId, section, value: text }).catch(
+          () => undefined,
+        );
+      }, 800),
+    );
+  };
+  /** Снимает отложенные записи черновиков (запись/отмена гасят debounce). */
+  const cancelSourceDraftTimers = (): void => {
+    for (const timer of sourceDraftTimers.values()) window.clearTimeout(timer);
+    sourceDraftTimers.clear();
+  };
+  /** Немедленно сохраняет черновики переданных «грязных» блоков (офлайн-уход). */
+  const flushSourceDrafts = (saves: readonly TransclusionBlockSave[]): void => {
+    if (collapseOwnerKey === undefined) return;
+    const ownerKey = collapseOwnerKey;
+    for (const save of saves) {
+      void saveSourceDraft({
+        networkId,
+        ownerKey,
+        sourceId: save.sourceId,
+        section: save.section,
+        value: save.text,
+      }).catch(() => undefined);
+    }
+  };
+
   const commitOrRevert = (): void => {
     if (mounting || editor === null || commitPending) return;
     const store = nestedStore;
@@ -1022,6 +1071,10 @@ export function createMarkdownField(opts: {
       if (md !== currentMd) opts.onCancel?.();
       store?.rollbackAll();
       editor.setValue(currentMd);
+      // Отменённая правка не должна воскреснуть из черновиков источников
+      // (задача `6a085e01`): debounce гасится, строки владельца удаляются.
+      cancelSourceDraftTimers();
+      if (collapseOwnerKey !== undefined) void clearSourceDrafts(networkId, collapseOwnerKey);
       showView();
       return;
     }
@@ -1035,6 +1088,16 @@ export function createMarkdownField(opts: {
       showView();
       return;
     }
+    // Офлайн-безопасность (задача `6a085e01`): поле с правками блоков без связи
+    // уходит в просмотр БЕЗ записи — правки остаются в черновиках (записаны
+    // немедленно) и восстановятся при следующем входе в правку.
+    if (saves.length > 0 && !canSave()) {
+      offlineNotice();
+      cancelSourceDraftTimers();
+      flushSourceDrafts(saves);
+      showView();
+      return;
+    }
     const onSave = opts.onSave;
     if (envChanged && onSave === undefined) {
       // No autosave: without a client renderer we cannot preview unsaved md.
@@ -1045,11 +1108,35 @@ export function createMarkdownField(opts: {
     // Флаг ставится СИНХРОННО: пока запись не разрешилась, `editing` ещё true,
     // и повторный коммит (см. `commitPending`) надо отсечь.
     commitPending = true;
+    cancelSourceDraftTimers();
     const writeEnv = envChanged && onSave !== undefined ? () => onSave(md) : null;
-    void commitTransclusionEdit({ networkId, saves, writeEnv })
+    // Гарантируем, что все «грязные» блоки уже в черновиках (debounce мог не
+    // сработать), и только затем пишем: успех чистит черновики уже после их
+    // фактической записи, частичный сбой оставляет несохранённые.
+    const flush =
+      collapseOwnerKey === undefined || saves.length === 0
+        ? Promise.resolve()
+        : Promise.all(
+            saves.map((save) =>
+              saveSourceDraft({
+                networkId,
+                ownerKey: collapseOwnerKey,
+                sourceId: save.sourceId,
+                section: save.section,
+                value: save.text,
+              }).catch(() => undefined),
+            ),
+          ).then(() => undefined);
+    void flush
+      .then(() => commitTransclusionEdit({ networkId, saves, writeEnv }))
       .then((result) => {
         for (const key of result.savedKeys) store?.markSaved(key);
         for (const key of result.failedKeys) store?.markError(key);
+        // Записанные источники больше не черновики; сбойные строки остаются —
+        // восстановятся при следующем входе в правку.
+        if (collapseOwnerKey !== undefined && result.savedKeys.length > 0) {
+          void clearSourceDrafts(networkId, collapseOwnerKey, result.savedKeys);
+        }
         if (result.failedKeys.length === 0 && result.envOk) {
           if (envChanged) {
             currentMd = md;
@@ -1078,6 +1165,8 @@ export function createMarkdownField(opts: {
     // предыдущей сборке поля.
     nestedStore?.dispose();
     nestedStore = new NestedEditorStore();
+    // Отложенные записи черновиков источников прошлой сборки неактуальны.
+    cancelSourceDraftTimers();
     const store = nestedStore;
     cancelled = false;
     editor = createMdEditor(currentMd, {
@@ -1112,7 +1201,8 @@ export function createMarkdownField(opts: {
         // по Esc внутри блока и догрузка захвата источника при монтировании
         // вложенного блока.
         blockEditorHostExtension({
-          onBlockDirty: () => undefined,
+          // «Грязный» блок зеркалится в черновик (задача `6a085e01`).
+          onBlockDirty: (key) => scheduleSourceDraft(key),
           onCommitEdit: () => {
             cancelled = false;
             editor?.blur();
@@ -1123,6 +1213,14 @@ export function createMarkdownField(opts: {
           },
           onBlockMounted: (sourceId) => {
             void sourceLocks?.acquire([sourceId]);
+          },
+          // Восстановление черновика правки источника при монтировании блока
+          // (задача `6a085e01`): текст черновика возвращается вложенному
+          // редактору вместо загруженного источника, блок встаёт «грязным».
+          getBlockDraft: async (sourceId, section) => {
+            if (collapseOwnerKey === undefined) return null;
+            const draft = await findSourceDraft(networkId, collapseOwnerKey, sourceId, section);
+            return draft === null ? null : draft.value;
           },
         }),
       ],

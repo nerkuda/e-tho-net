@@ -99,6 +99,13 @@ export interface BlockEditorHost {
   onCancelEdit?(key: string): void;
   /** Блок смонтирован — поле может взять захват источника (опционально). */
   onBlockMounted?(sourceId: string): void;
+  /**
+   * Черновик текста блока (владелец поля + источник + раздел) — задача
+   * `6a085e01`. Поле возвращает сохранённый текст правки источника, и вложенный
+   * редактор монтируется на нём (блок сразу «грязный»); `null` — черновика нет,
+   * берётся загруженный текст источника.
+   */
+  getBlockDraft?(sourceId: string, section: string | null): Promise<string | null>;
 }
 
 /** Фасет хоста поля: единственное значение (последнее — при нескольких). */
@@ -208,11 +215,23 @@ export class NestedEditorStore {
   }
 
   /**
-   * Создаёт (или пересоздаёт) инстанс с загруженным текстом. Повторный вход
-   * использует сохранённый текст — вызывающий сам решает, нужен ли новый.
+   * Создаёт (или пересоздаёт) инстанс. `restoreText` — текст черновика правки
+   * источника (задача `6a085e01`): если он отличается от загруженного
+   * `initialText`, document инстанса инициализируется черновиком, а блок сразу
+   * помечается «грязным» (база отката/сравнения — по-прежнему `initialText`).
+   * Без `restoreText` (по умолчанию) поведение прежнее: документ = `initialText`,
+   * блок чистый. Повторный вход использует сохранённый текст — вызывающий сам
+   * решает, нужен ли новый.
    */
-  mount(key: string, initialText: string, options: NestedEditorOptions): NestedEditorHandle {
+  mount(
+    key: string,
+    initialText: string,
+    options: NestedEditorOptions,
+    restoreText: string | null = null,
+  ): NestedEditorHandle {
     this.disposeEntry(key);
+    const docText: string = restoreText !== null && restoreText !== initialText ? restoreText : initialText;
+    const restoredDirty = docText !== initialText;
     const holder: { entry: NestedEntry | null } = { entry: null };
     const onInput = (md: string): void => {
       if (holder.entry === null) return;
@@ -226,12 +245,12 @@ export class NestedEditorStore {
     };
     const { view, dom } = this.createView({
       key,
-      initialText,
+      initialText: docText,
       options,
       extensions: nestedExtensions(key, options, onInput, this),
       onInput,
     });
-    const entry: NestedEntry = { key, initialText, dirty: false, error: false, view, dom };
+    const entry: NestedEntry = { key, initialText, dirty: restoredDirty, error: false, view, dom };
     holder.entry = entry;
     this.entries.set(key, entry);
     return entry;
