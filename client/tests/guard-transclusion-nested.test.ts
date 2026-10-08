@@ -7,6 +7,9 @@
  *      `startBlockEdit`, `restoreBlockEdit`, `cancelBlockEdit`, `BlockEditState`,
  *      `refRaw`, `setBlockEditRange`, `blockEditCollapseFacet`, линейной рамки
  *      `TRANSCLUSION_EDIT_RANGE_CLASS`/`--first`/`--last` и `TRANSCLUSION_ACTIONS_CLASS`;
+ *      режимные CSS-селекторы (`cm-transclusion-actions`,
+ *      `cm-transclusion-edit-range`, `transclusion-link`, `transclusion-change`)
+ *      удалены и из `styles/editor.css`;
  *   2. в `comment-commands.ts` нет кнопок «Отменить/Сохранить трансклюзию»
  *      (`transclusion.cancel` / `transclusion.save`) и `setBlockEditing`;
  *   3. вход в блок — кареткой: жесты зовут `enterBlock`, есть хранилище
@@ -32,6 +35,10 @@ const COMMENT_COMMANDS = read('comment-commands.ts');
 const MD_EDITOR = read('md-editor.ts');
 const NESTED = read('transclusion-nested.ts');
 const COMMENT_COLLAPSE = read('comment-collapse.ts');
+const EDITOR_CSS = fs.readFileSync(
+  path.join(RENDERER_ROOT, 'styles', 'editor.css'),
+  'utf8',
+);
 
 /**
  * Удалённые идентификаторы «растворения» (в исходнике не должно быть вовсе).
@@ -65,6 +72,24 @@ describe('guard: вложенный редактор блока вместо р�
       !COMMENT_COLLAPSE.includes('blockEditCollapseFacet'),
       'в comment-collapse.ts остался blockEditCollapseFacet',
     );
+    assert.ok(
+      !COMMENT_COLLAPSE.includes('BlockEditCollapseRegion'),
+      'в comment-collapse.ts остался тип BlockEditCollapseRegion',
+    );
+  });
+
+  it('режимные CSS-селекторы блока («растворение», ховер-кнопки) не возвращаются', () => {
+    for (const sel of [
+      'cm-transclusion-actions',
+      'cm-transclusion-edit-range',
+      'transclusion-link',
+      'transclusion-change',
+    ]) {
+      assert.ok(
+        !EDITOR_CSS.includes(sel),
+        `в editor.css остался/вернулся режимный селектор «${sel}»`,
+      );
+    }
   });
 
   it('кнопки «Отменить/Сохранить трансклюзию» и setBlockEditing удалены', () => {

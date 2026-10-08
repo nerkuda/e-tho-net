@@ -37,10 +37,12 @@ import {
   findSourceDraft,
   listSourceDrafts,
   parseSourceDraftField,
+  retryPendingDrafts,
   saveDraft,
   saveSourceDraft,
   sourceDraftField,
 } from '../src/renderer/drafts.js';
+import { store } from '../src/renderer/state.js';
 
 const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const ID_B = '11111111-2222-3333-4444-555555555555';
@@ -307,6 +309,56 @@ test('черновик комментария и черновик блока ж�
     ['comment'],
     'черновик окружения пережил очистку черновиков источников',
   );
+});
+
+// ---------------------------------------------------------------------------
+// Обязательство 5: черновик источника НЕ переотправляется как комментарий
+// ---------------------------------------------------------------------------
+
+test('retryPendingDrafts: черновик трансклюзии не уходит как комментарий (6a085e01)', async () => {
+  const stub = stubDraftStore();
+  await saveSourceDraft({
+    networkId: NET,
+    ownerKey: OWNER,
+    sourceId: ID_A,
+    section: 'Раздел A',
+    value: 'ЧЕРНОВИК ИСТОЧНИКА',
+  });
+  assert.equal(stub.rows().length, 1, 'черновик источника записан');
+
+  // Наблюдаем, что цикл переотправки не трогает черновик источника:
+  // ни правки комментария, ни удаления строки быть не должно (ветка
+  // `case 'transclusion'` в `sendDraft`).
+  let commentUpdates = 0;
+  let draftDeletes = 0;
+  const ui = (globalThis as unknown as { etn: { ui: Record<string, unknown> } }).etn.ui;
+  const originalDelete = ui['draftDelete'] as (id: string) => Promise<void>;
+  (globalThis as unknown as { etn: unknown }).etn = {
+    ui: {
+      ...ui,
+      draftDelete: async (id: string) => {
+        draftDeletes += 1;
+        await originalDelete(id);
+      },
+    },
+    comments: {
+      update: async () => {
+        commentUpdates += 1;
+      },
+    },
+  };
+
+  const prevNetworkId = store.state.networkId;
+  store.update({ networkId: NET });
+  try {
+    await retryPendingDrafts();
+  } finally {
+    store.update({ networkId: prevNetworkId });
+  }
+
+  assert.equal(commentUpdates, 0, 'черновик источника не отправлен правкой комментария');
+  assert.equal(draftDeletes, 0, 'черновик источника не удалён циклом переотправки');
+  assert.equal(stub.rows().length, 1, 'строка черновика источника сохранена для восстановления в правке');
 });
 
 // ---------------------------------------------------------------------------
