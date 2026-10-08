@@ -60,12 +60,16 @@ import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import {
+  commitTransclusionEdit,
+  dirtyBlockSaves,
   blockEditorHostExtension,
   decorateViewTransclusionChips,
   decorateViewTransclusionLocks,
   defaultTransclusionLoader,
   transclusionInternals,
   transclusionLabels,
+  TransclusionLockSet,
+  transclusionSourceIds,
   wireViewTransclusionLocks,
 } from './transclusion.js';
 import { NestedEditorStore, blockEditorStoreFacet } from './transclusion-nested.js';
@@ -669,6 +673,13 @@ export function createMarkdownField(opts: {
    * Инстансы сохраняют текст правок блоков между входами/выходами.
    */
   let nestedStore: NestedEditorStore | null = null;
+  /**
+   * Пакетный захват мыслей-источников трансклюзий поля (задача «Единая запись»,
+   * `e9dfc2df`): берётся при входе поля в правку на источники текущего
+   * документа и догружается при монтировании вложенных блоков; снимается при
+   * записи/отмене/выходе. `null` — поле не в правке.
+   */
+  let sourceLocks: TransclusionLockSet | null = null;
   /** Поле сейчас в режиме правки (для контекста сочетаний команд). */
   let editing = false;
   /**
@@ -985,6 +996,10 @@ export function createMarkdownField(opts: {
     // задача «Черновики», `e9dfc2df`).
     if (wasEditing) nestedStore?.dispose();
     nestedStore = null;
+    // Захваты источников снимаются пакетно при записи/отмене/выходе (задача
+    // «Единая запись», `e9dfc2df`).
+    void sourceLocks?.release();
+    sourceLocks = null;
     editing = false;
     deactivateFieldKeys();
     root.classList.remove('md-field--editing');
@@ -998,43 +1013,57 @@ export function createMarkdownField(opts: {
 
   const commitOrRevert = (): void => {
     if (mounting || editor === null || commitPending) return;
-    // Текст блоков трансклюзий живёт во вложенных редакторах и в документ
-    // контейнера не попадает, поэтому отдельной развязки коммита больше нет:
-    // контейнер коммитится как обычно. Запись правок блоков — задача «Единая
-    // запись» (`e9dfc2df`).
+    const store = nestedStore;
     const md = editor.getValue();
     if (cancelled) {
-      // Esc: the edit is dropped; restore the saved text so the field returns
-      // to the view unchanged.
+      // Esc: правка отбрасывается целиком — окружение и вложенные редакторы
+      // блоков возвращаются к загруженному тексту, захваты снимаются (в
+      // `showView`). Esc-отмена едина для всего поля (задача `e9dfc2df`).
       if (md !== currentMd) opts.onCancel?.();
+      store?.rollbackAll();
       editor.setValue(currentMd);
       showView();
       return;
     }
-    if (md === currentMd) {
+    // Единая запись (задача `e9dfc2df`): окружение (контейнер) + все «грязные»
+    // источники трансклюзий. Текст блоков живёт во вложенных редакторах и в
+    // документ контейнера не попадает, поэтому источники собираются из
+    // хранилища инстансов.
+    const saves = store === null ? [] : dirtyBlockSaves(store);
+    const envChanged = md !== currentMd;
+    if (!envChanged && saves.length === 0) {
       showView();
       return;
     }
-    if (opts.onSave === undefined) {
+    const onSave = opts.onSave;
+    if (envChanged && onSave === undefined) {
       // No autosave: without a client renderer we cannot preview unsaved md.
       editor.setValue(currentMd);
       showView();
       return;
     }
-    // Флаг ставится СИНХРОННО: пока `onSave` не разрешится, `editing` ещё
-    // true, и повторный коммит (см. `commitPending`) надо отсечь.
+    // Флаг ставится СИНХРОННО: пока запись не разрешилась, `editing` ещё true,
+    // и повторный коммит (см. `commitPending`) надо отсечь.
     commitPending = true;
-    void opts
-      .onSave(md)
-      .then((html) => {
-        currentMd = md;
-        currentHtml = html;
-        showView();
+    const writeEnv = envChanged && onSave !== undefined ? () => onSave(md) : null;
+    void commitTransclusionEdit({ networkId, saves, writeEnv })
+      .then((result) => {
+        for (const key of result.savedKeys) store?.markSaved(key);
+        for (const key of result.failedKeys) store?.markError(key);
+        if (result.failedKeys.length === 0 && result.envOk) {
+          if (envChanged) {
+            currentMd = md;
+            if (result.envHtml !== null) currentHtml = result.envHtml;
+          }
+          showView();
+          return;
+        }
+        // Частичный сбой (версия/LOCKED/нет источника): редактор остаётся
+        // открытым, сбойные блоки помечены (`markError`) — повторите запись.
+        notice(t('comment.transclusion.savePartial'), 'error');
       })
       .catch(() => {
-        // Save failed: revert.
-        editor?.setValue(currentMd);
-        showView();
+        notice(t('comment.transclusion.savePartial'), 'error');
       })
       .finally(() => {
         commitPending = false;
@@ -1078,10 +1107,24 @@ export function createMarkdownField(opts: {
         // Хранилище вложенных редакторов блоков (задача 73ae1d4b): виджет блока
         // берёт из него DOM активного инстанса.
         blockEditorStoreFacet.of(store),
-        // Хост поля: единственный сигнал — изменение текста блока («грязный»).
-        // Пока это только точка подключения: запись правок блоков в источники —
-        // задача «Единая запись» (e9dfc2df).
-        blockEditorHostExtension({ onBlockDirty: () => undefined }),
+        // Хост поля (задача «Единая запись», `e9dfc2df`): «грязный» сигнал
+        // блока, единая запись по Ctrl+Enter внутри блока, отмена всей правки
+        // по Esc внутри блока и догрузка захвата источника при монтировании
+        // вложенного блока.
+        blockEditorHostExtension({
+          onBlockDirty: () => undefined,
+          onCommitEdit: () => {
+            cancelled = false;
+            editor?.blur();
+          },
+          onCancelEdit: () => {
+            cancelled = true;
+            editor?.blur();
+          },
+          onBlockMounted: (sourceId) => {
+            void sourceLocks?.acquire([sourceId]);
+          },
+        }),
       ],
     });
     // Pasting files (screenshots / copied files) saves them as server-stored
@@ -1192,6 +1235,13 @@ export function createMarkdownField(opts: {
     root.classList.add('md-field--editing');
     modeActions.setEditing(true);
     mountEditor(locate);
+    // Пакетный захват всех мыслей-источников трансклюзий текста на время
+    // правки поля (задача «Единая запись», `e9dfc2df`): источники берутся из
+    // текущего документа; вложенные догружаются при монтировании блоков
+    // (`onBlockMounted`). Чужой захват — блок только для чтения, остальные
+    // редактируются (индикатор показывает `lock-cache`).
+    sourceLocks = new TransclusionLockSet();
+    void sourceLocks.acquire(transclusionSourceIds(currentMd));
     activateFieldKeys();
     search.refresh();
     opts.onEditChange?.(true);

@@ -20,18 +20,21 @@
  * меняет документ контейнера; блок остаётся атомарным диапазоном контейнера
  * ({@link transclusionAtomicRanges}). Вложенные трансклюзии внутри блока
  * работают рекурсивно до глубины `MAX_NESTED_DEPTH`. Изменение блока помечает
- * его «грязным» сигналом в хост ({@link blockEditorHostFacet}) — для будущей
- * задачи «Единая запись» (`e9dfc2df`); сама запись в источник здесь не делается.
- * Семантика выхода (шаг до задачи «Единая запись»): выход из блока, клик вне и
- * `Ctrl+Enter` внутри — выход из вложенного редактора с СОХРАНЕНИЕМ текста в его
- * состоянии; `Esc` — откат вложенного редактора к загруженному тексту.
- * Прежнего «растворения» текста источника в документ контейнера и связанных
- * режимов (кнопки «Отменить/Сохранить трансклюзию», линейная рамка) больше нет.
+ * его «грязным» сигналом в хост ({@link blockEditorHostFacet}) — поле входит в
+ * набор правки и на `Ctrl+Enter`/«Записать»/клик вне записывает его в источник
+ * (единая запись, {@link commitTransclusionEdit}). Семантика единой правки
+ * (задача «Единая запись», `e9dfc2df`): выход из блока, клик вне и `Ctrl+Enter`
+ * внутри — либо выход с СОХРАНЕНИЕМ текста в состоянии инстанса (пока правка
+ * поля не завершена), либо единая запись всего поля; `Esc` — отмена всей правки
+ * с откатом инстансов. Прежнего «растворения» текста источника в документ
+ * контейнера и связанных режимов (кнопки «Отменить/Сохранить трансклюзию»,
+ * линейная рамка) больше нет.
  *
  * **Замочек чужого захвата.** Источник, захваченный другим участником, делает
  * блок только для чтения: вход каретки вложенный редактор НЕ монтирует
- * (проверка через `lib/lock-cache`). Сам захват источника при входе — задача
- * «Единая запись» (`e9dfc2df`), здесь он не берётся.
+ * (проверка через `lib/lock-cache`). Пакетный захват всех мыслей-источников
+ * текста берётся при входе поля в правку ({@link TransclusionLockSet}) и
+ * снимается при записи/отмене/выходе.
  *
  * Два состояния одной ссылки в редакторе (курсор/выделение решают):
  *  1. **Блок** — ссылка заменена блоком с шапкой-чипом «имя · раздел» и
@@ -136,6 +139,12 @@ import { t } from '../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../lib/live/index.js';
 import { guardMenuFocus, showMenuAt } from '../lib/menu.js';
 import { holderName, otherHolder, subscribeLockCache } from '../lib/lock-cache.js';
+import {
+  acquireOrShowBlocked,
+  lockHandleFromOutcome,
+  releaseHeld,
+  type LockHandle,
+} from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
 import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
@@ -352,6 +361,188 @@ export function sectionBoundaryCrossed(body: string, section: string, newContent
     if (m !== null && m[1]!.length <= parts.level) return true;
   }
   return false;
+}
+
+/* ------------------------------------------------------------------ *
+ * Единая запись и пакетный захват источников (задача e9dfc2df, ТП fcde7c55)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Уникальные id мыслей-источников трансклюзий документа (в порядке появления).
+ * Пакетный захват берётся на КАЖДЫЙ источник текста при входе поля в правку
+ * (задача `e9dfc2df`, ADR `f3adf3d3`, решение 3).
+ */
+export function transclusionSourceIds(md: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const ref of parseTransclusions(md)) {
+    if (seen.has(ref.sourceId)) continue;
+    seen.add(ref.sourceId);
+    out.push(ref.sourceId);
+  }
+  return out;
+}
+
+/**
+ * Пакет захватов мыслей-источников трансклюзий на время правки поля (задача
+ * `e9dfc2df`). Держит `LockHandle` по каждому источнику и снимает их пачкой
+ * (`releaseHeld`) при записи/отмене/выходе. Источник, захваченный другим
+ * участником, — блок только для чтения с «замочком»: захват не удерживается
+ * (`lock-cache` уже показывает индикатор), остальные источники редактируются.
+ * Повторный `acquire` того же источника — no-op (в т.ч. если источник совпал с
+ * владельцем поля: существующий захват отдаётся как `self`).
+ */
+export class TransclusionLockSet {
+  private readonly handles = new Map<string, LockHandle>();
+  /** Источники с чужим захватом (блок только для чтения). */
+  private readonly blocked = new Set<string>();
+
+  /** Берёт захваты на источники `sourceIds`, которых ещё не касались. */
+  async acquire(sourceIds: Iterable<string>): Promise<void> {
+    const todo: string[] = [];
+    for (const id of sourceIds) {
+      if (typeof id !== 'string' || id === '') continue;
+      if (!this.handles.has(id) && !this.blocked.has(id)) todo.push(id);
+    }
+    if (todo.length === 0) return;
+    const outcomes = await Promise.all(
+      todo.map(async (id) => {
+        try {
+          const outcome = await acquireOrShowBlocked('thought', id);
+          return { id, outcome };
+        } catch {
+          // Вне сети/ранний доступ: захват — мягкая возмож-ность, не ломаем
+          // вход в правку (захват просто не берётся).
+          return { id, outcome: { kind: 'failed', error: null } as const };
+        }
+      }),
+    );
+    for (const { id, outcome } of outcomes) {
+      if (outcome.kind === 'acquired' || outcome.kind === 'self') {
+        this.handles.set(id, lockHandleFromOutcome('thought', id, outcome));
+      } else if (outcome.kind === 'blocked') {
+        // Чужой захват: блок только для чтения («замочек» уже показывает
+        // `lock-cache`), захват не удерживаем — снимать нечего.
+        this.blocked.add(id);
+      }
+    }
+  }
+
+  /** Снимает все удержанные захваты пачкой; список обнуляется. */
+  async release(): Promise<void> {
+    const handles = [...this.handles.values()];
+    this.handles.clear();
+    this.blocked.clear();
+    await Promise.all(handles.map((handle) => releaseHeld(handle)));
+  }
+
+  /** Идентификаторы удержанных захватов (для проб/тестов). */
+  heldIds(): string[] {
+    return [...this.handles.keys()];
+  }
+}
+
+/** Один «грязный» блок к записи в источник: ключ инстанса и его ссылка. */
+export interface TransclusionBlockSave {
+  /** Ключ инстанса (`sourceId#section`, {@link blockEditorKey}). */
+  key: string;
+  sourceId: string;
+  section: string | null;
+  /** Текущий текст правки блока. */
+  text: string;
+}
+
+/** Разбирает ключ инстанса блока обратно на источник и раздел. */
+export function parseBlockEditorKey(key: string): { sourceId: string; section: string | null } {
+  const at = key.indexOf('#');
+  if (at <= 0) return { sourceId: key, section: null };
+  const section = key.slice(at + 1);
+  return { sourceId: key.slice(0, at), section: section === '' ? null : section };
+}
+
+/**
+ * «Грязные» блоки хранилища к записи: ключ и текст инстанса + распарсенная
+ * ссылка. Источник/раздел берутся из КЛЮЧА (`sourceId#section`), поэтому
+ * пригодно и для вложенных блоков, чьей ссылки нет в документе контейнера.
+ */
+export function dirtyBlockSaves(store: NestedEditorStore): TransclusionBlockSave[] {
+  const out: TransclusionBlockSave[] = [];
+  for (const key of store.dirtyKeys()) {
+    const text = store.text(key);
+    if (text === null) continue;
+    const { sourceId, section } = parseBlockEditorKey(key);
+    out.push({ key, sourceId, section, text });
+  }
+  return out;
+}
+
+/** Записывает текст одного блока в постоянный комментарий источника. */
+async function saveOneSource(networkId: string, save: TransclusionBlockSave): Promise<void> {
+  const comments = await etn.comments.list(networkId, 'thought', save.sourceId);
+  const perm = comments.find((c) => c.kind === 'permanent');
+  if (perm === undefined) throw new Error('no permanent comment');
+  let body = save.text;
+  if (save.section !== null) {
+    const merged = mergeSectionContent(perm.body_md, save.section, save.text);
+    if (merged === null) throw new Error('no section');
+    body = merged;
+  }
+  await etn.comments.update(networkId, perm.id, { body_md: body }, perm.version);
+  // Записанный источник больше не актуален — сбрасываем из общего кэша сети,
+  // иначе повторная загрузка вернула бы старое тело (задача e9dfc2df).
+  invalidateTransclusionSource(networkId, save.sourceId);
+}
+
+/** Итог единой записи: записанные/сбойные блоки и успех записи окружения. */
+export interface TransclusionCommitResult {
+  /** Окружение (контейнер) записано (или записи не требовалось). */
+  envOk: boolean;
+  /** HTML окружения после успешной записи, либо `null`. */
+  envHtml: string | null;
+  /** Ключи блоков, чей источник записан. */
+  savedKeys: string[];
+  /** Ключи блоков, чью запись источник отверг (версия/`LOCKED`/нет источника). */
+  failedKeys: string[];
+  /** id источников, запись которых сорвалась (для уведомления). */
+  failedSourceIds: string[];
+}
+
+/**
+ * ЕДИНАЯ запись правки поля (задача `e9dfc2df`, ТП `fcde7c55`): окружение
+ * (контейнер) и все «грязные» источники трансклюзий. Источники пишутся
+ * `etn.comments.update` с `expected_version` (для раздела — слияние
+ * `mergeSectionContent`); сбой одного источника НЕ отменяет остальные —
+ * частичный сбой виден в {@link TransclusionCommitResult}. Окружение пишется
+ * через `writeEnv` (null — записи не требуется). Ничего не бросает: сбой
+ * окружения — `envOk: false`.
+ */
+export async function commitTransclusionEdit(params: {
+  networkId: string;
+  saves: readonly TransclusionBlockSave[];
+  writeEnv: (() => Promise<string>) | null;
+}): Promise<TransclusionCommitResult> {
+  const savedKeys: string[] = [];
+  const failedKeys: string[] = [];
+  const failedSourceIds: string[] = [];
+  for (const save of params.saves) {
+    try {
+      await saveOneSource(params.networkId, save);
+      savedKeys.push(save.key);
+    } catch {
+      failedKeys.push(save.key);
+      failedSourceIds.push(save.sourceId);
+    }
+  }
+  let envOk = true;
+  let envHtml: string | null = null;
+  if (params.writeEnv !== null) {
+    try {
+      envHtml = await params.writeEnv();
+    } catch {
+      envOk = false;
+    }
+  }
+  return { envOk, envHtml, savedKeys, failedKeys, failedSourceIds };
 }
 
 /** Метка ссылки в свёрнутом виде: имя мысли и, при наличии, раздел. */
@@ -1675,14 +1866,20 @@ export function decorateViewTransclusionChips(
  * ------------------------------------------------------------------ */
 
 /**
- * Хост поля комментария: единственное уведомление — изменение текста блока
- * («грязный» сигнал). Это точка для будущей задачи «Единая запись»
- * (`e9dfc2df`): сама запись в источник пока не выполняется. Фасет
- * необязателен — без хоста вход/выход работает, сигнал просто игнорируется.
+ * Хост поля комментария (задача «Единая запись», `e9dfc2df`). Поле-контейнер
+ * даёт блоку три точки: изменение текста блока («грязный» сигнал), запрос
+ * единой записи (`Ctrl+Enter` внутри блока) и отмену всей правки (`Esc` внутри
+ * блока). Фасет необязателен — без хоста блок работает, команды игнорируются.
  */
 export interface BlockEditorHost {
   /** Текст блока `key` изменён (отличается от загруженного). */
   onBlockDirty(key: string): void;
+  /** `Ctrl+Enter` в блоке — единая запись всего поля (опционально). */
+  onCommitEdit?(key: string): void;
+  /** `Esc` в блоке — отмена всей правки поля (опционально). */
+  onCancelEdit?(key: string): void;
+  /** Блок смонтирован — поле может взять захват источника (опционально). */
+  onBlockMounted?(sourceId: string): void;
 }
 
 /** Фасет хоста поля: единственное значение (последнее — при нескольких). */
@@ -1723,8 +1920,8 @@ function transclusionRefAt(view: EditorView, pos: number): TransclusionRef | nul
  * переносит в него фокус. Повторный вход в уже смонтированный блок лишь
  * активирует его и фокусирует (текст правки сохранён в состоянии инстанса).
  * Заблокированный источник (чужой захват) и превышение глубины — no-op: блок
- * остаётся только для чтения. Захват источника здесь НЕ берётся (задача
- * «Единая запись», `e9dfc2df`).
+ * остаётся только для чтения. Пакетный захват источников берётся полем при
+ * входе в правку ({@link TransclusionLockSet}), здесь он не ставится.
  */
 export function enterBlock(view: EditorView, ref: TransclusionRef, caretAtEnd = false): void {
   const store = editorStore(view);
@@ -1765,8 +1962,13 @@ async function loadNestedBlock(
       depth,
       onDirty: (k) => host?.onBlockDirty(k),
       onExit: (k, reason) => exitBlock(view, k, reason),
-      onRollback: (k) => store.rollback(k),
+      onCommit: () => host?.onCommitEdit?.(key),
+      onCancel: () => host?.onCancelEdit?.(key),
     });
+    // Блок смонтирован — источник входит в набор правки: поле берёт на него
+    // пакетный захват (задача `e9dfc2df`). Вложенные источники (в т.ч. внутри
+    // блока) попадают в набор по мере монтирования.
+    host?.onBlockMounted?.(ref.sourceId);
   }
   view.dispatch({ effects: setActiveBlock.of(key) });
   store.focus(key, caretAtEnd ? 'end' : 'start');
@@ -1808,7 +2010,7 @@ function sameLockMap(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, stri
  * Плагин «замочков»: ведёт карту чужих захватов источников документа для
  * индикатора 🔒 (требование `647fa34a`). Своих захватов не ставит — вход в блок
  * лишь проверяет `lock-cache` ({@link enterBlock}); пакетный захват источников
- * делает задача «Единая запись» (`e9dfc2df`, ADR `fdb1a271`).
+ * держит поле ({@link TransclusionLockSet}, задача `e9dfc2df`, ADR `fdb1a271`).
  */
 const transclusionLockPlugin = ViewPlugin.fromClass(
   class {
@@ -2096,4 +2298,9 @@ export const transclusionInternals = {
   blockEditorKey,
   loadThoughtEntries,
   sourceSectionTitles,
+  transclusionSourceIds,
+  parseBlockEditorKey,
+  dirtyBlockSaves,
+  commitTransclusionEdit,
+  TransclusionLockSet,
 };

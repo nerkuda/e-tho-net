@@ -14,9 +14,10 @@
  * он владеет только жизненным циклом вложенных инстансов редактора и их
  * хранилищем. Хранилище ({@link NestedEditorStore}) живёт на инстанс
  * поля-контейнера и переживает пересборку виджета: текст правки сохраняется в
- * состоянии инстанса при выходе из блока (семантика шага до задачи «Единая
- * запись») и восстанавливается при повторном входе; `Esc` откатывает инстанс к
- * загруженному тексту.
+ * состоянии инстанса при выходе из блока и восстанавливается при повторном
+ * входе; `Esc` — отмена всей правки поля (поле откатывает инстансы через
+ * {@link NestedEditorStore.rollbackAll}), `Ctrl+Enter` — единая запись поля
+ * (задача `e9dfc2df`).
  *
  * Рекурсия: стек вложенного инстанса включает расширения трансклюзий, поэтому
  * вложенные трансклюзии внутри блока работают так же, до глубины
@@ -35,6 +36,13 @@ import { mdEditorExtensions } from './md-editor.js';
 /** Предельная глубина вложенных редакторов (ТП, ADR f3adf3d3; требование границ). */
 export const MAX_NESTED_DEPTH = 5;
 
+/**
+ * Класс пометки блока, правку которого не удалось записать в источник
+ * (частичный сбой «Единой записи», задача `e9dfc2df`). Ставится на корневой DOM
+ * вложенного редактора; вид — `styles/editor.css`.
+ */
+export const NESTED_SAVE_ERROR_CLASS = 'cm-transclusion-save-error';
+
 /** Причина выхода из вложенного редактора (перенос фокуса наружу). */
 export type NestedExitReason =
   | 'up'
@@ -52,8 +60,18 @@ export interface NestedEditorOptions {
   onDirty: (key: string) => void;
   /** Фокус покинул вложенный редактор — выход из блока с сохранением текста. */
   onExit: (key: string, reason: NestedExitReason) => void;
-  /** `Esc` — откат вложенного редактора к загруженному тексту. */
-  onRollback: (key: string) => void;
+  /**
+   * `Ctrl+Enter` внутри блока — ЕДИНАЯ запись всего поля (окружение и все
+   * «грязные» источники): поле само коммитит правку и возвращается в просмотр
+   * (задача `e9dfc2df`). Отдельного сохранения блока по `Ctrl+Enter` нет.
+   */
+  onCommit: (key: string) => void;
+  /**
+   * `Esc` внутри блока — отмена ВСЕЙ правки поля (окружение и все блоки): поле
+   * само откатывает инстансы к загруженному тексту и снимает захваты (задача
+   * `e9dfc2df`, требование «Esc — отмена всего»).
+   */
+  onCancel: (key: string) => void;
 }
 
 /** Глубина текущего инстанса редактора (нет фасета — контейнер, глубина 0). */
@@ -70,8 +88,10 @@ export const blockEditorStoreFacet = Facet.define<NestedEditorStore, NestedEdito
 interface NestedEntry {
   readonly key: string;
   /** Текст, загруженный из источника при входе (точка отката `Esc`). */
-  readonly initialText: string;
+  initialText: string;
   dirty: boolean;
+  /** Правку блока не удалось записать в источник (задача `e9dfc2df`). */
+  error: boolean;
   readonly view: EditorView | null;
   readonly dom: HTMLElement | null;
 }
@@ -133,6 +153,18 @@ export class NestedEditorStore {
     return this.entries.get(key)?.dirty === true;
   }
 
+  /** Ключи «грязных» инстансов (текст отличается от загруженного). */
+  dirtyKeys(): string[] {
+    const out: string[] = [];
+    for (const [key, entry] of this.entries) if (entry.dirty) out.push(key);
+    return out;
+  }
+
+  /** Правку инстанса не удалось записать в источник (пометка блока). */
+  hasError(key: string): boolean {
+    return this.entries.get(key)?.error === true;
+  }
+
   /** DOM инстанса для вставки в виджет блока, либо `null`. */
   dom(key: string): HTMLElement | null {
     return this.entries.get(key)?.dom ?? null;
@@ -147,7 +179,10 @@ export class NestedEditorStore {
     const holder: { entry: NestedEntry | null } = { entry: null };
     const onInput = (md: string): void => {
       if (holder.entry === null) return;
-      const dirty = md !== initialText;
+      // Сравнение с ТЕКУЩЕЙ базой инстанса (`initialText`), а не с исходным
+      // аргументом: после удачной записи база сдвигается ({@link markSaved}), и
+      // «грязность» обязана считаться от записанного текста.
+      const dirty = md !== holder.entry.initialText;
       if (dirty === holder.entry.dirty) return;
       holder.entry.dirty = dirty;
       options.onDirty(key);
@@ -159,7 +194,7 @@ export class NestedEditorStore {
       extensions: nestedExtensions(key, options, onInput, this),
       onInput,
     });
-    const entry: NestedEntry = { key, initialText, dirty: false, view, dom };
+    const entry: NestedEntry = { key, initialText, dirty: false, error: false, view, dom };
     holder.entry = entry;
     this.entries.set(key, entry);
     return entry;
@@ -202,6 +237,38 @@ export class NestedEditorStore {
     if (entry === undefined || entry.view === null) return;
     setViewText(entry.view, entry.initialText);
     entry.dirty = false;
+    this.setError(key, false);
+  }
+
+  /** Откат всех инстансов к загруженному тексту (Esc — отмена всего поля). */
+  rollbackAll(): void {
+    for (const key of [...this.entries.keys()]) this.rollback(key);
+  }
+
+  /**
+   * Удачная запись правки блока в источник: текущий текст становится новой
+   * базой инстанса, «грязность» и пометка ошибки снимаются (частичный сбой
+   * «Единой записи» — задача `e9dfc2df`).
+   */
+  markSaved(key: string): void {
+    const entry = this.entries.get(key);
+    if (entry === undefined) return;
+    entry.initialText = textOfEntry(entry);
+    entry.dirty = false;
+    this.setError(key, false);
+  }
+
+  /** Помечает блок сбойной записью (или снимает пометку) — вид в CSS. */
+  markError(key: string, on = true): void {
+    this.setError(key, on);
+  }
+
+  /** Внутренний переключатель пометки ошибки: флаг + класс на DOM инстанса. */
+  private setError(key: string, on: boolean): void {
+    const entry = this.entries.get(key);
+    if (entry === undefined) return;
+    entry.error = on;
+    entry.dom?.classList.toggle(NESTED_SAVE_ERROR_CLASS, on);
   }
 
   /** Уничтожает инстанс под ключом (например, источник перечитан заново). */
@@ -245,21 +312,23 @@ function nestedExtensions(
     blockEditorStoreFacet.of(store),
     Prec.highest(
       keymap.of([
-        // `Esc` внутри блока — откат инстанса к загруженному тексту, не отмена
-        // всего поля (семантика шага до задачи «Единая запись»).
+        // `Esc` внутри блока — отмена ВСЕЙ правки поля (окружение и все блоки),
+        // а не только этого инстанса: поле откатывает все вложенные редакторы к
+        // загруженному тексту и снимает захваты (задача `e9dfc2df`).
         {
           key: 'Escape',
           run: () => {
-            options.onRollback(key);
+            options.onCancel(key);
             return true;
           },
         },
-        // `Ctrl+Enter` внутри блока — выход из блока с сохранением текста
-        // (запись в источник появится в задаче `e9dfc2df`).
+        // `Ctrl+Enter` внутри блока — ЕДИНАЯ запись всего поля: поле запишет
+        // окружение и все «грязные» источники одной командой (задача
+        // `e9dfc2df`). Отдельной записи блока нет.
         {
           key: 'Mod-Enter',
           run: () => {
-            options.onExit(key, 'ctrl-enter');
+            options.onCommit(key);
             return true;
           },
         },
