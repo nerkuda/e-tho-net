@@ -20,6 +20,7 @@ import {
   NestedEditorStore,
   blockEditorStoreFacet,
   nestedDepthFacet,
+  transclusionNestedInternals,
   type NestedViewFactory,
 } from '../src/renderer/editor/transclusion-nested.js';
 import {
@@ -1074,6 +1075,106 @@ test('exitBlock: blur не навязывает фокус контейнеру,
   const keyed = make();
   transclusionInternals.exitBlock(keyed.view as unknown as EditorView, key, 'ctrl-enter');
   assert.equal(keyed.focuses(), 1, 'выход по клавише возвращает фокус в контейнер');
+});
+
+test('edgeExit: граница — край ДОКУМЕНТА, а не строки (ce46723d)', () => {
+  const exits: string[] = [];
+  const registry = new Map<string, FakeNestedView>();
+  const store = new NestedEditorStore(fakeFactory(registry));
+  const key = blockEditorKey(ID_A, null);
+  // Строки: «a» (стр.1) / «» (стр.2, пустая) / «bb» (стр.3) / «c» (стр.4).
+  // Позиции: 0..1 / 2..2 / 3..5 / 6..7; длина документа 7.
+  store.mount(key, 'a\n\nbb\nc', {
+    depth: 1,
+    onDirty: () => undefined,
+    onExit: (_k, reason) => exits.push(reason),
+    onCommit: () => undefined,
+    onCancel: () => undefined,
+  });
+  const instance = registry.get(key)!;
+
+  /** Ставит каретку и жмёт стрелку; возвращает причины выходов из блока. */
+  const press = (pos: number, dir: 'up' | 'down' | 'left' | 'right'): string[] => {
+    instance.dispatch({ selection: { anchor: pos } });
+    exits.length = 0;
+    transclusionNestedInternals.edgeExit(
+      { state: instance.state } as unknown as EditorView,
+      {
+        depth: 1,
+        onDirty: () => undefined,
+        onExit: (_k, reason) => exits.push(reason),
+        onCommit: () => undefined,
+        onCancel: () => undefined,
+      },
+      key,
+      dir,
+    );
+    return [...exits];
+  };
+
+  // Конец ПЕРВОЙ строки (не пустая, середина документа): Down НЕ выходит,
+  // Up выходит (первая строка — край документа).
+  assert.deepEqual(press(1, 'down'), [], 'Down в конце первой строки не выходит из блока');
+  assert.deepEqual(press(1, 'up'), ['up'], 'Up с первой строки выходит из блока');
+
+  // ПУСТАЯ строка: ни Down, ни Up не выходят (был симптом «перескока»).
+  assert.deepEqual(press(2, 'down'), [], 'Down на пустой строке не выходит из блока');
+  assert.deepEqual(press(2, 'up'), [], 'Up на пустой строке не выходит из блока');
+
+  // Начало/конец СРЕДНЕЙ непустой строки: выходов нет ни вверх, ни вниз.
+  assert.deepEqual(press(3, 'down'), [], 'Down в начале средней строки не выходит');
+  assert.deepEqual(press(3, 'up'), [], 'Up в начале средней строки не выходит');
+  assert.deepEqual(press(5, 'down'), [], 'Down в конце средней строки не выходит');
+  assert.deepEqual(press(5, 'up'), [], 'Up в конце средней строки не выходит');
+
+  // Последняя строка документа — там и только там выходит Down; Up не выходит.
+  assert.deepEqual(press(6, 'down'), ['down'], 'Down с последней строки выходит из блока');
+  assert.deepEqual(press(6, 'up'), [], 'Up с последней строки не выходит');
+  assert.deepEqual(press(7, 'down'), ['down'], 'Down в конце последней строки выходит');
+
+  // Горизонтальные края документа: left с начала, right с конца.
+  assert.deepEqual(press(0, 'left'), ['left'], 'Left с начала документа выходит');
+  assert.deepEqual(press(0, 'down'), [], 'Down в начале документа не выходит');
+  assert.deepEqual(press(0, 'up'), ['up'], 'Up с первой строки документа выходит');
+  assert.deepEqual(press(7, 'right'), ['right'], 'Right с конца документа выходит');
+});
+
+test('applyDraft: черновик принимается только чистым инстансом (ce46723d)', () => {
+  const opts = {
+    depth: 1,
+    onDirty: () => undefined,
+    onExit: () => undefined,
+    onCommit: () => undefined,
+    onCancel: () => undefined,
+  };
+  const key = blockEditorKey(ID_A, null);
+
+  // Чистый инстанс черновик принимает, блок встаёт «грязным».
+  const cleanReg = new Map<string, FakeNestedView>();
+  const clean = new NestedEditorStore(fakeFactory(cleanReg));
+  clean.mount(key, 'СЕРВЕР', opts);
+  assert.equal(clean.applyDraft(key, 'ЧЕРНОВИК'), true, 'чистый инстанс принимает черновик');
+  assert.equal(clean.text(key), 'ЧЕРНОВИК', 'текст заменён черновиком');
+  assert.equal(clean.isDirty(key), true, 'блок помечен «грязным»');
+
+  // Черновик, равный загруженному тексту, — no-op (блок остаётся чистым).
+  const sameReg = new Map<string, FakeNestedView>();
+  const same = new NestedEditorStore(fakeFactory(sameReg));
+  same.mount(key, 'СЕРВЕР', opts);
+  assert.equal(same.applyDraft(key, 'СЕРВЕР'), false, 'совпадающий черновик — no-op');
+  assert.equal(same.isDirty(key), false, 'блок не помечен «грязным»');
+
+  // Грязный инстанс черновик НЕ принимает — правка пользователя приоритетна.
+  const dirtyReg = new Map<string, FakeNestedView>();
+  const dirty = new NestedEditorStore(fakeFactory(dirtyReg));
+  dirty.mount(key, 'СЕРВЕР', opts);
+  dirtyReg.get(key)!.dispatch({ changes: { from: 0, insert: 'X' } });
+  assert.equal(dirty.isDirty(key), true, 'пользователь тронул текст');
+  assert.equal(dirty.applyDraft(key, 'ЧЕРНОВИК'), false, 'грязный инстанс черновик не принимает');
+  assert.equal(dirty.text(key), 'XСЕРВЕР', 'текст правки пользователя сохранён');
+
+  // `null` — нет черновика, no-op.
+  assert.equal(dirty.applyDraft(key, null), false, 'отсутствие черновика — no-op');
 });
 
 test('рекурсия: вложенная трансклюзия внутри блока (глубина 2) отображается и входима (73ae1d4b)', async () => {

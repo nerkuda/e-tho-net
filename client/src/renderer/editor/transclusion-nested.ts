@@ -285,7 +285,11 @@ export class NestedEditorStore {
     if (draft === null) return false;
     const entry = this.entries.get(key);
     if (entry === undefined || entry.view === null) return false;
-    if (entry.dirty || textOfEntry(entry) !== entry.initialText) return false;
+    // Единственный источник истины о правке пользователя — флаг «грязности»:
+    // его выставляет каждая правка документа инстанса (`onInput`), а откат
+    // (`rollback`) и запись (`markSaved`) снимают. Пока он поднят, черновик не
+    // принимается — правка пользователя приоритетна.
+    if (entry.dirty) return false;
     if (draft === entry.initialText) return false;
     setViewText(entry.view, draft);
     entry.dirty = true;
@@ -412,9 +416,16 @@ function nestedExtensions(
 }
 
 /**
- * Выход по краю документа вложенного редактора: стрелка на первой/последней
- * строке уводит фокус в контейнер (до/после блока). Возвращает `false`, если
- * каретка не на краю, — стрелка остаётся обычной навигацией внутри блока.
+ * Выход по краю документа вложенного редактора: стрелка вверх с ПЕРВОЙ строки
+ * документа или вниз с ПОСЛЕДНЕЙ уводит фокус в контейнер (до/после блока).
+ * Возвращает `false`, если каретка не на краю документа, — стрелка остаётся
+ * обычной навигацией внутри блока.
+ *
+ * Граница — край ДОКУМЕНТА, а не строки (ошибка `ce46723d`): `line.from === head`
+ * истинно на начале ЛЮБОЙ строки, `line.to === head` — в конце любой строки, а
+ * на ПУСТОЙ строке оба условия истинны разом. Из-за этого Down на пустой строке
+ * или в конце произвольной строки (типичная позиция каретки у заголовка раздела)
+ * выкидывал из блока — симптом «курсор перескакивает за блок».
  */
 function edgeExit(
   view: EditorView,
@@ -427,8 +438,9 @@ function edgeExit(
   const doc = view.state.doc;
   const atStart = sel.head === 0;
   const atEnd = sel.head === doc.length;
-  const firstLine = doc.lineAt(sel.head).from === sel.head;
-  const lastLine = doc.lineAt(sel.head).to === sel.head;
+  const line = doc.lineAt(sel.head);
+  const firstLine = line.number === 1;
+  const lastLine = line.number === doc.lines;
   const exit =
     (dir === 'up' && firstLine) ||
     (dir === 'down' && lastLine) ||
@@ -438,6 +450,9 @@ function edgeExit(
   options.onExit(key, dir);
   return true;
 }
+
+/** Тестовый шов: узкая логика выхода по краю документа (unit-проверка границ). */
+export const transclusionNestedInternals = { edgeExit };
 
 /** Фабрика по умолчанию: настоящий `EditorView` CodeMirror 6. */
 function defaultNestedViewFactory(params: {
