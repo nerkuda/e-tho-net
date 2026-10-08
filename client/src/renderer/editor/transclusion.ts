@@ -535,6 +535,31 @@ function sourceKeyForCommentEvent(evt: AnyRealtimeEvent): string | null {
   return null;
 }
 
+/**
+ * Применяет realtime-событие к общему кэшу источников: правки/создание/удаление
+ * постоянного комментария-источника и удаление мысли сбрасывают запись
+ * ({@link sourceKeyForCommentEvent}), а переименование мысли-источника
+ * (`thought.updated` с `changes.title`) — точечно обновляет ЗАКЭШИРОВАННОЕ ИМЯ
+ * без массового сброса на любое обновление мысли (ошибка `0a11aec5`): тело
+ * источника от переименования не меняется, перечитывать его из сети дороже.
+ * Имя в шапке-чипе читается из этой записи, поэтому после переименования чип
+ * показывает актуальное имя. Обновляем только закэшированный источник.
+ */
+function applySourceCacheEvent(evt: AnyRealtimeEvent): void {
+  if (evt.type === 'thought.updated') {
+    const key = sourceCacheKey(evt.network_id, evt.data.id);
+    const cached = sourceCache.get(key);
+    if (cached === undefined) return;
+    const title = evt.data.changes.title;
+    if (typeof title === 'string' && title !== cached.title) {
+      sourceCache.set(key, { ...cached, title });
+    }
+    return;
+  }
+  const key = sourceKeyForCommentEvent(evt);
+  if (key !== null) sourceCache.delete(key);
+}
+
 let sourceCacheWired = false;
 
 /**
@@ -543,15 +568,14 @@ let sourceCacheWired = false;
  * комментария-источника — обычная правка комментария, черновик, хроно-путь, MCP,
  * чужая правка — приходит из main в рендерер событием `comment.*`, в том числе
  * автору записи (broadcast-to-all), поэтому ОДНА подписка покрывает все пути
- * записи: отдельные вызовы `etn.comments.update` ловить не нужно. Идемпотентно.
+ * записи: отдельные вызовы `etn.comments.update` ловить не нужно. Переименование
+ * мысли-источника приходит `thought.updated` и обновляет имя точечно
+ * ({@link applySourceCacheEvent}). Идемпотентно.
  */
 export function initTransclusionSourceCache(): void {
   if (sourceCacheWired) return;
   sourceCacheWired = true;
-  onRoutedRealtimeEvent((evt) => {
-    const key = sourceKeyForCommentEvent(evt);
-    if (key !== null) sourceCache.delete(key);
-  });
+  onRoutedRealtimeEvent(applySourceCacheEvent);
 }
 
 /**
@@ -2419,6 +2443,7 @@ export const transclusionInternals = {
   cachedTransclusionLoader,
   invalidateTransclusionSource,
   sourceKeyForCommentEvent,
+  applySourceCacheEvent,
   /** Очистка общего (на сеть) кэша источников — изоляция прогонов тестов. */
   clearSourceCache: () => sourceCache.clear(),
   setEntries,

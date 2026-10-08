@@ -76,11 +76,12 @@ function commentEvent(
   } as unknown as AnyRealtimeEvent;
 }
 
-/** Realtime-событие мысли минимальной формы (проверка сброса по `thought.deleted`). */
+/** Realtime-событие мысли минимальной формы (`thought.deleted`/`thought.updated`). */
 function thoughtEvent(
   type: 'thought.deleted' | 'thought.updated',
   id: string,
   seq: number,
+  changes: Record<string, unknown> = {},
 ): AnyRealtimeEvent {
   return {
     type,
@@ -90,7 +91,7 @@ function thoughtEvent(
     network_id: NET,
     audience: 'network',
     layer_id: '00000000-0000-0000-0000-000000000000',
-    data: { id },
+    data: type === 'thought.updated' ? { id, changes, version: 2 } : { id },
   } as unknown as AnyRealtimeEvent;
 }
 
@@ -269,6 +270,44 @@ test('realtime comment.updated сбрасывает источник (обычн
   const after = await load(ID_A);
   assert.equal(stub.fetches(), 2, 'событие сбросило источник — сеть перечитана');
   assert.equal(after?.body_md, '## Бета\nправка обычным путём', 'отрисовка получит свежее тело');
+});
+
+test('realtime thought.updated обновляет имя источника без перечитывания тела (0a11aec5)', async () => {
+  const stub = stubEtn();
+  transclusionInternals.clearSourceCache();
+  initTransclusionSourceCache();
+  const load = transclusionInternals.cachedTransclusionLoader(NET);
+
+  const first = await load(ID_A);
+  assert.equal(first?.title, 'Источник', 'исходное имя источника закэшировано');
+  assert.equal(stub.fetches(), 1, 'источник загружен');
+
+  // Переименование мысли-источника: приходит `thought.updated` с новым именем.
+  // Тело источника не менялось — сеть перезапрашивать не нужно, но имя в кэше
+  // обязано стать актуальным (чип-шапка показывает именно его).
+  resetEventRouter();
+  routeRealtimeEvent(thoughtEvent('thought.updated', ID_A, 100, { title: 'Новое имя' }));
+  const after = await load(ID_A);
+  assert.equal(after?.title, 'Новое имя', 'имя источника обновлено в кэше');
+  assert.equal(after?.body_md, '## Альфа\nтекст', 'тело источника сохранено');
+  assert.equal(stub.fetches(), 1, 'переименование не вызвало перечитывания тела из сети');
+});
+
+test('realtime thought.updated без смены имени не трогает кэш источника (0a11aec5)', async () => {
+  const stub = stubEtn();
+  transclusionInternals.clearSourceCache();
+  initTransclusionSourceCache();
+  const load = transclusionInternals.cachedTransclusionLoader(NET);
+
+  await load(ID_A);
+  assert.equal(stub.fetches(), 1, 'источник загружен');
+
+  // Правка другого поля мысли (без `title`) — массового сброса кэша быть не
+  // должно: иначе любое обновление мысли тянуло бы перезапрос источника в сеть.
+  resetEventRouter();
+  routeRealtimeEvent(thoughtEvent('thought.updated', ID_A, 100, { active: false }));
+  await load(ID_A);
+  assert.equal(stub.fetches(), 1, 'обновление без смены имени не сбросило источник');
 });
 
 // ---------------------------------------------------------------------------
