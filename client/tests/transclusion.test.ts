@@ -876,6 +876,35 @@ test('Esc: откат инстанса к загруженному тексту 
   assert.equal(store.isDirty(key), false, 'грязность снята');
 });
 
+test('exitBlock: blur не навязывает фокус контейнеру, клавиша — возвращает (b4986d3a)', () => {
+  const doc = `до ${BLOCK_RAW} после`;
+  const key = blockEditorKey(ID_A, null);
+  const make = (): { view: FakeView; focuses: () => number } => {
+    let state = EditorState.create({ doc, extensions: [...transclusionExtensions] });
+    state = state.update({ effects: setActiveBlock.of(key) }).state;
+    const view = makeView(state);
+    let focuses = 0;
+    (view as unknown as { focus: () => void }).focus = () => {
+      focuses += 1;
+    };
+    return { view, focuses: () => focuses };
+  };
+
+  // Причина `blur` (клик по постороннему элементу вне поля): фокус НЕ возвращаем
+  // в контейнер — иначе клик «перехватывается» обратно в поле (контракт на
+  // `exitBlock`, ошибка b4986d3a).
+  const blurred = make();
+  transclusionInternals.exitBlock(blurred.view as unknown as EditorView, key, 'blur');
+  assert.equal(blurred.focuses(), 0, 'blur не навязывает фокус контейнеру');
+  assert.equal(blurred.view.state.field(transclusionState)!.activeKey, null, 'блок деактивирован');
+
+  // Остальные причины выхода инициированы клавишей внутри блока — фокус
+  // возвращается на границу блока.
+  const keyed = make();
+  transclusionInternals.exitBlock(keyed.view as unknown as EditorView, key, 'ctrl-enter');
+  assert.equal(keyed.focuses(), 1, 'выход по клавише возвращает фокус в контейнер');
+});
+
 test('рекурсия: вложенная трансклюзия внутри блока (глубина 2) отображается и входима (73ae1d4b)', async () => {
   stubEtn({ [ID_A]: `![[#${ID_B}]]`, [ID_B]: 'ВНУТРЕННИЙ' });
   const { store: appStore } = await import('../src/renderer/state.js');

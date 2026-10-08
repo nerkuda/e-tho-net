@@ -2027,7 +2027,9 @@ async function loadNestedBlock(
  * Выход из блока: снимает активность (инстанс с текстом остаётся в хранилище —
  * семантика «сохранить в состоянии» до задачи «Единая запись»). При выходе
  * клавишей (`up`/`left`/`down`/`right`/`ctrl-enter`) фокус возвращается в
- * контейнер на границу блока; при уходе фокуса (`blur`) фокус не навязывается.
+ * контейнер на границу блока; при уходе фокуса (`blur`) фокус НЕ навязывается —
+ * иначе клик по внешнему элементу «перехватывался» бы обратно в поле (ошибка
+ * `b4986d3a`).
  */
 export function exitBlock(view: EditorView, key: string, reason: NestedExitReason): void {
   const active = view.state.field(transclusionState, false)?.activeKey ?? null;
@@ -2039,7 +2041,10 @@ export function exitBlock(view: EditorView, key: string, reason: NestedExitReaso
     effects: setActiveBlock.of(null),
     ...(anchor === null ? {} : { selection: { anchor } }),
   });
-  if (anchor !== null) view.focus();
+  // `blur` — фокус ушёл в посторонний элемент; возвращать его в контейнер
+  // нельзя (контракт выхода, ошибка `b4986d3a`). Остальные причины выхода
+  // инициированы клавишей внутри блока — фокус ставится на границу блока.
+  if (anchor !== null && reason !== 'blur') view.focus();
 }
 
 /** Выход из активного блока без причины (например, поле выходит из правки). */
