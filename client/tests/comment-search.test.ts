@@ -401,12 +401,55 @@ describe('коммит правки при уходе фокуса из реда
     assert.equal(
       field.editorBlurCommits(root as unknown as Node, outside as unknown as EventTarget),
       true,
-      'фокус ушёл наружу — правка коммитится',
+      'фокус ушёл наружу (реальный узел вне поля) — правка коммитится',
     );
+  });
+
+  it('focusout с relatedTarget=null не коммитит (ревизия слоя фокуса, ea9c76d3/e2c6c66c)', async () => {
+    const field = (await import(
+      '../src/renderer/editor/markdown-field.js'
+    )) as Field;
+    const root = new ShimElement('div');
     assert.equal(
       field.editorBlurCommits(root as unknown as Node, null),
-      true,
-      'программный blur (relatedTarget = null) — правка коммитится',
+      false,
+      'фокус исчез без перехода (снятие вложенного редактора/программный blur) — не решение о выходе',
     );
+  });
+
+  it('фокус в поповере/меню/диалоге поля не коммитит (0cb75868)', async () => {
+    const field = (await import(
+      '../src/renderer/editor/markdown-field.js'
+    )) as Field;
+    const root = new ShimElement('div');
+
+    const popover = new ShimElement('div', 'ui-popover');
+    const sectionButton = new ShimElement('button');
+    popover.append(sectionButton);
+
+    const menu = new ShimElement('div', 'menu');
+    const menuRow = new ShimElement('button', 'menu-item');
+    menu.append(menuRow);
+
+    const backdrop = new ShimElement('div', 'dialog-backdrop');
+    const dialogButton = new ShimElement('button');
+    backdrop.append(dialogButton);
+
+    for (const [node, label] of [
+      [sectionButton, 'раздел в поповере ссылки'],
+      [menuRow, 'строка собственного меню поля'],
+      [dialogButton, 'кнопка собственного диалога поля'],
+    ] as const) {
+      assert.equal(
+        field.editorBlurCommits(root as unknown as Node, node as unknown as EventTarget),
+        false,
+        `фокус на «${label}» — поле остаётся в правке`,
+      );
+      assert.equal(
+        field.fieldOwnsNode(root as unknown as Node, node as unknown as EventTarget),
+        true,
+        `«${label}» принадлежит фокусной области поля`,
+      );
+    }
   });
 });

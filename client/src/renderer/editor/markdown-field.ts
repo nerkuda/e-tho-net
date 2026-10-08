@@ -38,7 +38,8 @@ import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
 import { guardMenuFocus, showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
-import { isInsidePopover } from '../lib/ui/popover.js';
+import { isInsidePopover, watchOutsideTap } from '../lib/ui/popover.js';
+import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
 import { bindWikiCreateContext } from '../lib/wiki-create-context.js';
 import {
   buildCommentMenuItems,
@@ -561,23 +562,46 @@ function isDomNode(target: EventTarget | null): target is Node {
 }
 
 /**
- * Решает, коммитить ли правку при уходе фокуса из редактора: если фокус ушёл
- * на собственный элемент поля (`root` — панель поиска/замены, тулбар, кнопки
- * режима) или во всплывающую панель `lib/ui` (`isInsidePopover` — поповер правки
- * ссылки трансклюзии с полем поиска), правку НЕ коммитим. Иначе открытие панели
- * выбивало поле из правки: `onBlur` → `commitOrRevert` → `showView`, и действие
- * терялось (ошибка 3eb4d1d5; поповер — задача 68591b8a). Экспортируется для
- * юнит-тестов (задача 045f98db).
+ * Лежит ли узел в постороннем слое самого поля — контекстное меню (`.menu`) или
+ * модальный диалог (`.dialog-backdrop`). Оба монтируются в `body` (портал), но
+ * принадлежат текущему жесту поля: клик по ним не выход из правки (иначе
+ * «Вставить ссылку на публикацию…» выбивало бы поле из правки).
+ */
+function isInsideFieldMenuOrDialog(node: Node): boolean {
+  const el = node as (Element & { closest?(selector: string): Element | null }) | null;
+  if (el === null || typeof el !== 'object' || typeof el.closest !== 'function') return false;
+  return el.closest('.menu') !== null || el.closest('.dialog-backdrop') !== null;
+}
+
+/**
+ * Принадлежит ли узел ФОКУСНОЙ ОБЛАСТИ поля: его корню, всплывающей панели
+ * `lib/ui` (`isInsidePopover` — поповер правки ссылки трансклюзии), выпадашке
+ * живого поиска (`isInsideSuggestDropdown` — она порталится в `body`, вне
+ * поповера) или собственному меню/диалогу поля. Экспортируется для юнит-тестов
+ * (задача 045f98db).
+ */
+export function fieldOwnsNode(root: Node, node: EventTarget | null): boolean {
+  if (!isDomNode(node)) return false;
+  if (root.contains(node)) return true;
+  return isInsidePopover(node) || isInsideSuggestDropdown(node) || isInsideFieldMenuOrDialog(node);
+}
+
+/**
+ * Единое правило «фокус ушёл из поля НАРУЖУ» (ревизия слоя фокуса, ошибки
+ * `ea9c76d3`/`e2c6c66c`/`0cb75868`). Коммит по focusout разрешён только когда
+ * фокус перешёл на РЕАЛЬНЫЙ узел вне фокусной области поля:
+ * - `relatedTarget === null` — фокус не перешёл никуда (снятие активного
+ *   вложенного редактора из DOM при выходе из блока, программный `blur()`):
+ *   это НЕ решение о выходе, коммитить нельзя (раньше это уводило поле в
+ *   просмотр при навигации стрелками через блок).
+ * - узел внутри корня/поповера/подсказок/меню/диалога — поле остаётся в правке
+ *   (ошибка `3eb4d1d5`, поповер — `68591b8a`, портал подсказок — `0cb75868`).
+ * Сам выход по явному жесту (клик вне, Tab, Ctrl+Enter, «Записать», Esc) идёт
+ * своим путём и на этот предикат не опирается.
  */
 export function editorBlurCommits(root: Node, related: EventTarget | null): boolean {
-  if (!isDomNode(related)) return true;
-  if (root.contains(related)) return false;
-  // Фокус ушёл во всплывающую панель `lib/ui` (поповер правки ссылки
-  // трансклюзии: поле живого поиска мыслей) — правку НЕ коммитим. Клик по чипу
-  // открывает поповер, его поле забирает фокус у CodeMirror; без этой ветки
-  // `focusout` → `commitOrRevert` → `showView` выбивал бы поле из правки
-  // (задача 68591b8a).
-  return !isInsidePopover(related);
+  if (!isDomNode(related)) return false;
+  return !fieldOwnsNode(root, related);
 }
 
 /** Builds a markdown view/edit field. */
@@ -751,6 +775,19 @@ export function createMarkdownField(opts: {
   });
 
   /**
+   * Явный выход из правки — Ctrl+Enter, кнопка «Записать», Esc (в т.ч. из
+   * вложенного блока). Единое правило (ошибки `ea9c76d3`/`e2c6c66c`/`0cb75868`):
+   * решение о коммите принимается ЗДЕСЬ, а не по `focusout`; `blur()` только
+   * отпускает фокус. `commitOrRevert` объявлен ниже, но вызывается уже во время
+   * жеста — замыкание разрешено.
+   */
+  const finishEdit = (cancel: boolean): void => {
+    cancelled = cancel;
+    commitOrRevert();
+    editor?.blur();
+  };
+
+  /**
    * Хост команд поля (ТП1 «Команды редактирования комментария», задача
    * 3d6f98cb): тулбар и контекстное меню применяют команды к этому полю, а
    * команды уровня поля (поиск, отмена/сохранение) исполняет сам каркас правки.
@@ -787,13 +824,11 @@ export function createMarkdownField(opts: {
       }
       if (!editing || editor === null) return false;
       if (command === 'comment.cancel') {
-        cancelled = true;
-        editor.blur();
+        finishEdit(true);
         return true;
       }
       if (command === 'comment.save') {
-        cancelled = false;
-        editor.blur();
+        finishEdit(false);
         return true;
       }
       return false;
@@ -837,14 +872,21 @@ export function createMarkdownField(opts: {
   });
   root.addEventListener('focusout', (event) => {
     const next = event.relatedTarget;
-    if (next instanceof Node && root.contains(next)) return;
+    // Фокус остался в фокусной области поля (его элементы, поповер, подсказки,
+    // меню/диалог) — контекст сочетаний сохраняется.
+    if (fieldOwnsNode(root, next)) return;
+    // Фокус исчез без перехода (`relatedTarget = null`: снятие вложенного
+    // редактора из DOM при выходе из блока, программный `blur()`) — это НЕ
+    // решение о выходе: коммитить нельзя, иначе навигация стрелками через блок
+    // уводила поле в просмотр (ошибки `ea9c76d3`/`e2c6c66c`).
+    if (!isDomNode(next)) return;
     deactivateFieldKeys();
     search.leaveKeys();
-    // Фокус ушёл из поля целиком. Если правка была открыта и редактор уже не
-    // в фокусе (его `focusout` пропущен — фокус держала панель поиска), коммит
-    // иначе не случится. Обычный уход из редактора наружу сюда уже приходит с
-    // `editing === false` (commitOrRevert отработал в `onBlur` редактора) —
-    // повторного коммита нет.
+    // Фокус ушёл из поля целиком на реальный внешний узел. Если правка была
+    // открыта и редактор уже не в фокусе (его `focusout` пропущен — фокус
+    // держала панель поиска), коммит иначе не случится. Обычный уход из
+    // редактора наружу сюда уже приходит с `editing === false` (commitOrRevert
+    // отработал в `onBlur` редактора) — повторного коммита нет.
     if (editing) commitOrRevert();
   });
 
@@ -992,8 +1034,35 @@ export function createMarkdownField(opts: {
     paintView(viewHtml());
   };
 
+  /**
+   * Явный жест «клик вне поля» — второе основание выхода в просмотр (единое
+   * правило: выход только по явному жесту, ошибки `ea9c76d3`/`e2c6c66c`/
+   * `0cb75868`). Коммит по `focusout` больше не срабатывает при
+   * `relatedTarget = null`, поэтому клик по НЕфокусируемому месту (холст,
+   * карточка мысли) выходил бы из правки молча; ловим его «кликом вне» —
+   * ЕДИНЫМ механизмом `lib/ui` (`watchOutsideTap`, сторож `guard-ui-popover`),
+   * наш слой лишь описывает, какие узлы удерживают поле. Слушатель живёт только
+   * пока поле в правке.
+   */
+  let stopOutsideTap: (() => void) | null = null;
+  const attachOutsidePointer = (): void => {
+    if (stopOutsideTap !== null) return;
+    if (typeof document === 'undefined') return;
+    stopOutsideTap = watchOutsideTap(
+      (target) => fieldOwnsNode(root, target),
+      () => {
+        if (editing && !mounting) commitOrRevert();
+      },
+    );
+  };
+  const detachOutsidePointer = (): void => {
+    stopOutsideTap?.();
+    stopOutsideTap = null;
+  };
+
   const showView = (): void => {
     const wasEditing = editor !== null && !area.classList.contains('hidden');
+    detachOutsidePointer();
     // Выход из правки поля закрывает вложенные редакторы блоков: их инстансы
     // живут ровно столько, сколько открыта правка (состояние правок блоков —
     // задача «Черновики», `e9dfc2df`).
@@ -1061,7 +1130,9 @@ export function createMarkdownField(opts: {
   };
 
   const commitOrRevert = (): void => {
-    if (mounting || editor === null || commitPending) return;
+    // Поле не в правке — коммитить нечего (идемпотентность: после выхода в
+    // просмотр поздний `focusout`/повторный жест не запускают вторую запись).
+    if (!editing || mounting || editor === null || commitPending) return;
     const store = nestedStore;
     const md = editor.getValue();
     if (cancelled) {
@@ -1172,13 +1243,12 @@ export function createMarkdownField(opts: {
     editor = createMdEditor(currentMd, {
       onInput: (md) => opts.onInput?.(md),
       onEscape: () => {
-        cancelled = true;
-        editor?.blur();
+        finishEdit(true);
       },
-      // Ctrl+Enter (M10): обычный коммит через blur-обработчик.
+      // Ctrl+Enter (M10): явный коммит — решение принимаем сами, а не по
+      // focusout (единое правило выхода).
       onCommit: () => {
-        cancelled = false;
-        editor?.blur();
+        finishEdit(false);
       },
       onBlur: (event) => {
         // Фокус ушёл на элемент самого поля (панель поиска и т.п.) — правка
@@ -1204,12 +1274,10 @@ export function createMarkdownField(opts: {
           // «Грязный» блок зеркалится в черновик (задача `6a085e01`).
           onBlockDirty: (key) => scheduleSourceDraft(key),
           onCommitEdit: () => {
-            cancelled = false;
-            editor?.blur();
+            finishEdit(false);
           },
           onCancelEdit: () => {
-            cancelled = true;
-            editor?.blur();
+            finishEdit(true);
           },
           onBlockMounted: (sourceId) => {
             void sourceLocks?.acquire([sourceId]);
@@ -1341,6 +1409,9 @@ export function createMarkdownField(opts: {
     sourceLocks = new TransclusionLockSet();
     void sourceLocks.acquire(transclusionSourceIds(currentMd));
     activateFieldKeys();
+    // Явный жест выхода — клик вне фокусной области поля (см.
+    // `onOutsidePointerDown`).
+    attachOutsidePointer();
     search.refresh();
     opts.onEditChange?.(true);
   };
