@@ -38,6 +38,7 @@ import {
   sectionBoundaryCrossed,
   setActiveBlock,
   transclusionAtCaret,
+  transclusionBlockArrow,
   transclusionCacheKey,
   transclusionExtensions,
   transclusionInternals,
@@ -805,6 +806,48 @@ test('клик по блоку монтирует вложенный редак�
   const key = blockEditorKey(ID_A, null);
   assert.equal(view.state.field(transclusionState)!.activeKey, key, 'блок активирован кликом');
   assert.ok(store.has(key), 'инстанс смонтирован кликом');
+});
+
+test('вход в блок стрелками симметричен с обеих границ (ea9c76d3)', () => {
+  // Блок на ОТДЕЛЬНОЙ строке — как в реальном комментарии.
+  const doc = `до\n${BLOCK_RAW}\nпосле`;
+  const ref = parseTransclusions(doc)[0]!;
+
+  // Каретка на НИЖНЕЙ границе блока (позиция после выхода «вниз»/«вправо»):
+  // ArrowUp и ArrowLeft обязаны войти в блок, а не перескочить его.
+  const atEnd = makeView(
+    EditorState.create({ doc, extensions: [...transclusionExtensions] }).update({
+      selection: { anchor: ref.end },
+    }).state,
+  );
+  assert.equal(
+    transclusionBlockArrow(atEnd as unknown as EditorView, 'up'),
+    true,
+    'ArrowUp с нижней границы входит в блок',
+  );
+  assert.equal(
+    transclusionBlockArrow(atEnd as unknown as EditorView, 'left'),
+    true,
+    'ArrowLeft с нижней границы входит в блок',
+  );
+
+  // Каретка на ВЕРХНЕЙ границе блока (позиция после выхода «вверх»/«влево»):
+  // ArrowDown и ArrowRight обязаны войти в блок.
+  const atStart = makeView(
+    EditorState.create({ doc, extensions: [...transclusionExtensions] }).update({
+      selection: { anchor: ref.start },
+    }).state,
+  );
+  assert.equal(
+    transclusionBlockArrow(atStart as unknown as EditorView, 'down'),
+    true,
+    'ArrowDown с верхней границы входит в блок',
+  );
+  assert.equal(
+    transclusionBlockArrow(atStart as unknown as EditorView, 'right'),
+    true,
+    'ArrowRight с верхней границы входит в блок',
+  );
 });
 
 test('изменение текста блока: «грязный» сигнал наружу, контейнер не меняется (73ae1d4b)', async () => {

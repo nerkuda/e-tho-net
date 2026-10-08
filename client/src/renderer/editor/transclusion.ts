@@ -1195,6 +1195,15 @@ function coversRef(selection: { from: number; to: number }, from: number, to: nu
  * на markdown.
  */
 function linkDraftMode(selection: { from: number; to: number }, from: number, to: number): boolean {
+  // Каретка на ГРАНИЦЕ ссылки (перед открывающей парой или после закрывающей —
+  // `]]`-хвоста) — не черновик: блок остаётся блоком. Иначе блок был доступен
+  // только с левой границы (`intersects` строгий), и стрелки/вход через правую
+  // границу не срабатывали — асимметрия навигации (ошибка ea9c76d3). Черновик —
+  // только выделение, заходящее ВНУТРЬ ссылки (набор открытой трансклюзионной
+  // ссылки до автокомплита) или частично её покрывающее, но не полное покрытие.
+  if (selection.from === selection.to && (selection.from === from || selection.from === to)) {
+    return false;
+  }
   return intersects(selection, from, to) && !coversRef(selection, from, to);
 }
 
@@ -1451,8 +1460,14 @@ export function transclusionBlockArrow(
   let block: BlockRange | null = null;
   if (dir === 'right') block = blockStartingAt(blocks, pos);
   else if (dir === 'left') block = blockEndingAt(blocks, pos);
-  else if (dir === 'down') block = blockOnLineAfter(state, blocks, pos);
-  else block = blockOnLineBefore(state, blocks, pos);
+  // Вертикаль СИММЕТРИЧНА (ошибка ea9c76d3): сначала проверяем границу
+  // СОБСТВЕННОЙ строки каретки — после выхода из блока каретка стоит ровно на
+  // его крае (`ref.start` вверху / `ref.end` внизу), и обратная стрелка обязана
+  // снова войти в блок, а не перескочить его. Затем — блок на соседней строке
+  // (обычный подход сверху/снизу). «Вперёд» (вправо/вниз) входит кареткой в
+  // начало текста блока, «назад» (влево/вверх) — в конец.
+  else if (dir === 'down') block = blockStartingAt(blocks, pos) ?? blockOnLineAfter(state, blocks, pos);
+  else block = blockEndingAt(blocks, pos) ?? blockOnLineBefore(state, blocks, pos);
   if (block === null) return false;
   // Вход в блок: стрелка «вперёд» (вправо/вниз) — каретка в начало текста,
   // «назад» (влево/вверх) — в конец.
