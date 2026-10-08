@@ -323,9 +323,19 @@ async function sendDraft(draft: DraftRecord): Promise<void> {
       // после успешной единой записи (или по `Esc`).
       break;
     default:
-      break;
+      // Неизвестный тип черновика: не игнорировать молча — неизвестная строка
+      // не отправлена, и это должно быть видно (явная ветка `transclusion`
+      // выше обязана существовать: её нейтрализация уводит сюда и краснит тест).
+      throw new Error(`Неизвестный тип черновика: ${String(draft.entityType)}`);
   }
 }
+
+/**
+ * Тестовый шов узкой логики переотправки одного черновика (ветки `switch`).
+ * Экспортируется ради юнит-проверки ветки `transclusion` без поднятия UI и
+ * реального цикла: удаление этой ветки обязано красить тест.
+ */
+export const draftsInternals = { sendDraft };
 
 /** Convenience import for tests without DOM usage. */
 export function draftsEnabled(): boolean {

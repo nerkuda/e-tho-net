@@ -747,6 +747,24 @@ export function createMarkdownField(opts: {
   const collapseState = createCommentCollapseState(requireNetworkId(), collapseOwnerKey);
 
   /**
+   * Ключ черновиков правок ИСТОЧНИКОВ трансклюзий — стабильный владелец-СУЩНОСТЬ
+   * поля (`thought:<id>`/`link:<id>`), БЕЗ id комментария (ошибка `6d4d60ef`).
+   * При создании постоянного комментария `collapseOwnerKey` меняется с
+   * `thought:<ownerId>` на `comment:<id>` (виден только после пересборки поля), и
+   * черновики источников, снятые до создания, осиротели бы по старому ключу.
+   * Ключ по сущности-владельцу не меняется при создании комментария, поэтому
+   * черновики переживают его; область действия — владелец-мысль/связь. Состояние
+   * свёрнутости разделов остаётся на `collapseOwnerKey` (там id комментария
+   * уместен: у одной мысли бывает несколько комментариев).
+   */
+  const draftOwnerKey = ((): string | undefined => {
+    const cc = opts.commentContext;
+    if (cc !== undefined) return `${cc.ownerType}:${cc.ownerId}`;
+    const owner = opts.attachmentsOwner;
+    return owner !== undefined ? `${owner.ownerType}:${owner.ownerId}` : undefined;
+  })();
+
+  /**
    * Состояние свёрнутости блока трансклюзии по пути вставки (ТП2, требование
    * e04d84f7): владелец — «владелец поля (мысль-контейнер) + путь вставки».
    * Один и тот же источник в разных контейнерах (и на разных путях вставки)
@@ -1092,8 +1110,8 @@ export function createMarkdownField(opts: {
    */
   const sourceDraftTimers = new Map<string, number>();
   const scheduleSourceDraft = (key: string): void => {
-    if (collapseOwnerKey === undefined) return;
-    const ownerKey = collapseOwnerKey;
+    if (draftOwnerKey === undefined) return;
+    const ownerKey = draftOwnerKey;
     const pending = sourceDraftTimers.get(key);
     if (pending !== undefined) window.clearTimeout(pending);
     sourceDraftTimers.set(
@@ -1117,8 +1135,8 @@ export function createMarkdownField(opts: {
   };
   /** Немедленно сохраняет черновики переданных «грязных» блоков (офлайн-уход). */
   const flushSourceDrafts = (saves: readonly TransclusionBlockSave[]): void => {
-    if (collapseOwnerKey === undefined) return;
-    const ownerKey = collapseOwnerKey;
+    if (draftOwnerKey === undefined) return;
+    const ownerKey = draftOwnerKey;
     for (const save of saves) {
       void saveSourceDraft({
         networkId,
@@ -1146,7 +1164,7 @@ export function createMarkdownField(opts: {
       // Отменённая правка не должна воскреснуть из черновиков источников
       // (задача `6a085e01`): debounce гасится, строки владельца удаляются.
       cancelSourceDraftTimers();
-      if (collapseOwnerKey !== undefined) void clearSourceDrafts(networkId, collapseOwnerKey);
+      if (draftOwnerKey !== undefined) void clearSourceDrafts(networkId, draftOwnerKey);
       showView();
       return;
     }
@@ -1186,13 +1204,13 @@ export function createMarkdownField(opts: {
     // сработать), и только затем пишем: успех чистит черновики уже после их
     // фактической записи, частичный сбой оставляет несохранённые.
     const flush =
-      collapseOwnerKey === undefined || saves.length === 0
+      draftOwnerKey === undefined || saves.length === 0
         ? Promise.resolve()
         : Promise.all(
             saves.map((save) =>
               saveSourceDraft({
                 networkId,
-                ownerKey: collapseOwnerKey,
+                ownerKey: draftOwnerKey,
                 sourceId: save.sourceId,
                 section: save.section,
                 value: save.text,
@@ -1206,8 +1224,8 @@ export function createMarkdownField(opts: {
         for (const key of result.failedKeys) store?.markError(key);
         // Записанные источники больше не черновики; сбойные строки остаются —
         // восстановятся при следующем входе в правку.
-        if (collapseOwnerKey !== undefined && result.savedKeys.length > 0) {
-          void clearSourceDrafts(networkId, collapseOwnerKey, result.savedKeys);
+        if (draftOwnerKey !== undefined && result.savedKeys.length > 0) {
+          void clearSourceDrafts(networkId, draftOwnerKey, result.savedKeys);
         }
         if (result.failedKeys.length === 0 && result.envOk) {
           if (envChanged) {
@@ -1295,8 +1313,8 @@ export function createMarkdownField(opts: {
           // (задача `6a085e01`): текст черновика возвращается вложенному
           // редактору вместо загруженного источника, блок встаёт «грязным».
           getBlockDraft: async (sourceId, section) => {
-            if (collapseOwnerKey === undefined) return null;
-            const draft = await findSourceDraft(networkId, collapseOwnerKey, sourceId, section);
+            if (draftOwnerKey === undefined) return null;
+            const draft = await findSourceDraft(networkId, draftOwnerKey, sourceId, section);
             return draft === null ? null : draft.value;
           },
         }),

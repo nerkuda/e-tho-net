@@ -34,6 +34,7 @@ import {
 import { blockEditorKey, dirtyBlockSaves } from '../src/renderer/editor/transclusion.js';
 import {
   clearSourceDrafts,
+  draftsInternals,
   findSourceDraft,
   listSourceDrafts,
   parseSourceDraftField,
@@ -214,9 +215,50 @@ test('mount с черновиком, равным источнику: блок �
 });
 
 // ---------------------------------------------------------------------------
-// Обязательство 2: успешная запись чистит черновики записанных источников
+// Ошибка 6d4d60ef: создание комментария не теряет черновики блоков. Ключ
+// черновиков источников — по ВЛАДЕЛЬЦУ-СУЩНОСТИ поля, а не по id комментария:
+// у несохранённого комментария владелец `thought:<id>`, после создания поля с
+// `comment:<id>` черновики по старому ключу не нашлись бы. Тест моделирует
+// пересборку поля (до/после создания комментария) и контраст со старым ключом.
 // ---------------------------------------------------------------------------
 
+test('создание комментария не теряет черновики блоков (6d4d60ef)', async () => {
+  const stub = stubDraftStore();
+  const OWNER_THOUGHT = 'thought:owner-1';
+  const OWNER_COMMENT = 'comment:new-comment-1';
+  const key = blockEditorKey(ID_A, 'Раздел A');
+
+  // 1) До создания комментария поле сняло черновик блока под ключом владельца-
+  //    мысли (так делает `draftOwnerKey`).
+  await saveSourceDraft({
+    networkId: NET,
+    ownerKey: OWNER_THOUGHT,
+    sourceId: ID_A,
+    section: 'Раздел A',
+    value: 'ЧЕРНОВИК БЛОКА',
+  });
+
+  // 2) Комментарий создан, поле пересобрано. Ключ черновиков НЕ изменился —
+  //    черновик находится и восстанавливается во вложенный редактор.
+  const hit = await findSourceDraft(NET, OWNER_THOUGHT, ID_A, 'Раздел A');
+  assert.ok(hit !== null, 'черновик блока найден после создания комментария');
+  assert.equal(hit.value, 'ЧЕРНОВИК БЛОКА');
+  const registry = new Map<string, FakeNestedView>();
+  const store = new NestedEditorStore(fakeFactory(registry));
+  store.mount(key, 'СЕРВЕРНЫЙ ТЕКСТ', noopOptions, hit.value);
+  assert.equal(store.text(key), 'ЧЕРНОВИК БЛОКА', 'черновик восстановлен в блок');
+  assert.equal(store.isDirty(key), true, 'восстановленный блок «грязный»');
+
+  // 3) Контраст с прежним (багованным) ключом по id комментария: под ним
+  //    черновик отсутствует — именно так он терялся.
+  const lost = await findSourceDraft(NET, OWNER_COMMENT, ID_A, 'Раздел A');
+  assert.equal(lost, null, 'старый ключ по comment-id оставил бы черновик осиротевшим');
+  assert.equal(stub.rows().length, 1, 'строка черновика одна — ключ не раздвоился');
+});
+
+// ---------------------------------------------------------------------------
+// Обязательство 2: успешная запись чистит черновики записанных источников
+// ---------------------------------------------------------------------------
 test('успешная запись: clearSourceDrafts по ключам чистит только записанные источники', async () => {
   const stub = stubDraftStore();
   const keyA = blockEditorKey(ID_A, null);
@@ -361,6 +403,51 @@ test('retryPendingDrafts: черновик трансклюзии не уход�
   assert.equal(stub.rows().length, 1, 'строка черновика источника сохранена для восстановления в правке');
 });
 
+test('sendDraft: ветка «transclusion» — черновик не отправлен и не удалён (6a085e01)', async () => {
+  const stub = stubDraftStore();
+  // Прямой вызов узкой логики (тестовый шов `draftsInternals`): удаление ветки
+  // `case 'transclusion'` уводит в `default`, который бросает — тест краснеет
+  // (`assert.doesNotReject`). Прежняя проверка через `retryPendingDrafts` этого
+  // не ловила: ветки `transclusion` и `default` были эквивалентны.
+  let commentUpdates = 0;
+  let draftDeletes = 0;
+  const ui = (globalThis as unknown as { etn: { ui: Record<string, unknown> } }).etn.ui;
+  const originalDelete = ui['draftDelete'] as (id: string) => Promise<void>;
+  (globalThis as unknown as { etn: unknown }).etn = {
+    ui: {
+      ...ui,
+      draftDelete: async (id: string) => {
+        draftDeletes += 1;
+        await originalDelete(id);
+      },
+    },
+    comments: {
+      update: async () => {
+        commentUpdates += 1;
+      },
+    },
+  };
+
+  const record = {
+    id: 'draft-x',
+    networkId: NET,
+    entityType: 'transclusion',
+    entityId: OWNER,
+    field: sourceDraftField(ID_A, 'Раздел A'),
+    value: 'ЧЕРНОВИК ИСТОЧНИКА',
+    baseVersion: null,
+    status: 'pending',
+    createdAt: '2026-10-08T00:00:00.000Z',
+  };
+  await assert.doesNotReject(
+    () => draftsInternals.sendDraft(record),
+    'ветка transclusion обрабатывает черновик без ошибки',
+  );
+  assert.equal(commentUpdates, 0, 'черновик источника не отправлен как комментарий');
+  assert.equal(draftDeletes, 0, 'черновик источника не удалён');
+  assert.equal(stub.rows().length, 0, 'шов не трогает хранилище');
+});
+
 // ---------------------------------------------------------------------------
 // Сторож проводки поля: реальный EditorView headless не поднимается
 // ---------------------------------------------------------------------------
@@ -373,15 +460,28 @@ test('markdown-field: проводка черновиков источников
     [/getBlockDraft:/.test(src) && /findSourceDraft\(/.test(src), 'монтаж блока читает черновик'],
     [/saveSourceDraft\(/.test(src), 'черновик источника пишется через saveSourceDraft'],
     [
-      /clearSourceDrafts\(networkId, collapseOwnerKey\)/.test(src),
+      /clearSourceDrafts\(networkId, draftOwnerKey\)/.test(src),
       'Esc чистит все черновики источников поля',
     ],
     [
-      /clearSourceDrafts\(networkId, collapseOwnerKey, result\.savedKeys\)/.test(src),
+      /clearSourceDrafts\(networkId, draftOwnerKey, result\.savedKeys\)/.test(src),
       'успешная запись чистит черновики записанных источников',
     ],
     [/!canSave\(\)/.test(src) && /offlineNotice\(\)/.test(src), 'офлайн-уход сохраняет черновики'],
     [/cancelSourceDraftTimers\(\)/.test(src), 'запись/отмена гасят отложенную запись черновиков'],
+    // Ошибка 6d4d60ef: ключ черновиков источников — по владельцу-СУЩНОСТИ, без
+    // id комментария (иначе при создании комментария `thought:<id>` →
+    // `comment:<id>` черновики сиротеют). Все пути черновиков используют
+    // `draftOwnerKey`; он строится из `ownerType:ownerId`, не из `getCommentId`.
+    [
+      /const draftOwnerKey = /.test(src) && /`\$\{cc\.ownerType\}:\$\{cc\.ownerId\}`/.test(src),
+      'ключ черновиков строится по владельцу-сущности, не по id комментария',
+    ],
+    [
+      !/getBlockDraft[\s\S]{0,200}collapseOwnerKey/.test(src) &&
+        !/scheduleSourceDraft[\s\S]{0,200}collapseOwnerKey/.test(src),
+      'черновики источников не привязаны к ключу свёрнутости (comment-id)',
+    ],
   ];
   for (const [ok, what] of checks) assert.ok(ok, what);
 });
