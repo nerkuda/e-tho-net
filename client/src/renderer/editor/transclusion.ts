@@ -1484,6 +1484,19 @@ function blockInViewDom(view: EditorView, block: HTMLElement): boolean {
 }
 
 /**
+ * Цель события лежит во ВНУТРЕННЕМ (вложенном) редакторе относительно `view`:
+ * ближайший `.cm-editor` существует и не равен корню `view`. Такой жест
+ * принадлежит вложенному инстансу — контейнерный обработчик НЕ должен считать
+ * внешний блок-виджет (предок вложенного редактора, координаты контейнера)
+ * своей целью: иначе клик гасится (ошибка `e2c6c66c`), а правый клик открывает
+ * меню внешнего блока (ошибка `a8b74fd6`).
+ */
+function targetInNestedEditor(view: EditorView, target: Element | null): boolean {
+  const root = target?.closest?.('.cm-editor') ?? null;
+  return root !== null && root !== view.dom;
+}
+
+/**
  * Обработчик `mousedown` трансклюзий (задача `73ae1d4b`): клик по блоку монтирует
  * вложенный редактор и переносит фокус внутрь; клик по шапке-чипу открывает
  * поповер правки ссылки; клик по заблокированному (чужой захват) блоку лишь
@@ -1516,8 +1529,7 @@ export function transclusionMouseDown(event: MouseEvent, view: EditorView): bool
   // `e2c6c66c`). `preventDefault()` останавливает конвейер обработчиков CM6
   // (он пропускает оставшиеся после `defaultPrevented`), вложенный инстанс
   // свой жест уже получил.
-  const editorRoot = target.closest('.cm-editor');
-  if (editorRoot !== null && editorRoot !== view.dom) {
+  if (targetInNestedEditor(view, target)) {
     event.preventDefault();
     return true;
   }
@@ -1638,6 +1650,12 @@ export function transclusionMenuHandlers(
  * {@link transclusionMouseDown}, ошибка `27b95e60`).
  */
 export function transclusionContextMenuHandler(event: MouseEvent, view: EditorView): boolean {
+  // Правый клик внутри ВЛОЖЕННОГО редактора — это его собственный текст, а не
+  // внешний блок (внешний виджет — предок вложенного, он лежит внутри
+  // `view.dom` контейнера, поэтому одной проверки `blockInViewDom`
+  // недостаточно). Меню блока не открываем — событие уходит меню поля
+  // (ошибка `a8b74fd6`).
+  if (targetInNestedEditor(view, event.target as Element | null)) return false;
   const ref = transclusionWidgetRefAt(view, event.target as Element | null);
   if (ref === null) return false;
   event.preventDefault();

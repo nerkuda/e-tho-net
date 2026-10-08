@@ -61,6 +61,18 @@ function isComment(line: string): boolean {
   return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
 }
 
+/**
+ * Исходник без комментариев. Подстрочная проверка проводки не должна «видеть»
+ * вызовы в закомментированном коде (`// attachOutsidePointer();` — не проводка).
+ */
+function stripComments(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .map((line) => line.replace(/\/\/.*$/, ''))
+    .join('\n');
+}
+
 /** Общее для всех правил: не `lib/ui`, не комментарий. */
 function outsideFacades(rel: string, line: string): boolean {
   return isComment(line) || rel.startsWith('lib/ui/');
@@ -113,8 +125,15 @@ describe('guard: всплывающая панель lib/ui', () => {
     // Обратный регресс: поле обязано ставить/снимать «клик вне» через
     // `watchOutsideTap` при входе/выходе из правки. Отключение проводки
     // (attachOutsidePointer/detachOutsidePointer) краснит этот тест
-    // (ошибка e2c6c66c, раунд 2).
-    const src = fs.readFileSync(path.join(RENDERER_ROOT, 'editor', 'markdown-field.ts'), 'utf8');
+    // (ошибка e2c6c66c, раунд 2). Комментарии вычищаются: закомментированный
+    // вызов проводкой не считается.
+    const raw = fs.readFileSync(path.join(RENDERER_ROOT, 'editor', 'markdown-field.ts'), 'utf8');
+    const src = stripComments(raw);
+    assert.doesNotMatch(
+      stripComments('// attachOutsidePointer();\n/* watchOutsideTap(x, y) */'),
+      /attachOutsidePointer\(\)|watchOutsideTap\(/,
+      'вычистка комментариев работает — закомментированная проводка не засчитывается',
+    );
     assert.match(
       src,
       /stopOutsideTap\s*=\s*watchOutsideTap\(/,

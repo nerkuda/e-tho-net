@@ -248,6 +248,73 @@ describe('кнопки мыши по блоку трансклюзии (27b95e60
       'внешний блок меню не открывает — обрабатывает поле',
     );
   });
+
+  it('правый клик внутри вложенного редактора: контейнер не открывает меню внешнего блока (a8b74fd6)', () => {
+    // Внешний блок лежит ВНУТРИ DOM контейнера (blockInViewDom пропускает его),
+    // поэтому одной этой проверки мало: контейнерный обработчик обязан
+    // распознать, что цель — во ВНУТРЕННЕМ редакторе, и отдать жест меню поля.
+    const containerRoot = new ShimElement('div');
+    containerRoot.className = 'cm-editor';
+    const outerBlock = widget(TRANSCLUSION_BLOCK_CLASS, REF);
+    containerRoot.append(outerBlock);
+    const nestedRoot = new ShimElement('div');
+    nestedRoot.className = 'cm-editor';
+    outerBlock.append(nestedRoot);
+    const nestedContent = new ShimElement('div');
+    nestedContent.className = 'cm-content';
+    nestedRoot.append(nestedContent);
+
+    const view: any = fakeView(SRC); // документ контейнера — ссылка на месте
+    view.dom = containerRoot;
+    (nestedContent as any).closest = (selector: string): ShimElement | null => {
+      if (selector === '.cm-editor') return nestedRoot;
+      if (selector === `.${TRANSCLUSION_BLOCK_CLASS}`) return outerBlock;
+      return null;
+    };
+
+    const event = mouse(2, nestedContent);
+    assert.equal(
+      transclusionContextMenuHandler(event, view),
+      false,
+      'правый клик по тексту вложенного редактора — меню поля, не блока',
+    );
+    assert.equal(event.defaultPrevented, false, 'событие не гасится — доходит до меню поля');
+  });
+
+  it('правый клик на глубине ≥2: меню внешнего блока не открывается (a8b74fd6)', () => {
+    const containerRoot = new ShimElement('div');
+    containerRoot.className = 'cm-editor';
+    const outerBlock = widget(TRANSCLUSION_BLOCK_CLASS, REF);
+    containerRoot.append(outerBlock);
+    const midRoot = new ShimElement('div');
+    midRoot.className = 'cm-editor';
+    outerBlock.append(midRoot);
+    const midBlock = new ShimElement('div');
+    midBlock.className = TRANSCLUSION_BLOCK_CLASS;
+    midBlock.dataset.mdFrom = '0';
+    midBlock.dataset.mdTo = '1';
+    midRoot.append(midBlock);
+    const deepRoot = new ShimElement('div');
+    deepRoot.className = 'cm-editor';
+    midBlock.append(deepRoot);
+    const deepContent = new ShimElement('div');
+    deepContent.className = 'cm-content';
+    deepRoot.append(deepContent);
+
+    const view: any = fakeView(SRC);
+    view.dom = containerRoot;
+    (deepContent as any).closest = (selector: string): ShimElement | null => {
+      if (selector === '.cm-editor') return deepRoot;
+      if (selector === `.${TRANSCLUSION_BLOCK_CLASS}`) return midBlock;
+      return null;
+    };
+
+    assert.equal(
+      transclusionContextMenuHandler(mouse(2, deepContent), view),
+      false,
+      'на любой глубине контейнер не открывает меню своего блока для чужого текста',
+    );
+  });
 });
 
 describe('контекстное меню блока открывается правым кликом', () => {
