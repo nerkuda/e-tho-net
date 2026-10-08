@@ -36,7 +36,9 @@
  * допустимы).
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
+import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
@@ -105,5 +107,21 @@ function rules(): GuardRule[] {
 describe('guard: всплывающая панель lib/ui', () => {
   it('панель и её механика — только через компонент lib/ui/popover', () => {
     assertGuardClean(RENDERER_ROOT, rules());
+  });
+
+  it('поле комментария проводит «клик вне» через компонент, а не своим слушателем', () => {
+    // Обратный регресс: поле обязано ставить/снимать «клик вне» через
+    // `watchOutsideTap` при входе/выходе из правки. Отключение проводки
+    // (attachOutsidePointer/detachOutsidePointer) краснит этот тест
+    // (ошибка e2c6c66c, раунд 2).
+    const src = fs.readFileSync(path.join(RENDERER_ROOT, 'editor', 'markdown-field.ts'), 'utf8');
+    assert.match(
+      src,
+      /stopOutsideTap\s*=\s*watchOutsideTap\(/,
+      '«клик вне» проводят через lib/ui watchOutsideTap',
+    );
+    assert.match(src, /attachOutsidePointer\(\)/, 'вход в правку ставит слушатель клика вне');
+    assert.match(src, /detachOutsidePointer\(\)/, 'выход из правки снимает слушатель клика вне');
+    assert.match(src, /const showEdit = [\s\S]*?attachOutsidePointer\(\)/, 'проводка — в showEdit');
   });
 });
