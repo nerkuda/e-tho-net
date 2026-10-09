@@ -455,6 +455,19 @@ test('sendDraft: ветка «transclusion» — черновик не отпр�
 test('markdown-field: проводка черновиков источников (6a085e01)', () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const src = fs.readFileSync(path.join(here, '../src/renderer/editor/markdown-field.ts'), 'utf8');
+  // Тело ИМЕННО инициализатора `draftOwnerKey` — строго до его закрывающего
+  // `})();`. Проверять по всему файлу нельзя: литерал `${cc.ownerType}:${cc.ownerId}`
+  // есть и в определении `collapseOwnerKey` (ключ свёрнутости, с id комментария),
+  // поэтому прежняя проверка удовлетворялась ЧУЖОЙ строкой и возврат к
+  // `draftOwnerKey = collapseOwnerKey` (багованная модель ошибки 6d4d60ef) не
+  // краснил тест (ошибка 40dfe388). Тело же при таком возврате теряет знак
+  // владельца-сущности, и проверка падает.
+  const draftKeyStart = src.indexOf('const draftOwnerKey = ');
+  const draftKeyEnd = src.indexOf('})();', draftKeyStart);
+  const draftKeyInit =
+    draftKeyStart === -1
+      ? ''
+      : src.slice(draftKeyStart, draftKeyEnd === -1 ? src.length : draftKeyEnd);
   const checks: Array<[boolean, string]> = [
     [/onBlockDirty: \(key\) => scheduleSourceDraft\(key\)/.test(src), '«грязный» блок зеркалится в черновик'],
     [/getBlockDraft:/.test(src) && /findSourceDraft\(/.test(src), 'монтаж блока читает черновик'],
@@ -471,11 +484,15 @@ test('markdown-field: проводка черновиков источников
     [/cancelSourceDraftTimers\(\)/.test(src), 'запись/отмена гасят отложенную запись черновиков'],
     // Ошибка 6d4d60ef: ключ черновиков источников — по владельцу-СУЩНОСТИ, без
     // id комментария (иначе при создании комментария `thought:<id>` →
-    // `comment:<id>` черновики сиротеют). Все пути черновиков используют
-    // `draftOwnerKey`; он строится из `ownerType:ownerId`, не из `getCommentId`.
+    // `comment:<id>` черновики сиротеют). Проверяется ТЕЛО инициализатора
+    // `draftOwnerKey` (не файл целиком) — сторож обязан краснеть на возврате
+    // `draftOwnerKey = collapseOwnerKey` (ошибка 40dfe388).
     [
-      /const draftOwnerKey = /.test(src) && /`\$\{cc\.ownerType\}:\$\{cc\.ownerId\}`/.test(src),
-      'ключ черновиков строится по владельцу-сущности, не по id комментария',
+      draftKeyInit.includes('`${cc.ownerType}:${cc.ownerId}`') &&
+        !draftKeyInit.includes('getCommentId') &&
+        !draftKeyInit.includes('comment:') &&
+        !/=\s*collapseOwnerKey/.test(draftKeyInit),
+      'тело draftOwnerKey строится по владельцу-сущности (ownerType:ownerId), без id комментария',
     ],
     [
       !/getBlockDraft[\s\S]{0,200}collapseOwnerKey/.test(src) &&
