@@ -396,3 +396,47 @@ test('инлайн-правило: внутри и непосредственн�
   assert.equal(isNearInline(ranges(8), 10, 13), false, 'через символ до');
   assert.equal(isNearInline(ranges(14), 10, 13), false, 'через символ после');
 });
+
+// ---------------------------------------------------------------------------
+// HTML-комментарий в правке (ТЗ4 «Дневник без псевдослота»): весь узел серым
+// (класс `cm-md-html-comment`), маркеры `<!--`/`-->` скрыты вне курсора.
+// ---------------------------------------------------------------------------
+
+const HTML_COMMENT_CLASS = 'cm-md-html-comment';
+
+test('HTML-комментарий (инлайн): серый весь узел, маркеры скрыты вне курсора', () => {
+  const doc = 'text <!-- c --> more';
+  // Comment [5,15): `<!--` [5,9), `-->` [12,15).
+  const away = buildState(doc, doc.length);
+  assert.equal(hasClass(away, HTML_COMMENT_CLASS, 5, 15), true, 'весь узел серым');
+  assert.equal(hasHiddenMark(away, 5, 9), true, 'открывающий `<!--` скрыт вне');
+  assert.equal(hasHiddenMark(away, 12, 15), true, 'закрывающий `-->` скрыт вне');
+  // Каретка внутри комментария: маркеры видны, серость остаётся.
+  const inside = buildState(doc, 7);
+  assert.equal(hasHiddenMark(inside, 5, 9), false, '`<!--` виден внутри');
+  assert.equal(hasHiddenMark(inside, 12, 15), false, '`-->` виден внутри');
+  assert.equal(hasClass(inside, HTML_COMMENT_CLASS, 5, 15), true, 'серость остаётся');
+});
+
+test('HTML-комментарий: маркеры видны и в смежной позиции (как у парных `**`)', () => {
+  const doc = 'x <!-- c --> y';
+  // Comment [2,12): `<!--` [2,6), `-->` [9,12).
+  const before = buildState(doc, 2 - 1);
+  assert.equal(hasHiddenMark(before, 2, 6), false, 'вплотную ПЕРЕД — маркеры видны');
+  const after = buildState(doc, 12);
+  assert.equal(hasHiddenMark(after, 9, 12), false, 'вплотную ПОСЛЕ — маркеры видны');
+});
+
+test('HTML-комментарий (блочный CommentBlock): серый, маркеры скрыты вне курсора', () => {
+  const doc = 'текст\n\n<!-- block\ncomment -->\nконец';
+  const away = buildState(doc, doc.length);
+  const block = allSpecs(away).find((r) => r.spec.class === HTML_COMMENT_CLASS);
+  assert.ok(block, 'блочный комментарий найден');
+  assert.ok(block.to - block.from > 1, 'узел непустой');
+  assert.equal(hasHiddenMark(away, block.from, block.from + 4), true, '`<!--` скрыт вне');
+  assert.equal(hasHiddenMark(away, block.to - 3, block.to), true, '`-->` скрыт вне');
+  const inside = buildState(doc, block.from + 4);
+  assert.equal(hasHiddenMark(inside, block.from, block.from + 4), false, 'маркеры видны внутри');
+  assert.equal(hasHiddenMark(inside, block.to - 3, block.to), false);
+});
+

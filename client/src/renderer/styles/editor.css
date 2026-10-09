@@ -1145,6 +1145,13 @@
   text-decoration: underline;
 }
 
+/* ТЗ4: HTML-комментарий `<!-- … -->` в правке (`cm-md-html-comment`,
+   md-live.ts) — приглушённо-серый; маркеры скрыты вне курсора. Просмотр HTML
+   комментарий не рендерит (единый рендерер), поэтому правило только в правке. */
+.cm-editor .cm-line .cm-md-html-comment {
+  color: var(--md-html-comment);
+}
+
 
 .comment-view blockquote,
 .cm-editor .cm-line.cm-md-quote-line {
