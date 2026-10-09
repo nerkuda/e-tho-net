@@ -9,10 +9,17 @@
  *
  * Источники: «Эмодзи» (полный набор Unicode 16.0), «Библиотека» (значки
  * иконочной библиотеки с поиском), «Иконки мыслей» (сетка иконок типов),
- * «Файл» (системный выбор картинки с превью ≤256 КиБ) и «URL» (адрес с
- * предпросмотром). «Эмодзи»/«Библиотека»/«Иконки мыслей» применяются сразу по
- * клику; «Файл»/«URL» — нижней «Применить». Порядок вкладок: «Эмодзи» —
- * первая, «Библиотека» — следующая (элемент интерфейса 91367509).
+ * «Вложения» (системный выбор картинки с превью ≤256 КиБ; 0.12.1, ошибка
+ * e748e323 — терминология как у вкладки «Вложения» диалога обложки) и «URL»
+ * (адрес с предпросмотром). «Эмодзи»/«Библиотека»/«Иконки мыслей» применяются
+ * сразу по клику; «Вложения»/«URL» — нижней «Применить». Порядок вкладок:
+ * «Эмодзи» — первая, «Библиотека» — следующая (элемент интерфейса 91367509).
+ *
+ * При открытии диалог встаёт на вкладку ВИДА текущей иконки и отмечает текущий
+ * выбор (ошибка e2407f6d): `emoji`/`icon`/`image` → «Эмодзи»/«Библиотека»/«URL»,
+ * разворачивается категория эмодзи и выделяется текущий значок; на вкладке
+ * «Библиотека» уже выбранный значок делает «Применить» активной — смена только
+ * цвета не требует повторного поиска.
  */
 
 import type { IconKind } from '@etn/shared';
@@ -53,6 +60,18 @@ export function showIconDialog(opts: {
 }): void {
   const { current, onPick } = opts;
 
+  /**
+   * Вкладка при открытии — по ВИДУ текущей иконки (ошибка e2407f6d): `emoji` →
+   * «Эмодзи», `icon` → «Библиотека», `image` → «URL» (картинка-адрес).
+   */
+  const activeTab =
+    current.kind === 'icon' ? 'library' : current.kind === 'image' ? 'url' : 'emoji';
+  /** Начальное значение вкладки «URL» — адрес картинки (не `data:`-превью). */
+  const initialUrl =
+    current.kind === 'image' && current.icon !== null && !current.icon.startsWith('data:')
+      ? current.icon
+      : undefined;
+
   /** Применяет результат и закрывает диалог при успехе сохранения. */
   const submit =
     (result: IconPickResult) =>
@@ -63,8 +82,8 @@ export function showIconDialog(opts: {
   createResourcePicker({
     title: 'Иконка',
     size: 'm',
-    // Открытие на «URL», если текущая иконка — картинка (как было в диалоге).
-    activeTab: current.kind === 'image' ? 'url' : 'emoji',
+    // Открытие на вкладке вида текущей иконки; без выбора — «Эмодзи».
+    activeTab,
     applyLabel: t('actions.apply'),
     noneLabel: t('actions.reset'),
     noneDanger: true,
@@ -75,8 +94,12 @@ export function showIconDialog(opts: {
       });
     },
     tabs: [
-      emojiSourceTab((glyph, ctx) => submit({ icon: glyph, kind: 'emoji', color: null })(ctx)),
+      emojiSourceTab(
+        (glyph, ctx) => submit({ icon: glyph, kind: 'emoji', color: null })(ctx),
+        { initial: current.kind === 'emoji' ? current.icon : null },
+      ),
       libraryIconSourceTab({
+        initialIcon: current.kind === 'icon' ? current.icon : null,
         initialColor: current.color,
         onPick: (name, color, ctx) => submit({ icon: name, kind: 'icon', color })(ctx),
       }),
@@ -94,6 +117,7 @@ export function showIconDialog(opts: {
       urlSourceTab({
         placeholder: 'URL изображения',
         previewHint: 'Предпросмотр',
+        ...(initialUrl !== undefined ? { initial: initialUrl } : {}),
         onApply: (url, ctx) => submit({ icon: url, kind: 'image', color: null })(ctx),
       }),
     ],

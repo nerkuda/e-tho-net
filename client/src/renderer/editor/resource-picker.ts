@@ -203,35 +203,61 @@ export function createResourcePicker(config: ResourcePickerConfig): () => void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Прокручивает выделенную ячейку в вид. Панель строится ДО её вставки в DOM,
+ * поэтому прокрутку откладываем микрозадачей: к её исполнению диалог уже
+ * собран и узел в документе (иначе `scrollIntoView` — no-op).
+ */
+function revealCurrent(cell: HTMLElement | null): void {
+  if (cell === null || typeof cell.scrollIntoView !== 'function') return;
+  queueMicrotask(() => cell.scrollIntoView({ block: 'nearest' }));
+}
+
+/**
  * Источник «Эмодзи» — полный набор Unicode 16.0, категории CLDR, группы
  * сворачиваемые (контент строится при раскрытии). Немедленный: клик по глифу
  * применяет выбор; `onPick` сам решает, закрывать ли диалог.
+ *
+ * `opts.initial` — уже выбранный глиф (ошибка e2407f6d): его категория
+ * раскрывается при открытии, а ячейка помечается классом `emoji-cell-current`
+ * и прокручивается в вид, чтобы текущий выбор был виден без поиска.
  */
 export function emojiSourceTab(
   onPick: (glyph: string, ctx: ResourceSourceContext) => void | Promise<void>,
+  opts: { initial?: string | null } = {},
 ): ResourceSourceTab {
+  const initial = opts.initial ?? null;
   return {
     id: 'emoji',
     label: 'Эмодзи',
     build: (ctx) => {
       const root = div('emoji-groups');
+      let currentCell: HTMLElement | null = null;
       EMOJI_GROUPS.forEach((group, index) => {
+        // Группа текущей иконки разворачивается (иначе выбранный эмодзи скрыт
+        // в свёрнутой категории).
+        const hasCurrent = initial !== null && group.items.includes(initial);
         // Сворачиваемая эмодзи-группа — общий компонент lib/ui/collapsible.ts.
         const section = collapsibleSection({
           title: `${group.name} · ${group.items.length}`,
-          collapsed: index !== 0,
+          collapsed: hasCurrent ? false : index !== 0,
           caretKind: 'triangle',
           classes: { root: 'emoji-group', header: 'emoji-group-title', body: 'emoji-group-body' },
           buildBody: () => {
             const grid = div('emoji-grid');
             for (const glyph of group.items) {
-              grid.append(button(glyph, () => void onPick(glyph, ctx), 'emoji-cell'));
+              const cell = button(glyph, () => void onPick(glyph, ctx), 'emoji-cell');
+              if (glyph === initial) {
+                cell.classList.add('emoji-cell-current');
+                currentCell = cell;
+              }
+              grid.append(cell);
             }
             return grid;
           },
         });
         root.append(section.root);
       });
+      revealCurrent(currentCell);
       return root;
     },
   };
@@ -240,13 +266,24 @@ export function emojiSourceTab(
 /**
  * Источник «Библиотека» — значки иконочной библиотеки (Lucide) с ЖИВЫМ
  * поиском по каталогу имён. Клик применяет выбор немедленно
- * (`icon_kind='icon'`, `icon` = имя значка), как у «Эмодзи»: `apply` у
- * источника нет, применяет и закрывает диалог обработчик `onPick`. Полный
- * каталог грузится ЛЕНИВО при первом построении панели (первое открытие
- * вкладки); до загрузки — подсказка, сетка наполняется `reconcileKeyed` по
- * фильтру поиска (стандарт инкрементального рендера списков).
+ * (`icon_kind='icon'`, `icon` = имя значка), как у «Эмодзи»: применяет и
+ * закрывает диалог обработчик `onPick`. Полный каталог грузится ЛЕНИВО при
+ * первом построении панели (первое открытие вкладки); до загрузки — подсказка,
+ * сетка наполняется `reconcileKeyed` по фильтру поиска (стандарт
+ * инкрементального рендера списков).
+ *
+ * `opts.initialIcon` — уже выбранное имя значка (ошибка e2407f6d): ячейка
+ * помечается `icon-library-cell-current` и прокручивается в вид, а источник
+ * объявляет корректный выбор (`setReady`), поэтому нижняя «Применить» активна
+ * — смена ТОЛЬКО цвета ранее выбранной иконки не требует повторного поиска
+ * (`apply` применяет текущий значок с новым цветом).
  */
 export function libraryIconSourceTab(opts: {
+  /**
+   * Начальное имя выбранного значка (`null` — прежнее поведение, выбор не
+   * отмечен). Заполняет выделение и доступность «Применить» (ошибка e2407f6d).
+   */
+  initialIcon?: string | null;
   /**
    * Начальный цвет символа (`null` — прежнее поведение, `currentColor`).
    * Заполняет поле цвета (0.12.1, задача 4105bd6a).
@@ -254,7 +291,8 @@ export function libraryIconSourceTab(opts: {
   initialColor?: string | null;
   /**
    * Выбор значка: имя каталога + выбранный цвет символа (`null` — не задан).
-   * `apply` у источника нет, применяет и закрывает диалог обработчик `onPick`.
+   * Клик применяет и закрывает диалог; `apply` (нижняя «Применить») применяет
+   * уже выбранный значок — для смены только цвета.
    */
   onPick: (
     name: string,
@@ -262,6 +300,13 @@ export function libraryIconSourceTab(opts: {
     ctx: ResourceSourceContext,
   ) => void | Promise<void>;
 }): ResourceSourceTab {
+  const initial = opts.initialIcon ?? null;
+  /**
+   * Применение текущего значка рождается в `build` (нужен выбранный значок и
+   * поле цвета), а `apply` нужен каркасу заранее — читаем через холдер, как у
+   * `urlSourceTab`.
+   */
+  const holder: { run: ResourceSourceTab['apply'] } = { run: undefined };
   return {
     id: 'library',
     label: t('icons.library.tab'),
@@ -296,6 +341,18 @@ export function libraryIconSourceTab(opts: {
       box.append(colorRow, row, hint, grid);
 
       let catalog: IconCatalog | null = null;
+      /** Текущий выбор значка (начальный или кликнутый) — источник `apply`. */
+      let selected: string | null = initial;
+      let currentCell: HTMLElement | null = null;
+      let revealedCurrent = false;
+
+      /** Помечает ячейку текущего выбора классом (по `data-icon`). */
+      const paintCurrent = (): void => {
+        for (const cell of Array.from(grid.children) as HTMLElement[]) {
+          cell.classList.toggle('icon-library-cell-current', cell.dataset['icon'] === selected);
+        }
+      };
+
       const render = (): void => {
         if (catalog === null) return;
         const matched = searchIconCatalog(catalog.names, input.value);
@@ -305,21 +362,53 @@ export function libraryIconSourceTab(opts: {
         reconcileKeyed(grid, matched, {
           key: (name) => name,
           build: (name) => {
-            const cell = button('', () => void opts.onPick(name, color, ctx), 'icon-library-cell');
+            const cell = button(
+              '',
+              () => {
+                // Немедленное применение (поведение вкладки): выбор сразу уходит
+                // вызывающему; фиксируем его и для «Применить» (если запись
+                // не удалась и диалог остался открытым).
+                selected = name;
+                void opts.onPick(name, color, ctx);
+              },
+              'icon-library-cell',
+            );
             cell.title = name;
+            cell.dataset['icon'] = name;
             void renderLibraryIcon(cell, name, { size: 20 });
             return cell;
           },
           update: () => {},
         });
+        paintCurrent();
+        if (currentCell === null && selected !== null) {
+          currentCell =
+            (Array.from(grid.children) as HTMLElement[]).find(
+              (cell) => cell.dataset['icon'] === selected,
+            ) ?? null;
+        }
+        // Прокрутка к текущему выбору — один раз, после первой загрузки каталога.
+        if (!revealedCurrent) {
+          revealedCurrent = true;
+          revealCurrent(currentCell);
+        }
       };
       input.addEventListener('input', render);
       void loadIconCatalog().then((loaded) => {
         catalog = loaded;
         render();
       });
+      // Уже выбранный значок — «Применить» активна (смена только цвета).
+      if (selected !== null) ctx.setReady(true);
+      holder.run = (c) => {
+        if (selected === null) return;
+        return opts.onPick(selected, color, c);
+      };
       return box;
     },
+    // Нижняя «Применить»: применяет выбранный значок с текущим цветом
+    // (у немедленных источников `apply` нет; здесь он нужен для смены цвета).
+    apply: (ctx) => holder.run?.(ctx),
   };
 }
 

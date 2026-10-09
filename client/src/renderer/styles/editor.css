@@ -824,6 +824,15 @@
   background: var(--accent-soft);
 }
 
+/* Текущий выбор в диалоге иконки (ошибка e2407f6d): уже выбранная иконка
+   отмечена подсветкой и рамкой — при открытии диалога видно без поиска. */
+.emoji-cell-current,
+.icon-library-cell-current {
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .icon-source-row {
   display: flex;
   gap: 6px;
