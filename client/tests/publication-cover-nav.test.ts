@@ -185,15 +185,15 @@ async function openDialog(): Promise<{
   // Дать осесть асинхронному поиску вложений (runSearch).
   await new Promise((resolve) => setImmediate(resolve));
 
-  const list = body().querySelector('.pub-cover-list');
+  const list = body().querySelector('.att-pick-list');
   assert.ok(list !== null, 'список вложений диалога построен');
   const currentKey = (): string | null => {
     const row = list
-      .querySelectorAll('.pub-cover-item')
-      .find((el) => el.classList.contains('pub-cover-item-current'));
+      .querySelectorAll('.att-pick-item')
+      .find((el) => el.classList.contains('att-pick-item-current'));
     // Ключ строки — носитель (kind+путь), заголовок строки — title вложения,
     // которым в фикстурах служит id ('att-1'/'att-2').
-    return row?.querySelector('.pub-cover-item-title')?.textContent ?? null;
+    return row?.querySelector('.att-pick-item-title')?.textContent ?? null;
   };
   return { mod, list, currentKey };
 }
@@ -204,7 +204,7 @@ function body(): ShimElement {
 
 /** Адрес картинки препросмотра (свойство `src`; в шиме атрибут не ведётся). */
 function previewSrc(): string {
-  const img = body().querySelector('.pub-cover-preview-img') as unknown as
+  const img = body().querySelector('.att-pick-preview-img') as unknown as
     | { src?: string }
     | null;
   return img?.src ?? '';

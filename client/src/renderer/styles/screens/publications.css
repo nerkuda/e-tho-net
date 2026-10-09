@@ -579,12 +579,6 @@
   margin-left: auto;
 }
 
-.pub-cover-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-height: 12rem;
-}
 
 /* --- Вкладки карточки: резюме, свойства текстов/доп. материалы, метаданные,
        состояние пересборки -------------------------------------------------- */
@@ -631,119 +625,6 @@
   gap: var(--space-2);
 }
 
-/* --- Диалог обложки: список слева, препросмотр справа (горизонтальный
-       сплиттер ширины) ----------------------------------------------------- */
-
-.pub-cover-pane {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  min-height: 18rem;
-}
-
-.pub-cover-top {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.pub-cover-search {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.pub-cover-split {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-}
-
-/* Шов сплиттера ширины: размер и курсор задаёт владелец (общий гриф — в
-   `lib/ui/splitter.css`). Горизонтальный шов — `col-resize`. */
-.pub-cover-splitter {
-  flex: 0 0 10px;
-  width: 10px;
-  cursor: col-resize;
-}
-
-.pub-cover-list-box {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.pub-cover-list {
-  overflow-y: auto;
-}
-
-/* Строка списка диалога обложки. Класс СВОЙ (`pub-cover-item`), а не
-   `.pub-cover-row`: последний занят миниатюрой обложки в списках
-   (`cover.ts`, 2.5rem×1.75rem) и сжимал строку до этой рамки. */
-.pub-cover-item {
-  width: 100%;
-  height: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-}
-
-.pub-cover-item:hover {
-  background: var(--bg-hover);
-}
-
-.pub-cover-item-current {
-  background: var(--accent-soft);
-}
-
-.pub-cover-item-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Вид владельца вложения рисуют общие компоненты облачков: мысли —
-   `lib/thought-cloud.ts` (профиль `chip`), публикации — `lib/ui/publication-cloud`
-   (прямые углы, книга). Здесь — только контейнер ряда (замечание Б2 b02ef1cf). */
-.pub-cover-clouds {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.pub-cover-preview {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  padding: var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.pub-cover-preview-url {
-  min-height: 12rem;
-}
-
-.pub-cover-preview-img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-
-.pub-cover-url {
-  width: 100%;
-}
 
 /* --- Рабочая область открытой публикации (0.11.1, задача 4f03b9d5) ------- */
 

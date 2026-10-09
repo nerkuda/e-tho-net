@@ -2317,3 +2317,123 @@
 }
 
 
+
+/* --- Общий компонент выбора вложения (editor/attachment-picker.ts, задача
+       0f6c3e39): закреплённый сверху поиск, прокручиваемый внутри список и
+       ФИКСИРОВАННЫЙ предпросмотр справа (layout-фикс ошибки 3250096a). Панель
+       занимает высоту вкладки целиком, поэтому прокручивается список, а не
+       вся панель с поиском и предпросмотром. ------------------------------ */
+
+.att-pick-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  height: 100%;
+  min-height: 0;
+}
+
+/* Строка поиска и загрузки закреплена сверху — не прокручивается со списком. */
+.att-pick-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.att-pick-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.att-pick-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.att-pick-splitter {
+  flex: 0 0 10px;
+  width: 10px;
+  cursor: col-resize;
+}
+
+.att-pick-list-box {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Список прокручивается ВНУТРИ себя; предпросмотр при этом стоит на месте. */
+.att-pick-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.att-pick-more {
+  flex: none;
+}
+
+.att-pick-item {
+  width: 100%;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.att-pick-item:hover {
+  background: var(--bg-hover);
+}
+
+.att-pick-item-current {
+  background: var(--accent-soft);
+}
+
+.att-pick-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Вид владельцев вложения рисуют общие компоненты облачков. */
+.att-pick-clouds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Правая колонка предпросмотра: фиксированная ширина, высота — от видимой
+   части панели (не от длины списка), поэтому картинка видна всегда. */
+.att-pick-preview {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.att-pick-preview-current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.att-pick-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}

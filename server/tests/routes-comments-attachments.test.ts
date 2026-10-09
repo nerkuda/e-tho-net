@@ -498,6 +498,47 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal((onlyUrl.json().data as unknown[]).length, 1);
+
+        // Пагинация: `limit`/`offset` приходят СТРОКАМИ и обязаны приниматься
+        // (регресс: `parse: truncInt` ждал число и отдавал 422 на любой
+        // limit/offset — исправлено `queryInt`, задача 0f6c3e39). `q=e` даёт
+        // все три строки; страница по два вложения.
+        const firstPage = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=e&limit=2&offset=0`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(firstPage.statusCode, 200);
+        const firstBody = firstPage.json() as {
+          data: unknown[];
+          meta: { total: number; offset: number; limit: number };
+        };
+        assert.equal(firstBody.data.length, 2, 'первая страница — не больше limit');
+        assert.equal(firstBody.meta.limit, 2);
+        assert.equal(firstBody.meta.offset, 0);
+        assert.equal(firstBody.meta.total, 3, 'total — всё множество, не страница');
+
+        const secondPage = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=e&limit=2&offset=2`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(secondPage.statusCode, 200);
+        const secondBody = secondPage.json() as {
+          data: unknown[];
+          meta: { total: number; offset: number; limit: number };
+        };
+        assert.equal(secondBody.data.length, 1, 'хвост второй страницы');
+        assert.equal(secondBody.meta.offset, 2);
+
+        // Некорректный limit — понятная ошибка 422 с именем параметра.
+        const badLimit = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=e&limit=abc`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(badLimit.statusCode, 422);
+        assert.equal(badLimit.json().error.details.field, 'limit');
       } finally {
         await closeRestContext(ctx);
       }

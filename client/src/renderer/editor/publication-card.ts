@@ -44,19 +44,21 @@ import { showDialog, errorDialog, confirmDialog } from '../lib/dialog.js';
 import { menuAction, showMenuAt } from '../lib/menu.js';
 import { uiButton, iconButton } from '../lib/ui/button.js';
 import { uiTabs, type TabsHandle } from '../lib/ui/tabs.js';
-import { uiSplitter } from '../lib/ui/splitter.js';
 import { fieldInput, fieldRow, fieldTextarea } from '../lib/ui/field.js';
 import { fieldError } from '../lib/ui/messages.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
 import { loadingState } from '../lib/ui/empty-state.js';
-import { createListNav } from '../lib/ui/list.js';
-import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 import { notice } from '../lib/notice.js';
 import {
   createResourcePicker,
   urlSourceTab,
   type ResourceSourceContext,
 } from './resource-picker.js';
+import {
+  attachmentPickerSourceTab,
+  type AttachmentPick,
+  type AttachmentPickerRow,
+} from './attachment-picker.js';
 import {
   commitEntity,
   getEntity,
@@ -1146,53 +1148,18 @@ async function rebuildPublication(): Promise<void> {
     setRebuildingOn(ownerButton, ownerFeedback, false);
   }
 }
-
 // ---------------------------------------------------------------------------
 // Диалог выбора обложки
 // ---------------------------------------------------------------------------
 
 /**
- * Строка списка вложений диалога обложки: один ФИЗИЧЕСКИЙ носитель (файл/URL),
- * который могут держать несколько строк-владельцев. Схлопывание по носителю —
- * требование замечания 3 приёмки b02ef1cf: «Общая картинка.png» с тремя
- * владельцами — ОДНА строка с тремя облачками, а не три одинаковые.
+ * Открывает диалог выбора обложки: вкладки «Вложения» и «URL». Вкладка
+ * «Вложения» — общий компонент выбора вложения (задача 0f6c3e39): список
+ * картинок сети с поиском, загрузкой из файла, отметкой текущего и
+ * ФИКСИРОВАННЫМ предпросмотром; здесь остаётся только специфика обложки —
+ * облачка владельцев носителя и назначение выбранного вложения обложкой
+ * публикации. Ошибка 3250096a (предпросмотр/поиск) исправлена в компоненте.
  */
-interface CoverRow {
-  /** Ключ носителя (kind + путь/url). */
-  key: string;
-  /** Строки-владельцы этого носителя (по одной на владельца). */
-  attachments: Attachment[];
-  title: string;
-}
-
-/** Ключ носителя вложения (схлопывание строк диалога). */
-function coverCarrierKey(a: Attachment): string {
-  return `${a.kind}\u0000${a.file_path ?? a.url ?? a.id}`;
-}
-
-/** Название строки-носителя: заголовок предпочтительной строки или путь. */
-function coverRowTitle(attachments: readonly Attachment[]): string {
-  const first = attachments[0];
-  if (first === undefined) return '';
-  return first.title ?? first.file_path ?? first.url ?? first.id;
-}
-
-/**
- * Представитель носителя для препросмотра/применения: предпочтительна строка,
- * уже принадлежащая этой публикации (обложка ставится без копирования), иначе
- * первая.
- */
-function coverRepresentative(row: CoverRow, publicationId: string): Attachment | null {
-  return (
-    row.attachments.find(
-      (a) => a.owner_type === 'publication' && a.owner_id === publicationId,
-    ) ??
-    row.attachments[0] ??
-    null
-  );
-}
-
-/** Открывает диалог выбора обложки: вкладки «Вложения» и «URL». */
 async function openCoverDialog(): Promise<void> {
   const rawNetId = store.state.networkId;
   const publicationId = currentPublicationId();
@@ -1201,439 +1168,244 @@ async function openCoverDialog(): Promise<void> {
   const netId: string = rawNetId;
   const pubId: string = publicationId;
 
+  /** Владельцы носителя, по ключу строки (единый кеш — замечание 3). */
+  const usageCache = new Map<string, AttachmentOwnerRef[]>();
+  /** Разрешённые ссылки мыслей-владельцев (тип/значок/оформление, как везде). */
+  const refCache = new Map<string, ThoughtRef>();
+
+  /** Дочитывает ссылки мыслей-владельцев батчем (визуал типа — из ссылки). */
+  async function ensureRefs(owners: readonly AttachmentOwnerRef[]): Promise<void> {
+    const missing = owners
+      .filter((o) => o.owner_type === 'thought' && !refCache.has(o.owner_id))
+      .map((o) => o.owner_id);
+    if (missing.length === 0) return;
+    try {
+      const refs = await etn.thoughts.resolve(netId, missing.slice(0, 100));
+      for (const ref of refs) refCache.set(ref.id, ref);
+    } catch {
+      // Значок/оформление типа недоступны — облачко соберётся по имени.
+    }
+  }
+
   /**
-   * Выбор строки списка — общее состояние вкладки «Вложения»: его синхронизирует
-   * навигация, а нижняя «Применить и закрыть» берёт отсюда.
+   * Представитель носителя для препросмотра/применения: предпочтительна
+   * строка, уже принадлежащая этой публикации (обложка ставится без
+   * копирования), иначе первая.
    */
-  let selected: CoverRow | null = null;
+  function representative(row: AttachmentPickerRow): Attachment {
+    return (
+      row.attachments.find((a) => a.owner_type === 'publication' && a.owner_id === pubId) ??
+      row.representative
+    );
+  }
+
   /**
-   * Применение выбранного вложения. Рождается в сборке панели (нужны строки
-   * списка), а каркасу нужно заранее — читаем через холдер, как у источников
-   * `urlSourceTab`/`fileImageSourceTab`.
+   * Облачко одного владельца: мысль — общий компонент облачка мысли с её
+   * типом; публикация — компонент `lib/ui/publication-cloud`; связь — облачко
+   * со значком связи. У каждого — крестик снятия владельца (замечание Б2
+   * приёмки b02ef1cf).
    */
-  let applyAttachments: ((ctx: ResourceSourceContext) => void | Promise<void>) | null = null;
-
-  // --- Вкладка «Вложения» --------------------------------------------------
-  function buildAttachmentsTab(ctx: ResourceSourceContext): HTMLElement {
-    const box = div('pub-cover-pane');
-    const top = div('pub-cover-top');
-    const search = fieldInput({ extraClass: 'pub-cover-search' });
-    search.placeholder = t('publications.search');
-    const uploadButton = uiButton({
-      label: t('publication.cover.upload'),
-      role: 'secondary',
-      size: 's',
-      onClick: () => void uploadFromFile(),
-    });
-    top.append(search, uploadButton);
-
-    const split = div('pub-cover-split');
-    const listBox = div('pub-cover-list-box');
-    const listHost = div('pub-cover-list');
-    // Корень навигации принимает программный фокус: без него стрелки и
-    // Home/End ядра навигации не доходят (замечание В приёмки b02ef1cf).
-    listHost.tabIndex = 0;
-    const emptyHint = span(t('publication.cover.empty'), 'muted pub-cover-empty hidden');
-    listBox.append(listHost, emptyHint);
-    const previewHost = div('pub-cover-preview');
-    previewHost.style.width = '260px';
-    previewHost.style.flexBasis = '260px';
-    // Сплиттер ширины препросмотра — общий фасад `lib/ui/splitter.ts`.
-    const splitter = uiSplitter({
-      extraClass: 'pub-cover-splitter',
-      title: t('splitter.resizeHint'),
-      ariaLabel: t('splitter.resizeAriaHorizontal'),
-      plan: () => ({
-        axis: 'x' as const,
-        sign: -1 as const,
-        start: previewHost.getBoundingClientRect().width || 260,
-        min: 120,
-        max: 640,
-      }),
-      apply: (value) => {
-        previewHost.style.width = `${value}px`;
-        previewHost.style.flexBasis = `${value}px`;
-      },
-    });
-    split.append(listBox, splitter, previewHost);
-    box.append(top, split);
-
-    let rows: CoverRow[] = [];
-    const rowEls = new Map<string, HTMLElement>();
-    /** Владельцы носителя, по ключу строки (единый кеш — замечание 3). */
-    const usageCache = new Map<string, AttachmentOwnerRef[]>();
-    /** Фокус и первая текущая строка отдаются списку один раз — при первом показе. */
-    let initialFocusDone = false;
-
-    const nav = createListNav<CoverRow>(listHost, {
-      entries: () => rows,
-      tokenOf: (row) => row.key,
-      elementOf: (row) => rowEls.get(row.key) ?? null,
-      applyHighlight: (row) => {
-        for (const [key, el] of rowEls) {
-          el.classList.toggle('pub-cover-item-current', row !== null && key === row.key);
-        }
-      },
-      // Единый источник текущего выбора: стрелки/Home/End, клик, dblclick и сброс
-      // после перерисовки идут через `setCurrent`, который зовёт этот колбэк.
-      // Без него `selected` оставался прежним при подсветке стрелками, и
-      // Ctrl+Enter/«Применить и закрыть» применяли устаревшую строку (блокер
-      // приёмки b02ef1cf). Держим `selected`, препросмотр и доступность кнопки
-      // синхронными текущей позиции навигации.
-      onSelectionChange: (row) => {
-        selected = row;
-        renderPreview(row);
-        ctx.setReady(row !== null);
-      },
-      onActivate: (row) => selectRow(row),
-      // Ctrl+Enter в списке — «выбрать и применить, закрыв диалог» (замечание В
-      // приёмки b02ef1cf). Ядро навигации трактует Enter (в т.ч. с Ctrl) как
-      // активацию и гасит событие, поэтому перехватываем ДО базовых правил.
-      onKey: (key, event) => {
-        if (key !== 'Enter' || event.ctrlKey !== true) return false;
-        if (selected === null || applyAttachments === null) return true;
-        event.preventDefault?.();
-        void applyAttachments(ctx);
-        return true;
-      },
-      onClick: (target) => {
-        const row = closestRow(target);
-        const key = row?.getAttribute('data-key') ?? '';
-        const found = rows.find((r) => r.key === key);
-        if (found !== undefined) selectRow(found);
-      },
-    });
-
-    /** Ближайшая строка-вложение от узла клика. */
-    function closestRow(target: HTMLElement): HTMLElement | null {
-      let cursor: HTMLElement | null = target;
-      while (cursor !== null && cursor !== listHost) {
-        if (cursor.parentElement === listHost) return cursor;
-        cursor = cursor.parentElement;
-      }
-      return null;
-    }
-
-    /** Разрешённые ссылки мыслей-владельцев (тип/значок/оформление, как везде). */
-    const refCache = new Map<string, ThoughtRef>();
-
-    /** Дочитывает ссылки мыслей-владельцев батчем (визуал типа — из ссылки). */
-    async function ensureRefs(owners: readonly AttachmentOwnerRef[]): Promise<void> {
-      const missing = owners
-        .filter((o) => o.owner_type === 'thought' && !refCache.has(o.owner_id))
-        .map((o) => o.owner_id);
-      if (missing.length === 0) return;
-      try {
-        const refs = await etn.thoughts.resolve(netId, missing.slice(0, 100));
-        for (const ref of refs) refCache.set(ref.id, ref);
-      } catch {
-        // Значок/оформление типа недоступны — облачко соберётся по имени.
-      }
-    }
-
-    /**
-     * Представитель носителя для препросмотра/применения: предпочтительна
-     * строка, уже принадлежащая этой публикации (тогда обложка ставится без
-     * копирования), иначе первая.
-     */
-    function representative(row: CoverRow): Attachment | null {
-      return coverRepresentative(row, pubId);
-    }
-
-    /** Заполняет строку облачками владельцев (мысли/публикации/связи). */
-    function fillClouds(clouds: HTMLElement, row: CoverRow): void {
-      const draw = (): void => {
-        const owners = usageCache.get(row.key) ?? [];
-        while (clouds.firstChild !== null) clouds.removeChild(clouds.firstChild);
-        for (const owner of owners) clouds.append(buildOwnerCloud(owner, row));
-      };
-      const cached = usageCache.get(row.key);
-      if (cached !== undefined) {
-        void ensureRefs(cached).then(draw);
-        return;
-      }
-      // Владельцы общие для всего носителя — запрашиваем один раз по представителю.
-      const sample = representative(row);
-      if (sample === null) {
-        draw();
-        return;
-      }
-      void etn.attachments
-        .getUsage(netId, sample.id)
-        .then(async (usage) => {
-          usageCache.set(row.key, usage.owners);
-          await ensureRefs(usage.owners);
-          draw();
-        })
-        .catch(() => undefined);
-    }
-
-    /**
-     * Облачко одного владельца: мысль — общий компонент облачка мысли с её
-     * типом; публикация — компонент `lib/ui/publication-cloud`; связь — облачко
-     * со значком связи. У каждого — крестик снятия владельца (замечание Б2
-     * приёмки b02ef1cf).
-     */
-    function buildOwnerCloud(owner: AttachmentOwnerRef, row: CoverRow): HTMLElement {
-      if (owner.owner_type === 'publication') {
-        return createPublicationCloud(
-          { id: owner.owner_id, title: owner.title ?? owner.owner_id },
-          {
-            width: 'container',
-            labels: {
-              open: t('publications.menu.open'),
-              read: t('publications.menu.read'),
-              findOnShelf: t('publication.action.findOnShelf'),
-              remove: t('publication.cover.ownerRemove'),
-            },
-            actions: {
-              onOpen: (id) => {
-                void import('../screens/publications/publications.js').then((m) =>
-                  m.openPublicationCard(id),
-                );
-              },
-              onRead: (id) => {
-                void import('../screens/publications/publications.js').then((m) =>
-                  m.openPublicationWorkspace(id),
-                );
-              },
-              onFindOnShelf: (id) => {
-                void import('../screens/publications/publications.js').then((m) =>
-                  m.revealPublicationInLibrary(id),
-                );
-              },
-              onRemove: () => void removeOwner(row, owner),
-            },
+  function buildOwnerCloud(
+    owner: AttachmentOwnerRef,
+    row: AttachmentPickerRow,
+    refresh: () => void,
+  ): HTMLElement {
+    if (owner.owner_type === 'publication') {
+      return createPublicationCloud(
+        { id: owner.owner_id, title: owner.title ?? owner.owner_id },
+        {
+          width: 'container',
+          labels: {
+            open: t('publications.menu.open'),
+            read: t('publications.menu.read'),
+            findOnShelf: t('publication.action.findOnShelf'),
+            remove: t('publication.cover.ownerRemove'),
           },
-        );
-      }
-      const ref = refCache.get(owner.owner_id);
-      const input =
-        owner.owner_type === 'thought'
-          ? (ref ?? { id: owner.owner_id, title: owner.title ?? owner.owner_id })
-          : {
-              id: owner.owner_id,
-              title: owner.title ?? t('publication.cover.ownerLink'),
-              icon: '🔗',
-              icon_kind: 'emoji' as const,
-            };
-      return createThoughtCloud(input, {
-        profile: 'chip',
-        width: 'container',
-        actions: { onRemove: () => void removeOwner(row, owner) },
-      });
+          actions: {
+            onOpen: (id) => {
+              void import('../screens/publications/publications.js').then((m) =>
+                m.openPublicationCard(id),
+              );
+            },
+            onRead: (id) => {
+              void import('../screens/publications/publications.js').then((m) =>
+                m.openPublicationWorkspace(id),
+              );
+            },
+            onFindOnShelf: (id) => {
+              void import('../screens/publications/publications.js').then((m) =>
+                m.revealPublicationInLibrary(id),
+              );
+            },
+            onRemove: () => void removeOwner(row, owner, refresh),
+          },
+        },
+      );
     }
+    const ref = refCache.get(owner.owner_id);
+    const input =
+      owner.owner_type === 'thought'
+        ? (ref ?? { id: owner.owner_id, title: owner.title ?? owner.owner_id })
+        : {
+            id: owner.owner_id,
+            title: owner.title ?? t('publication.cover.ownerLink'),
+            icon: '🔗',
+            icon_kind: 'emoji' as const,
+          };
+    return createThoughtCloud(input, {
+      profile: 'chip',
+      width: 'container',
+      actions: { onRemove: () => void removeOwner(row, owner, refresh) },
+    });
+  }
 
-    /**
-     * Снимает владельца носителя: удаляет ЕГО строку вложения (носитель держат
-     * несколько строк-владельцев). Если владелец последний — сначала общий
-     * диалог подтверждения (замечание Б2 приёмки b02ef1cf). Инвалидируется
-     * единый кеш владельцев носителя, поэтому облачка схлопнутых строк
-     * обновляются все разом (замечание 3).
-     */
-    async function removeOwner(row: CoverRow, owner: AttachmentOwnerRef): Promise<void> {
-      let owners = usageCache.get(row.key) ?? [];
-      if (owners.length === 0) {
-        const sample = representative(row);
-        if (sample !== null) {
-          try {
-            owners = (await etn.attachments.getUsage(netId, sample.id)).owners;
-            usageCache.set(row.key, owners);
-          } catch {
-            owners = [];
-          }
+  /** Заполняет строку облачками владельцев (мысли/публикации/связи). */
+  function fillClouds(
+    clouds: HTMLElement,
+    row: AttachmentPickerRow,
+    refresh: () => void,
+  ): void {
+    const draw = (): void => {
+      const owners = usageCache.get(row.key) ?? [];
+      while (clouds.firstChild !== null) clouds.removeChild(clouds.firstChild);
+      for (const owner of owners) clouds.append(buildOwnerCloud(owner, row, refresh));
+    };
+    const cached = usageCache.get(row.key);
+    if (cached !== undefined) {
+      void ensureRefs(cached).then(draw);
+      return;
+    }
+    // Владельцы общие для всего носителя — запрашиваем один раз по представителю.
+    const sample = representative(row);
+    if (sample === null) {
+      draw();
+      return;
+    }
+    void etn.attachments
+      .getUsage(netId, sample.id)
+      .then(async (usage) => {
+        usageCache.set(row.key, usage.owners);
+        await ensureRefs(usage.owners);
+        draw();
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Снимает владельца носителя: удаляет ЕГО строку вложения (носитель держат
+   * несколько строк-владельцев). Если владелец последний — сначала общий
+   * диалог подтверждения (замечание Б2 приёмки b02ef1cf).
+   */
+  async function removeOwner(
+    row: AttachmentPickerRow,
+    owner: AttachmentOwnerRef,
+    refresh: () => void,
+  ): Promise<void> {
+    let owners = usageCache.get(row.key) ?? [];
+    if (owners.length === 0) {
+      const sample = representative(row);
+      if (sample !== null) {
+        try {
+          owners = (await etn.attachments.getUsage(netId, sample.id)).owners;
+          usageCache.set(row.key, owners);
+        } catch {
+          owners = [];
         }
       }
-      if (owners.length <= 1) {
-        const confirmed = await confirmDialog(
-          t('publication.cover.removeLastOwner.title'),
-          t('publication.cover.removeLastOwner.body'),
-          true,
-          t('actions.delete'),
-        );
-        if (!confirmed) return;
-      }
-      // Строка-владелец уже есть в сгруппированных данных — берём её id напрямую.
-      const target = row.attachments.find(
-        (a) => a.owner_type === owner.owner_type && a.owner_id === owner.owner_id,
+    }
+    if (owners.length <= 1) {
+      const confirmed = await confirmDialog(
+        t('publication.cover.removeLastOwner.title'),
+        t('publication.cover.removeLastOwner.body'),
+        true,
+        t('actions.delete'),
       );
-      if (target === undefined) return;
+      if (!confirmed) return;
+    }
+    // Строка-владелец уже есть в сгруппированных данных — берём её id напрямую.
+    const target = row.attachments.find(
+      (a) => a.owner_type === owner.owner_type && a.owner_id === owner.owner_id,
+    );
+    if (target === undefined) return;
+    try {
+      await etn.attachments.remove(netId, target.id);
+    } catch (err) {
+      errorDialog(t('publication.cover.removeOwner'), err);
+      return;
+    }
+    invalidatePublicationAttachments(pubId);
+    usageCache.delete(row.key);
+    refresh();
+  }
+
+  // Текущая обложка-вложение — отметить её строку при открытии (отметка
+  // текущего общего компонента).
+  const publication = instance?.publication ?? null;
+  const current =
+    publication !== null &&
+    publication.cover_kind === 'attachment' &&
+    publication.cover_attachment_id !== null
+      ? {
+          attachmentId: publication.cover_attachment_id,
+          preview: `etnimg://attachment/${encodeURIComponent(publication.cover_attachment_id)}`,
+        }
+      : null;
+
+  /**
+   * Применение выбранного вложения (нижняя «Применить», двойной клик,
+   * Ctrl+Enter): «своё» вложение публикации назначается напрямую, «чужое»
+   * сначала привязывается к публикации (сервер отвечает 422 на
+   * `cover_attachment_id` чужого владельца), загруженный файл — загружается
+   * во вложения публикации.
+   */
+  async function applyPick(pick: AttachmentPick, ctx: ResourceSourceContext): Promise<void> {
+    if (pick.source !== undefined) {
       try {
-        await etn.attachments.remove(netId, target.id);
-      } catch (err) {
-        errorDialog(t('publication.cover.removeOwner'), err);
-        return;
-      }
-      invalidatePublicationAttachments(pubId);
-      usageCache.delete(row.key);
-      await runSearch();
-    }
-
-    /** Строит строку носителя (название + облачки владельцев). */
-    function buildRow(row: CoverRow): HTMLElement {
-      // Класс строки СПИСКА диалога — свой (`pub-cover-item`): `.pub-cover-row`
-      // занят миниатюрой обложки в списках (`screens/publications/cover.ts`,
-      // 2.5rem×1.75rem) и сжимал бы строку до этой рамки.
-      const node = div('pub-cover-item');
-      node.append(span(row.title, 'pub-cover-item-title'));
-      const clouds = div('pub-cover-clouds');
-      node.append(clouds);
-      fillClouds(clouds, row);
-      // Двойной клик — выбрать и применить, закрыв диалог (замечание В приёмки).
-      node.addEventListener('dblclick', () => {
-        selectRow(row);
-        if (applyAttachments !== null) void applyAttachments(ctx);
-      });
-      return node;
-    }
-
-    /** Перерисовывает список носителей-картинок (keyed-сверка по носителю). */
-    function renderRows(): void {
-      reconcileKeyed(listHost, rows, {
-        key: (row) => row.key,
-        build: (row) => buildRow(row),
-        update: (el, row) => {
-          const clouds = el.querySelector<HTMLElement>('.pub-cover-clouds');
-          if (clouds !== null) fillClouds(clouds, row);
-        },
-      });
-      rowEls.clear();
-      for (const child of Array.from(listHost.children)) {
-        const key = (child as HTMLElement).getAttribute('data-key');
-        if (key !== null && key !== '') rowEls.set(key, child as HTMLElement);
-      }
-      emptyHint.classList.toggle('hidden', rows.length > 0);
-      nav.refresh();
-    }
-
-    /** Схлопывает строки-вложения по физическому носителю (замечание 3). */
-    function groupByCarrier(attachments: readonly Attachment[]): CoverRow[] {
-      const groups = new Map<string, Attachment[]>();
-      for (const a of attachments) {
-        const key = coverCarrierKey(a);
-        const list = groups.get(key);
-        if (list === undefined) groups.set(key, [a]);
-        else list.push(a);
-      }
-      const out: CoverRow[] = [];
-      for (const [key, list] of groups) out.push({ key, attachments: list, title: coverRowTitle(list) });
-      return out;
-    }
-
-    /** Ищет вложения-картинки сети (пустой запрос — все: `*`). */
-    async function runSearch(): Promise<void> {
-      const q = search.value.trim() === '' ? '*' : search.value.trim();
-      const hits = await etn.attachments.search(netId, { q }).catch(() => []);
-      rows = groupByCarrier(hits.filter(isImageAttachment));
-      renderRows();
-      // Первый показ списка: делаем первую строку текущей и отдаём списку фокус,
-      // чтобы стрелки/Home/End работали без лишнего клика (замечание В приёмки).
-      const first = rows[0];
-      if (!initialFocusDone && first !== undefined) {
-        initialFocusDone = true;
-        selectRow(first);
-        nav.focusNavigation();
-      }
-    }
-
-    /**
-     * Делает строку носителя текущей. Всё производное состояние (выбор,
-     * препросмотр, доступность кнопки) синхронизирует `onSelectionChange`
-     * навигации — отдельного присваивания здесь нет.
-     */
-    function selectRow(row: CoverRow): void {
-      nav.setCurrent(row);
-    }
-
-    /** Препросмотр картинки строки; `null` — подсказка вместо неё. */
-    function renderPreview(row: CoverRow | null): void {
-      const a = row === null ? null : representative(row);
-      while (previewHost.firstChild !== null) previewHost.removeChild(previewHost.firstChild);
-      if (a === null) {
-        previewHost.append(span(t('publication.cover.previewHint'), 'muted'));
-        return;
-      }
-      const img = document.createElement('img');
-      img.className = 'pub-cover-preview-img';
-      img.alt = '';
-      if (a.kind === 'file' && a.file_path !== null) {
-        img.src = etnimgUrl(a.file_path);
-      } else {
-        img.src = a.url ?? '';
-      }
-      img.addEventListener('error', () => {
-        while (previewHost.firstChild !== null) previewHost.removeChild(previewHost.firstChild);
-        previewHost.append(span(t('publication.cover.previewHint'), 'muted'));
-      });
-      while (previewHost.firstChild !== null) previewHost.removeChild(previewHost.firstChild);
-      previewHost.append(img);
-    }
-
-    /** «Загрузить из файла»: файл становится вложением публикации. */
-    async function uploadFromFile(): Promise<void> {
-      try {
-        const picked = await etn.system.pickFile();
-        if (picked.status === 'cancel') return;
-        const res = await fetch(etnimgUrl(picked.path));
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        const dataUrl = await blobToDataUrl(blob);
+        const comma = pick.source.dataUrl.indexOf(',');
         const created = await etn.attachments.uploadFile(netId, 'publication', pubId, {
-          title: picked.name,
-          mime_type: blob.type !== '' ? blob.type : 'application/octet-stream',
-          data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1),
+          title: pick.source.name.trim() !== '' ? pick.source.name.trim() : 'file',
+          mime_type: pick.source.mime,
+          data_base64: comma === -1 ? '' : pick.source.dataUrl.slice(comma + 1),
         });
         invalidatePublicationAttachments(pubId);
-        await runSearch();
-        // Текущей делаем строку носителя только что созданного вложения.
-        const createdRow = rows.find((r) => r.attachments.some((a) => a.id === created.id));
-        if (createdRow !== undefined) selectRow(createdRow);
+        queueSave({ cover_attachment_id: created.id, cover_url: null });
       } catch (err) {
         errorDialog(t('publication.cover.upload'), err);
-      }
-    }
-
-    /**
-     * Применение выбранного вложения (нижняя «Применить и закрыть», двойной
-     * клик, Ctrl+Enter): «своё» вложение публикации назначается напрямую,
-     * «чужое» сначала привязывается к публикации (сервер отвечает 422 на
-     * `cover_attachment_id` чужого владельца), затем назначается обложкой.
-     */
-    applyAttachments = async (c) => {
-      if (selected === null) return;
-      const attachment = coverRepresentative(selected, pubId);
-      if (attachment === null) return;
-      if (attachment.owner_type === 'publication' && attachment.owner_id === pubId) {
-        queueSave({ cover_attachment_id: attachment.id, cover_url: null });
-      } else {
-        try {
-          const created = await etn.attachments.add(netId, 'publication', pubId, {
-            kind: attachment.kind,
-            url: attachment.kind === 'url' ? attachment.url : null,
-            file_path: attachment.kind === 'file' ? attachment.file_path : null,
-            file_size: attachment.file_size,
-            mime_type: attachment.mime_type,
-            title: attachment.title,
-            description: attachment.description,
-          });
-          invalidatePublicationAttachments(pubId);
-          queueSave({ cover_attachment_id: created.id, cover_url: null });
-        } catch (err) {
-          errorDialog(t('publication.error'), err);
-          return;
-        }
+        return;
       }
       notice(t('publication.cover.setDone'), 'success');
-      c.close();
-    };
-
-    search.addEventListener('input', () => void runSearch());
-    void runSearch();
-    return box;
+      ctx.close();
+      return;
+    }
+    const attachment = pick.row !== undefined ? representative(pick.row) : pick.attachment;
+    if (attachment === undefined) return;
+    if (attachment.owner_type === 'publication' && attachment.owner_id === pubId) {
+      queueSave({ cover_attachment_id: attachment.id, cover_url: null });
+    } else {
+      try {
+        const created = await etn.attachments.add(netId, 'publication', pubId, {
+          kind: attachment.kind,
+          url: attachment.kind === 'url' ? attachment.url : null,
+          file_path: attachment.kind === 'file' ? attachment.file_path : null,
+          file_size: attachment.file_size,
+          mime_type: attachment.mime_type,
+          title: attachment.title,
+          description: attachment.description,
+        });
+        invalidatePublicationAttachments(pubId);
+        queueSave({ cover_attachment_id: created.id, cover_url: null });
+      } catch (err) {
+        errorDialog(t('publication.error'), err);
+        return;
+      }
+    }
+    notice(t('publication.cover.setDone'), 'success');
+    ctx.close();
   }
 
   // Каркас диалога — универсальный выбор ресурса (задача d1a56d76): вкладка
-  // «Вложения» — источник-панель публикации, «URL» — общий источник каркаса.
+  // «Вложения» — общий компонент выбора вложения (задача 0f6c3e39), «URL» —
+  // общий источник каркаса.
   createResourcePicker({
     title: t('publication.cover.title'),
     size: 'l',
@@ -1646,12 +1418,17 @@ async function openCoverDialog(): Promise<void> {
       close();
     },
     tabs: [
-      {
-        id: 'attachments',
+      attachmentPickerSourceTab({
         label: t('publication.cover.tab.attachments'),
-        build: (ctx) => buildAttachmentsTab(ctx),
-        apply: (ctx) => applyAttachments?.(ctx),
-      },
+        autoSelectFirst: true,
+        ...(current !== null ? { current } : {}),
+        renderRowExtra: (row, api) => {
+          const clouds = div('att-pick-clouds');
+          fillClouds(clouds, row, api.refresh);
+          return clouds;
+        },
+        onPick: (pick, ctx) => applyPick(pick, ctx),
+      }),
       urlSourceTab({
         placeholder: t('publication.cover.urlPlaceholder'),
         previewHint: t('publication.cover.previewHint'),
@@ -1662,15 +1439,5 @@ async function openCoverDialog(): Promise<void> {
         },
       }),
     ],
-  });
-}
-
-/** Читает Blob в `data:` URL (FileReader — в рендерере нет Buffer). */
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener('load', () => resolve(String(reader.result)));
-    reader.addEventListener('error', () => reject(reader.error ?? new Error('read failed')));
-    reader.readAsDataURL(blob);
   });
 }

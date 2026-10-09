@@ -2406,6 +2406,21 @@ const truncInt = (v: unknown): unknown => {
   return Math.trunc(v);
 };
 
+/**
+ * Целое из QUERY-строки (`limit`, `offset`): значение приходит СТРОКОЙ, поэтому
+ * сначала приводится к числу, затем усекается. Тело запроса несёт числа как
+ * есть — там работает {@link truncInt}. Поле ошибки — имя query-параметра
+ * (жалоба точно указывает, какой параметр некорректен).
+ */
+const queryInt = (field: string) => (v: unknown): unknown => {
+  const first = Array.isArray(v) ? v[0] : v;
+  const n = typeof first === 'string' && first.trim() !== '' ? Number(first) : first;
+  if (typeof n !== 'number' || !Number.isFinite(n)) {
+    throw new EtnError('VALIDATION_ERROR', 'значение должно быть числом.', { field });
+  }
+  return Math.trunc(n);
+};
+
 export const RestAttachmentListOwner = defineContract(
   'rest:attachments.list-owner',
   z.object({ network_id: NetworkId, owner_id: z.string().min(1) }),
@@ -2462,8 +2477,8 @@ export const RestAttachmentSearch = defineContract(
     },
     exclude_owner_id: { from: { kind: 'query' }, t: z.string().optional(), msg: 'exclude_owner_id должен быть строкой.' },
     kind: { from: { kind: 'query' }, t: z.enum(ATTACHMENT_KINDS).optional(), msg: 'kind должен быть url|file.' },
-    limit: { from: { kind: 'query' }, t: z.number().int().optional(), parse: truncInt, msg: 'limit должен быть числом.' },
-    offset: { from: { kind: 'query' }, t: z.number().int().optional(), parse: truncInt, msg: 'offset должен быть числом.' },
+    limit: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('limit'), msg: 'limit должен быть числом.' },
+    offset: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('offset'), msg: 'offset должен быть числом.' },
   },
 );
 
