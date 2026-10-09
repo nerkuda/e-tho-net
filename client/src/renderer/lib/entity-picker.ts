@@ -1309,8 +1309,13 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       });
       // Знак варианта-свойства-связи — значок конца связи, как в строках
       // выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
-      // значка светился глиф мысли по умолчанию.
-      if (explicitCloud === null && known?.cloud === undefined && known?.linkEnd != null) {
+      // значка светился глиф мысли по умолчанию. Условие не зависит от
+      // `explicitCloud`: вызывающий вправе задать `cloudOf` ради КАНОНИЧЕСКОГО
+      // имени свойства (рецепт публикации, `propertyChipTitles`), но знак
+      // свойства обязан прийти из реестра (`linkEnd`), а не из облачка-подписи
+      // (ошибка 382e3478). Облачко-мысль (`known.cloud`) — иной случай: там
+      // значок принадлежит типу/мысли и подмене не подлежит.
+      if (known?.cloud === undefined && known?.linkEnd != null) {
         const iconBox = chip.querySelector('.mini-icon');
         if (iconBox !== null) iconBox.replaceChildren(buildLinkEndIcon(known.linkEnd));
       }
