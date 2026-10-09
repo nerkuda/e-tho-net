@@ -151,6 +151,7 @@ import { type RecordTitleHandle } from './record-title.js';
 import { buildRecordHead } from './record-head.js';
 import { parseChronicleState } from './state.js';
 import { renderRecordView } from './record-body.js';
+import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
 
 /**
  * Границы размера панели отбора (задача 2ebe4206): слева — ширина, вверху
@@ -1199,7 +1200,9 @@ function updateRecordCard(card: HTMLElement, row: ChronicleRow, day: string): vo
  * Шапка (строка полей + строка заголовка) собирается единым конструктором
  * `buildRecordHead`; строка 1 — дата/период, облачка привязок, «+ мысль», меню
  * записи. Тело — оболочка комментария (`lib/ui/comment.ts`): в просмотре полный
- * `body_html`, в правке — общее поле markdown.
+ * `body_html`, в правке — общее поле markdown. Запись со ссылкой-трансклюзией
+ * достраивается полем markdown уже в просмотре (серверный `body_html` её не
+ * разворачивает — ошибка `e5e1f609`), см. `htmlHasTransclusionMarkup`.
  *
  * Режим правки принадлежит КАРТОЧКЕ: вход в правку заголовка ИЛИ тела открывает
  * оба поля; Ctrl+Enter / «Записать» / клик вне пишут оба одним PATCH; Esc /
@@ -1294,6 +1297,21 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     shell.setField(widget);
     return widget;
   };
+
+  // Просмотр тела в ленте — готовый серверный `body_html`, собранный из
+  // ИСХОДНОГО `body_md`, поэтому ссылка-трансклюзия в нём не развёрнута и блок
+  // невидим (ошибка e5e1f609). Записи с такой ссылкой достраиваются полем
+  // markdown — тем же путём, что комментарий мысли: поле разворачивает
+  // трансклюзии единым рендерером с блочными обёртками. Признак ищется по
+  // разметке, `body_md` дочитывается точечно только для таких записей. Ждём
+  // монтирования карточки (`ensureWidget` не создаёт поле до `body.isConnected`),
+  // поэтому откладываем на макрозадачу; `setTimeout`, а не rAF — кадры скрытого
+  // окна заторможены (грабли 03e33360).
+  if (htmlHasTransclusionMarkup(row.body_html)) {
+    setTimeout(() => {
+      if (body.isConnected) void ensureWidget();
+    }, 0);
+  }
 
   /**
    * Войти в единую правку с фокусом в заданном поле: тело создаётся при первом

@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { EditorState, RangeSet, type Extension } from '@codemirror/state';
 import { Decoration, keymap, runScopeHandlers, type DecorationSet, type EditorView } from '@codemirror/view';
 
-import { parseTransclusions } from '@etn/markdown';
+import { expandTransclusions, parseTransclusions, renderMarkdown } from '@etn/markdown';
 
 import { ShimElement } from './dom-shim.js';
 import {
@@ -32,6 +32,7 @@ import {
   blockEditorKey,
   buildTransclusionDecorations,
   createTransclusionHead,
+  htmlHasTransclusionMarkup,
   listSectionTitles,
   mergeSectionContent,
   renderTransclusionMarkdown,
@@ -1333,5 +1334,33 @@ test('keymap трансклюзий: # привязан к приёму мысл
   assert.ok(
     bindings.some((binding) => binding.key === '#' && typeof binding.run === 'function'),
     'клавиша # привязана к обработчику в keymap трансклюзий',
+  );
+});
+
+test('просмотр ленты: неразвёрнутый HTML трансклюзии распознаётся для достройки полем (e5e1f609)', () => {
+  // Кеш сервера (`comments.body_html`) собирается из ИСХОДНОГО `body_md`:
+  // ссылка-трансклюзия в нём — wiki-ссылка с ведущим `!` и ПУСТЫМ телом
+  // (id-форма), блока `.md-transclusion` нет. Лента Дневника показывает этот
+  // HTML напрямую, поэтому блок невидим, пока запись не достроена полем
+  // markdown (тем же путём, что комментарий мысли). Признак достройки —
+  // `htmlHasTransclusionMarkup`; он же не должен срабатывать на обычный текст
+  // и на уже развёрнутый рендер, иначе лента зря дочитывала бы `body_md`.
+  const raw = renderMarkdown(`Текст\n\n![[#${ID_A}]]`);
+  assert.ok(!raw.includes('md-transclusion'), 'кеш сервера не несёт блока трансклюзии');
+  assert.equal(htmlHasTransclusionMarkup(raw), true, 'неразвёрнутая ссылка распознана');
+
+  const expanded = renderMarkdown(
+    expandTransclusions(`Текст\n\n![[#${ID_A}]]`, (id) =>
+      id === ID_A ? { found: true, body_md: 'Тело источника' } : { found: false, body_md: '' },
+    ),
+    { transclusion: { labels: transclusionLabels() } },
+  );
+  assert.ok(expanded.includes('md-transclusion'), 'развёрнутый рендер несёт блок');
+  assert.equal(htmlHasTransclusionMarkup(expanded), false, 'развёрнутый HTML не требует достройки');
+
+  assert.equal(
+    htmlHasTransclusionMarkup(renderMarkdown('Текст [[Цель]] и `![[#x]]`')),
+    false,
+    'обычный текст и код не распознаются как трансклюзия',
   );
 });

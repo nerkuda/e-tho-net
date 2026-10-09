@@ -654,6 +654,22 @@ export function renderTransclusionMarkdown(text: string): string {
   return renderMarkdown(text, { transclusion: { labels: transclusionLabels() } });
 }
 
+/**
+ * Признак неразвёрнутой ссылки-трансклюзии в готовом HTML (ошибка `e5e1f609`).
+ * Кешированный сервером `body_html` собирается из ИСХОДНОГО `body_md`, где
+ * ссылка-трансклюзия ещё не развёрнута общим рендерером: единый `@etn/markdown`
+ * пишет такую ссылку как wiki-ссылку с ведущим `!` — `!<span class="wiki-link"…>`.
+ * Просмотр тела записи ленты «Дневника» рисует этот HTML напрямую и без
+ * развёртки оставляет блок невидимым, поэтому по признаку тело достраивается
+ * полем markdown — тем же путём, что и комментарий мысли (поле разворачивает
+ * трансклюзии единым механизмом). Ищем по ГОТОВОЙ разметке: саму ссылку здесь
+ * НЕ разбираем — разбор живёт только в `@etn/markdown` (сторож
+ * `own-transclusion-outside-package`).
+ */
+export function htmlHasTransclusionMarkup(html: string): boolean {
+  return html.includes('!<span class="wiki-link"');
+}
+
 /** Загруженный источник: имя мысли, наличие и полный текст постоянного комментария. */
 export interface TransclusionSource {
   found: boolean;
