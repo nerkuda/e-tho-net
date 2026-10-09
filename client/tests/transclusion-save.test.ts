@@ -273,6 +273,42 @@ test('commitTransclusionEdit: пишет окружение и N источни�
   assert.deepEqual(stub.lists.sort(), [ID_A, ID_B].sort(), 'источники прочитаны по разу');
 });
 
+// Ошибка aa6a9196: у мысли-источника ещё нет постоянного комментария — правка
+// «пустого» блока должна СОЗДАТЬ его (иначе добавить текст в такую трансклюзию
+// невозможно: `update` требует существующий id). Раньше запись падала.
+test('commitTransclusionEdit: пустой источник — постоянный комментарий создаётся (aa6a9196)', async () => {
+  const created: Array<{ ownerId: string; kind: string; body_md: string }> = [];
+  (globalThis as unknown as { etn: unknown }).etn = {
+    comments: {
+      list: async () => [],
+      create: async (
+        _n: string,
+        _t: string,
+        ownerId: string,
+        input: { kind: string; body_md: string },
+      ) => {
+        created.push({ ownerId, kind: input.kind, body_md: input.body_md });
+        return {
+          id: `perm-${ownerId}`,
+          kind: 'permanent',
+          body_md: input.body_md,
+          body_html: '',
+          version: 1,
+        };
+      },
+    },
+  };
+  const keyA = blockEditorKey(ID_A, null);
+  const result = await commitTransclusionEdit({
+    networkId: NET,
+    saves: [{ key: keyA, sourceId: ID_A, section: null, text: 'первый текст' }],
+    writeEnv: null,
+  });
+  assert.deepEqual(result.savedKeys, [keyA], 'правка пустого блока записана');
+  assert.deepEqual(result.failedKeys, [], 'сбоя нет');
+  assert.deepEqual(created, [{ ownerId: ID_A, kind: 'permanent', body_md: 'первый текст' }]);
+});
+
 test('commitTransclusionEdit: правка раздела сливается в тело источника', async () => {
   const stub = stubComments({
     bodies: { [ID_A]: '## Раздел A\nстарое\n## Раздел B\nбэ' },

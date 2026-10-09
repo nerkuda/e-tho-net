@@ -492,11 +492,25 @@ export function dirtyBlockSaves(store: NestedEditorStore): TransclusionBlockSave
   return out;
 }
 
-/** Записывает текст одного блока в постоянный комментарий источника. */
+/**
+ * Записывает текст одного блока в постоянный комментарий источника. Если у
+ * мысли-источника постоянного комментария ещё нет (пустой источник, ошибка
+ * `aa6a9196`), текста блока достаточно, чтобы его СОЗДАТЬ — иначе правка
+ * «пустого» блока была бы невозможна. Для ссылки на раздел комментарий обязан
+ * существовать: раздел непустого текста не содержит — сбой `no section`.
+ */
 async function saveOneSource(networkId: string, save: TransclusionBlockSave): Promise<void> {
   const comments = await etn.comments.list(networkId, 'thought', save.sourceId);
   const perm = comments.find((c) => c.kind === 'permanent');
-  if (perm === undefined) throw new Error('no permanent comment');
+  if (perm === undefined) {
+    if (save.section !== null) throw new Error('no section');
+    await etn.comments.create(networkId, 'thought', save.sourceId, {
+      kind: 'permanent',
+      body_md: save.text,
+    });
+    invalidateTransclusionSource(networkId, save.sourceId);
+    return;
+  }
   let body = save.text;
   if (save.section !== null) {
     const merged = mergeSectionContent(perm.body_md, save.section, save.text);
@@ -692,7 +706,17 @@ export interface TransclusionEntry {
   body_md?: string;
 }
 
-/** Загрузчик источника по умолчанию — постоянный комментарий мысли своей сети. */
+/**
+ * Загрузчик источника по умолчанию — постоянный комментарий мысли своей сети.
+ *
+ * Различает два разных состояния (ошибка `aa6a9196`): «мысль-источник не
+ * найдена» (`found: false` — блок показывает «нет источника») и «мысль есть, но
+ * постоянного комментария нет» (`found: true` с пустым телом). Прежде отсутствие
+ * комментария ошибочно считалось отсутствием источника: блок показывал плашку
+ * «Нет источника трансклюзии», лишался чипа и был недоступен для правки. Наличие
+ * мысли определяется её присутствием в ответе `thoughts.resolve` (имя обязательно
+ * непустое), а не пустым `title`.
+ */
 export function defaultTransclusionLoader(networkId: string): TransclusionSourceLoader {
   return async (sourceId) => {
     try {
@@ -700,10 +724,10 @@ export function defaultTransclusionLoader(networkId: string): TransclusionSource
         etn.thoughts.resolve(networkId, [sourceId]),
         etn.comments.list(networkId, 'thought', sourceId),
       ]);
-      const title = refs.find((r) => r.id === sourceId)?.title ?? '';
+      const ref = refs.find((r) => r.id === sourceId);
+      if (ref === undefined) return { found: false, title: '', body_md: '' };
       const permanent = comments.find((c) => c.kind === 'permanent');
-      if (permanent === undefined) return { found: false, title, body_md: '' };
-      return { found: true, title, body_md: permanent.body_md };
+      return { found: true, title: ref.title, body_md: permanent?.body_md ?? '' };
     } catch {
       return null;
     }
@@ -2598,6 +2622,7 @@ export const transclusionInternals = {
   expandWithLoader,
   loadEntry,
   emptyEntry,
+  defaultTransclusionLoader,
   cachedTransclusionLoader,
   invalidateTransclusionSource,
   sourceKeyForCommentEvent,

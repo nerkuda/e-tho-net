@@ -217,6 +217,49 @@ test('loadEntry: успешная развёртка отдаёт HTML без о
   assert.ok((entry.html ?? '').includes('Заголовок'));
 });
 
+// Ошибка aa6a9196: мысль-источник существует, но постоянного комментария у неё
+// нет — это НЕ «нет источника». Блок обязан остаться с чипом реального имени и
+// пустым телом, а не показывать плашку «Нет источника трансклюзии» и «Без имени».
+test('defaultTransclusionLoader: мысль без комментария — found true с пустым телом (aa6a9196)', async () => {
+  const prev = (globalThis as unknown as { etn?: unknown }).etn;
+  (globalThis as unknown as { etn: unknown }).etn = {
+    thoughts: {
+      resolve: async (_n: string, ids: string[]) =>
+        ids.filter((id) => id === ID_A).map((id) => ({ id, title: 'Пустая мысль' })),
+    },
+    comments: { list: async () => [] },
+  };
+  try {
+    const load = transclusionInternals.defaultTransclusionLoader(NET);
+    assert.deepEqual(await load(ID_A), {
+      found: true,
+      title: 'Пустая мысль',
+      body_md: '',
+    });
+    const missing = await load(ID_B);
+    assert.equal(missing?.found, false, 'отсутствующая мысль — источник не найден');
+  } finally {
+    (globalThis as unknown as { etn?: unknown }).etn = prev;
+  }
+});
+
+test('loadEntry: пустой источник — без ошибки, чип с реальным именем (aa6a9196)', async () => {
+  const ref = parseTransclusions(`![[#${ID_A}]]`)[0]!;
+  const load: TransclusionSourceLoader = async (id) =>
+    id === ID_A ? { found: true, title: 'Пустая мысль', body_md: '' } : null;
+  const entry = await transclusionInternals.loadEntry(ref, load);
+  assert.equal(entry.error, null, 'нет плашки «Нет источника трансклюзии»');
+  assert.equal(entry.exists, true);
+  assert.equal(entry.title, 'Пустая мысль');
+  assert.notEqual(entry.html, null, 'пустой блок всё же отрисован (пустая строка)');
+  assert.ok((entry.html ?? '').includes('md-transclusion'), 'блок отрисован как пустая строка без плашки');
+  assert.ok(
+    !(entry.html ?? '').includes('md-transclusion--missing'),
+    'нет надписи «нет источника» (источник есть, просто пуст)',
+  );
+  assert.equal(transclusionLinkLabel(entry.title, null), 'Пустая мысль', 'чип несёт реальное имя');
+});
+
 // ---------------------------------------------------------------------------
 // Режим правки блока и захват источника (задача f59d24e1)
 // ---------------------------------------------------------------------------
