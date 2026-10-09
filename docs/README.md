@@ -36,15 +36,23 @@
 
 ## Руководства
 
-Руководства пользователя пока ведутся файлами и в генерацию не входят:
+Руководства пользователя живут в мыслесети и генерируются в `docs/userdocs/`
+(как спецификации — публикациями; вручную не править):
 
-- [install-server.md](install-server.md) — установка и обновление сервера;
-- [install-client.md](install-client.md) — установка десктоп-клиента;
-- [admin-guide.md](admin-guide.md) — администрирование;
-- [mcp-clients.md](mcp-clients.md) — подключение AI-агентов (MCP);
-- [user-guide.md](user-guide.md), [user-guide-editing.md](user-guide-editing.md),
-  [user-guide-views.md](user-guide-views.md) — руководство пользователя;
-- [history-creation.md](history-creation.md) — история создания проекта.
+- [userdocs/overview.md](userdocs/overview.md) — обзор и основы;
+- [userdocs/map.md](userdocs/map.md) — рабочий стол «Карта»;
+- [userdocs/structures.md](userdocs/structures.md) — рабочий стол «Структуры»;
+- [userdocs/diary.md](userdocs/diary.md) — рабочий стол «Дневник»;
+- [userdocs/events.md](userdocs/events.md) — «События» и совместная работа;
+- [userdocs/publications.md](userdocs/publications.md) — экран «Публикации»;
+- [userdocs/editor.md](userdocs/editor.md) — редактор мысли и связи;
+- [userdocs/layers.md](userdocs/layers.md) — слои изменений;
+- [userdocs/install.md](userdocs/install.md) — установка и обновление;
+- [userdocs/admin.md](userdocs/admin.md) — администрирование;
+- [userdocs/ai-agents.md](userdocs/ai-agents.md) — подключение AI-агентов (MCP).
+
+Остаётся файлом: [history-creation.md](history-creation.md) — история создания
+проекта.
 
 ## Принципы проекта
 
