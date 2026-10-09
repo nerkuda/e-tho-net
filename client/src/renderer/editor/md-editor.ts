@@ -21,7 +21,7 @@ import {
   type Extension,
   type SelectionRange,
 } from '@codemirror/state';
-import { Decoration, drawSelection, EditorView, keymap, type DecorationSet } from '@codemirror/view';
+import { Decoration, drawSelection, EditorView, keymap, tooltips, type DecorationSet } from '@codemirror/view';
 
 import { findMatches } from './text-search.js';
 import {
@@ -386,6 +386,19 @@ export function mdEditorExtensions(
     // Прокрутка каретки к видимой в контейнере панели, а не в самом поле
     // (поле растёт по содержимому) — см. scrollCaretIntoView.
     EditorView.scrollHandler.of(scrollCaretIntoView),
+    // Тултипы редактора (автокомплит `[[`, подсказки разделов) — порталом в
+    // `document.body` (ошибка 7aee1df3). Причина: дизайн-система ставит
+    // `container-type: inline-size` на каркасы (`.fp-host`, `.ui-table` и др.),
+    // а inline-size-контейнмент создаёт containing block для `position: fixed`
+    // потомков. Дефолтный `position: fixed` тултип CM6 внутри такого каркаса
+    // отсчитывался от ЕГО верхнего края (каркас «Дневника» ниже тулбара на
+    // ~127px) и всплывал не у каретки, а ниже (иногда за краем окна). Вынос
+    // контейнера тултипов в `body` уводит их из-под контейнмента: fixed-координаты
+    // снова отсчитываются от вьюпорта. Тема переносится CM6 (container несёт
+    // themeClasses редактора). Гард — тестовые headless-инстансы без DOM.
+    ...(typeof document !== 'undefined' && document.body != null
+      ? [tooltips({ parent: document.body })]
+      : []),
     // Нативная проверка орфографии (задача 1e373ac7). CodeMirror 6 в
     // updateAttrs() принудительно ставит `spellcheck="false"` на contentDOM,
     // поэтому ошибки в комментарии не подчёркивались, в отличие от обычных
