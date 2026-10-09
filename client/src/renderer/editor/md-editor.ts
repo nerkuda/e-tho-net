@@ -283,6 +283,14 @@ const mdTheme = EditorView.theme({
     backgroundColor: 'var(--surface)',
     color: 'var(--text)',
     border: '1px solid var(--border)',
+    // Тултипы CM6 (автокомплит `[[`, подсказки разделов) порталятся в body
+    // (см. mdEditorExtensions). Базовый стиль CM6 держит `.cm-tooltip { z-index: 500 }`,
+    // а `.dialog-backdrop` диалогов стоит на 900 — тултип уходил ПОД подложку
+    // в md-полях внутри диалогов (ошибка 7aee1df3). Проектная конвенция для
+    // body-mounted попапов — 950 (`.type-combo-list`, type-combobox.css:51-52,
+    // «above the dialog stack»). Тема ставится после baseTheme (Prec.lowest),
+    // поэтому перекрывает z-index базового стиля.
+    zIndex: '950',
   },
 });
 
