@@ -16,9 +16,10 @@
  * «Эмодзи» — первая, «Библиотека» — следующая (элемент интерфейса 91367509).
  *
  * При открытии диалог встаёт на вкладку ВИДА текущей иконки и отмечает текущий
- * выбор (ошибки e2407f6d, 846c426a): `emoji`/`icon` → «Эмодзи»/«Библиотека»,
- * `image`-вложение (`icon_attachment_id`) → «Вложения» (текущее вложение показано
- * выбранным, применение без изменений его сохраняет), `image`-URL → «URL».
+ * выбор (ошибки e2407f6d, 846c426a, 844c426a): `emoji`/`icon` → «Эмодзи»/
+ * «Библиотека», `image`-файл (вложение мысли `icon_attachment_id` либо
+ * самодостаточное `data:`-превью типа) → «Вложения» (текущая картинка показана
+ * выбранной, применение без изменений её сохраняет), `image`-URL → «URL».
  * Разворачивается категория эмодзи и выделяется текущий значок; на вкладке
  * «Библиотека» уже выбранный значок делает «Применить» активной — смена только
  * цвета не требует повторного поиска.
@@ -78,28 +79,32 @@ export function showIconDialog(opts: {
   const { current, onPick } = opts;
 
   const attachmentId = current.attachmentId ?? null;
-  /** Иконка-ФАЙЛ: вид `image` из вложения (не URL) — ошибка 846c426a. */
-  const isAttachment = current.kind === 'image' && attachmentId !== null;
+  /**
+   * Иконка-ФАЙЛ (не URL): вид `image` из вложения мысли (`icon_attachment_id`)
+   * либо самодостаточное `data:`-превью — иконка-картинка ТИПА мысли, у типов
+   * вложений нет (ошибки 846c426a, 844c426a).
+   */
+  const isFileImage =
+    current.kind === 'image' &&
+    (attachmentId !== null || (current.icon?.startsWith('data:') ?? false));
 
   /**
-   * Вкладка при открытии — по ВИДУ текущей иконки (ошибки e2407f6d, 846c426a):
-   * `emoji` → «Эмодзи», `icon` → «Библиотека», `image`-вложение → «Вложения»
-   * (текущее вложение показано выбранным), `image`-URL → «URL».
+   * Вкладка при открытии — по ВИДУ текущей иконки (ошибки e2407f6d, 846c426a,
+   * 844c426a): `emoji` → «Эмодзи», `icon` → «Библиотека», `image`-файл (вложение
+   * или `data:`-превью) → «Вложения» (текущая картинка показана выбранной),
+   * `image`-URL → «URL».
    */
   const activeTab =
     current.kind === 'icon'
       ? 'library'
-      : isAttachment
+      : isFileImage
         ? 'file'
         : current.kind === 'image'
           ? 'url'
           : 'emoji';
   /** Начальное значение вкладки «URL» — адрес картинки (не `data:`-превью). */
   const initialUrl =
-    current.kind === 'image' &&
-    !isAttachment &&
-    current.icon !== null &&
-    !current.icon.startsWith('data:')
+    current.kind === 'image' && !isFileImage && current.icon !== null
       ? current.icon
       : undefined;
 
@@ -141,7 +146,7 @@ export function showIconDialog(opts: {
       }),
       fileImageSourceTab({
         types: store.state.thoughtTypes,
-        ...(isAttachment && current.icon !== null
+        ...(isFileImage && current.icon !== null
           ? { initial: { preview: current.icon, attachmentId } }
           : {}),
         onTypeIcon: (icon, kind, color, ctx) => submit({ icon, kind, color })(ctx),

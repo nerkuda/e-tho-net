@@ -14,6 +14,9 @@
  *      открывает вкладку «Вложения», текущее вложение показано выбранным
  *      (`icon-preview-current`), «Применить» активна, а применение без изменений
  *      отдаёт тот же `attachmentId` (повторная загрузка не нужна).
+ *   5. Картинка ТИПА мысли (ошибка 844c426a): вид `image` с самодостаточным
+ *      `data:`-превью (без вложения) тоже открывает «Вложения» с показанным
+ *      выбранным превью и активной «Применить»; применение сохраняет превью.
  *
  * jsdom в проекте нет — минимальный DOM-шим (конвенция `resource-picker.test.ts`).
  */
@@ -258,5 +261,49 @@ describe('вкладка «Вложения»: текущее вложение �
       onFile: () => undefined,
     }).build(ctx);
     assert.equal(ready, false, 'нет текущего вложения — источник молчит');
+  });
+});
+
+describe('диалог иконки: текущая картинка ТИПА мысли (вид image без вложения) отмечена (844c426a)', () => {
+  beforeEach(() => installShim());
+
+  it('вид «image» с data:-превью открывает вкладку «Вложения», «Применить» активна', () => {
+    open({ icon: 'data:image/png;base64,BBBB', kind: 'image', color: null });
+    assert.equal(activeTabLabel(), 'Вложения');
+    assert.notEqual(activeTabLabel(), 'URL');
+    assert.equal(isDisabled(footerBtn(t('actions.apply'))), false, '«Применить» активна');
+    assert.ok(
+      lastBox().querySelector('.icon-preview-current') !== null,
+      'текущая картинка показана выбранной',
+    );
+  });
+
+  it('вид «image» с data:-превью не оставляет активной пустую вкладку «URL»', () => {
+    open({ icon: 'data:image/png;base64,BBBB', kind: 'image', color: null });
+    // Вкладка «URL» ленивая и не активна — поля ввода адреса в диалоге нет.
+    const input = findByTag(lastBox(), 'INPUT').find((el) => (el as any).type === 'text');
+    assert.equal(input, undefined, 'поля URL нет на активной вкладке «Вложения»');
+  });
+
+  it('применение без изменений сохраняет самодостаточное data:-превью (без вложения)', async () => {
+    let ready = false;
+    const ctx: any = { close: () => undefined, setReady: (v: boolean) => (ready = v) };
+    const picked: Array<{ preview: string; attachmentId?: string | null }> = [];
+    const tab = fileImageSourceTab({
+      types: [],
+      initial: { preview: 'data:image/png;base64,BBBB', attachmentId: null },
+      onTypeIcon: () => undefined,
+      onFile: (pick) => {
+        picked.push({ preview: pick.preview, attachmentId: pick.attachmentId });
+      },
+    });
+    tab.build(ctx);
+    assert.equal(ready, true, 'источник объявил выбор — «Применить» активна');
+    await tab.apply!(ctx);
+    assert.deepEqual(
+      picked,
+      [{ preview: 'data:image/png;base64,BBBB', attachmentId: null }],
+      'превью сохранено как есть, вложения нет',
+    );
   });
 });
