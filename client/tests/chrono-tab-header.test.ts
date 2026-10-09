@@ -47,7 +47,7 @@ describe('шапка записи: заголовок во всю ширину (
     const row = src.slice(src.indexOf("const metaRow = div('chrono-meta-row');"));
     const block = row.slice(0, row.indexOf(';', row.indexOf('metaRow.append(')));
     assert.ok(block.includes('dateBtn'), 'период записи — первый элемент шапки');
-    assert.ok(block.includes('titleInput'), 'поле заголовка — второй элемент шапки');
+    assert.ok(block.includes('titleBox'), 'контейнер заголовка — второй элемент шапки');
     assert.match(
       src,
       /commentShell\(\{\s*variant:\s*'fill',\s*tools:\s*\[metaRow\]/,
