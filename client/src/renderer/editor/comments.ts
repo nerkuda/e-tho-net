@@ -260,6 +260,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
         ownerId: ctx.ownerId,
         commentKind: 'permanent',
         getCommentId: () => permanent?.id ?? null,
+        // Родитель новой мысли (ТЗ5): владелец-мысль; у комментария связи
+        // список пуст — порт вставки выведет источник связи.
+        getParentThoughtIds: () => (ctx.ownerType === 'thought' ? [ctx.ownerId] : []),
       },
       // Шаблон комментария типа мысли (08-ui-spec.md §6.4): когда у
       // редактируемой мысли есть тип с непустым `comment_template_md`,

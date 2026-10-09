@@ -49,6 +49,7 @@ import {
   type CommentCommandHost,
 } from './comment-commands.js';
 import { commentFieldKeymapExtension } from './comment-format.js';
+import { commentThoughtInsertMenuItems } from './comment-thought-insert.js';
 import {
   collapseScopeExtension,
   commentCollapseExtension,
@@ -669,14 +670,22 @@ export function createMarkdownField(opts: {
    * legacy-ссылке» (карточка ETN 34ffbd75): клик по неразолвленной ссылке
    * `[[имя|текст]]` в view-режиме открывает диалог добавления мысли с
    * родителем-владельцем комментария. Передаётся вкладками комментариев
-   * (постоянный `comments.ts`, хроно `chrono-tab.ts`); без опции клик по
-   * отсутствующей цели остаётся прежним поведением (notice «не найдена»).
+   * (постоянный `comments.ts`, хроно `chrono-tab.ts`, экран «Дневник»);
+   * без опции клик по отсутствующей цели остаётся прежним поведением
+   * (notice «не найдена»), а команды ТЗ5 недоступны.
    */
   commentContext?: {
     ownerType: 'thought' | 'link';
     ownerId: string;
     commentKind: 'permanent' | 'chronological';
     getCommentId: () => string | null;
+    /**
+     * Мысли-владельцы комментария (родители новой мысли, ТЗ5): у дневниковой
+     * записи — все цели-чипсы, у обычного комментария — владелец. Не задано или
+     * пусто — родитель выводится из `ownerType`/`ownerId` (для связи — её
+     * источник).
+     */
+    getParentThoughtIds?: () => readonly string[];
     /** Вызывается после успешной замены ссылок (обновить таблицу хроно и т.п.). */
     onLinksReplaced?: () => void;
   };
@@ -869,6 +878,9 @@ export function createMarkdownField(opts: {
       const cc = opts.commentContext;
       return cc === undefined ? null : { ownerType: cc.ownerType, ownerId: cc.ownerId };
     },
+    // Мысли-владельцы (родители новых мыслей, ТЗ5): цели-чипсы записи либо
+    // владелец. `null` — вложенного списка нет, родитель выводится из владельца.
+    getCommentParents: () => opts.commentContext?.getParentThoughtIds?.() ?? null,
     runFieldCommand: (command) => {
       // Поиск открывается в обоих режимах; замена — только в правке
       // (элемент b8eabc22, требование d72ea6eb).
@@ -1445,6 +1457,10 @@ export function createMarkdownField(opts: {
           });
         }),
       );
+      // ТЗ5 «Дневник без псевдослота»: рядом с «Вставить ссылку на публикацию…»
+      // — «Вставить ссылку на мысль» и «Вставить трансклюзию мысли». Без
+      // контекста комментария (нечего дать в родители новой мысли) недоступны.
+      extras.push(...commentThoughtInsertMenuItems(commandHost));
       items.push(MENU_SEPARATOR, ...extras);
       event.preventDefault();
       const menuRoot = showMenuAt(event.clientX, event.clientY, items);

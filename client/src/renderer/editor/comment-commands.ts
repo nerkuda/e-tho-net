@@ -79,6 +79,14 @@ export interface CommentCommandHost {
    */
   getCommentOwner?(): CommentOwnerRef | null;
   /**
+   * Мысли-владельцы комментария (родители новых мыслей): у дневниковой записи —
+   * все её цели-чипсы, у обычного комментария — владелец. `null` — вложенного
+   * списка нет, родитель выводится из {@link getCommentOwner}; пустой массив —
+   * тоже откат к владельцу. Задаётся владельцем поля из `commentContext`
+   * (ТЗ5 «Дневник без псевдослота»).
+   */
+  getCommentParents?(): readonly string[] | null;
+  /**
    * Команды уровня поля, которые знает само поле (отмена, сохранение и
    * прочие команды режима правки). `true` — команда обработана.
    */
@@ -105,6 +113,12 @@ export interface CommentCommandContext {
   root: HTMLElement;
   /** Владелец комментария (родитель новых мыслей) либо `null`. */
   getCommentOwner(): CommentOwnerRef | null;
+  /**
+   * Мысли-владельцы комментария (родители новых мыслей, ТЗ5): цели-чипсы
+   * дневниковой записи либо владелец обычного комментария. `null` — списка нет,
+   * родитель выводится из `getCommentOwner`.
+   */
+  getCommentParents(): readonly string[] | null;
   /** Запустить другую команду этого же поля (для составных команд). */
   run(command: string): boolean;
 }
@@ -170,6 +184,7 @@ function contextOf(host: CommentCommandHost, editor: MdEditor): CommentCommandCo
     editor,
     root: host.root,
     getCommentOwner: () => host.getCommentOwner?.() ?? null,
+    getCommentParents: () => host.getCommentParents?.() ?? null,
     run: (nested) => runCommentCommand(nested, host),
   };
 }

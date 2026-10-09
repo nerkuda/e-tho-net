@@ -117,6 +117,7 @@ import {
   localDay,
   localDayEnd,
   localDayStart,
+  parentThoughtIds,
   periodValuesForRange,
   resolvePeriodDay,
   rowDays,
@@ -1259,6 +1260,20 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       externalChanges: () =>
         (title !== null ? title.value().trim() : row.title ?? '') !== (row.title ?? ''),
       ...(owner !== null ? { attachmentsOwner: owner } : {}),
+      // Контекст комментария (карточка 34ffbd75 + ТЗ5 «Дневник без псевдослота»):
+      // флоу «создать мысль по legacy-ссылке», команды вставки ссылки/
+      // трансклюзии и родители новой мысли — ВСЕ цели-чипсы записи.
+      ...(owner !== null
+        ? {
+            commentContext: {
+              ownerType: 'thought' as const,
+              ownerId: owner.ownerId,
+              commentKind: 'chronological' as const,
+              getCommentId: () => row.id,
+              getParentThoughtIds: () => parentThoughtIds(row.targets),
+            },
+          }
+        : {}),
       onInput: (md) => {
         bodyDraft = md;
       },
