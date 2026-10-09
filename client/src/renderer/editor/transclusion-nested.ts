@@ -268,7 +268,12 @@ export class NestedEditorStore {
     if (view === undefined || view === null) return;
     if (where !== 'keep') {
       const anchor = where === 'start' ? 0 : view.state.doc.length;
-      view.dispatch({ selection: { anchor } });
+      // `scrollIntoView` — прокрутка каретки в видимую зону (ошибка
+      // 5e6d209d): без него вход в блок стрелкой ставит каретку в начало/конец
+      // текста, но поле НЕ прокручивает её в вид (у вложенного редактора свой
+      // `scrollHandler` — `md-editor.ts` `scrollCaretIntoView`, он и находит
+      // настоящий скроллер панели).
+      view.dispatch({ selection: { anchor }, scrollIntoView: true });
     }
     view.focus();
   }

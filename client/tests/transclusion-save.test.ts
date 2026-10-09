@@ -57,10 +57,13 @@ const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
 class FakeNestedView {
   state: EditorState;
   onInput: ((md: string) => void) | null = null;
+  /** Спеки транзакций `dispatch` — для проверки полей `selection`/`scrollIntoView`. */
+  specs: unknown[] = [];
   constructor(doc: string, extensions: Extension[]) {
     this.state = EditorState.create({ doc, extensions });
   }
   dispatch(spec: unknown): void {
+    this.specs.push(spec);
     const before = this.state.doc.toString();
     this.state = this.state.update(spec as never).state;
     const after = this.state.doc.toString();
@@ -523,6 +526,20 @@ test('transclusionEventSourceId: событие → мысль-источник 
     null,
   );
   assert.equal(transclusionEventSourceId(evt('thought.updated', { id: ID_A })), null);
+});
+
+test('NestedEditorStore.focus: каретка на край и запрос прокрутки в вид (5e6d209d)', () => {
+  const registry = new Map<string, FakeNestedView>();
+  const store = new NestedEditorStore(fakeFactory(registry));
+  const key = blockEditorKey(ID_A, null);
+  store.mount(key, 'строка 1\nстрока 2', noopOptions);
+  store.focus(key, 'end');
+  const specs = registry.get(key)!.specs as Array<{ selection?: unknown; scrollIntoView?: boolean }>;
+  const last = specs[specs.length - 1]!;
+  assert.deepEqual(last.selection, { anchor: 'строка 1\nстрока 2'.length });
+  // Без `scrollIntoView` CM6 не прокручивает каретку в вид — именно этот флаг
+  // и был потерян при входе в блок стрелкой (тест краснеет при его снятии).
+  assert.equal(last.scrollIntoView, true);
 });
 
 test('NestedEditorStore: rollbackAll возвращает все инстансы к загруженному тексту', () => {
