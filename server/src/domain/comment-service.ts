@@ -167,18 +167,6 @@ function validateOwnerType(ownerType: unknown): CommentOwnerType {
   return ownerType as CommentOwnerType;
 }
 
-/**
- * Id защищённой HOME-мысли сети (`is_root = 1`), или `null`, когда её нет.
- * Локальная копия запроса из `thought-service.getHomeThoughtId`: импорт оттуда
- * замкнул бы цикл — `thought-service` уже импортирует этот модуль.
- */
-function homeThoughtId(ndb: NetworkDb): string | null {
-  const row = ndb.prepare('SELECT id FROM thoughts_v WHERE is_root = 1 LIMIT 1').get() as
-    | { id: string }
-    | undefined;
-  return row?.id ?? null;
-}
-
 /** Непустой текст: строка, у которой после `trim()` остались символы. */
 function isNonEmptyText(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.trim() !== '';
@@ -216,17 +204,6 @@ export interface CreateCommentOptions {
    * рендера (ошибка 2764d7bb). По умолчанию `body_md`.
    */
   bodyField?: string;
-}
-
-/**
- * Есть ли у записи содержательная привязка — цель, отличная от HOME-мысли
- * (требование 26f0aa52): владелец HOME — первичная привязка, а не чипс.
- * Связь или любая чужая мысль считается содержанием записи.
- */
-function hasBindingOutsideHome(ndb: NetworkDb, targets: readonly CommentTarget[]): boolean {
-  const home = homeThoughtId(ndb);
-  if (home === null) return targets.length > 0;
-  return targets.some((t) => !(t.owner_type === 'thought' && t.owner_id === home));
 }
 
 /**
@@ -638,9 +615,9 @@ export function createComment(
  *
  * Throws:
  *   * `VALIDATION_ERROR` (422) for an invalid kind/targets or missing content —
- *     a `permanent` comment needs a non-empty `body_md`, a `chronological` one
- *     at least one of: non-empty `body_md`, non-empty `title`, or a target
- *     other than HOME (требование 26f0aa52);
+ *     a `permanent` comment needs a non-empty `body_md`; a `chronological` one
+ *     needs at least one target and may be created with empty `title`/`body_md`
+ *     (требование 26f0aa52, модель немедленного создания);
  *   * `NOT_FOUND` (404) if any target owner does not exist;
  *   * `DUPLICATE` (409) on a second `permanent` comment for the same owner.
  *
@@ -690,29 +667,15 @@ export function createCommentWithTargets(
       field: 'targets',
     });
   }
-  // Содержание записи (требование 26f0aa52). Постоянный комментарий — это
-  // содержимое мысли, поэтому `body_md` обязателен. Хронологическая запись
-  // может создаваться по заголовку или привязке (владелец HOME — первичная
-  // привязка, не чипс): пустой `body_md` допустим, пока есть непустой заголовок
-  // либо цель вне HOME. Содержание проверяется ПОСЛЕ сборки целей, т.к. зависит
-  // от набора привязок.
-  if (kind === 'permanent') {
-    if (!isNonEmptyText(input.body_md)) {
-      throw new EtnError('VALIDATION_ERROR', 'body_md must be a non-empty string', {
-        field: 'body_md',
-      });
-    }
-  } else if (
-    !isNonEmptyText(input.body_md) &&
-    !isNonEmptyText(input.title) &&
-    !hasBindingOutsideHome(ndb, targets)
-  ) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'a chronological comment must carry content: a non-empty body_md or title, ' +
-        'or a target other than HOME',
-      { field: 'content' },
-    );
+  // Содержание записи (требование 26f0aa52, модель немедленного создания
+  // 2026-10-09). Постоянный комментарий — это содержимое мысли, поэтому
+  // `body_md` обязателен. Хронологическая запись валидна уже при наличии хотя
+  // бы одной привязки (проверено выше: `targets.length === 0` → 422); пустые
+  // `title`/`body_md` допустимы — запись создаётся сразу и наполняется позже.
+  if (kind === 'permanent' && !isNonEmptyText(input.body_md)) {
+    throw new EtnError('VALIDATION_ERROR', 'body_md must be a non-empty string', {
+      field: 'body_md',
+    });
   }
   const bodyMd = input.body_md ?? '';
   // Лимит рендера проверяется ДО `renderMarkdown` (ошибка 2764d7bb): иначе
@@ -826,8 +789,10 @@ export function createCommentWithTargets(
  */
 export interface UpdateCommentOptions {
   /**
-   * Отключает защиту «`body_md` не пустое» для вызовов из {@link editComment}
-   * (граница 154df95d).
+   * Отключает защиту «`body_md` постоянного комментария не пустое» для вызовов
+   * из {@link editComment} (граница 154df95d). На хронологические записи не
+   * влияет — их опустошение разрешено всегда при наличии привязок (требование
+   * 26f0aa52).
    */
   allowEmptyBody?: boolean;
   /**
@@ -851,23 +816,23 @@ export interface UpdateCommentOptions {
  * `body_html` is re-rendered whenever `body_md` changes. `version` is bumped
  * on every successful update.
  *
- * `options.allowEmptyBody` — отключает защиту «`body_md` не пустое» для
- * вызовов из {@link editComment}: удаление единственной секции текста без `#`
- * оставляет пустое тело, но запись в БД сохраняется (граница 154df95d). По
- * умолчанию `false` — REST `PATCH /comments/{id}` и `etn.comments.update`
- * продолжают отвергать опустошение записи.
+ * `options.allowEmptyBody` — отключает защиту «`body_md` ПОСТОЯННОГО
+ * комментария не пустое» для вызовов из {@link editComment}: удаление
+ * единственной секции текста без `#` оставляет пустое тело, но запись в БД
+ * сохраняется (граница 154df95d). По умолчанию `false` — REST
+ * `PATCH /comments/{id}` и `etn.comments.update` продолжают отвергать
+ * опустошение постоянного комментария.
  *
  * `options.warnings` — коллектор предупреждений записи (требование
  * `822a9149`): правка, теряющая живые трансклюзии, добавляет туда
  * `TRANSCLUSION_LOST`, но всё равно применяется.
  *
- * Содержание (требование 26f0aa52): постоянный комментарий всегда требует
- * непустой `body_md`; хронологическая запись вне `allowEmptyBody` не может
- * стать полностью пустой — правка отвергается, если после неё нет ни
- * непустого `body_md`, ни заголовка, ни привязки вне HOME.
+ * Содержание (требование 26f0aa52, модель немедленного создания): постоянный
+ * комментарий всегда требует непустой `body_md`; хронологическую запись
+ * разрешено опустошить до пустых `title`/`body_md` при наличии привязок.
  *
  * Throws `NOT_FOUND` (404), `VERSION_CONFLICT` (409), or `VALIDATION_ERROR`
- * (422) when the edit would leave the comment without content and
+ * (422) when the edit would leave a permanent comment without body and
  * `allowEmptyBody` is not set.
  */
 export function updateComment(
@@ -907,9 +872,9 @@ export function updateComment(
     }
     if (changes.body_md !== undefined) {
       // У постоянного комментария пустое тело — потеря содержимого мысли, вне
-      // явного `allowEmptyBody` (граница 154df95d) запрещено. Хронологическая
-      // запись проверяется целиком ниже: её содержание может держаться на
-      // заголовке или привязке (требование 26f0aa52).
+      // явного `allowEmptyBody` (граница 154df95d) запрещено. Хронологическую
+      // запись разрешено опустошить до пустых title/body при наличии привязок
+      // (требование 26f0aa52, согласованность create/update).
       if (changes.body_md === '' && current.kind === 'permanent' && options.allowEmptyBody !== true) {
         throw new EtnError('VALIDATION_ERROR', 'body_md must not be empty', {
           field: 'body_md',
@@ -920,27 +885,10 @@ export function updateComment(
       assertBodyWithinRenderLimit(changes.body_md, options.bodyField ?? 'body_md');
       args.push(changes.body_md, renderMarkdown(changes.body_md));
     }
-    // Хронологическая запись не может стать полностью пустой (требование
-    // 26f0aa52): правка отвергается, если после неё у записи нет ни непустого
-    // текста, ни заголовка, ни привязки вне HOME. `allowEmptyBody` (editComment,
-    // граница 154df95d) осознанно снимает и эту защиту — там пустое тело
-    // разрешено самим контрактом секционной правки.
-    if (current.kind === 'chronological' && options.allowEmptyBody !== true) {
-      const nextBody = changes.body_md ?? current.body_md;
-      const nextTitle = changes.title !== undefined ? changes.title : current.title;
-      if (
-        !isNonEmptyText(nextBody) &&
-        !isNonEmptyText(nextTitle) &&
-        !hasBindingOutsideHome(ndb, current.targets)
-      ) {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          'a chronological comment cannot become empty: keep a non-empty body_md or title, ' +
-            'or a target other than HOME',
-          { field: 'content' },
-        );
-      }
-    }
+    // Хронологическую запись разрешено опустошить до пустых title/body, пока у
+    // неё есть хотя бы одна привязка (требование 26f0aa52, модель немедленного
+    // создания): согласованность create/update. Удаление последней привязки —
+    // отдельная операция (`removeCommentTarget` переводит запись на HOME).
     if (current.kind === 'chronological') {
       // Эффективное начало: правка `valid_from` либо текущее значение.
       const nextFrom =
