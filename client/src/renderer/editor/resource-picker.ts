@@ -552,10 +552,13 @@ export function urlSourceTab(opts: {
 }
 
 /**
- * Источник «Файл» — сетка иконок типов (быстрый выбор, немедленный) и системный
- * выбор файла-картинки с предпросмотром. Системный выбор применяет нижняя
- * «Применить»: файл ужимается до превью ≤256 КиБ ({@link makeIconPreview}), а
- * оригинал несётся вызывающему в {@link ResourceFileSource}.
+ * Источник «Вложения» — сетка иконок типов (быстрый выбор, немедленный) и
+ * системный выбор файла-картинки с предпросмотром. Подпись вкладки и кнопки —
+ * как в диалоге обложки публикации (ошибка e748e323): «Вложения» +
+ * «Загрузить из файла», те же фасады `lib/ui`. Системный выбор применяет
+ * нижняя «Применить»: файл ужимается до превью ≤256 КиБ
+ * ({@link makeIconPreview}), а оригинал несётся вызывающему в
+ * {@link ResourceFileSource}.
  */
 export function fileImageSourceTab(opts: {
   types: readonly ThoughtType[];
@@ -577,7 +580,7 @@ export function fileImageSourceTab(opts: {
   const holder: { run: ResourceSourceTab['apply'] } = { run: undefined };
   return {
     id: 'file',
-    label: 'Файл',
+    label: t('publication.cover.tab.attachments'),
     build: (ctx) => {
       const box = div('icon-source');
       const typeTab = thoughtIconSourceTab({
@@ -629,7 +632,7 @@ export function fileImageSourceTab(opts: {
       const pickRow = div('icon-pick-row');
       pickRow.append(
         uiButton({
-          label: t('actions.browse'),
+          label: t('publication.cover.upload'),
           role: 'secondary',
           size: 's',
           onClick: () => void pick(),
