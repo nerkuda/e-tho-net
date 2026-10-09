@@ -124,12 +124,12 @@ describe('diary: разворот записи по дням периода (e09
 
 describe('diary: группировка ленты по дням (c6ddc1ea)', () => {
   it('сохраняет серверный порядок записей внутри дня', () => {
-    // Сервер уже отсортировал (класс 0 впереди): клиент не пересортировывает.
-    const first = row({ id: 'class0', valid_from: '2026-09-26T13:00:00.000Z' });
-    const second = row({ id: 'class1', valid_from: '2026-09-26T12:00:00.000Z' });
+    // Сервер уже отсортировал (по дате/времени): клиент не пересортировывает.
+    const first = row({ id: 'a', valid_from: '2026-09-26T13:00:00.000Z' });
+    const second = row({ id: 'b', valid_from: '2026-09-26T12:00:00.000Z' });
     const days = groupByLocalDays([first, second]);
     assert.equal(days.length, 1);
-    assert.deepEqual(days[0]!.rows.map((r) => r.id), ['class0', 'class1']);
+    assert.deepEqual(days[0]!.rows.map((r) => r.id), ['a', 'b']);
   });
 
   it('дни идут по возрастанию, длинная запись попадает в каждый день', () => {

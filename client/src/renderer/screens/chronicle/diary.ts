@@ -375,24 +375,10 @@ export function formatDayLabel(day: string): string {
 }
 
 /**
- * Класс записи (0.10.1, требование c6ddc1ea): `0` — все привязки записи — это
- * HOME («запись дня»), `1` — есть хотя бы одна привязка вне HOME (мысль или
- * связь). Локальная строка (`localRowFromComment`) уже отбрасывает HOME из
- * `targets`, поэтому у неё класс 0 = пустой список привязок; для серверных
- * строк HOME приходит в `targets` и сверяется с `homeId`.
- */
-export function recordClass(row: ChronicleRow, homeId: string | null = null): 0 | 1 {
-  const isHomeOnly = row.targets.every(
-    (target) =>
-      target.kind === 'thought' && homeId !== null && target.thought.id === homeId,
-  );
-  return isHomeOnly ? 0 : 1;
-}
-
-/**
- * Порядок записей ленты (требование c6ddc1ea): класс записи ВСЕГДА по
- * возрастанию (0 первыми) — направление к нему НЕ применяется; затем
- * `valid_from` → `valid_to` → `created_at` → `id` в направлении `order`.
+ * Порядок записей ленты (требование c6ddc1ea, ревизия 2026-10-09, задача
+ * 5a002590): ТОЛЬКО по дате/времени записи — `valid_from` → `valid_to` →
+ * `created_at` → `id` в направлении `order`. Класс записи (близость к HOME) в
+ * сортировке НЕ участвует, поэтому добавление/снятие мыслей позицию не меняет.
  * Та же модель, что у серверного `ORDER BY`, — клиентская локальная вставка не
  * расходится с порядком страницы.
  */
@@ -400,10 +386,7 @@ export function compareRecords(
   a: ChronicleRow,
   b: ChronicleRow,
   order: SortOrder = 'asc',
-  homeId: string | null = null,
 ): number {
-  const cls = recordClass(a, homeId) - recordClass(b, homeId);
-  if (cls !== 0) return cls;
   const dir = order === 'desc' ? -1 : 1;
   const byDate = a.valid_from === b.valid_from ? 0 : a.valid_from < b.valid_from ? -1 : 1;
   if (byDate !== 0) return byDate * dir;
@@ -420,28 +403,25 @@ export function compareRecords(
 /**
  * Вставить строку в локальный список ленты (0.10.1, итерация приёмки №8, п.2 и
  * №9, п.1): локально созданная запись встаёт на своё место без полной
- * перерисовки, по тому же порядку, что серверный (`compareRecords`): класс
- * записи — всегда первым, затем даты/тайбрейкеры в направлении отбора.
- * Поэтому запись дня (класс 0) при «убывании» всё равно попадает в верхний
- * блок своего дня, а не в конец списка.
+ * перерисовки, по тому же порядку, что серверный (`compareRecords`): только
+ * даты/тайбрейкеры в направлении отбора (класс записи не участвует).
  */
 export function insertRowByDay(
   list: readonly ChronicleRow[],
   row: ChronicleRow,
   order: SortOrder = 'asc',
-  homeId: string | null = null,
 ): ChronicleRow[] {
   const out = [...list];
   let i = 0;
-  while (i < out.length && compareRecords(out[i]!, row, order, homeId) <= 0) i += 1;
+  while (i < out.length && compareRecords(out[i]!, row, order) <= 0) i += 1;
   out.splice(i, 0, row);
   return out;
 }
 
 /**
  * Группировка записей по локальным дням наблюдателя. Порядок записей внутри дня
- * — серверный (класс → `valid_from` → `valid_to` → `created_at` → `id`,
- * требование c6ddc1ea): клиент его не пересортировывает, а сохраняет порядок
+ * — серверный (`valid_from` → `valid_to` → `created_at` → `id`, требование
+ * c6ddc1ea): клиент его не пересортировывает, а сохраняет порядок
  * входа (сервер уже отдал строки в выбранном направлении). Дни сортируются по
  * `order` (0.10.1, итерация приёмки №8, п.3: «Убывание» — дни по убыванию,
  * записи внутри — серверный порядок выбранного направления). `from`/`to` —
@@ -585,7 +565,7 @@ export function hasRowId(rows: readonly { id: string }[], id: string): boolean {
 
 /**
  * Видимые чипсы записи: все привязки, кроме первичной привязки к HOME —
- * она служебная (класс записи, требование c81964c7) и крестика не имеет.
+ * она служебная (требование c81964c7) и крестика не имеет.
  */
 export function visibleChips(
   targets: readonly ChronicleTarget[],

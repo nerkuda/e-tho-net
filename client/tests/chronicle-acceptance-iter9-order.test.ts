@@ -1,11 +1,10 @@
 /**
- * Итерация приёмки №9 (0.10.1), пункт 1 — класс записи в сортировке ВСЕГДА
- * первым; направление отбора применяется только к датам/тайбрейкерам.
+ * Лента «Дневника»: порядок клиентской вставки — только по дате/времени
+ * (задача 5a002590; требование c6ddc1ea после ревизии 2026-10-09).
  *
- * Серверная часть — `chronicle-service.test.ts` и сторож паритета
- * `guard-chronicle-parity.test.ts`. Здесь — КЛИЕНТСКАЯ локальная вставка
- * созданной записи (`insertRowByDay`): новая запись из слота (класс 0) обязана
- * встать в верхний блок своего дня при любом направлении (требование c6ddc1ea).
+ * Прежняя модель («класс записи — всегда первым», итерация приёмки №9) отменена:
+ * состав привязок на порядок не влияет. Полный регресс стабильности — в
+ * `chronicle-feed-stable-order.test.ts`; здесь — вставка созданной записи.
  */
 
 import assert from 'node:assert/strict';
@@ -13,7 +12,7 @@ import { describe, it } from 'node:test';
 
 import type { ChronicleRow, ChronicleTarget } from '@etn/shared';
 
-/** Строка ленты с одной датой; `targets` — привязки вне HOME (пусто = класс 0). */
+/** Строка ленты с одной датой; `targets` — привязки вне HOME (пусто = без мыслей). */
 function row(id: string, day: string, hour = '10:00', targets: ChronicleTarget[] = []): ChronicleRow {
   const from = `${day}T${hour}:00.000Z`;
   return {
@@ -33,48 +32,31 @@ function row(id: string, day: string, hour = '10:00', targets: ChronicleTarget[]
   };
 }
 
-/** Привязка к чужой мысли (переводит запись в класс 1). */
+/** Привязка к чужой мысли. */
 function foreignTarget(id = 'thought-1'): ChronicleTarget {
   return { kind: 'thought', thought: { id } } as unknown as ChronicleTarget;
 }
 
-describe('приёмка №9, п.1: класс записи — всегда первым (клиентская вставка)', () => {
-  it('убывание: запись дня (класс 0) встаёт в верхний блок своего дня', async () => {
+describe('лента «Дневника»: вставка созданной записи по дате/времени (5a002590)', () => {
+  it('убывание: запись встаёт по времени, без приоритета «записи дня»', async () => {
     const { insertRowByDay } = await import('../src/renderer/screens/chronicle/diary.js');
-    // День один: класс 0 (h) и класс 1 (x); серверный порядок desc — [h, x].
-    const list = [row('h', '2026-09-10', '08:00'), row('x', '2026-09-10', '12:00', [foreignTarget()])];
-    const added = row('n', '2026-09-10', '20:00'); // новая запись из слота — класс 0
-    const out = insertRowByDay(list, added, 'desc').map((r) => r.id);
-    assert.deepEqual(out, ['n', 'h', 'x'], 'класс 0 первым в своём дне при «убывании»');
+    const list = [row('x', '2026-09-10', '12:00', [foreignTarget()]), row('h', '2026-09-10', '08:00')];
+    const added = row('n', '2026-09-10', '20:00');
+    assert.deepEqual(insertRowByDay(list, added, 'desc').map((r) => r.id), ['n', 'x', 'h']);
   });
 
-  it('возрастание: класс 0 тоже идёт перед классом 1 того же дня', async () => {
+  it('возрастание: порядок строго по valid_from вне зависимости от привязок', async () => {
     const { insertRowByDay } = await import('../src/renderer/screens/chronicle/diary.js');
     const list = [row('h', '2026-09-10', '08:00'), row('x', '2026-09-10', '12:00', [foreignTarget()])];
     const added = row('n', '2026-09-10', '09:00');
-    const out = insertRowByDay(list, added, 'asc').map((r) => r.id);
-    assert.deepEqual(out, ['h', 'n', 'x'], 'внутри класса 0 — по valid_from, класс 1 позже');
+    assert.deepEqual(insertRowByDay(list, added, 'asc').map((r) => r.id), ['h', 'n', 'x']);
   });
 
-  it('убывание вставляет по дню через границы (прежнее поведение сохранено)', async () => {
+  it('вставка по дню через границы уважает направление', async () => {
     const { insertRowByDay } = await import('../src/renderer/screens/chronicle/diary.js');
     const asc = [row('a', '2026-09-10'), row('c', '2026-09-20')];
-    assert.deepEqual(
-      insertRowByDay(asc, row('b', '2026-09-15'), 'asc').map((r) => r.id),
-      ['a', 'b', 'c'],
-      'возрастание — новая запись по своему дню',
-    );
+    assert.deepEqual(insertRowByDay(asc, row('b', '2026-09-15'), 'asc').map((r) => r.id), ['a', 'b', 'c']);
     const desc = [row('c', '2026-09-20'), row('a', '2026-09-10')];
-    assert.deepEqual(
-      insertRowByDay(desc, row('b', '2026-09-15'), 'desc').map((r) => r.id),
-      ['c', 'b', 'a'],
-      'убывание — новая запись по своему дню',
-    );
-  });
-
-  it('класс записи не разворачивается направлением (recordClass)', async () => {
-    const { recordClass } = await import('../src/renderer/screens/chronicle/diary.js');
-    assert.equal(recordClass(row('h', '2026-09-10')), 0, 'пустые привязки — класс 0');
-    assert.equal(recordClass(row('x', '2026-09-10', '10:00', [foreignTarget()])), 1, 'чужая мысль — класс 1');
+    assert.deepEqual(insertRowByDay(desc, row('b', '2026-09-15'), 'desc').map((r) => r.id), ['c', 'b', 'a']);
   });
 });

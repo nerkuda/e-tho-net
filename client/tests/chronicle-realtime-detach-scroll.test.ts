@@ -1,11 +1,12 @@
 /**
- * Регресс ошибки 368747a6: снятие последнего чипса поднимает запись в
- * HOME-блок, а лента остаётся прокрученной — перемещённая запись вне вида.
+ * Лента «Дневника»: снятие чипса не двигает запись (задача 5a002590).
  *
- * Ожидание: перемещение записи в другой блок (смена класса записи на 0) меняет
- * состав верхней части ленты, поэтому прокрутка сбрасывается к началу. Экран в
- * node-тесте не поднимается (тянет `app.js`/редактор), поэтому проводка
- * проверяется структурно по исходнику.
+ * Прежний регресс 368747a6 (снятие последнего чипса «поднимало» запись в
+ * HOME-блок, прокрутка сбрасывалась) отменён вместе с классовой сортировкой:
+ * порядок — только по дате/времени, позиция записи при снятии привязки НЕ
+ * меняется, поэтому прокрутку сбрасывать нечего. Экран в node-тесте не
+ * поднимается (тянет `app.js`/редактор), поэтому проводка проверяется
+ * структурно по исходнику.
  */
 
 import assert from 'node:assert/strict';
@@ -19,19 +20,15 @@ const CHRONICLE = fs.readFileSync(
   'utf8',
 );
 
-describe('chronicle realtime: detachChip сбрасывает прокрутку (ошибка 368747a6)', () => {
-  it('снятие последнего чипса показывает ленту с начала', () => {
+describe('chronicle detachChip: запись не перемещается, прокрутка не сбрасывается (5a002590)', () => {
+  it('снятие чипса обновляет ленту без сброса прокрутки', () => {
     const body = CHRONICLE.slice(CHRONICLE.indexOf('async function detachChip('));
     const fnBody = body.slice(0, body.indexOf('\n}\n'));
-    // Снятие последнего содержательного чипса меняет класс записи на 0 — сервер
-    // поднимает запись в верхний блок HOME.
-    assert.match(fnBody, /const movesToHome = isLastChip\(meaningful\)/);
-    // keyed-сверка держит позицию прокрутки, поэтому её сбрасываем явно после
-    // перезагрузки, чтобы перемещённая запись была видна.
-    assert.match(fnBody, /if \(movesToHome && feedWrap !== null\) feedWrap\.scrollTop = 0;/);
-    assert.match(
-      fnBody,
-      /invalidateQueries\(queryKeys\.chronicleFeedAll\(\)\);[\s\S]*?await refreshFeedAndCalendar\(\);[\s\S]*?feedWrap\.scrollTop = 0;/,
-    );
+    // Подтверждение снятия последней привязки сохранено (требование c81964c7).
+    assert.match(fnBody, /const isLast = isLastChip\(meaningful\)/);
+    assert.match(fnBody, /invalidateQueries\(queryKeys\.chronicleFeedAll\(\)\);[\s\S]*?await refreshFeedAndCalendar\(\);/);
+    // Классовой «перестановки» и сброса прокрутки больше нет.
+    assert.ok(!/movesToHome/.test(fnBody), 'прежняя логика перемещения удалена');
+    assert.ok(!/feedWrap\.scrollTop = 0/.test(fnBody), 'прокрутка не сбрасывается');
   });
 });

@@ -71,11 +71,14 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
     }
   });
 
-  it('ключ сортировки задан один раз и включает класс записи', () => {
-    assert.match(DOMAIN, /RECORD_CLASS_SQL/, 'класс записи считается выражением RECORD_CLASS_SQL');
+  it('ключ сортировки задан один раз и не содержит класса записи', () => {
     const orderBy = DOMAIN.match(/ORDER BY[\s\S]*?LIMIT/);
     assert.ok(orderBy, 'в домене найден ORDER BY');
-    assert.match(orderBy![0], /RECORD_CLASS_SQL/, 'ORDER BY обязан начинаться с класса записи');
+    // Ревизия 2026-10-09 (задача 5a002590): класс записи УДАЛЁН из сортировки —
+    // порядок только по дате/времени, иначе запись «прыгает» при смене привязок.
+    assert.ok(!/RECORD_CLASS_SQL/.test(DOMAIN), 'выражение класса записи удалено');
+    assert.ok(!/CASE WHEN EXISTS/.test(orderBy![0]), 'ORDER BY не считает класс записи');
+    assert.match(orderBy![0], /c\.valid_from/, 'ORDER BY начинается с даты записи');
     // Прежний тайбрейкер по title отменён (требование c6ddc1ea).
     assert.ok(!/c\.title COLLATE NOCASE/.test(orderBy![0]), 'тайбрейкер по title отменён');
   });
@@ -312,17 +315,18 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
         'targets отсёк запись, привязанную только к Beta',
       );
 
-      // Класс-first при «убывании» (требование c6ddc1ea): запись дня (единственная
-      // цель — HOME) обязана быть ПЕРВОЙ, хотя её дата позже всех. Оба фасада
-      // должны вернуть один и тот же класс-first порядок.
+      // Только дата/время (требование c6ddc1ea, ревизия 2026-10-09): запись дня
+      // (единственная цель — HOME) с РАННЕЙ датой при «убывании» обязана идти
+      // ПОСЛЕДНЕЙ — класс записи в порядок не входит. Оба фасада совпадают.
       const cHome = createComment(
         ndb,
         'thought',
         rest.homeId,
-        { kind: 'chronological', body_md: 'запись дня', valid_from: '2024-02-01' },
+        { kind: 'chronological', body_md: 'запись дня', valid_from: '2023-12-01' },
         USER,
       );
       const descFilter = { order: 'desc' };
+      const expectedDesc = [cBoth.id, _cBeta.id, cAlpha.id, cHome.id];
       const restDesc = await rest.app.inject({
         method: 'POST',
         url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
@@ -336,12 +340,12 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
         arguments: { network_id: rest.networkId, ...descFilter },
       });
       const mcpDescRows = toolJson<{ rows: Array<{ id: string }> }>(mcpDesc).rows;
-      assert.equal(restDescRows[0]!.id, cHome.id, 'REST: класс 0 первым при «убывании»');
-      assert.equal(mcpDescRows[0]!.id, cHome.id, 'MCP: класс 0 первым при «убывании»');
+      assert.deepEqual(restDescRows.map((r) => r.id), expectedDesc, 'REST: чистое убывание по дате');
+      assert.deepEqual(mcpDescRows.map((r) => r.id), expectedDesc, 'MCP: чистое убывание по дате');
       assert.deepEqual(
         mcpDescRows.map((r) => r.id),
         restDescRows.map((r) => r.id),
-        'класс-first порядок совпадает у REST и MCP',
+        'порядок совпадает у REST и MCP',
       );
     } finally {
       await handle.close();

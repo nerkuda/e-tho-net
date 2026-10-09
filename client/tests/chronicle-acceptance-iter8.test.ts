@@ -209,7 +209,7 @@ describe('приёмка №8, п.2: создание записи не дёрг
   it('экран вставляет созданную запись локально, без полной перерисовки ленты', () => {
     const src = source(CHRONICLE);
     assert.match(src, /insertCreatedRecord\(localRow\)/, 'созданная запись вставляется локально');
-    assert.match(src, /insertRowByDay\(rows, row, getFilterState\(\)\.order, home\)/, 'строка встаёт на своё место');
+    assert.match(src, /insertRowByDay\(rows, row, getFilterState\(\)\.order\)/, 'строка встаёт на своё место');
     assert.match(src, /async function localRowFromComment\(/, 'строка собирается из ответа создания');
     assert.match(src, /pendingReconcile = true/, 'следующая дозагрузка идёт согласованием');
     assert.match(

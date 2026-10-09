@@ -17,7 +17,8 @@
  *    сразу создаёт нормальную хроно-запись (дата + привязка, без содержания);
  *    псевдозаписи/слота нет (ТП «Дневник без псевдослота»);
  *  * требование 306f74cc — критерии целей (критерии панели едут в `targets`);
- *  * требование c6ddc1ea — порядок ленты (серверный, класс → даты);
+ *  * требование c6ddc1ea — порядок ленты (только по дате/времени: `valid_from`,
+ *    `valid_to`, тайбрейкеры `created_at`/`id`; класс записи не участвует);
  *  * требование e0970b70 — длительная запись видна в каждом дне периода;
  *  * требование c81964c7 — владелец HOME, чипсы — вторичные привязки;
  *  * требование 80b31f7a — переименование «Хроника» → «Дневник».
@@ -1017,8 +1018,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   if (hasRowId(rows, row.id)) {
     rows = rows.map((existing) => (existing.id === row.id ? row : existing));
   } else {
-    const home = homeId ?? (await getHome().catch(() => null));
-    rows = insertRowByDay(rows, row, getFilterState().order, home);
+    rows = insertRowByDay(rows, row, getFilterState().order);
     total += 1;
   }
   pendingReconcile = true;
@@ -1689,25 +1689,22 @@ async function detachChip(rowId: string, target: ChronicleTarget): Promise<void>
     const meaningful = fresh.targets.filter(
       (tg) => !(tg.owner_type === 'thought' && tg.owner_id === homeId),
     );
-    // Снятие последнего содержательного чипса меняет класс записи на 0 — сервер
-    // возвращает её в HOME и поднимает в верхний блок (c81964c7).
-    const movesToHome = isLastChip(meaningful);
-    if (movesToHome) {
+    // Снятие последнего содержательного чипса оставляет запись в дневнике без
+    // привязок к мыслям — действие подтверждаем (требование c81964c7). Позиция
+    // записи в ленте при этом НЕ меняется (сортировка только по дате/времени,
+    // требование c6ddc1ea): «прыжков» нет.
+    const isLast = isLastChip(meaningful);
+    if (isLast) {
       const ok = await confirmDialog(t('diary.detachTitle'), t('diary.detachQuestion'), true);
       if (!ok) return;
     }
     const ownerType = target.kind === 'thought' ? 'thought' : 'link';
     const ownerId = target.kind === 'thought' ? target.thought.id : target.link.id;
     await etn.comments.removeTarget(networkId, rowId, ownerType, ownerId, fresh.version);
-    // Снятие последнего чипса оставляет запись (сервер сам возвращает её в HOME
-    // и поднимает в верхний блок) — гасим ключ ленты и дожидаемся свежего DOM
-    // тем же путём, что отложенный перезапрос (сняв его таймер).
+    // Гасим ключ ленты и дожидаемся свежего DOM тем же путём, что отложенный
+    // перезапрос. Запись остаётся на своём месте — прокрутку не сбрасываем.
     invalidateQueries(queryKeys.chronicleFeedAll());
     await refreshFeedAndCalendar();
-    // Перемещение записи в другой блок меняет состав верхней части ленты:
-    // keyed-сверка держит позицию прокрутки, поэтому перемещённая запись может
-    // остаться вне вида. Показываем ленту с начала (ошибка 368747a6).
-    if (movesToHome && feedWrap !== null) feedWrap.scrollTop = 0;
   } catch (err) {
     notice(t('diary.detachFailed', [errText(err)]), 'error');
   }
@@ -1728,13 +1725,9 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
   if (thoughtIds.length === 0) return;
   try {
     const fresh = await etn.comments.get(networkId, rowId);
-    // Первая содержательная привязка выводит запись из HOME-блока вниз (класс
-    // записи становится > 0). Сверяемся с РАЗРЕШЁННЫМ HOME: при `homeId === null`
-    // HOME-цель не отличить от обычной (ошибка 810520c5, корень 89409d57).
-    const home = homeId ?? (await getHome().catch(() => null));
-    const firstBinding =
-      home !== null &&
-      !fresh.targets.some((tg) => tg.owner_type === 'thought' && tg.owner_id !== home);
+    // Привязка мысли НЕ меняет позицию записи в ленте: сортировка — только по
+    // дате/времени (требование c6ddc1ea, ревизия 2026-10-09), класс записи в
+    // порядке не участвует. Поэтому прокрутка к записи не требуется.
     let version = fresh.version;
     let attached = 0;
     for (const id of thoughtIds) {
@@ -1745,14 +1738,9 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
     }
     if (attached === 0) notice(t('diary.alreadyAttached'), 'info');
     // Локальная мутация — через слой: гасим ключ ленты и ДОЖИДАЕМСЯ свежего DOM
-    // (снятый отложенный перезапрос — `refreshFeedAndCalendar`), иначе прокрутка
-    // к перемещённой записи смотрела бы на старую ленту.
+    // (снятый отложенный перезапрос — `refreshFeedAndCalendar`).
     invalidateQueries(queryKeys.chronicleFeedAll());
     await refreshFeedAndCalendar();
-    // Перемещённая вниз запись должна быть видна: прокручиваем к её карточке, а
-    // если день записи ниже загруженной страницы — показываем ленту с начала
-    // (ошибка 810520c5, симметрично 368747a6).
-    if (firstBinding) revealRecord(rowId);
   } catch (err) {
     notice(t('diary.attachFailed', [errText(err)]), 'error');
   }
@@ -1915,22 +1903,6 @@ function focusRecord(id: string, day: string): void {
   renderFeed();
   const card = feedList?.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
   card?.scrollIntoView({ block: 'center' });
-}
-
-/**
- * Показывает запись после её перемещения между блоками ленты: прокручивает к
- * карточке записи, а если карточки в загруженной странице нет (день записи ниже
- * текущей позиции) — показывает ленту с начала. Keyed-сверка сохраняет позицию
- * прокрутки, поэтому перемещённая запись иначе остаётся вне вида (ошибка
- * 810520c5, симметрично 368747a6).
- */
-function revealRecord(id: string): void {
-  const card = feedList?.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
-  if (card !== null && card !== undefined) {
-    card.scrollIntoView({ block: 'center' });
-    return;
-  }
-  if (feedWrap !== null) feedWrap.scrollTop = 0;
 }
 
 /** Догружает страницы ленты, пока запись не появится (она внутри периода). */
