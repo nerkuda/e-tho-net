@@ -542,6 +542,20 @@ test('NestedEditorStore.focus: каретка на край и запрос пр
   assert.equal(last.scrollIntoView, true);
 });
 
+test('NestedEditorStore.selectByText: выделяет слово под кликом в блоке (f3dd9fe3)', () => {
+  const registry = new Map<string, FakeNestedView>();
+  const store = new NestedEditorStore(fakeFactory(registry));
+  const key = blockEditorKey(ID_A, null);
+  store.mount(key, 'альфа Текст раздела А.', noopOptions);
+  assert.equal(store.selectByText(key, 'Текст'), true, 'вхождение найдено');
+  const specs = registry.get(key)!.specs as Array<{ selection?: unknown; scrollIntoView?: boolean }>;
+  const last = specs[specs.length - 1]!;
+  assert.deepEqual(last.selection, { anchor: 6, head: 11 });
+  assert.equal(last.scrollIntoView, true);
+  assert.equal(store.selectByText(key, 'неттакого'), false, 'нет вхождения — без правки выделения');
+  assert.equal(store.selectByText(key, ''), false, 'пустая строка — без правки выделения');
+});
+
 test('NestedEditorStore: rollbackAll возвращает все инстансы к загруженному тексту', () => {
   const registry = new Map<string, FakeNestedView>();
   const store = new NestedEditorStore(fakeFactory(registry));

@@ -1414,7 +1414,10 @@ export function createMarkdownField(opts: {
   };
 
   /** Mounts a fresh editor for the current markdown. */
-  const mountEditor = (locate?: MdSourceSelection): void => {
+  const mountEditor = (
+    locate?: MdSourceSelection,
+    enterBlockAt?: { position: number; findText?: string },
+  ): void => {
     mounting = true;
     editor?.destroy();
     // Свежее хранилище вложенных редакторов: прежние инстансы принадлежали
@@ -1581,16 +1584,36 @@ export function createMarkdownField(opts: {
     // вход (кнопка, восстановление черновика) — каретка в конец (как раньше).
     if (locate !== undefined) editor.setSelection(locate.anchor, locate.head);
     else editor.focusToEnd();
+    // Двойной клик по слову ВНУТРИ блока трансклюзии в просмотре (ошибка
+    // f3dd9fe3): вход в правку сам блок не открывал — каретка оставалась на
+    // ссылке-атоме перед блоком. Открываем вложенный редактор и ставим
+    // выделение по слову под кликом.
+    if (enterBlockAt !== undefined && editor !== null) {
+      const enteredEditor = editor;
+      // Отложенно: `showEdit` после `mountEditor` ещё ставит захваты/подписки и
+      // снимает флаги — вход в блок делаем следующим тиком, когда состояние
+      // поля стабилизировалось (иначе плагин трансклюзий успевал пересобрать
+      // декорации и снять активность блока).
+      window.setTimeout(() => {
+        if (editor === enteredEditor) {
+          enteredEditor.enterBlockAt(enterBlockAt.position, enterBlockAt.findText);
+        }
+      }, 0);
+    }
   };
 
-  const showEdit = (md?: string, locate?: MdSourceSelection): void => {
+  const showEdit = (
+    md?: string,
+    locate?: MdSourceSelection,
+    enterBlockAt?: { position: number; findText?: string },
+  ): void => {
     if (md !== undefined) currentMd = md;
     view.classList.add('hidden');
     area.classList.remove('hidden');
     editing = true;
     root.classList.add('md-field--editing');
     modeActions.setEditing(true);
-    mountEditor(locate);
+    mountEditor(locate, enterBlockAt);
     // Пакетный захват всех мыслей-источников трансклюзий текста на время
     // правки поля (задача «Единая запись», `e9dfc2df`): источники берутся из
     // текущего документа; вложенные догружаются при монтировании блоков
@@ -1646,13 +1669,48 @@ export function createMarkdownField(opts: {
     return outerFrom;
   };
 
+  /** Слово под двойным кликом (выделение браузера), либо пусто. */
+  const wordUnderEvent = (event: MouseEvent): { findText?: string } => {
+    void event;
+    const word = (view.ownerDocument.getSelection?.()?.toString() ?? '').trim();
+    return word === '' ? {} : { findText: word };
+  };
+
+  /**
+   * Цель двойного клика — ВНЕШНИЙ блок трансклюзии в просмотре (ошибка
+   * `f3dd9fe3`): позиция его ссылки в `body_md` и слово под кликом. `undefined` —
+   * клик вне блока (или во вложенном: за него отвечает `nestedOuterRefStart`):
+   * прежнее поведение по карте смещений.
+   */
+  const viewBlockTarget = (
+    event: MouseEvent,
+  ): { position: number; findText?: string } | undefined => {
+    const target = event.target as Element | null;
+    const blockEl =
+      target !== null && typeof target.closest === 'function'
+        ? target.closest(`.${TRANSCLUSION_BLOCK_CLASS}`)
+        : null;
+    const block = transclusionBlockInfo(blockEl);
+    if (block === null || block.depth > 1) return undefined;
+    const ref = parseTransclusions(currentMd).find(
+      (r) => r.sourceId === block.sourceId && r.section === block.section,
+    );
+    if (ref === undefined) return undefined;
+    return { position: ref.start, ...wordUnderEvent(event) };
+  };
+
   view.addEventListener('dblclick', (event) => {
+    const blockTarget = viewBlockTarget(event);
     const outerFrom = nestedOuterRefStart(event);
     if (outerFrom !== null) {
-      showEdit(undefined, { anchor: outerFrom, head: outerFrom });
+      showEdit(
+        undefined,
+        { anchor: outerFrom, head: outerFrom },
+        { position: outerFrom, ...wordUnderEvent(event) },
+      );
       return;
     }
-    showEdit(undefined, selectionInView());
+    showEdit(undefined, selectionInView(), blockTarget);
   });
 
   handles.set(root, {

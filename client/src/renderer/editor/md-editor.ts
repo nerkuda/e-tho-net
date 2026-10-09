@@ -31,7 +31,14 @@ import {
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
-import { exitActiveBlock, transclusionExtensions } from './transclusion.js';
+import {
+  blockEditorKey,
+  enterBlock,
+  exitActiveBlock,
+  transclusionExtensions,
+  transclusionRefStartingAt,
+} from './transclusion.js';
+import { blockEditorStoreFacet } from './transclusion-nested.js';
 import { wikiLinkLegacyActions } from './wiki-link-legacy-actions.js';
 
 /** Callbacks of the editor (the field orchestrates view/edit modes). */
@@ -117,6 +124,15 @@ export interface MdEditor {
    * просмотра: каретка и выделенное слово — в месте клика (задача 189da39e).
    */
   setSelection(anchor: number, head: number): void;
+  /**
+   * Входит во вложенный редактор блока трансклюзии, начинающегося в позиции
+   * `position` документа (ошибка `f3dd9fe3`): двойной клик по слову внутри
+   * блока в просмотре входит в правку, монтирует вложенный редактор и ставит
+   * выделение по вхождению `findText` (слово под кликом) — «курсор в месте
+   * клика», как в обычном тексте. Без вхождения — каретка в начало блока.
+   * Заблокированный/превышенная глубина блок — no-op (`enterBlock`).
+   */
+  enterBlockAt(position: number, findText?: string): void;
   focus(): void;
   focusToEnd(): void;
   blur(): void;
@@ -493,6 +509,18 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       const head = Math.max(0, Math.min(len, Math.trunc(headPos)));
       view.focus();
       view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
+    },
+    enterBlockAt: (position: number, findText?: string) => {
+      const ref = transclusionRefStartingAt(view.state.doc.toString(), Math.trunc(position));
+      if (ref === null) return;
+      // Монтаж/активация вложенного редактора синхронны (см. `enterBlock`).
+      enterBlock(view, ref, false);
+      const store = view.state.facet(blockEditorStoreFacet);
+      if (store === null) return;
+      const key = blockEditorKey(ref.sourceId, ref.section);
+      // Слово под двойным кликом — выделение в месте клика; не найдено — каретка
+      // в начало блока (её уже поставил `enterBlock`).
+      if (findText !== undefined && findText !== '') store.selectByText(key, findText);
     },
     focusToEnd: () => {
       view.focus();

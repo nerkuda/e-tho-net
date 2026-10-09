@@ -279,6 +279,26 @@ export class NestedEditorStore {
   }
 
   /**
+   * Ставит выделение внутри уже смонтированного инстанса по вхождению `findText`
+   * (первое вхождение): вход в блок двойным кликом по слову в просмотре
+   * (ошибка `f3dd9fe3`) — курсор/выделение в месте клика. Возвращает `false`,
+   * если инстанса нет, текст не найден или вхождение не найдено: вызывающий
+   * оставляет каретку в начале блока (`focus`).
+   */
+  selectByText(key: string, findText: string): boolean {
+    const entry = this.entries.get(key);
+    if (entry === undefined || entry.view === null || findText === '') return false;
+    const doc = entry.view.state.doc.toString();
+    const at = doc.indexOf(findText);
+    if (at < 0) return false;
+    entry.view.dispatch({
+      selection: { anchor: at, head: at + findText.length },
+      scrollIntoView: true,
+    });
+    return true;
+  }
+
+  /**
    * Подставляет черновик правки источника в УЖЕ смонтированный инстанс —
    * асинхронный путь входа: монтаж не ждёт чтения черновика из локального
    * хранилища (задача `6a085e01`, упрощение входа `ce46723d`). Применяется
