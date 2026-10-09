@@ -1336,6 +1336,19 @@
   margin-bottom: var(--space-2);
 }
 
+/* Группа одного свойства-источника (ошибка 2dd51051): подпись-имя свойства
+   над списком его целей. */
+.pub-doc-extra-group + .pub-doc-extra-group {
+  margin-top: var(--space-2);
+}
+
+.pub-doc-extra-prop {
+  display: block;
+  color: var(--text-dim);
+  font-size: var(--font-size-3xs);
+  margin-bottom: var(--space-1);
+}
+
 .pub-doc-extra-list {
   display: flex;
   flex-direction: column;

@@ -1910,9 +1910,17 @@ export function mountPublicationWorkspace(
       node.addEventListener('dblclick', (ev) => openTextCommentEdit(ev, block));
       return node;
     }
+    // Блок «Дополнительные материалы» (ошибка 2dd51051): один общий заголовок,
+    // а внутри — по группе на каждое свойство-источник с подписью-именем
+    // свойства (`group.property` из DTO, порядок — как в рецепте). Без подписи
+    // ссылки разных свойств сливались в неотличимый список. Формулировка и
+    // группировка совпадают с экспортом (`publication-export-service`).
     const node = div('pub-doc-extra');
+    node.append(span(t('publications.ws.extra'), 'pub-doc-extra-title'));
     for (const group of block.groups) {
-      node.append(span(t('publications.ws.extra'), 'pub-doc-extra-title'));
+      const groupNode = div('pub-doc-extra-group');
+      // Имя свойства — данные сети (не UI-строка), поэтому без `t()`.
+      groupNode.append(span(group.property, 'pub-doc-extra-prop'));
       const list = div('pub-doc-extra-list');
       for (const target of group.targets) {
         const link = uiButton({
@@ -1923,7 +1931,8 @@ export function mountPublicationWorkspace(
         });
         list.append(link);
       }
-      node.append(list);
+      groupNode.append(list);
+      node.append(groupNode);
     }
     return node;
   }
