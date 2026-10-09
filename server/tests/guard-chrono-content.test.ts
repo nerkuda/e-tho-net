@@ -213,6 +213,24 @@ describe(
         assert.equal(noTargets.statusCode, 422);
         assert.equal(noTargets.json().error.code, 'VALIDATION_ERROR');
 
+        // Хроно-запись БЕЗ ключа targets (не пустой массив, а отсутствие) —
+        // тот же 422 с `details.field=targets`, а не 500 INTERNAL от итерации
+        // undefined в домене (ошибка 13a2706f). `targets` объявлен только в
+        // REST-карте, поэтому без явного `req` поле молча пропускалось.
+        const absentTargets = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/comments`,
+          headers: authHeaders(ctx),
+          payload: { kind: 'chronological' },
+        });
+        assert.equal(absentTargets.statusCode, 422, absentTargets.body);
+        const absentError = absentTargets.json().error as {
+          code: string;
+          details?: { field?: string };
+        };
+        assert.equal(absentError.code, 'VALIDATION_ERROR');
+        assert.equal(absentError.details?.field, 'targets');
+
         // Привязка вне HOME также валидна без содержания.
         const other = await apiCreateThought(ctx, { title: `Чипс ${randomUUID()}` });
         const byChip = await ctx.app.inject({

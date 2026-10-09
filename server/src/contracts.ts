@@ -2227,6 +2227,13 @@ export const RestCommentCreateTargets = defineContract(
     ...commentFieldsRest,
     targets: {
       from: { kind: 'body' },
+      // Поле REST-only (нет в общей схеме), поэтому без явного `req` его
+      // отсутствие в теле молча пропускается `parseRest` и `parse` не
+      // вызывается — `undefined` уходил в домен и давал 500 (ошибка 13a2706f).
+      // Явная обязательность даёт тот же 422 с `details.field=targets`, что и
+      // `targets: []`; сообщение совпадает с веткой `parse`.
+      req: true,
+      msg: 'targets обязателен: массив { owner_type, owner_id } (1 и более).',
       parse: (raw: unknown, requestId: string) => {
         if (!Array.isArray(raw) || raw.length === 0) {
           throw new EtnError(
