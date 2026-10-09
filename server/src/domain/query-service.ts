@@ -25,8 +25,9 @@
  *     выбирается по `value_type` свойства, а не по runtime-типу значения;
  *     операторы объединены из обоих фасадов (см. OPS_BY_VALUE_TYPE);
  *   * поддерево — направленный BFS вниз по активным связям с visited-set,
- *     потолком глубины и лимитом узлов; REST-режим исключает корни,
- *     MCP-режим включает (depth 0) и сообщает обрезку `truncated`/`reason`;
+ *     потолком глубины и лимитом узлов; корни входят в результат у обоих
+ *     фасадов (REST `parent_ids`, MCP `in_subtree_of` — ошибка ad1551ea),
+ *     MCP дополнительно сообщает обрезку `truncated`/`reason`;
  *   * актуальность/пометка на удаление — трёхсостояния `true`/`false`/`any`;
  *   * авторы, диапазоны дат, has_*-признаки, link_type_ids — из REST;
  *   * сортировки — единый набор REST (`alpha`/`created`/`updated`/`viewed`);
@@ -107,15 +108,16 @@ export interface ThoughtQueryPropertyCondition {
 }
 
 /**
- * Ограничение поддерева. REST-фасад (`parent_ids`) исключает корни из
- * набора кандидатов и включает неактивные рёбра при `show_inactive`;
- * MCP-фасад (`in_subtree_of`) включает корень (depth 0), ходит только по
- * активным связям и сообщает обрезку по лимиту узлов.
+ * Ограничение поддерева. Оба фасада включают корни (перечисленные мысли) в
+ * набор кандидатов: REST `parent_ids` — с `depth ≥ 0` (ошибка ad1551ea,
+ * 0.12.1), MCP `in_subtree_of` — с `depth 0`. Отличия фасадов только в
+ * деталях обхода: REST включает неактивные рёбра при `show_inactive`, MCP
+ * ходит только по активным связям и сообщает обрезку по лимиту узлов.
  */
 export interface ThoughtQuerySubtree {
   /** Корни обхода (REST — несколько, OR; MCP — один). */
   roots: string[];
-  /** `true` (MCP) — корни входят в набор кандидатов (depth 0). */
+  /** `true` — корни входят в набор кандидатов; в 0.12.1 у обоих фасадов. */
   include_roots: boolean;
   /** Потолок глубины обхода (REST — {@link STRUCTURES_PARENT_SCOPE_MAX_DEPTH}). */
   max_depth: number;
@@ -251,9 +253,10 @@ export interface ThoughtIdsQueryResult {
  *   * `trashed: true` — «включать помеченные наравне с обычными» → `'any'`;
  *     `false`/отсутствует — `'false'`.
  *
- * `parent_ids` превращаются в поддерево REST-режима: корни исключены,
- * глубина {@link STRUCTURES_PARENT_SCOPE_MAX_DEPTH}, неактивные рёбра — по
- * `show_inactive`.
+ * `parent_ids` превращаются в поддерево REST-режима: корни (перечисленные
+ * мысли) входят в результат (ошибка ad1551ea, 0.12.1 — выравнивание с MCP
+ * `in_subtree_of`), глубина {@link STRUCTURES_PARENT_SCOPE_MAX_DEPTH},
+ * неактивные рёбра — по `show_inactive`.
  */
 export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQueryRequest {
   const active: ThoughtQueryActive | undefined =
@@ -287,7 +290,7 @@ export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQuer
       req.parent_ids !== undefined && req.parent_ids.length > 0
         ? {
             roots: req.parent_ids,
-            include_roots: false,
+            include_roots: true,
             max_depth: STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
             include_inactive_links: req.show_inactive === true,
             link_filter: req.link_filter,
@@ -545,7 +548,8 @@ function walkSubtree(ndb: NetworkDb, subtree: ThoughtQuerySubtree): WalkResult {
       break;
     }
     visited.add(id);
-    // REST-режим исключает корни из набора кандидатов (их потомки — depth ≥ 1).
+    // Корни (depth 0) входят в набор кандидатов, когда `include_roots`
+    // (в 0.12.1 — у обоих фасадов, ошибка ad1551ea).
     if (subtree.include_roots || depth > 0) depths.set(id, depth);
     if (depth >= max_depth) continue;
     const rows = childrenOf.all(id, activeFlag, ...typeParams) as Array<{ nid: string }>;

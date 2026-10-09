@@ -374,12 +374,10 @@ describe(
           assertParity(rest, mcp, step.label);
         }
 
-        // Поддерево: REST parent_ids исключает корни, MCP in_subtree_of
-        // включает (depth 0) — наборы совпадают с точностью до корня, depth
-        // считает расстояние. Оба идут только по активным связям. Порядок —
-        // общая сортировка (корень «Работы версии» после «План работ»), так
-        // что сравниваем как множества. Неактивная t2 в дефолтную выдачу не
-        // входит (active 'true' у обоих фасадов).
+        // Поддерево: REST parent_ids и MCP in_subtree_of включают корень
+        // (ошибка ad1551ea, 0.12.1 — семантика выровнена) — наборы совпадают,
+        // depth считает расстояние. Оба идут только по активным связям.
+        // Неактивная t2 в дефолтную выдачу не входит (active 'true' у обоих).
         const restSub = await restQuery(restCtx, { parent_ids: [root], ...SORT_ALPHA });
         const mcpSub = await mcpQuery(handle!, networkId, {
           in_subtree_of: root,
@@ -388,9 +386,9 @@ describe(
           order: 'asc',
         });
         assert.deepEqual(
+          [...restSub.ids].sort(),
           [...mcpSub.hits.map((h) => h.id)].sort(),
-          [root, ...restSub.ids].sort(),
-          'MCP-поддерево = корень + REST-потомки',
+          'REST parent_ids = MCP in_subtree_of (корень входит)',
         );
         const depthById = new Map(
           mcpSub.hits.map((h) => [h.id, h.depth] as const),
@@ -400,7 +398,7 @@ describe(
         assert.equal(depthById.has(t2), false, 'неактивная мысль не входит в дефолтную выдачу');
 
         // Полная глубина — с active: any (REST show_inactive ↔ MCP 'any'):
-        // оба фасада видят неактивную t2 на глубине 2.
+        // оба фасада видят корень и неактивную t2 на глубине 2.
         const restSubAny = await restQuery(restCtx, {
           parent_ids: [root],
           show_inactive: true,
@@ -414,9 +412,9 @@ describe(
           order: 'asc',
         });
         assert.deepEqual(
+          [...restSubAny.ids].sort(),
           [...mcpSubAny.hits.map((h) => h.id)].sort(),
-          [root, ...restSubAny.ids].sort(),
-          'MCP-поддерево с active any = корень + REST-потомки с show_inactive',
+          'REST parent_ids + show_inactive = MCP in_subtree_of active any',
         );
         const depthAny = new Map(
           mcpSubAny.hits.map((h) => [h.id, h.depth] as const),
