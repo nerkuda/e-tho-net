@@ -140,6 +140,15 @@ interface MarkdownFieldHandle {
    * сохраняется.
    */
   focusStart(): void;
+  /**
+   * «Вставить ссылку на <мысль>» из меню авто-подсветки упоминания: заменяет
+   * первое вхождение `matchedText` в исходнике на wiki-ссылку и сохраняет (см.
+   * {@link insertMentionLink}). Нужно, когда меню упоминания отрисовано НЕ самим
+   * полем — на статичном просмотре `body_html` (лента «Дневника», ошибка
+   * `616207a9`), а запись ссылки должна идти тем же единственным путём, что и у
+   * поля.
+   */
+  insertMentionLink(thought: MentionsScanThought, matchedText: string): void;
 }
 
 /**
@@ -1588,6 +1597,7 @@ export function createMarkdownField(opts: {
 
   handles.set(root, {
     showEdit,
+    insertMentionLink,
     set: (md, html) => {
       currentMd = md;
       currentHtml = html;
@@ -1702,6 +1712,21 @@ export function focusMarkdownFieldStart(root: HTMLElement): void {
 /** Updates an already-built field's content (e.g. after an external change). */
 export function setMarkdownField(root: HTMLElement, md: string, html: string): void {
   handles.get(root)?.set(md, html);
+}
+
+/**
+ * «Вставить ссылку на <мысль>» в уже построенное поле — точка входа для меню
+ * авто-подсветки упоминания, отрисованного ВНЕ поля (статичный просмотр
+ * `body_html` ленты «Дневника», ошибка `616207a9`). Делегирует единственной
+ * реализации поля (`insertMentionLink`): замена первого вхождения на wiki-ссылку
+ * + сохранение через `onSave`. No-op для узла, не являющегося полем.
+ */
+export function insertMentionLinkIntoField(
+  root: HTMLElement,
+  thought: MentionsScanThought,
+  matchedText: string,
+): void {
+  handles.get(root)?.insertMentionLink(thought, matchedText);
 }
 
 /**

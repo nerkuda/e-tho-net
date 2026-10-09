@@ -56,7 +56,9 @@ import {
   createMarkdownField,
   editMarkdownField,
   focusMarkdownFieldStart,
+  insertMentionLinkIntoField,
 } from '../../editor/markdown-field.js';
+import { annotateMentions } from '../../editor/mentions-annotate.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
@@ -1222,8 +1224,18 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
 
   const shell = commentShell({ variant: 'plain' });
   const body = div('diary-record-body');
-  renderRecordView(shell, row);
+  // Тело просмотра — статичный `body_html`; декорируем его теми же шагами, что и
+  // поле markdown (авто-подсветка упоминаний). Держим элемент для декорации.
+  const recordView = renderRecordView(shell, row);
   body.append(shell.root);
+
+  /**
+   * Цель вложения/исключения упоминаний записи на момент обращения (первая
+   * привязанная мысль, иначе HOME). Геттер, а не значение: `homeId` может
+   * разрешиться позже сборки карточки, а `row.targets` — смениться к правке.
+   */
+  const currentOwner = (): { ownerType: 'thought'; ownerId: string } | null =>
+    attachmentOwnerForRow(row.targets, homeId);
 
   /**
    * Создать поле markdown тела при первом входе в правку (ленивое создание).
@@ -1247,7 +1259,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     if (!body.isConnected) return null;
     // Вставка картинки из буфера: цель вложения — первая привязанная мысль
     // записи, иначе HOME (паритет с постоянным комментарием мысли).
-    const owner = attachmentOwnerForRow(row.targets, homeId);
+    const owner = currentOwner();
     widget = createMarkdownField({
       md: bodyDraft,
       html: row.body_html,
@@ -1312,6 +1324,28 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       if (body.isConnected) void ensureWidget();
     }, 0);
   }
+
+  // Авто-подсветка упоминаний (L24) для статичного просмотра `body_html`
+  // (ошибка 616207a9): поле markdown декорирует СВОЙ просмотр само (`paintView`),
+  // а тело ленты рисовалось общим `renderHtml` без декораций — подчёркивания не
+  // появлялись. Декорируем тем же `annotateMentions`, что и поле, — единый путь
+  // подсветки в компоненте комментария. «Вставить ссылку» из меню создаёт поле и
+  // делегирует ему (`insertMentionLinkIntoField`): замена вхождения и сохранение
+  // идут единственной реализацией поля. Ждём монтирования карточки
+  // (`annotateMentions` пропускает оторванный узел), поэтому откладываем на
+  // макрозадачу; `setTimeout`, а не rAF — кадры скрытого окна заторможены
+  // (грабли 03e33360).
+  setTimeout(() => {
+    if (!recordView.isConnected) return;
+    annotateMentions(recordView, {
+      excludeThoughtId: currentOwner()?.ownerId,
+      onInsertLink: (thought, matchedText) => {
+        void ensureWidget().then((w) => {
+          if (w !== null) insertMentionLinkIntoField(w, thought, matchedText);
+        });
+      },
+    });
+  }, 0);
 
   /**
    * Войти в единую правку с фокусом в заданном поле: тело создаётся при первом
