@@ -54,3 +54,5 @@ coverage/
 # Local scratch / migration test beds
 .tmp/
 tmp/
+# Артефакты живых прогонов ui-probe (каталог `--out`, PNG-доказательства)
+ui-probe-out/

@@ -705,13 +705,16 @@ export function createMarkdownField(opts: {
    */
   editGroup?: () => Node | null;
   /**
-   * Единая правка записи (ТП «Дневник без псевдослота»): коммит вызывает
-   * `onSave`, даже если текст тела НЕ менялся. Нужно, когда запись держит ещё
-   * и заголовок: клик вне / «Записать» / Ctrl+Enter в заголовке должны записать
-   * оба поля одним PATCH, хотя редактор тела изменения не видит и иначе пропустил
-   * бы запись целиком.
+   * Единая правка записи (ТП «Дневник без псевдослота»): предикат «во внешних
+   * (соседних) полях записи есть несохранённые изменения» — например, изменён
+   * заголовок. Поле тела изменения не видит, поэтому без этого сигнала коммит
+   * был бы пропущен. Возвращая `true`, владелец просит записать поля одним
+   * `onSave` даже при неизменном теле. Пусто/`false` — коммит только при правке
+   * самого тела. Коммит при неизменных теле И внешних полях НЕ уходит: раньше
+   * это давало лишний PATCH и меняло «Редактора» записи (замечание проверки
+   * цикла A).
    */
-  saveUnchanged?: boolean;
+  externalChanges?: () => boolean;
 }): HTMLElement {
   const root = div('md-field');
   const view = div('md-field-view comment-view');
@@ -1221,8 +1224,9 @@ export function createMarkdownField(opts: {
     const saves = store === null ? [] : dirtyBlockSaves(store);
     let envChanged = md !== currentMd;
     // Единая правка записи: текст тела мог не меняться, но коммит обязан уйти —
-    // заголовок живёт рядом и пишется тем же `onSave` (см. `saveUnchanged`).
-    if (opts.saveUnchanged === true && opts.onSave !== undefined) envChanged = true;
+    // заголовок живёт рядом и пишется тем же `onSave` (см. `externalChanges`).
+    // При неизменных теле И внешних полях коммит не уходит (лишний PATCH).
+    if (opts.externalChanges?.() === true && opts.onSave !== undefined) envChanged = true;
     if (!envChanged && saves.length === 0) {
       showView();
       return;

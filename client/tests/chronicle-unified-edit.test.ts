@@ -122,3 +122,40 @@ describe('структура экрана: единая правка и неме
     assert.deepEqual(rows.map((r) => r.id), ['rec-1', 'rec-2']);
   });
 });
+
+describe('доводка цикла A: коммит только при реальном изменении', () => {
+  const MARKDOWN_FIELD = fs.readFileSync(
+    path.join(RENDERER_ROOT, 'editor', 'markdown-field.ts'),
+    'utf8',
+  );
+  const CHRONO_TAB = fs.readFileSync(path.join(RENDERER_ROOT, 'editor', 'chrono-tab.ts'), 'utf8');
+
+  it('поле коммитит при внешних изменениях (предикат), а не безусловно', () => {
+    assert.match(
+      MARKDOWN_FIELD,
+      /if \(opts\.externalChanges\?\.\(\) === true && opts\.onSave !== undefined\) envChanged = true;/,
+      'envChanged поднимается предикатом externalChanges',
+    );
+    assert.doesNotMatch(
+      MARKDOWN_FIELD,
+      /saveUnchanged/,
+      'прежняя безусловная опция saveUnchanged удалена',
+    );
+  });
+
+  it('экран «Дневник» коммитит только при изменении заголовка', () => {
+    assert.match(
+      CHRONICLE,
+      /externalChanges: \(\) =>\s*\n\s*\(title !== null \? title\.value\(\)\.trim\(\) : row\.title \?\? ''\) !== \(row\.title \?\? ''\)/,
+      'предикат сравнивает живой заголовок с сохранённым',
+    );
+  });
+
+  it('вкладка «Дневник» коммитит только при изменении заголовка', () => {
+    assert.match(
+      CHRONO_TAB,
+      /externalChanges: \(\) => currentTitle\(\)\.trim\(\) !== titleValue/,
+      'предикат сравнивает живой заголовок с сохранённым',
+    );
+  });
+});

@@ -397,8 +397,9 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
         // Группа единой правки — весь редактор записи: переход фокуса
         // заголовок↔тело и клик по шапке правку не закрывают.
         editGroup: () => bottom,
-        // Заголовок пишется тем же PATCH: коммит уходит и без правки тела.
-        saveUnchanged: true,
+        // Заголовок пишется тем же PATCH: коммит уходит, когда изменён заголовок
+        // (тело поле видит само). При неизменных обоих полях PATCH не уходит.
+        externalChanges: () => currentTitle().trim() !== titleValue,
         attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
         // Контекст комментария для флоу «создать мысль по legacy-ссылке»
         // (карточка ETN 34ffbd75): после замены ссылок поле перерисовывается,
