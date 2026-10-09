@@ -368,13 +368,12 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     });
     assert.deepEqual(inProject.hits.map((h) => h.title), ['Задача 1']);
 
-    // An unknown property_id drops the condition (the registry row may have
-    // been deleted after the filter was saved): the candidate set stays
-    // unchanged, so the response is every active thought. The structure
-    // filter keeps the same delete-safe semantics (see
-    // `structure-service.test.ts`).
+    // An unknown property_id no longer widens the candidate set: the condition
+    // stays in the WHERE as a false clause («нет совпадений»), so the response
+    // is empty (ошибки 090d0242/4f17cb73, 0.12.1). Previously the condition was
+    // dropped silently, returning every active thought.
     const unknown = run(ndb, { properties: [{ property_id: randomUUID(), operator: 'eq', value: 'x' }] });
-    assert.equal(unknown.total, 3);
+    assert.equal(unknown.total, 0);
 
     // Combining a property condition with the subtree filter.
     const combined = run(ndb, {
@@ -382,6 +381,23 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
       properties: [{ property_id: priorityDef, operator: 'lt', value: 5 }],
     });
     assert.deepEqual(combined.hits.map((h) => h.title), ['Задача 1']);
+  });
+
+  it('a property condition addressed by registry NAME equals the same addressed by property_id (ошибка 090d0242, 0.12.1)', () => {
+    // Движок резолвит ссылку условия: registry id ИЛИ имя строки реестра
+    // (`resolveConditionPropertyRef`). Обе формы обязаны дать один результат —
+    // иначе адресация по имени молча выпадала бы из отбора.
+    const ndb = createInMemoryNetworkDb();
+    const statusDef = seedPropertyDefinition(ndb, 'статус', 'text');
+    const open = seedThought(ndb, 'Задача 1');
+    const closed = seedThought(ndb, 'Задача 2');
+    seedPropertyValue(ndb, open, statusDef, 'text', 'открыта');
+    seedPropertyValue(ndb, closed, statusDef, 'text', 'закрыта');
+
+    const byId = run(ndb, { properties: [{ property_id: statusDef, operator: 'eq', value: 'открыта' }] });
+    const byName = run(ndb, { properties: [{ property_id: 'статус', operator: 'eq', value: 'открыта' }] });
+    assert.deepEqual(byId.hits.map((h) => h.title), ['Задача 1']);
+    assert.deepEqual(byName.hits.map((h) => h.title), byId.hits.map((h) => h.title));
   });
 
   it('property eq also matches ids inside multiple thought_ref arrays', () => {

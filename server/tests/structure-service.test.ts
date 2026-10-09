@@ -759,12 +759,15 @@ describe(
             (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
           );
 
-          // A condition referencing a deleted property definition is skipped.
+          // A condition referencing a missing/deleted property definition no
+          // longer drops out of the filter: it stays as a false clause, so the
+          // candidate set is empty (ошибки 090d0242/4f17cb73, 0.12.1) — никогда
+          // не расширяется до всей сети.
           const result = queryThoughts(ndb, USER, query({
             keywords: 'Кто-то',
             properties: [{ property_id: randomUUID(), op: 'eq', value: 'x' }],
           }));
-          assert.equal(result.items.length, 1);
+          assert.equal(result.items.length, 0);
         } finally {
           ndb.close();
         }

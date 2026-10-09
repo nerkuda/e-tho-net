@@ -59,7 +59,7 @@ import {
   parseStructureFilter,
   updateSavedFilter,
 } from '../domain/structure-service.js';
-import { structureRequestToQuery } from '../domain/query-service.js';
+import { assertPropertyConditionsResolvable, structureRequestToQuery } from '../domain/query-service.js';
 import { queryThoughtIdsAsync, queryThoughtsAsync } from '../domain/heavy-read.js';
 import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
 import { getEdgesAmong, toFocusEdge } from '../domain/link-service.js';
@@ -212,6 +212,11 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
           return;
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Граница ввода (ошибки 090d0242/4f17cb73, 0.12.1): неразрешимая ссылка
+        // на свойство в отборе — явная ошибка, а не молчаливое расширение
+        // выборки. Движок на такую ссылку даёт «нет совпадений»; роут как
+        // пользовательский вход отвергает её с указанием поля.
+        assertPropertyConditionsResolvable(ndb, query.properties, req.id);
         // Единый движок выборки (задача c5265deb): REST-фильтр переводится в
         // канонический запрос и исполняется общей доменной функцией.
         // ids_only (L22): bare ids for the bulk filter commands — the same

@@ -66,6 +66,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { getLinkDirections } from './link-service.js';
 import {
+  getNetworkProperty,
   isStructuralLinkProperty,
   linkPropertyDirection,
   linkPropertyLinkTypeId,
@@ -305,6 +306,32 @@ export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQuer
   };
 }
 
+/**
+ * Граница пользовательского ввода (ошибки 090d0242 и 4f17cb73, 0.12.1):
+ * убедиться, что каждая ссылка на свойство в условиях отбора разрешается в
+ * реестре сети, иначе — `VALIDATION_ERROR` с указанием поля. Движок выборки
+ * (`propertyClauses`) на такую ссылку даёт «нет совпадений», а не ошибку (он
+ * тотален и обслуживает сохранённые рецепты/веер); фасады, принимающие ввод от
+ * пользователя (`POST /thoughts/query`, `etn.thoughts.query`), обязаны
+ * отвергнуть неразрешимую ссылку явно, чтобы отбор не выглядел пустым молча.
+ */
+export function assertPropertyConditionsResolvable(
+  ndb: NetworkDb,
+  conditions: ReadonlyArray<{ property_id: string }> | undefined,
+  requestId?: string,
+): void {
+  for (const cond of conditions ?? []) {
+    if (getNetworkProperty(ndb, cond.property_id) === null) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Свойство «${cond.property_id}» не найдено в реестре сети.`,
+        { field: 'property_id', property_id: cond.property_id },
+        requestId,
+      );
+    }
+  }
+}
+
 const MCP_SORT_TO_CANONICAL: Record<ThoughtQuerySort, StructureSort> = {
   title: 'alpha',
   created_at: 'created',
@@ -315,9 +342,11 @@ const MCP_SORT_TO_CANONICAL: Record<ThoughtQuerySort, StructureSort> = {
  * MCP → канон: wire-`ThoughtQueryRequest` (05-mcp-server.md §4.1) переводится
  * в {@link ThoughtQueryRequest}. Имена типов и свойств резолвит MCP-фасад до
  * вызова адаптера — здесь принимаются только id (`type_id[]`,
- * `properties[].property_id`; условия без `property_id` отбрасываются как
- * «нет совпадения»). Дефолты MCP-контракта: лимит 50, смещение 0, `active`
- * `'true'`, `trashed` `'false'`, сортировка `title` (= `alpha`) `asc`.
+ * `properties[].property_id`). Условие без адреса свойства больше НЕ
+ * отбрасывается молча (ошибка 090d0242, 0.12.1): это `VALIDATION_ERROR` —
+ * иначе отбор незаметно расширяется. Дефолты MCP-контракта: лимит 50,
+ * смещение 0, `active` `'true'`, `trashed` `'false'`, сортировка `title`
+ * (= `alpha`) `asc`.
  */
 export function mcpRequestToQuery(
   req: McpThoughtQueryRequest,
@@ -329,13 +358,20 @@ export function mcpRequestToQuery(
   );
   return {
     type_ids: req.type_id,
-    properties: (req.properties ?? [])
-      .filter((c): c is typeof c & { property_id: string } => typeof c.property_id === 'string')
-      .map((c) => ({
+    properties: (req.properties ?? []).map((c) => {
+      if (typeof c.property_id !== 'string' || c.property_id === '') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Условие свойства не адресует свойство: укажите property_id или property.',
+          { field: 'property_id' },
+        );
+      }
+      return {
         property_id: c.property_id,
         operator: c.operator,
         value: c.value,
-      })),
+      };
+    }),
     active: req.active,
     trashed: req.trashed,
     keywords: req.keywords,
@@ -912,10 +948,28 @@ function linkPropertyClause(
 }
 
 /**
+ * Клауза «нет совпадений» для условия, ссылка на свойство которого не
+ * разрешилась (чужой/несуществующий `property_id` или имя без совпадения в
+ * реестре). В прежнем движке такое условие молча ВЫПАДАЛО из `WHERE`, из-за
+ * чего отбор расширялся до всей сети (ошибки 090d0242 и 4f17cb73, 0.12.1).
+ * Теперь условие остаётся в запросе как заведомо ложное: `AND 0` обнуляет
+ * набор совпадений и НЕ ослабляет отбор. Это согласуется с контрактом
+ * (`etn.guide { topic: "thoughts.query" }`: неизвестный `property_id` не
+ * матчит ничего) и с кросс-сетевым веером, где свойство может отсутствовать в
+ * части сетей (тогда такая сеть вносит пустой вклад, а не расширяет выборку).
+ *
+ * Явную ошибку `VALIDATION_ERROR` на неразрешимую ссылку дают границы
+ * пользовательского ввода (MCP-фасад `etn.thoughts.query`, REST-роут
+ * `POST /thoughts/query`) — движок же тотален и никогда не расширяет отбор.
+ */
+const NO_MATCH_CLAUSE: Clause = { sql: '0', params: [] };
+
+/**
  * Build one property-condition clause for a batch of conditions. Addressed
- * registry properties are read in one `SELECT … IN (…)` call; a missing
- * property (deleted after the filter was saved) drops the condition — «нет
- * совпадения», как в обоих прежних движках.
+ * registry properties are read in one `SELECT … IN (…)` call. A condition whose
+ * property reference does not resolve (foreign/unknown id, name without a
+ * registry match, or a property deleted after the filter was saved) yields
+ * {@link NO_MATCH_CLAUSE} — «нет совпадения», а не ослабление отбора.
  */
 function propertyClauses(
   ndb: NetworkDb,
@@ -926,24 +980,31 @@ function propertyClauses(
   // Резолвинг ссылки условия (задача df992826): registry id ИЛИ имя — прямое/
   // обратное имя свойства-связи. Обратное имя даёт клаузу с противоположным
   // направлением рёбер; коллизия имён отвергается с пояснением внутри
-  // `resolveConditionPropertyRef`. Неизвестная ссылка — условие отбрасывается
-  // («нет совпадения», как и раньше для чужого `property_id`).
+  // `resolveConditionPropertyRef`. Неразрешимая ссылка — клауза «нет
+  // совпадений» (`NO_MATCH_CLAUSE`), а не выпадение условия из отбора.
   const refs = conds.map((c) => resolveConditionPropertyRef(ndb, c.property_id, requestId));
   const ids = [...new Set(refs.filter((r) => r !== null).map((r) => r.propertyId))];
-  if (ids.length === 0) return [];
-  const placeholders = ids.map(() => '?').join(',');
-  const rows = ndb
-    .prepare(`SELECT id, value_type, config FROM properties_v WHERE id IN (${placeholders})`)
-    .all(...ids) as Array<{ id: string; value_type: string; config: string | null }>;
+  const rows =
+    ids.length === 0
+      ? []
+      : (ndb
+          .prepare(`SELECT id, value_type, config FROM properties_v WHERE id IN (${ids.map(() => '?').join(',')})`)
+          .all(...ids) as Array<{ id: string; value_type: string; config: string | null }>);
   const byId = new Map(rows.map((r) => [r.id, r] as const));
 
   const out: Clause[] = [];
   for (let i = 0; i < conds.length; i += 1) {
     const cond = conds[i]!;
     const ref = refs[i]!;
-    if (ref === null) continue;
+    if (ref === null) {
+      out.push(NO_MATCH_CLAUSE);
+      continue;
+    }
     const raw = byId.get(ref.propertyId);
-    if (raw === undefined) continue;
+    if (raw === undefined) {
+      out.push(NO_MATCH_CLAUSE);
+      continue;
+    }
     const def: RegistryPropertyRow = { id: raw.id, value_type: raw.value_type as PropertyValueType, config: raw.config };
     const allowed = OPS_BY_VALUE_TYPE[def.value_type];
     if (!allowed.includes(cond.operator)) {

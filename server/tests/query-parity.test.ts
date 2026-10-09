@@ -642,5 +642,60 @@ describe(
         await closeRestContext(restCtx);
       }
     });
+
+    it('неразрешимая ссылка на свойство в отборе — явная ошибка, а не расширение до всей сети (ошибки 090d0242/4f17cb73, 0.12.1)', async () => {
+      const restCtx = await buildRestContext();
+      const overrides = {
+        dataDir: restCtx.dataDir,
+        systemDb: restCtx.sys,
+        networkId: restCtx.networkId,
+      };
+      let mcpCtx: McpTestContext | undefined;
+      let handle: McpClientHandle | undefined;
+      try {
+        const ndb = openNetworkDb(restCtx.dataDir, restCtx.networkId);
+        insertThought(ndb, 'Мысль A');
+        insertThought(ndb, 'Мысль B');
+        const queryUrl = `/api/v1/networks/${restCtx.networkId}/thoughts/query`;
+        const unknownId = '11111111-1111-4111-8111-111111111111';
+
+        // REST: неизвестный property_id → 422 VALIDATION_ERROR с указанием поля,
+        // а не 200 со всей сетью (прежнее молчаливое выпадение условия).
+        const badId = await restCtx.app.inject({
+          method: 'POST',
+          url: queryUrl,
+          headers: authHeaders(restCtx),
+          payload: { count: true, properties: [{ property_id: unknownId, op: 'eq', value: 'x' }] },
+        });
+        assert.equal(badId.statusCode, 422, `REST: ${badId.statusCode} ${badId.body}`);
+        const errId = badId.json().error as { code: string; details?: { field?: string } };
+        assert.equal(errId.code, 'VALIDATION_ERROR');
+        assert.equal(errId.details?.field, 'property_id');
+
+        mcpCtx = await buildMcpContext(overrides);
+        handle = await connectMcpClient(mcpCtx, restCtx.adminKey);
+
+        // MCP: неизвестный property_id → VALIDATION_ERROR.
+        const mcpBadId = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: { network_id: restCtx.networkId, properties: [{ property_id: unknownId, operator: 'eq', value: 'x' }] },
+        });
+        assert.equal(mcpBadId.isError, true);
+        assert.match(toolText(mcpBadId), /VALIDATION_ERROR/);
+
+        // MCP: неизвестное поле условия (`key`) больше не выпадает молча —
+        // строгая схема отвергает ввод, адрес свойства не теряется.
+        const mcpKey = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: { network_id: restCtx.networkId, properties: [{ key: 'Статус', operator: 'eq', value: 'x' }] },
+        });
+        assert.equal(mcpKey.isError, true);
+        assert.match(toolText(mcpKey), /VALIDATION_ERROR/);
+      } finally {
+        if (handle !== undefined) await handle.close();
+        if (mcpCtx !== undefined) await closeMcpContext(mcpCtx, overrides);
+        await closeRestContext(restCtx);
+      }
+    });
   },
 );
