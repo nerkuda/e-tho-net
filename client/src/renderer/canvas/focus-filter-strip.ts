@@ -63,7 +63,26 @@ export interface ViewResult {
   unresolved: ReadonlyArray<{ token: string; reason: string }> | null;
   /** True when the run returned no rows AND no unresolved tokens. */
   empty: boolean;
+  /** Общее число мыслей отбора по серверу (`meta.total`). Индикатор-число
+   *  нижней зоны показывает именно его, а не длину загруженной порции
+   *  (ошибка 4493811f). */
+  total: number;
+  /** offset следующей порции отбора — сколько сырых строк сервера уже
+   *  израсходовано (учитывает и отфильтрованную контекстную мысль). */
+  nextOffset: number;
+  /** Порции исчерпаны: загружено всё (`items.length >= total`) или сервер
+   *  вернул пустую страницу. */
+  exhausted: boolean;
 }
+
+/**
+ * Размер порции результата отбора в нижней зоне карты. Совпадает с дефолтом
+ * сервера для `POST /thoughts/{id}/views/{view}/run` (`runViewForThought`:
+ * `options?.limit ?? 100`), поэтому первая порция запрашивается без явного
+ * `limit`, а offset следующей равен этому размеру. Динамическая пагинация
+ * отбора — требование карточки ошибки 4493811f.
+ */
+export const VIEW_PAGE_SIZE = 100;
 
 /** Per-focus mode map persisted to L4 as a JSON string. Unknown modes fall
  *  back to the focus's default view (or «Потомки»). */
@@ -1037,6 +1056,9 @@ export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult
     const unresolved = resp.meta.unresolved;
     const hasUnresolved = Array.isArray(unresolved) && unresolved.length > 0;
     const items = resp.data;
+    // `meta.total` — полное число совпадений по серверу; индикатор нижней зоны
+    // обязан показывать его, а не длину первой порции (ошибка 4493811f).
+    const total = resp.meta.total;
     lastResult = {
       viewId: currentMode.viewId,
       viewName: resp.meta.view.name,
@@ -1046,12 +1068,84 @@ export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult
       directions: resp.meta.directions ?? {},
       unresolved: hasUnresolved ? (unresolved as ReadonlyArray<{ token: string; reason: string }>) : null,
       empty: items.length === 0 && !hasUnresolved,
+      total,
+      nextOffset: VIEW_PAGE_SIZE,
+      exhausted: items.length >= total,
     };
     return lastResult;
   } catch (err) {
     notice(formatStripError(err, 'Не удалось исполнить отбор.'), 'error');
     lastResult = null;
     return null;
+  }
+}
+
+/**
+ * Есть ли ещё неподгруженные мысли отбора в нижней зоне карты. `false`, когда
+ * режим — «Потомки», результата ещё нет или порции исчерпаны (ошибка 4493811f).
+ */
+export function hasMoreViewResult(): boolean {
+  return (
+    lastResult !== null &&
+    !lastResult.exhausted &&
+    lastResult.items.length < lastResult.total
+  );
+}
+
+/**
+ * Догружает ОДНУ следующую порцию результата активного отбора (ошибка
+ * 4493811f, требование «динамическая пагинация»). Запрашивает страницу
+ * `views.run` с явным `limit`/`offset`, дописывает новые строки (без
+ * дубликатов и без самой фокусной мысли) и обновляет `total`/`exhausted`.
+ * Возвращает обновлённый результат или `null`, если догружать нечего либо
+ * порцию перекрыл более свежий запуск отбора.
+ */
+export async function loadMoreViewResult(focusId: string): Promise<ViewResult | null> {
+  if (currentMode.kind !== 'view') return null;
+  const result = lastResult;
+  if (
+    result === null ||
+    result.focusId !== focusId ||
+    result.viewId !== currentMode.viewId
+  ) {
+    return null;
+  }
+  if (result.exhausted) return result;
+  const networkId = store.state.networkId;
+  if (networkId === null) return result;
+  // Запуск отбора мог быть перекрыт (смена фокуса/режима/realtime): тогда
+  // `runSeq` уже сдвинут, а `lastResult` заменён/сброшен — порцию не применяем.
+  const seq = runSeq;
+  try {
+    const sortOrder = await loadViewSortOrder(
+      networkId,
+      currentMode.viewTypeId,
+      currentMode.viewId,
+    );
+    const resp = await etn.thoughtTypeViews.run(networkId, focusId, currentMode.viewName, {
+      ...(sortOrder === null || sortOrder.unsupported !== null
+        ? {}
+        : { sort: sortOrder.sort, order: sortOrder.order }),
+      limit: VIEW_PAGE_SIZE,
+      offset: result.nextOffset,
+    });
+    if (seq !== runSeq || lastResult !== result) return lastResult;
+    const known = new Set(result.items.map((item) => item.id));
+    const fresh = resp.data.filter((item) => item.id !== focusId && !known.has(item.id));
+    // `items`/`total`/`nextOffset`/`exhausted` — поля одного результата; правим
+    // на месте, чтобы `takeViewResult()` отдавал канвасу ту же ссылку.
+    result.items = [...result.items, ...fresh];
+    result.total = resp.meta.total;
+    result.nextOffset += VIEW_PAGE_SIZE;
+    // Порции исчерпаны, когда загружены все совпадения (`meta.total`) или
+    // сервер вернул пустую страницу. Длина `resp.data` не показатель: первая
+    // же страница может быть короче лимита, если сервер исключил контекстную
+    // мысль (ошибка 4493811f).
+    result.exhausted = resp.data.length === 0 || result.items.length >= result.total;
+    return result;
+  } catch {
+    // Best effort: следующий скролл нижней зоны повторит попытку.
+    return result;
   }
 }
 

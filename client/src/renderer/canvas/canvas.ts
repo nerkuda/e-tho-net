@@ -70,6 +70,7 @@ import {
 } from '../lib/pure.js';
 import {
   createZonePaging,
+  isNearBottom,
   planZoneReconcile,
   shouldLoadMore,
   zoneCountLabel,
@@ -108,13 +109,16 @@ import { splitterElement } from '../lib/ui/splitter.js';
 import {
   activeViewUsesKeywords,
   getActiveMode as getStripActiveMode,
+  hasMoreViewResult,
   invalidateViewResultForRealtime,
   isThoughtInViewResult,
+  loadMoreViewResult,
   loadPersistedStrip,
   mountFilterStrip,
   onModeChange as onStripModeChange,
   renderStrip as renderFilterStrip,
   runActiveViewIfNeeded,
+  takeViewResult,
   type ViewResult,
 } from './focus-filter-strip.js';
 import { queryKeys } from '../lib/live/query-keys.js';
@@ -1541,8 +1545,15 @@ async function maybeLoadMoreZone(
   dir: 'parents' | 'siblings' | 'children',
 ): Promise<void> {
   const zone = zones?.[dir];
+  if (zone === null || zone === undefined) return;
+  // Нижняя зона в режиме отбора: динамическая пагинация идёт по `views.run`
+  // с offset, а не по соседям фокуса (ошибка 4493811f).
+  if (dir === 'children' && isChildrenViewResult()) {
+    await maybeLoadMoreViewResult(zone);
+    return;
+  }
   const counters = zonePaging.get(dir);
-  if (zone === null || zone === undefined || counters === undefined) return;
+  if (counters === undefined) return;
   if (
     !shouldLoadMore(counters, {
       scrollTop: zone.scrollTop,
@@ -1553,6 +1564,31 @@ async function maybeLoadMoreZone(
     return;
   }
   await appendNextZonePage(dir);
+}
+
+/**
+ * Догружает следующую порцию результата активного отбора, когда нижняя зона
+ * подошла к нижней границе прокрутки (ошибка 4493811f, требование
+ * «динамическая пагинация»). Строки дописываются инкрементально; счётчик
+ * индикатора берётся из `meta.total` и от подгрузки не меняется.
+ */
+async function maybeLoadMoreViewResult(zone: HTMLElement): Promise<void> {
+  if (!hasMoreViewResult()) return;
+  if (
+    !isNearBottom({
+      scrollTop: zone.scrollTop,
+      clientHeight: zone.clientHeight,
+      scrollHeight: zone.scrollHeight,
+    })
+  ) {
+    return;
+  }
+  const focus = store.state.focus;
+  if (focus === null) return;
+  const result = await loadMoreViewResult(focus.focused.id);
+  if (result === null) return;
+  renderZone('children', viewResultToZoneEntries(result, focus));
+  paintZoneIndicators();
 }
 
 /**
@@ -1689,7 +1725,9 @@ function paintZoneIndicators(): void {
   setZoneIndicator('parents', zoneCountLabel(zonePaging.get('parents')?.total ?? -1));
   setZoneIndicator('siblings', zoneCountLabel(zonePaging.get('siblings')?.total ?? -1));
   if (isChildrenViewResult()) {
-    setZoneIndicator('children', zoneCountLabel(zoneData.get('children')?.length ?? 0));
+    // Нижняя зона в режиме отбора показывает РЕАЛЬНОЕ общее число мыслей
+    // отбора (`meta.total`), а не длину загруженной порции (ошибка 4493811f).
+    setZoneIndicator('children', zoneCountLabel(takeViewResult()?.total ?? -1));
   } else {
     setZoneIndicator('children', zoneCountLabel(zonePaging.get('children')?.total ?? -1));
   }

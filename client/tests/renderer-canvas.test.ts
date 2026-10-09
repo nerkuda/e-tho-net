@@ -478,6 +478,9 @@ describe('view result compound name (08-ui-spec §2.2.3, ace5e73b)', () => {
       ),
       unresolved: null,
       empty: false,
+      total: items.length,
+      nextOffset: items.length,
+      exhausted: true,
     };
   }
 
