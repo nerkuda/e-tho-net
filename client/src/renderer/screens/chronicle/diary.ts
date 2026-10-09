@@ -315,8 +315,8 @@ function monthPeriod(day: string): PeriodRange {
 }
 
 /**
- * Дата по умолчанию для псевдо-записи: `clamp(сегодня, начало, конец)` —
- * требование 26f0aa52. Пустые границы не ограничивают.
+ * Дата по умолчанию новой записи дневника: `clamp(сегодня, начало, конец
+ * периода)` — требование 26f0aa52. Пустые границы не ограничивают.
  */
 export function clampPseudoDate(today: string, from: string, to: string): string {
   let day = today;
@@ -592,86 +592,6 @@ export function applyPeriodToFilter<T extends { dateFrom: string; dateTo: string
   return { ...filter, dateFrom: period.from, dateTo: period.to };
 }
 
-/** Содержимое псевдо-записи, достаточное для первого сохранения. */
-export interface RecordDraft {
-  title?: string | null;
-  body?: string | null;
-  /** Сколько привязок уже готово к сохранению. */
-  bindings?: number;
-}
-
-/**
- * Есть ли в псевдо-записи содержательный элемент: непустой заголовок, непустой
- * текст или хотя бы одна привязка (требование 26f0aa52). Пока `false` — в базу
- * ничего не пишется.
- */
-export function hasRecordContent(draft: RecordDraft): boolean {
-  if ((draft.title ?? '').trim() !== '') return true;
-  if ((draft.body ?? '').trim() !== '') return true;
-  return (draft.bindings ?? 0) > 0;
-}
-
-/** Решение о сохранении черновика псевдо-записи (ошибка 0757cd08). */
-export interface SlotCommitPlan {
-  action: 'create' | 'update' | 'none';
-  /** Заголовок записи (пробелы обрезаны; пустой — `null`). */
-  title: string | null;
-  /** Тело записи (для создания — как есть; для обновления — см. `bodyProvided`). */
-  body: string;
-  /** Передано ли тело вызывающим: правка только заголовка тело не трогает. */
-  bodyProvided: boolean;
-}
-
-/**
- * Выбор операции для первого/очередного сохранения псевдо-записи (ошибка
- * 0757cd08). Заголовок входит в ЛЮБОЕ сохранение; тело — только когда реально
- * передано (`body !== undefined`), иначе правка заголовка затирала бы уже
- * сохранённый текст, а правка текста — заголовок. Пока записи нет (`commentId
- * === null`) и нет содержания — ничего не пишем (требование 26f0aa52). Если
- * запись уже создана (например, первым содержательным blur заголовка),
- * последующее сохранение ОБНОВЛЯЕТ её, а не создаёт дубль.
- */
-export function planSlotCommit(input: {
-  commentId: string | null;
-  title: string;
-  body?: string;
-  bindings?: number;
-}): SlotCommitPlan {
-  const title = input.title.trim() || null;
-  const body = input.body ?? '';
-  const bodyProvided = input.body !== undefined;
-  if (input.commentId === null) {
-    const has = hasRecordContent({
-      title: input.title,
-      body,
-      bindings: input.bindings ?? 0,
-    });
-    return { action: has ? 'create' : 'none', title, body, bodyProvided };
-  }
-  return { action: 'update', title, body, bodyProvided };
-}
-
-/**
- * Сериализует сохранения псевдо-записи: очередное сохранение запускается строго
- * ПОСЛЕ завершения предыдущего (`pending`). Нужно, потому что сохранения идут
- * из нескольких жестов (blur заголовка, commit редактора, уход фокуса из слота)
- * и могут наложиться друг на друга.
- *
- * Раньше страж возвращал промис уже ИДУЩЕГО сохранения и терял переданное
- * содержимое: уход фокуса из слота (`ensureSlot({})`, план `none`) успевал
- * занять страж раньше настоящего сохранения тела, и текст записи без заголовка
- * не долетал до сервера — запись не создавалась (ошибка d60f61b5). Очередь
- * сохраняет защиту от дубля: второй вызов видит проставленный `commentId` и
- * ОБНОВЛЯЕТ запись, а не создаёт вторую (ошибка 0757cd08). Сбой предыдущего
- * сохранения не блокирует следующее — очередь продолжается.
- */
-export function enqueueSlotSave<T>(
-  pending: Promise<unknown> | null,
-  run: () => Promise<T>,
-): Promise<T> {
-  return (pending ?? Promise.resolve(null)).catch(() => null).then(run);
-}
-
 /**
  * Есть ли в ленте строка с таким id. Дедуп локальной вставки созданной записи
  * (ошибка 0757cd08, круг 1): строку могла вставить другая ветка (realtime-
@@ -680,14 +600,6 @@ export function enqueueSlotSave<T>(
  */
 export function hasRowId(rows: readonly { id: string }[], id: string): boolean {
   return rows.some((row) => row.id === id);
-}
-
-/**
- * Нужны ли сетевые вызовы при удалении слота: пустой слот (без id) удаляется
- * только в клиенте, без записи в сеть и real-time событий (требование
- * 26f0aa52).
- */
-export function slotDeleteNeedsNetwork(commentId: string | null): boolean {  return commentId !== null;
 }
 
 /**

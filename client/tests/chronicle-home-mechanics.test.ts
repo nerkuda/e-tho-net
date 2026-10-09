@@ -76,17 +76,12 @@ describe('chronicle HOME: attachToRecord показывает перемещён
 });
 
 describe('chronicle HOME: insertCreatedRecord использует разрешённый HOME (ошибка 810520c5)', () => {
-  it('класс строки считается по homeId ?? getHome(), недоступный HOME → полный путь', () => {
+  it('класс строки считается по homeId ?? getHome(), а не по модульному homeId', () => {
     const fn = functionBody(CHRONICLE, 'async function insertCreatedRecord(');
     assert.match(
       fn,
       /const home = homeId \?\? \(await getHome\(\)\.catch\(\(\) => null\)\);/,
       'HOME берётся разрешённый',
-    );
-    assert.match(
-      fn,
-      /if \(home === null\) \{[\s\S]*?slot = null;[\s\S]*?await reload\(\);[\s\S]*?return;/,
-      'недоступный HOME — слот убирается, лента перезагружается',
     );
     assert.match(
       fn,
@@ -99,11 +94,11 @@ describe('chronicle HOME: insertCreatedRecord использует разреш�
     );
   });
 
-  it('вызывающий дожидается вставки (иначе повисший промис/гонка со слотом)', () => {
+  it('вызывающий дожидается вставки', () => {
     assert.match(
       CHRONICLE,
       /await insertCreatedRecord\(localRow\);/,
-      'ensureSlot дожидается локальной вставки',
+      'addRecord дожидается локальной вставки',
     );
   });
 });

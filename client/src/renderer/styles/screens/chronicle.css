@@ -387,11 +387,6 @@
   background: var(--surface);
 }
 
-.diary-slot {
-  border-style: dashed;
-  border-color: var(--accent);
-}
-
 /* Запись, к которой выполнен переход поиска (T7): подсветка рамкой и фоном. */
 .diary-record-target {
   border-color: var(--accent);

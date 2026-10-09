@@ -57,11 +57,36 @@ export interface RecordTitleOptions {
   onToggle?: () => void;
   /**
    * Завершение правки с сохранением: получает введённое значение, возвращает
-   * новую надпись просмотра. Вызывается и по `Enter`, и по `blur`.
+   * новую надпись просмотра. Вызывается по `Enter` и `blur` — когда поле ведёт
+   * правку САМО (одиночный режим).
    */
   onCommit?: (value: string) => string;
-  /** Отмена правки (`Escape`): значение не сохраняется. */
+  /** Отмена правки (`Escape`): значение не сохраняется (одиночный режим). */
   onCancel?: () => void;
+  /**
+   * Единая правка записи (ТП «Дневник без псевдослота»): `Enter` в поле не
+   * завершает правку, а зовёт хозяина — карточка/вкладка переводит фокус в тело
+   * записи (обычный `Enter`) либо записывает оба поля (`Ctrl`/`Cmd`+`Enter`).
+   * Событие передаётся, чтобы хозяин различил модификаторы. Задан — перекрывает
+   * `onCommit` для `Enter`.
+   */
+  onEnter?: (event: KeyboardEvent) => void;
+  /**
+   * Единая правка записи: `Escape` в поле зовёт хозяина (откат обоих полей).
+   * Задан — перекрывает `onCancel` для `Escape`.
+   */
+  onEscape?: () => void;
+  /**
+   * Завершать ли правку по уходу фокуса (по умолчанию `true`). В единой правке
+   * — `false`: переход фокуса заголовок↔тело правку не закрывает.
+   */
+  commitOnBlur?: boolean;
+  /**
+   * Вход в правку заголовка (двойной клик, программный `beginEdit`): хозяин
+   * открывает и тело записи. Вызывается до фокуса поля — фокус, выставленный
+   * хозяином раньше, не потеряется.
+   */
+  onBeginEdit?: () => void;
 }
 
 /** Публичный дескриптор компонента заголовка. */
@@ -73,9 +98,15 @@ export interface RecordTitleHandle {
   /** Открыта ли правка сейчас. */
   isEditing(): boolean;
   /** Войти в правку (уже в правке — сфокусировать поле). */
-  beginEdit(): void;
+  beginEdit(focus?: boolean): void;
   /** Завершить правку: `commit` — сохранить, иначе отменить. */
   endEdit(commit: boolean, refocus: boolean): void;
+  /**
+   * Задать показанное значение/надпись без входа в правку (хозяин применил
+   * сохранённые значения после единой записи). При открытой правке обновляется
+   * только поле ввода; надпись просмотра — при следующем выходе.
+   */
+  setContent(value: string, label?: string): void;
 }
 
 /**
@@ -146,10 +177,12 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
     if (refocus) view.focus();
   }
 
-  function beginEdit(): void {
+  function beginEdit(focus = true): void {
     if (field !== null) {
-      field.focus();
-      field.select();
+      if (focus) {
+        field.focus();
+        field.select();
+      }
       return;
     }
     const next = fieldInput({
@@ -167,26 +200,54 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
       id: contextId,
       bindings: [
         // Прежний обработчик завершал правку на Enter НЕЗАВИСИМО от модификаторов —
-        // набор выражен привязками (`lib/keymap-chords.ts`).
+        // набор выражен привязками (`lib/keymap-chords.ts`). В единой правке
+        // записи Enter зовёт хозяина (фокус → тело), а не завершает правку.
         ...modifierChordVariants('Enter').map((chord) => ({
           command: 'recordTitle.commit',
           chord,
-          run: (event: KeyboardEvent) => (event.key === 'Enter' ? endEdit(true, true) : false),
+          run: (event: KeyboardEvent) => (event.key === 'Enter' ? onEnterKey(event) : false),
         })),
         {
           command: 'recordTitle.cancel',
           chord: 'Escape',
-          run: (event) => (event.key === 'Escape' ? endEdit(false, true) : false),
+          run: (event) => (event.key === 'Escape' ? onEscapeKey() : false),
         },
       ],
     });
     releaseEditContext = pushKeyContext(contextId);
-    next.addEventListener('blur', () => endEdit(true, false));
+    next.addEventListener('blur', () => {
+      if (opts.commitOnBlur !== false) endEdit(true, false);
+    });
     node.replaceWith(next);
     field = next;
     node = next;
-    next.focus();
-    next.select();
+    // Хозяин единой правки открывает тело записи ДО фокуса: фокус заголовка,
+    // выставленный ниже, не будет перехвачен асинхронным входом в тело.
+    opts.onBeginEdit?.();
+    if (focus) {
+      next.focus();
+      next.select();
+    }
+  }
+
+  /** `Enter`: в единой правке — хозяину (фокус в тело / запись), иначе — завершение. */
+  function onEnterKey(event: KeyboardEvent): boolean {
+    if (opts.onEnter !== undefined) {
+      opts.onEnter(event);
+      return true;
+    }
+    endEdit(true, true);
+    return true;
+  }
+
+  /** `Escape`: в единой правке — хозяину (откат обоих полей), иначе — отмена. */
+  function onEscapeKey(): boolean {
+    if (opts.onEscape !== undefined) {
+      opts.onEscape();
+      return true;
+    }
+    endEdit(false, true);
+    return true;
   }
 
   function endEdit(commit: boolean, refocus: boolean): void {
@@ -204,11 +265,20 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
     showView(refocus);
   }
 
+  function setContent(nextValue: string, nextLabel?: string): void {
+    value = nextValue;
+    label = nextLabel ?? nextValue;
+    if (field !== null) field.value = value;
+    else setRecordTitleLabel(view, label);
+  }
+
   return {
     node: () => node,
-    value: () => value,
+    // В правке — живое значение поля (единая запись читает его в момент коммита).
+    value: () => (field !== null ? field.value : value),
     isEditing: () => field !== null,
     beginEdit,
     endEdit,
+    setContent,
   };
 }

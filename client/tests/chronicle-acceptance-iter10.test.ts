@@ -331,18 +331,13 @@ describe('приёмка №10, п.4: владелец вложения для �
     assert.equal(attachmentOwnerForRow([], null), null);
   });
 
-  it('поле правки записи получает attachmentsOwner, псевдо-запись — тоже', () => {
+  it('поле правки записи получает attachmentsOwner', () => {
     const src = readFileSync(
       resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'chronicle', 'chronicle.ts'),
       'utf8',
     );
     assert.match(src, /attachmentOwnerForRow\(row\.targets, homeId\)/, 'владелец считается помощником');
     assert.match(src, /\.\.\.\(owner !== null \? \{ attachmentsOwner: owner \} : \{\}\)/, 'поле записи получает владельца');
-    assert.match(
-      src,
-      /attachmentsOwner: \{ ownerType: 'thought' as const, ownerId: slotOwnerId \}/,
-      'псевдо-запись тоже умеет вставлять файлы',
-    );
   });
 
   it('экран подключает навигацию к диалогу даты и выбору мысли', () => {
@@ -350,7 +345,7 @@ describe('приёмка №10, п.4: владелец вложения для �
       resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'chronicle', 'chronicle.ts'),
       'utf8',
     );
-    assert.match(src, /onEditDates: \(_id, card\) => editCardDates\(card\)/, 'Enter на дате открывает диалог');
+    assert.match(src, /onEditDates: \(_id, card\) => \{/, 'Enter на дате открывает диалог');
     assert.match(src, /onAddThought: \(id\) => void pickAndAttach\(id\)/, 'Enter на мыслях открывает выбор');
   });
 });

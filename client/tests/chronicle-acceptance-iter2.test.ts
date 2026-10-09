@@ -70,14 +70,9 @@ describe('приёмка №2, п.1: единые поля выбора (обе 
 
 describe('приёмка №2, п.2–3: оболочка комментария в ленте', () => {
   it('тело записи строится оболочкой комментария (просмотр и правка)', () => {
-    assert.match(CHRONICLE, /function buildRecordBody\(row: ChronicleRow, card: HTMLElement\)[\s\S]*commentShell\(\{ variant: 'plain' \}\)/);
-    assert.match(CHRONICLE, /function openBodyEditor\([\s\S]*commentShell/, 'правка — та же оболочка');
-    assert.match(CHRONICLE, /shell\.setMode\(editing \? 'edit' : 'view'\)/);
-  });
-
-  it('псевдо-запись тоже идёт через оболочку', () => {
-    assert.match(CHRONICLE, /slotShell/);
-    assert.match(CHRONICLE, /slotShell\.setField\(widget\)/);
+    assert.match(CHRONICLE, /commentShell\(\{ variant: 'plain' \}\)/, 'тело — общая оболочка');
+    assert.match(CHRONICLE, /createMarkdownField\(\{/, 'правка — общее поле markdown');
+    assert.match(CHRONICLE, /shell\.setMode\(isEdit \? 'edit' : 'view'\)/);
   });
 
   it('пустая запись даёт кликабельную область с приглашением', () => {

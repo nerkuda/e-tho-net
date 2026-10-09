@@ -20,7 +20,6 @@ import {
   dayInPeriod,
   dayPeriod,
   groupByLocalDays,
-  hasRecordContent,
   isLastChip,
   isPeriodToken,
   isoWeekNumber,
@@ -30,7 +29,6 @@ import {
   resolveDateToken,
   resolvePeriodDay,
   rowDays,
-  slotDeleteNeedsNetwork,
   visibleChips,
   weekPeriod,
 } from '../src/renderer/screens/chronicle/diary.js';
@@ -182,24 +180,6 @@ describe('diary: день псевдо-записи виден только в �
     assert.equal(dayInPeriod('2026-09-29', '2026-09-28', '2026-09-30'), true);
   });
 
-  it('renderFeed показывает слот по dayInPeriod и монтирует только его день', () => {
-    const src = read('screens/chronicle/chronicle.ts');
-    assert.match(
-      src,
-      /const slotDay = slotNow !== null && dayInPeriod\(slotNow\.day, from, to\) \? slotNow\.day : null;/,
-      'день слота допускается в ленту только внутри применённого периода',
-    );
-    assert.match(
-      src,
-      /if \(slotNow !== null && slotDay === day\.day\) dayList\.prepend\(slotNow\.root\);/,
-      'слот монтируется только в свой (допущенный) день',
-    );
-    // Голого добавления дня слота без проверки периода быть не должно.
-    assert.ok(
-      !/days\.push\(\{ day: slotNow\.day, rows: \[\] \}\)/.test(src),
-      'день слота не добавляется в ленту безусловно',
-    );
-  });
 });
 
 describe('diary: клик календаря = новый период, прочие критерии целы', () => {
@@ -237,31 +217,18 @@ describe('diary: клик календаря = новый период, проч
   });
 });
 
-describe('diary: ленивое создание псевдо-записи (26f0aa52)', () => {
-  it('пустая псевдо-запись не создаётся, любой содержательный элемент — да', () => {
-    assert.equal(hasRecordContent({}), false);
-    assert.equal(hasRecordContent({ title: '  ', body: '\n' }), false);
-    assert.equal(hasRecordContent({ title: 'Встреча' }), true);
-    assert.equal(hasRecordContent({ body: 'текст' }), true);
-    assert.equal(hasRecordContent({ bindings: 1 }), true);
-  });
-
-  it('удаление пустого слота не требует сети', () => {
-    assert.equal(slotDeleteNeedsNetwork(null), false);
-    assert.equal(slotDeleteNeedsNetwork('comment-1'), true);
-  });
-
-  it('создание записи без обходной меры-пробела (ошибка 00115e7b исправлена)', () => {
+describe('diary: немедленное создание записи (26f0aa52, новая модель)', () => {
+  it('«Добавить» создаёт запись сразу, пустую, и открывает её в правке', () => {
     const src = read('screens/chronicle/chronicle.ts');
-    assert.ok(
-      !/\?\s*'\s'\s*:\s*body/.test(src),
-      'обходная мера «body_md из пробела» снята — сервер принимает пустой текст',
-    );
-    assert.match(
-      src,
-      /body_md:\s*body\b/,
-      'текст записи отправляется как есть (пустой допустим при заголовке/чипсе)',
-    );
+    // Запись создаётся сразу с HOME-привязкой, без заголовка и текста.
+    assert.match(src, /^async function addRecord\(/m, 'экран ведёт создание через `addRecord`');
+    assert.match(src, /kind: 'chronological',\s*\n\s*title: null,\s*\n\s*body_md: '',/);
+    // Локальная вставка на своё место + сразу в правке.
+    assert.match(src, /await insertCreatedRecord\(localRow\)/);
+    assert.match(src, /cardEditors\.get\(card\)\?\.openTitle\(\)/);
+    // Псевдозапись/слот демонтированы.
+    assert.ok(!/startSlot|ensureSlot|SlotState|slotBusy|slotFocusInside|slotSuspendConvert/.test(src));
+    assert.ok(!/planSlotCommit|enqueueSlotSave|slotDeleteNeedsNetwork/.test(src));
   });
 });
 

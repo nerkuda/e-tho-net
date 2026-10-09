@@ -180,12 +180,12 @@ describe('вкладка «Дневник» редактора: таблица �
 
   it('п.4: пустое состояние нижней области и «Добавить»', () => {
     assert.match(tab, /state: \{ kind: 'empty', text: t\('chrono\.emptyEditor'\) \}/, 'надпись пустого состояния');
-    assert.match(tab, /onClick: \(\) => startNew\(\)/, 'кнопка «Добавить»');
-    assert.match(tab, /buildEditor\(null, true\)/, 'новая запись сразу в правке');
+    assert.match(tab, /onClick: \(\) => void startNew\(\)/, 'кнопка «Добавить»');
+    assert.match(tab, /buildEditor\(created, true\)/, 'созданная запись сразу в правке');
   });
 
   it('п.5: шапка — период + заголовок одной строкой, без флажка и кнопки удаления', () => {
-    assert.match(tab, /metaRow\.append\(dateBtn, titleInput\)/, 'период слева, заголовок следом');
+    assert.match(tab, /metaRow\.append\(dateBtn, titleBox\)/, 'период слева, заголовок следом');
     assert.ok(!tab.includes('учитывать время'), 'флажка «учитывать время» нет');
     assert.ok(!/checkboxRow\(/.test(tab), 'переключатель не подключается');
     assert.ok(!/label: t\('actions\.delete'\)/.test(tab), 'в шапке кнопки удаления нет');

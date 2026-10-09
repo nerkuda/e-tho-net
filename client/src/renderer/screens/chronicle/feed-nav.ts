@@ -40,6 +40,7 @@
  */
 
 import { createListNav, type ListNavAdapter } from '../../lib/ui/list.js';
+import { RECORD_TITLE_INPUT_CLASS } from './record-groups.js';
 
 /** Класс выделения текущей сущности (группа или запись). */
 export const FEED_NAV_CURRENT_CLASS = 'diary-nav-current';
@@ -443,6 +444,11 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
       if (isEditingTarget(target)) {
         // Правка текста: стрелки/Tab/Enter — редактору; Esc — выход и возврат фокуса.
         if (key === 'Escape' && target !== null) {
+          // Поле заголовка единой правки записи: Esc принадлежит её диспетчеру
+          // (откат ЗАГОЛОВКА и ТЕЛА). Не перехватываем — пропускаем событие к
+          // контексту заголовка ниже по стеку (иначе Esc лишь снимал бы фокус и
+          // правка не откатывалась, дефект c0cd113a).
+          if (closestWithClass(target, RECORD_TITLE_INPUT_CLASS) !== null) return false;
           exitEditing(target);
           return true;
         }
@@ -470,7 +476,6 @@ export function attachFeedNav(root: HTMLElement, opts: FeedNavOptions): FeedNavH
           ? ''
           : (section.dataset?.['day'] ?? section.getAttribute?.('data-day') ?? '');
       if (card !== null && (card.getAttribute?.('data-row-key') ?? '') !== '' && day !== '') {
-        if (target.classList?.contains('diary-slot')) return;
         const key = card.getAttribute('data-row-key') ?? '';
         // Клик внутри ТЕКУЩЕЙ записи (по её полям, чипсам, кнопкам) режим полей не
         // сбрасывает: выделение записи и текущего поля сохраняются.

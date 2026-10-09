@@ -120,6 +120,24 @@ interface MarkdownFieldHandle {
    * который берёт первое вхождение текста).
    */
   focusAtSelection(selection: MdSourceSelection): void;
+  /**
+   * Отменяет правку и возвращает просмотр (Esc из группы единой правки, когда
+   * жест пришёл из заголовка записи, а не из самого поля). Ничего не делает,
+   * если поле не в правке.
+   */
+  cancel(): void;
+  /**
+   * Записывает правку и возвращает просмотр (Ctrl+Enter/«Записать» из группы
+   * единой правки, когда жест пришёл из заголовка). Ничего не делает, если поле
+   * не в правке.
+   */
+  commit(): void;
+  /**
+   * Переводит фокус в правку и ставит каретку в НАЧАЛО документа, не
+   * пересоздавая редактор (Enter в заголовке единой правки): набранный текст
+   * сохраняется.
+   */
+  focusStart(): void;
 }
 
 /**
@@ -678,6 +696,22 @@ export function createMarkdownField(opts: {
    */
   sourceMapView?: boolean;
   minRows?: number;
+  /**
+   * Узлы, удерживающие правку ГРУППЫ, а не только самого поля (ТП «Дневник без
+   * псевдослота»): общий контроллер единой правки передаёт сюда карточку/
+   * вкладку записи, чтобы переход фокуса между её заголовком и телом НЕ
+   * закрывал правку и клик по заголовку не считался «кликом вне». `null` —
+   * группа не задана, поле ведёт себя как одиночное.
+   */
+  editGroup?: () => Node | null;
+  /**
+   * Единая правка записи (ТП «Дневник без псевдослота»): коммит вызывает
+   * `onSave`, даже если текст тела НЕ менялся. Нужно, когда запись держит ещё
+   * и заголовок: клик вне / «Записать» / Ctrl+Enter в заголовке должны записать
+   * оба поля одним PATCH, хотя редактор тела изменения не видит и иначе пропустил
+   * бы запись целиком.
+   */
+  saveUnchanged?: boolean;
 }): HTMLElement {
   const root = div('md-field');
   const view = div('md-field-view comment-view');
@@ -710,6 +744,18 @@ export function createMarkdownField(opts: {
   let sourceLocks: TransclusionLockSet | null = null;
   /** Поле сейчас в режиме правки (для контекста сочетаний команд). */
   let editing = false;
+  /**
+   * Узел ГРУППЫ правки (`opts.editGroup`), удерживающий единую правку записи:
+   * фокус/нажатие внутри группы не считаются выходом из поля. `null` — группа
+   * не задана (поле одиночное).
+   */
+  const editGroupOwns = (node: EventTarget | null): boolean => {
+    const group = opts.editGroup?.() ?? null;
+    return group !== null && isDomNode(node) && group.contains(node);
+  };
+  /** «Узел внутри поля ИЛИ его группы правки» — фокус/нажатие остаются в правке. */
+  const ownsNode = (node: EventTarget | null): boolean =>
+    fieldOwnsNode(root, node) || editGroupOwns(node);
   /**
    * Коммит правки уже запущен (асинхронный `onSave`): до `showView()` поле
    * формально ещё «в правке», поэтому второй `focusout` (редактор → наружу
@@ -892,8 +938,8 @@ export function createMarkdownField(opts: {
   root.addEventListener('focusout', (event) => {
     const next = event.relatedTarget;
     // Фокус остался в фокусной области поля (его элементы, поповер, подсказки,
-    // меню/диалог) — контекст сочетаний сохраняется.
-    if (fieldOwnsNode(root, next)) return;
+    // меню/диалог) или в группе правки записи — контекст сочетаний сохраняется.
+    if (ownsNode(next)) return;
     // Фокус исчез без перехода (`relatedTarget = null`: снятие вложенного
     // редактора из DOM при выходе из блока, программный `blur()`) — это НЕ
     // решение о выходе: коммитить нельзя, иначе навигация стрелками через блок
@@ -1068,7 +1114,7 @@ export function createMarkdownField(opts: {
     if (stopOutsideTap !== null) return;
     if (typeof document === 'undefined') return;
     stopOutsideTap = watchOutsideTap(
-      (target) => fieldOwnsNode(root, target),
+      (target) => ownsNode(target),
       () => {
         if (editing && !mounting) commitOrRevert();
       },
@@ -1173,7 +1219,10 @@ export function createMarkdownField(opts: {
     // документ контейнера не попадает, поэтому источники собираются из
     // хранилища инстансов.
     const saves = store === null ? [] : dirtyBlockSaves(store);
-    const envChanged = md !== currentMd;
+    let envChanged = md !== currentMd;
+    // Единая правка записи: текст тела мог не меняться, но коммит обязан уйти —
+    // заголовок живёт рядом и пишется тем же `onSave` (см. `saveUnchanged`).
+    if (opts.saveUnchanged === true && opts.onSave !== undefined) envChanged = true;
     if (!envChanged && saves.length === 0) {
       showView();
       return;
@@ -1278,9 +1327,10 @@ export function createMarkdownField(opts: {
         finishEdit(false);
       },
       onBlur: (event) => {
-        // Фокус ушёл на элемент самого поля (панель поиска и т.п.) — правка
-        // остаётся открытой; коммит только при уходе фокуса наружу.
-        if (editorBlurCommits(root, event.relatedTarget)) commitOrRevert();
+        // Фокус ушёл на элемент самого поля (панель поиска и т.п.) или в группу
+        // единой правки (заголовок записи) — правка остаётся открытой; коммит
+        // только при уходе фокуса наружу.
+        if (isDomNode(event.relatedTarget) && !ownsNode(event.relatedTarget)) commitOrRevert();
       },
       // Точечное Prec.high-перекрытие сочетаний команд, которые иначе
       // «съедает» CM6 (Ctrl+I/U, Ctrl+Shift+K, Tab/Shift+Tab, Alt+↑/↓).
@@ -1519,6 +1569,20 @@ export function createMarkdownField(opts: {
       // включает правку и выделяет ровно переданные позиции `body_md`.
       showEdit(undefined, selection);
     },
+    cancel: () => {
+      if (editing) finishEdit(true);
+    },
+    commit: () => {
+      if (editing) finishEdit(false);
+    },
+    focusStart: () => {
+      if (!editing || editor === null) {
+        showEdit();
+        if (editor === null) return;
+      }
+      editor.setCaret(0);
+      editor.focus();
+    },
   });
 
   // Комментарийный контекст (карточка ETN 34ffbd75): после замены legacy-ссылок
@@ -1565,6 +1629,30 @@ export function focusMarkdownFieldAt(root: HTMLElement, findText?: string): void
  */
 export function focusMarkdownFieldSelection(root: HTMLElement, selection: MdSourceSelection): void {
   handles.get(root)?.focusAtSelection(selection);
+}
+
+/**
+ * Отменяет правку поля и возвращает просмотр — жест Esc, пришедший извне поля
+ * (из заголовка карточки/вкладки единой правки). No-op, если поле не в правке.
+ */
+export function cancelMarkdownFieldEdit(root: HTMLElement): void {
+  handles.get(root)?.cancel();
+}
+
+/**
+ * Записывает правку поля и возвращает просмотр — жест Ctrl+Enter/«Записать»,
+ * пришедший извне поля (из заголовка записи). No-op, если поле не в правке.
+ */
+export function commitMarkdownField(root: HTMLElement): void {
+  handles.get(root)?.commit();
+}
+
+/**
+ * Переводит поле в правку и ставит каретку в НАЧАЛО документа, не пересоздавая
+ * редактор (Enter в заголовке единой правки): набранный текст сохраняется.
+ */
+export function focusMarkdownFieldStart(root: HTMLElement): void {
+  handles.get(root)?.focusStart();
 }
 
 /** Updates an already-built field's content (e.g. after an external change). */

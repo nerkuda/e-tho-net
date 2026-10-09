@@ -122,7 +122,7 @@ describe('приёмка №3, п.1: просмотр записи = полны�
   });
 
   it('лента строит тело через общий рендер записи, а не через snippet', () => {
-    assert.match(CHRONICLE, /function buildRecordBody\(row: ChronicleRow, card: HTMLElement\)[\s\S]*renderRecordView\(shell, row\)/);
+    assert.match(CHRONICLE, /function fillRecordCard\(card: HTMLElement, row: ChronicleRow, day: string\): void \{[\s\S]*renderRecordView\(shell, row\)/);
     assert.ok(!/renderSnippet\(/.test(CHRONICLE), 'сниппет больше не рисуется в теле');
   });
 });
