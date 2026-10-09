@@ -307,13 +307,19 @@ export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQuer
 }
 
 /**
- * Граница пользовательского ввода (ошибки 090d0242 и 4f17cb73, 0.12.1):
- * убедиться, что каждая ссылка на свойство в условиях отбора разрешается в
- * реестре сети, иначе — `VALIDATION_ERROR` с указанием поля. Движок выборки
- * (`propertyClauses`) на такую ссылку даёт «нет совпадений», а не ошибку (он
- * тотален и обслуживает сохранённые рецепты/веер); фасады, принимающие ввод от
- * пользователя (`POST /thoughts/query`, `etn.thoughts.query`), обязаны
- * отвергнуть неразрешимую ссылку явно, чтобы отбор не выглядел пустым молча.
+ * Граница пользовательского ввода (ошибки 090d0242, 4f17cb73 и f4580fff,
+ * 0.12.1): убедиться, что каждая ссылка на свойство в условиях отбора
+ * разрешается в реестре сети, иначе — `NOT_FOUND` с указанием поля. Код
+ * выровнен по конвенции резолва реестровых сущностей (как у типа:
+ * `resolveThoughtTypeIdByName` — несуществующее имя → `NOT_FOUND`,
+ * неоднозначность → `VALIDATION_ERROR` с `details.candidates`; см.
+ * `etn.guide { topic: "thoughts.query" }`): ссылка на несуществующую
+ * реестровую сущность → `NOT_FOUND` — и по имени, и по id. Движок выборки
+ * (`propertyClauses`) на такую ссылку даёт «нет совпадений» (`NO_MATCH_CLAUSE`),
+ * а не ошибку (он тотален и обслуживает сохранённые рецепты/веер); фасады,
+ * принимающие ввод от пользователя (`POST /thoughts/query`,
+ * `etn.thoughts.query`), обязаны отвергнуть неразрешимую ссылку явно, чтобы
+ * отбор не выглядел пустым молча.
  */
 export function assertPropertyConditionsResolvable(
   ndb: NetworkDb,
@@ -323,7 +329,7 @@ export function assertPropertyConditionsResolvable(
   for (const cond of conditions ?? []) {
     if (getNetworkProperty(ndb, cond.property_id) === null) {
       throw new EtnError(
-        'VALIDATION_ERROR',
+        'NOT_FOUND',
         `Свойство «${cond.property_id}» не найдено в реестре сети.`,
         { field: 'property_id', property_id: cond.property_id },
         requestId,

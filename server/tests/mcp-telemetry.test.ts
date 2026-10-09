@@ -600,9 +600,17 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 0.11.1 (задача 094653b6): 25 публикационных/полочных инструментов
         // сняты в `etn.guide`/`etn.ops` → 37 174 Б. Планка опущена до 37 500
         // (не поднята): фиксирует фактическое сокращение, оставляя малый запас.
+        // 0.12.1 (ошибка f4580fff): `QueryPropertyFields` (условие отбора по
+        // свойству) обязан отвергать неизвестное поле явной VALIDATION_ERROR,
+        // а не вырезать его молча. zod вырезает лишние ключи ДО проверок,
+        // поэтому `refine` по `Object.keys` видит значение только с
+        // `.passthrough()`; в `inputSchema` это ровно `"additionalProperties":{}`
+        // (+26 Б, только `inputSchema` — контракт вызова, проза не менялась).
+        // Было 37 498 / планка 37 500 (запас 2 Б) → 37 524. Планка поднята ровно
+        // под контрактный прирост с малым запасом: 37 500 → 37 550.
         assert.ok(
-          descriptionsPlusInputSchema <= 37_500,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 37500`,
+          descriptionsPlusInputSchema <= 37_550,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 37550`,
         );
       } finally {
         await handle.close();

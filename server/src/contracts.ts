@@ -908,6 +908,9 @@ const SearchFields = z
   );
 export const ThoughtsSearch = defineContract('etn.thoughts.search', SearchFields, {});
 
+/** Допустимые поля одного условия отбора по свойству (контракт `etn.thoughts.query`). */
+const QUERY_PROPERTY_CONDITION_KEYS = ['property_id', 'property', 'operator', 'value'] as const;
+
 const QueryPropertyFields = z
   .object({
     property_id: z.string().min(1).optional(),
@@ -926,15 +929,40 @@ const QueryPropertyFields = z
     ]),
     value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string().min(1)).min(1)]),
   })
+  // `.passthrough()` до refine (ошибка f4580fff, 0.12.1): zod по умолчанию
+  // ВЫРЕЗАЕТ неизвестные ключи ещё до проверок, поэтому refine по `Object.keys`
+  // на обычном объекте их не увидел бы (проверял бы уже очищенное значение).
+  // passthrough сохраняет лишние ключи в разобранном значении — следующий
+  // refine отвергает условие с полем вне контракта (в т.ч. `key`). `.strict()`
+  // не ставим: он добавляет `additionalProperties: false` в `inputSchema` и
+  // раздувает бюджет `tools/list` (сторож `mcp-telemetry`), а passthrough
+  // решает задачу тем же refine.
+  .passthrough()
   .refine((v) => v.property_id === undefined || v.property === undefined, {
     message: PROPERTY_ID_PROPERTY_CONFLICT,
   })
+  // Неизвестное поле условия (напр. `key` вместо `property`) — явная
+  // `VALIDATION_ERROR`, а не молчаливое вырезание (ошибка f4580fff, 0.12.1).
+  // Принцип «не игнорировать молча»: даже при валидном адресе лишнее поле
+  // отвергается, а не теряется. Поля `key` контрактом не предусмотрено.
+  .refine(
+    (v) => Object.keys(v).every((k) => (QUERY_PROPERTY_CONDITION_KEYS as readonly string[]).includes(k)),
+    {
+      error: (iss) => {
+        const unknown = Object.keys((iss.input ?? {}) as Record<string, unknown>).filter(
+          (k) => !(QUERY_PROPERTY_CONDITION_KEYS as readonly string[]).includes(k),
+        );
+        return (
+          `Условие свойства содержит неизвестные поля: ${unknown.join(', ')}. ` +
+          `Допустимы: ${QUERY_PROPERTY_CONDITION_KEYS.join(', ')}.`
+        );
+      },
+    },
+  )
   // Условие обязано адресовать свойство: `property_id` или имя `property`
-  // (ошибки 090d0242/4f17cb73, 0.12.1). Неизвестное поле условия (напр. `key`)
-  // zod по умолчанию ВЫРЕЗАЕТ — без этой проверки условие теряло адрес и
-  // молча выпадало из отбора, расширяя его до всей сети. Теперь такой ввод —
-  // `VALIDATION_ERROR` (`.strict()` не ставим: он раздувает `inputSchema`
-  // сторожевого бюджета `tools/list`, а проверка адреса ловит тот же дефект).
+  // (ошибки 090d0242/4f17cb73, 0.12.1). Иначе условие теряло бы адрес и
+  // молча выпадало из отбора, расширяя его до всей сети — теперь это явная
+  // `VALIDATION_ERROR`.
   .refine((v) => v.property_id !== undefined || v.property !== undefined, {
     message: 'Укажите property_id или property в условии свойства.',
   });

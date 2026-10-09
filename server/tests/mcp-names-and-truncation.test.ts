@@ -245,8 +245,10 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
         assert.equal(byId.total, 1);
         assert.equal(byId.hits[0]?.title, 'Задача A');
 
-        // Несуществующее имя свойства — VALIDATION_ERROR с указанием поля
-        // (ошибка 090d0242, 0.12.1; ранее — молчаливое расширение отбора).
+        // Несуществующее имя свойства — `NOT_FOUND` с указанием поля (ошибки
+        // 090d0242/f4580fff, 0.12.1; ранее — молчаливое расширение отбора,
+        // затем асимметричный VALIDATION_ERROR). Код выровнен по конвенции
+        // резолва имён реестровых сущностей — как у типа.
         const missing = await handle.client.callTool({
           name: 'etn.thoughts.query',
           arguments: {
@@ -257,12 +259,21 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
           },
         });
         assert.equal(missing.isError, true);
-        assert.match(toolText(missing), /VALIDATION_ERROR/);
+        assert.match(toolText(missing), /NOT_FOUND/);
         // Подсказка, какое поле не найдено.
         assert.match(toolText(missing), /несуществующее-свойство/);
 
-        // Несуществующий property_id — тоже VALIDATION_ERROR, а не расширение
-        // отбора до всей сети (ошибка 4f17cb73, 0.12.1).
+        // Паритет с резолвом ИМЕНИ типа: несуществующий `type` — тот же код
+        // `NOT_FOUND` (конвенция типа/свойства; ошибка f4580fff, 0.12.1).
+        const missingType = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: { network_id: ctx.networkId, type: ['нет-такого-типа'] },
+        });
+        assert.equal(missingType.isError, true);
+        assert.match(toolText(missingType), /NOT_FOUND/);
+
+        // Несуществующий property_id — тоже `NOT_FOUND`, а не расширение
+        // отбора до всей сети (ошибки 4f17cb73/f4580fff, 0.12.1).
         const unknownId = await handle.client.callTool({
           name: 'etn.thoughts.query',
           arguments: {
@@ -273,12 +284,11 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
           },
         });
         assert.equal(unknownId.isError, true);
-        assert.match(toolText(unknownId), /VALIDATION_ERROR/);
+        assert.match(toolText(unknownId), /NOT_FOUND/);
         assert.match(toolText(unknownId), /11111111-1111-4111-8111-111111111111/);
 
-        // Неизвестное поле условия (напр. `key` вместо `property`) — ошибка
-        // строгой схемы (ошибка 090d0242, 0.12.1): условие больше не выпадает
-        // молча без адреса свойства.
+        // Неизвестное поле условия БЕЗ адреса (напр. `key` вместо `property`) —
+        // VALIDATION_ERROR (ошибка 090d0242, 0.12.1): условие не выпадает молча.
         const unknownField = await handle.client.callTool({
           name: 'etn.thoughts.query',
           arguments: {
@@ -290,6 +300,27 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(unknownField.isError, true);
         assert.match(toolText(unknownField), /VALIDATION_ERROR/);
+
+        // Неизвестное поле условия ПРИ валидном адресе (ошибка f4580fff,
+        // 0.12.1) — тоже явная VALIDATION_ERROR, а не молчаливое вырезание:
+        // лишний `key` не должен теряться, даже когда property_id разрешается.
+        const unknownFieldWithAddress = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: {
+            network_id: ctx.networkId,
+            properties: [
+              {
+                property_id: filtered.resolved_properties![0]!.id,
+                key: 'статус',
+                operator: 'eq',
+                value: 'в реализации',
+              },
+            ],
+          },
+        });
+        assert.equal(unknownFieldWithAddress.isError, true);
+        assert.match(toolText(unknownFieldWithAddress), /VALIDATION_ERROR/);
+        assert.match(toolText(unknownFieldWithAddress), /key/);
       } finally {
         await handle.close();
       }
