@@ -42,6 +42,7 @@ import {
   parseBlockEditorKey,
   reportCommitFailures,
   transclusionBlockLabel,
+  transclusionEventSourceId,
   transclusionSourceIds,
   type TransclusionCommitResult,
 } from '../src/renderer/editor/transclusion.js';
@@ -482,6 +483,46 @@ test('NestedEditorStore: markSaved сдвигает базу, markError поме
   store.markSaved(key);
   assert.equal(store.hasError(key), false, 'успешная запись снимает пометку');
   assert.equal(dom.classList.contains(NESTED_SAVE_ERROR_CLASS), false);
+});
+
+test('transclusionEventSourceId: событие → мысль-источник (402a70db)', () => {
+  const net = NET;
+  const evt = (type: string, data: unknown): never =>
+    ({ type, network_id: net, data }) as never;
+  // Правка/создание/удаление ПОСТОЯННОГО комментария владельца-мысли.
+  assert.equal(
+    transclusionEventSourceId(
+      evt('comment.updated', { id: 'c', owner_id: ID_A, kind: 'permanent', changes: {}, version: 2 }),
+    ),
+    ID_A,
+  );
+  assert.equal(
+    transclusionEventSourceId(
+      evt('comment.created', {
+        comment: { id: 'c', owner_type: 'thought', owner_id: ID_B, kind: 'permanent' },
+      }),
+    ),
+    ID_B,
+  );
+  assert.equal(
+    transclusionEventSourceId(evt('comment.deleted', { id: 'c', owner_type: 'thought', owner_id: ID_A })),
+    ID_A,
+  );
+  assert.equal(transclusionEventSourceId(evt('thought.deleted', { id: ID_A })), ID_A);
+  // Хроно-комментарий и владелец-связь источником трансклюзии не являются.
+  assert.equal(
+    transclusionEventSourceId(
+      evt('comment.updated', { id: 'c', owner_id: ID_A, kind: 'chronological', changes: {}, version: 2 }),
+    ),
+    null,
+  );
+  assert.equal(
+    transclusionEventSourceId(
+      evt('comment.deleted', { id: 'c', owner_type: 'link', owner_id: ID_A }),
+    ),
+    null,
+  );
+  assert.equal(transclusionEventSourceId(evt('thought.updated', { id: ID_A })), null);
 });
 
 test('NestedEditorStore: rollbackAll возвращает все инстансы к загруженному тексту', () => {

@@ -31,7 +31,7 @@ import {
 
 import { requireNetworkId } from '../app.js';
 import { canSave, clearSourceDrafts, findSourceDraft, offlineNotice, saveSourceDraft } from '../drafts.js';
-import { invalidateQueries, queryKeys } from '../lib/live/index.js';
+import { invalidateQueries, onRoutedRealtimeEvent, queryKeys } from '../lib/live/index.js';
 import { div, el, errText, renderHtml } from '../lib/dom.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { t } from '../lib/i18n.js';
@@ -74,6 +74,7 @@ import {
   reportCommitFailures,
   transclusionInternals,
   transclusionLabels,
+  transclusionEventSourceId,
   TransclusionLockSet,
   transclusionSourceIds,
   wireViewTransclusionLocks,
@@ -581,6 +582,48 @@ export function viewSelectionOffsets(view: HTMLElement): { from: number; to: num
 }
 
 const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
+
+/**
+ * Живые поля с трансклюзиями: перерисовка ПРОСМОТРА при изменении источника
+ * (ошибка `402a70db`). Карточка дневниковой записи НЕ перерисовывается при
+ * правке ЧУЖОЙ мысли-источника (сама запись не изменилась, keyed-сверка её не
+ * трогает), поэтому поле обязано само обновить развёртку, когда видит right-
+ * событие о своём источнике. Реестр — на модуль, подписка одна
+ * (`ensureTransclusionViewRefresh`); отключённые корни (пересобранная карточка,
+ * закрытое поле) вычищаются при первом же событии.
+ */
+interface TransclusionViewEntry {
+  /** Корень поля ещё в документе (иначе запись сирота — удаляем). */
+  isAlive(): boolean;
+  networkId(): string | null;
+  /** Текущие мысли-источники трансклюзий документа. */
+  sources(): string[];
+  /** Перерисовать просмотр (в правке — no-op). */
+  refresh(): void;
+}
+
+const transclusionViews = new Set<TransclusionViewEntry>();
+let transclusionViewsWired = false;
+
+/** Одна подписка на realtime: перерисовка полей под изменившийся источник. */
+function ensureTransclusionViewRefresh(): void {
+  if (transclusionViewsWired) return;
+  transclusionViewsWired = true;
+  onRoutedRealtimeEvent((evt) => {
+    const sourceId = transclusionEventSourceId(evt);
+    if (sourceId === null) return;
+    for (const entry of [...transclusionViews]) {
+      if (!entry.isAlive()) {
+        transclusionViews.delete(entry);
+        continue;
+      }
+      if (entry.networkId() !== evt.network_id) continue;
+      if (!entry.sources().includes(sourceId)) continue;
+      entry.refresh();
+    }
+  });
+}
+
 
 /**
  * Узел DOM ли `target` (`Window` — нет). Без `instanceof Node`: в тестовом
@@ -1146,6 +1189,23 @@ export function createMarkdownField(opts: {
     viewMap = null;
     paintView(viewHtml());
   };
+
+  // Поле с трансклюзиями перерисовывает просмотр, когда realtime сообщает о
+  // правке его источника (ошибка `402a70db`) — карточка «Дневника» при правке
+  // ЧУЖОЙ мысли не перестраивается (keyed-сверка видит неизменную запись).
+  // В правке просмотр не трогаем: блоки живут во вложенных редакторах.
+  if (opts.sourceMapView === true) {
+    ensureTransclusionViewRefresh();
+    const entry: TransclusionViewEntry = {
+      isAlive: () => root.isConnected,
+      networkId: () => networkId,
+      sources: () => transclusionSourceIds(currentMd),
+      refresh: () => {
+        if (!editing && !mounting) renderView();
+      },
+    };
+    transclusionViews.add(entry);
+  }
 
   /**
    * Явный жест «клик вне поля» — второе основание выхода в просмотр (единое

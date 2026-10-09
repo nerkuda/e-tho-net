@@ -780,40 +780,39 @@ export function invalidateTransclusionSource(networkId: string, sourceId: string
 }
 
 /**
- * Ключ источника, который надо сбросить по realtime-событию комментария, либо
- * `null`. Тело источника трансклюзии — ПОСТОЯННЫЙ комментарий мысли, поэтому
- * кэш трогают только создания/правки/удаления постоянных комментариев
- * владельца-мысли; хроно-комментарии и владельцы-связи — нет. Удаление самой
- * мысли-источника (`thought.deleted`) тоже сбрасывает ключ: её постоянный
- * комментарий сносится каскадом, а отдельного `comment.deleted` сервер не шлёт
- * (ошибка `746e4e59`).
+ * Мысль-источник, которую затрагивает realtime-событие, либо `null` (ошибка
+ * `402a70db`). Тело источника трансклюзии — ПОСТОЯННЫЙ комментарий мысли, поэтому
+ * событие принадлежит источнику только для создания/правки/удаления постоянного
+ * комментария владельца-мысли; хроно-комментарии и владельцы-связи — нет.
+ * Удаление мысли-источника (`thought.deleted`) тоже даёт id: её постоянный
+ * комментарий сносится каскадом, отдельного `comment.deleted` нет (ошибка
+ * `746e4e59`). Экспортируется для полей с трансклюзиями: по нему просмотр
+ * перерисовывает развёртку, когда правят источник в другом месте (`Открыть`).
  */
-function sourceKeyForCommentEvent(evt: AnyRealtimeEvent): string | null {
-  // Удаление мысли-источника (ошибка `746e4e59`): постоянный комментарий
-  // сносится каскадом, но маршрут эмитит только `thought.deleted`
-  // (`server/src/routes/thoughts.ts`) без `comment.deleted` — без этой ветки
-  // кэш держал бы тело удалённого источника и блок показывал бы его вместо
-  // «нет источника трансклюзии».
-  if (evt.type === 'thought.deleted') {
-    return sourceCacheKey(evt.network_id, evt.data.id);
-  }
+export function transclusionEventSourceId(evt: AnyRealtimeEvent): string | null {
+  if (evt.type === 'thought.deleted') return evt.data.id;
   if (evt.type === 'comment.updated') {
-    return evt.data.kind === 'permanent'
-      ? sourceCacheKey(evt.network_id, evt.data.owner_id)
-      : null;
+    return evt.data.kind === 'permanent' ? evt.data.owner_id : null;
   }
   if (evt.type === 'comment.created') {
     const comment = evt.data.comment;
     return comment.kind === 'permanent' && comment.owner_type === 'thought'
-      ? sourceCacheKey(evt.network_id, comment.owner_id)
+      ? comment.owner_id
       : null;
   }
   if (evt.type === 'comment.deleted') {
-    return evt.data.owner_type === 'thought'
-      ? sourceCacheKey(evt.network_id, evt.data.owner_id)
-      : null;
+    return evt.data.owner_type === 'thought' ? evt.data.owner_id : null;
   }
   return null;
+}
+
+/**
+ * Ключ источника, который надо сбросить по realtime-событию комментария, либо
+ * `null` (см. {@link transclusionEventSourceId}).
+ */
+function sourceKeyForCommentEvent(evt: AnyRealtimeEvent): string | null {
+  const sourceId = transclusionEventSourceId(evt);
+  return sourceId === null ? null : sourceCacheKey(evt.network_id, sourceId);
 }
 
 /**
