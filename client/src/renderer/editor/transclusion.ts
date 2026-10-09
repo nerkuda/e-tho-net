@@ -136,7 +136,7 @@ import {
 import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
-import { div, el, errText } from '../lib/dom.js';
+import { div, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../lib/live/index.js';
@@ -154,11 +154,9 @@ import { fieldInput } from '../lib/ui/field.js';
 import { svgIcon, type IconName } from '../lib/ui/icon.js';
 import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 import { openPopover, watchOutsideTap } from '../lib/ui/popover.js';
-import {
-  isInsideSuggestDropdown,
-  wireSuggest,
-  type SuggestEntry,
-} from '../lib/suggest-dropdown.js';
+// Мини-синтаксис подстрок живого поиска разделов — тот же, что у поиска
+// клиента (`parseKeywords`/`matchesKeywords`), второго парсера не заводим.
+import { matchesKeywords, parseKeywords } from '../lib/filter-builder.js';
 
 import { buildTransclusionMenuItems, TRANSCLUSION_NAV_MENU_LAYOUT } from './comment-commands.js';
 import { collapseScopeFacet, decorateCommentView } from './comment-collapse.js';
@@ -1813,31 +1811,14 @@ export const transclusionContextMenu = EditorView.domEventHandlers({
 
 /** Корень тела поповера правки ссылки (вид — `styles/editor.css`). */
 export const TRANSCLUSION_POPOVER_CLASS = 'transclusion-popover';
-/** Строка-подпись группы поповера («Мысль», «Раздел»). */
-const TRANSCLUSION_POPOVER_LABEL_CLASS = 'transclusion-popover-label';
+/** Кнопка «Все разделы комментария» (первая команда центра поповера). */
+const TRANSCLUSION_POPOVER_ALL_CLASS = 'transclusion-popover-all';
 /** Прокручиваемый список разделов источника. */
 const TRANSCLUSION_POPOVER_SECTIONS_CLASS = 'transclusion-popover-sections';
-/** Ряд команд навигации поповера. */
+/** Ряд команд навигации поповера (верхняя панель). */
 const TRANSCLUSION_POPOVER_COMMANDS_CLASS = 'transclusion-popover-commands';
 /** Строка списка разделов (кнопка словаря с модификатором раскладки). */
 const TRANSCLUSION_POPOVER_ROW_CLASS = 'transclusion-popover-row';
-
-/**
- * Источник подсказок «мысль» поповера (задача `68591b8a`): живой поиск по
- * именам и синонимам тем же серверным механизмом, что и выпадашка пикера
- * сущностей (`etn.thoughts.findDuplicates`), — второго поиска не заводим.
- * Пустой запрос ничего не отдаёт (живой поиск начинается с ввода).
- */
-async function loadThoughtEntries(networkId: string, query: string): Promise<SuggestEntry[]> {
-  const trimmed = query.trim();
-  if (trimmed === '') return [];
-  try {
-    const hits = await etn.thoughts.findDuplicates(networkId, trimmed, [], []);
-    return hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } }));
-  } catch {
-    return [];
-  }
-}
 
 /** Заголовки разделов источника (пусто, если источник не найден). */
 async function sourceSectionTitles(networkId: string, sourceId: string): Promise<string[]> {
@@ -1846,13 +1827,22 @@ async function sourceSectionTitles(networkId: string, sourceId: string): Promise
 }
 
 /**
- * Поповер правки ссылки блока (задача `68591b8a`, элемент `7a479549`): выбор
- * мысли живым поиском, выбор раздела источника целиком сразу и четыре команды
- * навигации. Смена ссылки применяется ОДНОЙ транзакцией замены диапазона
- * ссылки (`formatTransclusionRef`) — прежней сырой правки ссылки и сворачивания
- * блока нет. Поповер и его закрытие — общий компонент `lib/ui`; выпадашка
- * поиска мыслей — общий `wireSuggest`; «клик вне» закрывает через
- * `watchOutsideTap` (подсказки считаются «своими», как в строке поиска).
+ * Поповер правки ссылки блока (задача `68591b8a`, элемент `7a479549`; переделка
+ * по решению пользователя 2026-10-09, задача `aa309fb7`). Состав сверху вниз:
+ *  1. панель команд навигации БЕЗ подписи — «Открыть ссылку», «В фокус»,
+ *     «Копировать», «Копировать ID» и удаление блока крестиком (не корзиной);
+ *  2. первая команда центра — «Все разделы комментария»: применить ссылку без
+ *     раздела (весь комментарий), с подсказкой;
+ *  3. строка живого поиска ПО РАЗДЕЛАМ источника: пусто — все разделы,
+ *     набранные части слов — разделы, содержащие ВСЕ части без учёта регистра и
+ *     порядка (мини-синтаксис подстрок клиентского поиска);
+ *  4. список разделов источника (отфильтрованный поиском).
+ *
+ * Поиска МЫСЛИ в поповере нет (решение пользователя): другую мысль-источник
+ * выбирают, удалив прежнюю ссылку и вставив новую. Смена ссылки применяется
+ * ОДНОЙ транзакцией замены диапазона (`formatTransclusionRef`) — прежней сырой
+ * правки ссылки и сворачивания блока нет. Поповер и его закрытие — общий
+ * компонент `lib/ui`; «клик вне» закрывает через `watchOutsideTap`.
  */
 export function openTransclusionLinkPopover(
   view: EditorView,
@@ -1868,21 +1858,25 @@ export function openTransclusionLinkPopover(
   let stopOutside: () => void = () => {};
 
   const body = div(TRANSCLUSION_POPOVER_CLASS);
-  const input = fieldInput({
-    extraClass: 'transclusion-popover-input',
-    placeholder: t('comment.transclusion.popover.search'),
-  });
-  input.autocomplete = 'off';
-  const sectionList = div(TRANSCLUSION_POPOVER_SECTIONS_CLASS);
+  // Верхняя панель команд — БЕЗ подписи (решение пользователя).
   const commands = div(TRANSCLUSION_POPOVER_COMMANDS_CLASS);
-  body.append(
-    el('div', TRANSCLUSION_POPOVER_LABEL_CLASS, t('comment.transclusion.popover.thought')),
-    input,
-    el('div', TRANSCLUSION_POPOVER_LABEL_CLASS, t('comment.transclusion.popover.section')),
-    sectionList,
-    el('div', TRANSCLUSION_POPOVER_LABEL_CLASS, t('comment.transclusion.popover.commands')),
-    commands,
-  );
+  // Первая команда центра — «Все разделы комментария» (ссылка без раздела).
+  const allSections = uiButton({
+    label: t('comment.transclusion.popover.allSections'),
+    role: 'ghost',
+    size: 's',
+    class: `${TRANSCLUSION_POPOVER_ROW_CLASS} ${TRANSCLUSION_POPOVER_ALL_CLASS}`,
+    title: t('comment.transclusion.popover.allSectionsTooltip'),
+    onClick: () => apply(currentSourceId, null),
+  });
+  // Живой поиск по разделам (подстроки без регистра/порядка; пусто — все).
+  const sectionSearch = fieldInput({
+    extraClass: 'transclusion-popover-input',
+    placeholder: t('comment.transclusion.popover.sectionSearch'),
+  });
+  sectionSearch.autocomplete = 'off';
+  const sectionList = div(TRANSCLUSION_POPOVER_SECTIONS_CLASS);
+  body.append(commands, allSections, sectionSearch, sectionList);
 
   const close = (): void => popover.close();
 
@@ -1894,6 +1888,9 @@ export function openTransclusionLinkPopover(
       return ref.raw;
     }
   };
+
+  /** Подсветка активного выбора «Все разделы комментария». */
+  const refreshAllSections = (): void => setButtonActive(allSections, currentSection === null);
 
   /** Применяет смену ссылки одной транзакцией замены диапазона. */
   const apply = (sourceId: string, section: string | null): void => {
@@ -1917,41 +1914,45 @@ export function openTransclusionLinkPopover(
       selection: { anchor: change.from + change.insert.length },
       userEvent: 'input',
     });
+    refreshAllSections();
     void renderSections();
   };
 
-  /** Строка списка разделов (ключ — имя раздела; `null` — весь комментарий). */
+  /** Строка списка разделов (ключ и значение — имя раздела). */
   interface SectionRow {
     key: string;
     label: string;
-    section: string | null;
+    section: string;
     active: boolean;
   }
 
-  /** Перерисовывает список разделов текущего источника (целиком сразу). */
-  const renderSections = async (): Promise<void> => {
-    const sourceId = currentSourceId;
-    const titles = await sourceSectionTitles(networkId, sourceId);
-    if (sourceId !== currentSourceId) return;
-    const rows: SectionRow[] = [
-      {
-        key: '\u0000whole',
-        label: t('comment.transclusion.popover.whole'),
-        section: null,
-        active: currentSection === null,
-      },
-    ];
-    if (currentSection !== null && !titles.includes(currentSection)) {
-      // Текущий раздел не найден в источнике — показываем строкой, чтобы выбор
-      // не «терялся» на глазах пользователя.
-      rows.push({ key: currentSection, label: currentSection, section: currentSection, active: true });
-    }
-    for (const title of titles) {
-      rows.push({ key: title, label: title, section: title, active: currentSection === title });
+  /** Заголовки текущего источника — фильтр применяется без перезапроса. */
+  let sectionTitles: string[] = [];
+
+  /** Рисует список разделов с учётом живого поиска (пусто — все разделы). */
+  const paintSections = (): void => {
+    const parsed = parseKeywords(sectionSearch.value);
+    const rows: SectionRow[] = sectionTitles
+      .filter((title) => matchesKeywords(title, parsed))
+      .map((title) => ({
+        key: title,
+        label: title,
+        section: title,
+        active: currentSection === title,
+      }));
+    // Текущий раздел, которого нет в источнике или который не прошёл фильтр,
+    // держим видимым строкой — иначе выбор «теряется» на глазах пользователя.
+    if (currentSection !== null && !rows.some((row) => row.section === currentSection)) {
+      rows.unshift({
+        key: currentSection,
+        label: currentSection,
+        section: currentSection,
+        active: true,
+      });
     }
     // Инкрементальная сверка по ключу (стандарт «Списки рендерятся
-    // инкрементально»): смена активного раздела обновляет строку, не снося
-    // прокрутку/фокус списка.
+    // инкрементально»): смена активного раздела/фильтра обновляет строки, не
+    // снося прокрутку/фокус списка.
     reconcileKeyed(sectionList, rows, {
       key: (row) => row.key,
       equals: (a, b) => a.key === b.key && a.label === b.label && a.active === b.active,
@@ -1974,6 +1975,18 @@ export function openTransclusionLinkPopover(
       },
     });
   };
+
+  /** Загружает заголовки источника и рисует список (целиком сразу). */
+  const renderSections = async (): Promise<void> => {
+    const sourceId = currentSourceId;
+    const titles = await sourceSectionTitles(networkId, sourceId);
+    if (sourceId !== currentSourceId) return;
+    sectionTitles = titles;
+    refreshAllSections();
+    paintSections();
+  };
+
+  sectionSearch.addEventListener('input', () => paintSections());
 
   const commandButton = (
     icon: IconName,
@@ -2017,16 +2030,10 @@ export function openTransclusionLinkPopover(
       void copyTransclusionText(currentSourceId, t('comment.transclusion.menu.copiedId'));
     }),
     // «Удалить блок» — удаление ссылки одной транзакцией, каретка на место
-    // блока; без подтверждения (откат — undo контейнера).
-    commandButton('trash', t('comment.transclusion.menu.delete'), removeBlock),
+    // блока; без подтверждения (откат — undo контейнера). Иконка — крестик
+    // (`x`), не корзина (решение пользователя, задача `aa309fb7`).
+    commandButton('x', t('comment.transclusion.menu.delete'), removeBlock),
   );
-
-  const handle = wireSuggest(input, {
-    // Живой поиск мыслей — та же выпадашка, что у пикера сущностей.
-    sources: [{ when: 'typed', load: (query) => loadThoughtEntries(networkId, query) }],
-    minWidth: 280,
-    onPick: (entry) => apply(entry.value, null),
-  });
 
   const popover = openPopover({
     anchor: { element: anchor },
@@ -2035,16 +2042,14 @@ export function openTransclusionLinkPopover(
       body,
       maxHeightPx: 360,
     },
-    // Клик вне закрывает вручную через `watchOutsideTap` (подсказки мыслей
-    // живут в общем слое вне панели — их клик «свой», а не внешний).
+    // Клик вне закрывает вручную через `watchOutsideTap` (панель не модальна).
     closeOnOutsideClick: false,
     onClose: () => {
-      handle.dispose();
       stopOutside();
     },
   });
   stopOutside = watchOutsideTap(
-    (target) => popover.contains(target) || isInsideSuggestDropdown(target),
+    (target) => popover.contains(target),
     () => popover.close(),
   );
   void renderSections();
@@ -2607,7 +2612,6 @@ export const transclusionInternals = {
   exitActiveBlock,
   refForKey,
   blockEditorKey,
-  loadThoughtEntries,
   sourceSectionTitles,
   transclusionSourceIds,
   parseBlockEditorKey,

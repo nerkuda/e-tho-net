@@ -6,9 +6,11 @@
  *  1. `decorateViewTransclusionChips` вешает на блок просмотра чип «имя · раздел»
  *     (имя — из карты развёртки), идемпотентно; клик чипа открывает меню команд
  *     навигации в точке клика;
- *  2. `openTransclusionLinkPopover` открывает поповер с полем живого поиска,
- *     списком разделов источника (целиком сразу) и командами; выбор раздела
- *     применяется ОДНОЙ транзакцией замены диапазона ссылки.
+ *  2. `openTransclusionLinkPopover` (переделка по задаче `aa309fb7`): сверху —
+ *     команды навигации без подписи (удаление крестиком), первой командой
+ *     центра — «Все разделы комментария», ниже — живой поиск ПО РАЗДЕЛАМ
+ *     мини-синтаксисом подстрок, затем список разделов; поиска мысли нет; выбор
+ *     раздела применяется ОДНОЙ транзакцией замены диапазона ссылки.
  *
  * DOM-shimmed, как соседние lib-ui-тесты (`comment-commands.test.ts`).
  */
@@ -32,6 +34,7 @@ import {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+const ID_B = '11111111-2222-3333-4444-555555555555';
 const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
 
 /** Минимальный DOM/window-шим (поповер, меню, выпадашка, списки). */
@@ -131,8 +134,8 @@ describe('чип-шапка блока в просмотре (68591b8a)', () => 
   });
 });
 
-describe('поповер правки ссылки (68591b8a)', () => {
-  it('открывает поле поиска, разделы источника целиком и команды', async () => {
+describe('поповер правки ссылки (68591b8a, переделка aa309fb7)', () => {
+  it('команды сверху без подписи, «Все разделы комментария» и разделы источника', async () => {
     stubEtn('## Альфа\nтекст\n## Бета\nтекст');
     const { store } = await import('../src/renderer/state.js');
     store.update({ networkId: NET });
@@ -147,26 +150,80 @@ describe('поповер правки ссылки (68591b8a)', () => {
       const body = (globalThis as any).document.body as ShimElement;
       const popover = body.querySelector(`.${TRANSCLUSION_POPOVER_CLASS}`);
       assert.ok(popover !== null, 'поповер открыт');
-      // Поле живого поиска (внутри общего попапа) и четыре команды.
+      // Панель команд — ПЕРВЫЙ элемент поповера, без подписи «Команды».
+      const first = popover!.children[0]!;
       assert.ok(
-        body.querySelectorAll('.transclusion-popover-input').length >= 1,
-        'есть поле живого поиска мыслей',
+        first.classList.contains('transclusion-popover-commands'),
+        'панель команд стоит сверху',
       );
-      const rows = popover!.querySelectorAll('.transclusion-popover-row');
-      const labels = rows.map((row) => row.textContent);
-      assert.deepEqual(
-        labels,
-        ['Весь комментарий', 'Альфа', 'Бета'],
-        'разделы источника показаны целиком сразу',
+      assert.ok(
+        !popover!.textContent.includes('Команды'),
+        'у панели команд нет подписи «Команды»',
       );
-      const commandsBox = body.querySelector('.transclusion-popover-commands');
-      assert.ok(commandsBox !== null, 'есть ряд команд');
-      const commands = commandsBox!.children.filter((child) => child.classList.contains('ui-btn'));
-      assert.equal(commands.length, 5, 'четыре навигации + «Удалить блок» (c11b82ee)');
+      assert.ok(!popover!.textContent.includes('Мысль'), 'поиска мысли в поповере нет');
+      const commands = first.children.filter((child) => child.classList.contains('ui-btn'));
+      assert.equal(commands.length, 5, 'четыре навигации + удаление блока');
       assert.ok(
         commands.some((child) => (child as { title?: string }).title === 'Удалить блок'),
-        'в поповере есть команда «Удалить блок»',
+        'в поповере есть команда удаления блока',
       );
+      // Первая команда центра — «Все разделы комментария» с тултипом.
+      const all = popover!.querySelector('.transclusion-popover-all');
+      assert.ok(all !== null, 'есть команда «Все разделы комментария»');
+      assert.equal(all!.textContent, 'Все разделы комментария');
+      assert.equal(
+        (all as { title?: string }).title,
+        'Показать все разделы комментария мысли',
+        'тултип команды',
+      );
+      // Список разделов источника — целиком сразу, без строки «Весь комментарий».
+      const rows = popover!
+        .querySelector('.transclusion-popover-sections')!
+        .querySelectorAll('.transclusion-popover-row');
+      assert.deepEqual(
+        rows.map((row) => row.textContent),
+        ['Альфа', 'Бета'],
+        'разделы источника показаны целиком сразу',
+      );
+    } finally {
+      store.update({ networkId: null });
+    }
+  });
+
+  it('живой поиск по разделам: подстроки без регистра и порядка, пусто — все', async () => {
+    stubEtn('## Первая строка\nтекст\n## Вторая строка\nтекст\n## Третья часть\nтекст');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: NET });
+    try {
+      // Отдельный источник (ID_B): общий кэш источников на сеть удержал бы тело
+      // предыдущего теста — суть проверки в другом наборе разделов.
+      const doc = `![[#${ID_B}]]`;
+      const ref = parseTransclusions(doc)[0]!;
+      const view = { state: EditorState.create({ doc }), dispatch: () => undefined };
+      openTransclusionLinkPopover(view as any, ref, new ShimElement('button') as unknown as HTMLElement);
+      await tick();
+      await tick();
+
+      const body = (globalThis as any).document.body as ShimElement;
+      const popover = body.querySelector(`.${TRANSCLUSION_POPOVER_CLASS}`)!;
+      const list = popover.querySelector('.transclusion-popover-sections')!;
+      const input = popover.querySelector('.transclusion-popover-input')!;
+      const labels = (): string[] =>
+        list.querySelectorAll('.transclusion-popover-row').map((row) => row.textContent);
+      assert.equal(labels().length, 3, 'пусто — все разделы');
+
+      // Регистр и порядок не важны; обе части обязаны присутствовать (мини-синтаксис).
+      input.value = 'стр вт';
+      input.dispatchEvent({ type: 'input' });
+      assert.deepEqual(labels(), ['Вторая строка'], 'подстроки без регистра и порядка');
+
+      input.value = 'тре';
+      input.dispatchEvent({ type: 'input' });
+      assert.deepEqual(labels(), ['Третья часть'], 'одна подстрока');
+
+      input.value = 'неттакого';
+      input.dispatchEvent({ type: 'input' });
+      assert.deepEqual(labels(), [], 'нет совпадений — пусто');
     } finally {
       store.update({ networkId: null });
     }
@@ -206,6 +263,43 @@ describe('поповер правки ссылки (68591b8a)', () => {
         insert: `![[#${ID_A}#Бета]]`,
       });
       assert.equal(view.state.doc.toString(), `до ![[#${ID_A}#Бета]] после`);
+    } finally {
+      store.update({ networkId: null });
+    }
+  });
+
+  it('«Все разделы комментария» применяет ссылку без раздела одной транзакцией (aa309fb7)', async () => {
+    stubEtn('## Альфа\nтекст\n## Бета\nтекст');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: NET });
+    try {
+      const doc = `![[#${ID_A}#Бета]]`;
+      const ref = parseTransclusions(doc)[0]!;
+      const events: any[] = [];
+      const view: { state: EditorState; dispatch(spec: any): void } = {
+        state: EditorState.create({ doc }),
+        dispatch(spec: any): void {
+          events.push(spec);
+          view.state = view.state.update(spec).state;
+        },
+      };
+      openTransclusionLinkPopover(view as any, ref, new ShimElement('button') as unknown as HTMLElement);
+      await tick();
+      await tick();
+
+      const body = (globalThis as any).document.body as ShimElement;
+      const all = body.querySelector('.transclusion-popover-all');
+      assert.ok(all !== null, 'команда «Все разделы комментария» найдена');
+      all!.click();
+      await tick();
+
+      assert.equal(events.length, 1, 'ссылка без раздела — ровно одна транзакция');
+      assert.deepEqual(events[0].changes, {
+        from: ref.start,
+        to: ref.end,
+        insert: `![[#${ID_A}]]`,
+      });
+      assert.equal(view.state.doc.toString(), `![[#${ID_A}]]`);
     } finally {
       store.update({ networkId: null });
     }

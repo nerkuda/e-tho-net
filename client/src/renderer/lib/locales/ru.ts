@@ -401,16 +401,13 @@ export const ru = {
   'comment.transclusion.chip.tooltip': 'Ссылка трансклюзии',
   /** Заголовок поповера правки ссылки (68591b8a). */
   'comment.transclusion.popover.title': 'Ссылка трансклюзии',
-  /** Группа поповера: выбор мысли-источника. */
-  'comment.transclusion.popover.thought': 'Мысль',
-  /** Группа поповера: выбор раздела источника. */
-  'comment.transclusion.popover.section': 'Раздел',
-  /** Группа поповера: команды навигации. */
-  'comment.transclusion.popover.commands': 'Команды',
-  /** Плейсхолдер живого поиска мыслей в поповере. */
-  'comment.transclusion.popover.search': 'Поиск мысли…',
-  /** Строка списка разделов: весь комментарий, без раздела. */
-  'comment.transclusion.popover.whole': 'Весь комментарий',
+  /** Первая команда центра: применить ссылку без раздела (aa309fb7). */
+  'comment.transclusion.popover.allSections': 'Все разделы комментария',
+  /** Подсказка команды «Все разделы комментария» (aa309fb7). */
+  'comment.transclusion.popover.allSectionsTooltip':
+    'Показать все разделы комментария мысли',
+  /** Плейсхолдер живого поиска по разделам источника (aa309fb7). */
+  'comment.transclusion.popover.sectionSearch': 'Поиск раздела…',
   /** Плашка блока: мысль-источник недоступна или удалена. */
   'comment.transclusion.noSource': 'Нет источника трансклюзии',
   /** Плашка блока: раздел не найден в источнике. */
