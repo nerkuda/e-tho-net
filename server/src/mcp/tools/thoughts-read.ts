@@ -256,7 +256,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               if (cond.property !== undefined) {
                 const ref = resolveConditionPropertyRef(firstNdb, cond.property);
                 if (ref === null) {
-                  throw new EtnError('NOT_FOUND', `property "${cond.property}" not found`, {
+                  // Неразрешимое имя — явная ошибка (ошибка 090d0242, 0.12.1).
+                  throw new EtnError('VALIDATION_ERROR', `Свойство «${cond.property}» не найдено в реестре сети.`, {
                     field: 'property',
                     name: cond.property,
                   });
@@ -266,6 +267,15 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 if (resolved === null) resolved = [];
                 resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
                 continue;
+              }
+              // По id — проверяем существование в сети-контексте (сеть[0]); в
+              // остальных сетях отсутствующее свойство даёт пустой вклад
+              // (движок), а не расширение отбора (ошибка 4f17cb73, 0.12.1).
+              if (cond.property_id !== undefined && getNetworkProperty(firstNdb, cond.property_id) === null) {
+                throw new EtnError('VALIDATION_ERROR', `Свойство «${cond.property_id}» не найдено в реестре сети.`, {
+                  field: 'property_id',
+                  property_id: cond.property_id,
+                });
               }
               out.push(cond);
             }
@@ -333,7 +343,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             if (cond.property !== undefined) {
               const ref = resolveConditionPropertyRef(ndb, cond.property);
               if (ref === null) {
-                throw new EtnError('NOT_FOUND', `property "${cond.property}" not found`, {
+                // Ошибка 090d0242 (0.12.1): неразрешимое имя — явная ошибка, а
+                // не молчаливое выпадение условия (иначе отбор расширяется).
+                throw new EtnError('VALIDATION_ERROR', `Свойство «${cond.property}» не найдено в реестре сети.`, {
                   field: 'property',
                   name: cond.property,
                 });
@@ -343,6 +355,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               if (resolved === null) resolved = [];
               resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
               continue;
+            }
+            // Адресация по id: убеждаемся, что свойство есть в реестре сети
+            // (ошибка 4f17cb73, 0.12.1) — иначе отбор молча расширяется.
+            if (cond.property_id !== undefined && getNetworkProperty(ndb, cond.property_id) === null) {
+              throw new EtnError('VALIDATION_ERROR', `Свойство «${cond.property_id}» не найдено в реестре сети.`, {
+                field: 'property_id',
+                property_id: cond.property_id,
+              });
             }
             out.push(cond);
           }

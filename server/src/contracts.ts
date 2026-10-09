@@ -928,6 +928,15 @@ const QueryPropertyFields = z
   })
   .refine((v) => v.property_id === undefined || v.property === undefined, {
     message: PROPERTY_ID_PROPERTY_CONFLICT,
+  })
+  // Условие обязано адресовать свойство: `property_id` или имя `property`
+  // (ошибки 090d0242/4f17cb73, 0.12.1). Неизвестное поле условия (напр. `key`)
+  // zod по умолчанию ВЫРЕЗАЕТ — без этой проверки условие теряло адрес и
+  // молча выпадало из отбора, расширяя его до всей сети. Теперь такой ввод —
+  // `VALIDATION_ERROR` (`.strict()` не ставим: он раздувает `inputSchema`
+  // сторожевого бюджета `tools/list`, а проверка адреса ловит тот же дефект).
+  .refine((v) => v.property_id !== undefined || v.property !== undefined, {
+    message: 'Укажите property_id или property в условии свойства.',
   });
 const QueryFields = z
   .object({

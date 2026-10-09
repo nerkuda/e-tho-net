@@ -227,7 +227,26 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
         const text = toolText(conflict);
         assert.match(text, /ETN error \[VALIDATION_ERROR\]: provide at most one of property_id or property/);
 
-        // Несуществующее имя свойства — NOT_FOUND.
+        // Адресация по property_id даёт тот же результат, что по имени
+        // (ошибка 090d0242, 0.12.1): обе формы резолвятся в одно свойство.
+        const byId = toolJson<{ total: number; hits: Array<{ title: string }> }>(
+          await handle.client.callTool({
+            name: 'etn.thoughts.query',
+            arguments: {
+              network_id: ctx.networkId,
+              count: true,
+              type: ['задача'],
+              properties: [
+                { property_id: filtered.resolved_properties![0]!.id, operator: 'eq', value: 'в реализации' },
+              ],
+            },
+          }),
+        );
+        assert.equal(byId.total, 1);
+        assert.equal(byId.hits[0]?.title, 'Задача A');
+
+        // Несуществующее имя свойства — VALIDATION_ERROR с указанием поля
+        // (ошибка 090d0242, 0.12.1; ранее — молчаливое расширение отбора).
         const missing = await handle.client.callTool({
           name: 'etn.thoughts.query',
           arguments: {
@@ -238,9 +257,39 @@ describe('MCP filter names (d5ab1630)', { skip: !nativeAvailable() }, () => {
           },
         });
         assert.equal(missing.isError, true);
-        assert.match(toolText(missing), /NOT_FOUND/);
+        assert.match(toolText(missing), /VALIDATION_ERROR/);
         // Подсказка, какое поле не найдено.
         assert.match(toolText(missing), /несуществующее-свойство/);
+
+        // Несуществующий property_id — тоже VALIDATION_ERROR, а не расширение
+        // отбора до всей сети (ошибка 4f17cb73, 0.12.1).
+        const unknownId = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: {
+            network_id: ctx.networkId,
+            properties: [
+              { property_id: '11111111-1111-4111-8111-111111111111', operator: 'eq', value: 'x' },
+            ],
+          },
+        });
+        assert.equal(unknownId.isError, true);
+        assert.match(toolText(unknownId), /VALIDATION_ERROR/);
+        assert.match(toolText(unknownId), /11111111-1111-4111-8111-111111111111/);
+
+        // Неизвестное поле условия (напр. `key` вместо `property`) — ошибка
+        // строгой схемы (ошибка 090d0242, 0.12.1): условие больше не выпадает
+        // молча без адреса свойства.
+        const unknownField = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: {
+            network_id: ctx.networkId,
+            properties: [
+              { key: 'статус', operator: 'eq', value: 'в реализации' },
+            ],
+          },
+        });
+        assert.equal(unknownField.isError, true);
+        assert.match(toolText(unknownField), /VALIDATION_ERROR/);
       } finally {
         await handle.close();
       }
