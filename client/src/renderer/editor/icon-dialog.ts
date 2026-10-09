@@ -16,8 +16,10 @@
  * «Эмодзи» — первая, «Библиотека» — следующая (элемент интерфейса 91367509).
  *
  * При открытии диалог встаёт на вкладку ВИДА текущей иконки и отмечает текущий
- * выбор (ошибка e2407f6d): `emoji`/`icon`/`image` → «Эмодзи»/«Библиотека»/«URL»,
- * разворачивается категория эмодзи и выделяется текущий значок; на вкладке
+ * выбор (ошибки e2407f6d, 846c426a): `emoji`/`icon` → «Эмодзи»/«Библиотека»,
+ * `image`-вложение (`icon_attachment_id`) → «Вложения» (текущее вложение показано
+ * выбранным, применение без изменений его сохраняет), `image`-URL → «URL».
+ * Разворачивается категория эмодзи и выделяется текущий значок; на вкладке
  * «Библиотека» уже выбранный значок делает «Применить» активной — смена только
  * цвета не требует повторного поиска.
  */
@@ -51,24 +53,53 @@ export interface IconPickResult {
   color: string | null;
   /** Present when the icon came from the OS file picker (L16). */
   source?: IconPickSource;
+  /**
+   * Уже загруженное вложение-иконка, сохраняемое без повторной загрузки
+   * (ошибка 846c426a): применение вложения без изменений НЕ сбрасывает
+   * `icon_attachment_id` и не требует новой загрузки файла.
+   */
+  attachmentId?: string | null;
 }
 
 /** Opens the icon picker. `onPick` should persist the result and return success. */
 export function showIconDialog(opts: {
-  current: { icon: string | null; kind: IconKind; color: string | null };
+  current: {
+    icon: string | null;
+    kind: IconKind;
+    color: string | null;
+    /**
+     * id вложения текущей иконки-файла (`icon_attachment_id`); не `null` —
+     * иконка загружена из файла (ошибка 846c426a).
+     */
+    attachmentId?: string | null;
+  };
   onPick: (result: IconPickResult) => Promise<boolean>;
 }): void {
   const { current, onPick } = opts;
 
+  const attachmentId = current.attachmentId ?? null;
+  /** Иконка-ФАЙЛ: вид `image` из вложения (не URL) — ошибка 846c426a. */
+  const isAttachment = current.kind === 'image' && attachmentId !== null;
+
   /**
-   * Вкладка при открытии — по ВИДУ текущей иконки (ошибка e2407f6d): `emoji` →
-   * «Эмодзи», `icon` → «Библиотека», `image` → «URL» (картинка-адрес).
+   * Вкладка при открытии — по ВИДУ текущей иконки (ошибки e2407f6d, 846c426a):
+   * `emoji` → «Эмодзи», `icon` → «Библиотека», `image`-вложение → «Вложения»
+   * (текущее вложение показано выбранным), `image`-URL → «URL».
    */
   const activeTab =
-    current.kind === 'icon' ? 'library' : current.kind === 'image' ? 'url' : 'emoji';
+    current.kind === 'icon'
+      ? 'library'
+      : isAttachment
+        ? 'file'
+        : current.kind === 'image'
+          ? 'url'
+          : 'emoji';
   /** Начальное значение вкладки «URL» — адрес картинки (не `data:`-превью). */
   const initialUrl =
-    current.kind === 'image' && current.icon !== null && !current.icon.startsWith('data:')
+    current.kind === 'image' &&
+    !isAttachment &&
+    current.icon !== null &&
+    !current.icon.startsWith('data:')
       ? current.icon
       : undefined;
 
@@ -110,9 +141,18 @@ export function showIconDialog(opts: {
       }),
       fileImageSourceTab({
         types: store.state.thoughtTypes,
+        ...(isAttachment && current.icon !== null
+          ? { initial: { preview: current.icon, attachmentId } }
+          : {}),
         onTypeIcon: (icon, kind, color, ctx) => submit({ icon, kind, color })(ctx),
-        onFile: (preview, source, ctx) =>
-          submit({ icon: preview, kind: 'image', color: null, source })(ctx),
+        onFile: (pick, ctx) =>
+          submit({
+            icon: pick.preview,
+            kind: 'image',
+            color: null,
+            ...(pick.attachmentId !== undefined ? { attachmentId: pick.attachmentId } : {}),
+            ...(pick.source !== undefined ? { source: pick.source } : {}),
+          })(ctx),
       }),
       urlSourceTab({
         placeholder: 'URL изображения',

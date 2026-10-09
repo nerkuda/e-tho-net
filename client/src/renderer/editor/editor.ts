@@ -2476,7 +2476,12 @@ function openThoughtSettings(thought: Thought): void {
  */
 function changeThoughtIcon(thought: Thought): void {
   void showIconDialog({
-    current: { icon: thought.icon, kind: thought.icon_kind, color: thought.icon_color ?? null },
+    current: {
+      icon: thought.icon,
+      kind: thought.icon_kind,
+      color: thought.icon_color ?? null,
+      attachmentId: thought.icon_attachment_id ?? null,
+    },
     onPick: (result) => savePickedIcon(thought, result),
   });
 }
@@ -2484,7 +2489,9 @@ function changeThoughtIcon(thought: Thought): void {
 /** Persists a picked icon; file picks store the original as an attachment (L16). */
 async function savePickedIcon(thought: Thought, result: IconPickResult): Promise<boolean> {
   const networkId = requireNetworkId();
-  let attachmentId: string | null = null;
+  // Применение текущего вложения-иконки без изменений сохраняет его id
+  // (ошибка 846c426a); новый файл перезапишет его ниже после загрузки.
+  let attachmentId: string | null = result.attachmentId ?? null;
   if (result.source !== undefined) {
     const comma = result.source.dataUrl.indexOf(',');
     const dataBase64 = comma === -1 ? '' : result.source.dataUrl.slice(comma + 1);

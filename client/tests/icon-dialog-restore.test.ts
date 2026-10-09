@@ -10,6 +10,10 @@
  *      объявляет корректный выбор, и нижняя «Применить» активна — смена только
  *      цвета не требует повторного поиска; `apply` отдаёт текущий значок с
  *      выбранным цветом.
+ *   4. Вложение-картинка (ошибка 846c426a): вид `image` с `icon_attachment_id`
+ *      открывает вкладку «Вложения», текущее вложение показано выбранным
+ *      (`icon-preview-current`), «Применить» активна, а применение без изменений
+ *      отдаёт тот же `attachmentId` (повторная загрузка не нужна).
  *
  * jsdom в проекте нет — минимальный DOM-шим (конвенция `resource-picker.test.ts`).
  */
@@ -47,7 +51,9 @@ function installShim(): void {
 installShim();
 
 const { showIconDialog } = await import('../src/renderer/editor/icon-dialog.js');
-const { libraryIconSourceTab } = await import('../src/renderer/editor/resource-picker.js');
+const { libraryIconSourceTab, fileImageSourceTab } = await import(
+  '../src/renderer/editor/resource-picker.js'
+);
 const { loadIconCatalog } = await import('../src/renderer/lib/ui/icon.js');
 const { t } = await import('../src/renderer/lib/i18n.js');
 
@@ -102,7 +108,12 @@ function isDisabled(node: ShimElement): boolean {
 }
 
 /** Открывает диалог иконки с данным текущим выбором. */
-function open(current: { icon: string | null; kind: 'emoji' | 'icon' | 'image'; color: string | null }): void {
+function open(current: {
+  icon: string | null;
+  kind: 'emoji' | 'icon' | 'image';
+  color: string | null;
+  attachmentId?: string | null;
+}): void {
   showIconDialog({ current, onPick: () => Promise.resolve(true) });
 }
 
@@ -187,5 +198,65 @@ describe('диалог иконки: «Применить» активна пр�
     open({ icon: 'star', kind: 'icon', color: '#ff0000' });
     await loadIconCatalog();
     assert.equal(isDisabled(footerBtn(t('actions.apply'))), false, '«Применить» активна');
+  });
+});
+
+describe('диалог иконки: текущее вложение-картинка отмечено (846c426a)', () => {
+  beforeEach(() => installShim());
+
+  it('вид «image» из вложения открывает вкладку «Вложения» и «Применить» активна', () => {
+    open({ icon: 'data:image/png;base64,AAAA', kind: 'image', color: null, attachmentId: 'att-1' });
+    assert.equal(activeTabLabel(), t('publication.cover.tab.attachments'));
+    assert.equal(activeTabLabel(), 'Вложения');
+    assert.notEqual(activeTabLabel(), 'URL');
+    assert.equal(isDisabled(footerBtn(t('actions.apply'))), false, '«Применить» активна');
+    assert.ok(
+      lastBox().querySelector('.icon-preview-current') !== null,
+      'текущее вложение показано выбранным',
+    );
+  });
+
+  it('вид «image» без вложения (URL) по-прежнему открывает «URL»', () => {
+    open({ icon: 'https://example.test/pic.png', kind: 'image', color: null });
+    assert.equal(activeTabLabel(), 'URL');
+  });
+});
+
+describe('вкладка «Вложения»: текущее вложение и «Применить» (846c426a)', () => {
+  beforeEach(() => installShim());
+
+  it('восстанавливает вложение: выделено, «Применить» активна, apply отдаёт тот же id', async () => {
+    let ready = false;
+    const ctx: any = { close: () => undefined, setReady: (v: boolean) => (ready = v) };
+    const picked: Array<{ preview: string; attachmentId?: string | null }> = [];
+    const tab = fileImageSourceTab({
+      types: [],
+      initial: { preview: 'data:image/png;base64,AAAA', attachmentId: 'att-1' },
+      onTypeIcon: () => undefined,
+      onFile: (pick) => {
+        picked.push({ preview: pick.preview, attachmentId: pick.attachmentId });
+      },
+    });
+    const root = tab.build(ctx) as unknown as ShimElement;
+    assert.equal(ready, true, 'источник объявил выбор — «Применить» активна');
+    assert.ok(root.querySelector('.icon-preview-current') !== null, 'превью помечено выбранным');
+    assert.ok(tab.apply !== undefined, 'у источника есть apply');
+    await tab.apply!(ctx);
+    assert.deepEqual(
+      picked,
+      [{ preview: 'data:image/png;base64,AAAA', attachmentId: 'att-1' }],
+      'применение без изменений сохраняет то же вложение (без перезагрузки)',
+    );
+  });
+
+  it('без текущего вложения выбор не объявлен', () => {
+    let ready = false;
+    const ctx: any = { close: () => undefined, setReady: (v: boolean) => (ready = v) };
+    fileImageSourceTab({
+      types: [],
+      onTypeIcon: () => undefined,
+      onFile: () => undefined,
+    }).build(ctx);
+    assert.equal(ready, false, 'нет текущего вложения — источник молчит');
   });
 });

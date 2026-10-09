@@ -52,6 +52,20 @@ export interface ResourceFileSource {
 }
 
 /**
+ * Выбор во вкладке «Вложения» — либо НОВЫЙ файл из системного диалога (нужна
+ * загрузка оригинала), либо УЖЕ сохранённое вложение (применение без изменений,
+ * ошибка 846c426a — повторная загрузка не нужна, id сохраняется).
+ */
+export interface ResourceFilePick {
+  /** `data:`-превью выбранной иконки. */
+  preview: string;
+  /** Новый файл — вызывающий загружает оригинал во вложения (`icon_attachment_id`). */
+  source?: ResourceFileSource;
+  /** Текущее вложение восстановленной иконки — сохраняется как есть. */
+  attachmentId?: string | null;
+}
+
+/**
  * Контекст источника внутри каркаса. Отдаётся и в `build`, и в `apply` одного
  * источника (один объект на источник).
  */
@@ -558,11 +572,21 @@ export function urlSourceTab(opts: {
  * «Загрузить из файла», те же фасады `lib/ui`. Системный выбор применяет
  * нижняя «Применить»: файл ужимается до превью ≤256 КиБ
  * ({@link makeIconPreview}), а оригинал несётся вызывающему в
- * {@link ResourceFileSource}.
+ * {@link ResourceFilePick}.
+ *
+ * `opts.initial` — уже сохранённое вложение-иконка (ошибка 846c426a): при
+ * открытии диалога его превью показывается выбранным (`icon-preview-current`),
+ * «Применить» активна, а применение БЕЗ изменений возвращает то же вложение —
+ * `icon_attachment_id` сохраняется, повторная загрузка файла не нужна.
  */
 export function fileImageSourceTab(opts: {
   types: readonly ThoughtType[];
   emptyHint?: string;
+  /**
+   * Текущее вложение-иконка при открытии (превью + id) — восстановление выбора
+   * без повторной загрузки (ошибка 846c426a).
+   */
+  initial?: ResourceFilePick;
   /** Немедленный выбор иконки типа (последний аргумент — цвет символа). */
   onTypeIcon: (
     icon: string,
@@ -570,12 +594,8 @@ export function fileImageSourceTab(opts: {
     color: string | null,
     ctx: ResourceSourceContext,
   ) => void | Promise<void>;
-  /** Применение системного выбора файла (превью + оригинал). */
-  onFile: (
-    preview: string,
-    source: ResourceFileSource,
-    ctx: ResourceSourceContext,
-  ) => void | Promise<void>;
+  /** Применение выбора вкладки: новое превью с файлом-оригиналом либо текущее вложение. */
+  onFile: (pick: ResourceFilePick, ctx: ResourceSourceContext) => void | Promise<void>;
 }): ResourceSourceTab {
   const holder: { run: ResourceSourceTab['apply'] } = { run: undefined };
   return {
@@ -590,12 +610,16 @@ export function fileImageSourceTab(opts: {
       });
       box.append(el('div', 'icon-section-title', 'Иконки типов мыслей'), typeTab.build(ctx));
 
+      const initial = opts.initial ?? null;
       let dataUrl: string | null = null;
       let source: ResourceFileSource | null = null;
       const preview = div('icon-preview');
       const showBad = (): void => {
         preview.replaceChildren(el('span', 'icon-preview-bad', '✕'));
         preview.classList.add('icon-preview-error');
+      };
+      const markCurrent = (on: boolean): void => {
+        preview.classList.toggle('icon-preview-current', on);
       };
       const showPreview = (url: string): void => {
         preview.replaceChildren();
@@ -619,6 +643,7 @@ export function fileImageSourceTab(opts: {
         if (picked.status === 'cancel') return;
         dataUrl = null;
         source = null;
+        markCurrent(false);
         ctx.setReady(false);
         if (picked.status === 'error') {
           showBad();
@@ -639,21 +664,37 @@ export function fileImageSourceTab(opts: {
         }),
       );
       box.append(pickRow, preview);
-      preview.append(el('span', 'muted', 'Файл не выбран'));
 
-      // Применение системного выбора — нижней «Применить»: ужимаем до превью.
+      // Текущее вложение (ошибка 846c426a): показываем выбранным, «Применить»
+      // активна — применение без изменений сохранит `icon_attachment_id`.
+      if (initial !== null && initial.preview !== '') {
+        markCurrent(true);
+        ctx.setReady(true);
+        const img = el('img');
+        img.alt = '';
+        img.src = initial.preview;
+        preview.append(img);
+      } else {
+        preview.append(el('span', 'muted', 'Файл не выбран'));
+      }
+
+      // Применение — нижней «Применить»: новый файл ужимаем до превью, текущее
+      // вложение возвращаем как есть.
       holder.run = async (c) => {
-        if (dataUrl === null || source === null) return;
-        let icon = dataUrl;
-        if (dataUrlBytes(icon) > ICON_MAX_BYTES) {
-          try {
-            icon = await makeIconPreview(icon);
-          } catch {
-            notice('Не удалось подготовить превью иконки.', 'error');
-            return;
+        if (source !== null && dataUrl !== null) {
+          let icon = dataUrl;
+          if (dataUrlBytes(icon) > ICON_MAX_BYTES) {
+            try {
+              icon = await makeIconPreview(icon);
+            } catch {
+              notice('Не удалось подготовить превью иконки.', 'error');
+              return;
+            }
           }
+          await opts.onFile({ preview: icon, source }, c);
+          return;
         }
-        await opts.onFile(icon, source, c);
+        if (initial !== null) await opts.onFile(initial, c);
       };
       return box;
     },
