@@ -3,7 +3,7 @@
  * вкладки «Вложения»: список картинок сети с поиском, загрузкой из файла,
  * отметкой текущего и фиксированным предпросмотром. Используется диалогом
  * обложки публикации и диалогом выбора иконки; второй похожий список заводить
- * нельзя (сторож `guard-attachment-picker`).
+ * нельзя (сторож `client/tests/guard-resource-picker.test.ts`).
  *
  * Устройство панели (layout-фикс ошибки 3250096a):
  *  • строка поиска закреплена СВЕРХУ (не прокручивается вместе со списком);
@@ -39,6 +39,9 @@ import type {
 
 /** Предел страницы поиска вложений на сервере (`GET /attachments`). */
 const PAGE_SIZE = 200;
+
+/** Задержка живого поиска (мс): не бьём LIKE-поиском по сети на каждое нажатие. */
+const SEARCH_DEBOUNCE_MS = 200;
 
 /** Строка списка — носитель, схлопнутый по физическому файлу/ссылке. */
 export interface AttachmentPickerRow {
@@ -441,7 +444,17 @@ export function attachmentPickerSourceTab(opts: AttachmentPickerOptions): Resour
           attachmentId: currentId,
         });
       }
-      search.addEventListener('input', () => void runSearch(0));
+      // Живой поиск с задержкой: поиск вложений — LIKE по всей сети, и запрос
+      // на каждое нажатие нещадящ при тысячах записей. Первая загрузка списка
+      // (ниже) идёт сразу; пагинация debounce не касается.
+      let searchTimer: ReturnType<typeof setTimeout> | null = null;
+      search.addEventListener('input', () => {
+        if (searchTimer !== null) clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+          searchTimer = null;
+          void runSearch(0);
+        }, SEARCH_DEBOUNCE_MS);
+      });
       void runSearch(0);
       return root;
     },

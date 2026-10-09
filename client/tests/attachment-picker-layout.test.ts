@@ -181,4 +181,38 @@ describe('общий компонент выбора вложения: паги�
     // Последняя страница неполная — хвоста нет, кнопка скрыта.
     assert.ok(moreRow!.classList.contains('hidden'), 'хвост закончился — кнопка скрыта');
   });
+
+  it('живой поиск debounced: запрос не летит на каждое нажатие', async () => {
+    store.update({ networkId: 'net-1' });
+    const calls: Array<{ q: string; limit?: number; offset?: number }> = [];
+    (globalThis as any).window.etn = {
+      attachments: {
+        search: async (_n: string, query: { q: string; limit?: number; offset?: number }) => {
+          calls.push(query);
+          return query.q === '*' ? [imageAttachment('att-0')] : [];
+        },
+        getUsage: async () => ({ owners: [] }),
+      },
+    };
+
+    const tab = attachmentPickerSourceTab({ label: 'Вложения', onPick: () => undefined });
+    const root = tab.build({ close: () => undefined, setReady: () => undefined } as any) as
+      unknown as ShimElement;
+    await flush();
+    assert.equal(calls.length, 1, 'первая загрузка списка — сразу');
+
+    const searchInput = root.querySelector('.att-pick-search');
+    assert.ok(searchInput !== null, 'поле поиска построено');
+    searchInput!.value = 'att-00';
+    searchInput!.emit('input', {});
+
+    // Запрос НЕ ушёл синхронно — он отложен debounce. Убрать debounce →
+    // calls сразу станет 2, тест покраснеет (мутационно-проверяемо).
+    assert.equal(calls.length, 1, 'запрос отложен, а не на каждое нажатие');
+
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    assert.equal(calls.length, 2, 'после задержки поиск выполнен один раз');
+    assert.equal(calls[1]?.q, 'att-00', 'запрос с введённым текстом');
+    assert.equal(calls[1]?.offset, 0, 'поиск начинается с первой страницы');
+  });
 });
