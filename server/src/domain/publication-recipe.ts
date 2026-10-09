@@ -61,11 +61,20 @@ function nonEmptyArray(value: unknown): boolean {
 }
 
 /**
- * «Пустой рецепт» — ни одного условия отбора (задача 7cfaba7c, п.2). Перечислены
- * все поля {@link StructureFilter}, сужающие набор мыслей; `sort`/`order` и
- * `keyword_scope` — модификаторы, а `show_inactive` — переключатель показа, не
- * условие. Такой рецепт больше НЕ исполняется с `emptyFilterMode: 'all'`
- * (раньше он отдавал всю сеть) — сборка пустая с предупреждением.
+ * «Пустой рецепт» — ни одного условия ОТБОРА (задача 7cfaba7c, п.2; ошибка
+ * b9db6c0a, 0.12.1). Перечислены все поля {@link StructureFilter}, задающие
+ * ВЫБОРКУ мыслей; `sort`/`order`, `keyword_scope`, `show_inactive`, а также
+ * состояние `active`/`trashed` — модификаторы результата, а не критерий состава:
+ * рецепт из одних модификаторов не задаёт документ. Такой рецепт больше НЕ
+ * исполняется с `emptyFilterMode: 'all'` (раньше он отдавал всю сеть) — сборка
+ * пустая с предупреждением.
+ *
+ * Почему состояние — не критерий. Рецепт публикации, попавший в движок без
+ * условий состава (например, `parent_ids` задан, но пуст, и парсер его отбросил
+ * — тогда остаётся один `active`), исполнялся как «вся активная сеть»: сборка
+ * отдавала 255+ разделов БЕЗ предупреждения (ошибка b9db6c0a, воспроизведено на
+ * живой сети). Отбор по родителю — единственное, что задаёт разделы; пустой
+ * parent_ids обязан давать пустую сборку с предупреждением, а не всю сеть.
  */
 export function isStructureFilterEmpty(filter: StructureFilter): boolean {
   const authorPresent = (value: string | string[] | undefined): boolean =>
@@ -80,8 +89,6 @@ export function isStructureFilterEmpty(filter: StructureFilter): boolean {
     filter.has_comment === undefined &&
     filter.has_attachments === undefined &&
     filter.has_chronology === undefined &&
-    filter.active === undefined &&
-    filter.trashed !== true &&
     !authorPresent(filter.created_by) &&
     !authorPresent(filter.updated_by) &&
     !nonEmptyString(filter.created_after) &&

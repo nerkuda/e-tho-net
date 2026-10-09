@@ -28,6 +28,8 @@ import {
   setPublicationOrder,
   updatePublication,
 } from '../src/domain/publication-service.js';
+import { selectRecipeIds } from '../src/domain/publication-recipe.js';
+import { queryThoughts, structureRequestToQuery } from '../src/domain/query-service.js';
 import {
   acceptPublicationCandidate,
   assemblePublication,
@@ -982,6 +984,87 @@ describe('publication-assembly-service: кандидаты (временная �
         `warnings: ${JSON.stringify(doc.warnings)}`,
       );
       assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('рецепт с parent_ids собирает поддерево так же, как REST-выборка (ошибка b9db6c0a)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const catalog = seedThought(ndb, 'Каталог');
+      const kids = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'].map((title) => {
+        const id = seedThought(ndb, title);
+        seedUntypedLink(ndb, catalog, id, 0);
+        return id;
+      });
+      const recipe = {
+        parent_ids: [catalog],
+        active: true,
+        sort: 'alpha' as const,
+        order: 'asc' as const,
+      };
+
+      // Контроль: отбор рецепта обязан совпасть с REST-выборкой того же фильтра
+      // (тот же `structureRequestToQuery`). Если путь теряет `subtree`, рецепт
+      // вернёт всю сеть — расхождение поймает это сравнение.
+      const warnings: string[] = [];
+      const recipeIds = selectRecipeIds(ndb, USER, recipe, warnings).sort();
+      const rest = queryThoughts(
+        ndb,
+        USER,
+        structureRequestToQuery({ ...recipe, limit: 2000, offset: 0 } as never),
+        {},
+      );
+      assert.deepEqual(recipeIds, rest.items.map((i) => i.id).sort());
+      assert.deepEqual(recipeIds, [...kids, catalog].sort());
+      assert.deepEqual(warnings, []);
+
+      // Сборка: каталог — корневой раздел, страницы-дети вложены в него.
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipe }, USER);
+      const doc = assemblePublication(ndb, pub.id, USER);
+      assert.equal(doc.sections.length, 1);
+      assert.equal(doc.sections[0]!.thought_id, catalog);
+      assert.deepEqual(
+        doc.sections[0]!.children.map((c) => c.thought_id).sort(),
+        [...kids].sort(),
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('рецепт с пустым parent_ids — пустая сборка с предупреждением, а не вся сеть (ошибка b9db6c0a)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      seedThought(ndb, 'A');
+      seedThought(ndb, 'B');
+      seedThought(ndb, 'C');
+      // Рецепт задаёт отбор по родителю, но список корней пуст — парсер его
+      // отбрасывает, и остаётся один модификатор `active`. Такой рецепт не
+      // должен молча исполняться как «вся активная сеть» (живой симптом
+      // ошибки: 255+ разделов без предупреждения).
+      const recipe = {
+        parent_ids: [] as string[],
+        active: true,
+        sort: 'alpha' as const,
+        order: 'asc' as const,
+      };
+      const warnings: string[] = [];
+      assert.deepEqual(selectRecipeIds(ndb, USER, recipe, warnings), []);
+      assert.ok(
+        warnings.some((w) => w.includes('отбор заголовков не задан')),
+        `warnings: ${JSON.stringify(warnings)}`,
+      );
+
+      const pub = createPublication(ndb, { title: 'Док', title_recipe: recipe }, USER);
+      assert.deepEqual(getPublicationAcceptedIds(ndb, pub.id), []);
+      const doc = assemblePublication(ndb, pub.id, USER);
+      assert.equal(doc.sections.length, 0);
+      assert.ok(
+        doc.warnings.some((w) => w.includes('отбор заголовков не задан')),
+        `warnings: ${JSON.stringify(doc.warnings)}`,
+      );
     } finally {
       ndb.close();
     }
