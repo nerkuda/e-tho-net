@@ -213,6 +213,11 @@ export async function runCommentThoughtInsert(
   ctx: CommentCommandContext,
   kind: ThoughtInsertKind,
 ): Promise<void> {
+  // Цель вставки фиксируем СИНХРОННО, до первого `await`: меню/тулбар не
+  // крадут фокус (`guardMenuFocus`), поэтому если каретка во ВЛОЖЕННОМ редакторе
+  // блока трансклюзии — вставляем в его документ, а не в конец внешнего поля
+  // (ошибка f37ae845). Диалог выбора мысли ниже фокус уже уведёт.
+  const insertTarget = ctx.getActiveInsertEditor?.() ?? null;
   const owner = ctx.getCommentOwner();
   const hint = ctx.getCommentParents();
   if (owner === null && (hint === null || hint.length === 0)) return;
@@ -253,6 +258,12 @@ export async function runCommentThoughtInsert(
     }
     if (refs.length === 0) return;
     const insert = joinThoughtRefs(refs, kind);
+    // Каретка вложенного блока — вставка в его документ (задача правки
+    // источника тем же полем); иначе — прежний путь во внешнее поле.
+    if (insertTarget !== null) {
+      insertTarget.insert(insert);
+      return;
+    }
     const snap = ctx.editor.snapshot();
     ctx.editor.applyEdit({
       changes: { from: snap.to, to: snap.to, insert },

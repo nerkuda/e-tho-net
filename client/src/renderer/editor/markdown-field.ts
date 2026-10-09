@@ -15,6 +15,7 @@
  * with the rest of the dialog): blur then just switches back to the view.
  */
 
+import { EditorView } from '@codemirror/view';
 import type { MentionsScanThought } from '@etn/shared';
 import {
   parseTransclusions,
@@ -881,6 +882,29 @@ export function createMarkdownField(opts: {
     // Мысли-владельцы (родители новых мыслей, ТЗ5): цели-чипсы записи либо
     // владелец. `null` — вложенного списка нет, родитель выводится из владельца.
     getCommentParents: () => opts.commentContext?.getParentThoughtIds?.() ?? null,
+    // Активный редактор вставки (ошибка f37ae845): если фокус в ВЛОЖЕННОМ
+    // редакторе блока трансклюзии, команды вставки адресуют ЕГО документ, а не
+    // внешнее поле. Фокус берём из DOM (`.cm-focused`) — единственный редактор
+    // сфокусирован, а вложенный `.cm-editor` не равен `.cm-editor` поля. Цель
+    // захватывается СИНХРОННО в начале команды, до диалога выбора мысли, пока
+    // фокус ещё во вложенном редакторе (меню не крадёт фокус, `guardMenuFocus`).
+    getActiveInsertEditor: () => {
+      if (!editing || editor === null) return null;
+      const focused = root.querySelector<HTMLElement>('.cm-editor.cm-focused');
+      if (focused === null || focused === editor.dom) return null;
+      const nestedView = EditorView.findFromDOM(focused);
+      if (nestedView === null) return null;
+      return {
+        insert: (text: string): void => {
+          const pos = nestedView.state.selection.main.head;
+          nestedView.dispatch({
+            changes: { from: pos, insert: text },
+            selection: { anchor: pos + text.length },
+          });
+          nestedView.focus();
+        },
+      };
+    },
     runFieldCommand: (command) => {
       // Поиск открывается в обоих режимах; замена — только в правке
       // (элемент b8eabc22, требование d72ea6eb).

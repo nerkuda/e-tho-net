@@ -92,6 +92,15 @@ export interface CommentCommandHost {
    */
   runFieldCommand?(command: string): boolean;
   /**
+   * Активный редактор вставки: вложенный редактор блока трансклюзии, если
+   * каретка/фокус сейчас в нём, иначе `null` (вставка идёт во внешнее поле).
+   * Нужно командам, которые открывают диалог и вставляют markdown позже: цель
+   * фиксируется СИНХРОННО в начале команды, пока фокус ещё во вложенном
+   * редакторе (меню/тулбар не крадут фокус — `guardMenuFocus`), иначе вставка
+   * ушла бы в конец внешнего документа (ошибка `f37ae845`).
+   */
+  getActiveInsertEditor?(): CommentInsertTarget | null;
+  /**
    * Подписка на изменения текста/выделения редактора — для обновления
    * состояния кнопок тулбара. Возвращает функцию отписки. Поле может ещё не
    * иметь редактора — тогда подписка на будущий (возвращается no-op).
@@ -103,6 +112,17 @@ export interface CommentCommandHost {
 export interface CommentOwnerRef {
   ownerType: 'thought' | 'link';
   ownerId: string;
+}
+
+/**
+ * Цель вставки команды — активный редактор поля. Внешнее поле даёт `null`
+ * (команда пишет через {@link CommentCommandContext.editor}); вложенный редактор
+ * блока трансклюзии — этот интерфейс, и вставка идёт в ЕГО документ (ошибка
+ * `f37ae845`).
+ */
+export interface CommentInsertTarget {
+  /** Вставляет текст в позицию каретки активного редактора. */
+  insert(text: string): void;
 }
 
 /** Контекст исполнения команды, передаваемый зарегистрированному обработчику. */
@@ -121,6 +141,12 @@ export interface CommentCommandContext {
   getCommentParents(): readonly string[] | null;
   /** Запустить другую команду этого же поля (для составных команд). */
   run(command: string): boolean;
+  /**
+   * Активный редактор вставки (вложенный блок трансклюзии) либо `null` —
+   * цель команды, открывающей диалог. Вызывается СИНХРОННО в начале команды
+   * (см. {@link CommentCommandHost.getActiveInsertEditor}).
+   */
+  getActiveInsertEditor?(): CommentInsertTarget | null;
 }
 
 /** Состояние команды для кнопки тулбара (элемент `1ab005ca`). */
@@ -186,6 +212,7 @@ function contextOf(host: CommentCommandHost, editor: MdEditor): CommentCommandCo
     getCommentOwner: () => host.getCommentOwner?.() ?? null,
     getCommentParents: () => host.getCommentParents?.() ?? null,
     run: (nested) => runCommentCommand(nested, host),
+    getActiveInsertEditor: () => host.getActiveInsertEditor?.() ?? null,
   };
 }
 

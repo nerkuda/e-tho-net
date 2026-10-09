@@ -195,6 +195,26 @@ describe('ТЗ5: тела команд вставки', () => {
     assert.deepEqual(recorded[0]!.changes, { from: 0, to: 0, insert: `![[#${UUID_A}]]` });
   });
 
+  it('вставка из вложенного блока идёт в активный редактор, а не во внешнее поле (f37ae845)', async () => {
+    const recorded: Recorded[] = [];
+    const inserted: string[] = [];
+    setCommentThoughtInsertPort(
+      stubPort({
+        parents: { ids: [UUID_P1], primaryId: UUID_P1, primaryTitle: 'Р' },
+        pick: { items: [{ kind: 'existing', id: UUID_A }], thoughtTypeId: null },
+      }).port,
+    );
+    // Каретка во вложенном редакторе блока: контекст отдаёт цель вставки —
+    // вставка обязана уйти туда, а внешнее поле остаться нетронутым.
+    const ctx: CommentCommandContext = {
+      ...ctxFor({ text: 'внешний текст', recorded }),
+      getActiveInsertEditor: () => ({ insert: (text: string) => inserted.push(text) }),
+    };
+    await runCommentThoughtInsert(ctx, 'transclusion');
+    assert.deepEqual(inserted, [`![[#${UUID_A}]]`], 'вставка ушла во вложенный редактор');
+    assert.equal(recorded.length, 0, 'внешнее поле не тронуто');
+  });
+
   it('несколько выбранных мыслей — вставляются последовательно', async () => {
     const recorded: Recorded[] = [];
     setCommentThoughtInsertPort(
