@@ -1,589 +1,472 @@
-# 07. Десктоп-клиент (Electron)
+# 07-client-electron — клиент Electron
 
-## 1. Назначение и ограничения
+**Автор:** Проект ETN
 
-- Десктоп-клиент — единственный клиент MVP.
-- **Онлайн-only.** Работает только при связи с сервером. Локально хранит
-  персональные настройки, UI-state и черновики правок.
-- Все запросы к данным идут на сервер; локальный SQLite — для персонального
-  состояния и кэша, **не для авторитетных данных**.
+Десктоп-клиент Electron: структура, локальное состояние, связь с сервером, транспорт вложений.
 
-## 2. Структура процесса
+<a id="pub-70c881b5"></a>
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ Main process (Node.js, Electron)                                │
-│                                                                 │
-│  ┌──────────────┐ ┌────────────────┐ ┌──────────┐ ┌─────────┐   │
-│  │ Network      │ │ Realtime       │ │ Local    │ │ IPC     │   │
-│  │ client       │ │ pool           │ │ store    │ │ handlers│   │
-│  │ (REST)       │ │ (WS per net)   │ │ (SQLite) │ │         │   │
-│  └──────────────┘ └────────────────┘ └──────────┘ └─────────┘   │
-│         │                │                │           │         │
-│         └────────────────┴────────────────┴───────────┘         │
-│                              │                                   │
-│                    safeStorage (API-key)                         │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │ IPC (contextBridge)
-┌──────────────────────────────┴──────────────────────────────────┐
-│ Renderer process (Chromium)                                     │
-│                                                                 │
-│  UI: tab-strip │ холст │ редактор │ поиск │ выделения │ диалоги │
-│  UI-state: in-memory store (per-active-tab snapshot)            │
-│            + подписки на realtime-события (per-active-tab +     │
-│            маркер «*» на табах неактивных сетей)                │
-└─────────────────────────────────────────────────────────────────┘
-```
+## local.db — локальное хранилище десктоп-клиента
 
-> **Табы (фаза Q).** В одном окне Electron можно держать несколько
-> открытых мыслесетей и несколько табов с одной и той же сетью — см.
-> [08-ui-spec.md](08-ui-spec.md) §1. Realtime-клиент в main стал **пулом**
-> по сокетам (один WS на сеть), UI-state — снапшот активного таба. Подробности
-> в §3.5–§3.6, §4.2, §6.
+Локальная база десктоп-клиента — `userData/local.db`, SQLite (better-sqlite3) в режиме WAL. Хранит **только персональное состояние этой установки**, а не данные мыслесети: авторитетные данные всегда на сервере и запрашиваются по REST.
 
-### 2.1. Разделение ответственности
-- **Main:** сетевые операции, локальная БД, хранение ключей, IPC-обработчики,
-  пул `RealtimeClient` (см. §4.2). Ключ API в renderer **не попадает**.
-- **Renderer:** только UI и UI-state. Все обращения к данным — через IPC
-  (например, `window.etn.thoughts.get(id)` → IPC → main → REST). С табами
-  renderer держит **список табов** и **id активного**; «текущая сеть» —
-  это сеть активного таба; «текущий фокус» — focus активного таба.
+Состав:
 
-## 3. Локальное хранилище
+| Таблица | Что хранит |
+|---|---|
+| `server_profiles` | подключения к серверам ETN, включая зашифрованный API-ключ |
+| `ui_state` | персональное UI-состояние по паре «профиль × сеть» |
+| `drafts` | несохранённые правки полей |
+| `client_meta` | состояние самой установки: `client_id`, `last_seq`, тема, масштаб |
+| `visit_history` | история мыслей, открытых в редакторе |
+| `tabs` | открытые табы и их состояние |
 
-`userData/local.db` — SQLite (better-sqlite3), WAL.
+**Чего здесь нет и не должно быть.** Реплики графа — мыслей, связей, комментариев. Клиент онлайн-only, механизма слияния офлайн-правок не существует, и локальная копия графа превратилась бы во второй источник истины. Кэш метаданных облачек допустим именно как кэш.
 
-**Каталог профиля (userData).** Весь локальный профиль клиента — `local.db`
-(включая `server_profiles` с API-ключами), UI-state, черновики, положение окна —
-хранится в каталоге `userData`. По умолчанию: у установленной (packaged)
-сборки — `%APPDATA%\@etn\client`, у dev-запуска (electron-vite) — отдельный
-`%APPDATA%\@etn-dev`, чтобы разработка никогда не делила профиль с
-установленным приложением. Один установленный инстанс можно запускать с
-**разными профилями**: каталог профиля задаётся параметром запуска
-`--user-data-dir=<path>`:
+**Изоляция.** База открывается только в главном процессе; renderer обращается к ней через IPC. Каталог `userData` задаёт профиль клиента: удаление каталога полностью сбрасывает клиент, включая сохранённые ключи серверов.
 
-- собранное приложение:
-  `ETN.exe --user-data-dir=C:\etn\profile1`;
-- dev (electron-vite): аргументы после `--` передаются в Electron
-  (это механизм `ELECTRON_CLI_ARGS`), из каталога `client/`:
+<a id="pub-c33c11b9"></a>
 
-  ```
-  npm run dev -- -- --user-data-dir=C:\etn\profile1
-  ```
+### client_meta — состояние установки клиента
 
-  (первый `--` — разделитель npm, второй — разделитель electron-vite; то же
-  самое напрямую: `npx electron-vite dev -- --user-data-dir=C:\etn\profile1`).
+Состояние, уникальное для **установки приложения** и не зависящее ни от мыслесети, ни от пользователя, — уровень L5. Простое хранилище «ключ → значение»: `key` TEXT PK, `value` TEXT (строка или JSON).
 
-Относительный путь резолвится от текущего каталога запуска. Без параметра:
-packaged-сборка использует общий `%APPDATA%\@etn\client`, dev — свой
-`%APPDATA%\@etn-dev`; явный `--user-data-dir` всегда имеет приоритет. Разные
-профили полностью изолированы (своя локальная БД, свои серверные профили,
-свои настройки окна) и могут работать одновременно: single-instance-блокировка
-(см. §8) привязана к `userData`, поэтому два профиля не вытесняют друг друга.
-Удаление каталога профиля «сбрасывает» клиент (все локальные настройки и
-ключи серверов).
+**Зарезервированные ключи:**
 
-Разбор параметра — `parseUserDataDirArg` в `client/src/main/db/paths.ts`;
-main-процесс применяет его через `app.setPath('userData', …)` до
-`app.whenReady()` (Electron 31 сам также обрабатывает `--user-data-dir` —
-явный разбор даёт единый источник истины для резолва относительных путей).
+- `client_id` — UUIDv4 установки. Генерируется один раз при первом запуске и дальше не меняется; уходит серверу заголовком `Client-Id` в каждом запросе и при WebSocket-подключении. По нему клиент узнаӑт эхо собственных изменений; потеря `client_id` равносильна появлению нового клиента.
+- `last_seq` — объект `{ [network_id]: <seq> }`, позиция в журнале событий каждой сети. Обновляется по мере применения пришедших событий и уходит в кадре догона при переподключении. Значение **per-client, а не per-user**: две установки одного человека догоняют журнал независимо. Разбивка по сетям важна: табы держат несколько сетей открытыми одновременно.
+- `theme`, `zoom`, `active_profile_id` — настройки самой установки: тема оформления, масштаб интерфейса, текущий серверный профиль.
 
-### 3.1. server_profiles
+<a id="pub-7145dab1"></a>
 
-Подключения к серверам (у пользователя может быть несколько серверов ETN).
+### drafts — черновики правок на клиенте
 
-| Столбец | Тип |
-|---------|-----|
-| `id` | TEXT PK (UUID) |
-| `label` | TEXT |
-| `base_url` | TEXT |
-| `api_key_encrypted` | BLOB (через safeStorage) |
-| `user_id` | TEXT |
-| `is_active` | INTEGER |
+Несохранӑнные правки полей — страховка от потери текста при разрыве связи или закрытии окна.
 
-API-key шифруется `safeStorage.encryptString(key)` перед записью, расшифровывается
-в main-процессе при использовании.
-
-### 3.2. ui_state (персональный UI-state по сети)
-
-| Столбец | Тип | Описание |
-|---------|-----|----------|
-| `profile_id` | TEXT | Сервер-профиль |
-| `network_id` | TEXT | |
-| `key` | TEXT | Имя состояния |
-| `value` | TEXT | JSON |
-| `updated_at` | TEXT | |
-| PRIMARY KEY | `(profile_id, network_id, key)` | |
-
-Все значения в этой таблице — уровень **L4 (клиент × пользователь × сеть)** в
-классификации [11-settings-and-state.md](11-settings-and-state.md). Серверные
-настройки пользователя (`show_inactive`, выбор сортировки фокуса, ручной
-порядок) **здесь не хранятся** — они синхронизируются через real-time
-(audience=user).
-
-> **Табы (фаза Q).** Состояние, специфичное для конкретного таба (focus,
-> view, filter_state), пишется в `ui_state` с суффиксом `:<tab_id>` в
-> `key`: `current_focus_thought_id:<tab_id>`,
-> `active_view:<tab_id>`, `structures_state:<tab_id>`,
-> `chronicle_state:<tab_id>`. Ключи без суффикса остаются для
-> обратной совместимости и трактуются как legacy (один таб на сеть).
-> См. §3.6 и [08-ui-spec.md](08-ui-spec.md) §1.
-
-Зарезервированные ключи:
-- `current_focus_thought_id` — текущий фокус на этом клиенте.
-- `current_network_id` — текущая открытая сеть на этом клиенте.
-- `cloud_width` — ширина ячейки/облачка холста, px. Клиппится в
-  `[CLOUD_WIDTH_MIN, CLOUD_WIDTH_MAX]`. Высота не редактируется (3 строки).
-- `cloud_gap` — отступ между ячейками холста, px. Клиппится в
-  `[CLOUD_GAP_MIN, CLOUD_GAP_MAX]`.
-- `search_state` — последний поисковый запрос (`{ q, scope, options, results }`)
-  для восстановления при активации строки поиска.
-- `editor_position` — `left`/`right`/`top`/`bottom`/`hidden`.
-- `editor_collapsed_groups` — `{ [thoughtId|linkId]: { permanent: bool, chrono: bool, ... } }`.
-- `window_layout` — размеры панелей и позиция окна.
-- `last_used_link_type_id` — UX-память о выбранном типе связи.
-
-### 3.3. drafts (черновики правок)
-
-| Столбец | Тип | Описание |
-|---------|-----|----------|
-| `id` | TEXT PK (UUID) |
-| `profile_id` | TEXT |
-| `network_id` | TEXT |
-| `entity_type` | TEXT | `'thought'`/`'link'`/`'comment'`/... |
-| `entity_id` | TEXT | |
-| `field` | TEXT | Какое поле правится |
+| Столбец | Тип | Смысл |
+|---|---|---|
+| `id` | TEXT PK (UUID) | идентификатор черновика |
+| `profile_id` | TEXT | серверный профиль |
+| `network_id` | TEXT | мыслесеть |
+| `entity_type` | TEXT | `thought` / `link` / `comment` / … |
+| `entity_id` | TEXT | что правится |
+| `field` | TEXT | какое поле правится |
 | `value` | TEXT | JSON нового значения |
-| `base_version` | INTEGER | Версия, на основе которой правится |
-| `created_at` | TEXT | |
-| `status` | TEXT | `'pending'`/`'sent'`/`'failed'` |
+| `base_version` | INTEGER | версия сущности, на основе которой правили |
+| `created_at` | TEXT | время создания |
+| `status` | TEXT | `pending` / `sent` / `failed` |
 
-Черновик создаётся, когда пользователь начал редактировать поле, но ещё не
-сохранил. Это страховка от потери данных при разрыве связи или закрытии окна.
-На ключ `(profile_id, network_id, entity_type, entity_id, field)` существует
-уникальный индекс `idx_drafts_one_per_field`: повторное сохранение поля
-**обновляет** существующую строку (value, base_version, status, created_at),
-а не создаёт новую — промежуточные черновики не накапливаются.
+**Один черновик на поле.** Уникальный индекс `idx_drafts_one_per_field` на `(profile_id, network_id, entity_type, entity_id, field)`: повторное сохранение поля **обновляет** существующую строку (`value`, `base_version`, `status`, `created_at`), а не добавляет новую — промежуточные черновики от debounce не накапливаются.
 
-При открытии сущности черновик **не** переводит поле в режим редактирования:
-постоянный комментарий и хронологические комментарии всегда открываются в
-режиме просмотра (08-ui-spec.md §6.4, §6.6), а правка начинается только по
-двойному клику. Черновик остаётся в локальной БД и переотправляется при
-восстановлении соединения (п. 5.2); «мёртвые» черновики, текст которых уже
-совпал с сохранённым, удаляются при открытии. После **успешного сохранения**
-поля (заголовок мысли, постоянный комментарий) удаляются все черновики этого
-поля по ключу, а не только последняя известная строка — так debounce, чей id
-не успел вернуться к моменту сохранения, тоже не оставляет мусора.
+`base_version` отличает актуальный черновик от устаревшего: если версия сущности на сервере ушла вперӑд, черновик нельзя применять вслепую — попытка отправки даст конфликт версий.
 
-**Восстановление черновика заголовка** (редактор мысли) никогда не затирает
-текущее содержимое поля: черновик подставляется, только если поле ещё
-содержит сохранённый заголовок (пользователь ничего не печатал) и
-`base_version` совпадает с версией мысли. Если версия мысли ушла вперёд —
-черновик устарел и остаётся лишь для retry (09-scenarios.md J1); если поле
-уже изменено пользователем — черновик удаляется как устаревший.
+---
 
-### 3.4. client_meta (состояние установки, L5)
+**Термин (глоссарий 10).** **Черновик** (`drafts`, `pending`) — локальная несохранённая правка мысли или связи на клиенте, ждущая отправки на сервер; при конфликте версий разрешается слиянием.
 
-Уникальное для установки приложения, не зависит от сети/пользователя.
+<a id="pub-3c11a1aa"></a>
 
-| Столбец | Тип | Описание |
-|---------|-----|----------|
-| `key` | TEXT PK | Имя |
-| `value` | TEXT | JSON или строка |
+### server_profiles — подключения клиента к серверам ETN
 
-Зарезервированные ключи:
-- `client_id` — UUIDv4 установки. Генерируется один раз при первом запуске;
-  передаётся серверу в каждом запросе (`Client-Id`) и при WS-подключении.
-- `last_seq` — JSON-объект `{ [network_id]: <seq> }`, позиция в `event_log`
-  сети. Обновляется по мере применения пришедших событий. per-client, не per-user
-  (см. [11-settings-and-state.md](11-settings-and-state.md), п. 1.3).
-- `log_enabled` — `'true'`/`'false'`, флаг файлового журнала клиента (§7).
-- `theme`, `zoom`, `active_profile_id` — UI-настройки установки.
+Список подключений к серверам ETN: у пользователя может быть несколько серверов, активен один.
 
-### 3.5. visit_history (история посещения мыслей, L4)
+| Столбец | Тип | Смысл |
+|---|---|---|
+| `id` | TEXT PK (UUID) | идентификатор профиля |
+| `label` | TEXT | имя подключения для интерфейса |
+| `base_url` | TEXT | базовый URL сервера |
+| `api_key_encrypted` | BLOB | API-ключ, зашифрованный средствами ОС |
+| `user_id` | TEXT | пользователь, которому принадлежит ключ |
+| `is_active` | INTEGER | признак активного профиля |
 
-Единая история мыслей, открытых в редакторе на этом клиенте, — общая для
-всех видов (карта, структуры, хроника; 0.5.5). Локальное состояние per
-`(profile_id, network_id, tab_id)`. См.
-[11-settings-and-state.md](11-settings-and-state.md), п. 2.3.
+Ключ записывается только в зашифрованном виде (`safeStorage.encryptString`) и расшифровывается в главном процессе в момент использования — в renderer он не попадает никогда.
 
-| Столбец | Тип | Описание |
-|---------|-----|----------|
-| `profile_id` | TEXT NOT NULL | Сервер-профиль |
-| `network_id` | TEXT NOT NULL | |
-| `tab_id` | TEXT NULL | Идентификатор таба (см. §3.6); `NULL` — legacy-данные до введения табов |
-| `thought_id` | TEXT NOT NULL | |
-| `seq` | INTEGER NOT NULL | Монотонный счётчик на (profile, network, tab_id); больший = более свежий |
-| `visited_at` | TEXT NOT NULL | |
-| PRIMARY KEY | `(profile_id, network_id, tab_id, thought_id)` | |
+Профиль — единица скоупа для остального локального состояния: `ui_state`, `drafts`, `visit_history` и `tabs` адресуются через `profile_id`, поэтому состояния разных серверов не смешиваются.
 
-Индекс: `idx_visit_history_seq (profile_id, network_id, tab_id, seq DESC)`.
+---
 
-> **Табы (фаза Q).** PK расширен колонкой `tab_id`; в существующих строках
-> `tab_id` остаётся `NULL` — при первом запуске клиента с табами
-> автоматически создаётся стартовый таб с `tab_id = 'LEGACY'`, и история
-> привязывается к нему (см. §3.6). Для двух табов с одной сетью истории
-> независимы — это позволяет вести параллельные контексты в одной сети.
+**Термин (глоссарий 10).** **Профиль сервера** — запись подключения клиента к серверу ETN: URL, зашифрованный API-key, `user_id`. В коде таблица называется `server_profiles` (мн. ч.).
 
-> **Миграция 0.5.5** (`007_unified_visit_history.sql`): таблица
-> `focus_history` переименовывается в `visit_history` (строки сохраняются —
-> это бывшая история фокуса, становящаяся стартом единой истории); таблицы
-> `structures_history` и `chronicle_history` удаляются вместе с индексами —
-> это были локальные UI-кэши, их потеря безвредна.
+<a id="pub-c46fea47"></a>
 
-**Алгоритм при открытии мысли в редакторе `oldId → newId`** (в одной
-транзакции локально; `?` — `profile_id, network_id, tab_id`). `oldId` —
-мысль, открытая в редакторе до перехода; при смене фокуса холста это
-прежний фокус, при открытии из «Структур»/«Хроники» — прежняя открытая
-мысль. Открытие связи не вызывает операцию (связь — не посещённая мысль):
+### tabs — открытые табы клиента
 
-```sql
--- 1. newId больше не в истории — он открыт в редакторе
-DELETE FROM visit_history
-  WHERE profile_id = ? AND network_id = ? AND tab_id IS ? AND thought_id = ?;  -- newId
+Состояние полосы табов клиента (уровень L4): одна строка — один видимый таб. Кнопка «+» и элементы переполнения строками не являются. В одном окне могут быть табы разных сетей и несколько табов одной сети.
 
--- 2. oldId — в начало истории (seq — per-tab)
-INSERT OR REPLACE INTO visit_history (profile_id, network_id, tab_id, thought_id, seq, visited_at)
-  VALUES (?, ?, ?, ?,
-          (SELECT COALESCE(MAX(seq), 0) + 1 FROM visit_history
-            WHERE profile_id = ? AND network_id = ? AND tab_id IS ?), ?);
-
--- 3. Trim до 50: удалить всё, что не входит в топ-50 свежих
-DELETE FROM visit_history
-  WHERE profile_id = ? AND network_id = ? AND tab_id IS ?
-    AND seq NOT IN (
-      SELECT seq FROM visit_history
-        WHERE profile_id = ? AND network_id = ? AND tab_id IS ?
-        ORDER BY seq DESC LIMIT 50
-    );
-```
-
-`oldId = null` (первое открытие в табе, редактор с нуля) → шаг 2 пропускается.
-`oldId = newId` (повторное открытие той же мысли) → операция в целом no-op.
-
-**Получение истории:**
-
-```sql
-SELECT thought_id FROM visit_history
-  WHERE profile_id = ? AND network_id = ? AND tab_id IS ?
-  ORDER BY seq DESC LIMIT 50;
-```
-
-Возвращает массив `thought_id`. Метаданные облачек клиент докладывает через
-`POST /networks/{nid}/thoughts/resolve` ([03-server-api.md](03-server-api.md),
-п. 6.10) или берёт из локального кэша мыслей.
-
-**Очистка:** при получении real-time события `thought.deleted` для мысли в
-истории — обязательная локальная чистка
-(`DELETE FROM visit_history WHERE profile_id=? AND network_id=? AND tab_id IS ? AND thought_id=?`).
-Неактуальные (`active=0`) мысли из истории **не** вычищаются — они скрываются на
-уровне рендера при выключенном `show_inactive`.
-
-### 3.6. tabs (открытые табы, L4)
-
-Состояние tab-strip клиента (08-ui-spec.md §1). Каждой записи соответствует
-один видимый таб; «+» и overflow-элементы — не строки.
-
-| Столбец | Тип | Описание |
-|---------|-----|----------|
-| `profile_id` | TEXT NOT NULL | Сервер-профиль |
+| Столбец | Тип | Смысл |
+|---|---|---|
+| `profile_id` | TEXT NOT NULL | серверный профиль |
 | `tab_id` | TEXT NOT NULL | UUID, стабильный между перезапусками |
-| `slot_idx` | INTEGER NOT NULL | Позиция в strip по возрастанию |
-| `network_id` | TEXT NOT NULL | Какую сеть открывает таб |
-| `focus_id` | TEXT NULL | Текущий focus (или NULL, если ещё не выбран) |
-| `view_mode` | TEXT NULL | `'map'` \| `'structures'` \| `'chronicle'` (08-ui-spec.md §15.1) |
-| `structures_state` | TEXT NULL | JSON `FilterState` (08-ui-spec.md §15.3) |
-| `chronicle_state` | TEXT NULL | JSON `ChronicleFilterState` (08-ui-spec.md §17.7) |
-| `layer_id` | TEXT NULL | Слой изменений таба (S11, 13-layers.md §10.3); NULL — основа |
-| `last_active_at` | TEXT NOT NULL | ISO-8601 последней активации (для сортировки при необходимости) |
-| PRIMARY KEY | `(profile_id, tab_id)` | |
+| `slot_idx` | INTEGER NOT NULL | позиция в полосе по возрастанию |
+| `network_id` | TEXT NOT NULL | какую сеть открывает таб |
+| `focus_id` | TEXT NULL | текущий фокус (NULL — ещӑ не выбран) |
+| `view_mode` | TEXT NULL | `map` / `structures` / `chronicle` |
+| `structures_state` | TEXT NULL | JSON состояния отбора «Структур» |
+| `chronicle_state` | TEXT NULL | JSON состояния отбора «Хроники» |
+| `layer_id` | TEXT NULL | слой изменений таба; NULL — основа |
+| `last_active_at` | TEXT NOT NULL | ISO-8601 последней активации |
 
-Индекс: `idx_tabs_order (profile_id, slot_idx)`.
+Первичный ключ — `(profile_id, tab_id)`; индекс `idx_tabs_order (profile_id, slot_idx)`.
 
-**Поведение:**
+**Жизненный цикл.** Строка создаӑтся при открытии таба и удаляется при его закрытии. Переупорядочивание меняет только `slot_idx`, одной транзакцией. Каскадов на другие таблицы нет: `visit_history` и `ui_state` держат строки со своим `tab_id`, и осиротевшие строки просто игнорируются — при следующем запуске такие табы не появятся.
 
-- Строка создаётся при `etn.tabs.open(networkId)` (см. §6).
-- Удаляется при `etn.tabs.close(tabId)` либо при отсутствии ссылки на
-  `tab_id` из других таблиц (каскад не нужен — `visit_history`/`ui_state`
-  хранят строки с `tab_id`, но потеря orphan-строк допустима: при
-  следующем запуске такие табы не появятся, и строки тихо игнорируются).
-- При reorder — обновляются только `slot_idx` в одной транзакции
-  (метод `reorderTabs(profileId, orderedIds[])`).
-- **Слой — свойство таба (S11, 13-layers.md §10.3).** Серверная сессия
-  слоёв одна на клиента (ключ `(user_id, client_id)`), поэтому таб хранит
-  выбранный слой локально в `layer_id`; при активации таба рендерер
-  переключает серверную сессию (`POST …/layers/{id}/select`) и грузит
-  список слоёв + перекрытия **до** чтения фокуса — все последующие чтения
-  и записи таба идут в его слое. Протухший `layer_id` (слой удалён из
-  другого сеанса) ремонтируется сбросом в NULL; серверный control-фрейм
-  `layer.deleted` (realtime) делает то же самое живой сессии.
-- `focus_id`, `view_mode`, `structures_state`, `chronicle_state` — **не**
-  дублируются в `ui_state` для табов, открытых после введения этой
-  схемы; пишутся только сюда. Для legacy-таба (`tab_id = 'LEGACY'`)
-  значения могут читаться из legacy-ключей `ui_state` (см. §3.2).
+**Где живӑт состояние таба.** `focus_id`, `view_mode`, `structures_state`, `chronicle_state` для табов, заведӑнных после появления этой таблицы, пишутся только сюда и в `ui_state` не дублируются.
 
-**Миграция с legacy:** при первом запуске клиента с табами (если в
-`ui_state` есть `current_focus_thought_id`/`active_view`/`structures_state`/
-`chronicle_state`, а `tabs` пуста):
+**Недоступный таб.** Если сеть таба исчезла или доступ к ней потерян, строка не удаляется автоматически: таб помечается недоступным и закрывается пользователем.
 
-1. Создаётся один таб `tab_id = 'LEGACY'`, `slot_idx = 0`,
-   `network_id` из `current_network_id` (если есть).
-2. Legacy-значения переносятся в строку таба; legacy-ключи `ui_state`
-   остаются для чтения в эту же сессию (на случай гонки), но в новых
-   записях используются per-tab ключи `:<tab_id>`.
+<a id="pub-59a2e0fa"></a>
 
-## 4. Сетевой клиент
+### ui_state — персональное UI-состояние клиента по сети
 
-### 4.1. REST (`netClient`)
-- HTTP/HTTPS через `undici` или `electron`'s `net`.
-- Автоматически подставляет `Authorization: Bearer <key>`, `Client-Id`,
-  `Client-Request-Id` (генерируется на каждый изменяющий запрос).
-- Экспоненциальный retry на 5xx и сетевых ошибках (не на 4xx).
-- Таймауты: connect 10 с, response 30 с (отдельные — для тяжёлых endpoints).
+Персональное состояние интерфейса конкретной установки клиента для пары «серверный профиль × мыслесеть». Всё содержимое таблицы — уровень L4 (клиент × пользователь × сеть): на другой машине того же человека оно своё.
 
-### 4.2. Realtime (`realtimeClient`)
-- WebSocket через `ws` в main-процессе.
-- При подключении шлёт `resume { last_seq }` (см. [04-realtime.md](04-realtime.md)).
-- События парсятся и пересылаются в renderer через IPC-событие
-  `realtime:event`. Renderer применяет к UI-state.
-- Автоматический реконнект с jitter.
+| Столбец | Тип | Смысл |
+|---|---|---|
+| `profile_id` | TEXT | серверный профиль |
+| `network_id` | TEXT | мыслесеть |
+| `key` | TEXT | имя состояния |
+| `value` | TEXT | значение, JSON |
+| `updated_at` | TEXT | время записи |
 
-> **Табы (фаза Q).** Один `RealtimeClient` стал **пулом**:
-> `Map<networkId, {client, refCount}>` в `client/src/main/realtime/tab-rt-pool.ts`.
-> Сокет поднимается при первом `acquire(networkId)` (например, при открытии
-> таба с этой сетью или активации ранее открытого), опускается при
-> `refCount → 0` (например, при закрытии последнего таба с этой сетью).
-> Серверный контракт «один сокет = одна сеть» сохраняется; см.
-> [04-realtime.md](04-realtime.md) §2.0 и [11-settings-and-state.md](11-settings-and-state.md)
-> §1.2 — `byClient` уже поддерживает множественные сокеты на одного
-> `Client-Id`. `last_seq` остаётся per-network (без изменений в
-> `client_meta`).
+Первичный ключ — `(profile_id, network_id, key)`.
 
-## 5. Онлайн-only поведение
+**Зарезервированные ключи:**
 
-### 5.1. Индикатор статуса
-В строке состояния отображается: `🟢 Подключено`, `🟡 Переподключение…`,
-`🔴 Нет связи`. Клиент блокирует UI для изменений в состоянии `🟡/🔴`, но
-продолжает показывать последнее полученное состояние (read-only).
+- `current_focus_thought_id` — текущий фокус на этом клиенте;
+- `current_network_id` — текущая открытая сеть;
+- `cloud_width` — ширина облачка холста в px, клиппится в `[CLOUD_WIDTH_MIN, CLOUD_WIDTH_MAX]`; высота фиксирована (три строки) и не редактируется;
+- `cloud_gap` — отступ между ячейками холста в px, клиппится в `[CLOUD_GAP_MIN, CLOUD_GAP_MAX]`;
+- `search_state` — последний поисковый запрос `{ q, scope, options, results }` для восстановления строки поиска;
+- `editor_position` — `left` | `right` | `top` | `bottom` | `hidden`;
+- `editor_collapsed_groups` — свӑрнутость групп редактора по мыслям и связям;
+- `window_layout` — размеры панелей и позиция окна;
+- `last_used_link_type_id` — память о последнем выбранном типе связи.
 
-### 5.2. Защита правок при разрыве
-- Каждое изменение поля через UI сначала пишется в `drafts` со status=`pending`.
-- Если сеть доступна — отправляется немедленно, при успехе черновик помечается
-  `sent` и удаляется.
-- Если сети нет — остаётся `pending`. При восстановлении соединения все
-  `pending`-черновики отправляются в порядке создания.
-- Если в `drafts.base_version` уже не совпадает с серверной → `409`, показываем
-  пользователю конфликт (см. [04-realtime.md](04-realtime.md), п. 8).
+**Состояние, принадлежащее конкретному табу**, пишется с суффиксом `:<tab_id>` в ключе: `current_focus_thought_id:<tab_id>`, `active_view:<tab_id>`, `structures_state:<tab_id>`, `chronicle_state:<tab_id>`. Те же ключи без суффикса — legacy эпохи «один таб на сеть».
 
-### 5.3. Первая загрузка сети
-- `GET /networks/{id}` → `POST /thoughts/{focus_id}/focus` → рендер холста.
-- Фокус по умолчанию — `last_focus_thought_id` из `thought_views` на сервере.
-  Для новой сети — это HOME.
+**Чего здесь быть не должно.** Настроек пользователя, принадлежащих серверу (показ неактуальных, выбор сортировки зон фокуса, ручной порядок). Они одинаковы на всех машинах пользователя и синхронизируются событиями real-time, адресованными пользователю; положив их сюда, получишь расхождение между клиентами одного человека.
 
-## 6. IPC API (доступный renderer)
+<a id="pub-3d21da73"></a>
 
-Пример контракта (реализуется через `contextBridge.exposeInMainWorld`):
+### visit_history — история открытых мыслей на клиенте
 
-```ts
-window.etn = {
-  server: {
-    listProfiles(),
-    connect(profileId),         // проверка ключа + установка realtime
-    disconnect(),
-    getStatus(): "online"|"reconnecting"|"offline"
-  },
-  networks: {
-    list(),
-    get(id), create(name), update(id, fields), delete(id),
-    members(id), addMember(id, userId), removeMember(id, userId)
-  },
-  thoughts: {
-    get(networkId, id),
-    focus(networkId, id),
-    create(networkId, payload),
-    update(networkId, id, changes, version),
-    delete(networkId, id, version),
-    neighbors(networkId, id, dir, opts),
-    reorder(networkId, id, payload),
-    batch(networkId, op, ids, args),
-    search(networkId, query, opts),
-    mentions(networkId, id)
-  },
-  links: { get, create, update, delete, listByThought },
-  types: { listThoughtTypes, listLinkTypes, create, update, delete },
-  properties: { get, set, delete, listDefinitions },
-  comments: { list, create, update, delete },
-  attachments: { list, add, update, delete },
-  admin: { listUsers, createUser, deleteUser, listKeys, createKey },
-  me: { get, listKeys, createKey, deleteKey },
-  realtime: {
-    onEvent(cb),         // подписка на события в renderer
-    onStatusChange(cb),
-    onStale(cb), onNetworkLost(cb),
-    onLayerControl(cb),  // S11: layer.switched / layer.deleted — полный ресинк
-    onSelfMutated(cb)    // S11: своё подавленное эхо (`realtime:selfmut`
-                         // {networkId}) — живое обновление перекрытий (08 §2.2)
-  },
-  tabs: {
-    list(): Promise<TabDto[]>,
-    open(networkId): Promise<TabDto>,
-    activate(tabId): Promise<TabDto | null>,
-    close(tabId): Promise<void>,
-    reorder(orderedIds: string[]): Promise<void>,
-    updateState(tabId, partial: TabStatePatch): Promise<void>,
-  },
-  layers: {                       // S11, 13-layers.md §10.3 (REST §5a)
-    list(networkId), create(networkId, input),
-    update(networkId, layerId, changes, expectedVersion?),
-    remove(networkId, layerId, cascade?),
-    select(networkId, layerId),
-    merge(networkId, layerId, tables?),
-    diff(networkId, layerId), diffDoc(networkId, layerId),
-  },
-  system: {                       // прочее: о программе, экспорт, файлы, журналы (§7)
-    appInfo(), health(), version(),
-    export(networkId, request), getJob(jobId), downloadExport(jobId, filename, targetPath?),
-    pickImage(), pickFile(), openPath(path), openAttachmentFile(path), openExternal(url),
-    getClientLogState(): Promise<ClientLogState>,   // §7: журнал клиента
-    setClientLogging(enabled: boolean): Promise<ClientLogState>,
-    openClientLog(): Promise<string>,               // '' или текст ошибки
-    deleteClientLogs(): Promise<DeleteLogsResult>,
-    getServerLogging(): Promise<SystemLoggingStatus>,   // §7: журнал сервера (REST)
-    setServerLogging(enabled: boolean): Promise<SystemLoggingStatus>,
-    downloadServerLog(filename?: string, savePath?: string),
-    openServerLog(): Promise<string>,
-    deleteServerLogs(): Promise<void>,
-  },
-  logEvent(name: string, data?: unknown): void,
-  // §7: milestone-события renderer → файловый журнал, fire-and-forget
-  // (отдельный лёгкий канал `etn:log-event`, без invoke-контракта)
-  ui: {
-    getState(networkId, key, tabId?): Promise<string | null>,
-    setState(networkId, key, value, tabId?): Promise<void>,
-  }
-}
-```
+Единая история мыслей, открытых в редакторе на этом клиенте — общая для всех видов (карта, структуры, хроника). Локальное состояние уровня L4 со скоупом `(profile_id, network_id, tab_id)`.
 
-Все методы асинхронны (`Promise`). Ошибки — стандартизованный `EtnError`
-с кодом и деталями.
+| Столбец | Тип | Смысл |
+|---|---|---|
+| `profile_id` | TEXT NOT NULL | серверный профиль |
+| `network_id` | TEXT NOT NULL | мыслесеть |
+| `tab_id` | TEXT NULL | таб; `NULL` — данные, записанные до введения табов |
+| `thought_id` | TEXT NOT NULL | посещӑнная мысль |
+| `seq` | INTEGER NOT NULL | монотонный счӑтчик на `(profile, network, tab)`; больший = более свежий |
+| `visited_at` | TEXT NOT NULL | время посещения |
 
-> **Табы (фаза Q, фаза Q4).** Домен `etn.tabs.*` управляет жизненным
-> циклом табов и их состоянием. `tabId` в `etn.ui.*` — опциональный;
-> если передан, ключ `ui_state` интерпретируется как
-> `key:<tab_id>` (см. §3.2/§3.6). Дополнительные широковещания
-> `tabs:dirty {tabId}` (realtime-событие для неактивного таба) и
-> `tabs:clean {tabId}` (активация) — для маркера «*».
+Первичный ключ — `(profile_id, network_id, tab_id, thought_id)`; индекс `idx_visit_history_seq (profile_id, network_id, tab_id, seq DESC)`.
 
-## 7. Файловый журнал диагностики (главный процесс)
+**Истории табов независимы** — ради этого `tab_id` и входит в ключ: два таба с одной сетью ведут параллельные контексты.
 
-Клиентская половина сквозной трассировки «запрос висел в сети vs сервер
-отвечал долго»: plain-text журнал main-процесса с теми же правилами, что у
-серверного (`server/src/log/file-log.ts`, подсистема «Логирование»), но
-собственным кодом — модуль `client/src/main/log/client-log.ts`.
+**Чтение истории** — выборка `thought_id` по убыванию `seq` с лимитом 50. Возвращается только список идентификаторов: метаданные облачек клиент докладывает пакетным разрешением мыслей по списку id либо берӑт из локального кэша.
 
-**Файлы.** Каталог `<userData>/logs/` (фактический путь — `--user-data-dir`
-и dev-профиль учитываются, т.к. журнал создаётся после резолва `userData`).
-Суточные файлы `client-YYYY-MM-DD.log` по **локальной** дате (сервер свои
-ведёт по UTC), ротация при смене суток, файлы старше 30 дней удаляются при
-старте и при каждой ротации. Формат строки идентичен серверному:
+**Происхождение.** Таблица выросла из `focus_history` (история фокуса холста) переименованием с сохранением строк; отдельные `structures_history` и `chronicle_history` были локальными UI-кэшами и удалены — их потеря безвредна.
 
-```
-2026-09-04T12:34:56.789Z ERROR [rest] request failed method=GET path=/me status=500
-```
+<a id="pub-1a340e5f"></a>
 
-**Флаг.** ERROR пишется **всегда** (журнал обязан фиксировать сбой, даже когда
-диагностика выключена); WARN/INFO/DEBUG — только при включённом флаге.
-Переключение само журналируется (WARN, минуя флаг — аудит включения/выключения
-не должен теряться самим фактом выключения). Значение флага — `client_meta.log_enabled`
-(§3.4): сохраняется при каждом изменении (из UI или параметром запуска) и без
-параметра запуска восстанавливается при старте.
+## Realtime-клиент главного процесса: догон, проброс событий и реконнект
 
-**Параметры запуска.** `--logging` (включить) и `--no-logging` (выключить)
-переопределяют сохранённое значение на этот запуск и фиксируются как последнее
-установленное. Матчатся только точные токены — Electron/Chromium добавляют
-свои аргументы (например, `--enable-logging`), префиксный матч дал бы ложные
-срабатывания; при обоих переключателях побеждает последний. Разбор —
-`parseLoggingArg` в `client/src/main/db/paths.ts` (по образцу
-`parseUserDataDirArg`).
+Real-time канал держит главный процесс, renderer получает уже разобранные события.
 
-**Инструментирование** (INFO — при включённом флаге, ERROR — всегда):
+- **Подключение** — WebSocket из главного процесса, один сокет на сеть. Клиент с несколькими открытыми сетями держит **пул** соединений со счётчиком ссылок: сокет поднимается при первом обращении к сети (открытие или активация таба с ней) и опускается, когда ссылок не осталось (закрыт последний таб этой сети).
+- **Догон.** При подключении клиент шлёт кадр возобновления со своим `last_seq` для этой сети; позиция берётся из состояния установки и остаётся per-network.
+- **Проброс в renderer.** События разбираются в главном процессе и пересылаются в renderer IPC-событием `realtime:event`; renderer применяет их к UI-state.
+- **Реконнект** автоматический, с джиттером — иначе после перезапуска сервера все клиенты полезут переподключаться одновременно.
 
-- старт приложения (версия, платформа, Electron, argv, каталог `userData`) и
-  завершение; необработанные ошибки main-процесса
-  (`uncaughtException`/`unhandledRejection`) — ERROR;
-- `RestClient`: каждая попытка запроса (метод, путь, attempt, длительность мс,
-  статус), причина ретрая (таймаут/сетевая/5xx) и пауза backoff, итоговая
-  ошибка после исчерпания попыток — ERROR;
-- IPC-вызовы (`etn:invoke`): имя метода + длительность; медленные (>500 мс) —
-  WARN, сбой обработчика — ERROR;
-- WebSocket: каждая смена статуса (`idle/connecting/connected/reconnecting/offline`),
-  планирование реконнекта (attempt, backoff мс), срабатывание receive-idle
-  watchdog, исчерпание бюджета реконнектов — ERROR;
-- мост из renderer: milestone-события UI — `window.etn.logEvent(name, data?)`
-  (канал `etn:log-event`, fire-and-forget) пишутся одной строкой INFO,
-  `data` сжимается в строку и обрезается до ~200 символов.
+**Что не переустанавливается:** терминально закрытые сервером соединения (нет прав, сеть не найдена) и закрытые пользователем. При потере доступа к сети клиент закрывает её сокет и помечает таб недоступным.
 
-Сбой записи журнала никогда не роняет процесс (ошибка уходит в stderr).
+<a id="pub-b87ecfe6"></a>
 
-**IPC-методы управления** (контракт — `EtnApi.system`, §6):
+## REST-клиент главного процесса: заголовки, повторы и таймауты
 
-| Метод | Что делает |
-|-------|-----------|
-| `system.getClientLogState()` | `{enabled, logFile, logDir}` клиента — без соединения с сервером |
-| `system.setClientLogging(enabled)` | переключает флаг, persist в `client_meta.log_enabled`, возвращает новое состояние |
-| `system.openClientLog()` | создаёт текущий суточный файл при отсутствии и открывает его (`shell.openPath`); `''` или текст ошибки |
-| `system.deleteClientLogs()` | удаляет все клиентские файлы журнала; текущий суточный — усекается |
-| `system.getServerLogging()` | `GET /system/logging` — состояние журнала сервера (admin) |
-| `system.setServerLogging(enabled)` | `PUT /system/logging` — переключить флаг журнала сервера (admin) |
-| `system.downloadServerLog(filename?, savePath?)` | скачать файл журнала сервера (`text/plain`); без имени — текущий файл, без пути — `showSaveDialog` |
-| `system.openServerLog()` | открыть текущий журнал сервера: локально существующий путь — напрямую, иначе скачивание в `os.tmpdir()` и открытие копии |
-| `system.deleteServerLogs()` | `DELETE /system/logs` — удалить все файлы журнала сервера (admin) |
+Сетевые вызовы клиента идут из главного процесса по HTTP/HTTPS.
 
-## 8. Жизненный цикл приложения
+**Заголовки подставляются автоматически**, а не руками на каждом вызове: `Authorization: Bearer <ключ>`, `Client-Id` установки и `Client-Request-Id` — новый на каждый изменяющий запрос (именно он даёт идемпотентность повторов).
 
-1. Запуск → выбор активного профиля (или первоначальная настройка — ввод URL
-   сервера + ключ).
-2. Проверка `GET /me` → кеширование информации о пользователе.
-3. **Подключение WebSocket ко всем открытым сетям (фаза Q).** При наличии
-   табов в `tabs` (см. §3.6) — пул `RealtimeClient` поднимает сокет на
-   каждую `network_id` (счётчик ссылок ≥1). `last_seq` берётся per-network
-   из `client_meta`.
-4. Загрузка списка сетей (`etn.networks.list`) и табов
-   (`etn.tabs.list`) параллельно. Если для какого-то таба сеть
-   отсутствует/недоступна — таб помечается `inaccessible`, заголовок
-   рендерится «блеклым» (08-ui-spec.md §1).
-5. Активация таба: `etn.tabs.activate(tabId)` возвращает snapshot
-   (`focus_id`, `view_mode`, `structures_state`, `chronicle_state`) либо
-   `null` для inaccessible. Renderer применяет snapshot к store + модульным
-   state-ам, инициализирует `canvas`/`structures`/`chronicle`.
-6. Подписка на realtime-события уже работает на уровне пула — renderer
-   дополнительно проставляет маркер «*» для табов, чей `network_id`
-   совпадает с `evt.network_id`, но `tabId !== activeTabId` (см.
-   [08-ui-spec.md](08-ui-spec.md) §1).
-7. Пользователь нажимает «+» → переход на экран списка сетей; выбор сети
-   → `etn.tabs.open(networkId)` + `etn.tabs.activate`. Закрытие последнего
-   «настоящего» таба → возврат на экран списка сетей.
+**Повторы.** Экспоненциальный retry на 5xx и сетевые ошибки. **На 4xx повторов нет**: ответ «запрос неверен» повтором не исправляется, а слепой повтор конфликта версий только скроет от пользователя проблему.
 
-## 9. Обновление приложения
+**Таймауты.** Соединение — 10 секунд, ответ — 30 секунд. Для заведомо тяжёлых эндпоинтов таймаут ответа задаётся отдельно — общий жёсткий лимит оборвёт законную длительную операцию.
 
-- Electron + `electron-updater` для автообновления из GitHub Releases или
-  собственного static-хоста. Подпись обновлений обязательна.
-- Обновление клиента независимо от сервера (но с проверкой совместимости через
-  `GET /api/v1/version`).
+<a id="pub-380fd5d6"></a>
 
-## 10. Платформы MVP
+## window.etn — IPC-контракт main ↔ renderer
 
-- Windows 10/11 x64.
-- macOS (Intel + Apple Silicon).
-- Linux x64 (AppImage / deb).
+Единственный канал, через который renderer добирается до данных: объект `window.etn`, выставленный из preload через `contextBridge.exposeInMainWorld`. Renderer не ходит в сеть и не открывает локальную БД сам — он вызывает методы этого объекта, а работу выполняет главный процесс.
 
-Сборка — `electron-builder`. Платформы и автоматизация CI — вне MVP-спецификации.
+| Домен | Назначение |
+|---|---|
+| `server` | список профилей, `connect` / `disconnect`, статус соединения (`online` / `reconnecting` / `offline`) |
+| `networks` | список и CRUD мыслесетей, участники |
+| `thoughts` | чтение, фокус, CRUD, соседи, порядок, пакетные операции, поиск, упоминания |
+| `links`, `types`, `properties`, `comments`, `attachments` | CRUD соответствующих сущностей |
+| `admin`, `me` | администрирование пользователей и собственные API-ключи |
+| `realtime` | подписки: `onEvent`, `onStatusChange`, `onStale`, `onNetworkLost`, `onLayerControl` (переключение и удаление слоя — полный ресинк), `onSelfMutated` (подавленное собственное эхо — живое обновление перекрытий слоя) |
+| `tabs` | `list`, `open`, `activate`, `close`, `reorder`, `updateState` |
+| `layers` | `list`, `create`, `update`, `remove`, `select`, `merge`, `diff`, `diffDoc` |
+| `ui` | `getState` / `setState` с необязательным `tabId` |
 
-## 11. Открытые вопросы
+**Правила контракта.** Все методы асинхронны и возвращают `Promise`. Ошибка приходит стандартизованным объектом с кодом и деталями, а не строкой. `tabId` в домене `ui` необязателен: если передан, ключ состояния трактуется как `key:<tab_id>`.
 
-- **Тёмная/светлая тема** — входит ли в MVP? Предлагаю: одна тема (светлая),
-  тёмная — следующим шагом. Зафиксировать CSS-переменными с самого начала, чтобы
-  добавить вторую тему тривиально.
-- **Шрифты и доступность** — масштаб UI через `Cmd/Ctrl +/-`? Предлагаю — да,
-  как стандартное поведение Electron.
-- **Глобальные горячие клавиши** (вызов окна из любого места) — на MVP не нужно.
+Дополнительно главный процесс шлӑт в renderer широковещания `tabs:dirty {tabId}` (событие в сети неактивного таба) и `tabs:clean {tabId}` (активация) — по ним рисуется маркер «*» на табе.
+
+<a id="pub-c130d1ce"></a>
+
+## Десктоп-клиент (Electron)
+
+Настольное приложение на Electron — основной человеческий вход в систему.
+
+Делится на два процесса: **главный** — окно, локальный SQLite, сетевой клиент (REST плюс пул WebSocket-соединений, по сокету на открытую сеть) и безопасное хранение API-ключа средствами ОС; **renderer** — собственно интерфейс. Граница жӑсткая: renderer получает данные только через IPC-контракт `window.etn`.
+
+В одном окне можно держать несколько открытых мыслесетей и несколько табов одной сети: «текущая сеть» и «текущий фокус» — это всегда сеть и фокус активного таба.
+
+Локально хранятся только персональные настройки, UI-состояние, состояние поиска, история открытых мыслей, табы и черновики правок — никаких содержательных данных сети. Ключевое ограничение: клиент **онлайн-only**.
+
+<a id="pub-73ec53f6"></a>
+
+## Жизненный цикл черновика правки: отправка, дослать, восстановление
+
+Черновик создаӑтся, как только пользователь начал править поле, и живӑт до подтверждӑнного сохранения.
+
+**Отправка.** Каждое изменение поля сначала пишется в черновики со статусом `pending`. Есть связь — правка уходит на сервер немедленно, при успехе черновик помечается `sent` и удаляется. Связи нет — остаӑтся `pending`; при восстановлении соединения все `pending`-черновики отправляются в порядке создания. Если версия, на которой правили, разошлась с серверной — приходит конфликт версий, и он показывается пользователю, а не разрешается молча.
+
+**Удаление после сохранения.** После успешного сохранения поля (заголовок мысли, постоянный комментарий) удаляются **все** черновики этого поля по ключу «профиль + сеть + сущность + поле», а не только последняя известная строка: черновик от debounce, чей идентификатор не успел вернуться к моменту сохранения, иначе останется мусором.
+
+**Открытие сущности не включает режим правки.** Постоянный и хронологические комментарии всегда открываются в режиме просмотра; правка начинается только по двойному клику. Наличие черновика этого не меняет. «Мӑртвые» черновики, текст которых уже совпал с сохранӑнным, удаляются при открытии.
+
+**Восстановление черновика заголовка никогда не затирает поле.** Черновик подставляется, только если поле ещӑ содержит сохранӑнный заголовок (пользователь ничего не печатал) и версия-основа совпадает с версией мысли. Версия ушла вперӑд — черновик устарел и остаӑтся только для повторной отправки. Поле уже изменено пользователем — черновик удаляется как устаревший.
+
+<a id="pub-41117362"></a>
+
+## Запуск клиента: подключение, восстановление табов и первая загрузка сети
+
+**Действующее лицо:** пользователь, запускающий десктоп-клиент (тот же маршрут — при повторном подключении к серверу из меню).
+
+**Предусловия:** установленное приложение и каталог профиля — возможно, с сохранёнными серверными профилями и табами.
+
+**Шаги:**
+
+1. **Выбор профиля.** Берётся активный серверный профиль из состояния установки. Профилей нет — первоначальная настройка: пользователь вводит URL сервера и API-ключ, ключ шифруется и ложится в серверные профили.
+2. **Проверка пользователя.** Запрос сведений о себе, ответ кэшируется. Здесь же проверяется совместимость версии сервера.
+3. **Подключение сокетов.** По сохранённым табам пул поднимает по одному WebSocket на каждую уникальную сеть; позиция для догона берётся per-network из состояния установки.
+4. **Загрузка списков.** Параллельно читаются список сетей и список табов. Если сети таба нет или доступ к ней потерян, таб помечается недоступным и рисуется блеклым.
+5. **Активация таба.** Активация возвращает снапшот таба (фокус, вид, состояния «Структур» и «Хроники») либо ничего — для недоступного таба. Рендерер применяет снапшот и инициализирует холст, «Структуры» и «Хронику». Фокус по умолчанию — последняя просмотренная мысль по данным сервера; для новой сети это HOME. Дальше — запрос окрестности фокуса и отрисовка холста.
+6. **Подписка на события** уже работает на уровне пула; рендерер дополнительно ставит маркер «*» на табы, чья сеть совпала с сетью события, но которые не активны.
+7. **Открытие новой сети.** Кнопка «+» ведёт на экран списка сетей; выбор сети открывает новый таб и активирует его. Закрытие последнего «настоящего» таба возвращает на экран списка сетей.
+
+**Результат:** окно с восстановленной полосой табов, активным табом в его слое и прогруженным холстом; все открытые сети слушают события.
+
+**Ветвления и ошибки.**
+
+- Сохранённых табов нет (первое подключение, новый профиль) — показывается экран списка сетей.
+- Восстановление самого свежего таба упало (сеть удалена на сервере) — тоже экран списка сетей, а не пустое окно.
+- Клик по недоступному табу показывает заглушку «Нет доступа к сети» с кнопкой закрытия таба и не трогает рабочую область.
+- Повторное подключение к серверу идёт по этому же маршруту с шага 3, а не через экран списка сетей: иначе выбор сети создаст второй таб рядом с сохранённым.
+
+<a id="pub-8783e597"></a>
+
+## Каталог профиля клиента и параметр --user-data-dir
+
+Весь локальный профиль клиента — локальная БД (включая серверные профили с API-ключами), UI-состояние, черновики, положение окна — лежит в каталоге `userData`.
+
+**Значения по умолчанию.** Установленная (packaged) сборка — `%APPDATA%\@etn\client`; dev-запуск через electron-vite — отдельный `%APPDATA%\@etn-dev`. Разделение обязательное: разработка никогда не делит профиль с установленным приложением.
+
+**Явный профиль.** Каталог задаӑтся параметром запуска `--user-data-dir=<path>`, и он всегда имеет приоритет над значением по умолчанию:
+
+- собранное приложение — `ETN.exe --user-data-dir=C:\etn\profile1`;
+- dev — `npm run dev -- -- --user-data-dir=C:\etn\profile1` из каталога `client/`: первый `--` — разделитель npm, второй — electron-vite; то же напрямую: `npx electron-vite dev -- --user-data-dir=C:\etn\profile1`.
+
+Относительный путь резолвится от текущего каталога запуска.
+
+**Изоляция профилей.** Разные профили полностью независимы (своя локальная БД, свои серверные профили, свои настройки окна) и **могут работать одновременно**: блокировка единственного экземпляра привязана к `userData`, поэтому два профиля не вытесняют друг друга. Удаление каталога сбрасывает клиент целиком, вместе с ключами серверов.
+
+**Разбор параметра — собственный.** Клиент разбирает `--user-data-dir` сам и применяет его до готовности приложения. Electron обрабатывает этот флаг и самостоятельно, но собственный разбор даӑт единый источник истины для резолва относительных путей.
+
+<a id="pub-ebed4980"></a>
+
+## Клиент сбрасывает ответы устаревших запросов выборок
+
+Клиент отменяет устаревшие запросы выборок (при смене фильтра/вида) и не применяет их ответы; кэш выборок в этой работе не вводится.
+
+**Проверка.** Быстрые смены фильтра не дают перетирания актуального результата устаревшим; реальные ошибки по-прежнему показываются.
+
+<a id="pub-f9cc1826"></a>
+
+## Миграция состояния клиента до табов в таб LEGACY
+
+До введения табов состояние клиента было привязано к паре «профиль × сеть»: ключи UI-состояния без суффикса и строки истории с `tab_id = NULL`. Эти данные не выбрасываются.
+
+**Условие миграции:** первый запуск клиента с табами, когда в UI-состоянии есть `current_focus_thought_id` / `active_view` / `structures_state` / `chronicle_state`, а таблица табов пуста.
+
+**Шаги:**
+
+1. создаётся один таб `tab_id = 'LEGACY'`, `slot_idx = 0`, `network_id` берётся из `current_network_id` (если он есть);
+2. legacy-значения переносятся в строку этого таба, а история с `tab_id = NULL` привязывается к нему.
+
+Legacy-ключи остаются доступными для чтения в эту же сессию (на случай гонки), но новые записи идут уже по per-tab ключам с суффиксом `:<tab_id>`. Для таба `LEGACY` чтение из legacy-ключей допустимо и дальше.
+
+Смысл требования: после обновления клиента пользователь обязан увидеть ту же сеть, тот же фокус, тот же вид и ту же историю, а не пустое окно.
+
+<a id="pub-271b71d5"></a>
+
+## Обновление истории посещений при открытии мысли в редакторе
+
+При открытии мысли в редакторе история переписывается одной локальной транзакцией — переход `oldId → newId`, где `oldId` — мысль, открытая в редакторе до перехода (при смене фокуса холста — прежний фокус, при открытии из «Структур» или «Хроники» — прежняя открытая мысль), `newId` — открываемая.
+
+Шаги в пределах скоупа `(profile_id, network_id, tab_id)`:
+
+1. `newId` **удаляется** из истории — он теперь открыт в редакторе, а не «посещён ранее»;
+2. `oldId` вставляется в начало истории со значением `seq = MAX(seq) + 1` в этом же скоупе (счётчик per-tab);
+3. история подрезается до **50** самых свежих записей: всё, что не входит в топ-50 по `seq`, удаляется.
+
+**Ветвления.** `oldId = null` (первое открытие в табе, редактор с нуля) — шаг 2 пропускается. `oldId = newId` (повторное открытие той же мысли) — операция целиком no-op.
+
+**Открытие связи операцию не вызывает** — связь не является посещённой мыслью.
+
+**Очистка при удалении.** По real-time событию об удалении мысли соответствующая запись истории удаляется обязательно — иначе в списке останется ссылка в никуда. Неактуальные мысли из истории **не** вычищаются: они скрываются на уровне рендера при выключенном показе неактуальных.
+
+<a id="pub-2dec1f21"></a>
+
+## Один сокет — одна сеть: несколько открытых сетей у клиента
+
+Серверный контракт: один WebSocket = одна сеть (`?network_id=…`). Клиент с несколькими открытыми сетями (табы в одном окне) держит по одному сокету на каждую — это нужно для маркера «*» на любом табе, включая неактивные: клиент должен знать о событиях во всех открытых сетях.
+
+- Пул `RealtimeClient` на клиенте: счётчик ссылок на сеть; при первом «открытии» сети сокет поднимается, при последнем «закрытии» — опускается.
+- Серверу безразлично число сокетов одного `Client-Id` (реестр byClient поддерживает множественные подключения); серверный лимит на WS per client_id не вводится — сценарий «10 табов» штатный. Лимит одновременно открытых сетей — клиентский.
+- `last_seq` в `client_meta` уже хранится per network_id — серверных изменений не требуется.
+- При потере доступа (`network.deleted`, `member.removed` для своего `user_id`) клиент закрывает соответствующий сокет и помечает таб как «inaccessible». Терминально закрытые (4401/4404) и закрытые пользователем соединения не переустанавливаются.
+
+<a id="pub-c864bd8d"></a>
+
+## Онлайн-only режим десктоп-клиента
+
+Клиент работает **только при живом соединении с сервером**. Офлайн-режима нет.
+
+При разрыве связи клиент обязан:
+
+- **блокировать сохранение** — никаких попыток применить правку локально и дослать потом;
+- **буферизовать несохранӑнное в черновик** локального хранилища, чтобы работа пользователя не пропала;
+- **показывать индикатор статуса** соединения, а не делать вид, что всё в порядке.
+
+**Индикатор статуса** в строке состояния имеет три положения: «Подключено» (зелӑный), «Переподключение…» (жёлтый), «Нет связи» (красный). В жёлтом и красном состояниях интерфейс переходит в режим только для чтения: последнее полученное состояние продолжает показываться, но изменения заблокированы.
+
+Причина ограничения: источник истины — сервер, а сетью одновременно правят другие люди и агенты. Локальное хранилище клиента под реплику графа не рассчитано и механизма слияния офлайн-правок нет.
+
+<a id="pub-d654473a"></a>
+
+## Поставка десктоп-клиента: платформы, сборка и автообновление
+
+**Платформы MVP:** Windows 10/11 x64, macOS (Intel и Apple Silicon), Linux x64 (AppImage и deb).
+
+**Сборка** — `electron-builder`. Конкретный набор платформ в CI и автоматизация сборки в спецификацию MVP не входят.
+
+**Обновление** — `electron-updater`; источник обновлений — GitHub Releases либо собственный статический хост. **Подпись обновлений обязательна**: неподписанное обновление устанавливать нельзя — клиент имеет доступ к ключам серверов пользователя.
+
+**Клиент обновляется независимо от сервера**, но при подключении проверяет версию сервера и блокирует работу, если она вне поддерживаемого диапазона.
+
+<a id="pub-7f7b2d57"></a>
+
+## Разделение процессов клиента: renderer работает только через IPC
+
+Клиент разделӑн на два процесса, и граница между ними жӑсткая.
+
+**Главный процесс** владеет всем, что связано с внешним миром и диском: сетевые операции (REST и WebSocket), локальная база, хранение API-ключей, IPC-обработчики, пул realtime-соединений.
+
+**Renderer** — только интерфейс и его состояние: полоса табов, холст, редактор, поиск, выделения, диалоги. Любое обращение к данным идӑт вызовом IPC-контракта в главный процесс, а уже оттуда — на сервер.
+
+**Запрещено:** передавать API-ключ в renderer, открывать из renderer сетевые соединения или локальную БД, дублировать там сетевую логику «для удобства».
+
+**Состояние в renderer.** Он держит список табов и идентификатор активного: «текущая сеть» — это сеть активного таба, «текущий фокус» — фокус активного таба. UI-state — снапшот активного таба, а не глобальное состояние приложения: иначе переключение табов смешает контексты разных сетей.
+
+<a id="pub-fced5ffd"></a>
+
+## Реактивный слой lib/live — единый путь живого обновления клиента
+
+**Требование (0.11.1, техпроект 269016e2).** Все экраны и модули рендерера получают данные и обновления ТОЛЬКО через реактивный слой `client/src/renderer/lib/live/` — локальные шины событий, ручные schedule*-вызовы из мутаций и собственные снимки данных в экранах запрещены.
+
+Состав слоя и контракты:
+
+1. **Кэш сущностей** (`entities.ts`): нормализованный кэш «тип:id → сущность» с версионным дедупом — патч с версией/seq ≤ кэшированной не откатывает кэш; при optimistic-мутации в полёте события сущности буферизуются до подтверждения.
+2. **Реестр запросов** (`query-registry.ts`, ключи — фабрики `query-keys.ts`): экраны не держат свои снимки; инвалидация по префиксам ключа, коалесценция в микротаске, рефетч только при активных наблюдателях, ответ устаревшего фетча отбрасывается (version-токен).
+3. **Роутер событий** (`event-router.ts`): декларативная таблица «тип события → правила инвалидации/патча» (не switch); дедуп по seq; перечень игнорируемых типов — IGNORED_REALTIME_EVENT_TYPES (presence.* — сервер не эмитит).
+4. **Mutator** (`mutator.ts`): клиентские мутации кладут REST-ответ в кэш (commitEntity*/putMutationResult/runOptimistic) и гасят ТЕ ЖЕ ключи, что соответствующие события — свой путь и путь чужого события совпадают; локальные сигналы (LocalMutationSignal) для логики, которой нужен факт «изменил я».
+5. **Broadcast-to-all (B1)**: сервер доставляет событие и автору; ЭХО-ПОДАВЛЕНИЕ ОТМЕНЕНО — все потребители обязаны быть идемпотентны к своим событиям (обеспечивается пп. 1 и 4).
+6. **Реактивный примитив** (`reactive.ts`): контракт подписок Svelte-store, батч уведомлений в микротаске.
+
+**Запрет/сторожа.** Новые потребители realtime мимо слоя запрещены: сторож `guard-reactive-layer.test.ts` (подписки — только в `realtime.ts`, putEntity — только внутри lib/live); новые экраны не заводят собственных механизмов обновления.
+
+Реализует компонент lib/live (b1babaab); история — техпроект 269016e2 (этапы G1–G6, B1).
+
+<a id="pub-0eaf422b"></a>
+
+## Слой изменений — свойство таба, а не клиента
+
+Серверная сессия слоёв — одна на клиента (ключ «пользователь + `Client-Id`»). Табов же несколько, и они могут работать в разных слоях, поэтому **выбранный слой — свойство таба** и хранится локально в его строке (`layer_id`; NULL — основа).
+
+**Порядок при активации таба обязателен.** Рендерер сначала переключает серверную сессию на слой таба, затем грузит список слоёв и перекрытия — и только после этого читает фокус. Все последующие чтения и записи этого таба идут в его слое. Нарушение порядка даёт чтение из чужого слоя — баг, который выглядит как «пропали правки».
+
+**Протухший слой** (удалён из другого сеанса) ремонтируется сбросом `layer_id` в NULL. Управляющий real-time кадр об удалении слоя делает то же самое с живой сессией.
+
+<a id="pub-36ce5241"></a>
+
+## Совместимость версий: клиент проверяет диапазон версий сервера
+
+- **Клиент при подключении обязан проверить версию сервера.** Если она вне поддерживаемого диапазона — клиент **блокирует работу** и показывает сообщение, а не пытается работать «как получится»: рассогласованные версии портят данные.
+- Все изменения API идут под новым minor/major внутри `/api/v1`; при необходимости допускается параллельный выкат `/api/v2`.
+- На MVP существует только `v1`.
+
+<a id="pub-5fe24ebe"></a>
+
+## Тема оформления и масштаб интерфейса клиента в MVP
+
+**Тема.** В MVP тема одна — светлая. Тёмная — следующий шаг, и ради неё цвета **обязаны быть заданы CSS-переменными с самого начала**: добавление второй темы не должно превращаться в переписывание стилей. Захардкоженный цвет в стилях — дефект, даже пока тема одна.
+
+**Масштаб интерфейса** — стандартное поведение Electron: `Ctrl`/`Cmd` с `+` и `-`. Выбранный масштаб — настройка установки и хранится в состоянии установки, а не на сервере.
+
+**Глобальные горячие клавиши** (вызов окна из любого приложения) в MVP не нужны.
+
+**Статус.** В исходной спецификации это были открытые вопросы с предложенными решениями; здесь зафиксированы именно предложенные варианты. Пересматривать их можно, но отдельным решением, а не попутно в ходе другой задачи.
+
+### Цветовая индикация слоёв (0.6.4, задача 6c31d64f)
+
+**Цвета слоя при смене темы.** Цвета слоя хранятся в разрезе тем (dark/light). При переключении темы применяется вариант соответствующей темы; недостающий вариант вычисляется инверсией светлоты заданного (HSL L→1−L, тон и насыщенность сохраняются) — «тёмное ↔ светлое» без искажения оттенка.
+
+<a id="pub-7682d51e"></a>
+
+## Формы адреса схемы etnimg: файл по пути и вложение по id
+
+**Контекст.** Схема `etnimg` отдаёт клиенту картинки и файлы вложений. Исторически у неё была одна форма адреса — по абсолютному пути файла (`etnimg://<диск>/<путь…>`), и вызывающий код обязан был сам знать `file_path`. Обложка публикации в списках, заголовке рабочей области и титульном блоке чтения знает только `cover_attachment_id` — `cover.ts` собирал `etnimg://attachment/<id>`, но протокол такой формы не обслуживал: адрес давал 404, и картинка подменялась заглушкой (ошибка 280a322b).
+
+**Решение.**
+
+1. Схема `etnimg` имеет ДВЕ формы, обе обслуживает main-процесс:
+   - **по пути** — `etnimg://<диск>/<путь…>` (Windows-диск латинской буквой) или `etnimg://<первый-сегмент>/…` для POSIX-абсолютного пути; так адресуются места, где `file_path` уже известен (`etnimgUrl` в рендерере) — превью вложений, `![](etnimg:…)` в комментариях;
+   - **по id вложения** — `etnimg://attachment/<id>`; main резолвит id в `file_path` через REST (`GET /networks/{nid}/attachments/{id}`) и дальше отдаёт файл тем же порядком.
+2. Порядок отдачи един для обеих форм: локальное чтение → при отсутствии файла на машине клиента (вложение хранит **удалённый** сервер) — скачивание серверной копии (`GET /networks/{nid}/attachments/raw?path=…`) по активному соединению и ключу. Ключ остаётся в main-процессе.
+3. Разбор адреса и порядок отдачи вынесены в чистый модуль `client/src/main/etnimg.ts` с внедряемыми зависимостями — обе ветки (локально и сервер) покрыты юнит-тестами `client/tests/etnimg-protocol.test.ts`.
+
+**Следствия.** Рендереру больше не нужно резолвить `file_path` вложения ради картинки — достаточно id (одна точка правды в main). Все места показа обложки (списки библиотеки, заголовок рабочей области, титульный блок чтения, шапка карточки редактора) получают картинку через `buildCover` без изменений. Заглушка «цвет + инициалы» остаётся реакцией на `error` картинки (недоступный файл → 404 → заглушка).
+
+**Запрет.** Не резолвить id вложения в рендерере ради отдачи картинки и не заводить третью форму адреса. Картинку вложения рендерер адресует только `etnimg://attachment/<id>`; форма по пути допустима, когда `file_path` уже на руках (например `etnimgUrl(file_path)` в markdown-полях).
+
+**Применяется к.** `client/src/main/index.ts` (eeb9c4d5-20ab-4ff8-a59c-55b33136dd66), `client/src/main/etnimg.ts` (карточка компонента), `client/src/renderer/screens/publications/cover.ts` (9c7edbef-6618-426f-a6fd-922f1e7043b0).
+
+**Проблема.** Ошибка 280a322b-57e2-4c1e-a7ef-18bf2022916a.
+
+<a id="pub-4a149b1c"></a>
+
+## Хранение API-ключа на клиенте: safeStorage и изоляция renderer
+
+Десктоп-клиент обязан хранить API-ключ через Electron `safeStorage` — шифрование средствами ОС: DPAPI на Windows, Keychain на macOS, libsecret на Linux. На диске в конфиге приложения лежит только зашифрованный блоб.
+
+**Изоляция процессов.** В рантайме ключ расшифровывается в памяти **главного процесса** и передаётся сетевому клиенту. **Renderer ключ не получает никогда**: все сетевые вызовы идут через IPC из главного процесса.
+
+**Запрещено:** хранить ключ в конфиге открытым текстом, пробрасывать его в renderer ради «простоты» сетевого кода и писать его в логи.
+
+Причина жёсткости: ключ бессрочен и даёт полные права своего владельца, а автоматического истечения, которое ограничило бы ущерб от утечки, нет.
