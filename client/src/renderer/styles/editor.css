@@ -1361,21 +1361,14 @@
   font-size: var(--font-size-2xs, 11px);
 }
 
-/* Тело поповера правки ссылки трансклюзии (задача 68591b8a): группы «Мысль»/
-   «Раздел»/«Команды», прокручиваемый список разделов и ряд иконочных команд.
-   Панель и её вид — компонент `lib/ui` (`openPopover`); здесь только раскладка
-   содержимого. */
+/* Тело поповера правки ссылки трансклюзии (задача 68591b8a): верхняя панель
+   команд, прокручиваемый список разделов и ряд иконочных команд. Подписи
+   «Раздел»/«Команды» удалены (решение пользователя). Панель и её вид —
+   компонент `lib/ui` (`openPopover`); здесь только раскладка содержимого. */
 .transclusion-popover {
   display: flex;
   flex-direction: column;
   gap: var(--space-2, 4px);
-}
-
-.transclusion-popover-label {
-  color: var(--text-dim);
-  font-size: var(--font-size-2xs, 11px);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .transclusion-popover-sections {
@@ -1397,8 +1390,8 @@
 .transclusion-popover-commands {
   display: flex;
   gap: var(--space-1, 2px);
-  padding-top: var(--space-1, 2px);
-  border-top: 1px solid var(--border);
+  padding-bottom: var(--space-1, 2px);
+  border-bottom: 1px solid var(--border);
 }
 
 .cm-editor .cm-transclusion-error {
