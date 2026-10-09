@@ -18,7 +18,7 @@
  * нижняя «Применить» на такой вкладке недоступна.
  *
  * Где живёт: `editor/`, а не `lib/ui` — источники обращаются к домену
- * (`etn.system.pickImage`, `store`, эмодзи-набор), а `lib/ui` — слой фасадов без
+ * (`store`, эмодзи-набор), а `lib/ui` — слой фасадов без
  * знаний о домене. Из `lib/ui` каркас берёт только фасады (диалог, кнопки,
  * вкладки, поля, свёртки), как и требует дизайн-система.
  */
@@ -27,11 +27,7 @@ import type { IconKind, ThoughtType } from '@etn/shared';
 import { button, div, el, span } from '../lib/dom.js';
 import { showDialog, type DialogSize } from '../lib/dialog.js';
 import { EMOJI_GROUPS } from '../lib/emoji-data.js';
-import { etn } from '../lib/etn.js';
-import { dataUrlBytes, ICON_MAX_BYTES, makeIconPreview } from '../lib/image-preview.js';
 import { t } from '../lib/i18n.js';
-import { notice } from '../lib/notice.js';
-import { uiButton } from '../lib/ui/button.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { colorField } from '../lib/ui/color-field.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
@@ -49,20 +45,6 @@ export interface ResourceFileSource {
   dataUrl: string;
   mime: string;
   name: string;
-}
-
-/**
- * Выбор во вкладке «Вложения» — либо НОВЫЙ файл из системного диалога (нужна
- * загрузка оригинала), либо УЖЕ сохранённое вложение (применение без изменений,
- * ошибка 846c426a — повторная загрузка не нужна, id сохраняется).
- */
-export interface ResourceFilePick {
-  /** `data:`-превью выбранной иконки. */
-  preview: string;
-  /** Новый файл — вызывающий загружает оригинал во вложения (`icon_attachment_id`). */
-  source?: ResourceFileSource;
-  /** Текущее вложение восстановленной иконки — сохраняется как есть. */
-  attachmentId?: string | null;
 }
 
 /**
@@ -558,143 +540,6 @@ export function urlSourceTab(opts: {
       holder.run = (c) => {
         if (valid === null) return;
         return opts.onApply(valid, c);
-      };
-      return box;
-    },
-    apply: (ctx) => holder.run?.(ctx),
-  };
-}
-
-/**
- * Источник «Вложения» — сетка иконок типов (быстрый выбор, немедленный) и
- * системный выбор файла-картинки с предпросмотром. Подпись вкладки и кнопки —
- * как в диалоге обложки публикации (ошибка e748e323): «Вложения» +
- * «Загрузить из файла», те же фасады `lib/ui`. Системный выбор применяет
- * нижняя «Применить»: файл ужимается до превью ≤256 КиБ
- * ({@link makeIconPreview}), а оригинал несётся вызывающему в
- * {@link ResourceFilePick}.
- *
- * `opts.initial` — уже сохранённое вложение-иконка (ошибка 846c426a): при
- * открытии диалога его превью показывается выбранным (`icon-preview-current`),
- * «Применить» активна, а применение БЕЗ изменений возвращает то же вложение —
- * `icon_attachment_id` сохраняется, повторная загрузка файла не нужна.
- */
-export function fileImageSourceTab(opts: {
-  types: readonly ThoughtType[];
-  emptyHint?: string;
-  /**
-   * Текущее вложение-иконка при открытии (превью + id) — восстановление выбора
-   * без повторной загрузки (ошибка 846c426a).
-   */
-  initial?: ResourceFilePick;
-  /** Немедленный выбор иконки типа (последний аргумент — цвет символа). */
-  onTypeIcon: (
-    icon: string,
-    kind: IconKind,
-    color: string | null,
-    ctx: ResourceSourceContext,
-  ) => void | Promise<void>;
-  /** Применение выбора вкладки: новое превью с файлом-оригиналом либо текущее вложение. */
-  onFile: (pick: ResourceFilePick, ctx: ResourceSourceContext) => void | Promise<void>;
-}): ResourceSourceTab {
-  const holder: { run: ResourceSourceTab['apply'] } = { run: undefined };
-  return {
-    id: 'file',
-    label: t('publication.cover.tab.attachments'),
-    build: (ctx) => {
-      const box = div('icon-source');
-      const typeTab = thoughtIconSourceTab({
-        types: opts.types,
-        ...(opts.emptyHint !== undefined ? { emptyHint: opts.emptyHint } : {}),
-        onPick: opts.onTypeIcon,
-      });
-      box.append(el('div', 'icon-section-title', 'Иконки типов мыслей'), typeTab.build(ctx));
-
-      const initial = opts.initial ?? null;
-      let dataUrl: string | null = null;
-      let source: ResourceFileSource | null = null;
-      const preview = div('icon-preview');
-      const showBad = (): void => {
-        preview.replaceChildren(el('span', 'icon-preview-bad', '✕'));
-        preview.classList.add('icon-preview-error');
-      };
-      const markCurrent = (on: boolean): void => {
-        preview.classList.toggle('icon-preview-current', on);
-      };
-      const showPreview = (url: string): void => {
-        preview.replaceChildren();
-        preview.classList.remove('icon-preview-error');
-        const img = el('img');
-        img.alt = '';
-        img.addEventListener('load', () => {
-          dataUrl = url;
-          ctx.setReady(true);
-        });
-        img.addEventListener('error', () => {
-          dataUrl = null;
-          ctx.setReady(false);
-          showBad();
-        });
-        img.src = url;
-        preview.append(img);
-      };
-      const pick = async (): Promise<void> => {
-        const picked = await etn.system.pickImage();
-        if (picked.status === 'cancel') return;
-        dataUrl = null;
-        source = null;
-        markCurrent(false);
-        ctx.setReady(false);
-        if (picked.status === 'error') {
-          showBad();
-          notice(picked.message, 'error');
-          return;
-        }
-        source = { dataUrl: picked.dataUrl, mime: picked.mime, name: picked.name };
-        showPreview(picked.dataUrl);
-      };
-
-      const pickRow = div('icon-pick-row');
-      pickRow.append(
-        uiButton({
-          label: t('publication.cover.upload'),
-          role: 'secondary',
-          size: 's',
-          onClick: () => void pick(),
-        }),
-      );
-      box.append(pickRow, preview);
-
-      // Текущее вложение (ошибка 846c426a): показываем выбранным, «Применить»
-      // активна — применение без изменений сохранит `icon_attachment_id`.
-      if (initial !== null && initial.preview !== '') {
-        markCurrent(true);
-        ctx.setReady(true);
-        const img = el('img');
-        img.alt = '';
-        img.src = initial.preview;
-        preview.append(img);
-      } else {
-        preview.append(el('span', 'muted', 'Файл не выбран'));
-      }
-
-      // Применение — нижней «Применить»: новый файл ужимаем до превью, текущее
-      // вложение возвращаем как есть.
-      holder.run = async (c) => {
-        if (source !== null && dataUrl !== null) {
-          let icon = dataUrl;
-          if (dataUrlBytes(icon) > ICON_MAX_BYTES) {
-            try {
-              icon = await makeIconPreview(icon);
-            } catch {
-              notice('Не удалось подготовить превью иконки.', 'error');
-              return;
-            }
-          }
-          await opts.onFile({ preview: icon, source }, c);
-          return;
-        }
-        if (initial !== null) await opts.onFile(initial, c);
       };
       return box;
     },

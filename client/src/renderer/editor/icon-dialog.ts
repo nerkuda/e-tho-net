@@ -9,8 +9,8 @@
  *
  * Источники: «Эмодзи» (полный набор Unicode 16.0), «Библиотека» (значки
  * иконочной библиотеки с поиском), «Иконки мыслей» (сетка иконок типов),
- * «Вложения» (системный выбор картинки с превью ≤256 КиБ; 0.12.1, ошибка
- * e748e323 — терминология как у вкладки «Вложения» диалога обложки) и «URL»
+ * «Вложения» (общий компонент выбора вложения — задача 0f6c3e39: список
+ * картинок сети с поиском, загрузкой из файла и отметкой текущего) и «URL»
  * (адрес с предпросмотром). «Эмодзи»/«Библиотека»/«Иконки мыслей» применяются
  * сразу по клику; «Вложения»/«URL» — нижней «Применить». Порядок вкладок:
  * «Эмодзи» — первая, «Библиотека» — следующая (элемент интерфейса 91367509).
@@ -25,19 +25,22 @@
  * цвета не требует повторного поиска.
  */
 
-import type { IconKind } from '@etn/shared';
+import type { Attachment, IconKind } from '@etn/shared';
 import { t } from '../lib/i18n.js';
+import { dataUrlBytes, ICON_MAX_BYTES, makeIconPreview } from '../lib/image-preview.js';
+import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
+import { etnimgUrl } from './markdown-field.js';
 import {
   createResourcePicker,
   emojiSourceTab,
-  fileImageSourceTab,
   libraryIconSourceTab,
   thoughtIconSourceTab,
   urlSourceTab,
   type ResourceFileSource,
   type ResourceSourceContext,
 } from './resource-picker.js';
+import { attachmentPickerSourceTab, type AttachmentPick } from './attachment-picker.js';
 
 /** The original picked file, carried to the caller for the attachment upload. */
 export type IconPickSource = ResourceFileSource;
@@ -98,7 +101,7 @@ export function showIconDialog(opts: {
     current.kind === 'icon'
       ? 'library'
       : isFileImage
-        ? 'file'
+        ? 'attachments'
         : current.kind === 'image'
           ? 'url'
           : 'emoji';
@@ -114,6 +117,48 @@ export function showIconDialog(opts: {
     async (ctx: ResourceSourceContext): Promise<void> => {
       if (await onPick(result)) ctx.close();
     };
+
+  /**
+   * Применение выбора общего компонента вложений (задача 0f6c3e39): вложение
+   * из списка / загруженный файл / восстановленное текущее — в результат
+   * иконки. Файл-вложение читается и ужимается в самодостаточное `data:`-превью
+   * ≤256 КиБ (сервер отвергает `etnimg:`-пути), его id становится
+   * `icon_attachment_id`; url-вложение даёт иконку-URL.
+   */
+  async function applyAttachmentPick(
+    pick: AttachmentPick,
+    ctx: ResourceSourceContext,
+  ): Promise<void> {
+    if (pick.source !== undefined) {
+      await submit({ icon: pick.preview, kind: 'image', color: null, source: pick.source })(ctx);
+      return;
+    }
+    const a = pick.attachment;
+    if (a === undefined) {
+      await submit({
+        icon: pick.preview,
+        kind: 'image',
+        color: null,
+        attachmentId: pick.attachmentId ?? null,
+      })(ctx);
+      return;
+    }
+    // Текущее вложение без изменений — сохраняем как есть (ошибка 846c426a).
+    if (a.id === attachmentId && current.icon !== null) {
+      await submit({ icon: current.icon, kind: 'image', color: null, attachmentId })(ctx);
+      return;
+    }
+    if (a.kind === 'url') {
+      await submit({ icon: a.url ?? '', kind: 'image', color: null, attachmentId: null })(ctx);
+      return;
+    }
+    const icon = await attachmentIconPreview(a);
+    if (icon === null) {
+      notice(t('attachments.picker.readError'), 'error');
+      return;
+    }
+    await submit({ icon, kind: 'image', color: null, attachmentId: a.id })(ctx);
+  }
 
   createResourcePicker({
     title: 'Иконка',
@@ -144,20 +189,15 @@ export function showIconDialog(opts: {
         fill: true,
         onPick: (icon, kind, color, ctx) => submit({ icon, kind, color })(ctx),
       }),
-      fileImageSourceTab({
-        types: store.state.thoughtTypes,
-        ...(isFileImage && current.icon !== null
-          ? { initial: { preview: current.icon, attachmentId } }
+      attachmentPickerSourceTab({
+        label: t('publication.cover.tab.attachments'),
+        // Текущая иконка-картинка (вложение мысли или data:-превью типа)
+        // отмечается в списке/предпросмотре при открытии (ошибки 846c426a,
+        // 844c426a) — без повторного поиска и загрузки.
+        ...(isFileImage
+          ? { current: { attachmentId, preview: current.icon ?? '' } }
           : {}),
-        onTypeIcon: (icon, kind, color, ctx) => submit({ icon, kind, color })(ctx),
-        onFile: (pick, ctx) =>
-          submit({
-            icon: pick.preview,
-            kind: 'image',
-            color: null,
-            ...(pick.attachmentId !== undefined ? { attachmentId: pick.attachmentId } : {}),
-            ...(pick.source !== undefined ? { source: pick.source } : {}),
-          })(ctx),
+        onPick: (pick, ctx) => applyAttachmentPick(pick, ctx),
       }),
       urlSourceTab({
         placeholder: 'URL изображения',
@@ -166,5 +206,33 @@ export function showIconDialog(opts: {
         onApply: (url, ctx) => submit({ icon: url, kind: 'image', color: null })(ctx),
       }),
     ],
+  });
+}
+
+/**
+ * Самодостаточное `data:`-превью иконки из файла-вложения (≤256 КиБ): файл
+ * читается через `etnimg`, при превышении лимита ужимается {@link makeIconPreview}
+ * (пути `etnimg:` сервер не принимает в `icon`). `null` — файл недоступен.
+ */
+async function attachmentIconPreview(a: Attachment): Promise<string | null> {
+  if (a.file_path === null) return null;
+  try {
+    const res = await fetch(etnimgUrl(a.file_path));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let dataUrl = await blobToDataUrl(await res.blob());
+    if (dataUrlBytes(dataUrl) > ICON_MAX_BYTES) dataUrl = await makeIconPreview(dataUrl);
+    return dataUrl;
+  } catch {
+    return null;
+  }
+}
+
+/** Читает Blob в `data:` URL (FileReader — в рендерере нет Buffer). */
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => resolve(String(reader.result)));
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('read failed')));
+    reader.readAsDataURL(blob);
   });
 }

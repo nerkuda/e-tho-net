@@ -1,8 +1,9 @@
 /**
- * Вкладка выбора файла диалога иконки — терминология диалога обложки (ошибка
- * e748e323): вкладка называется «Вложения» (не «Файл»), содержит кнопку
- * «Загрузить из файла» (не «Обзор…»), как вкладка «Вложения» диалога обложки
- * публикации. Контролы — фасады `lib/ui` (`uiButton`), не самодельные.
+ * Вкладка «Вложения» диалога иконки — терминология диалога обложки (ошибка
+ * e748e323) и общий компонент выбора вложения (задача 0f6c3e39): вкладка
+ * называется «Вложения» (не «Файл»), содержит кнопку «Загрузить из файла»
+ * (не «Обзор…»), как вкладка «Вложения» диалога обложки публикации. Контролы —
+ * фасады `lib/ui` (`uiButton`), не самодельные.
  *
  * jsdom в проекте нет — минимальный DOM-шим (конвенция `resource-picker.test.ts`).
  */
@@ -39,7 +40,7 @@ function installShim(): void {
 
 installShim();
 
-const { fileImageSourceTab } = await import('../src/renderer/editor/resource-picker.js');
+const { attachmentPickerSourceTab } = await import('../src/renderer/editor/attachment-picker.js');
 const { t } = await import('../src/renderer/lib/i18n.js');
 
 /** Все потомки с данным тегом. */
@@ -56,21 +57,24 @@ function findByTag(root: ShimElement, tag: string): ShimElement[] {
   return hits;
 }
 
-describe('вкладка «Вложения» диалога иконки (e748e323)', () => {
+describe('вкладка «Вложения» диалога иконки (e748e323, 0f6c3e39)', () => {
   beforeEach(() => installShim());
 
+  /** Общий компонент с меткой вкладки диалога иконки. */
   function buildTab(): ShimElement {
-    const tab = fileImageSourceTab({
-      types: [],
-      onTypeIcon: () => undefined,
-      onFile: () => undefined,
+    const tab = attachmentPickerSourceTab({
+      label: t('publication.cover.tab.attachments'),
+      onPick: () => undefined,
     });
     const ctx: any = { close: () => undefined, setReady: () => undefined };
     return tab.build(ctx) as unknown as ShimElement;
   }
 
   it('подпись вкладки — «Вложения» (из словаря обложки, не «Файл»)', () => {
-    const tab = fileImageSourceTab({ types: [], onTypeIcon: () => undefined, onFile: () => undefined });
+    const tab = attachmentPickerSourceTab({
+      label: t('publication.cover.tab.attachments'),
+      onPick: () => undefined,
+    });
     assert.equal(tab.label, t('publication.cover.tab.attachments'));
     assert.equal(tab.label, 'Вложения');
     assert.notEqual(tab.label, 'Файл');

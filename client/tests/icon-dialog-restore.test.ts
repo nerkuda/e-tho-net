@@ -11,9 +11,10 @@
  *      цвета не требует повторного поиска; `apply` отдаёт текущий значок с
  *      выбранным цветом.
  *   4. Вложение-картинка (ошибка 846c426a): вид `image` с `icon_attachment_id`
- *      открывает вкладку «Вложения», текущее вложение показано выбранным
- *      (`icon-preview-current`), «Применить» активна, а применение без изменений
- *      отдаёт тот же `attachmentId` (повторная загрузка не нужна).
+ *      открывает вкладку «Вложения» общего компонента выбора вложения (задача
+ *      0f6c3e39), текущее показано выбранным (`att-pick-preview-current`),
+ *      «Применить» активна, а применение без изменений отдаёт тот же
+ *      `attachmentId` (повторная загрузка не нужна).
  *   5. Картинка ТИПА мысли (ошибка 844c426a): вид `image` с самодостаточным
  *      `data:`-превью (без вложения) тоже открывает «Вложения» с показанным
  *      выбранным превью и активной «Применить»; применение сохраняет превью.
@@ -54,8 +55,9 @@ function installShim(): void {
 installShim();
 
 const { showIconDialog } = await import('../src/renderer/editor/icon-dialog.js');
-const { libraryIconSourceTab, fileImageSourceTab } = await import(
-  '../src/renderer/editor/resource-picker.js'
+const { libraryIconSourceTab } = await import('../src/renderer/editor/resource-picker.js');
+const { attachmentPickerSourceTab } = await import(
+  '../src/renderer/editor/attachment-picker.js'
 );
 const { loadIconCatalog } = await import('../src/renderer/lib/ui/icon.js');
 const { t } = await import('../src/renderer/lib/i18n.js');
@@ -214,7 +216,7 @@ describe('диалог иконки: текущее вложение-карти�
     assert.notEqual(activeTabLabel(), 'URL');
     assert.equal(isDisabled(footerBtn(t('actions.apply'))), false, '«Применить» активна');
     assert.ok(
-      lastBox().querySelector('.icon-preview-current') !== null,
+      lastBox().querySelector('.att-pick-preview-current') !== null,
       'текущее вложение показано выбранным',
     );
   });
@@ -232,17 +234,16 @@ describe('вкладка «Вложения»: текущее вложение �
     let ready = false;
     const ctx: any = { close: () => undefined, setReady: (v: boolean) => (ready = v) };
     const picked: Array<{ preview: string; attachmentId?: string | null }> = [];
-    const tab = fileImageSourceTab({
-      types: [],
-      initial: { preview: 'data:image/png;base64,AAAA', attachmentId: 'att-1' },
-      onTypeIcon: () => undefined,
-      onFile: (pick) => {
+    const tab = attachmentPickerSourceTab({
+      label: t('publication.cover.tab.attachments'),
+      current: { preview: 'data:image/png;base64,AAAA', attachmentId: 'att-1' },
+      onPick: (pick) => {
         picked.push({ preview: pick.preview, attachmentId: pick.attachmentId });
       },
     });
     const root = tab.build(ctx) as unknown as ShimElement;
     assert.equal(ready, true, 'источник объявил выбор — «Применить» активна');
-    assert.ok(root.querySelector('.icon-preview-current') !== null, 'превью помечено выбранным');
+    assert.ok(root.querySelector('.att-pick-preview-current') !== null, 'превью помечено выбранным');
     assert.ok(tab.apply !== undefined, 'у источника есть apply');
     await tab.apply!(ctx);
     assert.deepEqual(
@@ -255,10 +256,9 @@ describe('вкладка «Вложения»: текущее вложение �
   it('без текущего вложения выбор не объявлен', () => {
     let ready = false;
     const ctx: any = { close: () => undefined, setReady: (v: boolean) => (ready = v) };
-    fileImageSourceTab({
-      types: [],
-      onTypeIcon: () => undefined,
-      onFile: () => undefined,
+    attachmentPickerSourceTab({
+      label: t('publication.cover.tab.attachments'),
+      onPick: () => undefined,
     }).build(ctx);
     assert.equal(ready, false, 'нет текущего вложения — источник молчит');
   });
@@ -273,27 +273,29 @@ describe('диалог иконки: текущая картинка ТИПА м
     assert.notEqual(activeTabLabel(), 'URL');
     assert.equal(isDisabled(footerBtn(t('actions.apply'))), false, '«Применить» активна');
     assert.ok(
-      lastBox().querySelector('.icon-preview-current') !== null,
+      lastBox().querySelector('.att-pick-preview-current') !== null,
       'текущая картинка показана выбранной',
     );
   });
 
   it('вид «image» с data:-превью не оставляет активной пустую вкладку «URL»', () => {
     open({ icon: 'data:image/png;base64,BBBB', kind: 'image', color: null });
-    // Вкладка «URL» ленивая и не активна — поля ввода адреса в диалоге нет.
-    const input = findByTag(lastBox(), 'INPUT').find((el) => (el as any).type === 'text');
-    assert.equal(input, undefined, 'поля URL нет на активной вкладке «Вложения»');
+    // Вкладка «URL» ленивая и не активна — поля ввода АДРЕСА (URL изображения)
+    // в диалоге нет; у вкладки «Вложения» поле поиска вложений.
+    const urlInput = findByTag(lastBox(), 'INPUT').find(
+      (el) => (el as any).placeholder === 'URL изображения',
+    );
+    assert.equal(urlInput, undefined, 'поля URL нет на активной вкладке «Вложения»');
   });
 
   it('применение без изменений сохраняет самодостаточное data:-превью (без вложения)', async () => {
     let ready = false;
     const ctx: any = { close: () => undefined, setReady: (v: boolean) => (ready = v) };
     const picked: Array<{ preview: string; attachmentId?: string | null }> = [];
-    const tab = fileImageSourceTab({
-      types: [],
-      initial: { preview: 'data:image/png;base64,BBBB', attachmentId: null },
-      onTypeIcon: () => undefined,
-      onFile: (pick) => {
+    const tab = attachmentPickerSourceTab({
+      label: t('publication.cover.tab.attachments'),
+      current: { preview: 'data:image/png;base64,BBBB', attachmentId: null },
+      onPick: (pick) => {
         picked.push({ preview: pick.preview, attachmentId: pick.attachmentId });
       },
     });

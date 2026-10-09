@@ -4,19 +4,21 @@
  * Правило: диалог выбора ресурса (иконка мысли/типа, обложка публикации,
  * будущие картинки в полях) собирается ТОЛЬКО каркасом
  * `editor/resource-picker.ts` (`createResourcePicker` + источники
- * `emojiSourceTab`/`libraryIconSourceTab`/`thoughtIconSourceTab`/`urlSourceTab`/
- * `fileImageSourceTab`).
- * Второй самодельный диалог под ту же роль — нарушение.
+ * `emojiSourceTab`/`libraryIconSourceTab`/`thoughtIconSourceTab`/`urlSourceTab`).
+ * Вкладка «Вложения» — ТОЛЬКО общий компонент выбора вложения
+ * `editor/attachment-picker.ts` (`attachmentPickerSourceTab`, задача 0f6c3e39).
+ * Второй самодельный диалог/список под ту же роль — нарушение.
  *
  * Что проверяется грепом:
- *  1. Системный выбор картинки (`etn.system.pickImage`) — только в источнике
- *     «Файл» универсального компонента: второй такой вызов означает вторую
+ *  1. Системный выбор картинки (`etn.system.pickImage`) — только в общем
+ *     компоненте выбора вложения: второй такой вызов означает вторую
  *     реализацию выбора.
  *  2. Набор эмодзи (`EMOJI_GROUPS`) подключается только источником «Эмодзи».
  *  3. Фабрики источников зовут только каркас и адаптеры (icon-dialog,
  *     publication-card); новый потребитель обязан быть осознанной правкой
  *     списка.
- *  4. Оба прежних диалога (иконка, обложка) собраны через `createResourcePicker`.
+ *  4. Оба прежних диалога (иконка, обложка) собраны через `createResourcePicker`
+ *     и вкладку «Вложения» берут из общего компонента.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -30,25 +32,31 @@ import { assertGuardClean } from './guard-helpers.js';
 
 const RENDERER_ROOT = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
 const PICKER = 'editor/resource-picker.ts';
+const ATTACHMENT_PICKER = 'editor/attachment-picker.ts';
 
 /** Файлы, которым разрешено пользоваться фабриками источников ресурса. */
-const SOURCE_CONSUMERS = new Set([PICKER, 'editor/icon-dialog.ts', 'editor/publication-card.ts']);
+const SOURCE_CONSUMERS = new Set([
+  PICKER,
+  ATTACHMENT_PICKER,
+  'editor/icon-dialog.ts',
+  'editor/publication-card.ts',
+]);
 
 function source(rel: string): string {
   return fs.readFileSync(path.join(RENDERER_ROOT, ...rel.split('/')), 'utf8');
 }
 
 describe('сторож: единый диалог выбора ресурса (d1a56d76)', () => {
-  it('системный выбор картинки — только в универсальном компоненте', () => {
+  it('системный выбор картинки — только в общем компоненте выбора вложения', () => {
     assertGuardClean(RENDERER_ROOT, [
       {
         name: 'single-image-picker',
         description:
-          '`etn.system.pickImage` — только в источнике «Файл» универсального ' +
-          'диалога выбора ресурса (editor/resource-picker.ts). Второй вызов — ' +
-          'вторая реализация выбора картинки: соберите источник в компоненте.',
+          '`etn.system.pickImage` — только в общем компоненте выбора вложения ' +
+          '(editor/attachment-picker.ts). Второй вызов — вторая реализация ' +
+          'выбора картинки: соберите источник в компоненте.',
         pattern: /pickImage/,
-        allow: (rel) => rel === PICKER,
+        allow: (rel) => rel === ATTACHMENT_PICKER,
       },
     ]);
   });
@@ -72,10 +80,11 @@ describe('сторож: единый диалог выбора ресурса (d
         name: 'single-resource-sources',
         description:
           '`createResourcePicker`/`emojiSourceTab`/`libraryIconSourceTab`/' +
-          '`thoughtIconSourceTab`/`urlSourceTab`/`fileImageSourceTab` — API ' +
-          'универсального диалога; ' +
+          '`thoughtIconSourceTab`/`urlSourceTab`/`attachmentPickerSourceTab` — ' +
+          'API универсального диалога; ' +
           'второй потребитель вне каркаса и адаптеров — второе семейство диалогов.',
-        pattern: /createResourcePicker|emojiSourceTab|libraryIconSourceTab|thoughtIconSourceTab|urlSourceTab|fileImageSourceTab/,
+        pattern:
+          /createResourcePicker|emojiSourceTab|libraryIconSourceTab|thoughtIconSourceTab|urlSourceTab|attachmentPickerSourceTab/,
         allow: (rel) => SOURCE_CONSUMERS.has(rel),
       },
     ]);
@@ -92,6 +101,30 @@ describe('сторож: единый диалог выбора ресурса (d
       source('editor/publication-card.ts'),
       /createResourcePicker\(/,
       'диалог обложки — адаптер универсального компонента',
+    );
+  });
+
+  it('вкладка «Вложения» обоих диалогов — из общего компонента', () => {
+    assert.match(
+      source(ATTACHMENT_PICKER),
+      /export function attachmentPickerSourceTab\(/,
+      'общий компонент выбора вложения объявлен',
+    );
+    assert.match(
+      source('editor/icon-dialog.ts'),
+      /attachmentPickerSourceTab\(/,
+      'диалог иконки берёт вкладку «Вложения» из общего компонента',
+    );
+    assert.match(
+      source('editor/publication-card.ts'),
+      /attachmentPickerSourceTab\(/,
+      'диалог обложки берёт вкладку «Вложения» из общего компонента',
+    );
+    // Прежняя отдельная реализация вкладки «Вложения» не должна вернуться.
+    assert.doesNotMatch(
+      source(PICKER),
+      /fileImageSourceTab/,
+      'дублирующая вкладка «Вложения» удалена из каркаса',
     );
   });
 
