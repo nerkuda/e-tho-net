@@ -23,10 +23,30 @@
  *   { "waitFor": "expr" } | { "waitFor": { "expression": "…", "frames": 2 } }
  *     | { "waitFor": { "frames": 2 } } | { "waitFor": 2 }
  *   { "probe": "expr" } | { "probe": { "name": "rows", "expression": "…" } }
+ *     К пробе можно добавить `"expect": <значение>`: раннер сверит факт с
+ *     ожиданием и покажет пару «факт/ожидание» в отчёте.
  *   { "shot": "01.png" } | { "shot": { "file": "01.png", "clip": "#sel" } }
  *     clip: селектор | [x, y, w, h] | { x, y, width, height }
+ *   { "assert": { "region": "#sel" | [x,y,w,h] | {x,y,width,height},
+ *                 "checks": [ <проверка>, … ], "evidence": false } }
+ *     — программный растровый ассерт: кроп региона, проверки по пикселям,
+ *     результат ТЕКСТОМ (PNG до модели не доходит; `evidence: true` сохранит
+ *     PNG — только как доказательство ошибки). Проверки:
+ *       { "kind": "notBlank", "minRatio": 0.02, "tolerance": 16 }
+ *       { "kind": "colorAt", "at": [dx, dy], "color": "#rrggbb", "tolerance": 8 }
+ *       { "kind": "hasColor", "color": "#rrggbb", "tolerance": 8, "minPixels": 1 }
+ *       { "kind": "distinct", "minColors": 2 }
+ *   { "api": { "name": "…", "method": "GET", "path": "/networks/…",
+ *              "expression": "data.body_md", "expect": "…" } }
+ *     — HTTP-запрос к серверу стенда ИЗ РАННЕРА (не из рендерера): так
+ *     проверяется эффект на сервере/в БД (грабли aa5cf162 — CDP не видит
+ *     трафик main-процесса). `expression` вычисляется от распарсенного тела
+ *     (обёртка `data` разворачивается); `expect` — необязательное ожидание.
  *   { "eval": "expr" } | { "eval": { "name": "focus", "expression": "…" } }
  *     — побочное действие без записи значения в отчёт (фокус, скролл, ввод).
+ *
+ * В строковых полях поддерживаются подстановки `{{имя}}` — значения задаются
+ * раннеру через `--var имя=значение` (стенд подставляет id засеянных сущностей).
  */
 
 /** Мс на шаг, если ни шаг, ни сценарий не задали свой предел. */
@@ -54,10 +74,23 @@ const SPECIAL_KEYS = {
 };
 
 /** Имена действий шага: ровно одно на шаг. */
-export const STEP_ACTION_KEYS = ['key', 'click', 'text', 'waitFor', 'probe', 'shot', 'eval'];
+export const STEP_ACTION_KEYS = [
+  'key',
+  'click',
+  'text',
+  'waitFor',
+  'probe',
+  'shot',
+  'assert',
+  'api',
+  'eval',
+];
+
+/** Виды растровых проверок региона (шаг `assert`). */
+export const REGION_CHECK_KINDS = ['notBlank', 'colorAt', 'hasColor', 'distinct'];
 
 /** Метаключи шага, допустимые вместе с любым действием. */
-const STEP_META_KEYS = ['name', 'timeout'];
+const STEP_META_KEYS = ['name', 'timeout', 'expect'];
 
 /** Дополнительные поля шага, допустимые только у конкретного действия. */
 const STEP_EXTRA_KEYS = { key: ['modifiers', 'code', 'keyCode'] };
@@ -230,26 +263,26 @@ function asNumber(value, where) {
   return value;
 }
 
-function normalizeClip(value, where) {
-  if (typeof value === 'string') return { selector: asString(value, `${where}.clip`) };
+function normalizeClip(value, where, field = 'clip') {
+  if (typeof value === 'string') return { selector: asString(value, `${where}.${field}`) };
   if (Array.isArray(value)) {
-    if (value.length !== 4) fail(`${where}.clip: ожидается [x, y, width, height]`);
+    if (value.length !== 4) fail(`${where}.${field}: ожидается [x, y, width, height]`);
     return {
-      x: asNumber(value[0], `${where}.clip[0]`),
-      y: asNumber(value[1], `${where}.clip[1]`),
-      width: asPositive(value[2], `${where}.clip[2]`),
-      height: asPositive(value[3], `${where}.clip[3]`),
+      x: asNumber(value[0], `${where}.${field}[0]`),
+      y: asNumber(value[1], `${where}.${field}[1]`),
+      width: asPositive(value[2], `${where}.${field}[2]`),
+      height: asPositive(value[3], `${where}.${field}[3]`),
     };
   }
-  if (!isPlainObject(value)) fail(`${where}.clip: селектор, [x,y,w,h] или {x,y,width,height}`);
+  if (!isPlainObject(value)) fail(`${where}.${field}: селектор, [x,y,w,h] или {x,y,width,height}`);
   for (const extra of Object.keys(value)) {
-    if (!['x', 'y', 'width', 'height'].includes(extra)) fail(`${where}.clip: неизвестное поле «${extra}»`);
+    if (!['x', 'y', 'width', 'height'].includes(extra)) fail(`${where}.${field}: неизвестное поле «${extra}»`);
   }
   return {
-    x: asNumber(value.x, `${where}.clip.x`),
-    y: asNumber(value.y, `${where}.clip.y`),
-    width: asPositive(value.width, `${where}.clip.width`),
-    height: asPositive(value.height, `${where}.clip.height`),
+    x: asNumber(value.x, `${where}.${field}.x`),
+    y: asNumber(value.y, `${where}.${field}.y`),
+    width: asPositive(value.width, `${where}.${field}.width`),
+    height: asPositive(value.height, `${where}.${field}.height`),
   };
 }
 
@@ -257,6 +290,123 @@ function asPositive(value, where) {
   const n = asNumber(value, where);
   if (n <= 0) fail(`${where}: ожидается положительное число`);
   return n;
+}
+
+/** Неотрицательное число (0 допустим). */
+function asNonNegative(value, where) {
+  const n = asNumber(value, where);
+  if (n < 0) fail(`${where}: ожидается неотрицательное число`);
+  return n;
+}
+
+/** Неотрицательное целое (0 допустим). */
+function asNonNegativeInt(value, where) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    fail(`${where}: ожидается целое неотрицательное число`);
+  }
+  return value;
+}
+
+/** Нормализовать одну проверку региона шага `assert`. */
+function normalizeCheck(raw, where, index) {
+  const at = `${where}.checks[${index}]`;
+  if (!isPlainObject(raw)) fail(`${at}: проверка должна быть объектом`);
+  const kind = raw.kind;
+  if (typeof kind !== 'string' || !REGION_CHECK_KINDS.includes(kind)) {
+    fail(`${at}.kind: ожидается одно из: ${REGION_CHECK_KINDS.join(', ')}`);
+  }
+  const name = raw.name === undefined ? `${kind}${index + 1}` : asString(raw.name, `${at}.name`);
+  const allowed = {
+    notBlank: ['kind', 'name', 'minRatio', 'tolerance'],
+    colorAt: ['kind', 'name', 'at', 'color', 'tolerance'],
+    hasColor: ['kind', 'name', 'color', 'tolerance', 'minPixels'],
+    distinct: ['kind', 'name', 'minColors'],
+  }[kind];
+  for (const extra of Object.keys(raw)) {
+    if (!allowed.includes(extra)) fail(`${at}: поле «${extra}» недопустимо для проверки ${kind}`);
+  }
+  switch (kind) {
+    case 'notBlank': {
+      const minRatio = raw.minRatio === undefined ? 0.02 : asNumber(raw.minRatio, `${at}.minRatio`);
+      if (minRatio < 0 || minRatio > 1) fail(`${at}.minRatio: ожидается доля 0..1`);
+      return {
+        kind,
+        name,
+        minRatio,
+        tolerance: raw.tolerance === undefined ? 16 : asNonNegative(raw.tolerance, `${at}.tolerance`),
+      };
+    }
+    case 'colorAt': {
+      if (!Array.isArray(raw.at) || raw.at.length !== 2) fail(`${at}.at: ожидается пара [dx, dy]`);
+      return {
+        kind,
+        name,
+        at: [
+          asNonNegativeInt(raw.at[0], `${at}.at[0]`),
+          asNonNegativeInt(raw.at[1], `${at}.at[1]`),
+        ],
+        color: asString(raw.color, `${at}.color`),
+        tolerance: raw.tolerance === undefined ? 8 : asNonNegative(raw.tolerance, `${at}.tolerance`),
+      };
+    }
+    case 'hasColor':
+      return {
+        kind,
+        name,
+        color: asString(raw.color, `${at}.color`),
+        tolerance: raw.tolerance === undefined ? 8 : asNonNegative(raw.tolerance, `${at}.tolerance`),
+        minPixels: raw.minPixels === undefined ? 1 : asPositiveInt(raw.minPixels, `${at}.minPixels`),
+      };
+    default:
+      return {
+        kind: 'distinct',
+        name,
+        minColors: raw.minColors === undefined ? 2 : asPositiveInt(raw.minColors, `${at}.minColors`),
+      };
+  }
+}
+
+/** Нормализовать действие `assert` (растровый ассерт). */
+function normalizeAssert(value, where, index) {
+  if (!isPlainObject(value)) fail(`${where}.assert: ожидается объект`);
+  for (const extra of Object.keys(value)) {
+    if (!['name', 'region', 'checks', 'evidence'].includes(extra)) {
+      fail(`${where}.assert: неизвестное поле «${extra}»`);
+    }
+  }
+  const name = value.name === undefined ? `assert${index + 1}` : asString(value.name, `${where}.assert.name`);
+  if (value.region === undefined) fail(`${where}.assert: нужен «region» (селектор или прямоугольник)`);
+  const region = normalizeClip(value.region, where, 'assert.region');
+  if (!Array.isArray(value.checks) || value.checks.length === 0) {
+    fail(`${where}.assert.checks: непустой массив проверок`);
+  }
+  const checks = value.checks.map((c, i) => normalizeCheck(c, where, i));
+  let evidence = false;
+  if (value.evidence !== undefined) {
+    if (typeof value.evidence !== 'boolean') fail(`${where}.assert.evidence: ожидается булево`);
+    evidence = value.evidence;
+  }
+  return { name, region, checks, evidence };
+}
+
+/** Нормализовать действие `api` (HTTP-запрос раннера к серверу стенда). */
+function normalizeApi(value, where, index) {
+  if (!isPlainObject(value)) fail(`${where}.api: ожидается объект`);
+  for (const extra of Object.keys(value)) {
+    if (!['name', 'method', 'path', 'expression'].includes(extra)) {
+      fail(`${where}.api: неизвестное поле «${extra}» (ожидание задаётся мета-полем «expect»)`);
+    }
+  }
+  const name = value.name === undefined ? `api${index + 1}` : asString(value.name, `${where}.api.name`);
+  const method = value.method === undefined ? 'GET' : asString(value.method, `${where}.api.method`).toUpperCase();
+  if (!['GET', 'POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+    fail(`${where}.api.method: недопустимый метод «${method}»`);
+  }
+  const path = asString(value.path, `${where}.api.path`);
+  if (!path.startsWith('/')) fail(`${where}.api.path: путь должен начинаться с «/»`);
+  const expression =
+    value.expression === undefined ? null : asString(value.expression, `${where}.api.expression`);
+  return { name, method, path, expression };
 }
 
 function normalizeWaitFor(value, where) {
@@ -340,9 +490,13 @@ function validateStep(raw, index, defaultTimeout) {
       fail(`${where}: неизвестное поле «${extra}»`);
     }
   }
+  if (raw.expect !== undefined && kind !== 'probe' && kind !== 'api') {
+    fail(`${where}: поле «expect» допустимо только у шагов probe и api`);
+  }
   const name = raw.name === undefined ? `${index + 1}:${kind}` : asString(raw.name, `${where}.name`);
   const timeout = raw.timeout === undefined ? defaultTimeout : asPositiveInt(raw.timeout, `${where}.timeout`);
   const step = { index, kind, name, timeout };
+  if (raw.expect !== undefined) step.expect = raw.expect;
   switch (kind) {
     case 'key': {
       // Строковая клавиша может нести модификаторы/код на уровне шага
@@ -375,6 +529,12 @@ function validateStep(raw, index, defaultTimeout) {
       break;
     case 'shot':
       step.shot = normalizeShot(raw.shot, where);
+      break;
+    case 'assert':
+      step.assert = normalizeAssert(raw.assert, where, index);
+      break;
+    case 'api':
+      step.api = normalizeApi(raw.api, where, index);
       break;
     default:
       fail(`${where}: необработанное действие «${kind}»`);

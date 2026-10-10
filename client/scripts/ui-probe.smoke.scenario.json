@@ -1,0 +1,71 @@
+{
+  "name": "gui-smoke",
+  "description": "Эталонный smoke GUI-стенда (задача 38ef87cc): подключение к изолированному серверу, открытие засеянной мысли, вход в правку постоянного комментария, команда форматирования (Ctrl+B), сохранение и контроль по БД стенда через шаг api. Запускается стендом: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.smoke.scenario.json. Подстановки {{…}} ставит стенд (адрес/ключ/имя сети/id засеянных сущностей). Без скриншотов: доказательства — текстовые пробы и контроль в БД. Это же — образец для сценариев задач.",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    {
+      "name": "server-url-value",
+      "probe": "document.querySelector(\"input[placeholder^='http']\")?.value ?? null",
+      "expect": "{{serverUrl}}"
+    },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "comment-of-thought",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('{{seedComment}}') === true"
+    },
+    {
+      "name": "comment-owner-title",
+      "probe": "document.querySelector('.editor-title-input')?.value ?? null",
+      "expect": "{{seedTitle}}"
+    },
+    { "name": "enter-edit", "click": "[data-action=\"edit\"]" },
+    {
+      "name": "edit-mode",
+      "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null"
+    },
+    { "name": "select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "format-bold", "key": "b", "modifiers": ["ctrl"] },
+    {
+      "name": "bold-markers",
+      "probe": "document.querySelector('.md-field--editing')?.textContent?.includes('**') ?? false",
+      "expect": true
+    },
+    { "name": "save", "click": "[data-action=\"save\"]" },
+    {
+      "name": "view-mode-back",
+      "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null"
+    },
+    {
+      "name": "comment-in-db",
+      "api": {
+        "name": "comment-in-db",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
+        "expression": "(Array.isArray(data) ? data : data.items).find((c) => c.kind === 'permanent').body_md"
+      },
+      "expect": "**{{seedComment}}**"
+    }
+  ]
+}

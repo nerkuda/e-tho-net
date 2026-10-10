@@ -32,6 +32,7 @@ import {
   ScenarioError,
   parseScenario,
 } from './ui-probe-scenario.mjs';
+import { decodePng, runRegionChecks } from './ui-probe-image.mjs';
 
 /** Ошибки вызова/подключения — код возврата 2 (в отличие от провала шага, 1). */
 class UsageError extends Error {
@@ -48,46 +49,30 @@ const HELP = `ui-probe — сценарный прогон UI клиента ETN
 
 Опции:
   -s, --scenario <file>  JSON-сценарий (обязательно).
-  -o, --out <dir>        Каталог отчёта и скриншотов (по умолчанию ui-probe-out).
+  -o, --out <dir>        Каталог отчёта (по умолчанию ui-probe-out).
       --host <host>      Хост CDP (по умолчанию 127.0.0.1).
       --port <n>         Порт CDP (по умолчанию 9222).
-      --cdp <url>        Полный базовый URL CDP; перекрывает --host/--port
-                         (например http://127.0.0.1:9333).
+      --cdp <url>        Полный базовый URL CDP; перекрывает --host/--port.
       --target <type>    Тип цели CDP (по умолчанию page).
       --timeout <ms>     Переопределить лимит на шаг для всего сценария.
+      --var <имя=знач.>  Подстановка {{имя}} в строках сценария (можно
+                         повторять). Значения подставляет стенд (id сущностей).
+      --api <url>        Базовый URL REST стенда для шагов api.
+      --api-key <key>    API-key для шагов api (заголовок Authorization).
+      --no-wake          Не «будить» страницу через CDP перед прогоном.
   -h, --help             Эта справка.
 
-Код возврата: 0 — все шаги прошли; 1 — провал/таймаут шага; 2 — ошибка
-вызова, сценария или подключения к CDP.
+Перед прогоном раннер по умолчанию «будит» скрытое окно обёртки через CDP
+(Page.bringToFront, Emulation.setFocusEmulationEnabled,
+Page.setWebLifecycleState('active')) — иначе rAF/layout заморожены и условия
+не наступают (грабли 03e33360). Отключить: --no-wake.
 
-Как запустить клиент для проверок (единственный штатный путь — обёртка):
+Код возврата: 0 — все шаги прошли; 1 — провал/таймаут шага или несошедшееся
+ожидание; 2 — ошибка вызова, сценария или подключения к CDP.
 
-  node client/scripts/ui-probe-launch.mjs --port 9333
-
-  Обёртка работает с собранным клиентом (npm -w @etn/client run build),
-  генерирует уникальный изолированный профиль, ставит ETN_HIDDEN_WINDOW=1,
-  включает CDP и ждёт готовности.
-  ETN_HIDDEN_WINDOW=1 — окно невидимо (opacity 0), не в панели задач и не
-  забирает фокус; рендер при этом живой, Page.captureScreenshot даёт кадр.
-  Изолированный профиль обязателен: на дефолтном (общем с клиентом
-  пользователя) тестовый режим отказывается стартовать — иначе поднял бы
-  окно пользователя и отобрал фокус.
-
-Шаги сценария (ровно одно действие на шаг, плюс необязательные name/timeout):
-  { "key": "ArrowDown", "modifiers": ["shift"] }   стрелки, Tab, Enter, Esc…
-  { "click": "#sel" } | { "click": { "selector": "#sel", "at": [4, 4] } }
-    | { "click": [640, 400] } | { "click": { "x": 10, "y": 20 } }
-  { "text": "строка" }                              ввод текста (Input.insertText)
-  { "waitFor": "expr" } | { "waitFor": { "expression": "…", "frames": 2 } }
-    | { "waitFor": 2 }                              условие и/или N кадров rAF
-  { "probe": "expr" } | { "probe": { "name": "rows", "expression": "…" } }
-  { "shot": "01.png" } | { "shot": { "file": "01.png", "clip": "#sel" } }
-    clip: селектор | [x, y, w, h] | { x, y, width, height }
-  { "eval": "expr" } | { "eval": { "name": "focus", "expression": "…" } }
-
-Ожидание — только по условию (поллинг выражения) или по кадрам отрисовки
-(двойной requestAnimationFrame), фиксированных пауз нет. Отчёт: <out>/report.json.
-Пример сценария: client/scripts/ui-probe.scenario.example.json.
+Шаги сценария — см. client/scripts/ui-probe.md и
+client/scripts/ui-probe.scenario.example.json. Отчёт: <out>/report.json и
+<out>/report.txt (текст «шаг → проба → факт/ожидание»).
 `;
 
 function parseArgs(argv) {
@@ -99,6 +84,10 @@ function parseArgs(argv) {
     cdp: null,
     target: 'page',
     timeout: null,
+    vars: {},
+    api: null,
+    apiKey: null,
+    wake: true,
     help: false,
   };
   const need = (value, flag) => {
@@ -147,6 +136,25 @@ function parseArgs(argv) {
         opts.timeout = int(need(argv[i + 1], arg), arg);
         i += 1;
         break;
+      case '--var': {
+        const pair = need(argv[i + 1], arg);
+        const eq = pair.indexOf('=');
+        if (eq <= 0) throw new UsageError('--var требует «имя=значение»');
+        opts.vars[pair.slice(0, eq)] = pair.slice(eq + 1);
+        i += 1;
+        break;
+      }
+      case '--api':
+        opts.api = need(argv[i + 1], arg);
+        i += 1;
+        break;
+      case '--api-key':
+        opts.apiKey = need(argv[i + 1], arg);
+        i += 1;
+        break;
+      case '--no-wake':
+        opts.wake = false;
+        break;
       default:
         throw new UsageError(`неизвестный аргумент «${arg}» (справка: --help)`);
     }
@@ -155,6 +163,29 @@ function parseArgs(argv) {
     throw new UsageError('не задан сценарий: --scenario <file> (справка: --help)');
   }
   return opts;
+}
+
+/**
+ * Подставить значения `--var` в строки сценария (`{{имя}}`). Рекурсивно по
+ * объектам/массивам; неизвестная переменная — ошибка вызова (код 2).
+ */
+function substituteVars(value, vars) {
+  if (typeof value === 'string') {
+    return value.replace(/\{\{([^{}]+)\}\}/g, (_match, raw) => {
+      const key = raw.trim();
+      if (!Object.prototype.hasOwnProperty.call(vars, key)) {
+        throw new UsageError(`в сценарии нет значения переменной {{${key}}} (задайте --var ${key}=…)`);
+      }
+      return vars[key];
+    });
+  }
+  if (Array.isArray(value)) return value.map((item) => substituteVars(item, vars));
+  if (value !== null && typeof value === 'object') {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = substituteVars(item, vars);
+    return out;
+  }
+  return value;
 }
 
 /** Минимальный CDP-клиент: send(method, params) с корреляцией по id. */
@@ -293,6 +324,89 @@ async function waitForExpression(cdp, expression, timeout) {
   }
 }
 
+/**
+ * «Разбудить» скрытое окно обёртки через CDP. Без этого документ остаётся
+ * `hidden`, rAF/layout заморожены и условия не наступают (грабли 03e33360).
+ * Методы необязательные для старых сборок — сбой каждого проглатывается.
+ */
+async function wakePage(cdp) {
+  const calls = [
+    ['Page.bringToFront', {}],
+    ['Emulation.setFocusEmulationEnabled', { enabled: true }],
+    ['Page.setWebLifecycleState', { state: 'active' }],
+  ];
+  for (const [method, params] of calls) {
+    try {
+      await cdp.send(method, params);
+    } catch {
+      // метод не поддержан этой сборкой — следующий
+    }
+  }
+}
+
+/** Стабильная сериализация значения для сравнения «факт ↔ ожидание». */
+function stableStringify(value) {
+  if (value === undefined) return 'undefined';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+}
+
+/** Показать значение компактно (для текстового отчёта). */
+function describeValue(value) {
+  const text = typeof value === 'string' ? JSON.stringify(value) : stableStringify(value);
+  return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+}
+
+/** Совпадают ли факт и ожидание (порядок ключей объектов не важен). */
+function sameValue(actual, expected) {
+  return stableStringify(actual) === stableStringify(expected);
+}
+
+/**
+ * Выполнить шаг `api`: HTTP-запрос к серверу стенда ИЗ РАННЕРА.
+ * Проверка эффекта на сервере/в БД — обход граблей aa5cf162 (CDP не видит
+ * HTTP main-процесса Electron).
+ */
+async function doApi(step, apiConfig) {
+  if (apiConfig.base === null) {
+    throw new Error('шаг api требует базовый URL стенда: запустите с --api <url>');
+  }
+  const url = `${apiConfig.base.replace(/\/+$/, '')}${step.api.path}`;
+  const headers = {};
+  if (apiConfig.key !== null) headers.authorization = `Bearer ${apiConfig.key}`;
+  let response;
+  let text;
+  try {
+    response = await fetch(url, { method: step.api.method, headers });
+    text = await response.text();
+  } catch (err) {
+    throw new Error(`api ${step.api.method} ${step.api.path}: ${err.message}`);
+  }
+  if (!response.ok) {
+    throw new Error(`api ${step.api.method} ${step.api.path}: HTTP ${response.status}`);
+  }
+  let body = text;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // не-JSON тело оставляем строкой
+  }
+  const data =
+    body !== null && typeof body === 'object' && !Array.isArray(body) && 'data' in body
+      ? body.data
+      : body;
+  if (step.api.expression === null) return data;
+  try {
+    // Выражение пишет автор сценария (инструмент разработки, локальный прогон).
+    const fn = new Function('data', `return (${step.api.expression});`);
+    return fn(data);
+  } catch (err) {
+    throw new Error(`api ${step.api.path}: выражение не вычислено: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /** Прямоугольник элемента во вьюпорте; сам элемент подкручивается в вид. */
 async function elementRect(cdp, selector) {
   const expression =
@@ -304,6 +418,43 @@ async function elementRect(cdp, selector) {
   const rect = await evaluate(cdp, expression);
   if (rect === null || rect === undefined) throw new Error(`селектор не найден: ${selector}`);
   return rect;
+}
+
+/** Прямоугольник кропа во вьюпорте: селектор элемента либо явные координаты. */
+async function resolveClipBox(cdp, clip) {
+  if (clip.selector !== undefined) {
+    const rect = await elementRect(cdp, clip.selector);
+    if (rect.width <= 0 || rect.height <= 0) {
+      throw new Error(`обрезка: элемент «${clip.selector}» нулевого размера`);
+    }
+    return rect;
+  }
+  return clip;
+}
+
+/** Снимок страницы (или кропа) как буфер PNG. */
+async function screenshot(cdp, clip) {
+  const params = { format: 'png', fromSurface: true, captureBeyondViewport: false };
+  if (clip !== null) {
+    const box = await resolveClipBox(cdp, clip);
+    params.clip = {
+      x: Math.round(box.x),
+      y: Math.round(box.y),
+      width: Math.max(1, Math.round(box.width)),
+      height: Math.max(1, Math.round(box.height)),
+      scale: 1,
+    };
+  }
+  const result = await cdp.send('Page.captureScreenshot', params);
+  return Buffer.from(result.data, 'base64');
+}
+
+/** Записать буфер PNG в каталог отчёта; вернуть относительный путь. */
+function writeShot(outDir, file, buffer) {
+  const absolute = path.join(outDir, file);
+  mkdirSync(path.dirname(absolute), { recursive: true });
+  writeFileSync(absolute, buffer);
+  return file;
 }
 
 async function doClick(cdp, spec) {
@@ -364,35 +515,12 @@ async function doKey(cdp, key) {
 }
 
 async function doShot(cdp, shot, outDir) {
-  const params = { format: 'png', fromSurface: true, captureBeyondViewport: false };
-  if (shot.clip !== null) {
-    let box;
-    if (shot.clip.selector !== undefined) {
-      const rect = await elementRect(cdp, shot.clip.selector);
-      if (rect.width <= 0 || rect.height <= 0) {
-        throw new Error(`обрезка: элемент «${shot.clip.selector}» нулевого размера`);
-      }
-      box = rect;
-    } else {
-      box = shot.clip;
-    }
-    params.clip = {
-      x: Math.round(box.x),
-      y: Math.round(box.y),
-      width: Math.max(1, Math.round(box.width)),
-      height: Math.max(1, Math.round(box.height)),
-      scale: 1,
-    };
-  }
-  const result = await cdp.send('Page.captureScreenshot', params);
-  const absolute = path.join(outDir, shot.file);
-  mkdirSync(path.dirname(absolute), { recursive: true });
-  writeFileSync(absolute, Buffer.from(result.data, 'base64'));
-  return shot.file;
+  const buffer = await screenshot(cdp, shot.clip);
+  return writeShot(outDir, shot.file, buffer);
 }
 
 /** Выполнить один шаг, сложив результат в запись отчёта `entry`. */
-async function runStep(cdp, step, outDir, entry, report) {
+async function runStep(cdp, step, outDir, entry, report, context) {
   switch (step.kind) {
     case 'key':
       await doKey(cdp, step.key);
@@ -416,8 +544,42 @@ async function runStep(cdp, step, outDir, entry, report) {
       break;
     case 'probe': {
       const value = await evaluate(cdp, step.probe.expression);
-      entry.probe = { name: step.probe.name, value };
+      entry.probe = { name: step.probe.name, value, expect: step.expect };
       report.probes[step.probe.name] = value;
+      if (step.expect !== undefined && !sameValue(value, step.expect)) {
+        throw new Error(
+          `проба «${step.probe.name}»: факт ${describeValue(value)} ≠ ожидание ${describeValue(step.expect)}`,
+        );
+      }
+      break;
+    }
+    case 'assert': {
+      const buffer = await screenshot(cdp, step.assert.region);
+      const image = decodePng(buffer);
+      const results = runRegionChecks(image, step.assert.checks);
+      entry.assert = { name: step.assert.name, checks: results };
+      if (step.assert.evidence) {
+        const file = writeShot(outDir, `${step.assert.name}-evidence.png`, buffer);
+        entry.shot = file;
+        report.shots.push(file);
+      }
+      const failed = results.filter((check) => !check.ok);
+      if (failed.length > 0) {
+        const detail = failed
+          .map((check) => `${check.name}: факт ${check.fact} — ожидание ${check.expect}`)
+          .join('; ');
+        throw new Error(`растровый ассерт «${step.assert.name}»: ${detail}`);
+      }
+      break;
+    }
+    case 'api': {
+      const value = await doApi(step, context.api);
+      entry.api = { name: step.api.name, method: step.api.method, path: step.api.path, value };
+      if (step.expect !== undefined && !sameValue(value, step.expect)) {
+        throw new Error(
+          `api «${step.api.name}»: факт ${describeValue(value)} ≠ ожидание ${describeValue(step.expect)}`,
+        );
+      }
       break;
     }
     case 'eval':
@@ -445,14 +607,43 @@ function withTimeout(timeout, promise, label) {
 function formatStep(entry) {
   const status = entry.status === 'ok' ? 'ok  ' : 'FAIL';
   let detail = '';
-  if (entry.probe !== undefined) detail = ` ${entry.probe.name} = ${JSON.stringify(entry.probe.value)}`;
-  else if (entry.shot !== undefined) detail = ` → ${entry.shot}`;
-  else if (entry.eval !== undefined) detail = ` ${entry.eval.name}`;
-  else if (entry.error !== undefined) detail = ` — ${entry.error}`;
+  if (entry.probe !== undefined) {
+    detail = ` ${entry.probe.name} = ${describeValue(entry.probe.value)}`;
+    if (entry.probe.expect !== undefined) {
+      detail += ` (ожидание ${describeValue(entry.probe.expect)})`;
+    }
+  } else if (entry.assert !== undefined) {
+    const checks = entry.assert.checks
+      .map((check) => `${check.ok ? '✓' : '✗'} ${check.name}: ${check.fact} — ожидание ${check.expect}`)
+      .join('; ');
+    detail = ` ${entry.assert.name}: ${checks}`;
+  } else if (entry.api !== undefined) {
+    detail = ` ${entry.api.name} ${entry.api.method} ${entry.api.path} = ${describeValue(entry.api.value)}`;
+    if (entry.expect !== undefined) detail += ` (ожидание ${describeValue(entry.expect)})`;
+  } else if (entry.shot !== undefined) {
+    detail = ` → ${entry.shot}`;
+  } else if (entry.eval !== undefined) {
+    detail = ` ${entry.eval.name}`;
+  }
+  if (entry.error !== undefined) detail += ` — ${entry.error}`;
   return `${status} ${String(entry.index + 1).padStart(2)} ${entry.kind.padEnd(7)} ${entry.name}${detail} (${entry.ms} мс)`;
 }
 
-async function runScenario(cdp, scenario, outDir, base) {
+/** Текстовый отчёт прогона «шаг → проба → факт/ожидание». */
+function renderTextReport(report) {
+  const failed = report.steps.filter((entry) => entry.status !== 'ok').length;
+  const lines = [
+    `ui-probe: сценарий «${report.scenario}» через ${report.cdp}`,
+    `итог: ${report.ok ? 'OK' : 'ПРОВАЛ'} — шагов ${report.steps.length}, провалено ${failed}, ${report.durationMs} мс`,
+  ];
+  for (const entry of report.steps) lines.push(formatStep(entry));
+  if (report.shots.length > 0) {
+    lines.push(`PNG (доказательства, не для модели): ${report.shots.join(', ')}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+async function runScenario(cdp, scenario, outDir, base, context) {
   const report = {
     tool: 'ui-probe',
     scenario: scenario.name,
@@ -469,10 +660,11 @@ async function runScenario(cdp, scenario, outDir, base) {
   for (const step of scenario.steps) {
     const started = Date.now();
     const entry = { index: step.index, kind: step.kind, name: step.name, status: 'ok', ms: 0 };
+    if (step.expect !== undefined) entry.expect = step.expect;
     try {
       // Every step — including `waitFor` by frames — is bounded by the step
       // deadline, so a stalled frame supply cannot hang the run.
-      await withTimeout(step.timeout, runStep(cdp, step, outDir, entry, report), step.name);
+      await withTimeout(step.timeout, runStep(cdp, step, outDir, entry, report, context), step.name);
     } catch (err) {
       entry.status = 'failed';
       entry.error = err instanceof Error ? err.message : String(err);
@@ -509,27 +701,33 @@ async function main(argv) {
       steps: scenario.steps.map((step) => ({ ...step, timeout: opts.timeout })),
     };
   }
+  // Подстановки {{имя}} из --var (id сущностей стенда и т.п.).
+  scenario = substituteVars(scenario, opts.vars);
 
   const outDir = path.resolve(opts.out);
   mkdirSync(outDir, { recursive: true });
   const base = opts.cdp ?? `http://${opts.host}:${opts.port}`;
   const target = await resolvePageTarget(base, opts.target);
   const cdp = await CdpClient.connect(target.webSocketDebuggerUrl);
+  const context = { api: { base: opts.api, key: opts.apiKey } };
   let report;
   try {
     await cdp.send('Runtime.enable');
     await cdp.send('Page.enable');
-    report = await runScenario(cdp, scenario, outDir, base);
+    if (opts.wake) await wakePage(cdp);
+    report = await runScenario(cdp, scenario, outDir, base, context);
   } finally {
     cdp.close();
   }
 
   const reportPath = path.join(outDir, 'report.json');
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  const textPath = path.join(outDir, 'report.txt');
+  writeFileSync(textPath, renderTextReport(report));
   const passed = report.steps.filter((entry) => entry.status === 'ok').length;
   process.stdout.write(
     `ui-probe: сценарий «${scenario.name}» — ${passed}/${report.steps.length} ok за ${report.durationMs} мс\n` +
-      `отчёт: ${reportPath}\n` +
+      `отчёт: ${textPath} (текст), ${reportPath} (json)\n` +
       (report.shots.length > 0 ? `снимки: ${report.shots.join(', ')}\n` : ''),
   );
   return report.ok ? 0 : 1;

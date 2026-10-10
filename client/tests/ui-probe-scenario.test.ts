@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_STEP_TIMEOUT,
+  REGION_CHECK_KINDS,
   ScenarioError,
   normalizeModifiers,
   parseScenario,
@@ -209,4 +210,111 @@ test('text и timeout: пустая строка и нечисловой лим�
   assert.throws(() => validateScenario({ steps: [{ key: 'Tab' }], timeout: -1 }), ScenarioError);
   const scenario = validateScenario(scenarioFrom([{ key: 'Tab', timeout: 250 }]));
   assert.equal(scenario.steps[0]?.timeout, 250);
+});
+
+test('assert: регион и проверки нормализуются с значениями по умолчанию', () => {
+  const scenario = validateScenario(
+    scenarioFrom([
+      {
+        assert: {
+          name: 'cloud',
+          region: '.cloud.halo',
+          checks: [
+            { kind: 'notBlank' },
+            { kind: 'colorAt', at: [3, 4], color: '#ffffff' },
+            { kind: 'hasColor', color: '#000000', minPixels: 5 },
+            { kind: 'distinct', minColors: 4 },
+          ],
+        },
+      },
+      { assert: { region: [10, 20, 30, 40], checks: [{ kind: 'notBlank', minRatio: 0.5 }] } },
+    ]),
+  );
+  assert.ok(REGION_CHECK_KINDS.includes('notBlank'));
+  assert.equal(scenario.steps[0]?.kind, 'assert');
+  const first = scenario.steps[0]?.assert;
+  assert.equal(first?.name, 'cloud');
+  assert.deepEqual(first?.region, { selector: '.cloud.halo' });
+  assert.equal(first?.checks.length, 4);
+  assert.equal(first?.checks[0]?.name, 'notBlank1');
+  assert.deepEqual(first?.checks[1], {
+    kind: 'colorAt',
+    name: 'colorAt2',
+    at: [3, 4],
+    color: '#ffffff',
+    tolerance: 8,
+  });
+  assert.deepEqual(first?.checks[2], {
+    kind: 'hasColor',
+    name: 'hasColor3',
+    color: '#000000',
+    tolerance: 8,
+    minPixels: 5,
+  });
+  assert.deepEqual(first?.checks[3], { kind: 'distinct', name: 'distinct4', minColors: 4 });
+  assert.equal(first?.evidence, false);
+  const second = scenario.steps[1]?.assert;
+  assert.deepEqual(second?.region, { x: 10, y: 20, width: 30, height: 40 });
+  assert.equal(second?.name, 'assert2');
+});
+
+test('assert: ошибки формы региона и проверок', () => {
+  assert.throws(() => validateScenario(scenarioFrom([{ assert: { checks: [{ kind: 'notBlank' }] } }])), ScenarioError);
+  assert.throws(() => validateScenario(scenarioFrom([{ assert: { region: '.x', checks: [] } }])), ScenarioError);
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ assert: { region: '.x', checks: [{ kind: 'blur' }] } }])),
+    ScenarioError,
+  );
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ assert: { region: '.x', checks: [{ kind: 'notBlank', bogus: 1 }] } }])),
+    ScenarioError,
+  );
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ assert: { region: '.x', checks: [{ kind: 'colorAt', at: [1], color: '#fff' }] } }])),
+    ScenarioError,
+  );
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ assert: { region: '.x', checks: [{ kind: 'notBlank' }], evidence: 'да' } }])),
+    ScenarioError,
+  );
+});
+
+test('api: метод/путь/выражение и ожидание как мета-поле', () => {
+  const scenario = validateScenario(
+    scenarioFrom([
+      {
+        name: 'db',
+        api: {
+          name: 'comment-in-db',
+          path: '/networks/{{networkId}}/thoughts/{{thoughtId}}/comments',
+          expression: "data.find((c) => c.kind === 'permanent').body_md",
+        },
+        expect: '**текст**',
+      },
+      { api: { path: '/networks' } },
+    ]),
+  );
+  assert.equal(scenario.steps[0]?.kind, 'api');
+  assert.deepEqual(scenario.steps[0]?.api, {
+    name: 'comment-in-db',
+    method: 'GET',
+    path: '/networks/{{networkId}}/thoughts/{{thoughtId}}/comments',
+    expression: "data.find((c) => c.kind === 'permanent').body_md",
+  });
+  assert.equal(scenario.steps[0]?.expect, '**текст**');
+  assert.deepEqual(scenario.steps[1]?.api, { name: 'api2', method: 'GET', path: '/networks', expression: null });
+});
+
+test('api: ошибки метода/пути и формы', () => {
+  assert.throws(() => validateScenario(scenarioFrom([{ api: { path: 'networks' } }])), ScenarioError);
+  assert.throws(() => validateScenario(scenarioFrom([{ api: { method: 'TRACE', path: '/x' } }])), ScenarioError);
+  assert.throws(() => validateScenario(scenarioFrom([{ api: 'x' }])), ScenarioError);
+  assert.throws(() => validateScenario(scenarioFrom([{ api: { path: '/x', bogus: 1 } }])), ScenarioError);
+});
+
+test('expect: допустим только у probe и api', () => {
+  const ok = validateScenario(scenarioFrom([{ probe: '1 + 1', expect: 2 }]));
+  assert.equal(ok.steps[0]?.expect, 2);
+  assert.throws(() => validateScenario(scenarioFrom([{ key: 'Tab', expect: 1 }])), ScenarioError);
+  assert.throws(() => validateScenario(scenarioFrom([{ shot: 'a.png', expect: 1 }])), ScenarioError);
 });

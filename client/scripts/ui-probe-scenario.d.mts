@@ -4,7 +4,39 @@
  * обычный `.mjs` (исполняется `node` без сборки), а тест — TypeScript.
  */
 
-export type StepKind = 'key' | 'click' | 'text' | 'waitFor' | 'probe' | 'shot' | 'eval';
+export type StepKind =
+  | 'key'
+  | 'click'
+  | 'text'
+  | 'waitFor'
+  | 'probe'
+  | 'shot'
+  | 'assert'
+  | 'api'
+  | 'eval';
+
+export type RegionCheckKind = 'notBlank' | 'colorAt' | 'hasColor' | 'distinct';
+
+/** Нормализованная проверка региона шага `assert`. */
+export type RegionCheck =
+  | { kind: 'notBlank'; name: string; minRatio: number; tolerance: number }
+  | { kind: 'colorAt'; name: string; at: [number, number]; color: string; tolerance: number }
+  | { kind: 'hasColor'; name: string; color: string; tolerance: number; minPixels: number }
+  | { kind: 'distinct'; name: string; minColors: number };
+
+export interface NormalizedAssert {
+  name: string;
+  region: NormalizedClip;
+  checks: RegionCheck[];
+  evidence: boolean;
+}
+
+export interface NormalizedApi {
+  name: string;
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+  path: string;
+  expression: string | null;
+}
 
 /** Прямоугольник обрезки снимка в координатах вьюпорта, CSS-пиксели. */
 export interface ClipRect {
@@ -55,12 +87,15 @@ export interface ScenarioStep {
   kind: StepKind;
   name: string;
   timeout: number;
+  expect?: unknown;
   key?: NormalizedKey;
   click?: NormalizedClick;
   text?: string;
   waitFor?: NormalizedWaitFor;
   probe?: NormalizedExpression;
   shot?: NormalizedShot;
+  assert?: NormalizedAssert;
+  api?: NormalizedApi;
   eval?: NormalizedExpression;
 }
 
@@ -72,6 +107,7 @@ export interface Scenario {
 
 export declare const DEFAULT_STEP_TIMEOUT: number;
 export declare const STEP_ACTION_KEYS: StepKind[];
+export declare const REGION_CHECK_KINDS: RegionCheckKind[];
 
 export declare class ScenarioError extends Error {
   constructor(message: string);
