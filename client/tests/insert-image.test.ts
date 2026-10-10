@@ -234,10 +234,37 @@ describe('Ctrl+V / Drag&Drop картинки (87c455db)', () => {
     );
   });
 
-  it('поле регистрирует dragover/drop для картинок (якорь исходника)', () => {
+  it('.svg (текстовый образ, image/svg+xml) даёт одну ссылку-вложение, без сырого текста', async () => {
+    // Регресс приёмки: CM6 сам вставляет содержимое ТЕКСТОВЫХ файлов при drop;
+    // svg — текстовый образ с MIME image/svg+xml, поэтому без capture-перехвата
+    // получалась двойная вставка (сырой SVG + наша ссылка).
+    const calls = freshCalls();
+    const uploaded = makeAttachment({
+      id: 'att-svg',
+      title: 'icon.svg',
+      file_path: 'C:/net/attachments/icon.svg',
+      mime_type: 'image/svg+xml',
+    });
+    const { markdownField } = await load(calls, uploaded);
+    const { editor, inserted } = fakeEditor();
+
+    await markdownField.mdFieldInternals.insertClipboardFiles(
+      editor,
+      { ownerType: 'thought', ownerId: 't1' },
+      [fakeFile('icon.svg', 'image/svg+xml')],
+    );
+
+    assert.equal(calls.uploads.length, 1, 'svg уходит вложением на владельца');
+    assert.deepEqual(inserted, ['![icon.svg](etnimg://attachment/att-svg)']);
+    assert.ok(!inserted.join('').includes('<svg'), 'сырой SVG-текст не вставляется');
+  });
+
+  it('drop/dragover навешены в capture-фазе — перехват до CM6 (регресс приёмки)', () => {
     const source = readText('editor/markdown-field.ts');
-    assert.match(source, /addEventListener\('dragover'/);
-    assert.match(source, /addEventListener\('drop'/);
+    // Третий аргумент `true` (capture) обязателен: иначе файловый drop .svg
+    // обработает CodeMirror раньше нас и вставит сырой текст.
+    assert.match(source, /addEventListener\(\s*'drop',[\s\S]*?\n\s*true,\s*\n\s*\)/);
+    assert.match(source, /addEventListener\(\s*'dragover',[\s\S]*?\n\s*true,\s*\n\s*\)/);
     assert.match(source, /imageFilesFrom\(event\.dataTransfer\?\.files/);
   });
 });

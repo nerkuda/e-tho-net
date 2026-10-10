@@ -1513,21 +1513,37 @@ export function createMarkdownField(opts: {
     // вставка из буфера — файл уходит вложением на владельца, в каретку
     // вставляется ссылка по id. Прочие переносимые данные (текст, мысли)
     // не перехватываем — обработчики идут только по файлам-картинкам.
-    editor.dom.addEventListener('dragover', (event) => {
-      if (opts.attachmentsOwner === undefined) return;
-      if (imageFilesFrom(event.dataTransfer?.files ?? []).length === 0) return;
-      event.preventDefault();
-      if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy';
-    });
-    editor.dom.addEventListener('drop', (event) => {
-      if (editor === null) return;
-      const owner = opts.attachmentsOwner;
-      if (owner === undefined) return;
-      const files = imageFilesFrom(event.dataTransfer?.files ?? []);
-      if (files.length === 0) return;
-      event.preventDefault();
-      void insertClipboardFiles(editor, owner, files);
-    });
+    //
+    // Capture-фаза, как у `paste` (ошибка приёмки): CodeMirror обрабатывает
+    // файловый drop сам (на contentDOM, раньше bubble-слушателя) и для
+    // ТЕКСТОВЫХ файлов вставляет их содержимое. Растровые картинки отсекает
+    // его бинарный guard, но `.svg` (image/svg+xml — текстовый образ) дал бы
+    // ДВОЙНУЮ вставку: сырой SVG-текст от CM6 + наша ссылка. В capture наш
+    // обработчик идёт первым и `preventDefault` гасит ветку CM6; без
+    // файлов-картинок управление возвращается CM6 (никакого вмешательства).
+    editor.dom.addEventListener(
+      'dragover',
+      (event) => {
+        if (opts.attachmentsOwner === undefined) return;
+        if (imageFilesFrom(event.dataTransfer?.files ?? []).length === 0) return;
+        event.preventDefault();
+        if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy';
+      },
+      true,
+    );
+    editor.dom.addEventListener(
+      'drop',
+      (event) => {
+        if (editor === null) return;
+        const owner = opts.attachmentsOwner;
+        if (owner === undefined) return;
+        const files = imageFilesFrom(event.dataTransfer?.files ?? []);
+        if (files.length === 0) return;
+        event.preventDefault();
+        void insertClipboardFiles(editor, owner, files);
+      },
+      true,
+    );
     // Контекстное меню редактора: команды форматирования поля (ТП1 «Команды
     // редактирования комментария», задача 3d6f98cb) плюс «Вставить текст
     // шаблона из типа мысли» (08-ui-spec.md §6.4) и «Вставить ссылку на
