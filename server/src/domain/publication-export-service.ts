@@ -332,29 +332,65 @@ function attachmentsDir(ndb: NetworkDb): string {
   return path.join(path.dirname(ndb.dbPath), 'attachments');
 }
 
+/** Сегмент «attachment» в хосте URL — признак адреса по id вложения (паритет с клиентом). */
+const ETNIMG_ATTACHMENT_HOST = 'attachment';
+
+/** id вложения: uuid-подобный (защита от мусора и path traversal), как в клиенте. */
+const ETNIMG_ATTACHMENT_ID_RE = /^[0-9a-zA-Z-]{1,64}$/;
+
+/** Резолв `etnimg://`-адреса: абсолютный путь файла сервера либо причина отказа. */
+type EtnimgResolution = { absPath: string } | { error: string };
+
 /**
- * `etnimg://<host>/<path…>` → absolute file path (inverse of the client's
- * `etnimgUrl`). Returns `null` for a malformed URL.
+ * Резолвит `etnimg://`-адрес в абсолютный путь файла на сервере (паритет с
+ * клиентским `parseEtnimgTarget`). Две формы:
+ *
+ * 1. **По id вложения** — `etnimg://attachment/<id>` (требование 5943e3e8):
+ *    id → `file_path` по `attachments_v` (владение общее, вложение может быть
+ *    заведено в текущем слое сети). Так адресуются картинки, вставленные в
+ *    тексты комментариев.
+ * 2. **По пути** — `etnimg://<диск>/<путь…>` (Windows-диск одной латинской
+ *    буквой) либо `etnimg://<первый-сегмент>/…` для POSIX-абсолютного пути
+ *    (прежняя форма, inverse клиентского `etnimgUrl`).
+ *
+ * Нераспознанный адрес и неизвестное/нефайловое вложение дают причину —
+ * вызывающий превращает её в предупреждение и не падает.
  */
-function decodeEtnimgUrl(href: string): string | null {
+function resolveEtnimgPath(ndb: NetworkDb, href: string): EtnimgResolution {
   let url: URL;
   try {
     url = new URL(href);
   } catch {
-    return null;
+    return { error: `не разобран URL ${href}` };
   }
-  if (url.protocol !== 'etnimg:') return null;
+  if (url.protocol !== 'etnimg:') return { error: `не разобран URL ${href}` };
   let host: string;
   let pathname: string;
   try {
     host = decodeURIComponent(url.hostname);
     pathname = decodeURIComponent(url.pathname);
   } catch {
-    return null;
+    return { error: `не разобран URL ${href}` };
   }
   const segments = pathname.split('/').filter((s) => s !== '' && s !== '.' && s !== '..');
-  if (host === '' || segments.length === 0) return null;
-  return /^[a-zA-Z]$/.test(host) ? `${host}:\\${segments.join('\\')}` : `/${[host, ...segments].join('/')}`;
+
+  if (host.toLowerCase() === ETNIMG_ATTACHMENT_HOST) {
+    const id = segments[0];
+    if (segments.length !== 1 || id === undefined || !ETNIMG_ATTACHMENT_ID_RE.test(id)) {
+      return { error: `не разобран URL ${href}` };
+    }
+    const attachment = getAttachment(ndb, id);
+    if (attachment === null || attachment.kind !== 'file' || attachment.file_path === null) {
+      return { error: `вложение не найдено (${id})` };
+    }
+    return { absPath: attachment.file_path };
+  }
+
+  if (host === '' || segments.length === 0) return { error: `не разобран URL ${href}` };
+  const abs = /^[a-zA-Z]$/.test(host)
+    ? `${host}:\\${segments.join('\\')}`
+    : `/${[host, ...segments].join('/')}`;
+  return { absPath: abs };
 }
 
 /** Normalized absolute path for containment checks (case-folded on Windows). */
@@ -395,9 +431,10 @@ function assetNameFor(absPath: string): string {
 
 /**
  * Copy server-available image attachments referenced by `sources` into the
- * archive's `assets/` directory. Missing files, client-local paths and
- * external URLs produce a warning and leave the `src` untouched — the document
- * never fails (requirement 975b159a).
+ * archive's `assets/` directory. Accepts both `etnimg://` forms — by attachment
+ * id (`etnimg://attachment/<id>`) and legacy by path. Missing files,
+ * client-local paths and external URLs produce a warning and leave the `src`
+ * untouched — the document never fails (requirement 975b159a).
  */
 function collectAssets(ndb: NetworkDb, sources: readonly string[], withAssets: boolean): AssetCollection {
   const replacements = new Map<string, string>();
@@ -408,11 +445,12 @@ function collectAssets(ndb: NetworkDb, sources: readonly string[], withAssets: b
   const dir = attachmentsDir(ndb);
   const byName = new Map<string, string>(); // name → absPath (dedup identical content)
   for (const url of collectEtnimgUrls(sources)) {
-    const abs = decodeEtnimgUrl(url);
-    if (abs === null) {
-      warnings.push(`вложение недоступно: не разобран URL ${url}`);
+    const resolved = resolveEtnimgPath(ndb, url);
+    if ('error' in resolved) {
+      warnings.push(`вложение недоступно: ${resolved.error}`);
       continue;
     }
+    const abs = resolved.absPath;
     if (!isInsideAttachments(dir, abs)) {
       warnings.push(`вложение недоступно: путь вне каталога сервера (${path.basename(abs)})`);
       continue;
@@ -483,11 +521,12 @@ function collectInlineAssets(
   const warnings: string[] = [];
   const dir = attachmentsDir(ndb);
   for (const url of collectEtnimgUrls(sources)) {
-    const abs = decodeEtnimgUrl(url);
-    if (abs === null) {
-      warnings.push(`вложение недоступно: не разобран URL ${url}`);
+    const resolved = resolveEtnimgPath(ndb, url);
+    if ('error' in resolved) {
+      warnings.push(`вложение недоступно: ${resolved.error}`);
       continue;
     }
+    const abs = resolved.absPath;
     if (!isInsideAttachments(dir, abs)) {
       warnings.push(`вложение недоступно: путь вне каталога сервера (${path.basename(abs)})`);
       continue;
