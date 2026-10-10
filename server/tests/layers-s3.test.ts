@@ -319,7 +319,7 @@ describe('layers S3 — lint: domain code reads branchable tables only via the `
    */
   const MARKER = 'layers:physical-read';
   const DIRECT_READ =
-    /\b(FROM|JOIN)\s+(thoughts|links|comments|attachments|thought_synonyms|thought_types|link_types|type_properties|type_property_overrides|property_values|comment_targets|publications|publication_order|publication_exclusions|shelves|shelf_items)(?!_v)\b/g;
+    /\b(FROM|JOIN)\s+(thoughts|links|comments|attachments|attachment_owners|thought_synonyms|thought_types|link_types|type_properties|type_property_overrides|property_values|comment_targets|publications|publication_order|publication_exclusions|shelves|shelf_items)(?!_v)\b/g;
   const SCANNED_DIRS = ['domain', 'routes', 'mcp'];
 
   it('every direct FROM/JOIN of a branchable table is marked layers:physical-read', () => {
