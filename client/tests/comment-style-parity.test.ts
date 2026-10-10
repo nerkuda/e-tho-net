@@ -352,3 +352,38 @@ describe('единая шкала вертикальных отступов бл
     }
   });
 });
+
+describe('отступы картинки: просмотр совпадает с редактором (4e93119e)', () => {
+  it('вертикальный зазор картинки — токен --md-widget-gap в ОБОИХ режимах', () => {
+    const css = readRendererCss();
+    // Единое правило `.comment-view img` обслуживает и просмотр (картинка в
+    // абзаце единого рендерера), и правку (тот же `<img>` внутри блок-виджета
+    // `.md-widget.comment-view`): зазор задаёт сам блок, как у блочных виджетов.
+    assert.ok(
+      bodiesFor(css, '.comment-view img').some((b) =>
+        /margin-block:\s*var\(--md-widget-gap\)/.test(b),
+      ),
+      'картинка берёт вертикальный зазор из --md-widget-gap (а не абзацный --md-block-gap)',
+    );
+  });
+
+  it('абзац-обёртка картинки в просмотре не добавляет второго зазора', () => {
+    const css = readRendererCss();
+    assert.ok(
+      parseRules(css).some(
+        (r) =>
+          r.selectors.some((s) => /\.comment-view p:has\(> img:only-child\)/.test(s)) &&
+          /margin-block:\s*0/.test(r.body),
+      ),
+      'абзац с одинокой картинкой обнуляет margin-block (иначе зазор дублируется)',
+    );
+    assert.ok(
+      parseRules(css).some(
+        (r) =>
+          r.selectors.some((s) => /\.comment-view p:has\(\+ p > img:only-child\)/.test(s)) &&
+          /margin-block-end:\s*0/.test(r.body),
+      ),
+      'абзац перед картинкой не добавляет зазор перед ней',
+    );
+  });
+});
