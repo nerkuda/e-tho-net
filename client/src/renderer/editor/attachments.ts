@@ -16,6 +16,7 @@
  * tab title is refreshed after every change.
  */
 
+import { EtnError } from '@etn/shared';
 import type { Attachment, AttachmentOwnerType, Thought, ThoughtUpdateInput } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
@@ -36,6 +37,8 @@ import { etn } from '../lib/etn.js';
 import { ICON_MAX_BYTES, dataUrlBytes, makeIconPreview } from '../lib/image-preview.js';
 import { menuAction, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
+import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { requireNetworkId } from '../app.js';
 import { firstPickedThoughtId, pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { etnimgUrl, createMarkdownField, guessMimeFromName } from './markdown-field.js';
@@ -47,7 +50,9 @@ import {
   type EditorContext,
 } from './editor.js';
 import { rowSplitter } from './splitter.js';
-import { uiButton } from '../lib/ui/button.js';
+import { badge } from '../lib/ui/badge.js';
+import { iconButton, uiButton } from '../lib/ui/button.js';
+import { svgIcon } from '../lib/ui/icon.js';
 
 /** Registers the attachments tab content and its badge counter (L7). */
 export function registerAttachmentsTab(): void {
@@ -118,16 +123,63 @@ export async function assignDataIconToThought(
 }
 
 /**
+ * Индекс русской формы по числу (mod 10 / mod 100): 0 — «1», 1 — «2–4»,
+ * 2 — прочие. Общая арифметика для {@link pluralRu} и подписи владельцев.
+ */
+function pluralForm(n: number): 0 | 1 | 2 {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 0;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 1;
+  return 2;
+}
+
+/**
  * Picks one of three Russian noun forms by `n` (mod 10 / mod 100):
  * `['мысль', 'мысли', 'мыслей']` → 1 мысль, 3 мысли, 5 мыслей. Local helper
  * for the «Скопировано в N мыслей…» notice; not exposed.
  */
 function pluralRu(n: number, forms: [string, string, string]): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return forms[0];
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return forms[1];
-  return forms[2];
+  return forms[pluralForm(n)];
+}
+
+/** Ключи словаря для подписи числа владельцев (единственное / 2–4 / 5+). */
+const OWNER_COUNT_KEYS = [
+  'attachments.owners.one',
+  'attachments.owners.few',
+  'attachments.owners.many',
+] as const;
+
+/** Подпись числа владельцев вложения в строке списка («3 владельца»). */
+function ownersCountLabel(count: number): string {
+  return t(OWNER_COUNT_KEYS[pluralForm(count)], count);
+}
+
+/** Заголовок строки вложения: заголовок, иначе url/путь, иначе прочерк. */
+function attachmentTitle(a: Attachment): string {
+  return a.title ?? a.url ?? a.file_path ?? '—';
+}
+
+/** Подпись строки вложения: url для ссылок, путь и размер для файлов. */
+function attachmentMeta(a: Attachment): string {
+  return a.kind === 'url'
+    ? (a.url ?? '')
+    : `${a.file_path ?? ''}${a.file_size !== null ? ` · ${a.file_size} Б` : ''}`;
+}
+
+/**
+ * true — сервер запретил снятие владения (409 `ATTACHMENT_OWNER_IS_ICON`):
+ * объект сам держит вложение как свою иконку/обложку (требование 6b524569).
+ * На проводе код ошибки — `VALIDATION_ERROR` со `details.status = 409`, а
+ * именованный код лежит в `details.code` (см. server/http/errors.ts).
+ */
+function isIconOwnerBlock(err: unknown): boolean {
+  return (
+    err instanceof EtnError &&
+    typeof err.details === 'object' &&
+    err.details !== null &&
+    (err.details as { code?: unknown }).code === 'ATTACHMENT_OWNER_IS_ICON'
+  );
 }
 
 /** True for URL attachments pointing at common image formats. */
@@ -291,6 +343,12 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
   let selectedId: string | null = null;
   /** Row elements of the current list, by attachment id. */
   const rowById = new Map<string, HTMLElement>();
+  /** Старт inline-переименования строки, по id вложения (пункт меню «Переименовать»). */
+  const renameById = new Map<string, () => void>();
+  /** Счётчик правок заголовка: уникальный id контекста клавиатуры. */
+  let renameSeq = 0;
+  /** Снятие контекста клавиатуры активной правки (null — правки нет). */
+  let releaseRenameContext: (() => void) | null = null;
 
   showViewerHint('Выберите вложение для просмотра.');
   void reload();
@@ -391,8 +449,13 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     // владельца событий `attachment.updated/deleted`, несущих только id.
     for (const attachment of attachments) commitEntity('attachment', attachment.id, attachment);
     onCountChange?.();
+    // Незавершённая правка заголовка гибнет вместе со строками — снимаем её
+    // контекст клавиатуры, чтобы он не остался на стеке диспетчера.
+    releaseRenameContext?.();
+    releaseRenameContext = null;
     list.replaceChildren();
     rowById.clear();
+    renameById.clear();
     if (attachments.length === 0) {
       list.append(el('p', 'muted', 'Вложений нет.'));
       return;
@@ -432,31 +495,55 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     return img;
   }
 
-  /** Builds one attachment row (preview + title + meta; menu on right-click). */
+  /** Builds one attachment row (preview + heading + meta; actions; context menu). */
   function buildAttachmentItem(attachment: Attachment): HTMLElement {
     const item = div('attachment-item');
     item.append(buildThumb(attachment));
     const info = div('attachment-info');
     info.style.flex = '1';
     info.style.minWidth = '0';
-    const title = el(
-      'div',
-      'att-title',
-      attachment.title ?? attachment.url ?? attachment.file_path ?? '—',
-    );
+    // Заголовок и бейдж числа владельцев — в одной строке; подпись (url/путь) ниже.
+    const heading = div('att-heading');
+    const title = el('div', 'att-title', attachmentTitle(attachment));
     title.style.overflow = 'hidden';
     title.style.textOverflow = 'ellipsis';
     title.style.whiteSpace = 'nowrap';
-    info.append(title);
-    const meta = el(
-      'div',
-      'att-meta',
-      attachment.kind === 'url'
-        ? (attachment.url ?? '')
-        : `${attachment.file_path ?? ''}${attachment.file_size !== null ? ` · ${attachment.file_size} Б` : ''}`,
-    );
-    info.append(meta);
+    title.style.flex = '1';
+    heading.append(title);
+    // Общее вложение (есть другие владельцы) помечается бейджем (требование 0502e045):
+    // единичное владение — обычная строка без метки.
+    const owners = attachment.owner_count ?? attachment.owners?.length ?? 0;
+    if (owners > 1) heading.append(ownersBadge(owners));
+    info.append(heading);
+    info.append(el('div', 'att-meta', attachmentMeta(attachment)));
     item.append(info);
+    // Действия строки: переименование (общий заголовок, PATCH title) и снятие
+    // СВОЕГО владения (не удаление вложения). Клик по кнопке строку не выбирает.
+    const actions = div('att-row-actions');
+    actions.append(
+      iconButton({
+        icon: svgIcon('pencil', 14),
+        title: t('attachments.row.rename'),
+        role: 'ghost',
+        size: 's',
+        onClick: (event) => {
+          event.stopPropagation();
+          startRename(attachment, title);
+        },
+      }),
+      iconButton({
+        icon: svgIcon('trash', 14),
+        title: t('attachments.row.remove'),
+        role: 'ghost',
+        size: 's',
+        onClick: (event) => {
+          event.stopPropagation();
+          void removeOwnership(attachment);
+        },
+      }),
+    );
+    item.append(actions);
+    renameById.set(attachment.id, () => startRename(attachment, title));
     item.addEventListener('click', () => selectAttachment(attachment));
     item.addEventListener('contextmenu', (event) => {
       event.preventDefault();
@@ -467,6 +554,87 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       void openDefault(attachment);
     });
     return item;
+  }
+
+  /** Бейдж «N владельцев» для общего вложения (тихий счётчик рядом с заголовком). */
+  function ownersBadge(count: number): HTMLElement {
+    return badge(ownersCountLabel(count), {
+      kind: 'quiet',
+      title: t('attachments.owners.tooltip'),
+    });
+  }
+
+  /**
+   * Inline-переименование вложения (общий заголовок, требование fabc1231):
+   * заголовок строки заменяется полем ввода; Enter/потеря фокуса — PATCH
+   * `{title}`, Esc — отмена. Переименование меняет вложение для ВСЕХ владельцев,
+   * это не операция владения. Клавиатура правки — через общеклиентский
+   * диспетчер (ADR b420b08c): локальный `keydown`-слушатель запрещён сторожем
+   * `guard-keymap-single-point`.
+   */
+  function startRename(attachment: Attachment, title: HTMLElement): void {
+    // На строке зараз одна правка: незавершённую прошлую закрываем.
+    releaseRenameContext?.();
+    releaseRenameContext = null;
+    const input = fieldInput({ maxLength: 300 });
+    input.value = attachmentTitle(attachment);
+    input.classList.add('att-title-input');
+    title.replaceWith(input);
+    let done = false;
+    const finish = (): void => {
+      releaseRenameContext?.();
+      releaseRenameContext = null;
+    };
+    /** Возврат заголовка на место без записи (Esc, пустое значение). */
+    const restore = (): void => {
+      if (done) return;
+      done = true;
+      finish();
+      input.replaceWith(title);
+    };
+    const commit = async (): Promise<void> => {
+      if (done) return;
+      done = true;
+      finish();
+      const next = input.value.trim();
+      input.replaceWith(title);
+      if (next === '' || next === (attachment.title ?? '')) return;
+      try {
+        const updated = await etn.attachments.update(networkId, attachment.id, { title: next });
+        title.textContent = updated.title ?? next;
+        refreshAttachments();
+      } catch (err) {
+        notice(`${t('attachments.rename.failed')}: ${errText(err)}`, 'error');
+      }
+    };
+    const contextId = `attachment-rename-${(renameSeq += 1)}`;
+    defineKeyContext({
+      id: contextId,
+      bindings: [
+        ...modifierChordVariants('Enter').map((chord) => ({
+          command: 'attachment.rename.commit',
+          chord,
+          run: (event: KeyboardEvent) => {
+            if (event.key !== 'Enter') return false;
+            void commit();
+            return true;
+          },
+        })),
+        {
+          command: 'attachment.rename.cancel',
+          chord: 'Escape',
+          run: (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return false;
+            restore();
+            return true;
+          },
+        },
+      ],
+    });
+    releaseRenameContext = pushKeyContext(contextId);
+    input.addEventListener('blur', () => void commit());
+    input.focus();
+    input.select();
   }
 
   /** Selects an attachment and shows it in the viewer area. */
@@ -717,28 +885,39 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     }
   }
 
-  /** «Удалить» — removes the row (and the server-stored file). */
-  async function removeAttachment(attachment: Attachment): Promise<void> {
-    const name = attachment.title ?? attachment.url ?? attachment.file_path ?? '—';
+  /**
+   * «Удалить» — снять СВОЁ владение вложением (0.12.1, требование 6b524569):
+   * `DELETE /attachments/{id}/owners`, а не удаление вложения. Вложение
+   * остаётся у других владельцев; после снятия последнего владельца сервер
+   * удаляет само вложение (owner-cleanup). Защита 409
+   * `ATTACHMENT_OWNER_IS_ICON` (своя иконка/обложка) — внятное сообщение.
+   */
+  async function removeOwnership(attachment: Attachment): Promise<void> {
+    const name = attachmentTitle(attachment);
+    const shared = (attachment.owner_count ?? 0) > 1 ? ` ${t('attachments.remove.shared')}` : '';
     const ok = await confirmDialog(
-      'Удалить вложение',
-      `Удалить вложение «${name}»?` +
-        (attachment.kind === 'file'
-          ? ' Серверская копия файла будет удалена, если файл не используется другими вложениями или иконками мыслей.'
-          : ''),
+      t('attachments.remove.title'),
+      t('attachments.remove.message', name) + shared,
       true,
     );
     if (!ok) return;
     try {
-      await etn.attachments.remove(networkId, attachment.id);
-      invalidateQueries(queryKeys.indicators(attachment.owner_id));
+      await etn.attachments.removeOwner(networkId, attachment.id, {
+        owner_type: ownerType,
+        owner_id: ownerId,
+      });
+      invalidateQueries(queryKeys.indicators(ownerId));
       if (selectedId === attachment.id) {
         selectedId = null;
         showViewerHint('Выберите вложение для просмотра.');
       }
       refreshAttachments();
     } catch (err) {
-      notice(`Не удалось удалить: ${errText(err)}`, 'error');
+      if (isIconOwnerBlock(err)) {
+        notice(t('attachments.remove.iconBlocked'), 'error');
+        return;
+      }
+      notice(`${t('attachments.remove.failed')}: ${errText(err)}`, 'error');
     }
   }
 
@@ -764,9 +943,10 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       );
     }
     items.push(
+      menuAction(t('attachments.menu.rename'), () => renameById.get(attachment.id)?.()),
       menuAction(t('attachments.menu.move'), () => void moveToThought(attachment)),
       menuAction(t('attachments.menu.copy'), () => void copyToThoughts(attachment)),
-      menuAction(t('attachments.menu.delete'), () => void removeAttachment(attachment), {
+      menuAction(t('attachments.menu.delete'), () => void removeOwnership(attachment), {
         danger: true,
       }),
     );
