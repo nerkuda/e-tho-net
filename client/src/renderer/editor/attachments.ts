@@ -124,7 +124,7 @@ export async function assignDataIconToThought(
 
 /**
  * Индекс русской формы по числу (mod 10 / mod 100): 0 — «1», 1 — «2–4»,
- * 2 — прочие. Общая арифметика для {@link pluralRu} и подписи владельцев.
+ * 2 — прочие. Общая арифметика подписи владельцев и итога копирования.
  */
 function pluralForm(n: number): 0 | 1 | 2 {
   const mod10 = n % 10;
@@ -134,20 +134,18 @@ function pluralForm(n: number): 0 | 1 | 2 {
   return 2;
 }
 
-/**
- * Picks one of three Russian noun forms by `n` (mod 10 / mod 100):
- * `['мысль', 'мысли', 'мыслей']` → 1 мысль, 3 мысли, 5 мыслей. Local helper
- * for the «Скопировано в N мыслей…» notice; not exposed.
- */
-function pluralRu(n: number, forms: [string, string, string]): string {
-  return forms[pluralForm(n)];
-}
-
 /** Ключи словаря для подписи числа владельцев (единственное / 2–4 / 5+). */
 const OWNER_COUNT_KEYS = [
   'attachments.owners.one',
   'attachments.owners.few',
   'attachments.owners.many',
+] as const;
+
+/** Ключи словаря для итога «Скопировано в N мыслей» (1 / 2–4 / 5+). */
+const COPY_ADDED_KEYS = [
+  'attachments.copy.one',
+  'attachments.copy.few',
+  'attachments.copy.many',
 ] as const;
 
 /** Подпись числа владельцев вложения в строке списка («3 владельца»). */
@@ -350,7 +348,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
   /** Снятие контекста клавиатуры активной правки (null — правки нет). */
   let releaseRenameContext: (() => void) | null = null;
 
-  showViewerHint('Выберите вложение для просмотра.');
+  showViewerHint(t('attachments.viewer.hint'));
   void reload();
 
   // Набор вложений владельца живёт под ключом слоя `attachments:@owner`:
@@ -827,36 +825,61 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     }
   }
 
-  /** «Перенести в мысль» — moves the attachment to another owner (L1). */
+  /**
+   * «Перенести в мысль» — перенос вложения на другую мысль ОДНОЙ пользовательской
+   * операцией (0.12.1, элемент d3c419a9): сначала добавить нового владельца
+   * (`POST /attachments/{id}/owners`), затем снять СВОЁ владение
+   * (`DELETE /attachments/{id}/owners`). Порядок принципиален: отказ добавления —
+   * прежнее владение не снимаем. 409 на снятии (вложение — своя иконка/обложка)
+   * оставляет добавленное владение и объясняет причину. Прежнего `PATCH owner`
+   * больше нет — сервер игнорирует смену владельца в `PATCH`.
+   */
   async function moveToThought(attachment: Attachment): Promise<void> {
     const result = await pickThoughtsDialog({ networkId, allowCreate: false, allowLinkType: false });
     const targetId = firstPickedThoughtId(result);
     if (targetId === null || targetId === attachment.owner_id) return;
+    // 1. Новый владелец. Не удалось — ничего не снимаем.
     try {
-      await etn.attachments.update(networkId, attachment.id, {
+      await etn.attachments.addOwners(networkId, attachment.id, {
         owner_type: 'thought',
-        owner_id: targetId,
+        owner_ids: [targetId],
       });
-      invalidateQueries(queryKeys.indicators(attachment.owner_id));
-      invalidateQueries(queryKeys.indicators(targetId));
-      if (selectedId === attachment.id) {
-        selectedId = null;
-        showViewerHint('Выберите вложение для просмотра.');
-      }
-      // Вложение ушло из показанного владельца и прибыло к целевому: гасим оба
-      // списка — подписчики перечитают набор.
-      refreshAttachments();
-      invalidateQueries(queryKeys.attachments('thought', targetId));
     } catch (err) {
-      notice(`Не удалось перенести: ${errText(err)}`, 'error');
+      notice(`${t('attachments.move.failed')}: ${errText(err)}`, 'error');
+      return;
     }
+    invalidateQueries(queryKeys.indicators(targetId));
+    invalidateQueries(queryKeys.attachments('thought', targetId));
+    // 2. Снять своё владение. 409 (своя иконка/обложка) — внятное сообщение,
+    //    вложение у целевой мысли при этом остаётся.
+    try {
+      await etn.attachments.removeOwner(networkId, attachment.id, {
+        owner_type: ownerType,
+        owner_id: ownerId,
+      });
+    } catch (err) {
+      if (isIconOwnerBlock(err)) {
+        notice(t('attachments.move.iconBlocked'), 'error');
+      } else {
+        notice(`${t('attachments.move.removeFailed')}: ${errText(err)}`, 'error');
+      }
+      refreshAttachments();
+      return;
+    }
+    invalidateQueries(queryKeys.indicators(ownerId));
+    if (selectedId === attachment.id) {
+      selectedId = null;
+      showViewerHint(t('attachments.viewer.hint'));
+    }
+    // Вложение ушло из показанного владельца и прибыло к целевому: гасим список.
+    refreshAttachments();
   }
 
   /**
-   * «Скопировать в мысли…» — multi-pick destination thoughts (workplan L25).
-   * The server creates one new attachment row per target, all sharing the
-   * source's `url`/`file_path` (no file duplication). Duplicates in targets
-   * that already own the same `kind+url/file_path` are skipped silently.
+   * «Скопировать в мысли…» — добавить вложение владельцам нескольких выбранных
+   * мыслей (0.12.1, элемент d3c419a9): один вызов `POST /attachments/{id}/owners`
+   * на весь список, а не `POST /copy`. Идемпотентность сервера покрывает повторы
+   * (уже владеющие попадают в `skipped`); новых строк-копий вложения не создаётся.
    */
   async function copyToThoughts(attachment: Attachment): Promise<void> {
     const result = await pickThoughtsDialog({
@@ -867,21 +890,22 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     const targetIds = pickedThoughtIds(result).filter((id) => id !== attachment.owner_id);
     if (targetIds.length === 0) return;
     try {
-      const copyResult = await etn.attachments.copy(networkId, attachment.id, {
-        target_owner_type: 'thought',
-        target_owner_ids: targetIds,
+      const addResult = await etn.attachments.addOwners(networkId, attachment.id, {
+        owner_type: 'thought',
+        owner_ids: targetIds,
       });
-      for (const ref of copyResult.added) {
+      for (const ref of addResult.added) {
         invalidateQueries(queryKeys.indicators(ref.owner_id));
+        invalidateQueries(queryKeys.attachments('thought', ref.owner_id));
       }
-      const created = copyResult.added.length;
-      const skipped = copyResult.skipped.length;
+      const created = addResult.added.length;
+      const skipped = addResult.skipped.length;
       const parts: string[] = [];
-      if (created > 0) parts.push(`Скопировано в ${created} ${pluralRu(created, ['мысль', 'мысли', 'мыслей'])}`);
-      if (skipped > 0) parts.push(`уже было в ${skipped}`);
-      notice(parts.join(', ') + '.');
+      if (created > 0) parts.push(t(COPY_ADDED_KEYS[pluralForm(created)], created));
+      if (skipped > 0) parts.push(t('attachments.copy.skipped', skipped));
+      if (parts.length > 0) notice(parts.join(', ') + '.');
     } catch (err) {
-      notice(`Не удалось скопировать: ${errText(err)}`, 'error');
+      notice(`${t('attachments.copy.failed')}: ${errText(err)}`, 'error');
     }
   }
 
@@ -909,7 +933,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       invalidateQueries(queryKeys.indicators(ownerId));
       if (selectedId === attachment.id) {
         selectedId = null;
-        showViewerHint('Выберите вложение для просмотра.');
+        showViewerHint(t('attachments.viewer.hint'));
       }
       refreshAttachments();
     } catch (err) {
