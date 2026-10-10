@@ -60,6 +60,7 @@ import {
   insertMentionLinkIntoField,
 } from '../../editor/markdown-field.js';
 import { annotateMentions } from '../../editor/mentions-annotate.js';
+import { createCommentCollapseState, decorateCommentView } from '../../editor/comment-collapse.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
@@ -1228,6 +1229,18 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // поле markdown (авто-подсветка упоминаний). Держим элемент для декорации.
   const recordView = renderRecordView(shell, row);
   body.append(shell.root);
+  // Сворачивание заголовков в просмотре записи — тем же механизмом, что у
+  // комментария мысли (ошибка c91a0067): статичный `body_html` без декоратора
+  // не сворачивался, хотя в правке сворачивание работает. Владелец состояния —
+  // сам хроно-комментарий (`row.id`): иначе записи одной мысли делили бы
+  // свёрнутость. Это забота ЭКРАНА: `record-body.ts` остаётся чистым.
+  const collapseNetworkId = store.state.networkId;
+  if (collapseNetworkId !== null && row.body_html.trim() !== '') {
+    decorateCommentView(
+      recordView,
+      createCommentCollapseState(collapseNetworkId, row.id),
+    );
+  }
 
   /**
    * Цель вложения/исключения упоминаний записи на момент обращения (первая
