@@ -45,6 +45,21 @@ export interface Attachment {
   created_at_ms?: number;
   /** Unix-миллисекунды последнего изменения вложения. */
   updated_at_ms?: number;
+  /**
+   * Живые владельцы вложения (0.12.1, ADR `9f90b010`, сущность 109be255).
+   * У вложения может быть несколько владельцев; порядок — по позиции владения.
+   * Заполняется фасадами (`get`/`list`/`search`); в realtime-нагрузках —
+   * владелец-снимок.
+   */
+  owners?: AttachmentOwnerRef[];
+  /** Число живых владений вложения (`owners.length`, агрегат колонки DTO). */
+  owner_count?: number;
+  /**
+   * Признак «вложение принадлежит объекту, для которого запрошен список»
+   * (0.12.1, сущность 109be255). Определён только там, где есть контекст
+   * владельца (список вложений объекта); при поиске без контекста — отсутствует.
+   */
+  owned_by_current?: boolean;
 }
 
 /** Input accepted by `POST …/{id}/attachments` (03-server-api.md §11). */
@@ -157,12 +172,38 @@ export interface AttachmentCopyResult {
   skipped: AttachmentOwnerRef[];
 }
 
-/** Result of adding owners (`POST /attachments/{id}/owners`). */
+/**
+ * Result of adding owners (`POST /attachments/{id}/owners`).
+ */
 export interface AttachmentOwnerChangeResult {
   /** Ownerships created, in the order of the requested owner ids. */
   added: AttachmentOwnerRef[];
   /** Ownerships that already existed (idempotent no-op). */
   skipped: AttachmentOwnerRef[];
+}
+
+/**
+ * Input of `POST /attachments/{id}/owners` (0.12.1, задача 6ba247cc, ADR
+ * `9f90b010`): add one or more owners to an existing attachment. Idempotent —
+ * already-owned pairs are no-ops and land in `skipped`.
+ */
+export interface AttachmentOwnerAddInput {
+  /** Owner kind: `thought` | `link` | `publication`. */
+  owner_type: AttachmentOwnerType;
+  /** Ids of owners to add; all must exist, duplicates are skipped. */
+  owner_ids: string[];
+}
+
+/**
+ * Input of `DELETE /attachments/{id}/owners` (0.12.1, задача 4924d61e, ADR
+ * `9f90b010`): remove ONE ownership (attachment, object). `confirm` acknowledges
+ * a 409 warning (text usage) and retries the removal.
+ */
+export interface AttachmentOwnerRemoveInput {
+  owner_type: AttachmentOwnerType;
+  owner_id: string;
+  /** Acknowledgement of a `409 ATTACHMENT_OWNER_IN_TEXT` warning. */
+  confirm?: boolean;
 }
 
 /**
@@ -209,20 +250,48 @@ export interface AttachmentOwnerRef {
 }
 
 /**
- * Ответ «использование вложения» (0.11.1, задача 46cf4bcb): все владельцы
- * (мысли, связи, публикации), которые держат ЭТО вложение.
+ * Вид использования вложения (0.12.1, задача f3203ce4, требование 6b524569):
+ * `icon` — мысль использует вложение как иконку (`icon_attachment_id`);
+ * `cover` — публикация использует вложение как обложку (`cover_attachment_id`);
+ * `text` — вложение вставлено в текст комментария объекта (картинка по id).
+ * Текстовые использования появились позже (задача 87c455db) — структура
+ * заложена заранее, сейчас массив `text` пуст.
+ */
+export type AttachmentUsageKind = 'icon' | 'cover' | 'text';
+
+/**
+ * Одно использование вложения объектом (0.12.1, задача f3203ce4). В отличие от
+ * {@link AttachmentOwnerRef} (владение), это роль, в которой носитель реально
+ * задействован: иконка, обложка или вставка в текст.
+ */
+export interface AttachmentUsageRef {
+  /** Роль использования. */
+  usage: AttachmentUsageKind;
+  owner_type: AttachmentOwnerType;
+  owner_id: string;
+  /** Название мысли/публикации; у связи — `null`. */
+  title: string | null;
+}
+
+/**
+ * Ответ «использование вложения» (0.11.1, задача 46cf4bcb; 0.12.1, задача
+ * f3203ce4): владельцы (мысли, связи, публикации), которые держат ЭТО вложение,
+ * и его фактические использования (иконки/обложки/вхождения в тексты).
  *
- * Одна строка вложения имеет ровно одного владельца, но общий физический
- * носитель (файл/URL) может быть привязан несколькими строками — прежде всего
- * при копировании вложения на другого владельца (ADR 73cfcf64). Поэтому в
- * ответ попадают владельцы всех живых строк с тем же `kind` и тем же
- * `url`/`file_path` — это и есть «облачка» мыслей и публикаций в диалоге
- * выбора обложки. Порядок детерминирован: владельцы группы `thought`, затем
- * `publication`, затем `link`; внутри группы — по id владельца.
+ * Источник владельцев — строки `attachment_owners` ЭТОГО вложения (дедупликация
+ * по `content_hash` гарантирует, что один файл = одна строка вложения). Порядок
+ * владельцев детерминирован: `thought` → `publication` → `link`, внутри группы —
+ * по id владельца.
  */
 export interface AttachmentUsage {
   /** Строка вложения, для которой запрошено использование (её id). */
   attachment_id: string;
-  /** Владельцы общего носителя, без дублей. */
+  /** Владельцы вложения (его строки `attachment_owners`), без дублей. */
   owners: AttachmentOwnerRef[];
+  /**
+   * Фактические использования вложения. Сейчас заполняются `icon`/`cover`
+   * (мысли/публикации, ссылающиеся на вложение как иконку/обложку); `text` —
+   * точка расширения (задача 87c455db), пока всегда пусто.
+   */
+  usages: AttachmentUsageRef[];
 }

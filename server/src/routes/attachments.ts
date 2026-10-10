@@ -5,9 +5,14 @@
  *   GET/POST /networks/:networkId/links/:id/attachments    — list/create on a link
  *   GET/POST /networks/:networkId/publications/:id/attachments — list/create on a publication
  *   GET      /networks/:networkId/attachments/raw?path=…    — raw bytes of a stored file
- *   GET      /networks/:networkId/attachments/:id/usage     — owners of the shared file
- *   PATCH    /networks/:networkId/attachments/:id          — update (last-write-wins)
- *   DELETE   /networks/:networkId/attachments/:id          — delete
+ *   GET      /networks/:networkId/attachments/:id/usage     — owners + usages of the attachment
+ *   POST     /networks/:networkId/attachments/:id/owners    — add owner(s) to an attachment
+ *   DELETE   /networks/:networkId/attachments/:id/owners    — remove one ownership
+ *   PATCH    /networks/:networkId/attachments/:id          — update metadata (title/description/icon)
+ *
+ * Удаления вложения в публичном API НЕТ (0.12.1, задача 478f8c1f, операция
+ * 28ecc295): полное удаление выполняет owner-cleanup, когда снят последний
+ * живой владелец во всех слоях; снятие одного владения — DELETE /owners.
  *
  * Attachments are polymorphic (`owner_type` + `owner_id`); on MVP `kind=file`
  * stores only a client-side path (no upload). The table has no `version`
@@ -37,16 +42,17 @@ import {
   type RouteDeps,
 } from './helpers.js';
 import {
+  addOwners,
   copyAttachment,
   createAttachment,
   createAttachmentFileResult,
-  deleteAttachment,
   enrichUrlAttachment,
   getAttachment,
   getAttachmentContent,
   getAttachmentRawByPath,
   listAttachments,
   listAttachmentUsage,
+  removeOwner,
   searchAttachments,
   updateAttachment,
   updateAttachmentContent,
@@ -59,6 +65,8 @@ import {
   RestAttachmentCreate,
   RestAttachmentFileCreate,
   RestAttachmentListOwner,
+  RestAttachmentOwnersAdd,
+  RestAttachmentOwnerRemove,
   RestAttachmentRaw,
   RestAttachmentSearch,
   RestAttachmentUpdate,
@@ -281,24 +289,71 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
+    // Владельцы вложения (0.12.1, задачи 6ba247cc/4924d61e, ADR 9f90b010):
+    // добавить одного/нескольких владельцев и снять ОДНО владение. Снятие
+    // последнего живого владельца во всех слоях удаляет вложение (owner-cleanup).
+    // События владельцев (`attachment.owner.added`/`removed`) ставит задача
+    // f77382ba; здесь — одно `attachment.updated`, чтобы подписчики перечитали.
+    app.post(
+      '/networks/:networkId/attachments/:id/owners',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestAttachmentOwnersAdd, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const added = addOwners(
+            ndb,
+            input.attachment_id,
+            input.owner_type as AttachmentOwnerType,
+            input.owner_ids as string[],
+            req.auth!.user.id,
+          );
+          const events: AnyWriteEvent[] =
+            added.added.length === 0
+              ? []
+              : [{ type: 'attachment.updated', data: { id: input.attachment_id, changes: {} } }];
+          return { result: added, events };
+        });
+        sendSuccess(reply, result);
+      },
+    );
+
+    app.delete(
+      '/networks/:networkId/attachments/:id/owners',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestAttachmentOwnerRemove, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const removed = removeOwner(
+            ndb,
+            input.attachment_id,
+            input.owner_type as AttachmentOwnerType,
+            input.owner_id as string,
+            input.confirm === true,
+          );
+          const events: AnyWriteEvent[] = removed.attachment_deleted
+            ? [{ type: 'attachment.deleted', data: { id: input.attachment_id } }]
+            : [{ type: 'attachment.updated', data: { id: input.attachment_id, changes: {} } }];
+          return { result: removed, events };
+        });
+        sendSuccess(reply, result);
+      },
+    );
+
+    // PATCH — правка МЕТАДАННЫХ вложения (0.12.1, задача 478f8c1f): только
+    // title/description/icon. Смены владельца здесь нет (владельцы — POST/DELETE
+    // …/owners); местоположение (url/file_path) неизменяемо.
     app.patch(
       '/networks/:networkId/attachments/:id',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestAttachmentUpdate, req);
         const changes: AttachmentUpdateInput = {};
-        if (input.url !== undefined) changes.url = input.url as string | null;
-        if (input.file_path !== undefined) changes.file_path = input.file_path as string | null;
-        if (input.file_size !== undefined) changes.file_size = input.file_size as number;
-        if (input.mime_type !== undefined) changes.mime_type = input.mime_type as string | null;
         if (input.title !== undefined) changes.title = input.title as string | null;
         if (input.description !== undefined)
           changes.description = input.description as string | null;
         if (input.icon !== undefined) changes.icon = input.icon as string | null;
-        if (input.position !== undefined) changes.position = input.position as number;
-        if (input.owner_type !== undefined)
-          changes.owner_type = input.owner_type as AttachmentOwnerType;
-        if (input.owner_id !== undefined) changes.owner_id = input.owner_id as string;
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const attachment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
           const updated = updateAttachment(ndb, input.attachment_id, changes, req.auth!.user.id);
@@ -312,34 +367,10 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
-    app.delete(
-      '/networks/:networkId/attachments/:id',
-      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
-      async (req: FastifyRequest, reply) => {
-        const input = parseRest(RestAttachmentById, req);
-        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-          const existing = getAttachment(ndb, input.attachment_id);
-          deleteAttachment(ndb, input.attachment_id);
-          return {
-            result: undefined,
-            events: [{ type: 'attachment.deleted', data: { id: input.attachment_id } }],
-            ...(existing === null
-              ? {}
-              : {
-                  activity: [
-                    {
-                      kind: 'attachment' as const,
-                      action: 'deleted' as const,
-                      attachment: existing,
-                    },
-                  ],
-                }),
-          };
-        });
-        reply.code(204).send();
-      },
-    );
+    // `DELETE /attachments/{id}` убран из публичного API (0.12.1, задача
+    // 478f8c1f, операция 28ecc295): полное удаление вложения выполняет
+    // owner-cleanup, когда снят последний живой владелец; снятие ОДНОГО
+    // владения — DELETE …/owners.
 
     // Text content of a file attachment for the built-in viewer/editor (L7,
     // 03-server-api.md §11). GET returns text (+ rendered html for markdown);

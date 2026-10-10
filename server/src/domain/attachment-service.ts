@@ -48,6 +48,7 @@ import {
   type AttachmentSearchQuery,
   type AttachmentUpdateInput,
   type AttachmentUsage,
+  type AttachmentUsageRef,
 } from '@etn/shared';
 
 import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
@@ -546,7 +547,9 @@ export function getAttachment(ndb: NetworkDb, id: string): Attachment | null {
   if (row === undefined) return null;
   // Владелец в DTO берётся из владений (первичный), колонки строки — лишь
   // резерв для переходного периода (см. блок «Ownership»).
-  return rowToAttachment(row, primaryOwnership(ndb, id));
+  const attachment = rowToAttachment(row, primaryOwnership(ndb, id));
+  withOwnershipAggregates(ndb, [attachment]);
+  return attachment;
 }
 
 /** Return an attachment or throw `NOT_FOUND` (404). */
@@ -578,7 +581,10 @@ export function listAttachments(
     )
     .all(ownerType, ownerId) as (AttachmentRow & { owner_position: number })[];
   const override = { owner_type: ownerType, owner_id: ownerId };
-  return rows.map((row) => rowToAttachment(row, { ...override, position: row.owner_position }));
+  const list = rows.map((row) => rowToAttachment(row, { ...override, position: row.owner_position }));
+  // Список запрошен для конкретного объекта — все его строки принадлежат ему.
+  for (const a of withOwnershipAggregates(ndb, list)) a.owned_by_current = true;
+  return list;
 }
 
 /** Порядок групп владельцев в ответе «использование вложения». */
@@ -603,18 +609,71 @@ function resolveOwnerTitles(
 }
 
 /**
- * Использование вложения (0.11.1, задача 46cf4bcb): владельцы, которые держат
- * это вложение — мысли, связи и публикации. Нужно диалогу выбора обложки
- * публикации: в строке вложения показываются «облачка» мыслей и публикаций, к
- * которым относится картинка.
+ * Батч-агрегаты владения для DTO (0.12.1, задача 478f8c1f, сущность 109be255):
+ * по списку id вложений одним запросом собирает живых владельцев каждого и
+ * резолвит их названия. Возвращает `attachment_id → AttachmentOwnerRef[]`.
+ */
+function ownersByAttachment(
+  ndb: NetworkDb,
+  ids: readonly string[],
+): Map<string, AttachmentOwnerRef[]> {
+  const out = new Map<string, AttachmentOwnerRef[]>();
+  if (ids.length === 0) return out;
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ndb
+    .prepare(
+      `SELECT attachment_id, owner_type, owner_id FROM attachment_owners_v
+        WHERE attachment_id IN (${placeholders})
+        ORDER BY position ASC, created_at ASC, id ASC`,
+    )
+    .all(...ids) as { attachment_id: string; owner_type: string; owner_id: string }[];
+  const spans: { attachment_id: string; len: number }[] = [];
+  const flat: { owner_type: AttachmentOwnerType; owner_id: string }[] = [];
+  for (const r of rows) {
+    flat.push({ owner_type: r.owner_type as AttachmentOwnerType, owner_id: r.owner_id });
+    const last = spans[spans.length - 1];
+    if (last !== undefined && last.attachment_id === r.attachment_id) last.len += 1;
+    else spans.push({ attachment_id: r.attachment_id, len: 1 });
+  }
+  // Названия владельцев резолвятся ОДНИМ батчем на весь набор, затем режутся
+  // по спанам — иначе был бы запрос на вложение.
+  const refs = resolveOwnerRefs(ndb, flat);
+  let cursor = 0;
+  for (const span of spans) {
+    out.set(span.attachment_id, refs.slice(cursor, cursor + span.len));
+    cursor += span.len;
+  }
+  return out;
+}
+
+/**
+ * Дополнить вложения агрегатами владения (0.12.1, задача 478f8c1f, сущность
+ * 109be255): `owners`, `owner_count` и — где есть контекст владельца —
+ * `owned_by_current`. Мутирует переданные объекты и возвращает их же.
+ */
+function withOwnershipAggregates(ndb: NetworkDb, attachments: Attachment[]): Attachment[] {
+  if (attachments.length === 0) return attachments;
+  const owners = ownersByAttachment(
+    ndb,
+    attachments.map((a) => a.id),
+  );
+  for (const a of attachments) {
+    const refs = owners.get(a.id) ?? [];
+    a.owners = refs;
+    a.owner_count = refs.length;
+  }
+  return attachments;
+}
+
+/**
+ * Использование вложения (0.11.1, задача 46cf4bcb; 0.12.1, задача f3203ce4):
+ * владельцы ЭТОГО вложения и его фактические использования — иконки мыслей,
+ * обложки публикаций и (точка расширения 87c455db) вхождения в тексты.
  *
- * С мульти-владением (0.12.1, ADR `9f90b010`) источник — строки владений
- * `attachment_owners` ЭТОГО вложения (а не общий носитель: дедупликация по
- * `content_hash` гарантирует, что один файл = одна строка вложения).
- *
- * Названия мыслей и публикаций подставляются из `*_v`; у связи названия нет
- * (`title: null`). Порядок детерминирован (`thought` → `publication` → `link`,
- * внутри группы — по id владельца).
+ * Источник владельцев — строки владений `attachment_owners` этого вложения
+ * (дедупликация по `content_hash` гарантирует, что один файл = одна строка
+ * вложения). Названия мыслей и публикаций подставляются из `*_v`; у связи
+ * названия нет (`title: null`). Порядок детерминирован.
  *
  * Throws `NOT_FOUND` (404), если строка вложения не видна в текущем слое.
  */
@@ -629,7 +688,30 @@ export function listAttachmentUsage(ndb: NetworkDb, attachmentId: string): Attac
       OWNER_TYPE_RANK[a.owner_type] - OWNER_TYPE_RANK[b.owner_type] ||
       (a.owner_id < b.owner_id ? -1 : a.owner_id > b.owner_id ? 1 : 0),
   );
-  return { attachment_id: source.id, owners };
+  // Фактические использования: иконки мыслей и обложки публикаций, ссылающиеся
+  // на это вложение. Текстовые вхождения (usage: 'text') пока не собираются —
+  // точка расширения задачи 87c455db (картинки по id в комментариях).
+  const usages: AttachmentUsageRef[] = [];
+  const iconOwners = ndb
+    .prepare('SELECT id AS owner_id, title FROM thoughts_v WHERE icon_attachment_id = ? ORDER BY id ASC')
+    .all(attachmentId) as { owner_id: string; title: string }[];
+  for (const row of iconOwners) {
+    usages.push({ usage: 'icon', owner_type: 'thought', owner_id: row.owner_id, title: row.title });
+  }
+  const coverOwners = ndb
+    .prepare(
+      'SELECT id AS owner_id, title FROM publications_v WHERE cover_attachment_id = ? ORDER BY id ASC',
+    )
+    .all(attachmentId) as { owner_id: string; title: string }[];
+  for (const row of coverOwners) {
+    usages.push({
+      usage: 'cover',
+      owner_type: 'publication',
+      owner_id: row.owner_id,
+      title: row.title,
+    });
+  }
+  return { attachment_id: source.id, owners, usages };
 }
 
 /**
@@ -1215,7 +1297,16 @@ export function searchAttachments(
     )
     .all(...params, limit, offset) as AttachmentRow[];
   // Владелец в DTO — первичное владение (переходный период, см. блок «Ownership»).
-  return { items: rows.map((row) => rowToAttachment(row, primaryOwnership(ndb, row.id))), total: totalRow.n };
+  const items = withOwnershipAggregates(
+    ndb,
+    rows.map((row) => rowToAttachment(row, primaryOwnership(ndb, row.id))),
+  );
+  // При отборе `exclude_owner_*` все возвращённые вложения по построению НЕ
+  // принадлежат указанному объекту — отмечаем это явно (сущность 109be255).
+  if (query.exclude_owner_type !== undefined && query.exclude_owner_id !== undefined) {
+    for (const a of items) a.owned_by_current = false;
+  }
+  return { items, total: totalRow.n };
 }
 
 /**

@@ -308,6 +308,9 @@ function buildApi(): EtnBridgeApi {
         invoke('attachments.updateContent', networkId, id, input),
       copy: (networkId, attachmentId, input) =>
         invoke('attachments.copy', networkId, attachmentId, input),
+      addOwners: (networkId, id, input) => invoke('attachments.addOwners', networkId, id, input),
+      removeOwner: (networkId, id, input) =>
+        invoke('attachments.removeOwner', networkId, id, input),
       search: (networkId, query) => invoke('attachments.search', networkId, query),
       getUsage: (networkId, id) => invoke('attachments.getUsage', networkId, id),
     },

@@ -1378,6 +1378,12 @@ export const AttachmentsSearch = defineContract(
   {},
 );
 
+/**
+ * MCP `etn.attachments.update` (0.12.1, задача 478f8c1f, операция `0b23a32a`):
+ * правка МЕТАДАННЫХ вложения — только `title`/`description`/`icon`. Смена
+ * владельца и правка местоположения отсюда убраны: владельцами управляют
+ * `attachments.add`/`attachments.copy`/`attachments.removeOwner`.
+ */
 export const AttachmentsUpdate = defineContract(
   'etn.attachments.update',
   z.object({
@@ -1385,8 +1391,25 @@ export const AttachmentsUpdate = defineContract(
     attachment_id: z.string().min(1),
     title: z.string().nullable().optional(),
     description: z.string().nullable().optional(),
-    url: z.string().nullable().optional(),
-    file_path: z.string().nullable().optional(),
+    icon: z.string().nullable().optional(),
+  }),
+  {},
+);
+
+/**
+ * MCP `etn.attachments.removeOwner` (0.12.1, задача 4924d61e, операция
+ * `4924d61e`): снять ОДНО владение пары (вложение, объект). Деструктивное
+ * действие — требует верхнеуровневый `confirm: true` у `etn.ops` (как прочие
+ * destructive). Защита `ATTACHMENT_OWNER_IS_ICON` реализована; текстовое
+ * предупреждение (`ATTACHMENT_OWNER_IN_TEXT`) — точка расширения (87c455db).
+ */
+export const AttachmentsRemoveOwner = defineContract(
+  'etn.attachments.removeOwner',
+  z.object({
+    network_id: NetworkId,
+    attachment_id: z.string().min(1),
+    owner_type: z.enum(ATTACHMENT_OWNER_TYPES),
+    owner_id: z.string().min(1),
   }),
   {},
 );
@@ -1402,11 +1425,10 @@ export const AttachmentsUsage = defineContract(
   {},
 );
 
-export const AttachmentsDelete = defineContract(
-  'etn.attachments.delete',
-  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
-  {},
-);
+// `etn.attachments.delete` снят с публичного фасада (0.12.1, задача 478f8c1f,
+// операция 28ecc295): полное удаление вложения выполняет owner-cleanup
+// автоматически, когда снят последний живой владелец во всех слоях. Снятие
+// ОДНОГО владения — `etn.attachments.removeOwner`.
 
 // ===========================================================================
 // Область: сети (tools/networks.ts)
@@ -2549,26 +2571,104 @@ export const RestAttachmentUsage = defineContract(
   },
 );
 
+/**
+ * REST `PATCH /attachments/{id}` (0.12.1, задача 478f8c1f, операция
+ * `28ecc295`): правка МЕТАДАННЫХ вложения — только `title`/`description`/`icon`.
+ * Смена владельца отсюда убрана (владельцами управляют `POST`/`DELETE
+ * /attachments/{id}/owners`), как и правка `url`/`file_path` местоположения.
+ */
 export const RestAttachmentUpdate = defineContract(
   'rest:attachments.update',
   z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     attachment_id: { from: { kind: 'param', name: 'id' } },
-    url: { from: { kind: 'body' }, t: z.string().nullable() },
-    file_path: { from: { kind: 'body' }, t: z.string().nullable() },
-    file_size: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: 'file_size должен быть числом.' },
-    mime_type: { from: { kind: 'body' }, t: z.string().nullable() },
     title: { from: { kind: 'body' }, t: z.string().nullable() },
     description: { from: { kind: 'body' }, t: z.string().nullable() },
     icon: { from: { kind: 'body' }, t: z.string().nullable() },
-    position: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: 'position должен быть числом.' },
+  },
+);
+
+/**
+ * REST `POST /attachments/{id}/owners` (0.12.1, задача 6ba247cc, операция
+ * `6ba247cc`): добавить одного или нескольких владельцев существующему
+ * вложению. Идемпотентно — уже владеющие попадают в `skipped`.
+ */
+export const RestAttachmentOwnersAdd = defineContract(
+  'rest:attachments.owners-add',
+  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    attachment_id: { from: { kind: 'param', name: 'id' } },
     owner_type: {
       from: { kind: 'body' },
-      t: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
+      t: z.enum(ATTACHMENT_OWNER_TYPES),
+      req: true,
       msg: 'owner_type должен быть thought|link|publication.',
     },
-    owner_id: { from: { kind: 'body' }, t: z.string().optional() },
+    owner_ids: {
+      from: { kind: 'body' },
+      parse: (raw: unknown, requestId: string) => {
+        if (!Array.isArray(raw)) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'owner_ids должен быть непустым массивом строк.',
+            { field: 'owner_ids' },
+            requestId,
+          );
+        }
+        const ids = raw.map((v) => {
+          if (typeof v !== 'string' || v === '') {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'owner_ids содержит не строку или пустую строку.',
+              { field: 'owner_ids' },
+              requestId,
+            );
+          }
+          return v;
+        });
+        if (ids.length === 0) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'owner_ids должен быть непустым массивом строк.',
+            { field: 'owner_ids' },
+            requestId,
+          );
+        }
+        return ids;
+      },
+      req: true,
+    },
+  },
+);
+
+/**
+ * REST `DELETE /attachments/{id}/owners` (0.12.1, задача 4924d61e, операция
+ * `4924d61e`): снять ОДНО владение пары (вложение, объект). Защиты 409
+ * (`ATTACHMENT_OWNER_IS_ICON` — запрет; `ATTACHMENT_OWNER_IN_TEXT` —
+ * предупреждение, повтор с `confirm: true`). Ответ —
+ * `{ removed, attachment_deleted }`.
+ */
+export const RestAttachmentOwnerRemove = defineContract(
+  'rest:attachments.owner-remove',
+  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    attachment_id: { from: { kind: 'param', name: 'id' } },
+    owner_type: {
+      from: { kind: 'body' },
+      t: z.enum(ATTACHMENT_OWNER_TYPES),
+      req: true,
+      msg: 'owner_type должен быть thought|link|publication.',
+    },
+    owner_id: {
+      from: { kind: 'body' },
+      t: z.string().min(1),
+      req: true,
+      msg: 'owner_id обязателен.',
+    },
+    confirm: { from: { kind: 'body' }, t: z.boolean(), msg: 'confirm должен быть логическим значением.' },
   },
 );
 

@@ -136,8 +136,8 @@ const WRITE_VIEW_COVERAGE: readonly WriteViewEntry[] = [
     field: 'kind',
     operation: 'POST /networks/:networkId/thoughts|links/:id/attachments',
     tests: {
-      url: 'routes-comments-attachments.test.ts::attachments: url/file validation, list, patch (no If-Match), delete',
-      file: 'routes-comments-attachments.test.ts::attachments: url/file validation, list, patch (no If-Match), delete',
+      url: 'routes-comments-attachments.test.ts::attachments: url/file validation, list, patch metadata',
+      file: 'routes-comments-attachments.test.ts::attachments: url/file validation, list, patch metadata',
     },
   },
   {

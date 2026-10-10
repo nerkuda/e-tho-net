@@ -1554,6 +1554,26 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'attachments.addOwners',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        input: Parameters<RestClient['addAttachmentOwners']>[2],
+      ) => requireRest(deps).addAttachmentOwners(networkId, id, input),
+    ),
+  );
+  handlers.set(
+    'attachments.removeOwner',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        input: Parameters<RestClient['removeAttachmentOwner']>[2],
+      ) => requireRest(deps).removeAttachmentOwner(networkId, id, input),
+    ),
+  );
+  handlers.set(
     'attachments.search',
     bind((networkId: string, query: Parameters<RestClient['searchAttachments']>[1]) =>
       requireRest(deps).searchAttachments(networkId, query),
@@ -2412,6 +2432,8 @@ const SELF_MUTATING_IPC_METHODS: ReadonlySet<string> = new Set([
   'attachments.uploadFile',
   'attachments.updateContent',
   'attachments.copy',
+  'attachments.addOwners',
+  'attachments.removeOwner',
   'trash.purge',
   'system.importEtnx',
 ]);

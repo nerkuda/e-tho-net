@@ -36,7 +36,7 @@ import {
   ActivityTruncate,
   AttachmentsAdd,
   AttachmentsCopy,
-  AttachmentsDelete,
+  AttachmentsRemoveOwner,
   AttachmentsSearch,
   AttachmentsUpdate,
   AttachmentsUsage,
@@ -89,9 +89,8 @@ import {
   AttachmentFileCopier,
   copyAttachment,
   createAttachmentFromInput,
-  deleteAttachment,
-  getAttachment,
   listAttachmentUsage,
+  removeOwner,
   searchAttachments,
   updateAttachment,
 } from '../../domain/attachment-service.js';
@@ -403,16 +402,15 @@ const HANDLERS: Record<string, OpHandler> = {
       requireWriteBudget(rt);
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
+      // 0.12.1 (задача 478f8c1f): только метаданные, владелец не меняется.
       const changes: {
         title?: string | null;
         description?: string | null;
-        url?: string | null;
-        file_path?: string | null;
+        icon?: string | null;
       } = {};
       if (a.title !== undefined) changes.title = a.title;
       if (a.description !== undefined) changes.description = a.description;
-      if (a.url !== undefined) changes.url = a.url;
-      if (a.file_path !== undefined) changes.file_path = a.file_path;
+      if (a.icon !== undefined) changes.icon = a.icon;
       const attachment = runWrite(ndb, fx, () => {
         const updated = updateAttachment(ndb, a.attachment_id, changes, rt.deps.auth.userId);
         return {
@@ -430,35 +428,33 @@ const HANDLERS: Record<string, OpHandler> = {
       return { id: attachment.id, version: 0, request_id: String(extra.requestId) } satisfies McpMutationResult;
     });
   },
-  'attachments.delete': (rt, p, extra) => {
-    const a = p as unknown as z.infer<typeof AttachmentsDelete.schema>;
+  'attachments.removeOwner': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof AttachmentsRemoveOwner.schema>;
     return runWriteTool(rt, a.network_id, () => {
       requireWritable(rt);
       requireWriteBudget(rt);
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
-      runWrite(ndb, fx, () => {
-        const existing = getAttachment(ndb, a.attachment_id);
-        deleteAttachment(ndb, a.attachment_id);
+      const removed = runWrite(ndb, fx, () => {
+        const result = removeOwner(ndb, a.attachment_id, a.owner_type, a.owner_id);
         return {
-          result: undefined,
-          events: [{ type: 'attachment.deleted', data: { id: a.attachment_id } }],
-          ...(existing === null
-            ? {}
-            : {
-                activity: [
-                  { kind: 'attachment' as const, action: 'deleted' as const, attachment: existing },
-                ],
-              }),
+          result,
+          // Вложение удалено owner-cleanup'ом — `attachment.deleted`; иначе
+          // событие правки, чтобы подписчики перечитали вложение.
+          events: [
+            result.attachment_deleted
+              ? { type: 'attachment.deleted' as const, data: { id: a.attachment_id } }
+              : { type: 'attachment.updated' as const, data: { id: a.attachment_id, changes: {} } },
+          ],
           audit: {
-            action: 'etn.attachments.delete',
+            action: 'etn.attachments.removeOwner',
             targetType: 'attachment',
             targetId: a.attachment_id,
             details: a,
           },
         };
       });
-      return { deleted: true, request_id: String(extra.requestId) };
+      return { ...removed, request_id: String(extra.requestId) };
     });
   },
 

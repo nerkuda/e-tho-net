@@ -141,15 +141,36 @@ describe('вложения публикаций: REST (46cf4bcb)', { skip }, () 
       );
       assert.equal(owners2[0]!.title, 'Владелец картинки');
 
-      // Отвязка: с муль-владением операция владельцев — отдельная задача
-      // (478f8c1f); DELETE /attachments/{id} удаляет вложение целиком.
-      const del = await api(ctx, 'DELETE', `/attachments/${attachment.id}`);
-      assert.equal(del.statusCode, 204, del.body);
-      const list2 = await api(ctx, 'GET', `/publications/${pub.id}/attachments`);
-      assert.equal((list2.json().data as unknown[]).length, 0);
-      // Мысль тоже потеряла удалённое вложение.
+      // Отвязка (0.12.1): снятие владений по одному. Публикация держит
+      // вложение как обложку — сначала очищаем обложку, иначе 409.
+      const coverClear = await api(ctx, 'PATCH', `/publications/${pub.id}`, {
+        payload: { cover_attachment_id: null },
+      });
+      assert.equal(coverClear.statusCode, 200, coverClear.body);
+      const delPub = await api(ctx, 'DELETE', `/attachments/${attachment.id}/owners`, {
+        payload: { owner_type: 'publication', owner_id: pub.id },
+      });
+      assert.equal(delPub.statusCode, 200, delPub.body);
+      assert.equal(
+        (delPub.json().data as { attachment_deleted: boolean }).attachment_deleted,
+        false,
+      );
+      const listPub = await api(ctx, 'GET', `/publications/${pub.id}/attachments`);
+      assert.equal((listPub.json().data as unknown[]).length, 0);
+      // Мысль ещё владеет вложением.
       const listT = await api(ctx, 'GET', `/thoughts/${thought}/attachments`);
-      assert.equal((listT.json().data as unknown[]).length, 0);
+      assert.equal((listT.json().data as unknown[]).length, 1);
+      // Последний живой владелец удаляет вложение целиком (owner-cleanup).
+      const delThought = await api(ctx, 'DELETE', `/attachments/${attachment.id}/owners`, {
+        payload: { owner_type: 'thought', owner_id: thought },
+      });
+      assert.equal(delThought.statusCode, 200, delThought.body);
+      assert.equal(
+        (delThought.json().data as { attachment_deleted: boolean }).attachment_deleted,
+        true,
+      );
+      const listT2 = await api(ctx, 'GET', `/thoughts/${thought}/attachments`);
+      assert.equal((listT2.json().data as unknown[]).length, 0);
     } finally {
       await closeRestContext(ctx);
     }

@@ -23,6 +23,10 @@ import type {
   AttachmentCopyResult,
   AttachmentFileInput,
   AttachmentInput,
+  AttachmentOwnerAddInput,
+  AttachmentOwnerChangeResult,
+  AttachmentOwnerRemoveInput,
+  AttachmentOwnerRemoveResult,
   AttachmentOwnerType,
   AttachmentSearchQuery,
   AttachmentUpdateInput,
@@ -1092,6 +1096,26 @@ export interface EtnApi {
       attachmentId: string,
       input: AttachmentCopyInput,
     ): Promise<AttachmentCopyResult>;
+    /**
+     * `POST /attachments/{id}/owners` — добавить одного или нескольких
+     * владельцев существующему вложению (0.12.1, задача 6ba247cc). Идемпотентно:
+     * уже владеющие попадают в `skipped`.
+     */
+    addOwners(
+      networkId: string,
+      id: string,
+      input: AttachmentOwnerAddInput,
+    ): Promise<AttachmentOwnerChangeResult>;
+    /**
+     * `DELETE /attachments/{id}/owners` — снять ОДНО владение пары
+     * (вложение, объект) (0.12.1, задача 4924d61e). Защита от снятия
+     * собственной иконки/обложки приходит как ошибка 409.
+     */
+    removeOwner(
+      networkId: string,
+      id: string,
+      input: AttachmentOwnerRemoveInput,
+    ): Promise<AttachmentOwnerRemoveResult>;
     /**
      * `GET /attachments?q=…` — network-wide attachment search (workplan L25).
      * Used by the editor's "Найти существующее" dialog tab.

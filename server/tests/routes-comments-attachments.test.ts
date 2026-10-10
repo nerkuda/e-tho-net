@@ -144,7 +144,7 @@ describe(
       }
     });
 
-    it('attachments: url/file validation, list, patch (no If-Match), delete', async () => {
+    it('attachments: url/file validation, list, patch metadata', async () => {
       const ctx = await buildRestContext();
       try {
         const thoughtId = await createThought(ctx, 'Хозяин вложений');
@@ -193,7 +193,7 @@ describe(
         assert.equal(list.statusCode, 200);
         assert.equal((list.json().data as unknown[]).length, 2);
 
-        // PATCH without If-Match (attachments have no version column).
+        // PATCH без If-Match (у вложений нет колонки версии) — правка метаданных.
         const patched = await ctx.app.inject({
           method: 'PATCH',
           url: `/api/v1/networks/${ctx.networkId}/attachments/${urlAtt.id}`,
@@ -203,12 +203,15 @@ describe(
         assert.equal(patched.statusCode, 200);
         assert.equal((patched.json().data as { title: string }).title, 'Обновлённая ссылка');
 
+        // Снятие владельца (owner-cleanup): последний живой владелец удаляет вложение.
         const del = await ctx.app.inject({
           method: 'DELETE',
-          url: `/api/v1/networks/${ctx.networkId}/attachments/${fileAtt.id}`,
+          url: `/api/v1/networks/${ctx.networkId}/attachments/${fileAtt.id}/owners`,
           headers: authHeaders(ctx),
+          payload: { owner_type: 'thought', owner_id: thoughtId },
         });
-        assert.equal(del.statusCode, 204);
+        assert.equal(del.statusCode, 200, del.body);
+        assert.deepEqual(del.json().data, { removed: true, attachment_deleted: true });
 
         const after = await ctx.app.inject({
           method: 'GET',
@@ -216,6 +219,14 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal((after.json().data as unknown[]).length, 1);
+
+        // Публичного DELETE вложения БОЛЬШЕ НЕТ (0.12.1, задача 478f8c1f).
+        const gone = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/${urlAtt.id}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(gone.statusCode, 404, gone.body);
       } finally {
         await closeRestContext(ctx);
       }
