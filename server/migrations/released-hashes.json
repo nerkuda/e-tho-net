@@ -1,9 +1,9 @@
 {
-  "version": "0.11.2",
+  "version": "0.12.1",
   "algorithm": "sha256",
   "normalize": "lf",
   "regenerate": "node server/scripts/release-migrations-hash.mjs --version <X.Y.Z>",
-  "note": "Манифест хешей миграций, выпущенных в релизе v0.11.2: по одному sha256 на каждый файл каталогов network/ и system/ (содержимое нормализовано: CRLF → LF, как задаёт .gitattributes). Файл лежит РЯДОМ с каталогами миграций намеренно и не должен внутрь них переезжать: мигратор (server/src/db/migrator.ts) применяет только *.sql из переданного ему каталога (paths.ts: migrations/network, migrations/system), поэтому лежащий на уровень выше JSON не может быть прочитан как миграция. Источник истины сторожа server/tests/guard-migrations-immutable.test.ts: правка любого перечисленного здесь файла или новая миграция с номером не больше максимального — красный тест. Обновляется при выпуске версии: после фиксации состава релиза пересобери манифест (поле regenerate) и закоммить его вместе с релизным коммитом — до тега v0.11.2.",
+  "note": "Манифест хешей миграций, выпущенных в релизе v0.12.1: по одному sha256 на каждый файл каталогов network/ и system/ (содержимое нормализовано: CRLF → LF, как задаёт .gitattributes). Файл лежит РЯДОМ с каталогами миграций намеренно и не должен внутрь них переезжать: мигратор (server/src/db/migrator.ts) применяет только *.sql из переданного ему каталога (paths.ts: migrations/network, migrations/system), поэтому лежащий на уровень выше JSON не может быть прочитан как миграция. Источник истины сторожа server/tests/guard-migrations-immutable.test.ts: правка любого перечисленного здесь файла или новая миграция с номером не больше максимального — красный тест. Обновляется при выпуске версии: после фиксации состава релиза пересобери манифест (поле regenerate) и закоммить его вместе с релизным коммитом — до тега v0.12.1.",
   "network": {
     "001_thoughts.sql": "bd9babc14ff47c1364eefb743f8bfced3694076953cadf8ea8d43f900c0d6ace",
     "002_thought_synonyms.sql": "368b944506a3dee116fcfbf02709e1e81bc648ec08c421e727354ba26db80000",
@@ -52,7 +52,10 @@
     "044_cross_network_ref.sql": "86bc5ce4b1edfa81eb1c718a067bffba370778c5e190207b8be6fc2796e1e446",
     "045_links_covering_indexes.sql": "427d65de6017906541bd798b8d3b15550c79eb308816bfa2cd87085297f4d444",
     "046_comments_time.sql": "017f8be840a2c88322c3266202f54fd8d45b2856e68863f40739b53fedef6e24",
-    "047_publications.sql": "8e40515a3be0f47bc8bef06c4d3fd483cccf67f386ec9f20cbc3bc1ead5ed661"
+    "047_publications.sql": "8e40515a3be0f47bc8bef06c4d3fd483cccf67f386ec9f20cbc3bc1ead5ed661",
+    "048_comment_permanent_deterministic_id.sql": "a53e95ee30ef0e2416668f3bc66e5f2d55873a5c439010da57c1735971401a23",
+    "049_thought_icon_color.sql": "261afabd90da398a06eafbfe8fc5b83d27310ea8152a85560717c6802d188a43",
+    "050_attachment_owners.sql": "b9f8bb1e380a708dad71c397132ded41d11af28f649e01e68e6a1941cd8d6dec"
   },
   "system": {
     "001_users.sql": "f03ac5d3f08430776c2f9190a0da3f533da6c60a0c81f578050bd8353cf61a14",
@@ -67,6 +70,7 @@
     "010_api_keys_max_writes_per_minute.sql": "f34628d277c61ef4d26e126f6c1d51a89da0859d94b41871cdabaeea68db5edd",
     "011_networks_self_description.sql": "e92f2355c639ca8c2e49f02e57554a1e8fbb5a7405094d5f829c9db3edd465c0",
     "012_mcp_tool_call_metrics.sql": "869b59d5aaf003f4ee37e9976c58750464163b3db7ef5f5ac562595642711d84",
-    "013_networks_type_roles.sql": "3d492527656cdcf721ec6c82194cc7cdd32aff7feb4a3280adca26ac6b1b1505"
+    "013_networks_type_roles.sql": "3d492527656cdcf721ec6c82194cc7cdd32aff7feb4a3280adca26ac6b1b1505",
+    "014_user_settings.sql": "169bdafe299de967672ddbf52139039a87a06c4e5b816f98c79af93704361898"
   }
 }
