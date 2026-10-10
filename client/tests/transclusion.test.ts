@@ -33,6 +33,7 @@ import {
   buildTransclusionDecorations,
   createTransclusionHead,
   htmlHasTransclusionMarkup,
+  listSections,
   listSectionTitles,
   mergeSectionContent,
   renderTransclusionMarkdown,
@@ -116,6 +117,28 @@ test('listSectionTitles: ATX-заголовки по порядку, дубли 
 
 test('listSectionTitles: заголовки с закрывающими # и разными уровнями', () => {
   assert.deepEqual(listSectionTitles('# H1 ##\n#### H4\nне заголовок'), ['H1', 'H4']);
+});
+
+test('listSections: уровни H1–H6 по порядку, дубли схлопнуты у первого вхождения', () => {
+  const body = '# A\n## B\ntext\n### A\n#### D\n## B\n###### F';
+  assert.deepEqual(listSections(body), [
+    { title: 'A', level: 1 },
+    { title: 'B', level: 2 },
+    { title: 'D', level: 4 },
+    { title: 'F', level: 6 },
+  ]);
+});
+
+test('listSections: заголовки с закрывающими # и отступом, тексты без заголовка пропущены', () => {
+  assert.deepEqual(listSections('  ### H3 ###\nне заголовок\n#### H4'), [
+    { title: 'H3', level: 3 },
+    { title: 'H4', level: 4 },
+  ]);
+});
+
+test('listSectionTitles: тонкая обёртка над listSections (имена без уровней)', () => {
+  const body = '# A\n## B\n### C';
+  assert.deepEqual(listSectionTitles(body), listSections(body).map((s) => s.title));
 });
 
 test('transclusionLinkLabel: имя и раздел', () => {

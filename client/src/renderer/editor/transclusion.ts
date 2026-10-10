@@ -136,7 +136,7 @@ import {
 import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
-import { div, errText } from '../lib/dom.js';
+import { div, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../lib/live/index.js';
@@ -149,7 +149,7 @@ import {
   type LockHandle,
 } from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
-import { iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
+import { BUTTON_LABEL_CLASS, iconButton, setButtonActive, uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
 import { svgIcon, type IconName } from '../lib/ui/icon.js';
 import { reconcileKeyed } from '../lib/ui/keyed-list.js';
@@ -306,23 +306,38 @@ export function transclusionBlockRemoval(
 /** ATX-заголовок: уровень и текст (закрывающие `#` срезаны). */
 const HEADING_RE = /^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$/;
 
+/** Раздел источника: имя заголовка и его уровень (1..6). */
+export interface SectionTitle {
+  title: string;
+  level: number;
+}
+
 /**
- * Заголовки источника по порядку (для выпадашки разделов). Лёгкий обзор
- * заголовков markdown-текста — не разбор трансклюзий; повторяющиеся имена
- * схлопываются (при резолве берётся первый).
+ * Заголовки источника по порядку с уровнями (для выпадашки/списка разделов,
+ * задача `9cdbefd2`). Лёгкий обзор заголовков markdown-текста — не разбор
+ * трансклюзий; повторяющиеся имена схлопываются (при резолве берётся первый),
+ * порядок сохраняется.
  */
-export function listSectionTitles(bodyMd: string): string[] {
+export function listSections(bodyMd: string): SectionTitle[] {
   const seen = new Set<string>();
-  const out: string[] = [];
+  const out: SectionTitle[] = [];
   for (const line of bodyMd.split('\n')) {
     const m = HEADING_RE.exec(line.endsWith('\r') ? line.slice(0, -1) : line);
     if (m === null) continue;
     const title = m[2]!.trim();
     if (title === '' || seen.has(title)) continue;
     seen.add(title);
-    out.push(title);
+    out.push({ title, level: m[1]!.length });
   }
   return out;
+}
+
+/**
+ * Имена заголовков источника по порядку (для автокомплита разделов при вводе
+ * ссылки). Тонкая обёртка над {@link listSections} — дедуп и порядок те же.
+ */
+export function listSectionTitles(bodyMd: string): string[] {
+  return listSections(bodyMd).map((section) => section.title);
 }
 
 /**
@@ -1842,11 +1857,20 @@ const TRANSCLUSION_POPOVER_SECTIONS_CLASS = 'transclusion-popover-sections';
 const TRANSCLUSION_POPOVER_COMMANDS_CLASS = 'transclusion-popover-commands';
 /** Строка списка разделов (кнопка словаря с модификатором раскладки). */
 const TRANSCLUSION_POPOVER_ROW_CLASS = 'transclusion-popover-row';
+/** Приглушённая метка уровня `H1`–`H6` в строке списка разделов (задача 9cdbefd2). */
+const TRANSCLUSION_POPOVER_LEVEL_CLASS = 'transclusion-popover-level';
 
-/** Заголовки разделов источника (пусто, если источник не найден). */
-async function sourceSectionTitles(networkId: string, sourceId: string): Promise<string[]> {
+/** Разделы источника с уровнями (пусто, если источник не найден). */
+async function sourceSections(networkId: string, sourceId: string): Promise<SectionTitle[]> {
   const src = await cachedTransclusionLoader(networkId)(sourceId).catch(() => null);
-  return src !== null && src.found ? listSectionTitles(src.body_md) : [];
+  return src !== null && src.found ? listSections(src.body_md) : [];
+}
+
+/** Метка уровня заголовка перед названием раздела (`H1`–`H6`); декоративна. */
+function sectionLevelBadge(level: number): HTMLSpanElement {
+  const badge = span(`H${level}`, TRANSCLUSION_POPOVER_LEVEL_CLASS);
+  badge.setAttribute('aria-hidden', 'true');
+  return badge;
 }
 
 /**
@@ -1941,44 +1965,54 @@ export function openTransclusionLinkPopover(
     void renderSections();
   };
 
-  /** Строка списка разделов (ключ и значение — имя раздела). */
+  /** Строка списка разделов (уровень `null` — раздела нет в источнике). */
   interface SectionRow {
     key: string;
     label: string;
     section: string;
+    level: number | null;
     active: boolean;
   }
 
-  /** Заголовки текущего источника — фильтр применяется без перезапроса. */
-  let sectionTitles: string[] = [];
+  /** Разделы текущего источника — фильтр применяется без перезапроса. */
+  let sections: SectionTitle[] = [];
 
   /** Рисует список разделов с учётом живого поиска (пусто — все разделы). */
   const paintSections = (): void => {
     const parsed = parseKeywords(sectionSearch.value);
-    const rows: SectionRow[] = sectionTitles
-      .filter((title) => matchesKeywords(title, parsed))
-      .map((title) => ({
-        key: title,
-        label: title,
-        section: title,
-        active: currentSection === title,
+    // Фильтр — по НАЗВАНИЮ раздела, метка уровня `H1`–`H6` в поиск не входит.
+    const rows: SectionRow[] = sections
+      .filter((section) => matchesKeywords(section.title, parsed))
+      .map((section) => ({
+        key: section.title,
+        label: section.title,
+        section: section.title,
+        level: section.level,
+        active: currentSection === section.title,
       }));
     // Текущий раздел, которого нет в источнике или который не прошёл фильтр,
     // держим видимым строкой — иначе выбор «теряется» на глазах пользователя.
+    // Уровень неизвестен: строка без префикса и без отступа (задача 9cdbefd2).
     if (currentSection !== null && !rows.some((row) => row.section === currentSection)) {
       rows.unshift({
         key: currentSection,
         label: currentSection,
         section: currentSection,
+        level: null,
         active: true,
       });
     }
     // Инкрементальная сверка по ключу (стандарт «Списки рендерятся
     // инкрементально»): смена активного раздела/фильтра обновляет строки, не
-    // снося прокрутку/фокус списка.
+    // снося прокрутку/фокус списка. Уровень входит и в ключ, и в сравнение —
+    // при смене уровня та же строка пересобирается с новым префиксом/отступом.
     reconcileKeyed(sectionList, rows, {
-      key: (row) => row.key,
-      equals: (a, b) => a.key === b.key && a.label === b.label && a.active === b.active,
+      key: (row) => `${row.level ?? 0}:${row.key}`,
+      equals: (a, b) =>
+        a.key === b.key &&
+        a.label === b.label &&
+        a.level === b.level &&
+        a.active === b.active,
       build: (row) => {
         const btn = uiButton({
           label: row.label,
@@ -1986,13 +2020,18 @@ export function openTransclusionLinkPopover(
           size: 's',
           class: TRANSCLUSION_POPOVER_ROW_CLASS,
           title: row.label,
+          prefix: row.level === null ? undefined : sectionLevelBadge(row.level),
           onClick: () => apply(currentSourceId, row.section),
         });
+        if (row.level !== null) btn.setAttribute('data-level', String(row.level));
         setButtonActive(btn, row.active);
         return btn;
       },
       update: (el, row) => {
-        el.textContent = row.label;
+        // У строки с префиксом надпись живёт в обёртке — правим её текст,
+        // сохраняя метку уровня; у строки без префикса надпись прямо на кнопке.
+        const labelEl = el.querySelector(`.${BUTTON_LABEL_CLASS}`);
+        (labelEl ?? el).textContent = row.label;
         el.title = row.label;
         setButtonActive(el as HTMLButtonElement, row.active);
       },
@@ -2002,9 +2041,9 @@ export function openTransclusionLinkPopover(
   /** Загружает заголовки источника и рисует список (целиком сразу). */
   const renderSections = async (): Promise<void> => {
     const sourceId = currentSourceId;
-    const titles = await sourceSectionTitles(networkId, sourceId);
+    const loaded = await sourceSections(networkId, sourceId);
     if (sourceId !== currentSourceId) return;
-    sectionTitles = titles;
+    sections = loaded;
     refreshAllSections();
     paintSections();
   };
@@ -2636,7 +2675,7 @@ export const transclusionInternals = {
   exitActiveBlock,
   refForKey,
   blockEditorKey,
-  sourceSectionTitles,
+  sourceSections,
   transclusionSourceIds,
   parseBlockEditorKey,
   dirtyBlockSaves,

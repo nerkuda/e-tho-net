@@ -198,4 +198,19 @@ describe('guard: визуальные слои блока трансклюзии
       'контейнер списка разделов обязан прокручиваться (overflow: auto)',
     );
   });
+
+  it('уровень раздела виден меткой H1–H6 и отступом (9cdbefd2)', () => {
+    // Метка уровня — приглушённая моноширинная фиксированной ширины, названия
+    // разделов выравниваются; отступ растёт с уровнем на все шесть значений.
+    const badge = ruleBody('.transclusion-popover-level');
+    assert.ok(badge !== '', 'не найдено правило .transclusion-popover-level');
+    assert.match(badge, /font-family:\s*var\(--md-mono\)/, 'метка уровня — моноширинная');
+    assert.match(badge, /var\(--text-dim\)/, 'метка уровня — приглушённая');
+    assert.match(badge, /width:\s*2ch/, 'метка уровня — фиксированной ширины (выравнивание названий)');
+    for (let level = 1; level <= 6; level += 1) {
+      const indent = ruleBody(`.transclusion-popover-row[data-level='${level}']`);
+      assert.ok(indent !== '', `нет отступа для уровня ${level}`);
+      assert.match(indent, /padding-left:/, `отступ уровня ${level} обязан задавать padding-left`);
+    }
+  });
 });

@@ -40,6 +40,13 @@ export const BUTTON_CLASS = 'ui-btn';
 /** Класс активного состояния (переключатели вида/сегменты). */
 export const BUTTON_ACTIVE_CLASS = 'ui-btn--active';
 
+/**
+ * Класс надписи кнопки с префиксом (`ButtonOptions.prefix`). Обёртка нужна,
+ * чтобы надпись усекалась многоточием, а префикс-элемент сохранялся (вид —
+ * `./button.css`). Правится потребителем при точечном обновлении строки.
+ */
+export const BUTTON_LABEL_CLASS = 'ui-btn__label';
+
 /** Опции обычной (текстовой) кнопки словаря. */
 export interface ButtonOptions {
   /** Надпись кнопки. */
@@ -59,6 +66,13 @@ export interface ButtonOptions {
    * состояния задавать здесь нельзя.
    */
   class?: string;
+  /**
+   * Необязательный элемент-префикс ПЕРЕД надписью (например, приглушённая
+   * метка уровня `H1`–`H6` в строке списка разделов, задача 9cdbefd2).
+   * Надпись при этом оборачивается в {@link BUTTON_LABEL_CLASS} и усекается
+   * многоточием; вид префикса задаёт прикладной слой потребителя.
+   */
+  prefix?: Node;
   /** Обработчик клика. */
   onClick?: (event: MouseEvent) => void;
 }
@@ -86,8 +100,24 @@ function classNames(role: ButtonRole, size: ButtonSize, icon: boolean, extra?: s
  * форму), подсказка — нативный `title`, клик вешается на сам элемент.
  */
 export function uiButton(options: ButtonOptions = {}): HTMLButtonElement {
-  const { label = '', role = 'secondary', size = 'm', title, disabled, class: extra, onClick } = options;
-  const node = el('button', classNames(role, size, false, extra), label);
+  const {
+    label = '',
+    role = 'secondary',
+    size = 'm',
+    title,
+    disabled,
+    class: extra,
+    prefix,
+    onClick,
+  } = options;
+  const node = el('button', classNames(role, size, false, extra));
+  if (prefix !== undefined) {
+    // Префикс и надпись — отдельные узлы: потребитель задаёт префиксу вид и
+    // фиксированную ширину, а надпись в обёртке усекается многоточием.
+    node.append(prefix, el('span', BUTTON_LABEL_CLASS, label));
+  } else {
+    node.textContent = label;
+  }
   node.type = 'button';
   if (title !== undefined) node.title = title;
   if (disabled === true) node.disabled = true;

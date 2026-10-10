@@ -82,6 +82,16 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Надпись строки раздела БЕЗ метки уровня: у строк источника надпись лежит в
+ * обёртке `.ui-btn__label` (перед ней — префикс `H1`–`H6`), у строки текущего
+ * раздела без уровня надпись стоит прямо на кнопке.
+ */
+function rowLabel(row: ShimElement): string {
+  const label = row.querySelector('.ui-btn__label');
+  return label === null ? row.textContent : label.textContent;
+}
+
 /** Блок просмотра `.md-transclusion` с источником и (опц.) разделом. */
 function viewBlock(sourceId: string, section: string | null): ShimElement {
   const block = new ShimElement('div');
@@ -181,7 +191,7 @@ describe('поповер правки ссылки (68591b8a, переделка
         .querySelector('.transclusion-popover-sections')!
         .querySelectorAll('.transclusion-popover-row');
       assert.deepEqual(
-        rows.map((row) => row.textContent),
+        rows.map((row) => rowLabel(row)),
         ['Альфа', 'Бета'],
         'разделы источника показаны целиком сразу',
       );
@@ -209,7 +219,7 @@ describe('поповер правки ссылки (68591b8a, переделка
       const list = popover.querySelector('.transclusion-popover-sections')!;
       const input = popover.querySelector('.transclusion-popover-input')!;
       const labels = (): string[] =>
-        list.querySelectorAll('.transclusion-popover-row').map((row) => row.textContent);
+        list.querySelectorAll('.transclusion-popover-row').map((row) => rowLabel(row));
       assert.equal(labels().length, 3, 'пусто — все разделы');
 
       // Регистр и порядок не важны; обе части обязаны присутствовать (мини-синтаксис).
@@ -251,7 +261,7 @@ describe('поповер правки ссылки (68591b8a, переделка
       const body = (globalThis as any).document.body as ShimElement;
       const betta = body
         .querySelectorAll('.transclusion-popover-row')
-        .find((row) => row.textContent === 'Бета');
+        .find((row) => rowLabel(row) === 'Бета');
       assert.ok(betta !== undefined, 'строка раздела «Бета» найдена');
       betta!.click();
       await tick();
@@ -302,6 +312,89 @@ describe('поповер правки ссылки (68591b8a, переделка
       assert.equal(view.state.doc.toString(), `![[#${ID_A}]]`);
     } finally {
       store.update({ networkId: null });
+    }
+  });
+});
+
+describe('уровни и префиксы строк списка разделов (9cdbefd2)', () => {
+  // Отдельный источник на тест: общий кэш тел на сеть удержал бы тело
+  // предыдущего теста (sourceCache ключ — `сеть:источник`).
+  const SRC_LEVELS = '33333333-1111-4111-8111-111111111111';
+  const SRC_MISSING = '44444444-1111-4111-8111-111111111111';
+  const SRC_SEARCH = '55555555-1111-4111-8111-111111111111';
+
+  /** Открывает поповер для источника и возвращает корень документа. */
+  async function openPopover(id: string, source: string, doc = `![[#${id}]]`): Promise<ShimElement> {
+    stubEtn(source);
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: NET });
+    const ref = parseTransclusions(doc)[0]!;
+    const view = { state: EditorState.create({ doc }), dispatch: () => undefined };
+    openTransclusionLinkPopover(view as any, ref, new ShimElement('button') as unknown as HTMLElement);
+    await tick();
+    await tick();
+    return (globalThis as any).document.body as ShimElement;
+  }
+
+  /** Возвращает сеть в исходное состояние (данные и кэш изолируются ключом источника). */
+  async function resetNetwork(): Promise<void> {
+    (await import('../src/renderer/state.js')).store.update({ networkId: null });
+  }
+
+  it('строки источника несут метку H1–H6 и data-level по уровню заголовка', async () => {
+    const body = await openPopover(SRC_LEVELS, '# Первый\nтекст\n## Второй\nтекст\n### Третий');
+    try {
+      const rows = body
+        .querySelector('.transclusion-popover-sections')!
+        .querySelectorAll('.transclusion-popover-row');
+      assert.deepEqual(rows.map((row) => rowLabel(row)), ['Первый', 'Второй', 'Третий']);
+      assert.deepEqual(
+        rows.map((row) => row.querySelector('.transclusion-popover-level')!.textContent),
+        ['H1', 'H2', 'H3'],
+        'перед названием — приглушённая метка уровня',
+      );
+      assert.deepEqual(
+        rows.map((row) => row.getAttribute('data-level')),
+        ['1', '2', '3'],
+        'отступ задаётся атрибутом уровня',
+      );
+    } finally {
+      await resetNetwork();
+    }
+  });
+
+  it('строка текущего раздела, которого нет в источнике, — без метки и отступа', async () => {
+    const body = await openPopover(SRC_MISSING, '## Есть\nтекст', `![[#${SRC_MISSING}#Чужой]]`);
+    try {
+      const rows = body
+        .querySelector('.transclusion-popover-sections')!
+        .querySelectorAll('.transclusion-popover-row');
+      assert.equal(rows.length, 2, 'строка чужого раздела + раздел источника');
+      assert.equal(rowLabel(rows[0]!), 'Чужой', 'чужой раздел — первой строкой, помечен активным');
+      assert.equal(rows[0]!.querySelector('.transclusion-popover-level'), null, 'без метки уровня');
+      assert.equal(rows[0]!.getAttribute('data-level'), null, 'без отступа по уровню');
+    } finally {
+      await resetNetwork();
+    }
+  });
+
+  it('живой поиск фильтрует по названию раздела, а не по метке уровня', async () => {
+    const body = await openPopover(SRC_SEARCH, '## Альфа\nтекст\n## Бета');
+    try {
+      const list = body.querySelector('.transclusion-popover-sections')!;
+      const input = body.querySelector('.transclusion-popover-input')!;
+      const labels = (): string[] =>
+        list.querySelectorAll('.transclusion-popover-row').map((row) => rowLabel(row));
+      assert.equal(labels().length, 2, 'пусто — все разделы');
+      input.value = 'аль';
+      input.dispatchEvent({ type: 'input' });
+      assert.deepEqual(labels(), ['Альфа'], 'поиск по названию');
+      // Метка уровня — `H2`, но в поиск она не входит.
+      input.value = 'H2';
+      input.dispatchEvent({ type: 'input' });
+      assert.deepEqual(labels(), [], 'метка уровня в поиск не входит');
+    } finally {
+      await resetNetwork();
     }
   });
 });

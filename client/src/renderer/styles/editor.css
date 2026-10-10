@@ -1409,6 +1409,45 @@
   flex: 0 0 auto;
 }
 
+/* Уровень заголовка раздела `H1`–`H6` в строке списка (задача 9cdbefd2):
+   приглушённая моноширинная метка ФИКСИРОВАННОЙ ширины — названия разделов
+   выравниваются в общий столбец независимо от уровня. */
+.transclusion-popover-level {
+  flex: 0 0 auto;
+  width: 2ch;
+  font-family: var(--md-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--text-dim);
+}
+
+/* Отступ слева растёт с уровнем заголовка (база 8px, шаг 8px): уровень виден
+   по горизонтали, а не только по метке. Строка без `data-level` (текущий
+   раздел, которого нет в источнике; «Все разделы комментария») отступа не
+   получает — уровень неизвестен. */
+.transclusion-popover-row[data-level='1'] {
+  padding-left: calc(var(--space-4) * 1);
+}
+
+.transclusion-popover-row[data-level='2'] {
+  padding-left: calc(var(--space-4) * 2);
+}
+
+.transclusion-popover-row[data-level='3'] {
+  padding-left: calc(var(--space-4) * 3);
+}
+
+.transclusion-popover-row[data-level='4'] {
+  padding-left: calc(var(--space-4) * 4);
+}
+
+.transclusion-popover-row[data-level='5'] {
+  padding-left: calc(var(--space-4) * 5);
+}
+
+.transclusion-popover-row[data-level='6'] {
+  padding-left: calc(var(--space-4) * 6);
+}
+
 .transclusion-popover-commands {
   display: flex;
   gap: var(--space-1, 2px);

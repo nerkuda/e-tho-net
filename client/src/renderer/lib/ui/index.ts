@@ -19,6 +19,7 @@ import './register.js';
 export {
   BUTTON_CLASS,
   BUTTON_ACTIVE_CLASS,
+  BUTTON_LABEL_CLASS,
   uiButton,
   iconButton,
   setButtonActive,
