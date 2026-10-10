@@ -59,6 +59,25 @@ export interface RecipeBuilder {
   getDefinition: () => SavedFilterDefinition;
 }
 
+/**
+ * Состояние свёрнутости групп «Свойства»/«Дополнительно» рецепта. Карточка
+ * публикации держит его МЕЖДУ пересборками билдера (ошибка 4773b34f): правка
+ * отбора шлёт сохранение, серверное эхо пересобирает панель — без переноса
+ * состояния группы молча вернулись бы к умолчаниям (сворачивание/разворот
+ * «сами»). См. {@link buildRecipeBuilder} `collapse`.
+ */
+export interface RecipeCollapseState {
+  /** Группа «Свойства» свёрнута. */
+  props: boolean;
+  /** Группа «Дополнительно» свёрнута. */
+  extras: boolean;
+}
+
+/** Умолчания свёрнутости групп рецепта: «Свойства» развёрнуты, прочее свёрнуто. */
+export function createRecipeCollapseState(): RecipeCollapseState {
+  return { props: false, extras: true };
+}
+
 /** Реестр свойств сети в виде строк общего списка (для пикера свойств). */
 export async function loadPropertyRows(networkId: string): Promise<PropertyRegistryRow[]> {
   const registry = await etn.propertyRegistry.list(networkId).catch(() => []);
@@ -140,11 +159,16 @@ export function buildRecipeBuilder(opts: {
    * не задан — определение забирается вручную на шаге «Создать».
    */
   onChange?: () => void;
+  /**
+   * Внешний держатель свёрнутости групп (ошибка 4773b34f): карточка публикации
+   * передаёт его, чтобы состояние переживало пересборку билдера на серверном
+   * эхе. Не задан — создаётся своё ({@link createRecipeCollapseState}).
+   */
+  collapse?: RecipeCollapseState;
 }): RecipeBuilder {
   const state: FilterCriteriaState =
     opts.initial !== null ? parseFilterDefinition(opts.initial) : defaultFilterCriteriaState();
-  let propsCollapsed = false;
-  let extrasCollapsed = true;
+  const collapse = opts.collapse ?? createRecipeCollapseState();
 
   const sections: FilterSection[] = [];
   const touch = (): void => {
@@ -215,12 +239,12 @@ export function buildRecipeBuilder(opts: {
   sections.push(
     buildConditionsSection(
       ctx,
-      { get: () => propsCollapsed, set: (v) => (propsCollapsed = v) },
+      { get: () => collapse.props, set: (v) => (collapse.props = v) },
       { caretKind: 'chevron' },
     ),
   );
   sections.push(
-    buildExtrasSection(ctx, { get: () => extrasCollapsed, set: (v) => (extrasCollapsed = v) }, {
+    buildExtrasSection(ctx, { get: () => collapse.extras, set: (v) => (collapse.extras = v) }, {
       caretKind: 'chevron',
     }),
   );

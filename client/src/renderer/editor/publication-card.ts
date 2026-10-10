@@ -83,6 +83,7 @@ import {
 } from '../screens/publications/model.js';
 import {
   buildRecipeBuilder,
+  createRecipeCollapseState,
   loadPropertyRegistry,
   loadPropertyRows,
   propertyChipTitles,
@@ -694,6 +695,9 @@ function buildRecipePane(): HTMLElement {
   pane.append(textsGroup.root, extrasGroup.root);
 
   let builder: RecipeBuilder | null = null;
+  /** Держатель свёрнутости групп рецепта: переживает пересборку билдера на
+   *  серверном эхе (ошибка 4773b34f) — группы не сворачиваются/разворачиваются сами. */
+  const recipeCollapse = createRecipeCollapseState();
   /** Любая правка формы рецепта — в отложенное сохранение (ошибка 82aada28). */
   const onRecipeChange = (): void => {
     if (builder !== null) queueSave({ title_recipe: builder.getDefinition() });
@@ -786,7 +790,12 @@ function buildRecipePane(): HTMLElement {
     const builderKey = builder === null ? null : JSON.stringify(builder.getDefinition());
     if (registry !== null && (builder === null || recipeKey !== builderKey)) {
       while (recipeHost.firstChild !== null) recipeHost.removeChild(recipeHost.firstChild);
-      builder = buildRecipeBuilder({ registry, initial: p.title_recipe, onChange: onRecipeChange });
+      builder = buildRecipeBuilder({
+        registry,
+        initial: p.title_recipe,
+        onChange: onRecipeChange,
+        collapse: recipeCollapse,
+      });
       recipeHost.append(builder.root);
     }
   });

@@ -289,6 +289,84 @@ describe('карточка публикации: сохранение рецеп
   });
 });
 
+/** Секция формы рецепта по подписи заголовка (`.st-f-block`). */
+function recipeSection(scrollBox: ShimElement, title: string): ShimElement {
+  const block = scrollBox.findAll((el) => el.className.includes('st-f-block')).find((el) => {
+    const head = el.querySelector('.st-f-collapsible-title') ?? el.querySelector('.st-f-title');
+    return head !== null && head.flatText().includes(title);
+  });
+  assert.ok(block !== undefined, `секция «${title}» рецепта построена`);
+  return block!;
+}
+
+/** Состояние свёрнутости секции (по классу каретки `collapsed`). */
+function sectionCollapsed(scrollBox: ShimElement, title: string): boolean {
+  const caret = recipeSection(scrollBox, title).querySelector('.st-f-caret');
+  assert.ok(caret !== null, `каретка секции «${title}» есть`);
+  return caret!.classList.contains('collapsed');
+}
+
+/** Клик по заголовку секции — свернуть/развернуть. */
+function toggleSection(scrollBox: ShimElement, title: string): void {
+  const head = recipeSection(scrollBox, title).querySelector('.st-f-title');
+  assert.ok(head !== null, `заголовок секции «${title}» есть`);
+  head!.emit('click', { target: head });
+}
+
+describe('карточка публикации: сворачивание групп рецепта переживает правку (ошибка 4773b34f)', () => {
+  let scrollBox: ShimElement;
+
+  beforeEach(() => {
+    installShim([publication()]);
+    scrollBox = new ShimElement('div');
+    store.update({ networkId: NETWORK_ID, editorTarget: null });
+  });
+
+  afterEach(async () => {
+    const mod = await import('../src/renderer/editor/publication-card.js');
+    mod.disposePublicationCard();
+  });
+
+  it('смена «Только актуальные» не сворачивает «Дополнительно» и не разворачивает «Свойства»', async () => {
+    await openRecipeTab(scrollBox, publication());
+
+    // Заданное пользователем состояние: «Свойства» свёрнуты, «Дополнительно»
+    // развёрнуты. Раньше правка сбрасывала обе группы к исходным умолчаниям.
+    toggleSection(scrollBox, 'Свойства');
+    toggleSection(scrollBox, 'Дополнительно');
+    assert.equal(sectionCollapsed(scrollBox, 'Свойства'), true, '«Свойства» свёрнуты пользователем');
+    assert.equal(sectionCollapsed(scrollBox, 'Дополнительно'), false, '«Дополнительно» развёрнуты');
+
+    const row = scrollBox
+      .findAll((el) => el.className.includes('st-f-tri-row'))
+      .find((r) => (r.querySelector('.st-f-tri-label')?.textContent ?? '') === 'Только актуальные');
+    assert.ok(row !== undefined, 'строка «Только актуальные» построена');
+    const select = row!.querySelector('select');
+    assert.ok(select !== null, 'селект «Только актуальные» построен');
+    select!.value = 'true';
+    select!.emit('change');
+
+    assert.equal(sectionCollapsed(scrollBox, 'Свойства'), true, '«Свойства» остались свёрнуты');
+    assert.equal(
+      sectionCollapsed(scrollBox, 'Дополнительно'),
+      false,
+      '«Дополнительно» остались развёрнуты',
+    );
+
+    await wait(450);
+    assert.equal(
+      sectionCollapsed(scrollBox, 'Свойства'),
+      true,
+      'после сохранения «Свойства» остались свёрнуты',
+    );
+    assert.equal(
+      sectionCollapsed(scrollBox, 'Дополнительно'),
+      false,
+      'после сохранения «Дополнительно» остались развёрнуты',
+    );
+  });
+});
+
 describe('карточка публикации: автосейв при смене цели и тиках store (ошибка 82aada28)', () => {
   beforeEach(() => {
     installShim([
