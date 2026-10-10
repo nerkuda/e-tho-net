@@ -23,8 +23,8 @@
  */
 
 import path from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type Database from 'better-sqlite3';
 import DatabaseConstructor from 'better-sqlite3';
@@ -394,6 +394,17 @@ export function registerMigrationHelpers(
   registerQueryFunctions(db);
   db.function('gen_uuid', () => randomUUID());
   db.function('etn_first_user_id', () => firstUserId);
+  // Best-effort SHA-256 файла вложения для `attachments.content_hash` (миграция
+  // 050, задача 369241e4). Нечитаемый/отсутствующий файл (клиентский локальный
+  // путь) даёт NULL — миграция продолжается. Детерминирована по аргументу.
+  db.function('etn_file_sha256', { deterministic: true }, (filePath: unknown) => {
+    if (typeof filePath !== 'string' || filePath === '') return null;
+    try {
+      return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+    } catch {
+      return null;
+    }
+  });
   db.function(
     'etn_pv_id',
     { deterministic: true },

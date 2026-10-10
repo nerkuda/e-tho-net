@@ -85,6 +85,7 @@ export const BRANCHABLE_TABLES = [
   'comments',
   'comment_targets',
   'attachments',
+  'attachment_owners',
   'publications',
   'publication_order',
   'publication_exclusions',
