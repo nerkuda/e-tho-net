@@ -18,6 +18,13 @@ export interface ThoughtType {
   icon: string | null;
   /** Kind of the default icon (thoughts without their own icon inherit it). */
   icon_kind: IconKind;
+  /**
+   * HEX-цвет (`#rrggbb`) символа иконки типа или `null` (0.12.1, задача
+   * 4105bd6a). Пусто — иконка наследует цвет текста (`currentColor`).
+   * Наследуется по цепочке типов вместе с иконкой (требование 0da6f02a).
+   * Помечено `?` ради клиентских фикстур — прецедент `updated_by?`.
+   */
+  icon_color?: string | null;
   fg_color: string | null;
   bg_color: string | null;
   /**
@@ -60,6 +67,8 @@ export interface ThoughtTypeInput {
   parent_id?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
+  /** Цвет символа иконки (HEX `#rrggbb` или `null`) — см. {@link ThoughtType.icon_color}. */
+  icon_color?: string | null;
   fg_color?: string | null;
   bg_color?: string | null;
   font_bold?: boolean | null;
@@ -84,6 +93,8 @@ export interface ThoughtTypeUpdateInput {
   parent_id?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
+  /** Цвет символа иконки (HEX `#rrggbb` или `null`). */
+  icon_color?: string | null;
   fg_color?: string | null;
   bg_color?: string | null;
   font_bold?: boolean | null;

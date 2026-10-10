@@ -440,15 +440,14 @@ describe(
       }
     });
 
-    it('sorts by record class (HOME-only first), then valid_from/valid_to, in both orders', () => {
+    it('sorts strictly by date/time (valid_from/valid_to), ignoring record class, in both orders', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const home = seedThought(ndb, 'HOME', { home: true });
         const a = seedThought(ndb, 'A');
-        // Класс 0 — привязка только к HOME.
+        // Класс записи (только HOME / прочие) в сортировке НЕ участвует.
         const h2 = createComment(ndb, 'thought', home, { kind: 'chronological', body_md: 'h2', valid_from: '2024-01-01' }, USER);
         const h1 = createComment(ndb, 'thought', home, { kind: 'chronological', body_md: 'h1', valid_from: '2024-01-02' }, USER);
-        // Класс 1 — чужая мысль или смешанные привязки.
         const p1 = createComment(ndb, 'thought', a, { kind: 'chronological', body_md: 'p1', valid_from: '2024-01-03' }, USER);
         const p2 = createCommentWithTargets(
           ndb,
@@ -461,26 +460,26 @@ describe(
         assert.deepEqual(
           asc.rows.map((r) => r.id),
           [h2.id, h1.id, p1.id, p2.id],
-          'класс 0 блоком вверху, внутри — по valid_from',
+          'возрастание — строго по valid_from, класс не группирует',
         );
-        // Класс — ВСЕГДА по возрастанию (требование c6ddc1ea): «убывание»
-        // переворачивает только даты, но не класс. Записи дня (класс 0)
-        // по-прежнему первыми, внутри класса — обратная хронология.
+        // Требование c6ddc1ea (ревизия 2026-10-09): направление применяется ко
+        // ВСЕМ ключам, класс записи не фиксируется по возрастанию.
         const desc = query(ndb, {}, { order: 'desc' });
         assert.deepEqual(
           desc.rows.map((r) => r.id),
-          [h1.id, h2.id, p2.id, p1.id],
-          'убывание переворачивает даты, но класс 0 остаётся первым',
+          [p2.id, p1.id, h1.id, h2.id],
+          'убывание — обратный порядок по valid_from, записи дня не впереди',
         );
-        // Снятие последнего чипса (HOME остаётся единственной целью) поднимает
-        // запись в класс 0 — «p2» становится классом 0 при возврате к HOME.
+        // Снятие последнего чипса (HOME — единственная цель) позицию НЕ меняет:
+        // запись без мыслей стоит рядом с прочими той же датой, а не «всплывает».
         const homeOnly = createComment(ndb, 'thought', home, { kind: 'chronological', body_md: 'p2', valid_from: '2024-01-04' }, USER);
         const after = query(ndb, {});
         assert.equal(after.rows[0]!.id, h2.id);
-        assert.ok(
-          after.rows.findIndex((r) => r.id === homeOnly.id) <
-            after.rows.findIndex((r) => r.id === p2.id),
-          'запись с единственной целью HOME идёт в блоке класса 0',
+        const ids = after.rows.map((r) => r.id);
+        assert.equal(
+          Math.abs(ids.indexOf(homeOnly.id) - ids.indexOf(p2.id)),
+          1,
+          'запись без мыслей и запись с мыслью стоят рядом — класс не разносит их',
         );
       } finally {
         ndb.close();

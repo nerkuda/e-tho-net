@@ -92,6 +92,28 @@ describe('чип-поле: имя варианта-свойства-связи �
     assert.equal(sign.getAttribute('data-direction'), 'down', 'направление значка — сторона-источник');
   });
 
+  it('cloudOf с названием (рецепт публикации) не подавляет значок свойства (ошибка 382e3478)', () => {
+    installShim();
+    const field = buildEntityChipField({
+      getValues: () => [PROPERTY_ID],
+      onChange: () => undefined,
+      loadOptions: () => [LINK_PROPERTY_OPTION],
+      initialOptions: [LINK_PROPERTY_OPTION],
+      // Рецепт публикации передаёт облачко ради КАНОНИЧЕСКОГО имени свойства
+      // (`cloudOf` возвращает `{id, title}` без значка). Знак чипа обязан
+      // прийти из реестра (`linkEnd` варианта), а не подмениться глифом мысли.
+      cloudOf: (value) => ({ id: value, title: PROPERTY_NAME }),
+    });
+    const root = field.root as unknown as ShimElement;
+
+    const chip = chips(root)[0];
+    assert.ok(chip !== undefined, 'чип значения построен');
+    assert.ok(chip.flatText().includes(PROPERTY_NAME), 'чип показывает имя свойства');
+    const sign = chip.findAll((el) => el.className.includes('property-list-link-icon'))[0];
+    assert.ok(sign !== undefined, 'чип свойства несёт значок реестра, а не глиф мысли');
+    assert.equal(sign.getAttribute('data-direction'), 'down', 'направление значка — сторона-источник');
+  });
+
   it('без initialOptions имя появляется после загрузки каталога (тот же резолв, не только предзагрузка)', async () => {
     installShim();
     const field = buildEntityChipField({

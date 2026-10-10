@@ -68,7 +68,9 @@ import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
 import { div, el, span } from './dom.js';
 import { etn } from './etn.js';
-import { svgIcon, type IconName } from './icons.js';
+import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { modifierChordVariants } from './keymap-chords.js';
+import { svgIcon, type IconName } from './ui/icon.js';
 import {
   buildLinkEndIcon,
   linkEndIconSpec,
@@ -550,7 +552,7 @@ export interface EntityPickerDialogCtx {
  * команды в тултипе (`title`) и в `aria-label` (доступность с клавиатуры).
  */
 export interface EntityPickerCommand {
-  /** Имя иконки из единого набора проекта (`lib/icons.ts`). */
+  /** Имя иконки из единого набора проекта (`lib/ui/icon.ts`). */
   icon: IconName;
   /** Полное название команды — тултип и доступная подпись кнопки. */
   title: string;
@@ -1170,6 +1172,9 @@ function restoreKeyboardFocus(
  * автор/редактор) сохраняют смешение литералов и токенов. Отдельная сборка
  * чипов вне общих модулей запрещена сторожем `guard-value-editor`.
  */
+/** Счётчик чип-полей: у каждого свой контекст сочетаний (замыкание `commit`). */
+let chipFieldContextSeq = 0;
+
 export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipField {
   const root = div('entity-chip-field st-f-fieldrow');
   // Разметку чип-поля даёт общая `.link-value-wrap/field/corner` — та же, что
@@ -1234,17 +1239,42 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   const sources: SuggestSource[] = [source, ...(opts.extraSources ?? [])];
   wireSuggest(input, {
     sources,
-    // Свободный текст фиксирует обработчик `keydown` ниже; Enter над
+    // Свободный текст фиксирует клавиатурная команда контекста ниже; Enter над
     // выделенной строкой выбирает её (общая выпадашка гасит событие).
     pickFirstOnEnter: false,
     onPick: (entry) => commit(entry.value),
   });
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.defaultPrevented) {
-      event.preventDefault();
-      commit(input.value);
-    }
+  // Клавиатура поля — через общеклиентский диспетчер: пока фокус внутри поля,
+  // его контекст на вершине стека (ADR b420b08c, задача fd3d84f4). Общая
+  // выпадашка подсказок гасит Enter над выделенной строкой (`defaultPrevented`),
+  // и диспетчер такую команду не исполняет — прежний порядок сохранён. Прежняя
+  // семантика — любой Enter КРОМЕ Shift+Enter (`event.key === 'Enter' &&
+  // !event.shiftKey`); набор модификаторов (кроме Shift) выражен привязками —
+  // `lib/keymap-chords.ts`.
+  const contextId = `entity-chip-field-${(chipFieldContextSeq += 1)}`;
+  const handleCommitKey = (event: KeyboardEvent): boolean => {
+    if (event.key !== 'Enter' || event.shiftKey) return false;
+    commit(input.value);
+    return true;
+  };
+  defineKeyContext({
+    id: contextId,
+    bindings: modifierChordVariants('Enter', ['Ctrl', 'Alt', 'Meta']).map((chord) => ({
+      command: 'entityChip.commit',
+      chord,
+      run: handleCommitKey,
+    })),
   });
+  let releaseContext: (() => void) | null = null;
+  const onFocusIn = (): void => {
+    releaseContext ??= pushKeyContext(contextId);
+  };
+  const onFocusOut = (): void => {
+    releaseContext?.();
+    releaseContext = null;
+  };
+  field.addEventListener('focusin', onFocusIn as EventListener);
+  field.addEventListener('focusout', onFocusOut as EventListener);
   field.addEventListener('click', (event) => {
     if (event.target === field) input.focus();
   });
@@ -1279,8 +1309,13 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       });
       // Знак варианта-свойства-связи — значок конца связи, как в строках
       // выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
-      // значка светился глиф мысли по умолчанию.
-      if (explicitCloud === null && known?.cloud === undefined && known?.linkEnd != null) {
+      // значка светился глиф мысли по умолчанию. Условие не зависит от
+      // `explicitCloud`: вызывающий вправе задать `cloudOf` ради КАНОНИЧЕСКОГО
+      // имени свойства (рецепт публикации, `propertyChipTitles`), но знак
+      // свойства обязан прийти из реестра (`linkEnd`), а не из облачка-подписи
+      // (ошибка 382e3478). Облачко-мысль (`known.cloud`) — иной случай: там
+      // значок принадлежит типу/мысли и подмене не подлежит.
+      if (known?.cloud === undefined && known?.linkEnd != null) {
         const iconBox = chip.querySelector('.mini-icon');
         if (iconBox !== null) iconBox.replaceChildren(buildLinkEndIcon(known.linkEnd));
       }

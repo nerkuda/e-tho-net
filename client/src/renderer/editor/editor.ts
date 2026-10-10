@@ -76,7 +76,7 @@ import {
 import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
@@ -127,8 +127,8 @@ import {
   recomputeOverflow,
   type StripElements,
 } from '../screens/tabs/tab-overflow.js';
-import { showIconDialog, type IconPickResult } from './icon-dialog.js';
-import { editMarkdownField, focusMarkdownFieldAt } from './markdown-field.js';
+import { showIconDialog, type IconPickOutcome, type IconPickResult } from './icon-dialog.js';
+import { editMarkdownField, focusMarkdownFieldAt, focusMarkdownFieldSelection, type MdSourceSelection } from './markdown-field.js';
 import { commentFocusStep } from './comment-focus.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 import { showThoughtTypeEditor } from '../screens/type-manager.js';
@@ -1833,7 +1833,7 @@ function shownThoughtId(): string {
   return store.state.focus?.focused.id ?? '';
 }
 
-function focusEditorComment(thoughtId: string, findText?: string): void {
+function focusEditorComment(thoughtId: string, findText?: string, selection?: MdSourceSelection): void {
   const deadline = Date.now() + 8000;
   let activated = false;
   const tick = (): void => {
@@ -1881,9 +1881,12 @@ function focusEditorComment(thoughtId: string, findText?: string): void {
       return;
     }
     // step === 'focus': поле нужной мысли смонтировано.
-    // С офсетом — `focusMarkdownFieldAt` сам включает правку и ставит каретку;
-    // без офсета — обычный вход в правку (каретка в конец).
-    if (findText !== undefined && findText !== '') focusMarkdownFieldAt(field!, findText);
+    // С точным диапазоном — `focusMarkdownFieldSelection` сам включает правку и
+    // выделяет переданный диапазон источника (двойной клик в ленте публикаций,
+    // задача 59774016); с текстом — вход по вхождению (задача 189da39e); без
+    // офсета — обычный вход в правку (каретка в конец).
+    if (selection !== undefined) focusMarkdownFieldSelection(field!, selection);
+    else if (findText !== undefined && findText !== '') focusMarkdownFieldAt(field!, findText);
     else editMarkdownField(field!);
   };
   window.setTimeout(tick, 0);
@@ -1891,14 +1894,18 @@ function focusEditorComment(thoughtId: string, findText?: string): void {
 
 /**
  * Открывает мысль в редакторе, активирует вкладку «Комментарий», включает режим
- * правки постоянного комментария и ставит курсор: по вхождению `findText` в
- * исходнике комментария, иначе — в начало. Точка входа двойного клика по тексту
- * публикации (задача ea1b5f14, пункт 4): точный офсет рендер-узла к markdown
- * недостижим — курсор идёт к началу абзаца, ошибок не бросаем.
+ * правки постоянного комментария и ставит курсор. Приоритет источника позиции:
+ * точный диапазон `selection` (задача 59774016 — двойной клик по тексту
+ * публикации, резолвится в смещение `body_md`), иначе вхождение `findText`
+ * (вхождение выделяется, задача 189da39e), иначе каретка в конец.
  */
-export function openThoughtCommentEditor(id: string, findText?: string): void {
+export function openThoughtCommentEditor(
+  id: string,
+  findText?: string,
+  selection?: MdSourceSelection,
+): void {
   openThoughtInEditor(id);
-  focusEditorComment(id, findText);
+  focusEditorComment(id, findText, selection);
 }
 
 // ---------------------------------------------------------------------------
@@ -2469,15 +2476,28 @@ function openThoughtSettings(thought: Thought): void {
  */
 function changeThoughtIcon(thought: Thought): void {
   void showIconDialog({
-    current: { icon: thought.icon, kind: thought.icon_kind },
+    current: {
+      icon: thought.icon,
+      kind: thought.icon_kind,
+      color: thought.icon_color ?? null,
+      attachmentId: thought.icon_attachment_id ?? null,
+    },
+    // Выбор чужой картинки-вложения добавляет ЭТУ мысль владельцем
+    // (тех.проект f9b8917c, ошибка c37981b7).
+    owner: { type: 'thought', id: thought.id },
     onPick: (result) => savePickedIcon(thought, result),
   });
 }
 
 /** Persists a picked icon; file picks store the original as an attachment (L16). */
-async function savePickedIcon(thought: Thought, result: IconPickResult): Promise<boolean> {
+async function savePickedIcon(
+  thought: Thought,
+  result: IconPickResult,
+): Promise<boolean | IconPickOutcome> {
   const networkId = requireNetworkId();
-  let attachmentId: string | null = null;
+  // Применение текущего вложения-иконки без изменений сохраняет его id
+  // (ошибка 846c426a); новый файл перезапишет его ниже после загрузки.
+  let attachmentId: string | null = result.attachmentId ?? null;
   if (result.source !== undefined) {
     const comma = result.source.dataUrl.indexOf(',');
     const dataBase64 = comma === -1 ? '' : result.source.dataUrl.slice(comma + 1);
@@ -2498,11 +2518,14 @@ async function savePickedIcon(thought: Thought, result: IconPickResult): Promise
     invalidateQueries(queryKeys.attachments('thought', thought.id));
   }
   // `icon_attachment_id: null` clears a stale link on emoji/URL/clear picks.
-  return saveThought({
+  const ok = await saveThought({
     icon: result.icon,
     icon_kind: result.kind,
+    icon_color: result.color,
     icon_attachment_id: attachmentId,
   });
+  // id созданного вложения — для истории последних иконок (задача 0fc95a2b).
+  return ok ? { ok: true, attachmentId } : false;
 }
 
 /**

@@ -7,6 +7,12 @@
  *   POST   /api/v1/me/keys         — create a key, full key returned once (201)
  *   PATCH  /api/v1/me/keys/:id     — edit a key's write rate limit (O8)
  *   DELETE /api/v1/me/keys/:id     — revoke an own key (204)
+ *   GET    /api/v1/users/me/settings       — all server-level user settings
+ *   PUT    /api/v1/users/me/settings/:key  — set one server-level user setting
+ *
+ * The `/users/me/settings` pair (task f57524ab, ADR 3a829d25) stores L3s
+ * settings — per-user values shared by all networks and devices of the user on
+ * this server (table `_system.db.user_settings`, spec «/api/v1/users/me/settings»).
  *
  * Registered under the `/api/v1` prefix by the server factory. The auth
  * preHandler runs first; the idempotency preHandler is attached to the
@@ -23,9 +29,10 @@ import type {
   CurrentUser,
   UpdateApiKeyInput,
   User,
+  UserSettingsMap,
 } from '@etn/shared';
 
-import { EtnError } from '@etn/shared';
+import { EtnError, USER_SETTING_KEY } from '@etn/shared';
 
 /** Max length of `users.display_name`; mirrors the schema CHECK. */
 const DISPLAY_NAME_MAX_LENGTH = 200;
@@ -46,6 +53,7 @@ function currentUserDto(user: User): CurrentUser {
 }
 
 import { generateApiKey, hashApiKey } from '../auth/api-key.js';
+import { parseRest, RestUserSettingKey } from '../contracts.js';
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 
 /** Body of `POST /me/keys`. */
@@ -80,6 +88,40 @@ export function parseMaxWritesPerMinute(
     );
   }
   return value;
+}
+
+/**
+ * Validate the `value` of a server-level user setting (`PUT /users/me/settings/:key`).
+ *
+ * The `value` field is mandatory. Known keys get a shape check; unknown keys are
+ * stored as-is so the table can carry future server-level user settings
+ * (ADR 3a829d25) without an allowlist edit per key.
+ */
+export function validateUserSettingValue(key: string, value: unknown, requestId: string): void {
+  if (value === undefined) {
+    throw new EtnError('VALIDATION_ERROR', 'Требуется поле value.', { field: 'value' }, requestId);
+  }
+  if (key !== USER_SETTING_KEY.COMMENT_HOTKEYS) {
+    return;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'comment_hotkeys должен быть JSON-объектом «команда → сочетание».',
+      { field: 'value' },
+      requestId,
+    );
+  }
+  for (const [command, combination] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof combination !== 'string') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Сочетание команды «${command}» должно быть строкой.`,
+        { field: 'value' },
+        requestId,
+      );
+    }
+  }
 }
 
 /** Build the public DTO of an existing key (no secret). */
@@ -277,6 +319,32 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         details: { self: true },
       });
       reply.code(204).send();
+    },
+  );
+
+  // --- L3s server-level user settings (task f57524ab, ADR 3a829d25) --------
+
+  app.get(
+    '/users/me/settings',
+    { preHandler: [app.authPreHandler] },
+    async (req: FastifyRequest, reply) => {
+      const settings: UserSettingsMap = {};
+      for (const entry of app.systemDb.listUserSettings(req.auth!.user.id)) {
+        settings[entry.key] = entry.value;
+      }
+      sendSuccess(reply, settings);
+    },
+  );
+
+  app.put(
+    '/users/me/settings/:key',
+    { preHandler: [app.authPreHandler, app.idempotency.preHandler] },
+    async (req: FastifyRequest, reply) => {
+      const { key } = parseRest(RestUserSettingKey, req);
+      const body = (req.body ?? {}) as { value?: unknown };
+      validateUserSettingValue(key, body.value, req.id);
+      app.systemDb.setUserSetting(req.auth!.user.id, key, body.value);
+      sendSuccess(reply, { key, value: body.value });
     },
   );
 };

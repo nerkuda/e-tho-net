@@ -35,11 +35,17 @@ export interface RecordBodySource {
 /**
  * Показать запись в оболочке комментария: полный `body_html` через общий
  * рендер; пустой текст — приглашение (двойной клик входит в правку).
+ *
+ * Возвращает контейнер тела (`.diary-body`), чтобы вызывающий декорировал его
+ * так же, как `markdown-field.ts` декорирует СВОЙ просмотр (авто-подсветка
+ * упоминаний `annotateMentions`, резолв ID-ссылок). Просмотр комментария обязан
+ * нести одни и те же декорации в любом месте, включая статичный `body_html`
+ * ленты «Дневника» (ошибка `616207a9`).
  */
 export function renderRecordView(
   shell: ReturnType<typeof commentShell>,
   row: RecordBodySource,
-): void {
+): HTMLElement {
   const view = div(RECORD_VIEW_CLASS);
   if (row.body_html.trim() !== '') {
     renderHtml(view, row.body_html);
@@ -48,4 +54,5 @@ export function renderRecordView(
   }
   shell.setField(view);
   shell.setState({ kind: 'ready' });
+  return view;
 }

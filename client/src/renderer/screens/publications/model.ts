@@ -579,6 +579,12 @@ export type DocBlock =
       /** id мысли раздела-владельца: группа соседей текста (внутри раздела). */
       parentThoughtId: string;
       html: string;
+      /**
+       * Исходный markdown текста (постоянный комментарий мысли-текста). Нужен
+       * для развёртки трансклюзий в ленте: серверный `body_html` собран из
+       * исходника и ссылку-трансклюзию не разворачивает (ошибка 075602b4).
+       */
+      md: string;
     }
   | { kind: 'extra'; key: string; groups: PublicationAssemblyExtraGroup[] };
 
@@ -675,6 +681,7 @@ export function documentBlocks(
             nodeKey: text.edge_id,
             parentThoughtId: section.thought_id,
             html: text.body_html,
+            md: text.body_md,
           });
         });
         if (section.extra.length > 0) {

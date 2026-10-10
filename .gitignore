@@ -54,3 +54,8 @@ coverage/
 # Local scratch / migration test beds
 .tmp/
 tmp/
+# Артефакты живых прогонов ui-probe (каталог `--out`, PNG-доказательства)
+ui-probe-out/
+
+# Локальные скрипты выгрузки документации из ETN (ключи в .env) — не поставка
+tools/docs-export/

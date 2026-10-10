@@ -589,6 +589,13 @@
   object-fit: contain;
 }
 
+/* Библиотечная иконка (icon_kind='icon') в квадрате редактора — значок Lucide
+   из фасада масштабируется по font-size квадрата (как эмодзи-глиф). */
+.editor-icon-box svg.icon {
+  width: 1em;
+  height: 1em;
+}
+
 /* Editor preloader (0.5.6, bug 9d1d27c9). The icon slot of a freshly-targeted
    thought becomes a small spinning gear while the entity is in flight —
    long loads on heavy thoughts stay visibly "in progress" instead of showing
@@ -651,7 +658,7 @@
 
 .style-color-caption {
   font-size: 12px;
-  color: var(--text-muted, var(--text));
+  color: var(--text-dim);
 }
 
 /* Icon picker dialog (08-ui-spec.md §6.8). Полоса вкладок — общий механизм
@@ -686,7 +693,7 @@
   padding: 6px 8px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-dim);
   user-select: none;
 }
 
@@ -701,7 +708,7 @@
 
 .icon-section-title {
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-dim);
   margin-bottom: 6px;
 }
 
@@ -738,6 +745,102 @@
   background: var(--accent-soft);
 }
 
+/* Библиотечная иконка типа (icon_kind='icon') — значок каталога из фасада
+   lib/ui/icon.ts; масштаб как у эмодзи-глифа ячейки. */
+.icon-type-cell svg.icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Вкладка «Библиотека» диалога иконки (задача 4b80a1b3): живой поиск +
+   сетка значков каталога. Значок рисует фасад lib/ui/icon.ts, ячейка —
+   обёртка-кнопка. */
+.icon-source {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Строка «поиск + выбор цвета» закреплена СВЕРХУ вкладки и не прокручивается
+   вместе с сеткой значков (ошибка 705d834b): flex:none + sticky, поиск
+   забирает остаток ширины, сетка прокручивается ВНУТРИ себя. */
+.icon-source-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.icon-source-head .icon-color-row {
+  margin-bottom: 0;
+}
+
+.icon-source-head .ui-input {
+  flex: 1 1 auto;
+}
+
+.icon-source > .icon-library-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.icon-library-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.icon-library-cell {
+  aspect-ratio: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-library-cell:hover {
+  background: var(--accent-soft);
+}
+
+/* Цвет символа иконки на вкладке «Библиотека» (0.12.1, задача 4105bd6a):
+   тумблер «свой цвет» + поле выбора цвета. */
+.icon-color-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+/* Вкладка «Иконки мыслей» на всю высоту панели (0.12.1, задача 4105bd6a):
+   обёртка-панель занимает высоту панели вкладок, сетка прокручивается внутри. */
+.icon-type-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.icon-type-panel > .icon-type-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
 .icon-pick-row {
   display: flex;
   gap: 6px;
@@ -755,6 +858,22 @@
 }
 
 .emoji-cell:hover {
+  background: var(--accent-soft);
+}
+
+/* Текущий выбор в диалоге иконки (ошибки e2407f6d, 846c426a): уже выбранная
+   иконка/вложение отмечены подсветкой и рамкой — при открытии диалога видно
+   без поиска. */
+.emoji-cell-current,
+.icon-library-cell-current {
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.icon-preview-current {
+  border-style: solid;
+  border-color: var(--accent);
   background: var(--accent-soft);
 }
 
@@ -794,6 +913,56 @@
 .icon-preview-bad {
   font-size: 28px;
   color: var(--danger);
+}
+
+/* Строка последних выбранных иконок НАД вкладками диалога иконки
+   (0.12.1, задача 0fc95a2b): ≤10 ячеек 24×24 любых видов (эмодзи, значок
+   библиотеки с цветом, превью вложения, URL). Ячейка проходит тач-таргет
+   (24 ≥ 18). */
+.recent-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.recent-icon-cell {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.recent-icon-cell:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.recent-icon-cell img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.recent-icon-cell svg.icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* Превью вложения резолвится лениво — до готовности ячейка приглушена. */
+.recent-icon-cell-loading {
+  opacity: 0.4;
 }
 
 .group {
@@ -886,6 +1055,26 @@
   /* Scale proportionally to the comment field width (08-ui-spec.md §6.4). */
   max-width: 100%;
   height: auto;
+  /* Картинка — блочный элемент, как блок-виджет живой правки
+     (`.md-widget.comment-view`): вертикальный зазор вокруг неё — токен
+     `--md-widget-gap`, а НЕ абзацный `--md-block-gap`. Ошибка 4e93119e:
+     просмотр (куда картинку оборачивал `<p>` единого рендерера) добавлял
+     абзацный зазор в обе стороны, и отступы расходились с правкой. Значение
+     одно на оба режима (правило общее: виджет несёт класс `.comment-view`). */
+  margin-block: var(--md-widget-gap);
+}
+
+/* Абзац с ОДИНОКОЙ картинкой в просмотре абзацного зазора не добавляет:
+   он дублировал бы вертикальный отступ самой картинки (выше) — в правке
+   такого абзаца-обёртки нет вовсе. Ошибка 4e93119e. */
+.comment-view p:has(> img:only-child) {
+  margin-block: 0;
+}
+
+/* Абзац ПЕРЕД одинокой картинкой тоже не добавляет зазор перед ней — иначе к
+   отступу картинки прибавлялся бы ещё и абзацный (ошибка 4e93119e). */
+.comment-view p:has(+ p > img:only-child) {
+  margin-block-end: 0;
 }
 
 /* Ссылки — единый вид с wiki-ссылками и редактором: акцент, без
@@ -924,9 +1113,11 @@
 
    Отличие применения отступа: у нормального потока просмотра это `margin`, у
    строк CodeMirror — `padding` (margin не входит в `getBoundingClientRect()` и
-   сбивает карту высот редактора — стрелки вверх/вниз «прыгали»). Значение
-   задано одной переменной `--md-block-gap` на общем селекторе, применяется
-   каждый своим свойством — источник значения по-прежнему один.
+   сбивает карту высот редактора — стрелки вверх/вниз «прыгали»). Значения
+   вертикальных отступов объявлены ОДИН раз токенами в `styles/tokens.css`
+   (`--md-block-gap`, `--md-heading-gap`, `--md-quote-gap`, `--md-hr-gap`,
+   `--md-widget-gap` — единая шкала, ошибка ad6e62ef), а каждый режим применяет
+   их своим свойством — источник значения по-прежнему один.
    ------------------------------------------------------------------------- */
 
 /* Заголовки h1–h6: размеры/насыщенность/межстрочный — браузерные (просмотр их
@@ -953,18 +1144,20 @@
   text-wrap: initial;
 }
 
+/* Зазор заголовка — своя шкала по уровням (в `em` от кегля заголовка, как
+   браузерные поля UA), отдельная от базового межблочного `--md-block-gap`. */
 .comment-view h1,
-.cm-editor .cm-line.cm-md-h1 { font-size: 2em;    --md-block-gap: 0.67em; }
+.cm-editor .cm-line.cm-md-h1 { font-size: 2em;    --md-heading-gap: 0.67em; }
 .comment-view h2,
-.cm-editor .cm-line.cm-md-h2 { font-size: 1.5em;  --md-block-gap: 0.83em; }
+.cm-editor .cm-line.cm-md-h2 { font-size: 1.5em;  --md-heading-gap: 0.83em; }
 .comment-view h3,
-.cm-editor .cm-line.cm-md-h3 { font-size: 1.17em; --md-block-gap: 1em; }
+.cm-editor .cm-line.cm-md-h3 { font-size: 1.17em; --md-heading-gap: 1em; }
 .comment-view h4,
-.cm-editor .cm-line.cm-md-h4 { font-size: 1em;    --md-block-gap: 1.33em; }
+.cm-editor .cm-line.cm-md-h4 { font-size: 1em;    --md-heading-gap: 1.33em; }
 .comment-view h5,
-.cm-editor .cm-line.cm-md-h5 { font-size: 0.83em; --md-block-gap: 1.67em; }
+.cm-editor .cm-line.cm-md-h5 { font-size: 0.83em; --md-heading-gap: 1.67em; }
 .comment-view h6,
-.cm-editor .cm-line.cm-md-h6 { font-size: 0.67em; --md-block-gap: 2.33em; }
+.cm-editor .cm-line.cm-md-h6 { font-size: 0.67em; --md-heading-gap: 2.33em; }
 
 /* Применение отступа: просмотр — внешние поля (как UA у h1–h6), редактор —
    внутренние отступы строки (см. шапку блока). */
@@ -974,11 +1167,36 @@
 .comment-view h4,
 .comment-view h5,
 .comment-view h6 {
-  margin-block: var(--md-block-gap);
+  margin-block: var(--md-heading-gap);
 }
 
 .cm-editor .cm-line:is(.cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6) {
-  padding-block: var(--md-block-gap);
+  padding-block: var(--md-heading-gap);
+}
+
+/* Абзацы и списки: раньше парных правил не было — зазор в просмотре брался из
+   прозы Web Awesome (`@layer wa-native`: `margin-block-end:
+   var(--wa-content-spacing)` = 24px у любого блока с соседом), а в правке — из
+   пустой строки строкового ритма CodeMirror. Источники расходились (ошибка
+   ad6e62ef). Теперь оба режима берут ОДИН токен `--md-block-gap`, выведенный из
+   `--md-line-height`: в правке разделитель блоков — ровно одна пустая строка
+   этого ритма, в просмотре — внешнее поле. `--wa-content-spacing` внутри
+   `.comment-view` переопределён тем же токеном, чтобы проза WA не подмешивала
+   свои 24px для прочих блоков (pre/table); заголовки и цитата задают свой зазор
+   явными правилами выше/ниже. */
+.comment-view {
+  --wa-content-spacing: var(--md-block-gap);
+}
+
+.comment-view p,
+.comment-view ul,
+.comment-view ol,
+.comment-view li {
+  margin-block: 0;
+}
+
+.comment-view :is(p, ul, ol):has(+ *) {
+  margin-block-end: var(--md-block-gap);
 }
 
 .comment-view code,
@@ -1006,11 +1224,57 @@
   white-space: pre-wrap;
 }
 
-.comment-view hr {
+/* Горизонтальная линейка: линия — единый вид в просмотре (`.comment-view hr`)
+   и в виджете live preview (внутренний `hr` обёртки, `editor/md-live.ts`).
+   Обёртка виджета несёт только вертикальный отступ. */
+.comment-view hr,
+.cm-editor .md-widget.md-hr .md-hr-line {
   border: none;
   border-top: 1px solid var(--border-strong);
-  margin: 6px 0;
 }
+
+.comment-view hr {
+  margin: var(--md-hr-gap) 0;
+}
+
+/* ТП1 (задача 2fc28fa2): task-списки из единого рендерера — чекбокс вместо
+   маркера. Классы ставит @etn/markdown. */
+.comment-view ul.contains-task-list,
+.comment-view ol.contains-task-list,
+.comment-view li.task-list-item {
+  list-style: none;
+}
+
+.comment-view .task-list-item-checkbox,
+.cm-editor .cm-line .cm-md-task-checkbox {
+  margin-inline-end: 0.4em;
+  vertical-align: baseline;
+}
+
+/* ТП1: выделение `==…==` (`<mark>`) — тем же фоном, что подсветка поиска,
+   а не жёлтым по умолчанию Web Awesome (`@layer wa-native`). Класс
+   `cm-md-mark` в правке ставит `editor/md-live.ts`. */
+.comment-view mark,
+.cm-editor .cm-line .cm-md-mark {
+  background: var(--mark-bg);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+/* ТП1: подчёркивание `<u>…</u>` в правке (`cm-md-underline`, md-live.ts) —
+   как `<u>` в просмотре (подчёркивание по умолчанию браузера). */
+.cm-editor .cm-line .cm-md-underline {
+  text-decoration: underline;
+}
+
+/* ТЗ4: HTML-комментарий `<!-- … -->` в правке (`cm-md-html-comment`,
+   md-live.ts) — приглушённо-серый; маркеры скрыты вне курсора. Просмотр HTML
+   комментарий не рендерит (единый рендерер), поэтому правило только в правке. */
+.cm-editor .cm-line .cm-md-html-comment {
+  color: var(--md-html-comment);
+}
+
 
 .comment-view blockquote,
 .cm-editor .cm-line.cm-md-quote-line {
@@ -1019,12 +1283,16 @@
   color: var(--text-dim);
 }
 
-/* Вертикальные отступы цитаты: просмотр — поля блока (6px сверху/снизу),
-   редактор — padding ТОЛЬКО первой и последней строки блока (между строками
-   одной цитаты отступа нет — как в просмотре, где строки образуют один абзац).
-   Классы `cm-md-quote-first`/`cm-md-quote-last` ставит `editor/md-live.ts`. */
+/* Вертикальные отступы цитаты: и просмотр, и редактор задают зазор ВНУТРЕННИМ
+   паддингом из одного токена (--md-quote-gap). В просмотре — `padding-block`
+   блока; в редакторе — `padding-top`/`padding-bottom` только первой и последней
+   строки блока (между строками одной цитаты отступа нет — как в просмотре, где
+   строки образуют один абзац; классы `cm-md-quote-first`/`cm-md-quote-last`
+   ставит `editor/md-live.ts`). Внешний `margin-block` обнулён: он добавлял в
+   просмотре зазор, которого нет в правке, — отступы цитаты расходились
+   (ошибка 333aa879). */
 .comment-view blockquote {
-  margin-block: var(--md-quote-gap);
+  margin-block: 0;
   /* Проза-стили Web Awesome (`@layer wa-native`) задают blockquote серифное
      семейство (`--wa-font-family-longform`), кегль ×1.125² и padding
      `--wa-space-xl` (26px) — луковый слой проигрывает только ЯВНО объявленным
@@ -1080,8 +1348,256 @@
 
 /* Удалённая мысль в любом режиме — серый курсив без плейсхолдера. */
 .wiki-link-deleted {
-  color: var(--muted, #888);
+  color: var(--text-faint);
   font-style: italic;
+}
+
+/* Трансклюзии комментариев в редакторе (0.12.1, ТП2, задача f72a9134):
+   блок развёрнутого текста с шапкой-чипом «имя · раздел» (задача 68591b8a).
+   Фон по уровням, анимация и неделимость навигации — задача a2b68d72. */
+.cm-editor .cm-transclusion-block {
+  position: relative;
+  border-left: 2px solid var(--border-strong, var(--border));
+  background: var(--surface, rgba(127, 127, 127, 0.06));
+  border-radius: 3px;
+  padding: var(--md-transclusion-pad);
+  /* Содержимое блока — готовый HTML единого рендерера (`transclusion.ts`,
+     `body.innerHTML = entry.html`) и лежит прямым потомком `.cm-content`.
+     Базовая тема CodeMirror задаёт контейнеру свойство `white-space: pre` (при
+     `EditorView.lineWrapping` — `break-spaces`), и это значение НАСЛЕДОВАЛОСЬ в
+     HTML блока: переводы строк между блочными тегами (`</p>` и следующий `<p>`)
+     рисовались пустыми строками, и вертикальные отступы внутри блока
+     раздувались, тогда как в просмотре (`.md-field-view.comment-view`, обычный
+     `white-space`) они схлопываются (ошибка 4453f2e4). Сбрасываем наследование
+     на самом блоке — новые строки HTML схлопываются как в просмотре. Обычные
+     строки редактора и их перенос (`lineWrapping`) не затронуты: селектор
+     ограничен блоком. */
+  white-space: normal;
+  /* Появление/раскрытие блока анимировано (ADR c425202a); при
+     prefers-reduced-motion токен обнулён — появление мгновенное. */
+  animation: md-transclusion-in var(--md-transclusion-anim, 160ms) ease;
+}
+
+/* Блок целиком покрыт выделением (ошибка 39553204): для пользователя блок —
+   единое целое, поэтому выделение рисуется РАМКОЙ ВОКРУГ блока, а подсветка
+   текста и пробелов внутри НЕ показывается.
+
+   Источник подсветки (живая проверка 2026-10-07): блок — replace-виджет
+   `block: true`, и CodeMirror (`addBlockWidget`) кладёт его ПРЯМЫМ потомком
+   `.cm-content`, а НЕ внутрь `.cm-line`. Поэтому и тема CM (hideNativeSelection,
+   `.cm-line ::selection`), и прежнее правило подавления с `.cm-line` в селекторе
+   до текста блока не доставали — браузер рисовал нативное выделение цветом
+   `.comment-view ::selection` (--selection-bg). Слой `.cm-selectionLayer` тут ни
+   при чём: прямоугольники выделения блочного виджета нулевой ширины и слой лежит
+   под непрозрачным фоном блока.
+
+   Рамка — inset box-shadow от токена темы: рисуется внутри бокса блока, видна
+   со всех четырёх сторон и не обрезается overflow контейнера (внешний outline
+   с outline-offset уходил за край поля — ошибка 39553204). Появление рамки не
+   сдвигает содержимое. */
+.cm-editor .cm-transclusion-block--covered {
+  box-shadow: inset 0 0 0 2px var(--selection, var(--accent));
+}
+
+/* Нативная подсветка текста/пробелов внутри покрытого блока подавлена; селектор
+   намеренно БЕЗ `.cm-line` — блочный виджет лежит в `.cm-content` (ошибка
+   39553204: прежняя привязка к `.cm-line` не матчила блок). */
+.cm-editor .cm-transclusion-block--covered ::selection,
+.cm-editor .cm-transclusion-block--covered::selection {
+  background-color: transparent !important;
+}
+
+/* Блоки развёрнутых трансклюзий (задача a2b68d72, ADR c425202a, требование
+   29a3c17a): оттенок фона вычисляется от базового токена темы по глубине —
+   в тёмной теме светлее, в светлой темнее. Уровней до 5; цвета не
+   хардкодятся — коэффициент смешения умножается на номер уровня. */
+.md-transclusion {
+  --md-transclusion-step: 7%;
+  --md-transclusion-level: 1;
+  /* Якорь для «замочка» чужого захвата источника (ошибка f60f99e0): в просмотре
+     индикатор позиционируется абсолютно внутри блока. */
+  position: relative;
+  background: color-mix(
+    in srgb,
+    var(--text) calc(var(--md-transclusion-step) * var(--md-transclusion-level)),
+    var(--surface)
+  );
+  border-left: 2px solid var(--border-strong, var(--border));
+  border-radius: 3px;
+  padding: var(--md-transclusion-pad);
+  animation: md-transclusion-in var(--md-transclusion-anim, 160ms) ease;
+}
+
+.md-transclusion[data-transclusion-depth='1'] {
+  --md-transclusion-level: 1;
+}
+.md-transclusion[data-transclusion-depth='2'] {
+  --md-transclusion-level: 2;
+}
+.md-transclusion[data-transclusion-depth='3'] {
+  --md-transclusion-level: 3;
+}
+.md-transclusion[data-transclusion-depth='4'] {
+  --md-transclusion-level: 4;
+}
+.md-transclusion[data-transclusion-depth='5'] {
+  --md-transclusion-level: 5;
+}
+
+/* Плашки состояний источника (требование fc60d763): нет источника/раздела,
+   нераскрытая ссылка (цикл/предел глубины). */
+.md-transclusion--missing,
+.md-transclusion--skipped {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* Появление блока/ссылки трансклюзии. */
+@keyframes md-transclusion-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Шапка-чип блока «имя · раздел» (задача 68591b8a, элемент 7a479549): чип
+   словаря `lib/ui` с модификатором раскладки. Правило ПАРНОЕ для правки
+   (`.cm-editor`) и просмотра (`.comment-view`) — вид один, как у «замочка».
+   Чип всегда виден (не hover-only): открытие поповера правки ссылки не
+   зависит от наведения мыши. */
+.cm-editor .transclusion-head,
+.comment-view .transclusion-head {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: var(--md-widget-gap, 6px);
+}
+
+.cm-editor .transclusion-head .transclusion-chip,
+.comment-view .transclusion-head .transclusion-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs, 11px);
+}
+
+/* Тело поповера правки ссылки трансклюзии (задача 68591b8a): верхняя панель
+   команд, прокручиваемый список разделов и ряд иконочных команд. Подписи
+   «Раздел»/«Команды» удалены (решение пользователя). Панель и её вид —
+   компонент `lib/ui` (`openPopover`); здесь только раскладка содержимого. */
+.transclusion-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 4px);
+}
+
+.transclusion-popover-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1, 2px);
+  max-height: 180px;
+  overflow: auto;
+}
+
+.transclusion-popover-row {
+  justify-content: flex-start;
+  text-align: left;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Запрет сжатия строки (ошибка dc6f4121). У flex-элемента с `overflow`, не
+     равным `visible`, автоматический минимум размера равен нулю: при
+     переполнении колонка НЕ прокручивалась, а сплющивала ВСЕ строки в её
+     `max-height` (на приёмке ~25 строк по несколько пикселей). Строка обязана
+     сохранять естественную высоту кнопки — тогда прокручивается контейнер. */
+  flex: 0 0 auto;
+}
+
+/* Уровень заголовка раздела `H1`–`H6` в строке списка (задача 9cdbefd2):
+   приглушённая моноширинная метка ФИКСИРОВАННОЙ ширины — названия разделов
+   выравниваются в общий столбец независимо от уровня. */
+.transclusion-popover-level {
+  flex: 0 0 auto;
+  width: 2ch;
+  font-family: var(--md-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--text-dim);
+}
+
+/* Отступ слева растёт с уровнем заголовка (база 8px, шаг 8px): уровень виден
+   по горизонтали, а не только по метке. Строка без `data-level` (текущий
+   раздел, которого нет в источнике; «Все разделы комментария») отступа не
+   получает — уровень неизвестен. */
+.transclusion-popover-row[data-level='1'] {
+  padding-left: calc(var(--space-4) * 1);
+}
+
+.transclusion-popover-row[data-level='2'] {
+  padding-left: calc(var(--space-4) * 2);
+}
+
+.transclusion-popover-row[data-level='3'] {
+  padding-left: calc(var(--space-4) * 3);
+}
+
+.transclusion-popover-row[data-level='4'] {
+  padding-left: calc(var(--space-4) * 4);
+}
+
+.transclusion-popover-row[data-level='5'] {
+  padding-left: calc(var(--space-4) * 5);
+}
+
+.transclusion-popover-row[data-level='6'] {
+  padding-left: calc(var(--space-4) * 6);
+}
+
+.transclusion-popover-commands {
+  display: flex;
+  gap: var(--space-1, 2px);
+  padding-bottom: var(--space-1, 2px);
+  border-bottom: 1px solid var(--border);
+}
+
+.cm-editor .cm-transclusion-error {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.cm-editor .cm-transclusion-id {
+  color: var(--accent-strong, var(--accent));
+  font-weight: 500;
+}
+
+/* Активный блок трансклюзии (задача 73ae1d4b): внутри смонтирован вложенный
+   редактор — блок выделяется рамкой, как облачко, открытое в редакторе. */
+.cm-editor .cm-transclusion-block--editing {
+  border-left-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Сбойная запись правки блока в источник (частичный сбой единой записи, задача
+   e9dfc2df): вложенный редактор помечается рамкой «ошибки», запись можно
+   повторить (кнопка «Записать»/Ctrl+Enter). */
+.cm-editor .cm-transclusion-save-error {
+  box-shadow: 0 0 0 1px var(--danger);
+  border-radius: 2px;
+}
+
+/* «Замочек» блока при чужом захвате источника (задача f59d24e1; просмотр —
+   ошибка f60f99e0). Парный селектор: индикатор тот же и в правке
+   (`.cm-editor`), и в просмотре (`.comment-view`). */
+.cm-editor .cm-transclusion-lock,
+.comment-view .cm-transclusion-lock {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: default;
 }
 
 /* Авто-упоминания мыслей в тексте комментариев (L24, 08-ui-spec.md §6.4):
@@ -1106,15 +1622,33 @@
 /* Виджеты live preview (M6): блоки в редакторе отображаются как в просмотре.
    Вертикальный отступ — padding, не margin: getBoundingClientRect() не
    включает margin, и карта высот CodeMirror расходилась бы с раскладкой
-   (md-editor.ts, стрелки вверх/вниз прыгали бы через строки). */
-.cm-editor .md-widget {
-  padding: 2px 0;
+   (md-editor.ts, стрелки вверх/вниз прыгали бы через строки).
+
+   Блочные HTML-виджеты (`.md-widget.comment-view` — fenced-код, картинка,
+   таблица) вертикальных полей НЕ добавляют: их отступ целиком задаёт сам блок
+   (`pre`/`table`/`img`), и в просмотре, и в правке — виджет несёт класс
+   `comment-view`, поэтому блок берёт те же правила просмотра. Иначе к паддингу
+   блока прибавлялся бы паддинг обёртки и отступ fenced-кода в правке расходился
+   бы с просмотром (ошибка 333aa879). Виджет линейки (`.md-hr`) тоже задаёт
+   вертикальный отступ сам — общее правило к нему не применяется. */
+.cm-editor .md-widget:not(.comment-view):not(.md-hr) {
+  padding: var(--md-widget-gap) 0;
 }
 
+/* Виджет горизонтальной линейки (ошибка 47bce601): вертикальный отступ —
+   padding обёртки, не margin (margin не входит в getBoundingClientRect() и
+   искажает карту высот CodeMirror — см. шапку блока). Зазор 6px сверху и снизу
+   от линии — как `margin: 6px 0` у `.comment-view hr` в просмотре; саму линию
+   рисует внутренний `hr` (общее правило выше), поэтому она стоит по центру
+   паддинга. */
 .cm-editor .md-widget.md-hr {
-  border: none;
-  border-top: 1px solid var(--border-strong);
-  margin: 6px 0;
+  margin: 0;
+  padding-block: var(--md-hr-gap);
+}
+
+.cm-editor .md-widget.md-hr .md-hr-line {
+  display: block;
+  margin: 0;
 }
 
 .cm-editor .md-widget.wiki-link {
@@ -1218,6 +1752,173 @@
   line-height: var(--md-line-height);
 }
 
+/* Документ редактора — отдельный контейнер прокрутки (ошибка f65add20). В
+   растущем поле он растёт по содержимому (прокрутки нет); в ограниченном по
+   высоте поле (оболочка `--fill`) прокручивается только текст, а тулбар и
+   панель кнопок режима остаются на месте. */
+.md-field-scroll {
+  overflow: auto;
+}
+
+/* Область правки в ограниченном по высоте поле (оболочка комментария `--fill`):
+   заполняет остаток высоты, редактор прокручивается ВНУТРИ неё. Без этого
+   `.md-field-area` как flex-элемент ужималась до минимума (5 строк), редактор
+   переполнял её, а панель кнопок (`.md-field-actions`) вставала посреди текста
+   и уезжала вместе с ним при прокрутке (ошибка f65add20). */
+.ui-comment--fill > .ui-comment__body > .md-field > .md-field-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ui-comment--fill > .ui-comment__body > .md-field > .md-field-area > .md-field-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Просмотр в ограниченном по высоте поле (оболочка комментария `--fill`):
+   текст уезжает в собственную прокрутку `.md-field-view`, а не в прокрутку
+   корня комментария — тогда поле (и привязанная к его верхнему краю кнопка
+   «Редактировать», ошибка de14e6d2) не сдвигается вместе с текстом. */
+.ui-comment--fill > .ui-comment__body > .md-field > .md-field-view {
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Тулбар команд поля комментария (0.12.1, задача 3d6f98cb, ТП1): верхняя
+   панель поля, видна только в режиме правки (живёт внутри скрываемой
+   `.md-field-area`). Кнопки — словарь lib/ui (`ui-btn--ghost--s`), здесь только
+   раскладка: ряд слева направо, подменю настроек прижато к правому краю. */
+.md-field-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding-bottom: var(--space-1);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.md-field-toolbar__spacer {
+  flex: 1 1 auto;
+}
+
+/* Значки кнопок тулбара — блочные, чтобы не добавляли строчный зазор. */
+.md-field-toolbar .icon {
+  display: block;
+}
+
+/* Кнопки режима в углу поля комментария (0.12.1, задача 3901f07e, ТП1; элемент
+   a0e5bc2e). В просмотре иконочная кнопка «Редактировать» всплывает по наведению
+   курсора или клавиатурному фокусу в поле и не занимает места: абсолютный слой в
+   ПРАВОМ ВЕРХНЕМ углу поля. В правке «Отменить»/«Сохранить» стоят в потоке под
+   полем и видны постоянно. Кнопки — словарь lib/ui (`ui-btn--*`), здесь только
+   раскладка и появление; фокусное кольцо — из словаря кнопок. */
+.md-field {
+  position: relative;
+}
+
+/* Верхний край поля не двигается: в ограниченном по высоте поле текст уезжает в
+   СВОЮ прокрутку (`.md-field-view` ниже), а сам корень поля не прокручивается —
+   иначе привязанная к `top:0` кнопка уезжала бы вместе с текстом (ошибка
+   de14e6d2, ранее — f65add20 для области правки). */
+.md-field-actions {
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+/* Всплывание: наведение на поле или фокус внутри него (в т.ч. Tab на кнопку).
+   Кнопки остаются в порядке табуляции (`opacity`, не `visibility`), поэтому
+   фокус с клавиатуры достижим и видим. */
+.md-field:hover > .md-field-actions,
+.md-field:focus-within > .md-field-actions {
+  opacity: 1;
+}
+
+/* Правка: кнопки режима — в потоке под полем, видны постоянно. */
+.md-field--editing > .md-field-actions {
+  position: static;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  margin-top: var(--space-1);
+  opacity: 1;
+}
+
+/* Текст в режиме правки — приглушённый (`--text-dim`), чтобы правка считывалась
+   по цвету: просмотр показывает тот же markdown цветом `--text`, а исходник в
+   правке намеренно бледнее (ошибка 61329f12). Различие — только по цвету и
+   только в правке: размеры/отступы остаются общими (паритет типографики, ошибка
+   45989471), а выход из правки снимает класс `.md-field--editing` —
+   просмотр снова обычного цвета. */
+.md-field--editing .cm-editor,
+.md-field--editing .cm-editor .cm-content {
+  color: var(--text-dim);
+}
+
+/* Панель поиска и замены поля комментария (0.12.1, задача 045f98db, ТП1;
+   элемент b8eabc22): первая строка поля, видна в обоих режимах, пока открыта.
+   Поля — фасад lib/ui (`.ui-input`), здесь только раскладка ряда. */
+.md-field-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-1);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.md-field-search[hidden] {
+  display: none;
+}
+
+.md-field-search__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.md-field-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.md-field-search__count {
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+/* Подсветка вхождений поиска (CSS Custom Highlight API) в просмотре. Виджеты
+   wiki-ссылок в поиск не попадают (требование d72ea6eb) — их текст исключён
+   ещё при сборе узлов. Текущее вхождение — акцентной заливкой. */
+::highlight(etn-md-search) {
+  background-color: var(--accent-soft);
+  color: var(--text);
+}
+
+::highlight(etn-md-search-current) {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* То же для правки: декорации CM6 (md-editor.ts) вместо Custom Highlight. */
+.cm-md-search-hit {
+  background-color: var(--accent-soft);
+  border-radius: var(--radius-s);
+}
+
+.cm-md-search-hit--current {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+}
+
 /* Единый вид форм-гридов редакторов (задача 0a1a2414, требование 0dddd939):
  * таблицы-ФОРМЫ ввода (привязки свойств и типов, значения выделения, списки
  * вкладок редактора) остаются `<table>()`, но выглядят одним семейством с
@@ -1281,6 +1982,28 @@
 
 .attachment-item .att-title {
   font-weight: var(--font-weight-semibold);
+}
+
+/* Заголовок и бейдж числа владельцев — в одной строке (0.12.1). */
+.attachment-item .att-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Действия строки вложения: переименование и снятие владения (0.12.1). */
+.attachment-item .att-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+}
+
+/* Inline-поле переименования заголовка строки — не растягивает строку. */
+.attachment-item .att-title-input {
+  flex: 1;
+  min-width: 0;
 }
 
 .attachment-item .att-meta {
@@ -1699,3 +2422,201 @@
   font-style: italic;
 }
 
+/* Сворачивание разделов комментария (0.12.1, задача 634f1412): индикатор в
+ * зарезервированной полосе-гаттере слева и скрытие тела свёрнутого раздела.
+ * Один класс индикатора обслуживает и просмотр (полоса-гаттер
+ * `.md-collapse-rail`), и правку (CM6-гаттер `.cm-md-collapse-gutter`).
+ * Ширина полосы в обоих режимах — `--hit-area`, поэтому столбец совпадает, а
+ * текст вправо не сдвигается от появления/исчезновения символа (ошибка
+ * ce8e9f67). */
+.md-collapse-hidden {
+  display: none;
+}
+
+.md-collapse-toggle {
+  min-width: var(--hit-area);
+  min-height: var(--hit-area);
+  /* Плотность ghost-иконочной кнопки снята: в гаттере индикатор — глиф в узкой
+     полосе. Специфичность правил `.ui-btn--*` выше — гасим padding точечно. */
+  padding: 0 !important;
+  color: var(--text-dim);
+}
+
+.md-collapse-toggle .icon {
+  display: block;
+  transition: transform var(--transition-hover);
+}
+
+.md-collapse-toggle.is-collapsed .icon {
+  transform: rotate(-90deg);
+}
+
+/* Просмотр: хост резервирует полосу слева, маркеры лежат в ней абсолютно и не
+   участвуют в потоке текста. `top` маркера выставляет скрипт по высоте якоря. */
+.md-collapse-host {
+  position: relative;
+  padding-inline-start: var(--hit-area);
+}
+
+.md-collapse-rail {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: var(--hit-area);
+  pointer-events: none;
+}
+
+.md-collapse-rail .md-collapse-toggle {
+  position: absolute;
+  inset-inline-start: 0;
+  margin: 0;
+  pointer-events: auto;
+}
+
+/* Правка: CM6-гаттер — та же полоса шириной `--hit-area`, без фона и рамки
+   темы (это пустое место под индикаторы, а не нумерация строк). */
+.cm-md-collapse-gutter {
+  width: var(--hit-area);
+}
+
+.cm-md-collapse-gutter .cm-gutterElement {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.md-field-area .cm-editor .cm-gutters.cm-gutters-before {
+  background: transparent;
+  border-right: 0;
+}
+
+
+
+/* --- Общий компонент выбора вложения (editor/attachment-picker.ts, задача
+       0f6c3e39): закреплённый сверху поиск, прокручиваемый внутри список и
+       ФИКСИРОВАННЫЙ предпросмотр справа (layout-фикс ошибки 3250096a). Панель
+       занимает высоту вкладки целиком, поэтому прокручивается список, а не
+       вся панель с поиском и предпросмотром. ------------------------------ */
+
+.att-pick-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  height: 100%;
+  min-height: 0;
+}
+
+/* Строка поиска и загрузки закреплена сверху — не прокручивается со списком. */
+.att-pick-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.att-pick-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.att-pick-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.att-pick-splitter {
+  flex: 0 0 10px;
+  width: 10px;
+  cursor: col-resize;
+}
+
+.att-pick-list-box {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Список прокручивается ВНУТРИ себя; предпросмотр при этом стоит на месте. */
+.att-pick-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.att-pick-more {
+  flex: none;
+}
+
+.att-pick-item {
+  width: 100%;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.att-pick-item:hover {
+  background: var(--bg-hover);
+}
+
+.att-pick-item-current {
+  background: var(--accent-soft);
+}
+
+.att-pick-item-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Строка заголовка списка выбора: заголовок + кнопка переименования (fabc1231). */
+.att-pick-item-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Вид владельцев вложения рисуют общие компоненты облачков. */
+.att-pick-clouds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Правая колонка предпросмотра: фиксированная ширина, высота — от видимой
+   части панели (не от длины списка), поэтому картинка видна всегда. */
+.att-pick-preview {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.att-pick-preview-current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.att-pick-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}

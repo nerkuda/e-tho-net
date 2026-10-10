@@ -18,6 +18,7 @@ import { countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolv
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
 import { getCommentsPreview } from '../../domain/comment-service.js';
+import { createBodyExpander } from '../../domain/transclusion-service.js';
 import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolveConditionPropertyRef } from '../../domain/property-service.js';
 import { findDuplicates, resolveThoughts } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
@@ -255,7 +256,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               if (cond.property !== undefined) {
                 const ref = resolveConditionPropertyRef(firstNdb, cond.property);
                 if (ref === null) {
-                  throw new EtnError('NOT_FOUND', `property "${cond.property}" not found`, {
+                  // Неразрешимое имя — `NOT_FOUND` (ошибки 090d0242/f4580fff,
+                  // 0.12.1): код выровнен по конвенции резолва имён реестровых
+                  // сущностей (как у типа — `resolveThoughtTypeIdByName`).
+                  throw new EtnError('NOT_FOUND', `Свойство «${cond.property}» не найдено в реестре сети.`, {
                     field: 'property',
                     name: cond.property,
                   });
@@ -265,6 +269,16 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 if (resolved === null) resolved = [];
                 resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
                 continue;
+              }
+              // По id — проверяем существование в сети-контексте (сеть[0]); в
+              // остальных сетях отсутствующее свойство даёт пустой вклад
+              // (движок), а не расширение отбора (ошибки 4f17cb73/f4580fff,
+              // 0.12.1). Неразрешимая ссылка — `NOT_FOUND` (единое правило).
+              if (cond.property_id !== undefined && getNetworkProperty(firstNdb, cond.property_id) === null) {
+                throw new EtnError('NOT_FOUND', `Свойство «${cond.property_id}» не найдено в реестре сети.`, {
+                  field: 'property_id',
+                  property_id: cond.property_id,
+                });
               }
               out.push(cond);
             }
@@ -332,7 +346,11 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             if (cond.property !== undefined) {
               const ref = resolveConditionPropertyRef(ndb, cond.property);
               if (ref === null) {
-                throw new EtnError('NOT_FOUND', `property "${cond.property}" not found`, {
+                // Ошибки 090d0242/f4580fff (0.12.1): неразрешимое имя — явная
+                // ошибка, а не молчаливое выпадение условия; код `NOT_FOUND`
+                // выровнен по конвенции резолва имён реестровых сущностей
+                // (как у типа — `resolveThoughtTypeIdByName`).
+                throw new EtnError('NOT_FOUND', `Свойство «${cond.property}» не найдено в реестре сети.`, {
                   field: 'property',
                   name: cond.property,
                 });
@@ -342,6 +360,15 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               if (resolved === null) resolved = [];
               resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
               continue;
+            }
+            // Адресация по id: убеждаемся, что свойство есть в реестре сети
+            // (ошибки 4f17cb73/f4580fff, 0.12.1) — иначе отбор молча
+            // расширяется. Неразрешимая ссылка — `NOT_FOUND` (единое правило).
+            if (cond.property_id !== undefined && getNetworkProperty(ndb, cond.property_id) === null) {
+              throw new EtnError('NOT_FOUND', `Свойство «${cond.property_id}» не найдено в реестре сети.`, {
+                field: 'property_id',
+                property_id: cond.property_id,
+              });
             }
             out.push(cond);
           }
@@ -728,17 +755,26 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             getEffectiveViewsForThought(ndb, { type_id: seed.type_id }),
           );
         }
+        // MCP-выдача подграфа отдаёт превью с развёрнутыми трансклюзиями
+        // (ТП2, задача bcfc7eb7); один expander с кешем источников на весь обход.
+        const expandComments = createBodyExpander(ndb);
         const comments =
           args.include_comments === true
             ? result.nodes.map((id) => ({
                 thought_id: id,
                 ...omitEmptyContainers(
-                  getCommentsPreview(ndb, 'thought', id, {
-                    // Требование «Бюджет ответа subgraph: max_chars», блок
-                    // «Актуализация 0.8.3»: постоянный комментарий узла —
-                    // 600 символов; хронология остаётся 2000.
-                    permanent: SUBGRAPH_PERMANENT_PREVIEW_CHARS,
-                  }),
+                  getCommentsPreview(
+                    ndb,
+                    'thought',
+                    id,
+                    {
+                      // Требование «Бюджет ответа subgraph: max_chars», блок
+                      // «Актуализация 0.8.3»: постоянный комментарий узла —
+                      // 600 символов; хронология остаётся 2000.
+                      permanent: SUBGRAPH_PERMANENT_PREVIEW_CHARS,
+                    },
+                    expandComments,
+                  ),
                 ),
               }))
             : undefined;

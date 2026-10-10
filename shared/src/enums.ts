@@ -76,8 +76,13 @@ export type CommentKind = (typeof COMMENT_KINDS)[number];
 export const ATTACHMENT_KINDS = ['url', 'file'] as const;
 export type AttachmentKind = (typeof ATTACHMENT_KINDS)[number];
 
-/** How a thought/type icon is represented (02-data-model.md §3.1). */
-export const ICON_KINDS = ['emoji', 'image'] as const;
+/**
+ * How a thought/type icon is represented (02-data-model.md §3.1).
+ *
+ * `icon` — значок иконочной библиотеки Lucide: поле `icon` хранит kebab-имя
+ * из каталога {@link ICON_LIBRARY_NAMES} (ADR 2b655b29).
+ */
+export const ICON_KINDS = ['emoji', 'image', 'icon'] as const;
 export type IconKind = (typeof ICON_KINDS)[number];
 
 /** Visual style of a link line (02-data-model.md §3.7). */

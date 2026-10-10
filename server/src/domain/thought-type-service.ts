@@ -34,6 +34,7 @@ import {
   getRootTypeId,
   typeAncestors,
 } from './type-hierarchy.js';
+import { assertIconColor } from './icon-view.js';
 
 /** Raw `thought_types` row (INTEGER booleans, may be NULL for font_*). */
 interface ThoughtTypeRow {
@@ -43,6 +44,8 @@ interface ThoughtTypeRow {
   is_root: number;
   icon: string | null;
   icon_kind: string;
+  /** HEX-цвет символа иконки (0.12.1, задача 4105bd6a). */
+  icon_color: string | null;
   fg_color: string | null;
   bg_color: string | null;
   font_bold: number | null;
@@ -69,6 +72,7 @@ function rowToThoughtType(row: ThoughtTypeRow): ThoughtType {
     is_root: row.is_root === 1,
     icon: row.icon,
     icon_kind: row.icon_kind as IconKind,
+    icon_color: row.icon_color,
     fg_color: row.fg_color,
     bg_color: row.bg_color,
     // NULL = «not set on this type» — the parent chain supplies the value
@@ -201,6 +205,8 @@ export function createThoughtType(
   const id = randomUUID();
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
+  // Цвет символа иконки типа: пусто или HEX `#rrggbb` (задача 4105bd6a).
+  assertIconColor(input.icon_color);
 
   return ndb.transaction(() => {
     const existing = ndb.prepare('SELECT 1 FROM thought_types_v WHERE name_key = ?').get(nameKey);
@@ -214,12 +220,12 @@ export function createThoughtType(
     ndb
       .prepare(
         `INSERT INTO thought_types (id, layer_id, name, name_key, parent_id, is_root,
-                                     icon, icon_kind, fg_color, bg_color,
+                                     icon, icon_kind, fg_color, bg_color, icon_color,
                                      font_bold, font_italic, font_underline, font_strike,
                                      description, comment_template_md,
                                      version, created_at, updated_at, created_by, updated_by,
                                      created_at_ms, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -231,6 +237,7 @@ export function createThoughtType(
         input.icon_kind ?? 'emoji',
         input.fg_color ?? null,
         input.bg_color ?? null,
+        input.icon_color ?? null,
         input.font_bold === undefined || input.font_bold === null ? null : input.font_bold ? 1 : 0,
         input.font_italic === undefined || input.font_italic === null
           ? null
@@ -402,6 +409,11 @@ export function updateThoughtType(
     };
     optStr(changes.icon, 'icon');
     optStr(changes.icon_kind, 'icon_kind');
+    if (changes.icon_color !== undefined) {
+      // Цвет символа иконки типа: пусто или HEX `#rrggbb` (задача 4105bd6a).
+      assertIconColor(changes.icon_color);
+    }
+    optStr(changes.icon_color, 'icon_color');
     optStr(changes.fg_color, 'fg_color');
     optStr(changes.bg_color, 'bg_color');
     optStr(changes.description, 'description');

@@ -759,12 +759,15 @@ describe(
             (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
           );
 
-          // A condition referencing a deleted property definition is skipped.
+          // A condition referencing a missing/deleted property definition no
+          // longer drops out of the filter: it stays as a false clause, so the
+          // candidate set is empty (ошибки 090d0242/4f17cb73, 0.12.1) — никогда
+          // не расширяется до всей сети.
           const result = queryThoughts(ndb, USER, query({
             keywords: 'Кто-то',
             properties: [{ property_id: randomUUID(), op: 'eq', value: 'x' }],
           }));
-          assert.equal(result.items.length, 1);
+          assert.equal(result.items.length, 0);
         } finally {
           ndb.close();
         }
@@ -1146,7 +1149,7 @@ describe(
     });
 
     describe('queryThoughts: parent_ids scoping', () => {
-      it('restricts the candidate set to the union of the given subtrees, roots excluded', () => {
+      it('restricts the candidate set to the union of the given subtrees, roots included', () => {
         const ndb = createInMemoryNetworkDb();
         try {
           seedThought(ndb, { title: 'Home', is_root: 1 });
@@ -1161,17 +1164,19 @@ describe(
           seedLink(ndb, rootB, childB);
 
           const scoped = queryThoughts(ndb, USER, query({ parent_ids: [rootA] }));
+          // Корень входит в результат вместе с потомками (ошибка ad1551ea,
+          // 0.12.1 — семантика выровнена с MCP in_subtree_of).
           assert.deepEqual(
             scoped.items.map((t) => t.id).sort(),
-            [childA, grandA].sort(),
+            [rootA, childA, grandA].sort(),
           );
-          // The root itself and unrelated thoughts are not «подчинённые».
-          assert.ok(!scoped.items.some((t) => t.id === rootA || t.id === outside));
+          // Посторонние мысли в поддерево не входят.
+          assert.ok(!scoped.items.some((t) => t.id === outside));
 
           const union = queryThoughts(ndb, USER, query({ parent_ids: [rootA, rootB] }));
           assert.deepEqual(
             union.items.map((t) => t.id).sort(),
-            [childA, grandA, childB].sort(),
+            [rootA, childA, grandA, rootB, childB].sort(),
           );
 
           const unknown = queryThoughts(ndb, USER, query({ parent_ids: [randomUUID()] }));
@@ -1190,12 +1195,10 @@ describe(
           seedLink(ndb, a, b);
           seedLink(ndb, b, a); // cycle
           const result = queryThoughts(ndb, USER, query({ parent_ids: [a] }));
-          // Единый движок (задача c5265deb) ходит BFS с visited-set: цикл не
-          // втягивает корень обратно в результат — корни исключены по контракту
-          // §6.10 («the roots themselves are excluded»). Прежний CTE без
-          // visited-set возвращал и `a` (через b → a) — артефакт реализации,
-          // противоречивший собственной спеке.
-          assert.deepEqual(result.items.map((t) => t.id).sort(), [b]);
+          // Единый движок (задача c5265deb) ходит BFS с visited-set: корень
+          // входит ровно один раз (depth 0, ошибка ad1551ea), цикл не
+          // дублирует его и не зацикливает обход.
+          assert.deepEqual(result.items.map((t) => t.id).sort(), [a, b].sort());
         } finally {
           ndb.close();
         }

@@ -163,6 +163,53 @@ describe(
       }
     });
 
+    it('search by_names short capitalised prefix matches through the route (bug 6bba224b)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const thoughtId = await createThought(ctx, 'Новиков');
+
+        // A 1–2 char prefix never reaches the trigram index: the route relies
+        // on the LIKE fallback against the lowercase `title_norm`. Before the
+        // fix a capitalised prefix built `%Н%` and returned nothing while the
+        // lowercase one matched — the exact live-search symptom.
+        for (const q of ['Н', 'Но']) {
+          const res = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${ctx.networkId}/search?q=${encodeURIComponent(q)}&scope=names`,
+            headers: authHeaders(ctx),
+          });
+          assert.equal(res.statusCode, 200, `q=${q} must be accepted`);
+          const data = res.json().data as { by_names: Array<{ thought_id: string }> };
+          assert.ok(
+            data.by_names.some((h) => h.thought_id === thoughtId),
+            `q=${q}: a short capitalised prefix must find «Новиков»`,
+          );
+        }
+
+        // Case must not change the result set.
+        const lower = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/search?q=${encodeURIComponent('н')}&scope=names`,
+          headers: authHeaders(ctx),
+        });
+        const upper = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/search?q=${encodeURIComponent('Н')}&scope=names`,
+          headers: authHeaders(ctx),
+        });
+        assert.deepEqual(
+          (upper.json().data as { by_names: Array<{ thought_id: string }> }).by_names.map(
+            (h) => h.thought_id,
+          ),
+          (lower.json().data as { by_names: Array<{ thought_id: string }> }).by_names.map(
+            (h) => h.thought_id,
+          ),
+        );
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('export: markdown job goes 202 → done → downloadable; pdf rejected (422)', async () => {
       const ctx = await buildRestContext();
       try {

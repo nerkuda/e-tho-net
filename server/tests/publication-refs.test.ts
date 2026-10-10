@@ -32,9 +32,9 @@ import {
 import {
   copyAttachment,
   createAttachment,
-  deleteAttachment,
   getAttachment,
   listAttachments,
+  removeOwner,
   storedFileInUse,
 } from '../src/domain/attachment-service.js';
 
@@ -263,18 +263,17 @@ describe('владелец-вложение publication (f37b468d)', { skip }, (
         { target_owner_type: 'publication', target_owner_ids: [pub.id] },
         USER,
       );
-      assert.equal(result.created.length, 1);
-      const copy = result.created[0]!;
-      assert.notEqual(copy.id, source.id, 'у копии свой id строки');
-      assert.equal(copy.file_path, source.file_path, 'тот же физический файл');
-      assert.equal(copy.owner_type, 'publication');
+      assert.equal(result.added.length, 1);
+      // Муль-владение: та же строка-вложение теперь держится и публикацией.
+      const shared = getAttachment(ndb, source.id)!;
+      assert.equal(shared.file_path, source.file_path, 'тот же физический файл');
       assert.ok(storedFileInUse(ndb, filePath), 'файл используется');
 
-      // Удаление исходной строки мысли не трогает файл: он нужен копии.
-      deleteAttachment(ndb, source.id);
-      assert.equal(getAttachment(ndb, source.id), null);
-      assert.equal(getAttachment(ndb, copy.id)?.file_path, source.file_path);
-      assert.ok(storedFileInUse(ndb, filePath), 'файл удержан строкой-публикацией');
+      // Снятие владения мысли не трогает файл: он нужен публикации.
+      removeOwner(ndb, source.id, 'thought', sourceThought);
+      assert.notEqual(getAttachment(ndb, source.id), null);
+      assert.equal(getAttachment(ndb, source.id)?.file_path, source.file_path);
+      assert.ok(storedFileInUse(ndb, filePath), 'файл удержан владением публикации');
     } finally {
       ndb.close();
     }

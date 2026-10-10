@@ -14,7 +14,7 @@
  */
 
 import { div, span, el, setTooltip } from '../dom.js';
-import { svgIcon } from '../icons.js';
+import { svgIcon } from './icon.js';
 import { menuAction, showMenuAt, type MenuItem } from '../menu.js';
 
 /** Базовый класс корня облачка публикации. */

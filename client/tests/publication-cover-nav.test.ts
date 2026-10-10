@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { Attachment, Publication } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { store } from '../src/renderer/state.js';
 import { invalidateQueries, queryKeys } from '../src/renderer/lib/live/index.js';
 
@@ -184,15 +185,15 @@ async function openDialog(): Promise<{
   // Дать осесть асинхронному поиску вложений (runSearch).
   await new Promise((resolve) => setImmediate(resolve));
 
-  const list = body().querySelector('.pub-cover-list');
+  const list = body().querySelector('.att-pick-list');
   assert.ok(list !== null, 'список вложений диалога построен');
   const currentKey = (): string | null => {
     const row = list
-      .querySelectorAll('.pub-cover-item')
-      .find((el) => el.classList.contains('pub-cover-item-current'));
+      .querySelectorAll('.att-pick-item')
+      .find((el) => el.classList.contains('att-pick-item-current'));
     // Ключ строки — носитель (kind+путь), заголовок строки — title вложения,
     // которым в фикстурах служит id ('att-1'/'att-2').
-    return row?.querySelector('.pub-cover-item-title')?.textContent ?? null;
+    return row?.querySelector('.att-pick-item-title')?.textContent ?? null;
   };
   return { mod, list, currentKey };
 }
@@ -203,19 +204,22 @@ function body(): ShimElement {
 
 /** Адрес картинки препросмотра (свойство `src`; в шиме атрибут не ведётся). */
 function previewSrc(): string {
-  const img = body().querySelector('.pub-cover-preview-img') as unknown as
+  const img = body().querySelector('.att-pick-preview-img') as unknown as
     | { src?: string }
     | null;
   return img?.src ?? '';
 }
 
 function pressList(list: ShimElement, key: string, ctrl = false): void {
-  list.emit('keydown', {
+  // Фокус внутри списка кладёт его контекст на вершину стека диспетчера.
+  list.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     ctrlKey: ctrl,
     target: list,
     preventDefault: () => undefined,
-  });
+  } as unknown as KeyboardEvent);
+  list.emit('focusout', {});
 }
 
 /** Ждёт срабатывания debounce сохранения карточки (400 мс). */
@@ -280,6 +284,7 @@ describe('диалог обложки: навигация синхронизир
 
   beforeEach(() => {
     mod = null;
+    keymap.keymapInternals.reset();
   });
 
   afterEach(async () => {

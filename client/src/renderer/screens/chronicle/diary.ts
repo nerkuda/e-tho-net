@@ -3,13 +3,12 @@
  *
  * Всё, что можно посчитать без DOM и сети, живёт здесь: разбор локального дня
  * наблюдателя, разворот длинной записи по дням периода, группировка ленты,
- * периоды клика по календарю, решение о ленивом создании псевдо-записи и состав
- * видимых чипсов. Модуль без DOM — проверяется обычными юнит-тестами
- * (`tests/chronicle-diary.test.ts`).
+ * периоды клика по календарю и состав видимых чипсов. Модуль без DOM —
+ * проверяется обычными юнит-тестами (`tests/chronicle-diary.test.ts`).
  *
- * Требования-первоисточники: 26f0aa52 (ленивое создание), e0970b70 (видимость
- * записи в периоде), c6ddc1ea (порядок ленты), c81964c7 (запись дня/HOME),
- * 80b31f7a (переименование). Дата принадлежности записи вычисляется в ЛОКАЛЬНОМ
+ * Требования-первоисточники: 26f0aa52 (немедленное создание записи), e0970b70
+ * (видимость записи в периоде), c6ddc1ea (порядок ленты), c81964c7 (запись
+ * дня/HOME), 80b31f7a (переименование). Дата принадлежности записи вычисляется в
  * поясе наблюдателя (ADR времени 994d076a).
  */
 
@@ -315,8 +314,8 @@ function monthPeriod(day: string): PeriodRange {
 }
 
 /**
- * Дата по умолчанию для псевдо-записи: `clamp(сегодня, начало, конец)` —
- * требование 26f0aa52. Пустые границы не ограничивают.
+ * Дата по умолчанию новой записи дневника: `clamp(сегодня, начало, конец
+ * периода)` — требование 26f0aa52. Пустые границы не ограничивают.
  */
 export function clampPseudoDate(today: string, from: string, to: string): string {
   let day = today;
@@ -349,27 +348,9 @@ export function rowDays(row: ChronicleRow, from = '', to = ''): string[] {
 }
 
 /**
- * Лежит ли локальный день в применённом периоде ленты (границы включительные;
- * пустая граница не ограничивает; `''` — не день). Тот же критерий, что у
- * записей ({@link rowDays}), но без разворота интервала: нужен для решения,
- * показывать ли день псевдо-записи (слот) в текущем периоде.
- *
- * Ошибка effefba3: `renderFeed` безусловно добавлял день слота в ленту, из-за
- * чего несозданная/зависшая псевдо-запись (без `data-row-key`, с
- * некликабельной датой-`span`) торчала при ЛЮБОМ периоде. Псевдо-запись, как и
- * запись, обязана быть видна только в своём периоде.
- */
-export function dayInPeriod(day: string, from = '', to = ''): boolean {
-  if (day === '') return false;
-  if (from !== '' && day < from) return false;
-  if (to !== '' && day > to) return false;
-  return true;
-}
-
-/**
  * Сравнение двух локальных дней `YYYY-MM-DD` по направлению сортировки
  * (0.10.1, итерация приёмки №8, п.3). Одна точка правды для группировки ленты
- * и для вставки дня слота псевдо-записи.
+ * (вставки дня в ленту нет с демонтажом слотовой псевдозаписи).
  */
 export function compareDays(a: string, b: string, order: SortOrder = 'asc'): number {
   if (a === b) return 0;
@@ -394,24 +375,10 @@ export function formatDayLabel(day: string): string {
 }
 
 /**
- * Класс записи (0.10.1, требование c6ddc1ea): `0` — все привязки записи — это
- * HOME («запись дня»), `1` — есть хотя бы одна привязка вне HOME (мысль или
- * связь). Локальная строка (`localRowFromComment`) уже отбрасывает HOME из
- * `targets`, поэтому у неё класс 0 = пустой список привязок; для серверных
- * строк HOME приходит в `targets` и сверяется с `homeId`.
- */
-export function recordClass(row: ChronicleRow, homeId: string | null = null): 0 | 1 {
-  const isHomeOnly = row.targets.every(
-    (target) =>
-      target.kind === 'thought' && homeId !== null && target.thought.id === homeId,
-  );
-  return isHomeOnly ? 0 : 1;
-}
-
-/**
- * Порядок записей ленты (требование c6ddc1ea): класс записи ВСЕГДА по
- * возрастанию (0 первыми) — направление к нему НЕ применяется; затем
- * `valid_from` → `valid_to` → `created_at` → `id` в направлении `order`.
+ * Порядок записей ленты (требование c6ddc1ea, ревизия 2026-10-09, задача
+ * 5a002590): ТОЛЬКО по дате/времени записи — `valid_from` → `valid_to` →
+ * `created_at` → `id` в направлении `order`. Класс записи (близость к HOME) в
+ * сортировке НЕ участвует, поэтому добавление/снятие мыслей позицию не меняет.
  * Та же модель, что у серверного `ORDER BY`, — клиентская локальная вставка не
  * расходится с порядком страницы.
  */
@@ -419,10 +386,7 @@ export function compareRecords(
   a: ChronicleRow,
   b: ChronicleRow,
   order: SortOrder = 'asc',
-  homeId: string | null = null,
 ): number {
-  const cls = recordClass(a, homeId) - recordClass(b, homeId);
-  if (cls !== 0) return cls;
   const dir = order === 'desc' ? -1 : 1;
   const byDate = a.valid_from === b.valid_from ? 0 : a.valid_from < b.valid_from ? -1 : 1;
   if (byDate !== 0) return byDate * dir;
@@ -439,28 +403,25 @@ export function compareRecords(
 /**
  * Вставить строку в локальный список ленты (0.10.1, итерация приёмки №8, п.2 и
  * №9, п.1): локально созданная запись встаёт на своё место без полной
- * перерисовки, по тому же порядку, что серверный (`compareRecords`): класс
- * записи — всегда первым, затем даты/тайбрейкеры в направлении отбора.
- * Поэтому запись дня (класс 0) при «убывании» всё равно попадает в верхний
- * блок своего дня, а не в конец списка.
+ * перерисовки, по тому же порядку, что серверный (`compareRecords`): только
+ * даты/тайбрейкеры в направлении отбора (класс записи не участвует).
  */
 export function insertRowByDay(
   list: readonly ChronicleRow[],
   row: ChronicleRow,
   order: SortOrder = 'asc',
-  homeId: string | null = null,
 ): ChronicleRow[] {
   const out = [...list];
   let i = 0;
-  while (i < out.length && compareRecords(out[i]!, row, order, homeId) <= 0) i += 1;
+  while (i < out.length && compareRecords(out[i]!, row, order) <= 0) i += 1;
   out.splice(i, 0, row);
   return out;
 }
 
 /**
  * Группировка записей по локальным дням наблюдателя. Порядок записей внутри дня
- * — серверный (класс → `valid_from` → `valid_to` → `created_at` → `id`,
- * требование c6ddc1ea): клиент его не пересортировывает, а сохраняет порядок
+ * — серверный (`valid_from` → `valid_to` → `created_at` → `id`, требование
+ * c6ddc1ea): клиент его не пересортировывает, а сохраняет порядок
  * входа (сервер уже отдал строки в выбранном направлении). Дни сортируются по
  * `order` (0.10.1, итерация приёмки №8, п.3: «Убывание» — дни по убыванию,
  * записи внутри — серверный порядок выбранного направления). `from`/`to` —
@@ -592,86 +553,19 @@ export function applyPeriodToFilter<T extends { dateFrom: string; dateTo: string
   return { ...filter, dateFrom: period.from, dateTo: period.to };
 }
 
-/** Содержимое псевдо-записи, достаточное для первого сохранения. */
-export interface RecordDraft {
-  title?: string | null;
-  body?: string | null;
-  /** Сколько привязок уже готово к сохранению. */
-  bindings?: number;
-}
-
-/**
- * Есть ли в псевдо-записи содержательный элемент: непустой заголовок, непустой
- * текст или хотя бы одна привязка (требование 26f0aa52). Пока `false` — в базу
- * ничего не пишется.
- */
-export function hasRecordContent(draft: RecordDraft): boolean {
-  if ((draft.title ?? '').trim() !== '') return true;
-  if ((draft.body ?? '').trim() !== '') return true;
-  return (draft.bindings ?? 0) > 0;
-}
-
-/** Решение о сохранении черновика псевдо-записи (ошибка 0757cd08). */
-export interface SlotCommitPlan {
-  action: 'create' | 'update' | 'none';
-  /** Заголовок записи (пробелы обрезаны; пустой — `null`). */
-  title: string | null;
-  /** Тело записи (для создания — как есть; для обновления — см. `bodyProvided`). */
-  body: string;
-  /** Передано ли тело вызывающим: правка только заголовка тело не трогает. */
-  bodyProvided: boolean;
-}
-
-/**
- * Выбор операции для первого/очередного сохранения псевдо-записи (ошибка
- * 0757cd08). Заголовок входит в ЛЮБОЕ сохранение; тело — только когда реально
- * передано (`body !== undefined`), иначе правка заголовка затирала бы уже
- * сохранённый текст, а правка текста — заголовок. Пока записи нет (`commentId
- * === null`) и нет содержания — ничего не пишем (требование 26f0aa52). Если
- * запись уже создана (например, первым содержательным blur заголовка),
- * последующее сохранение ОБНОВЛЯЕТ её, а не создаёт дубль.
- */
-export function planSlotCommit(input: {
-  commentId: string | null;
-  title: string;
-  body?: string;
-  bindings?: number;
-}): SlotCommitPlan {
-  const title = input.title.trim() || null;
-  const body = input.body ?? '';
-  const bodyProvided = input.body !== undefined;
-  if (input.commentId === null) {
-    const has = hasRecordContent({
-      title: input.title,
-      body,
-      bindings: input.bindings ?? 0,
-    });
-    return { action: has ? 'create' : 'none', title, body, bodyProvided };
-  }
-  return { action: 'update', title, body, bodyProvided };
-}
-
 /**
  * Есть ли в ленте строка с таким id. Дедуп локальной вставки созданной записи
  * (ошибка 0757cd08, круг 1): строку могла вставить другая ветка (realtime-
- * событие, перезагрузка/сверка), пока слот ждал ухода фокуса. Повторная
- * вставка даёт ленте два узла с одним ключом и роняет `reconcileKeyed`.
+ * событие, перезагрузка/сверка), пока шло создание. Повторная вставка даёт
+ * ленте два узла с одним ключом и роняет `reconcileKeyed`.
  */
 export function hasRowId(rows: readonly { id: string }[], id: string): boolean {
   return rows.some((row) => row.id === id);
 }
 
 /**
- * Нужны ли сетевые вызовы при удалении слота: пустой слот (без id) удаляется
- * только в клиенте, без записи в сеть и real-time событий (требование
- * 26f0aa52).
- */
-export function slotDeleteNeedsNetwork(commentId: string | null): boolean {  return commentId !== null;
-}
-
-/**
  * Видимые чипсы записи: все привязки, кроме первичной привязки к HOME —
- * она служебная (класс записи, требование c81964c7) и крестика не имеет.
+ * она служебная (требование c81964c7) и крестика не имеет.
  */
 export function visibleChips(
   targets: readonly ChronicleTarget[],
@@ -686,6 +580,20 @@ export function visibleChips(
 /** Является ли привязка снятием последнего чипса (тогда нужно подтверждение). */
 export function isLastChip(chips: readonly unknown[]): boolean {
   return chips.length <= 1;
+}
+
+/**
+ * Мысли-владельцы записи (родители новой мысли, ТЗ5 «Дневник без псевдослота»):
+ * все её цели-чипсы. Для чипса-связи берётся источник (мысль, к которой
+ * привязан комментарий связи — как в `wiki-link-create`), дубли схлопываются.
+ */
+export function parentThoughtIds(targets: readonly ChronicleTarget[]): string[] {
+  const ids: string[] = [];
+  for (const target of targets) {
+    const id = target.kind === 'thought' ? target.thought.id : target.link.source.id;
+    if (id !== '' && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
 }
 
 /**

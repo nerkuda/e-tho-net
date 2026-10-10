@@ -25,6 +25,14 @@ import {
   publishFocusResponse,
 } from './lib/layer-resync.js';
 import { closeMenu } from './lib/menu.js';
+import {
+  GLOBAL_CONTEXT_ID,
+  defineKeyContext,
+  installKeymap,
+  isEditableTarget,
+  type KeyBindingDef,
+  type KeyCommandHandler,
+} from './lib/keymap.js';
 import { queryKeys } from './lib/live/query-keys.js';
 import { invalidateQueries, setQueryData } from './lib/live/query-registry.js';
 import { notice } from './lib/notice.js';
@@ -50,8 +58,10 @@ import { initRealtime, setRealtimeEffects } from './realtime.js';
 import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
+import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache } from './lib/lock-cache.js';
+import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
@@ -470,6 +480,12 @@ export function backToNetworks(): void {
  * be430215: every re-pick opened a duplicate tab of an already open network).
  */
 export async function restoreSession(): Promise<void> {
+  // Серверные настройки пользователя (уровень «пользователь × сервер», ADR
+  // 3a829d25, задача d534eb35): сочетания клавиш комментария. Общая точка
+  // после успешного подключения — boot() и оба пути онбординга зовут
+  // restoreSession(). Недоступные настройки не блокируют вход: при сбое
+  // остаются умолчания.
+  await loadUserSettings().catch(() => undefined);
   // Q5: warm the `networkList` cache early so the first tab-strip render has
   // display_names. The accessibility marking itself re-runs at the end of
   // `openNetwork`, once `store.tabs` is populated — marking here raced an
@@ -492,6 +508,9 @@ export async function restoreSession(): Promise<void> {
 export async function disconnect(): Promise<void> {
   await etn.server.disconnect();
   deactivateFocusQuery();
+  // Сочетания клавиш принадлежат пользователю сервера (L3s): при отключении
+  // возвращаем умолчания, чтобы их не унаследовал следующий пользователь.
+  resetUserSettings();
   store.resetNetwork();
   store.update({ me: null, profileId: null });
   showScreen('onboarding');
@@ -610,6 +629,11 @@ export async function boot(): Promise<void> {
   // its colours or the theme change.
   initLayerTheme();
   initLockCache();
+  // Центральная инвалидация кэша источников трансклюзий по событиям `comment.*`
+  // (задача a4f4113d): правка постоянного комментария-источника любой веткой —
+  // своя или чужая — сбрасывает закэшированное тело, чтобы отрисовка блока не
+  // показывала устаревший текст.
+  initTransclusionSourceCache();
   initRealtime();
   setRealtimeEffects({
     onStale: () => scheduleRefresh(),
@@ -656,8 +680,15 @@ export async function boot(): Promise<void> {
   showScreen('onboarding');
 }
 
-/** Global keyboard shortcuts (08-ui-spec.md §13): Ctrl+F, Escape, Ctrl+±/0,
- *  and the copy/paste bindings of workplan L26 (Ctrl+C, Ctrl+V). */
+/** Global keyboard shortcuts (08-ui-spec.md §13): Ctrl+Shift+F, Escape,
+ *  Ctrl+±/0, and the copy/paste bindings of workplan L26 (Ctrl+C, Ctrl+V).
+ *
+ *  Все команды регистрируются в общеклиентском диспетчере контекстов
+ *  (`lib/keymap.ts`, ADR `b420b08c`): он владеет единственной точкой перехвата
+ *  `keydown` на уровне приложения. Локальный `window.addEventListener` здесь
+ *  больше не заводится — это запрет ADR. Экраны и поля вместо собственных
+ *  слушателей регистрируют свои контексты (`defineKeyContext` +
+ *  `pushKeyContext`). */
 export function initKeyboard(): void {
   // Native text copies (the CM6 editor, inputs, text selections outside
   // editables) must supersede the internal thought clipboard — the same
@@ -665,99 +696,115 @@ export function initKeyboard(): void {
   // (bug 731a9d16). Thought copies never fire a native copy event, so they
   // keep the snapshot.
   void import('./canvas/clipboard.js').then((m) => m.initNativeCopyTracking());
-  window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      // A dialog that consumed the press (the top dialog's capture handler
-      // calls preventDefault) already closed itself — closing again here
-      // would pop the dialog below it (L21 fix). Same for a key auto-repeat.
-      if (event.defaultPrevented || event.repeat) return;
-      closeMenu();
-      closeDialog();
-      return;
-    }
-    if (event.ctrlKey || event.metaKey) {
-      // Copy / paste of thoughts (workplan L26). Only fire when the focus is
-      // *not* inside an editable surface — there the native Ctrl+C/V must
-      // run (CM6 comment editor, add dialog input, …). Same scope as the
-      // canvas kbd-nav handler (canvas/kbd-nav.ts:100).
-      const editable = isEditableTarget(event.target);
-      if (!editable) {
-        // Check `event.code` in addition to `event.key` — some keyboard
-        // layouts (notably Cyrillic) report `event.key` as the layout's
-        // character (e.g. 'с') while the physical key (event.code = 'KeyC')
-        // is stable. Without the code fallback Ctrl+C/V silently stop
-        // matching when the user types in a non-Latin layout.
-        const isC = event.key.toLowerCase() === 'c' || event.code === 'KeyC';
-        const isV = event.key.toLowerCase() === 'v' || event.code === 'KeyV';
-        const noMod = !event.shiftKey && !event.altKey;
-        if (noMod && isC) {
-          // A visible DOM text selection (e.g. inside the comment view mode,
-          // b6690109) outranks the thought copy: no preventDefault, the
-          // native copy puts the selected text on the system clipboard.
-          if (
-            store.state.screen === 'workspace' &&
-            store.state.networkId !== null &&
-            !hasTextSelection(document.getSelection())
-          ) {
-            event.preventDefault();
-            void globalCopy();
-            return;
-          }
-        }
-        if (noMod && isV) {
-          if (store.state.screen === 'workspace' && store.state.networkId !== null) {
-            event.preventDefault();
-            void globalPaste();
-            return;
-          }
-        }
-      }
-      // Same `event.code` fallback as Ctrl+C/V above — on a Cyrillic layout
-      // the physical F key reports `event.key` as a Cyrillic character, not
-      // 'f', so Ctrl+F silently never matched (bug 98302e81).
-      const isF = event.key.toLowerCase() === 'f' || event.code === 'KeyF';
-      if (isF) {
-        // Ctrl+F focuses the canvas search row — hidden in the structures
-        // view (§15.1) and while a comment/field is being edited (native
-        // find should not be hijacked there), so the shortcut does nothing
-        // in those cases.
-        if (!editable && store.state.screen === 'workspace' && store.state.activeView === 'map') {
-          event.preventDefault();
-          document.querySelector<HTMLInputElement>('.search-input')?.focus();
-        }
-        return;
-      }
-      // Canvas zoom (L9): '+'/'=' (both main-row layouts), numpad 'Add';
-      // '-'/'Subtract'; '0' resets. Workspace screen only.
-      if (store.state.screen === 'workspace') {
-        if (event.key === '+' || event.key === '=' || event.key === 'Add') {
-          event.preventDefault();
-          applyCanvasZoom('in');
-          return;
-        }
-        if (event.key === '-' || event.key === 'Subtract') {
-          event.preventDefault();
-          applyCanvasZoom('out');
-          return;
-        }
-        if (event.key === '0') {
-          event.preventDefault();
-          applyCanvasZoom('reset');
-        }
-      }
-    }
-  });
+  defineKeyContext({ id: GLOBAL_CONTEXT_ID, bindings: globalKeyBindings() });
+  installKeymap();
 }
 
-/** True when the keypress landed inside an editable surface the renderer
- *  should leave alone (input, textarea, contenteditable, CM6). */
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (target === null || !(target instanceof HTMLElement)) return false;
-  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return true;
-  if (target.isContentEditable) return true;
-  // CodeMirror 6 puts its editable element inside `.cm-content`.
-  if (target.closest('.cm-content') !== null) return true;
-  return false;
+/** Привязки глобального контекста: команды уровня приложения. Порядок в
+ *  массиве не важен — сочетания не пересекаются; проигравший по модификаторам
+ *  вариант возвращает `false` и уступает нативной обработке. */
+function globalKeyBindings(): KeyBindingDef[] {
+  const bindings: KeyBindingDef[] = [];
+  /** Регистрирует команду под несколькими сочетаниями (Ctrl и Meta-варианты). */
+  const bind = (
+    command: string,
+    chords: string[],
+    run: KeyCommandHandler,
+    when?: (event: KeyboardEvent) => boolean,
+  ): void => {
+    for (const chord of chords) {
+      bindings.push(when === undefined ? { command, chord, run } : { command, chord, run, when });
+    }
+  };
+
+  bind('app.closeOverlay', ['Escape'], (event) => {
+    // A dialog that consumed the press (the top dialog's capture handler
+    // calls preventDefault) already closed itself — closing again here
+    // would pop the dialog below it (L21 fix). Key auto-repeat is ignored
+    // for the same reason: a held Escape would otherwise walk the stack down.
+    if (event.defaultPrevented || event.repeat) return false;
+    closeMenu();
+    closeDialog();
+    return true;
+  });
+
+  // Copy / paste of thoughts (workplan L26). Only fire when the focus is
+  // *not* inside an editable surface — there the native Ctrl+C/V must run
+  // (CM6 comment editor, add dialog input, …).
+  bind('app.copyThought', ['Ctrl+C', 'Meta+C'], (event) => {
+    if (isEditableTarget(event.target)) return false;
+    if (event.shiftKey || event.altKey) return false;
+    // A visible DOM text selection (e.g. inside the comment view mode,
+    // b6690109) outranks the thought copy: no preventDefault, the native copy
+    // puts the selected text on the system clipboard.
+    if (
+      store.state.screen === 'workspace' &&
+      store.state.networkId !== null &&
+      !hasTextSelection(document.getSelection())
+    ) {
+      void globalCopy();
+      return true;
+    }
+    return false;
+  });
+
+  bind('app.pasteThought', ['Ctrl+V', 'Meta+V'], (event) => {
+    if (isEditableTarget(event.target)) return false;
+    if (event.shiftKey || event.altKey) return false;
+    if (store.state.screen === 'workspace' && store.state.networkId !== null) {
+      void globalPaste();
+      return true;
+    }
+    return false;
+  });
+
+  // Глобальный поиск клиента перенесён на Ctrl+Shift+F (0.12.1, задача
+  // 045f98db, требование 778e13f4): Ctrl+F закреплён за поиском внутри
+  // текущего текстового поля (панель поиска комментария, ТП1).
+  bind('app.focusMapSearch', ['Ctrl+Shift+F', 'Meta+Shift+F'], (event) => {
+    // Ctrl+Shift+F focuses the canvas search row — hidden in the structures view
+    // (§15.1) and while a comment/field is being edited (native find should
+    // not be hijacked there), so the shortcut does nothing in those cases.
+    if (isEditableTarget(event.target)) return false;
+    if (store.state.screen === 'workspace' && store.state.activeView === 'map') {
+      document.querySelector<HTMLInputElement>('.search-input')?.focus();
+      return true;
+    }
+    return false;
+  });
+
+  // Canvas zoom (L9): '+'/'=' (both main-row layouts), numpad 'Add';
+  // '-'/'Subtract'; '0' resets. Workspace screen only.
+  const workspaceOnly = (): boolean => store.state.screen === 'workspace';
+  bind(
+    'canvas.zoomIn',
+    ['Ctrl+=', 'Ctrl++', 'Ctrl+Shift+=', 'Ctrl+Add', 'Meta+=', 'Meta++', 'Meta+Add'],
+    () => {
+      applyCanvasZoom('in');
+      return true;
+    },
+    workspaceOnly,
+  );
+  bind(
+    'canvas.zoomOut',
+    ['Ctrl+-', 'Ctrl+Subtract', 'Meta+-', 'Meta+Subtract'],
+    () => {
+      applyCanvasZoom('out');
+      return true;
+    },
+    workspaceOnly,
+  );
+  bind(
+    'canvas.zoomReset',
+    ['Ctrl+0', 'Meta+0'],
+    () => {
+      applyCanvasZoom('reset');
+      return true;
+    },
+    workspaceOnly,
+  );
+
+  return bindings;
 }
 
 /** Ctrl+C: copy the thought under the dashed cursor frame on the canvas, or —

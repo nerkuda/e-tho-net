@@ -866,30 +866,17 @@ interface Row {
 }
 
 /**
- * Класс записи (0.10.1, требование c6ddc1ea): `0` — привязка только к HOME
- * («запись дня», все цели — корень сети), `1` — все прочие. Считается по
- * `comment_targets`: запись класса 0 не имеет ни одной цели, отличной от
- * корневой мысли (ни чужой мысли, ни связи).
- */
-const RECORD_CLASS_SQL = `CASE WHEN EXISTS (
-  SELECT 1 FROM comment_targets_v ct_class
-  LEFT JOIN thoughts_v ht ON ht.id = ct_class.owner_id AND ct_class.owner_type = 'thought'
-  WHERE ct_class.comment_id = c.id
-    AND (ct_class.owner_type <> 'thought' OR ht.is_root <> 1)
-) THEN 1 ELSE 0 END`;
-
-/**
  * Run the two-phase chronicle query (docs/03-server-api.md §20).
  *
  * Phase 1 selects thoughts; phase 2 lists chronological comments attached to
  * them or to their links. Returns the paged rows with the total count.
  *
- * Сортировка (0.10.1, требование c6ddc1ea): класс записи → `valid_from` →
- * `valid_to` → `created_at` → `id`. Класс записи (`0` — запись дня, `1` —
- * прочие) сортируется ВСЕГДА по возрастанию — направление `order` к нему не
- * применяется; направление действует только на `valid_from`/`valid_to` и
- * тайбрейкеры `created_at`/`id`. Прежние тайбрейкеры (NULL-обработка
- * `valid_to`, `title`) отменены — порядок детерминирован уникальным `id`.
+ * Сортировка (требование c6ddc1ea): ТОЛЬКО по дате/времени записи —
+ * `valid_from` → `valid_to` → тайбрейкеры `created_at` → `id`, все в
+ * направлении `order`. Класс записи (близость к HOME) в сортировке НЕ
+ * участвует (ревизия 2026-10-09, задача 5a002590): он заставлял запись
+ * «прыгать» при добавлении/снятии мыслей. Порядок детерминирован уникальным
+ * `id`, поэтому не зависит от состава привязок и времени изменения.
  *
  * `opts.userId` — контекст исполнения критериев целей (движок выборки мыслей);
  * `opts.now` — часы для раскрытия токенов периода (тесты).
@@ -897,7 +884,22 @@ const RECORD_CLASS_SQL = `CASE WHEN EXISTS (
 export function queryChronicle(
   ndb: NetworkDb,
   request: ChronicleQueryRequest,
-  opts: { userId?: string; now?: () => Date } = {},
+  opts: {
+    userId?: string;
+    now?: () => Date;
+    /**
+     * Транспорт-агностичный transform `body_md` → `body_html` (MCP-фасад
+     * передаёт пересборку из развёрнутого текста — ошибка a6da3d37; REST не
+     * передаёт ничего и получает кешированный `body_html`).
+     */
+    bodyHtmlTransform?: (body_md: string) => string;
+    /**
+     * Транспорт-агностичный transform `body_md` → текст сниппета (MCP-фасад
+     * передаёт развёртку трансклюзий БЕЗ маркеров границ — ошибка a3fb62b6;
+     * REST не передаёт ничего и получает сниппет из исходного текста).
+     */
+    snippetTransform?: (body_md: string) => string;
+  } = {},
 ): ChronicleQueryResponse {
   const userId = opts.userId ?? '';
   // Токены периода раскрываются в момент применения отбора (требование
@@ -956,8 +958,7 @@ export function queryChronicle(
               c.use_time, c.version, c.created_at, c.updated_at, c.created_by, c.updated_by
        FROM comments_v c
        WHERE ${cond}
-       ORDER BY ${RECORD_CLASS_SQL} ASC,
-                c.valid_from ${dir},
+       ORDER BY c.valid_from ${dir},
                 c.valid_to ${dir},
                 c.created_at ${dir},
                 c.id ${dir}
@@ -1024,9 +1025,18 @@ export function queryChronicle(
     });
   }
 
-  const withSnippets = rows.map((row) => ({
-    ...row,
-    snippet: makeSnippet(row.body_md, includeWords),
-  }));
+  const withSnippets = rows.map((row) => {
+    // Сниппет строится из того же развёрнутого текста, что и `body_html`, если
+    // фасад передал трансформ (MCP): иначе превью показывало бы литерал
+    // трансклюзии при развёрнутом содержимом строки (ошибка a3fb62b6).
+    const snippetSource =
+      opts.snippetTransform === undefined ? row.body_md : opts.snippetTransform(row.body_md);
+    return {
+      ...row,
+      snippet: makeSnippet(snippetSource, includeWords),
+      body_html:
+        opts.bodyHtmlTransform === undefined ? row.body_html : opts.bodyHtmlTransform(row.body_md),
+    };
+  });
   return { rows: buildRows(ndb, withSnippets, refs, linkTargets), total };
 }

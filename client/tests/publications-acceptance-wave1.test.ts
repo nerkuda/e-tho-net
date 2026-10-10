@@ -86,7 +86,7 @@ describe('5de0332d п.2: dblclick открывает комментарий и �
     // `openTextCommentEditById` (тот же путь использует автовыбор добавленного) —
     // проверяем и переход от блока, и сам вызов редактора.
     assert.match(WS, /openTextCommentEditById\(block\.thoughtId/);
-    assert.match(WS, /mod\.openThoughtCommentEditor\(thoughtId, findText\)/);
+    assert.match(WS, /mod\.openThoughtCommentEditor\(thoughtId, findText, selection\)/);
     assert.match(
       WS,
       /closest\('p, li, blockquote, h1, h2, h3, h4, h5, h6'\)/,
@@ -101,7 +101,9 @@ describe('5de0332d п.3: рендерер markdown — одиночный пер
   });
 
   it('версия конвейера поднята — кеш body_html перерисуется', () => {
-    assert.match(MD_INDEX, /MD_RENDER_VERSION = 'markdown-it\/7'/, 'версия рендера поднята');
+    // Значение движется вместе с конвейером: 8 — ТП1 (задача 2fc28fa2,
+    // task-списки / ==…== / <u> / скрытие HTML-комментариев).
+    assert.match(MD_INDEX, /MD_RENDER_VERSION = 'markdown-it\/8'/, 'версия рендера поднята');
   });
 });
 

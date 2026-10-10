@@ -141,21 +141,36 @@ describe('вложения публикаций: REST (46cf4bcb)', { skip }, () 
       );
       assert.equal(owners2[0]!.title, 'Владелец картинки');
 
-      // Отвязка строки публикации.
-      const del = await api(ctx, 'DELETE', `/attachments/${attachment.id}`);
-      assert.equal(del.statusCode, 204, del.body);
-      const list2 = await api(ctx, 'GET', `/publications/${pub.id}/attachments`);
-      assert.equal((list2.json().data as unknown[]).length, 0);
-
-      // У скопированной строки носитель тот же, но владелец теперь один.
-      const copiedId = (copied.json().data as { created: Array<{ id: string }> }).created[0]!.id;
-      const usage3 = await api(ctx, 'GET', `/attachments/${copiedId}/usage`);
-      assert.deepEqual(
-        (usage3.json().data as { owners: Array<{ owner_type: string }> }).owners.map(
-          (o) => o.owner_type,
-        ),
-        ['thought'],
+      // Отвязка (0.12.1): снятие владений по одному. Публикация держит
+      // вложение как обложку — сначала очищаем обложку, иначе 409.
+      const coverClear = await api(ctx, 'PATCH', `/publications/${pub.id}`, {
+        payload: { cover_attachment_id: null },
+      });
+      assert.equal(coverClear.statusCode, 200, coverClear.body);
+      const delPub = await api(ctx, 'DELETE', `/attachments/${attachment.id}/owners`, {
+        payload: { owner_type: 'publication', owner_id: pub.id },
+      });
+      assert.equal(delPub.statusCode, 200, delPub.body);
+      assert.equal(
+        (delPub.json().data as { attachment_deleted: boolean }).attachment_deleted,
+        false,
       );
+      const listPub = await api(ctx, 'GET', `/publications/${pub.id}/attachments`);
+      assert.equal((listPub.json().data as unknown[]).length, 0);
+      // Мысль ещё владеет вложением.
+      const listT = await api(ctx, 'GET', `/thoughts/${thought}/attachments`);
+      assert.equal((listT.json().data as unknown[]).length, 1);
+      // Последний живой владелец удаляет вложение целиком (owner-cleanup).
+      const delThought = await api(ctx, 'DELETE', `/attachments/${attachment.id}/owners`, {
+        payload: { owner_type: 'thought', owner_id: thought },
+      });
+      assert.equal(delThought.statusCode, 200, delThought.body);
+      assert.equal(
+        (delThought.json().data as { attachment_deleted: boolean }).attachment_deleted,
+        true,
+      );
+      const listT2 = await api(ctx, 'GET', `/thoughts/${thought}/attachments`);
+      assert.equal((listT2.json().data as unknown[]).length, 0);
     } finally {
       await closeRestContext(ctx);
     }
@@ -227,31 +242,34 @@ describe('вложения публикаций: REST (46cf4bcb)', { skip }, () 
         'usage файлового вложения обязан находить владельца (блокер)',
       );
 
-      // Копия файла на мысль — создаётся; повтор — skipped, без дубля строки
-      // (общий корень с блокером: старый паттерн создавал дубль).
+      // Копия файла на мысль — добавляется владелец; повтор — skipped, без
+      // дубля строки (общий корень с блокером: старый паттерн создавал дубль).
       const thought = await createThought(ctx, 'Хозяин файла');
       const copy1 = await api(ctx, 'POST', `/attachments/${fileAtt.id}/copy`, {
         payload: { target_owner_type: 'thought', target_owner_ids: [thought] },
       });
       assert.equal(copy1.statusCode, 200, copy1.body);
-      const copy1data = copy1.json().data as { created: unknown[]; skipped: string[] };
-      assert.equal(copy1data.created.length, 1);
+      const copy1data = copy1.json().data as { added: unknown[]; skipped: unknown[] };
+      assert.equal(copy1data.added.length, 1);
       assert.deepEqual(copy1data.skipped, []);
 
       const copy2 = await api(ctx, 'POST', `/attachments/${fileAtt.id}/copy`, {
         payload: { target_owner_type: 'thought', target_owner_ids: [thought] },
       });
       assert.equal(copy2.statusCode, 200, copy2.body);
-      const copy2data = copy2.json().data as { created: unknown[]; skipped: string[] };
-      assert.equal(copy2data.created.length, 0, 'повторное копирование файла не создаёт дубль');
-      assert.deepEqual(copy2data.skipped, [thought]);
+      const copy2data = copy2.json().data as {
+        added: unknown[];
+        skipped: Array<{ owner_id: string }>;
+      };
+      assert.equal(copy2data.added.length, 0, 'повторное копирование файла не создаёт дубль');
+      assert.deepEqual(copy2data.skipped.map((s) => s.owner_id), [thought]);
 
       // Копия на СВОЕГО же владельца (публикацию) тоже skipped — дубль не растёт.
       const copySameOwner = await api(ctx, 'POST', `/attachments/${fileAtt.id}/copy`, {
         payload: { target_owner_type: 'publication', target_owner_ids: [pub.id] },
       });
       assert.equal(
-        (copySameOwner.json().data as { created: unknown[] }).created.length,
+        (copySameOwner.json().data as { added: unknown[] }).added.length,
         0,
         'копия файла на уже владеющего — skipped',
       );
@@ -278,7 +296,7 @@ describe('вложения публикаций: REST (46cf4bcb)', { skip }, () 
         payload: { target_owner_type: 'thought', target_owner_ids: [thought] },
       });
       assert.equal(
-        (urlCopy1.json().data as { created: unknown[] }).created.length,
+        (urlCopy1.json().data as { added: unknown[] }).added.length,
         1,
         'первая копия url создаётся',
       );
@@ -286,7 +304,7 @@ describe('вложения публикаций: REST (46cf4bcb)', { skip }, () 
         payload: { target_owner_type: 'thought', target_owner_ids: [thought] },
       });
       assert.equal(
-        (urlCopy2.json().data as { created: unknown[] }).created.length,
+        (urlCopy2.json().data as { added: unknown[] }).added.length,
         0,
         'повторная копия url — skipped',
       );

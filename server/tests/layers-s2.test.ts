@@ -24,6 +24,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { BASE_LAYER_ID } from '@etn/shared';
 
 import { runMigrations } from '../src/db/migrator.js';
+import { permanentCommentId } from '../src/db/comment-permanent-id.js';
 import { createInMemoryNetworkDb, registerMigrationHelpers } from '../src/db/network-db.js';
 import { networkMigrationsDir } from '../src/paths.js';
 import { networkMigrationFilesFrom } from './migration-files.js';
@@ -435,7 +436,11 @@ describe(
              WHERE fts_thought_texts MATCH 'заголовок'`,
           )
           .all() as { id: string }[];
-        assert.deepEqual(matchJoined.map((r) => r.id), ['c1']);
+        assert.deepEqual(
+          matchJoined.map((r) => r.id),
+          [permanentCommentId('thought', 't1')],
+          'миграция 048 нормализует id постоянного комментария к natural key владельца',
+        );
 
         // 7. Database is consistent.
         assert.deepEqual(db.pragma('foreign_key_check'), []);

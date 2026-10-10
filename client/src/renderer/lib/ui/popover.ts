@@ -27,6 +27,7 @@
  */
 
 import { div, el } from '../dom.js';
+import { defineKeyContext, keyContextStack, pushKeyContext, removeKeyContext } from '../keymap.js';
 
 /** Класс панели. Объявлен только здесь — прямой разметкой панели занимается компонент. */
 export const POPOVER_CLASS = 'ui-popover';
@@ -202,6 +203,38 @@ interface ActivePopover {
 const active: ActivePopover[] = [];
 let listenersReady = false;
 
+/** Идентификатор контекста сочетаний панелей (кладётся, пока открыта хоть одна). */
+const POPOVER_CONTEXT_ID = 'ui-popover';
+
+/** Escape закрывает только самую верхнюю (последнюю открытую) панель. */
+function closeTopmostOnEsc(): boolean {
+  for (let i = active.length - 1; i >= 0; i--) {
+    const popover = active[i]!;
+    if (!popover.closeOnEsc) continue;
+    popover.close();
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Держит контекст `ui-popover` на вершине стека, пока открыта хоть одна
+ * панель: Escape по верхней панели — приоритетнее сочетаний под ней.
+ * Наличие контекста проверяется по стеку — так состояние самовосстанавливается.
+ */
+function syncPopoverContext(): void {
+  const onStack = keyContextStack().includes(POPOVER_CONTEXT_ID);
+  if (active.length > 0 && !onStack) {
+    defineKeyContext({
+      id: POPOVER_CONTEXT_ID,
+      bindings: [{ command: 'popover.close', chord: 'Escape', run: closeTopmostOnEsc }],
+    });
+    pushKeyContext(POPOVER_CONTEXT_ID);
+  } else if (active.length === 0 && onStack) {
+    removeKeyContext(POPOVER_CONTEXT_ID);
+  }
+}
+
 /** Ставит делегированные слушатели (один раз за сессию рендерера). */
 function ensureListeners(): void {
   if (listenersReady) return;
@@ -222,16 +255,9 @@ function ensureListeners(): void {
     true,
   );
 
-  // `Escape` закрывает только самую верхнюю (последнюю открытую) панель.
-  document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    for (let i = active.length - 1; i >= 0; i--) {
-      const popover = active[i]!;
-      if (!popover.closeOnEsc) continue;
-      popover.close();
-      return;
-    }
-  });
+  // `Escape` закрывает только самую верхнюю панель — через общеклиентский
+  // диспетчер (контекст `ui-popover` держится, пока панель открыта; ADR
+  // b420b08c, задача fd3d84f4). Делегированный document-слушатель упразднён.
 
   // Прокрутка ВНУТРИ любой нашей панели не закрывает ничего (панель сама
   // прокручивается в `.ui-popover-body`); прокрутка вне всего слоя отрывает
@@ -279,6 +305,19 @@ export function watchOutsideTap(
     true,
   );
   return () => document.removeEventListener('pointerdown', handler, true);
+}
+
+/**
+ * Лежит ли узел внутри всплывающей панели (`.ui-popover`) — решений «свой ли
+ * узел держит фокус/нажатие» для полей, которые при уходе фокуса коммитят
+ * правку. Клик в панель (например, поле живого поиска) не должен трактоваться
+ * как выход из поля: `markdown-field.editorBlurCommits` считает такой фокус
+ * «внутри поля».
+ */
+export function isInsidePopover(node: Node | null): boolean {
+  const el = node as (Element & { closest?(selector: string): Element | null }) | null;
+  if (el === null || typeof el !== 'object' || typeof el.closest !== 'function') return false;
+  return el.closest(`.${POPOVER_CLASS}`) !== null;
 }
 
 /**
@@ -346,12 +385,14 @@ export function openPopover(options: PopoverOptions): PopoverHandle {
     if (index === -1) return; // уже закрыта
     active.splice(index, 1);
     element.remove();
+    syncPopoverContext();
     record.onClose?.();
   };
 
   document.body.append(element);
   position();
   active.push(record);
+  syncPopoverContext();
   ensureListeners();
 
   return {

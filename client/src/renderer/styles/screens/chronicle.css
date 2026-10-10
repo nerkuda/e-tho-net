@@ -145,7 +145,7 @@
 }
 
 .cal-row-head {
-  color: var(--muted);
+  color: var(--text-dim);
   font-size: 11px;
 }
 
@@ -155,7 +155,7 @@
 
 .cal-week {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-dim);
 }
 
 .cal-day {
@@ -232,7 +232,7 @@
 
 .dpd-sep {
   flex: 0 0 auto;
-  color: var(--muted);
+  color: var(--text-faint);
 }
 
 /* Нижняя строка значения — ОДНА строка: поля ввода не переносятся на другую
@@ -246,7 +246,7 @@
   flex-wrap: nowrap;
   padding-top: 4px;
   border-top: 1px solid var(--border);
-  color: var(--muted);
+  color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
 
@@ -387,11 +387,6 @@
   background: var(--surface);
 }
 
-.diary-slot {
-  border-style: dashed;
-  border-color: var(--accent);
-}
-
 /* Запись, к которой выполнен переход поиска (T7): подсветка рамкой и фоном. */
 .diary-record-target {
   border-color: var(--accent);
@@ -436,7 +431,7 @@
 .diary-record-date {
   flex: 0 0 auto;
   white-space: nowrap;
-  color: var(--muted);
+  color: var(--text-dim);
 }
 
 .diary-record-title {

@@ -13,12 +13,32 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { languages } from '@codemirror/language-data';
 import { tags } from '@lezer/highlight';
-import { EditorState, type SelectionRange } from '@codemirror/state';
-import { drawSelection, EditorView, keymap } from '@codemirror/view';
+import {
+  EditorState,
+  RangeSetBuilder,
+  StateEffect,
+  StateField,
+  type Extension,
+  type SelectionRange,
+} from '@codemirror/state';
+import { Decoration, drawSelection, EditorView, keymap, tooltips, type DecorationSet } from '@codemirror/view';
 
+import { findMatches } from './text-search.js';
+import {
+  toggleCollapseAtCaret as runCollapseToggle,
+  type CollapseToggleMode,
+} from './comment-collapse.js';
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
+import {
+  blockEditorKey,
+  enterBlock,
+  exitActiveBlock,
+  transclusionExtensions,
+  transclusionRefStartingAt,
+} from './transclusion.js';
+import { blockEditorStoreFacet } from './transclusion-nested.js';
 import { wikiLinkLegacyActions } from './wiki-link-legacy-actions.js';
 
 /** Callbacks of the editor (the field orchestrates view/edit modes). */
@@ -29,8 +49,59 @@ export interface MdEditorCallbacks {
   onEscape?: () => void;
   /** Ctrl/Cmd+Enter: commit the edit and return to the view. */
   onCommit?: () => void;
-  /** Focus left the editor (commit point of the field). */
-  onBlur?: () => void;
+  /**
+   * Focus left the editor (commit point of the field). Получает событие
+   * `focusout`, чтобы поле могло отличить уход фокуса наружу от перехода на
+   * собственный элемент поля (панель поиска, тулбар) — см.
+   * `markdown-field.ts` (`editorBlurCommits`).
+   */
+  onBlur?: (event: FocusEvent) => void;
+  /**
+   * Дополнительные расширения CM6 (например, точечное перекрытие сочетаний
+   * команд поля комментария через `Prec.high` — задача ab0c4470).
+   */
+  extraExtensions?: Extension[];
+}
+
+/** Снимок текста и главного выделения редактора. */
+export interface MdEditorSnapshot {
+  /** Полный текст документа (markdown). */
+  text: string;
+  /** Начало выделения (меньший офсет); равен `to` при каретке. */
+  from: number;
+  /** Конец выделения (больший офсет). */
+  to: number;
+}
+
+/** Одна правка диапазона: заменить `[from, to)` на `insert`. */
+export interface MdEditorChange {
+  from: number;
+  to?: number;
+  insert?: string;
+}
+
+/** Транзакция правки редактора (текст и/или выделение). */
+export interface MdEditorEdit {
+  changes: MdEditorChange | readonly MdEditorChange[];
+  selection?: { anchor: number; head?: number };
+  /**
+   * Прокрутить поле к итоговому выделению (`scrollIntoView` CM6). Нужно
+   * командам, чья правка заменяет документ целиком (например, перемещение
+   * строк `moveLine`): такая замена рушит якорь прокрутки контейнера, и без
+   * явного прокручивания к каретке поле «прыгает» к началу документа
+   * (ошибка `ffb49898`). Прочие команды оставляют флаг не выставленным.
+   */
+  scrollIntoView?: boolean;
+}
+
+/**
+ * Подсветка вхождений поиска в редакторе (панель поиска поля комментария,
+ * задача 045f98db): запрос и текущее совпадение. `null` — подсветка снята.
+ */
+export interface MdSearchHighlight {
+  query: string;
+  /** Текущее совпадение (подсвечивается сильнее), либо `null`. */
+  current: { from: number; to: number } | null;
 }
 
 /** Handle of a mounted editor. */
@@ -47,11 +118,94 @@ export interface MdEditor {
    * публикации: курсор в месте клика/начале абзаца (задача ea1b5f14).
    */
   setCaret(position: number): void;
+  /**
+   * Ставит выделение `[anchor, head]` (оба клампятся по длине документа),
+   * фокусирует редактор и прокручивает к нему. Нужно входу в правку из
+   * просмотра: каретка и выделенное слово — в месте клика (задача 189da39e).
+   */
+  setSelection(anchor: number, head: number): void;
+  /**
+   * Входит во вложенный редактор блока трансклюзии, начинающегося в позиции
+   * `position` документа (ошибка `f3dd9fe3`): двойной клик по слову внутри
+   * блока в просмотре входит в правку, монтирует вложенный редактор и ставит
+   * выделение по вхождению `findText` (слово под кликом) — «курсор в месте
+   * клика», как в обычном тексте. Без вхождения — каретка в начало блока.
+   * Заблокированный/превышенная глубина блок — no-op (`enterBlock`).
+   */
+  enterBlockAt(position: number, findText?: string): void;
   focus(): void;
   focusToEnd(): void;
   blur(): void;
   destroy(): void;
+  /** Текст и главное выделение — вход чистых преобразований команд. */
+  snapshot(): MdEditorSnapshot;
+  /** Применяет правку (текст и/или выделение) одной транзакцией. */
+  applyEdit(edit: MdEditorEdit): void;
+  /** Подписка на изменения текста/выделения (для состояния кнопок тулбара). */
+  subscribe(listener: () => void): () => void;
+  /**
+   * Подсвечивает все вхождения запроса подсветкой CM6 (панель поиска поля,
+   * задача 045f98db). `null` снимает подсветку.
+   */
+  setSearchHighlight(highlight: MdSearchHighlight | null): void;
+  /**
+   * Выделяет диапазон и прокручивает к нему, НЕ забирая фокус у панели поиска
+   * (навигация F3/Enter из панели). Фокус остаётся там, где был.
+   */
+  selectMatch(from: number, to: number): void;
+  /**
+   * Сворачивает/разворачивает раздел под кареткой в режиме правки (команды
+   * `comment.fold`/`comment.unfold`, умолчания Ctrl+Up / Ctrl+Down; задача
+   * 558cac34). `fold` — свернуть, `unfold` — развернуть, `toggle` —
+   * переключить. Возвращает `false` как no-op, если под кареткой нет
+   * сворачиваемого раздела.
+   */
+  toggleCollapseAtCaret(mode: CollapseToggleMode): boolean;
 }
+
+/** Эффект установки подсветки поиска. */
+const setSearchHighlightEffect = StateEffect.define<MdSearchHighlight | null>();
+
+/** Состояние подсветки: текущий запрос и собранные декорации. */
+interface MdSearchState {
+  highlight: MdSearchHighlight | null;
+  deco: DecorationSet;
+}
+
+const searchMatchMark = Decoration.mark({ class: 'cm-md-search-hit' });
+const searchCurrentMark = Decoration.mark({ class: 'cm-md-search-hit cm-md-search-hit--current' });
+
+/** Собирает декорации подсветки всех вхождений запроса (текущее — сильнее). */
+function buildSearchDecorations(text: string, highlight: MdSearchHighlight | null): DecorationSet {
+  if (highlight === null || highlight.query === '') return Decoration.none;
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const match of findMatches(text, highlight.query)) {
+    const current =
+      highlight.current !== null &&
+      highlight.current.from === match.from &&
+      highlight.current.to === match.to;
+    builder.add(match.from, match.to, current ? searchCurrentMark : searchMatchMark);
+  }
+  return builder.finish();
+}
+
+const mdSearchField = StateField.define<MdSearchState>({
+  create: () => ({ highlight: null, deco: Decoration.none }),
+  update(value, tr) {
+    let highlight = value.highlight;
+    let touched = false;
+    for (const effect of tr.effects) {
+      if (effect.is(setSearchHighlightEffect)) {
+        highlight = effect.value;
+        touched = true;
+      }
+    }
+    if (tr.docChanged) touched = true;
+    if (!touched) return value;
+    return { highlight, deco: buildSearchDecorations(tr.state.doc.toString(), highlight) };
+  },
+  provide: (field) => EditorView.decorations.from(field, (state) => state.deco),
+});
 
 /** Syntax colours through the app's CSS variables (follows light/dark themes). */
 const mdHighlightStyle = HighlightStyle.define([
@@ -129,6 +283,14 @@ const mdTheme = EditorView.theme({
     backgroundColor: 'var(--surface)',
     color: 'var(--text)',
     border: '1px solid var(--border)',
+    // Тултипы CM6 (автокомплит `[[`, подсказки разделов) порталятся в body
+    // (см. mdEditorExtensions). Базовый стиль CM6 держит `.cm-tooltip { z-index: 500 }`,
+    // а `.dialog-backdrop` диалогов стоит на 900 — тултип уходил ПОД подложку
+    // в md-полях внутри диалогов (ошибка 7aee1df3). Проектная конвенция для
+    // body-mounted попапов — 950 (`.type-combo-list`, type-combobox.css:51-52,
+    // «above the dialog stack»). Тема ставится после baseTheme (Prec.lowest),
+    // поэтому перекрывает z-index базового стиля.
+    zIndex: '950',
   },
 });
 
@@ -196,74 +358,130 @@ function scrollCaretIntoView(
   return handled;
 }
 
-/** Test seam: the panel-scroll handler of the auto-height markdown editor. */
+/** Test seam: прокрутка каретки к видимой части контейнера. */
 export const mdEditorInternals = { scrollCaretIntoView };
+
+/**
+ * Стек расширений markdown-редактора: язык с wiki-ссылками и трансклюзиями,
+ * автокомплит (мысли и разделы источников), live preview, свёрнутость разделов,
+ * клавиатурные контексты поля (`lib/keymap` через `wikiLinkLegacyActions`),
+ * поиск, трансклюзии и тема.
+ *
+ * Вынесен отдельной функцией, чтобы markdown-редактор можно было поднять
+ * ЛЮБЫМ числом НЕЗАВИСИМЫХ инстансов одним стеком (поле-контейнер комментария и
+ * вложенные редакторы блоков трансклюзий — ТП «Живой блок»). Каждому инстансу
+ * нужен СВОЙ вызов: часть расширений несёт по-инстансные замыкания (кэш
+ * автокомплита `wikiLinkCompletions`, кэш разделов
+ * `transclusionSectionCompletions`) — общий массив на два редактора сцепил бы
+ * их кэши.
+ *
+ * `listeners` — подписчики на изменения текста/выделения (состояние кнопок
+ * тулбара); свой набор на инстанс. `cb.extraExtensions` идут последними,
+ * приоритет задаёт само расширение (`Prec.high`) — задача ab0c4470.
+ */
+export function mdEditorExtensions(
+  cb: MdEditorCallbacks = {},
+  listeners: Set<() => void> = new Set(),
+): Extension[] {
+  return [
+    // Esc cancels the edit (unless the autocomplete dropdown is open —
+    // then the completion keymap closes it first). Ctrl/Cmd+Enter
+    // commits and returns to the view (M10).
+    keymap.of([
+      {
+        key: 'Escape',
+        run: (v) => {
+          if (completionStatus(v.state) === 'active') return false;
+          cb.onEscape?.();
+          return true;
+        },
+      },
+      {
+        key: 'Mod-Enter',
+        run: () => {
+          cb.onCommit?.();
+          return true;
+        },
+      },
+      indentWithTab,
+    ]),
+    history(),
+    drawSelection(),
+    // Прокрутка каретки к видимой в контейнере панели, а не в самом поле
+    // (поле растёт по содержимому) — см. scrollCaretIntoView.
+    EditorView.scrollHandler.of(scrollCaretIntoView),
+    // Тултипы редактора (автокомплит `[[`, подсказки разделов) — порталом в
+    // `document.body` (ошибка 7aee1df3). Причина: дизайн-система ставит
+    // `container-type: inline-size` на каркасы (`.fp-host`, `.ui-table` и др.),
+    // а inline-size-контейнмент создаёт containing block для `position: fixed`
+    // потомков. Дефолтный `position: fixed` тултип CM6 внутри такого каркаса
+    // отсчитывался от ЕГО верхнего края (каркас «Дневника» ниже тулбара на
+    // ~127px) и всплывал не у каретки, а ниже (иногда за краем окна). Вынос
+    // контейнера тултипов в `body` уводит их из-под контейнмента: fixed-координаты
+    // снова отсчитываются от вьюпорта. Тема переносится CM6 (container несёт
+    // themeClasses редактора). Гард — тестовые headless-инстансы без DOM.
+    ...(typeof document !== 'undefined' && document.body != null
+      ? [tooltips({ parent: document.body })]
+      : []),
+    // Нативная проверка орфографии (задача 1e373ac7). CodeMirror 6 в
+    // updateAttrs() принудительно ставит `spellcheck="false"` на contentDOM,
+    // поэтому ошибки в комментарии не подчёркивались, в отличие от обычных
+    // полей (`lib/ui/field.ts`, spellcheck по умолчанию true). Фасет
+    // contentAttributes применяется после и возвращает атрибуту true; языки
+    // спеллчекера задаёт главный процесс (client/src/main/index.ts).
+    EditorView.contentAttributes.of({ spellcheck: 'true' }),
+    EditorView.lineWrapping,
+    syntaxHighlighting(mdHighlightStyle, { fallback: true }),
+    EditorView.updateListener.of((update) => {
+      // Единственная точка, где markdown документа уходит владельцу поля.
+      // Текст блоков трансклюзий живёт во ВЛОЖЕННЫХ редакторах и в документ
+      // контейнера не попадает — гейт подавления больше не нужен.
+      if (update.docChanged) cb.onInput?.(update.state.doc.toString());
+      if (update.docChanged || update.selectionSet) {
+        for (const listener of listeners) listener();
+      }
+    }),
+    // The markdown keymap (Enter/Backspace list handling) must outrank
+    // the default keymap below.
+    markdown({
+      base: markdownLanguage,
+      addKeymap: true,
+      codeLanguages,
+      extensions: [wikiLinkLanguage()],
+    }),
+    keymap.of([...historyKeymap, ...completionKeymap, ...defaultKeymap]),
+    wikiLinkAutocompletion(),
+    ...wikiIdExtensions,
+    ...transclusionExtensions,
+    wikiLinkLegacyActions,
+    livePreview,
+    mdWidgetClick,
+    mdSearchField,
+    mdTheme,
+    // Дополнительные расширения вызывающего (точечные перекрытия сочетаний
+    // команд поля — задача ab0c4470). Идут последними; приоритет задаётся
+    // самим расширением (`Prec.high`), а не порядком подключения.
+    ...(cb.extraExtensions ?? []),
+  ];
+}
 
 /** Creates a markdown editor for the given initial document. */
 export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdEditor {
+  /** Подписчики на изменения (текст/выделение) — состояние кнопок тулбара. */
+  const listeners = new Set<() => void>();
+  /** Редактор уничтожен (например, поле вышло из правки) — правки игнорируем. */
+  let alive = true;
   const view = new EditorView({
     state: EditorState.create({
       doc: initial,
-      extensions: [
-        // Esc cancels the edit (unless the autocomplete dropdown is open —
-        // then the completion keymap closes it first). Ctrl/Cmd+Enter
-        // commits and returns to the view (M10).
-        keymap.of([
-          {
-            key: 'Escape',
-            run: (v) => {
-              if (completionStatus(v.state) === 'active') return false;
-              cb.onEscape?.();
-              return true;
-            },
-          },
-          {
-            key: 'Mod-Enter',
-            run: () => {
-              cb.onCommit?.();
-              return true;
-            },
-          },
-          indentWithTab,
-        ]),
-        history(),
-        drawSelection(),
-        // Прокрутка каретки к видимой в контейнере панели, а не в самом поле
-        // (поле растёт по содержимому) — см. scrollCaretIntoView.
-        EditorView.scrollHandler.of(scrollCaretIntoView),
-        // Нативная проверка орфографии (задача 1e373ac7). CodeMirror 6 в
-        // updateAttrs() принудительно ставит `spellcheck="false"` на contentDOM,
-        // поэтому ошибки в комментарии не подчёркивались, в отличие от обычных
-        // полей (`lib/ui/field.ts`, spellcheck по умолчанию true). Фасет
-        // contentAttributes применяется после и возвращает атрибуту true; языки
-        // спеллчекера задаёт главный процесс (client/src/main/index.ts).
-        EditorView.contentAttributes.of({ spellcheck: 'true' }),
-        EditorView.lineWrapping,
-        syntaxHighlighting(mdHighlightStyle, { fallback: true }),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) cb.onInput?.(update.state.doc.toString());
-        }),
-        // The markdown keymap (Enter/Backspace list handling) must outrank
-        // the default keymap below.
-        markdown({
-          base: markdownLanguage,
-          addKeymap: true,
-          codeLanguages,
-          extensions: [wikiLinkLanguage()],
-        }),
-        keymap.of([...historyKeymap, ...completionKeymap, ...defaultKeymap]),
-        wikiLinkAutocompletion(),
-        ...wikiIdExtensions,
-        wikiLinkLegacyActions,
-        livePreview,
-        mdWidgetClick,
-        mdTheme,
-      ],
+      // Стек расширений общий для поля-контейнера и вложенных редакторов;
+      // каждый инстанс получает СВОЙ вызов (по-инстансные кэши расширений).
+      extensions: mdEditorExtensions(cb, listeners),
     }),
   });
 
-  view.dom.addEventListener('focusout', () => {
-    cb.onBlur?.();
+  view.dom.addEventListener('focusout', (event) => {
+    cb.onBlur?.(event);
   });
 
   return {
@@ -293,6 +511,25 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       view.focus();
       view.dispatch({ selection: { anchor }, scrollIntoView: true });
     },
+    setSelection: (anchorPos: number, headPos: number) => {
+      const len = view.state.doc.length;
+      const anchor = Math.max(0, Math.min(len, Math.trunc(anchorPos)));
+      const head = Math.max(0, Math.min(len, Math.trunc(headPos)));
+      view.focus();
+      view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
+    },
+    enterBlockAt: (position: number, findText?: string) => {
+      const ref = transclusionRefStartingAt(view.state.doc.toString(), Math.trunc(position));
+      if (ref === null) return;
+      // Монтаж/активация вложенного редактора синхронны (см. `enterBlock`).
+      enterBlock(view, ref, false);
+      const store = view.state.facet(blockEditorStoreFacet);
+      if (store === null) return;
+      const key = blockEditorKey(ref.sourceId, ref.section);
+      // Слово под двойным кликом — выделение в месте клика; не найдено — каретка
+      // в начало блока (её уже поставил `enterBlock`).
+      if (findText !== undefined && findText !== '') store.selectByText(key, findText);
+    },
     focusToEnd: () => {
       view.focus();
       // `scrollIntoView` (замечание проверки f4f99e3f): без него при входе в
@@ -303,7 +540,50 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         scrollIntoView: true,
       });
     },
-    blur: () => view.contentDOM.blur(),
-    destroy: () => view.destroy(),
+    blur: () => {
+      // Если фокус во вложенном редакторе блока, `contentDOM.blur()` контейнера
+      // — no-op (фокус не у него), и поле не ушло бы в просмотр. Сначала
+      // возвращаем фокус контейнеру (вложенный редактор при этом выходит из
+      // блока своим `focusout`), затем отпускаем фокус контейнера.
+      view.focus();
+      exitActiveBlock(view);
+      view.contentDOM.blur();
+    },
+    snapshot: () => {
+      const { state } = view;
+      const sel = state.selection.main;
+      return { text: state.doc.toString(), from: sel.from, to: sel.to };
+    },
+    applyEdit: (edit) => {
+      if (!alive) return;
+      view.dispatch({
+        changes: edit.changes,
+        selection: edit.selection,
+        scrollIntoView: edit.scrollIntoView,
+      });
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    setSearchHighlight: (highlight) => {
+      view.dispatch({ effects: setSearchHighlightEffect.of(highlight) });
+    },
+    selectMatch: (from, to) => {
+      const len = view.state.doc.length;
+      const anchor = Math.max(0, Math.min(len, Math.trunc(from)));
+      const head = Math.max(anchor, Math.min(len, Math.trunc(to)));
+      // Фокус НЕ забираем: навигация идёт из панели поиска, её поле должно
+      // остаться активным (F3/Enter продолжают работать).
+      view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
+    },
+    toggleCollapseAtCaret: (mode) => runCollapseToggle(view, mode),
+    destroy: () => {
+      alive = false;
+      listeners.clear();
+      view.destroy();
+    },
   };
 }

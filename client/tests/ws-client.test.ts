@@ -127,6 +127,16 @@ function trackSockets(server: WebSocketServer): WebSocket[] {
   return sockets;
 }
 
+/**
+ * Resolves once the client's `resume` handshake frame has landed on the
+ * server-side socket. Deterministic replacement for a fixed sleep: the resume
+ * is sent right after `open`, so under load a `wait(20)` could observe the
+ * socket before the frame arrived (flake `85657ee0`).
+ */
+function waitForResume(ws: WebSocket & { messages: string[] }): Promise<void> {
+  return until(() => ws.messages.some((m) => m.includes('"type":"resume"')));
+}
+
 const teardowns: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (teardowns.length) {
@@ -145,7 +155,7 @@ describe('RealtimeClient — handshake & resume', () => {
     const client = makeClient(url, db);
     client.connect();
     const ws = await conn;
-    await wait(20);
+    await waitForResume(ws);
 
     const resumes = ws.messages.map((m) => JSON.parse(m) as { type: string; last_seq: number });
     assert.ok(
@@ -164,7 +174,7 @@ describe('RealtimeClient — handshake & resume', () => {
     const client = makeClient(url, db);
     client.connect();
     const ws = await conn;
-    await wait(20);
+    await waitForResume(ws);
 
     const resumes = ws.messages.map((m) => JSON.parse(m) as { type: string; last_seq: number });
     assert.ok(resumes.some((m) => m.type === 'resume' && m.last_seq === 0));

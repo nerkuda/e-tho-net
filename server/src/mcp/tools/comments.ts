@@ -7,7 +7,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
-import type { McpMutationResult } from '@etn/shared';
+import type { McpMutationResult, MutationWarning } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import {
   CommentsEdit,
@@ -17,9 +17,12 @@ import {
 import {
   editComment,
   getComment,
+  getPermanentComment,
+  getVisibleComment,
   listComments,
   updateComment,
 } from '../../domain/comment-service.js';
+import { createBodyPresenter } from '../../domain/transclusion-service.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
@@ -46,21 +49,35 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
+        // MCP-выдача отдаёт `body_md` с развёрнутыми трансклюзиями и маркерами
+        // границ (ТП2, задача bcfc7eb7, ADR 85a7a01e); в базе хранится
+        // исходная ссылка, REST-ответы её сохраняют. `body_html` пересобирается
+        // из развёрнутого текста — иначе кеш показывает нетронутую ссылку-
+        // трансклюзию как обычный текст (ошибка a6da3d37).
+        const present = createBodyPresenter(ndb);
         if (args.comment_id !== undefined) {
-          const comment = getComment(ndb, args.comment_id);
+          // Ошибка ec9918b3: для постоянного комментария идентичность — его
+          // владелец, поэтому по-id чтение отдаёт ВИДИМУЮ редакцию (ближайший
+          // слой) — ту же, что `etn.instructions`/`meta.permanent`. Без этого
+          // устаревший легаси-id возвращал старый текст инструкции.
+          const comment = getVisibleComment(ndb, args.comment_id);
           if (comment === null) {
             throw new Error(`ETN error [NOT_FOUND]: comment ${args.comment_id} not found`);
           }
-          return comment;
+          return { ...comment, ...present(comment.body_md) };
         }
         // The refine guarantees exactly one of the two; TS needs an explicit check.
         if (args.thought_id === undefined) {
           throw new Error('ETN error [VALIDATION_ERROR]: thought_id required');
         }
         getThoughtOrThrow(ndb, args.thought_id);
-        const permanent =
-          listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ?? null;
-        return { thought_id: args.thought_id, permanent };
+        // Видимый постоянный комментарий по владельцу (ошибка ec9918b3) —
+        // та же редакция, что в `etn.instructions`.
+        const permanent = getPermanentComment(ndb, 'thought', args.thought_id);
+        return {
+          thought_id: args.thought_id,
+          permanent: permanent === null ? null : { ...permanent, ...present(permanent.body_md) },
+        };
       }),
   );
 }
@@ -83,6 +100,10 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
         const fx = mcpWriteFx(rt, args.network_id, extra.requestId);
+        // Коллектор предупреждений записи (требование 822a9149): правка,
+        // теряющая живые трансклюзии, применяется, но предупреждение
+        // возвращается агенту в `warnings`.
+        const warnings: MutationWarning[] = [];
         const comment = runWrite(ndb, fx, () => {
           const updated = updateComment(
             ndb,
@@ -90,6 +111,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
             args.changes,
             args.expected_version,
             rt.deps.auth.userId,
+            { warnings },
           );
           return {
             result: updated,
@@ -118,6 +140,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
           id: comment.id,
           version: comment.version,
           request_id: String(extra.requestId),
+          ...(warnings.length > 0 ? { warnings } : {}),
         } satisfies McpMutationResult;
       }),
   );
@@ -210,6 +233,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
           sections: result.sections,
           chars_total: result.chars_total,
           request_id: String(extra.requestId),
+          ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
         };
       }),
   );

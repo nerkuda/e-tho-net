@@ -1,7 +1,7 @@
 /**
  * Чистые помощники экрана «Дневник» (0.10.1, задача T6 64ca2b48):
  * локальный день, периоды календаря, разворот длинной записи по дням,
- * группировка ленты, ленивое создание псевдо-записи и состав чипсов.
+ * группировка ленты и состав чипсов.
  *
  * Тесты без DOM и сети (конвенция `tests/zone-paging.test.ts`).
  */
@@ -17,10 +17,8 @@ import {
   addDays,
   applyPeriodToFilter,
   clampPseudoDate,
-  dayInPeriod,
   dayPeriod,
   groupByLocalDays,
-  hasRecordContent,
   isLastChip,
   isPeriodToken,
   isoWeekNumber,
@@ -30,7 +28,6 @@ import {
   resolveDateToken,
   resolvePeriodDay,
   rowDays,
-  slotDeleteNeedsNetwork,
   visibleChips,
   weekPeriod,
 } from '../src/renderer/screens/chronicle/diary.js';
@@ -127,12 +124,12 @@ describe('diary: разворот записи по дням периода (e09
 
 describe('diary: группировка ленты по дням (c6ddc1ea)', () => {
   it('сохраняет серверный порядок записей внутри дня', () => {
-    // Сервер уже отсортировал (класс 0 впереди): клиент не пересортировывает.
-    const first = row({ id: 'class0', valid_from: '2026-09-26T13:00:00.000Z' });
-    const second = row({ id: 'class1', valid_from: '2026-09-26T12:00:00.000Z' });
+    // Сервер уже отсортировал (по дате/времени): клиент не пересортировывает.
+    const first = row({ id: 'a', valid_from: '2026-09-26T13:00:00.000Z' });
+    const second = row({ id: 'b', valid_from: '2026-09-26T12:00:00.000Z' });
     const days = groupByLocalDays([first, second]);
     assert.equal(days.length, 1);
-    assert.deepEqual(days[0]!.rows.map((r) => r.id), ['class0', 'class1']);
+    assert.deepEqual(days[0]!.rows.map((r) => r.id), ['a', 'b']);
   });
 
   it('дни идут по возрастанию, длинная запись попадает в каждый день', () => {
@@ -157,48 +154,6 @@ describe('diary: группировка ленты по дням (c6ddc1ea)', ()
     });
     const days = groupByLocalDays([long], { from: '2026-09-26', to: '2026-09-27' });
     assert.deepEqual(days.map((d) => d.day), ['2026-09-26', '2026-09-27']);
-  });
-});
-
-describe('diary: день псевдо-записи виден только в своём периоде (ошибка effefba3)', () => {
-  it('dayInPeriod: включительные границы, пустая граница не ограничивает', () => {
-    assert.equal(dayInPeriod('2026-09-29', '2026-09-01', '2026-09-30'), true);
-    assert.equal(dayInPeriod('2026-09-01', '2026-09-01', '2026-09-30'), true, 'нижняя включительна');
-    assert.equal(dayInPeriod('2026-09-30', '2026-09-01', '2026-09-30'), true, 'верхняя включительна');
-    assert.equal(dayInPeriod('2026-09-29', '2026-09-15', '2026-09-15'), false, 'другой день — вне периода');
-    assert.equal(dayInPeriod('2026-09-29', '', ''), true, 'период не задан — не ограничивает');
-    assert.equal(dayInPeriod('', '2026-09-01', '2026-09-30'), false, 'пустой день не виден');
-  });
-
-  it('сценарий карточки: псевдо-запись и запись вне своего периода не показываются', () => {
-    // Создание при периоде-месяце: псевдо-запись получила день 29.
-    assert.equal(dayInPeriod('2026-09-29', '2026-09-01', '2026-09-30'), true);
-    // Смена периода на другой день (как клик по дате 15) — псевдо-запись скрыта.
-    assert.equal(dayInPeriod('2026-09-29', '2026-09-15', '2026-09-15'), false);
-    // Запись, уже сохранённая на 29, в периоде 15 тоже отсутствует (группировка).
-    const saved = row({ id: 'saved', valid_from: '2026-09-29T12:00:00.000Z' });
-    assert.deepEqual(groupByLocalDays([saved], { from: '2026-09-15', to: '2026-09-15' }), []);
-    // Возврат периода, содержащего день псевдо-записи, — она снова видна.
-    assert.equal(dayInPeriod('2026-09-29', '2026-09-28', '2026-09-30'), true);
-  });
-
-  it('renderFeed показывает слот по dayInPeriod и монтирует только его день', () => {
-    const src = read('screens/chronicle/chronicle.ts');
-    assert.match(
-      src,
-      /const slotDay = slotNow !== null && dayInPeriod\(slotNow\.day, from, to\) \? slotNow\.day : null;/,
-      'день слота допускается в ленту только внутри применённого периода',
-    );
-    assert.match(
-      src,
-      /if \(slotNow !== null && slotDay === day\.day\) dayList\.prepend\(slotNow\.root\);/,
-      'слот монтируется только в свой (допущенный) день',
-    );
-    // Голого добавления дня слота без проверки периода быть не должно.
-    assert.ok(
-      !/days\.push\(\{ day: slotNow\.day, rows: \[\] \}\)/.test(src),
-      'день слота не добавляется в ленту безусловно',
-    );
   });
 });
 
@@ -237,31 +192,18 @@ describe('diary: клик календаря = новый период, проч
   });
 });
 
-describe('diary: ленивое создание псевдо-записи (26f0aa52)', () => {
-  it('пустая псевдо-запись не создаётся, любой содержательный элемент — да', () => {
-    assert.equal(hasRecordContent({}), false);
-    assert.equal(hasRecordContent({ title: '  ', body: '\n' }), false);
-    assert.equal(hasRecordContent({ title: 'Встреча' }), true);
-    assert.equal(hasRecordContent({ body: 'текст' }), true);
-    assert.equal(hasRecordContent({ bindings: 1 }), true);
-  });
-
-  it('удаление пустого слота не требует сети', () => {
-    assert.equal(slotDeleteNeedsNetwork(null), false);
-    assert.equal(slotDeleteNeedsNetwork('comment-1'), true);
-  });
-
-  it('создание записи без обходной меры-пробела (ошибка 00115e7b исправлена)', () => {
+describe('diary: немедленное создание записи (26f0aa52, новая модель)', () => {
+  it('«Добавить» создаёт запись сразу, пустую, и открывает её в правке', () => {
     const src = read('screens/chronicle/chronicle.ts');
-    assert.ok(
-      !/\?\s*'\s'\s*:\s*body/.test(src),
-      'обходная мера «body_md из пробела» снята — сервер принимает пустой текст',
-    );
-    assert.match(
-      src,
-      /body_md:\s*body\b/,
-      'текст записи отправляется как есть (пустой допустим при заголовке/чипсе)',
-    );
+    // Запись создаётся сразу с HOME-привязкой, без заголовка и текста.
+    assert.match(src, /^async function addRecord\(/m, 'экран ведёт создание через `addRecord`');
+    assert.match(src, /kind: 'chronological',\s*\n\s*title: null,\s*\n\s*body_md: '',/);
+    // Локальная вставка на своё место + сразу в правке.
+    assert.match(src, /await insertCreatedRecord\(localRow\)/);
+    assert.match(src, /cardEditors\.get\(card\)\?\.openTitle\(\)/);
+    // Псевдозапись/слот демонтированы.
+    assert.ok(!/startSlot|ensureSlot|SlotState|slotBusy|slotFocusInside|slotSuspendConvert/.test(src));
+    assert.ok(!/planSlotCommit|enqueueSlotSave|slotDeleteNeedsNetwork/.test(src));
   });
 });
 

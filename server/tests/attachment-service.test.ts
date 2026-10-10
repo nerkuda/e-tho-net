@@ -9,7 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { EtnError } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError } from '@etn/shared';
+
+import { DEFAULT_MAX_LENGTH } from '@etn/markdown';
 
 import DatabaseConstructor from 'better-sqlite3';
 
@@ -17,9 +19,11 @@ import { createInMemoryNetworkDb, NetworkDb, registerMigrationHelpers } from '..
 import { runMigrations } from '../src/db/migrator.js';
 import { networkMigrationsDir } from '../src/paths.js';
 import {
+  addOwners,
   copyAttachment,
   createAttachment,
   createAttachmentFile,
+  createAttachmentFileResult,
   deleteAttachment,
   enrichUrlAttachment,
   extractFaviconUrl,
@@ -27,7 +31,10 @@ import {
   getAttachment,
   getAttachmentContent,
   getAttachmentRawByPath,
+  hasLiveOwnershipAnywhere,
+  hasOwnership,
   listAttachments,
+  removeOwner,
   searchAttachments,
   updateAttachment,
   updateAttachmentContent,
@@ -366,14 +373,19 @@ describe(
           USER,
         );
         assert.ok(stored.file_path !== null && existsSync(stored.file_path));
-        // A second row resolving to the same file (possible via PATCH file_path).
+        // Вторая строка, разрешающаяся в тот же файл (возможно через PATCH
+        // file_path): делаем её отдельным вложением с другим относительным
+        // адресом и переносим file_path на общий файл (дедуп по хэшу при
+        // создании такой строки не даёт — содержимое то же, но создаём через
+        // клиентский путь, который сервер не читает).
         const twin = createAttachment(
           ndb,
           'thought',
           t2,
-          { kind: 'file', file_path: stored.file_path, mime_type: 'image/png' },
+          { kind: 'file', file_path: 'C:\\client\\other.bin', mime_type: 'image/png' },
           USER,
         );
+        updateAttachment(ndb, twin.id, { file_path: stored.file_path }, USER);
         deleteAttachment(ndb, stored.id);
         assert.ok(existsSync(stored.file_path), 'shared file must survive one row deletion');
         deleteAttachment(ndb, twin.id);
@@ -636,6 +648,65 @@ describe(
       }
     });
 
+    it('updateAttachmentContent rejects markdown over the render limit without touching file or row (9f2e94b0)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-content-over', path.join(tmp, 'data.db'));
+      try {
+        const t = seedThought(ndb);
+        const md = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          {
+            title: 'Большой',
+            mime_type: 'text/markdown',
+            data_base64: Buffer.from('# старый').toString('base64'),
+          },
+          USER,
+        );
+        const before = getAttachment(ndb, md.id);
+        assert.ok(before !== null);
+
+        // Over-limit body: 422 VALIDATION_ERROR with the payload field, and
+        // neither the file on disk nor the row may change (error 9f2e94b0).
+        const over = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        assert.throws(
+          () =>
+            updateAttachmentContent(ndb, md.id, {
+              data_base64: Buffer.from(over).toString('base64'),
+            }),
+          (e: unknown) =>
+            e instanceof EtnError &&
+            e.code === 'VALIDATION_ERROR' &&
+            (e.details as { field?: string }).field === 'data_base64' &&
+            (e.details as { limit?: number }).limit === DEFAULT_MAX_LENGTH,
+        );
+        assert.equal(readFileSync(md.file_path!, 'utf8'), '# старый');
+        const after = getAttachment(ndb, md.id);
+        assert.ok(after !== null);
+        assert.equal(after.file_size, before.file_size);
+        assert.equal(after.updated_at_ms, before.updated_at_ms);
+
+        // The boundary is inclusive: exactly DEFAULT_MAX_LENGTH is accepted.
+        const exact = 'a'.repeat(DEFAULT_MAX_LENGTH);
+        const result = updateAttachmentContent(ndb, md.id, {
+          data_base64: Buffer.from(exact).toString('base64'),
+        });
+        assert.ok(result.html !== null);
+        assert.equal(readFileSync(md.file_path!, 'utf8'), exact);
+        const refreshed = getAttachment(ndb, md.id);
+        assert.ok(refreshed !== null);
+        assert.equal(refreshed.file_size, DEFAULT_MAX_LENGTH);
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
     it('getAttachmentRawByPath serves stored files and rejects everything else', () => {
       const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
       const db = new DatabaseConstructor(':memory:');
@@ -721,34 +792,36 @@ describe(
           USER,
         );
         assert.equal(result.skipped.length, 0);
-        assert.equal(result.created.length, 2);
-        // New ids, same visible fields.
-        const ids = new Set(result.created.map((c) => c.id));
-        assert.equal(ids.size, 2);
-        for (const created of result.created) {
-          assert.notEqual(created.id, a.id);
-          assert.equal(created.kind, 'url');
-          assert.equal(created.url, 'https://e.com/page');
-          assert.equal(created.title, 'Page');
-          assert.equal(created.description, 'desc');
-          assert.equal(created.mime_type, 'text/html');
-          assert.equal(created.icon, 'data:image/png;base64,AAA');
-          assert.equal(created.owner_type, 'thought');
-          assert.ok([t1, t2].includes(created.owner_id));
+        assert.equal(result.added.length, 2);
+        assert.deepEqual(
+          result.added.map((r) => r.owner_id).sort(),
+          [t1, t2].sort(),
+        );
+        // С муль-владением копия = владение ТОЙ ЖЕ строкой: новых строк нет,
+        // видимые поля сохранены, id общий.
+        for (const ref of result.added) {
+          const list = listAttachments(ndb, 'thought', ref.owner_id);
+          assert.equal(list.length, 1);
+          const shared = list[0]!;
+          assert.equal(shared.id, a.id);
+          assert.equal(shared.kind, 'url');
+          assert.equal(shared.url, 'https://e.com/page');
+          assert.equal(shared.title, 'Page');
+          assert.equal(shared.description, 'desc');
+          assert.equal(shared.mime_type, 'text/html');
+          assert.equal(shared.icon, 'data:image/png;base64,AAA');
         }
-        // Each target now sees the attachment in its list.
-        assert.equal(listAttachments(ndb, 'thought', t1).length, 1);
-        assert.equal(listAttachments(ndb, 'thought', t2).length, 1);
       } finally {
         ndb.close();
       }
     });
 
-    it('copyAttachment skips duplicate (same owner + same kind + same url) silently', () => {
+    it('copyAttachment skips a target that already owns the attachment (idempotent)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const source = seedThought(ndb);
         const target = seedThought(ndb);
+        const otherTarget = seedThought(ndb, 'Other');
         const a = createAttachment(
           ndb,
           'thought',
@@ -756,18 +829,16 @@ describe(
           { kind: 'url', url: 'https://e.com/dup' },
           USER,
         );
-        // Pre-existing copy on the target.
-        createAttachment(ndb, 'thought', target, { kind: 'url', url: 'https://e.com/dup' }, USER);
-        const otherTarget = seedThought(ndb, 'Other');
+        // target уже владеет этим вложением.
+        copyAttachment(ndb, a.id, { target_owner_type: 'thought', target_owner_ids: [target] }, USER);
         const result = copyAttachment(
           ndb,
           a.id,
           { target_owner_type: 'thought', target_owner_ids: [target, otherTarget] },
           USER,
         );
-        assert.deepEqual(result.skipped, [target]);
-        assert.equal(result.created.length, 1);
-        assert.equal(result.created[0]!.owner_id, otherTarget);
+        assert.deepEqual(result.skipped.map((r) => r.owner_id), [target]);
+        assert.deepEqual(result.added.map((r) => r.owner_id), [otherTarget]);
       } finally {
         ndb.close();
       }
@@ -803,7 +874,7 @@ describe(
       }
     });
 
-    it('copyAttachment preserves file_path on kind=file (no file copy)', () => {
+    it('copyAttachment shares one row on kind=file (no file copy)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const source = seedThought(ndb);
@@ -821,10 +892,12 @@ describe(
           { target_owner_type: 'thought', target_owner_ids: [t] },
           USER,
         );
-        assert.equal(result.created.length, 1);
-        assert.equal(result.created[0]!.file_path, 'C:\\shared\\plan.md');
-        assert.equal(result.created[0]!.kind, 'file');
-        assert.equal(result.created[0]!.mime_type, 'text/markdown');
+        assert.equal(result.added.length, 1);
+        const shared = listAttachments(ndb, 'thought', t)[0]!;
+        assert.equal(shared.id, a.id);
+        assert.equal(shared.file_path, 'C:\\shared\\plan.md');
+        assert.equal(shared.kind, 'file');
+        assert.equal(shared.mime_type, 'text/markdown');
       } finally {
         ndb.close();
       }
@@ -916,6 +989,456 @@ describe(
         assert.equal(excludeOwner.items[0]!.owner_id, other);
       } finally {
         ndb.close();
+      }
+    });
+
+    // --- ownership (0.12.1, ADR 9f90b010, задача 7678876a) -------------------
+
+    it('listAttachments orders by ownership position', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const late = createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'url', url: 'https://e/late', position: 5 },
+          USER,
+        );
+        const early = createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'url', url: 'https://e/early', position: 1 },
+          USER,
+        );
+        const list = listAttachments(ndb, 'thought', t);
+        assert.deepEqual(
+          list.map((a) => a.id),
+          [early.id, late.id],
+        );
+        assert.deepEqual(
+          list.map((a) => a.position),
+          [1, 5],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('addOwners is idempotent (sticky ownership)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t1 = seedThought(ndb, 'A');
+        const t2 = seedThought(ndb, 'B');
+        const a = createAttachment(ndb, 'thought', t1, { kind: 'url', url: 'https://e/x' }, USER);
+        const r1 = addOwners(ndb, a.id, 'thought', [t2, t2], USER);
+        assert.deepEqual(
+          r1.added.map((x) => x.owner_id),
+          [t2],
+        );
+        const r2 = addOwners(ndb, a.id, 'thought', [t2], USER);
+        assert.deepEqual(r2.added, []);
+        assert.deepEqual(
+          r2.skipped.map((x) => x.owner_id),
+          [t2],
+        );
+        assert.equal(listAttachments(ndb, 'thought', t2).length, 1);
+        assert.ok(hasOwnership(ndb, a.id, 'thought', t2));
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('removeOwner forbids removing an ownership that backs the object icon', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const a = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://e/icon' }, USER);
+        ndb.prepare('UPDATE thoughts SET icon_attachment_id = ? WHERE id = ?').run(a.id, t);
+        assert.throws(
+          () => removeOwner(ndb, a.id, 'thought', t),
+          (e: unknown) =>
+            e instanceof EtnError &&
+            (e.details as { code?: string }).code === 'ATTACHMENT_OWNER_IS_ICON',
+        );
+        assert.ok(hasOwnership(ndb, a.id, 'thought', t), 'владение не снято');
+        // Нет живого владения — 404.
+        const other = seedThought(ndb, 'Other');
+        assert.throws(
+          () => removeOwner(ndb, a.id, 'thought', other),
+          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('removeOwner deletes the attachment and file with the last live owner', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-own-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-own', path.join(tmp, 'data.db'));
+      try {
+        const t1 = seedThought(ndb, 'A');
+        const t2 = seedThought(ndb, 'B');
+        const stored = createAttachmentFile(
+          ndb,
+          'thought',
+          t1,
+          {
+            title: 'pic',
+            mime_type: 'image/png',
+            data_base64: Buffer.from('own-bytes').toString('base64'),
+          },
+          USER,
+        );
+        const fp = stored.file_path!;
+        assert.ok(existsSync(fp));
+        copyAttachment(ndb, stored.id, { target_owner_type: 'thought', target_owner_ids: [t2] }, USER);
+        const r1 = removeOwner(ndb, stored.id, 'thought', t1);
+        assert.deepEqual(r1, { removed: true, attachment_deleted: false });
+        assert.notEqual(getAttachment(ndb, stored.id), null);
+        assert.ok(existsSync(fp), 'файл удержан владением t2');
+        const r2 = removeOwner(ndb, stored.id, 'thought', t2);
+        assert.deepEqual(r2, { removed: true, attachment_deleted: true });
+        assert.equal(getAttachment(ndb, stored.id), null);
+        assert.equal(existsSync(fp), false);
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('uploading the same bytes reuses the attachment (dedup by content_hash)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-dedup-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-dedup', path.join(tmp, 'data.db'));
+      try {
+        const t1 = seedThought(ndb, 'A');
+        const t2 = seedThought(ndb, 'B');
+        const b64 = Buffer.from('same-image-bytes').toString('base64');
+        const first = createAttachmentFileResult(
+          ndb,
+          'thought',
+          t1,
+          { title: 'a', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(first.reused, false);
+        const second = createAttachmentFileResult(
+          ndb,
+          'thought',
+          t2,
+          { title: 'b', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(second.reused, true);
+        assert.equal(second.attachment.id, first.attachment.id);
+        // Одна строка — два владельца.
+        const l1 = listAttachments(ndb, 'thought', t1);
+        const l2 = listAttachments(ndb, 'thought', t2);
+        assert.equal(l1.length, 1);
+        assert.equal(l2.length, 1);
+        assert.equal(l1[0]!.id, l2[0]!.id);
+        assert.ok(hasOwnership(ndb, first.attachment.id, 'thought', t2));
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('rename changes the shared title only; ownership stays', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const a = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://e/doc' }, USER);
+        const updated = updateAttachment(ndb, a.id, { title: 'Новое имя' }, USER);
+        assert.equal(updated.title, 'Новое имя');
+        assert.equal(updated.url, 'https://e/doc');
+        assert.ok(hasOwnership(ndb, a.id, 'thought', t));
+        assert.equal(listAttachments(ndb, 'thought', t)[0]!.title, 'Новое имя');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    // --- дедуп и судьба файла МЕЖДУ слоями (0.12.1, ADR e3a35864) ------------
+
+    const LAYER_A = '11111111-1111-4111-8111-aaaaaaaaaaaa';
+    const LAYER_B = '22222222-2222-4222-8222-bbbbbbbbbbbb';
+    const LAYER_SERVICE = '33333333-3333-4333-8333-cccccccccccc';
+
+    /** Вставить строку слоя (is_service по умолчанию 0). */
+    function seedLayerRow(
+      ndb: NetworkDb,
+      id: string,
+      parentId: string,
+      service = false,
+    ): void {
+      const now = new Date().toISOString();
+      ndb
+        .prepare(
+          `INSERT INTO layers (id, parent_id, title, is_service, is_base, depth, created_by, created_at, last_activity_at)
+           VALUES (?, ?, 'Слой', ?, 0, ?, 'u', ?, ?)`,
+        )
+        .run(id, parentId, service ? 1 : 0, parentId === BASE_LAYER_ID ? 1 : 2, now, now);
+    }
+
+    it('dedup reuses a row found in another layer (raw search across layers, materializes across branches)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-xl-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-xl', path.join(tmp, 'data.db'));
+      try {
+        // Истинные братья: A и B — оба прямые дети основы.
+        seedLayerRow(ndb, LAYER_A, BASE_LAYER_ID);
+        seedLayerRow(ndb, LAYER_B, BASE_LAYER_ID);
+        const ownerBase = seedThought(ndb, 'Владелец основы');
+        const ownerA = seedThought(ndb, 'Владелец A');
+        const ownerA2 = seedThought(ndb, 'Владелец A2');
+        const ownerB = seedThought(ndb, 'Владелец B');
+        const ownerA3 = seedThought(ndb, 'Владелец A3');
+        const ownerBase3 = seedThought(ndb, 'Владелец основы 3');
+
+        const upload = (
+          owner: string,
+          bytes: string,
+        ): { id: string; file_path: string | null; reused: boolean } => {
+          const r = createAttachmentFileResult(
+            ndb,
+            'thought',
+            owner,
+            { title: 'x', mime_type: 'image/png', data_base64: Buffer.from(bytes).toString('base64') },
+            USER,
+          );
+          return { id: r.attachment.id, file_path: r.attachment.file_path, reused: r.reused };
+        };
+
+        // S1. Подъём к предку: строка в ОСНОВЕ, загрузка в ПОТОМКЕ A — строка
+        //     видна через цепочку, материализация не нужна.
+        ndb.useLayer(BASE_LAYER_ID);
+        const baseRow = upload(ownerBase, 'payload-ancestor');
+        assert.equal(baseRow.reused, false);
+        ndb.useLayer(LAYER_A);
+        const inA = upload(ownerA, 'payload-ancestor');
+        assert.equal(inA.reused, true, 'S1: предок виден из потомка');
+        assert.equal(inA.id, baseRow.id);
+        assert.notEqual(getAttachment(ndb, inA.id), null, 'S1: вложение видно в слое A');
+        assert.equal(listAttachments(ndb, 'thought', ownerA).length, 1, 'S1: listAttachments=1');
+
+        // S2. Брат→брат: строка в СЛОЕ A, загрузка в СЛОЕ B (вне цепочки) —
+        //     строка МАТЕРИАЛИЗУЕТСЯ в B, затем видна.
+        ndb.useLayer(LAYER_A);
+        const aRow = upload(ownerA2, 'payload-sibling');
+        assert.equal(aRow.reused, false);
+        ndb.useLayer(LAYER_B);
+        const inB = upload(ownerB, 'payload-sibling');
+        assert.equal(inB.reused, true, 'S2: брат переиспользован');
+        assert.equal(inB.id, aRow.id);
+        assert.notEqual(getAttachment(ndb, inB.id), null, 'S2: вложение видно в слое B');
+        assert.equal(listAttachments(ndb, 'thought', ownerB).length, 1, 'S2: listAttachments=1');
+
+        // S3. Потомок→предок: строка в СЛОЕ A, загрузка в ОСНОВЕ (вне цепочки
+        //     основы) — материализуется в основу, затем видна.
+        ndb.useLayer(LAYER_A);
+        const a2Row = upload(ownerA3, 'payload-up');
+        assert.equal(a2Row.reused, false);
+        ndb.useLayer(BASE_LAYER_ID);
+        const upBase = upload(ownerBase3, 'payload-up');
+        assert.equal(upBase.reused, true, 'S3: строка из потомка переиспользована');
+        assert.equal(upBase.id, a2Row.id);
+        assert.notEqual(getAttachment(ndb, upBase.id), null, 'S3: вложение видно в основе');
+        assert.equal(listAttachments(ndb, 'thought', ownerBase3).length, 1, 'S3: listAttachments=1');
+
+        // Байты не дублируются: на каждый payload — ровно один физический файл.
+        const files = new Set(
+          (
+            ndb
+              .prepare(
+                'SELECT DISTINCT file_path FROM attachments WHERE content_hash IS NOT NULL AND deleted = 0',
+              )
+              .all() as { file_path: string }[]
+          ).map((r) => r.file_path),
+        );
+        assert.equal(files.size, 3, 'три разных payload → три файла');
+        // Владения — в своих слоях.
+        const ownedIn = (ownerId: string, layerId: string): boolean =>
+          ndb
+            .prepare(
+              'SELECT 1 FROM attachment_owners WHERE attachment_id = ? AND owner_id = ? AND layer_id = ?',
+            )
+            .get(baseRow.id, ownerId, layerId) !== undefined;
+        assert.ok(ownedIn(ownerBase, BASE_LAYER_ID));
+        assert.ok(ownedIn(ownerA, LAYER_A), 'S1: владение в слое A');
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('dedup does not reuse a tombstoned row (deleted = 0 only)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-tomb-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-tomb', path.join(tmp, 'data.db'));
+      try {
+        seedLayerRow(ndb, LAYER_A, BASE_LAYER_ID);
+        const owner = seedThought(ndb, 'Владелец');
+        const b64 = Buffer.from('tombstone-bytes').toString('base64');
+        ndb.useLayer(LAYER_A);
+        const first = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(first.reused, false);
+        // Снятие единственного владельца в слое → надгробие строки вложения.
+        const r = removeOwner(ndb, first.attachment.id, 'thought', owner);
+        assert.equal(r.removed, true);
+        assert.equal(getAttachment(ndb, first.attachment.id), null);
+
+        // Повторная загрузка тех же байт: НЕ reused (надгробие не переиспользуем),
+        // создаётся свежая строка, видимая в слое.
+        const again = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(again.reused, false, 'надгробие не переиспользуется');
+        assert.notEqual(again.attachment.id, first.attachment.id);
+        assert.notEqual(getAttachment(ndb, again.attachment.id), null);
+        assert.equal(listAttachments(ndb, 'thought', owner).length, 1);
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('removeOwner ignores SERVICE layers when deciding the file fate (1d0620a8)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-svc-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-svc', path.join(tmp, 'data.db'));
+      try {
+        seedLayerRow(ndb, LAYER_SERVICE, BASE_LAYER_ID, true);
+        const owner = seedThought(ndb, 'Владелец');
+        const other = seedThought(ndb, 'Другой');
+        const up = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'p', mime_type: 'image/png', data_base64: Buffer.from('svc-bytes').toString('base64') },
+          USER,
+        ).attachment;
+        const fp = up.file_path!;
+        // Копия строки владения в служебном (резервном) слое — как её кладёт
+        // merge-резерв. Она НЕ должна удерживать файл.
+        ndb
+          .prepare(
+            `INSERT INTO attachment_owners
+               (id, layer_id, deleted, base_version, attachment_id, owner_type, owner_id, position, created_at, created_by)
+             VALUES (?, ?, 0, 0, ?, 'thought', ?, 0, ?, 'u')`,
+          )
+          .run(randomUUID(), LAYER_SERVICE, up.id, other, new Date().toISOString());
+
+        const r = removeOwner(ndb, up.id, 'thought', owner);
+        assert.deepEqual(r, { removed: true, attachment_deleted: true });
+        assert.equal(getAttachment(ndb, up.id), null);
+        assert.equal(hasLiveOwnershipAnywhere(ndb, up.id), false);
+        assert.equal(existsSync(fp), false, 'служебный слой не удерживает файл');
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('removing then re-adding the same ownership in a layer does not collide (S4/S5)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-revive-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-revive', path.join(tmp, 'data.db'));
+      try {
+        seedLayerRow(ndb, LAYER_A, BASE_LAYER_ID);
+        const owner = seedThought(ndb, 'Владелец');
+        const b64 = Buffer.from('revive-bytes').toString('base64');
+
+        // Вложение живёт в ОСНОВЕ (владелец — owner), видно и в слое A.
+        ndb.useLayer(BASE_LAYER_ID);
+        const att = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        ).attachment;
+
+        // --- S5: removeOwner → addOwners той же пары в слое ------------------
+        ndb.useLayer(LAYER_A);
+        const r = removeOwner(ndb, att.id, 'thought', owner);
+        assert.equal(r.removed, true);
+        // Надгробная строка владения физически осталась в слое A.
+        const tomb = ndb
+          .prepare(
+            'SELECT deleted FROM attachment_owners WHERE attachment_id = ? AND owner_id = ? AND layer_id = ?',
+          )
+          .get(att.id, owner, LAYER_A) as { deleted: number } | undefined;
+        assert.equal(tomb?.deleted, 1, 'в слое A надгробие владения');
+
+        const added = addOwners(ndb, att.id, 'thought', [owner], USER);
+        assert.equal(added.skipped.length, 0, 'S5: владение возвращено без throw');
+        assert.ok(hasOwnership(ndb, att.id, 'thought', owner), 'S5: владение живо в слое A');
+        assert.equal(listAttachments(ndb, 'thought', owner).length, 1, 'S5: listAttachments=1');
+        assert.equal(
+          (
+            ndb
+              .prepare(
+                'SELECT deleted FROM attachment_owners WHERE attachment_id = ? AND owner_id = ? AND layer_id = ?',
+              )
+              .get(att.id, owner, LAYER_A) as { deleted: number }
+          ).deleted,
+          0,
+          'S5: надгробие воскрешено',
+        );
+
+        // --- S4: снять владение в слое → повторная загрузка тех же байт ------
+        removeOwner(ndb, att.id, 'thought', owner);
+        const again = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(again.reused, true, 'S4: байты переиспользованы, без throw');
+        assert.equal(again.attachment.id, att.id);
+        assert.notEqual(getAttachment(ndb, att.id), null, 'S4: вложение видно в слое A');
+        assert.equal(listAttachments(ndb, 'thought', owner).length, 1, 'S4: listAttachments=1');
+
+        // Основу не задели: владение и строка вложения там живы.
+        ndb.useLayer(BASE_LAYER_ID);
+        assert.ok(hasOwnership(ndb, att.id, 'thought', owner), 'основа не затронута');
+        assert.notEqual(getAttachment(ndb, att.id), null);
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
       }
     });
   },

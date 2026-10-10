@@ -75,6 +75,12 @@ import {
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
 import {
+  ICON_COLOR_MESSAGE,
+  LIBRARY_ICON_MESSAGE,
+  iconColorValid,
+  libraryIconValid,
+} from './domain/icon-view.js';
+import {
   numberingRangeInvalid,
   recipeOverlap,
   summaryHasMarkdownHeadings,
@@ -118,7 +124,8 @@ export const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
 /** Error text shared by every `property_id`/`property` pair (задача d5ab1630). */
 export const PROPERTY_ID_PROPERTY_CONFLICT = 'provide at most one of property_id or property';
 
-/** `direction` inline-ссылки (task O4, docs/03-server-api.md §6.3). */
+/**
+ * `direction` inline-ссылки (task O4, docs/03-server-api.md §6.3). */
 export const LinkDirection = z
   .enum(['parent', 'child'])
   .describe(
@@ -901,6 +908,9 @@ const SearchFields = z
   );
 export const ThoughtsSearch = defineContract('etn.thoughts.search', SearchFields, {});
 
+/** Допустимые поля одного условия отбора по свойству (контракт `etn.thoughts.query`). */
+const QUERY_PROPERTY_CONDITION_KEYS = ['property_id', 'property', 'operator', 'value'] as const;
+
 const QueryPropertyFields = z
   .object({
     property_id: z.string().min(1).optional(),
@@ -919,8 +929,42 @@ const QueryPropertyFields = z
     ]),
     value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string().min(1)).min(1)]),
   })
+  // `.passthrough()` до refine (ошибка f4580fff, 0.12.1): zod по умолчанию
+  // ВЫРЕЗАЕТ неизвестные ключи ещё до проверок, поэтому refine по `Object.keys`
+  // на обычном объекте их не увидел бы (проверял бы уже очищенное значение).
+  // passthrough сохраняет лишние ключи в разобранном значении — следующий
+  // refine отвергает условие с полем вне контракта (в т.ч. `key`). `.strict()`
+  // не ставим: он добавляет `additionalProperties: false` в `inputSchema` и
+  // раздувает бюджет `tools/list` (сторож `mcp-telemetry`), а passthrough
+  // решает задачу тем же refine.
+  .passthrough()
   .refine((v) => v.property_id === undefined || v.property === undefined, {
     message: PROPERTY_ID_PROPERTY_CONFLICT,
+  })
+  // Неизвестное поле условия (напр. `key` вместо `property`) — явная
+  // `VALIDATION_ERROR`, а не молчаливое вырезание (ошибка f4580fff, 0.12.1).
+  // Принцип «не игнорировать молча»: даже при валидном адресе лишнее поле
+  // отвергается, а не теряется. Поля `key` контрактом не предусмотрено.
+  .refine(
+    (v) => Object.keys(v).every((k) => (QUERY_PROPERTY_CONDITION_KEYS as readonly string[]).includes(k)),
+    {
+      error: (iss) => {
+        const unknown = Object.keys((iss.input ?? {}) as Record<string, unknown>).filter(
+          (k) => !(QUERY_PROPERTY_CONDITION_KEYS as readonly string[]).includes(k),
+        );
+        return (
+          `Условие свойства содержит неизвестные поля: ${unknown.join(', ')}. ` +
+          `Допустимы: ${QUERY_PROPERTY_CONDITION_KEYS.join(', ')}.`
+        );
+      },
+    },
+  )
+  // Условие обязано адресовать свойство: `property_id` или имя `property`
+  // (ошибки 090d0242/4f17cb73, 0.12.1). Иначе условие теряло бы адрес и
+  // молча выпадало из отбора, расширяя его до всей сети — теперь это явная
+  // `VALIDATION_ERROR`.
+  .refine((v) => v.property_id !== undefined || v.property !== undefined, {
+    message: 'Укажите property_id или property в условии свойства.',
   });
 const QueryFields = z
   .object({
@@ -1334,6 +1378,12 @@ export const AttachmentsSearch = defineContract(
   {},
 );
 
+/**
+ * MCP `etn.attachments.update` (0.12.1, задача 478f8c1f, операция `0b23a32a`):
+ * правка МЕТАДАННЫХ вложения — только `title`/`description`/`icon`. Смена
+ * владельца и правка местоположения отсюда убраны: владельцами управляют
+ * `attachments.add`/`attachments.copy`/`attachments.removeOwner`.
+ */
 export const AttachmentsUpdate = defineContract(
   'etn.attachments.update',
   z.object({
@@ -1341,8 +1391,25 @@ export const AttachmentsUpdate = defineContract(
     attachment_id: z.string().min(1),
     title: z.string().nullable().optional(),
     description: z.string().nullable().optional(),
-    url: z.string().nullable().optional(),
-    file_path: z.string().nullable().optional(),
+    icon: z.string().nullable().optional(),
+  }),
+  {},
+);
+
+/**
+ * MCP `etn.attachments.removeOwner` (0.12.1, задача 4924d61e, операция
+ * `4924d61e`): снять ОДНО владение пары (вложение, объект). Деструктивное
+ * действие — требует верхнеуровневый `confirm: true` у `etn.ops` (как прочие
+ * destructive). Защита `ATTACHMENT_OWNER_IS_ICON` реализована; текстовое
+ * предупреждение (`ATTACHMENT_OWNER_IN_TEXT`) — точка расширения (87c455db).
+ */
+export const AttachmentsRemoveOwner = defineContract(
+  'etn.attachments.removeOwner',
+  z.object({
+    network_id: NetworkId,
+    attachment_id: z.string().min(1),
+    owner_type: z.enum(ATTACHMENT_OWNER_TYPES),
+    owner_id: z.string().min(1),
   }),
   {},
 );
@@ -1358,11 +1425,10 @@ export const AttachmentsUsage = defineContract(
   {},
 );
 
-export const AttachmentsDelete = defineContract(
-  'etn.attachments.delete',
-  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
-  {},
-);
+// `etn.attachments.delete` снят с публичного фасада (0.12.1, задача 478f8c1f,
+// операция 28ecc295): полное удаление вложения выполняет owner-cleanup
+// автоматически, когда снят последний живой владелец во всех слоях. Снятие
+// ОДНОГО владения — `etn.attachments.removeOwner`.
 
 // ===========================================================================
 // Область: сети (tools/networks.ts)
@@ -1427,6 +1493,7 @@ const OntologyWriteThoughtTypeFields = z
     description: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     fg_color: z.string().nullable().optional(),
     bg_color: z.string().nullable().optional(),
     font_bold: z.boolean().nullable().optional(),
@@ -1435,7 +1502,11 @@ const OntologyWriteThoughtTypeFields = z
     font_strike: z.boolean().nullable().optional(),
     comment_template_md: z.string().nullable().optional(),
   })
-  .strict();
+  .strict()
+  // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+  .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+  // Цвет символа иконки: пусто или HEX `#rrggbb` (задача 4105bd6a).
+  .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] });
 const OntologyWriteLinkTypeFields = z
   .object({
     ref: z.string().min(1).optional(),
@@ -2206,6 +2277,13 @@ export const RestCommentCreateTargets = defineContract(
     ...commentFieldsRest,
     targets: {
       from: { kind: 'body' },
+      // Поле REST-only (нет в общей схеме), поэтому без явного `req` его
+      // отсутствие в теле молча пропускается `parseRest` и `parse` не
+      // вызывается — `undefined` уходил в домен и давал 500 (ошибка 13a2706f).
+      // Явная обязательность даёт тот же 422 с `details.field=targets`, что и
+      // `targets: []`; сообщение совпадает с веткой `parse`.
+      req: true,
+      msg: 'targets обязателен: массив { owner_type, owner_id } (1 и более).',
       parse: (raw: unknown, requestId: string) => {
         if (!Array.isArray(raw) || raw.length === 0) {
           throw new EtnError(
@@ -2350,6 +2428,21 @@ const truncInt = (v: unknown): unknown => {
   return Math.trunc(v);
 };
 
+/**
+ * Целое из QUERY-строки (`limit`, `offset`): значение приходит СТРОКОЙ, поэтому
+ * сначала приводится к числу, затем усекается. Тело запроса несёт числа как
+ * есть — там работает {@link truncInt}. Поле ошибки — имя query-параметра
+ * (жалоба точно указывает, какой параметр некорректен).
+ */
+const queryInt = (field: string) => (v: unknown): unknown => {
+  const first = Array.isArray(v) ? v[0] : v;
+  const n = typeof first === 'string' && first.trim() !== '' ? Number(first) : first;
+  if (typeof n !== 'number' || !Number.isFinite(n)) {
+    throw new EtnError('VALIDATION_ERROR', 'значение должно быть числом.', { field });
+  }
+  return Math.trunc(n);
+};
+
 export const RestAttachmentListOwner = defineContract(
   'rest:attachments.list-owner',
   z.object({ network_id: NetworkId, owner_id: z.string().min(1) }),
@@ -2406,8 +2499,8 @@ export const RestAttachmentSearch = defineContract(
     },
     exclude_owner_id: { from: { kind: 'query' }, t: z.string().optional(), msg: 'exclude_owner_id должен быть строкой.' },
     kind: { from: { kind: 'query' }, t: z.enum(ATTACHMENT_KINDS).optional(), msg: 'kind должен быть url|file.' },
-    limit: { from: { kind: 'query' }, t: z.number().int().optional(), parse: truncInt, msg: 'limit должен быть числом.' },
-    offset: { from: { kind: 'query' }, t: z.number().int().optional(), parse: truncInt, msg: 'offset должен быть числом.' },
+    limit: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('limit'), msg: 'limit должен быть числом.' },
+    offset: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('offset'), msg: 'offset должен быть числом.' },
   },
 );
 
@@ -2478,26 +2571,104 @@ export const RestAttachmentUsage = defineContract(
   },
 );
 
+/**
+ * REST `PATCH /attachments/{id}` (0.12.1, задача 478f8c1f, операция
+ * `28ecc295`): правка МЕТАДАННЫХ вложения — только `title`/`description`/`icon`.
+ * Смена владельца отсюда убрана (владельцами управляют `POST`/`DELETE
+ * /attachments/{id}/owners`), как и правка `url`/`file_path` местоположения.
+ */
 export const RestAttachmentUpdate = defineContract(
   'rest:attachments.update',
   z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     attachment_id: { from: { kind: 'param', name: 'id' } },
-    url: { from: { kind: 'body' }, t: z.string().nullable() },
-    file_path: { from: { kind: 'body' }, t: z.string().nullable() },
-    file_size: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: 'file_size должен быть числом.' },
-    mime_type: { from: { kind: 'body' }, t: z.string().nullable() },
     title: { from: { kind: 'body' }, t: z.string().nullable() },
     description: { from: { kind: 'body' }, t: z.string().nullable() },
     icon: { from: { kind: 'body' }, t: z.string().nullable() },
-    position: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: 'position должен быть числом.' },
+  },
+);
+
+/**
+ * REST `POST /attachments/{id}/owners` (0.12.1, задача 6ba247cc, операция
+ * `6ba247cc`): добавить одного или нескольких владельцев существующему
+ * вложению. Идемпотентно — уже владеющие попадают в `skipped`.
+ */
+export const RestAttachmentOwnersAdd = defineContract(
+  'rest:attachments.owners-add',
+  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    attachment_id: { from: { kind: 'param', name: 'id' } },
     owner_type: {
       from: { kind: 'body' },
-      t: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
+      t: z.enum(ATTACHMENT_OWNER_TYPES),
+      req: true,
       msg: 'owner_type должен быть thought|link|publication.',
     },
-    owner_id: { from: { kind: 'body' }, t: z.string().optional() },
+    owner_ids: {
+      from: { kind: 'body' },
+      parse: (raw: unknown, requestId: string) => {
+        if (!Array.isArray(raw)) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'owner_ids должен быть непустым массивом строк.',
+            { field: 'owner_ids' },
+            requestId,
+          );
+        }
+        const ids = raw.map((v) => {
+          if (typeof v !== 'string' || v === '') {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'owner_ids содержит не строку или пустую строку.',
+              { field: 'owner_ids' },
+              requestId,
+            );
+          }
+          return v;
+        });
+        if (ids.length === 0) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'owner_ids должен быть непустым массивом строк.',
+            { field: 'owner_ids' },
+            requestId,
+          );
+        }
+        return ids;
+      },
+      req: true,
+    },
+  },
+);
+
+/**
+ * REST `DELETE /attachments/{id}/owners` (0.12.1, задача 4924d61e, операция
+ * `4924d61e`): снять ОДНО владение пары (вложение, объект). Защиты 409
+ * (`ATTACHMENT_OWNER_IS_ICON` — запрет; `ATTACHMENT_OWNER_IN_TEXT` —
+ * предупреждение, повтор с `confirm: true`). Ответ —
+ * `{ removed, attachment_deleted }`.
+ */
+export const RestAttachmentOwnerRemove = defineContract(
+  'rest:attachments.owner-remove',
+  z.object({ network_id: NetworkId, attachment_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    attachment_id: { from: { kind: 'param', name: 'id' } },
+    owner_type: {
+      from: { kind: 'body' },
+      t: z.enum(ATTACHMENT_OWNER_TYPES),
+      req: true,
+      msg: 'owner_type должен быть thought|link|publication.',
+    },
+    owner_id: {
+      from: { kind: 'body' },
+      t: z.string().min(1),
+      req: true,
+      msg: 'owner_id обязателен.',
+    },
+    confirm: { from: { kind: 'body' }, t: z.boolean(), msg: 'confirm должен быть логическим значением.' },
   },
 );
 
@@ -2581,6 +2752,19 @@ export const RestNetworkPreferenceKey = defineContract(
   z.object({ network_id: NetworkId, key: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
+    key: { from: { kind: 'param' } },
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Серверные настройки пользователя вне сети (REST — routes/me.ts)
+// ---------------------------------------------------------------------------
+
+/** PUT /users/me/settings/:key — имя настройки из пути (ADR 3a829d25). */
+export const RestUserSettingKey = defineContract(
+  'rest:users.me.setting-key',
+  z.object({ key: z.string().min(1) }),
+  {
     key: { from: { kind: 'param' } },
   },
 );
@@ -2958,6 +3142,7 @@ export const RestThoughtCreateBody = defineContract(
     type_id: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     active: z.boolean().optional(),
     fg_color: z.string().nullable().optional(),
     bg_color: z.string().nullable().optional(),
@@ -2965,13 +3150,17 @@ export const RestThoughtCreateBody = defineContract(
     font_italic: z.boolean().optional(),
     font_underline: z.boolean().optional(),
     font_strike: z.boolean().optional(),
-  }),
+  })
+    // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+    .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
     title: { from: { kind: 'body' }, msg: 'title обязателен и не может быть пустым.' },
     synonyms: { from: { kind: 'body' } },
     type_id: { from: { kind: 'body' } },
     icon: { from: { kind: 'body' } },
     icon_kind: { from: { kind: 'body' } },
+    icon_color: { from: { kind: 'body' } },
     active: { from: { kind: 'body' } },
     fg_color: { from: { kind: 'body' } },
     bg_color: { from: { kind: 'body' } },
@@ -3012,6 +3201,29 @@ export const RestThoughtCreateBody = defineContract(
         };
       },
     },
+    // Постоянный комментарий, создаваемый вместе с мыслью (0.12.1, задача
+    // aa79c82d): `comment { body_md }`. Один запрос — одна транзакция,
+    // разбирается наравне с `create_link` (поле вне общей zod-схемы).
+    comment: {
+      from: { kind: 'body' },
+      parse: (raw: unknown, requestId: string) => {
+        if (raw === undefined) return undefined;
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+          throw new EtnError('VALIDATION_ERROR', 'comment должен быть объектом.', { field: 'comment' }, requestId);
+        }
+        const c = raw as Record<string, unknown>;
+        const bodyMd = c['body_md'];
+        if (typeof bodyMd !== 'string' || bodyMd.trim() === '') {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'comment.body_md обязателен и не может быть пустым.',
+            { field: 'comment.body_md' },
+            requestId,
+          );
+        }
+        return { body_md: bodyMd };
+      },
+    },
   },
 );
 
@@ -3024,6 +3236,7 @@ export const RestThoughtUpdateBody = defineContract(
     type_id: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     icon_attachment_id: z.string().nullable().optional(),
     active: z.boolean().optional(),
     marked_for_deletion: z.boolean().optional(),
@@ -3033,13 +3246,17 @@ export const RestThoughtUpdateBody = defineContract(
     font_italic: z.boolean().nullable().optional(),
     font_underline: z.boolean().nullable().optional(),
     font_strike: z.boolean().nullable().optional(),
-  }),
+  })
+    // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+    .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
     title: { from: { kind: 'body' } },
     synonyms: { from: { kind: 'body' } },
     type_id: { from: { kind: 'body' } },
     icon: { from: { kind: 'body' } },
     icon_kind: { from: { kind: 'body' } },
+    icon_color: { from: { kind: 'body' } },
     icon_attachment_id: { from: { kind: 'body' } },
     active: { from: { kind: 'body' } },
     marked_for_deletion: { from: { kind: 'body' } },
@@ -3295,6 +3512,7 @@ export const RestThoughtTypeCreateBody = defineContract(
     parent_id: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     fg_color: z.string().nullable().optional(),
     bg_color: z.string().nullable().optional(),
     font_bold: z.boolean().nullable().optional(),
@@ -3303,7 +3521,10 @@ export const RestThoughtTypeCreateBody = defineContract(
     font_strike: z.boolean().nullable().optional(),
     description: z.string().nullable().optional(),
     comment_template_md: z.string().nullable().optional(),
-  }),
+  })
+    // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+    .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
     name: { from: { kind: 'body' }, msg: 'name обязателен и не может быть пустым.' },
     parent_id: {
@@ -3312,6 +3533,7 @@ export const RestThoughtTypeCreateBody = defineContract(
     },
     icon: { from: { kind: 'body' } },
     icon_kind: { from: { kind: 'body' } },
+    icon_color: { from: { kind: 'body' } },
     fg_color: { from: { kind: 'body' } },
     bg_color: { from: { kind: 'body' } },
     font_bold: { from: { kind: 'body' } },
@@ -3331,6 +3553,7 @@ export const RestThoughtTypeUpdateBody = defineContract(
     parent_id: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
     icon_kind: z.enum(ICON_KINDS).optional(),
+    icon_color: z.string().nullable().optional(),
     fg_color: z.string().nullable().optional(),
     bg_color: z.string().nullable().optional(),
     font_bold: z.boolean().nullable().optional(),
@@ -3345,12 +3568,16 @@ export const RestThoughtTypeUpdateBody = defineContract(
     // повторный PATCH с `confirmed: true` выполняет правку. Без `parent_id`
     // флаг игнорируется.
     confirmed: z.boolean().optional(),
-  }),
+  })
+    // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
+    .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
+    .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
     name: { from: { kind: 'body' } },
     parent_id: { from: { kind: 'body' }, parse: (raw: unknown) => (raw === '' ? null : raw) },
     icon: { from: { kind: 'body' } },
     icon_kind: { from: { kind: 'body' } },
+    icon_color: { from: { kind: 'body' } },
     fg_color: { from: { kind: 'body' } },
     bg_color: { from: { kind: 'body' } },
     font_bold: { from: { kind: 'body' } },

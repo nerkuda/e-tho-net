@@ -62,10 +62,10 @@ interface InstructionsEmpty {
 function makeThought(
   ndb: ReturnType<typeof openNetworkDb>,
   title: string,
-  opts: { typeId: string | null; active?: number; trashed?: number },
+  opts: { typeId: string | null; active?: number; trashed?: number; id?: string },
   userId: string,
 ): string {
-  const id = randomUUID();
+  const id = opts.id ?? randomUUID();
   const now = new Date().toISOString();
   ndb
     .prepare(
@@ -222,6 +222,145 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
           assert.ok(item.preview.body_md.length > 0);
         }
         assert.equal(data.meta.total, 2);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Контракт перечневого пути: карточка перечня несёт комментарий ИМЕННО своей
+  // мысли — один и тот же `preview.id` не может принадлежать двум инструкциям.
+  // Сверяем `preview.id`/тело каждой карточки с реальным владельцем постоянного
+  // комментария по базе (`etn.comments.get` по `thought_id`) и FULL режим — с
+  // телом запрошенной мысли. Это контрактный сторож (не регресс 50098756:
+  // аномалия не воспроизводится).
+  it('контракт: карточка перечня несёт комментарий своей мысли', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const instructionsTypeId = makeThoughtType(ndb, 'Инструкция', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const alpha = makeThought(ndb, 'Alpha', { typeId: instructionsTypeId }, ctx.adminId);
+        const beta = makeThought(ndb, 'Beta', { typeId: instructionsTypeId }, ctx.adminId);
+        const alphaBody = 'ALPHA: тело первой инструкции. '.repeat(40);
+        const betaBody = 'BETA: тело второй инструкции. '.repeat(40);
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, alpha, alphaBody);
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, beta, betaBody);
+        setTypeRoles(ctx, { instructions: instructionsTypeId });
+
+        // Реальные владельцы постоянных комментариев — по данным базы.
+        const owner = async (thoughtId: string): Promise<string> => {
+          const res = await handle.client.callTool({
+            name: 'etn.comments.get',
+            arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+          });
+          const data = toolJson<{ permanent: { id: string } | null }>(res);
+          assert.ok(data.permanent !== null, 'у инструкции обязан быть постоянный комментарий');
+          return data.permanent.id;
+        };
+        const alphaCommentId = await owner(alpha);
+        const betaCommentId = await owner(beta);
+        assert.notEqual(alphaCommentId, betaCommentId, 'разные мысли — разные комментарии');
+
+        const res = await handle.client.callTool({
+          name: 'etn.instructions',
+          arguments: { network_id: ctx.networkId },
+        });
+        assert.equal(res.isError, undefined, toolText(res));
+        const data = toolJson<InstructionsList>(res);
+        const byId = new Map(data.instructions.map((i) => [i.id, i]));
+        const alphaItem = byId.get(alpha);
+        const betaItem = byId.get(beta);
+        assert.ok(alphaItem !== undefined && betaItem !== undefined);
+        // Карточка Alpha несёт комментарий Alpha, карточка Beta — комментарий Beta.
+        assert.equal(alphaItem.preview.id, alphaCommentId);
+        assert.equal(betaItem.preview.id, betaCommentId);
+        assert.ok(alphaItem.preview.body_md.startsWith('ALPHA:'));
+        assert.ok(betaItem.preview.body_md.startsWith('BETA:'));
+
+        // FULL-режим отдаёт тело ровно запрошенной мысли.
+        const full = toolJson<InstructionFull>(
+          await handle.client.callTool({
+            name: 'etn.instructions',
+            arguments: { network_id: ctx.networkId, instruction_id: beta },
+          }),
+        );
+        assert.equal(full.instruction_id, beta);
+        assert.equal(full.body_md, betaBody);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Ошибка 8ca8f4cc: `instruction_id` принимает короткий (hex-префиксный) id —
+  // как `etn.thoughts.get`. Однозначный префикс резолвится; неоднозначный и
+  // ненайденный дают внятную ошибку (ложный ответ недопустим).
+  it('короткий id инструкции резолвится; неоднозначный/ненайденный — ошибка (8ca8f4cc)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const instructionsTypeId = makeThoughtType(ndb, 'Инструкция', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Две мысли с общим 8-символьным префиксом `cafe000` — для
+        // детерминированной неоднозначности; третьей общей префикс не нужен.
+        const alpha = makeThought(
+          ndb,
+          'Alpha',
+          { typeId: instructionsTypeId, id: 'cafe0001-0000-4000-8000-000000000001' },
+          ctx.adminId,
+        );
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, alpha, 'Тело Альфы.');
+        makeThought(
+          ndb,
+          'Alpha-2',
+          { typeId: instructionsTypeId, id: 'cafe0002-0000-4000-8000-000000000002' },
+          ctx.adminId,
+        );
+        setTypeRoles(ctx, { instructions: instructionsTypeId });
+
+        // Однозначный префикс — полный текст нужной инструкции.
+        const shortRes = await handle.client.callTool({
+          name: 'etn.instructions',
+          arguments: { network_id: ctx.networkId, instruction_id: 'cafe0001' },
+        });
+        assert.equal(shortRes.isError, undefined, toolText(shortRes));
+        const short = toolJson<InstructionFull>(shortRes);
+        assert.equal(short.instruction_id, alpha);
+        assert.equal(short.body_md, 'Тело Альфы.');
+
+        // Короткий id в режиме «указанные» тоже резолвится.
+        const idsRes = await handle.client.callTool({
+          name: 'etn.instructions',
+          arguments: { network_id: ctx.networkId, instruction_ids: ['cafe0001'] },
+        });
+        assert.equal(idsRes.isError, undefined, toolText(idsRes));
+        const ids = toolJson<InstructionsList & { missing: string[] }>(idsRes);
+        assert.deepEqual(ids.instructions.map((i) => i.id), [alpha]);
+        assert.deepEqual(ids.missing, []);
+
+        // Неоднозначный префикс — VALIDATION_ERROR со списком кандидатов.
+        const amb = await handle.client.callTool({
+          name: 'etn.instructions',
+          arguments: { network_id: ctx.networkId, instruction_id: 'cafe000' },
+        });
+        assert.equal(amb.isError, true, toolText(amb));
+        assert.match(toolText(amb), /VALIDATION_ERROR/);
+        assert.match(toolText(amb), /неоднозначен/);
+
+        // Ненайденный префикс — NOT_FOUND (без ложного ответа).
+        const gone = await handle.client.callTool({
+          name: 'etn.instructions',
+          arguments: { network_id: ctx.networkId, instruction_id: 'deadbeef' },
+        });
+        assert.equal(gone.isError, true, toolText(gone));
+        assert.match(toolText(gone), /NOT_FOUND/);
       } finally {
         await handle.close();
       }

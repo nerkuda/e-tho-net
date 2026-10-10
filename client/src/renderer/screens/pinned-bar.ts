@@ -31,7 +31,7 @@ import { registerDropActions, wireExternalDragSource } from '../canvas/drag-clou
 import { button, clear, div, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import {
   commitEntity,

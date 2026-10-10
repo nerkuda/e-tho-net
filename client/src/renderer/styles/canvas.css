@@ -769,6 +769,14 @@ body.cloud-dragging * {
   object-fit: contain;
 }
 
+/* Библиотечная иконка мысли (icon_kind='icon') — значок Lucide из фасада;
+   квадратный, поэтому масштабируется 1em по font-size полосы — тот же приём,
+   что у картинки, включая увеличение фокус-облачка. */
+.cloud-icon svg.icon {
+  height: 1em;
+  width: 1em;
+}
+
 /* Compact thought icon for lists (history bar, link rows, search hits,
    selection panel): image icons fill the fixed box exactly like the cloud
    icons do — never their natural size. */
@@ -786,6 +794,13 @@ body.cloud-dragging * {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+/* Библиотечная иконка в компактном значке списков (чип, лента) — значок Lucide
+   заполняет фиксированный квадрат, как картинка. */
+.mini-icon svg.icon {
+  width: 100%;
+  height: 100%;
 }
 
 /* Right column: title on top, indicators underneath aligned to its left

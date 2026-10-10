@@ -34,7 +34,7 @@ describe('i18n: t и подстановки', () => {
 
   it('подставляет позиционные параметры `%1`, `%2`', () => {
     assert.equal(t('actions.closeShortcut', 'Esc'), 'Закрыть (Esc)');
-    assert.equal(t('actions.searchShortcut', 'Ctrl+F'), 'Поиск… (Ctrl+F)');
+    assert.equal(t('actions.searchShortcut', 'Ctrl+Shift+F'), 'Поиск… (Ctrl+Shift+F)');
     registerLocale('zz', { 'errors.prefix': 'Сбой %1 при %2' });
     setLang('zz');
     assert.equal(t('errors.prefix', ['записи', 'чтении']), 'Сбой записи при чтении');

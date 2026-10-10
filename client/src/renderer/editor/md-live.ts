@@ -28,6 +28,8 @@ import {
 
 import { renderMarkdown } from '@etn/markdown';
 
+import { choiceControl } from '../lib/ui/choice-row.js';
+import { isCollapsedHiddenAt, setCollapseEffect } from './comment-collapse.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 
 /** Корневой класс всех виджетов live preview. */
@@ -136,11 +138,68 @@ class HrWidget extends WidgetType {
   }
 
   override toDOM(): HTMLElement {
-    const hr = document.createElement('hr');
-    hr.className = `${MD_WIDGET_CLASS} md-hr`;
-    hr.dataset.mdFrom = String(this.from);
-    hr.dataset.mdTo = String(this.to);
-    return hr;
+    // Обёртка несёт вертикальный отступ (padding, не margin — см. шапку
+    // `.md-widget` в styles/editor.css), а линию рисует внутренний `hr`: так
+    // зазор 6px сверху и снизу совпадает с `margin: 6px 0` у `.comment-view hr`
+    // в просмотре (ошибка 47bce601).
+    const box = document.createElement('div');
+    box.className = `${MD_WIDGET_CLASS} md-hr`;
+    box.dataset.mdFrom = String(this.from);
+    box.dataset.mdTo = String(this.to);
+    const line = document.createElement('hr');
+    line.className = 'md-hr-line';
+    box.append(line);
+    return box;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+/** Чекбокс task-списка (`- [ ]` / `- [x]`): заменяет маркер вне активного пункта. */
+class TaskCheckboxWidget extends WidgetType {
+  constructor(readonly checked: boolean) {
+    super();
+  }
+
+  override eq(other: TaskCheckboxWidget): boolean {
+    return other.checked === this.checked;
+  }
+
+  override toDOM(): HTMLElement {
+    // Контрол строит фасад дизайн-системы (сторож `guard-ui-fields`):
+    // голый `<input>` в обход `choiceControl` запрещён.
+    const input = choiceControl('checkbox', { checked: this.checked, disabled: true });
+    input.classList.add('cm-md-task-checkbox');
+    return input;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+/**
+ * Отрисованный маркер списка: заменяет исходный `ListMark` вне активного
+ * пункта — `•` для маркированного, `N.` для нумерованного (паритет с
+ * просмотром, где `<ul>`/`<ol>` рисуют disc/decimal). Пробел-разделитель
+ * остаётся в документе, поэтому маркер идёт перед текстом как в просмотре.
+ */
+class ListMarkerWidget extends WidgetType {
+  constructor(readonly marker: string) {
+    super();
+  }
+
+  override eq(other: ListMarkerWidget): boolean {
+    return other.marker === this.marker;
+  }
+
+  override toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-md-list-marker';
+    span.textContent = this.marker;
+    return span;
   }
 
   override ignoreEvent(): boolean {
@@ -212,10 +271,26 @@ function buildDecorations(state: EditorState): DecorationSet {
    * при входе в узел (метод Tree.getChildren не подходит: его координаты
    * зависят от дерева-объекта, а не от узла).
    */
-  const inlineStack: Array<{ kind: 'link' | 'emphasis' | 'code'; from: number; to: number }> = [];
+  const inlineStack: Array<{
+    kind: 'link' | 'emphasis' | 'code';
+    from: number;
+    to: number;
+    /** Пустое содержимое пары (`====`, `<u></u>`) — маркеры не скрываются. */
+    empty?: boolean;
+  }> = [];
+
+  /**
+   * Стек пунктов списка: маркер списка (`-`/`N.`) и task-маркер (`[ ]`/`[x]`)
+   * «принадлежат» своему `ListItem` — его диапазон задаёт активность обоих.
+   */
+  const listItemStack: Array<{ from: number; to: number }> = [];
 
   syntaxTree(state).iterate({
     enter(node) {
+      // Внутри тела свёрнутого раздела (задача 634f1412) декорации не строим:
+      // их диапазоны пересеклись бы с блок-заменой сворачивания.
+      if (isCollapsedHiddenAt(state, node.from)) return false;
+
       const { from, to } = node;
 
       switch (node.name) {
@@ -277,6 +352,30 @@ function buildDecorations(state: EditorState): DecorationSet {
           inlineStack.push({ kind: 'emphasis', from, to });
           break;
         }
+        // ТП1: выделение `==…==` и подчёркивание `<u>…</u>` — инлайн-родители
+        // (узлы задаёт `wiki-link.ts`). Содержимое отрисовано всегда, как текст
+        // жирного: выделение — фоном, подчёркивание — линией; маркеры скрывает
+        // обработка `MarkMark`/`UnderlineMark` ниже (по активности родителя).
+        case 'Mark':
+        case 'Underline': {
+          const openLen = node.name === 'Mark' ? 2 : 3;
+          const closeLen = node.name === 'Mark' ? 2 : 4;
+          // Пустая пара (`====`, `<u></u>`) в рендерер не проходит — там
+          // остаётся литерал (markdown/src/mark.ts, underline.ts). Такой же
+          // узел лексера содержимого не имеет: маркеры не скрываем.
+          const empty = to - from <= openLen + closeLen;
+          inlineStack.push({ kind: 'emphasis', from, to, empty });
+          if (!empty) {
+            parts.push({
+              from: from + openLen,
+              to: to - closeLen,
+              value: Decoration.mark({
+                class: node.name === 'Mark' ? 'cm-md-mark' : 'cm-md-underline',
+              }),
+            });
+          }
+          break;
+        }
         case 'InlineCode': {
           inlineStack.push({ kind: 'code', from, to });
           // Плашка как у <code> в просмотре — mark на весь узел: скрытые
@@ -289,11 +388,14 @@ function buildDecorations(state: EditorState): DecorationSet {
         // непосредственно перед/после него.
         case 'EmphasisMark':
         case 'StrikethroughMark':
+        case 'MarkMark':
+        case 'UnderlineMark':
         case 'CodeMark': {
           const parent = inlineStack[inlineStack.length - 1];
           if (
             parent !== undefined &&
             parent.kind !== 'link' &&
+            parent.empty !== true &&
             !isNearInline(ranges, parent.from, parent.to)
           ) {
             hide(from, to);
@@ -305,6 +407,76 @@ function buildDecorations(state: EditorState): DecorationSet {
           const link = [...inlineStack].reverse().find((p) => p.kind === 'link');
           if (link !== undefined && !isNearInline(ranges, link.from, link.to)) {
             hide(from - 1, link.to);
+          }
+          break;
+        }
+        // HTML-комментарий `<!-- … -->` (ТЗ4 «Дневник без псевдослота»):
+        // весь узел — приглушённо-серым, маркеры `<!--`/`-->` скрыты вне
+        // курсора. Механизм тот же, что у парных `**` (isNearInline): маркеры
+        // видны, когда курсор внутри диапазона или в смежной позиции.
+        // Лексер даёт два узла: инлайновый `Comment` и строчный `CommentBlock`.
+        // Просмотр не меняется — HTML-комментарий там не рендерится.
+        case 'Comment':
+        case 'CommentBlock': {
+          parts.push({
+            from,
+            to,
+            value: Decoration.mark({ class: 'cm-md-html-comment' }),
+          });
+          // Длины маркеров фиксированы: `<!--` (4) и `-->` (3). Вырожденный
+          // узел короче суммы маркеров маркеры не «съедает».
+          if (to - from >= 7 && !isNearInline(ranges, from, to)) {
+            hide(from, from + 4);
+            hide(to - 3, to);
+          }
+          break;
+        }
+        // Пункт списка: его диапазон «владеет» маркером списка (`-`/`N.`) и
+        // task-маркером (`[ ]`/`[x]`). Пока каретка внутри пункта или вплотную
+        // к нему — исходные маркеры видны; вне — пункт отрисован как в просмотре
+        // (ошибка 9d611f5f).
+        case 'ListItem': {
+          listItemStack.push({ from, to });
+          break;
+        }
+        // Маркер списка (`-`, `*`, `+`, `1.`, `1)`) вне активного пункта.
+        // Task-пункт (есть ребёнок `Task`) — маркер скрывается: в просмотре у
+        // task-списка маркера нет (`list-style: none`), а `[ ]` заменяет
+        // чекбокс. Обычный пункт — вместо исходного маркера отрисовывается
+        // маркер списка (`•` / `N.`), как `<ul>`/`<ol>` в просмотре.
+        case 'ListMark': {
+          const item = listItemStack[listItemStack.length - 1];
+          if (item !== undefined && !isNearInline(ranges, item.from, item.to)) {
+            const isTask = node.node.parent?.getChild('Task') != null;
+            if (isTask) {
+              const extra = state.sliceDoc(to, to + 1) === ' ' ? 1 : 0;
+              hide(from, to + extra);
+            } else {
+              const src = state.sliceDoc(from, to);
+              const num = /^(\d+)[.)]$/.exec(src);
+              parts.push({
+                from,
+                to,
+                value: Decoration.replace({
+                  widget: new ListMarkerWidget(num !== null ? `${num[1]}.` : '•'),
+                }),
+              });
+            }
+          }
+          break;
+        }
+        // Task-маркер (`[ ]`/`[x]`): вне активного пункта заменяется чекбоксом.
+        // Активность — по диапазону `ListItem` (как у маркера списка), чтобы
+        // весь пункт раскрывался исходником одновременно.
+        case 'TaskMarker': {
+          const item = listItemStack[listItemStack.length - 1];
+          if (item !== undefined && !isNearInline(ranges, item.from, item.to)) {
+            const checked = /[xX]/.test(state.sliceDoc(from + 1, to - 1));
+            parts.push({
+              from,
+              to,
+              value: Decoration.replace({ widget: new TaskCheckboxWidget(checked) }),
+            });
           }
           break;
         }
@@ -368,6 +540,9 @@ function buildDecorations(state: EditorState): DecorationSet {
         // Wiki-ссылка — инлайн-элемент: скобки видны и внутри, и сразу
         // после `]]`, чтобы ссылку можно было править.
         case 'WikiLink': {
+          // Трансклюзия (восклицательный знак перед скобками) — не wiki-ссылка:
+          // её развёртку и виджет ведёт `editor/transclusion.ts` (f72a9134).
+          if (from > 0 && state.sliceDoc(from - 1, from) === '!') return false;
           if (!isNearInline(ranges, from, to)) {
             const parsed = wikiLabel(state.sliceDoc(from, to));
             if (parsed !== null) {
@@ -401,8 +576,13 @@ function buildDecorations(state: EditorState): DecorationSet {
         case 'Emphasis':
         case 'StrongEmphasis':
         case 'Strikethrough':
+        case 'Mark':
+        case 'Underline':
         case 'InlineCode':
           inlineStack.pop();
+          break;
+        case 'ListItem':
+          listItemStack.pop();
           break;
         default:
           break;
@@ -417,33 +597,51 @@ function buildDecorations(state: EditorState): DecorationSet {
 export const livePreview = StateField.define<DecorationSet>({
   create: (state) => buildDecorations(state),
   update: (decorations, tr) => {
-    if (tr.docChanged || tr.selection) return buildDecorations(tr.state);
+    // Переключение свёрнутости раздела (задача 634f1412) меняет набор
+    // пропускаемых узлов — декорации перестраиваются вместе с ним.
+    const collapseToggled = tr.effects.some((effect) => effect.is(setCollapseEffect));
+    if (tr.docChanged || tr.selection || collapseToggled) return buildDecorations(tr.state);
     return decorations;
   },
   provide: (field) => EditorView.decorations.from(field),
 });
 
+/**
+ * Обработчик `mousedown` виджета live-preview: клик по виджету уводит каретку
+ * в диапазон блока — декорации раскрывают исходный markdown.
+ *
+ * Реагирует только на ОСНОВНУЮ кнопку мыши (`event.button === 0`): правый и
+ * средний клик — жесты вызова контекстного меню, они не должны менять
+ * выделение и разворачивать виджет (ошибка `87751f42`, тот же класс, что
+ * `27b95e60` в `transclusion.ts`). Событие при этом не гасим — `contextmenu`
+ * открывает меню поля поверх прежнего состояния. Родной обработчик CM6 на
+ * неосновных кнопках выделение не двигает (`view/dist/index.js`:
+ * basicMouseSelection — только при `button == 0`).
+ */
+export function mdWidgetMouseDown(event: MouseEvent, view: EditorView): boolean {
+  if (event.button !== 0) return false;
+  const target = event.target as Element | null;
+  const widget = target?.closest?.(`.${MD_WIDGET_CLASS}`);
+  if (!(widget instanceof HTMLElement)) return false;
+  const fromRaw = widget.dataset.mdFrom;
+  const toRaw = widget.dataset.mdTo;
+  if (fromRaw === undefined || toRaw === undefined) return false;
+  const from = Number(fromRaw);
+  const to = Number(toRaw);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to - from < 2) return false;
+
+  let pos = from + 1;
+  const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (coords !== null && coords > from && coords < to) pos = coords;
+  view.dispatch({
+    selection: { anchor: Math.min(pos, to - 1) },
+    scrollIntoView: false,
+    userEvent: 'select',
+  });
+  return true;
+}
+
 /** Клик по виджету: каретка в диапазон блока — декорации раскроют исходник. */
 export const mdWidgetClick = EditorView.domEventHandlers({
-  mousedown: (event, view) => {
-    const target = event.target as Element | null;
-    const widget = target?.closest?.(`.${MD_WIDGET_CLASS}`);
-    if (!(widget instanceof HTMLElement)) return false;
-    const fromRaw = widget.dataset.mdFrom;
-    const toRaw = widget.dataset.mdTo;
-    if (fromRaw === undefined || toRaw === undefined) return false;
-    const from = Number(fromRaw);
-    const to = Number(toRaw);
-    if (!Number.isFinite(from) || !Number.isFinite(to) || to - from < 2) return false;
-
-    let pos = from + 1;
-    const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
-    if (coords !== null && coords > from && coords < to) pos = coords;
-    view.dispatch({
-      selection: { anchor: Math.min(pos, to - 1) },
-      scrollIntoView: false,
-      userEvent: 'select',
-    });
-    return true;
-  },
+  mousedown: mdWidgetMouseDown,
 });

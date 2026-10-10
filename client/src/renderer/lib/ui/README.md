@@ -60,6 +60,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | Модуль | Экспорт (barrel) | Назначение | Ссылки |
 | --- | --- | --- | --- |
 | `button.ts` / `button.css` | `uiButton`, `iconButton`, `BUTTON_CLASS`, `BUTTON_ACTIVE_CLASS`, `setButtonActive` | Единственный API кнопок: роли (`primary`/`neutral`/`danger`/`ghost`), плотности, состояния | задача `56f1dcb2`, требование `edc5faea` |
+| `icon.ts` | `svgIcon`, `renderIcon`, `renderIconNode`, `ICON_NAMES`, `isIconName`, `loadIconCatalog`, `searchIconCatalog`, `iconAliases`, `renderLibraryIcon`, `ICON_CLASS` | **Единственный доступ к иконочной библиотеке Lucide**: рендер значка обвязки с размером/цветом/толщиной, каталог имён библиотеки (лениво), поиск по нему (в том числе по псевдонимам Lucide — возвращает канонические имена, ошибка `08b90470`) и отложенная отрисовка значка каталога по имени (вид `icon_kind='icon'`). Прямой импорт `lucide` вне фасада запрещён; эмодзи/картинки контента — не сюда | задача `6d8db38b`, ADR `bd224643`, требование `e52d249e` |
 | `tabs.ts` / `tabs.css` | `uiTabs` | Полоса вкладок диалогов и экранов (`.ui-tab*`) поверх `wa-tab-group` | задача `a57e7998`, требование `88a9225a` |
 | `collapsible.ts` | `collapsibleSection` | Сворачиваемые секции (группы редактора, панели) | задача `a57e7998` |
 | `messages.ts` / `messages.css` | `errorLine`, `fieldError`, `operationError`, `setStatusText`, `footerErrorLine`, классы `ERROR_LINE_CLASS`/`FIELD_ERROR_CLASS`/`FOOTER_ERROR_CLASS` | Единый вид сообщений и строк ошибок | задача `e20761c2`, требование `397c5a56` |
@@ -139,4 +140,5 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 `guard-ui-tree`, `guard-ui-empty-state`, `guard-ui-states`,
 `guard-ui-discoverability`, `guard-ui-hit-area`, `guard-ui-container`,
 `guard-ui-tokens`, `guard-ui-user-tokens`, `guard-ui-i18n`,
-`guard-ui-licenses`, `guard-ui-dialog`, `guard-keyed-lists`, `guard-list-nav`.
+`guard-ui-licenses`, `guard-ui-dialog`, `guard-ui-icons`, `guard-keyed-lists`,
+`guard-list-nav`.

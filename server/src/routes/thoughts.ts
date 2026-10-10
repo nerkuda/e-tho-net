@@ -20,6 +20,7 @@
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
+import path from 'node:path';
 
 import {
   EtnError,
@@ -77,7 +78,10 @@ import {
   RestThoughtUpdateBody,
 } from '../contracts.js';
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
+import { networkDir } from '../paths.js';
+import { listComments } from '../domain/comment-service.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
+import { assertLibraryIcon } from '../domain/icon-view.js';
 import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
 import {
   clearThoughtRefUsages,
@@ -101,7 +105,7 @@ import {
   resolveThoughts,
   updateThought,
 } from '../domain/thought-service.js';
-import { copyThoughtsBatch } from '../domain/thought-copy-service.js';
+import { copyThoughtsBatch, makeCopyFileCopier } from '../domain/thought-copy-service.js';
 import {
   applyBulkThoughtOp,
   BULK_THOUGHT_OPS,
@@ -203,6 +207,7 @@ function parseThoughtCreateBody(
     type_id: (out.type_id ?? null) as string | null,
     icon: (out.icon ?? null) as string | null,
     icon_kind: iconKind,
+    icon_color: (out.icon_color ?? null) as string | null,
     active: out.active as boolean | undefined,
     fg_color: (out.fg_color ?? null) as string | null,
     bg_color: (out.bg_color ?? null) as string | null,
@@ -211,6 +216,7 @@ function parseThoughtCreateBody(
     font_underline: out.font_underline as boolean | undefined,
     font_strike: out.font_strike as boolean | undefined,
     create_link: out.create_link as ThoughtCreateInput['create_link'],
+    comment: out.comment as ThoughtCreateInput['comment'],
   };
 }
 
@@ -233,6 +239,7 @@ function parseThoughtUpdateBody(
   if (changes.icon_kind === 'image') {
     assertImageIcon(changes.icon, requestId);
   }
+  if (out.icon_color !== undefined) changes.icon_color = out.icon_color as string | null;
   if (out.active !== undefined) changes.active = out.active as boolean;
   if (out.marked_for_deletion !== undefined)
     changes.marked_for_deletion = out.marked_for_deletion as boolean;
@@ -387,6 +394,20 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const activity: WriteActivityEntry[] = [
             { kind: 'thought', action: 'created', thought: created },
           ];
+          // Постоянный комментарий из тела запроса (0.12.1, задача aa79c82d):
+          // создан доменом в этой же транзакции — публикуем событие и запись
+          // журнала, как это делает REST-роут комментариев. Без этого
+          // подписчики не увидели бы комментарий в реальном времени (ср.
+          // ошибка 8655842b для link-дефолтов).
+          if (input.comment !== undefined) {
+            const createdComment = listComments(ndb, 'thought', created.id).find(
+              (c) => c.kind === 'permanent',
+            );
+            if (createdComment !== undefined) {
+              events.push({ type: 'comment.created', data: { comment: createdComment } });
+              activity.push({ kind: 'comment', action: 'created', comment: createdComment });
+            }
+          }
           for (const linkId of defaultLinkIds) {
             const link = getLink(ndb, linkId);
             if (link !== null) {
@@ -433,6 +454,18 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const changes = parseThoughtUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Частичная правка может нести только `icon` или только `icon_kind` —
+        // правило вида `icon` (задача 610a440e) проверяет ИТОГОВУЮ пару,
+        // слитую с сохранённой мыслью. Мысль не найдена — решение за
+        // `updateThought` (NOT_FOUND), здесь ничего не проверяем.
+        const before = getThought(ndb, id);
+        if (before !== null) {
+          assertLibraryIcon(
+            changes.icon_kind ?? before.icon_kind,
+            changes.icon !== undefined ? changes.icon : before.icon,
+            req.id,
+          );
+        }
         const thought = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const updated = updateThought(ndb, id, changes, expectedVersion, req.auth!.user.id);
           return {
@@ -790,8 +823,18 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const input = parseThoughtCopyBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Межсетевое копирование: файлы вложений физически переносятся в
+        // сеть-получатель (ошибка b83a7d89). `path.basename` отсекает
+        // traversal в `source_network_id` — у реального id (UUID) это no-op.
+        const sourceAttachmentsDir = path.join(
+          networkDir(deps.dataDir, path.basename(input.source_network_id)),
+          'attachments',
+        );
+        const fileCopier = makeCopyFileCopier(ndb, input, sourceAttachmentsDir, (message, details) =>
+          app.appLogger.warn({ ...details }, message),
+        );
         const result = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
-          const copied = copyThoughtsBatch(ndb, input, req.auth!.user.id);
+          const copied = copyThoughtsBatch(ndb, input, req.auth!.user.id, { fileCopier });
           const events: AnyWriteEvent[] = [];
           const activity: WriteActivityEntry[] = [];
           // Real-time: emit a `thought.created` for every new thought and a
@@ -809,6 +852,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           }
           return { result: copied, events, activity };
         });
+        // Файлы вложений пишутся после успешного коммита БД: при откате
+        // транзакции осиротевших файлов не остаётся (ошибка b83a7d89).
+        fileCopier?.commit();
         sendSuccess(reply, result);
       },
     );

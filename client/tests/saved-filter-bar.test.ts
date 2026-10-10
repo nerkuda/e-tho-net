@@ -6,8 +6,9 @@
  * открывается диалогом: поиск по именам сверху (правило 1 требования
  * 11ddd910), строка управления «Изменить/Копировать/Удалить» над текущей
  * строкой (правило 2), навигация ↑/↓, клик делает строку текущей,
- * Enter/«Выбрать» применяют, двойной клик открывает редактор, и контекстное
- * меню строки «Переименовать» / «Скопировать»
+ * Enter/двойной клик/«Выбрать» ПОДТВЕРЖДАЮТ выбор (диалог — пикер одиночного
+ * значения, правило 6), а переименование доступно кнопкой «Изменить» и командой
+ * контекстного меню строки «Переименовать» / «Скопировать»
  * (копия с « (копия)») / «Удалить». «Хроника» работает так же, как «Структуры».
  *
  * Клиентские тесты идут без jsdom (конвенция соседних тестов), поэтому чистая
@@ -30,7 +31,7 @@ const BAR_TS = resolve(RENDERER, 'lib', 'saved-filter-bar.ts');
 const STRUCTURES_PANEL = resolve(RENDERER, 'screens', 'structures', 'filter-panel.ts');
 const CHRONICLE_PANEL = resolve(RENDERER, 'screens', 'chronicle', 'filter-panel.ts');
 const ACTIVITY_TS = resolve(RENDERER, 'screens', 'activity', 'activity.ts');
-const ICONS_TS = resolve(RENDERER, 'lib', 'icons.ts');
+const ICONS_TS = resolve(RENDERER, 'lib', 'ui', 'icon.ts');
 
 function readText(path: string): string {
   return readFileSync(path, 'utf8');
@@ -135,11 +136,6 @@ describe('диалог выбора сохранённого отбора (за�
     assert.match(bar, /createTable<SavedFilterEntry>\(\{/, 'список собирает фасад lib/ui/table.ts');
     assert.match(bar, /rowKey: \(entry\) => entry\.id/, 'строка адресуется стабильным id');
     assert.match(bar, /onActivate: \(entry\) => pick\(entry\)/, 'Enter применяет текущую строку (решение)');
-    assert.match(
-      bar,
-      /onDblActivate: \(entry\) => void opts\.onRename\(entry\)\.then\(render\)/,
-      'двойной клик открывает редактор строки (переименование), правило 6',
-    );
     // Клавиатура — от фасада: стрелки/Enter из поля поиска перенаправляются
     // таблице, чтобы текущая строка была видна.
     assert.match(
@@ -148,6 +144,40 @@ describe('диалог выбора сохранённого отбора (за�
       'клавиатура поля поиска перенаправляется таблице',
     );
     assert.match(bar, /table\.setRows\(visible\)/, 'перерисовка списка по фильтру');
+  });
+
+  it('двойной клик по строке подтверждает выбор как «Выбрать» (ошибка 03f63297)', () => {
+    // Регресс 03f63297: раньше диалог задавал `onDblActivate` = переименование,
+    // и двойной клик открывал редактор вместо выбора. Диалог — пикер одиночного
+    // значения (правило 6 требования 11ddd910): двойной клик ОБЯЗАН идти тем же
+    // путём, что Enter и кнопка «Выбрать», — в `onActivate` → `pick` (применить
+    // и закрыть). Для этого `onDblActivate` в спеке таблицы НЕ задаётся: фасад
+    // на двойной клик без него зовёт `onActivate`.
+    const bar = readText(BAR_TS);
+    const start = bar.indexOf('createTable<SavedFilterEntry>({');
+    assert.ok(start >= 0, 'диалог собирает список через createTable');
+    const spec = bar.slice(start, bar.indexOf('\n  });', start));
+    assert.ok(
+      !/onDblActivate\s*:/.test(spec),
+      'в пикере `onDblActivate` не задан — двойной клик зовёт `onActivate` (pick), а не редактор строки',
+    );
+    assert.match(spec, /onActivate: \(entry\) => pick\(entry\)/, 'двойной клик/Enter применяют отбор');
+    // Симптом 2 ошибки 03f63297: после выбора диалог ОБЯЗАН закрыться. Все пути
+    // выбора (Enter, двойной клик, кнопка «Выбрать») идут через `pick`, который
+    // применяет отбор и зовёт `close()`.
+    assert.match(
+      bar,
+      /const pick = \(entry: SavedFilterEntry\): void => \{\s*opts\.onPick\(entry\);\s*close\(\);\s*\}/,
+      'выбор применяет отбор и закрывает диалог',
+    );
+    assert.match(
+      bar,
+      /const entry = currentEntry\(\);\s*if \(entry !== null\) pick\(entry\);/,
+      'кнопка «Выбрать» применяет текущую строку тем же путём `pick`',
+    );
+    // Переименование осталось доступным: кнопкой «Изменить» и меню строки.
+    assert.ok(bar.includes("t('listActions.edit')"), 'переименование — кнопкой «Изменить» над списком');
+    assert.ok(bar.includes("menuAction(t('savedFilters.menu.rename')"), 'и командой меню строки');
   });
 
   it('строка управления над списком: изменить / копировать / удалить текущей', () => {

@@ -42,6 +42,8 @@
  * поведение не меняется.
  */
 
+import { defineKeyContext, pushKeyContext } from '../keymap.js';
+import { modifierChordVariants } from '../keymap-chords.js';
 import {
   isEditingTarget as coreIsEditingTarget,
   listTargetIndex,
@@ -50,6 +52,9 @@ import {
   resolveNavAction,
   type NavBox,
 } from './nav-core.js';
+
+/** Счётчик списков: у каждого свой контекст сочетаний (замыкание навигации). */
+let listContextSeq = 0;
 
 /** Loose view of `KeyboardEvent` fields used by the controller (test-friendly). */
 export interface ListNavKeyEvent {
@@ -374,67 +379,63 @@ export function createListNav<E>(
     if (target !== null) setCurrent(target, { reveal: true });
   };
 
-  const handleKeyDown = (event: ListNavKeyEvent): void => {
+  /** Клавиатурная команда списка; `true` — событие обработано (см. диспетчер). */
+  const handleKeyDown = (event: KeyboardEvent): boolean => {
     const key = event.key ?? '';
     const target = (event.target ?? null) as HTMLElement | null;
     // Расширение ядра (режим полей «Дневника»): Tab/Escape и правка текста.
-    if (adapter.onKey?.(key, event) === true) {
+    if (adapter.onKey?.(key, event as unknown as ListNavKeyEvent) === true) {
       navActive = true;
-      return;
+      return true;
     }
     // Поле правки текста: стрелки/Tab/Enter принадлежат редактору.
-    if (isEditing(target)) return;
+    if (isEditing(target)) return false;
     // Alt+↑/↓ — сдвиг порядка; навигацию курсора ведёт базовый разбор без Alt.
     const action = resolveNavAction(key, { altKey: event.altKey === true });
-    if (action === null) return;
+    if (action === null) return false;
     navActive = true;
     const useSpatial = spatial();
     const onGroupHead = current !== null && adapter.isGroupHead?.(current) === true;
     switch (action) {
       case 'up':
-        event.preventDefault?.();
         if (useSpatial) moveSpatial(0, -1);
         else move(-1);
-        break;
+        return true;
       case 'down':
-        event.preventDefault?.();
         if (useSpatial) moveSpatial(0, 1);
         else move(1);
-        break;
+        return true;
       case 'home':
-        event.preventDefault?.();
         if (useSpatial) moveGroupEdge(false, event.ctrlKey === true);
         else moveToEdge(false);
-        break;
+        return true;
       case 'end':
-        event.preventDefault?.();
         if (useSpatial) moveGroupEdge(true, event.ctrlKey === true);
         else moveToEdge(true);
-        break;
+        return true;
       case 'collapse':
       case 'expand': {
         // В пространственном режиме на КНИЖКЕ ←/→ — перемещение по горизонтали,
         // а сворачивание — только на заголовке группы (спека 1eecd988).
         if (useSpatial && !onGroupHead) {
-          event.preventDefault?.();
           moveSpatial(action === 'collapse' ? -1 : 1, 0);
-          break;
+          return true;
         }
         if (current !== null && adapter.onCollapse !== undefined) {
-          event.preventDefault?.();
           adapter.onCollapse(current, action === 'collapse');
+          return true;
         }
-        break;
+        return false;
       }
       case 'activate':
         if (current !== null && adapter.onActivate !== undefined) {
-          event.preventDefault?.();
           adapter.onActivate(current);
+          return true;
         }
-        break;
+        return false;
       default:
         // PgUp/PgDn списком не используются.
-        break;
+        return false;
     }
   };
 
@@ -453,7 +454,49 @@ export function createListNav<E>(
     adapter.onOutsideClick?.();
   };
 
-  root.addEventListener('keydown', handleKeyDown as EventListener);
+  // Клавиатура списка — через общеклиентский диспетчер: пока фокус внутри
+  // списка, его контекст на вершине стека (ADR b420b08c, задача fd3d84f4).
+  const contextId = `ui-list-${(listContextSeq += 1)}`;
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'list.up', chord: 'ArrowUp', run: handleKeyDown },
+      { command: 'list.down', chord: 'ArrowDown', run: handleKeyDown },
+      { command: 'list.left', chord: 'ArrowLeft', run: handleKeyDown },
+      { command: 'list.right', chord: 'ArrowRight', run: handleKeyDown },
+      { command: 'list.home', chord: 'Home', run: handleKeyDown },
+      { command: 'list.end', chord: 'End', run: handleKeyDown },
+      { command: 'list.home.global', chord: 'Ctrl+Home', run: handleKeyDown },
+      { command: 'list.end.global', chord: 'Ctrl+End', run: handleKeyDown },
+      // Прежний обработчик активировал текущую сущность на Enter независимо от
+      // модификаторов, КРОМЕ Alt (`resolveNavAction(key, { altKey })` при Alt даёт
+      // null) — набор выражен привязками (`lib/keymap-chords.ts`). Ctrl+Enter
+      // по-прежнему сперва отдаётся адаптеру (`adapter.onKey`).
+      ...modifierChordVariants('Enter', ['Ctrl', 'Shift', 'Meta']).map((chord) => ({
+        command: 'list.activate',
+        chord,
+        run: handleKeyDown,
+      })),
+      // Tab/Shift+Tab/Escape — расширение ядра (`adapter.onKey`, режим полей
+      // «Дневника» и Ctrl+Enter-Ctrl-расширения потребителей).
+      { command: 'list.tab', chord: 'Tab', run: handleKeyDown },
+      { command: 'list.tab.prev', chord: 'Shift+Tab', run: handleKeyDown },
+      { command: 'list.escape', chord: 'Escape', run: handleKeyDown },
+      // Alt+↑/↓ — сдвиг порядка (разбор в адаптере/ядре); гасим без обработки.
+      { command: 'list.moveUp', chord: 'Alt+ArrowUp', run: handleKeyDown },
+      { command: 'list.moveDown', chord: 'Alt+ArrowDown', run: handleKeyDown },
+    ],
+  });
+  let releaseContext: (() => void) | null = null;
+  const onFocusIn = (): void => {
+    releaseContext ??= pushKeyContext(contextId);
+  };
+  const onFocusOut = (): void => {
+    releaseContext?.();
+    releaseContext = null;
+  };
+  root.addEventListener('focusin', onFocusIn as EventListener);
+  root.addEventListener('focusout', onFocusOut as EventListener);
   root.addEventListener('click', onClick as EventListener);
   ownerDocument?.addEventListener('click', onDocumentClick as EventListener, true);
 
@@ -481,7 +524,10 @@ export function createListNav<E>(
       return current === null ? null : adapter.tokenOf(current);
     },
     destroy(): void {
-      root.removeEventListener('keydown', handleKeyDown as EventListener);
+      root.removeEventListener('focusin', onFocusIn as EventListener);
+      root.removeEventListener('focusout', onFocusOut as EventListener);
+      releaseContext?.();
+      releaseContext = null;
       root.removeEventListener('click', onClick as EventListener);
       ownerDocument?.removeEventListener('click', onDocumentClick as EventListener, true);
     },

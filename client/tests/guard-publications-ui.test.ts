@@ -222,29 +222,32 @@ describe('guard: UI публикаций (a3cfc018)', () => {
       path.join(RENDERER_ROOT, 'editor', 'publication-card.ts'),
       'utf8',
     );
-    const dialog = card.slice(
-      card.indexOf('async function openCoverDialog'),
-      card.indexOf('function blobToDataUrl'),
-    );
+    const dialog = card.slice(card.indexOf('async function openCoverDialog'));
     assert.ok(dialog.length > 0, 'тело openCoverDialog найдено');
+    // Список вложений и его навигация живут в ОБЩЕМ компоненте выбора вложения
+    // (задача 0f6c3e39) — второй такой список запрещён.
+    const picker = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'editor', 'attachment-picker.ts'),
+      'utf8',
+    );
     // Список создаётся фасадом с контрактными аргументами.
     assert.match(
-      dialog,
-      /createListNav<CoverRow>\(listHost,\s*\{[\s\S]*?entries:\s*\(\)\s*=>\s*rows[\s\S]*?tokenOf:\s*\(row\)\s*=>\s*row\.key[\s\S]*?onActivate:/,
+      picker,
+      /createListNav<AttachmentPickerRow>\(listHost,\s*\{[\s\S]*?entries:\s*\(\)\s*=>\s*rows[\s\S]*?tokenOf:\s*\(row\)\s*=>\s*row\.key[\s\S]*?onActivate:/,
       'список вложений строится общим фасадом createListNav с entries/tokenOf/onActivate',
     );
-    // Строки рисуются keyed-сверкой по id, а не пересборкой.
+    // Строки рисуются keyed-сверкой по ключу носителя, а не пересборкой.
     assert.match(
-      dialog,
+      picker,
       /reconcileKeyed\(listHost,\s*rows,\s*\{[\s\S]*?key:\s*\(row\)\s*=>\s*row\.key/,
-      'строки списка рисуются keyed-сверкой reconcileKeyed по id',
+      'строки списка рисуются keyed-сверкой reconcileKeyed по ключу',
     );
-    // Никакой рукописной карты стрелок и клавиатуры в диалоге.
+    // Никакой рукописной карты стрелок и клавиатуры в списке.
     for (const gone of ["'ArrowUp'", "'ArrowDown'", "'ArrowLeft'", "'ArrowRight'"]) {
-      assert.ok(!dialog.includes(gone), `в диалоге обложки нет рукописной обработки ${gone}`);
+      assert.ok(!picker.includes(gone), `в списке нет рукописной обработки ${gone}`);
     }
     assert.ok(
-      !/addEventListener\(\s*['"]keydown['"]/.test(dialog),
+      !/addEventListener\(\s*['"]keydown['"]/.test(picker),
       'навигацию списка ведёт фасад, а не собственный keydown-обработчик',
     );
     // Диалог — через универсальный каркас выбора ресурса (задача d1a56d76),
@@ -252,6 +255,10 @@ describe('guard: UI публикаций (a3cfc018)', () => {
     assert.ok(
       dialog.includes('createResourcePicker('),
       'диалог обложки — общий каркас выбора ресурса (createResourcePicker)',
+    );
+    assert.ok(
+      dialog.includes('attachmentPickerSourceTab('),
+      'вкладка «Вложения» обложки — общий компонент выбора вложения',
     );
     assert.ok(
       dialog.includes('tabs:'),

@@ -578,6 +578,31 @@ export class RestClient {
     await this.request('DELETE', `/me/keys/${encodeURIComponent(id)}`, { requestOptions: opts });
   }
 
+  /**
+   * `GET /users/me/settings` — all server-level (L3s) settings of the current
+   * user as a «key → JSON value» map (ADR 3a829d25, task f57524ab; spec
+   * operation e7e07b24).
+   */
+  public async getMySettings(): Promise<import('@etn/shared').UserSettingsMap> {
+    return this.request('GET', '/users/me/settings');
+  }
+
+  /**
+   * `PUT /users/me/settings/{key}` — set one server-level user setting. The
+   * server validates the value shape (e.g. `comment_hotkeys` must be a string
+   * map).
+   */
+  public async setMySetting(
+    key: string,
+    value: unknown,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request('PUT', `/users/me/settings/${encodeURIComponent(key)}`, {
+      body: { value },
+      requestOptions: opts,
+    });
+  }
+
   // -------------------------------------------------------------------------
   // §4 Admin: users
   // -------------------------------------------------------------------------
@@ -1964,6 +1989,42 @@ export class RestClient {
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(id)}`,
       { requestOptions: opts },
+    );
+  }
+
+  /**
+   * `POST /networks/{nid}/attachments/{id}/owners` — добавить одного или
+   * нескольких владельцев существующему вложению (0.12.1, задача 6ba247cc).
+   * Идемпотентно: уже владеющие попадают в `skipped`.
+   */
+  public async addAttachmentOwners(
+    networkId: string,
+    id: string,
+    input: import('@etn/shared').AttachmentOwnerAddInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').AttachmentOwnerChangeResult> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(id)}/owners`,
+      { body: input, requestOptions: opts },
+    );
+  }
+
+  /**
+   * `DELETE /networks/{nid}/attachments/{id}/owners` — снять ОДНО владение
+   * (0.12.1, задача 4924d61e). Защиты 409 (иконка/обложка, тексты) приходят
+   * как ошибка; повтор с `confirm: true` снимает предупреждение о текстах.
+   */
+  public async removeAttachmentOwner(
+    networkId: string,
+    id: string,
+    input: import('@etn/shared').AttachmentOwnerRemoveInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').AttachmentOwnerRemoveResult> {
+    return this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(id)}/owners`,
+      { body: input, requestOptions: opts },
     );
   }
 

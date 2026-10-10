@@ -23,6 +23,7 @@ import {
 import { listThoughtTypes } from '../../domain/thought-type-service.js';
 import { listLinkTypes } from '../../domain/link-type-service.js';
 import { listThoughtTypeViewsByType } from '../../domain/thought-type-views-service.js';
+import { createBodyExpander } from '../../domain/transclusion-service.js';
 import { openMemberNetwork, runTool } from '../context.js';
 
 export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
@@ -34,6 +35,8 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
         'Оба каталога типов целиком: типы мыслей и связей с иерархией (`parent_id`/`is_root`), ' +
         'AI-описанием и эффективными свойствами (свои + унаследованные: `key`, `value_type`, ' +
         '`required`, `config` с `options`/`allowed_type_ids`, `default_value`, `property_id`); ' +
+        'тексты `description` (и `comment_template_md` типов мыслей) отдаются с развёрнутыми ' +
+        'трансклюзиями; ' +
         'сервисные поля привязки не отдаются, структурные «Родители»/«Потомки» вынесены строкой ' +
         '`structural_properties_note`. Каждый тип мысли несёт собственные `views[]`. `in_subtree_of`' +
         '(+`max_depth`) ограничивает каталог типами поддерева с `usage_count`; `scope` выбирает ' +
@@ -46,6 +49,12 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
+        // Требование 39e30070, блок «Scope описаний типов» (ТП2, задача bcfc7eb7):
+        // тексты типов, отдаваемые MCP (`description`, `comment_template_md`),
+        // разворачиваются так же, как body_md комментариев — маркеры ADR 85a7a01e.
+        const expand = createBodyExpander(ndb);
+        const expandText = (text: string | null): string | null =>
+          text === null ? null : expand(text);
 
         // O16: subtree-scoped catalogue. If `in_subtree_of` references an
         // unknown thought, surface the same error a `thoughts.get` would.
@@ -91,7 +100,10 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
             name: t.name,
             parent_id: t.parent_id,
             is_root: t.is_root,
-            description: t.description,
+            description: expandText(t.description),
+            // Шаблон постоянного комментария типа (требование 39e30070):
+            // в MCP-каталоге отдаётся и разворачивается вместе с `description`.
+            comment_template_md: expandText(t.comment_template_md),
             // Bug fix (§5.1e): `etn.types.list` has no `view` param — always
             // sanitize the inline `data:` icon URL.
             icon: sanitizeIcon(t.icon),
@@ -131,7 +143,7 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
             name_reverse: t.name_reverse,
             parent_id: t.parent_id,
             is_root: t.is_root,
-            description: t.description,
+            description: expandText(t.description),
             color: t.color,
             style: t.style,
             properties: listEffectiveTypeProperties(ndb, 'link_type', t.id),

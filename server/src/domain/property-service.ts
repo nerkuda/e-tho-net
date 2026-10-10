@@ -56,6 +56,7 @@ import {
   type RegistryPropertyCounters,
   type ResolvedLinkProperty,
   type ResolvedPropertyValue,
+  type MutationWarning,
   type ThoughtCardWarning,
   type ThoughtUsage,
   type ThoughtUsageGroup,
@@ -1276,16 +1277,19 @@ function setLinkPosition(
     .run(position, new Date().toISOString(), actorUserId, Date.now(), linkId, ndb.layerId);
 }
 
-/** Написать/обновить постоянный комментарий ребра («зачем именно эта ссылка»). */
+/** Написать/обновить постоянный комментарий ребра («зачем именно эта ссылка»).
+ *  `warnings` — коллектор предупреждений записи (требование 822a9149):
+ *  перезапись комментария ребра может потерять живые трансклюзии. */
 function upsertLinkComment(
   ndb: NetworkDb,
   linkId: string,
   comment: string,
   actorUserId: string,
+  warnings: MutationWarning[],
 ): void {
   const existing = listComments(ndb, 'link', linkId).find((c) => c.kind === 'permanent');
   if (existing !== undefined) {
-    updateComment(ndb, existing.id, { body_md: comment }, undefined, actorUserId);
+    updateComment(ndb, existing.id, { body_md: comment }, undefined, actorUserId, { warnings });
   } else {
     createComment(ndb, 'link', linkId, { kind: 'permanent', title: null, body_md: comment }, actorUserId);
   }
@@ -1303,6 +1307,7 @@ function addLinkPropertyTarget(
   targetId: string,
   comment: string | null,
   actorUserId: string,
+  warnings: MutationWarning[],
   nameDirection: LinkPropertyDirection | null = null,
 ): string {
   const cfg = prop.config ?? {};
@@ -1325,12 +1330,12 @@ function addLinkPropertyTarget(
   }
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
   if (existing !== undefined) {
-    if (comment !== null) upsertLinkComment(ndb, existing.id, comment, actorUserId);
+    if (comment !== null) upsertLinkComment(ndb, existing.id, comment, actorUserId, warnings);
     return existing.id;
   }
   const position = structural ? (direction === 'out' ? nextStructuralPosition(ndb, src) : nextStructuralPosition(ndb, src)) : 0;
   const id = insertLinkRow(ndb, src, dst, linkTypeId, position, actorUserId);
-  if (comment !== null) upsertLinkComment(ndb, id, comment, actorUserId);
+  if (comment !== null) upsertLinkComment(ndb, id, comment, actorUserId, warnings);
   return id;
 }
 
@@ -3846,7 +3851,7 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     .prepare(
       `SELECT pv.property_id AS property_id, p.name AS property_key,
               t.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,
-              t.active,
+              t.icon_color, t.active,
               t.fg_color, t.bg_color, t.font_bold, t.font_italic,
               t.font_underline, t.font_strike, t.font_manual
        FROM property_values_v pv
@@ -3865,6 +3870,7 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    icon_color: string | null;
     active: number;
     fg_color: string | null;
     bg_color: string | null;
@@ -3897,7 +3903,7 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     const linkRows = ndb
       .prepare(
         `SELECT t.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,
-                t.active, t.fg_color, t.bg_color, t.font_bold, t.font_italic,
+                t.icon_color, t.active, t.fg_color, t.bg_color, t.font_bold, t.font_italic,
                 t.font_underline, t.font_strike, t.font_manual
            FROM links_v l
            JOIN thoughts_v t ON t.id = l.${refCol}
@@ -4751,6 +4757,10 @@ function parseStoredCrossNetworkAddresses(raw: string): string[] {
  * Добавить одну цель в набор свойства-связи (операция `add`, 0.8.1): идемпотентно
  * (живое ребро уже есть — no-op), принимает необязательный комментарий «зачем
  * именно эта ссылка». Один вызов, без чтения текущего набора.
+ *
+ * `warnings` в результате (требование 822a9149) — предупреждения записи
+ * комментария ребра: перезапись теряет живые трансклюзии (в т.ч. при `add` на
+ * ЖИВОМ ребре с новым `comment`).
  */
 export function addLinkPropertyValue(
   ndb: NetworkDb,
@@ -4760,7 +4770,7 @@ export function addLinkPropertyValue(
   targetId: string,
   comment: string | null,
   actorUserId: string,
-): { link_id: string; created: boolean } {
+): { link_id: string; created: boolean; warnings: MutationWarning[] } {
   if (ownerType !== 'thought') {
     throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
       owner_type: ownerType,
@@ -4783,6 +4793,7 @@ export function addLinkPropertyValue(
       prop.direction ??
         linkPropertyDirection(prop.config, resolveOwnerBindingSide(ndb, ownerId, prop.id)),
     ).get(targetId);
+    const warnings: MutationWarning[] = [];
     const id = addLinkPropertyTarget(
       ndb,
       ownerId,
@@ -4790,10 +4801,11 @@ export function addLinkPropertyValue(
       targetId,
       comment,
       actorUserId,
+      warnings,
       prop.direction,
     );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
-    return { link_id: id, created: existing === undefined };
+    return { link_id: id, created: existing === undefined, warnings };
   });
 }
 

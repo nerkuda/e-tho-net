@@ -9,7 +9,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -49,6 +50,7 @@ const EXPECTED_TABLES = [
   'comments',
   'comment_targets',
   'attachments',
+  'attachment_owners',
   'publications',
   'publication_order',
   'publication_exclusions',
@@ -259,6 +261,7 @@ describe(
           'comments',
           'comment_targets',
           'attachments',
+          'attachment_owners',
         ]) {
           const cols = (
             db.prepare('SELECT name FROM pragma_table_info(?)').all(table) as { name: string }[]
@@ -1541,6 +1544,195 @@ describe(
         }
       } finally {
         db.close();
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // 050: attachment_owners + content_hash (0.12.1, задача 369241e4;
+    // ADR 9f90b010; сущности `attachments` 19dd0b5d и `attachment_owners`
+    // 2868dac0). Владельцы переносятся из owner-колонок `attachments` в новую
+    // ветвимую таблицу — включая владения СВЯЗЕЙ (`owner_type='link'`,
+    // уточнение аудита K1); `content_hash` заполняется best-effort по
+    // фактическому файлу. Колонки owner_* у `attachments` на этом шаге
+    // остаются (объём «а»: снятие — задача домена 7678876a).
+    // ------------------------------------------------------------------
+
+    /** Apply migrations up to (excluding) 050 and return the prepared db. */
+    function pre050Db(): Database.Database {
+      const dir = mkdtempSync(path.join(tmpdir(), 'etn-mig-'));
+      for (const f of readdirSync(networkMigrationsDir()).filter(
+        (f) => f.endsWith('.sql') && f < '050',
+      )) {
+        cpSync(path.join(networkMigrationsDir(), f), path.join(dir, f));
+      }
+      const db = new Database(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, dir);
+      rmSync(dir, { recursive: true, force: true });
+      return db;
+    }
+
+    it('050 creates the branchable attachment_owners table and keeps owner_* on attachments (volume «a»)', () => {
+      const db = pre050Db();
+      try {
+        runMigrations(db, networkMigrationsDir());
+        const cols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('attachment_owners') as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        for (const col of [
+          'pk',
+          'id',
+          'layer_id',
+          'deleted',
+          'base_version',
+          'attachment_id',
+          'owner_type',
+          'owner_id',
+          'position',
+          'created_at',
+          'created_by',
+        ]) {
+          assert.ok(cols.includes(col), `missing attachment_owners.${col}`);
+        }
+        const indexes = new Set(
+          (
+            db
+              .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+              .all() as { name: string }[]
+          ).map((r) => r.name),
+        );
+        assert.ok(indexes.has('idx_attachment_owners_owner'), 'missing owner index');
+        assert.ok(indexes.has('idx_attachment_owners_attachment'), 'missing attachment index');
+        assert.ok(indexes.has('idx_attachment_owners_layer'), 'missing layer index');
+
+        // content_hash добавлена, owner-колонки attachments сохранены.
+        const attCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('attachments') as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        assert.ok(attCols.includes('content_hash'), 'missing attachments.content_hash');
+        assert.ok(attCols.includes('owner_type'), 'attachments.owner_type must stay (volume «a»)');
+        assert.ok(attCols.includes('owner_id'), 'attachments.owner_id must stay (volume «a»)');
+        assert.ok(
+          indexes.has('idx_attachments_content_hash'),
+          'missing partial index on attachments.content_hash',
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    it('050 migrates thought/link/publication owners into attachment_owners (link ownerships included)', () => {
+      const db = pre050Db();
+      try {
+        const now = '2026-10-10T00:00:00Z';
+        const insAtt = db.prepare(
+          `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, title, position, created_at, created_by)
+           VALUES (?, ?, ?, ?, 'url', ?, ?, ?, ?, 'u1')`,
+        );
+        insAtt.run('at-thought', BASE, 'thought', 't1', 'https://a', 'мысль', 5, now);
+        insAtt.run('at-link', BASE, 'link', 'l1', 'https://b', 'связь', 2, now);
+        insAtt.run('at-pub', BASE, 'publication', 'p1', 'https://c', 'публикация', 0, now);
+
+        const res = runMigrations(db, networkMigrationsDir());
+        assert.deepEqual(res.applied, networkMigrationFilesFrom('050_attachment_owners.sql'));
+
+        const rows = db
+          .prepare(
+            `SELECT attachment_id, owner_type, owner_id, position, layer_id, deleted
+               FROM attachment_owners ORDER BY attachment_id`,
+          )
+          .all() as Array<{
+          attachment_id: string;
+          owner_type: string;
+          owner_id: string;
+          position: number;
+          layer_id: string;
+          deleted: number;
+        }>;
+        assert.deepEqual(rows, [
+          { attachment_id: 'at-link', owner_type: 'link', owner_id: 'l1', position: 2, layer_id: BASE, deleted: 0 },
+          { attachment_id: 'at-pub', owner_type: 'publication', owner_id: 'p1', position: 0, layer_id: BASE, deleted: 0 },
+          { attachment_id: 'at-thought', owner_type: 'thought', owner_id: 't1', position: 5, layer_id: BASE, deleted: 0 },
+        ]);
+        // Ровно одно владение на вложение в слое — без дублей.
+        const perAttachment = db
+          .prepare('SELECT attachment_id, COUNT(*) AS c FROM attachment_owners GROUP BY attachment_id')
+          .all() as { attachment_id: string; c: number }[];
+        assert.ok(perAttachment.every((r) => r.c === 1), 'one ownership row per attachment expected');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('050 copies ownership per layer with the same tombstone (layer snapshot parity)', () => {
+      const db = pre050Db();
+      try {
+        const now = '2026-10-10T00:00:00Z';
+        db.prepare(
+          `INSERT INTO layers (id, parent_id, title, is_base, depth, created_by, created_at, last_activity_at)
+           VALUES ('lay1', ?, 'слой', 0, 1, 'u1', ?, ?)`,
+        ).run(BASE, now, now);
+        const insAtt = db.prepare(
+          `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, title, position, deleted, created_at, created_by)
+           VALUES (?, ?, 'thought', 't1', 'url', ?, 'x', 0, ?, ?, 'u1')`,
+        );
+        insAtt.run('at-lay', BASE, 'https://x', 0, now);
+        insAtt.run('at-lay', 'lay1', 'https://x', 1, now);
+
+        runMigrations(db, networkMigrationsDir());
+
+        const rows = db
+          .prepare(
+            `SELECT attachment_id, layer_id, deleted FROM attachment_owners WHERE attachment_id = 'at-lay' ORDER BY layer_id`,
+          )
+          .all() as Array<{ attachment_id: string; layer_id: string; deleted: number }>;
+        assert.deepEqual(rows, [
+          { attachment_id: 'at-lay', layer_id: BASE, deleted: 0 },
+          { attachment_id: 'at-lay', layer_id: 'lay1', deleted: 1 },
+        ]);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('050 fills content_hash best-effort from the file, NULL when unreadable', () => {
+      const db = pre050Db();
+      const dir = mkdtempSync(path.join(tmpdir(), 'etn-hash-'));
+      try {
+        const filePath = path.join(dir, 'sample.bin');
+        const payload = Buffer.from('ETN attachment payload', 'utf8');
+        writeFileSync(filePath, payload);
+        const expected = createHash('sha256').update(payload).digest('hex');
+
+        const insAtt = db.prepare(
+          `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, file_path, title, position, created_at, created_by)
+           VALUES (?, ?, 'thought', 't1', ?, ?, ?, ?, 0, '2026-10-10T00:00:00Z', 'u1')`,
+        );
+        insAtt.run('at-file', BASE, 'file', null, filePath, 'файл');
+        insAtt.run('at-missing', BASE, 'file', null, path.join(dir, 'nope.bin'), 'нет файла');
+        insAtt.run('at-url', BASE, 'url', 'https://x', null, 'url');
+
+        runMigrations(db, networkMigrationsDir());
+
+        const byId = new Map(
+          (
+            db.prepare('SELECT id, content_hash FROM attachments').all() as Array<{
+              id: string;
+              content_hash: string | null;
+            }>
+          ).map((r) => [r.id, r.content_hash]),
+        );
+        assert.equal(byId.get('at-file'), expected, 'existing file hashed');
+        assert.equal(byId.get('at-missing'), null, 'unreadable file → NULL');
+        assert.equal(byId.get('at-url'), null, 'url attachment → NULL');
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
       }
     });
   },

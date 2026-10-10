@@ -15,8 +15,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура дерева идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
 
@@ -171,7 +175,9 @@ describe('возврат фокуса списку после закрытия �
     assert.equal(editBtn.focused, false, 'кнопка фокус не удерживает');
 
     const before = tree.getCurrentId();
-    root.emit('keydown', { key: 'ArrowDown', preventDefault: () => undefined });
+    root.emit('focusin', {});
+    keymap.dispatchKeyEvent({ key: 'ArrowDown', preventDefault: () => undefined } as unknown as KeyboardEvent);
+    root.emit('focusout', {});
     assert.notEqual(tree.getCurrentId(), before, 'стрелка двигает текущую строку без клика');
 
     closeDialog(); // закрыть диалог-список — стек пуст для следующих тестов

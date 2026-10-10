@@ -10,10 +10,25 @@
  */
 
 import { DEFAULT_MAX_LENGTH, getRenderer } from './renderer.js';
+import type { TransclusionRenderOptions } from './transclusion-block.js';
 
 export { parseAltSize } from './image.js';
 export { isSafeUrl } from './url.js';
 export { DEFAULT_MAX_LENGTH } from './renderer.js';
+export {
+  MD_SOURCE_START_ATTR,
+  MD_SOURCE_END_ATTR,
+  MD_SOURCE_AFTER_ATTR,
+  MD_SOURCE_LEAF_ATTR,
+  MD_SOURCE_SHIFT_ATTR,
+  TEXT_NODE,
+  ELEMENT_NODE,
+  computeLineStarts,
+  parseSourceRange,
+  nearestSourceRange,
+  sourceOffsetFromCaret,
+} from './source-map.js';
+export type { SourceRange, SourceMapNode } from './source-map.js';
 export {
   WIKI_LINK_CLASS,
   WIKI_LINK_TARGET_ATTR,
@@ -26,6 +41,35 @@ export type {
   WikiLinkResolution,
   WikiLinkResolver,
 } from './wiki-link.js';
+export {
+  TRANSCLUSION_MAX_DEPTH,
+  TRANSCLUSION_MARKER_PREFIX,
+  formatTransclusionRef,
+  parseTransclusions,
+  extractSection,
+  expandTransclusions,
+} from './transclusion.js';
+export { parseSelectionUnits } from './selection.js';
+export type { MarkdownUnit, MarkdownUnitKind } from './selection.js';
+export {
+  TRANSCLUSION_BLOCK_CLASS,
+  TRANSCLUSION_MISSING_CLASS,
+  TRANSCLUSION_SKIPPED_CLASS,
+  TRANSCLUSION_DEPTH_ATTR,
+  TRANSCLUSION_SOURCE_ATTR,
+  TRANSCLUSION_SECTION_ATTR,
+  transclusionBlockPlugin,
+} from './transclusion-block.js';
+export type {
+  TransclusionLabels,
+  TransclusionRenderOptions,
+} from './transclusion-block.js';
+export type {
+  TransclusionRef,
+  TransclusionResolution,
+  TransclusionResolver,
+  ExpandTransclusionsOptions,
+} from './transclusion.js';
 export {
   PUB_ANCHOR_PREFIX,
   shortId,
@@ -70,13 +114,33 @@ export type {
  * `markdown-it/7`: `breaks: true` — a single newline renders as `<br>` so the
  * view matches the editor (задача 5de0332d, п. 3). Cached `body_html` must
  * re-render.
+ *
+ * `markdown-it/8`: ТП1 (задача 2fc28fa2) — task-списки (`- [ ]` / `- [x]`),
+ * выделение `==…==`, подчёркивание `<u>…</u>` и скрытие HTML-комментариев
+ * (`<!-- … -->`) в просмотре/публикациях. Cached `body_html` must re-render
+ * so existing comments lose the previously escaped comments and gain the new
+ * constructs.
  */
-export const MD_RENDER_VERSION = 'markdown-it/7';
+export const MD_RENDER_VERSION = 'markdown-it/8';
 
 /** Options for {@link renderMarkdown}. */
 export interface RenderOptions {
   /** Maximum input length in characters before rendering is refused. */
   maxLength?: number;
+  /**
+   * Annotate the rendered nodes with their source character ranges
+   * (`data-md-start` / `data-md-end`, see `source-map.ts`). Off by default, so
+   * the plain render output is byte-for-byte unchanged.
+   */
+  sourceMap?: boolean;
+  /**
+   * Блочные обёртки развёрнутых трансклюзий (ТП2, задача `a2b68d72`): каждый
+   * вставленный фрагмент оборачивается в `<div class="md-transclusion">` с
+   * атрибутом глубины, а маркеры ошибок/пропуска — в контейнер с подписью.
+   * Требует готовых маркеров `etn:transclusion` (выход `expandTransclusions`).
+   * Без опции маркеры скрываются, как раньше, и вывод не меняется.
+   */
+  transclusion?: TransclusionRenderOptions;
 }
 
 /**
@@ -92,5 +156,9 @@ export function renderMarkdown(source: unknown, opts: RenderOptions = {}): strin
   if (source.length > maxLength) {
     throw new Error(`renderMarkdown: source exceeds ${maxLength} characters`);
   }
-  return getRenderer().render(source);
+  return getRenderer().render(source, {
+    sourceMap: opts.sourceMap === true,
+    sourceMapSource: opts.sourceMap === true ? source : undefined,
+    transclusionLabels: opts.transclusion?.labels,
+  });
 }

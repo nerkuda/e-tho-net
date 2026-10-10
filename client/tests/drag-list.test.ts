@@ -8,8 +8,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import {
   createDragList,
   DRAG_ACTIVE_CLASS,
@@ -19,6 +20,9 @@ import {
 } from '../src/renderer/lib/ui/drag-list.js';
 import { resolveNavAction } from '../src/renderer/lib/ui/nav-core.js';
 import { ShimElement, type ShimRect } from './dom-shim.js';
+
+// Клавиатура списка идёт через диспетчер контекстов: стек между тестами пуст.
+beforeEach(() => keymap.keymapInternals.reset());
 
 const rect = (top: number, bottom: number): ShimRect => ({
   left: 0,
@@ -76,14 +80,17 @@ function setup(
 }
 
 function keydown(root: ShimElement, key: string, altKey: boolean): { prevented: boolean } {
+  // Фокус внутри списка кладёт его контекст на вершину стека диспетчера.
+  root.emit('focusin', {});
   let prevented = false;
-  root.emit('keydown', {
+  keymap.dispatchKeyEvent({
     key,
     altKey,
     preventDefault: () => {
       prevented = true;
     },
-  });
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
   return { prevented };
 }
 

@@ -405,7 +405,7 @@ describe('приёмка №5, п.1: компоновка карточки за�
     // конструктором — обе входят в `head.root`, затем идёт тело.
     assert.match(
       CHRONICLE,
-      /card\.replaceChildren\(head\.root, buildRecordBody\(row, card\)\)/,
+      /card\.replaceChildren\(head\.root, body\)/,
       'порядок: шапка (строка полей + заголовок), затем тело',
     );
     const RECORD_HEAD = read('screens/chronicle/record-head.ts');
@@ -416,7 +416,7 @@ describe('приёмка №5, п.1: компоновка карточки за�
     );
     assert.match(
       CHRONICLE,
-      /function buildRecordBody\(row: ChronicleRow, card: HTMLElement\)[\s\S]*renderRecordView\(shell, row\)/,
+      /function fillRecordCard\(card: HTMLElement, row: ChronicleRow, day: string\): void \{[\s\S]*renderRecordView\(shell, row\)/,
     );
   });
 });

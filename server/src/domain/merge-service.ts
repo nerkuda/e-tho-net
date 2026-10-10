@@ -182,6 +182,26 @@ function existsAnywhere(ndb: NetworkDb, table: BranchableTable, id: string): boo
   );
 }
 
+/**
+ * Есть ли у вложения живое владение хотя бы в одном рабочем (не служебном)
+ * слое (0.12.1, ADR 9f90b010): вложение живёт, пока в любом слое остаётся
+ * живое владение. Служебные (резервные) слои — технические копии для отката —
+ * не считаются. Чтение физическое и осознанное: вопрос «в каком-либо слое», а
+ * не о цепочке одного контекста.
+ */
+function hasLiveOwnershipAnywhere(ndb: NetworkDb, attachmentId: string): boolean {
+  return (
+    ndb
+      .prepare(
+        `SELECT 1 FROM attachment_owners o -- layers:physical-read
+         JOIN layers l ON l.id = o.layer_id AND l.is_service = 0
+         WHERE o.attachment_id = ? AND o.deleted = 0
+         LIMIT 1`,
+      )
+      .get(attachmentId) !== undefined
+  );
+}
+
 /** Sentinel making NULL link types comparable in the triple lookup (§6.2). */
 const NULL_TYPE_SENTINEL = '\u0000';
 
@@ -506,7 +526,7 @@ function typeOwnerTableOf(ownerType: unknown): BranchableTable {
 
 /** References a live merged row carries (§8.1 closure): referent table +
  * logical id. Link endpoints are handled separately (§6.4), and a thought's
- * `icon_attachment_id` is deliberately not a closure reference — a deleted
+ * `icon_attachment_id` is deliberately not a closure reference — a disappeared
  * attachment nulls the pointer during the replay instead. */
 function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: string }> {
   const r = entry.row;
@@ -540,8 +560,24 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
       return compact([ref(ownerTableOf(r.owner_type), r.owner_id)]);
     case 'comment_targets':
       return compact([ref('comments', r.comment_id), ref(ownerTableOf(r.owner_type), r.owner_id)]);
+    // ПЕРЕХОДНЫЙ ПЕРИОД (0.12.1 → задача домена 7678876a): замыкание читает ОБА
+    // источника. Целевая модель (ADR 9f90b010, тех.проект f9b8917c) — владелец
+    // живёт в `attachment_owners` (строка владения замыкается ниже), а строка
+    // вложения сама ни на кого не ссылается. Но пока домен пишет только
+    // owner-колонки `attachments` (attachment-service) и снимает их задача
+    // 7678876a, замыкание строки вложения по owner-колонкам СОХРАНЯЕТСЯ —
+    // иначе вложение слоя, созданное доменным кодом, выпадало бы из набора.
+    // После 7678876a ветка станет недостижимой (`owner_type` = undefined → []),
+    // двойное чтение убирается вместе со снятием колонок.
     case 'attachments':
       return compact([ref(ownerTableOf(r.owner_type), r.owner_id)]);
+    // Владение ссылается на своё вложение (attachment_id) и на объект-владельца:
+    // без живого вложения или владельца строка владения бессмысленна.
+    case 'attachment_owners':
+      return compact([
+        ref('attachments', r.attachment_id),
+        ref(ownerTableOf(r.owner_type), r.owner_id),
+      ]);
     // 0.11.1: подсистема публикаций. Обложка (`cover_attachment_id`) — не
     // ссылка замыкания: как и `thoughts.icon_attachment_id`, пойнтер
     // обнуляется при удалении вложения, а не отвергает слияние.
@@ -807,7 +843,10 @@ function mergeLayerInner(
   const applied: Record<string, number> = {};
   const reorderGroups = new Map<string, number>();
   const publicationReorderGroups = new Map<string, number>();
-  const deletedAttachmentIds = new Set<string>();
+  // Вложения, затронутые слиянием: строки владений (их attachment_id) и
+  // надгробия самих строк вложений. После реплея по этому набору проверяется,
+  // не потеряло ли вложение последнее живое владение (0.12.1, ADR 9f90b010).
+  const touchedAttachmentIds = new Set<string>();
 
   /** Tombstone replay: the deletion lands in P (§8.1, реализация — only P's
    * row; other layers' shadows survive and conflict-detect at their own
@@ -815,9 +854,9 @@ function mergeLayerInner(
   const deleteInTarget = (entry: MergedRow): void => {
     const { table, row, winner } = entry;
     if (winner === undefined) return; // nothing to delete — no-op drop
+    if (table === 'attachments') touchedAttachmentIds.add(row.id as string);
     if (targetIsBase) {
       ndb.prepare(`DELETE FROM ${table} WHERE rowid = ?`).run(winner.rowid);
-      if (table === 'attachments') deletedAttachmentIds.add(row.id as string);
       return;
     }
     if (winner.layer_id === target.id) {
@@ -958,6 +997,11 @@ function mergeLayerInner(
   const liveUpdates: MergedRow[] = [];
   const liveInserts: MergedRow[] = [];
   for (const entry of merged) {
+    // Затронутые слиянием владения (0.12.1): по их вложениям после реплея
+    // проверяется, не исчезло ли вложение (последнее живое владение).
+    if (entry.table === 'attachment_owners') {
+      touchedAttachmentIds.add(entry.row.attachment_id as string);
+    }
     if (entry.row.deleted === 1) {
       deleteInTarget(entry);
     } else if (entry.winner === undefined || entry.winner.deleted === 1) {
@@ -970,23 +1014,6 @@ function mergeLayerInner(
   }
   for (const entry of liveUpdates) updateInTarget(entry);
   for (const entry of liveInserts) insertInTarget(entry);
-
-  // Attachment rows deleted by the replay must not leave dangling
-  // `icon_attachment_id` pointers in P (mirrors the physical purge path).
-  for (const attachmentId of deletedAttachmentIds) {
-    ndb
-      .prepare(
-        'UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ? AND layer_id = ?',
-      )
-      .run(attachmentId, target.id);
-    // 0.11.1: обложка публикации, как и иконка мысли, — не ссылка замыкания;
-    // при удалении строки-вложения пойнтер обнуляется.
-    ndb
-      .prepare(
-        'UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ? AND layer_id = ?',
-      )
-      .run(attachmentId, target.id);
-  }
 
   // --- Phase E: remove the merged rows from L (§8.4) ----------------------
   // §6.4-skipped links stay in the layer: they were not merged (their target
@@ -1013,6 +1040,37 @@ function mergeLayerInner(
     ndb
       .prepare('UPDATE layers SET last_activity_at = ? WHERE id IN (?, ?)')
       .run(now, layerId, target.id);
+  }
+
+  // --- Phase E2: исчезновение вложений (0.12.1, ADR 9f90b010) -------------
+  // Вложение живёт, пока в ЛЮБОМ рабочем слое остаётся живое владение. Слияние
+  // сводит слои — здесь и проверяется «последний владелец»: для вложений,
+  // затронутых слиянием (надгробия владений отреплеены, строки слоя уже
+  // убраны в Phase E), без живого владения строка вложения убирается из цели, а
+  // висячие указатели иконки мысли / обложки публикации обнуляются (как и в
+  // физическом каскаде — пойнтер не ссылка замыкания).
+  //
+  // Физический файл здесь НЕ трогается: носитель один на все слои, его судьбу
+  // по исчезновению последнего живого владельца решает owner-cleanup (задача
+  // da59a4cf), а не слияние.
+  for (const attachmentId of touchedAttachmentIds) {
+    if (hasLiveOwnershipAnywhere(ndb, attachmentId)) continue;
+    const winner = resolveRow(ndb, 'attachments', attachmentId);
+    if (winner !== undefined && winner.deleted === 0) {
+      deleteInTarget({ table: 'attachments', row: winner, winner });
+    }
+    ndb
+      .prepare(
+        'UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ? AND layer_id = ?',
+      )
+      .run(attachmentId, target.id);
+    // 0.11.1: обложка публикации, как и иконка мысли, — не ссылка замыкания;
+    // при исчезновении вложения пойнтер обнуляется.
+    ndb
+      .prepare(
+        'UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ? AND layer_id = ?',
+      )
+      .run(attachmentId, target.id);
   }
 
   for (const entry of merged) {
@@ -1093,6 +1151,12 @@ export function collectThoughtLayerRows(
     'property_values',
     layerIds(ndb, 'property_values', layerId, "owner_type = 'thought' AND owner_id = ?", thoughtId),
   );
+  // Вложения мысли — ОБА источника, переходный период (ADR 9f90b010; снимется
+  // задачей домена 7678876a): строки владений `attachment_owners` (целевая
+  // модель) и вложения по owner-колонкам `attachments` (пока домен пишет их —
+  // именно этот путь создаёт вложение иконки/вложения в слое сегодня). Дубли
+  // схлопывает дедупликация на выходе.
+  pushOwnedAttachments(ndb, layerId, 'thought', [thoughtId], selection);
   push(
     'attachments',
     layerIds(ndb, 'attachments', layerId, "owner_type = 'thought' AND owner_id = ?", thoughtId),
@@ -1128,6 +1192,9 @@ export function collectThoughtLayerRows(
         ...linkIds,
       ),
     );
+    // Вложения связей — тем же двойным чтением (переходный период, 7678876a):
+    // строки владений + owner-колонки `attachments`.
+    pushOwnedAttachments(ndb, layerId, 'link', linkIds, selection);
     push(
       'attachments',
       layerIds(
@@ -1169,6 +1236,43 @@ function layerIds(
       .prepare(`SELECT id FROM ${table} WHERE layer_id = ? AND ${where} -- layers:physical-read`)
       .all(layerId, ...args) as { id: string }[]
   ).map((r) => r.id);
+}
+
+/**
+ * Добавить в набор строки владений (`attachment_owners`) перечисленных объектов
+ * и строки вложений, созданных в СЛОЕ (0.12.1, ADR 9f90b010): владелец вложения
+ * определяется строками владений, а не owner-колонками `attachments`. Вложение,
+ * живущее только в основе, в набор не попадает — его разрешит замыкание по
+ * цепочке (`resolveLiveRow`), как и раньше.
+ */
+function pushOwnedAttachments(
+  ndb: NetworkDb,
+  layerId: string,
+  ownerType: 'thought' | 'link',
+  ownerIds: string[],
+  selection: MergeSelection,
+): void {
+  if (ownerIds.length === 0) return;
+  const ownerPlaceholders = ownerIds.map(() => '?').join(', ');
+  const ownerships = ndb
+    .prepare(
+      `SELECT id, attachment_id FROM attachment_owners -- layers:physical-read
+       WHERE layer_id = ? AND owner_type = ? AND owner_id IN (${ownerPlaceholders})`,
+    )
+    .all(layerId, ownerType, ...ownerIds) as Array<{ id: string; attachment_id: string }>;
+  if (ownerships.length === 0) return;
+  (selection.attachment_owners ??= []).push(...ownerships.map((o) => o.id));
+  const attachmentIds = [...new Set(ownerships.map((o) => o.attachment_id))];
+  const attachmentPlaceholders = attachmentIds.map(() => '?').join(', ');
+  const attachments = ndb
+    .prepare(
+      `SELECT id FROM attachments -- layers:physical-read
+       WHERE layer_id = ? AND id IN (${attachmentPlaceholders})`,
+    )
+    .all(layerId, ...attachmentIds) as Array<{ id: string }>;
+  if (attachments.length > 0) {
+    (selection.attachments ??= []).push(...attachments.map((a) => a.id));
+  }
 }
 
 /** Layer `comment_targets` rows attached to any of `commentIds`. */

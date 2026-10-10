@@ -73,6 +73,12 @@ const EDITOR_SPECS: readonly EditorSpec[] = [
     end: '\0',
   },
   {
+    file: 'editor/comment-hotkeys-dialog.ts',
+    name: 'настройка сочетаний клавиш комментария',
+    start: 'export function showCommentHotkeysDialog(',
+    end: '\0',
+  },
+  {
     file: 'screens/networks.ts',
     name: 'создание мыслесети (экран сетей)',
     start: 'export async function showCreateNetworkDialog(',

@@ -276,6 +276,9 @@ export class SystemDb {
   private readonly stGetPreference: Database.Statement;
   private readonly stUpsertPreference: Database.Statement;
   private readonly stListPreferences: Database.Statement;
+  private readonly stGetUserSetting: Database.Statement;
+  private readonly stUpsertUserSetting: Database.Statement;
+  private readonly stListUserSettings: Database.Statement;
   private readonly stGetSetting: Database.Statement;
   private readonly stSetSetting: Database.Statement;
   private readonly stListNetworkIds: Database.Statement;
@@ -388,6 +391,15 @@ export class SystemDb {
     );
     this.stListPreferences = db.prepare(
       'SELECT key, value, updated_at FROM user_preferences WHERE user_id = ? AND network_id = ? ORDER BY key',
+    );
+    this.stGetUserSetting = db.prepare(
+      'SELECT value, updated_at FROM user_settings WHERE user_id = ? AND key = ? LIMIT 1',
+    );
+    this.stUpsertUserSetting = db.prepare(
+      'INSERT INTO user_settings (user_id, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+    );
+    this.stListUserSettings = db.prepare(
+      'SELECT key, value, updated_at FROM user_settings WHERE user_id = ? ORDER BY key',
     );
     this.stGetSetting = db.prepare('SELECT value FROM settings WHERE key = ? LIMIT 1');
     this.stSetSetting = db.prepare(
@@ -984,6 +996,43 @@ export class SystemDb {
     networkId: string,
   ): Array<{ key: string; value: unknown; updated_at: string }> {
     const rows = this.stListPreferences.all(userId, networkId) as Array<{
+      key: string;
+      value: string;
+      updated_at: string;
+    }>;
+    return rows.map((r) => ({ key: r.key, value: JSON.parse(r.value), updated_at: r.updated_at }));
+  }
+
+  // -------------------------------------------------------------------------
+  // L3s server-level user settings outside any network (docs/11-settings-and-state.md
+  // §2.1 L3s, table `user_settings`; ADR 3a829d25)
+  // -------------------------------------------------------------------------
+
+  /** Read one server-level user setting, or `null` when unset. */
+  getUserSetting(userId: string, key: string): { value: unknown; updated_at: string } | null {
+    const row = this.stGetUserSetting.get(userId, key) as
+      { value: string; updated_at: string } | undefined;
+    if (row === undefined) {
+      return null;
+    }
+    return { value: JSON.parse(row.value), updated_at: row.updated_at };
+  }
+
+  /** Upsert a server-level user setting (value JSON-encoded). */
+  setUserSetting(userId: string, key: string, value: unknown): void {
+    this.stUpsertUserSetting.run(
+      userId,
+      key,
+      JSON.stringify(value),
+      new Date().toISOString(),
+    );
+  }
+
+  /** List all server-level settings of a user (outside any network). */
+  listUserSettings(
+    userId: string,
+  ): Array<{ key: string; value: unknown; updated_at: string }> {
+    const rows = this.stListUserSettings.all(userId) as Array<{
       key: string;
       value: string;
       updated_at: string;

@@ -4,7 +4,9 @@
  * Единственный каркас всех диалогов выбора ресурса клиента — иконки мысли/типа,
  * обложки публикации, будущих картинок в полях. Вместо семейства похожих
  * диалогов: общий КАРКАС (вкладки-источники + нижние кнопки) и набор готовых
- * ИСТОЧНИКОВ ресурса (эмодзи, иконки мыслей, URL, файл-картинка). Новый тип
+ * ИСТОЧНИКОВ ресурса (эмодзи, значки библиотеки, иконки мыслей, URL). Вкладка
+ * «Вложения» — отдельный общий компонент `editor/attachment-picker.ts`
+ * (`attachmentPickerSourceTab`, задача 0f6c3e39). Новый тип
  * ресурса — новая вкладка-источник ({@link ResourceSourceTab}) без правки
  * каркаса; так закрыто требование «точки расширения».
  *
@@ -17,22 +19,27 @@
  * нижняя «Применить» на такой вкладке недоступна.
  *
  * Где живёт: `editor/`, а не `lib/ui` — источники обращаются к домену
- * (`etn.system.pickImage`, `store`, эмодзи-набор), а `lib/ui` — слой фасадов без
+ * (`store`, эмодзи-набор), а `lib/ui` — слой фасадов без
  * знаний о домене. Из `lib/ui` каркас берёт только фасады (диалог, кнопки,
  * вкладки, поля, свёртки), как и требует дизайн-система.
  */
 
 import type { IconKind, ThoughtType } from '@etn/shared';
 import { button, div, el, span } from '../lib/dom.js';
-import { showDialog, type DialogSize } from '../lib/dialog.js';
+import { showDialog, type DialogButton, type DialogSize } from '../lib/dialog.js';
 import { EMOJI_GROUPS } from '../lib/emoji-data.js';
-import { etn } from '../lib/etn.js';
-import { dataUrlBytes, ICON_MAX_BYTES, makeIconPreview } from '../lib/image-preview.js';
 import { t } from '../lib/i18n.js';
-import { notice } from '../lib/notice.js';
-import { uiButton } from '../lib/ui/button.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
+import { colorField } from '../lib/ui/color-field.js';
+import { checkboxRow } from '../lib/ui/choice-row.js';
 import { fieldInput } from '../lib/ui/field.js';
+import {
+  loadIconCatalog,
+  renderLibraryIcon,
+  searchIconCatalog,
+  type IconCatalog,
+} from '../lib/ui/icon.js';
+import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 
 /** Оригинал файла-картинки, выбранного системным диалогом (несётся вызывающему). */
 export interface ResourceFileSource {
@@ -78,8 +85,21 @@ export interface ResourcePickerConfig {
   tabs: ResourceSourceTab[];
   /** Активная вкладка при открытии; по умолчанию — первая. */
   activeTab?: string;
+  /**
+   * Слот «над вкладками»: постоянный блок между заголовком диалога и полосой
+   * вкладок, общий для всех вкладок (не переключается с ними). Диалог иконки
+   * кладёт сюда строку последних выбранных иконок (задача 0fc95a2b); прокрутки
+   * блок не имеет, высота — по содержимому.
+   */
+  aboveTabs?: HTMLElement;
   /** Подпись нижней «Применить». */
   applyLabel: string;
+  /**
+   * Дополнительные кнопки футера ПЕРЕД «Отменой» (слот каркаса). Диалог иконки
+   * ставит сюда «Вставить из буфера» (задача 78eaf07a). Порядок: «без ресурса»
+   * (leading) → эти кнопки → «Отмена» → «без ресурса» (trailing) → «Применить».
+   */
+  footerLeadingButtons?: DialogButton[];
   /** Подпись кнопки «без ресурса»; не задана — кнопки нет. */
   noneLabel?: string;
   /** «Без ресурса» — опасное действие (красная кнопка), по умолчанию `false`. */
@@ -162,6 +182,7 @@ export function createResourcePicker(config: ResourcePickerConfig): () => void {
   };
   const buttons = [
     ...(noneButton !== null && config.nonePlacement === 'leading' ? [noneButton] : []),
+    ...(config.footerLeadingButtons ?? []),
     cancelButton,
     ...(noneButton !== null && config.nonePlacement !== 'leading' ? [noneButton] : []),
     applyButton,
@@ -171,6 +192,7 @@ export function createResourcePicker(config: ResourcePickerConfig): () => void {
     title: config.title,
     size: config.size ?? 'm',
     activeTab: activeTabId,
+    ...(config.aboveTabs !== undefined ? { headerExtra: config.aboveTabs } : {}),
     onTabChange: (id) => {
       activeTabId = id;
       refreshApply();
@@ -193,37 +215,215 @@ export function createResourcePicker(config: ResourcePickerConfig): () => void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Прокручивает выделенную ячейку в вид. Панель строится ДО её вставки в DOM,
+ * поэтому прокрутку откладываем микрозадачей: к её исполнению диалог уже
+ * собран и узел в документе (иначе `scrollIntoView` — no-op).
+ */
+function revealCurrent(cell: HTMLElement | null): void {
+  if (cell === null || typeof cell.scrollIntoView !== 'function') return;
+  queueMicrotask(() => cell.scrollIntoView({ block: 'nearest' }));
+}
+
+/**
  * Источник «Эмодзи» — полный набор Unicode 16.0, категории CLDR, группы
  * сворачиваемые (контент строится при раскрытии). Немедленный: клик по глифу
  * применяет выбор; `onPick` сам решает, закрывать ли диалог.
+ *
+ * `opts.initial` — уже выбранный глиф (ошибка e2407f6d): его категория
+ * раскрывается при открытии, а ячейка помечается классом `emoji-cell-current`
+ * и прокручивается в вид, чтобы текущий выбор был виден без поиска.
  */
 export function emojiSourceTab(
   onPick: (glyph: string, ctx: ResourceSourceContext) => void | Promise<void>,
+  opts: { initial?: string | null } = {},
 ): ResourceSourceTab {
+  const initial = opts.initial ?? null;
   return {
     id: 'emoji',
     label: 'Эмодзи',
     build: (ctx) => {
       const root = div('emoji-groups');
+      let currentCell: HTMLElement | null = null;
       EMOJI_GROUPS.forEach((group, index) => {
+        // Группа текущей иконки разворачивается (иначе выбранный эмодзи скрыт
+        // в свёрнутой категории).
+        const hasCurrent = initial !== null && group.items.includes(initial);
         // Сворачиваемая эмодзи-группа — общий компонент lib/ui/collapsible.ts.
         const section = collapsibleSection({
           title: `${group.name} · ${group.items.length}`,
-          collapsed: index !== 0,
+          collapsed: hasCurrent ? false : index !== 0,
           caretKind: 'triangle',
           classes: { root: 'emoji-group', header: 'emoji-group-title', body: 'emoji-group-body' },
           buildBody: () => {
             const grid = div('emoji-grid');
             for (const glyph of group.items) {
-              grid.append(button(glyph, () => void onPick(glyph, ctx), 'emoji-cell'));
+              const cell = button(glyph, () => void onPick(glyph, ctx), 'emoji-cell');
+              if (glyph === initial) {
+                cell.classList.add('emoji-cell-current');
+                currentCell = cell;
+              }
+              grid.append(cell);
             }
             return grid;
           },
         });
         root.append(section.root);
       });
+      revealCurrent(currentCell);
       return root;
     },
+  };
+}
+
+/**
+ * Источник «Библиотека» — значки иконочной библиотеки (Lucide) с ЖИВЫМ
+ * поиском по каталогу имён. Клик применяет выбор немедленно
+ * (`icon_kind='icon'`, `icon` = имя значка), как у «Эмодзи»: применяет и
+ * закрывает диалог обработчик `onPick`. Полный каталог грузится ЛЕНИВО при
+ * первом построении панели (первое открытие вкладки); до загрузки — подсказка,
+ * сетка наполняется `reconcileKeyed` по фильтру поиска (стандарт
+ * инкрементального рендера списков).
+ *
+ * `opts.initialIcon` — уже выбранное имя значка (ошибка e2407f6d): ячейка
+ * помечается `icon-library-cell-current` и прокручивается в вид, а источник
+ * объявляет корректный выбор (`setReady`), поэтому нижняя «Применить» активна
+ * — смена ТОЛЬКО цвета ранее выбранной иконки не требует повторного поиска
+ * (`apply` применяет текущий значок с новым цветом).
+ */
+export function libraryIconSourceTab(opts: {
+  /**
+   * Начальное имя выбранного значка (`null` — прежнее поведение, выбор не
+   * отмечен). Заполняет выделение и доступность «Применить» (ошибка e2407f6d).
+   */
+  initialIcon?: string | null;
+  /**
+   * Начальный цвет символа (`null` — прежнее поведение, `currentColor`).
+   * Заполняет поле цвета (0.12.1, задача 4105bd6a).
+   */
+  initialColor?: string | null;
+  /**
+   * Выбор значка: имя каталога + выбранный цвет символа (`null` — не задан).
+   * Клик применяет и закрывает диалог; `apply` (нижняя «Применить») применяет
+   * уже выбранный значок — для смены только цвета.
+   */
+  onPick: (
+    name: string,
+    color: string | null,
+    ctx: ResourceSourceContext,
+  ) => void | Promise<void>;
+}): ResourceSourceTab {
+  const initial = opts.initialIcon ?? null;
+  /**
+   * Применение текущего значка рождается в `build` (нужен выбранный значок и
+   * поле цвета), а `apply` нужен каркасу заранее — читаем через холдер, как у
+   * `urlSourceTab`.
+   */
+  const holder: { run: ResourceSourceTab['apply'] } = { run: undefined };
+  return {
+    id: 'library',
+    label: t('icons.library.tab'),
+    build: (ctx) => {
+      const box = div('icon-source');
+
+      // Цвет символа (0.12.1, задача 4105bd6a): тумблер «свой цвет» + поле
+      // выбора. Выключен — цвет не задан (`null`, значок наследует цвет текста).
+      let color: string | null = opts.initialColor ?? null;
+      const colorRow = div('icon-color-row');
+      const colorControl = colorField({ value: color ?? '#20242d' });
+      colorControl.picker.disabled = color === null;
+      const colorToggle = checkboxRow({
+        label: t('icons.library.color'),
+        checked: color !== null,
+        onChange: (on) => {
+          colorControl.picker.disabled = !on;
+          color = on ? colorControl.value() : null;
+        },
+      });
+      colorControl.picker.addEventListener('input', () => {
+        if (color !== null) color = colorControl.value();
+      });
+      colorRow.append(colorToggle.row, colorControl.root);
+
+      // Поиск и выбор цвета — на ОДНОЙ закреплённой сверху строке (ошибка
+      // 705d834b): строка не прокручивается вместе с сеткой значков (её высоту
+      // забирает прокручиваемая сетка, см. `.icon-source-head` в editor.css).
+      const head = div('icon-source-head');
+      const input = fieldInput({ type: 'search', placeholder: t('icons.library.search') });
+      head.append(colorRow, input);
+
+      const hint = el('p', 'muted', t('icons.library.loading'));
+      const grid = div('icon-library-grid');
+      box.append(head, hint, grid);
+
+      let catalog: IconCatalog | null = null;
+      /** Текущий выбор значка (начальный или кликнутый) — источник `apply`. */
+      let selected: string | null = initial;
+      let currentCell: HTMLElement | null = null;
+      let revealedCurrent = false;
+
+      /** Помечает ячейку текущего выбора классом (по `data-icon`). */
+      const paintCurrent = (): void => {
+        for (const cell of Array.from(grid.children) as HTMLElement[]) {
+          cell.classList.toggle('icon-library-cell-current', cell.dataset['icon'] === selected);
+        }
+      };
+
+      const render = (): void => {
+        if (catalog === null) return;
+        const matched = searchIconCatalog(catalog.names, input.value);
+        const empty = matched.length === 0;
+        hint.textContent = empty ? t('icons.library.empty') : '';
+        hint.style.display = empty ? '' : 'none';
+        reconcileKeyed(grid, matched, {
+          key: (name) => name,
+          build: (name) => {
+            const cell = button(
+              '',
+              () => {
+                // Немедленное применение (поведение вкладки): выбор сразу уходит
+                // вызывающему; фиксируем его и для «Применить» (если запись
+                // не удалась и диалог остался открытым).
+                selected = name;
+                void opts.onPick(name, color, ctx);
+              },
+              'icon-library-cell',
+            );
+            cell.title = name;
+            cell.dataset['icon'] = name;
+            void renderLibraryIcon(cell, name, { size: 20 });
+            return cell;
+          },
+          update: () => {},
+        });
+        paintCurrent();
+        if (currentCell === null && selected !== null) {
+          currentCell =
+            (Array.from(grid.children) as HTMLElement[]).find(
+              (cell) => cell.dataset['icon'] === selected,
+            ) ?? null;
+        }
+        // Прокрутка к текущему выбору — один раз, после первой загрузки каталога.
+        if (!revealedCurrent) {
+          revealedCurrent = true;
+          revealCurrent(currentCell);
+        }
+      };
+      input.addEventListener('input', render);
+      void loadIconCatalog().then((loaded) => {
+        catalog = loaded;
+        render();
+      });
+      // Уже выбранный значок — «Применить» активна (смена только цвета).
+      if (selected !== null) ctx.setReady(true);
+      holder.run = (c) => {
+        if (selected === null) return;
+        return opts.onPick(selected, color, c);
+      };
+      return box;
+    },
+    // Нижняя «Применить»: применяет выбранный значок с текущим цветом
+    // (у немедленных источников `apply` нет; здесь он нужен для смены цвета).
+    apply: (ctx) => holder.run?.(ctx),
   };
 }
 
@@ -234,8 +434,26 @@ export function emojiSourceTab(
 export function thoughtIconSourceTab(opts: {
   types: readonly ThoughtType[];
   emptyHint?: string;
-  onPick: (icon: string, kind: IconKind, ctx: ResourceSourceContext) => void | Promise<void>;
+  /**
+   * Растянуть сетку на всю доступную высоту панели (0.12.1, задача 4105bd6a):
+   * `true` — вкладка «Иконки мыслей» диалога иконки; `false`/не задано —
+   * встроенный быстрый выбор внутри вкладки «Файл» (компактный предел высоты).
+   */
+  fill?: boolean;
+  onPick: (
+    icon: string,
+    kind: IconKind,
+    color: string | null,
+    ctx: ResourceSourceContext,
+  ) => void | Promise<void>;
 }): ResourceSourceTab {
+  /** Оборачивает сетку растягивающим контейнером, когда нужна вся высота. */
+  const wrap = (grid: HTMLElement): HTMLElement => {
+    if (opts.fill !== true) return grid;
+    const panel = div('icon-type-panel');
+    panel.append(grid);
+    return panel;
+  };
   return {
     id: 'thought-icons',
     label: 'Иконки мыслей',
@@ -244,12 +462,12 @@ export function thoughtIconSourceTab(opts: {
       const types = opts.types.filter((type) => type.icon !== null && type.icon !== '');
       if (types.length === 0) {
         grid.append(el('p', 'muted', opts.emptyHint ?? 'Типы мыслей с иконками не заданы.'));
-        return grid;
+        return wrap(grid);
       }
       for (const type of types) {
         const cell = button(
           '',
-          () => void opts.onPick(type.icon ?? '', type.icon_kind, ctx),
+          () => void opts.onPick(type.icon ?? '', type.icon_kind, type.icon_color ?? null, ctx),
           'icon-type-cell',
         );
         cell.title = `Иконка типа «${type.name}»`;
@@ -258,12 +476,19 @@ export function thoughtIconSourceTab(opts: {
           img.src = type.icon;
           img.alt = '';
           cell.append(img);
+        } else if (type.icon_kind === 'icon' && type.icon !== null) {
+          // Библиотечная иконка типа (icon_kind='icon') — значок каталога
+          // рисует фасад, отложенно (каталог грузится лениво). Цвет символа —
+          // как у типа (0.12.1, задача 4105bd6a).
+          const iconOptions: { size: number; color?: string } = { size: 20 };
+          if (type.icon_color !== null) iconOptions.color = type.icon_color;
+          void renderLibraryIcon(cell, type.icon, iconOptions, '💭');
         } else {
           cell.textContent = type.icon ?? '💭';
         }
         grid.append(cell);
       }
-      return grid;
+      return wrap(grid);
     },
   };
 }
@@ -334,108 +559,6 @@ export function urlSourceTab(opts: {
       holder.run = (c) => {
         if (valid === null) return;
         return opts.onApply(valid, c);
-      };
-      return box;
-    },
-    apply: (ctx) => holder.run?.(ctx),
-  };
-}
-
-/**
- * Источник «Файл» — сетка иконок типов (быстрый выбор, немедленный) и системный
- * выбор файла-картинки с предпросмотром. Системный выбор применяет нижняя
- * «Применить»: файл ужимается до превью ≤256 КиБ ({@link makeIconPreview}), а
- * оригинал несётся вызывающему в {@link ResourceFileSource}.
- */
-export function fileImageSourceTab(opts: {
-  types: readonly ThoughtType[];
-  emptyHint?: string;
-  /** Немедленный выбор иконки типа. */
-  onTypeIcon: (icon: string, kind: IconKind, ctx: ResourceSourceContext) => void | Promise<void>;
-  /** Применение системного выбора файла (превью + оригинал). */
-  onFile: (
-    preview: string,
-    source: ResourceFileSource,
-    ctx: ResourceSourceContext,
-  ) => void | Promise<void>;
-}): ResourceSourceTab {
-  const holder: { run: ResourceSourceTab['apply'] } = { run: undefined };
-  return {
-    id: 'file',
-    label: 'Файл',
-    build: (ctx) => {
-      const box = div('icon-source');
-      const typeTab = thoughtIconSourceTab({
-        types: opts.types,
-        ...(opts.emptyHint !== undefined ? { emptyHint: opts.emptyHint } : {}),
-        onPick: opts.onTypeIcon,
-      });
-      box.append(el('div', 'icon-section-title', 'Иконки типов мыслей'), typeTab.build(ctx));
-
-      let dataUrl: string | null = null;
-      let source: ResourceFileSource | null = null;
-      const preview = div('icon-preview');
-      const showBad = (): void => {
-        preview.replaceChildren(el('span', 'icon-preview-bad', '✕'));
-        preview.classList.add('icon-preview-error');
-      };
-      const showPreview = (url: string): void => {
-        preview.replaceChildren();
-        preview.classList.remove('icon-preview-error');
-        const img = el('img');
-        img.alt = '';
-        img.addEventListener('load', () => {
-          dataUrl = url;
-          ctx.setReady(true);
-        });
-        img.addEventListener('error', () => {
-          dataUrl = null;
-          ctx.setReady(false);
-          showBad();
-        });
-        img.src = url;
-        preview.append(img);
-      };
-      const pick = async (): Promise<void> => {
-        const picked = await etn.system.pickImage();
-        if (picked.status === 'cancel') return;
-        dataUrl = null;
-        source = null;
-        ctx.setReady(false);
-        if (picked.status === 'error') {
-          showBad();
-          notice(picked.message, 'error');
-          return;
-        }
-        source = { dataUrl: picked.dataUrl, mime: picked.mime, name: picked.name };
-        showPreview(picked.dataUrl);
-      };
-
-      const pickRow = div('icon-pick-row');
-      pickRow.append(
-        uiButton({
-          label: t('actions.browse'),
-          role: 'secondary',
-          size: 's',
-          onClick: () => void pick(),
-        }),
-      );
-      box.append(pickRow, preview);
-      preview.append(el('span', 'muted', 'Файл не выбран'));
-
-      // Применение системного выбора — нижней «Применить»: ужимаем до превью.
-      holder.run = async (c) => {
-        if (dataUrl === null || source === null) return;
-        let icon = dataUrl;
-        if (dataUrlBytes(icon) > ICON_MAX_BYTES) {
-          try {
-            icon = await makeIconPreview(icon);
-          } catch {
-            notice('Не удалось подготовить превью иконки.', 'error');
-            return;
-          }
-        }
-        await opts.onFile(icon, source, c);
       };
       return box;
     },

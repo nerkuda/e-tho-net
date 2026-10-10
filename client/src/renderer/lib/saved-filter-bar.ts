@@ -11,11 +11,13 @@
  * «Удалить» над текущей строкой (правило 2), сам список — единый табличный
  * фасад `lib/ui/table.ts` (задача ae76b75e, требование 93115633): текущая
  * строка, клавиатура (↑/↓, Home/End, PgUp/PgDn, Enter), контекстное меню
- * строки, копирование Ctrl+C. Клик делает строку текущей, двойной клик
- * открывает редактор (переименование), Enter и кнопка «Выбрать» футера
- * применяют отбор (правила 3, 6); после копии список позиционируется на ней
- * (правило 7). У строки контекстное меню «Переименовать» / «Скопировать»
- * (копия с « (копия)») / «Удалить».
+ * строки, копирование Ctrl+C. Диалог — пикер одиночного значения (правило 6
+ * требования 11ddd910): клик лишь делает строку текущей, а выбор ПОДТВЕРЖДАЮТ
+ * двойной клик и Enter (эквивалент кнопки «Выбрать» футера, правило 3) и диалог
+ * закрывается. Переименование доступно кнопкой «Изменить» и командой меню
+ * строки; после копии список позиционируется на ней (правило 7). У строки
+ * контекстное меню «Переименовать» / «Скопировать» (копия с « (копия)») /
+ * «Удалить».
  *
  * Экран передаёт каркасу только своё: хранилище отборов (REST-виды разные —
  * `structures` и `chronicle`), конвертер текущих настроек в определение и
@@ -30,7 +32,9 @@
 import { confirmDialog, errorDialog, promptDialog, showDialog } from './dialog.js';
 import { t } from './i18n.js';
 import { div, el, span } from './dom.js';
-import { svgIcon } from './icons.js';
+import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { modifierChordVariants } from './keymap-chords.js';
+import { svgIcon } from './ui/icon.js';
 import { menuAction, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
 import { iconButton, uiButton } from './ui/button.js';
@@ -275,9 +279,13 @@ interface SavedFilterDialogOptions {
 
 /**
  * Диалог списка сохранённых отборов: поиск по именам сверху, навигация ↑/↓,
- * выбор кликом или Enter, контекстное меню строки. Остаётся открытым после
+ * выбор подтверждают Enter, двойной клик и кнопка «Выбрать» (правило 6
+ * требования 11ddd910), контекстное меню строки. Остаётся открытым после
  * переименования/копирования/удаления — список перерисовывается на месте.
  */
+/** Счётчик диалогов сохранённых отборов: у каждого свой контекст поля поиска. */
+let savedFilterSearchSeq = 0;
+
 export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
   const body = div('sfd list-dialog-body');
 
@@ -373,11 +381,12 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
     rowKey: (entry) => entry.id,
     emptyText: t('savedFilters.empty'),
     emptyHint: t('savedFilters.emptyHint'),
-    // Правило 6 (выбор одиночного значения): клик делает строку текущей,
-    // решение принимает Enter или кнопка «Выбрать»; двойной клик открывает
-    // редактор строки (переименование).
+    // Правило 6 требования 11ddd910 (выбор одиночного значения, ошибка
+    // 03f63297): клик ТОЛЬКО делает строку текущей, а выбор ПОДТВЕРЖДАЮТ Enter,
+    // двойной клик и кнопка «Выбрать» — все три идут в `onActivate` и закрывают
+    // диалог. `onDblActivate` намеренно НЕ задан: фасад на двойной клик без него
+    // зовёт `onActivate` (эквивалент «Выбрать»), а не редактор строки.
     onActivate: (entry) => pick(entry),
-    onDblActivate: (entry) => void opts.onRename(entry).then(render),
     onCurrentChange: () => updateButtons(),
     rowMenu: (entry) => rowMenu(entry),
   });
@@ -442,12 +451,39 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
   // Ввод в поле поиска фильтрует список; стрелки/Enter перенаправляем таблице,
   // чтобы клавиатура оставалась от фасада (текущая строка и подсветка видны).
   search.addEventListener('input', () => render());
-  search.addEventListener('keydown', (event) => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return;
-    event.preventDefault();
+  // Клавиатура поля — через общеклиентский диспетчер (ADR b420b08c, задача
+  // fd3d84f4): пока фокус в поиске, его контекст на вершине стека.
+  const searchContextId = `saved-filter-search-${(savedFilterSearchSeq += 1)}`;
+  const handleSearchKey = (event: KeyboardEvent): boolean => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return false;
     table.focus();
     table.element.dispatchEvent(new KeyboardEvent('keydown', { key: event.key, bubbles: true }));
+    return true;
+  };
+  defineKeyContext({
+    id: searchContextId,
+    bindings: [
+      { command: 'savedFilter.search.down', chord: 'ArrowDown', run: handleSearchKey },
+      { command: 'savedFilter.search.up', chord: 'ArrowUp', run: handleSearchKey },
+      // Прежний обработчик срабатывал на Enter независимо от модификаторов —
+      // нажатие выражено привязкой на каждое подмножество (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'savedFilter.search.enter',
+        chord,
+        run: handleSearchKey,
+      })),
+    ],
   });
+  let releaseSearchContext: (() => void) | null = null;
+  const onSearchFocusIn = (): void => {
+    releaseSearchContext ??= pushKeyContext(searchContextId);
+  };
+  const onSearchFocusOut = (): void => {
+    releaseSearchContext?.();
+    releaseSearchContext = null;
+  };
+  search.addEventListener('focusin', onSearchFocusIn as EventListener);
+  search.addEventListener('focusout', onSearchFocusOut as EventListener);
 
   close = showDialog({
     title: t('savedFilters.title'),

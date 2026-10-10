@@ -13,6 +13,7 @@ import type { McpRuntime } from '../context.js';
 import { NetworksStructure } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, STRUCTURE_SECTION_PREVIEW_CHARS } from '@etn/shared';
 import { getPermanentPreview } from '../../domain/comment-service.js';
+import { createBodyExpander } from '../../domain/transclusion-service.js';
 import { getPropertyValuesResolved } from '../../domain/property-service.js';
 
 import { getThoughtMeta } from '../../domain/thought-meta.js';
@@ -137,6 +138,9 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
               'thought',
               row.id,
               STRUCTURE_SECTION_PREVIEW_CHARS,
+              // MCP-выдача структуры отдаёт превью с развёрнутыми трансклюзиями
+              // (ТП2, задача bcfc7eb7).
+              createBodyExpander(ndb),
             );
             const properties = getPropertyValuesResolved(ndb, 'thought', row.id, accessibleNetworkIds);
             return {

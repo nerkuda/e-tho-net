@@ -308,6 +308,9 @@ function buildApi(): EtnBridgeApi {
         invoke('attachments.updateContent', networkId, id, input),
       copy: (networkId, attachmentId, input) =>
         invoke('attachments.copy', networkId, attachmentId, input),
+      addOwners: (networkId, id, input) => invoke('attachments.addOwners', networkId, id, input),
+      removeOwner: (networkId, id, input) =>
+        invoke('attachments.removeOwner', networkId, id, input),
       search: (networkId, query) => invoke('attachments.search', networkId, query),
       getUsage: (networkId, id) => invoke('attachments.getUsage', networkId, id),
     },
@@ -331,6 +334,8 @@ function buildApi(): EtnBridgeApi {
       listKeys: () => invoke('me.listKeys'),
       createKey: (label, maxWritesPerMinute) => invoke('me.createKey', label, maxWritesPerMinute),
       removeKey: (id) => invoke('me.removeKey', id),
+      getSettings: () => invoke('me.getSettings'),
+      setSetting: (key, value) => invoke('me.setSetting', key, value),
     },
     locks: {
       acquire: (networkId, entityType, entityId) =>
@@ -455,6 +460,7 @@ function buildApi(): EtnBridgeApi {
     },
     system: {
       appInfo: () => invoke('system.appInfo'),
+      readClipboard: () => invoke('system.readClipboard'),
       health: () => invoke('system.health'),
       version: () => invoke('system.version'),
       export: (networkId, request) => invoke('system.export', networkId, request),

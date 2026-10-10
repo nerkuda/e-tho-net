@@ -23,7 +23,8 @@ import {
   listComments,
   updateComment,
 } from '../src/domain/comment-service.js';
-import { renderMarkdown } from '@etn/markdown';
+import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
+import { acquireLock } from '../src/domain/lock-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -464,6 +465,83 @@ describe(
       }
     });
 
+    it('rejects a comment body over the render limit with VALIDATION_ERROR (ошибка 2764d7bb)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'OverLimit');
+        const big = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        let caught: unknown;
+        try {
+          createComment(ndb, 'thought', t, { kind: 'permanent', body_md: big }, USER);
+        } catch (e) {
+          caught = e;
+        }
+        assert.ok(caught instanceof EtnError, 'должна бросаться EtnError, а не голый Error');
+        assert.equal(caught.code, 'VALIDATION_ERROR');
+        assert.deepEqual(caught.details, { field: 'body_md', limit: DEFAULT_MAX_LENGTH });
+        const count = ndb.prepare('SELECT COUNT(*) AS n FROM comments_v').get() as { n: number };
+        assert.equal(count.n, 0, 'при отказе ничего не записано');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('accepts a comment body exactly at the render limit (boundary, ошибка 2764d7bb)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'AtLimit');
+        const body = 'a'.repeat(DEFAULT_MAX_LENGTH);
+        const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: body }, USER);
+        assert.equal(c.body_md.length, DEFAULT_MAX_LENGTH);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('uses the caller-supplied field path in details.field (ошибка 2764d7bb)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'NestedField');
+        const big = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        assert.throws(
+          () =>
+            createComment(
+              ndb,
+              'thought',
+              t,
+              { kind: 'permanent', body_md: big },
+              USER,
+              { bodyField: 'comment.body_md' },
+            ),
+          (e: unknown) =>
+            e instanceof EtnError &&
+            e.code === 'VALIDATION_ERROR' &&
+            (e.details as { field?: string }).field === 'comment.body_md',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('rejects an over-limit body on update and keeps the stored body (ошибка 2764d7bb)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'UpdateOverLimit');
+        const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: 'ok' }, USER);
+        const big = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        assert.throws(
+          () => updateComment(ndb, c.id, { body_md: big }, undefined, USER),
+          (e: unknown) =>
+            e instanceof EtnError &&
+            e.code === 'VALIDATION_ERROR' &&
+            (e.details as { field?: string }).field === 'body_md',
+        );
+        assert.equal(listComments(ndb, 'thought', t)[0]?.body_md, 'ok');
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('addCommentTarget attaches one more owner and rejects duplicates (L20)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
@@ -520,6 +598,86 @@ describe(
         };
         assert.equal(updated.owner_id, home.id, 'comment re-attached to HOME');
         assert.equal(listComments(ndb, 'thought', home.id).length, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+
+describe(
+  'comment-service: захват владельца блокирует запись (ошибка 68be6829)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    const ALICE = '00000000-0000-4000-8000-00000000a11ce';
+    const BOB = '00000000-0000-4000-8000-00000000b0b00';
+
+    it('правка чужого комментария при захвате мысли-владельца — 409 LOCKED', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Источник');
+        const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: 'исходный' }, ALICE);
+        acquireLock(ndb, { entityType: 'thought', entityId: t, userId: ALICE, clientId: 'alice-cli' });
+        assert.throws(
+          () => updateComment(ndb, c.id, { body_md: 'правка Боба' }, undefined, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.equal(getCommentsPreview(ndb, 'thought', t).permanent?.body_md, 'исходный');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('правка комментария держателем захвата проходит', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Источник');
+        const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: 'исходный' }, ALICE);
+        acquireLock(ndb, { entityType: 'thought', entityId: t, userId: ALICE, clientId: 'alice-cli' });
+        const updated = updateComment(ndb, c.id, { body_md: 'правка Алисы' }, undefined, ALICE);
+        assert.equal(updated.body_md, 'правка Алисы');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('создание и удаление комментария при чужом захвате — 409 LOCKED', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Источник');
+        const c = createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'x' }, ALICE);
+        acquireLock(ndb, { entityType: 'thought', entityId: t, userId: ALICE, clientId: 'alice-cli' });
+        assert.throws(
+          () => createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'новая' }, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.throws(
+          () => deleteComment(ndb, c.id, undefined, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.equal(listComments(ndb, 'thought', t).length, 1, 'комментарий не удалён');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('смена привязок комментария при чужом захвате владельца — 409 LOCKED', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Источник');
+        const other = seedThought(ndb, 'Другая');
+        const c = createComment(ndb, 'thought', t, { kind: 'chronological', body_md: 'x' }, ALICE);
+        acquireLock(ndb, { entityType: 'thought', entityId: t, userId: ALICE, clientId: 'alice-cli' });
+        assert.throws(
+          () => addCommentTarget(ndb, c.id, 'thought', other, c.version, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.throws(
+          () => removeCommentTarget(ndb, c.id, 'thought', t, c.version, BOB),
+          (e: unknown) => e instanceof EtnError && e.code === 'LOCKED',
+        );
+        assert.equal(listComments(ndb, 'thought', t).length, 1, 'привязка не изменилась');
+        assert.equal(listComments(ndb, 'thought', other).length, 0);
       } finally {
         ndb.close();
       }

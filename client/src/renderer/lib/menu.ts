@@ -202,6 +202,37 @@ function buildMenu(items: MenuItem[]): HTMLDivElement {
 }
 
 /**
+ * Удерживает фокус текущего элемента при клике по строке меню: строки не
+ * забирают фокус на `mousedown`, поэтому поле, из которого открыто меню
+ * (в частности редактор комментария CodeMirror), не выходит из правки, а
+ * команда применяется к текущему выделению.
+ *
+ * Обработчик делегирован на КОНТЕЙНЕР меню в фазе capture: `mousedown` по
+ * любой строке-потомку `.menu-item` гасится — в том числе по строкам подменю,
+ * которые строятся лениво на `mouseenter` ({@link buildMenu}) и появляются в
+ * DOM уже ПОСЛЕ открытия меню, на любой глубине вложенности. Навешивание
+ * обработчиков на строки, существовавшие на момент вызова, не защищало ленивые
+ * подменю (ошибка 64b18420).
+ */
+export function guardMenuFocus(menuRoot: HTMLElement): void {
+  menuRoot.addEventListener(
+    'mousedown',
+    (event) => {
+      if (isMenuRowTarget(event.target)) event.preventDefault();
+    },
+    true,
+  );
+}
+
+/** Цель `mousedown` — строка меню (сама `.menu-item` или её потомок). */
+function isMenuRowTarget(target: EventTarget | null): boolean {
+  const node = target as (Element & { closest?(selector: string): Element | null }) | null;
+  if (node === null || typeof node !== 'object') return false;
+  if (node.classList?.contains('menu-item') === true) return true;
+  return typeof node.closest === 'function' && node.closest('.menu-item') !== null;
+}
+
+/**
  * Shows a menu at viewport coordinates and returns its root element (so the
  * caller can wire extra behaviour onto the rows, e.g. drag sources).
  * Coordinates are clamped to the viewport and the menu is closed on outside

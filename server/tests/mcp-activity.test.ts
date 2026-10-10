@@ -328,8 +328,9 @@ describe(
               target_owner_ids: [copyTargetId],
             });
           assert.equal(copyRes.isError, undefined, toolText(copyRes));
-          const copiedId = toolJson<Array<{ id: string }>>(copyRes)[0]?.id;
-          assert.ok(copiedId !== undefined);
+          // Муль-владение: копия не создаёт новых строк — результат пуст,
+          // владельцем той же строки стал целевой объект (задача 7678876a).
+          assert.deepEqual(toolJson<unknown[]>(copyRes), []);
 
           const linkRows = rowsOf(ctx, 'link', linkId);
           assert.deepEqual(
@@ -345,9 +346,6 @@ describe(
             rowsOf(ctx, 'attachment', attachmentId).map((r) => r.action),
             ['created'],
           );
-          const copiedRows = rowsOf(ctx, 'attachment', copiedId);
-          assert.deepEqual(copiedRows.map((r) => r.action), ['created']);
-          assert.match(copiedRows[0]?.entity_title ?? '', /Документация/);
         } finally {
           await handle.close();
         }

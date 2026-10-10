@@ -59,7 +59,8 @@
 etn/
 ├── docs/        # исторические снимки: спецификации (истина — в мыслесети `ETN`) + workplan (фазы, выполненные до переноса планирования в `ETN`) + руководства
 ├── server/      # @etn/server  — Fastify + better-sqlite3 + WebSocket + MCP
-│   ├── src/  migrations/{system,network}/
+│   ├── migrations/{system,network}/   # SQLite-миграции: system — системная БД, network — БД сетей
+│   ├── src/
 │   └── dist/    # сборка — НЕ коммитить
 ├── client/      # @etn/client  — Electron + electron-vite (vanilla TS, без React)
 │   ├── src/{main,preload,renderer}/  scripts/rebuild-native.mjs

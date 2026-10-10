@@ -73,7 +73,6 @@ export async function acquireOrShowBlocked(
   entityType: LockEntityType | string,
   entityId: string,
 ): Promise<AcquireOutcome> {
-  const networkId = requireNetworkId();
   const existing = getLock(entityType, entityId);
   if (existing !== undefined) {
     const me = store.state.me;
@@ -88,6 +87,10 @@ export async function acquireOrShowBlocked(
   }
 
   try {
+    // `requireNetworkId()` может бросить (сеть закрыта, ошибка 85edaad1): вызов
+    // внутри try сохраняет контракт хелпера — неудачный захват не блокирует
+    // работу, а оборачивается исходом `failed`.
+    const networkId = requireNetworkId();
     const lock = await etn.locks.acquire(networkId, entityType, entityId);
     return { kind: 'acquired', lock };
   } catch (err) {

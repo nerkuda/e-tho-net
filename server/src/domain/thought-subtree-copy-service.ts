@@ -11,7 +11,9 @@
  *   * ссылки — рёбра снапшота: их типы резолвятся по id → по имени в целевой
  *     сети (включая рёбра свойств-связей, 0.8.1 — thought_ref упразднён
  *     миграцией 040);
- *   * файлы вложений не копируются — только видимые поля;
+ *   * файлы вложений при копировании МЕЖДУ сетями физически переносятся в
+ *     сеть-получатель (копия получает уникальное имя, `-<n>`); внутри одной
+ *     сети файл шарится как единственный экземпляр (ошибка b83a7d89);
  *   * ссылки на root of target создаются автоматически от `parent_thought_id`.
  *
  * Поверх — четыре политики разрешения коллизий:
@@ -52,14 +54,18 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { createAttachment, listAttachments } from './attachment-service.js';
+import { AttachmentFileCopier, createAttachment, listAttachments } from './attachment-service.js';
 import { listComments } from './comment-service.js';
 import { traverse } from './graph-traversal.js';
 import { createLink, findLinksBetween } from './link-service.js';
 import { getPropertyValues, setPropertyValue } from './property-service.js';
 import { findDuplicates } from './search-service.js';
 import { getThought } from './thought-service.js';
-import { copyThoughtsBatch, linkIdentity, resolveCopyLinkTypeId } from './thought-copy-service.js';
+import {
+  copyThoughtsBatch,
+  linkIdentity,
+  resolveCopyLinkTypeId,
+} from './thought-copy-service.js';
 import { getLinkType } from './link-type-service.js';
 import { getThoughtType } from './thought-type-service.js';
 
@@ -82,6 +88,14 @@ export interface CopySubtreeParams {
   target_parent_thought_id: string;
   /** id актора для `created_by` / `updated_by`. */
   actor_user_id: string;
+  /**
+   * Планировщик физического копирования файлов вложений при межсетевом
+   * копировании (ошибка b83a7d89). Создаётся и коммитится ВЫЗЫВАЮЩИМ
+   * (фасад), причём `commit()` — ПОСЛЕ фиксации внешней транзакции, иначе
+   * при её откате останутся файлы-сироты. `null`/не задан — файлы вложений
+   * не копируются (внутрисетевое копирование, шаринг единственного файла).
+   */
+  fileCopier?: AttachmentFileCopier | null;
 }
 
 /** Сводка, которую возвращает `copySubtree`. */
@@ -196,10 +210,19 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
   // выполнял бы обещанного политикой (ошибка af4f6568 «reuse не докопирует
   // недостающее»). Транзакция вложена в `runWrite`-транзакцию фасада —
   // savepoint откатывает всё вместе при ошибке.
+  //
+  // Файлы вложений при межсетевом копировании переносятся физически. Один
+  // общий планировщик на всю операцию (мысли + переиспользованные вложения):
+  // дедуп одного исходного файла и общая нумерация копий. Планировщик
+  // приходит от вызывающего и коммитится ИМ после фиксации внешней
+  // транзакции — сам `copySubtree` файлы не пишет (иначе при откате внешней
+  // транзакции остался бы файл-сирота, регресс b83a7d89).
+  const fileCopier = params.fileCopier ?? null;
+
   return target_ndb.transaction(() => {
     const base: ThoughtCopyResult =
       built.copyInput.thoughts.length > 0
-        ? copyThoughtsBatch(target_ndb, built.copyInput, actor_user_id)
+        ? copyThoughtsBatch(target_ndb, built.copyInput, actor_user_id, { fileCopier })
         : emptyCopyResult();
 
     // Полная карта адресации: созданные (`base`) + переиспользованные.
@@ -212,6 +235,7 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
       built.reuseLinks,
       thoughtIdMap,
       actor_user_id,
+      fileCopier,
     );
 
     return {
@@ -356,6 +380,7 @@ function collectSnapshot(
         },
         icon: t.icon,
         icon_kind: t.icon_kind,
+        icon_color: t.icon_color,
         active: t.active,
         fg_color: t.fg_color,
         bg_color: t.bg_color,
@@ -648,7 +673,7 @@ function buildCopyInput(
   }
 
   const copyInput: ThoughtCopyInput = {
-    source_network_id: 'internal:subtree',
+    source_network_id: src.networkId,
     parent_thought_id: targetParentId,
     thoughts: thoughtsToCopy.map((t) => ({
       source_id: t.id,
@@ -714,6 +739,7 @@ function fillReusedThoughts(
   links: ReadonlyArray<ThoughtCopyLink>,
   combinedMap: Record<string, string>,
   actorUserId: string,
+  fileCopier: AttachmentFileCopier | null,
 ): { link_id_map: Record<string, string>; created_link_ids: string[] } {
   for (const plan of plans) {
     const existingKeys = new Set(
@@ -733,6 +759,12 @@ function fillReusedThoughts(
     const existingAttachments = listAttachments(target, 'thought', plan.target_id);
     for (const a of plan.attachments) {
       if (existingAttachments.some((e) => sameVisibleAttachment(e, a))) continue;
+      // Межсетевое копирование: файл вложения переносится в сеть-получатель
+      // (общий планировщик с `copyThoughtsBatch`, ошибка b83a7d89).
+      const filePath =
+        a.kind === 'file' && a.file_path !== null && a.file_path !== undefined && fileCopier !== null
+          ? fileCopier.resolveFilePath(a.file_path)
+          : (a.file_path ?? null);
       try {
         createAttachment(
           target,
@@ -741,7 +773,7 @@ function fillReusedThoughts(
           {
             kind: a.kind,
             url: a.url ?? null,
-            file_path: a.file_path ?? null,
+            file_path: filePath,
             file_size: a.file_size ?? null,
             mime_type: a.mime_type ?? null,
             title: a.title ?? null,

@@ -57,6 +57,9 @@ import { linkTypeFilterClause } from './type-hierarchy.js';
 // Filter parsing / validation
 // ---------------------------------------------------------------------------
 
+/** Допустимые поля одного условия отбора (REST wire-форма, §6.10). */
+const STRUCTURE_PROPERTY_CONDITION_KEYS = ['property_id', 'op', 'value'] as const;
+
 /** Read a `StructureFilter` from an untrusted object (request body or saved JSON). */
 export function parseStructureFilter(
   body: Record<string, unknown>,
@@ -293,6 +296,21 @@ function parsePropertyCondition(raw: unknown, requestId?: string): StructureProp
     }, requestId);
   }
   const obj = raw as Record<string, unknown>;
+  // Неизвестные поля условия отвергаются явно (ошибка f4580fff, 0.12.1):
+  // молчаливое игнорирование лишнего ключа (`key` вместо `property_id`)
+  // незаметно меняло намерение пользователя — принцип «не игнорировать молча»
+  // требует явной ошибки, как и у MCP-контракта `etn.thoughts.query`.
+  const unknown = Object.keys(obj).filter(
+    (k) => !(STRUCTURE_PROPERTY_CONDITION_KEYS as readonly string[]).includes(k),
+  );
+  if (unknown.length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Условие свойства содержит неизвестные поля: ${unknown.join(', ')}. Допустимы: ${STRUCTURE_PROPERTY_CONDITION_KEYS.join(', ')}.`,
+      { field: 'properties', fields: unknown },
+      requestId,
+    );
+  }
   const propertyId = obj['property_id'];
   if (typeof propertyId !== 'string' || propertyId === '') {
     throw new EtnError('VALIDATION_ERROR', 'property_id должен быть непустой строкой.', {

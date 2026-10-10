@@ -16,6 +16,7 @@ import {
   nativeAvailable,
   type RestTestContext,
 } from './rest-helpers.js';
+import { createThoughtType } from '../src/domain/thought-type-service.js';
 
 /** Create a thought and assert 201; returns its id. */
 async function createThought(
@@ -38,6 +39,183 @@ describe(
   '/thoughts routes',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
+    it('create with comment: мысль и постоянный комментарий одной транзакцией (0.12.1, aa79c82d)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts`,
+          headers: authHeaders(ctx),
+          payload: {
+            title: 'Из выделения',
+            create_link: { direction: 'parent', target_thought_id: ctx.homeId },
+            comment: { body_md: '# Раздел\n\n**жирный** текст' },
+          },
+        });
+        assert.equal(res.statusCode, 201);
+        const id = (res.json().data as { id: string }).id;
+
+        // Постоянный комментарий уже на месте — отдельного запроса не было.
+        const list = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${id}/comments`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(list.statusCode, 200);
+        const comments = list.json().data as Array<{
+          kind: string;
+          body_md: string;
+          body_html: string;
+        }>;
+        assert.equal(comments.length, 1);
+        assert.equal(comments[0]!.kind, 'permanent');
+        assert.equal(comments[0]!.body_md, '# Раздел\n\n**жирный** текст');
+        // `body_html` предрендерен серверным рендерером @etn/markdown.
+        assert.match(comments[0]!.body_html, /<h1[^>]*>Раздел<\/h1>/);
+        assert.match(comments[0]!.body_html, /<strong>жирный<\/strong>/);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('create with comment: явный комментарий перекрывает comment_template_md типа', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const type = createThoughtType(
+          ctx.ndb,
+          { name: 'Карточка-комментарий', comment_template_md: '## Шаблон\n\n- пункт: ' },
+          ctx.adminId,
+        );
+        const id = await createThought(ctx, {
+          title: 'Со своим текстом',
+          type_id: type.id,
+          comment: { body_md: 'Свой текст' },
+        });
+
+        const list = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${id}/comments`,
+          headers: authHeaders(ctx),
+        });
+        const comments = list.json().data as Array<{ kind: string; body_md: string }>;
+        // Ровно один постоянный комментарий — явное тело, а не шаблон.
+        assert.equal(comments.filter((c) => c.kind === 'permanent').length, 1);
+        assert.equal(comments.find((c) => c.kind === 'permanent')!.body_md, 'Свой текст');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('create with comment: пустое тело комментария отвергается (422), мысль не создаётся', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts`,
+          headers: authHeaders(ctx),
+          payload: { title: 'Пустой комментарий', comment: { body_md: '   ' } },
+        });
+        assert.equal(res.statusCode, 422);
+        assert.equal(res.json().error.code, 'VALIDATION_ERROR');
+        // Ни мысли, ни комментария не осталось.
+        const thoughts = ctx.ndb
+          .prepare('SELECT COUNT(*) AS n FROM thoughts_v WHERE title = ?')
+          .get('Пустой комментарий') as { n: number };
+        assert.equal(thoughts.n, 0);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('create with comment: сбой связи-родителя откатывает и мысль, и комментарий', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Несуществующий родитель: create_link бросает NOT_FOUND уже после
+        // INSERT мысли, но в той же транзакции — откат обязан снять обе
+        // записи (мысль и её постоянный комментарий).
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts`,
+          headers: authHeaders(ctx),
+          payload: {
+            title: 'Откат',
+            create_link: {
+              direction: 'parent',
+              target_thought_id: '00000000-0000-0000-0000-000000000000',
+            },
+            comment: { body_md: 'Тело отката' },
+          },
+        });
+        assert.equal(res.statusCode, 404);
+        const thoughts = ctx.ndb
+          .prepare('SELECT COUNT(*) AS n FROM thoughts_v WHERE title = ?')
+          .get('Откат') as { n: number };
+        assert.equal(thoughts.n, 0);
+        const comments = ctx.ndb
+          .prepare('SELECT COUNT(*) AS n FROM comments_v WHERE body_md = ?')
+          .get('Тело отката') as { n: number };
+        assert.equal(comments.n, 0);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('create with comment: комментарий сверх лимита рендера — 422 и откат мысли', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Тело сверх лимита 256 КиБ отвергается проверкой ДО рендера (ошибка
+        // 2764d7bb): клиентская ошибка 422 VALIDATION_ERROR с details.field =
+        // `comment.body_md`, а не 500 INTERNAL от голого Error рендерера.
+        // createComment исполняется внутри транзакции createThought — INSERT
+        // мысли обязан откатиться.
+        const big = 'a'.repeat(256 * 1024 + 1);
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts`,
+          headers: authHeaders(ctx),
+          payload: { title: 'Слишком большой комментарий', comment: { body_md: big } },
+        });
+        assert.equal(res.statusCode, 422);
+        const error = res.json().error as { code: string; details?: { field?: string } };
+        assert.equal(error.code, 'VALIDATION_ERROR');
+        assert.equal(error.details?.field, 'comment.body_md');
+        const thoughts = ctx.ndb
+          .prepare('SELECT COUNT(*) AS n FROM thoughts_v WHERE title = ?')
+          .get('Слишком большой комментарий') as { n: number };
+        assert.equal(thoughts.n, 0);
+        const comments = ctx.ndb
+          .prepare('SELECT COUNT(*) AS n FROM comments_v WHERE length(body_md) > ?')
+          .get(256 * 1024) as { n: number };
+        assert.equal(comments.n, 0);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('POST /comments: комментарий сверх лимита рендера — 422 VALIDATION_ERROR (ошибка 2764d7bb)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const id = await createThought(ctx, { title: 'Владелец большого комментария' });
+        const big = 'a'.repeat(256 * 1024 + 1);
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${id}/comments`,
+          headers: authHeaders(ctx),
+          payload: { kind: 'permanent', body_md: big },
+        });
+        assert.equal(res.statusCode, 422);
+        const error = res.json().error as { code: string; details?: { field?: string } };
+        assert.equal(error.code, 'VALIDATION_ERROR');
+        assert.equal(error.details?.field, 'body_md');
+        const comments = ctx.ndb
+          .prepare('SELECT COUNT(*) AS n FROM comments_v WHERE owner_id = ?')
+          .get(id) as { n: number };
+        assert.equal(comments.n, 0, 'комментарий не создан');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('CRUD: create with link, read, patch with If-Match, delete', async () => {
       const ctx = await buildRestContext();
       try {

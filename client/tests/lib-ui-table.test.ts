@@ -19,11 +19,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
 import type { TableColumn } from '../src/renderer/lib/ui/table.js';
 import type { GridColumnSpec, GridTableAdapter } from '../src/renderer/lib/ui/table-grid.js';
+
+// Клавиатура грида идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 function shimDom(): void {
   (globalThis as any).document = {
@@ -147,15 +151,24 @@ const ROWS: Row[] = [
   { id: 'c', name: 'Гамма', size: 20 },
 ];
 
-function keyEvent(key: string, ctrl = false): any {
+function keyEvent(key: string, ctrl = false, mods: Record<string, boolean> = {}): any {
   return {
     key,
+    ...(key === ' ' ? { code: 'Space' } : {}),
     ctrlKey: ctrl,
     metaKey: false,
     shiftKey: false,
+    altKey: false,
+    ...mods,
     preventDefault: () => undefined,
     stopPropagation: () => undefined,
   };
+}
+
+/** Нажатие клавиши на обёртке: фокус кладёт контекст, событие — диспетчеру. */
+function press(wrapper: any, event: any): void {
+  wrapper.focus();
+  keymap.dispatchKeyEvent(event as KeyboardEvent);
 }
 
 describe('lib/ui/table: чистые функции', () => {
@@ -329,15 +342,15 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
     const wrapper = t.element as unknown as ShimElement;
     assert.equal(t.getCurrent(), null);
 
-    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    press(wrapper, keyEvent('ArrowDown'));
     assert.equal(t.getCurrent()?.key, 'a');
-    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    press(wrapper, keyEvent('ArrowDown'));
     assert.equal(t.getCurrent()?.key, 'b');
-    wrapper.emit('keydown', keyEvent('End'));
+    press(wrapper, keyEvent('End'));
     assert.equal(t.getCurrent()?.key, 'c');
-    wrapper.emit('keydown', keyEvent('ArrowUp'));
+    press(wrapper, keyEvent('ArrowUp'));
     assert.equal(t.getCurrent()?.key, 'b');
-    wrapper.emit('keydown', keyEvent('Home'));
+    press(wrapper, keyEvent('Home'));
     assert.equal(t.getCurrent()?.key, 'a');
     assert.deepEqual(changes, ['a', 'b', 'c', 'b', 'a'], 'onCurrentChange на каждое перемещение');
     assert.equal(stub.active, ROWS[0], 'строка подсвечена активной');
@@ -356,9 +369,32 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
       onActivate: (row) => activated.push(row.id),
     });
     const wrapper = t.element as unknown as ShimElement;
-    wrapper.emit('keydown', keyEvent('ArrowDown')); // текущая 'a'
-    wrapper.emit('keydown', keyEvent('Enter'));
+    press(wrapper, keyEvent('ArrowDown')); // текущая 'a'
+    press(wrapper, keyEvent('Enter'));
     assert.deepEqual(activated, ['a']);
+  });
+
+  it('модификаторный Enter: Shift/Alt активируют строку; Ctrl/Meta — нет, как прежде', async () => {
+    const { table } = await load();
+    const stub = new StubAdapter();
+    const activated: string[] = [];
+    const t = table.createTable<Row>({
+      columns: COLUMNS,
+      rows: ROWS,
+      rowKey: (r) => r.id,
+      adapter: stub,
+      onActivate: (row) => activated.push(row.id),
+    });
+    const wrapper = t.element as unknown as ShimElement;
+    press(wrapper, keyEvent('ArrowDown')); // текущая 'a'
+    press(wrapper, keyEvent('Enter', false, { shiftKey: true }));
+    press(wrapper, keyEvent('Enter', false, { altKey: true }));
+    assert.deepEqual(activated, ['a', 'a'], 'Shift/Alt+Enter активируют строку');
+    // Прежний обработчик на Ctrl/Meta (кроме Ctrl+C) делал ранний `return` —
+    // активации не было; так же и теперь.
+    press(wrapper, keyEvent('Enter', true)); // Ctrl+Enter
+    press(wrapper, keyEvent('Enter', false, { metaKey: true }));
+    assert.deepEqual(activated, ['a', 'a'], 'Ctrl/Meta+Enter строку не активируют');
   });
 
   it('клик и двойной клик по строке: текущая, onRowClick, onActivate', async () => {
@@ -402,7 +438,7 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
     assert.equal(stub.scrolled.length, 0, 'клик/меню строки не прокручивают список');
 
     // Явное действие пользователя — стрелка: строку подводим к видимой.
-    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    press(wrapper, keyEvent('ArrowDown'));
     assert.equal(stub.scrolled.length, 1, 'клавиатура подводит текущую строку к видимой');
   });
 
@@ -462,8 +498,8 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
       clipboard: (text) => copied.push(text),
     });
     const wrapper = t.element as unknown as ShimElement;
-    wrapper.emit('keydown', keyEvent('ArrowDown')); // текущая 'a'
-    wrapper.emit('keydown', keyEvent('c', true));
+    press(wrapper, keyEvent('ArrowDown')); // текущая 'a'
+    press(wrapper, keyEvent('c', true));
     assert.deepEqual(copied, ['Имя\tРазмер\r\nБета\t30']);
     assert.equal(t.buildCopyText(), 'Имя\tРазмер\r\nБета\t30');
   });
@@ -481,15 +517,15 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
       clipboard: (text) => copied.push(text),
     });
     const wrapper = t.element as unknown as ShimElement;
-    wrapper.emit('keydown', keyEvent('ArrowDown')); // 'a'
-    wrapper.emit('keydown', keyEvent(' '));
-    wrapper.emit('keydown', keyEvent('ArrowDown')); // 'b'
-    wrapper.emit('keydown', keyEvent(' '));
+    press(wrapper, keyEvent('ArrowDown')); // 'a'
+    press(wrapper, keyEvent(' '));
+    press(wrapper, keyEvent('ArrowDown')); // 'b'
+    press(wrapper, keyEvent(' '));
     assert.deepEqual(t.getSelection().sort(), ['a', 'b']);
-    wrapper.emit('keydown', keyEvent('c', true));
+    press(wrapper, keyEvent('c', true));
     assert.equal(copied[0], 'Имя\tРазмер\r\nБета\t30\r\nАльфа\t10');
     // Повторный Space снимает выделение.
-    wrapper.emit('keydown', keyEvent(' '));
+    press(wrapper, keyEvent(' '));
     assert.deepEqual(t.getSelection(), ['a']);
   });
 
@@ -551,7 +587,7 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
       selection: 'multi',
     });
     const wrapper = t.element as unknown as ShimElement;
-    wrapper.emit('keydown', keyEvent('ArrowDown')); // текущая 'a'
+    press(wrapper, keyEvent('ArrowDown')); // текущая 'a'
 
     // Фикс d59fdfb9: выделение идёт через `setSelected` и НЕ пере-назначает
     // набор строк (`setItems`/`setRows`) — иначе список пересобирался бы и
@@ -559,7 +595,7 @@ describe('lib/ui/table: фасад на стабе адаптера', () => {
     const itemsBefore = stub.itemSets.length;
     const selectedBefore = stub.selectedSets.length;
 
-    wrapper.emit('keydown', keyEvent(' ')); // Space выделяет текущую 'a'
+    press(wrapper, keyEvent(' ')); // Space выделяет текущую 'a'
     assert.deepEqual(t.getSelection(), ['a']);
     assert.equal(stub.itemSets.length, itemsBefore, 'Space не пере-назначает строки');
     assert.ok(stub.selectedSets.length > selectedBefore, 'выделение ушло через setSelected');
@@ -691,7 +727,7 @@ describe('lib/ui/table: режим ячеек nav: cell (задача 20ac6917)'
     }
     assert.equal(t.getCellCursor()?.row, -1, 'до выбора строки курсора строки нет');
 
-    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    press(wrapper, keyEvent('ArrowDown'));
     assert.equal(t.getCellCursor()?.row, 0, '↓ встаёт на первую строку');
     assert.equal(t.getCurrent()?.key, 'a');
     // Текущая ячейка/элемент подсвечены.
@@ -703,17 +739,17 @@ describe('lib/ui/table: режим ячеек nav: cell (задача 20ac6917)'
       'подсвечен ровно один чип',
     );
 
-    wrapper.emit('keydown', keyEvent('ArrowRight'));
+    press(wrapper, keyEvent('ArrowRight'));
     assert.deepEqual(t.getCellCursor(), { row: 0, col: 0, item: 1 }, '→ по чипам колонки');
-    wrapper.emit('keydown', keyEvent('ArrowRight'));
+    press(wrapper, keyEvent('ArrowRight'));
     assert.deepEqual(t.getCellCursor(), { row: 0, col: 1, item: 0 }, '→ на краю — в соседнюю колонку');
-    wrapper.emit('keydown', keyEvent('ArrowLeft'));
+    press(wrapper, keyEvent('ArrowLeft'));
     assert.deepEqual(t.getCellCursor(), { row: 0, col: 0, item: 0 }, '← возвращает в колонку');
-    wrapper.emit('keydown', keyEvent('Tab'));
+    press(wrapper, keyEvent('Tab'));
     assert.deepEqual(t.getCellCursor(), { row: 0, col: 1, item: 0 }, 'Tab — следующая колонка');
 
     // Enter активирует выбранный чип (клик по нему).
-    wrapper.emit('keydown', keyEvent('Enter'));
+    press(wrapper, keyEvent('Enter'));
     assert.deepEqual(clicks, ['size-0'], 'Enter кликнул выбранный чип');
   });
 
@@ -737,17 +773,17 @@ describe('lib/ui/table: режим ячеек nav: cell (задача 20ac6917)'
       const row = ROWS[index] as Row;
       wrapper.append(stub.columns[0]!.render(row, index) as unknown as ShimElement);
     }
-    wrapper.emit('keydown', keyEvent('ArrowDown'));
-    wrapper.emit('keydown', keyEvent('ArrowRight'));
+    press(wrapper, keyEvent('ArrowDown'));
+    press(wrapper, keyEvent('ArrowRight'));
     assert.deepEqual(t.getCellCursor(), { row: 0, col: 0, item: 1 });
-    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    press(wrapper, keyEvent('ArrowDown'));
     assert.deepEqual(
       t.getCellCursor(),
       { row: 1, col: 0, item: 0 },
       '↓ следующая строка, элемент сброшен',
     );
     assert.deepEqual(changes, ['a', 'b'], 'смена строки уведомляет onCurrentChange');
-    wrapper.emit('keydown', keyEvent('ArrowUp'));
+    press(wrapper, keyEvent('ArrowUp'));
     assert.equal(t.getCellCursor()?.row, 0);
   });
 
@@ -768,8 +804,8 @@ describe('lib/ui/table: режим ячеек nav: cell (задача 20ac6917)'
     for (const column of stub.columns) {
       wrapper.append(column.render(ROWS[0], 0) as unknown as ShimElement);
     }
-    wrapper.emit('keydown', keyEvent('ArrowDown'));
-    wrapper.emit('keydown', keyEvent('Enter'));
+    press(wrapper, keyEvent('ArrowDown'));
+    press(wrapper, keyEvent('Enter'));
     assert.deepEqual(activated, ['a'], 'Enter на ячейке без чипов активирует строку');
   });
 
@@ -784,7 +820,7 @@ describe('lib/ui/table: режим ячеек nav: cell (задача 20ac6917)'
     });
     assert.equal(t.getCellCursor(), null);
     const wrapper = t.element as unknown as ShimElement;
-    wrapper.emit('keydown', keyEvent('ArrowDown'));
+    press(wrapper, keyEvent('ArrowDown'));
     assert.equal(t.getCurrent()?.key, 'a', 'построчная навигация не изменилась');
   });
 });

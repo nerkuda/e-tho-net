@@ -76,6 +76,7 @@ import {
 } from '../domain/property-service.js';
 import { getLinkType } from '../domain/link-type-service.js';
 import { getThoughtType } from '../domain/thought-type-service.js';
+import { assertLibraryIcon } from '../domain/icon-view.js';
 
 /** Route params for a network + type id. */
 interface TypeIdParams {
@@ -110,6 +111,7 @@ function parseThoughtTypeBody(body: Record<string, unknown>, requestId: string):
     parent_id: (out.parent_id ?? null) as string | null,
     icon: (out.icon ?? null) as string | null,
     icon_kind: iconKind,
+    icon_color: (out.icon_color ?? null) as string | null,
     fg_color: (out.fg_color ?? null) as string | null,
     bg_color: (out.bg_color ?? null) as string | null,
     font_bold: out.font_bold as boolean | null | undefined,
@@ -131,6 +133,7 @@ function parseThoughtTypeUpdateBody(
   if (out.parent_id !== undefined) changes.parent_id = out.parent_id;
   if (out.icon !== undefined) changes.icon = out.icon;
   if (out.icon_kind !== undefined) changes.icon_kind = out.icon_kind;
+  if (out.icon_color !== undefined) changes.icon_color = out.icon_color;
   if (out.fg_color !== undefined) changes.fg_color = out.fg_color;
   if (out.bg_color !== undefined) changes.bg_color = out.bg_color;
   if (out.font_bold !== undefined) changes.font_bold = out.font_bold;
@@ -404,6 +407,18 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const { changes, confirmed } = parseThoughtTypeUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Частичная правка может нести только `icon` (вид сохранён) или только
+        // `icon_kind` (значение сохранено) — правило вида `icon` (задача
+        // 610a440e) проверяет ИТОГОВУЮ пару, слитую с сохранённым типом. Тип не
+        // найден — решение за `updateThoughtType` (NOT_FOUND).
+        const before = getThoughtType(ndb, id);
+        if (before !== null) {
+          assertLibraryIcon(
+            changes.icon_kind ?? before.icon_kind,
+            changes.icon !== undefined ? changes.icon : before.icon,
+            req.id,
+          );
+        }
         const type = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const updated = updateThoughtType(ndb, id, changes, expectedVersion, req.auth!.user.id, {
             confirmed,

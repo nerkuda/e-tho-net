@@ -28,23 +28,31 @@ import { focusThoughtOnMap, openPublicationInWorkspace, setActiveView } from '..
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
+import { markdownInlineExt } from './markdown-inline-ext.js';
 import { searchLegacyWikiTarget, WIKI_LINK_PUB_ATTR } from './wiki-link-resolver.js';
 import { tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
+import { transclusionSectionCompletions } from './transclusion.js';
 
 /** Chars allowed inside an in-progress wiki prefix (no closing/alias/newline). */
 const WIKI_PREFIX_RE = /^[^[\]\n|]*$/;
 
+/** Минимум символов имени для автокомплита трансклюзии (элемент 7a479549). */
+export const TRANSCLUSION_MIN_PREFIX = 3;
+
 /**
- * Parses the text before the caret (a single line) for an in-progress wiki
- * link: the last `[[` followed only by prefix characters. Returns the `[[`
- * position and the typed prefix, or `null` when the caret is not inside one
- * (closed link, alias part after `|`, or an empty prefix).
+ * Позиция открывающих скобок и набранный префикс; `transclusion` — перед
+ * `[[` стоит восклицательный знак (ссылка трансклюзии, элемент интерфейса
+ * 7a479549). Возвращает также `transclusion`, только когда он истинен, —
+ * форма ответа прежняя для обычных wiki-ссылок.
  */
-export function wikiPrefixAt(before: string): { open: number; prefix: string } | null {
+export function wikiPrefixAt(
+  before: string,
+): { open: number; prefix: string; transclusion?: true } | null {
   const open = before.lastIndexOf('[[');
   if (open === -1) return null;
   const rest = before.slice(open + 2);
   if (rest === '' || !WIKI_PREFIX_RE.test(rest)) return null;
+  if (open > 0 && before[open - 1] === '!') return { open, prefix: rest, transclusion: true };
   return { open, prefix: rest };
 }
 
@@ -75,7 +83,9 @@ const wikiLinkMarkdownExt: MarkdownExtension = {
 
 /** Language extension for `markdown({ extensions: […] })`. */
 export function wikiLinkLanguage(): MarkdownExtension {
-  return wikiLinkMarkdownExt;
+  // Точка подключения инлайн-узлов языка редактора: wiki-ссылки (здесь) и
+  // конструкции ТП1 (`markdown-inline-ext.ts`, живой просмотр — `md-live.ts`).
+  return [wikiLinkMarkdownExt, markdownInlineExt];
 }
 
 /** Short cache of search results per prefix (thought lists change rarely). */
@@ -98,12 +108,19 @@ async function loadCompletions(networkId: string, prefix: string): Promise<Compl
 }
 
 function wikiLinkCompletions(): CompletionSource {
+  // Кэш ПО-ИНСТАНСНЫЙ: своё замыкание на каждый вызов `wikiLinkCompletions()`,
+  // а вызов — один на редактор (в `wikiLinkAutocompletion()`). Два инстанса
+  // редактора (поле-контейнер и вложенный блок, ТП «Живой блок») кэшируют
+  // результаты поиска независимо и не видят чужих записей.
   const cache = new Map<string, { expires: number; options: Completion[] }>();
   return async (context) => {
     const line = context.state.doc.lineAt(context.pos);
     const before = line.text.slice(0, context.pos - line.from);
     const hit = wikiPrefixAt(before);
     if (hit === null) return null;
+    // Трансклюзия: список мыслей открывается не раньше трёх символов имени
+    // (элемент интерфейса 7a479549); обычная wiki-ссылка — с первого.
+    if (hit.transclusion === true && hit.prefix.length < TRANSCLUSION_MIN_PREFIX) return null;
 
     let cached = cache.get(hit.prefix);
     if (cached === undefined || cached.expires < Date.now()) {
@@ -114,17 +131,28 @@ function wikiLinkCompletions(): CompletionSource {
       cache.set(hit.prefix, cached);
     }
     if (cached.options.length === 0) return null;
+    // Без `validFor`: источник должен вызываться заново на каждый новый
+    // символ префикса (кэш по префиксу выше это и обеспечивает). Широкий
+    // `validFor` (WIKI_PREFIX_RE совпадает с любым продолжением) заставлял
+    // CM6 фильтровать уже полученные `limit: 20` результатов локально, не
+    // перезапрашивая сервер, — поэтому `[[новиков` не находил ничего, если
+    // при односимвольном префиксе мысль не попала в первые 20
+    // (ошибка 6bba224b-9899-4f7e-a37c-ff2067ac0a6c).
     return {
       from: line.from + hit.open + 2,
       options: cached.options,
-      validFor: WIKI_PREFIX_RE,
     };
   };
 }
 
 /** Autocomplete extension: opens on `[[` + typed prefix, inserts `имя]]`. */
 export function wikiLinkAutocompletion(): Extension {
-  return autocompletion({ override: [wikiLinkCompletions()], activateOnTyping: true });
+  return autocompletion({
+    // Один автокомплит на wiki-ссылки и трансклюзии (ADR 8c41387c):
+    // подсказки мыслей — здесь, разделов источника — в transclusion.ts.
+    override: [wikiLinkCompletions(), transclusionSectionCompletions()],
+    activateOnTyping: true,
+  });
 }
 
 /**

@@ -23,9 +23,13 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура заголовка идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -163,7 +167,13 @@ function baseEtn(win: Record<string, any>, onCreate: (networkId: string, targets
         return comment('c1', targets[0]?.owner_id ?? '');
       },
       update: async (_n: string, id: string) => comment(id, ''),
-      get: async (_n: string, id: string) => comment(id, ''),
+      // Чтение тела для правки отвергается: сторож проверяет ТОЛЬКО тело
+      // `POST /comments`, а под Node DOM-шим не поднимает редактор поля
+      // (`markdown-field` монтирует CodeMirror). Ленивая загрузка тела мягко
+      // сообщает об ошибке и правку не открывает.
+      get: async () => {
+        throw new Error('guard: тело для правки не читается');
+      },
       addTarget: async (_n: string, id: string) => comment(id, ''),
       remove: async () => undefined,
       removeTarget: async () => undefined,
@@ -173,15 +183,11 @@ function baseEtn(win: Record<string, any>, onCreate: (networkId: string, targets
   };
 }
 
-/** Создать запись штатным путём: кнопка «Добавить» → заголовок → Enter. */
+/** Создать запись штатным путём: кнопка «Добавить» сразу шлёт `POST /comments`. */
 function createRecord(host: ShimElement): void {
   const add = host.querySelector('.diary-add-btn');
   assert.ok(add, 'кнопка «Добавить запись дневника» смонтирована');
   add!.click();
-  const input = host.querySelector('.diary-record-title-input');
-  assert.ok(input, 'поле заголовка слота смонтировано');
-  input!.value = 'Тест';
-  input!.fire('keydown', { key: 'Enter', preventDefault() {} });
 }
 
 describe('guard: HOME «Дневника» привязан к сети (ошибка ab4e499f)', () => {
@@ -231,6 +237,8 @@ describe('guard: HOME «Дневника» привязан к сети (оши�
 
     createRecord(host as unknown as ShimElement);
     await created;
+    // Дать досчитать хвост создания (локальная вставка/попытка открыть правку).
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
 
     // Тело `POST /comments`: сеть текущая, первичная привязка — её HOME.
     const target0 = ((createTargets as any[] | null) ?? [])[0] as
@@ -317,6 +325,7 @@ describe('guard: HOME «Дневника» привязан к сети (оши�
 
     createRecord(host as unknown as ShimElement);
     await created;
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
 
     const target0 = ((createTargets as any[] | null) ?? [])[0] as
       | { owner_type?: string; owner_id?: string }

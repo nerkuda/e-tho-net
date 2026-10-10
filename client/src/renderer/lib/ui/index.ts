@@ -19,6 +19,7 @@ import './register.js';
 export {
   BUTTON_CLASS,
   BUTTON_ACTIVE_CLASS,
+  BUTTON_LABEL_CLASS,
   uiButton,
   iconButton,
   setButtonActive,
@@ -135,6 +136,8 @@ export {
   placeUnderAnchor,
   placeAtCursor,
   openPopover,
+  watchOutsideTap,
+  isInsidePopover,
 } from './popover.js';
 export type {
   RectLike,
@@ -377,6 +380,26 @@ export {
   errorState,
 } from './empty-state.js';
 export type { StateAction, EmptyStateOptions } from './empty-state.js';
+
+// Фасад иконок — единственный доступ к библиотеке Lucide (задача 6d8db38b,
+// ADR bd224643, требование e52d249e): рендер значка обвязки, полный каталог
+// имён библиотеки (лениво) и поиск по нему. Прямой импорт `lucide` вне этого
+// фасада запрещён.
+export {
+  ICON_CLASS,
+  ICON_NAMES,
+  svgIcon,
+  renderIcon,
+  renderIconNode,
+  isIconName,
+  iconNameFromExport,
+  buildIconCatalog,
+  loadIconCatalog,
+  searchIconCatalog,
+  iconAliases,
+  renderLibraryIcon,
+} from './icon.js';
+export type { IconName, IconOptions, IconCatalog } from './icon.js';
 
 // Якорь возврата клавиатурного фокуса — общий атрибут обоих фасадов списков
 // (дерева и таблицы) для правила 10 требования 11ddd910 (ошибка 28d69bc6).

@@ -6,25 +6,82 @@
  * change through `onSave` (which returns the freshly rendered HTML) and
  * returns to the view; `Esc` cancels, restoring the previous text.
  *
+ * With `sourceMapView` the view is rendered by the single `@etn/markdown`
+ * renderer with source-position annotations, so a double-click enters editing
+ * with the caret (and the double-clicked word's selection) at the click place
+ * (task 189da39e, ADR ee4e721b).
+ *
  * `onSave` may be omitted (e.g. a "new" form whose text is committed together
  * with the rest of the dialog): blur then just switches back to the view.
  */
 
-import type { MentionsScanThought } from '@etn/shared';
+import { EditorView } from '@codemirror/view';
+import type { Attachment, MentionsScanThought } from '@etn/shared';
+import {
+  parseTransclusions,
+  renderMarkdown,
+  sourceOffsetFromCaret,
+  TRANSCLUSION_BLOCK_CLASS,
+  TRANSCLUSION_DEPTH_ATTR,
+  TRANSCLUSION_MARKER_PREFIX,
+  TRANSCLUSION_SECTION_ATTR,
+  TRANSCLUSION_SOURCE_ATTR,
+  type SourceMapNode,
+} from '@etn/markdown';
 
 import { requireNetworkId } from '../app.js';
-import { invalidateQueries, queryKeys } from '../lib/live/index.js';
+import { canSave, clearSourceDrafts, findSourceDraft, offlineNotice, saveSourceDraft } from '../drafts.js';
+import { invalidateQueries, onRoutedRealtimeEvent, queryKeys } from '../lib/live/index.js';
 import { div, el, errText, renderHtml } from '../lib/dom.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
-import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { guardMenuFocus, showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { isInsidePopover, watchOutsideTap } from '../lib/ui/popover.js';
+import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
 import { bindWikiCreateContext } from '../lib/wiki-create-context.js';
+import {
+  buildCommentMenuItems,
+  buildCommentToolbar,
+  createCommentModeActions,
+  enterCommentEdit,
+  type CommentCommandHost,
+} from './comment-commands.js';
+import { commentFieldKeymapExtension } from './comment-format.js';
+import { commentThoughtInsertMenuItems } from './comment-thought-insert.js';
+import { showInsertImageDialog, type InsertResourceResult } from './insert-image-dialog.js';
+import {
+  collapseScopeExtension,
+  commentCollapseExtension,
+  createCommentCollapseState,
+  decorateCommentView,
+  transclusionCollapseOwnerKey,
+  type CommentCollapseState,
+} from './comment-collapse.js';
+import { createCommentSearch } from './comment-search.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
+import {
+  commitTransclusionEdit,
+  dirtyBlockSaves,
+  blockEditorHostExtension,
+  decorateViewTransclusionChips,
+  decorateViewTransclusionLocks,
+  defaultTransclusionLoader,
+  parseBlockEditorKey,
+  reportCommitFailures,
+  transclusionInternals,
+  transclusionLabels,
+  transclusionEventSourceId,
+  TransclusionLockSet,
+  transclusionSourceIds,
+  wireViewTransclusionLocks,
+  type TransclusionBlockSave,
+} from './transclusion.js';
+import { NestedEditorStore, blockEditorStoreFacet } from './transclusion-nested.js';
 import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
 import {
   buildCommentPasteLinks,
@@ -52,14 +109,574 @@ interface MarkdownFieldHandle {
   set(md: string, html: string): void;
   /**
    * Переключает поле в правку и ставит каретку: по вхождению `findText` в
-   * исходнике markdown, а если его нет — в начало документа. Нужно двойному
-   * клику по тексту публикации (задача ea1b5f14, пункт 4): точный офсет
-   * рендер-узла к markdown недостижим, поэтому курсор — к началу абзаца.
+   * исходнике markdown (вхождение выделяется — слово, кликнутое в ленте
+   * публикаций, остаётся выделенным), а если его нет — в начало документа.
+   * Нужно двойному клику по тексту публикации (задача ea1b5f14, пункт 4;
+   * уточнено задачей 189da39e): точный офсет рендер-узла ленты к markdown
+   * недостижим — курсор идёт по вхождению кликнутого слова.
    */
   focusAt(findText?: string): void;
+  /**
+   * Переключает поле в правку и ставит каретку по ТОЧНОМУ диапазону исходника
+   * (задача 59774016): двойной клик по слову в ленте публикаций резолвится в
+   * смещение `body_md` общим `sourceOffsetFromCaret`, поэтому вхождение под
+   * кликом сохраняется даже при повторах слова (в отличие от {@link focusAt},
+   * который берёт первое вхождение текста).
+   */
+  focusAtSelection(selection: MdSourceSelection): void;
+  /**
+   * Отменяет правку и возвращает просмотр (Esc из группы единой правки, когда
+   * жест пришёл из заголовка записи, а не из самого поля). Ничего не делает,
+   * если поле не в правке.
+   */
+  cancel(): void;
+  /**
+   * Записывает правку и возвращает просмотр (Ctrl+Enter/«Записать» из группы
+   * единой правки, когда жест пришёл из заголовка). Ничего не делает, если поле
+   * не в правке.
+   */
+  commit(): void;
+  /**
+   * Переводит фокус в правку и ставит каретку в НАЧАЛО документа, не
+   * пересоздавая редактор (Enter в заголовке единой правки): набранный текст
+   * сохраняется.
+   */
+  focusStart(): void;
+  /**
+   * «Вставить ссылку на <мысль>» из меню авто-подсветки упоминания: заменяет
+   * первое вхождение `matchedText` в исходнике на wiki-ссылку и сохраняет (см.
+   * {@link insertMentionLink}). Нужно, когда меню упоминания отрисовано НЕ самим
+   * полем — на статичном просмотре `body_html` (лента «Дневника», ошибка
+   * `616207a9`), а запись ссылки должна идти тем же единственным путём, что и у
+   * поля.
+   */
+  insertMentionLink(thought: MentionsScanThought, matchedText: string): void;
+}
+
+/**
+ * Диапазон исходника markdown, который надо выделить при входе в правку
+ * (позиции каретки для CodeMirror 6). `anchor` — начало, `head` — конец.
+ */
+export interface MdSourceSelection {
+  anchor: number;
+  head: number;
+}
+
+/**
+ * Вложенный блок трансклюзии внутри развёрнутого блока верхнего уровня
+ * (ошибка 5ecb9f0b): диапазон в развёрнутом тексте. Любая вложенность (глубина
+ * ≥ 2) целиком лежит внутри такого диапазона, поэтому глубже иерархию хранить
+ * не нужно.
+ */
+export interface NestedChunkRange {
+  expStart: number;
+  expEnd: number;
+}
+
+/**
+ * Один отрезок карты смещений просмотра с трансклюзиями (ошибки 0fdd8c86,
+ * 5ecb9f0b). `expStart`/`expEnd` — диапазон в развёрнутом тексте (в его
+ * координатах рендерер размечает позиции), `srcStart` — соответствующая позиция
+ * исходника `body_md`. Для развёрнутого блока трансклюзии (`chunk: true`)
+ * позиция внутри отрезка не имеет 1:1-соответствия: клик по нему входит в
+ * правку на саму ссылку-трансклюзию (`srcStart` — её начало).
+ *
+ * `nested` — диапазоны ВЛОЖЕННЫХ блоков внутри этого блока. Их текст приходит
+ * из исходника другой мысли, и позиции для него в `body_md` поля не существует
+ * (позиция ссылки в исходнике контейнера невосстановима из развёртки — ссылка
+ * трансклюзии в развёрнутом тексте заменена блоком). Такие позиции карта не
+ * переводит: клик внутри вложенного блока не схлопывается на внешнюю ссылку.
+ */
+export interface ViewOffsetSegment {
+  expStart: number;
+  expEnd: number;
+  srcStart: number;
+  chunk?: boolean;
+  nested?: readonly NestedChunkRange[];
+}
+
+/** Карта «развёрнутый текст просмотра → исходник body_md». */
+export interface ViewOffsetMap {
+  segments: readonly ViewOffsetSegment[];
+}
+
+/** Граница маркерной строки трансклюзии в развёрнутом тексте. */
+const VIEW_CHUNK_MARKER_RE = new RegExp(
+  `^<!--\\s*${TRANSCLUSION_MARKER_PREFIX}\\s+(begin|end|skip|missing)\\b`,
+);
+
+/** Границы развёрнутого блока трансклюзии в тексте развёртки. */
+interface ChunkBounds {
+  /** Конец блока (эксклюзивно), с учётом замыкающего перевода строки. */
+  expEnd: number;
+  /** Начало внутреннего текста блока (после строки `begin`), либо `end` для пропуска. */
+  interiorStart: number;
+  /** Конец внутреннего текста перед строкой `end`, либо `end` для пропуска. */
+  interiorEnd: number;
+}
+
+/**
+ * Границы развёрнутого блока трансклюзии, начинающегося в `start` (позиция сразу
+ * после предыдущего неразвёрнутого фрагмента). Парсит уже готовые маркеры
+ * `etn:transclusion` (ADR 85a7a01e), которые кладёт в текст развёртка: `begin`
+ * сбалансирован парным `end` (счёт по строкам), `missing`/`skip` — одна строка.
+ * Возвращает и внутренний диапазон блока (`begin`…`end`), чтобы найти внутри
+ * вложенные трансклюзии (ошибка 5ecb9f0b). `null` — маркер не распознан (карту
+ * строить нельзя).
+ */
+function transclusionChunkBounds(
+  expanded: string,
+  start: number,
+  ref: { start: number; end: number },
+  raw: string,
+): ChunkBounds | null {
+  let i = start;
+  // wrapBlock мог вставить ведущий перевод строки, когда ссылка не на границе строки.
+  if (expanded[i] === '\n') i += 1;
+  const lineEnd = expanded.indexOf('\n', i);
+  const line = expanded.slice(i, lineEnd === -1 ? expanded.length : lineEnd);
+  const head = VIEW_CHUNK_MARKER_RE.exec(line);
+  if (head === null) return null;
+  // Блок маркеров не несёт завершающего перевода строки (он идёт от самого
+  // исходника); исключать надо только текст маркера.
+  let end = lineEnd === -1 ? expanded.length : lineEnd;
+  let interiorStart = i;
+  let interiorEnd = i;
+  if (head[1] === 'begin') {
+    interiorStart = lineEnd === -1 ? expanded.length : lineEnd + 1;
+    let depth = 0;
+    let pos = i;
+    for (;;) {
+      const le = expanded.indexOf('\n', pos);
+      const at = le === -1 ? expanded.length : le;
+      const marker = VIEW_CHUNK_MARKER_RE.exec(expanded.slice(pos, at));
+      if (marker !== null) {
+        if (marker[1] === 'begin') depth += 1;
+        else if (marker[1] === 'end' && (depth -= 1) === 0) {
+          end = le === -1 ? expanded.length : le;
+          // Между внутренним текстом и строкой `end` стоит вставленный `\n`.
+          interiorEnd = pos > 0 ? pos - 1 : 0;
+          break;
+        }
+      }
+      if (le === -1) return null;
+      pos = le + 1;
+    }
+  }
+  // wrapBlock мог вставить замыкающий перевод строки.
+  if (ref.end < raw.length && raw[ref.end] !== '\n' && expanded[end] === '\n') end += 1;
+  return { expEnd: end, interiorStart, interiorEnd };
+}
+
+/**
+ * Диапазоны вложенных блоков трансклюзии внутри внутреннего текста блока
+ * верхнего уровня (ошибка 5ecb9f0b). Возвращает ВНЕШНИЕ вложенные блоки: любой
+ * блок большей глубины лежит внутри одного из них, поэтому глубже не разбираем.
+ * `missing`/`skip` — одна строка (`begin` без парного `end` не встречается).
+ */
+function nestedChunkRanges(
+  expanded: string,
+  from: number,
+  to: number,
+): NestedChunkRange[] {
+  const ranges: NestedChunkRange[] = [];
+  let pos = from;
+  while (pos < to) {
+    const nl = expanded.indexOf('\n', pos);
+    const lineEnd = nl === -1 || nl > to ? to : nl;
+    const marker = VIEW_CHUNK_MARKER_RE.exec(expanded.slice(pos, lineEnd));
+    if (marker !== null && marker[1] !== 'end') {
+      // Внешний вложенный блок: его конец — парный `end` для `begin` или конец
+      // строки для `skip`/`missing`. Блоки большей глубины лежат внутри — после
+      // него продолжаем сразу за его концом, чтобы не дублировать диапазоны.
+      let end = lineEnd;
+      if (marker[1] === 'begin') {
+        let depth = 0;
+        let scan = pos;
+        for (;;) {
+          const le = expanded.indexOf('\n', scan);
+          const at = le === -1 || le > to ? to : le;
+          const inner = VIEW_CHUNK_MARKER_RE.exec(expanded.slice(scan, at));
+          if (inner !== null) {
+            if (inner[1] === 'begin') depth += 1;
+            else if (inner[1] === 'end' && (depth -= 1) === 0) {
+              end = at;
+              break;
+            }
+          }
+          if (le === -1 || le > to) break;
+          scan = le + 1;
+        }
+      }
+      ranges.push({ expStart: pos, expEnd: end });
+      const after = expanded.indexOf('\n', end);
+      if (after === -1 || after + 1 >= to) break;
+      pos = after + 1;
+      continue;
+    }
+    if (lineEnd >= to) break;
+    pos = lineEnd + 1;
+  }
+  return ranges;
+}
+
+/**
+ * Строит карту смещений «развёрнутый текст просмотра → исходник» (ошибки
+ * 0fdd8c86, 5ecb9f0b). Развёртка трансклюзий заменяет каждую ссылку-трансклюзию
+ * блоком маркеров с текстом источника; неразвёрнутые фрагменты переносятся в
+ * развёрнутый текст дословно, поэтому их позиции отображаются 1:1 (со сдвигом),
+ * а блоки трансклюзий — в позицию ссылки. Вложенные блоки внутрь блока верхнего
+ * уровня помечаются диапазонами `nested` — их текст принадлежит другой мысли и
+ * в координатах `body_md` поля позиции не имеет. `null` — трансклюзий нет либо
+ * развёрнутый текст не согласован с исходником (карта не строится, поле
+ * откатывается к прежнему поведению).
+ */
+export function buildExpandedSourceMap(raw: string, expanded: string): ViewOffsetMap | null {
+  const refs = parseTransclusions(raw);
+  if (refs.length === 0) return null;
+  const segments: ViewOffsetSegment[] = [];
+  let src = 0;
+  let exp = 0;
+  for (const ref of refs) {
+    const run = raw.slice(src, ref.start);
+    if (expanded.slice(exp, exp + run.length) !== run) return null;
+    if (run.length > 0) {
+      segments.push({ expStart: exp, expEnd: exp + run.length, srcStart: src });
+    }
+    exp += run.length;
+    const bounds = transclusionChunkBounds(expanded, exp, ref, raw);
+    if (bounds === null) return null;
+    const nested =
+      bounds.interiorEnd > bounds.interiorStart
+        ? nestedChunkRanges(expanded, bounds.interiorStart, bounds.interiorEnd)
+        : [];
+    segments.push({
+      expStart: exp,
+      expEnd: bounds.expEnd,
+      srcStart: ref.start,
+      chunk: true,
+      nested,
+    });
+    exp = bounds.expEnd;
+    src = ref.end;
+  }
+  if (expanded.slice(exp) !== raw.slice(src)) return null;
+  if (src < raw.length) {
+    segments.push({ expStart: exp, expEnd: expanded.length, srcStart: src });
+  }
+  return { segments };
+}
+
+/**
+ * Переводит смещение в развёрнутом тексте просмотра в позицию исходника по
+ * карте (ошибки 0fdd8c86, 5ecb9f0b). Позиция вне карты или внутри ВЛОЖЕННОГО
+ * блока — `null`: вложенный текст приходит из исходника другой мысли, и позиции
+ * для него в `body_md` поля не существует (клик не должен схлопываться на
+ * внешнюю ссылку).
+ */
+export function mapViewOffsetToSource(map: ViewOffsetMap, offset: number): number | null {
+  for (const segment of map.segments) {
+    if (offset < segment.expStart) return null;
+    if (offset >= segment.expEnd) continue;
+    if (segment.chunk !== true) {
+      return segment.srcStart + (offset - segment.expStart);
+    }
+    if (segment.nested !== undefined) {
+      for (const nested of segment.nested) {
+        if (offset >= nested.expStart && offset < nested.expEnd) return null;
+      }
+    }
+    return segment.srcStart;
+  }
+  return null;
+}
+
+/**
+ * Позиция ВНЕШНЕЙ ссылки-трансклюзии в исходнике поля для клика внутри
+ * ВЛОЖЕННОГО блока развёртки (ошибка `23570aef`). Вложенный текст приходит из
+ * источника другой мысли, поэтому `mapViewOffsetToSource` его позиции не знает
+ * (ошибка `5ecb9f0b`); но клиент может определить, что клик попал во вложенный
+ * блок (диапазон `nested`), и открыть правку блока вложенного источника — на
+ * месте внешней ссылки, позицию которой и даёт эта функция.
+ *
+ * `null` — смещение вне развёрнутого блока или во внешней его части: там
+ * действует прежнее поведение (`mapViewOffsetToSource`).
+ */
+export function outerRefStartForNested(map: ViewOffsetMap, offset: number): number | null {
+  for (const segment of map.segments) {
+    if (offset < segment.expStart) return null;
+    if (offset >= segment.expEnd) continue;
+    if (segment.chunk === true && segment.nested !== undefined) {
+      for (const nested of segment.nested) {
+        if (offset >= nested.expStart && offset < nested.expEnd) return segment.srcStart;
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+/** Блок трансклюзии по DOM-обёртке (атрибуты разметки единого рендерера). */
+export interface ViewTransclusionBlock {
+  /** Id мысли-источника блока. */
+  sourceId: string;
+  /** Имя раздела источника, либо `null`. */
+  section: string | null;
+  /** Глубина вложенности (1 — внешний блок). */
+  depth: number;
+}
+
+/**
+ * Читает данные блока трансклюзии с DOM-обёртки `.md-transclusion` (ошибка
+ * `23570aef`): источник, раздел и глубину. `null` — элемент не обёртка блока
+ * или источник не размечен.
+ */
+export function transclusionBlockInfo(el: Element | null): ViewTransclusionBlock | null {
+  if (el === null || typeof el.getAttribute !== 'function') return null;
+  const sourceId = el.getAttribute(TRANSCLUSION_SOURCE_ATTR);
+  if (sourceId === null || sourceId === '') return null;
+  const depth = Number.parseInt(el.getAttribute(TRANSCLUSION_DEPTH_ATTR) ?? '', 10);
+  return {
+    sourceId,
+    section: el.getAttribute(TRANSCLUSION_SECTION_ATTR),
+    depth: Number.isFinite(depth) && depth > 0 ? depth : 1,
+  };
+}
+
+/**
+ * Позиция внешней ссылки в исходнике поля по DOM-предку вложенного блока —
+ * запасной путь к `outerRefStartForNested`, когда разметки смещений нет:
+ * поднимаемся до самого внешнего `.md-transclusion` и ищем ссылку контейнера
+ * по источнику и разделу. `null` — внешний блок/ссылка не найдены.
+ */
+function outerRefStartFromDom(nestedEl: Element, md: string): number | null {
+  let cur: Element | null = nestedEl;
+  let outer: Element | null = null;
+  while (cur !== null) {
+    if (
+      typeof cur.classList?.contains === 'function' &&
+      cur.classList.contains(TRANSCLUSION_BLOCK_CLASS)
+    ) {
+      outer = cur;
+    }
+    cur = cur.parentElement ?? null;
+  }
+  const info = transclusionBlockInfo(outer);
+  if (info === null) return null;
+  const ref = parseTransclusions(md).find(
+    (r) => r.sourceId === info.sourceId && r.section === info.section,
+  );
+  return ref?.start ?? null;
+}
+
+/**
+ * Переводит выделение в просмотре (узлы и смещения DOM) в диапазон исходника
+ * markdown через разметку позиций единого рендерера `@etn/markdown`
+ * (`sourceOffsetFromCaret`, ADR ee4e721b). `map` — карта смещений для просмотра
+ * с развёрнутыми трансклюзиями (ошибка 0fdd8c86): разметка идёт в координатах
+ * развёрнутого текста, карта переводит их в исходник. `null` — узлы вне
+ * размеченного рендера (просмотр без `sourceMap`): вызывающий откатывается к
+ * прежнему поведению. Экспортируется для юнит-тестов (задача 189da39e).
+ */
+export function sourceRangeFromSelection(
+  anchor: { node: Node | null; offset: number },
+  focus: { node: Node | null; offset: number },
+  map?: ViewOffsetMap,
+): MdSourceSelection | null {
+  if (anchor.node === null || focus.node === null) return null;
+  const from = sourceOffsetFromCaret(anchor.node as unknown as SourceMapNode, anchor.offset);
+  const to = sourceOffsetFromCaret(focus.node as unknown as SourceMapNode, focus.offset);
+  if (from === null || to === null) return null;
+  if (map !== undefined) {
+    const anchorSource = mapViewOffsetToSource(map, from);
+    const focusSource = mapViewOffsetToSource(map, to);
+    if (anchorSource === null || focusSource === null) return null;
+    return { anchor: anchorSource, head: focusSource };
+  }
+  return { anchor: from, head: to };
+}
+
+/**
+ * Выделение DOM-просмотра → диапазон исходника с учётом карты развёрнутых
+ * трансклюзий (ошибка 0fdd8c86). Читает выделение документа просмотра,
+ * проверяет, что оба его конца внутри поля, и переводит позиции картой
+ * `viewMap`, построенной `renderView` (`buildExpandedSourceMap`). Пустое или
+ * пробельное выделение даёт схлопнутый диапазон (каретка в месте клика без
+ * выделения) — ошибка `0e39d301`. `undefined` — выделения нет, оно вне поля или
+ * у разметки нет офсета: тогда вход в правку идёт без офсета (откат к каретке в
+ * конец).
+ *
+ * Вынесено из `selectionInView` отдельной функцией-швом (задача 3e74715f):
+ * иначе склейку «развёртка → `viewMap` → выделение просмотра» можно было
+ * проверить только сквозным UI-пробником.
+ */
+export function viewSelectionToSourceRange(
+  view: HTMLElement,
+  viewMap: ViewOffsetMap | null,
+): MdSourceSelection | undefined {
+  const nodes = viewSelectionNodes(view);
+  if (nodes === null) return undefined;
+  const range = sourceRangeFromSelection(nodes.anchor, nodes.focus, viewMap ?? undefined);
+  if (range === null) return undefined;
+  // Пустое/пробельное выделение (ошибка 0e39d301): двойной клик по пробелам,
+  // табам или пустым строкам браузер оформляет в выделение из одних пробельных
+  // символов. Переводить его в диапазон исходника нельзя — иначе в правке
+  // выделяется пустой участок. Вход в правку ставит каретку в начало выделения
+  // (`anchor` — место двойного клика) БЕЗ выделения; выделение слова проходит
+  // как есть.
+  if (isBlankViewSelection(view)) return { anchor: range.anchor, head: range.anchor };
+  return range;
+}
+
+/**
+ * Выделение просмотра пустое (`isCollapsed`) или состоит только из пробельных
+ * символов — пробелов, табов, переводов строк (ошибка `0e39d301`). Нужно, чтобы
+ * двойной клик по пустому месту не тащил в правку выделение пустого участка.
+ * Если текст выделения недоступен (в DOM-шиме нет `toString`) — считается
+ * непустым, прежнее поведение сохраняется.
+ */
+export function isBlankViewSelection(view: HTMLElement): boolean {
+  const selection = view.ownerDocument.getSelection?.() ?? null;
+  if (selection === null || selection.rangeCount === 0) return true;
+  if (selection.isCollapsed === true) return true;
+  if (typeof selection.toString !== 'function') return false;
+  return selection.toString().trim() === '';
+}
+
+/**
+ * Узлы выделения документа просмотра, оба конца которого внутри поля.
+ * `null` — выделения нет или оно выходит за пределы поля.
+ */
+function viewSelectionNodes(
+  view: HTMLElement,
+): { anchor: { node: Node; offset: number }; focus: { node: Node; offset: number } } | null {
+  const selection = view.ownerDocument.getSelection?.() ?? null;
+  if (selection === null || selection.rangeCount === 0) return null;
+  if (
+    selection.anchorNode === null ||
+    selection.focusNode === null ||
+    !view.contains(selection.anchorNode) ||
+    !view.contains(selection.focusNode)
+  ) {
+    return null;
+  }
+  return {
+    anchor: { node: selection.anchorNode, offset: selection.anchorOffset },
+    focus: { node: selection.focusNode, offset: selection.focusOffset },
+  };
+}
+
+/**
+ * Смещения выделения просмотра в координатах РАЗВЁРНУТОГО текста (`sourceMap`
+ * единого рендерера), до перевода картой `viewMap` (ошибка `23570aef`). Нужны,
+ * чтобы отличить клик внутри вложенного блока от клика во внешней части:
+ * `mapViewOffsetToSource` для вложенного текста возвращает `null`. `null` —
+ * разметки/выделения нет.
+ */
+export function viewSelectionOffsets(view: HTMLElement): { from: number; to: number } | null {
+  const nodes = viewSelectionNodes(view);
+  if (nodes === null) return null;
+  const from = sourceOffsetFromCaret(nodes.anchor.node as unknown as SourceMapNode, nodes.anchor.offset);
+  const to = sourceOffsetFromCaret(nodes.focus.node as unknown as SourceMapNode, nodes.focus.offset);
+  if (from === null || to === null) return null;
+  return { from, to };
 }
 
 const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
+
+/**
+ * Живые поля с трансклюзиями: перерисовка ПРОСМОТРА при изменении источника
+ * (ошибка `402a70db`). Карточка дневниковой записи НЕ перерисовывается при
+ * правке ЧУЖОЙ мысли-источника (сама запись не изменилась, keyed-сверка её не
+ * трогает), поэтому поле обязано само обновить развёртку, когда видит right-
+ * событие о своём источнике. Реестр — на модуль, подписка одна
+ * (`ensureTransclusionViewRefresh`); отключённые корни (пересобранная карточка,
+ * закрытое поле) вычищаются при первом же событии.
+ */
+interface TransclusionViewEntry {
+  /** Корень поля ещё в документе (иначе запись сирота — удаляем). */
+  isAlive(): boolean;
+  networkId(): string | null;
+  /** Текущие мысли-источники трансклюзий документа. */
+  sources(): string[];
+  /** Перерисовать просмотр (в правке — no-op). */
+  refresh(): void;
+}
+
+const transclusionViews = new Set<TransclusionViewEntry>();
+let transclusionViewsWired = false;
+
+/** Одна подписка на realtime: перерисовка полей под изменившийся источник. */
+function ensureTransclusionViewRefresh(): void {
+  if (transclusionViewsWired) return;
+  transclusionViewsWired = true;
+  onRoutedRealtimeEvent((evt) => {
+    const sourceId = transclusionEventSourceId(evt);
+    if (sourceId === null) return;
+    for (const entry of [...transclusionViews]) {
+      if (!entry.isAlive()) {
+        transclusionViews.delete(entry);
+        continue;
+      }
+      if (entry.networkId() !== evt.network_id) continue;
+      if (!entry.sources().includes(sourceId)) continue;
+      entry.refresh();
+    }
+  });
+}
+
+
+/**
+ * Узел DOM ли `target` (`Window` — нет). Без `instanceof Node`: в тестовом
+ * DOM-шиме глобального `Node` нет, а `root.contains` на не-узле бросает
+ * `TypeError`.
+ */
+function isDomNode(target: EventTarget | null): target is Node {
+  return target !== null && typeof (target as Node).nodeType === 'number';
+}
+
+/**
+ * Лежит ли узел в постороннем слое самого поля — контекстное меню (`.menu`) или
+ * модальный диалог (`.dialog-backdrop`). Оба монтируются в `body` (портал), но
+ * принадлежат текущему жесту поля: клик по ним не выход из правки (иначе
+ * «Вставить ссылку на публикацию…» выбивало бы поле из правки).
+ */
+function isInsideFieldMenuOrDialog(node: Node): boolean {
+  const el = node as (Element & { closest?(selector: string): Element | null }) | null;
+  if (el === null || typeof el !== 'object' || typeof el.closest !== 'function') return false;
+  return el.closest('.menu') !== null || el.closest('.dialog-backdrop') !== null;
+}
+
+/**
+ * Принадлежит ли узел ФОКУСНОЙ ОБЛАСТИ поля: его корню, всплывающей панели
+ * `lib/ui` (`isInsidePopover` — поповер правки ссылки трансклюзии), выпадашке
+ * живого поиска (`isInsideSuggestDropdown` — она порталится в `body`, вне
+ * поповера) или собственному меню/диалогу поля. Экспортируется для юнит-тестов
+ * (задача 045f98db).
+ */
+export function fieldOwnsNode(root: Node, node: EventTarget | null): boolean {
+  if (!isDomNode(node)) return false;
+  if (root.contains(node)) return true;
+  return isInsidePopover(node) || isInsideSuggestDropdown(node) || isInsideFieldMenuOrDialog(node);
+}
+
+/**
+ * Единое правило «фокус ушёл из поля НАРУЖУ» (ревизия слоя фокуса, ошибки
+ * `ea9c76d3`/`e2c6c66c`/`0cb75868`). Коммит по focusout разрешён только когда
+ * фокус перешёл на РЕАЛЬНЫЙ узел вне фокусной области поля:
+ * - `relatedTarget === null` — фокус не перешёл никуда (снятие активного
+ *   вложенного редактора из DOM при выходе из блока, программный `blur()`):
+ *   это НЕ решение о выходе, коммитить нельзя (раньше это уводило поле в
+ *   просмотр при навигации стрелками через блок).
+ * - узел внутри корня/поповера/подсказок/меню/диалога — поле остаётся в правке
+ *   (ошибка `3eb4d1d5`, поповер — `68591b8a`, портал подсказок — `0cb75868`).
+ * Сам выход по явному жесту (клик вне, Tab, Ctrl+Enter, «Записать», Esc) идёт
+ * своим путём и на этот предикат не опирается.
+ */
+export function editorBlurCommits(root: Node, related: EventTarget | null): boolean {
+  if (!isDomNode(related)) return false;
+  return !fieldOwnsNode(root, related);
+}
 
 /** Builds a markdown view/edit field. */
 export function createMarkdownField(opts: {
@@ -107,14 +724,22 @@ export function createMarkdownField(opts: {
    * legacy-ссылке» (карточка ETN 34ffbd75): клик по неразолвленной ссылке
    * `[[имя|текст]]` в view-режиме открывает диалог добавления мысли с
    * родителем-владельцем комментария. Передаётся вкладками комментариев
-   * (постоянный `comments.ts`, хроно `chrono-tab.ts`); без опции клик по
-   * отсутствующей цели остаётся прежним поведением (notice «не найдена»).
+   * (постоянный `comments.ts`, хроно `chrono-tab.ts`, экран «Дневник»);
+   * без опции клик по отсутствующей цели остаётся прежним поведением
+   * (notice «не найдена»), а команды ТЗ5 недоступны.
    */
   commentContext?: {
     ownerType: 'thought' | 'link';
     ownerId: string;
     commentKind: 'permanent' | 'chronological';
     getCommentId: () => string | null;
+    /**
+     * Мысли-владельцы комментария (родители новой мысли, ТЗ5): у дневниковой
+     * записи — все цели-чипсы, у обычного комментария — владелец. Не задано или
+     * пусто — родитель выводится из `ownerType`/`ownerId` (для связи — её
+     * источник).
+     */
+    getParentThoughtIds?: () => readonly string[];
     /** Вызывается после успешной замены ссылок (обновить таблицу хроно и т.п.). */
     onLinksReplaced?: () => void;
   };
@@ -124,10 +749,42 @@ export function createMarkdownField(opts: {
    * редактировании или при сохранении непустого значения.
    */
   placeholder?: string;
+  /**
+   * Просмотр рендерит сам единый рендерер `@etn/markdown` с разметкой позиций
+   * (`renderMarkdown(md, { sourceMap: true })`), а не серверный HTML: узлы
+   * несут диапазоны исходных смещений, поэтому двойной клик в просмотре
+   * входит в правку с кареткой и выделением в месте клика (требование
+   * bac754e4, ADR ee4e721b). Включать только для markdown-исходников: для
+   * plain-text (просмотр вложений) — оставить выключенным.
+   */
+  sourceMapView?: boolean;
   minRows?: number;
+  /**
+   * Узлы, удерживающие правку ГРУППЫ, а не только самого поля (ТП «Дневник без
+   * псевдослота»): общий контроллер единой правки передаёт сюда карточку/
+   * вкладку записи, чтобы переход фокуса между её заголовком и телом НЕ
+   * закрывал правку и клик по заголовку не считался «кликом вне». `null` —
+   * группа не задана, поле ведёт себя как одиночное.
+   */
+  editGroup?: () => Node | null;
+  /**
+   * Единая правка записи (ТП «Дневник без псевдослота»): предикат «во внешних
+   * (соседних) полях записи есть несохранённые изменения» — например, изменён
+   * заголовок. Поле тела изменения не видит, поэтому без этого сигнала коммит
+   * был бы пропущен. Возвращая `true`, владелец просит записать поля одним
+   * `onSave` даже при неизменном теле. Пусто/`false` — коммит только при правке
+   * самого тела. Коммит при неизменных теле И внешних полях НЕ уходит: раньше
+   * это давало лишний PATCH и меняло «Редактора» записи (замечание проверки
+   * цикла A).
+   */
+  externalChanges?: () => boolean;
 }): HTMLElement {
   const root = div('md-field');
   const view = div('md-field-view comment-view');
+  // Просмотр фокусируем по клику (но не добавляем в порядок табуляции): поле —
+  // текущий элемент для сочетаний, поэтому Ctrl+F открывает поиск и в
+  // просмотре (элемент b8eabc22, требование d72ea6eb).
+  view.tabIndex = -1;
   const area = div('md-field-area');
   area.tabIndex = -1;
   area.setAttribute('aria-label', 'Текст комментария');
@@ -138,6 +795,257 @@ export function createMarkdownField(opts: {
   /** Guards against a focusout fired while the editor is being rebuilt. */
   let mounting = false;
   let editor: MdEditor | null = null;
+  /**
+   * Хранилище вложенных редакторов блоков трансклюзий текущей правки (задача
+   * `73ae1d4b`): создаётся на монтаж редактора, живёт до выхода из правки.
+   * Инстансы сохраняют текст правок блоков между входами/выходами.
+   */
+  let nestedStore: NestedEditorStore | null = null;
+  /**
+   * Пакетный захват мыслей-источников трансклюзий поля (задача «Единая запись»,
+   * `e9dfc2df`): берётся при входе поля в правку на источники текущего
+   * документа и догружается при монтировании вложенных блоков; снимается при
+   * записи/отмене/выходе. `null` — поле не в правке.
+   */
+  let sourceLocks: TransclusionLockSet | null = null;
+  /** Поле сейчас в режиме правки (для контекста сочетаний команд). */
+  let editing = false;
+  /**
+   * Узел ГРУППЫ правки (`opts.editGroup`), удерживающий единую правку записи:
+   * фокус/нажатие внутри группы не считаются выходом из поля. `null` — группа
+   * не задана (поле одиночное).
+   */
+  const editGroupOwns = (node: EventTarget | null): boolean => {
+    const group = opts.editGroup?.() ?? null;
+    return group !== null && isDomNode(node) && group.contains(node);
+  };
+  /** «Узел внутри поля ИЛИ его группы правки» — фокус/нажатие остаются в правке. */
+  const ownsNode = (node: EventTarget | null): boolean =>
+    fieldOwnsNode(root, node) || editGroupOwns(node);
+  /**
+   * Коммит правки уже запущен (асинхронный `onSave`): до `showView()` поле
+   * формально ещё «в правке», поэтому второй `focusout` (редактор → наружу
+   * всплывает до `root`) не должен коммитить повторно — иначе два
+   * `comments.update`/`comments.create` (ошибка 3eb4d1d5).
+   */
+  let commitPending = false;
+  /** Счётчик рендеров просмотра — защита от гонок асинхронной развёртки трансклюзий (a2b68d72). */
+  let renderSeq = 0;
+  /**
+   * Карта смещений текущего просмотра с развёрнутыми трансклюзиями (ошибка
+   * 0fdd8c86): разметка позиций идёт в координатах развёрнутого текста, карта
+   * переводит клик в исходник. `null` — просмотр без развёртки (обычный
+   * `sourceMap`-рендер или серверный HTML).
+   */
+  let viewMap: ViewOffsetMap | null = null;
+  /** Снятие контекста сочетаний поля; `null` — контекст не активен. */
+  let releaseCommentKeys: (() => void) | null = null;
+
+  /**
+   * Состояние свёрнутости разделов комментария (0.12.1, задача 634f1412):
+   * локальное на клиенте, ключ «владелец поля + раздел». Владелец — комментарий
+   * (постоянный/хроно), когда он известен, иначе сущность-владелец поля; без
+   * владельца состояние живёт только в памяти поля.
+   */
+  const collapseOwnerKey = ((): string | undefined => {
+    const cc = opts.commentContext;
+    if (cc !== undefined) {
+      const commentId = cc.getCommentId();
+      return commentId !== null ? `comment:${commentId}` : `${cc.ownerType}:${cc.ownerId}`;
+    }
+    const owner = opts.attachmentsOwner;
+    return owner !== undefined ? `${owner.ownerType}:${owner.ownerId}` : undefined;
+  })();
+  const collapseState = createCommentCollapseState(requireNetworkId(), collapseOwnerKey);
+
+  /**
+   * Ключ черновиков правок ИСТОЧНИКОВ трансклюзий — стабильный владелец-СУЩНОСТЬ
+   * поля (`thought:<id>`/`link:<id>`), БЕЗ id комментария (ошибка `6d4d60ef`).
+   * При создании постоянного комментария `collapseOwnerKey` меняется с
+   * `thought:<ownerId>` на `comment:<id>` (виден только после пересборки поля), и
+   * черновики источников, снятые до создания, осиротели бы по старому ключу.
+   * Ключ по сущности-владельцу не меняется при создании комментария, поэтому
+   * черновики переживают его; область действия — владелец-мысль/связь. Состояние
+   * свёрнутости разделов остаётся на `collapseOwnerKey` (там id комментария
+   * уместен: у одной мысли бывает несколько комментариев).
+   */
+  const draftOwnerKey = ((): string | undefined => {
+    const cc = opts.commentContext;
+    if (cc !== undefined) return `${cc.ownerType}:${cc.ownerId}`;
+    const owner = opts.attachmentsOwner;
+    return owner !== undefined ? `${owner.ownerType}:${owner.ownerId}` : undefined;
+  })();
+
+  /**
+   * Состояние свёрнутости блока трансклюзии по пути вставки (ТП2, требование
+   * e04d84f7): владелец — «владелец поля (мысль-контейнер) + путь вставки».
+   * Один и тот же источник в разных контейнерах (и на разных путях вставки)
+   * хранит свёрнутость разделов раздельно; на сервер не едет.
+   */
+  const collapseScopeFor = (path: readonly string[]): CommentCollapseState =>
+    createCommentCollapseState(
+      requireNetworkId(),
+      collapseOwnerKey === undefined
+        ? undefined
+        : transclusionCollapseOwnerKey(collapseOwnerKey, path),
+    );
+
+  /**
+   * Панель поиска и замены поля (0.12.1, задача 045f98db): открывается по
+   * Ctrl+F и в просмотре, и в правке, замена — только в правке.
+   */
+  const search = createCommentSearch({
+    root,
+    view,
+    getEditor: () => (editing ? editor : null),
+    isEditing: () => editing,
+    restoreFocus: () => {
+      if (editing) editor?.focus();
+      else view.focus();
+    },
+  });
+
+  /**
+   * Явный выход из правки — Ctrl+Enter, кнопка «Записать», Esc (в т.ч. из
+   * вложенного блока). Единое правило (ошибки `ea9c76d3`/`e2c6c66c`/`0cb75868`):
+   * решение о коммите принимается ЗДЕСЬ, а не по `focusout`; `blur()` только
+   * отпускает фокус. `commitOrRevert` объявлен ниже, но вызывается уже во время
+   * жеста — замыкание разрешено.
+   */
+  const finishEdit = (cancel: boolean): void => {
+    cancelled = cancel;
+    commitOrRevert();
+    editor?.blur();
+  };
+
+  /**
+   * Хост команд поля (ТП1 «Команды редактирования комментария», задача
+   * 3d6f98cb): тулбар и контекстное меню применяют команды к этому полю, а
+   * команды уровня поля (поиск, отмена/сохранение) исполняет сам каркас правки.
+   */
+  const commandHost: CommentCommandHost = {
+    getEditor: () => (editing ? editor : null),
+    root,
+    // Владелец комментария — родитель новых мыслей команд ТП3 (задача
+    // 5f854e7a). Известен только у поля с контекстом комментария.
+    getCommentOwner: () => {
+      const cc = opts.commentContext;
+      return cc === undefined ? null : { ownerType: cc.ownerType, ownerId: cc.ownerId };
+    },
+    // Мысли-владельцы (родители новых мыслей, ТЗ5): цели-чипсы записи либо
+    // владелец. `null` — вложенного списка нет, родитель выводится из владельца.
+    getCommentParents: () => opts.commentContext?.getParentThoughtIds?.() ?? null,
+    // Активный редактор вставки (ошибка f37ae845): если фокус в ВЛОЖЕННОМ
+    // редакторе блока трансклюзии, команды вставки адресуют ЕГО документ, а не
+    // внешнее поле. Фокус берём из DOM (`.cm-focused`) — единственный редактор
+    // сфокусирован, а вложенный `.cm-editor` не равен `.cm-editor` поля. Цель
+    // захватывается СИНХРОННО в начале команды, до диалога выбора мысли, пока
+    // фокус ещё во вложенном редакторе (меню не крадёт фокус, `guardMenuFocus`).
+    getActiveInsertEditor: () => {
+      if (!editing || editor === null) return null;
+      const focused = root.querySelector<HTMLElement>('.cm-editor.cm-focused');
+      if (focused === null || focused === editor.dom) return null;
+      const nestedView = EditorView.findFromDOM(focused);
+      if (nestedView === null) return null;
+      return {
+        insert: (text: string): void => {
+          const pos = nestedView.state.selection.main.head;
+          nestedView.dispatch({
+            changes: { from: pos, insert: text },
+            selection: { anchor: pos + text.length },
+          });
+          nestedView.focus();
+        },
+      };
+    },
+    runFieldCommand: (command) => {
+      // Поиск открывается в обоих режимах; замена — только в правке
+      // (элемент b8eabc22, требование d72ea6eb).
+      if (command === 'comment.find') {
+        search.open('find');
+        return true;
+      }
+      if (command === 'comment.replace') {
+        if (!editing) return false;
+        search.open('replace');
+        return true;
+      }
+      if (command === 'comment.findNext') return search.next();
+      if (command === 'comment.findPrevious') return search.previous();
+      if (command === 'comment.edit') {
+        // Вход в правку кнопкой под полем — тот же путь, что и двойной клик
+        // (элемент a0e5bc2e). Действует в просмотре; в правке не нужен.
+        if (editing) return false;
+        showEdit();
+        return true;
+      }
+      if (!editing || editor === null) return false;
+      if (command === 'comment.cancel') {
+        finishEdit(true);
+        return true;
+      }
+      if (command === 'comment.save') {
+        finishEdit(false);
+        return true;
+      }
+      return false;
+    },
+    // Состояние кнопок тулбара обновляется по изменениям выделения/текста.
+    subscribe: (listener) => editor?.subscribe(listener) ?? (() => {}),
+  };
+
+  /**
+   * Кнопки режима под полем (элемент a0e5bc2e, задача 3901f07e): в просмотре —
+   * всплывающая «Редактировать», в правке — «Отменить»/«Сохранить». Вид
+   * переключает `showView`/`showEdit`, действия идут командой поля (тот же путь,
+   * что Esc/Ctrl+Enter).
+   */
+  const modeActions = createCommentModeActions(commandHost);
+
+  /**
+   * Включает контекст сочетаний поля, пока поле — текущий элемент (фокус).
+   * Действует и в просмотре: команды без редактора — no-op, но Ctrl+F открывает
+   * панель поиска (требование d72ea6eb).
+   */
+  const activateFieldKeys = (): void => {
+    releaseCommentKeys ??= enterCommentEdit(commandHost);
+  };
+  /** Снимает контекст сочетаний поля. */
+  const deactivateFieldKeys = (): void => {
+    releaseCommentKeys?.();
+    releaseCommentKeys = null;
+  };
+  root.addEventListener('focusin', (event) => {
+    const target = event.target;
+    // Фокус в панели поиска — её контекст поверх: команды форматирования из
+    // поля поиска срабатывать не должны.
+    if (target instanceof Node && search.element.contains(target)) {
+      deactivateFieldKeys();
+      search.enterKeys();
+      return;
+    }
+    search.leaveKeys();
+    activateFieldKeys();
+  });
+  root.addEventListener('focusout', (event) => {
+    const next = event.relatedTarget;
+    // Фокус остался в фокусной области поля (его элементы, поповер, подсказки,
+    // меню/диалог) или в группе правки записи — контекст сочетаний сохраняется.
+    if (ownsNode(next)) return;
+    // Фокус исчез без перехода (`relatedTarget = null`: снятие вложенного
+    // редактора из DOM при выходе из блока, программный `blur()`) — это НЕ
+    // решение о выходе: коммитить нельзя, иначе навигация стрелками через блок
+    // уводила поле в просмотр (ошибки `ea9c76d3`/`e2c6c66c`).
+    if (!isDomNode(next)) return;
+    deactivateFieldKeys();
+    search.leaveKeys();
+    // Фокус ушёл из поля целиком на реальный внешний узел. Если правка была
+    // открыта и редактор уже не в фокусе (его `focusout` пропущен — фокус
+    // держала панель поиска), коммит иначе не случится. Обычный уход из
+    // редактора наружу сюда уже приходит с `editing === false` (commitOrRevert
+    // отработал в `onBlur` редактора) — повторного коммита нет.
+    if (editing) commitOrRevert();
+  });
 
   // Масштаб документа (M9): Ctrl+колесо над полем меняет глобальный
   // `--md-font-size` — действует на все md-поля; значение сохраняется на сеть.
@@ -188,10 +1096,25 @@ export function createMarkdownField(opts: {
       });
   };
 
-  const renderView = (): void => {
+  /**
+   * HTML просмотра: с `sourceMapView` — единый рендерер с разметкой позиций
+   * (`sourceMap`), чтобы клик в просмотре отображался в смещение исходника;
+   * иначе (или при пустом/слишком большом исходнике) — серверный HTML.
+   */
+  const viewHtml = (): string => {
+    if (opts.sourceMapView !== true || currentMd.trim() === '') return currentHtml;
+    try {
+      return renderMarkdown(currentMd, { sourceMap: true });
+    } catch {
+      return currentHtml;
+    }
+  };
+
+  /** Рисует просмотр из готового HTML (общий путь обычного и трансклюзийного рендера). */
+  const paintView = (html: string, transclusionTitles?: ReadonlyMap<string, string>): void => {
     view.replaceChildren();
-    if (currentHtml.trim() !== '') {
-      renderHtml(view, currentHtml);
+    if (html.trim() !== '') {
+      renderHtml(view, html);
       renderMermaidBlocks(view);
       annotateMentions(view, {
         excludeThoughtId: excludeThoughtId(),
@@ -207,6 +1130,20 @@ export function createMarkdownField(opts: {
       // `wiki-link-deleted` class) lazily at hover time, well after that
       // promise settles.
       wireCommentLinksInDom(view);
+      // Сворачивание разделов комментария (0.12.1, задача 634f1412): индикаторы
+      // и восстановление свёрнутости в просмотре. Блоки трансклюзий — своим
+      // состоянием на путь вставки (ТП2, задача 1b405a92, требование e04d84f7).
+      decorateCommentView(view, collapseState, collapseScopeFor);
+      // Шапки-чипы «имя · раздел» блоков трансклюзий в просмотре (задача
+      // 68591b8a): имена — из карты того же прохода развёртки, что нарисовал
+      // блок. Идемпотентно (прежняя шапка снимается).
+      decorateViewTransclusionChips(view, transclusionTitles ?? new Map());
+      // «Замочки» чужих захватов источников трансклюзий в просмотре (ошибка
+      // f60f99e0): та же карта захватов (`lock-cache`), что у правки. Разметка
+      // идемпотентна (её повторяет подписка на переходы кэша), подписка одна на
+      // приложение — поля пересоздаются, «подписка на поле» текла бы.
+      decorateViewTransclusionLocks(view);
+      wireViewTransclusionLocks();
     } else if (opts.placeholder !== undefined && opts.placeholder !== '') {
       // Пустой комментарий — показываем плейсхолдер (задача 8ab775d9).
       const ph = el('div', 'md-field-placeholder', opts.placeholder);
@@ -214,66 +1151,337 @@ export function createMarkdownField(opts: {
     }
   };
 
+  const renderView = (): void => {
+    // Развёртка трансклюзий в просмотре (задача a2b68d72): ссылки-трансклюзии
+    // разворачиваются общим механизмом `@etn/markdown`, а рендер рисует блоки с
+    // фоном по уровням и плашками ошибок источника. Асинхронно (нужны тексты
+    // источников) — с защитой от гонок по счётчику и режиму правки.
+    //
+    // Разметка позиций ведётся по РАЗВЁРНУТОМУ тексту (sourceMap), поэтому
+    // смещения не совпадают с `body_md`; `buildExpandedSourceMap` строит карту
+    // «развёрнутый → исходник», и двойной клик вне блока трансклюзии входит в
+    // правку кареткой в месте клика (ошибка 0fdd8c86). Развёрнутый текст с
+    // маркерами даёт публичный шов `transclusionInternals.expandWithLoader` —
+    // тот же путь развёртки, что и у блоков в правке.
+    if (opts.sourceMapView === true && parseTransclusions(currentMd).length > 0) {
+      const seq = ++renderSeq;
+      view.replaceChildren();
+      const md = currentMd;
+      void transclusionInternals
+        .expandWithLoader(md, defaultTransclusionLoader(networkId))
+        .then(({ text, titles }) => {
+          if (seq !== renderSeq || editing) return;
+          const html = renderMarkdown(text, {
+            sourceMap: true,
+            transclusion: { labels: transclusionLabels() },
+          });
+          viewMap = buildExpandedSourceMap(md, text);
+          paintView(html, titles);
+        })
+        .catch(() => {
+          if (seq === renderSeq && !editing) {
+            viewMap = null;
+            paintView(currentHtml);
+          }
+        });
+      return;
+    }
+    renderSeq += 1;
+    viewMap = null;
+    paintView(viewHtml());
+  };
+
+  // Поле с трансклюзиями перерисовывает просмотр, когда realtime сообщает о
+  // правке его источника (ошибка `402a70db`) — карточка «Дневника» при правке
+  // ЧУЖОЙ мысли не перестраивается (keyed-сверка видит неизменную запись).
+  // В правке просмотр не трогаем: блоки живут во вложенных редакторах.
+  if (opts.sourceMapView === true) {
+    ensureTransclusionViewRefresh();
+    const entry: TransclusionViewEntry = {
+      isAlive: () => root.isConnected,
+      networkId: () => networkId,
+      sources: () => transclusionSourceIds(currentMd),
+      refresh: () => {
+        if (!editing && !mounting) renderView();
+      },
+    };
+    transclusionViews.add(entry);
+  }
+
+  /**
+   * Явный жест «клик вне поля» — второе основание выхода в просмотр (единое
+   * правило: выход только по явному жесту, ошибки `ea9c76d3`/`e2c6c66c`/
+   * `0cb75868`). Коммит по `focusout` больше не срабатывает при
+   * `relatedTarget = null`, поэтому клик по НЕфокусируемому месту (холст,
+   * карточка мысли) выходил бы из правки молча; ловим его «кликом вне» —
+   * ЕДИНЫМ механизмом `lib/ui` (`watchOutsideTap`, сторож `guard-ui-popover`),
+   * наш слой лишь описывает, какие узлы удерживают поле. Слушатель живёт только
+   * пока поле в правке.
+   */
+  let stopOutsideTap: (() => void) | null = null;
+  const attachOutsidePointer = (): void => {
+    if (stopOutsideTap !== null) return;
+    if (typeof document === 'undefined') return;
+    stopOutsideTap = watchOutsideTap(
+      (target) => ownsNode(target),
+      () => {
+        if (editing && !mounting) commitOrRevert();
+      },
+    );
+  };
+  const detachOutsidePointer = (): void => {
+    stopOutsideTap?.();
+    stopOutsideTap = null;
+  };
+
   const showView = (): void => {
     const wasEditing = editor !== null && !area.classList.contains('hidden');
+    detachOutsidePointer();
+    // Выход из правки поля закрывает вложенные редакторы блоков: их инстансы
+    // живут ровно столько, сколько открыта правка (состояние правок блоков —
+    // задача «Черновики», `e9dfc2df`).
+    if (wasEditing) nestedStore?.dispose();
+    nestedStore = null;
+    // Захваты источников снимаются пакетно при записи/отмене/выходе (задача
+    // «Единая запись», `e9dfc2df`).
+    void sourceLocks?.release();
+    sourceLocks = null;
+    editing = false;
+    deactivateFieldKeys();
+    root.classList.remove('md-field--editing');
+    modeActions.setEditing(false);
     area.classList.add('hidden');
     view.classList.remove('hidden');
     renderView();
+    search.refresh();
     if (wasEditing) opts.onEditChange?.(false);
   };
 
+  /**
+   * Отложенная (debounce) запись черновиков правок источников трансклюзий
+   * (задача `6a085e01`): «грязный» блок зеркалится в локальное хранилище
+   * черновиков тем же механизмом, что и правка окружения (`drafts.ts`), и
+   * переживает перезапуск. Ключ — владелец поля + источник + раздел.
+   */
+  const sourceDraftTimers = new Map<string, number>();
+  const scheduleSourceDraft = (key: string): void => {
+    if (draftOwnerKey === undefined) return;
+    const ownerKey = draftOwnerKey;
+    const pending = sourceDraftTimers.get(key);
+    if (pending !== undefined) window.clearTimeout(pending);
+    sourceDraftTimers.set(
+      key,
+      window.setTimeout(() => {
+        sourceDraftTimers.delete(key);
+        const text = nestedStore?.text(key);
+        if (text === null || text === undefined) return;
+        const { sourceId, section } = parseBlockEditorKey(key);
+        // Лучшее усилие: сбой локального хранилища не должен ломать правку.
+        void saveSourceDraft({ networkId, ownerKey, sourceId, section, value: text }).catch(
+          () => undefined,
+        );
+      }, 800),
+    );
+  };
+  /** Снимает отложенные записи черновиков (запись/отмена гасят debounce). */
+  const cancelSourceDraftTimers = (): void => {
+    for (const timer of sourceDraftTimers.values()) window.clearTimeout(timer);
+    sourceDraftTimers.clear();
+  };
+  /** Немедленно сохраняет черновики переданных «грязных» блоков (офлайн-уход). */
+  const flushSourceDrafts = (saves: readonly TransclusionBlockSave[]): void => {
+    if (draftOwnerKey === undefined) return;
+    const ownerKey = draftOwnerKey;
+    for (const save of saves) {
+      void saveSourceDraft({
+        networkId,
+        ownerKey,
+        sourceId: save.sourceId,
+        section: save.section,
+        value: save.text,
+      }).catch(() => undefined);
+    }
+  };
+
   const commitOrRevert = (): void => {
-    if (mounting || editor === null) return;
+    // Поле не в правке — коммитить нечего (идемпотентность: после выхода в
+    // просмотр поздний `focusout`/повторный жест не запускают вторую запись).
+    if (!editing || mounting || editor === null || commitPending) return;
+    const store = nestedStore;
     const md = editor.getValue();
     if (cancelled) {
-      // Esc: the edit is dropped; restore the saved text so the field returns
-      // to the view unchanged.
+      // Esc: правка отбрасывается целиком — окружение и вложенные редакторы
+      // блоков возвращаются к загруженному тексту, захваты снимаются (в
+      // `showView`). Esc-отмена едина для всего поля (задача `e9dfc2df`).
       if (md !== currentMd) opts.onCancel?.();
+      store?.rollbackAll();
       editor.setValue(currentMd);
+      // Отменённая правка не должна воскреснуть из черновиков источников
+      // (задача `6a085e01`): debounce гасится, строки владельца удаляются.
+      cancelSourceDraftTimers();
+      if (draftOwnerKey !== undefined) void clearSourceDrafts(networkId, draftOwnerKey);
       showView();
       return;
     }
-    if (md === currentMd) {
+    // Единая запись (задача `e9dfc2df`): окружение (контейнер) + все «грязные»
+    // источники трансклюзий. Текст блоков живёт во вложенных редакторах и в
+    // документ контейнера не попадает, поэтому источники собираются из
+    // хранилища инстансов.
+    const saves = store === null ? [] : dirtyBlockSaves(store);
+    let envChanged = md !== currentMd;
+    // Единая правка записи: текст тела мог не меняться, но коммит обязан уйти —
+    // заголовок живёт рядом и пишется тем же `onSave` (см. `externalChanges`).
+    // При неизменных теле И внешних полях коммит не уходит (лишний PATCH).
+    if (opts.externalChanges?.() === true && opts.onSave !== undefined) envChanged = true;
+    if (!envChanged && saves.length === 0) {
       showView();
       return;
     }
-    if (opts.onSave === undefined) {
+    // Офлайн-безопасность (задача `6a085e01`): поле с правками блоков без связи
+    // уходит в просмотр БЕЗ записи — правки остаются в черновиках (записаны
+    // немедленно) и восстановятся при следующем входе в правку.
+    if (saves.length > 0 && !canSave()) {
+      offlineNotice();
+      cancelSourceDraftTimers();
+      flushSourceDrafts(saves);
+      showView();
+      return;
+    }
+    const onSave = opts.onSave;
+    if (envChanged && onSave === undefined) {
       // No autosave: without a client renderer we cannot preview unsaved md.
       editor.setValue(currentMd);
       showView();
       return;
     }
-    void opts
-      .onSave(md)
-      .then((html) => {
-        currentMd = md;
-        currentHtml = html;
-        showView();
+    // Флаг ставится СИНХРОННО: пока запись не разрешилась, `editing` ещё true,
+    // и повторный коммит (см. `commitPending`) надо отсечь.
+    commitPending = true;
+    cancelSourceDraftTimers();
+    const writeEnv = envChanged && onSave !== undefined ? () => onSave(md) : null;
+    // Гарантируем, что все «грязные» блоки уже в черновиках (debounce мог не
+    // сработать), и только затем пишем: успех чистит черновики уже после их
+    // фактической записи, частичный сбой оставляет несохранённые.
+    const flush =
+      draftOwnerKey === undefined || saves.length === 0
+        ? Promise.resolve()
+        : Promise.all(
+            saves.map((save) =>
+              saveSourceDraft({
+                networkId,
+                ownerKey: draftOwnerKey,
+                sourceId: save.sourceId,
+                section: save.section,
+                value: save.text,
+              }).catch(() => undefined),
+            ),
+          ).then(() => undefined);
+    void flush
+      .then(() => commitTransclusionEdit({ networkId, saves, writeEnv }))
+      .then((result) => {
+        for (const key of result.savedKeys) store?.markSaved(key);
+        for (const key of result.failedKeys) store?.markError(key);
+        // Записанные источники больше не черновики; сбойные строки остаются —
+        // восстановятся при следующем входе в правку.
+        if (draftOwnerKey !== undefined && result.savedKeys.length > 0) {
+          void clearSourceDrafts(networkId, draftOwnerKey, result.savedKeys);
+        }
+        if (result.failedKeys.length === 0 && result.envOk) {
+          if (envChanged) {
+            currentMd = md;
+            if (result.envHtml !== null) currentHtml = result.envHtml;
+          }
+          showView();
+          return;
+        }
+        // Сбой записи: называем конкретные сбойные блоки (если они есть) и/или
+        // причину сбоя окружения. Блок-специфичное сообщение не показывается при
+        // нуле блоков — поле без трансклюзий получает своё сообщение об ошибке
+        // записи окружения (ошибка `7399c9ec`). Редактор остаётся открытым,
+        // сбойные блоки помечены (`markError`) — повторите запись.
+        reportCommitFailures({
+          networkId,
+          result,
+          notify: (message, level) => notice(message, level),
+        });
       })
-      .catch(() => {
-        // Save failed: revert.
-        editor?.setValue(currentMd);
-        showView();
+      .catch((err) => {
+        // Неожиданный сбой самого коммита (не записи окружения/блоков).
+        notice(t('comment.save.failed', errText(err)), 'error');
+      })
+      .finally(() => {
+        commitPending = false;
       });
   };
 
   /** Mounts a fresh editor for the current markdown. */
-  const mountEditor = (): void => {
+  const mountEditor = (
+    locate?: MdSourceSelection,
+    enterBlockAt?: { position: number; findText?: string },
+  ): void => {
     mounting = true;
     editor?.destroy();
+    // Свежее хранилище вложенных редакторов: прежние инстансы принадлежали
+    // предыдущей сборке поля.
+    nestedStore?.dispose();
+    nestedStore = new NestedEditorStore();
+    // Отложенные записи черновиков источников прошлой сборки неактуальны.
+    cancelSourceDraftTimers();
+    const store = nestedStore;
     cancelled = false;
     editor = createMdEditor(currentMd, {
       onInput: (md) => opts.onInput?.(md),
       onEscape: () => {
-        cancelled = true;
-        editor?.blur();
+        finishEdit(true);
       },
-      // Ctrl+Enter (M10): обычный коммит через blur-обработчик.
+      // Ctrl+Enter (M10): явный коммит — решение принимаем сами, а не по
+      // focusout (единое правило выхода).
       onCommit: () => {
-        cancelled = false;
-        editor?.blur();
+        finishEdit(false);
       },
-      onBlur: () => commitOrRevert(),
+      onBlur: (event) => {
+        // Фокус ушёл на элемент самого поля (панель поиска и т.п.) или в группу
+        // единой правки (заголовок записи) — правка остаётся открытой; коммит
+        // только при уходе фокуса наружу.
+        if (isDomNode(event.relatedTarget) && !ownsNode(event.relatedTarget)) commitOrRevert();
+      },
+      // Точечное Prec.high-перекрытие сочетаний команд, которые иначе
+      // «съедает» CM6 (Ctrl+I/U, Ctrl+Shift+K, Tab/Shift+Tab, Alt+↑/↓).
+      extraExtensions: [
+        commentFieldKeymapExtension(),
+        commentCollapseExtension(collapseState),
+        // Фабрика состояний свёрнутости блоков трансклюзий (ТП2, задача
+        // 1b405a92): виджеты блоков читают её и декорируют своё содержимое.
+        collapseScopeExtension(collapseScopeFor),
+        // Хранилище вложенных редакторов блоков (задача 73ae1d4b): виджет блока
+        // берёт из него DOM активного инстанса.
+        blockEditorStoreFacet.of(store),
+        // Хост поля (задача «Единая запись», `e9dfc2df`): «грязный» сигнал
+        // блока, единая запись по Ctrl+Enter внутри блока, отмена всей правки
+        // по Esc внутри блока и догрузка захвата источника при монтировании
+        // вложенного блока.
+        blockEditorHostExtension({
+          // «Грязный» блок зеркалится в черновик (задача `6a085e01`).
+          onBlockDirty: (key) => scheduleSourceDraft(key),
+          onCommitEdit: () => {
+            finishEdit(false);
+          },
+          onCancelEdit: () => {
+            finishEdit(true);
+          },
+          onBlockMounted: (sourceId) => {
+            void sourceLocks?.acquire([sourceId]);
+          },
+          // Восстановление черновика правки источника при монтировании блока
+          // (задача `6a085e01`): текст черновика возвращается вложенному
+          // редактору вместо загруженного источника, блок встаёт «грязным».
+          getBlockDraft: async (sourceId, section) => {
+            if (draftOwnerKey === undefined) return null;
+            const draft = await findSourceDraft(networkId, draftOwnerKey, sourceId, section);
+            return draft === null ? null : draft.value;
+          },
+        }),
+      ],
     });
     // Pasting files (screenshots / copied files) saves them as server-stored
     // attachments of the owner entity and inserts a markdown reference at the
@@ -301,19 +1509,55 @@ export function createMarkdownField(opts: {
       },
       true,
     );
-    // Контекстное меню редактора: «Вставить текст шаблона из типа мысли»
-    // (08-ui-spec.md §6.4) и «Вставить ссылку на публикацию…» (0.11.1, задача
-    // 3275fd8d, требование 7f583ef9). Меню показывается, только когда есть
-    // хотя бы один применимый пункт; иначе пропускаем событие, и пользователь
-    // видит стандартное меню CM6.
+    // Drag&Drop файла-картинки в поле (задача 87c455db): тот же путь, что и
+    // вставка из буфера — файл уходит вложением на владельца, в каретку
+    // вставляется ссылка по id. Прочие переносимые данные (текст, мысли)
+    // не перехватываем — обработчики идут только по файлам-картинкам.
+    //
+    // Capture-фаза, как у `paste` (ошибка приёмки): CodeMirror обрабатывает
+    // файловый drop сам (на contentDOM, раньше bubble-слушателя) и для
+    // ТЕКСТОВЫХ файлов вставляет их содержимое. Растровые картинки отсекает
+    // его бинарный guard, но `.svg` (image/svg+xml — текстовый образ) дал бы
+    // ДВОЙНУЮ вставку: сырой SVG-текст от CM6 + наша ссылка. В capture наш
+    // обработчик идёт первым и `preventDefault` гасит ветку CM6; без
+    // файлов-картинок управление возвращается CM6 (никакого вмешательства).
+    editor.dom.addEventListener(
+      'dragover',
+      (event) => {
+        if (opts.attachmentsOwner === undefined) return;
+        if (imageFilesFrom(event.dataTransfer?.files ?? []).length === 0) return;
+        event.preventDefault();
+        if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy';
+      },
+      true,
+    );
+    editor.dom.addEventListener(
+      'drop',
+      (event) => {
+        if (editor === null) return;
+        const owner = opts.attachmentsOwner;
+        if (owner === undefined) return;
+        const files = imageFilesFrom(event.dataTransfer?.files ?? []);
+        if (files.length === 0) return;
+        event.preventDefault();
+        void insertClipboardFiles(editor, owner, files);
+      },
+      true,
+    );
+    // Контекстное меню редактора: команды форматирования поля (ТП1 «Команды
+    // редактирования комментария», задача 3d6f98cb) плюс «Вставить текст
+    // шаблона из типа мысли» (08-ui-spec.md §6.4) и «Вставить ссылку на
+    // публикацию…» (0.11.1, задача 3275fd8d, требование 7f583ef9). Раскладка
+    // команд повторяет тулбар; подменю настроек поля в меню нет (элемент
+    // 0562e0e3).
     editor.dom.addEventListener('contextmenu', (event) => {
       if (editor === null) return;
-      const items: MenuItem[] = [];
+      const items: MenuItem[] = buildCommentMenuItems(commandHost);
+      const extras: MenuItem[] = [];
       const template = opts.onInsertTemplate?.() ?? null;
       if (template !== null && template.trim() !== '') {
-        items.push({
-          label: 'Вставить текст шаблона из типа мысли',
-          onClick: () => {
+        extras.push(
+          menuAction('Вставить текст шаблона из типа мысли', () => {
             if (editor === null) return;
             if (area.classList.contains('hidden')) {
               // Поле в view-режиме: переключаем в edit и подставляем текст.
@@ -321,12 +1565,11 @@ export function createMarkdownField(opts: {
             } else {
               editor.insertAtCaret(template);
             }
-          },
-        });
+          }),
+        );
       }
-      items.push({
-        label: t('publications.link.insert'),
-        onClick: () => {
+      extras.push(
+        menuAction(t('publications.link.insert'), () => {
           if (editor === null) return;
           void pickEntitiesModal({
             networkId,
@@ -344,32 +1587,187 @@ export function createMarkdownField(opts: {
               })
               .catch(() => undefined);
           });
-        },
-      });
-      if (items.length === 0) return;
+        }),
+      );
+      // ТЗ5 «Дневник без псевдослота»: рядом с «Вставить ссылку на публикацию…»
+      // — «Вставить ссылку на мысль» и «Вставить трансклюзию мысли». Без
+      // контекста комментария (нечего дать в родители новой мысли) недоступны.
+      // «Вставить картинку…» (задача 87c455db) — диалог-адаптер resource-picker;
+      // доступен полям с владельцем вложений (комментарий постоянный/дневниковый).
+      const insertImageOwner = opts.attachmentsOwner;
+      if (insertImageOwner !== undefined) {
+        extras.push(
+          menuAction(t('comment.cmd.insertImage'), () => {
+            if (editor === null) return;
+            showInsertImageDialog({
+              onPick: (result) => {
+                if (editor === null) return;
+                void insertResourceAt(editor, insertImageOwner, result);
+              },
+            });
+          }),
+        );
+      }
+      extras.push(...commentThoughtInsertMenuItems(commandHost));
+      items.push(MENU_SEPARATOR, ...extras);
       event.preventDefault();
-      showMenuAt(event.clientX, event.clientY, items);
+      const menuRoot = showMenuAt(event.clientX, event.clientY, items);
+      // Клик по пункту меню не должен снимать фокус/выделение редактора —
+      // иначе поле выйдет из правки и команда не применится к выделению.
+      // Общий механизм меню: делегированный обработчик покрывает и лениво
+      // построенные строки подменю (ошибка 64b18420).
+      guardMenuFocus(menuRoot);
     });
-    area.replaceChildren(editor.dom);
+    // Тулбар — верхняя панель поля; живёт внутри `area`, поэтому виден только в
+    // правке (`area` скрыта в просмотре) — требование 6f8575a5. Собирается
+    // после редактора: кнопки сразу отражают состояние текущего выделения.
+    //
+    // Документ редактора — в отдельном контейнере прокрутки `.md-field-scroll`
+    // (ошибка f65add20): в ограниченном по высоте поле (оболочка комментария
+    // `--fill`) прокручивается только текст. Тулбар (первый ребёнок `area`) и
+    // панель кнопок режима (`.md-field-actions` — сиблинг `area` под полем)
+    // остаются на месте и не уезжают вместе с текстом. В растущем поле контейнер
+    // растёт по содержимому — прокрутки нет.
+    const scroller = div('md-field-scroll');
+    scroller.append(editor.dom);
+    area.replaceChildren(buildCommentToolbar(commandHost), scroller);
     mounting = false;
-    editor.focusToEnd();
+    // Вход по клику в просмотре — каретка/выделение в месте клика; программный
+    // вход (кнопка, восстановление черновика) — каретка в конец (как раньше).
+    if (locate !== undefined) editor.setSelection(locate.anchor, locate.head);
+    else editor.focusToEnd();
+    // Двойной клик по слову ВНУТРИ блока трансклюзии в просмотре (ошибка
+    // f3dd9fe3): вход в правку сам блок не открывал — каретка оставалась на
+    // ссылке-атоме перед блоком. Открываем вложенный редактор и ставим
+    // выделение по слову под кликом.
+    if (enterBlockAt !== undefined && editor !== null) {
+      const enteredEditor = editor;
+      // Отложенно: `showEdit` после `mountEditor` ещё ставит захваты/подписки и
+      // снимает флаги — вход в блок делаем следующим тиком, когда состояние
+      // поля стабилизировалось (иначе плагин трансклюзий успевал пересобрать
+      // декорации и снять активность блока).
+      window.setTimeout(() => {
+        if (editor === enteredEditor) {
+          enteredEditor.enterBlockAt(enterBlockAt.position, enterBlockAt.findText);
+        }
+      }, 0);
+    }
   };
 
-  const showEdit = (md?: string): void => {
+  const showEdit = (
+    md?: string,
+    locate?: MdSourceSelection,
+    enterBlockAt?: { position: number; findText?: string },
+  ): void => {
     if (md !== undefined) currentMd = md;
     view.classList.add('hidden');
     area.classList.remove('hidden');
-    mountEditor();
+    editing = true;
+    root.classList.add('md-field--editing');
+    modeActions.setEditing(true);
+    mountEditor(locate, enterBlockAt);
+    // Пакетный захват всех мыслей-источников трансклюзий текста на время
+    // правки поля (задача «Единая запись», `e9dfc2df`): источники берутся из
+    // текущего документа; вложенные догружаются при монтировании блоков
+    // (`onBlockMounted`). Чужой захват — блок только для чтения, остальные
+    // редактируются (индикатор показывает `lock-cache`).
+    sourceLocks = new TransclusionLockSet();
+    void sourceLocks.acquire(transclusionSourceIds(currentMd));
+    activateFieldKeys();
+    // Явный жест выхода — клик вне фокусной области поля (см.
+    // `onOutsidePointerDown`).
+    attachOutsidePointer();
+    search.refresh();
     opts.onEditChange?.(true);
   };
 
   // Programmatic focus (e.g. the editor rebuild refocus, editor.ts) lands on
   // the wrapper and is delegated to the editor.
   area.addEventListener('focus', () => editor?.focus());
-  view.addEventListener('dblclick', () => showEdit());
+  /**
+   * Выделение в просмотре → диапазон исходника (задача 189da39e): двойной
+   * клик по слову переводит выделение браузера в позиции markdown через
+   * разметку позиций рендерера. Для просмотра с развёрнутыми трансклюзиями
+   * смещения разметки — в координатах развёрнутого текста и переводятся картой
+   * `viewMap` (ошибка 0fdd8c86). `undefined` — разметки нет (просмотр без
+   * `sourceMapView`) или выделение вне поля — тогда вход в правку без офсета.
+   */
+  const selectionInView = (): MdSourceSelection | undefined =>
+    viewSelectionToSourceRange(view, viewMap);
+
+  /**
+   * Позиция ВНЕШНЕЙ ссылки-трансклюзии в `body_md` для двойного клика в
+   * просмотре внутри ВЛОЖЕННОГО блока (ошибка `23570aef`): ссылки вложенного
+   * источника в контейнере нет (текст приходит из источника другой мысли —
+   * ошибка `5ecb9f0b`). Вход в правку ставит каретку на внешний блок — далее
+   * вложенный редактор открывается входом кареткой (задача `73ae1d4b`).
+   * `null` — внешний блок или вне блоков: прежнее поведение по карте смещений.
+   */
+  const nestedOuterRefStart = (event: MouseEvent): number | null => {
+    const target = event.target as Element | null;
+    const blockEl =
+      target !== null && typeof target.closest === 'function'
+        ? target.closest(`.${TRANSCLUSION_BLOCK_CLASS}`)
+        : null;
+    const block = transclusionBlockInfo(blockEl);
+    // Внешний блок в просмотре — прежнее поведение (каретка на внешнюю ссылку).
+    if (block === null || blockEl === null || block.depth <= 1) return null;
+    let outerFrom: number | null = null;
+    const offsets = viewSelectionOffsets(view);
+    if (offsets !== null && viewMap !== null) {
+      outerFrom = outerRefStartForNested(viewMap, offsets.from);
+    }
+    if (outerFrom === null) outerFrom = outerRefStartFromDom(blockEl, currentMd);
+    return outerFrom;
+  };
+
+  /** Слово под двойным кликом (выделение браузера), либо пусто. */
+  const wordUnderEvent = (event: MouseEvent): { findText?: string } => {
+    void event;
+    const word = (view.ownerDocument.getSelection?.()?.toString() ?? '').trim();
+    return word === '' ? {} : { findText: word };
+  };
+
+  /**
+   * Цель двойного клика — ВНЕШНИЙ блок трансклюзии в просмотре (ошибка
+   * `f3dd9fe3`): позиция его ссылки в `body_md` и слово под кликом. `undefined` —
+   * клик вне блока (или во вложенном: за него отвечает `nestedOuterRefStart`):
+   * прежнее поведение по карте смещений.
+   */
+  const viewBlockTarget = (
+    event: MouseEvent,
+  ): { position: number; findText?: string } | undefined => {
+    const target = event.target as Element | null;
+    const blockEl =
+      target !== null && typeof target.closest === 'function'
+        ? target.closest(`.${TRANSCLUSION_BLOCK_CLASS}`)
+        : null;
+    const block = transclusionBlockInfo(blockEl);
+    if (block === null || block.depth > 1) return undefined;
+    const ref = parseTransclusions(currentMd).find(
+      (r) => r.sourceId === block.sourceId && r.section === block.section,
+    );
+    if (ref === undefined) return undefined;
+    return { position: ref.start, ...wordUnderEvent(event) };
+  };
+
+  view.addEventListener('dblclick', (event) => {
+    const blockTarget = viewBlockTarget(event);
+    const outerFrom = nestedOuterRefStart(event);
+    if (outerFrom !== null) {
+      showEdit(
+        undefined,
+        { anchor: outerFrom, head: outerFrom },
+        { position: outerFrom, ...wordUnderEvent(event) },
+      );
+      return;
+    }
+    showEdit(undefined, selectionInView(), blockTarget);
+  });
 
   handles.set(root, {
     showEdit,
+    insertMentionLink,
     set: (md, html) => {
       currentMd = md;
       currentHtml = html;
@@ -377,14 +1775,37 @@ export function createMarkdownField(opts: {
       if (editor !== null && !area.classList.contains('hidden')) {
         editor.setValue(md);
       }
+      search.refresh();
     },
     focusAt: (findText) => {
       showEdit();
       if (editor === null) return;
-      const source = editor.getValue();
-      const position =
-        findText !== undefined && findText !== '' ? source.indexOf(findText) : -1;
-      editor.setCaret(position >= 0 ? position : 0);
+      const needle = findText ?? '';
+      const position = needle !== '' ? editor.getValue().indexOf(needle) : -1;
+      // Найдено — выделяем вхождение: слово, по которому кликнули в ленте
+      // публикаций, остаётся выделенным (задача 189da39e); иначе — каретка в
+      // начало (вхождения нет: текст изменён форматированием).
+      if (position >= 0) editor.setSelection(position, position + needle.length);
+      else editor.setCaret(0);
+    },
+    focusAtSelection: (selection) => {
+      // Точный диапазон исходника (задача 59774016): `showEdit` с `locate`
+      // включает правку и выделяет ровно переданные позиции `body_md`.
+      showEdit(undefined, selection);
+    },
+    cancel: () => {
+      if (editing) finishEdit(true);
+    },
+    commit: () => {
+      if (editing) finishEdit(false);
+    },
+    focusStart: () => {
+      if (!editing || editor === null) {
+        showEdit();
+        if (editor === null) return;
+      }
+      editor.setCaret(0);
+      editor.focus();
     },
   });
 
@@ -403,7 +1824,7 @@ export function createMarkdownField(opts: {
     });
   }
 
-  root.append(view, area);
+  root.append(search.element, view, area, modeActions.root);
   showView();
   return root;
 }
@@ -415,11 +1836,47 @@ export function editMarkdownField(root: HTMLElement, md?: string): void {
 
 /**
  * Переключает поле в правку и ставит каретку по вхождению `findText` в
- * исходнике markdown (нет вхождения — начало документа). Точка входа
- * двойного клика по тексту публикации (задача ea1b5f14, пункт 4).
+ * исходнике markdown (вхождение выделяется; нет вхождения — начало
+ * документа). Точка входа двойного клика по тексту публикации
+ * (задача ea1b5f14, пункт 4; уточнено задачей 189da39e).
  */
 export function focusMarkdownFieldAt(root: HTMLElement, findText?: string): void {
   handles.get(root)?.focusAt(findText);
+}
+
+/**
+ * Переключает поле в правку и выделяет ТОЧНЫЙ диапазон исходника (задача
+ * 59774016): диапазон приходит от резолвера ленты публикаций
+ * (`feedSelectionFromDom` → `sourceOffsetFromCaret`) и адресует вхождение под
+ * двойным кликом, а не первое вхождение слова. Точка входа двойного клика по
+ * тексту публикации.
+ */
+export function focusMarkdownFieldSelection(root: HTMLElement, selection: MdSourceSelection): void {
+  handles.get(root)?.focusAtSelection(selection);
+}
+
+/**
+ * Отменяет правку поля и возвращает просмотр — жест Esc, пришедший извне поля
+ * (из заголовка карточки/вкладки единой правки). No-op, если поле не в правке.
+ */
+export function cancelMarkdownFieldEdit(root: HTMLElement): void {
+  handles.get(root)?.cancel();
+}
+
+/**
+ * Записывает правку поля и возвращает просмотр — жест Ctrl+Enter/«Записать»,
+ * пришедший извне поля (из заголовка записи). No-op, если поле не в правке.
+ */
+export function commitMarkdownField(root: HTMLElement): void {
+  handles.get(root)?.commit();
+}
+
+/**
+ * Переводит поле в правку и ставит каретку в НАЧАЛО документа, не пересоздавая
+ * редактор (Enter в заголовке единой правки): набранный текст сохраняется.
+ */
+export function focusMarkdownFieldStart(root: HTMLElement): void {
+  handles.get(root)?.focusStart();
 }
 
 /** Updates an already-built field's content (e.g. after an external change). */
@@ -428,47 +1885,172 @@ export function setMarkdownField(root: HTMLElement, md: string, html: string): v
 }
 
 /**
- * Uploads pasted files to the server (which stores them under the network's
- * `attachments/` directory next to `data.db`) and inserts markdown references
- * at the caret: `![alt](…)` for images, `[name](…)` links for other files.
+ * «Вставить ссылку на <мысль>» в уже построенное поле — точка входа для меню
+ * авто-подсветки упоминания, отрисованного ВНЕ поля (статичный просмотр
+ * `body_html` ленты «Дневника», ошибка `616207a9`). Делегирует единственной
+ * реализации поля (`insertMentionLink`): замена первого вхождения на wiki-ссылку
+ * + сохранение через `onSave`. No-op для узла, не являющегося полем.
+ */
+export function insertMentionLinkIntoField(
+  root: HTMLElement,
+  thought: MentionsScanThought,
+  matchedText: string,
+): void {
+  handles.get(root)?.insertMentionLink(thought, matchedText);
+}
+
+/**
+ * Markdown-ссылка на картинку-вложение по id (требование `5943e3e8`): форма
+ * `![подпись](etnimg://attachment/<id>)` устойчива к переездам файла и видна в
+ * любом слое — main-процесс резолвит id в `file_path` (ADR `7682d51e`). Форма
+ * по пути для вставленных в текст картинок не используется.
+ */
+export function attachmentImageRef(attachmentId: string, title: string): string {
+  return `![${sanitizeAlt(title)}](etnimg://attachment/${encodeURIComponent(attachmentId)})`;
+}
+
+/** Markdown-ссылка на картинку по адресу (вкладка «URL» диалога вставки). */
+function urlImageRef(url: string, title = ''): string {
+  return `![${sanitizeAlt(title)}](${url})`;
+}
+
+/**
+ * Картинки из перетаскиваемого набора (drag&drop). Фильтр по MIME: в поле
+ * комментария бросают файлы-картинки, прочие файлы путь не имеет.
+ */
+export function imageFilesFrom(files: ArrayLike<File>): File[] {
+  const picked: File[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (file !== undefined && file.type.startsWith('image/')) picked.push(file);
+  }
+  return picked;
+}
+
+/**
+ * Загружает вложение на сервер (файл ложится в каталог `attachments/` сети),
+ * возвращает созданную запись или `null` (сбой — notice). Владелец задаётся
+ * вызовом (мульти-владение, тех.проект `f9b8917c`); после загрузки гасятся
+ * кэши счётчиков и списка вложений владельца.
+ */
+async function uploadAttachment(
+  owner: AttachmentsOwner,
+  input: { title: string; mime_type: string; data_base64: string },
+): Promise<Attachment | null> {
+  const networkId = requireNetworkId();
+  let attachment: Attachment;
+  try {
+    attachment = await etn.attachments.uploadFile(networkId, owner.ownerType, owner.ownerId, input);
+  } catch {
+    notice('Не удалось добавить вложение.', 'error');
+    return null;
+  }
+  invalidateQueries(queryKeys.indicators(owner.ownerId));
+  // Tell the editor chrome the owner's attachment set changed: the
+  // «Вложения» tab (if built) reloads its list, the tab badge re-counts —
+  // without this a paste from the comment field left a stale empty list
+  // until the editor target changed. Кэш-путь слоя (G4): ключ списка вложений
+  // владельца гасится, подписчики (вкладка/бейдж) перечитывают список.
+  invalidateQueries(queryKeys.attachments(owner.ownerType, owner.ownerId));
+  return attachment;
+}
+
+/**
+ * Гарантирует владение вложением объектом-владельцем комментария (требование
+ * 87c455db, ADR d85e17b6): выбор чужой картинки из диалога добавляет объект
+ * владельцем (`POST /attachments/{id}/owners`, идемпотентно). `true` — владение
+ * подтверждено (или владельца у поля нет), `false` — сбой запроса.
+ */
+async function ensureAttachmentOwner(owner: AttachmentsOwner, attachmentId: string): Promise<boolean> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return false;
+  try {
+    await etn.attachments.addOwners(networkId, attachmentId, {
+      owner_type: owner.ownerType,
+      owner_ids: [owner.ownerId],
+    });
+    return true;
+  } catch (err) {
+    notice(`${t('attachments.owner.add.failed')}: ${errText(err)}`, 'error');
+    return false;
+  }
+}
+
+/**
+ * Uploads files (system paste / drag&drop) to the server — it stores them under
+ * the network's `attachments/` directory next to `data.db` — and inserts
+ * markdown references at the caret: a by-id image reference
+ * `![alt](etnimg://attachment/<id>)` for images (требование 5943e3e8), a
+ * by-path `[name](…)` link for other files.
  */
 async function insertClipboardFiles(
   editor: MdEditor,
   owner: AttachmentsOwner,
   files: File[],
 ): Promise<void> {
-  const networkId = requireNetworkId();
   for (const file of files) {
     const dataUrl = await readFileAsDataUrl(file);
     const comma = dataUrl.indexOf(',');
     const dataBase64 = comma === -1 ? '' : dataUrl.slice(comma + 1);
     const title = file.name.trim() !== '' ? file.name.trim() : 'file';
     const mime = file.type || guessMimeFromName(file.name) || 'application/octet-stream';
-    let attachment;
-    try {
-      attachment = await etn.attachments.uploadFile(networkId, owner.ownerType, owner.ownerId, {
-        title,
+    const attachment = await uploadAttachment(owner, {
+      title,
+      mime_type: mime,
+      data_base64: dataBase64,
+    });
+    if (attachment === null) continue;
+    if (mime.startsWith('image/')) {
+      editor.insertAtCaret(attachmentImageRef(attachment.id, title));
+      continue;
+    }
+    const filePath = attachment.file_path;
+    if (filePath === null || filePath === '') continue;
+    editor.insertAtCaret(`[${sanitizeAlt(title)}](${etnimgUrl(filePath)})`);
+  }
+}
+
+/**
+ * Вставляет выбор диалога «Вставить картинку» в позицию курсора
+ * ({@link InsertResourceResult}): эмодзи — глифом, URL — картинкой по адресу,
+ * существующее вложение — ссылкой по id (владелец гарантируется), новый файл —
+ * загрузкой на владельца и ссылкой по id.
+ */
+async function insertResourceAt(
+  editor: MdEditor,
+  owner: AttachmentsOwner | undefined,
+  result: InsertResourceResult,
+): Promise<void> {
+  switch (result.kind) {
+    case 'emoji':
+      editor.insertAtCaret(result.glyph);
+      return;
+    case 'url':
+      editor.insertAtCaret(urlImageRef(result.url));
+      return;
+    case 'attachment': {
+      const attachment = result.attachment;
+      if (owner !== undefined && !(await ensureAttachmentOwner(owner, attachment.id))) return;
+      editor.insertAtCaret(attachmentImageRef(attachment.id, attachment.title ?? ''));
+      return;
+    }
+    case 'file': {
+      if (owner === undefined) {
+        notice('Не удалось вставить картинку: у поля нет владельца.', 'error');
+        return;
+      }
+      const source = result.source;
+      const comma = source.dataUrl.indexOf(',');
+      const dataBase64 = comma === -1 ? '' : source.dataUrl.slice(comma + 1);
+      const mime = source.mime || guessMimeFromName(source.name) || 'application/octet-stream';
+      const attachment = await uploadAttachment(owner, {
+        title: source.name.trim() !== '' ? source.name.trim() : 'file',
         mime_type: mime,
         data_base64: dataBase64,
       });
-    } catch {
-      notice('Не удалось добавить вложение.', 'error');
-      continue;
+      if (attachment === null) return;
+      editor.insertAtCaret(attachmentImageRef(attachment.id, attachment.title ?? ''));
     }
-    invalidateQueries(queryKeys.indicators(owner.ownerId));
-    // Tell the editor chrome the owner's attachment set changed: the
-    // «Вложения» tab (if built) reloads its list, the tab badge re-counts —
-    // without this a paste from the comment field left a stale empty list
-    // until the editor target changed. Кэш-путь слоя (G4): ключ списка вложений
-    // владельца гасится, подписчики (вкладка/бейдж) перечитывают список.
-    invalidateQueries(queryKeys.attachments(owner.ownerType, owner.ownerId));
-    const filePath = attachment.file_path;
-    if (filePath === null || filePath === '') continue;
-    const url = etnimgUrl(filePath);
-    const ref = mime.startsWith('image/')
-      ? `![${sanitizeAlt(title)}](${url})`
-      : `[${sanitizeAlt(title)}](${url})`;
-    editor.insertAtCaret(ref);
   }
 }
 
@@ -556,5 +2138,11 @@ function handleClipboardThoughtsPaste(event: ClipboardEvent, editor: MdEditor): 
   return true;
 }
 
-/** Test seam: the comment-paste decision of bug 290a50c0. */
-export const mdFieldInternals = { handleClipboardThoughtsPaste };
+/** Test seam: the comment-paste decision of bug 290a50c0 and image-insert paths. */
+export const mdFieldInternals = {
+  handleClipboardThoughtsPaste,
+  insertClipboardFiles,
+  insertResourceAt,
+  imageFilesFrom,
+  attachmentImageRef,
+};

@@ -16,6 +16,7 @@ import { EtnError } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { publicationExclusionId, publicationOrderId } from '../src/db/publication-id.js';
+import { addOwners, createAttachment } from '../src/domain/attachment-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import {
   addPublicationExclusion,
@@ -162,16 +163,15 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const p = createPublication(ndb, { title: 'X' }, 'u');
-        const now = new Date().toISOString();
-        // Строка-вложение с owner_type='publication' этой публикации.
-        const attId = randomUUID();
-        ndb
-          .prepare(
-            `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, position,
-                                      created_at, created_by, updated_by, created_at_ms, updated_at_ms)
-             VALUES (?, ?, 'publication', ?, 'url', 'https://e/c.png', 0, ?, 'u', 'u', ?, ?)`,
-          )
-          .run(attId, ndb.layerId, p.id, now, Date.now(), Date.now());
+        // Вложение-обложка, принадлежащее публикации (владение в
+        // attachment_owners, 0.12.1).
+        const attId = createAttachment(
+          ndb,
+          'publication',
+          p.id,
+          { kind: 'url', url: 'https://e/c.png' },
+          'u',
+        ).id;
         const updated = updatePublication(ndb, p.id, { cover_attachment_id: attId }, 'u');
         assert.equal(updated.cover_attachment_id, attId);
         assert.equal(updated.cover_kind, 'attachment');
@@ -182,6 +182,30 @@ describe(
           () => updatePublication(ndb, other.id, { cover_attachment_id: attId }, 'u'),
           (e) => codeOf(e) === 'VALIDATION_ERROR',
         );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('обложка принимает вложение после добавления владения публикации (0.12.1)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const p = createPublication(ndb, { title: 'X' }, 'u');
+        const other = createPublication(ndb, { title: 'Y' }, 'u');
+        const attId = createAttachment(
+          ndb,
+          'publication',
+          other.id,
+          { kind: 'url', url: 'https://e/c.png' },
+          'u',
+        ).id;
+        // Вложение другой публикации: текущая становится владельцем (addOwners),
+        // после чего валидация по ЖИВОМУ ВЛАДЕНИЮ (0.12.1, задача 08869cfc)
+        // пропускает обложку.
+        addOwners(ndb, attId, 'publication', [p.id], 'u');
+        const updated = updatePublication(ndb, p.id, { cover_attachment_id: attId }, 'u');
+        assert.equal(updated.cover_attachment_id, attId);
+        assert.equal(updated.cover_kind, 'attachment');
       } finally {
         ndb.close();
       }

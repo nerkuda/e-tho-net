@@ -1,28 +1,50 @@
 /**
- * Сторож единой шапки дневниковой записи (0.10.2, ошибка 36c330a3; 0.10.3,
- * ошибка 47c2bf05).
+ * Сторож единой шапки дневниковой записи и ЕДИНОЙ правки карточки (0.12.1, ТП
+ * «Дневник без псевдослота»; ранее ошибки 36c330a3, 47c2bf05).
  *
- * Шапку — строку полей (дата/период, привязки, «+ мысль», завершающий элемент) и
- * строку заголовка — карточка существующей записи и слот создания ОБЯЗАНЫ
- * собирать одним конструктором `screens/chronicle/record-head.ts`
- * (`buildRecordHead`). Раньше их собирали независимо, и компоновка расходилась:
- * в слоте заголовок попадал в строку 1 рядом с периодом, а «+ мысль» уезжала на
- * строку 2 (ошибка 47c2bf05). Заголовок обоих состояний — один компонент
- * `record-title.ts` (`createRecordTitle`, ошибка 36c330a3).
+ * Шапка карточки (дата/период, привязки, «+ мысль», меню записи; строка
+ * заголовка) собирается единым конструктором `record-head.ts`
+ * (`buildRecordHead`), заголовок — одним компонентом `record-title.ts`
+ * (`createRecordTitle`, ровно один вызов внутри конструктора шапки).
  *
- * Проверка раскладки — В ИСПОЛНЕНИИ, а не разбором текста: сторож монтирует
- * шапку на DOM-шиме и сверяет структуру (две строки; порядок и состав строки
- * полей; заголовок — ИМЕННО `title.node()`, а не локальная сборка). Плюс
- * структурная «привязка» экрана: и карточка, и `startSlot` зовут
- * `buildRecordHead`, а `createRecordTitle` вызывается ровно один раз.
+ * Режим правки принадлежит КАРТОЧКЕ: вход в правку заголовка или тела открывает
+ * оба поля (`editGroup` + `onBeginEdit`), уход фокуса правку не закрывает
+ * (`commitOnBlur: false`), Enter зовёт хозяина (`onEnter`), Escape — откат обоих
+ * (`onEscape`). Псевдозапись/слот отсутствует.
+ *
+ * Проверка раскладки — В ИСПОЛНЕНИИ на DOM-шиме; контракт компонента заголовка —
+ * тоже исполнением (Enter/Escape/blur/setContent).
  */
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура правки идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
+
+/** Нажатие через диспетчер (контекст правки уже на стеке после beginEdit). */
+function pressViaKeymap(
+  node: ShimElement,
+  key: string,
+  mods: Record<string, boolean> = {},
+): void {
+  keymap.dispatchKeyEvent({
+    key,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    metaKey: false,
+    ...mods,
+    target: node,
+    preventDefault: () => undefined,
+    stopPropagation: () => undefined,
+  } as unknown as KeyboardEvent);
+}
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 
@@ -33,16 +55,6 @@ function read(...parts: string[]): string {
 const CHRONICLE = read('screens', 'chronicle', 'chronicle.ts');
 const RECORD_TITLE = read('screens', 'chronicle', 'record-title.ts');
 const RECORD_HEAD = read('screens', 'chronicle', 'record-head.ts');
-
-/** Тело функции верхнего уровня по объявлению (стиль файла: `}` в колонке 0). */
-function functionBody(src: string, signature: string): string {
-  const start = src.indexOf(signature);
-  assert.ok(start >= 0, `исходник содержит «${signature}»`);
-  const body = src.slice(start);
-  const end = body.indexOf('\n}\n');
-  assert.ok(end >= 0, `у «${signature}» найдено тело`);
-  return body.slice(0, end);
-}
 
 /** Минимальный DOM-шим для исполнения компонента и шапки записи. */
 function installShim(): void {
@@ -69,33 +81,27 @@ function installShim(): void {
   win['removeEventListener'] = () => undefined;
 }
 
-interface HeadModule {
-  buildRecordHead(hooks: {
-    dayLabel: string;
-    onDateClick?: () => void;
-    dateTitle?: string;
-    chips: ShimElement;
-    onAddThought: () => void;
-    trailing: ShimElement;
-    title: {
-      value: string;
-      label: string;
-      editHint: string;
-      placeholder: string;
-      onCommit?: (value: string) => string;
-      onCancel?: () => void;
-    };
-  }): {
-    root: ShimElement;
-    row: ShimElement;
-    title: { node(): ShimElement; isEditing(): boolean; beginEdit(): void };
-  };
+interface TitleHandle {
+  node(): ShimElement;
+  value(): string;
+  isEditing(): boolean;
+  beginEdit(focus?: boolean): void;
+  endEdit(commit: boolean, refocus: boolean): void;
+  setContent(value: string, label?: string): void;
 }
 
-describe('сторож: единая шапка записи «Дневника» (ошибки 36c330a3, 47c2bf05)', () => {
-  it('карточка и слот собирают шапку одним `buildRecordHead`, заголовок — одним `createRecordTitle`', () => {
+async function makeTitle(opts: Record<string, unknown>): Promise<TitleHandle> {
+  installShim();
+  const { createRecordTitle } = await import(
+    '../src/renderer/screens/chronicle/record-title.js'
+  );
+  return createRecordTitle(opts as never) as unknown as TitleHandle;
+}
+
+describe('сторож: единая шапка и единая правка записи «Дневника» (0.12.1)', () => {
+  it('карточка собирает шапку одним `buildRecordHead`, заголовок — одним `createRecordTitle`', () => {
     const headCalls = (CHRONICLE.match(/buildRecordHead\(/g) ?? []).length;
-    assert.equal(headCalls, 2, 'карточка и слот — две проводки единого конструктора шапки');
+    assert.equal(headCalls, 1, 'единственная проводка конструктора шапки (карточка)');
     const titleCalls =
       (CHRONICLE.match(/createRecordTitle\(/g) ?? []).length +
       (RECORD_HEAD.match(/createRecordTitle\(/g) ?? []).length;
@@ -104,35 +110,29 @@ describe('сторож: единая шапка записи «Дневника�
       1,
       'заголовок-компонент создаётся ровно один раз — внутри конструктора шапки',
     );
+    assert.match(CHRONICLE, /buildRecordHead\(/, 'карточка зовёт конструктор шапки');
     assert.match(
       CHRONICLE,
-      /recordTitles\.set\(card, head\.title\)/,
-      'карточка берёт дескриптор заголовка из шапки',
+      /createMarkdownField\(\{/,
+      'тело записи использует общий markdown-компонент',
     );
-    const slot = functionBody(
-      CHRONICLE,
-      'function startSlot(day?: string, presetThoughtIds: string[] = []): void {',
-    );
-    assert.match(slot, /buildRecordHead\(/, 'слот собирает шапку тем же конструктором');
-    assert.match(CHRONICLE, /title: RecordTitleHandle;/, 'слот хранит дескриптор компонента');
-    assert.match(CHRONICLE, /state\.title\.beginEdit\(\)/, 'слот открывает заголовок в правке');
-    assert.match(
-      CHRONICLE,
-      /void ensureSlot\(\{ title: next \}\)/,
-      'завершение правки заголовка сохраняет черновик через `ensureSlot`',
-    );
+    assert.ok(!/startSlot|ensureSlot|SlotState/.test(CHRONICLE), 'псевдозапись демонтирована');
   });
 
-  it('раскладка: строка полей (дата, привязки, «+ мысль», завершение), затем заголовок — в исполнении', async () => {
+  it('раскладка: строка полей (дата, привязки, «+ мысль», завершение), затем заголовок', async () => {
     installShim();
-    const mod = (await import(
+    const { buildRecordHead } = await import(
       '../src/renderer/screens/chronicle/record-head.js'
-    )) as unknown as HeadModule;
+    );
     const chips = new ShimElement('div');
     const trailing = new ShimElement('button');
     const added: number[] = [];
-    let commits = 0;
-    const { root, row, title } = mod.buildRecordHead({
+    interface Head {
+      root: ShimElement;
+      row: ShimElement;
+      title: { node(): ShimElement };
+    }
+    const { root, row, title } = buildRecordHead({
       dayLabel: '1 сентября 2026',
       chips,
       onAddThought: () => added.push(1),
@@ -142,143 +142,89 @@ describe('сторож: единая шапка записи «Дневника�
         label: 'Пустая запись',
         editHint: 'Правка',
         placeholder: 'Заголовок',
-        onCommit: (value) => {
-          commits++;
-          return value.trim() || 'Пустая запись';
-        },
       },
-    });
+    } as never) as unknown as Head;
 
-    // Две строки: строка полей и строка заголовка.
     assert.equal(root.children.length, 2, 'шапка — две строки: поля и заголовок');
     assert.ok(root.children[0] === row, 'первая строка — строка полей');
-    assert.ok(
-      row.classList.contains('diary-record-head-row'),
-      'строка полей носит свой класс',
-    );
-    const titleNode = root.children[1]!;
-    assert.ok(titleNode === title.node(), 'вторая строка — узел компонента-заголовка (идентичность)');
-    assert.ok(!row.contains(title.node()), 'заголовок НЕ находится в строке полей');
-
-    // Строка полей: дата, привязки, «+ мысль», завершающий элемент.
+    assert.ok(root.children[1] === title.node(), 'вторая строка — узел заголовка');
     assert.equal(row.children.length, 4, 'в строке полей четыре элемента');
     assert.ok(row.children[0]!.classList.contains('diary-record-date'), 'первый — дата/период');
     assert.ok(row.children[1] === chips, 'второй — контейнер привязок');
-    assert.ok(row.children[2]!.classList.contains('diary-chip-add'), 'третий — кнопка «+ мысль»');
-    assert.ok(row.children[3] === trailing, 'четвёртый — завершающий элемент (меню/«✕»)');
+    assert.ok(row.children[2]!.classList.contains('diary-chip-add'), 'третий — «+ мысль»');
+    assert.ok(row.children[3] === trailing, 'четвёртый — завершающий элемент');
 
-    // Клик по «+ мысль» дёргает доменное действие.
     row.children[2]!.click();
     assert.equal(added.length, 1, '«+ мысль» вызывает `onAddThought`');
 
-    // Заголовок — кнопка компонента со стрелкой; вход в правку даёт его поле.
-    assert.ok(titleNode.classList.contains('diary-record-title'), 'класс заголовка компонента');
-    assert.equal(titleNode.tagName, 'button', 'в просмотре — кнопка-группа компонента');
-    assert.ok(
-      titleNode.firstChild !== null && titleNode.firstChild.tagName === 'svg',
-      'у группы есть индикатор-стрелка компонента',
-    );
-    title.beginEdit();
-    assert.ok(root.children[1] === title.node(), 'в правке на той же строке — поле компонента');
-    assert.equal(title.node().tagName, 'input', 'правка — поле ввода');
-    title.node().value = 'Заголовок';
-    title.node().emit('keydown', {
-      key: 'Enter',
-      preventDefault: () => undefined,
-      stopPropagation: () => undefined,
-    });
-    assert.equal(commits, 1, 'Enter завершает правку и коммитит значение');
-    assert.equal(root.children[1]!.tagName, 'button', 'вернулась кнопка-группа');
+    assert.equal(title.node().tagName, 'button', 'в просмотре — кнопка-группа');
+    const arrow = title.node().firstChild as ShimElement | null;
+    assert.ok(arrow !== null && arrow.tagName === 'svg', 'у группы есть индикатор-стрелка');
   });
 
-  it('`startSlot` не собирает поле ввода локально (запрет сужен до его тела)', () => {
-    const slot = functionBody(
-      CHRONICLE,
-      'function startSlot(day?: string, presetThoughtIds: string[] = []): void {',
-    );
-    assert.match(slot, /buildRecordHead\(/, 'шапка слота собирается конструктором');
-    assert.ok(!/fieldInput\(/.test(slot), 'в теле startSlot нет `fieldInput(`');
-    assert.ok(!/el\(\s*['"]input['"]/.test(slot), 'в теле startSlot нет самодельного `el(\'input\')`');
-    assert.ok(!/createElement/.test(slot), 'в теле startSlot нет `createElement`');
-    assert.ok(
-      !/['"]diary['"]\s*\+\s*['"]-record-title['"]/.test(CHRONICLE),
-      'класс заголовка не собирается склейкой строк в экране',
-    );
-    assert.ok(!/RECORD_TITLE_INPUT_CLASS/.test(CHRONICLE), 'класс поля правки — только в компоненте');
-  });
-
-  it('контракт правки компонента проверяется ИСПОЛНЕНИЕМ: Enter/Escape/blur', async () => {
-    installShim();
-    const { createRecordTitle } = await import(
-      '../src/renderer/screens/chronicle/record-title.js'
-    );
-    type El = ShimElement;
-    interface H {
-      node(): El;
-      isEditing(): boolean;
-      beginEdit(): void;
-    }
-    const make = (onCommit: (v: string) => string, onCancel?: () => void): H =>
-      createRecordTitle({
-        value: 'A',
-        label: 'A',
-        editHint: 'e',
-        placeholder: 'p',
-        onCommit,
-        ...(onCancel !== undefined ? { onCancel } : {}),
-      }) as unknown as H;
-
-    const entered: string[] = [];
-    const byEnter = make((v) => {
-      entered.push(v);
-      return v;
+  it('единая правка: Enter зовёт хозяина (без завершения), Escape — откат, blur не завершает', async () => {
+    const entered: KeyboardEvent[] = [];
+    const escapes: number[] = [];
+    const commits: string[] = [];
+    const handle = await makeTitle({
+      value: 'Старый',
+      label: 'Старый',
+      editHint: 'Правка',
+      placeholder: 'Заголовок',
+      commitOnBlur: false,
+      onEnter: (event: KeyboardEvent) => entered.push(event),
+      onEscape: () => escapes.push(1),
+      onCommit: (next: string) => {
+        commits.push(next);
+        return next;
+      },
     });
     const host = new ShimElement('div');
-    host.append(byEnter.node());
-    byEnter.beginEdit();
-    assert.equal(byEnter.node().tagName, 'input', 'правка открыта');
-    byEnter.node().value = 'B';
-    byEnter.node().emit('keydown', {
-      key: 'Enter',
-      preventDefault: () => undefined,
-      stopPropagation: () => undefined,
-    });
-    assert.equal(byEnter.isEditing(), false, 'Enter завершил правку');
-    assert.equal(byEnter.node().tagName, 'button', 'вернулась кнопка-группа, а не «ничего»');
-    assert.deepEqual(entered, ['B'], 'значение закоммичено');
+    host.append(handle.node());
 
-    const cancelled = { n: 0 };
-    const commits: string[] = [];
-    const byEscape = make(
-      (v) => {
-        commits.push(v);
-        return v;
-      },
-      () => {
-        cancelled.n++;
-      },
+    handle.beginEdit(true);
+    const field = handle.node();
+    assert.equal(field.tagName, 'input', 'правка открыта');
+
+    pressViaKeymap(field, 'Enter');
+    assert.equal(entered.length, 1, 'обычный Enter зовёт хозяина');
+    assert.equal(handle.isEditing(), true, 'правка НЕ завершается (единая модель)');
+
+    pressViaKeymap(field, 'Enter', { ctrlKey: true });
+    assert.equal(entered.length, 2, 'Ctrl+Enter тоже уходит хозяину (он решает записать)');
+
+    field.value = 'Изменённый';
+    field.emit('blur');
+    assert.equal(handle.isEditing(), true, 'blur при `commitOnBlur: false` правку не закрывает');
+    assert.deepEqual(commits, [], 'blur ничего не коммитит');
+
+    pressViaKeymap(field, 'Escape');
+    assert.equal(escapes.length, 1, 'Escape зовёт хозяина (откат обоих полей)');
+  });
+
+  it('`setContent` задаёт показанное значение и надпись просмотра', async () => {
+    const handle = await makeTitle({
+      value: '',
+      label: 'Пустая запись',
+      editHint: 'Правка',
+      placeholder: 'Заголовок',
+    });
+    handle.setContent('Встреча', 'Встреча');
+    assert.equal(handle.value(), 'Встреча');
+    assert.equal(
+      handle.node().children[handle.node().children.length - 1]?.textContent,
+      'Встреча',
+      'надпись просмотра обновилась',
     );
-    byEscape.beginEdit();
-    byEscape.node().value = 'C';
-    byEscape.node().emit('keydown', {
-      key: 'Escape',
-      preventDefault: () => undefined,
-      stopPropagation: () => undefined,
-    });
-    assert.equal(byEscape.isEditing(), false, 'Escape завершил правку');
-    assert.deepEqual(commits, [], 'Escape не коммитит');
-    assert.equal(cancelled.n, 1, 'отмена замечена');
+  });
 
-    const blurred: string[] = [];
-    const byBlur = make((v) => {
-      blurred.push(v);
-      return v;
-    });
-    byBlur.beginEdit();
-    byBlur.node().value = 'D';
-    byBlur.node().emit('blur');
-    assert.equal(byBlur.isEditing(), false, 'blur завершил правку');
-    assert.deepEqual(blurred, ['D'], 'blur сохранил значение');
+  it('карточка объявляет единую модель правки: editGroup, commitOnBlur, onEnter/onEscape', () => {
+    assert.match(CHRONICLE, /editGroup: \(\) => card/, 'группа правки — карточка');
+    assert.match(CHRONICLE, /commitOnBlur: false/, 'blur правку не закрывает');
+    assert.match(CHRONICLE, /onBeginEdit: \(\) => void enterBodyEdit\('title'\)/, 'вход в тело из заголовка');
+    assert.match(CHRONICLE, /onEnter: \(event\) =>/, 'Enter заголовка — хозяину');
+    assert.match(CHRONICLE, /onEscape: \(\) => cancelEdit\(\)/, 'Escape — откат обоих полей');
+    assert.match(CHRONICLE, /title: \{[\s\S]*?value: row\.title \?\? ''/, 'заголовок — поле ввода');
   });
 
   it('компонент строит и просмотр-группу, и поле правки из фасадов `lib/ui`', () => {

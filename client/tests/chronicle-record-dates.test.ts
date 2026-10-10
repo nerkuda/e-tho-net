@@ -134,12 +134,12 @@ describe('«Дневник»: запись дат идёт через resolvePer
     );
   });
 
-  it('создание псевдо-записи и копия тоже переводят даты', () => {
+  it('создание новой записи и копия тоже переводят даты', () => {
     const src = source();
     assert.match(
       src,
-      /resolvePeriodInstants\(\s*\{\s*from:\s*state\.from,\s*to:\s*state\.from\s*\}/,
-      'создание псевдо-записи — через помощник',
+      /resolvePeriodInstants\(\s*\{\s*from:\s*targetDay,\s*to:\s*targetDay\s*\}/,
+      'создание новой записи — через помощник',
     );
     assert.match(
       src,

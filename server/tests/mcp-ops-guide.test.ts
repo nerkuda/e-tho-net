@@ -320,7 +320,12 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.ok(found.length >= 1);
         assert.equal(
           (
-            await callOp(c, 'attachments.delete', { network_id: net, attachment_id: att.id }, true)
+            await callOp(
+              c,
+              'attachments.removeOwner',
+              { network_id: net, attachment_id: att.id, owner_type: 'thought', owner_id: thought.id },
+              true,
+            )
           ).isError,
           undefined,
         );

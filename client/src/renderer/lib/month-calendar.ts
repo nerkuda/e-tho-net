@@ -35,6 +35,8 @@
 
 import { div, el, span } from './dom.js';
 import { buildMonthWeeks, firstOfMonth, todayLocal, type CalendarWeek } from './dates.js';
+import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { modifierChordVariants } from './keymap-chords.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 import { openPopover, type PopoverHandle } from './ui/popover.js';
@@ -154,6 +156,9 @@ function minDay(a: string, b: string): string {
 function maxDay(a: string, b: string): string {
   return a >= b ? a : b;
 }
+
+/** Счётчик календарей: у каждого свой контекст сочетаний (замыкание года). */
+let yearInputContextSeq = 0;
 
 /** Строит календарь месяца. */
 export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHandle {
@@ -370,17 +375,46 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
 
   yearInput.addEventListener('change', commitYear);
   yearInput.addEventListener('blur', commitYear);
-  yearInput.addEventListener('keydown', (event) => {
+  // Клавиатура поля года — через общеклиентский диспетчер (ADR b420b08c,
+  // задача fd3d84f4). Escape гасит регистрируемый ниже capture-слушатель `window`
+  // раньше диспетчера (он должен обогнать capture-Escape каркаса диалога), так
+  // что Escape-ветка здесь — страховка для календаря вне диалога.
+  const yearContextId = `month-calendar-year-${(yearInputContextSeq += 1)}`;
+  const handleYearKey = (event: KeyboardEvent): boolean => {
     if (event.key === 'Enter') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
       commitYear();
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      cancelYear();
+      return true;
     }
+    if (event.key === 'Escape') {
+      cancelYear();
+      return true;
+    }
+    return false;
+  };
+  defineKeyContext({
+    id: yearContextId,
+    bindings: [
+      // Прежний обработчик применял год на `event.key === 'Enter'` НЕЗАВИСИМО
+      // от модификаторов — нажатие выражено привязкой на каждое подмножество
+      // (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'calendar.year.commit',
+        chord,
+        run: handleYearKey,
+      })),
+      { command: 'calendar.year.cancel', chord: 'Escape', run: handleYearKey },
+    ],
   });
+  let releaseYearContext: (() => void) | null = null;
+  const onYearFocusIn = (): void => {
+    releaseYearContext ??= pushKeyContext(yearContextId);
+  };
+  const onYearFocusOut = (): void => {
+    releaseYearContext?.();
+    releaseYearContext = null;
+  };
+  yearInput.addEventListener('focusin', onYearFocusIn as EventListener);
+  yearInput.addEventListener('focusout', onYearFocusOut as EventListener);
 
   // Esc в поле года должен отменить правку года, а НЕ закрыть модальный диалог
   // (`showDialog` слушает Escape на `window` в capture-фазе). Capture-слушатель

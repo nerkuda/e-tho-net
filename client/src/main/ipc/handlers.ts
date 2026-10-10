@@ -21,7 +21,8 @@ import { CLIENT_META_KEY, type CurrentUser, type FocusDir, type LinkTypeFilterIn
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
-import type { AppInfo, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
+import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
+import { readClipboard } from './clipboard.js';
 import { classifyOpenTarget } from './open-target.js';
 import { printHtmlToPdf, type PdfPrintWindow } from '../print-pdf.js';
 import { errText } from '../../renderer/lib/dom.js';
@@ -1553,6 +1554,26 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'attachments.addOwners',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        input: Parameters<RestClient['addAttachmentOwners']>[2],
+      ) => requireRest(deps).addAttachmentOwners(networkId, id, input),
+    ),
+  );
+  handlers.set(
+    'attachments.removeOwner',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        input: Parameters<RestClient['removeAttachmentOwner']>[2],
+      ) => requireRest(deps).removeAttachmentOwner(networkId, id, input),
+    ),
+  );
+  handlers.set(
     'attachments.search',
     bind((networkId: string, query: Parameters<RestClient['searchAttachments']>[1]) =>
       requireRest(deps).searchAttachments(networkId, query),
@@ -1648,6 +1669,14 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'me.removeKey',
     bind((id: string) => requireRest(deps).deleteMyKey(id)),
+  );
+  handlers.set(
+    'me.getSettings',
+    bind(() => requireRest(deps).getMySettings()),
+  );
+  handlers.set(
+    'me.setSetting',
+    bind((key: string, value: unknown) => requireRest(deps).setMySetting(key, value)),
   );
 
   // --- object locks (task 4f141756, docs/03-server-api.md §13c) --------------
@@ -1851,6 +1880,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set('system.pickImage', bind(() => pickImageFile()));
   handlers.set('system.pickFile', bind(() => pickAnyFile()));
+  handlers.set('system.readClipboard', bind(() => readSystemClipboard()));
   handlers.set('system.openPath', bind((filePath: string) => openPathShell(filePath)));
   handlers.set(
     'system.openAttachment',
@@ -2147,6 +2177,20 @@ const IMAGE_MIME: Record<string, string> = {
 };
 
 /**
+ * Reads the OS clipboard for the icon dialog (задача 78eaf07a): text and/or an
+ * image (`data:` PNG URL). Electron is imported lazily so this module stays
+ * loadable in the Node test runner; a missing runtime (Node) or an OS failure
+ * resolves the empty result via {@link readClipboard}.
+ */
+async function readSystemClipboard(): Promise<ClipboardReadResult> {
+  const { clipboard } = (await import('electron')) as unknown as {
+    clipboard?: import('./clipboard.js').ClipboardReader;
+  };
+  if (clipboard === undefined) return { text: null, imagePngDataUrl: null };
+  return readClipboard(clipboard);
+}
+
+/**
  * Opens the OS file picker for an image and returns the ORIGINAL file as a
  * `data:` URL with its name/mime/size (08-ui-spec.md §6.8, workplan L16). The
  * icon-sized preview is the renderer's job — files up to the attachment limit
@@ -2388,6 +2432,8 @@ const SELF_MUTATING_IPC_METHODS: ReadonlySet<string> = new Set([
   'attachments.uploadFile',
   'attachments.updateContent',
   'attachments.copy',
+  'attachments.addOwners',
+  'attachments.removeOwner',
   'trash.purge',
   'system.importEtnx',
 ]);

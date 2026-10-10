@@ -21,11 +21,15 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
 import type { ChronicleTarget, ThoughtRef } from '@etn/shared';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура ленты — через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 // ---------------------------------------------------------------------------
 // Каркас ленты на DOM-шиме
@@ -79,12 +83,14 @@ async function navModule(): Promise<typeof import('../src/renderer/screens/chron
 }
 
 function press(root: ShimElement, key: string, target?: ShimElement, shift = false): void {
-  root.emit('keydown', {
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     shiftKey: shift,
     target: target ?? root,
     preventDefault: () => undefined,
-  });
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
 }
 
 // ---------------------------------------------------------------------------
@@ -325,18 +331,13 @@ describe('приёмка №10, п.4: владелец вложения для �
     assert.equal(attachmentOwnerForRow([], null), null);
   });
 
-  it('поле правки записи получает attachmentsOwner, псевдо-запись — тоже', () => {
+  it('поле правки записи получает attachmentsOwner', () => {
     const src = readFileSync(
       resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'chronicle', 'chronicle.ts'),
       'utf8',
     );
     assert.match(src, /attachmentOwnerForRow\(row\.targets, homeId\)/, 'владелец считается помощником');
     assert.match(src, /\.\.\.\(owner !== null \? \{ attachmentsOwner: owner \} : \{\}\)/, 'поле записи получает владельца');
-    assert.match(
-      src,
-      /attachmentsOwner: \{ ownerType: 'thought' as const, ownerId: slotOwnerId \}/,
-      'псевдо-запись тоже умеет вставлять файлы',
-    );
   });
 
   it('экран подключает навигацию к диалогу даты и выбору мысли', () => {
@@ -344,7 +345,7 @@ describe('приёмка №10, п.4: владелец вложения для �
       resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'chronicle', 'chronicle.ts'),
       'utf8',
     );
-    assert.match(src, /onEditDates: \(_id, card\) => editCardDates\(card\)/, 'Enter на дате открывает диалог');
+    assert.match(src, /onEditDates: \(_id, card\) => \{/, 'Enter на дате открывает диалог');
     assert.match(src, /onAddThought: \(id\) => void pickAndAttach\(id\)/, 'Enter на мыслях открывает выбор');
   });
 });

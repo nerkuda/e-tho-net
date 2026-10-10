@@ -48,7 +48,7 @@ import type { LinkPropertySide, LinkStyle, LinkType, NetworkProperty, PropertyVa
 import { t } from './i18n.js';
 
 import { div, setTooltip, span } from './dom.js';
-import { svgIcon, type IconName } from './icons.js';
+import { svgIcon, type IconName } from './ui/icon.js';
 import { menuAction, type MenuItem } from './menu.js';
 import { resolveLinkTypeVisual, type ResolvedLinkVisual } from './type-tree.js';
 import { etn } from './etn.js';
@@ -391,7 +391,7 @@ export function buildLinkEndIcon(spec: LinkEndIconSpec): SVGSVGElement {
 }
 
 /** Иконка вида значения для скаляра (требование 4): переиспользует единый
- *  набор штриховых иконок клиента (`lib/icons.ts`). Для `link` иконки нет —
+ *  набор штриховых иконок клиента (`lib/ui/icon.ts`). Для `link` иконки нет —
  *  у конца связи рисуется линия со стрелкой. Карта, а не `switch` по виду
  *  значения: диспетчер по `value_type` разрешён только общему редактору
  *  значения (`editor/value-editor.ts`, стандарт S2). Чистая — юнит-тест. */

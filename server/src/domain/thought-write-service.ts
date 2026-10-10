@@ -43,9 +43,9 @@ import type {
   PropertyValue,
   PropertyValueValue,
   ThoughtBundleInput,
-  ThoughtCardWarning,
+  MutationWarning,
 } from '@etn/shared';
-import { EtnError, MCP_MAX_THOUGHTS_PER_WRITE } from '@etn/shared';
+import { EtnError, MCP_MAX_THOUGHTS_PER_WRITE, isTransclusionLostWarning } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
@@ -72,9 +72,11 @@ export type ThoughtWriteItemResult = McpThoughtWriteItemResult;
 /** Whole-batch result. */
 export interface ThoughtWriteResult {
   items: ThoughtWriteItemResult[];
-  /** Aggregated card-completeness warnings across the batch (one per item,
-   *  with `ref`/`thought_id` so the caller can locate the offender). */
-  warnings: ThoughtCardWarning[];
+  /** Aggregated non-fatal warnings across the batch (one per item, with
+   *  `ref`/`thought_id` so the caller can locate the offender). Card-completeness
+   *  warnings are recomputed against the final card; transclusion-loss warnings
+   *  (требование 822a9149) are preserved as-is. */
+  warnings: MutationWarning[];
   /** Total link count actually written (created). */
   link_count: number;
   /** Total thought count actually affected (created + updated). */
@@ -448,7 +450,7 @@ export function writeThoughts(
   return ndb.transaction(() => {
     const items: ThoughtWriteItemResult[] = [];
     let linkCount = 0;
-    const warnings: ThoughtCardWarning[] = [];
+    const warnings: MutationWarning[] = [];
     /** Spec links per item, indexed by batch position. Filled during phase 2
      *  and consumed by phase 3 — needs to be in a closure-scoped array so
      *  the link-writing pass can walk it AFTER phase 2 has populated refToId. */
@@ -635,6 +637,7 @@ export function writeThoughts(
             ? [targetId, pending.itemThoughtId]
             : [pending.itemThoughtId, targetId];
 
+        const linkWarnings: MutationWarning[] = [];
         const lr = createLink(
           ndb,
           {
@@ -645,7 +648,12 @@ export function writeThoughts(
             ...(linkSpec.comment !== undefined ? { comment: linkSpec.comment } : {}),
           },
           actorUserId,
+          // Комментарий ребра — markdown-поле: восстановление ребра из корзины
+          // с новым комментарием может потерять трансклюзии (требование
+          // 822a9149). Предупреждение уходит в warnings элемента и батча.
+          { warnings: linkWarnings },
         );
+        if (linkWarnings.length > 0) itemResult.warnings.push(...linkWarnings);
 
         // Read back inline knowledge attached to the link so the caller sees
         // the full picture (same trick as upsertThoughtBundle).
@@ -697,7 +705,11 @@ export function writeThoughts(
     ) {
       warnings.length = 0;
       for (const [index, it] of items.entries()) {
-        const fresh = computeThoughtCardWarnings(ndb, it.id);
+        // Свежие карточные предупреждения + сохранённые предупреждения о
+        // потере трансклюзий (требование 822a9149): пересчёт карточки не должен
+        // стирать предупреждение о текстовой записи.
+        const textLost = it.warnings.filter(isTransclusionLostWarning);
+        const fresh: MutationWarning[] = [...computeThoughtCardWarnings(ndb, it.id), ...textLost];
         it.warnings = fresh;
         const source = resolved.thoughts[index]!;
         warnings.push(

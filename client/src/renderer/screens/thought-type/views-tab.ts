@@ -34,6 +34,8 @@ import { div, el } from '../../lib/dom.js';
 import { errorLine as panelErrorLine, operationError } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import { isInBaseLayer } from '../../lib/layer-base.js';
+import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
+import { modifierChordVariants } from '../../lib/keymap-chords.js';
 import { notice } from '../../lib/notice.js';
 import { asRealtimeCause, onQueryInvalidated } from '../../lib/live/index.js';
 
@@ -77,6 +79,9 @@ export interface ViewsTab {
   /** Снимает подписку realtime — вызывается на закрытии диалога. */
   dispose: () => void;
 }
+
+/** Счётчик вкладок отборов: уникальный id контекста клавиатуры. */
+let viewsTabNavSeq = 0;
 
 /**
  * Builds the «Отборы» tab content for the thought-type editor.
@@ -132,27 +137,56 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
 
   // Навигация клавишами: стрелки — по строкам, Enter — открыть отбор.
   tableWrap.tabIndex = 0;
-  tableWrap.addEventListener('keydown', (event) => {
+  // Клавиатура грид-таблицы — через общеклиентский диспетчер: пока фокус внутри
+  // таблицы, её контекст на вершине стека (ADR b420b08c, задача fd3d84f4).
+  const contextId = `views-tab-nav-${(viewsTabNavSeq += 1)}`;
+  const handleNavKey = (event: KeyboardEvent): boolean => {
     const rows = Array.from(tableWrap.querySelectorAll<HTMLTableRowElement>('.views-tab-table tbody tr'));
-    if (rows.length === 0) return;
+    if (rows.length === 0) return false;
     if (event.key === 'ArrowDown') {
-      event.preventDefault();
       selectedIdx = selectedIdx < 0 ? 0 : Math.min(rows.length - 1, selectedIdx + 1);
       applySelection();
       rows[selectedIdx]?.scrollIntoView({ block: 'nearest' });
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
+      return true;
+    }
+    if (event.key === 'ArrowUp') {
       selectedIdx = selectedIdx < 0 ? 0 : Math.max(0, selectedIdx - 1);
       applySelection();
       rows[selectedIdx]?.scrollIntoView({ block: 'nearest' });
-    } else if (event.key === 'Enter') {
-      const v = selectedView();
-      if (v !== null) {
-        event.preventDefault();
-        void onEdit(v);
-      }
+      return true;
     }
+    if (event.key === 'Enter') {
+      const v = selectedView();
+      if (v === null) return false;
+      void onEdit(v);
+      return true;
+    }
+    return false;
+  };
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'viewsTab.down', chord: 'ArrowDown', run: handleNavKey },
+      { command: 'viewsTab.up', chord: 'ArrowUp', run: handleNavKey },
+      // Прежний обработчик открывал отбор на Enter НЕЗАВИСИМО от модификаторов —
+      // набор выражен привязками (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'viewsTab.open',
+        chord,
+        run: handleNavKey,
+      })),
+    ],
   });
+  let releaseContext: (() => void) | null = null;
+  const onFocusIn = (): void => {
+    releaseContext ??= pushKeyContext(contextId);
+  };
+  const onFocusOut = (): void => {
+    releaseContext?.();
+    releaseContext = null;
+  };
+  tableWrap.addEventListener('focusin', onFocusIn as EventListener);
+  tableWrap.addEventListener('focusout', onFocusOut as EventListener);
 
   /** View ids, чьи PATCH прямо сейчас в полёте — realtime-обработчик
    *  пропускает `load()` для них, чтобы оптимистичный reorder или

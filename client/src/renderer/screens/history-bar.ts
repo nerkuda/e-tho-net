@@ -39,7 +39,7 @@ import { setFocus } from '../app.js';
 import { button, div, clear, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
 import { store } from '../state.js';

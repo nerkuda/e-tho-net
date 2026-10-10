@@ -20,6 +20,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import path from 'node:path';
 import { z } from 'zod';
 
 import { BASE_LAYER_ID, EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, validateTypeRoles } from '@etn/shared';
@@ -35,7 +36,7 @@ import {
   ActivityTruncate,
   AttachmentsAdd,
   AttachmentsCopy,
-  AttachmentsDelete,
+  AttachmentsRemoveOwner,
   AttachmentsSearch,
   AttachmentsUpdate,
   AttachmentsUsage,
@@ -85,11 +86,11 @@ import {
   releaseLock,
 } from '../../domain/lock-service.js';
 import {
+  AttachmentFileCopier,
   copyAttachment,
-  createAttachmentFromInput,
-  deleteAttachment,
-  getAttachment,
+  createAttachmentFromInputResult,
   listAttachmentUsage,
+  removeOwner,
   searchAttachments,
   updateAttachment,
 } from '../../domain/attachment-service.js';
@@ -293,7 +294,7 @@ const HANDLERS: Record<string, OpHandler> = {
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
       const attachment = runWrite(ndb, fx, () => {
-        const created = createAttachmentFromInput(
+        const { attachment: created, reused, ownership_added } = createAttachmentFromInputResult(
           ndb,
           a.owner_type,
           a.owner_id,
@@ -325,7 +326,24 @@ const HANDLERS: Record<string, OpHandler> = {
         }
         return {
           result: created,
-          events: [{ type: 'attachment.created', data: { attachment: created } }],
+          // Дедуп-переиспользование: строки нет, добавлен владелец —
+          // `attachment.owner.added` вместо ложного `attachment.created`
+          // (0.12.1, задача f77382ba). Повтор тому же владельцу нового
+          // владения не даёт — событий нет.
+          events: reused
+            ? ownership_added
+              ? [
+                  {
+                    type: 'attachment.owner.added' as const,
+                    data: {
+                      attachment_id: created.id,
+                      owner_type: a.owner_type,
+                      owner_id: a.owner_id,
+                    },
+                  },
+                ]
+              : []
+            : [{ type: 'attachment.created', data: { attachment: created } }],
           activity: [{ kind: 'attachment', action: 'created', attachment: created }],
           audit: {
             action: 'etn.attachments.add',
@@ -345,7 +363,7 @@ const HANDLERS: Record<string, OpHandler> = {
       requireWriteBudget(rt);
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
-      const result = runWrite(ndb, fx, () => {
+      runWrite(ndb, fx, () => {
         const copied = copyAttachment(
           ndb,
           a.attachment_id,
@@ -354,15 +372,17 @@ const HANDLERS: Record<string, OpHandler> = {
         );
         return {
           result: copied,
-          events: copied.created.map((attachment) => ({
-            type: 'attachment.created' as const,
-            data: { attachment },
+          // Нет новых строк-копий (муль-владение): на каждое добавленное
+          // владение — `attachment.owner.added` (операция 45903e1d).
+          events: copied.added.map((ref) => ({
+            type: 'attachment.owner.added' as const,
+            data: {
+              attachment_id: a.attachment_id,
+              owner_type: ref.owner_type,
+              owner_id: ref.owner_id,
+            },
           })),
-          activity: copied.created.map((attachment) => ({
-            kind: 'attachment' as const,
-            action: 'created' as const,
-            attachment,
-          })),
+          activity: [],
           audit: {
             action: 'etn.attachments.copy',
             targetType: 'attachment',
@@ -371,11 +391,8 @@ const HANDLERS: Record<string, OpHandler> = {
           },
         };
       });
-      return result.created.map((att) => ({
-        id: att.id,
-        version: 0,
-        request_id: String(extra.requestId),
-      })) satisfies McpMutationResult[];
+      // Строки не создаются — результат пуст (владельцы не сущности мутации).
+      return [] satisfies McpMutationResult[];
     });
   },
   'attachments.search': (rt, p) => {
@@ -407,16 +424,15 @@ const HANDLERS: Record<string, OpHandler> = {
       requireWriteBudget(rt);
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
+      // 0.12.1 (задача 478f8c1f): только метаданные, владелец не меняется.
       const changes: {
         title?: string | null;
         description?: string | null;
-        url?: string | null;
-        file_path?: string | null;
+        icon?: string | null;
       } = {};
       if (a.title !== undefined) changes.title = a.title;
       if (a.description !== undefined) changes.description = a.description;
-      if (a.url !== undefined) changes.url = a.url;
-      if (a.file_path !== undefined) changes.file_path = a.file_path;
+      if (a.icon !== undefined) changes.icon = a.icon;
       const attachment = runWrite(ndb, fx, () => {
         const updated = updateAttachment(ndb, a.attachment_id, changes, rt.deps.auth.userId);
         return {
@@ -434,35 +450,42 @@ const HANDLERS: Record<string, OpHandler> = {
       return { id: attachment.id, version: 0, request_id: String(extra.requestId) } satisfies McpMutationResult;
     });
   },
-  'attachments.delete': (rt, p, extra) => {
-    const a = p as unknown as z.infer<typeof AttachmentsDelete.schema>;
+  'attachments.removeOwner': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof AttachmentsRemoveOwner.schema>;
     return runWriteTool(rt, a.network_id, () => {
       requireWritable(rt);
       requireWriteBudget(rt);
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
-      runWrite(ndb, fx, () => {
-        const existing = getAttachment(ndb, a.attachment_id);
-        deleteAttachment(ndb, a.attachment_id);
+      const removed = runWrite(ndb, fx, () => {
+        const result = removeOwner(ndb, a.attachment_id, a.owner_type, a.owner_id);
         return {
-          result: undefined,
-          events: [{ type: 'attachment.deleted', data: { id: a.attachment_id } }],
-          ...(existing === null
-            ? {}
-            : {
-                activity: [
-                  { kind: 'attachment' as const, action: 'deleted' as const, attachment: existing },
-                ],
-              }),
+          result,
+          // Снятие владения — `attachment.owner.removed` (операция 4924d61e);
+          // уход последнего владельца дополнительно удаляет вложение —
+          // `attachment.deleted` (0.12.1, задача f77382ba).
+          events: [
+            {
+              type: 'attachment.owner.removed' as const,
+              data: {
+                attachment_id: a.attachment_id,
+                owner_type: a.owner_type,
+                owner_id: a.owner_id,
+              },
+            },
+            ...(result.attachment_deleted
+              ? ([{ type: 'attachment.deleted' as const, data: { id: a.attachment_id } }] as const)
+              : []),
+          ],
           audit: {
-            action: 'etn.attachments.delete',
+            action: 'etn.attachments.removeOwner',
             targetType: 'attachment',
             targetId: a.attachment_id,
             details: a,
           },
         };
       });
-      return { deleted: true, request_id: String(extra.requestId) };
+      return { ...removed, request_id: String(extra.requestId) };
     });
   },
 
@@ -952,6 +975,19 @@ const HANDLERS: Record<string, OpHandler> = {
       const targetNdb = openMemberNetwork(rt, a.target_network_id);
       const fx = mcpWriteFx(rt, a.target_network_id, extra.requestId);
       const parentId = a.target_parent_thought_id ?? '';
+      // Межсетевое копирование: файлы вложений (мыслей и связей) физически
+      // переносятся в сеть-получатель. Планировщик создаётся ЗДЕСЬ и
+      // коммитится ПОСЛЕ фиксации `runWrite` — иначе при откате внешней
+      // транзакции в каталоге целевой сети остался бы файл-сирота, хотя строки
+      // БД откатились (регресс b83a7d89). Внутри сети файл шарится как есть.
+      const fileCopier =
+        a.source_network_id !== a.target_network_id
+          ? new AttachmentFileCopier(
+              targetNdb,
+              path.join(path.dirname(sourceNdb.dbPath), 'attachments'),
+              (message, details) => rt.deps.logger.warn({ ...details }, message),
+            )
+          : null;
       const summary = runWrite(targetNdb, fx, () => {
         const copied = copySubtreeFn({
           source_ndb: sourceNdb,
@@ -962,6 +998,7 @@ const HANDLERS: Record<string, OpHandler> = {
           duplicate_policy: a.duplicate_policy ?? 'fail',
           target_parent_thought_id: parentId,
           actor_user_id: rt.deps.auth.userId,
+          fileCopier,
         });
         const events: AnyWriteEvent[] = [];
         const activity: WriteActivityEntry[] = [];
@@ -997,6 +1034,8 @@ const HANDLERS: Record<string, OpHandler> = {
           },
         };
       });
+      // Файлы вложений — только после успешного коммита внешней транзакции.
+      fileCopier?.commit();
       const layer = resolveRuntimeLayer(rt, a.target_network_id);
       const includeRemap = a.id_remap !== false;
       return {

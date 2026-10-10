@@ -187,9 +187,17 @@ function fakeMdEditor(initial: string): MdEditor {
     },
     insertAtCaret: () => undefined,
     setCaret: () => undefined,
+    setSelection: () => undefined,
+    enterBlockAt: () => undefined,
     focus: () => undefined,
     focusToEnd: () => undefined,
     blur: () => undefined,
+    snapshot: () => ({ text: value, from: value.length, to: value.length }),
+    applyEdit: () => undefined,
+    subscribe: () => () => undefined,
+    setSearchHighlight: () => undefined,
+    selectMatch: () => undefined,
+    toggleCollapseAtCaret: () => false,
     destroy: () => undefined,
   };
 }

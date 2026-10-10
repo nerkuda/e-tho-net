@@ -156,6 +156,138 @@ test('inline-код: плашка cm-md-inline-code всегда; бэктики
   assert.equal(hasClass(inside, 'cm-md-inline-code', 1, 2), true);
 });
 
+test('выделение ==…==: вне — маркеры скрыты и содержимое подсвечено; внутри — маркеры видны', () => {
+  const doc = '==m== text';
+  const away = buildState(doc, doc.length);
+  assert.equal(hasHiddenMark(away, 0, 2), true, 'открывающий `==` скрыт');
+  assert.equal(hasHiddenMark(away, 3, 5), true, 'закрывающий `==` скрыт');
+  assert.equal(hasClass(away, 'cm-md-mark', 2, 3), true, 'содержимое подсвечено (как <mark>)');
+  // Каретка внутри: маркеры видны, подсветка содержимого остаётся.
+  const inside = buildState(doc, 2);
+  assert.equal(hasHiddenMark(inside, 0, 2), false, 'открывающий `==` виден');
+  assert.equal(hasHiddenMark(inside, 3, 5), false, 'закрывающий `==` виден');
+  assert.equal(hasClass(inside, 'cm-md-mark', 2, 3), true, 'содержимое подсвечено и при активности');
+});
+
+test('подчёркивание <u>…</u>: вне — маркеры скрыты и содержимое подчёркнуто; внутри — маркеры видны', () => {
+  const doc = '<u>u</u> text';
+  const away = buildState(doc, doc.length);
+  assert.equal(hasHiddenMark(away, 0, 3), true, '`<u>` скрыт');
+  assert.equal(hasHiddenMark(away, 4, 8), true, '`</u>` скрыт');
+  assert.equal(hasClass(away, 'cm-md-underline', 3, 4), true, 'содержимое подчёркнуто');
+  const inside = buildState(doc, 3);
+  assert.equal(hasHiddenMark(inside, 0, 3), false, '`<u>` виден');
+  assert.equal(hasHiddenMark(inside, 4, 8), false, '`</u>` виден');
+  assert.equal(hasClass(inside, 'cm-md-underline', 3, 4), true, 'подчёркивание остаётся и при активности');
+});
+
+test('пустые пары `====` и `<u></u>` — маркеры НЕ скрываются (паритет с рендерером)', () => {
+  // Рендерер пустую пару оставляет литералом (`markdown/src/mark.ts`,
+  // `underline.ts` — `close === openEnd → false`), правка не должна её стирать.
+  const markEmpty = buildState('==== text', 9);
+  assert.deepEqual(allSpecs(markEmpty), [], 'пустая пара `====` — без декораций');
+  const markInline = buildState('x ==== y', 8);
+  assert.equal(hasHiddenMark(markInline, 2, 4), false, 'открывающий `==` не скрыт');
+  assert.equal(hasHiddenMark(markInline, 4, 6), false, 'закрывающий `==` не скрыт');
+  // `========` — четыре пары, обе пары пустые: текст не стирается.
+  const eight = buildState('========', 8);
+  for (const [f, t] of [[0, 2], [2, 4], [4, 6], [6, 8]] as const) {
+    assert.equal(hasHiddenMark(eight, f, t), false, `восемь «=»: [${f},${t})`);
+  }
+  const uEmpty = buildState('<u></u> text', 10);
+  assert.deepEqual(allSpecs(uEmpty), [], 'пустая пара `<u></u>` — без декораций');
+  const uInline = buildState('x <u></u> y', 11);
+  assert.equal(hasHiddenMark(uInline, 2, 5), false, '`<u>` не скрыт');
+  assert.equal(hasHiddenMark(uInline, 5, 9), false, '`</u>` не скрыт');
+});
+
+test('несбалансированные пары `==`/`<u>` — литерал без декораций', () => {
+  for (const doc of ['== x', 'x ==', 'x == y', '<u>u', 'u</u>']) {
+    assert.deepEqual(allSpecs(buildState(doc, doc.length)), [], `литерал: ${JSON.stringify(doc)}`);
+  }
+});
+
+test('зачёркивание ~~…~~: вне — маркеры скрыты; внутри — видны (как жирный)', () => {
+  const doc = '~~s~~ text';
+  const away = buildState(doc, doc.length);
+  assert.equal(hasHiddenMark(away, 0, 2), true, 'открывающий `~~` скрыт');
+  assert.equal(hasHiddenMark(away, 3, 5), true, 'закрывающий `~~` скрыт');
+  const inside = buildState(doc, 3);
+  assert.equal(hasHiddenMark(inside, 0, 2), false, 'открывающий `~~` виден');
+  assert.equal(hasHiddenMark(inside, 3, 5), false, 'закрывающий `~~` виден');
+});
+
+test('жирный/курсив не сломаны: маркеры вне скрыты, внутри видны', () => {
+  const bold = '**b** text';
+  assert.equal(hasHiddenMark(buildState(bold, bold.length), 0, 2), true, '`**` вне скрыт');
+  assert.equal(hasHiddenMark(buildState(bold, bold.length), 3, 5), true, '`**` вне скрыт');
+  assert.equal(hasHiddenMark(buildState(bold, 2), 0, 2), false, '`**` внутри виден');
+
+  const ital = '*i* text';
+  assert.equal(hasHiddenMark(buildState(ital, ital.length), 0, 1), true, '`*` вне скрыт');
+  assert.equal(hasHiddenMark(buildState(ital, ital.length), 2, 3), true, '`*` вне скрыт');
+  assert.equal(hasHiddenMark(buildState(ital, 1), 0, 1), false, '`*` внутри виден');
+});
+
+test('task-список: вне — маркер `[ ]` заменён чекбоксом, `-` скрыт; внутри — исходные маркеры', () => {
+  const doc = '- [ ] todo\n\nпара';
+  // Каретка вне пункта (во второй строке): чекбокс на месте `[ ]`, дефис скрыт.
+  const away = buildState(doc, doc.length);
+  const checkbox = allSpecs(away).find(
+    (r) => r.from === 2 && r.to === 5 && r.spec.widget !== undefined,
+  );
+  assert.ok(checkbox, 'маркер `[ ]` заменён виджетом-чекбоксом');
+  assert.equal(hasHiddenMark(away, 0, 1), true, 'маркер списка `-` скрыт вне пункта');
+  // Каретка внутри пункта: исходные маркеры видны, виджета нет.
+  const inside = buildState(doc, 3);
+  assert.equal(allSpecs(inside).some((r) => r.spec.widget !== undefined), false);
+  assert.equal(hasHiddenMark(inside, 0, 1), false, 'маркер списка `-` виден');
+  assert.equal(hasHiddenMark(inside, 2, 5), false, 'маркер `[ ]` виден');
+});
+
+/** Текст виджета-маркера списка на диапазоне `[from,to)` (или null). */
+function listMarker(state: EditorState, from: number, to: number): string | null {
+  const r = allSpecs(state).find((x) => x.from === from && x.to === to);
+  const w = r?.spec.widget as { marker?: string } | undefined;
+  return w?.marker ?? null;
+}
+
+test('маркированный список: вне — отрисован маркер `•`; внутри и вплотную — исходный `-`', () => {
+  // ListItem [0,6), ListMark [0,1); «пара» отделена пустой строкой от списка.
+  const doc = '- item\n\nпара';
+  // Вне пункта: `-` заменён отрисованным маркером списка (как `•` в просмотре),
+  // не скрыт и не оставлен исходником.
+  const away = buildState(doc, doc.length);
+  assert.equal(listMarker(away, 0, 1), '•', '`-` заменён маркером `•`');
+  assert.equal(hasHiddenMark(away, 0, 1), false, 'маркер не «скрыт» — он отрисован');
+  // Внутри пункта и вплотную: исходный `-`, виджета нет.
+  assert.equal(listMarker(buildState(doc, 3), 0, 1), null, 'внутри — исходник');
+  assert.equal(listMarker(buildState(doc, 0), 0, 1), null, 'вплотную — исходник');
+});
+
+test('нумерованный список: вне — номер `N.` отрисован (не теряется); внутри — исходник', () => {
+  // "1. one\n2) two\n\nпара": ListItem1 [0,6) ListMark [0,2); ListItem2 [7,13) ListMark [7,9).
+  const doc = '1. one\n2) two\n\nпара';
+  const away = buildState(doc, doc.length);
+  // Номер сохраняется как в просмотре; `2)` нормализуется к `2.` (decimal).
+  assert.equal(listMarker(away, 0, 2), '1.', 'номер первого пункта отрисован');
+  assert.equal(listMarker(away, 7, 9), '2.', 'номер второго пункта отрисован (2) → 2.)');
+  assert.equal(hasHiddenMark(away, 0, 2), false, 'номер не скрыт');
+  // Внутри первого пункта: исходник без виджета; маркер соседнего пункта отрисован.
+  const insideFirst = buildState(doc, 3);
+  assert.equal(listMarker(insideFirst, 0, 2), null, '`1.` внутри — исходник');
+  assert.equal(listMarker(insideFirst, 7, 9), '2.', 'соседний пункт вне каретки — отрисован');
+});
+
+test('task-список: отмеченный `[x]` даёт чекбокс с checked', () => {
+  const doc = '- [x] todo\n\nпара';
+  const away = buildState(doc, doc.length);
+  const checkbox = allSpecs(away).find((r) => r.from === 2 && r.to === 5);
+  assert.ok(checkbox, 'маркер `[x]` заменён виджетом');
+  const widget = checkbox.spec.widget as { checked?: boolean } | undefined;
+  assert.equal(widget?.checked, true, 'чекбокс отмечен');
+});
+
 test('wiki-ссылка: вне — виджет; внутри — исходник без виджета', () => {
   const doc = '[[Мысль]] x';
   // Каретка после ссылки (за пределами «перед/после»): ссылка — виджет.
@@ -264,3 +396,47 @@ test('инлайн-правило: внутри и непосредственн�
   assert.equal(isNearInline(ranges(8), 10, 13), false, 'через символ до');
   assert.equal(isNearInline(ranges(14), 10, 13), false, 'через символ после');
 });
+
+// ---------------------------------------------------------------------------
+// HTML-комментарий в правке (ТЗ4 «Дневник без псевдослота»): весь узел серым
+// (класс `cm-md-html-comment`), маркеры `<!--`/`-->` скрыты вне курсора.
+// ---------------------------------------------------------------------------
+
+const HTML_COMMENT_CLASS = 'cm-md-html-comment';
+
+test('HTML-комментарий (инлайн): серый весь узел, маркеры скрыты вне курсора', () => {
+  const doc = 'text <!-- c --> more';
+  // Comment [5,15): `<!--` [5,9), `-->` [12,15).
+  const away = buildState(doc, doc.length);
+  assert.equal(hasClass(away, HTML_COMMENT_CLASS, 5, 15), true, 'весь узел серым');
+  assert.equal(hasHiddenMark(away, 5, 9), true, 'открывающий `<!--` скрыт вне');
+  assert.equal(hasHiddenMark(away, 12, 15), true, 'закрывающий `-->` скрыт вне');
+  // Каретка внутри комментария: маркеры видны, серость остаётся.
+  const inside = buildState(doc, 7);
+  assert.equal(hasHiddenMark(inside, 5, 9), false, '`<!--` виден внутри');
+  assert.equal(hasHiddenMark(inside, 12, 15), false, '`-->` виден внутри');
+  assert.equal(hasClass(inside, HTML_COMMENT_CLASS, 5, 15), true, 'серость остаётся');
+});
+
+test('HTML-комментарий: маркеры видны и в смежной позиции (как у парных `**`)', () => {
+  const doc = 'x <!-- c --> y';
+  // Comment [2,12): `<!--` [2,6), `-->` [9,12).
+  const before = buildState(doc, 2 - 1);
+  assert.equal(hasHiddenMark(before, 2, 6), false, 'вплотную ПЕРЕД — маркеры видны');
+  const after = buildState(doc, 12);
+  assert.equal(hasHiddenMark(after, 9, 12), false, 'вплотную ПОСЛЕ — маркеры видны');
+});
+
+test('HTML-комментарий (блочный CommentBlock): серый, маркеры скрыты вне курсора', () => {
+  const doc = 'текст\n\n<!-- block\ncomment -->\nконец';
+  const away = buildState(doc, doc.length);
+  const block = allSpecs(away).find((r) => r.spec.class === HTML_COMMENT_CLASS);
+  assert.ok(block, 'блочный комментарий найден');
+  assert.ok(block.to - block.from > 1, 'узел непустой');
+  assert.equal(hasHiddenMark(away, block.from, block.from + 4), true, '`<!--` скрыт вне');
+  assert.equal(hasHiddenMark(away, block.to - 3, block.to), true, '`-->` скрыт вне');
+  const inside = buildState(doc, block.from + 4);
+  assert.equal(hasHiddenMark(inside, block.from, block.from + 4), false, 'маркеры видны внутри');
+  assert.equal(hasHiddenMark(inside, block.to - 3, block.to), false);
+});
+

@@ -128,7 +128,7 @@ describe('публикация: правка через кэш слоя (зам�
         save.includes('queryKeys.publicationsListAll()'),
       'карточка гасит ключ библиотеки (кэш-путь)',
     );
-    const upload = functionBlock(source, 'async function uploadFromFile(');
+    const upload = functionBlock(source, 'async function applyPick(');
     assert.ok(
       upload.includes('invalidatePublicationAttachments(pubId)'),
       'вложение из диалога обложки гасит ключ списка вложений',
@@ -166,27 +166,29 @@ describe('публикация: правка через кэш слоя (зам�
 
 describe('диалог обложки: якоря поведения (замечание В приёмки b02ef1cf)', () => {
   const source = read('editor/publication-card.ts');
+  // Список вложений и его навигация живут в общем компоненте выбора вложения
+  // (задача 0f6c3e39); здесь — якоря самого диалога обложки.
+  const picker = read('editor/attachment-picker.ts');
 
   it('список фокусируем и отдаём ему первую строку при первом показе', () => {
-    assert.ok(source.includes('listHost.tabIndex = 0'), 'корень навигации принимает фокус');
-    const search = functionBlock(source, 'async function runSearch(');
+    assert.ok(picker.includes('listHost.tabIndex = 0'), 'корень навигации принимает фокус');
+    const search = functionBlock(picker, 'async function runSearch(');
     assert.ok(search.includes('nav.focusNavigation()'), 'фокус отдаётся списку');
-    assert.ok(search.includes('selectRow(first)'), 'первая строка становится текущей');
+    assert.ok(search.includes('nav.setCurrent(first)'), 'первая строка становится текущей');
   });
 
   it('dblclick и Ctrl+Enter выбирают и применяют с закрытием', () => {
-    // Применение выбора живёт в источнике «Вложения» универсального диалога
-    // выбора ресурса (задача d1a56d76) — холдер `applyAttachments`, а не
-    // прежняя локальная `applySelection`.
+    // Применение выбора живёт в общем компоненте выбора вложения — холдер
+    // `applySelection`, а не прежняя локальная логика диалога.
     assert.ok(
-      /\.addEventListener\('dblclick',[\s\S]*?applyAttachments\(ctx\)/.test(source),
+      /\.addEventListener\('dblclick',[\s\S]*?applySelection\(ctx\)/.test(picker),
       'двойной клик по строке применяет выбор',
     );
-    const navInit = functionBlock(source, 'const nav = createListNav<CoverRow>(');
+    const navInit = functionBlock(picker, 'const nav = createListNav<AttachmentPickerRow>(');
     assert.ok(navInit.includes('onKey'), 'Ctrl+Enter перехватывается до базовых правил ядра');
     assert.ok(
       /key !== 'Enter' \|\| event\.ctrlKey !== true/.test(navInit) &&
-        navInit.includes('applyAttachments(ctx)'),
+        navInit.includes('applySelection(ctx)'),
       'Ctrl+Enter применяет выбор',
     );
   });

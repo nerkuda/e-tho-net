@@ -66,8 +66,10 @@ export interface StructureFilter {
   keyword_scope?: StructureKeywordScope[];
   /**
    * Restrict the candidate set to the union of the subtrees of these thoughts
-   * (OR between roots, depth ≤ `STRUCTURES_PARENT_SCOPE_MAX_DEPTH`, deduped;
-   * the roots themselves are excluded — only their descendants match).
+   * (OR between roots, depth ≤ `STRUCTURES_PARENT_SCOPE_MAX_DEPTH`, deduped).
+   * The listed thoughts themselves are included (depth 0) along with their
+   * descendants — the same semantics as MCP `in_subtree_of` (ошибка ad1551ea,
+   * 0.12.1).
    */
   parent_ids?: string[];
   /**

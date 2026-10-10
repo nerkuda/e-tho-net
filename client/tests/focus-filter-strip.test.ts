@@ -758,6 +758,116 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     assert.deepEqual(state.viewRun.calls[0]?.opts, { sort: 'updated', order: 'asc' });
   });
 
+  // -------------------------------------------------------------------
+  // Ошибка 4493811f: индикатор-число нижней зоны показывает РЕАЛЬНОЕ число
+  // мыслей отбора (`meta.total`), а не длину загруженной порции, и результат
+  // догружается динамической пагинацией.
+  // -------------------------------------------------------------------
+
+  /** Идентификаторы мыслей подряд — чтобы различать строки страниц. */
+  function refIds(count: number, start = 0): string[] {
+    return Array.from(
+      { length: count },
+      (_, i) => `00000000-0000-4000-8000-${String(start + i).padStart(12, '0')}`,
+    );
+  }
+
+  function refItem(id: string): any {
+    return {
+      id,
+      title: id,
+      type_id: null,
+      icon: null,
+      icon_kind: 'emoji',
+      active: true,
+      marked_for_deletion: false,
+    };
+  }
+
+  /** Готовит полосу с отбором по умолчанию и ответ первой страницы `run`. */
+  async function setupDefaultPage(total: number, pageIds: string[]): Promise<void> {
+    const harness = installShim();
+    setNetwork();
+    strip.mountFilterStrip(harness.host as any);
+    state.thoughtsGet.response = {
+      meta: { views: [metaViewRow(view('v-page', 'Страница', { is_default: true, position: 0 }))] },
+    };
+    state.viewRun.response = {
+      data: pageIds.map(refItem),
+      meta: {
+        total,
+        limit: pageIds.length,
+        offset: 0,
+        directions: {},
+        view: { id: 'v-page', name: 'Страница', type_id: TYPE_ID },
+        unresolved: [],
+      },
+    };
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'Каталог')));
+  }
+
+  it('runActiveViewIfNeeded несёт meta.total, а не длину порции (4493811f)', async () => {
+    await setupDefaultPage(316, refIds(100));
+    const result = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.ok(result !== null);
+    assert.equal(result!.items.length, 100, 'порция ограничена лимитом сервера');
+    assert.equal(result!.total, 316, 'total — из meta.total, а не длина порции');
+    assert.equal(strip.hasMoreViewResult(), true, 'есть неподгруженные мысли');
+  });
+
+  it('loadMoreViewResult догружает порцию с offset и исчерпывается на meta.total (4493811f)', async () => {
+    await setupDefaultPage(250, refIds(100, 0));
+    const first = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(first!.total, 250);
+
+    // Вторая порция: 100 новых строк, полный лимит.
+    state.viewRun.response = {
+      data: refIds(100, 1000).map(refItem),
+      meta: {
+        total: 250,
+        limit: 100,
+        offset: 100,
+        directions: {},
+        view: { id: 'v-page', name: 'Страница', type_id: TYPE_ID },
+        unresolved: [],
+      },
+    };
+    const second = await strip.loadMoreViewResult(FOCUS_ID);
+    assert.ok(second !== null);
+    assert.equal(second!.items.length, 200);
+    const lastCall = state.viewRun.calls[state.viewRun.calls.length - 1];
+    assert.deepEqual(lastCall?.opts, { limit: 100, offset: 100 }, 'порция запрошена с offset');
+    assert.equal(strip.hasMoreViewResult(), true);
+
+    // Третья порция: неполная, добивает до total.
+    state.viewRun.response = {
+      data: refIds(50, 2000).map(refItem),
+      meta: {
+        total: 250,
+        limit: 50,
+        offset: 200,
+        directions: {},
+        view: { id: 'v-page', name: 'Страница', type_id: TYPE_ID },
+        unresolved: [],
+      },
+    };
+    const third = await strip.loadMoreViewResult(FOCUS_ID);
+    assert.ok(third !== null);
+    assert.equal(third!.items.length, 250);
+    assert.equal(third!.total, 250);
+    assert.equal(strip.hasMoreViewResult(), false, 'порции исчерпаны на meta.total');
+  });
+
+  it('loadMoreViewResult — no-op в режиме «Потомки» и без результата (4493811f)', async () => {
+    const harness = installShim();
+    setNetwork();
+    strip.mountFilterStrip(harness.host as any);
+    state.thoughtsGet.response = { meta: { views: [] } };
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'В')));
+    assert.equal(await strip.loadMoreViewResult(FOCUS_ID), null);
+    assert.equal(strip.hasMoreViewResult(), false);
+  });
+
   it('realtime thought-type-view event triggers a strip rebuild', async () => {
     const harness = installShim();
     setNetwork();

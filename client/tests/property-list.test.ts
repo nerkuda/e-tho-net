@@ -42,7 +42,7 @@ const COMPONENT_TS = resolve(RENDERER, 'lib', 'property-list.ts');
 const MANAGER_TS = resolve(RENDERER, 'screens', 'property-manager.ts');
 const PICKER_TS = resolve(RENDERER, 'screens', 'type-manager.ts');
 const CATALOGUE_TS = resolve(RENDERER, 'screens', 'type-catalogue.ts');
-const ICONS_TS = resolve(RENDERER, 'lib', 'icons.ts');
+const ICONS_TS = resolve(RENDERER, 'lib', 'ui', 'icon.ts');
 
 function read(path: string): string {
   return readFileSync(path, 'utf8');
@@ -192,7 +192,7 @@ describe('иконки видов значения (требование 4)', ()
     }
   });
 
-  it('иконки объявлены в общем наборе (lib/icons.ts)', () => {
+  it('иконки объявлены в общем наборе (lib/ui/icon.ts)', () => {
     const src = read(ICONS_TS);
     for (const icon of ['value-text', 'value-number', 'value-date', 'value-bool', 'value-url', 'value-ref', 'value-publication']) {
       assert.ok(src.includes(`'${icon}'`), `иконка «${icon}» объявлена в IconName`);

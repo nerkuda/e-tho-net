@@ -47,7 +47,8 @@ import {
   shelfItemId,
 } from '../db/publication-id.js';
 import { listPublicationHoldingLayers } from './holding-layers.js';
-import { removeStoredFile, storedFileInUse } from './attachment-service.js';
+import { hasOwnership } from './attachment-service.js';
+import { purgeOwnerAttachments } from './owner-cleanup.js';
 import { invalidatePublicationMembershipCache } from './publication-membership-cache.js';
 import { selectRecipeIds } from './publication-recipe.js';
 import { linkPropertyLinkTypeId } from './property-service.js';
@@ -377,20 +378,15 @@ function assertSingleCover(
   }
 }
 
-/** Строка-вложение-обложка обязана принадлежать этой публикации. */
+/** Строка-вложение-обложка обязана принадлежать этой публикации (живое владение). */
 function assertCoverAttachmentOwned(
   ndb: NetworkDb,
   publicationId: string,
   attachmentId: string | null,
 ): void {
   if (attachmentId === null) return;
-  const row = ndb
-    .prepare(
-      `SELECT 1 FROM attachments_v
-       WHERE id = ? AND owner_type = 'publication' AND owner_id = ? LIMIT 1`,
-    )
-    .get(attachmentId, publicationId);
-  if (row === undefined) {
+  // 0.12.1 (ADR 9f90b010): владение, а не owner-колонки строки вложения.
+  if (!hasOwnership(ndb, attachmentId, 'publication', publicationId)) {
     throw new EtnError(
       'VALIDATION_ERROR',
       'обложка должна ссылаться на строку-вложение этой публикации',
@@ -777,8 +773,10 @@ export function checkPublicationDeletion(
 /**
  * Физическое удаление публикации — только в основе (в слое
  * `VALIDATION_ERROR purge_base_only`). Каскад: строки `publication_order`,
- * `publication_exclusions`, `shelf_items` и строки-вложения обложки ВСЕХ
- * слоёв; физический файл удаляется, когда на него не осталось строк.
+ * `publication_exclusions`, `shelf_items` и владения вложениями-обложками
+ * (`attachment_owners`). Снимаются только владения САМОЙ публикации: вложение
+ * и его файл удаляются, лишь когда у них не осталось живых владельцев у других
+ * объектов (ADR 9f90b010, задача da59a4cf) — общее вложение не разрушается.
  * Блокировки (`deletion_blocked`): живые значения свойств типа «Публикация» и
  * живая теневая строка в ином слое.
  */
@@ -801,27 +799,15 @@ export function purgePublication(ndb: NetworkDb, id: string): void {
       );
     }
 
-    // Строки-вложения обложки: сначала запомнить файлы для сборки мусора.
-    const attachments = ndb
-      .prepare(
-        `SELECT kind, file_path FROM attachments -- layers:physical-read
-          WHERE owner_type = 'publication' AND owner_id = ?`,
-      )
-      .all(id) as { kind: string; file_path: string | null }[];
-    ndb
-      .prepare("DELETE FROM attachments WHERE owner_type = 'publication' AND owner_id = ?")
-      .run(id);
+    // Вложения обложки: снимаются ТОЛЬКО владения публикации; вложение и файл
+    // уходят, лишь если не осталось живых владельцев у других объектов
+    // (ADR 9f90b010, задача da59a4cf) — общее вложение не разрушается.
+    purgeOwnerAttachments(ndb, 'publication', [id]);
 
     ndb.prepare('DELETE FROM publication_order WHERE publication_id = ?').run(id);
     ndb.prepare('DELETE FROM publication_exclusions WHERE publication_id = ?').run(id);
     ndb.prepare('DELETE FROM shelf_items WHERE publication_id = ?').run(id);
     ndb.prepare('DELETE FROM publications WHERE id = ?').run(id);
-
-    for (const a of attachments) {
-      if (a.kind === 'file' && a.file_path !== null && !storedFileInUse(ndb, a.file_path)) {
-        removeStoredFile(ndb, 'file', a.file_path);
-      }
-    }
     invalidatePublicationMembershipCache(id);
 
     // Строки состава полок удалены каскадом — «полки не блокируют удаление».

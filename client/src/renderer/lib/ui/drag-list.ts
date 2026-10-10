@@ -29,8 +29,12 @@
  */
 
 import { span } from '../dom.js';
+import { defineKeyContext, pushKeyContext } from '../keymap.js';
 
 import { isReorderAction, resolveNavAction } from './nav-core.js';
+
+/** Счётчик списков: у каждого свой контекст сочетаний (замыкание навигации). */
+let dragListContextSeq = 0;
 
 /** Класс грипа-аффорданса перетаскивания. */
 export const DRAG_HANDLE_CLASS = 'ui-drag-handle';
@@ -228,10 +232,11 @@ export function createDragList<E>(
 
   // --- Клавиатура (Alt+↑/↓) -------------------------------------------------
 
-  const onKeydown = (event: { key?: string; altKey?: boolean; preventDefault?: () => void }): void => {
+  /** Перестановка клавиатурой; `false` — событие не наше (идёт по стеку ниже). */
+  const handleKeydown = (event: KeyboardEvent): boolean => {
     const action = resolveNavAction(event.key ?? '', { altKey: event.altKey === true });
-    if (!isReorderAction(action)) return;
-    if (moveCurrent(action === 'moveUp' ? -1 : 1)) event.preventDefault?.();
+    if (!isReorderAction(action)) return false;
+    return moveCurrent(action === 'moveUp' ? -1 : 1);
   };
 
   // --- Перетаскивание указателем -------------------------------------------
@@ -367,7 +372,27 @@ export function createDragList<E>(
     });
   };
 
-  root.addEventListener?.('keydown', onKeydown as EventListener);
+  // Клавиатурная перестановка (Alt+↑/↓) — через общеклиентский диспетчер:
+  // пока фокус внутри списка, его контекст на вершине стека (ADR b420b08c,
+  // задача fd3d84f4). Корень не фокусируем сам — ловим всплытие focusin.
+  const contextId = `ui-drag-list-${(dragListContextSeq += 1)}`;
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'dragList.moveUp', chord: 'Alt+ArrowUp', run: handleKeydown },
+      { command: 'dragList.moveDown', chord: 'Alt+ArrowDown', run: handleKeydown },
+    ],
+  });
+  let releaseContext: (() => void) | null = null;
+  const onFocusIn = (): void => {
+    releaseContext ??= pushKeyContext(contextId);
+  };
+  const onFocusOut = (): void => {
+    releaseContext?.();
+    releaseContext = null;
+  };
+  root.addEventListener?.('focusin', onFocusIn as EventListener);
+  root.addEventListener?.('focusout', onFocusOut as EventListener);
 
   return {
     refresh(): void {
@@ -375,7 +400,10 @@ export function createDragList<E>(
     },
     moveCurrent,
     destroy(): void {
-      root.removeEventListener?.('keydown', onKeydown as EventListener);
+      root.removeEventListener?.('focusin', onFocusIn as EventListener);
+      root.removeEventListener?.('focusout', onFocusOut as EventListener);
+      releaseContext?.();
+      releaseContext = null;
       clearDropMarks();
       removeGhost();
     },

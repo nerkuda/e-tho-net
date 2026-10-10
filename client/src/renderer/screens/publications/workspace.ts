@@ -41,7 +41,7 @@ import {
 } from '../../lib/dom.js';
 import { t } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
-import { svgIcon, type IconName } from '../../lib/icons.js';
+import { svgIcon, type IconName } from '../../lib/ui/icon.js';
 import { errorDialog, isInsideDialog, showDialog } from '../../lib/dialog.js';
 import { notice } from '../../lib/notice.js';
 import {
@@ -68,6 +68,15 @@ import {
   type DragListItem,
 } from '../../lib/ui/drag-list.js';
 import { buildCover } from './cover.js';
+import {
+  htmlHasTransclusionMarkup,
+  renderExpandedTransclusionHtml,
+} from '../../editor/transclusion.js';
+import {
+  feedSelectionFromDom,
+  type DomSelectionLike,
+  type FeedSourceSelection,
+} from './feed-selection.js';
 import {
   applyPublicationOrder,
   assemblyDateLabel,
@@ -676,10 +685,7 @@ export function mountPublicationWorkspace(
     // прилетевшее событие прокрутки не пересчитало current (замечание 1).
     lockScrollSync();
     docHost.scrollTop = Math.max(0, topWithinDoc(node) - 8);
-    currentAnchor = anchor;
-    for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
-      row.classList.toggle('pub-toc-current', row.dataset['anchor'] === anchor);
-    }
+    applyCurrentAnchor(anchor);
     makeDocCurrent(anchor, focusDoc);
   }
 
@@ -756,6 +762,9 @@ export function mountPublicationWorkspace(
   docHost.addEventListener('scroll', onDocScroll);
   docHost.addEventListener('keydown', onDocKeydown, { capture: true });
   document.addEventListener('keydown', onKeydown);
+  // Выделение текста в ленте подсвечивает его раздел в оглавлении (ошибка
+  // d79f7254): обратная связь к прокрутке/клику по оглавлению.
+  document.addEventListener('selectionchange', onSelectionChange);
 
   // --- Загрузка ------------------------------------------------------------
 
@@ -845,6 +854,7 @@ export function mountPublicationWorkspace(
    */
   function patchBlockText(thoughtId: string, html: string): void {
     for (const node of blockNodesForThought(thoughtId)) {
+      const block = blockForKey(node.dataset?.['blockKey']);
       if (node.classList.contains('pub-doc-section')) {
         const target = node.querySelector<HTMLElement>('.pub-doc-preamble');
         if (target === null) continue;
@@ -852,11 +862,10 @@ export function mountPublicationWorkspace(
       } else {
         // Текст-блок: `renderTextBody` сам решает, что показать при пустом
         // комментарии; `renderHtml` внутри сносит грип DnD — возвращаем его.
-        renderTextBody(node, html);
+        renderTextBody(node, html, block !== null && block.kind === 'text' ? block.md : '');
         node.prepend(makeGrip(t('publications.ws.dragHandle')));
       }
       // Синхронизируем модель (иначе сигнатура не отразит правку).
-      const block = blockForKey(node.dataset?.['blockKey']);
       if (block === null) continue;
       if (block.kind === 'section') block.preambleHtml = html;
       else if (block.kind === 'text') block.html = html;
@@ -1715,25 +1724,52 @@ export function mountPublicationWorkspace(
   }
 
   /**
-   * Двойной клик по тексту (пункт 4): мысль открывается в редакторе на вкладке
-   * «Комментарий» в режиме правки, курсор — по началу кликнутого абзаца
-   * (точный офсет рендера к markdown недостижим; нет вхождения — начало).
+   * Двойной клик по тексту (пункт 4; уточнено задачами 189da39e и 59774016):
+   * мысль открывается в редакторе на вкладке «Комментарий» в режиме правки, а
+   * каретка/выделение встают по вхождению кликнутого слова. `body_html` ленты
+   * размечен серверной сборкой (`data-md-*` относительно `body_md`), поэтому
+   * выделение двойного клика резолвится в ТОЧНЫЙ диапазон источника общим
+   * `sourceOffsetFromCaret` — позиция попадает именно во вхождение под кликом,
+   * а не в первое вхождение слова. Резолвер недоступен — прежний фолбэк:
+   * ориентир — выделенное слово, затем начало кликнутого абзаца.
    */
   function openTextCommentEdit(ev: MouseEvent, block: DocBlock): void {
     if (block.kind !== 'text') return;
+    const selection = feedSelectionFromDom(getDomSelection());
+    if (selection !== null) {
+      openTextCommentEditById(block.thoughtId, undefined, selection);
+      return;
+    }
+    const word = (window.getSelection?.()?.toString() ?? '').trim();
+    if (word !== '') {
+      openTextCommentEditById(block.thoughtId, word);
+      return;
+    }
     const target = ev.target as HTMLElement | null;
     const paragraph = target?.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6') ?? null;
     const text = (paragraph?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
     openTextCommentEditById(block.thoughtId, text === '' ? undefined : text);
   }
 
+  /** Текущее DOM-выделение в структурном виде резолвера (или `null`). */
+  function getDomSelection(): DomSelectionLike | null {
+    const selection = window.getSelection?.();
+    if (selection === null || selection === undefined) return null;
+    return selection as unknown as DomSelectionLike;
+  }
+
   /**
-   * Открыть мысль-текст в редакторе на вкладке «Комментарий» в режиме правки
-   * (`findText` — курсор к началу абзаца, иначе к началу комментария).
+   * Открыть мысль-текст в редакторе на вкладке «Комментарий» в режиме правки:
+   * точный диапазон `selection` (задача 59774016) либо вхождение `findText`
+   * (каретка/выделение по вхождению), иначе каретка в конец.
    */
-  function openTextCommentEditById(thoughtId: string, findText?: string): void {
+  function openTextCommentEditById(
+    thoughtId: string,
+    findText?: string,
+    selection?: FeedSourceSelection,
+  ): void {
     void import('../../editor/editor.js').then((mod) =>
-      mod.openThoughtCommentEditor(thoughtId, findText),
+      mod.openThoughtCommentEditor(thoughtId, findText, selection),
     );
   }
 
@@ -1792,7 +1828,7 @@ export function mountPublicationWorkspace(
    * и скрыть (исключение). Заглушка — пустой абзац, высоту даёт CSS
    * `.pub-doc-text-line`; на неё же опирается фиттинг/навигация.
    */
-  function renderTextBody(node: HTMLElement, html: string): void {
+  function renderTextBody(node: HTMLElement, html: string, md: string): void {
     renderHtml(node, html);
     const empty = html.trim() === '';
     node.classList.toggle('pub-doc-text-empty', empty);
@@ -1801,6 +1837,32 @@ export function mountPublicationWorkspace(
       line.setAttribute('aria-hidden', 'true');
       node.append(line);
     }
+    // Серверный `body_html` собран из исходного `body_md` и ссылку-трансклюзию
+    // не разворачивает (ошибка 075602b4) — блок показывает только ссылку.
+    // Тексты с такой ссылкой достраиваем развёрнутым HTML общим путём просмотра
+    // (`renderExpandedTransclusionHtml`) — тем же, что и комментарий мысли.
+    if (htmlHasTransclusionMarkup(html)) void expandTextTransclusions(node, md);
+  }
+
+  /**
+   * Асинхронно заменяет серверный HTML текста развёрнутым (трансклюзии). Грип
+   * ручного порядка снимается `replaceChildren` — возвращаем его после
+   * перерисовки. Сбой/отсутствие развёртки — серверный HTML остаётся.
+   */
+  async function expandTextTransclusions(node: HTMLElement, md: string): Promise<void> {
+    const networkId = store.state.networkId;
+    if (networkId === null || md.trim() === '') return;
+    const expanded = await renderExpandedTransclusionHtml(md, networkId);
+    if (expanded === null || !node.isConnected) return;
+    const grip =
+      node.firstElementChild !== null &&
+      node.firstElementChild.classList.contains(DRAG_HANDLE_CLASS)
+        ? node.firstElementChild
+        : null;
+    // `renderHtml` сносит содержимое (и грип) через innerHTML — возвращаем грип.
+    renderHtml(node, expanded);
+    node.classList.remove('pub-doc-text-empty');
+    if (grip !== null) node.prepend(grip);
   }
 
   function buildBlock(block: DocBlock): HTMLElement {
@@ -1866,7 +1928,7 @@ export function mountPublicationWorkspace(
       node.dataset['thoughtId'] = block.thoughtId;
       node.dataset['blockKey'] = block.key;
       node.tabIndex = -1;
-      renderTextBody(node, block.html);
+      renderTextBody(node, block.html, block.md);
       // Ручка ручного порядка текста среди текстов своего раздела (d13fd645).
       setTooltip(node, t('publications.ws.dragKeyboardHint'));
       node.prepend(makeGrip(t('publications.ws.dragHandle')));
@@ -1878,9 +1940,17 @@ export function mountPublicationWorkspace(
       node.addEventListener('dblclick', (ev) => openTextCommentEdit(ev, block));
       return node;
     }
+    // Блок «Дополнительные материалы» (ошибка 2dd51051): один общий заголовок,
+    // а внутри — по группе на каждое свойство-источник с подписью-именем
+    // свойства (`group.property` из DTO, порядок — как в рецепте). Без подписи
+    // ссылки разных свойств сливались в неотличимый список. Формулировка и
+    // группировка совпадают с экспортом (`publication-export-service`).
     const node = div('pub-doc-extra');
+    node.append(span(t('publications.ws.extra'), 'pub-doc-extra-title'));
     for (const group of block.groups) {
-      node.append(span(t('publications.ws.extra'), 'pub-doc-extra-title'));
+      const groupNode = div('pub-doc-extra-group');
+      // Имя свойства — данные сети (не UI-строка), поэтому без `t()`.
+      groupNode.append(span(group.property, 'pub-doc-extra-prop'));
       const list = div('pub-doc-extra-list');
       for (const target of group.targets) {
         const link = uiButton({
@@ -1891,7 +1961,8 @@ export function mountPublicationWorkspace(
         });
         list.append(link);
       }
-      node.append(list);
+      groupNode.append(list);
+      node.append(groupNode);
     }
     return node;
   }
@@ -2042,7 +2113,7 @@ export function mountPublicationWorkspace(
   function updateCurrentSection(): void {
     const headings = docHost.querySelectorAll<HTMLElement>('.pub-doc-section');
     if (headings.length === 0) {
-      currentAnchor = null;
+      applyCurrentAnchor(null);
       return;
     }
     const top = docHost.scrollTop + 24;
@@ -2058,11 +2129,50 @@ export function mountPublicationWorkspace(
     if (docHost.scrollTop + docHost.clientHeight >= docHost.scrollHeight - 2) {
       current = headings[headings.length - 1]?.id ?? current;
     }
-    if (current === currentAnchor) return;
-    currentAnchor = current;
+    applyCurrentAnchor(current);
+  }
+
+  /** Единая запись текущего раздела и подсветки его строки в оглавлении. */
+  function applyCurrentAnchor(next: string | null): void {
+    if (next === currentAnchor) return;
+    currentAnchor = next;
     for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
-      row.classList.toggle('pub-toc-current', row.dataset['anchor'] === current);
+      row.classList.toggle('pub-toc-current', row.dataset['anchor'] === next);
     }
+  }
+
+  /**
+   * Раздел документа, которому принадлежит узел (последний заголовок
+   * `.pub-doc-section` выше него). Обратное направление к {@link
+   * updateCurrentSection}: подсветку ведёт НЕ прокрутка, а место выделения
+   * текста в ленте (замечание приёмки 0.12.1, ошибка d79f7254).
+   */
+  function sectionAnchorForNode(node: Node | null): string | null {
+    if (node === null) return null;
+    const el = node.nodeType === 1 ? (node as HTMLElement) : node.parentElement;
+    if (el === null || !docHost.contains(el)) return null;
+    const headings = docHost.querySelectorAll<HTMLElement>('.pub-doc-section');
+    if (headings.length === 0) return null;
+    const top = topWithinDoc(el) + 1;
+    let current: string | null = null;
+    for (const heading of headings) {
+      if (topWithinDoc(heading) <= top) current = heading.id;
+      else break;
+    }
+    return current ?? headings[0]?.id ?? null;
+  }
+
+  /**
+   * Выделение текста в ленте подсвечивает его раздел в оглавлении (обратное
+   * направление к переходу по клику, ошибка d79f7254): берём узел начала
+   * выделения, находим охватывающий раздел и назначаем его текущим. Выделение
+   * вне документа (поля, редактор) игнорируется.
+   */
+  function onSelectionChange(): void {
+    const selection = window.getSelection?.() ?? null;
+    if (selection === null || selection.rangeCount === 0 || selection.isCollapsed) return;
+    const anchor = sectionAnchorForNode(selection.anchorNode);
+    if (anchor !== null) applyCurrentAnchor(anchor);
   }
 
   // --- Кандидаты -----------------------------------------------------------
@@ -2488,6 +2598,7 @@ export function mountPublicationWorkspace(
     docHost.removeEventListener('scroll', onDocScroll);
     docHost.removeEventListener('keydown', onDocKeydown, { capture: true });
     document.removeEventListener('keydown', onKeydown);
+    document.removeEventListener('selectionchange', onSelectionChange);
     docNav.destroy();
     docDrag.destroy();
     tocNav.destroy();

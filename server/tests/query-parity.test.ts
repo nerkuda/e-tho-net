@@ -374,12 +374,10 @@ describe(
           assertParity(rest, mcp, step.label);
         }
 
-        // Поддерево: REST parent_ids исключает корни, MCP in_subtree_of
-        // включает (depth 0) — наборы совпадают с точностью до корня, depth
-        // считает расстояние. Оба идут только по активным связям. Порядок —
-        // общая сортировка (корень «Работы версии» после «План работ»), так
-        // что сравниваем как множества. Неактивная t2 в дефолтную выдачу не
-        // входит (active 'true' у обоих фасадов).
+        // Поддерево: REST parent_ids и MCP in_subtree_of включают корень
+        // (ошибка ad1551ea, 0.12.1 — семантика выровнена) — наборы совпадают,
+        // depth считает расстояние. Оба идут только по активным связям.
+        // Неактивная t2 в дефолтную выдачу не входит (active 'true' у обоих).
         const restSub = await restQuery(restCtx, { parent_ids: [root], ...SORT_ALPHA });
         const mcpSub = await mcpQuery(handle!, networkId, {
           in_subtree_of: root,
@@ -388,9 +386,9 @@ describe(
           order: 'asc',
         });
         assert.deepEqual(
+          [...restSub.ids].sort(),
           [...mcpSub.hits.map((h) => h.id)].sort(),
-          [root, ...restSub.ids].sort(),
-          'MCP-поддерево = корень + REST-потомки',
+          'REST parent_ids = MCP in_subtree_of (корень входит)',
         );
         const depthById = new Map(
           mcpSub.hits.map((h) => [h.id, h.depth] as const),
@@ -400,7 +398,7 @@ describe(
         assert.equal(depthById.has(t2), false, 'неактивная мысль не входит в дефолтную выдачу');
 
         // Полная глубина — с active: any (REST show_inactive ↔ MCP 'any'):
-        // оба фасада видят неактивную t2 на глубине 2.
+        // оба фасада видят корень и неактивную t2 на глубине 2.
         const restSubAny = await restQuery(restCtx, {
           parent_ids: [root],
           show_inactive: true,
@@ -414,9 +412,9 @@ describe(
           order: 'asc',
         });
         assert.deepEqual(
+          [...restSubAny.ids].sort(),
           [...mcpSubAny.hits.map((h) => h.id)].sort(),
-          [root, ...restSubAny.ids].sort(),
-          'MCP-поддерево с active any = корень + REST-потомки с show_inactive',
+          'REST parent_ids + show_inactive = MCP in_subtree_of active any',
         );
         const depthAny = new Map(
           mcpSubAny.hits.map((h) => [h.id, h.depth] as const),
@@ -638,6 +636,74 @@ describe(
         // Каждая из пяти мыслей найдена FTS-путём keywords (индексный сужатель
         // + LIKE-остаток) — курсорный обход вернул ровно их.
         assert.deepEqual(new Set(seen), new Set(ids));
+      } finally {
+        if (handle !== undefined) await handle.close();
+        if (mcpCtx !== undefined) await closeMcpContext(mcpCtx, overrides);
+        await closeRestContext(restCtx);
+      }
+    });
+
+    it('неразрешимая ссылка на свойство в отборе — явная ошибка, а не расширение до всей сети (ошибки 090d0242/4f17cb73, 0.12.1)', async () => {
+      const restCtx = await buildRestContext();
+      const overrides = {
+        dataDir: restCtx.dataDir,
+        systemDb: restCtx.sys,
+        networkId: restCtx.networkId,
+      };
+      let mcpCtx: McpTestContext | undefined;
+      let handle: McpClientHandle | undefined;
+      try {
+        const ndb = openNetworkDb(restCtx.dataDir, restCtx.networkId);
+        insertThought(ndb, 'Мысль A');
+        insertThought(ndb, 'Мысль B');
+        const queryUrl = `/api/v1/networks/${restCtx.networkId}/thoughts/query`;
+        const unknownId = '11111111-1111-4111-8111-111111111111';
+
+        // REST: неизвестный property_id → 404 NOT_FOUND с указанием поля,
+        // а не 200 со всей сетью (прежнее молчаливое выпадение условия).
+        // Код выровнен по конвенции резолва реестровых сущностей (ошибка
+        // f4580fff, 0.12.1): ссылка на несуществующее свойство → NOT_FOUND.
+        const badId = await restCtx.app.inject({
+          method: 'POST',
+          url: queryUrl,
+          headers: authHeaders(restCtx),
+          payload: { count: true, properties: [{ property_id: unknownId, op: 'eq', value: 'x' }] },
+        });
+        assert.equal(badId.statusCode, 404, `REST: ${badId.statusCode} ${badId.body}`);
+        const errId = badId.json().error as { code: string; details?: { field?: string } };
+        assert.equal(errId.code, 'NOT_FOUND');
+        assert.equal(errId.details?.field, 'property_id');
+
+        // REST: неизвестное поле условия (`key`) при валидном адресе —
+        // явная VALIDATION_ERROR, а не молчаливое вырезание (ошибка f4580fff).
+        const badKey = await restCtx.app.inject({
+          method: 'POST',
+          url: queryUrl,
+          headers: authHeaders(restCtx),
+          payload: { count: true, properties: [{ property_id: unknownId, key: 'x', op: 'eq', value: 'v' }] },
+        });
+        assert.equal(badKey.statusCode, 422, `REST: ${badKey.statusCode} ${badKey.body}`);
+        assert.equal(badKey.json().error.code, 'VALIDATION_ERROR');
+
+        mcpCtx = await buildMcpContext(overrides);
+        handle = await connectMcpClient(mcpCtx, restCtx.adminKey);
+
+        // MCP: неизвестный property_id → NOT_FOUND (конвенция f4580fff).
+        const mcpBadId = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: { network_id: restCtx.networkId, properties: [{ property_id: unknownId, operator: 'eq', value: 'x' }] },
+        });
+        assert.equal(mcpBadId.isError, true);
+        assert.match(toolText(mcpBadId), /NOT_FOUND/);
+
+        // MCP: неизвестное поле условия (`key`) — VALIDATION_ERROR, ввод
+        // отвергается, адрес свойства не теряется молча (ошибка f4580fff).
+        const mcpKey = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: { network_id: restCtx.networkId, properties: [{ key: 'Статус', operator: 'eq', value: 'x' }] },
+        });
+        assert.equal(mcpKey.isError, true);
+        assert.match(toolText(mcpKey), /VALIDATION_ERROR/);
       } finally {
         if (handle !== undefined) await handle.close();
         if (mcpCtx !== undefined) await closeMcpContext(mcpCtx, overrides);

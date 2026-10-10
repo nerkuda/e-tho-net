@@ -11,6 +11,7 @@ import { Instructions } from '../../contracts.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { openMemberNetwork, runTool } from '../context.js';
 import { getNetworkInstructions } from '../../domain/instructions-service.js';
+import { createBodyExpander } from '../../domain/transclusion-service.js';
 
 export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
   // ---------------------------------------------------------------------------
@@ -45,7 +46,8 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Витрина инструкций сети',
       description:
-        'Read the network\'s instructions. Modes: `{ instruction_id }` → FULL comment; `{ instruction_ids }` ' +
+        'Read the network\'s instructions. `instruction_id` accepts a full UUID or an unambiguous hex ' +
+        'prefix (≥ 4 chars), as in `etn.thoughts.get`. Modes: `{ instruction_id }` → FULL comment; `{ instruction_ids }` ' +
         '→ cards (title, synonyms, preview ≤ 300) in request order, unresolved in `missing`; `{ keywords }` ' +
         '→ filter by title+synonyms (whitespace-AND, `-word`); `{ network_id }` → active, default ROOT only ' +
         '(no untyped parent link), `scope: "all"` adds sub-instructions. No role → ' +
@@ -84,6 +86,9 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
             ...(args.limit !== undefined ? { limit: args.limit } : {}),
             ...(args.offset !== undefined ? { offset: args.offset } : {}),
           },
+          // MCP-витрина разворачивает трансклюзии в теле/превью инструкции
+          // (ТП2, задача bcfc7eb7, ADR 85a7a01e); REST-фасад — без развёртки.
+          createBodyExpander(ndb),
         );
         // Списочный режим собирает записи через общий сериализатор домена
         // (response-projection.ts) — в самом `getNetworkInstructions`. Точечный

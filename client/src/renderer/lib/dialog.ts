@@ -23,7 +23,7 @@
 
 import { div, el, errText } from './dom.js';
 import { t } from './i18n.js';
-import { svgIcon } from './icons.js';
+import { svgIcon } from './ui/icon.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput, fieldRow } from './ui/field.js';
 import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';

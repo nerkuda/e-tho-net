@@ -920,6 +920,8 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'attachment.created': 'добавлено вложение',
   'attachment.updated': 'изменено вложение',
   'attachment.deleted': 'удалено вложение',
+  'attachment.owner.added': 'у вложения добавлен владелец',
+  'attachment.owner.removed': 'у вложения снят владелец',
   'property-value.set': 'изменено свойство',
   'property-value.deleted': 'удалено свойство',
   'network.updated': 'изменена сеть',

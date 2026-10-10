@@ -14,6 +14,7 @@
 export * from './enums.js';
 export * from './constants.js';
 export * from './errors.js';
+export * from './icon-catalog.js';
 export * from './keywords.js';
 export * from './mentions.js';
 export * from './deep-link.js';

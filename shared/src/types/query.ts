@@ -48,9 +48,13 @@ export interface PropertyQueryCondition {
    *  в фильтрах MCP). */
   property_id?: string;
   /** Имя свойства из реестра (0.6.5). MCP-фасад резолвит в `property_id` —
-   *  `NOT_FOUND` если такого имени нет, `VALIDATION_ERROR` с
-   *  `details.candidates` при неоднозначности (теоретически невозможно — ключ
-   *  уникален в пределах сети). Взаимоисключающе с `property_id`. */
+   *  `NOT_FOUND` если такого имени нет (ошибки 090d0242/f4580fff, 0.12.1: код
+   *  выровнен по конвенции резолва имён реестровых сущностей — как у `type`
+   *  и `resolvePropertyIdByName`; ранее асимметрично `VALIDATION_ERROR`),
+   *  `VALIDATION_ERROR` с `details.candidates` при неоднозначности
+   *  (теоретически невозможно — ключ уникален в пределах сети).
+   *  Взаимоисключающе с `property_id`. Условие обязано задать `property_id`
+   *  или `property`; иначе — `VALIDATION_ERROR` (не молчаливый сброс). */
   property?: string;
   operator: PropertyQueryOperator;
   /**

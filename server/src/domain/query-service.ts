@@ -25,8 +25,9 @@
  *     выбирается по `value_type` свойства, а не по runtime-типу значения;
  *     операторы объединены из обоих фасадов (см. OPS_BY_VALUE_TYPE);
  *   * поддерево — направленный BFS вниз по активным связям с visited-set,
- *     потолком глубины и лимитом узлов; REST-режим исключает корни,
- *     MCP-режим включает (depth 0) и сообщает обрезку `truncated`/`reason`;
+ *     потолком глубины и лимитом узлов; корни входят в результат у обоих
+ *     фасадов (REST `parent_ids`, MCP `in_subtree_of` — ошибка ad1551ea),
+ *     MCP дополнительно сообщает обрезку `truncated`/`reason`;
  *   * актуальность/пометка на удаление — трёхсостояния `true`/`false`/`any`;
  *   * авторы, диапазоны дат, has_*-признаки, link_type_ids — из REST;
  *   * сортировки — единый набор REST (`alpha`/`created`/`updated`/`viewed`);
@@ -65,6 +66,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { getLinkDirections } from './link-service.js';
 import {
+  getNetworkProperty,
   isStructuralLinkProperty,
   linkPropertyDirection,
   linkPropertyLinkTypeId,
@@ -107,15 +109,16 @@ export interface ThoughtQueryPropertyCondition {
 }
 
 /**
- * Ограничение поддерева. REST-фасад (`parent_ids`) исключает корни из
- * набора кандидатов и включает неактивные рёбра при `show_inactive`;
- * MCP-фасад (`in_subtree_of`) включает корень (depth 0), ходит только по
- * активным связям и сообщает обрезку по лимиту узлов.
+ * Ограничение поддерева. Оба фасада включают корни (перечисленные мысли) в
+ * набор кандидатов: REST `parent_ids` — с `depth ≥ 0` (ошибка ad1551ea,
+ * 0.12.1), MCP `in_subtree_of` — с `depth 0`. Отличия фасадов только в
+ * деталях обхода: REST включает неактивные рёбра при `show_inactive`, MCP
+ * ходит только по активным связям и сообщает обрезку по лимиту узлов.
  */
 export interface ThoughtQuerySubtree {
   /** Корни обхода (REST — несколько, OR; MCP — один). */
   roots: string[];
-  /** `true` (MCP) — корни входят в набор кандидатов (depth 0). */
+  /** `true` — корни входят в набор кандидатов; в 0.12.1 у обоих фасадов. */
   include_roots: boolean;
   /** Потолок глубины обхода (REST — {@link STRUCTURES_PARENT_SCOPE_MAX_DEPTH}). */
   max_depth: number;
@@ -251,9 +254,10 @@ export interface ThoughtIdsQueryResult {
  *   * `trashed: true` — «включать помеченные наравне с обычными» → `'any'`;
  *     `false`/отсутствует — `'false'`.
  *
- * `parent_ids` превращаются в поддерево REST-режима: корни исключены,
- * глубина {@link STRUCTURES_PARENT_SCOPE_MAX_DEPTH}, неактивные рёбра — по
- * `show_inactive`.
+ * `parent_ids` превращаются в поддерево REST-режима: корни (перечисленные
+ * мысли) входят в результат (ошибка ad1551ea, 0.12.1 — выравнивание с MCP
+ * `in_subtree_of`), глубина {@link STRUCTURES_PARENT_SCOPE_MAX_DEPTH},
+ * неактивные рёбра — по `show_inactive`.
  */
 export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQueryRequest {
   const active: ThoughtQueryActive | undefined =
@@ -287,7 +291,7 @@ export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQuer
       req.parent_ids !== undefined && req.parent_ids.length > 0
         ? {
             roots: req.parent_ids,
-            include_roots: false,
+            include_roots: true,
             max_depth: STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
             include_inactive_links: req.show_inactive === true,
             link_filter: req.link_filter,
@@ -302,6 +306,38 @@ export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQuer
   };
 }
 
+/**
+ * Граница пользовательского ввода (ошибки 090d0242, 4f17cb73 и f4580fff,
+ * 0.12.1): убедиться, что каждая ссылка на свойство в условиях отбора
+ * разрешается в реестре сети, иначе — `NOT_FOUND` с указанием поля. Код
+ * выровнен по конвенции резолва реестровых сущностей (как у типа:
+ * `resolveThoughtTypeIdByName` — несуществующее имя → `NOT_FOUND`,
+ * неоднозначность → `VALIDATION_ERROR` с `details.candidates`; см.
+ * `etn.guide { topic: "thoughts.query" }`): ссылка на несуществующую
+ * реестровую сущность → `NOT_FOUND` — и по имени, и по id. Движок выборки
+ * (`propertyClauses`) на такую ссылку даёт «нет совпадений» (`NO_MATCH_CLAUSE`),
+ * а не ошибку (он тотален и обслуживает сохранённые рецепты/веер); фасады,
+ * принимающие ввод от пользователя (`POST /thoughts/query`,
+ * `etn.thoughts.query`), обязаны отвергнуть неразрешимую ссылку явно, чтобы
+ * отбор не выглядел пустым молча.
+ */
+export function assertPropertyConditionsResolvable(
+  ndb: NetworkDb,
+  conditions: ReadonlyArray<{ property_id: string }> | undefined,
+  requestId?: string,
+): void {
+  for (const cond of conditions ?? []) {
+    if (getNetworkProperty(ndb, cond.property_id) === null) {
+      throw new EtnError(
+        'NOT_FOUND',
+        `Свойство «${cond.property_id}» не найдено в реестре сети.`,
+        { field: 'property_id', property_id: cond.property_id },
+        requestId,
+      );
+    }
+  }
+}
+
 const MCP_SORT_TO_CANONICAL: Record<ThoughtQuerySort, StructureSort> = {
   title: 'alpha',
   created_at: 'created',
@@ -312,9 +348,11 @@ const MCP_SORT_TO_CANONICAL: Record<ThoughtQuerySort, StructureSort> = {
  * MCP → канон: wire-`ThoughtQueryRequest` (05-mcp-server.md §4.1) переводится
  * в {@link ThoughtQueryRequest}. Имена типов и свойств резолвит MCP-фасад до
  * вызова адаптера — здесь принимаются только id (`type_id[]`,
- * `properties[].property_id`; условия без `property_id` отбрасываются как
- * «нет совпадения»). Дефолты MCP-контракта: лимит 50, смещение 0, `active`
- * `'true'`, `trashed` `'false'`, сортировка `title` (= `alpha`) `asc`.
+ * `properties[].property_id`). Условие без адреса свойства больше НЕ
+ * отбрасывается молча (ошибка 090d0242, 0.12.1): это `VALIDATION_ERROR` —
+ * иначе отбор незаметно расширяется. Дефолты MCP-контракта: лимит 50,
+ * смещение 0, `active` `'true'`, `trashed` `'false'`, сортировка `title`
+ * (= `alpha`) `asc`.
  */
 export function mcpRequestToQuery(
   req: McpThoughtQueryRequest,
@@ -326,13 +364,20 @@ export function mcpRequestToQuery(
   );
   return {
     type_ids: req.type_id,
-    properties: (req.properties ?? [])
-      .filter((c): c is typeof c & { property_id: string } => typeof c.property_id === 'string')
-      .map((c) => ({
+    properties: (req.properties ?? []).map((c) => {
+      if (typeof c.property_id !== 'string' || c.property_id === '') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Условие свойства не адресует свойство: укажите property_id или property.',
+          { field: 'property_id' },
+        );
+      }
+      return {
         property_id: c.property_id,
         operator: c.operator,
         value: c.value,
-      })),
+      };
+    }),
     active: req.active,
     trashed: req.trashed,
     keywords: req.keywords,
@@ -378,7 +423,7 @@ export function mcpRequestToQuery(
  * `show_trash`). Флаг — такая же часть внешнего вида, как `active`.
  */
 export const REF_COLUMNS =
-  't.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,' +
+  't.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id, t.icon_color,' +
   ' t.active, t.marked_for_deletion, t.fg_color, t.bg_color,' +
   ' t.font_bold, t.font_italic, t.font_underline, t.font_strike, t.font_manual';
 
@@ -545,7 +590,8 @@ function walkSubtree(ndb: NetworkDb, subtree: ThoughtQuerySubtree): WalkResult {
       break;
     }
     visited.add(id);
-    // REST-режим исключает корни из набора кандидатов (их потомки — depth ≥ 1).
+    // Корни (depth 0) входят в набор кандидатов, когда `include_roots`
+    // (в 0.12.1 — у обоих фасадов, ошибка ad1551ea).
     if (subtree.include_roots || depth > 0) depths.set(id, depth);
     if (depth >= max_depth) continue;
     const rows = childrenOf.all(id, activeFlag, ...typeParams) as Array<{ nid: string }>;
@@ -908,10 +954,28 @@ function linkPropertyClause(
 }
 
 /**
+ * Клауза «нет совпадений» для условия, ссылка на свойство которого не
+ * разрешилась (чужой/несуществующий `property_id` или имя без совпадения в
+ * реестре). В прежнем движке такое условие молча ВЫПАДАЛО из `WHERE`, из-за
+ * чего отбор расширялся до всей сети (ошибки 090d0242 и 4f17cb73, 0.12.1).
+ * Теперь условие остаётся в запросе как заведомо ложное: `AND 0` обнуляет
+ * набор совпадений и НЕ ослабляет отбор. Это согласуется с контрактом
+ * (`etn.guide { topic: "thoughts.query" }`: неизвестный `property_id` не
+ * матчит ничего) и с кросс-сетевым веером, где свойство может отсутствовать в
+ * части сетей (тогда такая сеть вносит пустой вклад, а не расширяет выборку).
+ *
+ * Явную ошибку `VALIDATION_ERROR` на неразрешимую ссылку дают границы
+ * пользовательского ввода (MCP-фасад `etn.thoughts.query`, REST-роут
+ * `POST /thoughts/query`) — движок же тотален и никогда не расширяет отбор.
+ */
+const NO_MATCH_CLAUSE: Clause = { sql: '0', params: [] };
+
+/**
  * Build one property-condition clause for a batch of conditions. Addressed
- * registry properties are read in one `SELECT … IN (…)` call; a missing
- * property (deleted after the filter was saved) drops the condition — «нет
- * совпадения», как в обоих прежних движках.
+ * registry properties are read in one `SELECT … IN (…)` call. A condition whose
+ * property reference does not resolve (foreign/unknown id, name without a
+ * registry match, or a property deleted after the filter was saved) yields
+ * {@link NO_MATCH_CLAUSE} — «нет совпадения», а не ослабление отбора.
  */
 function propertyClauses(
   ndb: NetworkDb,
@@ -922,24 +986,31 @@ function propertyClauses(
   // Резолвинг ссылки условия (задача df992826): registry id ИЛИ имя — прямое/
   // обратное имя свойства-связи. Обратное имя даёт клаузу с противоположным
   // направлением рёбер; коллизия имён отвергается с пояснением внутри
-  // `resolveConditionPropertyRef`. Неизвестная ссылка — условие отбрасывается
-  // («нет совпадения», как и раньше для чужого `property_id`).
+  // `resolveConditionPropertyRef`. Неразрешимая ссылка — клауза «нет
+  // совпадений» (`NO_MATCH_CLAUSE`), а не выпадение условия из отбора.
   const refs = conds.map((c) => resolveConditionPropertyRef(ndb, c.property_id, requestId));
   const ids = [...new Set(refs.filter((r) => r !== null).map((r) => r.propertyId))];
-  if (ids.length === 0) return [];
-  const placeholders = ids.map(() => '?').join(',');
-  const rows = ndb
-    .prepare(`SELECT id, value_type, config FROM properties_v WHERE id IN (${placeholders})`)
-    .all(...ids) as Array<{ id: string; value_type: string; config: string | null }>;
+  const rows =
+    ids.length === 0
+      ? []
+      : (ndb
+          .prepare(`SELECT id, value_type, config FROM properties_v WHERE id IN (${ids.map(() => '?').join(',')})`)
+          .all(...ids) as Array<{ id: string; value_type: string; config: string | null }>);
   const byId = new Map(rows.map((r) => [r.id, r] as const));
 
   const out: Clause[] = [];
   for (let i = 0; i < conds.length; i += 1) {
     const cond = conds[i]!;
     const ref = refs[i]!;
-    if (ref === null) continue;
+    if (ref === null) {
+      out.push(NO_MATCH_CLAUSE);
+      continue;
+    }
     const raw = byId.get(ref.propertyId);
-    if (raw === undefined) continue;
+    if (raw === undefined) {
+      out.push(NO_MATCH_CLAUSE);
+      continue;
+    }
     const def: RegistryPropertyRow = { id: raw.id, value_type: raw.value_type as PropertyValueType, config: raw.config };
     const allowed = OPS_BY_VALUE_TYPE[def.value_type];
     if (!allowed.includes(cond.operator)) {

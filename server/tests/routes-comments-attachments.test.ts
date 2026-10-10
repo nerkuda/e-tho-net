@@ -6,7 +6,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+
+import { DEFAULT_MAX_LENGTH } from '@etn/markdown';
 
 import {
   authHeaders,
@@ -141,7 +144,7 @@ describe(
       }
     });
 
-    it('attachments: url/file validation, list, patch (no If-Match), delete', async () => {
+    it('attachments: url/file validation, list, patch metadata', async () => {
       const ctx = await buildRestContext();
       try {
         const thoughtId = await createThought(ctx, 'Хозяин вложений');
@@ -190,7 +193,7 @@ describe(
         assert.equal(list.statusCode, 200);
         assert.equal((list.json().data as unknown[]).length, 2);
 
-        // PATCH without If-Match (attachments have no version column).
+        // PATCH без If-Match (у вложений нет колонки версии) — правка метаданных.
         const patched = await ctx.app.inject({
           method: 'PATCH',
           url: `/api/v1/networks/${ctx.networkId}/attachments/${urlAtt.id}`,
@@ -200,12 +203,15 @@ describe(
         assert.equal(patched.statusCode, 200);
         assert.equal((patched.json().data as { title: string }).title, 'Обновлённая ссылка');
 
+        // Снятие владельца (owner-cleanup): последний живой владелец удаляет вложение.
         const del = await ctx.app.inject({
           method: 'DELETE',
-          url: `/api/v1/networks/${ctx.networkId}/attachments/${fileAtt.id}`,
+          url: `/api/v1/networks/${ctx.networkId}/attachments/${fileAtt.id}/owners`,
           headers: authHeaders(ctx),
+          payload: { owner_type: 'thought', owner_id: thoughtId },
         });
-        assert.equal(del.statusCode, 204);
+        assert.equal(del.statusCode, 200, del.body);
+        assert.deepEqual(del.json().data, { removed: true, attachment_deleted: true });
 
         const after = await ctx.app.inject({
           method: 'GET',
@@ -213,6 +219,70 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal((after.json().data as unknown[]).length, 1);
+
+        // Публичного DELETE вложения БОЛЬШЕ НЕТ (0.12.1, задача 478f8c1f).
+        const gone = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/${urlAtt.id}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(gone.statusCode, 404, gone.body);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('attachments: PUT /content over the render limit → 422, file and row unchanged (9f2e94b0)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const thoughtId = await createThought(ctx, 'Хозяин редактора');
+        const upload = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/attachments/file`,
+          headers: authHeaders(ctx),
+          payload: {
+            title: 'Заметка',
+            mime_type: 'text/markdown',
+            data_base64: Buffer.from('# старый').toString('base64'),
+          },
+        });
+        assert.equal(upload.statusCode, 201);
+        const att = upload.json().data as { id: string; file_path: string; file_size: number };
+        const contentUrl = `/api/v1/networks/${ctx.networkId}/attachments/${att.id}/content`;
+
+        // Over-limit markdown body → 422 VALIDATION_ERROR with the payload field.
+        const over = 'a'.repeat(DEFAULT_MAX_LENGTH + 1);
+        const rejected = await ctx.app.inject({
+          method: 'PUT',
+          url: contentUrl,
+          headers: authHeaders(ctx),
+          payload: { data_base64: Buffer.from(over).toString('base64') },
+        });
+        assert.equal(rejected.statusCode, 422);
+        const error = rejected.json().error as { code: string; details?: { field?: string } };
+        assert.equal(error.code, 'VALIDATION_ERROR');
+        assert.equal(error.details?.field, 'data_base64');
+
+        // Neither the file on disk nor the row changed.
+        assert.equal(readFileSync(att.file_path, 'utf8'), '# старый');
+        const meta = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/${att.id}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal((meta.json().data as { file_size: number }).file_size, att.file_size);
+
+        // Boundary is inclusive: exactly the limit is accepted, and a normal
+        // update still rewrites the file.
+        const exact = 'a'.repeat(DEFAULT_MAX_LENGTH);
+        const ok = await ctx.app.inject({
+          method: 'PUT',
+          url: contentUrl,
+          headers: authHeaders(ctx),
+          payload: { data_base64: Buffer.from(exact).toString('base64') },
+        });
+        assert.equal(ok.statusCode, 200);
+        assert.equal(readFileSync(att.file_path, 'utf8'), exact);
       } finally {
         await closeRestContext(ctx);
       }
@@ -298,19 +368,18 @@ describe(
         });
         assert.equal(copyRes.statusCode, 200);
         const copyBody = copyRes.json().data as {
-          created: Array<{ id: string; owner_id: string; title: string }>;
-          skipped: string[];
+          added: Array<{ owner_type: string; owner_id: string; title: string | null }>;
+          skipped: unknown[];
         };
-        assert.equal(copyBody.created.length, 2);
+        assert.equal(copyBody.added.length, 2);
         assert.deepEqual(copyBody.skipped, []);
-        const newIds = new Set(copyBody.created.map((c) => c.id));
-        assert.equal(newIds.size, 2);
-        for (const c of copyBody.created) {
-          assert.equal(c.title, 'Page');
-          assert.ok([t1, t2].includes(c.owner_id));
-        }
+        // Муль-владение: у того же вложения появились владельцы t1/t2.
+        assert.deepEqual(
+          copyBody.added.map((a) => a.owner_id).sort(),
+          [t1, t2].sort(),
+        );
 
-        // Re-copy: same source, target t1 already has the same kind+url — skipped.
+        // Re-copy: those owners already exist — all skipped, nothing added.
         const reCopy = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${ctx.networkId}/attachments/${sourceId}/copy`,
@@ -319,11 +388,11 @@ describe(
         });
         assert.equal(reCopy.statusCode, 200);
         const reBody = reCopy.json().data as {
-          created: unknown[];
-          skipped: string[];
+          added: unknown[];
+          skipped: Array<{ owner_id: string }>;
         };
-        assert.equal(reBody.created.length, 0);
-        assert.deepEqual(reBody.skipped.sort(), [t1, t2].sort());
+        assert.equal(reBody.added.length, 0);
+        assert.deepEqual(reBody.skipped.map((s) => s.owner_id).sort(), [t1, t2].sort());
 
         // Each target now has exactly one copy in its list.
         for (const tid of [t1, t2]) {
@@ -439,6 +508,47 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal((onlyUrl.json().data as unknown[]).length, 1);
+
+        // Пагинация: `limit`/`offset` приходят СТРОКАМИ и обязаны приниматься
+        // (регресс: `parse: truncInt` ждал число и отдавал 422 на любой
+        // limit/offset — исправлено `queryInt`, задача 0f6c3e39). `q=e` даёт
+        // все три строки; страница по два вложения.
+        const firstPage = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=e&limit=2&offset=0`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(firstPage.statusCode, 200);
+        const firstBody = firstPage.json() as {
+          data: unknown[];
+          meta: { total: number; offset: number; limit: number };
+        };
+        assert.equal(firstBody.data.length, 2, 'первая страница — не больше limit');
+        assert.equal(firstBody.meta.limit, 2);
+        assert.equal(firstBody.meta.offset, 0);
+        assert.equal(firstBody.meta.total, 3, 'total — всё множество, не страница');
+
+        const secondPage = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=e&limit=2&offset=2`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(secondPage.statusCode, 200);
+        const secondBody = secondPage.json() as {
+          data: unknown[];
+          meta: { total: number; offset: number; limit: number };
+        };
+        assert.equal(secondBody.data.length, 1, 'хвост второй страницы');
+        assert.equal(secondBody.meta.offset, 2);
+
+        // Некорректный limit — понятная ошибка 422 с именем параметра.
+        const badLimit = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=e&limit=abc`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(badLimit.statusCode, 422);
+        assert.equal(badLimit.json().error.details.field, 'limit');
       } finally {
         await closeRestContext(ctx);
       }

@@ -40,6 +40,8 @@ import {
 } from '../lib/menu.js';
 import { errorDialog, showDialog } from '../lib/dialog.js';
 import { div, span } from '../lib/dom.js';
+import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
+import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { colorField } from '../lib/ui/color-field.js';
 import { fieldInput, fieldRow, fieldTextarea } from '../lib/ui/field.js';
 import { emptyState, errorState, loadingState } from '../lib/ui/empty-state.js';
@@ -674,6 +676,19 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
   const body = div('diff-body');
   body.append(stateHost, listHost);
 
+  // Пока фокус внутри списка — его контекст на вершине стека диспетчера
+  // (ADR b420b08c, задача fd3d84f4); снимаем и при закрытии диалога.
+  let releaseDiffContext: (() => void) | null = null;
+  const onDiffFocusIn = (): void => {
+    releaseDiffContext ??= pushKeyContext(DIFF_ROW_CONTEXT_ID);
+  };
+  const onDiffFocusOut = (): void => {
+    releaseDiffContext?.();
+    releaseDiffContext = null;
+  };
+  listHost.addEventListener('focusin', onDiffFocusIn as EventListener);
+  listHost.addEventListener('focusout', onDiffFocusOut as EventListener);
+
   let rows: DiffRow[] = [];
   let counts: LayerDiffCounts | null = null;
   let cursor: string | null = null;
@@ -777,6 +792,8 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
       if (scrollEl !== null && scrollHandler !== null) {
         scrollEl.removeEventListener('scroll', scrollHandler);
       }
+      releaseDiffContext?.();
+      releaseDiffContext = null;
     },
   });
 }
@@ -829,15 +846,46 @@ function diffRowNode(row: DiffRow, onOpen: (row: DiffRow) => void): HTMLElement 
     node.tabIndex = 0;
     node.title = 'Показать построчный дифф';
     node.addEventListener('click', () => onOpen(row));
-    node.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        onOpen(row);
-      }
-    });
+    // Клавиатура строки — через общеклиентский диспетчер (ADR b420b08c,
+    // задача fd3d84f4): открыватель привязан к узлу, клавиши разбирает
+    // делегированный контекст списка.
+    diffRowOpeners.set(node, { row, onOpen });
   }
   return node;
 }
+
+/** Открыватель строки дифа, привязанный к её узлу (делегированная клавиатура). */
+const diffRowOpeners = new WeakMap<HTMLElement, { row: DiffRow; onOpen: (row: DiffRow) => void }>();
+
+/** Делегированная клавиатура строк дифа (Enter/Space на строке-«кнопке»). */
+function handleDiffRowKey(event: KeyboardEvent): boolean {
+  const target = event.target;
+  if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false;
+  const rowEl = target.classList.contains('diff-row-thought')
+    ? target
+    : target.closest<HTMLElement>('.diff-row-thought');
+  if (rowEl === null) return false;
+  const entry = diffRowOpeners.get(rowEl);
+  if (entry === undefined) return false;
+  entry.onOpen(entry.row);
+  return true;
+}
+
+const DIFF_ROW_CONTEXT_ID = 'layers-diff-row';
+defineKeyContext({
+  id: DIFF_ROW_CONTEXT_ID,
+  bindings: [
+    // Прежний обработчик открывал строку на Enter (и Space) НЕЗАВИСИМО от
+    // модификаторов. Для Enter набор выражен привязками (`lib/keymap-chords.ts`);
+    // Space оставлен как прежде — вне Enter-скоупа задачи.
+    ...modifierChordVariants('Enter').map((chord) => ({
+      command: 'layers.diff.open',
+      chord,
+      run: handleDiffRowKey,
+    })),
+    { command: 'layers.diff.open.space', chord: 'Space', run: handleDiffRowKey },
+  ],
+});
 
 /** Interleave section headings with rows in the canonical section order, keyed
  *  so `reconcileKeyed` appends only what a new page brought. Grouping by the

@@ -249,6 +249,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       md: permanent?.body_md ?? '',
       html: permanent?.body_html ?? '',
       placeholder: 'Введите комментарий…',
+      // Вход в правку двойным кликом ставит каретку/выделение в место клика
+      // (требование bac754e4, задача 189da39e): просмотр размечен позициями.
+      sourceMapView: true,
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
       // Контекст комментария для флоу «создать мысль по legacy-ссылке»
       // (карточка ETN 34ffbd75): владелец — родитель создаваемой мысли.
@@ -257,6 +260,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
         ownerId: ctx.ownerId,
         commentKind: 'permanent',
         getCommentId: () => permanent?.id ?? null,
+        // Родитель новой мысли (ТЗ5): владелец-мысль; у комментария связи
+        // список пуст — порт вставки выведет источник связи.
+        getParentThoughtIds: () => (ctx.ownerType === 'thought' ? [ctx.ownerId] : []),
       },
       // Шаблон комментария типа мысли (08-ui-spec.md §6.4): когда у
       // редактируемой мысли есть тип с непустым `comment_template_md`,

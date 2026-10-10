@@ -76,7 +76,7 @@
   flex: none;
   width: 12px;
   font-size: 10px;
-  color: var(--muted, #8a93a5);
+  color: var(--text-faint);
   text-align: center;
   cursor: pointer;
 }
@@ -87,7 +87,7 @@
 
 .type-combo-item.disabled {
   cursor: default;
-  color: var(--muted, #8a93a5);
+  color: var(--text-faint);
 }
 
 .type-combo-item.disabled:hover,
@@ -114,7 +114,7 @@
   max-width: 55%;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--muted, #8a93a5);
+  color: var(--text-faint);
   font-size: 0.85em;
 }
 
@@ -132,7 +132,7 @@
 
 .entity-pick-note {
   flex: none;
-  color: var(--muted, #8a93a5);
+  color: var(--text-faint);
   font-size: 0.85em;
 }
 
@@ -301,7 +301,7 @@ button.entity-combo-pick:disabled {
 }
 
 .row-disabled > td {
-  color: var(--muted, #8a93a5);
+  color: var(--text-faint);
   opacity: 0.7;
 }
 
@@ -362,7 +362,7 @@ button.entity-combo-pick:disabled {
 .property-list-icon {
   vertical-align: middle;
   margin-right: 6px;
-  color: var(--muted, #8a93a5);
+  color: var(--text-faint);
 }
 
 /* Единый значок конца связи: короткая вертикальная линия с приделанной к её

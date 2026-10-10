@@ -160,6 +160,20 @@ export const PREF_KEY = {
 export type PrefKey = (typeof PREF_KEY)[keyof typeof PREF_KEY];
 
 /**
+ * L3s server-level user settings stored in `user_settings` of `_system.db`
+ * (11-settings-and-state.md §2.1 L3s, ADR 3a829d25). They sit outside any
+ * network and are shared by all networks and all devices of the user on this
+ * server; access is `/api/v1/users/me/settings`.
+ *
+ * First (and currently only) key: `comment_hotkeys` — JSON map
+ * «command → combination» of the user's comment hotkeys.
+ */
+export const USER_SETTING_KEY = {
+  COMMENT_HOTKEYS: 'comment_hotkeys',
+} as const satisfies Record<string, string>;
+export type UserSettingKey = (typeof USER_SETTING_KEY)[keyof typeof USER_SETTING_KEY];
+
+/**
  * L4 client-side UI-state keys stored in the local `ui_state` table
  * (11-settings-and-state.md §2.1 L4). Per (client × user × network), never
  * synced between clients.

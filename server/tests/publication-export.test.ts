@@ -22,6 +22,7 @@ import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
 import { createPublication } from '../src/domain/publication-service.js';
+import { createAttachmentFile } from '../src/domain/attachment-service.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import {
   authHeaders,
@@ -378,6 +379,77 @@ describe('publication-export: одиночный экспорт', { skip }, () =
     // Картинка вклеена как data-URI, а исходный etnimg-URL исчез.
     assert.ok(html.includes('src="data:image/png;base64,'), html);
     assert.ok(!html.includes('etnimg://'), html);
+  });
+
+  it('картинка по id вложения (etnimg://attachment/<id>): экспорт в assets и печать в data-URI, недоступное — предупреждение (5943e3e8)', async () => {
+    const ctx = await buildRestContext();
+    cleanups.push(() => closeRestContext(ctx));
+
+    const docType = createThoughtType(ctx.ndb, { name: 'Doc' }, ctx.adminId);
+    const a = seedThought(ctx.ndb, 'Раздел A', docType.id, ctx.adminId);
+
+    // Серверная картинка-вложение (владелец — сам раздел); file_path внутри
+    // каталога attachments сети — id резолвится по attachments_v.
+    const att = createAttachmentFile(
+      ctx.ndb,
+      'thought',
+      a,
+      {
+        title: 'pic',
+        mime_type: 'image/png',
+        data_base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 7, 7, 7]).toString('base64'),
+      },
+      ctx.adminId,
+    );
+    assert.equal(att.kind, 'file');
+    assert.ok(att.file_path !== null);
+
+    // Ссылки в тексте: доступная по id + недоступная (несуществующий id).
+    const missingId = randomUUID();
+    seedComment(
+      ctx.ndb,
+      a,
+      `![pic](etnimg://attachment/${att.id})\n\n![gone](etnimg://attachment/${missingId})\n\n![path](${etnimgUrl(att.file_path)})`,
+      ctx.adminId,
+    );
+
+    const pub = createPublication(
+      ctx.ndb,
+      { title: 'Doc By Id', title_recipe: { type_ids: [docType.id], sort: 'alpha', order: 'asc' } },
+      ctx.adminId,
+    );
+
+    // Zip-экспорт: доступная по id скопирована в assets и переписана; прежняя
+    // форма по пути — тоже; недоступная оставлена как есть, документ цел.
+    const jobId = await startExport(ctx, pub.id, 'html');
+    const job = await getJob(ctx, jobId);
+    assert.equal(job.status, 'done');
+    assert.ok(
+      job.report?.publications[0]?.warnings.some((w) => w.includes('вложение не найдено')),
+      `ожидалось предупреждение о недоступном id: ${JSON.stringify(job.report)}`,
+    );
+
+    const zip = await downloadJob(ctx, jobId);
+    const names = (await listZipEntries(zip)).map((e) => e.fileName);
+    const asset = names.find((n) => n.startsWith('assets/') && n.endsWith('.png'));
+    assert.ok(asset, names.join(', '));
+    const html = (await readZipEntry(zip, 'doc-by-id.html')).toString('utf8');
+    assert.ok(html.includes(`src="${asset}"`), html);
+    assert.ok(!html.includes(`etnimg://attachment/${att.id}`), html);
+    assert.ok(html.includes(`src="etnimg://attachment/${missingId}"`), html);
+
+    // Печать: тот же резолв по id — картинка вклеена как data-URI, недоступная
+    // не роняет печать (200), исходная схема доступной исчезает.
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/networks/${ctx.networkId}/publications/${pub.id}/print`,
+      headers: authHeaders(ctx),
+    });
+    assert.equal(res.statusCode, 200);
+    const printHtml = res.body;
+    assert.ok(printHtml.includes('src="data:image/png;base64,'), printHtml);
+    assert.ok(!printHtml.includes(`etnimg://attachment/${att.id}`), printHtml);
+    assert.ok(printHtml.includes(`etnimg://attachment/${missingId}`), printHtml);
   });
 
   it('разделы глубже H6: обезглавливание в абзац, а не кламп (md и html)', async () => {

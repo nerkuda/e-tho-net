@@ -8,6 +8,7 @@ import type { AuditCategory, ExportFormat, JobStatus } from '../enums.js';
 import type { EtnErrorBody } from '../errors.js';
 import type { LayerEcho } from './layer.js';
 import type { PublicationExportReport } from './publication.js';
+import type { MutationWarning } from './transclusion-warning.js';
 
 /** Optional metadata returned on a single-item success response. */
 export interface SuccessMeta {
@@ -18,12 +19,25 @@ export interface SuccessMeta {
   /** Echoes the `Client-Request-Id` header of the request. */
   request_id?: string;
   /**
+   * Attachment uploads only (0.12.1, ADR `e3a35864`, операция 47215aab):
+   * `true` when the uploaded file matched an existing attachment by
+   * `content_hash` and was reused — no new row, no file copy.
+   */
+  reused?: boolean;
+  /**
    * Echo of the session's current layer (task S7, 13-layers.md §7.1): every
    * mutating REST response of a network carries it, so a write landing in a
    * foreign layer is discoverable immediately. Injected centrally by the
    * server's onSend hook — route handlers do not fill it manually.
    */
   layer?: LayerEcho;
+  /**
+   * Non-fatal warnings about the applied write (требование `822a9149`): the
+   * change succeeded, but the written markdown lost live transclusions that
+   * existed before (`TRANSCLUSION_LOST`). Absent when there is nothing to warn
+   * about.
+   */
+  warnings?: MutationWarning[];
 }
 
 /** Single-item success envelope: `{ data, meta }` (03-server-api.md §2). */

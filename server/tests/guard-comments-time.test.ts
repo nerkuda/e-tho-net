@@ -30,6 +30,7 @@ import { describe, it } from 'node:test';
 import DatabaseConstructor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 
+import { permanentCommentId } from '../src/db/comment-permanent-id.js';
 import { registerMigrationHelpers } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { networkMigrationsDir } from '../src/paths.js';
@@ -150,7 +151,11 @@ describe(
         seedComment(db, 'c-date-only', 'chronological', '2024-01-01', null);
         seedComment(db, 'c-open-ended', 'chronological', '2024-02-03T04:05:06.789Z', null);
         seedComment(db, 'c-to-date-only', 'chronological', '2024-03-04T05:06:07.000Z', '2024-03-05');
-        seedComment(db, 'c-permanent', 'permanent', '2024-01-01T00:00:00.000Z', null);
+        // Постоянный комментарий — с уже детерминированным id владельца
+        // (миграция 048 нормализует `kind='permanent'` к id от natural key и
+        // переименовала бы произвольный id; здесь проверяется 046, не 048).
+        const permanentId = permanentCommentId('thought', 't1');
+        seedComment(db, permanentId, 'permanent', '2024-01-01T00:00:00.000Z', null);
 
         const res = runMigrations(db, networkMigrationsDir());
         // База доведена до 045 (pre046Db) — применяется каталог с 046
@@ -179,8 +184,8 @@ describe(
           use_time: 0,
         });
         // Постоянный комментарий сохраняет valid_to = NULL.
-        assert.deepEqual(readComment(db, 'c-permanent'), {
-          id: 'c-permanent',
+        assert.deepEqual(readComment(db, permanentId), {
+          id: permanentId,
           valid_from: '2024-01-01T00:00:00.000Z',
           valid_to: null,
           use_time: 0,

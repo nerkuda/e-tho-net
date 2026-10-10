@@ -47,7 +47,7 @@
 import type { LinkStyle } from '@etn/shared';
 
 import { div, el, positionBodyDropdown, span } from './dom.js';
-import { svgIcon } from './icons.js';
+import { svgIcon } from './ui/icon.js';
 import { buildLinkEndIcon, type LinkEndIconSpec } from './property-list.js';
 import { createThoughtCloud, type CloudProfile, type ThoughtCloudInput } from './thought-cloud.js';
 

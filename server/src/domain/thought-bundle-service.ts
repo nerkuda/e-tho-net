@@ -22,6 +22,7 @@ import type {
   ThoughtBundleResult,
   ThoughtBundleThoughtAction,
   ThoughtDuplicateCandidate,
+  MutationWarning,
 } from '@etn/shared';
 import { EtnError } from '@etn/shared';
 
@@ -213,6 +214,7 @@ function upsertPermanentComment(
   thoughtId: string,
   input: NonNullable<ThoughtBundleInput['comment']>,
   actorUserId: string,
+  warnings: MutationWarning[],
 ): { comment: Comment; action: 'created' | 'updated' } {
   const existing = listComments(ndb, 'thought', thoughtId).find((c) => c.kind === 'permanent');
   if (existing !== undefined) {
@@ -225,6 +227,9 @@ function upsertPermanentComment(
       },
       undefined,
       actorUserId,
+      // Перезапись постоянного комментария может потерять живые трансклюзии —
+      // предупреждение собирается доменом (требование 822a9149).
+      { warnings },
     );
     return { comment, action: 'updated' };
   }
@@ -268,8 +273,17 @@ export function upsertThoughtBundle(
 
     let comment: Comment | undefined;
     let commentAction: 'created' | 'updated' | undefined;
+    // Предупреждения текстовых частей бандла (требование 822a9149): перезапись
+    // постоянного комментария может потерять живые трансклюзии.
+    const textWarnings: MutationWarning[] = [];
     if (input.comment !== undefined) {
-      const upserted = upsertPermanentComment(ndb, thought.id, input.comment, actorUserId);
+      const upserted = upsertPermanentComment(
+        ndb,
+        thought.id,
+        input.comment,
+        actorUserId,
+        textWarnings,
+      );
       comment = upserted.comment;
       commentAction = upserted.action;
     }
@@ -345,6 +359,9 @@ export function upsertThoughtBundle(
             ...(l.comment === undefined ? {} : { comment: l.comment }),
           },
           actorUserId,
+          // Комментарий ребра тоже markdown-поле: перезапись при восстановлении
+          // ребра из корзины может потерять трансклюзии (требование 822a9149).
+          { warnings: textWarnings },
         );
         // Read back the link's properties + permanent comment when the bundle
         // attached any, so the caller (and the audit/event payload) sees the
@@ -382,8 +399,12 @@ export function upsertThoughtBundle(
 
     // Task O6: "card completeness" warnings — computed against the freshly
     // written card so the agent learns about unfilled `required` properties
-    // (own or inherited via L21) before assuming the bundle is "done".
-    const warnings = computeThoughtCardWarnings(ndb, thought.id);
+    // (own or inherited via L21) before assuming the bundle is "done". Text
+    // warnings (lost transclusions, 822a9149) tail the list.
+    const warnings: MutationWarning[] = [
+      ...computeThoughtCardWarnings(ndb, thought.id),
+      ...textWarnings,
+    ];
 
     // Части бандла пишутся ПОСЛЕ мысли и могли сдвинуть её `updated_at`
     // (комментарии/хроника — ошибка 228df7a4; значения свойств — требование

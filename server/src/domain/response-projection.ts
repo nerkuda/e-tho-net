@@ -55,6 +55,7 @@ import type { CompactVisualFieldKeys } from '@etn/shared';
 export const COMPACT_VISUAL_FIELD_KEYS: readonly CompactVisualFieldKeys[] = [
   'fg_color',
   'bg_color',
+  'icon_color',
   'font_bold',
   'font_italic',
   'font_underline',

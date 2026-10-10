@@ -8,7 +8,10 @@
  * keep the primary (first) attachment. Two kinds exist:
  *   * `permanent` — at most **one** per owner (enforced by the partial unique
  *     index `idx_comments_permanent_one`) and always exactly one target;
- *     `valid_from = created_at`, `valid_to = NULL`.
+ *     `valid_from = created_at`, `valid_to = NULL`. Уникальность — ПО ЦЕПОЧКЕ
+ *     слоёв: логический id выводится детерминированно от владельца
+ *     (`db/comment-permanent-id.ts`, ошибка 46b93145), поэтому слой и основа
+ *     сходятся в один id, а не заводят по строке.
  *   * `chronological` — unrestricted count; carries `valid_from`/`valid_to`
  *     (always full UTC instants; `valid_to` is never empty — unset equals
  *     `valid_from`, 0.10.1) and 1..N targets. Detaching the last target
@@ -35,15 +38,20 @@ import {
   type CommentTarget,
   type CommentUpdateInput,
   type CommentsPreview,
+  type MutationWarning,
   type PermanentCommentFull,
   type PermanentCommentPreview,
 } from '@etn/shared';
 
-import { renderMarkdown } from '@etn/markdown';
+import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
 
 import { applySectionOps, type EditOp } from './markdown-sections.js';
 import { normaliseInstant } from './dates.js';
+import { enforceLock } from './lock-service.js';
+import type { BodyExpander } from './transclusion-service.js';
+import { transclusionLossWarning } from './transclusion-service.js';
 import type { NetworkDb } from '../db/network-db.js';
+import { permanentCommentId } from '../db/comment-permanent-id.js';
 import {
   deleteRowLayered,
   isBaseContext,
@@ -159,32 +167,68 @@ function validateOwnerType(ownerType: unknown): CommentOwnerType {
   return ownerType as CommentOwnerType;
 }
 
-/**
- * Id защищённой HOME-мысли сети (`is_root = 1`), или `null`, когда её нет.
- * Локальная копия запроса из `thought-service.getHomeThoughtId`: импорт оттуда
- * замкнул бы цикл — `thought-service` уже импортирует этот модуль.
- */
-function homeThoughtId(ndb: NetworkDb): string | null {
-  const row = ndb.prepare('SELECT id FROM thoughts_v WHERE is_root = 1 LIMIT 1').get() as
-    | { id: string }
-    | undefined;
-  return row?.id ?? null;
-}
-
 /** Непустой текст: строка, у которой после `trim()` остались символы. */
 function isNonEmptyText(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.trim() !== '';
 }
 
 /**
- * Есть ли у записи содержательная привязка — цель, отличная от HOME-мысли
- * (требование 26f0aa52): владелец HOME — первичная привязка, а не чипс.
- * Связь или любая чужая мысль считается содержанием записи.
+ * Лимит рендера тела комментария (ошибка 2764d7bb, требование 99055dba):
+ * единый рендерер `@etn/markdown` отвергает источник длиннее
+ * {@link DEFAULT_MAX_LENGTH} обычным `Error`, который глобальный обработчик
+ * превращал в `500 INTERNAL`. Проверяем длину ДО рендера и отвечаем
+ * `422 VALIDATION_ERROR` с `details.field` — это клиентская ошибка ввода, а не
+ * внутренняя. Граница включительна: ровно {@link DEFAULT_MAX_LENGTH} символов
+ * допустимо, отвергается только превышение.
+ *
+ * @param bodyMd - тело в формате Markdown.
+ * @param field - путь поля тела в исходном запросе для `details.field`
+ *   (`body_md` для `POST /comments`, `comment.body_md` для `POST /thoughts`).
  */
-function hasBindingOutsideHome(ndb: NetworkDb, targets: readonly CommentTarget[]): boolean {
-  const home = homeThoughtId(ndb);
-  if (home === null) return targets.length > 0;
-  return targets.some((t) => !(t.owner_type === 'thought' && t.owner_id === home));
+function assertBodyWithinRenderLimit(bodyMd: string, field: string): void {
+  if (bodyMd.length > DEFAULT_MAX_LENGTH) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `body_md превышает лимит рендера (${bodyMd.length} > ${DEFAULT_MAX_LENGTH} символов).`,
+      { field, limit: DEFAULT_MAX_LENGTH },
+    );
+  }
+}
+
+/**
+ * Опции создания комментария.
+ */
+export interface CreateCommentOptions {
+  /**
+   * Путь поля тела в исходном запросе для `details.field` при превышении лимита
+   * рендера (ошибка 2764d7bb). По умолчанию `body_md`.
+   */
+  bodyField?: string;
+}
+
+/**
+ * Object-lock enforcement for comment writes (ошибка 68be6829, требование
+ * `647fa34a`, ADR `fdb1a271`). Комментарий — часть содержимого своего
+ * владельца, поэтому запись в комментарий (создание/правка/удаление) обязана
+ * подчиняться тому же захвату, что и правка самой мысли: пока владелец-мысль
+ * захвачен другим участником, сервер отвечает `409 LOCKED`. Ранее `enforceLock`
+ * вызывался только в `thought-service` — правка комментария захваченной мысли
+ * проходила мимо блокировки, из-за чего запись блока трансклюзии в источник не
+ * отклонялась.
+ *
+ * Проверяются все цели комментария (`comment_targets`, L20): блокировка любой
+ * из них запрещает запись. Ребро-владелец (инлайн-комментарий связи) тоже
+ * проверяется — тип сущности берётся из цели. `actorUserId = null` пропускает
+ * проверку (системные операции), как и в {@link enforceLock}.
+ */
+function enforceCommentLocks(
+  ndb: NetworkDb,
+  targets: readonly CommentTarget[],
+  actorUserId: string | null,
+): void {
+  for (const t of targets) {
+    enforceLock(ndb, t.owner_type, t.owner_id, actorUserId);
+  }
 }
 
 /**
@@ -260,6 +304,14 @@ function getCommentOrThrow(ndb: NetworkDb, id: string): Comment {
  * `owner_type/owner_id` pair plus every m2m attachment in `comment_targets`
  * (L20). The permanent comment (if any) sorts first, then chronological
  * comments ordered by `valid_from` ascending.
+ *
+ * Среди нескольких видимых постоянных комментариев владельца побеждает
+ * строка БЛИЖАЙШЕГО слоя цепочки (ошибка ec9918b3): у легаси-данных, где
+ * слой и основа завели каждая свою случайную строку, `comments_v` отдаёт два
+ * победителя, и прежний порядок (`valid_from`/`created_at`) выбирал
+ * произвольную редакцию — «витрины», читающие `listComments(...).find(permanent)`,
+ * могли показать устаревший текст. Тот же детерминированный выбор, что в
+ * {@link getPermanentRow}.
  */
 export function listComments(
   ndb: NetworkDb,
@@ -275,49 +327,93 @@ export function listComments(
             SELECT 1 FROM comment_targets_v ct
             WHERE ct.comment_id = c.id AND ct.owner_type = ? AND ct.owner_id = ?
           )
-       ORDER BY (c.kind <> 'permanent'), c.valid_from ASC, c.created_at ASC`,
+       ORDER BY (c.kind <> 'permanent'),
+                CASE WHEN c.kind = 'permanent'
+                     THEN (SELECT lc.depth FROM layer_chain lc WHERE lc.layer_id = c.layer_id)
+                     ELSE 0 END ASC,
+                c.valid_from ASC, c.created_at ASC`,
     )
     .all(ownerType, ownerId, ownerType, ownerId) as CommentRow[];
   const targets = loadTargets(ndb, rows);
   return rows.map((row) => rowToComment(row, targets.get(row.id) ?? []));
 }
 
+/** Строка-победитель постоянного комментария владельца (без метаданных обрезки). */
+interface PermanentCommentRow {
+  id: string;
+  body_md: string;
+  valid_from: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Детерминированно выбрать видимый постоянный комментарий владельца
+ * (ошибка a7d3ef19, 0.12.1).
+ *
+ * Частичный уникальный индекс `idx_comments_permanent_one` обеспечивает
+ * единственность постоянного комментария лишь В ПРЕДЕЛАХ ОДНОГО слоя
+ * (`owner_type, owner_id, layer_id`). Уникальности по цепочке слоёв нет:
+ * если слой завёл свой постоянный комментарий (новый логический `id`), пока
+ * в основе появлялся комментарий того же владельца, в контексте слоя
+ * `comments_v` отдаёт ДВЕ строки-победителя (по одной на логический `id`).
+ * Прежний `LIMIT 1` без `ORDER BY` выбирал произвольную из них — «витрины»
+ * (`etn.instructions`, `meta.permanent`, `comment_preview`) могли показать
+ * чужую редакцию комментария.
+ *
+ * Порядок — по семантике слоёв ETN (13-layers.md §4.1): побеждает строка из
+ * БЛИЖАЙШЕГО слоя цепочки (`layer_chain.depth` минимальна), то есть та, что
+ * действительно видима из текущего контекста. Табличка `layer_chain` —
+ * per-connection temp-объект (db/layer-chain.ts), доступный тому же соединению.
+ * Дополнительные ключи (`updated_at`/`version`/`id`) страхуют от неоднозначности
+ * на равной глубине и дают стабильный порядок. Тот же приём, что в
+ * `property-service.resolveVisiblePropertyValueId` (ошибка 49d1f5e8), — для
+ * естественного ключа, которым у постоянного комментария является владелец.
+ */
+function getPermanentRow(
+  ndb: NetworkDb,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+): PermanentCommentRow | undefined {
+  return ndb
+    .prepare(
+      `SELECT c.id, c.body_md, c.valid_from, c.created_at, c.updated_at
+       FROM comments_v c
+       JOIN layer_chain lc ON lc.layer_id = c.layer_id
+       WHERE c.owner_type = ? AND c.owner_id = ? AND c.kind = 'permanent'
+       ORDER BY lc.depth ASC, c.updated_at DESC, c.version DESC, c.id ASC
+       LIMIT 1`,
+    )
+    .get(ownerType, ownerId) as PermanentCommentRow | undefined;
+}
+
 /**
  * Превью постоянного комментария (tasks N2/N5): `body_md` — первые
  * {@link COMMENT_PREVIEW_CHARS} символов с метаданными обрезки; `null`, когда
- * постоянного комментария нет. Один SELECT по частичному уникальному индексу
- * `idx_comments_permanent_one`.
+ * постоянного комментария нет. Строка-победитель выбирается
+ * {@link getPermanentRow} (детерминированно — видимая версия).
  */
 export function getPermanentPreview(
   ndb: NetworkDb,
   ownerType: CommentOwnerType,
   ownerId: string,
   previewChars: number = COMMENT_PREVIEW_CHARS,
+  bodyTransform?: BodyExpander,
 ): PermanentCommentPreview | null {
   validateOwnerType(ownerType);
-  const row = ndb
-    .prepare(
-      `SELECT id, body_md, valid_from, created_at, updated_at FROM comments_v
-       WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent'
-       LIMIT 1`,
-    )
-    .get(ownerType, ownerId) as
-    | {
-        id: string;
-        body_md: string;
-        valid_from: string;
-        created_at: string;
-        updated_at: string;
-      }
-    | undefined;
+  const row = getPermanentRow(ndb, ownerType, ownerId);
   if (row === undefined) {
     return null;
   }
-  const chars_total = row.body_md.length;
+  // Трансформация — над ПОЛНЫМ телом, до обрезки превью: иначе развёрнутая
+  // трансклюзия разошлась бы с `chars_total`/`truncated` и пробила бы бюджет
+  // превью. Транспорт-агностично: REST не передаёт `bodyTransform`.
+  const body = bodyTransform === undefined ? row.body_md : bodyTransform(row.body_md);
+  const chars_total = body.length;
   const chars_returned = Math.min(chars_total, previewChars);
   return {
     id: row.id,
-    body_md: row.body_md.slice(0, chars_returned),
+    body_md: body.slice(0, chars_returned),
     chars_returned,
     chars_total,
     truncated: chars_total > chars_returned,
@@ -332,40 +428,72 @@ export function getPermanentPreview(
  * «Условная обрезка текстов в ответах MCP». Возвращается из
  * `etn.thoughts.get` в `meta.permanent` — единственный случай, когда
  * постоянный комментарий отдаётся целиком без метаданных `chars_*`/
- * `truncated`. Тот же SELECT, что в {@link getPermanentPreview}, без
- * усечения тела.
+ * `truncated`. Тот же выбор строки, что в {@link getPermanentPreview}
+ * ({@link getPermanentRow}), без усечения тела.
  */
 export function getPermanentFull(
   ndb: NetworkDb,
   ownerType: CommentOwnerType,
   ownerId: string,
+  bodyTransform?: BodyExpander,
 ): PermanentCommentFull | null {
   validateOwnerType(ownerType);
-  const row = ndb
-    .prepare(
-      `SELECT id, body_md, valid_from, created_at, updated_at FROM comments_v
-       WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent'
-       LIMIT 1`,
-    )
-    .get(ownerType, ownerId) as
-    | {
-        id: string;
-        body_md: string;
-        valid_from: string;
-        created_at: string;
-        updated_at: string;
-      }
-    | undefined;
+  const row = getPermanentRow(ndb, ownerType, ownerId);
   if (row === undefined) {
     return null;
   }
   return {
     id: row.id,
-    body_md: row.body_md,
+    body_md: bodyTransform === undefined ? row.body_md : bodyTransform(row.body_md),
     valid_from: row.valid_from,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+/**
+ * Полностью материализованный ВИДИМЫЙ постоянный комментарий владельца
+ * (ошибка ec9918b3) — строка ближайшего слоя цепочки, выбранная
+ * {@link getPermanentRow}, в форме {@link Comment} (со `version`, `targets`,
+ * `valid_from`/`valid_to`). `null`, когда постоянного комментария нет.
+ *
+ * Логическая идентичность постоянного комментария — его владелец
+ * (`db/comment-permanent-id.ts`), а не суррогатный `id`. У легаси-данных
+ * слой и основа могли завести каждая свою строку с РАЗНЫМИ случайными id
+ * (до фикса 46b93145) — тогда «витрины» (`etn.instructions`, `meta.permanent`)
+ * и по-id чтение (`etn.comments.get { comment_id }`) обязаны сойтись на одной
+ * видимой редакции. Возврат именно этой формы позволяет читающим фасадам
+ * (MCP/REST) отдать её без второго «сырого» чтения по id.
+ */
+export function getPermanentComment(
+  ndb: NetworkDb,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+): Comment | null {
+  validateOwnerType(ownerType);
+  const row = getPermanentRow(ndb, ownerType, ownerId);
+  if (row === undefined) {
+    return null;
+  }
+  return getComment(ndb, row.id);
+}
+
+/**
+ * Видимый комментарий по id для ЧИТАЮЩИХ фасадов (ошибка ec9918b3). Для
+ * хронологической записи идентичность — сам `id`, поэтому возвращается строка
+ * как есть. Для постоянного комментария идентичность — владелец: если по
+ * запрошенному id видна лишь устаревшая легаси-строка (другой логический ряд
+ * того же владельца), отдаётся видимая редакция владельца
+ * ({@link getPermanentComment}). Пишущие пути (`updateComment`/`editComment`/
+ * `deleteComment`/targets) по-прежнему работают с точным id через
+ * {@link getComment} — правка не должна молча уезжать на «чужую» строку.
+ */
+export function getVisibleComment(ndb: NetworkDb, id: string): Comment | null {
+  const comment = getComment(ndb, id);
+  if (comment === null || comment.kind !== 'permanent') {
+    return comment;
+  }
+  return getPermanentComment(ndb, comment.owner_type, comment.owner_id) ?? comment;
 }
 
 /**
@@ -386,11 +514,12 @@ export function getCommentsPreview(
   ownerType: CommentOwnerType,
   ownerId: string,
   previewChars: { permanent?: number; chronological?: number } = {},
+  bodyTransform?: BodyExpander,
 ): CommentsPreview {
   validateOwnerType(ownerType);
   const permanentChars = previewChars.permanent ?? COMMENT_PREVIEW_CHARS;
   const chronoChars = previewChars.chronological ?? COMMENT_PREVIEW_CHARS;
-  const permanent = getPermanentPreview(ndb, ownerType, ownerId, permanentChars);
+  const permanent = getPermanentPreview(ndb, ownerType, ownerId, permanentChars, bodyTransform);
   const total = (
     ndb
       .prepare(
@@ -427,7 +556,8 @@ export function getCommentsPreview(
     created_at: string;
   }>;
   const entries = rows.map((row) => {
-    const chars_total = row.body_md.length;
+    const body = bodyTransform === undefined ? row.body_md : bodyTransform(row.body_md);
+    const chars_total = body.length;
     const chars_returned = Math.min(chars_total, chronoChars);
     return {
       id: row.id,
@@ -436,7 +566,7 @@ export function getCommentsPreview(
       valid_to: row.valid_to,
       created_by: row.created_by,
       created_at: row.created_at,
-      body_md: row.body_md.slice(0, chars_returned),
+      body_md: body.slice(0, chars_returned),
       chars_returned,
       chars_total,
       truncated: chars_total > chars_returned,
@@ -465,8 +595,15 @@ export function createComment(
   ownerId: string,
   input: CommentInput,
   actorUserId: string,
+  options: CreateCommentOptions = {},
 ): Comment {
-  return createCommentWithTargets(ndb, [{ owner_type: ownerType, owner_id: ownerId }], input, actorUserId);
+  return createCommentWithTargets(
+    ndb,
+    [{ owner_type: ownerType, owner_id: ownerId }],
+    input,
+    actorUserId,
+    options,
+  );
 }
 
 /**
@@ -478,9 +615,9 @@ export function createComment(
  *
  * Throws:
  *   * `VALIDATION_ERROR` (422) for an invalid kind/targets or missing content —
- *     a `permanent` comment needs a non-empty `body_md`, a `chronological` one
- *     at least one of: non-empty `body_md`, non-empty `title`, or a target
- *     other than HOME (требование 26f0aa52);
+ *     a `permanent` comment needs a non-empty `body_md`; a `chronological` one
+ *     needs at least one target and may be created with empty `title`/`body_md`
+ *     (требование 26f0aa52, модель немедленного создания);
  *   * `NOT_FOUND` (404) if any target owner does not exist;
  *   * `DUPLICATE` (409) on a second `permanent` comment for the same owner.
  *
@@ -496,6 +633,7 @@ export function createCommentWithTargets(
   rawTargets: CommentTarget[],
   input: CommentInput,
   actorUserId: string,
+  options: CreateCommentOptions = {},
 ): Comment {
   const kind = validateKind(input.kind);
   // Dedup targets preserving order; validate owner types and ids.
@@ -529,37 +667,28 @@ export function createCommentWithTargets(
       field: 'targets',
     });
   }
-  // Содержание записи (требование 26f0aa52). Постоянный комментарий — это
-  // содержимое мысли, поэтому `body_md` обязателен. Хронологическая запись
-  // может создаваться по заголовку или привязке (владелец HOME — первичная
-  // привязка, не чипс): пустой `body_md` допустим, пока есть непустой заголовок
-  // либо цель вне HOME. Содержание проверяется ПОСЛЕ сборки целей, т.к. зависит
-  // от набора привязок.
-  if (kind === 'permanent') {
-    if (!isNonEmptyText(input.body_md)) {
-      throw new EtnError('VALIDATION_ERROR', 'body_md must be a non-empty string', {
-        field: 'body_md',
-      });
-    }
-  } else if (
-    !isNonEmptyText(input.body_md) &&
-    !isNonEmptyText(input.title) &&
-    !hasBindingOutsideHome(ndb, targets)
-  ) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'a chronological comment must carry content: a non-empty body_md or title, ' +
-        'or a target other than HOME',
-      { field: 'content' },
-    );
+  // Содержание записи (требование 26f0aa52, модель немедленного создания
+  // 2026-10-09). Постоянный комментарий — это содержимое мысли, поэтому
+  // `body_md` обязателен. Хронологическая запись валидна уже при наличии хотя
+  // бы одной привязки (проверено выше: `targets.length === 0` → 422); пустые
+  // `title`/`body_md` допустимы — запись создаётся сразу и наполняется позже.
+  if (kind === 'permanent' && !isNonEmptyText(input.body_md)) {
+    throw new EtnError('VALIDATION_ERROR', 'body_md must be a non-empty string', {
+      field: 'body_md',
+    });
   }
   const bodyMd = input.body_md ?? '';
+  // Лимит рендера проверяется ДО `renderMarkdown` (ошибка 2764d7bb): иначе
+  // единый рендерер бросил бы обычный `Error` и запрос ушёл бы в 500.
+  assertBodyWithinRenderLimit(bodyMd, options.bodyField ?? 'body_md');
   const bodyHtml = renderMarkdown(bodyMd);
 
   return ndb.transaction(() => {
     for (const t of targets) {
       ensureOwnerExists(ndb, t.owner_type, t.owner_id);
     }
+    // Захват владельца запрещает запись комментария (ошибка 68be6829).
+    enforceCommentLocks(ndb, targets, actorUserId);
 
     const primary = targets[0];
     if (primary === undefined) {
@@ -570,6 +699,12 @@ export function createCommentWithTargets(
     if (kind === 'permanent') {
       // Enforce the "one permanent per owner" invariant ahead of the unique
       // index so we can raise the canonical DUPLICATE error explicitly.
+      // Проверка идёт по `comments_v` (видимые строки цепочки слоёв): из
+      // контекста, где постоянный комментарий владельца уже виден, вторая
+      // попытка отвергается. Из контекста, который строку не видит
+      // (основа при строке в дочернем слое), запись не блокируется, но
+      // сходится с ней в ОДИН логический id (см. `id` ниже) — кросс-слойная
+      // уникальность постоянного комментария (ошибка 46b93145).
       const existing = ndb
         .prepare(
           `SELECT 1 FROM comments_v
@@ -584,7 +719,14 @@ export function createCommentWithTargets(
       }
     }
 
-    const id = randomUUID();
+    // Постоянный комментарий уникален ПО ЦЕПОЧКЕ слоёв (ошибка 46b93145):
+    // его логический id детерминирован от владельца, поэтому независимая
+    // «первая запись» из основы при уже заведённой одноимённой строке в
+    // невидимом дочернем слое сходится с ней в ОДИН id — «ближайший слой
+    // побеждает» отдаёт ровно один видимый постоянный комментарий, а не два
+    // (см. db/comment-permanent-id.ts). Хронологическая запись сохраняет
+    // случайный id: её идентичность — не владелец.
+    const id = kind === 'permanent' ? permanentCommentId(primary.owner_type, primary.owner_id) : randomUUID();
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
     const title = input.title === undefined ? null : input.title;
@@ -643,23 +785,54 @@ export function createCommentWithTargets(
 }
 
 /**
+ * Options of {@link updateComment}.
+ */
+export interface UpdateCommentOptions {
+  /**
+   * Отключает защиту «`body_md` постоянного комментария не пустое» для вызовов
+   * из {@link editComment} (граница 154df95d). На хронологические записи не
+   * влияет — их опустошение разрешено всегда при наличии привязок (требование
+   * 26f0aa52).
+   */
+  allowEmptyBody?: boolean;
+  /**
+   * Коллектор предупреждений записи (требование `822a9149`). Если правка
+   * `body_md` теряет существовавшие ранее живые трансклюзии, домен добавляет
+   * сюда `TRANSCLUSION_LOST`-предупреждение; сама запись при этом применяется.
+   * Так все пути записи комментария (REST PATCH, `etn.comments.update/edit`,
+   * комментарий батча `etn.thoughts.write`) получают проверку из одного места,
+   * не меняя тип возврата {@link Comment}.
+   */
+  warnings?: MutationWarning[];
+  /**
+   * Путь поля тела в исходном запросе для `details.field` при превышении лимита
+   * рендера (ошибка 2764d7bb). По умолчанию `body_md`.
+   */
+  bodyField?: string;
+}
+
+/**
  * Patch a comment (docs/03-server-api.md §10). Last-write-wins per field;
  * `body_html` is re-rendered whenever `body_md` changes. `version` is bumped
  * on every successful update.
  *
- * `allowEmptyBody` — отключает защиту «`body_md` не пустое» для вызовов из
- * {@link editComment}: удаление единственной секции текста без `#` оставляет
- * пустое тело, но запись в БД сохраняется (граница 154df95d). По умолчанию
- * `false` — REST `PATCH /comments/{id}` и `etn.comments.update` продолжают
- * отвергать опустошение записи.
+ * `options.allowEmptyBody` — отключает защиту «`body_md` ПОСТОЯННОГО
+ * комментария не пустое» для вызовов из {@link editComment}: удаление
+ * единственной секции текста без `#` оставляет пустое тело, но запись в БД
+ * сохраняется (граница 154df95d). По умолчанию `false` — REST
+ * `PATCH /comments/{id}` и `etn.comments.update` продолжают отвергать
+ * опустошение постоянного комментария.
  *
- * Содержание (требование 26f0aa52): постоянный комментарий всегда требует
- * непустой `body_md`; хронологическая запись вне `allowEmptyBody` не может
- * стать полностью пустой — правка отвергается, если после неё нет ни
- * непустого `body_md`, ни заголовка, ни привязки вне HOME.
+ * `options.warnings` — коллектор предупреждений записи (требование
+ * `822a9149`): правка, теряющая живые трансклюзии, добавляет туда
+ * `TRANSCLUSION_LOST`, но всё равно применяется.
+ *
+ * Содержание (требование 26f0aa52, модель немедленного создания): постоянный
+ * комментарий всегда требует непустой `body_md`; хронологическую запись
+ * разрешено опустошить до пустых `title`/`body_md` при наличии привязок.
  *
  * Throws `NOT_FOUND` (404), `VERSION_CONFLICT` (409), or `VALIDATION_ERROR`
- * (422) when the edit would leave the comment without content and
+ * (422) when the edit would leave a permanent comment without body and
  * `allowEmptyBody` is not set.
  */
 export function updateComment(
@@ -668,10 +841,13 @@ export function updateComment(
   changes: CommentUpdateInput,
   expectedVersion: number | undefined,
   actorUserId: string,
-  options: { allowEmptyBody?: boolean } = {},
+  options: UpdateCommentOptions = {},
 ): Comment {
   return ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, id);
+    // Захват владельца запрещает правку его комментария (ошибка 68be6829;
+    // требование 647fa34a/ADR fdb1a271 для записи блока трансклюзии в источник).
+    enforceCommentLocks(ndb, current.targets, actorUserId);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
         entity: 'comment',
@@ -679,6 +855,13 @@ export function updateComment(
         expected: expectedVersion,
         current: current.version,
       });
+    }
+    // Проверка потери живых трансклюзий (требование 822a9149) — ДО применения
+    // правки: предупреждение собирается из «старого → нового» тела, но саму
+    // запись не отменяет.
+    if (changes.body_md !== undefined && options.warnings !== undefined) {
+      const warning = transclusionLossWarning(current.body_md, changes.body_md);
+      if (warning !== null) options.warnings.push(warning);
     }
 
     const sets: string[] = [];
@@ -689,38 +872,23 @@ export function updateComment(
     }
     if (changes.body_md !== undefined) {
       // У постоянного комментария пустое тело — потеря содержимого мысли, вне
-      // явного `allowEmptyBody` (граница 154df95d) запрещено. Хронологическая
-      // запись проверяется целиком ниже: её содержание может держаться на
-      // заголовке или привязке (требование 26f0aa52).
+      // явного `allowEmptyBody` (граница 154df95d) запрещено. Хронологическую
+      // запись разрешено опустошить до пустых title/body при наличии привязок
+      // (требование 26f0aa52, согласованность create/update).
       if (changes.body_md === '' && current.kind === 'permanent' && options.allowEmptyBody !== true) {
         throw new EtnError('VALIDATION_ERROR', 'body_md must not be empty', {
           field: 'body_md',
         });
       }
       sets.push('body_md = ?', 'body_html = ?');
+      // Лимит рендера проверяется ДО `renderMarkdown` (ошибка 2764d7bb).
+      assertBodyWithinRenderLimit(changes.body_md, options.bodyField ?? 'body_md');
       args.push(changes.body_md, renderMarkdown(changes.body_md));
     }
-    // Хронологическая запись не может стать полностью пустой (требование
-    // 26f0aa52): правка отвергается, если после неё у записи нет ни непустого
-    // текста, ни заголовка, ни привязки вне HOME. `allowEmptyBody` (editComment,
-    // граница 154df95d) осознанно снимает и эту защиту — там пустое тело
-    // разрешено самим контрактом секционной правки.
-    if (current.kind === 'chronological' && options.allowEmptyBody !== true) {
-      const nextBody = changes.body_md ?? current.body_md;
-      const nextTitle = changes.title !== undefined ? changes.title : current.title;
-      if (
-        !isNonEmptyText(nextBody) &&
-        !isNonEmptyText(nextTitle) &&
-        !hasBindingOutsideHome(ndb, current.targets)
-      ) {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          'a chronological comment cannot become empty: keep a non-empty body_md or title, ' +
-            'or a target other than HOME',
-          { field: 'content' },
-        );
-      }
-    }
+    // Хронологическую запись разрешено опустошить до пустых title/body, пока у
+    // неё есть хотя бы одна привязка (требование 26f0aa52, модель немедленного
+    // создания): согласованность create/update. Удаление последней привязки —
+    // отдельная операция (`removeCommentTarget` переводит запись на HOME).
     if (current.kind === 'chronological') {
       // Эффективное начало: правка `valid_from` либо текущее значение.
       const nextFrom =
@@ -781,6 +949,12 @@ export interface EditCommentResult {
   chars_total: number;
   /** Итоговое тело после применения всех ops — для передачи в события и журналы. */
   body_md: string;
+  /**
+   * Предупреждения записи (требование `822a9149`): если правка потеряла живые
+   * трансклюзии — `TRANSCLUSION_LOST` со списком источников. Пусто, когда
+   * потерь нет.
+   */
+  warnings: MutationWarning[];
 }
 
 /**
@@ -822,13 +996,16 @@ export function editComment(
       });
     }
     const result = applySectionOps(current.body_md, ops);
+    // Коллектор предупреждений: секционная правка тоже может потерять живые
+    // трансклюзии (требование 822a9149) — напр. `replace_section`/`delete_section`.
+    const warnings: MutationWarning[] = [];
     const updated = updateComment(
       ndb,
       id,
       { body_md: result.body },
       undefined,
       actorUserId,
-      { allowEmptyBody: result.body === '' },
+      { allowEmptyBody: result.body === '', warnings },
     );
     return {
       id: updated.id,
@@ -837,6 +1014,7 @@ export function editComment(
       sections: result.sections,
       chars_total: result.body.length,
       body_md: result.body,
+      warnings,
     };
   });
 }
@@ -858,6 +1036,8 @@ export function deleteComment(
 ): void {
   ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, id);
+    // Захват владельца запрещает удаление его комментария (ошибка 68be6829).
+    enforceCommentLocks(ndb, current.targets, actorUserId);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
         entity: 'comment',
@@ -904,6 +1084,9 @@ export function addCommentTarget(
   const ot = validateOwnerType(ownerType);
   return ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, commentId);
+    // Смена привязок комментария — тоже запись в захваченного владельца
+    // (ошибка 68be6829, требование 647fa34a).
+    enforceCommentLocks(ndb, current.targets, actorUserId);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
         entity: 'comment',
@@ -962,6 +1145,9 @@ export function removeCommentTarget(
   const ot = validateOwnerType(ownerType);
   return ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, commentId);
+    // Смена привязок комментария — тоже запись в захваченного владельца
+    // (ошибка 68be6829, требование 647fa34a).
+    enforceCommentLocks(ndb, current.targets, actorUserId);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
         entity: 'comment',

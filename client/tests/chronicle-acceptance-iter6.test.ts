@@ -20,9 +20,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура поля года идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /** Минимальный DOM-шим + перехват capture-`keydown` на `window`. */
 function installShim(): { body: ShimElement; pressEscape: () => void } {
@@ -333,16 +337,31 @@ describe('приёмка №6, п.5: год — инлайн-поле (4 циф�
     assert.equal(yearInput.style.display, 'none', 'поле года закрыто по Esc');
     assert.equal(yearBtn.textContent, '2020', 'год не изменился при отмене');
 
-    // Enter — применение.
+    // Enter — применение (через диспетчер: фокус кладёт контекст поля года).
     yearBtn.click();
     const again = byClass(root, 'cal-year-input')!;
     again.value = '2027';
-    again.emit('keydown', {
+    again.emit('focusin', {});
+    keymap.dispatchKeyEvent({
       key: 'Enter',
       preventDefault: () => undefined,
-      stopImmediatePropagation: () => undefined,
-    });
+    } as unknown as KeyboardEvent);
+    again.emit('focusout', {});
     assert.equal(yearBtn.textContent, '2027', 'год применён по Enter');
+
+    // Ctrl+Enter — тоже применение: прежний обработчик срабатывал на
+    // `event.key === 'Enter'` независимо от модификаторов (блокер задачи fd3d84f4).
+    yearBtn.click();
+    const modified = byClass(root, 'cal-year-input')!;
+    modified.value = '2029';
+    modified.emit('focusin', {});
+    keymap.dispatchKeyEvent({
+      key: 'Enter',
+      ctrlKey: true,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    modified.emit('focusout', {});
+    assert.equal(yearBtn.textContent, '2029', 'год применён и по Ctrl+Enter');
   });
 });
 

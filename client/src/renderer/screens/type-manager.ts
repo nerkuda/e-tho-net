@@ -84,7 +84,7 @@ import { confirmDialog, errorDialog, raiseOpenDialog, showDialog, type DialogBut
 import { div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { footerErrorLine, operationError, type ErrorAddress, type FooterErrorLine } from '../lib/ui/messages.js';
 import { loadingState } from '../lib/ui/empty-state.js';
-import { svgIcon } from '../lib/icons.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import {
@@ -151,7 +151,7 @@ import { buildViewsTab } from './thought-type/views-tab.js';
 import type { CataloguePanel } from './type-catalogue.js';
 import { store } from '../state.js';
 import { renderNewTypeHint } from '../lib/type-editor-hints.js';
-import { showIconDialog } from '../editor/icon-dialog.js';
+import { showIconDialog, type IconPickOutcome } from '../editor/icon-dialog.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showThoughtStyleDialog } from '../editor/style-dialog.js';
 import { renderMarkdown } from '@etn/markdown';
@@ -207,6 +207,8 @@ export interface ThoughtTypeDraft {
   description: string;
   icon: string | null;
   icon_kind: IconKind;
+  /** Цвет символа иконки (HEX или `null`), задача 4105bd6a. */
+  icon_color?: string | null;
   fg_color: string | null;
   bg_color: string | null;
   font_bold: boolean | null;
@@ -240,6 +242,9 @@ export function buildCreateTypeInput(
   if (draft.icon !== null) {
     input.icon = draft.icon;
     input.icon_kind = draft.icon_kind;
+  }
+  if (draft.icon_color !== undefined && draft.icon_color !== null) {
+    input.icon_color = draft.icon_color;
   }
   if (draft.fg_color !== null) input.fg_color = draft.fg_color;
   if (draft.bg_color !== null) input.bg_color = draft.bg_color;
@@ -275,6 +280,9 @@ export function buildTypePatchInput(
   if (draft.icon !== current.icon) {
     input.icon = draft.icon;
     input.icon_kind = draft.icon_kind;
+  }
+  if (draft.icon_color !== undefined && draft.icon_color !== (current.icon_color ?? null)) {
+    input.icon_color = draft.icon_color;
   }
   if (draft.fg_color !== current.fg_color) input.fg_color = draft.fg_color;
   if (draft.bg_color !== current.bg_color) input.bg_color = draft.bg_color;
@@ -579,7 +587,12 @@ export function buildThoughtTypesPanel(): CataloguePanel {
       // with the icon/colours/font inherited from its ancestors.
       const visual = resolveThoughtTypeVisual(currentTypes, item.type.id);
       const icon = span('', 'mini-icon');
-      applyThoughtIcon(icon, { icon: visual.icon, icon_kind: visual.icon_kind, type_id: null });
+      applyThoughtIcon(icon, {
+        icon: visual.icon,
+        icon_kind: visual.icon_kind,
+        type_id: null,
+        icon_color: visual.icon_color,
+      });
       const name = span(item.type.name, `type-list-name ${TREE_LABEL_CLASS}`);
       name.title = item.type.name;
       applyTypeStyle(name, {
@@ -954,6 +967,7 @@ export function showThoughtTypeEditor(
     name: type?.name ?? extras?.initialName ?? '',
     icon: type?.icon ?? null,
     icon_kind: type?.icon_kind ?? 'emoji',
+    icon_color: type?.icon_color ?? null,
     fg_color: type?.fg_color ?? null,
     bg_color: type?.bg_color ?? null,
     font_bold: type?.font_bold ?? null,
@@ -979,17 +993,26 @@ export function showThoughtTypeEditor(
   iconBox.type = 'button';
   setTooltip(iconBox, 'Иконка типа');
   const renderIcon = (): void => {
-    applyThoughtIcon(iconBox, { icon: draft.icon, icon_kind: draft.icon_kind, type_id: null });
+    applyThoughtIcon(iconBox, {
+      icon: draft.icon,
+      icon_kind: draft.icon_kind,
+      type_id: null,
+      icon_color: draft.icon_color,
+    });
   };
   renderIcon();
   iconBox.addEventListener('click', () => {
     showIconDialog({
-      current: { icon: draft.icon, kind: draft.icon_kind },
-      onPick: (result) => {
+      current: { icon: draft.icon, kind: draft.icon_kind, color: draft.icon_color ?? null },
+      onPick: (result): Promise<IconPickOutcome> => {
         draft.icon = result.icon;
         draft.icon_kind = result.kind;
+        draft.icon_color = result.color;
         renderIcon();
-        return Promise.resolve(true);
+        // У типов вложений нет: картинка-файл ложится самодостаточным
+        // data:-превью в сам тип, id вложения отсутствует (в историю последних
+        // иконок такие картинки не пишутся — в localStorage data: не хранится).
+        return Promise.resolve({ ok: true, attachmentId: null });
       },
     });
   });
@@ -1379,6 +1402,7 @@ export function showThoughtTypeEditor(
       // закрыть». `null` still means «inherit from the parent type» (L21).
       onApply: (patch) => {
         if (patch.icon !== undefined) draft.icon = patch.icon;
+        if (patch.icon_color !== undefined) draft.icon_color = patch.icon_color;
         if (patch.fg_color !== undefined) draft.fg_color = patch.fg_color;
         if (patch.bg_color !== undefined) draft.bg_color = patch.bg_color;
         if (patch.font_bold !== undefined) draft.font_bold = patch.font_bold;

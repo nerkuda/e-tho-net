@@ -17,11 +17,15 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { applyDayCollapsed, findDaySection } from '../src/renderer/screens/chronicle/day-groups.js';
 import { preserveScroll } from '../src/renderer/lib/ui/scroll-anchor.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура ленты — через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 // ---------------------------------------------------------------------------
 // Каркас ленты на DOM-шиме
@@ -102,12 +106,14 @@ function buildFeed(spec: DaySpec[]): FakeFeed {
 }
 
 function press(root: ShimElement, key: string, target?: ShimElement, shift = false): void {
-  root.emit('keydown', {
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     shiftKey: shift,
     target: target ?? root,
     preventDefault: () => undefined,
-  });
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
 }
 
 async function navModule(): Promise<typeof import('../src/renderer/screens/chronicle/feed-nav.js')> {

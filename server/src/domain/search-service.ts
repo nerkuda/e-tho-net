@@ -551,14 +551,19 @@ function joinClauses(clauses: Array<Clause | null>): { where: string; params: un
 
 /**
  * LIKE-fallback clause for one `by_names` short/anchor-less word (Tier 1,
- * bug 0258fd9d): `title_norm`/`synonym_norm` are already NFC+lowercase, so
- * this is correct for Cyrillic without any custom case-folding — the exact
- * pattern already proven in {@link findDuplicates} (same escaping, same
- * `ESCAPE '\'` — copied deliberately rather than re-derived, see the bug's
- * chronological comment on why re-deriving it went wrong last time).
+ * bug 0258fd9d): `title_norm`/`synonym_norm` are already NFC+lowercase, so the
+ * typed word MUST be lower-cased before it becomes a pattern (bug
+ * 6bba224b-9899-4f7e-a37c-ff2067ac0a6c — a `%Н%` pattern can never match the
+ * normalized column, so a short query typed with a capital letter returned
+ * nothing; the same `toLowerCase()` every other `buildLikePattern` caller in
+ * the domain uses). After folding, this is correct for Cyrillic without any
+ * custom case-folding — the exact pattern already proven in
+ * {@link findDuplicates} (same escaping, same `ESCAPE '\'` — copied
+ * deliberately rather than re-derived, see the bug's chronological comment on
+ * why re-deriving it went wrong last time).
  */
 function buildShortWordNameClause(word: string, negate: boolean): Clause {
-  const pattern = buildLikePattern(word);
+  const pattern = buildLikePattern(word.toLowerCase());
   const sql =
     "(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
     " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
@@ -616,6 +621,7 @@ function searchNames(
     .prepare(
       `SELECT t.id AS thought_id, t.title AS title, t.icon AS icon,
               t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id,
+              t.icon_color AS icon_color,
               t.fg_color AS fg_color, t.bg_color AS bg_color,
               t.font_bold AS font_bold, t.font_italic AS font_italic,
               t.font_underline AS font_underline, t.font_strike AS font_strike,
@@ -632,6 +638,7 @@ function searchNames(
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    icon_color: string | null;
     fg_color: string | null;
     bg_color: string | null;
     font_bold: number;
@@ -651,6 +658,7 @@ function searchNames(
         icon: r.icon,
         icon_kind: r.icon_kind as IconKind,
         icon_attachment_id: r.icon_attachment_id,
+        icon_color: r.icon_color,
         fg_color: r.fg_color,
         bg_color: r.bg_color,
         font_bold: readFont(r.font_manual, FONT_BOLD_BIT, r.font_bold),
@@ -705,13 +713,14 @@ function searchTexts(
   const rows = ndb
     .prepare(
       `SELECT comment_id, thought_id, title, body, icon, icon_kind,
-              icon_attachment_id, fg_color, bg_color,
+              icon_attachment_id, icon_color, fg_color, bg_color,
               font_bold, font_italic, font_underline, font_strike,
               font_manual, type_id, active
        FROM (
          SELECT c.id AS comment_id, f.thought_id AS thought_id, t.title AS title,
                 c.body_md AS body, t.icon AS icon, t.icon_kind AS icon_kind,
                 t.icon_attachment_id AS icon_attachment_id,
+                t.icon_color AS icon_color,
                 t.fg_color AS fg_color, t.bg_color AS bg_color,
                 t.font_bold AS font_bold, t.font_italic AS font_italic,
                 t.font_underline AS font_underline, t.font_strike AS font_strike,
@@ -736,6 +745,7 @@ function searchTexts(
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    icon_color: string | null;
     fg_color: string | null;
     bg_color: string | null;
     font_bold: number;
@@ -755,6 +765,7 @@ function searchTexts(
         icon: r.icon,
         icon_kind: r.icon_kind as IconKind,
         icon_attachment_id: r.icon_attachment_id,
+        icon_color: r.icon_color,
         fg_color: r.fg_color,
         bg_color: r.bg_color,
         font_bold: readFont(r.font_manual, FONT_BOLD_BIT, r.font_bold),
@@ -1109,7 +1120,7 @@ export function findDuplicates(
   const byId = new Map<string, DuplicateHit>();
 
   /** The row columns shared by every candidate query below. */
-  const DUP_COLUMNS = `id, title, type_id, icon, icon_kind, fg_color, bg_color,
+  const DUP_COLUMNS = `id, title, type_id, icon, icon_kind, icon_color, fg_color, bg_color,
        font_bold, font_italic, font_underline, font_strike, font_manual`;
 
   const ensure = (row: {
@@ -1118,6 +1129,7 @@ export function findDuplicates(
     type_id: string | null;
     icon: string | null;
     icon_kind: string;
+    icon_color: string | null;
     fg_color: string | null;
     bg_color: string | null;
     font_bold: number;
@@ -1138,7 +1150,11 @@ export function findDuplicates(
         matched_on: 'partial',
         type_id: row.type_id,
         icon: row.icon,
-        icon_kind: row.icon_kind === 'image' ? 'image' : 'emoji',
+        // Все три вида иконки сохраняются как есть (задача 610a440e):
+        // библиотечный вид `icon` не должен схлопываться в `emoji`.
+        icon_kind:
+          row.icon_kind === 'image' || row.icon_kind === 'icon' ? row.icon_kind : 'emoji',
+        icon_color: row.icon_color,
         fg_color: row.fg_color,
         bg_color: row.bg_color,
         font_bold: readFont(row.font_manual, FONT_BOLD_BIT, row.font_bold),
@@ -1165,7 +1181,7 @@ export function findDuplicates(
   const wildSynRows = ndb
     .prepare(
       `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
-              t.icon AS icon, t.icon_kind AS icon_kind,
+              t.icon AS icon, t.icon_kind AS icon_kind, t.icon_color AS icon_color,
               t.fg_color AS fg_color, t.bg_color AS bg_color,
               t.font_bold AS font_bold, t.font_italic AS font_italic,
               t.font_underline AS font_underline, t.font_strike AS font_strike,
@@ -1180,6 +1196,7 @@ export function findDuplicates(
     type_id: string | null;
     icon: string | null;
     icon_kind: string;
+    icon_color: string | null;
     fg_color: string | null;
     bg_color: string | null;
     font_bold: number;
@@ -1204,6 +1221,7 @@ export function findDuplicates(
       type_id: string | null;
       icon: string | null;
       icon_kind: string;
+      icon_color: string | null;
       fg_color: string | null;
       bg_color: string | null;
       font_bold: number;
@@ -1219,7 +1237,7 @@ export function findDuplicates(
     const synRows = ndb
       .prepare(
         `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
-                t.icon AS icon, t.icon_kind AS icon_kind,
+                t.icon AS icon, t.icon_kind AS icon_kind, t.icon_color AS icon_color,
                 t.fg_color AS fg_color, t.bg_color AS bg_color,
                 t.font_bold AS font_bold, t.font_italic AS font_italic,
                 t.font_underline AS font_underline, t.font_strike AS font_strike,
@@ -1234,6 +1252,7 @@ export function findDuplicates(
       type_id: string | null;
       icon: string | null;
       icon_kind: string;
+      icon_color: string | null;
       fg_color: string | null;
       bg_color: string | null;
       font_bold: number;
@@ -1276,7 +1295,13 @@ export function findDuplicates(
       const conditions: string[] = [];
       const params: unknown[] = [];
       const push = (word: string, negate: boolean): void => {
-        const pattern = buildLikePattern(word);
+        // `title_norm`/`synonym_norm` are stored NFC+lowercase (001_thoughts.sql),
+        // so the fragment must be folded before it becomes a pattern. The
+        // caller already feeds these words through `norm()` (NFC+trim+lower) —
+        // bug 6bba224b-… — but folding explicitly here keeps the pattern
+        // correct if that upstream normalisation ever changes and matches the
+        // neighbouring `buildLikePattern(word.toLowerCase())` callers.
+        const pattern = buildLikePattern(word.toLowerCase());
         const clause =
           "(title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
           " WHERE ts.thought_id = thoughts.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
@@ -1301,6 +1326,7 @@ export function findDuplicates(
         type_id: string | null;
         icon: string | null;
         icon_kind: string;
+        icon_color: string | null;
         fg_color: string | null;
         bg_color: string | null;
         font_bold: number;

@@ -8,8 +8,8 @@
  *   * `etn.thoughts.bulk_update` (спека 77502d93) — групповые операции;
  *   * `etn.chronicle.query` (спека 52767bdf) — обёртка REST `POST /chronicle/query`;
  *   * `etn.members.list` (спека 6cccac39) — обёртка REST `GET /networks/{id}/members`;
- *   * `etn.attachments.update` / `etn.attachments.delete` (спека 0b23a32a) — правка
- *     и отвязка вложения.
+ *   * `etn.attachments.update` / `etn.attachments.removeOwner` (спека 0b23a32a,
+ *     4924d61e) — правка метаданных и снятие владения (0.12.1).
  *
  * Skipped when the `better-sqlite3` native binding is unavailable.
  */
@@ -506,10 +506,10 @@ describe('etn.members.list (0.7.2)', { skip: !nativeAvailable() }, () => {
 });
 
 // ===========================================================================
-// etn.attachments.update / delete (0b23a32a)
+// etn.attachments.update / removeOwner (0b23a32a, 4924d61e)
 // ===========================================================================
 
-describe('etn.attachments.update / delete (0.7.2)', { skip: !nativeAvailable() }, () => {
+describe('etn.attachments.update / removeOwner (0.7.2, 0.12.1)', { skip: !nativeAvailable() }, () => {
   it('update меняет title и description', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -554,7 +554,7 @@ describe('etn.attachments.update / delete (0.7.2)', { skip: !nativeAvailable() }
     }
   });
 
-  it('delete отвязывает вложение (поиск больше его не находит)', async () => {
+  it('removeOwner снимает владение — последний владелец удаляет вложение', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -570,19 +570,22 @@ describe('etn.attachments.update / delete (0.7.2)', { skip: !nativeAvailable() }
             }),
         );
 
-        // До удаления — находится поиском.
+        // До снятия владения — находится поиском.
         const before = toolJson<Array<{ id: string }>>(
           await callOp(handle.client, 'attachments.search', { network_id: ctx.networkId, q: 'to-delete' }),
         );
         assert.ok(before.find((a) => a.id === created.id), 'находится ДО');
 
-        const deleted = toolJson<{ deleted: boolean; request_id?: string }>(
-          await callOp(handle.client, 'attachments.delete', {
+        const removed = toolJson<{ removed: boolean; attachment_deleted: boolean }>(
+          await callOp(handle.client, 'attachments.removeOwner', {
               network_id: ctx.networkId,
               attachment_id: created.id,
+              owner_type: 'thought',
+              owner_id: ctx.homeId,
             }, true),
         );
-        assert.equal(deleted.deleted, true);
+        assert.equal(removed.removed, true);
+        assert.equal(removed.attachment_deleted, true, 'последний живой владелец удаляет вложение');
 
         const after = toolJson<Array<{ id: string }>>(
           await callOp(handle.client, 'attachments.search', { network_id: ctx.networkId, q: 'to-delete' }),
@@ -590,7 +593,7 @@ describe('etn.attachments.update / delete (0.7.2)', { skip: !nativeAvailable() }
         assert.equal(
           after.find((a) => a.id === created.id),
           undefined,
-          'после удаления запись не находится поиском',
+          'после снятия владения запись не находится поиском',
         );
       } finally {
         await handle.close();

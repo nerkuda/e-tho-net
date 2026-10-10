@@ -13,6 +13,22 @@ import type { FastifyReply } from 'fastify';
 
 import { EtnError, type ApiError, type EtnErrorBody, type EtnErrorCode } from '@etn/shared';
 
+/**
+ * Явный HTTP-статус из `details.status`, если домен его задал (400–599).
+ *
+ * Отдельные ошибки несут один код `EtnErrorCode`, но на проводе требуют иного
+ * статуса: защита снятия владения отдаётся как `409 ATTACHMENT_OWNER_IS_ICON`
+ * (требование 6b524569), хотя код ошибки — `VALIDATION_ERROR` (422). Домен
+ * кладёт желаемый статус в `details.status`; транспорт его уважает.
+ */
+function explicitStatus(details: unknown): number | undefined {
+  if (typeof details !== 'object' || details === null) return undefined;
+  const status = (details as { status?: unknown }).status;
+  return typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599
+    ? status
+    : undefined;
+}
+
 /** Maps a stable {@link EtnErrorCode} to its HTTP status code. */
 export function httpStatusForCode(code: EtnErrorCode): number {
   switch (code) {
@@ -85,7 +101,7 @@ export function normaliseError(
 ): { statusCode: number; body: ApiError; internalMessage: string } {
   if (err instanceof EtnError) {
     return {
-      statusCode: httpStatusForCode(err.code),
+      statusCode: explicitStatus(err.details) ?? httpStatusForCode(err.code),
       body: buildErrorBody(err.code, err.message, err.details, requestId ?? err.requestId),
       internalMessage: err.message,
     };

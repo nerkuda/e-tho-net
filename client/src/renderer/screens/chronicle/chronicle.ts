@@ -13,10 +13,12 @@
  *    с новым периодом, остальные критерии не трогаются, лента перезагружается;
  *  * «Лента дневных записей» e01f383a — группировка по дням, дозагрузка «+50»,
  *    чипсы привязок с «+»/«✕», правка по месту;
- *  * «Sticky-панель новой записи» a2b993d7 + требование 26f0aa52 — псевдо-запись,
- *    в базу не пишется до первого содержания;
+ *  * «Sticky-панель новой записи» a2b993d7 + требование 26f0aa52 — «Добавить»
+ *    сразу создаёт нормальную хроно-запись (дата + привязка, без содержания);
+ *    псевдозаписи/слота нет (ТП «Дневник без псевдослота»);
  *  * требование 306f74cc — критерии целей (критерии панели едут в `targets`);
- *  * требование c6ddc1ea — порядок ленты (серверный, класс → даты);
+ *  * требование c6ddc1ea — порядок ленты (только по дате/времени: `valid_from`,
+ *    `valid_to`, тайбрейкеры `created_at`/`id`; класс записи не участвует);
  *  * требование e0970b70 — длительная запись видна в каждом дне периода;
  *  * требование c81964c7 — владелец HOME, чипсы — вторичные привязки;
  *  * требование 80b31f7a — переименование «Хроника» → «Дневник».
@@ -49,13 +51,22 @@ import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js
 import { showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { registerDropActions } from '../../canvas/drag-cloud.js';
 import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
-import { createMarkdownField, editMarkdownField } from '../../editor/markdown-field.js';
+import {
+  cancelMarkdownFieldEdit,
+  commitMarkdownField,
+  createMarkdownField,
+  editMarkdownField,
+  focusMarkdownFieldStart,
+  insertMentionLinkIntoField,
+} from '../../editor/markdown-field.js';
+import { annotateMentions } from '../../editor/mentions-annotate.js';
+import { createCommentCollapseState, decorateCommentView } from '../../editor/comment-collapse.js';
 import { confirmDialog } from '../../lib/dialog.js';
-import { div, el, errText, fmtDate, span } from '../../lib/dom.js';
+import { div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
-import { svgIcon } from '../../lib/icons.js';
+import { svgIcon } from '../../lib/ui/icon.js';
 import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import {
@@ -100,8 +111,6 @@ import {
   attachmentOwnerForRow,
   clampPseudoDate,
   collectRowsToDepth,
-  compareDays,
-  dayInPeriod,
   dayPeriod,
   formatDayLabel,
   groupByLocalDays,
@@ -112,15 +121,13 @@ import {
   localDay,
   localDayEnd,
   localDayStart,
+  parentThoughtIds,
   periodValuesForRange,
-  planSlotCommit,
   resolvePeriodDay,
   rowDays,
-  slotDeleteNeedsNetwork,
   todayLocal,
   visibleChips,
   weekPeriod,
-  type SlotCommitPlan,
 } from './diary.js';
 import { recordDisplayTitle, recordTitleFromBody } from '../../lib/record-title.js';
 import {
@@ -144,10 +151,11 @@ import {
   recordCollapseKey,
   type RecordGroupLabels,
 } from './record-groups.js';
-import { type RecordTitleHandle, type RecordTitleOptions } from './record-title.js';
+import { type RecordTitleHandle } from './record-title.js';
 import { buildRecordHead } from './record-head.js';
 import { parseChronicleState } from './state.js';
 import { renderRecordView } from './record-body.js';
+import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
 
 /**
  * Границы размера панели отбора (задача 2ebe4206): слева — ширина, вверху
@@ -200,21 +208,23 @@ let feedList: HTMLElement | null = null;
 /** Контроллер клавиатурной навигации ленты (0.10.1, приёмка №9). */
 let feedNav: FeedNavHandle | null = null;
 /**
- * Обработчики карточек записей (оболочка комментария + строка), заведённые при
- * сборке карточки: вход в правку текста по навигации идёт от DOM-узла карточки
- * (требование 165323a7), а не от повторного поиска строки.
+ * Единый контроллер правки карточки записи (ТП «Дневник без псевдослота»):
+ * режим правки принадлежит КАРТОЧКЕ — вход в правку любого поля (заголовок или
+ * тело) открывает ОБА поля, выход идёт едиными жестами (Ctrl+Enter/«Записать»/
+ * клик вне — запись обоих одним PATCH; Esc/«Отменить» — откат обоих). Вход в
+ * правку по навигации идёт от DOM-узла карточки (требование 165323a7).
  */
-const recordShells = new WeakMap<
-  HTMLElement,
-  { row: ChronicleRow; shell: ReturnType<typeof commentShell>; body: HTMLElement }
->();
-/**
- * Дескрипторы заголовка-компонента по узлу карточки (0.10.2, ошибка 36c330a3):
- * вход в правку по клавиатуре (Enter на поле «заголовок», требование 165323a7)
- * идёт от DOM-узла карточки, переданного контроллером навигации, — строка и
- * компонент берутся отсюда, а не из повторного поиска.
- */
-const recordTitles = new WeakMap<HTMLElement, RecordTitleHandle>();
+interface CardEditor {
+  readonly row: ChronicleRow;
+  /** Идёт ли единая правка карточки сейчас. */
+  editing(): boolean;
+  /** Войти в правку с фокусом в заголовке. */
+  openTitle(): void;
+  /** Войти в правку с фокусом в теле. */
+  openBody(): void;
+}
+
+const cardEditors = new WeakMap<HTMLElement, CardEditor>();
 let statusEl: HTMLElement | null = null;
 let calendar: MonthCalendarHandle | null = null;
 /** Persisted month of the calendar (`chronicle_state.month`). */
@@ -225,47 +235,6 @@ const dayCounts = new Map<string, number>();
 let jumpHighlightId: string | null = null;
 /** Строка поиска дневниковых записей (0.10.1, задача 46057359). */
 let recordSearch: RecordSearchHandle | null = null;
-
-// ---------------------------------------------------------------------------
-// Pseudo-record (slot) state
-// ---------------------------------------------------------------------------
-
-interface SlotState {
-  day: string;
-  commentId: string | null;
-  root: HTMLElement;
-  /**
-   * Компонент заголовка слота (0.10.2, ошибка 36c330a3): тот же
-   * `createRecordTitle`, что и в карточке. Заголовок открыт В ПРАВКЕ, `Enter`
-   * завершает правку и показывает группу-просмотр, `Escape` отменяет, `blur`
-   * по-прежнему сохраняет черновик.
-   */
-  title: RecordTitleHandle;
-  /** Дата записи по умолчанию (`clamp(сегодня, начало, конец периода)`). */
-  from: string;
-}
-
-let slot: SlotState | null = null;
-
-/**
- * Идёт ли сохранение слота (создание/обновление). Защита от гонки: заголовок
- * сохраняется по blur, а уход из слота — по focusout; оба пути зовут
- * `ensureSlot`, и без стража создался бы дубль записи (ошибка 0757cd08).
- */
-let slotBusy: Promise<Comment | null> | null = null;
-
-/**
- * Находится ли фокус внутри слота псевдо-записи. Пока фокус внутри (поле
- * заголовка или редактор комментария), слот НЕ подменяется карточкой: живой
- * редактор отсоединился бы, и набранный текст потерялся бы (ошибка 0757cd08).
- */
-let slotFocusInside = false;
-
-/**
- * Приостановка конвертации слота на время модального диалога (выбор мысли):
- * фокус уходит в диалог, но слот покинутым не считается.
- */
-let slotSuspendConvert = false;
 
 /** Свёрнутые группы дат ленты (0.10.1, приёмка №2); состояние — L4 `ui_state`. */
 const collapsedDays = new Set<string>();
@@ -456,7 +425,6 @@ export async function ensureChronicleInitialised(): Promise<void> {
 
   rows = [];
   total = 0;
-  slot = null;
   month = null;
   fullRefreshPending = false;
   collapsedDaysLoaded = false;
@@ -592,7 +560,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       label: t('diary.addRecord'),
       role: 'primary',
       class: 'diary-add-btn',
-      onClick: () => startSlot(),
+      onClick: () => void addRecord(),
     }),
     iconButton({
       icon: svgIcon('chevrons-down', 16),
@@ -625,9 +593,12 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   feedNav = attachFeedNav(feedWrap, {
     onSetDayCollapsed: (day, collapsed) => setDayCollapsed(day, collapsed),
     onSetRecordCollapsed: (day, id, collapsed) => setRecordCollapsed(day, id, collapsed),
-    onEditTitle: (_id, card) => beginTitleEditByCard(card),
-    onEditBody: (_id, card) => openCardBodyEditor(card),
-    onEditDates: (_id, card) => editCardDates(card),
+    onEditTitle: (_id, card) => cardEditors.get(card)?.openTitle(),
+    onEditBody: (_id, card) => cardEditors.get(card)?.openBody(),
+    onEditDates: (_id, card) => {
+      const editor = cardEditors.get(card);
+      if (editor !== undefined) void editRecordDates(editor.row);
+    },
     onAddThought: (id) => void pickAndAttach(id),
   });
 
@@ -640,7 +611,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   wireChronicleApplyShortcut(hostEl);
   registerDropActions({
     chronicleAttach: (thoughtId, rowId) => void attachToRecord(rowId, [thoughtId]),
-    chronicleNewEntry: (thoughtId) => startSlot(undefined, [thoughtId]),
+    chronicleNewEntry: (thoughtId) => void addRecord([thoughtId]),
     chronicleFilterAdd: (thoughtId) => addThoughtToFilter(thoughtId),
   });
 
@@ -907,7 +878,7 @@ function renderStatus(kind: 'loading' | 'error', err?: unknown): void {
 // Feed rendering
 // ---------------------------------------------------------------------------
 
-/** Локальный день HOME-записи — для слота псевдо-записи. */
+/** Локальный день записи HOME — границы применённого периода ленты. */
 function currentFromTo(): { from: string; to: string } {
   const filter = getFilterState();
   return { from: resolvePeriodDay(filter.dateFrom), to: resolvePeriodDay(filter.dateTo) };
@@ -932,28 +903,6 @@ function renderFeed(): void {
   // Счётчики календаря приходят из отдельного запроса по месяцу
   // (`refreshCalendarCounts`) — они не зависят от применённого периода, поэтому
   // видны и на выделенной, и на невыделенной дате (0.10.1, дефект приёмки).
-  // Слот псевдо-записи виден, как и запись, ТОЛЬКО в своём периоде (ошибка
-  // effefba3): если применённый период не содержит её день, слот не
-  // показывается — иначе зависшая псевдо-запись (без `data-row-key`, с
-  // некликабельной датой) торчала бы при любом периоде. День слота при этом
-  // остаётся в его состоянии: при возврате периода псевдо-запись показывается
-  // снова (черновик в узле сохраняется).
-  // Слот, чья запись уже вернулась из сети обычной карточкой (перезагрузка
-  // ленты/filter apply, пока слот ещё не сконвертирован — отложенная
-  // конвертация, ошибка 0757cd08), снимаем: иначе запись показалась бы дважды.
-  const stale = slot;
-  if (stale !== null && stale.commentId !== null && hasRowId(rows, stale.commentId)) {
-    stale.root.remove();
-    slot = null;
-    slotFocusInside = false;
-  }
-  const slotNow = slot;
-  const slotDay = slotNow !== null && dayInPeriod(slotNow.day, from, to) ? slotNow.day : null;
-  if (slotDay !== null && !days.some((d) => d.day === slotDay)) {
-    days.push({ day: slotDay, rows: [] });
-    days.sort((a, b) => compareDays(a.day, b.day, order));
-  }
-
   // Инкрементальное обновление ленты (уровень 2 тех.проекта `1d48df6d`):
   // ВНЕШНИЙ уровень — группы дней по ключу дня (`data-day`), ВНУТРЕННИЙ —
   // карточки записей по `data-row-key`. Неизменные узлы не пересоздаются,
@@ -981,12 +930,6 @@ function renderFeed(): void {
       build: (row) => buildRecordCard(row, day.day),
       update: (card, row) => updateRecordCard(card, row, day.day),
     });
-    // Слот псевдо-записи — ВНЕ reconcile: сверка снимает его как безключевой
-    // узел, поэтому возвращаем ТОТ ЖЕ элемент наверх списка дня. Identity узла
-    // и текст живого редактора сохраняются (элемент «Sticky-панель новой
-    // записи»). Показываем только когда его день в применённом периоде
-    // (ошибка effefba3): вне периода узел остаётся отсоединённым.
-    if (slotNow !== null && slotDay === day.day) dayList.prepend(slotNow.root);
   }
 
   // Хвост ленты («пусто»/«осталось N») — вне reconcile, монтируется после:
@@ -1060,66 +1003,87 @@ async function resolveRowTargets(
   return out;
 }
 
-/** Обновить строку «осталось N» без перерисовки ленты (её счётчик сдвинулся). */
-function updateMoreLine(): void {
-  if (feedList === null) return;
-  const more = feedList.querySelector<HTMLElement>('.chron-feed-more');
-  if (more !== null) more.textContent = t('diary.moreLeft', [rows.length, total]);
+
+/**
+ * Локальная вставка только что созданной записи: строка встаёт на своё место
+ * (`insertRowByDay`), лента пересобирается keyed-сверкой без сетевого
+ * перезапроса — соседние карточки и прокрутка сохраняются. Метка дня календаря
+ * обновляется сразу (`syncCalendar` + `refreshCalendarCounts`).
+ *
+ * Дедупликация по id: строку могла вставить другая ветка (realtime-событие,
+ * перезагрузка/сверка) — повторная вставка дала бы ленте два узла с одним
+ * ключом и уронила `reconcileKeyed`. Строка уже в ленте — вторую не вставляем,
+ * но СЛИВАЕМ свежие поля.
+ */
+async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
+  if (hasRowId(rows, row.id)) {
+    rows = rows.map((existing) => (existing.id === row.id ? row : existing));
+  } else {
+    rows = insertRowByDay(rows, row, getFilterState().order);
+    total += 1;
+  }
+  pendingReconcile = true;
+  renderFeed();
+  publishChronicleSnapshot();
+  syncCalendar();
+  void refreshCalendarCounts();
+  feedNav?.refresh();
 }
 
 /**
- * Локальная вставка созданной записи: слот превращается в карточку записи на
- * месте (0.10.1, итерация приёмки №8, п.2) — DOM-позиция и скролл сохраняются,
- * соседние карточки не пересобираются. `feedList` при этом не перерисовывается
- * целиком; счётчики календаря обновляются отдельным запросом (фоном).
- *
- * Место строки в ленте считается по РАЗРЕШЁННОМУ HOME (`homeId ?? getHome()`), а
- * не по модульному `homeId`: при `homeId === null` `recordClass` даёт 1 всем
- * строкам и позиция расходится с серверной (та же природа, что 89409d57).
- * Недоступный HOME уводит в полный путь — слот убираем, лента перезагружается
- * (ошибка 810520c5).
+ * «Добавить»: СРАЗУ создаёт обычную хроно-запись (привязки — HOME и, при
+ * drop-жесте, указанные мысли; дата — `clamp(сегодня, период)`, текущее время),
+ * без заголовка и текста. Карточка встаёт на место локально и открывается в
+ * единой правке с фокусом в заголовке (требование 26f0aa52, модель немедленного
+ * создания). Пустые записи не чистятся автоматически.
  */
-async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
-  const home = homeId ?? (await getHome().catch(() => null));
-  const slotRoot = slot?.root ?? null;
-  // День слота — для восстановления сохранённой свёрнутости вставляемой карточки
-  // (блокер проверки 41ed99ab: день нельзя вывести из DOM до вставки).
-  const createdDay = slot?.day ?? localDay(row.valid_from);
-  if (home === null) {
-    slot = null;
-    slotFocusInside = false;
-    slotRoot?.remove();
-    await reload();
-    return;
+async function addRecord(presetThoughtIds: string[] = []): Promise<void> {
+  if (host === null) return;
+  const filter = getFilterState();
+  const targetDay = clampPseudoDate(
+    todayLocal(),
+    resolvePeriodDay(filter.dateFrom),
+    resolvePeriodDay(filter.dateTo),
+  );
+  const networkId = requireNetworkId();
+  try {
+    const home = await getHome();
+    const targets: CommentTarget[] = [{ owner_type: 'thought', owner_id: home }];
+    for (const id of presetThoughtIds) {
+      if (id === home || targets.some((t) => t.owner_id === id)) continue;
+      targets.push({ owner_type: 'thought', owner_id: id });
+    }
+    // Дата — указанный день + текущее время (ADR 994d076a): голую дату не шлём,
+    // `valid_to` обязан быть непустым (требование d58aa1a4).
+    const now = new Date().toISOString();
+    const { from: validFrom, to: validTo } = resolvePeriodInstants(
+      { from: targetDay, to: targetDay },
+      { from: now, to: now },
+    );
+    const created = await etn.comments.createMulti(networkId, targets, {
+      kind: 'chronological',
+      title: null,
+      body_md: '',
+      valid_from: validFrom,
+      valid_to: validTo,
+      use_time: false,
+    });
+    const localRow = await localRowFromComment(created, home);
+    if (localRow === null) {
+      await reload();
+      syncCalendar();
+      return;
+    }
+    await insertCreatedRecord(localRow);
+    // Новая карточка — сразу в правке, фокус в поле заголовка.
+    const card = feedList?.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${created.id}"]`);
+    if (card !== null && card !== undefined) {
+      feedNav?.selectRecord(created.id, localDay(created.valid_from));
+      cardEditors.get(card)?.openTitle();
+    }
+  } catch (err) {
+    notice(t('diary.createFailed', [errText(err)]), 'error');
   }
-  slot = null;
-  slotFocusInside = false;
-  // Дедупликация по id: пока слот ждал ухода фокуса, строку уже могла вставить
-  // другая ветка (realtime-событие, перезагрузка/сверка). Повторная вставка даёт
-  // ленте два узла с одним ключом и роняет `reconcileKeyed` (ошибка 0757cd08,
-  // круг 1: Ctrl+Enter + повторное «Добавить запись дневника»). Строка уже в ленте —
-  // вторую не вставляем, но СЛИВАЕМ свежие поля (тело/заголовок/даты): ветка,
-  // вставившая строку, могла знать запись ещё до сохранения текста, и карточка
-  // иначе показывала бы устаревшее содержимое. Позицию сохраняет сверка.
-  if (hasRowId(rows, row.id)) {
-    rows = rows.map((existing) => (existing.id === row.id ? row : existing));
-    slotRoot?.remove();
-    pendingReconcile = true;
-    renderFeed();
-    publishChronicleSnapshot();
-    feedNav?.refresh();
-    return;
-  }
-  const card = buildRecordCard(row, createdDay);
-  const inPlace = slotRoot !== null && slotRoot.parentElement !== null;
-  if (inPlace) slotRoot!.replaceWith(card);
-  rows = insertRowByDay(rows, row, getFilterState().order, home);
-  total += 1;
-  pendingReconcile = true;
-  if (inPlace) updateMoreLine();
-  else renderFeed();
-  publishChronicleSnapshot();
-  feedNav?.refresh();
 }
 /** Свернуть/развернуть все показанные группы дат И тела записей (кнопки панели). */
 function setAllDaysCollapsed(collapsed: boolean): void {
@@ -1131,7 +1095,6 @@ function setAllDaysCollapsed(collapsed: boolean): void {
       collapsedDays.add(day.day);
       for (const row of day.rows) collapsedRecords.add(recordCollapseKey(day.day, row.id));
     }
-    if (slot !== null) collapsedDays.add(slot.day);
   }
   // Переключение секций НА МЕСТЕ (требование 165323a7) — фокус и прокрутка
   // сохраняются. Ключи свёрнутости собираем и с ФАКТИЧЕСКИХ карточек DOM, а не
@@ -1225,21 +1188,243 @@ function buildRecordCard(row: ChronicleRow, day: string): HTMLElement {
  * Обновление существующей карточки при keyed-сверке: перерисовывается ТОЛЬКО
  * содержимое, сам узел карточки (и его DOM-позиция) сохраняется, поэтому правка
  * одной записи не пересоздаёт соседние карточки и не сбрасывает прокрутку.
+ * Карточка В ЕДИНОЙ ПРАВКЕ не трогается: пересборка отсоединила бы живой
+ * редактор и потеряла несохранённый текст — обновление ждёт выхода из правки.
  */
 function updateRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void {
+  if (cardEditors.get(card)?.editing() === true) return;
   fillRecordCard(card, row, day);
 }
 
-/** Наполнить карточку содержимым записи (общая сборка и обновление). */
+/**
+ * Наполнить карточку содержимым записи (общая сборка и обновление) и завести
+ * ЕДИНЫЙ контроллер её правки (ТП «Дневник без псевдослота»).
+ *
+ * Шапка (строка полей + строка заголовка) собирается единым конструктором
+ * `buildRecordHead`; строка 1 — дата/период, облачка привязок, «+ мысль», меню
+ * записи. Тело — оболочка комментария (`lib/ui/comment.ts`): в просмотре полный
+ * `body_html`, в правке — общее поле markdown. Запись со ссылкой-трансклюзией
+ * достраивается полем markdown уже в просмотре (серверный `body_html` её не
+ * разворачивает — ошибка `e5e1f609`), см. `htmlHasTransclusionMarkup`.
+ *
+ * Режим правки принадлежит КАРТОЧКЕ: вход в правку заголовка ИЛИ тела открывает
+ * оба поля; Ctrl+Enter / «Записать» / клик вне пишут оба одним PATCH; Esc /
+ * «Отменить» откатывают оба (требование 26f0aa52).
+ */
 function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void {
   // Запись, к которой выполнен переход поиска, подсвечена (T7); при правке
   // класс пересчитывается (запись могла перестать быть целью перехода).
   card.classList.toggle('diary-record-target', row.id === jumpHighlightId);
 
-  // Шапка (строка полей + строка заголовка) собирается ЕДИНЫМ конструктором
-  // `buildRecordHead` — тем же, что у слота создания (0.10.3, ошибка 47c2bf05).
-  // Строка 1: значение даты/периода (клик — диалог «Дата/период»), облачка
-  // привязок, кнопка «+ мысль», у правого края «бутерброд» меню записи.
+  let editing = false;
+  /** md тела загружен (лента несёт только `body_html`/`snippet`). */
+  let bodyLoaded = false;
+  let bodyDraft = '';
+  let widget: HTMLElement | null = null;
+  let title: RecordTitleHandle | null = null;
+
+  const shell = commentShell({ variant: 'plain' });
+  const body = div('diary-record-body');
+  // Тело просмотра — статичный `body_html`; декорируем его теми же шагами, что и
+  // поле markdown (авто-подсветка упоминаний). Держим элемент для декорации.
+  const recordView = renderRecordView(shell, row);
+  body.append(shell.root);
+  // Сворачивание заголовков в просмотре записи — тем же механизмом, что у
+  // комментария мысли (ошибка c91a0067): статичный `body_html` без декоратора
+  // не сворачивался, хотя в правке сворачивание работает. Владелец состояния —
+  // сам хроно-комментарий (`row.id`): иначе записи одной мысли делили бы
+  // свёрнутость. Это забота ЭКРАНА: `record-body.ts` остаётся чистым.
+  const collapseNetworkId = store.state.networkId;
+  if (collapseNetworkId !== null && row.body_html.trim() !== '') {
+    decorateCommentView(
+      recordView,
+      createCommentCollapseState(collapseNetworkId, row.id),
+    );
+  }
+
+  /**
+   * Цель вложения/исключения упоминаний записи на момент обращения (первая
+   * привязанная мысль, иначе HOME). Геттер, а не значение: `homeId` может
+   * разрешиться позже сборки карточки, а `row.targets` — смениться к правке.
+   */
+  const currentOwner = (): { ownerType: 'thought'; ownerId: string } | null =>
+    attachmentOwnerForRow(row.targets, homeId);
+
+  /**
+   * Создать поле markdown тела при первом входе в правку (ленивое создание).
+   * Полный `body_md` ленты не несёт — он точечно дочитывается `etn.comments.get`
+   * (как и раньше). `null` — загрузка не удалась (сообщение уже показано).
+   */
+  const ensureWidget = async (): Promise<HTMLElement | null> => {
+    if (widget !== null) return widget;
+    if (!bodyLoaded) {
+      try {
+        const comment = await etn.comments.get(requireNetworkId(), row.id);
+        bodyDraft = comment.body_md;
+        row.body_html = comment.body_html;
+        row.version = comment.version;
+        bodyLoaded = true;
+      } catch (err) {
+        notice(t('diary.loadFailed', [errText(err)]), 'error');
+        return null;
+      }
+    }
+    if (!body.isConnected) return null;
+    // Вставка картинки из буфера: цель вложения — первая привязанная мысль
+    // записи, иначе HOME (паритет с постоянным комментарием мысли).
+    const owner = currentOwner();
+    widget = createMarkdownField({
+      md: bodyDraft,
+      html: row.body_html,
+      placeholder: t('diary.emptyRecordHint'),
+      // Каретка/выделение при входе в правку — в месте клика в просмотре
+      // (требование bac754e4, задача 189da39e).
+      sourceMapView: true,
+      // Группа единой правки — вся карточка: переход фокуса заголовок↔тело и
+      // клик по её элементам (дата, чипсы, «+ мысль») правку не закрывают.
+      editGroup: () => card,
+      // Заголовок пишется тем же PATCH: коммит уходит, когда изменён заголовок
+      // (тело поле видит само). При неизменных обоих полях PATCH не уходит.
+      externalChanges: () =>
+        (title !== null ? title.value().trim() : row.title ?? '') !== (row.title ?? ''),
+      ...(owner !== null ? { attachmentsOwner: owner } : {}),
+      // Контекст комментария (карточка 34ffbd75 + ТЗ5 «Дневник без псевдослота»):
+      // флоу «создать мысль по legacy-ссылке», команды вставки ссылки/
+      // трансклюзии и родители новой мысли — ВСЕ цели-чипсы записи.
+      ...(owner !== null
+        ? {
+            commentContext: {
+              ownerType: 'thought' as const,
+              ownerId: owner.ownerId,
+              commentKind: 'chronological' as const,
+              getCommentId: () => row.id,
+              getParentThoughtIds: () => parentThoughtIds(row.targets),
+            },
+          }
+        : {}),
+      onInput: (md) => {
+        bodyDraft = md;
+      },
+      onSave: (md) => saveBoth(md),
+      onEditChange: (isEdit) => {
+        editing = isEdit;
+        shell.setMode(isEdit ? 'edit' : 'view');
+        if (isEdit) {
+          // Единая правка: вход в тело открывает и заголовок (без кражи фокуса).
+          if (title !== null && !title.isEditing()) title.beginEdit(false);
+        } else {
+          if (title !== null && title.isEditing()) title.endEdit(false, false);
+          // Выход из правки — фокус возвращается в навигацию записи.
+          feedNav?.focusNavigation();
+        }
+      },
+    });
+    shell.setField(widget);
+    return widget;
+  };
+
+  // Просмотр тела в ленте — готовый серверный `body_html`, собранный из
+  // ИСХОДНОГО `body_md`, поэтому ссылка-трансклюзия в нём не развёрнута и блок
+  // невидим (ошибка e5e1f609). Записи с такой ссылкой достраиваются полем
+  // markdown — тем же путём, что комментарий мысли: поле разворачивает
+  // трансклюзии единым рендерером с блочными обёртками. Признак ищется по
+  // разметке, `body_md` дочитывается точечно только для таких записей. Ждём
+  // монтирования карточки (`ensureWidget` не создаёт поле до `body.isConnected`),
+  // поэтому откладываем на макрозадачу; `setTimeout`, а не rAF — кадры скрытого
+  // окна заторможены (грабли 03e33360).
+  if (htmlHasTransclusionMarkup(row.body_html)) {
+    setTimeout(() => {
+      if (body.isConnected) void ensureWidget();
+    }, 0);
+  }
+
+  // Авто-подсветка упоминаний (L24) для статичного просмотра `body_html`
+  // (ошибка 616207a9): поле markdown декорирует СВОЙ просмотр само (`paintView`),
+  // а тело ленты рисовалось общим `renderHtml` без декораций — подчёркивания не
+  // появлялись. Декорируем тем же `annotateMentions`, что и поле, — единый путь
+  // подсветки в компоненте комментария. «Вставить ссылку» из меню создаёт поле и
+  // делегирует ему (`insertMentionLinkIntoField`): замена вхождения и сохранение
+  // идут единственной реализацией поля. Ждём монтирования карточки
+  // (`annotateMentions` пропускает оторванный узел), поэтому откладываем на
+  // макрозадачу; `setTimeout`, а не rAF — кадры скрытого окна заторможены
+  // (грабли 03e33360).
+  setTimeout(() => {
+    if (!recordView.isConnected) return;
+    annotateMentions(recordView, {
+      excludeThoughtId: currentOwner()?.ownerId,
+      onInsertLink: (thought, matchedText) => {
+        void ensureWidget().then((w) => {
+          if (w !== null) insertMentionLinkIntoField(w, thought, matchedText);
+        });
+      },
+    });
+  }, 0);
+
+  /**
+   * Войти в единую правку с фокусом в заданном поле: тело создаётся при первом
+   * входе, заголовок открывается тем же действием (через `onEditChange`).
+   */
+  const enterBodyEdit = async (focus: 'title' | 'body'): Promise<void> => {
+    const w = await ensureWidget();
+    if (w === null) return;
+    if (editing) {
+      if (focus === 'title') title?.beginEdit(true);
+      else focusMarkdownFieldStart(w);
+      return;
+    }
+    editMarkdownField(w);
+    if (focus === 'title') title?.beginEdit(true);
+  };
+
+  /** ЕДИНАЯ запись обоих полей одним PATCH (требование 26f0aa52). */
+  const saveBoth = async (md: string): Promise<string> => {
+    const networkId = requireNetworkId();
+    const nextTitle = (title !== null ? title.value() : row.title ?? '').trim();
+    const fresh = await etn.comments.get(networkId, row.id);
+    const updated = await etn.comments.update(
+      networkId,
+      row.id,
+      { title: nextTitle === '' ? null : nextTitle, body_md: md },
+      fresh.version,
+    );
+    applySaved(updated);
+    // Локальная мутация — тем же путём, что чужая: гасим ключ слоя, лента
+    // перечитается отложенно (единственный путь обновления, G3).
+    invalidateQueries(queryKeys.chronicleFeedAll());
+    return updated.body_html;
+  };
+
+  /** Перенести сохранённые поля в строку ленты и в заголовок-компонент. */
+  const applySaved = (updated: Comment): void => {
+    row.title = updated.title;
+    row.body_html = updated.body_html;
+    row.version = updated.version;
+    row.snippet = recordTitleFromBody(updated.body_md);
+    bodyDraft = updated.body_md;
+    bodyLoaded = true;
+    if (title !== null) {
+      title.setContent(
+        updated.title ?? '',
+        recordDisplayTitle(updated.title, updated.body_md) || t('diary.emptyTitle'),
+      );
+    }
+  };
+
+  /** Откат ОБОИХ полей к сохранённым значениям (Esc / «Отменить»). */
+  const cancelEdit = (): void => {
+    if (widget !== null) cancelMarkdownFieldEdit(widget);
+    if (title !== null && title.isEditing()) title.endEdit(false, false);
+    editing = false;
+  };
+
+  const editor: CardEditor = {
+    row,
+    editing: () => editing,
+    // Вход в правку заголовка через компонент: он же откроет и тело (`onBeginEdit`).
+    openTitle: () => title?.beginEdit(true),
+    openBody: () => void enterBodyEdit('body'),
+  };
+
   const head = buildRecordHead({
     dayLabel: recordDateLabel(row),
     onDateClick: () => void editRecordDates(row),
@@ -1254,19 +1439,45 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       class: 'diary-record-actions',
       onClick: (event) => showMenuAt(event.clientX, event.clientY, recordMenuItems(row)),
     }),
-    title: recordTitleOptions(row, card),
+    title: {
+      value: row.title ?? '',
+      label: recordTitleLabel(row),
+      editHint: t('diary.titleEditHint'),
+      placeholder: t('diary.titlePlaceholder'),
+      // Единая правка: уход фокуса заголовок↔тело правку не закрывает.
+      commitOnBlur: false,
+      // Одиночный клик в просмотре сворачивает/разворачивает тело записи.
+      onToggle: () => {
+        const d = dayOfCard(card);
+        if (d === null) return;
+        toggleRecordCollapsed(d, row.id);
+      },
+      // Двойной клик / вход в правку заголовка открывает и тело записи.
+      onBeginEdit: () => void enterBodyEdit('title'),
+      // Enter в заголовке: Ctrl/Cmd — записать оба поля, иначе — фокус в тело,
+      // курсор в позицию 0.
+      onEnter: (event) => {
+        const w = widget;
+        if (w === null) return;
+        if (event.ctrlKey || event.metaKey) commitMarkdownField(w);
+        else focusMarkdownFieldStart(w);
+      },
+      onEscape: () => cancelEdit(),
+    },
   });
-  recordTitles.set(card, head.title);
-  // Строка 2 — заголовок-группа (внутри шапки), далее оболочка комментария.
-  // `buildRecordBody` кладёт дескриптор оболочки в `recordShells` под этот самый
-  // узел карточки.
-  card.replaceChildren(head.root, buildRecordBody(row, card));
+  title = head.title;
+  cardEditors.set(card, editor);
+
+  // Двойной клик по СТАТИЧНОМУ просмотру (поле ещё не создано) входит в правку
+  // тела. После создания поля его собственный обработчик ведёт правку сам.
+  shell.root.addEventListener('dblclick', () => {
+    if (widget === null) editor.openBody();
+  });
+
+  card.replaceChildren(head.root, body);
   // Свёрнутость тела записи переприменяется при keyed-обновлении карточки и
-  // realtime (0.10.2, задача 41ed99ab): fillRecordCard — общая точка сборки и
-  // обновления. День приходит ЯВНЫМ параметром через единый помощник
-  // `applyRecordCollapsedForDay` (задача 8f9c9b12): на момент `build` карточка
-  // ещё не вставлена в ленту, и `dayOfCard(card)` вернул бы null (блокер
-  // проверки).
+  // realtime (0.10.2, задача 41ed99ab): день приходит ЯВНЫМ параметром (на
+  // момент `build` карточка ещё не вставлена, `dayOfCard` вернул бы null).
   applyRecordCollapsedForDay(card, day, row.id, collapsedRecords, recordGroupLabels());
 }
 
@@ -1280,145 +1491,12 @@ function recordTitleLabel(row: ChronicleRow): string {
   return recordDisplayTitle(row.title, row.snippet) || t('diary.emptyTitle');
 }
 
-/**
- * Опции заголовка-компонента карточки записи (0.10.2, ошибка 36c330a3; 0.10.3,
- * ошибка 47c2bf05): надписи, сворачивание тела и сохранение заголовка. Сам узел
- * компонента создаёт единый конструктор шапки `buildRecordHead` — тот же, что у
- * слота создания; здесь только доменные обработчики карточки.
- *
- * В ПРОСМОТРЕ заголовок — крупный текст-кнопка со стрелкой-индикатором (задача
- * 472457bf): одиночный клик сворачивает/разворачивает ТОЛЬКО тело комментария,
- * двойной клик входит в правку. Пока заголовок правится, сворачивание
- * недоступно; `Enter`/уход из поля завершают правку, `Escape` — отменяет.
- *
- * Дескриптор кладётся в `recordTitles` под узел карточки: вход в правку по
- * клавиатуре (Enter на поле «заголовок») идёт от DOM-узла карточки.
- */
-function recordTitleOptions(row: ChronicleRow, card: HTMLElement): RecordTitleOptions {
-  let committed = row.title ?? '';
-  return {
-    value: committed,
-    label: recordTitleLabel(row),
-    editHint: t('diary.titleEditHint'),
-    placeholder: t('diary.titlePlaceholder'),
-    onToggle: () => {
-      const day = dayOfCard(card);
-      if (day === null) return;
-      toggleRecordCollapsed(day, row.id);
-    },
-    onCommit: (next) => {
-      const trimmed = next.trim();
-      if (trimmed !== committed) {
-        committed = trimmed;
-        void patchRecord(row.id, { title: trimmed || null });
-      }
-      return recordDisplayTitle(trimmed || null, row.snippet) || t('diary.emptyTitle');
-    },
-  };
-}
-
-/**
- * Вход в правку заголовка по клавиатуре (Enter на поле «заголовок», 0.10.2,
- * требование 165323a7): карточка → дескриптор её заголовка-компонента.
- */
-function beginTitleEditByCard(card: HTMLElement): void {
-  recordTitles.get(card)?.beginEdit();
-}
-
 function recordMenuItems(row: ChronicleRow): MenuItem[] {
   return [
     menuAction(t('chrono.menu.copy'), () => void copyRecord(row.id)),
     MENU_SEPARATOR,
     menuAction(t('actions.delete'), () => void removeRecord(row.id), { danger: true }),
   ];
-}
-
-/**
- * Тело записи: единая оболочка комментария (`lib/ui/comment.ts`) в режиме
- * ПРОСМОТРА показывает ПОЛНЫЙ `body_html` записи (0.10.1, приёмка №3) —
- * заголовки, списки, выделения видны целиком, без выжимки `snippet`. Сборка
- * тела вынесена в `./record-body.js` ради поведенческого теста. Двойной клик —
- * правка тем же полем markdown, что в редакторе мысли. Пустая запись тоже даёт
- * кликабельную область и приглашение (0.10.1, приёмка №2).
- *
- * Дескриптор оболочки кладётся в `recordShells` под узел карточки: вход в правку
- * текста по клавиатуре (Enter на элементе «комментарий», требование 165323a7)
- * идёт от DOM-узла, который передаёт контроллер навигации.
- */
-function buildRecordBody(row: ChronicleRow, card: HTMLElement): HTMLElement {
-  const body = div('diary-record-body');
-  const shell = commentShell({ variant: 'plain' });
-  renderRecordView(shell, row);
-  shell.root.addEventListener('dblclick', () => void openBodyEditor(body, row, shell));
-  body.append(shell.root);
-  recordShells.set(card, { row, shell, body });
-  return body;
-}
-
-/**
- * Вход в правку текста записи по клавиатурной навигации (Enter на элементе
- * «комментарий»): карточка → её оболочка комментария (требование 165323a7).
- */
-function openCardBodyEditor(card: HTMLElement): void {
-  const handle = recordShells.get(card);
-  if (handle === undefined) return;
-  void openBodyEditor(handle.body, handle.row, handle.shell);
-}
-
-/**
- * Вход в диалог «Дата/период» по клавиатурной навигации (Enter на поле
- * «дата/период», требование 165323a7): строка записи берётся из дескриптора
- * карточки, переданной контроллером.
- */
-function editCardDates(card: HTMLElement): void {
-  const handle = recordShells.get(card);
-  if (handle === undefined) return;
-  void editRecordDates(handle.row);
-}
-
-/** Встроенная правка текста записи (оболочка комментария + поле markdown). */
-async function openBodyEditor(
-  body: HTMLElement,
-  row: ChronicleRow,
-  shell: ReturnType<typeof commentShell>,
-): Promise<void> {
-  // Уже в правке либо поле уже установлено — вложенное поле само откроет
-  // правку по двойному клику, повторный запрос не нужен.
-  if (shell.root.dataset['mode'] === 'edit' || body.querySelector('.md-field') !== null) return;
-  const networkId = requireNetworkId();
-  try {
-    const comment = await etn.comments.get(networkId, row.id);
-    if (!body.isConnected) return;
-    // Вставка картинки из буфера (приёмка №10, ошибка 8f090884): цель вложения —
-    // первая привязанная мысль записи, иначе HOME (паритет с постоянным
-    // комментарием мысли). Владелец не задан — поле просто пропускает файлы.
-    const owner = attachmentOwnerForRow(row.targets, homeId);
-    const widget = createMarkdownField({
-      md: comment.body_md,
-      html: comment.body_html,
-      placeholder: t('diary.emptyRecordHint'),
-      ...(owner !== null ? { attachmentsOwner: owner } : {}),
-      onSave: async (md) => {
-        const fresh = await etn.comments.get(networkId, row.id);
-        const updated = await etn.comments.update(networkId, row.id, { body_md: md }, fresh.version);
-        // Локальная мутация — тем же путём, что чужая: гасим ключ слоя, лента
-        // перечитается отложенно (единственный путь обновления, G3).
-        invalidateQueries(queryKeys.chronicleFeedAll());
-        return updated.body_html;
-      },
-      onEditChange: (editing) => {
-        shell.setMode(editing ? 'edit' : 'view');
-        // Выход из правки (Esc/клик вне, требование 165323a7) — фокус
-        // возвращается в навигацию записи.
-        if (!editing) feedNav?.focusNavigation();
-      },
-    });
-    shell.setField(widget);
-    shell.setMode('edit');
-    editMarkdownField(widget);
-  } catch (err) {
-    notice(t('diary.loadFailed', [errText(err)]), 'error');
-  }
 }
 
 /**
@@ -1481,19 +1559,6 @@ async function saveRecordDates(
   }
 }
 
-/** Обновляет поля записи (свежая версия — иначе VERSION_CONFLICT). */
-async function patchRecord(id: string, patch: Record<string, unknown>): Promise<void> {
-  const networkId = requireNetworkId();
-  try {
-    const fresh = await etn.comments.get(networkId, id);
-    await etn.comments.update(networkId, id, patch, fresh.version);
-    // Локальная мутация — тем же путём, что чужая: гасим ключ слоя, лента
-    // перечитается отложенно (единственный путь обновления, G3).
-    invalidateQueries(queryKeys.chronicleFeedAll());
-  } catch (err) {
-    notice(t('diary.saveFailed', [errText(err)]), 'error');
-  }
-}
 
 async function removeRecord(id: string): Promise<void> {
   const ok = await confirmDialog(t('diary.deleteTitle'), t('diary.deleteQuestion'), true);
@@ -1637,25 +1702,22 @@ async function detachChip(rowId: string, target: ChronicleTarget): Promise<void>
     const meaningful = fresh.targets.filter(
       (tg) => !(tg.owner_type === 'thought' && tg.owner_id === homeId),
     );
-    // Снятие последнего содержательного чипса меняет класс записи на 0 — сервер
-    // возвращает её в HOME и поднимает в верхний блок (c81964c7).
-    const movesToHome = isLastChip(meaningful);
-    if (movesToHome) {
+    // Снятие последнего содержательного чипса оставляет запись в дневнике без
+    // привязок к мыслям — действие подтверждаем (требование c81964c7). Позиция
+    // записи в ленте при этом НЕ меняется (сортировка только по дате/времени,
+    // требование c6ddc1ea): «прыжков» нет.
+    const isLast = isLastChip(meaningful);
+    if (isLast) {
       const ok = await confirmDialog(t('diary.detachTitle'), t('diary.detachQuestion'), true);
       if (!ok) return;
     }
     const ownerType = target.kind === 'thought' ? 'thought' : 'link';
     const ownerId = target.kind === 'thought' ? target.thought.id : target.link.id;
     await etn.comments.removeTarget(networkId, rowId, ownerType, ownerId, fresh.version);
-    // Снятие последнего чипса оставляет запись (сервер сам возвращает её в HOME
-    // и поднимает в верхний блок) — гасим ключ ленты и дожидаемся свежего DOM
-    // тем же путём, что отложенный перезапрос (сняв его таймер).
+    // Гасим ключ ленты и дожидаемся свежего DOM тем же путём, что отложенный
+    // перезапрос. Запись остаётся на своём месте — прокрутку не сбрасываем.
     invalidateQueries(queryKeys.chronicleFeedAll());
     await refreshFeedAndCalendar();
-    // Перемещение записи в другой блок меняет состав верхней части ленты:
-    // keyed-сверка держит позицию прокрутки, поэтому перемещённая запись может
-    // остаться вне вида. Показываем ленту с начала (ошибка 368747a6).
-    if (movesToHome && feedWrap !== null) feedWrap.scrollTop = 0;
   } catch (err) {
     notice(t('diary.detachFailed', [errText(err)]), 'error');
   }
@@ -1676,13 +1738,9 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
   if (thoughtIds.length === 0) return;
   try {
     const fresh = await etn.comments.get(networkId, rowId);
-    // Первая содержательная привязка выводит запись из HOME-блока вниз (класс
-    // записи становится > 0). Сверяемся с РАЗРЕШЁННЫМ HOME: при `homeId === null`
-    // HOME-цель не отличить от обычной (ошибка 810520c5, корень 89409d57).
-    const home = homeId ?? (await getHome().catch(() => null));
-    const firstBinding =
-      home !== null &&
-      !fresh.targets.some((tg) => tg.owner_type === 'thought' && tg.owner_id !== home);
+    // Привязка мысли НЕ меняет позицию записи в ленте: сортировка — только по
+    // дате/времени (требование c6ddc1ea, ревизия 2026-10-09), класс записи в
+    // порядке не участвует. Поэтому прокрутка к записи не требуется.
     let version = fresh.version;
     let attached = 0;
     for (const id of thoughtIds) {
@@ -1693,356 +1751,14 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
     }
     if (attached === 0) notice(t('diary.alreadyAttached'), 'info');
     // Локальная мутация — через слой: гасим ключ ленты и ДОЖИДАЕМСЯ свежего DOM
-    // (снятый отложенный перезапрос — `refreshFeedAndCalendar`), иначе прокрутка
-    // к перемещённой записи смотрела бы на старую ленту.
+    // (снятый отложенный перезапрос — `refreshFeedAndCalendar`).
     invalidateQueries(queryKeys.chronicleFeedAll());
     await refreshFeedAndCalendar();
-    // Перемещённая вниз запись должна быть видна: прокручиваем к её карточке, а
-    // если день записи ниже загруженной страницы — показываем ленту с начала
-    // (ошибка 810520c5, симметрично 368747a6).
-    if (firstBinding) revealRecord(rowId);
   } catch (err) {
     notice(t('diary.attachFailed', [errText(err)]), 'error');
   }
 }
 
-// ---------------------------------------------------------------------------
-// Pseudo-record (slot)
-// ---------------------------------------------------------------------------
-
-/**
- * Creates a pseudo-record slot: an empty card that writes nothing to the
- * network until the first content (title/text/binding) — requirement 26f0aa52.
- */
-function startSlot(day?: string, presetThoughtIds: string[] = []): void {
-  if (host === null) return;
-  if (slot !== null && presetThoughtIds.length === 0) {
-    slot.title.beginEdit();
-    return;
-  }
-  slotFocusInside = false;
-  slotSuspendConvert = false;
-  slotBusy = null;
-  const filter = getFilterState();
-  const targetDay =
-    day ??
-    clampPseudoDate(
-      todayLocal(),
-      resolvePeriodDay(filter.dateFrom),
-      resolvePeriodDay(filter.dateTo),
-    );
-
-  const root = div('diary-record diary-slot');
-  // Шапка слота — тем же ЕДИНЫМ конструктором `buildRecordHead`, что и карточка
-  // (0.10.3, ошибка 47c2bf05; 0.10.2, ошибка 36c330a3): слот обязан показывать
-  // поля так же, как будет выглядеть итоговая запись. Строка 1: период, привязки,
-  // «+ мысль», «✕» отмены; строка 2: заголовок — узел компонента
-  // `createRecordTitle`. Слот открывается в правке; `Enter`/уход завершают правку
-  // и возвращают заголовок в сворачиваемую группу со стрелкой, `Escape` отменяет.
-  let slotCollapsed = false;
-  const { root: head, title } = buildRecordHead({
-    dayLabel: fmtDate(targetDay),
-    chips: div('diary-record-chips'),
-    onAddThought: () => void addSlotChip(),
-    trailing: uiButton({
-      label: '✕',
-      role: 'ghost',
-      size: 's',
-      class: 'diary-slot-cancel',
-      title: t('diary.slotCancel'),
-      onClick: () => cancelSlot(),
-    }),
-    title: {
-      value: '',
-      label: t('diary.emptyTitle'),
-      editHint: t('diary.titleEditHint'),
-      placeholder: t('diary.titlePlaceholder'),
-      onToggle: () => {
-        slotCollapsed = !slotCollapsed;
-        applyRecordCollapsed(root, slotCollapsed, {
-          expand: t('listActions.expand'),
-          collapse: t('listActions.collapse'),
-        });
-      },
-      // Правку завершают и `Enter`, и уход из поля — оба пути сохраняют
-      // черновик одним `ensureSlot` (ошибка 0757cd08: стража гонки, без дубля).
-      onCommit: (next) => {
-        void ensureSlot({ title: next });
-        return next.trim() || t('diary.emptyTitle');
-      },
-    },
-  });
-
-  const body = div('diary-record-body');
-  // Псевдо-запись — тоже через единую оболочку комментария (0.10.1, приёмка
-  // №2); пустое тело даёт область двойного клика для входа в правку.
-  const slotShell = commentShell({ variant: 'plain' });
-  // Вставка картинки из буфера в псевдо-записи (приёмка №10): пока чипсов нет,
-  // цель вложения — первая заданная мысль (drop) либо HOME.
-  const slotOwnerId = presetThoughtIds[0] ?? homeId;
-  const widget = createMarkdownField({
-    md: '',
-    html: '',
-    placeholder: t('diary.emptyRecordHint'),
-    ...(slotOwnerId !== null
-      ? { attachmentsOwner: { ownerType: 'thought' as const, ownerId: slotOwnerId } }
-      : {}),
-    onSave: async (md) => {
-      const created = await ensureSlot({ body: md });
-      return created?.body_html ?? md;
-    },
-    onEditChange: (editing) => slotShell.setMode(editing ? 'edit' : 'view'),
-  });
-  // Вид поля делаем фокусируемым (tabindex): уход фокуса из заголовка в
-  // комментарий оставляет фокус ВНУТРИ слота, поэтому запись ещё не создаётся
-  // и живой редактор не отсоединяется (ошибка 0757cd08).
-  widget.querySelector<HTMLElement>('.md-field-view')?.setAttribute('tabindex', '-1');
-  slotShell.setField(widget);
-  slotShell.setState({ kind: 'ready' });
-  body.append(slotShell.root);
-
-  root.append(head, body);
-  const state: SlotState = {
-    day: targetDay,
-    commentId: null,
-    root,
-    title,
-    from: targetDay,
-  };
-  slot = state;
-
-  // Уход фокуса за пределы слота — единственная точка превращения слота в
-  // карточку. Пока фокус внутри (заголовок, редактор комментария), слот
-  // остаётся: запись уже может быть создана (`state.commentId`), а последующие
-  // правки её ОБНОВЛЯЮТ, не теряя введённый текст (ошибка 0757cd08).
-  root.addEventListener('focusin', () => {
-    slotFocusInside = true;
-  });
-  root.addEventListener('focusout', (event) => {
-    if (slotSuspendConvert) return;
-    const next = (event as FocusEvent).relatedTarget as Node | null;
-    slotFocusInside = next !== null && root.contains(next);
-    if (!slotFocusInside) void ensureSlot({});
-  });
-
-  async function addSlotChip(): Promise<void> {
-    // Диалог выбора мысли уводит фокус из слота, но слот покинутым не считается.
-    slotSuspendConvert = true;
-    let result: Awaited<ReturnType<typeof pickThoughtsDialog>>;
-    try {
-      result = await pickThoughtsDialog({
-        networkId: requireNetworkId(),
-        allowCreate: false,
-        allowLinkType: false,
-      });
-    } finally {
-      slotSuspendConvert = false;
-    }
-    if (result === null) return;
-    const ids = pickedThoughtIds(result);
-    if (ids.length === 0) return;
-    await ensureSlot({ extraThoughtIds: ids });
-  }
-
-  // Открытие слота не должно оставлять модульный `slot` в неконсистентном
-  // состоянии при любой ошибке отрисовки: иначе все последующие клики уходят в
-  // раннюю ветку «слот уже есть» и кнопка «Добавить запись дневника» перестаёт
-  // работать (ошибка 0757cd08, круг 1, независимая проверка).
-  try {
-    renderFeed();
-    // Слот открывается с заголовком В ПРАВКЕ (текст надо набирать): фокус
-    // ставим после монтирования — на откреплённом узле он бессмыслен.
-    state.title.beginEdit();
-  } catch (err) {
-    if (slot === state) {
-      slot = null;
-      slotFocusInside = false;
-    }
-    state.root.remove();
-    notice(t('diary.createFailed', [errText(err)]), 'error');
-    return;
-  }
-
-  // Привязки, заданные сразу (drop на ленте/пустом месте), создают запись и
-  // превращают слот в карточку немедленно — фокус в слоте не удерживается.
-  if (presetThoughtIds.length > 0) {
-    void ensureSlot({ extraThoughtIds: presetThoughtIds, convert: true });
-  }
-}
-
-/** Отменяет слот: без id — только в клиенте, без сети (требование 26f0aa52). */
-function cancelSlot(): void {
-  const state = slot;
-  if (state === null) return;
-  if (!slotDeleteNeedsNetwork(state.commentId)) {
-    slot = null;
-    slotFocusInside = false;
-    renderFeed();
-    return;
-  }
-  // Запись уже создана первым содержательным сохранением — удаляем на сервере.
-  // Пока открыт диалог подтверждения, слот не конвертируем (фокус уходит в
-  // диалог, но слот покинутым не считается).
-  slotSuspendConvert = true;
-  void (async () => {
-    try {
-      const ok = await confirmDialog(t('diary.deleteTitle'), t('diary.deleteQuestion'), true);
-      if (!ok) return;
-      const networkId = requireNetworkId();
-      const fresh = await etn.comments.get(networkId, state.commentId!);
-      await etn.comments.remove(networkId, state.commentId!, fresh.version);
-      if (slot === state) {
-        slot = null;
-        slotFocusInside = false;
-        // Слот — локальная псевдо-запись: убираем её из DOM сразу, затем гасим
-        // ключ ленты (единственный путь обновления, G3).
-        renderFeed();
-      }
-      invalidateQueries(queryKeys.chronicleFeedAll());
-    } catch (err) {
-      notice(t('diary.deleteFailed', [errText(err)]), 'error');
-    } finally {
-      slotSuspendConvert = false;
-    }
-  })();
-}
-
-/**
- * Сохраняет черновик слота: создаёт запись при первом содержании (владелец
- * HOME, дата — псевдо-день) либо ОБНОВЛЯЕТ уже созданную. Возвращает запись или
- * `null`, если содержания нет.
- *
- * Заголовок и текст сохраняются в ЛЮБОМ порядке ввода: запись, созданная первым
- * содержательным blur (например, заголовком), дальше обновляется, а не теряет
- * последующий текст (ошибка 0757cd08). Слот превращается в карточку на месте
- * (`insertCreatedRecord`), только когда фокус покинул слот (или явно —
- * `convert: true`): пока пользователь в поле, живой редактор остаётся.
- */
-async function ensureSlot(opts: {
-  title?: string | null;
-  body?: string;
-  extraThoughtIds?: string[];
-  convert?: boolean;
-}): Promise<Comment | null> {
-  // Гонка путей сохранения (blur заголовка, commit редактора, focusout ухода из
-  // слота): сохраняет только первый вызов, остальные ждут его результата —
-  // иначе создался бы дубль записи.
-  if (slotBusy !== null) return slotBusy;
-  const run = runEnsureSlot(opts);
-  slotBusy = run;
-  try {
-    return await run;
-  } finally {
-    if (slotBusy === run) slotBusy = null;
-  }
-}
-
-async function runEnsureSlot(opts: {
-  title?: string | null;
-  body?: string;
-  extraThoughtIds?: string[];
-  convert?: boolean;
-}): Promise<Comment | null> {
-  const state = slot;
-  if (state === null) return null;
-  const networkId = requireNetworkId();
-  const title = opts.title !== undefined ? (opts.title ?? '') : state.title.value();
-  const body = opts.body ?? '';
-  const extra = opts.extraThoughtIds ?? [];
-  const plan = planSlotCommit({
-    commentId: state.commentId,
-    title,
-    body: opts.body,
-    bindings: extra.length,
-  });
-  if (plan.action === 'none') return null;
-  try {
-    const home = await getHome();
-    // Содержание записи держится на любом из: текст, заголовок, чипс
-    // (требование 26f0aa52). Сервер допускает пустой `body_md`, пока есть
-    // непустой заголовок или привязка вне HOME, поэтому текст шлём как есть.
-    //
-    // Дата записи — псевдо-день + текущее время суток (ADR 994d076a: «при
-    // создании — указанная дата + текущее время»). Голую дату не шлём: она
-    // теряет время суток, а `valid_to` обязан быть непустым (d58aa1a4).
-    let comment: Comment;
-    if (plan.action === 'create') {
-      const targets: CommentTarget[] = [{ owner_type: 'thought', owner_id: home }];
-      for (const id of extra) {
-        if (id !== home) targets.push({ owner_type: 'thought', owner_id: id });
-      }
-      const now = new Date().toISOString();
-      const { from: validFrom, to: validTo } = resolvePeriodInstants(
-        { from: state.from, to: state.from },
-        { from: now, to: now },
-      );
-      comment = await etn.comments.createMulti(networkId, targets, {
-        kind: 'chronological',
-        title: plan.title,
-        body_md: body,
-        valid_from: validFrom,
-        valid_to: validTo,
-        use_time: false,
-      });
-      state.commentId = comment.id;
-    } else {
-      comment = await updateSlotComment(networkId, state.commentId!, plan, extra, home);
-    }
-    // Спокойная лента (0.10.1, итерация приёмки №8, п.2): слот превращается в
-    // карточку записи НА МЕСТЕ, без полной перерисовки ленты и перескока
-    // скролла. Если локальную строку собрать не удалось (нестандартные цели) —
-    // откат на полную перезагрузку ради точности данных.
-    const localRow = await localRowFromComment(comment, home);
-    if (localRow === null) {
-      slot = null;
-      slotFocusInside = false;
-      state.root.remove();
-      await reload();
-      syncCalendar();
-      return comment;
-    }
-    if (opts.convert === true || !slotFocusInside) {
-      await insertCreatedRecord(localRow);
-    }
-    syncCalendar();
-    void refreshCalendarCounts();
-    return comment;
-  } catch (err) {
-    notice(t('diary.createFailed', [errText(err)]), 'error');
-    return null;
-  }
-}
-
-/**
- * Обновление уже созданной из слота записи (ошибка 0757cd08): заголовок —
- * всегда, тело — только если было передано вызывающим (правка одного поля не
- * затирает другое). Новые привязки добавляются точечно (`comments.addTarget`).
- */
-async function updateSlotComment(
-  networkId: string,
-  id: string,
-  plan: SlotCommitPlan,
-  extra: readonly string[],
-  home: string,
-): Promise<Comment> {
-  const fresh = await etn.comments.get(networkId, id);
-  let version = fresh.version;
-  const patch: Record<string, unknown> = { title: plan.title };
-  if (plan.bodyProvided) patch['body_md'] = plan.body;
-  let comment = await etn.comments.update(networkId, id, patch, version);
-  version = comment.version;
-  for (const tid of extra) {
-    if (tid === home) continue;
-    if (comment.targets.some((tg) => tg.owner_type === 'thought' && tg.owner_id === tid)) {
-      continue;
-    }
-    comment = await etn.comments.addTarget(networkId, id, 'thought', tid, version);
-    version = comment.version;
-  }
-  return comment;
-}
-
-// ---------------------------------------------------------------------------
 // Calendar wiring
 // ---------------------------------------------------------------------------
 
@@ -2200,22 +1916,6 @@ function focusRecord(id: string, day: string): void {
   renderFeed();
   const card = feedList?.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
   card?.scrollIntoView({ block: 'center' });
-}
-
-/**
- * Показывает запись после её перемещения между блоками ленты: прокручивает к
- * карточке записи, а если карточки в загруженной странице нет (день записи ниже
- * текущей позиции) — показывает ленту с начала. Keyed-сверка сохраняет позицию
- * прокрутки, поэтому перемещённая запись иначе остаётся вне вида (ошибка
- * 810520c5, симметрично 368747a6).
- */
-function revealRecord(id: string): void {
-  const card = feedList?.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
-  if (card !== null && card !== undefined) {
-    card.scrollIntoView({ block: 'center' });
-    return;
-  }
-  if (feedWrap !== null) feedWrap.scrollTop = 0;
 }
 
 /** Догружает страницы ленты, пока запись не появится (она внутри периода). */

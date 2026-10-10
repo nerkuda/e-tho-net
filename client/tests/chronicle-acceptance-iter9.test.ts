@@ -13,9 +13,13 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура ленты — через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /** Сборка фрагмента ленты: день → заголовок + список карточек записей. */
 interface FakeFeed {
@@ -79,14 +83,16 @@ async function navModule(): Promise<typeof import('../src/renderer/screens/chron
 /** Нажатие клавиши на ленте; `target` — узел, где случилось событие. */
 function press(root: ShimElement, key: string, target?: ShimElement, shift = false): void {
   let prevented = false;
-  root.emit('keydown', {
+  root.emit('focusin', {});
+  keymap.dispatchKeyEvent({
     key,
     shiftKey: shift,
     target: target ?? root,
     preventDefault: () => {
       prevented = true;
     },
-  });
+  } as unknown as KeyboardEvent);
+  root.emit('focusout', {});
   void prevented;
 }
 
@@ -284,17 +290,16 @@ describe('приёмка №9, п.2: клавиатурная навигация
     assert.match(src, /attachFeedNav\(feedWrap, \{/, 'лента подключает контроллер навигации');
     assert.match(src, /feedWrap\.tabIndex = 0/, 'лента фокусируема для клавиатуры');
     assert.match(src, /feedNav\?\.refresh\(\)/, 'после перерисовки выделение переприменяется');
-    // Класс строки при локальной вставке считается по РАЗРЕШЁННОМУ HOME (ошибка
-    // 810520c5): при `homeId === null` место записи расходилось с серверным.
+    // Локальная вставка идёт строго по дате/времени (задача 5a002590): класс
+    // записи считается только по целям и на порядок больше не влияет.
     assert.match(
       src,
-      /const home = homeId \?\? \(await getHome\(\)\.catch\(\(\) => null\)\);/,
-      'локальная вставка разрешает HOME',
+      /insertRowByDay\(rows, row, getFilterState\(\)\.order\)/,
+      'строка встаёт по дате/времени, без класса записи',
     );
-    assert.match(
-      src,
-      /insertRowByDay\(rows, row, getFilterState\(\)\.order, home\)/,
-      'экран передаёт разрешённый home — класс записи считается как на сервере',
+    assert.ok(
+      !/insertRowByDay\(rows, row, getFilterState\(\)\.order, home\)/.test(src),
+      'разрешённый HOME в сортировку не передаётся',
     );
   });
 });

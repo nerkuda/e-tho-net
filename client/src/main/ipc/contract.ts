@@ -23,6 +23,10 @@ import type {
   AttachmentCopyResult,
   AttachmentFileInput,
   AttachmentInput,
+  AttachmentOwnerAddInput,
+  AttachmentOwnerChangeResult,
+  AttachmentOwnerRemoveInput,
+  AttachmentOwnerRemoveResult,
   AttachmentOwnerType,
   AttachmentSearchQuery,
   AttachmentUpdateInput,
@@ -245,6 +249,18 @@ export type PickImageResult =
 export type PickFileResult =
   | { status: 'ok'; path: string; name: string }
   | { status: 'cancel' };
+
+/**
+ * Содержимое системного буфера обмена, прочитанное главным процессом
+ * (задача 78eaf07a). Картинки из буфера рендереру недоступны
+ * (`navigator.clipboard` умеет только текст; требование «Разделение процессов
+ * клиента» 7f7b2d57), поэтому буфер читает main: `text` — текстовое содержимое
+ * (или `null`), `imagePngDataUrl` — картинка как `data:`-URL PNG (или `null`).
+ */
+export interface ClipboardReadResult {
+  text: string | null;
+  imagePngDataUrl: string | null;
+}
 
 /**
  * Client application info for the «О программе» dialog (08-ui-spec.md §8.2).
@@ -1081,6 +1097,26 @@ export interface EtnApi {
       input: AttachmentCopyInput,
     ): Promise<AttachmentCopyResult>;
     /**
+     * `POST /attachments/{id}/owners` — добавить одного или нескольких
+     * владельцев существующему вложению (0.12.1, задача 6ba247cc). Идемпотентно:
+     * уже владеющие попадают в `skipped`.
+     */
+    addOwners(
+      networkId: string,
+      id: string,
+      input: AttachmentOwnerAddInput,
+    ): Promise<AttachmentOwnerChangeResult>;
+    /**
+     * `DELETE /attachments/{id}/owners` — снять ОДНО владение пары
+     * (вложение, объект) (0.12.1, задача 4924d61e). Защита от снятия
+     * собственной иконки/обложки приходит как ошибка 409.
+     */
+    removeOwner(
+      networkId: string,
+      id: string,
+      input: AttachmentOwnerRemoveInput,
+    ): Promise<AttachmentOwnerRemoveResult>;
+    /**
      * `GET /attachments?q=…` — network-wide attachment search (workplan L25).
      * Used by the editor's "Найти существующее" dialog tab.
      */
@@ -1124,6 +1160,17 @@ export interface EtnApi {
       maxWritesPerMinute?: number | null,
     ): Promise<{ id: string; apiKey: string }>;
     removeKey(id: string): Promise<void>;
+    /**
+     * `GET /users/me/settings` — server-level (L3s) settings of the current
+     * user, shared by all networks and devices on this server (ADR 3a829d25,
+     * task f57524ab; spec operation e7e07b24). Returns a «key → JSON value» map.
+     */
+    getSettings(): Promise<import('@etn/shared').UserSettingsMap>;
+    /**
+     * `PUT /users/me/settings/{key}` — set one server-level user setting. The
+     * server validates the value shape (`comment_hotkeys` — a string map).
+     */
+    setSetting(key: string, value: unknown): Promise<void>;
   };
   /**
    * Object-locks REST bridge (task 4f141756, операция 8919b057 «/locks»,
@@ -1357,6 +1404,13 @@ export interface EtnApi {
      * a connection.
      */
     appInfo(): Promise<AppInfo>;
+    /**
+     * Читает системный буфер обмена главным процессом (задача 78eaf07a):
+     * текст и/или картинку как `data:`-URL PNG. Рендерер не имеет доступа к
+     * картинкам буфера (`navigator.clipboard` — только текст), поэтому чтение
+     * живёт в main. Ничего в буфер не пишется; сбой чтения → оба поля `null`.
+     */
+    readClipboard(): Promise<ClipboardReadResult>;
     health(): Promise<HealthResponse>;
     version(): Promise<VersionResponse>;
     export(networkId: string, request: ExportRequest): Promise<ExportJobStartResult>;

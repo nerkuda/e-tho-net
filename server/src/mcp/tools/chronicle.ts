@@ -9,6 +9,7 @@ import type { McpRuntime } from '../context.js';
 
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
 import { parseChronicleQueryBody, queryChronicle } from '../../domain/chronicle-service.js';
+import { createBodyPresenter, createSnippetExpander } from '../../domain/transclusion-service.js';
 import { ChronicleQuery } from '../../contracts.js';
 import { resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { resolveLinkTypeIdByName } from '../../domain/link-type-service.js';
@@ -56,7 +57,20 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         if (args.limit !== undefined) body.limit = args.limit;
         if (args.offset !== undefined) body.offset = args.offset;
         const request = parseChronicleQueryBody(body, '');
-        const result = queryChronicle(ndb, request, { userId: rt.deps.auth.userId });
+        // MCP-выдача пересобирает `body_html` из развёрнутого `body_md`, чтобы
+        // HTML был согласован с развёрнутыми трансклюзиями (ошибка a6da3d37,
+        // ТП2 задача bcfc7eb7, ADR 85a7a01e). REST-путь transform не передаёт
+        // и сохраняет кешированный `body_html`.
+        const present = createBodyPresenter(ndb);
+        // `snippet` собирается из развёрнутого текста без маркеров границ
+        // (ошибка a3fb62b6): превью строки согласовано с `body_md`/`body_html`
+        // и не показывает сырую ссылку-трансклюзию.
+        const expandSnippet = createSnippetExpander(ndb);
+        const result = queryChronicle(ndb, request, {
+          userId: rt.deps.auth.userId,
+          bodyHtmlTransform: (body_md) => present(body_md).body_html,
+          snippetTransform: (body_md) => expandSnippet(body_md),
+        });
         return {
           rows: result.rows,
           meta: { total: result.total, offset: request.offset, limit: request.limit },

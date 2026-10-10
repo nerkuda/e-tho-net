@@ -118,8 +118,8 @@ describe('вкладка «Дневник»: диалог даты/период�
       src.indexOf('etn.comments.create('),
       src.indexOf('invalidateQueries(queryKeys.indicators(ctx.ownerId));', src.indexOf('etn.comments.create(')),
     );
-    assert.ok(create.includes('valid_from: fromInstant'), 'create: полный инстанс начала');
-    assert.ok(create.includes('valid_to: toInstant'), 'create: полный инстанс конца');
+    assert.ok(create.includes('valid_from: now'), 'create: полный инстанс начала');
+    assert.ok(create.includes('valid_to: now'), 'create: полный инстанс конца');
     assert.ok(!/valid_to:\s*(?:null|['"]['"])/.test(src), 'valid_to не бывает пустым');
   });
 });

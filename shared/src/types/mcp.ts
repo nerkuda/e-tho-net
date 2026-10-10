@@ -22,7 +22,7 @@ import type {
   ThoughtBundleThoughtAction,
   ThoughtDuplicateCandidate,
 } from './thought-bundle.js';
-import type { ThoughtCardWarning } from './thought-card-warning.js';
+import type { MutationWarning } from './transclusion-warning.js';
 import type { Link } from './link.js';
 import type { Thought, ThoughtRef, ThoughtUsage } from './thought.js';
 
@@ -188,12 +188,13 @@ export interface McpMutationResult {
   version: number;
   request_id?: string;
   /**
-   * Non-fatal warnings about the resulting card (task O6). Currently emitted
-   * by `etn.thoughts.write` batch items (via the bundle domain) — the call
-   * succeeded, but the card is not fully compliant with its type's
-   * required-property contract. Absent when no warnings apply.
+   * Non-fatal warnings about the resulting card or the applied text change
+   * (tasks O6, ed796c43). Currently emitted by `etn.thoughts.write` batch items
+   * (card completeness via the bundle domain) and by comment writes that lost
+   * live transclusions (`TRANSCLUSION_LOST`, требование 822a9149). The call
+   * succeeded; absent when there is nothing to warn about.
    */
-  warnings?: ThoughtCardWarning[];
+  warnings?: MutationWarning[];
 }
 
 /** Base shape of an `etn://` resource URI (opaque string; templated by server). */
@@ -281,6 +282,11 @@ export interface CardThoughtTypeRef {
  *  (это контракт `etn.types.list` для типов; эффективный набор для конкретной
  *  мысли — через `etn.thoughts.get { meta.views }`). */
 export interface McpThoughtTypeEntry extends ThoughtTypeRef {
+  /**
+   * Шаблон постоянного комментария мысли (требование 39e30070, ТП2): в MCP-выдаче
+   * текст отдаётся с развёрнутыми трансклюзиями, как и `description`.
+   */
+  comment_template_md: string | null;
   properties: McpEffectiveTypeProperty[];
   views: McpThoughtTypeViewEntry[];
 }
@@ -585,17 +591,20 @@ export interface McpThoughtWriteItemResult {
    * рёбра «молча». Пусто/не задано — дефолтов-связей не было.
    */
   default_link_ids?: string[];
-  /** Card-completeness warnings (task O6) for this item. */
-  warnings: ThoughtCardWarning[];
+  /**
+   * Per-item non-fatal warnings (task O6 card completeness; требование
+   * 822a9149 — a comment/chronicle write that lost live transclusions).
+   */
+  warnings: MutationWarning[];
 }
 
 /** Result of `etn.thoughts.write`. */
 export interface McpThoughtWriteResult {
   /** Per-item results in the same order as `thoughts[]` in the request. */
   items: McpThoughtWriteItemResult[];
-  /** Aggregated "card completeness" warnings across the batch — each entry
-   *  carries `ref` or `thought_id` so the caller can locate the offender. */
-  warnings: ThoughtCardWarning[];
+  /** Aggregated non-fatal warnings across the batch — each entry carries `ref`
+   *  or `thought_id` so the caller can locate the offender. */
+  warnings: MutationWarning[];
   /** Echo of the network's session layer the batch materialised in. */
   layer: { id: string; title: string };
   request_id?: string;
@@ -776,6 +785,7 @@ export type CompactThought = Omit<
   Thought,
   | 'fg_color'
   | 'bg_color'
+  | 'icon_color'
   | 'font_bold'
   | 'font_italic'
   | 'font_underline'
@@ -789,13 +799,14 @@ export type CompactThought = Omit<
 /**
  * Drop-in replacement of {@link ThoughtRef} for the neighbours catalogue and
  * `etn.thoughts.usage`. The reference already only carries style fields
- * (`fg_color`, `bg_color`, `font_*`, `icon_attachment_id`), so the compact
- * projection strips those and keeps the identity / lifecycle subset.
+ * (`fg_color`, `bg_color`, `icon_color`, `font_*`, `icon_attachment_id`), so
+ * the compact projection strips those and keeps the identity / lifecycle subset.
  */
 export type CompactThoughtRef = Omit<
   ThoughtRef,
   | 'fg_color'
   | 'bg_color'
+  | 'icon_color'
   | 'font_bold'
   | 'font_italic'
   | 'font_underline'
@@ -828,13 +839,14 @@ export interface CompactThoughtUsage
 
 /**
  * Ширина «визуальных» полей стиля, которые compact-проекция выносит из
- * списочных ответов MCP: цвет текста и фона, ручные флаги шрифта, вид иконки
- * и вложение-подложка иконки. `icon` (само значение emoji/ссылки) остаётся —
- * оно семантично. Список — единый источник для всех compact-проекций.
+ * списочных ответов MCP: цвет текста/фона/символа иконки, ручные флаги шрифта,
+ * вид иконки и вложение-подложка иконки. `icon` (само значение emoji/ссылки)
+ * остаётся — оно семантично. Список — единый источник для всех compact-проекций.
  */
 export type CompactVisualFieldKeys =
   | 'fg_color'
   | 'bg_color'
+  | 'icon_color'
   | 'font_bold'
   | 'font_italic'
   | 'font_underline'

@@ -186,6 +186,8 @@ export interface DuplicateHit {
   /** Own icon, when set; the caller falls back to the type's icon. */
   icon: string | null;
   icon_kind: IconKind;
+  /** HEX-цвет символа иконки или `null` (задача 4105bd6a). */
+  icon_color?: string | null;
   /** Own style overrides (nullable: inherit the type defaults). */
   fg_color: string | null;
   bg_color: string | null;

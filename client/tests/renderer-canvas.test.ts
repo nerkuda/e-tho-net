@@ -199,7 +199,7 @@ describe('resolveThoughtIcon (требование «Наследование в
   it('своя иконка побеждает типовую — вместе со своим видом', () => {
     store.update({ thoughtTypes: chain });
     const icon = resolveThoughtIcon(ref({ type_id: 'person', icon: '⭐', icon_kind: 'emoji' }));
-    assert.deepEqual(icon, { icon: '⭐', kind: 'emoji' });
+    assert.deepEqual(icon, { icon: '⭐', kind: 'emoji', color: null });
     store.update({ thoughtTypes: [] });
   });
 
@@ -209,19 +209,53 @@ describe('resolveThoughtIcon (требование «Наследование в
     assert.deepEqual(resolveThoughtIcon(ref({ type_id: 'mate' })), {
       icon: '🧑',
       kind: 'emoji',
+      color: null,
     });
     store.update({ thoughtTypes: [] });
   });
 
   it('мысль без типа получает иконку корневого типа', () => {
     store.update({ thoughtTypes: chain });
-    assert.deepEqual(resolveThoughtIcon(ref({ type_id: null })), { icon: '🌳', kind: 'emoji' });
+    assert.deepEqual(resolveThoughtIcon(ref({ type_id: null })), {
+      icon: '🌳',
+      kind: 'emoji',
+      color: null,
+    });
     store.update({ thoughtTypes: [] });
   });
 
   it('иконки нет нигде — отдаёт null (вызывающий рисует 💭)', () => {
     store.update({ thoughtTypes: [] });
-    assert.deepEqual(resolveThoughtIcon(ref()), { icon: null, kind: 'emoji' });
+    assert.deepEqual(resolveThoughtIcon(ref()), { icon: null, kind: 'emoji', color: null });
+  });
+
+  it('цвет символа наследуется ВМЕСТЕ с иконкой — у того типа, что дал иконку (4105bd6a)', () => {
+    store.update({
+      thoughtTypes: [
+        type({ id: 'root', name: 'основной тип', is_root: true, icon: '🌳' }),
+        type({
+          id: 'person',
+          name: 'Персона',
+          parent_id: 'root',
+          is_root: false,
+          icon: '🧑',
+          icon_color: '#ff0000',
+        }),
+        type({ id: 'mate', name: 'Коллега', parent_id: 'person', is_root: false }),
+      ],
+    });
+    // Своя иконка с собственным цветом — цвет своей иконки.
+    assert.deepEqual(
+      resolveThoughtIcon(ref({ type_id: 'person', icon: '⭐', icon_kind: 'icon', icon_color: '#00ff00' })),
+      { icon: '⭐', kind: 'icon', color: '#00ff00' },
+    );
+    // Наследованная иконка — цвет типа, давшего иконку.
+    assert.deepEqual(resolveThoughtIcon(ref({ type_id: 'mate' })), {
+      icon: '🧑',
+      kind: 'emoji',
+      color: '#ff0000',
+    });
+    store.update({ thoughtTypes: [] });
   });
 });
 
@@ -444,6 +478,9 @@ describe('view result compound name (08-ui-spec §2.2.3, ace5e73b)', () => {
       ),
       unresolved: null,
       empty: false,
+      total: items.length,
+      nextOffset: items.length,
+      exhausted: true,
     };
   }
 

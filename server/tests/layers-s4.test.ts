@@ -45,6 +45,7 @@ import {
   deleteAttachment,
   createAttachment,
   getAttachment,
+  updateAttachment,
 } from '../src/domain/attachment-service.js';
 import { getPermanentPreview, listComments } from '../src/domain/comment-service.js';
 import { deleteLink, getLink } from '../src/domain/link-service.js';
@@ -135,6 +136,15 @@ describe(
           .prepare(
             `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, position, created_at, created_by)
              VALUES ('att-parent', ?, 'thought', ?, 'url', 'https://example.com/x', 0, ?, 'u')`,
+          )
+          .run(BASE_LAYER_ID, parent.id, now);
+        // Источник истины о владении с 0.12.1 — строки `attachment_owners`
+        // (ADR 9f90b010); owner-колонки строки вложения — лишь зеркало.
+        ndb
+          .prepare(
+            `INSERT INTO attachment_owners (id, layer_id, deleted, base_version, attachment_id,
+               owner_type, owner_id, position, created_at, created_by)
+             VALUES ('ao-parent', ?, 0, 0, 'att-parent', 'thought', ?, 0, ?, 'u')`,
           )
           .run(BASE_LAYER_ID, parent.id, now);
 
@@ -475,13 +485,17 @@ describe(
           { kind: 'file', file_path: filePath },
           'u',
         );
+        // Вторая строка, разрешающаяся в тот же файл: создаём с клиентским
+        // путём и переносим file_path на общий файл (дедуп по хэшу при
+        // создании такой строки не даёт).
         const att2 = createAttachment(
           ndbBase,
           'thought',
           b.id,
-          { kind: 'file', file_path: filePath },
+          { kind: 'file', file_path: 'C:\\client\\other.bin' },
           'u',
         );
+        updateAttachment(ndbBase, att2.id, { file_path: filePath }, 'u');
 
         // Deleting att1 in layer A tombstones the binding only — the file
         // survives (att2 + the base row of att1 still reference it).

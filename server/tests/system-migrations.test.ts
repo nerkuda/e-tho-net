@@ -28,6 +28,7 @@ const EXPECTED_FILES = [
   '011_networks_self_description.sql',
   '012_mcp_tool_call_metrics.sql',
   '013_networks_type_roles.sql',
+  '014_user_settings.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */
@@ -38,6 +39,7 @@ const EXPECTED_TABLES = [
   'networks',
   'network_members',
   'user_preferences',
+  'user_settings',
   'audit_log',
   'client_request_cache',
   'settings',

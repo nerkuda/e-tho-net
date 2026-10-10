@@ -29,7 +29,7 @@ import { store } from '../state.js';
 import { el, setTooltip } from './dom.js';
 import { etn } from './etn.js';
 import { t } from './i18n.js';
-import { svgIcon } from './icons.js';
+import { svgIcon } from './ui/icon.js';
 import {
   DEFAULT_FILTER_PANEL_STATE,
   type FilterPanelPlacement,

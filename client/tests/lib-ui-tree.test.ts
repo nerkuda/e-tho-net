@@ -15,8 +15,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура дерева идёт через диспетчер контекстов: стек между тестами чист.
+beforeEach(() => keymap.keymapInternals.reset());
 
 /** Минимальный DOM-шим для конструкторов дерева. */
 function shimDom(): void {
@@ -78,9 +82,23 @@ function byClass(root: ShimElement, cls: string): ShimElement[] {
   return root.findAll((el) => el.classList.contains(cls));
 }
 
-/** Событие клавиатуры для шима. */
-function key(key: string): { key: string; preventDefault: () => void } {
-  return { key, preventDefault: () => undefined };
+/** Событие клавиатуры для шима (пробел несёт `code: Space`, как в браузере). */
+function key(key: string): { key: string; code?: string; preventDefault: () => void } {
+  return { key, ...(key === ' ' ? { code: 'Space' } : {}), preventDefault: () => undefined };
+}
+
+/** Событие клавиатуры с явными модификаторами (задача fd3d84f4, волна 1). */
+function keyMods(
+  key: string,
+  mods: Record<string, boolean>,
+): { key: string; preventDefault: () => void } {
+  return { key, ...mods, preventDefault: () => undefined };
+}
+
+/** Нажатие клавиши на корне дерева: фокус кладёт контекст, событие — диспетчеру. */
+function press(root: ShimElement, event: { key: string; preventDefault: () => void }): void {
+  root.focus();
+  keymap.dispatchKeyEvent(event as unknown as KeyboardEvent);
 }
 
 describe('lib/ui/tree: чистые помощники дерева', () => {
@@ -309,12 +327,30 @@ describe('lib/ui/tree: флажок, клик, клавиатура', () => {
     const root = tree.root as unknown as ShimElement;
     assert.equal(tree.getCurrentId(), 'root', 'текущая строка — первая видимая');
 
-    root.emit('keydown', key('ArrowDown'));
+    press(root, key('ArrowDown'));
     assert.equal(tree.getCurrentId(), 'a', 'вниз — к следующей строке');
-    root.emit('keydown', key(' '));
+    press(root, key(' '));
     assert.deepEqual(events.checked, ['a'], 'Space переключил флажок');
-    root.emit('keydown', key('Enter'));
+    press(root, key('Enter'));
     assert.deepEqual(events.activated, ['a'], 'Enter активировал строку');
+  });
+
+  it('модификаторный Enter (Ctrl/Shift/Alt/Meta) активирует строку, как прежде', async () => {
+    const T = await treeModule();
+    const host = new ShimElement('div');
+    const events = { checked: [] as string[], activated: [] as string[] };
+    const tree = buildTree(T, events, host);
+    const root = tree.root as unknown as ShimElement;
+    press(root, key('ArrowDown')); // текущая 'a'
+    press(root, keyMods('Enter', { ctrlKey: true }));
+    press(root, keyMods('Enter', { shiftKey: true }));
+    press(root, keyMods('Enter', { altKey: true }));
+    press(root, keyMods('Enter', { metaKey: true }));
+    assert.deepEqual(
+      events.activated,
+      ['a', 'a', 'a', 'a'],
+      'прежний `case Enter` в switch игнорировал модификаторы',
+    );
   });
 
   it('клавиатура: ← сворачивает/уходит к родителю, → раскрывает/идёт к потомку', async () => {
@@ -323,15 +359,15 @@ describe('lib/ui/tree: флажок, клик, клавиатура', () => {
     const events = { checked: [] as string[], activated: [] as string[] };
     const tree = buildTree(T, events, host);
     const root = tree.root as unknown as ShimElement;
-    root.emit('keydown', key('ArrowDown')); // a
-    root.emit('keydown', key('ArrowDown')); // b
-    root.emit('keydown', key('ArrowLeft')); // b — лист → к родителю a
+    press(root, key('ArrowDown')); // a
+    press(root, key('ArrowDown')); // b
+    press(root, key('ArrowLeft')); // b — лист → к родителю a
     assert.equal(tree.getCurrentId(), 'a');
-    root.emit('keydown', key('ArrowLeft')); // a раскрыт → свернуть
+    press(root, key('ArrowLeft')); // a раскрыт → свернуть
     assert.equal(tree.isExpanded('a'), false, '← свернул раскрытую ветвь');
-    root.emit('keydown', key('ArrowRight')); // → раскрыть
+    press(root, key('ArrowRight')); // → раскрыть
     assert.equal(tree.isExpanded('a'), true, '→ раскрыл ветвь');
-    root.emit('keydown', key('ArrowRight')); // → к первому потомку
+    press(root, key('ArrowRight')); // → к первому потомку
     assert.equal(tree.getCurrentId(), 'b', '→ у раскрытой ветви идёт к потомку');
   });
 

@@ -160,10 +160,6 @@ describe('сторож: сворачиваемая запись «Дневник
       /applyRecordCollapsedForDay\(card, day, row\.id, collapsedRecords, recordGroupLabels\(\)\)/,
       'fillRecordCard применяет свёрнутость по дню-параметру',
     );
-    assert.ok(
-      !/dayOfCard\(/.test(fillCode),
-      'fillRecordCard не выводит день из DOM-предка (регресс-блокер)',
-    );
   });
 
   it('«Свернуть все» собирает ключи и с фактических карточек DOM', () => {

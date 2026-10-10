@@ -219,6 +219,17 @@ test('etnimg: разрешён и для ссылок, и для картино�
   assert.ok(!renderMarkdown('[x](data:text/plain,hi)').includes('href='));
 });
 
+test('картинка-вложение по id etnimg://attachment/<id> рендерится <img> (5943e3e8)', () => {
+  // Требование 5943e3e8: картинка-вложение в тексте адресуется формой по id.
+  const id = '22222222-2222-4222-8222-222222222222';
+  const html = renderMarkdown(`![подпись](etnimg://attachment/${id})`);
+  assert.ok(html.includes(`<img src="etnimg://attachment/${id}"`), html);
+  assert.ok(html.includes('alt="подпись"'), html);
+  // Форма по id допустима и с размером `![подпись|600px](…)` (требование 5943e3e8).
+  const sized = renderMarkdown(`![подпись|600px](etnimg://attachment/${id})`);
+  assert.ok(sized.includes(`<img src="etnimg://attachment/${id}"`), sized);
+});
+
 test('сброшенная ссылка не оставляет паразитный </a> (карточка ETN 6cd0290f)', () => {
   // data: проходит общий validateLink (набор картинок), но сбрасывается
   // link-плагином — именно такие ссылки и дают паразитный </a>.
@@ -358,3 +369,172 @@ test('не-строка бросает ошибку', () => {
   assert.throws(() => renderMarkdown(null));
   assert.throws(() => renderMarkdown(123));
 });
+
+// ---------------------------------------------------------------------------
+// ТП1: task-списки, ==…==, <u>, скрытие HTML-комментариев (задача 2fc28fa2)
+// ---------------------------------------------------------------------------
+
+test('task-список: `- [ ]` — снятый чекбокс, список и пункт получают классы', () => {
+  const html = renderMarkdown('- [ ] раз');
+  assert.match(html, /<ul class="contains-task-list">/);
+  assert.match(html, /<li class="task-list-item">/);
+  assert.ok(
+    html.includes('<input class="task-list-item-checkbox" type="checkbox" disabled>'),
+    html,
+  );
+  assert.ok(!html.includes('[ ]'), html);
+  assert.ok(html.includes('>раз</li>'), html);
+});
+
+test('task-список: `- [x]` и `- [X]` — отмеченный чекбокс', () => {
+  for (const src of ['- [x] два', '- [X] два']) {
+    const html = renderMarkdown(src);
+    assert.ok(html.includes('type="checkbox" disabled checked>'), html);
+    assert.ok(!html.includes('[x]') && !html.includes('[X]'), html);
+  }
+});
+
+test('task-список: нумерованный список и смешанные пункты', () => {
+  const ordered = renderMarkdown('1. [ ] раз');
+  assert.match(ordered, /<ol class="contains-task-list">/);
+  assert.ok(ordered.includes('type="checkbox" disabled>'), ordered);
+
+  const mixed = renderMarkdown('- обычный\n- [ ] задача');
+  assert.match(mixed, /<ul class="contains-task-list">/);
+  // Обычный пункт остаётся без класса задачи.
+  assert.ok(mixed.includes('<li>обычный</li>'), mixed);
+  assert.match(mixed, /<li class="task-list-item">/);
+});
+
+test('task-список: вложенный список задач независим', () => {
+  const html = renderMarkdown('- [ ] а\n  - [x] вложенный');
+  assert.equal((html.match(/class="contains-task-list"/g) ?? []).length, 2, html);
+  assert.ok(html.includes('type="checkbox" disabled checked>вложенный</li>'), html);
+});
+
+test('task-список: не-чекбокс в тексте не трогается', () => {
+  const html = renderMarkdown('просто [ ] текст');
+  assert.ok(!html.includes('task-list-item'), html);
+  assert.ok(html.includes('просто [ ] текст'), html);
+});
+
+test('==…== рендерится как <mark>, несколько вхождений и экранирование', () => {
+  assert.match(renderMarkdown('==выделение=='), /<p><mark>выделение<\/mark><\/p>/);
+  assert.match(renderMarkdown('a ==b== c ==d=='), /a <mark>b<\/mark> c <mark>d<\/mark>/);
+  const escaped = renderMarkdown('==<b>==');
+  assert.ok(escaped.includes('<mark>&lt;b&gt;</mark>'), escaped);
+});
+
+test('== без пары и внутри code span остаётся текстом', () => {
+  assert.match(renderMarkdown('== несомкнутое'), /<p>== несомкнутое<\/p>/);
+  assert.ok(renderMarkdown('`==y==`').includes('<code>==y==</code>'));
+});
+
+test('<u>…</u> рендерится как <u>, регистр тега не важен', () => {
+  assert.match(renderMarkdown('<u>подчёркнутый</u>'), /<p><u>подчёркнутый<\/u><\/p>/);
+  assert.match(renderMarkdown('<U>Заглавная</U>'), /<p><u>Заглавная<\/u><\/p>/);
+});
+
+test('<u> без пары и внутри code span экранируется, а не проходит насквозь', () => {
+  assert.ok(renderMarkdown('<u> несомкнутое').includes('&lt;u&gt; несомкнутое'));
+  assert.ok(renderMarkdown('`<u>x</u>`').includes('<code>&lt;u&gt;x&lt;/u&gt;</code>'));
+});
+
+test('HTML-комментарий-блок скрыт и не оставляет пустого абзаца', () => {
+  const html = renderMarkdown('до\n\n<!-- скрыто -->\n\nпосле');
+  assert.ok(!html.includes('скрыто'), html);
+  assert.ok(!html.includes('<!--'), html);
+  assert.equal((html.match(/<p>/g) ?? []).length, 2, html);
+});
+
+test('многострочный HTML-комментарий скрыт целиком', () => {
+  const html = renderMarkdown('<!--\nмного\nстрочный\n-->\n\nпосле');
+  assert.ok(!html.includes('много'), html);
+  assert.ok(!html.includes('-->'), html);
+  assert.ok(html.includes('<p>после</p>'), html);
+});
+
+test('HTML-комментарий в строке текста скрыт, окружающий текст сохранён', () => {
+  const html = renderMarkdown('текст <!-- скрыто --> ещё');
+  assert.ok(!html.includes('скрыто'), html);
+  assert.ok(html.includes('текст') && html.includes('ещё'), html);
+
+  const trailing = renderMarkdown('<!-- c --> текст');
+  assert.ok(!trailing.includes('<!--'), trailing);
+  assert.ok(trailing.includes('текст'), trailing);
+});
+
+test('незакрытый HTML-комментарий — обычный экранированный текст', () => {
+  const html = renderMarkdown('<!-- незакрытый');
+  assert.ok(html.includes('&lt;!-- незакрытый'), html);
+});
+
+test('HTML-комментарий внутри fenced-кода сохраняется', () => {
+  const html = renderMarkdown('```\n<!-- keep -->\n```');
+  assert.ok(html.includes('&lt;!-- keep --&gt;'), html);
+});
+
+// ---------------------------------------------------------------------------
+// silent-контракт markdown-it: новые конструкции внутри `[...]`
+// (регрессия по ревью задачи 2fc28fa2)
+// ---------------------------------------------------------------------------
+
+test('новые конструкции внутри label ссылки не роняют рендер (silent-контракт)', () => {
+  const inputs = [
+    '[==a==](http://e.com)',
+    '[<u>x</u>](http://e.com)',
+    '[<!-- c -->](http://e.com)',
+    '[![==a==](https://e.com/i.png)](https://e.com/)',
+    '[<u>u</u>]',
+    '[==a==]',
+    '[==a](http://e.com)',
+    `[[#8e0d670e-de61-4da7-b13e-9232cd1c6ca5|==x==]]`,
+    '[[name|<u>x</u>]]',
+    '[[name|a<!-- c -->b]]',
+    '[ <u>u</u> ]',
+  ];
+  for (const src of inputs) {
+    assert.doesNotThrow(() => renderMarkdown(src), src);
+  }
+});
+
+test('==…== внутри label ссылки рендерится как <mark> внутри <a>', () => {
+  const html = renderMarkdown('[==a==](http://e.com)');
+  assert.ok(html.includes('<a href="http://e.com"><mark>a</mark></a>'), html);
+});
+
+test('<u>…</u> внутри label ссылки рендерится как <u> внутри <a>', () => {
+  const html = renderMarkdown('[<u>x</u>](http://e.com)');
+  assert.ok(html.includes('<a href="http://e.com"><u>x</u></a>'), html);
+});
+
+test('HTML-комментарий внутри label ссылки скрыт, ссылка сохранена', () => {
+  const html = renderMarkdown('[<!-- c -->](http://e.com)');
+  assert.ok(!html.includes('<!--'), html);
+  assert.ok(html.includes('<a href="http://e.com">'), html);
+});
+
+test('картинка с ==…== в alt внутри ссылки не роняет рендер', () => {
+  const html = renderMarkdown('[![==a==](https://e.com/i.png)](https://e.com/)');
+  assert.ok(html.includes('<img src="https://e.com/i.png"'), html);
+  assert.ok(html.includes('<a href="https://e.com/">'), html);
+});
+
+test('конструкции внутри wiki-алиаса не роняют рендер и остаются текстом', () => {
+  // Алиас wiki-ссылки — плоский текст (экранируется), но parsing label
+  // проходит через skipToken: правило обязано двигать state.pos.
+  assert.doesNotThrow(() => renderMarkdown('[[name|<u>x</u>]]'));
+  assert.doesNotThrow(() => renderMarkdown('[[name|a<!-- c -->b]]'));
+  assert.doesNotThrow(
+    () => renderMarkdown(`[[#8e0d670e-de61-4da7-b13e-9232cd1c6ca5|==x==]]`),
+  );
+});
+
+test('loose-список задач: класс contains-task-list не дублируется', () => {
+  const html = renderMarkdown('- [ ] a\n\n- [x] b');
+  assert.equal((html.match(/contains-task-list/g) ?? []).length, 1, html);
+  assert.match(html, /<ul class="contains-task-list">/);
+  assert.equal((html.match(/type="checkbox"/g) ?? []).length, 2, html);
+});
+
+

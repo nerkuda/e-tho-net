@@ -43,6 +43,7 @@ function thoughtType(
     is_root: isRoot,
     icon: null,
     icon_kind: 'emoji',
+    icon_color: null,
     fg_color: null,
     bg_color: null,
     font_bold: null,

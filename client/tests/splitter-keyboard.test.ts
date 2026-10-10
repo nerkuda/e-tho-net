@@ -13,9 +13,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+// Клавиатура грифа идёт через диспетчер контекстов: между тестами стек
+// контекстов сбрасываем, иначе контекст прошлого грифа перехватит событие.
+beforeEach(() => keymap.keymapInternals.reset());
 
 function shimDom(): void {
   (globalThis as any).document = {
@@ -44,13 +49,21 @@ async function load(): Promise<SplitterModule> {
   return import('../src/renderer/lib/ui/splitter.js');
 }
 
-const keydown = (key: string): any => ({ key, preventDefault: () => undefined });
+const keydown = (key: string, mods: Record<string, boolean> = {}): any => ({
+  key,
+  ctrlKey: false,
+  altKey: false,
+  shiftKey: false,
+  metaKey: false,
+  ...mods,
+  preventDefault: () => undefined,
+});
 
 interface Harness {
   element: HTMLElement;
   applied: number[];
   commits: Array<{ value: number; moved: boolean }>;
-  press(key: string): void;
+  press(key: string, mods?: Record<string, boolean>): void;
   blur(): void;
 }
 
@@ -74,7 +87,12 @@ function harness(mod: SplitterModule, axis: 'x' | 'y'): Harness {
     element,
     applied,
     commits,
-    press: (key) => (element as any).emit('keydown', keydown(key)),
+    press: (key, mods = {}) => {
+      // Фокус кладёт контекст грифа на вершину стека, событие идёт через
+      // единственный слушатель диспетчера (`lib/keymap.ts`).
+      (element as any).focus();
+      return keymap.dispatchKeyEvent(keydown(key, mods) as KeyboardEvent);
+    },
     blur: () => (element as any).emit('blur', {}),
   };
 }
@@ -113,6 +131,26 @@ describe('guard: клавиатурный контракт разделител�
     h.press('ArrowDown');
     h.press('Enter');
     assert.deepEqual(h.commits, [{ value: 308, moved: true }]);
+  });
+
+  it('модификаторный Enter (Ctrl/Shift/Alt/Meta) коммитит сессию, как прежде', async () => {
+    const mod = await load();
+    const modifierCases: Array<Record<string, boolean>> = [
+      { ctrlKey: true },
+      { shiftKey: true },
+      { altKey: true },
+      { metaKey: true },
+    ];
+    for (const mods of modifierCases) {
+      const h = harness(mod, 'y');
+      h.press('ArrowDown'); // активная сессия со сдвигом
+      h.press('Enter', mods);
+      assert.deepEqual(
+        h.commits,
+        [{ value: 308, moved: true }],
+        `прежний обработчик коммитил на любой Enter (${JSON.stringify(mods)})`,
+      );
+    }
   });
 
   it('Escape возвращает стартовую метрику и не отмечает сдвиг', async () => {

@@ -54,11 +54,16 @@
 import { div, el, span } from '../dom.js';
 import { t } from '../i18n.js';
 import { showMenuAt, type MenuItem } from '../menu.js';
+import { defineKeyContext, pushKeyContext } from '../keymap.js';
+import { modifierChordVariants } from '../keymap-chords.js';
 import { badge } from './badge.js';
 import { choiceControl } from './choice-row.js';
 import { emptyState, type StateAction } from './empty-state.js';
 import { FOCUS_ANCHOR_ATTR } from './focus-anchor.js';
 import { reconcileKeyed } from './keyed-list.js';
+
+/** Счётчик деревьев: у каждого свой контекст сочетаний (замыкание навигации). */
+let treeContextSeq = 0;
 
 /** Корневой класс дерева (роль `tree`). */
 export const TREE_CLASS = 'ui-tree';
@@ -903,46 +908,42 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     else root.removeAttribute('aria-activedescendant');
   }
 
-  root.addEventListener('keydown', (event) => {
-    const keyEvent = event as KeyboardEvent;
+  // Клавиатура дерева — через общеклиентский диспетчер: пока фокус на корне
+  // дерева, его контекст на вершине стека (ADR b420b08c, задача fd3d84f4).
+  // `true` — событие обработано (диспетчер вызовет `preventDefault`).
+  const handleTreeKey = (keyEvent: KeyboardEvent): boolean => {
     // Копирование текущей строки — Ctrl+C (правило 2 требования 11ddd910,
     // кнопка «Копировать» строки управления).
     if ((keyEvent.ctrlKey === true || keyEvent.metaKey === true) && (keyEvent.key === 'c' || keyEvent.key === 'C')) {
-      keyEvent.preventDefault();
       copyCurrent();
-      return;
+      return true;
     }
     const items = itemsOf();
     const byId = new Map(items.map((item) => [item.id, item]));
     const ids = visible();
-    switch (event.key) {
+    switch (keyEvent.key) {
       case 'ArrowDown':
-        event.preventDefault();
         moveCurrent(1);
-        return;
+        return true;
       case 'ArrowUp':
-        event.preventDefault();
         moveCurrent(-1);
-        return;
+        return true;
       case 'Home':
-        event.preventDefault();
         currentId = ids[0] ?? null;
         render();
         scrollCurrentIntoView();
         notifyCurrent();
-        return;
+        return true;
       case 'End':
-        event.preventDefault();
         currentId = ids[ids.length - 1] ?? null;
         render();
         scrollCurrentIntoView();
         notifyCurrent();
-        return;
+        return true;
       case 'ArrowRight': {
-        event.preventDefault();
-        if (currentId === null) return;
+        if (currentId === null) return true;
         const item = byId.get(currentId);
-        if (item === undefined) return;
+        if (item === undefined) return true;
         if (expanded.has(currentId)) {
           const child = treeChildIds(items, currentId)[0];
           if (child !== undefined) {
@@ -955,13 +956,12 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
           applyExpand(currentId, true, item);
           render();
         }
-        return;
+        return true;
       }
       case 'ArrowLeft': {
-        event.preventDefault();
-        if (currentId === null) return;
+        if (currentId === null) return true;
         const item = byId.get(currentId);
-        if (item === undefined) return;
+        if (item === undefined) return true;
         if (expanded.has(currentId)) {
           applyExpand(currentId, false, item);
           render();
@@ -974,29 +974,58 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
             notifyCurrent();
           }
         }
-        return;
+        return true;
       }
       case ' ': {
-        event.preventDefault();
-        if (currentId === null) return;
+        if (currentId === null) return true;
         const item = byId.get(currentId);
-        if (item === undefined) return;
-        if (options.checkbox !== true) return;
+        if (item === undefined) return true;
+        if (options.checkbox !== true) return true;
         const row = root.querySelector(`#${cssId(currentId)}`);
         const input = row?.querySelector(`.${TREE_CHECK_CLASS}`) as HTMLInputElement | null;
         if (input !== null && input !== undefined) toggleCheck(item, input, !input.checked);
-        return;
+        return true;
       }
       case 'Enter': {
-        event.preventDefault();
-        if (currentId === null) return;
+        if (currentId === null) return true;
         const item = byId.get(currentId);
         if (item !== undefined) options.onActivate?.(item);
-        return;
+        return true;
       }
       default:
-        return;
+        return false;
     }
+  };
+
+  const contextId = `ui-tree-${(treeContextSeq += 1)}`;
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      { command: 'tree.copy', chord: 'Ctrl+C', run: handleTreeKey },
+      { command: 'tree.copy.meta', chord: 'Meta+C', run: handleTreeKey },
+      { command: 'tree.up', chord: 'ArrowUp', run: handleTreeKey },
+      { command: 'tree.down', chord: 'ArrowDown', run: handleTreeKey },
+      { command: 'tree.home', chord: 'Home', run: handleTreeKey },
+      { command: 'tree.end', chord: 'End', run: handleTreeKey },
+      { command: 'tree.collapse', chord: 'ArrowLeft', run: handleTreeKey },
+      { command: 'tree.expand', chord: 'ArrowRight', run: handleTreeKey },
+      { command: 'tree.toggle', chord: 'Space', run: handleTreeKey },
+      // Прежний обработчик активировал строку на Enter НЕЗАВИСИМО от
+      // модификаторов — набор выражен привязками (`lib/keymap-chords.ts`).
+      ...modifierChordVariants('Enter').map((chord) => ({
+        command: 'tree.activate',
+        chord,
+        run: handleTreeKey,
+      })),
+    ],
+  });
+  let releaseContext: (() => void) | null = null;
+  root.addEventListener('focus', () => {
+    releaseContext ??= pushKeyContext(contextId);
+  });
+  root.addEventListener('blur', () => {
+    releaseContext?.();
+    releaseContext = null;
   });
 
   /** Копирует текст текущей строки (см. {@link TreeHandle.copyCurrent}). */

@@ -285,13 +285,18 @@ describe('проводка обновления списка вложений (�
 
   it('правки на вкладке гасят ключ слоя, reload() обновляет счётчик', () => {
     const attachments = read('editor/attachments.ts');
-    // Удаление на вкладке: строка убирается, 📎-индикатор холста сбрасывается,
-    // ключ списка вложений гасится — подписчики перечитывают набор.
+    // Удаление из строки — снятие СВОЕГО владения (removeOwner, 0.12.1): строка
+    // убирается, 📎-индикатор холста сбрасывается, ключ списка вложений гасится.
     assert.ok(
-      /await etn\.attachments\.remove\(networkId, attachment\.id\);[\s\S]{0,400}?invalidateQueries\(queryKeys\.indicators\(attachment\.owner_id\)\);[\s\S]{0,400}?refreshAttachments\(\)/.test(
+      /await etn\.attachments\.removeOwner\(networkId, attachment\.id, \{[\s\S]{0,120}?owner_type: ownerType,[\s\S]{0,80}?owner_id: ownerId,[\s\S]{0,40}?\}\);[\s\S]{0,200}?invalidateQueries\(queryKeys\.indicators\(ownerId\)\);[\s\S]{0,300}?refreshAttachments\(\)/.test(
         attachments,
       ),
-      'удаление вложения гасит ключ списка и индикатор слоя',
+      'снятие владения гасит ключ списка и индикатор слоя',
+    );
+    // Снятое `DELETE /attachments/{id}` (без владельца) больше не вызывается.
+    assert.ok(
+      !/etn\.attachments\.remove\(networkId/.test(attachments),
+      'удаление вложения напрямую (DELETE /attachments/{id}) не вызывается',
     );
     assert.ok(
       /const refreshAttachments = \(\): void => \{[\s\S]{0,200}?invalidateQueries\(queryKeys\.attachments\(ownerType, ownerId\)\)/.test(
