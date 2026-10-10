@@ -130,6 +130,67 @@ describe('общий компонент выбора вложения: layout (�
   });
 });
 
+describe('общий компонент выбора вложения: переименование сохраняет выбор (ошибка ac449f1c)', () => {
+  beforeEach(() => installShim());
+
+  it('после переименования подсветка/выбор остаются на той же строке', async () => {
+    store.update({ networkId: 'net-1' });
+    const first = imageAttachment('att-0');
+    const second = imageAttachment('att-1');
+    const updates: Array<{ id: string; title?: string }> = [];
+    (globalThis as any).window.etn = {
+      attachments: {
+        search: async () => [first, second],
+        update: async (_n: string, id: string, patch: { title?: string }) => {
+          updates.push({ id, ...patch });
+          if (id === first.id && patch.title !== undefined) first.title = patch.title;
+          return { ...first };
+        },
+        getUsage: async () => ({ owners: [] }),
+      },
+    };
+
+    const tab = attachmentPickerSourceTab({ label: 'Вложения', onPick: () => undefined });
+    const root = tab.build({ close: () => undefined, setReady: () => undefined } as any) as
+      unknown as ShimElement;
+    await flush();
+
+    const rows = root.querySelectorAll('.att-pick-item');
+    assert.equal(rows.length, 2, 'обе строки построены');
+
+    // Выбор первой строки делегированным кликом (обработчик списка ищет строку
+    // по parentElement, которого у шима нет, — подставляем родителя явно).
+    const list = root.querySelector('.att-pick-list')!;
+    Object.defineProperty(rows[0]!, 'parentElement', { get: () => list, configurable: true });
+    list.emit('click', { target: rows[0]! });
+    assert.ok(rows[0]!.classList.contains('att-pick-item-current'), 'строка выбрана до правки');
+
+    // Карандаш переименования в строке → поле правки → запись по blur.
+    const pencil = findByTag(rows[0]!, 'button')[0];
+    assert.ok(pencil !== undefined, 'кнопка переименования есть');
+    pencil!.emit('click', { stopPropagation: () => undefined });
+
+    const input = findByTag(rows[0]!, 'input')[0];
+    assert.ok(input !== undefined, 'поле переименования открылось');
+    input!.value = 'renamed';
+    input!.emit('blur', {});
+    await flush();
+    await flush();
+
+    assert.equal(updates.length, 1, 'заголовок записан на сервер');
+    assert.equal(updates[0]!.title, 'renamed', 'записано новое имя');
+
+    const after = root.querySelectorAll('.att-pick-item');
+    const current = after.filter((row) => row.classList.contains('att-pick-item-current'));
+    assert.equal(current.length, 1, 'выбор не потерян после перечитывания');
+    assert.equal(
+      current[0]!.querySelector('.att-pick-item-title')?.textContent,
+      'renamed',
+      'подсвечена переименованная строка',
+    );
+  });
+});
+
 describe('общий компонент выбора вложения: пагинация (задача 0f6c3e39)', () => {
   beforeEach(() => installShim());
 

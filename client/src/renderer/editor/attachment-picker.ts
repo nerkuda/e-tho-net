@@ -458,6 +458,11 @@ export function attachmentPickerSourceTab(opts: AttachmentPickerOptions): Resour
       async function runSearch(offset: number): Promise<void> {
         const networkId = store.state.networkId;
         if (networkId === null) return;
+        // Ключ текущей строки переживает перечитывание списка: переименование
+        // вложения дергает `refresh` → пересборку строк, и без этого выбор
+        // сбрасывался (ошибка ac449f1c). Снимаем ДО очистки списка, пока
+        // `selection` ещё несёт прежнюю строку.
+        const restoreKey = selection !== null && selection.kind === 'row' ? selection.row.key : null;
         const query = search.value.trim() === '' ? '*' : search.value.trim();
         if (offset === 0) {
           loaded.clear();
@@ -474,6 +479,12 @@ export function attachmentPickerSourceTab(opts: AttachmentPickerOptions): Resour
         hasMore = page.length === PAGE_SIZE;
         regroup();
         renderRows();
+        // Восстановление выбора: строка с прежним ключом (носителя) снова стала
+        // текущей — подсветка/фокус остаются на переименованной записи.
+        if (restoreKey !== null) {
+          const restored = rows.find((row) => row.key === restoreKey);
+          if (restored !== undefined) nav.setCurrent(restored);
+        }
         // Отметка текущего: появилась строка с нужным id — выделяем её (смена
         // выбора на строку списка); не нашлась — остаётся текущее превью,
         // выставленное при открытии.
