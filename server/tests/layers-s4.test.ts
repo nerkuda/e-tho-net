@@ -45,6 +45,7 @@ import {
   deleteAttachment,
   createAttachment,
   getAttachment,
+  updateAttachment,
 } from '../src/domain/attachment-service.js';
 import { getPermanentPreview, listComments } from '../src/domain/comment-service.js';
 import { deleteLink, getLink } from '../src/domain/link-service.js';
@@ -475,13 +476,17 @@ describe(
           { kind: 'file', file_path: filePath },
           'u',
         );
+        // Вторая строка, разрешающаяся в тот же файл: создаём с клиентским
+        // путём и переносим file_path на общий файл (дедуп по хэшу при
+        // создании такой строки не даёт).
         const att2 = createAttachment(
           ndbBase,
           'thought',
           b.id,
-          { kind: 'file', file_path: filePath },
+          { kind: 'file', file_path: 'C:\\client\\other.bin' },
           'u',
         );
+        updateAttachment(ndbBase, att2.id, { file_path: filePath }, 'u');
 
         // Deleting att1 in layer A tombstones the binding only — the file
         // survives (att2 + the base row of att1 still reference it).

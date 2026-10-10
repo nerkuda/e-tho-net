@@ -357,19 +357,18 @@ describe(
         });
         assert.equal(copyRes.statusCode, 200);
         const copyBody = copyRes.json().data as {
-          created: Array<{ id: string; owner_id: string; title: string }>;
-          skipped: string[];
+          added: Array<{ owner_type: string; owner_id: string; title: string | null }>;
+          skipped: unknown[];
         };
-        assert.equal(copyBody.created.length, 2);
+        assert.equal(copyBody.added.length, 2);
         assert.deepEqual(copyBody.skipped, []);
-        const newIds = new Set(copyBody.created.map((c) => c.id));
-        assert.equal(newIds.size, 2);
-        for (const c of copyBody.created) {
-          assert.equal(c.title, 'Page');
-          assert.ok([t1, t2].includes(c.owner_id));
-        }
+        // Муль-владение: у того же вложения появились владельцы t1/t2.
+        assert.deepEqual(
+          copyBody.added.map((a) => a.owner_id).sort(),
+          [t1, t2].sort(),
+        );
 
-        // Re-copy: same source, target t1 already has the same kind+url — skipped.
+        // Re-copy: those owners already exist — all skipped, nothing added.
         const reCopy = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${ctx.networkId}/attachments/${sourceId}/copy`,
@@ -378,11 +377,11 @@ describe(
         });
         assert.equal(reCopy.statusCode, 200);
         const reBody = reCopy.json().data as {
-          created: unknown[];
-          skipped: string[];
+          added: unknown[];
+          skipped: Array<{ owner_id: string }>;
         };
-        assert.equal(reBody.created.length, 0);
-        assert.deepEqual(reBody.skipped.sort(), [t1, t2].sort());
+        assert.equal(reBody.added.length, 0);
+        assert.deepEqual(reBody.skipped.map((s) => s.owner_id).sort(), [t1, t2].sort());
 
         // Each target now has exactly one copy in its list.
         for (const tid of [t1, t2]) {

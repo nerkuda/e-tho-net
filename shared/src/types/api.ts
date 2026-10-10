@@ -19,6 +19,12 @@ export interface SuccessMeta {
   /** Echoes the `Client-Request-Id` header of the request. */
   request_id?: string;
   /**
+   * Attachment uploads only (0.12.1, ADR `e3a35864`, операция 47215aab):
+   * `true` when the uploaded file matched an existing attachment by
+   * `content_hash` and was reused — no new row, no file copy.
+   */
+  reused?: boolean;
+  /**
    * Echo of the session's current layer (task S7, 13-layers.md §7.1): every
    * mutating REST response of a network carries it, so a write landing in a
    * foreign layer is discoverable immediately. Injected centrally by the

@@ -35,12 +35,11 @@ import {
   runWrite,
   type AnyWriteEvent,
   type RouteDeps,
-  type WriteActivityEntry,
 } from './helpers.js';
 import {
   copyAttachment,
   createAttachment,
-  createAttachmentFile,
+  createAttachmentFileResult,
   deleteAttachment,
   enrichUrlAttachment,
   getAttachment,
@@ -138,8 +137,8 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             data_base64: input.data_base64 as string,
           };
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-          const attachment = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-            const created = createAttachmentFile(
+          const outcome = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+            const { attachment: created, reused } = createAttachmentFileResult(
               ndb,
               ownerType,
               input.owner_id,
@@ -147,12 +146,12 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
               req.auth!.user.id,
             );
             return {
-              result: created,
+              result: { created, reused },
               events: [{ type: 'attachment.created', data: { attachment: created } }],
               activity: [{ kind: 'attachment', action: 'created', attachment: created }],
             };
           });
-          sendCreated(reply, attachment, { request_id: req.id });
+          sendCreated(reply, outcome.created, { request_id: req.id, reused: outcome.reused });
         },
       );
     };
@@ -214,9 +213,9 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
-    // Copy an attachment to one or more target owners (workplan L25). Each
-    // target receives a new row with the same visible fields; the file is not
-    // duplicated. 422 on unknown targets or invalid body, 404 on the source.
+    // Copy an attachment to one or more target owners (workplan L25; с
+    // муль-владением 0.12.1 — добавление владельцев той же строке, без новых
+    // строк). 422 on unknown targets or invalid body, 404 on the source.
     app.post(
       '/networks/:networkId/attachments/:id/copy',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
@@ -229,16 +228,15 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
           const copied = copyAttachment(ndb, input.attachment_id, parsed, req.auth!.user.id);
-          // One event per created row so realtime subscribers can react
-          // individually (re-render the target's attachments tab, refresh the
-          // `attachments_count` indicator, etc.).
-          const events: AnyWriteEvent[] = [];
-          const activity: WriteActivityEntry[] = [];
-          for (const attachment of copied.created) {
-            events.push({ type: 'attachment.created', data: { attachment } });
-            activity.push({ kind: 'attachment', action: 'created', attachment });
-          }
-          return { result: copied, events, activity };
+          // С муль-владением (0.12.1) копия = добавление владельцев той же
+          // строке; новых строк нет. Отдельные события владельцев —
+          // `attachment.owner.added` (задача f77382ba). Пока эмитим одно
+          // `attachment.updated`, чтобы подписчики перечитали вложение.
+          const events: AnyWriteEvent[] =
+            copied.added.length === 0
+              ? []
+              : [{ type: 'attachment.updated', data: { id: input.attachment_id, changes: {} } }];
+          return { result: copied, events };
         });
         sendSuccess(reply, result);
       },

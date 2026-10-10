@@ -703,10 +703,10 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         target_owner_type: 'thought',
         target_owner_ids: targetIds,
       });
-      for (const created of copyResult.created) {
-        invalidateQueries(queryKeys.indicators(created.owner_id));
+      for (const ref of copyResult.added) {
+        invalidateQueries(queryKeys.indicators(ref.owner_id));
       }
-      const created = copyResult.created.length;
+      const created = copyResult.added.length;
       const skipped = copyResult.skipped.length;
       const parts: string[] = [];
       if (created > 0) parts.push(`Скопировано в ${created} ${pluralRu(created, ['мысль', 'мысли', 'мыслей'])}`);

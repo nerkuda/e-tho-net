@@ -134,8 +134,8 @@ export interface AttachmentContentUpdateResult {
 
 /**
  * Input of `POST /attachments/{id}/copy` (03-server-api.md §11, workplan L25).
- * Creates one new attachment row per `target_owner_ids`, all pointing at the
- * same `url`/`file_path` as the source — the underlying file is not duplicated.
+ * With multi-ownership (0.12.1, ADR `9f90b010`) the operation degenerates into
+ * adding owners of the SAME attachment — no new rows are created.
  */
 export interface AttachmentCopyInput {
   /** Target owner kind: `thought` | `link` | `publication`. */
@@ -144,12 +144,36 @@ export interface AttachmentCopyInput {
   target_owner_ids: string[];
 }
 
-/** Result of `POST /attachments/{id}/copy`. */
+/**
+ * Result of `POST /attachments/{id}/copy` (0.12.1, ADR `9f90b010`): with
+ * multi-ownership the operation degenerates into adding owners of the SAME
+ * attachment — no new rows are created. `added` lists the ownerships created
+ * (in request order), `skipped` those that already existed.
+ */
 export interface AttachmentCopyResult {
-  /** Created rows in the order of `target_owner_ids`, skipping duplicates. */
-  created: Attachment[];
-  /** Ids of `target_owner_ids` that already had the same attachment. */
-  skipped: string[];
+  /** Ownerships created, in the order of `target_owner_ids`. */
+  added: AttachmentOwnerRef[];
+  /** Ownerships that already existed (idempotent no-op). */
+  skipped: AttachmentOwnerRef[];
+}
+
+/** Result of adding owners (`POST /attachments/{id}/owners`). */
+export interface AttachmentOwnerChangeResult {
+  /** Ownerships created, in the order of the requested owner ids. */
+  added: AttachmentOwnerRef[];
+  /** Ownerships that already existed (idempotent no-op). */
+  skipped: AttachmentOwnerRef[];
+}
+
+/**
+ * Result of `DELETE /attachments/{id}/owners` — removing one ownership
+ * (0.12.1, ADR `9f90b010`). `attachment_deleted` is `true` when the last live
+ * ownership across ALL layers went away and the attachment row (and its
+ * server-stored file) was removed with it.
+ */
+export interface AttachmentOwnerRemoveResult {
+  removed: boolean;
+  attachment_deleted: boolean;
 }
 
 /**

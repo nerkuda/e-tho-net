@@ -19,9 +19,11 @@ import { createInMemoryNetworkDb, NetworkDb, registerMigrationHelpers } from '..
 import { runMigrations } from '../src/db/migrator.js';
 import { networkMigrationsDir } from '../src/paths.js';
 import {
+  addOwners,
   copyAttachment,
   createAttachment,
   createAttachmentFile,
+  createAttachmentFileResult,
   deleteAttachment,
   enrichUrlAttachment,
   extractFaviconUrl,
@@ -29,7 +31,9 @@ import {
   getAttachment,
   getAttachmentContent,
   getAttachmentRawByPath,
+  hasOwnership,
   listAttachments,
+  removeOwner,
   searchAttachments,
   updateAttachment,
   updateAttachmentContent,
@@ -368,14 +372,19 @@ describe(
           USER,
         );
         assert.ok(stored.file_path !== null && existsSync(stored.file_path));
-        // A second row resolving to the same file (possible via PATCH file_path).
+        // Вторая строка, разрешающаяся в тот же файл (возможно через PATCH
+        // file_path): делаем её отдельным вложением с другим относительным
+        // адресом и переносим file_path на общий файл (дедуп по хэшу при
+        // создании такой строки не даёт — содержимое то же, но создаём через
+        // клиентский путь, который сервер не читает).
         const twin = createAttachment(
           ndb,
           'thought',
           t2,
-          { kind: 'file', file_path: stored.file_path, mime_type: 'image/png' },
+          { kind: 'file', file_path: 'C:\\client\\other.bin', mime_type: 'image/png' },
           USER,
         );
+        updateAttachment(ndb, twin.id, { file_path: stored.file_path }, USER);
         deleteAttachment(ndb, stored.id);
         assert.ok(existsSync(stored.file_path), 'shared file must survive one row deletion');
         deleteAttachment(ndb, twin.id);
@@ -782,34 +791,36 @@ describe(
           USER,
         );
         assert.equal(result.skipped.length, 0);
-        assert.equal(result.created.length, 2);
-        // New ids, same visible fields.
-        const ids = new Set(result.created.map((c) => c.id));
-        assert.equal(ids.size, 2);
-        for (const created of result.created) {
-          assert.notEqual(created.id, a.id);
-          assert.equal(created.kind, 'url');
-          assert.equal(created.url, 'https://e.com/page');
-          assert.equal(created.title, 'Page');
-          assert.equal(created.description, 'desc');
-          assert.equal(created.mime_type, 'text/html');
-          assert.equal(created.icon, 'data:image/png;base64,AAA');
-          assert.equal(created.owner_type, 'thought');
-          assert.ok([t1, t2].includes(created.owner_id));
+        assert.equal(result.added.length, 2);
+        assert.deepEqual(
+          result.added.map((r) => r.owner_id).sort(),
+          [t1, t2].sort(),
+        );
+        // С муль-владением копия = владение ТОЙ ЖЕ строкой: новых строк нет,
+        // видимые поля сохранены, id общий.
+        for (const ref of result.added) {
+          const list = listAttachments(ndb, 'thought', ref.owner_id);
+          assert.equal(list.length, 1);
+          const shared = list[0]!;
+          assert.equal(shared.id, a.id);
+          assert.equal(shared.kind, 'url');
+          assert.equal(shared.url, 'https://e.com/page');
+          assert.equal(shared.title, 'Page');
+          assert.equal(shared.description, 'desc');
+          assert.equal(shared.mime_type, 'text/html');
+          assert.equal(shared.icon, 'data:image/png;base64,AAA');
         }
-        // Each target now sees the attachment in its list.
-        assert.equal(listAttachments(ndb, 'thought', t1).length, 1);
-        assert.equal(listAttachments(ndb, 'thought', t2).length, 1);
       } finally {
         ndb.close();
       }
     });
 
-    it('copyAttachment skips duplicate (same owner + same kind + same url) silently', () => {
+    it('copyAttachment skips a target that already owns the attachment (idempotent)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const source = seedThought(ndb);
         const target = seedThought(ndb);
+        const otherTarget = seedThought(ndb, 'Other');
         const a = createAttachment(
           ndb,
           'thought',
@@ -817,18 +828,16 @@ describe(
           { kind: 'url', url: 'https://e.com/dup' },
           USER,
         );
-        // Pre-existing copy on the target.
-        createAttachment(ndb, 'thought', target, { kind: 'url', url: 'https://e.com/dup' }, USER);
-        const otherTarget = seedThought(ndb, 'Other');
+        // target уже владеет этим вложением.
+        copyAttachment(ndb, a.id, { target_owner_type: 'thought', target_owner_ids: [target] }, USER);
         const result = copyAttachment(
           ndb,
           a.id,
           { target_owner_type: 'thought', target_owner_ids: [target, otherTarget] },
           USER,
         );
-        assert.deepEqual(result.skipped, [target]);
-        assert.equal(result.created.length, 1);
-        assert.equal(result.created[0]!.owner_id, otherTarget);
+        assert.deepEqual(result.skipped.map((r) => r.owner_id), [target]);
+        assert.deepEqual(result.added.map((r) => r.owner_id), [otherTarget]);
       } finally {
         ndb.close();
       }
@@ -864,7 +873,7 @@ describe(
       }
     });
 
-    it('copyAttachment preserves file_path on kind=file (no file copy)', () => {
+    it('copyAttachment shares one row on kind=file (no file copy)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const source = seedThought(ndb);
@@ -882,10 +891,12 @@ describe(
           { target_owner_type: 'thought', target_owner_ids: [t] },
           USER,
         );
-        assert.equal(result.created.length, 1);
-        assert.equal(result.created[0]!.file_path, 'C:\\shared\\plan.md');
-        assert.equal(result.created[0]!.kind, 'file');
-        assert.equal(result.created[0]!.mime_type, 'text/markdown');
+        assert.equal(result.added.length, 1);
+        const shared = listAttachments(ndb, 'thought', t)[0]!;
+        assert.equal(shared.id, a.id);
+        assert.equal(shared.file_path, 'C:\\shared\\plan.md');
+        assert.equal(shared.kind, 'file');
+        assert.equal(shared.mime_type, 'text/markdown');
       } finally {
         ndb.close();
       }
@@ -975,6 +986,182 @@ describe(
         });
         assert.equal(excludeOwner.total, 1);
         assert.equal(excludeOwner.items[0]!.owner_id, other);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    // --- ownership (0.12.1, ADR 9f90b010, задача 7678876a) -------------------
+
+    it('listAttachments orders by ownership position', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const late = createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'url', url: 'https://e/late', position: 5 },
+          USER,
+        );
+        const early = createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'url', url: 'https://e/early', position: 1 },
+          USER,
+        );
+        const list = listAttachments(ndb, 'thought', t);
+        assert.deepEqual(
+          list.map((a) => a.id),
+          [early.id, late.id],
+        );
+        assert.deepEqual(
+          list.map((a) => a.position),
+          [1, 5],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('addOwners is idempotent (sticky ownership)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t1 = seedThought(ndb, 'A');
+        const t2 = seedThought(ndb, 'B');
+        const a = createAttachment(ndb, 'thought', t1, { kind: 'url', url: 'https://e/x' }, USER);
+        const r1 = addOwners(ndb, a.id, 'thought', [t2, t2], USER);
+        assert.deepEqual(
+          r1.added.map((x) => x.owner_id),
+          [t2],
+        );
+        const r2 = addOwners(ndb, a.id, 'thought', [t2], USER);
+        assert.deepEqual(r2.added, []);
+        assert.deepEqual(
+          r2.skipped.map((x) => x.owner_id),
+          [t2],
+        );
+        assert.equal(listAttachments(ndb, 'thought', t2).length, 1);
+        assert.ok(hasOwnership(ndb, a.id, 'thought', t2));
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('removeOwner forbids removing an ownership that backs the object icon', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const a = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://e/icon' }, USER);
+        ndb.prepare('UPDATE thoughts SET icon_attachment_id = ? WHERE id = ?').run(a.id, t);
+        assert.throws(
+          () => removeOwner(ndb, a.id, 'thought', t),
+          (e: unknown) =>
+            e instanceof EtnError &&
+            (e.details as { code?: string }).code === 'ATTACHMENT_OWNER_IS_ICON',
+        );
+        assert.ok(hasOwnership(ndb, a.id, 'thought', t), 'владение не снято');
+        // Нет живого владения — 404.
+        const other = seedThought(ndb, 'Other');
+        assert.throws(
+          () => removeOwner(ndb, a.id, 'thought', other),
+          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('removeOwner deletes the attachment and file with the last live owner', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-own-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-own', path.join(tmp, 'data.db'));
+      try {
+        const t1 = seedThought(ndb, 'A');
+        const t2 = seedThought(ndb, 'B');
+        const stored = createAttachmentFile(
+          ndb,
+          'thought',
+          t1,
+          {
+            title: 'pic',
+            mime_type: 'image/png',
+            data_base64: Buffer.from('own-bytes').toString('base64'),
+          },
+          USER,
+        );
+        const fp = stored.file_path!;
+        assert.ok(existsSync(fp));
+        copyAttachment(ndb, stored.id, { target_owner_type: 'thought', target_owner_ids: [t2] }, USER);
+        const r1 = removeOwner(ndb, stored.id, 'thought', t1);
+        assert.deepEqual(r1, { removed: true, attachment_deleted: false });
+        assert.notEqual(getAttachment(ndb, stored.id), null);
+        assert.ok(existsSync(fp), 'файл удержан владением t2');
+        const r2 = removeOwner(ndb, stored.id, 'thought', t2);
+        assert.deepEqual(r2, { removed: true, attachment_deleted: true });
+        assert.equal(getAttachment(ndb, stored.id), null);
+        assert.equal(existsSync(fp), false);
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('uploading the same bytes reuses the attachment (dedup by content_hash)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-dedup-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-dedup', path.join(tmp, 'data.db'));
+      try {
+        const t1 = seedThought(ndb, 'A');
+        const t2 = seedThought(ndb, 'B');
+        const b64 = Buffer.from('same-image-bytes').toString('base64');
+        const first = createAttachmentFileResult(
+          ndb,
+          'thought',
+          t1,
+          { title: 'a', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(first.reused, false);
+        const second = createAttachmentFileResult(
+          ndb,
+          'thought',
+          t2,
+          { title: 'b', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(second.reused, true);
+        assert.equal(second.attachment.id, first.attachment.id);
+        // Одна строка — два владельца.
+        const l1 = listAttachments(ndb, 'thought', t1);
+        const l2 = listAttachments(ndb, 'thought', t2);
+        assert.equal(l1.length, 1);
+        assert.equal(l2.length, 1);
+        assert.equal(l1[0]!.id, l2[0]!.id);
+        assert.ok(hasOwnership(ndb, first.attachment.id, 'thought', t2));
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('rename changes the shared title only; ownership stays', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const a = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://e/doc' }, USER);
+        const updated = updateAttachment(ndb, a.id, { title: 'Новое имя' }, USER);
+        assert.equal(updated.title, 'Новое имя');
+        assert.equal(updated.url, 'https://e/doc');
+        assert.ok(hasOwnership(ndb, a.id, 'thought', t));
+        assert.equal(listAttachments(ndb, 'thought', t)[0]!.title, 'Новое имя');
       } finally {
         ndb.close();
       }

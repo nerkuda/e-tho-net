@@ -13,7 +13,7 @@
  * without an `If-Match` guard (unlike thoughts/links/comments).
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
@@ -41,7 +41,9 @@ import {
   type AttachmentFileInput,
   type AttachmentInput,
   type AttachmentKind,
+  type AttachmentOwnerChangeResult,
   type AttachmentOwnerRef,
+  type AttachmentOwnerRemoveResult,
   type AttachmentOwnerType,
   type AttachmentSearchQuery,
   type AttachmentUpdateInput,
@@ -81,11 +83,14 @@ interface AttachmentRow {
 }
 
 /** Convert a raw row into an {@link Attachment}. */
-function rowToAttachment(row: AttachmentRow): Attachment {
+function rowToAttachment(
+  row: AttachmentRow,
+  owner?: { owner_type: AttachmentOwnerType; owner_id: string; position: number } | undefined,
+): Attachment {
   return {
     id: row.id,
-    owner_type: row.owner_type as AttachmentOwnerType,
-    owner_id: row.owner_id,
+    owner_type: (owner?.owner_type ?? row.owner_type) as AttachmentOwnerType,
+    owner_id: owner?.owner_id ?? row.owner_id,
     kind: row.kind as AttachmentKind,
     url: row.url,
     file_path: row.file_path,
@@ -94,7 +99,7 @@ function rowToAttachment(row: AttachmentRow): Attachment {
     title: row.title,
     icon: row.icon,
     description: row.description,
-    position: row.position,
+    position: owner?.position ?? row.position,
     created_at: row.created_at,
     created_by: row.created_by,
     updated_by: row.updated_by,
@@ -154,11 +159,351 @@ function nullable(value: string | null | undefined): string | null {
   return trimmed === '' ? null : value;
 }
 
+// ---------------------------------------------------------------------------
+// Ownership (0.12.1, ADR 9f90b010 / task 7678876a)
+// ---------------------------------------------------------------------------
+//
+// Владение вложения живёт в ветвимой таблице `attachment_owners` (одна строка
+// = одна пара (вложение, объект)). Владельцев у вложения может быть много;
+// владение «липкое» — снимается только явным `removeOwner`.
+//
+// Переходный период (dual-write): колонки `attachments.owner_type/owner_id/
+// position` продолжают поддерживаться как зеркало ПЕРВИЧНОГО владельца, потому
+// что их ещё читают merge-service (резервная ветка слияния), owner-cleanup,
+// импорт/экспорт `.etnx` и клиентский DTO. Финальное снятие колонок —
+// отдельные задачи (DTO 478f8c1f/f77382ba, owner-cleanup da59a4cf); домен уже
+// читает и пишет владения ТОЛЬКО через `attachment_owners`.
+
+/** Raw `attachment_owners` row shape (joined/live view). */
+interface OwnershipRow {
+  id: string;
+  attachment_id: string;
+  owner_type: string;
+  owner_id: string;
+  position: number;
+}
+
+/** SHA-256 hex of a byte buffer (dedup key, ADR e3a35864). */
+function sha256Hex(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+/** SHA-256 of a server-resolvable file, or `null` when it cannot be read. */
+function fileContentHash(filePath: string): string | null {
+  try {
+    return sha256Hex(readFileSync(filePath));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Одна живая строка владения парой (вложение, объект) в текущем слое, либо
+ * `undefined`. Чтение — через представление `attachment_owners_v` (13-layers.md
+ * §4.2): надгробие владения скрывает его из этого слоя.
+ */
+function liveOwnership(
+  ndb: NetworkDb,
+  attachmentId: string,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+): OwnershipRow | undefined {
+  return ndb
+    .prepare(
+      'SELECT id, attachment_id, owner_type, owner_id, position FROM attachment_owners_v WHERE attachment_id = ? AND owner_type = ? AND owner_id = ? LIMIT 1',
+    )
+    .get(attachmentId, ownerType, ownerId) as OwnershipRow | undefined;
+}
+
+/**
+ * Публичная проверка «вложение живо принадлежит объекту» — для валидаций
+ * иконки мысли и обложки публикации (0.12.1, задача 7678876a): владелец, а не
+ * колонки `attachments`.
+ */
+export function hasOwnership(
+  ndb: NetworkDb,
+  attachmentId: string,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+): boolean {
+  return liveOwnership(ndb, attachmentId, ownerType, ownerId) !== undefined;
+}
+
+/** Живые владения вложения в текущем слое, в порядке отображения. */
+function listLiveOwners(ndb: NetworkDb, attachmentId: string): OwnershipRow[] {
+  return ndb
+    .prepare(
+      'SELECT id, attachment_id, owner_type, owner_id, position FROM attachment_owners_v WHERE attachment_id = ? ORDER BY position ASC, created_at ASC, id ASC',
+    )
+    .all(attachmentId) as OwnershipRow[];
+}
+
+/**
+ * Первичный владелец для DTO `owner_type/owner_id` (переходный период до
+ * редизайна DTO, задачи 478f8c1f/f77382ba): владение с наименьшим `position`,
+ * при равенстве — ранее созданное. Нет владений — `undefined` (тогда берутся
+ * зеркальные колонки строки).
+ */
+function primaryOwnership(
+  ndb: NetworkDb,
+  attachmentId: string,
+): { owner_type: AttachmentOwnerType; owner_id: string; position: number } | undefined {
+  const row = ndb
+    .prepare(
+      'SELECT owner_type, owner_id, position FROM attachment_owners_v WHERE attachment_id = ? ORDER BY position ASC, created_at ASC, id ASC LIMIT 1',
+    )
+    .get(attachmentId) as { owner_type: string; owner_id: string; position: number } | undefined;
+  if (row === undefined) return undefined;
+  return { owner_type: row.owner_type as AttachmentOwnerType, owner_id: row.owner_id, position: row.position };
+}
+
+/**
+ * Есть ли у вложения ХОТЬ ОДНО живое владение во ВСЕХ слоях (13-layers.md
+ * §5.3). Физический файл один на все слои: он удаляется только когда живых
+ * владений не осталось нигде.
+ */
+export function hasLiveOwnershipAnywhere(ndb: NetworkDb, attachmentId: string): boolean {
+  // layers:physical-read — судьба файла решается по строкам всех слоёв.
+  const row = ndb
+    .prepare(
+      'SELECT 1 FROM attachment_owners WHERE attachment_id = ? AND deleted = 0 LIMIT 1', // layers:physical-read
+    )
+    .get(attachmentId);
+  return row !== undefined;
+}
+
+/** Наименьшая свободная позиция в конце списка владельца (append). */
+function nextOwnerPosition(ndb: NetworkDb, ownerType: AttachmentOwnerType, ownerId: string): number {
+  const row = ndb
+    .prepare(
+      'SELECT COALESCE(MAX(position), -1) AS m FROM attachment_owners_v WHERE owner_type = ? AND owner_id = ?',
+    )
+    .get(ownerType, ownerId) as { m: number };
+  return row.m + 1;
+}
+
+/** Вставить строку владения в текущем слое. */
+function insertOwnership(
+  ndb: NetworkDb,
+  attachmentId: string,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+  position: number,
+  actorUserId: string,
+): string {
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  ndb
+    .prepare(
+      `INSERT INTO attachment_owners
+         (id, layer_id, deleted, base_version, attachment_id, owner_type, owner_id,
+          position, created_at, created_by)
+       VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(id, ndb.layerId, attachmentId, ownerType, ownerId, position, now, actorUserId);
+  return id;
+}
+
+/** Проверить существование нескольких владельцев одного типа (422 — первый отсутствующий). */
+function ensureOwnersExist(
+  ndb: NetworkDb,
+  ownerType: AttachmentOwnerType,
+  ownerIds: readonly string[],
+): void {
+  const table =
+    ownerType === 'thought' ? 'thoughts_v' : ownerType === 'link' ? 'links_v' : 'publications_v';
+  const placeholders = ownerIds.map(() => '?').join(', ');
+  const existing = new Set(
+    (
+      ndb.prepare(`SELECT id FROM ${table} WHERE id IN (${placeholders})`).all(...ownerIds) as {
+        id: string;
+      }[]
+    ).map((r) => r.id),
+  );
+  for (const id of ownerIds) {
+    if (!existing.has(id)) {
+      throw new EtnError('VALIDATION_ERROR', `${ownerType} ${id} not found`, {
+        field: 'owner_ids',
+        missing: id,
+      });
+    }
+  }
+}
+
+/** Батч-титулы владельцев для OwnerRef (мысль/публикация; у связи названия нет). */
+function resolveOwnerRefs(ndb: NetworkDb, refs: readonly { owner_type: AttachmentOwnerType; owner_id: string }[]): AttachmentOwnerRef[] {
+  const thoughtIds = refs.filter((r) => r.owner_type === 'thought').map((r) => r.owner_id);
+  const publicationIds = refs.filter((r) => r.owner_type === 'publication').map((r) => r.owner_id);
+  const thoughtTitles = resolveOwnerTitles(ndb, thoughtIds, 'thoughts_v');
+  const publicationTitles = resolveOwnerTitles(ndb, publicationIds, 'publications_v');
+  return refs.map((r) => ({
+    owner_type: r.owner_type,
+    owner_id: r.owner_id,
+    title:
+      r.owner_type === 'thought'
+        ? (thoughtTitles.get(r.owner_id) ?? null)
+        : r.owner_type === 'publication'
+          ? (publicationTitles.get(r.owner_id) ?? null)
+          : null,
+  }));
+}
+
+/**
+ * Добавить одного или нескольких владельцев существующему вложению
+ * (`POST /attachments/{id}/owners` и вырождённый `POST …/copy`; 0.12.1, задачи
+ * 6ba247cc/45903e1d, ADR 9f90b010).
+ *
+ * Идемпотентно: живое владение (вложение, объект) — no-op и попадает в
+ * `skipped`. `added` — в порядке переданных `ownerIds`.
+ *
+ * Throws `NOT_FOUND` (404) — вложение не найдено; `VALIDATION_ERROR` (422) —
+ * неверный `owner_type` или хотя бы один несуществующий владелец.
+ */
+export function addOwners(
+  ndb: NetworkDb,
+  attachmentId: string,
+  ownerType: AttachmentOwnerType,
+  ownerIds: readonly string[],
+  actorUserId: string,
+): AttachmentOwnerChangeResult {
+  const ot = validateOwnerType(ownerType);
+  const ids = Array.from(new Set(ownerIds));
+  if (ids.length === 0) return { added: [], skipped: [] };
+  return ndb.transaction(() => {
+    getAttachmentOrThrow(ndb, attachmentId);
+    ensureOwnersExist(ndb, ot, ids);
+    const added: { owner_type: AttachmentOwnerType; owner_id: string }[] = [];
+    const skipped: { owner_type: AttachmentOwnerType; owner_id: string }[] = [];
+    for (const ownerId of ids) {
+      if (liveOwnership(ndb, attachmentId, ot, ownerId) !== undefined) {
+        skipped.push({ owner_type: ot, owner_id: ownerId });
+        continue;
+      }
+      insertOwnership(
+        ndb,
+        attachmentId,
+        ot,
+        ownerId,
+        nextOwnerPosition(ndb, ot, ownerId),
+        actorUserId,
+      );
+      added.push({ owner_type: ot, owner_id: ownerId });
+    }
+    return { added: resolveOwnerRefs(ndb, added), skipped: resolveOwnerRefs(ndb, skipped) };
+  });
+}
+
+/**
+ * Снять владение пары (вложение, объект) — `DELETE /attachments/{id}/owners`
+ * (0.12.1, задача 4924d61e, требование 6b524569).
+ *
+ * Защиты (серверная часть требования; текстовый скан — точка расширения задачи
+ * 87c455db, сейчас не реализован, т.к. текстовых использований ещё нет):
+ *   * `409 ATTACHMENT_OWNER_IS_ICON` — объект использует вложение как свою
+ *     иконку (мысль) или обложку (публикация).
+ *
+ * Идемпотентность наружу: нет живого владения — `NOT_FOUND` (404). После снятия
+ * последнего живого владельца ВО ВСЕХ слоях вложение и его серверный файл
+ * удаляются: `attachment_deleted: true`. В слое физический файл не трогается
+ * (13-layers.md §5.3) — ставится надгробие владения и (при исчезновении всех
+ * владений) строки вложения.
+ */
+export function removeOwner(
+  ndb: NetworkDb,
+  attachmentId: string,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+  // Точка подтверждения предупреждения о текстах (87c455db) — пока не используется.
+  _confirm = false,
+): AttachmentOwnerRemoveResult {
+  const ot = validateOwnerType(ownerType);
+  return ndb.transaction(() => {
+    const current = getAttachmentOrThrow(ndb, attachmentId);
+    const ownership = liveOwnership(ndb, attachmentId, ot, ownerId);
+    if (ownership === undefined) {
+      throw new EtnError('NOT_FOUND', `владение ${ownerType} ${ownerId} не найдено`, {
+        entity: 'attachment_owner',
+        attachment_id: attachmentId,
+        owner_type: ownerType,
+        owner_id: ownerId,
+      });
+    }
+    // Запрет: объект сам использует вложение как свою иконку/обложку.
+    if (ot === 'thought') {
+      const icon = ndb
+        .prepare('SELECT 1 FROM thoughts_v WHERE id = ? AND icon_attachment_id = ? LIMIT 1')
+        .get(ownerId, attachmentId);
+      if (icon !== undefined) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'объект использует вложение как свою иконку — снятие владения запрещено',
+          { code: 'ATTACHMENT_OWNER_IS_ICON', status: 409, field: 'owner_id' },
+        );
+      }
+    } else if (ot === 'publication') {
+      const cover = ndb
+        .prepare('SELECT 1 FROM publications_v WHERE id = ? AND cover_attachment_id = ? LIMIT 1')
+        .get(ownerId, attachmentId);
+      if (cover !== undefined) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'объект использует вложение как свою обложку — снятие владения запрещено',
+          { code: 'ATTACHMENT_OWNER_IS_ICON', status: 409, field: 'owner_id' },
+        );
+      }
+    }
+    // TODO(87c455db): скан текстов комментариев объекта на `etnimg://attachment/<id>`
+    // → `409 ATTACHMENT_OWNER_IN_TEXT` без confirm (точка расширения).
+
+    if (!isBaseContext(ndb)) {
+      // Слой: надгробие владения; файл не трогаем.
+      materializeTombstone(ndb, 'attachment_owners', ownership.id);
+      if (!hasLiveOwnershipAnywhere(ndb, attachmentId)) {
+        materializeTombstone(ndb, 'attachments', attachmentId);
+      }
+      return { removed: true, attachment_deleted: false };
+    }
+
+    ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(ownership.id);
+    if (hasLiveOwnershipAnywhere(ndb, attachmentId)) {
+      return { removed: true, attachment_deleted: false };
+    }
+    // Последнее живое владение в сети ушло — удаляем строку вложения и файл.
+    // layers:physical-read — живая иконка в любом слое удерживает файл (L16).
+    const iconBacksFile =
+      current.kind === 'file' &&
+      ndb
+        .prepare(
+          'SELECT 1 FROM thoughts WHERE icon_attachment_id = ? AND deleted = 0 LIMIT 1', // layers:physical-read
+        )
+        .get(attachmentId) !== undefined;
+    ndb.prepare('DELETE FROM attachments WHERE id = ?').run(attachmentId);
+    ndb
+      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
+      .run(attachmentId);
+    ndb
+      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?')
+      .run(attachmentId);
+    const keepFile =
+      iconBacksFile ||
+      (current.kind === 'file' &&
+        current.file_path !== null &&
+        storedFileInUse(ndb, path.resolve(current.file_path)));
+    if (!keepFile) removeStoredFile(ndb, current.kind, current.file_path);
+    return { removed: true, attachment_deleted: true };
+  });
+}
+
+
 /** Return an attachment by id, or `null` when absent. */
 export function getAttachment(ndb: NetworkDb, id: string): Attachment | null {
   const row = ndb.prepare('SELECT * FROM attachments_v WHERE id = ? LIMIT 1').get(id) as
-    AttachmentRow | undefined;
-  return row ? rowToAttachment(row) : null;
+    | AttachmentRow
+    | undefined;
+  if (row === undefined) return null;
+  // Владелец в DTO берётся из владений (первичный), колонки строки — лишь
+  // резерв для переходного периода (см. блок «Ownership»).
+  return rowToAttachment(row, primaryOwnership(ndb, id));
 }
 
 /** Return an attachment or throw `NOT_FOUND` (404). */
@@ -171,8 +516,9 @@ function getAttachmentOrThrow(ndb: NetworkDb, id: string): Attachment {
 }
 
 /**
- * List attachments attached to an owner (docs/03-server-api.md §11), ordered by
- * display position then creation time.
+ * List attachments attached to an owner (docs/03-server-api.md §11; 0.12.1, ADR
+ * `9f90b010`): вложения-владения объекта, порядок — `attachment_owners.position`
+ * (у каждого владельца свой порядок), при равенстве — по времени создания.
  */
 export function listAttachments(
   ndb: NetworkDb,
@@ -182,10 +528,14 @@ export function listAttachments(
   validateOwnerType(ownerType);
   const rows = ndb
     .prepare(
-      'SELECT * FROM attachments_v WHERE owner_type = ? AND owner_id = ? ORDER BY position ASC, created_at ASC',
+      `SELECT a.*, o.position AS owner_position FROM attachment_owners_v o
+         JOIN attachments_v a ON a.id = o.attachment_id
+        WHERE o.owner_type = ? AND o.owner_id = ?
+        ORDER BY o.position ASC, a.created_at ASC`,
     )
-    .all(ownerType, ownerId) as AttachmentRow[];
-  return rows.map(rowToAttachment);
+    .all(ownerType, ownerId) as (AttachmentRow & { owner_position: number })[];
+  const override = { owner_type: ownerType, owner_id: ownerId };
+  return rows.map((row) => rowToAttachment(row, { ...override, position: row.owner_position }));
 }
 
 /** Порядок групп владельцев в ответе «использование вложения». */
@@ -210,16 +560,14 @@ function resolveOwnerTitles(
 }
 
 /**
- * Использование вложения (0.11.1, задача 46cf4bcb): все владельцы, которые
- * держат это вложение — мысли, связи и публикации. Нужно диалогу выбора
- * обложки публикации: в строке вложения показываются «облачка» мыслей и
- * публикаций, к которым относится картинка.
+ * Использование вложения (0.11.1, задача 46cf4bcb): владельцы, которые держат
+ * это вложение — мысли, связи и публикации. Нужно диалогу выбора обложки
+ * публикации: в строке вложения показываются «облачка» мыслей и публикаций, к
+ * которым относится картинка.
  *
- * У строки вложения ровно один владелец, но общий физический носитель
- * (файл/URL) может быть привязан несколькими строками — прежде всего
- * копированием на другого владельца (ADR 73cfcf64). Поэтому берутся владельцы
- * ВСЕХ живых строк с тем же `kind` и тем же `url`/`file_path`, что у указанной
- * строки; дубли по `(owner_type, owner_id)` схлопываются.
+ * С мульти-владением (0.12.1, ADR `9f90b010`) источник — строки владений
+ * `attachment_owners` ЭТОГО вложения (а не общий носитель: дедупликация по
+ * `content_hash` гарантирует, что один файл = одна строка вложения).
  *
  * Названия мыслей и публикаций подставляются из `*_v`; у связи названия нет
  * (`title: null`). Порядок детерминирован (`thought` → `publication` → `link`,
@@ -229,61 +577,15 @@ function resolveOwnerTitles(
  */
 export function listAttachmentUsage(ndb: NetworkDb, attachmentId: string): AttachmentUsage {
   const source = getAttachmentOrThrow(ndb, attachmentId);
-  // Общий носитель: для kind='url' — тот же url, для kind='file' — тот же
-  // file_path. Ветка выбирается по НЕпустой колонке носителя, поэтому
-  // nullable-колонка не «склеивает» между собой вложения без адреса.
-  // (Раньше вторая ветка ошибочно проверяла `file_path IS NULL` и для
-  // файловых вложений не находила ни строки — блокер приёмки 46cf4bcb.)
-  const rows = ndb
-    .prepare(
-      `SELECT owner_type, owner_id FROM attachments_v
-        WHERE kind = ?
-          AND ((url IS NOT NULL AND url = ?) OR (file_path IS NOT NULL AND file_path = ?))
-        ORDER BY owner_type ASC, owner_id ASC`,
-    )
-    .all(source.kind, source.url, source.file_path) as {
-    owner_type: string;
-    owner_id: string;
-  }[];
-
-  const seen = new Set<string>();
-  const refs: { owner_type: AttachmentOwnerType; owner_id: string }[] = [];
-  for (const row of rows) {
-    const type = row.owner_type as AttachmentOwnerType;
-    const key = `${type}\u0000${row.owner_id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    refs.push({ owner_type: type, owner_id: row.owner_id });
-  }
-
-  const thoughtTitles = resolveOwnerTitles(
-    ndb,
-    refs.filter((r) => r.owner_type === 'thought').map((r) => r.owner_id),
-    'thoughts_v',
+  const refs = listLiveOwners(ndb, attachmentId).map((o) => ({
+    owner_type: o.owner_type as AttachmentOwnerType,
+    owner_id: o.owner_id,
+  }));
+  const owners: AttachmentOwnerRef[] = resolveOwnerRefs(ndb, refs).sort(
+    (a, b) =>
+      OWNER_TYPE_RANK[a.owner_type] - OWNER_TYPE_RANK[b.owner_type] ||
+      (a.owner_id < b.owner_id ? -1 : a.owner_id > b.owner_id ? 1 : 0),
   );
-  const publicationTitles = resolveOwnerTitles(
-    ndb,
-    refs.filter((r) => r.owner_type === 'publication').map((r) => r.owner_id),
-    'publications_v',
-  );
-
-  const owners: AttachmentOwnerRef[] = refs
-    .map((r) => ({
-      owner_type: r.owner_type,
-      owner_id: r.owner_id,
-      title:
-        r.owner_type === 'thought'
-          ? (thoughtTitles.get(r.owner_id) ?? null)
-          : r.owner_type === 'publication'
-            ? (publicationTitles.get(r.owner_id) ?? null)
-            : null,
-    }))
-    .sort(
-      (a, b) =>
-        OWNER_TYPE_RANK[a.owner_type] - OWNER_TYPE_RANK[b.owner_type] ||
-        (a.owner_id < b.owner_id ? -1 : a.owner_id > b.owner_id ? 1 : 0),
-    );
-
   return { attachment_id: source.id, owners };
 }
 
@@ -305,6 +607,26 @@ export function createAttachment(
   input: AttachmentInput,
   actorUserId: string,
 ): Attachment {
+  return createAttachmentResult(ndb, ownerType, ownerId, input, actorUserId).attachment;
+}
+
+/**
+ * Create an attachment and report whether an existing one was REUSED by
+ * `content_hash` (дедупликация, ADR `e3a35864`; 0.12.1, задача 7678876a).
+ *
+ * При совпадении SHA-256 содержимого с уже существующим файловым вложением
+ * сети новая строка и копия файла НЕ создаются: текущий объект становится
+ * владельцем существующего вложения (`attachment_owners`), `reused: true`.
+ * Поиск ведётся по СЫРОЙ таблице `attachments` по ВСЕМ слоям — физические байты
+ * не дублируются никогда.
+ */
+export function createAttachmentResult(
+  ndb: NetworkDb,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+  input: AttachmentInput,
+  actorUserId: string,
+): { attachment: Attachment; reused: boolean } {
   const ot = validateOwnerType(ownerType);
   const kind = validateKind(input.kind);
   const url = nullable(input.url ?? null);
@@ -323,17 +645,34 @@ export function createAttachment(
 
   return ndb.transaction(() => {
     ensureOwnerExists(ndb, ot, ownerId);
+    // Хэш — только для файла, реально читаемого сервером (загрузка/серверный
+    // путь); клиентские локальные пути и URL дедупликации не подлежат.
+    const hash =
+      kind === 'file' && filePath !== null && isResolvableFile(filePath)
+        ? fileContentHash(filePath)
+        : null;
+    if (hash !== null) {
+      const reusedId = findReusableByHash(ndb, hash);
+      if (reusedId !== null && getAttachment(ndb, reusedId) !== null) {
+        const position = typeof input.position === 'number' ? Math.trunc(input.position) : nextOwnerPosition(ndb, ot, ownerId);
+        if (liveOwnership(ndb, reusedId, ot, ownerId) === undefined) {
+          insertOwnership(ndb, reusedId, ot, ownerId, position, actorUserId);
+        }
+        return { attachment: getAttachmentOrThrow(ndb, reusedId), reused: true };
+      }
+    }
     const id = randomUUID();
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
-    const position = typeof input.position === 'number' ? Math.trunc(input.position) : 0;
+    const position =
+      typeof input.position === 'number' ? Math.trunc(input.position) : nextOwnerPosition(ndb, ot, ownerId);
     ndb
       .prepare(
         `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, file_path,
-                                  file_size, mime_type, title, description, position,
+                                  content_hash, file_size, mime_type, title, description, position,
                                   created_at, created_by, updated_by,
                                   created_at_ms, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -343,6 +682,7 @@ export function createAttachment(
         kind,
         kind === 'url' ? url : null,
         kind === 'file' ? filePath : null,
+        hash,
         input.file_size ?? null,
         nullable(input.mime_type ?? null),
         nullable(input.title ?? null),
@@ -354,8 +694,23 @@ export function createAttachment(
         nowMs,
         nowMs,
       );
-    return getAttachmentOrThrow(ndb, id);
+    insertOwnership(ndb, id, ot, ownerId, position, actorUserId);
+    return { attachment: getAttachmentOrThrow(ndb, id), reused: false };
   });
+}
+
+/**
+ * Id вложения с тем же хэшем файла, уже существующего в сети — по СЫРОЙ таблице
+ * `attachments` ПО ВСЕМ слоям (ADR `e3a35864`); предпочтение — живой строке.
+ */
+function findReusableByHash(ndb: NetworkDb, hash: string): string | null {
+  // layers:physical-read — дедупликация ищет по всем слоям: байты не дублируются.
+  const row = ndb
+    .prepare(
+      "SELECT id FROM attachments WHERE kind = 'file' AND content_hash = ? ORDER BY deleted ASC LIMIT 1", // layers:physical-read
+    )
+    .get(hash) as { id: string } | undefined;
+  return row?.id ?? null;
 }
 
 /** Maximum decoded size of an uploaded attachment file, 10 MiB. */
@@ -406,6 +761,21 @@ export function createAttachmentFile(
   input: AttachmentFileInput,
   actorUserId: string,
 ): Attachment {
+  return createAttachmentFileResult(ndb, ownerType, ownerId, input, actorUserId).attachment;
+}
+
+/**
+ * {@link createAttachmentFile} с признаком переиспользования (ADR `e3a35864`):
+ * если файл с тем же SHA-256 уже есть в сети, копия и строка не создаются —
+ * текущий объект становится владельцем существующего вложения (`reused: true`).
+ */
+export function createAttachmentFileResult(
+  ndb: NetworkDb,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+  input: AttachmentFileInput,
+  actorUserId: string,
+): { attachment: Attachment; reused: boolean } {
   const ot = validateOwnerType(ownerType);
   const mime = input.mime_type.trim().toLowerCase();
   if (mime === '') {
@@ -436,6 +806,19 @@ export function createAttachmentFile(
   // Ensure the owner exists before touching the filesystem.
   ensureOwnerExists(ndb, ot, ownerId);
 
+  // Дедупликация по хэшу содержимого (ADR e3a35864): совпало — не пишем файл и
+  // не создаём строку, лишь добавляем владение существующему вложению.
+  const hash = sha256Hex(buffer);
+  const reusedId = findReusableByHash(ndb, hash);
+  if (reusedId !== null && getAttachment(ndb, reusedId) !== null) {
+    return ndb.transaction(() => {
+      if (liveOwnership(ndb, reusedId, ot, ownerId) === undefined) {
+        insertOwnership(ndb, reusedId, ot, ownerId, nextOwnerPosition(ndb, ot, ownerId), actorUserId);
+      }
+      return { attachment: getAttachmentOrThrow(ndb, reusedId), reused: true };
+    });
+  }
+
   const dir = path.join(path.dirname(ndb.dbPath), 'attachments');
   mkdirSync(dir, { recursive: true });
   const ext = UPLOAD_MIME_EXT[mime] ?? (mime.split('/')[1] ?? 'bin').replace(/[^a-z0-9]/g, '');
@@ -446,7 +829,7 @@ export function createAttachmentFile(
   const filePath = path.join(dir, name);
   writeFileSync(filePath, buffer);
 
-  return createAttachment(
+  return createAttachmentResult(
     ndb,
     ot,
     ownerId,
@@ -679,30 +1062,14 @@ export class AttachmentFileCopier {
 }
 
 /**
- * Copy an attachment to one or more target owners (03-server-api.md §11,
- * workplan L25). Each target gets a brand-new row carrying the same visible
- * fields as the source (`kind`/`url`/`file_path`/`mime_type`/`title`/
- * `description`/`icon`/`file_size`); the underlying file is **not** duplicated —
- * a `kind='file'` row simply references the same `file_path`, so the server's
- * existing rule "file is removed only when nobody uses it" (deleteAttachment,
- * L16 icon cleanup) applies without change.
+ * `POST /attachments/{id}/copy` — с приходом мульти-владения (0.12.1,
+ * ADR `9f90b010`, задача 45903e1d) операция ВЫРОЖДАЕТСЯ в добавление
+ * владельцев: новым целевым объектам НЕ создаются строки-копии, а у того же
+ * вложения добавляются владения (`attachment_owners`). Эквивалент
+ * {@link addOwners}; ответ — `added`/`skipped` владений (в порядке цели).
  *
- * Targets that already own an attachment with the same `kind` and the same
- * `url`/`file_path` are skipped silently and reported via `skipped`.
- *
- * Targets may be thoughts, links or publications (0.11.1, задача f37b468d):
- * this is the mechanism behind «взять обложку из чужого вложения» — the source
- * thought keeps its row, the publication gets its own row over the same file
- * (ADR 73cfcf64).
- *
- * Throws:
- *   * `NOT_FOUND` (404) if the source attachment does not exist;
- *   * `VALIDATION_ERROR` (422) if any target owner id does not exist.
- *
- * The whole batch runs in a single transaction — either every new row is
- * inserted or none are.
- *
- * @param actorUserId - user creating the copies (recorded as `created_by`).
+ * Throws `NOT_FOUND` (404) — вложение не найдено; `VALIDATION_ERROR` (422) —
+ * неверный тип владельца или несуществующий владелец.
  */
 export function copyAttachment(
   ndb: NetworkDb,
@@ -710,101 +1077,7 @@ export function copyAttachment(
   input: AttachmentCopyInput,
   actorUserId: string,
 ): AttachmentCopyResult {
-  const targetOwnerType = validateOwnerType(input.target_owner_type);
-  const targetIds = Array.from(new Set(input.target_owner_ids));
-  if (targetIds.length === 0) {
-    return { created: [], skipped: [] };
-  }
-  return ndb.transaction(() => {
-    const source = getAttachmentOrThrow(ndb, sourceId);
-    // All targets must exist before any row is written — 422 names the first
-    // missing id so the client can show a precise error.
-    const placeholders = targetIds.map(() => '?').join(', ');
-    const targetTable =
-      targetOwnerType === 'thought'
-        ? 'thoughts_v'
-        : targetOwnerType === 'link'
-          ? 'links_v'
-          : 'publications_v';
-    const existingTargetIds = new Set(
-      (
-        ndb
-          .prepare(`SELECT id FROM ${targetTable} WHERE id IN (${placeholders})`)
-          .all(...targetIds) as { id: string }[]
-      ).map((r) => r.id),
-    );
-    for (const id of targetIds) {
-      if (!existingTargetIds.has(id)) {
-        throw new EtnError('VALIDATION_ERROR', `${targetOwnerType} ${id} not found`, {
-          field: 'target_owner_ids',
-          missing: id,
-        });
-      }
-    }
-    // Detect duplicates in one pass: same owner + same kind + same url/file_path.
-    // The leg is chosen by the NON-null carrier column, so a file attachment
-    // (url IS NULL) is matched by file_path and vice versa. (Раньше вторая
-    // ветка ошибочно проверяла `file_path IS NULL`: повторное копирование
-    // файлового вложения создавало дубль строки вместо `skipped` — общий
-    // корень с блокером usage, приёмка 46cf4bcb.)
-    const dupRows = ndb
-      .prepare(
-        `SELECT owner_id FROM attachments_v
-         WHERE owner_type = ? AND kind = ? AND owner_id IN (${placeholders})
-           AND ((url IS NOT NULL AND url = ?) OR (file_path IS NOT NULL AND file_path = ?))`,
-      )
-      .all(
-        targetOwnerType,
-        source.kind,
-        ...targetIds,
-        source.url,
-        source.file_path,
-      ) as { owner_id: string }[];
-    const duplicateIds = new Set(dupRows.map((r) => r.owner_id));
-
-    const nowMs = Date.now();
-    const now = new Date(nowMs).toISOString();
-    const created: Attachment[] = [];
-    const skipped: string[] = [];
-    const insertStmt = ndb.prepare(
-      `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, file_path,
-                               file_size, mime_type, title, description, icon,
-                               position, created_at, created_by, updated_by,
-                               created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const selectById = ndb.prepare('SELECT * FROM attachments_v WHERE id = ? LIMIT 1');
-    for (const targetId of targetIds) {
-      if (duplicateIds.has(targetId)) {
-        skipped.push(targetId);
-        continue;
-      }
-      const newId = randomUUID();
-      insertStmt.run(
-        newId,
-        ndb.layerId,
-        targetOwnerType,
-        targetId,
-        source.kind,
-        source.kind === 'url' ? source.url : null,
-        source.kind === 'file' ? source.file_path : null,
-        source.file_size,
-        source.mime_type,
-        source.title,
-        source.description,
-        source.icon,
-        0,
-        now,
-        actorUserId,
-        actorUserId,
-        nowMs,
-        nowMs,
-      );
-      const row = selectById.get(newId) as AttachmentRow | undefined;
-      if (row !== undefined) created.push(rowToAttachment(row));
-    }
-    return { created, skipped };
-  });
+  return addOwners(ndb, sourceId, input.target_owner_type, input.target_owner_ids, actorUserId);
 }
 
 /**
@@ -851,7 +1124,11 @@ export function searchAttachments(
     params.push(query.kind);
   }
   if (query.exclude_owner_type !== undefined && query.exclude_owner_id !== undefined) {
-    where.push('NOT (owner_type = ? AND owner_id = ?)');
+    // Отбор по владениям (0.12.1, ADR 9f90b010): скрыть вложения, которыми
+    // УЖЕ владеет указанный объект.
+    where.push(
+      'NOT EXISTS (SELECT 1 FROM attachment_owners_v o WHERE o.attachment_id = attachments_v.id AND o.owner_type = ? AND o.owner_id = ?)',
+    );
     params.push(query.exclude_owner_type, query.exclude_owner_id);
   }
 
@@ -865,7 +1142,8 @@ export function searchAttachments(
        ORDER BY created_at DESC LIMIT ? OFFSET ?`,
     )
     .all(...params, limit, offset) as AttachmentRow[];
-  return { items: rows.map(rowToAttachment), total: totalRow.n };
+  // Владелец в DTO — первичное владение (переходный период, см. блок «Ownership»).
+  return { items: rows.map((row) => rowToAttachment(row, primaryOwnership(ndb, row.id))), total: totalRow.n };
 }
 
 /**
@@ -932,6 +1210,8 @@ export function updateAttachment(
     // Moving the attachment to another owner: both fields must describe the
     // target consistently; the new owner must exist (no SQL FK on the table).
     let moved = false;
+    let movedType: AttachmentOwnerType = current.owner_type;
+    let movedId: string = current.owner_id;
     if (changes.owner_type !== undefined || changes.owner_id !== undefined) {
       const nextType =
         changes.owner_type !== undefined
@@ -949,6 +1229,8 @@ export function updateAttachment(
         sets.push('owner_type = ?', 'owner_id = ?');
         args.push(nextType, nextId);
         moved = true;
+        movedType = nextType;
+        movedId = nextId;
       }
     }
     if (changes.description !== undefined) {
@@ -982,6 +1264,19 @@ export function updateAttachment(
     // thoughts and null the field in their shadow rows); the icon preview
     // itself stays.
     if (moved) {
+      // Перенос владельца (0.12.1): снять прежнее владение и добавить новое
+      // (эквивалент addOwners + removeOwner без защиты иконки).
+      const srcOwnership = liveOwnership(ndb, id, current.owner_type, current.owner_id);
+      if (srcOwnership !== undefined) {
+        if (isBaseContext(ndb)) {
+          ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(srcOwnership.id);
+        } else {
+          materializeTombstone(ndb, 'attachment_owners', srcOwnership.id);
+        }
+      }
+      if (liveOwnership(ndb, id, movedType, movedId) === undefined) {
+        insertOwnership(ndb, id, movedType, movedId, nextOwnerPosition(ndb, movedType, movedId), actorUserId);
+      }
       const iconOwners = (
         ndb.prepare('SELECT id FROM thoughts_v WHERE icon_attachment_id = ?').all(id) as {
           id: string;
@@ -1060,6 +1355,10 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
     if (!isBaseContext(ndb)) {
       // A layer never deletes the shared file — tombstone the binding (§5.3).
       materializeTombstone(ndb, 'attachments', id);
+      // Владения вложения тоже прячем из слоя (иначе останутся висячие).
+      for (const o of listLiveOwners(ndb, id)) {
+        materializeTombstone(ndb, 'attachment_owners', o.id);
+      }
       return;
     }
     // Check the icon reference BEFORE it is reset below — the file must
@@ -1074,11 +1373,15 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
           'SELECT 1 FROM thoughts WHERE icon_attachment_id = ? AND deleted = 0 LIMIT 1', // layers:physical-read
         )
         .get(id) !== undefined;
+    ndb.prepare('DELETE FROM attachment_owners WHERE attachment_id = ?').run(id);
     ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id);
     // Thoughts may reference this attachment as the backing picture of their
     // icon (L16) — drop the dangling reference; the icon preview itself stays.
     ndb
       .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
+      .run(id);
+    ndb
+      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?')
       .run(id);
     const keepFile =
       iconBacksFile ||

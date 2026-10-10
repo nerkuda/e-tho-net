@@ -47,7 +47,7 @@ import {
   shelfItemId,
 } from '../db/publication-id.js';
 import { listPublicationHoldingLayers } from './holding-layers.js';
-import { removeStoredFile, storedFileInUse } from './attachment-service.js';
+import { hasOwnership, removeStoredFile, storedFileInUse } from './attachment-service.js';
 import { invalidatePublicationMembershipCache } from './publication-membership-cache.js';
 import { selectRecipeIds } from './publication-recipe.js';
 import { linkPropertyLinkTypeId } from './property-service.js';
@@ -377,20 +377,15 @@ function assertSingleCover(
   }
 }
 
-/** Строка-вложение-обложка обязана принадлежать этой публикации. */
+/** Строка-вложение-обложка обязана принадлежать этой публикации (живое владение). */
 function assertCoverAttachmentOwned(
   ndb: NetworkDb,
   publicationId: string,
   attachmentId: string | null,
 ): void {
   if (attachmentId === null) return;
-  const row = ndb
-    .prepare(
-      `SELECT 1 FROM attachments_v
-       WHERE id = ? AND owner_type = 'publication' AND owner_id = ? LIMIT 1`,
-    )
-    .get(attachmentId, publicationId);
-  if (row === undefined) {
+  // 0.12.1 (ADR 9f90b010): владение, а не owner-колонки строки вложения.
+  if (!hasOwnership(ndb, attachmentId, 'publication', publicationId)) {
     throw new EtnError(
       'VALIDATION_ERROR',
       'обложка должна ссылаться на строку-вложение этой публикации',

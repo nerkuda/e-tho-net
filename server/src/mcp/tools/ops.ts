@@ -347,7 +347,7 @@ const HANDLERS: Record<string, OpHandler> = {
       requireWriteBudget(rt);
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
-      const result = runWrite(ndb, fx, () => {
+      runWrite(ndb, fx, () => {
         const copied = copyAttachment(
           ndb,
           a.attachment_id,
@@ -356,15 +356,12 @@ const HANDLERS: Record<string, OpHandler> = {
         );
         return {
           result: copied,
-          events: copied.created.map((attachment) => ({
-            type: 'attachment.created' as const,
-            data: { attachment },
-          })),
-          activity: copied.created.map((attachment) => ({
-            kind: 'attachment' as const,
-            action: 'created' as const,
-            attachment,
-          })),
+          // Нет новых строк-копий (муль-владение): одно событие правки вложения.
+          events:
+            copied.added.length === 0
+              ? []
+              : [{ type: 'attachment.updated' as const, data: { id: a.attachment_id, changes: {} } }],
+          activity: [],
           audit: {
             action: 'etn.attachments.copy',
             targetType: 'attachment',
@@ -373,11 +370,8 @@ const HANDLERS: Record<string, OpHandler> = {
           },
         };
       });
-      return result.created.map((att) => ({
-        id: att.id,
-        version: 0,
-        request_id: String(extra.requestId),
-      })) satisfies McpMutationResult[];
+      // Строки не создаются — результат пуст (владельцы не сущности мутации).
+      return [] satisfies McpMutationResult[];
     });
   },
   'attachments.search': (rt, p) => {

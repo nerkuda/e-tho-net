@@ -63,7 +63,7 @@ import { assertIconColor } from './icon-view.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
 import { resolveThoughtId } from './thought-id.js';
 
-import { getAttachment } from './attachment-service.js';
+import { getAttachment, hasOwnership } from './attachment-service.js';
 import { getEdgesAmong, getLinkDirections, toFocusEdge } from './link-service.js';
 import { enforceLock } from './lock-service.js';
 import { getThoughtMeta } from './thought-meta.js';
@@ -1032,12 +1032,14 @@ export function updateThought(
       const attachmentId = changes.icon_attachment_id;
       if (attachmentId !== null) {
         const attachment = getAttachment(ndb, attachmentId);
+        // 0.12.1 (ADR 9f90b010): проверяется ЖИВОЕ ВЛАДЕНИЕ этой мысли, а не
+        // owner-колонки строки; при выборе «чужой» картинки-иконки владелец
+        // добавляется (addOwners) до/вместе с проставлением ссылки.
         if (
           attachment === null ||
           attachment.kind !== 'file' ||
           !(attachment.mime_type ?? '').startsWith('image/') ||
-          attachment.owner_type !== 'thought' ||
-          attachment.owner_id !== id
+          !hasOwnership(ndb, attachmentId, 'thought', id)
         ) {
           throw new EtnError(
             'VALIDATION_ERROR',
