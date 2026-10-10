@@ -12,7 +12,9 @@
  *     live row in ANY layer;
  *   * a live `comments` / `comment_targets` / `attachments` /
  *     `property_values` row whose owner does not exist as a live row in ANY
- *     layer (attachments have a third owner kind — `publication`, 0.11.1);
+ *     layer (attachments have a third owner kind — `publication`, 0.11.1; and
+ *     since 0.12.1 their ownership is read from `attachment_owners`, the
+ *     owner-columns being only an inexact mirror — task 8a4b7270);
  *   * a live `type_properties` / `type_property_overrides` /
  *     `property_values` row whose property (registry) is not live in ANY layer
  *     (0.6.5: every property reference now points at the `properties` registry).
@@ -163,39 +165,60 @@ export function checkLayerIntegrity(ndb: NetworkDb): LayerIntegrityViolation[] {
     }
   }
 
-  // attachments: the owner (thought, link or publication) must be live
-  // somewhere. Publications are owners since 0.11.1 (обложка публикации,
-  // задача f37b468d) — их отсутствие в наборе превращало живую обложку в
-  // ложное нарушение целостности.
+  // attachments: живой владелец — по `attachment_owners`, а не по owner-колонкам
+  // строки (0.12.1, задача 8a4b7270). Колонки `attachments.owner_type/owner_id`
+  // — НЕТОЧНОЕ зеркало ПЕРВИЧНОГО владельца: `addOwners`/`removeOwner` их не
+  // обновляют (см. блок «Ownership» attachment-service), поэтому при снятии
+  // зеркального владельца у вложения с живым вторым владельцем они указывают на
+  // мёртвый объект и давали ЛОЖНОЕ «attachments owner missing». Источник истины
+  // — живые владения в рабочих слоях (служебные копии для откатов слияния не
+  // считаются, см. hasLiveOwnershipAnywhere). Переходный период: колонки
+  // учитываются дополнительно (аддитивно), чтобы их отставание не рождало
+  // ложных нарушений.
+  const liveOwnerAttachmentIds = new Set<string>();
+  /** Первый владелец вложения из `attachment_owners` — для диагностики нарушения. */
+  const ownershipOwner = new Map<string, { table: string; id: string }>();
+
+  /** Жив ли объект-владелец и как называется его таблица. */
+  const resolveOwner = (ownerType: string, ownerId: string): { alive: boolean; table: string } => {
+    if (ownerType === 'thought') return { alive: thoughts.has(ownerId), table: 'thoughts' };
+    if (ownerType === 'link') return { alive: links.has(ownerId), table: 'links' };
+    if (ownerType === 'publication') return { alive: publications.has(ownerId), table: 'publications' };
+    // Неизвестный владелец — сам по себе нарушение (раньше молча считался
+    // связью, что скрывало бы новый вид владельца).
+    return { alive: false, table: ownerType };
+  };
+
+  for (const o of ndb
+    .prepare(
+      `SELECT o.attachment_id AS attachment_id, o.owner_type AS owner_type, o.owner_id AS owner_id
+         FROM attachment_owners o -- layers:physical-read
+         JOIN layers l ON l.id = o.layer_id AND l.is_service = 0
+        WHERE o.deleted = 0`,
+    )
+    .all() as { attachment_id: string; owner_type: string; owner_id: string }[]) {
+    const { alive, table } = resolveOwner(o.owner_type, o.owner_id);
+    if (!ownershipOwner.has(o.attachment_id)) {
+      ownershipOwner.set(o.attachment_id, { table, id: o.owner_id });
+    }
+    if (alive) liveOwnerAttachmentIds.add(o.attachment_id);
+  }
+
   for (const row of ndb
     .prepare(
       'SELECT id, owner_type, owner_id FROM attachments WHERE deleted = 0 -- layers:physical-read',
     )
     .all() as { id: string; owner_type: string; owner_id: string }[]) {
-    let alive: boolean;
-    let ownerTable: string;
-    if (row.owner_type === 'thought') {
-      alive = thoughts.has(row.owner_id);
-      ownerTable = 'thoughts';
-    } else if (row.owner_type === 'link') {
-      alive = links.has(row.owner_id);
-      ownerTable = 'links';
-    } else if (row.owner_type === 'publication') {
-      alive = publications.has(row.owner_id);
-      ownerTable = 'publications';
-    } else {
-      // Неизвестный владелец — сам по себе нарушение (раньше молча считался
-      // связью, что скрывало бы новый вид владельца).
-      alive = false;
-      ownerTable = row.owner_type;
-    }
+    // Живое владение (источник истины) ИЛИ живой владелец по зеркальным колонкам
+    // (переходный fallback, пока колонки не сняты).
+    const columnOwner = resolveOwner(row.owner_type, row.owner_id);
+    const alive = liveOwnerAttachmentIds.has(row.id) || columnOwner.alive;
     if (!alive) {
-      violations.push({
-        table: 'attachments',
-        id: row.id,
-        ref: 'owner',
-        missing: { table: ownerTable, id: row.owner_id },
-      });
+      const missing = ownershipOwner.get(row.id) ?? {
+        table: columnOwner.table,
+        id: row.owner_id,
+      };
+      violations.push({ table: 'attachments', id: row.id, ref: 'owner', missing });
     }
   }
 

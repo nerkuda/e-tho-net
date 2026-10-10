@@ -47,7 +47,7 @@ import { mergeLayer } from '../src/domain/merge-service.js';
 import { createLayer, deleteLayer } from '../src/domain/layer-service.js';
 import { checkLayerIntegrity as sweep } from '../src/domain/layer-integrity.js';
 import { createPublication } from '../src/domain/publication-service.js';
-import { createAttachment } from '../src/domain/attachment-service.js';
+import { addOwners, createAttachment, removeOwner } from '../src/domain/attachment-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -241,6 +241,38 @@ describe(
           table: 'publications',
           id: pub.id,
         });
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('integrity: снятие зеркального владельца при живом втором — не «owner missing» (задача 8a4b7270)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const first = createThought(ndb, { title: 'Первый владелец' }, USER);
+        const second = createThought(ndb, { title: 'Второй владелец' }, USER);
+        // Вложение создано Первым: owner-колонки строки зеркалят ПЕРВОГО.
+        const att = createAttachment(
+          ndb,
+          'thought',
+          first.id,
+          { kind: 'url', url: 'https://e/a.png' },
+          USER,
+        );
+        // Второе владение — тот же объект становится владельцем вложения.
+        addOwners(ndb, att.id, 'thought', [second.id], USER);
+        assertIntegrity(ndb);
+
+        // Первого владельца удаляют: его владение снято, а мысль перестаёт
+        // быть живой. Owner-колонки строки вложения при этом продолжают
+        // указывать на Первого (addOwners/removeOwner колонки не трогают) —
+        // до 0.12.1 это давало ЛОЖНОЕ «attachments owner missing», хотя живой
+        // Второй владелец удерживал вложение.
+        removeOwner(ndb, att.id, 'thought', first.id);
+        ndb.prepare('DELETE FROM thoughts WHERE id = ?').run(first.id);
+
+        // Источник истины — attachment_owners: живой Второй => нарушения нет.
+        assertIntegrity(ndb);
       } finally {
         ndb.close();
       }
