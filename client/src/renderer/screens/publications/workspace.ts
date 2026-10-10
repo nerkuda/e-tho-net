@@ -681,10 +681,7 @@ export function mountPublicationWorkspace(
     // прилетевшее событие прокрутки не пересчитало current (замечание 1).
     lockScrollSync();
     docHost.scrollTop = Math.max(0, topWithinDoc(node) - 8);
-    currentAnchor = anchor;
-    for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
-      row.classList.toggle('pub-toc-current', row.dataset['anchor'] === anchor);
-    }
+    applyCurrentAnchor(anchor);
     makeDocCurrent(anchor, focusDoc);
   }
 
@@ -761,6 +758,9 @@ export function mountPublicationWorkspace(
   docHost.addEventListener('scroll', onDocScroll);
   docHost.addEventListener('keydown', onDocKeydown, { capture: true });
   document.addEventListener('keydown', onKeydown);
+  // Выделение текста в ленте подсвечивает его раздел в оглавлении (ошибка
+  // d79f7254): обратная связь к прокрутке/клику по оглавлению.
+  document.addEventListener('selectionchange', onSelectionChange);
 
   // --- Загрузка ------------------------------------------------------------
 
@@ -2083,7 +2083,7 @@ export function mountPublicationWorkspace(
   function updateCurrentSection(): void {
     const headings = docHost.querySelectorAll<HTMLElement>('.pub-doc-section');
     if (headings.length === 0) {
-      currentAnchor = null;
+      applyCurrentAnchor(null);
       return;
     }
     const top = docHost.scrollTop + 24;
@@ -2099,11 +2099,50 @@ export function mountPublicationWorkspace(
     if (docHost.scrollTop + docHost.clientHeight >= docHost.scrollHeight - 2) {
       current = headings[headings.length - 1]?.id ?? current;
     }
-    if (current === currentAnchor) return;
-    currentAnchor = current;
+    applyCurrentAnchor(current);
+  }
+
+  /** Единая запись текущего раздела и подсветки его строки в оглавлении. */
+  function applyCurrentAnchor(next: string | null): void {
+    if (next === currentAnchor) return;
+    currentAnchor = next;
     for (const row of tocList.querySelectorAll<HTMLElement>('.pub-toc-line')) {
-      row.classList.toggle('pub-toc-current', row.dataset['anchor'] === current);
+      row.classList.toggle('pub-toc-current', row.dataset['anchor'] === next);
     }
+  }
+
+  /**
+   * Раздел документа, которому принадлежит узел (последний заголовок
+   * `.pub-doc-section` выше него). Обратное направление к {@link
+   * updateCurrentSection}: подсветку ведёт НЕ прокрутка, а место выделения
+   * текста в ленте (замечание приёмки 0.12.1, ошибка d79f7254).
+   */
+  function sectionAnchorForNode(node: Node | null): string | null {
+    if (node === null) return null;
+    const el = node.nodeType === 1 ? (node as HTMLElement) : node.parentElement;
+    if (el === null || !docHost.contains(el)) return null;
+    const headings = docHost.querySelectorAll<HTMLElement>('.pub-doc-section');
+    if (headings.length === 0) return null;
+    const top = topWithinDoc(el) + 1;
+    let current: string | null = null;
+    for (const heading of headings) {
+      if (topWithinDoc(heading) <= top) current = heading.id;
+      else break;
+    }
+    return current ?? headings[0]?.id ?? null;
+  }
+
+  /**
+   * Выделение текста в ленте подсвечивает его раздел в оглавлении (обратное
+   * направление к переходу по клику, ошибка d79f7254): берём узел начала
+   * выделения, находим охватывающий раздел и назначаем его текущим. Выделение
+   * вне документа (поля, редактор) игнорируется.
+   */
+  function onSelectionChange(): void {
+    const selection = window.getSelection?.() ?? null;
+    if (selection === null || selection.rangeCount === 0 || selection.isCollapsed) return;
+    const anchor = sectionAnchorForNode(selection.anchorNode);
+    if (anchor !== null) applyCurrentAnchor(anchor);
   }
 
   // --- Кандидаты -----------------------------------------------------------
@@ -2529,6 +2568,7 @@ export function mountPublicationWorkspace(
     docHost.removeEventListener('scroll', onDocScroll);
     docHost.removeEventListener('keydown', onDocKeydown, { capture: true });
     document.removeEventListener('keydown', onKeydown);
+    document.removeEventListener('selectionchange', onSelectionChange);
     docNav.destroy();
     docDrag.destroy();
     tocNav.destroy();
