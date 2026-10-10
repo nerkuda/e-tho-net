@@ -38,6 +38,8 @@ var/
 
 # Agent workspace (ZCode). В .zcode лежат личные данные (API-ключи в
 # config.json, планы сессий) — коммитится только .zcode/skills/ (скиллы).
+# Профили субагентов (.zcode/agents) НЕ версионируются: не должны пушиться
+# на публичный github; разделить файлы по remote git не может (грабли).
 .zcode/*
 !.zcode/skills/
 !.zcode/skills/**
