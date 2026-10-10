@@ -40,6 +40,9 @@ const SOURCE_CONSUMERS = new Set([
   ATTACHMENT_PICKER,
   'editor/icon-dialog.ts',
   'editor/publication-card.ts',
+  // Диалог вставки картинки в текст комментария (0.12.1, задача 87c455db,
+  // ADR d85e17b6) — штатный АДАПТЕР того же каркаса, а не второй диалог.
+  'editor/insert-image-dialog.ts',
 ]);
 
 function source(rel: string): string {

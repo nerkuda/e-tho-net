@@ -219,6 +219,17 @@ test('etnimg: разрешён и для ссылок, и для картино�
   assert.ok(!renderMarkdown('[x](data:text/plain,hi)').includes('href='));
 });
 
+test('картинка-вложение по id etnimg://attachment/<id> рендерится <img> (5943e3e8)', () => {
+  // Требование 5943e3e8: картинка-вложение в тексте адресуется формой по id.
+  const id = '22222222-2222-4222-8222-222222222222';
+  const html = renderMarkdown(`![подпись](etnimg://attachment/${id})`);
+  assert.ok(html.includes(`<img src="etnimg://attachment/${id}"`), html);
+  assert.ok(html.includes('alt="подпись"'), html);
+  // Форма по id допустима и с размером `![подпись|600px](…)` (требование 5943e3e8).
+  const sized = renderMarkdown(`![подпись|600px](etnimg://attachment/${id})`);
+  assert.ok(sized.includes(`<img src="etnimg://attachment/${id}"`), sized);
+});
+
 test('сброшенная ссылка не оставляет паразитный </a> (карточка ETN 6cd0290f)', () => {
   // data: проходит общий validateLink (набор картинок), но сбрасывается
   // link-плагином — именно такие ссылки и дают паразитный </a>.

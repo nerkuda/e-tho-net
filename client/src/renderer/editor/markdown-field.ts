@@ -16,7 +16,7 @@
  */
 
 import { EditorView } from '@codemirror/view';
-import type { MentionsScanThought } from '@etn/shared';
+import type { Attachment, MentionsScanThought } from '@etn/shared';
 import {
   parseTransclusions,
   renderMarkdown,
@@ -51,6 +51,7 @@ import {
 } from './comment-commands.js';
 import { commentFieldKeymapExtension } from './comment-format.js';
 import { commentThoughtInsertMenuItems } from './comment-thought-insert.js';
+import { showInsertImageDialog, type InsertResourceResult } from './insert-image-dialog.js';
 import {
   collapseScopeExtension,
   commentCollapseExtension,
@@ -1508,6 +1509,25 @@ export function createMarkdownField(opts: {
       },
       true,
     );
+    // Drag&Drop файла-картинки в поле (задача 87c455db): тот же путь, что и
+    // вставка из буфера — файл уходит вложением на владельца, в каретку
+    // вставляется ссылка по id. Прочие переносимые данные (текст, мысли)
+    // не перехватываем — обработчики идут только по файлам-картинкам.
+    editor.dom.addEventListener('dragover', (event) => {
+      if (opts.attachmentsOwner === undefined) return;
+      if (imageFilesFrom(event.dataTransfer?.files ?? []).length === 0) return;
+      event.preventDefault();
+      if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy';
+    });
+    editor.dom.addEventListener('drop', (event) => {
+      if (editor === null) return;
+      const owner = opts.attachmentsOwner;
+      if (owner === undefined) return;
+      const files = imageFilesFrom(event.dataTransfer?.files ?? []);
+      if (files.length === 0) return;
+      event.preventDefault();
+      void insertClipboardFiles(editor, owner, files);
+    });
     // Контекстное меню редактора: команды форматирования поля (ТП1 «Команды
     // редактирования комментария», задача 3d6f98cb) плюс «Вставить текст
     // шаблона из типа мысли» (08-ui-spec.md §6.4) и «Вставить ссылку на
@@ -1556,6 +1576,22 @@ export function createMarkdownField(opts: {
       // ТЗ5 «Дневник без псевдослота»: рядом с «Вставить ссылку на публикацию…»
       // — «Вставить ссылку на мысль» и «Вставить трансклюзию мысли». Без
       // контекста комментария (нечего дать в родители новой мысли) недоступны.
+      // «Вставить картинку…» (задача 87c455db) — диалог-адаптер resource-picker;
+      // доступен полям с владельцем вложений (комментарий постоянный/дневниковый).
+      const insertImageOwner = opts.attachmentsOwner;
+      if (insertImageOwner !== undefined) {
+        extras.push(
+          menuAction(t('comment.cmd.insertImage'), () => {
+            if (editor === null) return;
+            showInsertImageDialog({
+              onPick: (result) => {
+                if (editor === null) return;
+                void insertResourceAt(editor, insertImageOwner, result);
+              },
+            });
+          }),
+        );
+      }
       extras.push(...commentThoughtInsertMenuItems(commandHost));
       items.push(MENU_SEPARATOR, ...extras);
       event.preventDefault();
@@ -1848,47 +1884,157 @@ export function insertMentionLinkIntoField(
 }
 
 /**
- * Uploads pasted files to the server (which stores them under the network's
- * `attachments/` directory next to `data.db`) and inserts markdown references
- * at the caret: `![alt](…)` for images, `[name](…)` links for other files.
+ * Markdown-ссылка на картинку-вложение по id (требование `5943e3e8`): форма
+ * `![подпись](etnimg://attachment/<id>)` устойчива к переездам файла и видна в
+ * любом слое — main-процесс резолвит id в `file_path` (ADR `7682d51e`). Форма
+ * по пути для вставленных в текст картинок не используется.
+ */
+export function attachmentImageRef(attachmentId: string, title: string): string {
+  return `![${sanitizeAlt(title)}](etnimg://attachment/${encodeURIComponent(attachmentId)})`;
+}
+
+/** Markdown-ссылка на картинку по адресу (вкладка «URL» диалога вставки). */
+function urlImageRef(url: string, title = ''): string {
+  return `![${sanitizeAlt(title)}](${url})`;
+}
+
+/**
+ * Картинки из перетаскиваемого набора (drag&drop). Фильтр по MIME: в поле
+ * комментария бросают файлы-картинки, прочие файлы путь не имеет.
+ */
+export function imageFilesFrom(files: ArrayLike<File>): File[] {
+  const picked: File[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (file !== undefined && file.type.startsWith('image/')) picked.push(file);
+  }
+  return picked;
+}
+
+/**
+ * Загружает вложение на сервер (файл ложится в каталог `attachments/` сети),
+ * возвращает созданную запись или `null` (сбой — notice). Владелец задаётся
+ * вызовом (мульти-владение, тех.проект `f9b8917c`); после загрузки гасятся
+ * кэши счётчиков и списка вложений владельца.
+ */
+async function uploadAttachment(
+  owner: AttachmentsOwner,
+  input: { title: string; mime_type: string; data_base64: string },
+): Promise<Attachment | null> {
+  const networkId = requireNetworkId();
+  let attachment: Attachment;
+  try {
+    attachment = await etn.attachments.uploadFile(networkId, owner.ownerType, owner.ownerId, input);
+  } catch {
+    notice('Не удалось добавить вложение.', 'error');
+    return null;
+  }
+  invalidateQueries(queryKeys.indicators(owner.ownerId));
+  // Tell the editor chrome the owner's attachment set changed: the
+  // «Вложения» tab (if built) reloads its list, the tab badge re-counts —
+  // without this a paste from the comment field left a stale empty list
+  // until the editor target changed. Кэш-путь слоя (G4): ключ списка вложений
+  // владельца гасится, подписчики (вкладка/бейдж) перечитывают список.
+  invalidateQueries(queryKeys.attachments(owner.ownerType, owner.ownerId));
+  return attachment;
+}
+
+/**
+ * Гарантирует владение вложением объектом-владельцем комментария (требование
+ * 87c455db, ADR d85e17b6): выбор чужой картинки из диалога добавляет объект
+ * владельцем (`POST /attachments/{id}/owners`, идемпотентно). `true` — владение
+ * подтверждено (или владельца у поля нет), `false` — сбой запроса.
+ */
+async function ensureAttachmentOwner(owner: AttachmentsOwner, attachmentId: string): Promise<boolean> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return false;
+  try {
+    await etn.attachments.addOwners(networkId, attachmentId, {
+      owner_type: owner.ownerType,
+      owner_ids: [owner.ownerId],
+    });
+    return true;
+  } catch (err) {
+    notice(`${t('attachments.owner.add.failed')}: ${errText(err)}`, 'error');
+    return false;
+  }
+}
+
+/**
+ * Uploads files (system paste / drag&drop) to the server — it stores them under
+ * the network's `attachments/` directory next to `data.db` — and inserts
+ * markdown references at the caret: a by-id image reference
+ * `![alt](etnimg://attachment/<id>)` for images (требование 5943e3e8), a
+ * by-path `[name](…)` link for other files.
  */
 async function insertClipboardFiles(
   editor: MdEditor,
   owner: AttachmentsOwner,
   files: File[],
 ): Promise<void> {
-  const networkId = requireNetworkId();
   for (const file of files) {
     const dataUrl = await readFileAsDataUrl(file);
     const comma = dataUrl.indexOf(',');
     const dataBase64 = comma === -1 ? '' : dataUrl.slice(comma + 1);
     const title = file.name.trim() !== '' ? file.name.trim() : 'file';
     const mime = file.type || guessMimeFromName(file.name) || 'application/octet-stream';
-    let attachment;
-    try {
-      attachment = await etn.attachments.uploadFile(networkId, owner.ownerType, owner.ownerId, {
-        title,
+    const attachment = await uploadAttachment(owner, {
+      title,
+      mime_type: mime,
+      data_base64: dataBase64,
+    });
+    if (attachment === null) continue;
+    if (mime.startsWith('image/')) {
+      editor.insertAtCaret(attachmentImageRef(attachment.id, title));
+      continue;
+    }
+    const filePath = attachment.file_path;
+    if (filePath === null || filePath === '') continue;
+    editor.insertAtCaret(`[${sanitizeAlt(title)}](${etnimgUrl(filePath)})`);
+  }
+}
+
+/**
+ * Вставляет выбор диалога «Вставить картинку» в позицию курсора
+ * ({@link InsertResourceResult}): эмодзи — глифом, URL — картинкой по адресу,
+ * существующее вложение — ссылкой по id (владелец гарантируется), новый файл —
+ * загрузкой на владельца и ссылкой по id.
+ */
+async function insertResourceAt(
+  editor: MdEditor,
+  owner: AttachmentsOwner | undefined,
+  result: InsertResourceResult,
+): Promise<void> {
+  switch (result.kind) {
+    case 'emoji':
+      editor.insertAtCaret(result.glyph);
+      return;
+    case 'url':
+      editor.insertAtCaret(urlImageRef(result.url));
+      return;
+    case 'attachment': {
+      const attachment = result.attachment;
+      if (owner !== undefined && !(await ensureAttachmentOwner(owner, attachment.id))) return;
+      editor.insertAtCaret(attachmentImageRef(attachment.id, attachment.title ?? ''));
+      return;
+    }
+    case 'file': {
+      if (owner === undefined) {
+        notice('Не удалось вставить картинку: у поля нет владельца.', 'error');
+        return;
+      }
+      const source = result.source;
+      const comma = source.dataUrl.indexOf(',');
+      const dataBase64 = comma === -1 ? '' : source.dataUrl.slice(comma + 1);
+      const mime = source.mime || guessMimeFromName(source.name) || 'application/octet-stream';
+      const attachment = await uploadAttachment(owner, {
+        title: source.name.trim() !== '' ? source.name.trim() : 'file',
         mime_type: mime,
         data_base64: dataBase64,
       });
-    } catch {
-      notice('Не удалось добавить вложение.', 'error');
-      continue;
+      if (attachment === null) return;
+      editor.insertAtCaret(attachmentImageRef(attachment.id, attachment.title ?? ''));
     }
-    invalidateQueries(queryKeys.indicators(owner.ownerId));
-    // Tell the editor chrome the owner's attachment set changed: the
-    // «Вложения» tab (if built) reloads its list, the tab badge re-counts —
-    // without this a paste from the comment field left a stale empty list
-    // until the editor target changed. Кэш-путь слоя (G4): ключ списка вложений
-    // владельца гасится, подписчики (вкладка/бейдж) перечитывают список.
-    invalidateQueries(queryKeys.attachments(owner.ownerType, owner.ownerId));
-    const filePath = attachment.file_path;
-    if (filePath === null || filePath === '') continue;
-    const url = etnimgUrl(filePath);
-    const ref = mime.startsWith('image/')
-      ? `![${sanitizeAlt(title)}](${url})`
-      : `[${sanitizeAlt(title)}](${url})`;
-    editor.insertAtCaret(ref);
   }
 }
 
@@ -1976,5 +2122,11 @@ function handleClipboardThoughtsPaste(event: ClipboardEvent, editor: MdEditor): 
   return true;
 }
 
-/** Test seam: the comment-paste decision of bug 290a50c0. */
-export const mdFieldInternals = { handleClipboardThoughtsPaste };
+/** Test seam: the comment-paste decision of bug 290a50c0 and image-insert paths. */
+export const mdFieldInternals = {
+  handleClipboardThoughtsPaste,
+  insertClipboardFiles,
+  insertResourceAt,
+  imageFilesFrom,
+  attachmentImageRef,
+};
