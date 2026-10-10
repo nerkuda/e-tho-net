@@ -110,6 +110,35 @@ function hasHitAreaExpansion(css: string, selector: string): boolean {
   return re.test(code);
 }
 
+/**
+ * Швы, чей псевдоэлемент хит-зоны обязан расширяться АСИММЕТРИЧНО (ошибка
+ * eec19dfe): у соседней панели вдоль шва лежит полоса прокрутки, и симметричная
+ * зона перекрыла бы её ползунок. Классы совпадают с `THIN_SEAMS`.
+ */
+const SEAM_SCROLLBAR_CLASSES = ['.editor-resizer', '.selection-resizer'];
+
+/**
+ * Селекторы блоков `…::after`, у которых хит-зона снова задана симметричным
+ * центрированием (`max(100%, var(--hit-area))` + `translateX/Y(-50%)`) — так
+ * псевдоэлемент выходит за обе половины шва и снова перекрывает полосу
+ * прокрутки соседней панели (ошибка eec19dfe). Пустой массив — норма.
+ */
+function symmetricSeamAfter(css: string): string[] {
+  const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const re = /([^{}]*::(?:after|before)\s*)\{([^{}]*)\}/g;
+  const bad: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    const selector = (m[1] ?? '').trim();
+    const body = m[2] ?? '';
+    if (!SEAM_SCROLLBAR_CLASSES.some((cls) => selector.includes(cls))) continue;
+    const symmetric =
+      /max\(100%,\s*var\(--hit-area\)\)/.test(body) && /translate[XY]\(-50%\)/.test(body);
+    if (symmetric) bad.push(selector);
+  }
+  return bad;
+}
+
 describe('guard: тач-зоны lib/ui (e45ca252, требование 5677bc3d)', () => {
   it('токен тач-таргета объявлен и не меньше токена геометрии строки', () => {
     const css = read('styles.css');
@@ -198,6 +227,19 @@ describe('guard: тач-зоны lib/ui (e45ca252, требование 5677bc3d
     }
   });
 
+  it('швы у полосы прокрутки расширяются асимметрично (eec19dfe)', () => {
+    const bad = symmetricSeamAfter(read('styles.css'));
+    assert.deepEqual(
+      bad,
+      [],
+      `Тач-зона шва снова симметрична — перекроет полосу прокрутки соседней панели (10px, ` +
+        `ошибка eec19dfe):\n  • ${bad.join('\n  • ')}\n` +
+        'Расти в сторону БЕЗ полосы: вертикальные швы — `left: 3px; inline-size: ' +
+        'calc(var(--hit-area) - 3px)`, горизонтальные — `top: 3px; block-size: ' +
+        'calc(var(--hit-area) - 3px)` (итого 3 + 15 = 18px).',
+    );
+  });
+
   it('проверка краснеет на контроле без расширения', () => {
     assert.equal(
       hasHitAreaExpansion('.ui-x { padding: 0; }', '.ui-x'),
@@ -211,6 +253,20 @@ describe('guard: тач-зоны lib/ui (e45ca252, требование 5677bc3d
       ),
       true,
       'корректное расширение обязано распознаваться',
+    );
+    assert.equal(
+      symmetricSeamAfter(
+        '.editor-resizer::after { inline-size: max(100%, var(--hit-area)); transform: translateX(-50%); }',
+      ).length,
+      1,
+      'симметричное центрирование шва обязано распознаваться как нарушение (eec19dfe)',
+    );
+    assert.equal(
+      symmetricSeamAfter(
+        ".editor-resizer::after { left: 3px; inline-size: calc(var(--hit-area) - 3px); }",
+      ).length,
+      0,
+      'асимметричное расширение шва не должно считаться нарушением',
     );
   });
 });

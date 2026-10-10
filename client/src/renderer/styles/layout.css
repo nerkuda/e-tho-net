@@ -639,21 +639,29 @@
   cursor: row-resize;
 }
 
-/* Тач-зона шва (требование 5677bc3d, ошибка 4417a2bb). Видимый шов намеренно
-   тонкий (6px) ради точности перетаскивания, поэтому зона нажатия расширяется
-   НЕВИДИМЫМ псевдоэлементом поперёк шва до `--hit-area`; вдоль шва он занимает
-   всю длину. Псевдоэлемент принадлежит самому разделителю и потому принимает
-   клик. Расширение симметрично (±6px на 18px) — соседний контент перехватывается
-   лишь в узкой полосе у самого шва. */
+/* Тач-зона шва (требование 5677bc3d, ошибки 4417a2bb и eec19dfe). Видимый шов
+   намеренно тонкий (6px) ради точности перетаскивания, поэтому зона нажатия
+   расширяется НЕВИДИМЫМ псевдоэлементом поперёк шва до `--hit-area`; вдоль шва
+   он занимает всю длину. Псевдоэлемент принадлежит самому разделителю и потому
+   принимает клик.
+
+   Расширение АСИММЕТРИЧНОЕ. Скроллящийся сосед прижимает свою полосу прокрутки
+   (10px, `styles/scrollbars.css`) к своему краю, а этот край совпадает с
+   серединой шва: полоса всегда лежит на левой/верхней половине шва. Прежняя
+   симметричная зона (±9px) накрывала 9 из 10px полосы, и разделитель
+   (`z-index: 5`) перехватывал `pointerdown` — ползунок было не ухватить
+   (ошибка eec19dfe). Поэтому со стороны полосы зона не выходит за видимую
+   половину шва (её покрывает сам разделитель — 3px), а недостающие до 18px
+   пиксели (15px) добираются в сторону БЕЗ полосы: вертикальные швы растут
+   вправо, горизонтальные — вниз. Итого 3 + 15 = 18px (≥ `--hit-area`). */
 .workspace-body[data-editor-pos='right'] > .editor-resizer::after,
 .workspace-body[data-editor-pos='left'] > .editor-resizer::after {
   content: '';
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 50%;
-  inline-size: max(100%, var(--hit-area));
-  transform: translateX(-50%);
+  left: 3px;
+  inline-size: calc(var(--hit-area) - 3px);
 }
 .workspace-body[data-editor-pos='top'] > .editor-resizer::after,
 .workspace-body[data-editor-pos='bottom'] > .editor-resizer::after {
@@ -661,9 +669,8 @@
   position: absolute;
   left: 0;
   right: 0;
-  top: 50%;
-  block-size: max(100%, var(--hit-area));
-  transform: translateY(-50%);
+  top: 3px;
+  block-size: calc(var(--hit-area) - 3px);
 }
 
 /* --- selection resizer: draggable splitter between the selection panel and
@@ -697,16 +704,17 @@
   display: none;
 }
 
-/* Тач-зона шва (требование 5677bc3d, ошибка 4417a2bb): шов тонкий (6px),
-   невидимый псевдоэлемент расширяет зону нажатия до `--hit-area` поперёк. */
+/* Тач-зона шва (требование 5677bc3d, ошибки 4417a2bb и eec19dfe): шов тонкий
+   (6px), невидимый псевдоэлемент расширяет зону нажатия до `--hit-area`.
+   Асимметрично, как у `.editor-resizer`: полоса прокрутки панели выделения
+   прижата к шву слева, поэтому зона растёт только вправо (3 + 15 = 18px). */
 .workspace-body > .selection-resizer::after {
   content: '';
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 50%;
-  inline-size: max(100%, var(--hit-area));
-  transform: translateX(-50%);
+  left: 3px;
+  inline-size: calc(var(--hit-area) - 3px);
 }
 
 .statusbar {
