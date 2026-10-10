@@ -138,6 +138,15 @@ describe(
              VALUES ('att-parent', ?, 'thought', ?, 'url', 'https://example.com/x', 0, ?, 'u')`,
           )
           .run(BASE_LAYER_ID, parent.id, now);
+        // Источник истины о владении с 0.12.1 — строки `attachment_owners`
+        // (ADR 9f90b010); owner-колонки строки вложения — лишь зеркало.
+        ndb
+          .prepare(
+            `INSERT INTO attachment_owners (id, layer_id, deleted, base_version, attachment_id,
+               owner_type, owner_id, position, created_at, created_by)
+             VALUES ('ao-parent', ?, 0, 0, 'att-parent', 'thought', ?, 0, ?, 'u')`,
+          )
+          .run(BASE_LAYER_ID, parent.id, now);
 
         // Delete the parent in layer A.
         ndb.useLayer(LAYER_A);

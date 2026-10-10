@@ -31,6 +31,15 @@
  *     Children are NOT deleted — the cascade hits link rows, not child
  *     thoughts. Server-stored attachment files are never touched here (§5.3).
  *
+ * **Attachments are multi-owned since 0.12.1** (ADR 9f90b010): ownership lives
+ * in the branchable `attachment_owners` table (one row per (attachment, object)),
+ * `attachments.owner_type/owner_id` are a merely approximate mirror that is
+ * never trusted here. Deleting an owner therefore removes only ITS ownership
+ * rows; the attachment row and its server file go away solely when the last
+ * live ownership disappears *anywhere* (working layers only — service/reserve
+ * layers do not count, `hasLiveOwnershipAnywhere`, error 1d0620a8). Attachments
+ * owned by other objects — and their files — are left untouched.
+ *
  * Server-stored attachment files (`networks/<nid>/attachments/`) are removed
  * from disk as well; client-local file paths are never touched.
  */
@@ -41,10 +50,18 @@ import path from 'node:path';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { materializeTombstone } from '../db/layer-write.js';
-import { removeStoredFile, storedFileInUse } from './attachment-service.js';
+import { hasLiveOwnershipAnywhere, removeStoredFile, storedFileInUse } from './attachment-service.js';
 
 /** Polymorphic owner of comments/attachments/property values. */
 type OwnerType = 'thought' | 'link';
+
+/**
+ * Owner type whose attachment ownerships are purged by
+ * {@link purgeOwnerAttachments}. Wider than {@link OwnerType}: publications own
+ * attachments (covers) although they do not keep comments/property values in
+ * the very same tables.
+ */
+export type AttachmentPurgeOwnerType = 'thought' | 'link' | 'publication';
 
 /**
  * SQLite's bind-parameter cap is far above this; chunking keeps the `IN (…)`
@@ -152,14 +169,28 @@ function tombstoneChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]
   ).map((r) => r.id);
   for (const targetId of secondaryIds) materializeTombstone(ndb, 'comment_targets', targetId);
 
-  // Вложения: только привязки. Файл на диске один на все слои — его судьбу
-  // решает счётчик живых ссылок по всем слоям (§5.3), а не удаление в слое.
-  const attachmentIds = (
-    ndb
-      .prepare(`SELECT id FROM attachments_v WHERE owner_type = ? AND owner_id IN (${owners})`)
-      .all(ownerType, ...ownerIds) as { id: string }[]
-  ).map((r) => r.id);
-  for (const attachmentId of attachmentIds) materializeTombstone(ndb, 'attachments', attachmentId);
+  // Вложения: надгробим только ВЛАДЕНИЯ владельца в этом слое — вложение может
+  // принадлежать и другим объектам (ADR 9f90b010). Видимую строку вложения
+  // прячем, лишь когда живых владений не осталось ни в одном рабочем слое.
+  // Физический файл один на все слои, из слоя не трогается (§5.3).
+  const ownedAttachments = ndb
+    .prepare(
+      `SELECT id, attachment_id FROM attachment_owners_v WHERE owner_type = ? AND owner_id IN (${owners})`,
+    )
+    .all(ownerType, ...ownerIds) as { id: string; attachment_id: string }[];
+  const affectedAttachmentIds = new Set<string>();
+  for (const ownership of ownedAttachments) {
+    materializeTombstone(ndb, 'attachment_owners', ownership.id);
+    affectedAttachmentIds.add(ownership.attachment_id);
+  }
+  for (const attachmentId of affectedAttachmentIds) {
+    // Вложение теряет видимость в этом слое, когда в его цепочке не осталось ни
+    // одного живого владения (файл общий для всех слоёв — из слоя не трогается).
+    const stillVisible = ndb
+      .prepare('SELECT 1 FROM attachment_owners_v WHERE attachment_id = ? LIMIT 1')
+      .get(attachmentId);
+    if (stillVisible === undefined) materializeTombstone(ndb, 'attachments', attachmentId);
+  }
 
   // Значения свойств владельца (и его связей — вызывающий код передаёт их id
   // отдельным вызовом с ownerType='link').
@@ -224,39 +255,110 @@ function purgeChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): v
     .prepare(`DELETE FROM comment_targets WHERE owner_type = ? AND owner_id IN (${owners})`)
     .run(ownerType, ...ownerIds);
 
-  // layers:physical-read — судьба ФАЙЛА вложения решается по строкам всех слоёв (13-layers.md §5.3).
-  const attachmentRows = ndb
-    .prepare(
-      `SELECT id, kind, file_path FROM attachments WHERE owner_type = ? AND owner_id IN (${owners})`, // layers:physical-read
-    )
-    .all(ownerType, ...ownerIds) as { id: string; kind: AttachmentKind; file_path: string | null }[];
-  if (attachmentRows.length > 0) {
-    ndb
-      .prepare(`DELETE FROM attachments WHERE owner_type = ? AND owner_id IN (${owners})`)
-      .run(ownerType, ...ownerIds);
-    // A thought icon may reference its attachment (L16) — never leave a
-    // dangling icon_attachment_id behind.
-    const attachmentIds = attachmentRows.map((row) => row.id);
-    ndb
-      .prepare(
-        `UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id IN (${attachmentIds.map(() => '?').join(', ')})`,
-      )
-      .run(...attachmentIds);
-    for (const row of attachmentRows) {
-      // A live attachment may still resolve to the same stored file (a second
-      // reference is possible via `PATCH …/file_path`) — keep the file then.
-      if (
-        row.kind === 'file' &&
-        row.file_path !== null &&
-        storedFileInUse(ndb, path.resolve(row.file_path))
-      ) {
-        continue;
-      }
-      removeStoredFile(ndb, row.kind, row.file_path);
-    }
-  }
+  // Вложения: снимаем только ВЛАДЕНИЯ владельца (строки `attachment_owners`);
+  // вложение и файл уходят по исчезновению последнего живого владельца (ADR
+  // 9f90b010). Чужие владения и их файлы не трогаются.
+  purgeOwnerAttachmentsChunk(ndb, ownerType, ownerIds);
 
   ndb
     .prepare(`DELETE FROM property_values WHERE owner_type = ? AND owner_id IN (${owners})`)
     .run(ownerType, ...ownerIds);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-owned attachments (ADR 9f90b010): ownership-scoped purge
+// ---------------------------------------------------------------------------
+
+/**
+ * Снять владения вложениями удаляемых объектов и убрать вложения, оставшиеся
+ * без живых владельцев. Единственный источник истины о владении — строки
+ * `attachment_owners`; owner-колонки `attachments` не читаются (постоянно
+ * неактуальное зеркало, см. предупреждение в attachment-service).
+ *
+ * Используется физическим каскадом мыслей/связей и физическим удалением
+ * публикации (в основе, `is_base_context`). No-op для пустого списка.
+ */
+export function purgeOwnerAttachments(
+  ndb: NetworkDb,
+  ownerType: AttachmentPurgeOwnerType,
+  ownerIds: string[],
+): void {
+  for (let i = 0; i < ownerIds.length; i += OWNER_CHUNK_SIZE) {
+    purgeOwnerAttachmentsChunk(ndb, ownerType, ownerIds.slice(i, i + OWNER_CHUNK_SIZE));
+  }
+}
+
+/** Single-chunk ownership purge; `ownerIds` non-empty and ≤ OWNER_CHUNK_SIZE. */
+function purgeOwnerAttachmentsChunk(
+  ndb: NetworkDb,
+  ownerType: AttachmentPurgeOwnerType,
+  ownerIds: string[],
+): void {
+  if (ownerIds.length === 0) return;
+  const owners = ownerIds.map(() => '?').join(', ');
+
+  // Вложения, которыми владел удаляемый объект, — по СЫРОЙ таблице, во ВСЕХ
+  // слоях: физический каскад выметает строки каждого слоя.
+  const attachmentIds = (
+    ndb
+      .prepare(
+        `SELECT DISTINCT attachment_id FROM attachment_owners -- layers:physical-read
+          WHERE owner_type = ? AND owner_id IN (${owners})`,
+      )
+      .all(ownerType, ...ownerIds) as { attachment_id: string }[]
+  ).map((r) => r.attachment_id);
+
+  // Снимаем ТОЛЬКО владения удаляемого объекта.
+  ndb
+    .prepare(`DELETE FROM attachment_owners WHERE owner_type = ? AND owner_id IN (${owners})`)
+    .run(ownerType, ...ownerIds);
+
+  if (attachmentIds.length === 0) return;
+
+  // Вложение и файл уходят, только если не осталось ни одного живого владения
+  // во всех рабочих слоях (служебные слои не считаются).
+  const orphanIds = attachmentIds.filter((id) => !hasLiveOwnershipAnywhere(ndb, id));
+  if (orphanIds.length === 0) return;
+  removeOrphanAttachments(ndb, orphanIds);
+}
+
+/**
+ * Физически удалить осиротевшие вложения (живых владений нет) вместе с их
+ * серверными файлами и почистить висячие ссылки-иконки/обложки. Строки всех
+ * слоёв: вложение — общий ресурс сети.
+ */
+function removeOrphanAttachments(ndb: NetworkDb, attachmentIds: string[]): void {
+  const ids = attachmentIds.map(() => '?').join(', ');
+  const rows = ndb
+    .prepare(
+      `SELECT DISTINCT id, kind, file_path FROM attachments -- layers:physical-read
+        WHERE id IN (${ids})`,
+    )
+    .all(...attachmentIds) as { id: string; kind: AttachmentKind; file_path: string | null }[];
+
+  // Строки владений, оставшиеся в служебных слоях, тоже убираем — иначе они
+  // ссылались бы на удалённое вложение.
+  ndb.prepare(`DELETE FROM attachment_owners WHERE attachment_id IN (${ids})`).run(...attachmentIds);
+  ndb.prepare(`DELETE FROM attachments WHERE id IN (${ids})`).run(...attachmentIds);
+
+  // Висячих ссылок-иконок (L16) и обложек публикаций не оставляем.
+  ndb
+    .prepare(`UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id IN (${ids})`)
+    .run(...attachmentIds);
+  ndb
+    .prepare(`UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id IN (${ids})`)
+    .run(...attachmentIds);
+
+  for (const row of rows) {
+    // Тот же серверный файл может ещё использоваться другой живой строкой
+    // (вторая ссылка через `PATCH …/file_path`) — тогда файл сохраняем.
+    if (
+      row.kind === 'file' &&
+      row.file_path !== null &&
+      storedFileInUse(ndb, path.resolve(row.file_path))
+    ) {
+      continue;
+    }
+    removeStoredFile(ndb, row.kind, row.file_path);
+  }
 }
