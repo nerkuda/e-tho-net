@@ -44,8 +44,8 @@ import {
 import {
   addOwners,
   copyAttachment,
-  createAttachment,
   createAttachmentFileResult,
+  createAttachmentResult,
   enrichUrlAttachment,
   getAttachment,
   getAttachmentContent,
@@ -127,9 +127,19 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
           const fx = restWriteFx(deps, req, input.network_id);
           // Создание — через обёртку (без событий: снимок ещё не окончательный).
-          let attachment = runWrite(ndb, fx, () => ({
-            result: createAttachment(ndb, ownerType, input.owner_id, parsed, req.auth!.user.id),
+          // `createAttachmentResult` (не `createAttachment`) — чтобы узнать
+          // дедуп-переиспользование по хэшу: тогда эмитим владение, а не created
+          // (замечание проверки f77382ba).
+          const created = runWrite(ndb, fx, () => ({
+            result: createAttachmentResult(
+              ndb,
+              ownerType,
+              input.owner_id,
+              parsed,
+              req.auth!.user.id,
+            ),
           }));
+          let attachment = created.attachment;
           // URL attachments are enriched (page title + favicon) before the
           // response/event so clients render a filled row at once (L1).
           // Обогащение — сетевой вызов, поэтому вне транзакции.
@@ -139,7 +149,13 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           // Событие и журнал — из итогового снимка, после коммита.
           runWrite(ndb, fx, () => ({
             result: undefined,
-            events: [{ type: 'attachment.created', data: { attachment } }],
+            events: created.reused
+              ? created.ownership_added
+                ? ownerAddedEvents(attachment.id, [
+                    { owner_type: ownerType, owner_id: input.owner_id },
+                  ])
+                : []
+              : [{ type: 'attachment.created', data: { attachment } }],
             activity: [{ kind: 'attachment', action: 'created', attachment }],
           }));
           sendCreated(reply, attachment, { request_id: req.id });

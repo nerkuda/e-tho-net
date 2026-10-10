@@ -751,7 +751,7 @@ export function createAttachmentResult(
   ownerId: string,
   input: AttachmentInput,
   actorUserId: string,
-): { attachment: Attachment; reused: boolean } {
+): { attachment: Attachment; reused: boolean; ownership_added: boolean } {
   const ot = validateOwnerType(ownerType);
   const kind = validateKind(input.kind);
   const url = nullable(input.url ?? null);
@@ -784,7 +784,13 @@ export function createAttachmentResult(
         // её в текущий слой, затем пишем владение.
         const position = typeof input.position === 'number' ? Math.trunc(input.position) : nextOwnerPosition(ndb, ot, ownerId);
         const reused = reuseAttachmentRow(ndb, reusedId, ot, ownerId, position, actorUserId);
-        if (reused !== null) return { attachment: reused.attachment, reused: true };
+        if (reused !== null) {
+          return {
+            attachment: reused.attachment,
+            reused: true,
+            ownership_added: reused.ownership_added,
+          };
+        }
       }
     }
     const id = randomUUID();
@@ -821,7 +827,8 @@ export function createAttachmentResult(
         nowMs,
       );
     insertOwnership(ndb, id, ot, ownerId, position, actorUserId);
-    return { attachment: getAttachmentOrThrow(ndb, id), reused: false };
+    // Новая строка — владение создано вместе с ней.
+    return { attachment: getAttachmentOrThrow(ndb, id), reused: false, ownership_added: true };
   });
 }
 
@@ -992,7 +999,7 @@ export function createAttachmentFileResult(
   const filePath = path.join(dir, name);
   writeFileSync(filePath, buffer);
 
-  const created = createAttachmentResult(
+  return createAttachmentResult(
     ndb,
     ot,
     ownerId,
@@ -1005,8 +1012,6 @@ export function createAttachmentFileResult(
     },
     actorUserId,
   );
-  // Новая строка — владение создано вместе с ней.
-  return { ...created, ownership_added: true };
 }
 
 /**
@@ -1094,11 +1099,10 @@ export function createAttachmentFromInputResult(
         },
       );
     }
-    return {
-      attachment: createAttachment(ndb, ownerType, ownerId, input, actorUserId),
-      reused: false,
-      ownership_added: true,
-    };
+    // Метаданный путь тоже дедуплицируется по хэшу читаемого сервером файла
+    // (ADR e3a35864): пробрасываем `reused`/`ownership_added` наружу, иначе
+    // фасад эмитил бы ложное `attachment.created` (замечание проверки f77382ba).
+    return createAttachmentResult(ndb, ownerType, ownerId, input, actorUserId);
   }
   if (input.kind !== 'file') {
     throw new EtnError('VALIDATION_ERROR', "data_base64 requires kind='file'", {

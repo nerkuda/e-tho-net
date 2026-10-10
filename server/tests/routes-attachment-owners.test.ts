@@ -15,6 +15,8 @@
  */
 
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import type { AnyRealtimeEvent } from '@etn/shared';
@@ -437,6 +439,63 @@ describe('REST: realtime-события владений (109be255, f77382ba)', 
       await closeRestContext(ctx);
     }
   });
+
+  it('дедуп по хэшу метаданного file_path — owner.added, не created (замечание проверки)', async () => {
+    const ctx = await buildRestContext();
+    const seen: AnyRealtimeEvent[] = [];
+    const unsubscribe = ctx.app.pubsub.subscribe(ctx.networkId, (e) =>
+      seen.push(e as unknown as AnyRealtimeEvent),
+    );
+    const attEvents = (): AnyRealtimeEvent[] =>
+      seen.filter((e) => e.type.startsWith('attachment.'));
+    try {
+      const a = await createThought(ctx, 'A');
+      const b = await createThought(ctx, 'B');
+      // Файл, читаемый СЕРВЕРОМ: `kind=file` + абсолютный `file_path` — именно
+      // этот путь дедуплицируется по content_hash (ADR e3a35864).
+      const filePath = join(ctx.dataDir, 'meta-dedup.png');
+      writeFileSync(filePath, Buffer.from(PNG_BASE64, 'base64'));
+      const payload = { kind: 'file', file_path: filePath, mime_type: 'image/png', title: 'meta' };
+
+      seen.length = 0;
+      const first = await api(ctx, 'POST', `/thoughts/${a}/attachments`, { payload });
+      assert.equal(first.statusCode, 201, first.body);
+      const firstId = (first.json().data as { id: string }).id;
+      assert.deepEqual(
+        attEvents().map((e) => e.type),
+        ['attachment.created'],
+        'первая строка — создание',
+      );
+
+      // Тот же file_path другому владельцу — дедуп: та же строка, owner.added.
+      seen.length = 0;
+      const second = await api(ctx, 'POST', `/thoughts/${b}/attachments`, { payload });
+      assert.equal(second.statusCode, 201, second.body);
+      assert.equal((second.json().data as { id: string }).id, firstId, 'дедуп: та же строка');
+      assert.deepEqual(
+        attEvents().map((e) => e.type),
+        ['attachment.owner.added'],
+        'дедуп метаданного пути — владение, не создание',
+      );
+      assert.deepEqual(attEvents()[0]!.data, {
+        attachment_id: firstId,
+        owner_type: 'thought',
+        owner_id: b,
+      });
+
+      // Повтор тому же владельцу — нового владения нет, событий нет.
+      seen.length = 0;
+      await api(ctx, 'POST', `/thoughts/${b}/attachments`, { payload });
+      assert.deepEqual(
+        attEvents().map((e) => e.type),
+        [],
+        'повтор тому же владельцу — без событий',
+      );
+    } finally {
+      unsubscribe();
+      await closeRestContext(ctx);
+    }
+  });
 });
 
 describe('каталог etn.ops: attachments.delete снят (478f8c1f)', () => {
@@ -624,6 +683,64 @@ describe('MCP: события владений вложения (f77382ba)', { s
           attEvents().map((e) => e.type),
           ['attachment.owner.removed', 'attachment.deleted'],
         );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      unsubscribe();
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('дедуп по хэшу метаданного file_path — owner.added, не created (замечание проверки)', async () => {
+    const ctx = await buildMcpContext();
+    const seen: AnyRealtimeEvent[] = [];
+    const unsubscribe = ctx.pubsub.subscribe(ctx.networkId, (e) =>
+      seen.push(e as unknown as AnyRealtimeEvent),
+    );
+    const attEvents = (): AnyRealtimeEvent[] =>
+      seen.filter((e) => e.type.startsWith('attachment.'));
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const written = await callWrite(handle.client, ctx.networkId, [
+          { ref: 'mcp-meta-owner', thought: { title: 'MCP meta-владелец' } },
+        ]);
+        const ownerId = written.items[0]!.id;
+        const filePath = join(ctx.dataDir, 'mcp-meta-dedup.png');
+        writeFileSync(filePath, Buffer.from(PNG_BASE64, 'base64'));
+        const params = {
+          network_id: ctx.networkId,
+          kind: 'file',
+          file_path: filePath,
+          mime_type: 'image/png',
+          title: 'mcp-meta',
+        };
+
+        seen.length = 0;
+        const first = toolJson<{ id: string }>(
+          await callOp(handle.client, 'attachments.add', { ...params, owner_type: 'thought', owner_id: ctx.homeId }),
+        );
+        assert.deepEqual(
+          attEvents().map((e) => e.type),
+          ['attachment.created'],
+        );
+
+        seen.length = 0;
+        const second = toolJson<{ id: string }>(
+          await callOp(handle.client, 'attachments.add', { ...params, owner_type: 'thought', owner_id: ownerId }),
+        );
+        assert.equal(second.id, first.id, 'дедуп: та же строка');
+        assert.deepEqual(
+          attEvents().map((e) => e.type),
+          ['attachment.owner.added'],
+          'дедуп метаданного пути — владение, не создание',
+        );
+        assert.deepEqual(attEvents()[0]!.data, {
+          attachment_id: first.id,
+          owner_type: 'thought',
+          owner_id: ownerId,
+        });
       } finally {
         await handle.close();
       }
