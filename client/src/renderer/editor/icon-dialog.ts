@@ -34,7 +34,7 @@
  */
 
 import type { Attachment, IconKind } from '@etn/shared';
-import { div } from '../lib/dom.js';
+import { div, errText } from '../lib/dom.js';
 import type { DialogButton } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
@@ -108,6 +108,14 @@ export function showIconDialog(opts: {
      */
     attachmentId?: string | null;
   };
+  /**
+   * Владелец-объект диалога (0.12.1, тех.проект f9b8917c): выбор в списке
+   * «Вложения» картинки, принадлежащей ДРУГОМУ объекту, добавляет ЭТОТ объект
+   * владельцем (`POST /attachments/{id}/owners`) и применяет картинку
+   * (ошибка c37981b7). Для ТИПОВ мыслей владельца нет — вложение не создаётся,
+   * файл ложится самодостаточным `data:`-превью.
+   */
+  owner?: { type: 'thought'; id: string };
   onPick: (result: IconPickResult) => Promise<boolean | IconPickOutcome>;
 }): void {
   const { current, onPick } = opts;
@@ -151,13 +159,45 @@ export function showIconDialog(opts: {
   });
 
   /**
+   * Гарантирует владение вложением текущим объектом, если он задан (тех.проект
+   * f9b8917c): выбор чужой картинки-вложения добавляет объект владельцем
+   * (`POST /attachments/{id}/owners`, идемпотентно) — иначе сервер отвергнет
+   * `icon_attachment_id`, не принадлежащий объекту (ошибка c37981b7).
+   */
+  async function ensureAttachmentOwner(attachmentId: string): Promise<boolean> {
+    const owner = opts.owner;
+    if (owner === undefined) return true;
+    const networkId = store.state.networkId;
+    if (networkId === null) return false;
+    try {
+      await etn.attachments.addOwners(networkId, attachmentId, {
+        owner_type: owner.type,
+        owner_ids: [owner.id],
+      });
+      return true;
+    } catch (err) {
+      notice(`${t('attachments.owner.add.failed')}: ${errText(err)}`, 'error');
+      return false;
+    }
+  }
+
+  /**
    * Применяет результат и (при успехе) закрывает диалог. Успех фиксирует иконку
    * в истории последних выбранных (задача 0fc95a2b); id вложения знает
    * вызывающая сторона — оно приходит в расширенной форме {@link IconPickOutcome}.
+   * `ensureOwner: false` — путь ПЕРЕИСПОЛЬЗОВАНИЯ собственного вложения
+   * (846c426a): владение уже есть, лишний запрос не нужен.
    */
   const submit =
-    (result: IconPickResult) =>
+    (result: IconPickResult, options?: { ensureOwner?: boolean }) =>
     async (ctx: ResourceSourceContext): Promise<void> => {
+      if (
+        options?.ensureOwner !== false &&
+        result.attachmentId != null &&
+        !(await ensureAttachmentOwner(result.attachmentId))
+      ) {
+        return;
+      }
       const outcome = await onPick(result);
       const ok = typeof outcome === 'boolean' ? outcome : outcome.ok;
       if (!ok) return;
@@ -195,9 +235,12 @@ export function showIconDialog(opts: {
       })(ctx);
       return;
     }
-    // Текущее вложение без изменений — сохраняем как есть (ошибка 846c426a).
+    // Текущее вложение без изменений — сохраняем как есть (ошибка 846c426a):
+    // владение уже установлено, повторный POST владельцев не нужен.
     if (a.id === attachmentId && current.icon !== null) {
-      await submit({ icon: current.icon, kind: 'image', color: null, attachmentId })(ctx);
+      await submit({ icon: current.icon, kind: 'image', color: null, attachmentId }, {
+        ensureOwner: false,
+      })(ctx);
       return;
     }
     if (a.kind === 'url') {

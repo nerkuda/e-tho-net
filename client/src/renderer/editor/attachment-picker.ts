@@ -18,14 +18,22 @@
  * вложения, загруженный локальный файл (куда его сохранить, решает вызывающий)
  * либо восстановленное текущее `data:`-превью. Вёрстка — фасады `lib/ui`
  * (поле, кнопка, сплиттер, список); строки — из словаря `t()`.
+ *
+ * Переименование прямо в строке списка (требование fabc1231): заголовок
+ * вложения ОБЩИЙ для всех владельцев, правится `PATCH /attachments/{id} {title}`
+ * (кнопка-карандаш в строке, Enter/потеря фокуса — запись, Esc — отмена).
  */
 
 import type { Attachment } from '@etn/shared';
-import { div, span } from '../lib/dom.js';
+import { div, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
-import { uiButton } from '../lib/ui/button.js';
+import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
+import { modifierChordVariants } from '../lib/keymap-chords.js';
+import { notice } from '../lib/notice.js';
+import { iconButton, uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 import { createListNav } from '../lib/ui/list.js';
 import { uiSplitter } from '../lib/ui/splitter.js';
@@ -213,6 +221,82 @@ export function attachmentPickerSourceTab(opts: AttachmentPickerOptions): Resour
 
       const api: AttachmentPickerRowApi = { refresh: () => void runSearch(0) };
 
+      /** Счётчик правок — ключ активного клавиатурного контекста строки. */
+      let renameSeq = 0;
+      /** Снятие клавиатурного контекста текущей правки (закрыть прошлую). */
+      let releaseRename: (() => void) | null = null;
+
+      /**
+       * Встроенное переименование вложения прямо в строке списка
+       * (требование fabc1231): заголовок общий для ВСЕХ владельцев, поэтому
+       * это `PATCH /attachments/{id} {title}`, а не операция владения. Enter/
+       * потеря фокуса — запись, Esc — отмена. Клавиатура — через общеклиентский
+       * диспетчер (ADR b420b08c); локальный `keydown`-слушатель запрещён.
+       */
+      function startRename(row: AttachmentPickerRow, titleEl: HTMLElement): void {
+        const networkId = store.state.networkId;
+        if (networkId === null) return;
+        const attachment = row.representative;
+        releaseRename?.();
+        releaseRename = null;
+        const input = fieldInput({ maxLength: 300 });
+        input.value = row.title;
+        titleEl.replaceWith(input);
+        let done = false;
+        const release = (): void => {
+          releaseRename?.();
+          releaseRename = null;
+        };
+        const restore = (): void => {
+          if (done) return;
+          done = true;
+          release();
+          input.replaceWith(titleEl);
+        };
+        const commit = async (): Promise<void> => {
+          if (done) return;
+          done = true;
+          release();
+          const next = input.value.trim();
+          input.replaceWith(titleEl);
+          if (next === '' || next === (attachment.title ?? '')) return;
+          try {
+            await etn.attachments.update(networkId, attachment.id, { title: next });
+            api.refresh();
+          } catch (err) {
+            notice(`${t('attachments.rename.failed')}: ${errText(err)}`, 'error');
+          }
+        };
+        const contextId = `att-pick-rename-${(renameSeq += 1)}`;
+        defineKeyContext({
+          id: contextId,
+          bindings: [
+            ...modifierChordVariants('Enter').map((chord) => ({
+              command: 'att.pick.rename.commit',
+              chord,
+              run: (event: KeyboardEvent) => {
+                if (event.key !== 'Enter') return false;
+                void commit();
+                return true;
+              },
+            })),
+            {
+              command: 'att.pick.rename.cancel',
+              chord: 'Escape',
+              run: (event: KeyboardEvent) => {
+                if (event.key !== 'Escape') return false;
+                restore();
+                return true;
+              },
+            },
+          ],
+        });
+        releaseRename = pushKeyContext(contextId);
+        input.addEventListener('blur', () => void commit());
+        input.focus();
+        input.select();
+      }
+
       /** Превью выбранного/текущего; `null` — подсказка. */
       const renderPreview = (): void => {
         while (previewHost.firstChild !== null) previewHost.removeChild(previewHost.firstChild);
@@ -302,12 +386,29 @@ export function attachmentPickerSourceTab(opts: AttachmentPickerOptions): Resour
         ctx.setReady(next !== null);
       };
 
-      /** Заполняет один узел списка (заголовок + декор строки). */
+      /** Заполняет один узел списка (заголовок с правкой + декор строки). */
       const fillRow = (node: HTMLElement, row: AttachmentPickerRow): void => {
         // Точечная пересборка ОДНОЙ строки (не коллекции): состав её частей
         // (заголовок + облачка владельцев) меняется вслед за данными.
         while (node.firstChild !== null) node.removeChild(node.firstChild);
-        node.append(span(row.title, 'att-pick-item-title'));
+        const head = div('att-pick-item-head');
+        const title = span(row.title, 'att-pick-item-title');
+        head.append(title);
+        // Переименование самогó вложения (общий заголовок, fabc1231) — кнопкой
+        // строки; клик по ней не выбирает строку (гасим всплытие к списку).
+        head.append(
+          iconButton({
+            icon: svgIcon('pencil', 14),
+            title: t('attachments.row.rename'),
+            role: 'ghost',
+            size: 's',
+            onClick: (event) => {
+              event.stopPropagation();
+              startRename(row, title);
+            },
+          }),
+        );
+        node.append(head);
         const extra = opts.renderRowExtra?.(row, api);
         if (extra !== null && extra !== undefined) node.append(extra);
       };

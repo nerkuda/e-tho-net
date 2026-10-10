@@ -173,7 +173,7 @@ function attachmentMeta(a: Attachment): string {
  * На проводе код ошибки — `VALIDATION_ERROR` со `details.status = 409`, а
  * именованный код лежит в `details.code` (см. server/http/errors.ts).
  */
-function isIconOwnerBlock(err: unknown): boolean {
+export function isIconOwnerBlock(err: unknown): boolean {
   return (
     err instanceof EtnError &&
     typeof err.details === 'object' &&

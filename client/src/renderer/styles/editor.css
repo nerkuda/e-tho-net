@@ -2516,9 +2516,18 @@
 }
 
 .att-pick-item-title {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Строка заголовка списка выбора: заголовок + кнопка переименования (fabc1231). */
+.att-pick-item-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 /* Вид владельцев вложения рисуют общие компоненты облачков. */

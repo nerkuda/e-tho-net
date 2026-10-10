@@ -30,7 +30,7 @@ import type {
 } from '@etn/shared';
 
 import { createMdEditor } from './md-editor.js';
-import { buildAttachmentsPane } from './attachments.js';
+import { buildAttachmentsPane, isIconOwnerBlock } from './attachments.js';
 import { createMarkdownField, etnimgUrl, setMarkdownField } from './markdown-field.js';
 import { commentShell } from '../lib/ui/comment.js';
 import { createThoughtCloud, type ThoughtCloudInput } from '../lib/thought-cloud.js';
@@ -1188,15 +1188,22 @@ async function openCoverDialog(): Promise<void> {
   }
 
   /**
-   * Представитель носителя для препросмотра/применения: предпочтительна
-   * строка, уже принадлежащая этой публикации (обложка ставится без
-   * копирования), иначе первая.
+   * Представитель носителя для предпросмотра/применения: предпочтительна
+   * строка-владение ЭТОЙ публикации (обложка ставится без добавления владельца),
+   * иначе — первый владелец носителя. Владение проверяется по агрегату
+   * `owners` (одно вложение — много владельцев, 0.12.1).
    */
+  function isOwnedByPublication(a: Attachment): boolean {
+    if ((a.owners ?? []).some((o) => o.owner_type === 'publication' && o.owner_id === pubId)) {
+      return true;
+    }
+    // Запас: DTO без агрегата владельцев несёт первичное владение в полях
+    // `owner_type`/`owner_id` (совместимость и клиентские фикстуры).
+    return a.owner_type === 'publication' && a.owner_id === pubId;
+  }
+
   function representative(row: AttachmentPickerRow): Attachment {
-    return (
-      row.attachments.find((a) => a.owner_type === 'publication' && a.owner_id === pubId) ??
-      row.representative
-    );
+    return row.attachments.find(isOwnedByPublication) ?? row.representative;
   }
 
   /**
@@ -1292,9 +1299,10 @@ async function openCoverDialog(): Promise<void> {
   }
 
   /**
-   * Снимает владельца носителя: удаляет ЕГО строку вложения (носитель держат
-   * несколько строк-владельцев). Если владелец последний — сначала общий
-   * диалог подтверждения (замечание Б2 приёмки b02ef1cf).
+   * Снимает ОДНО владение (вложение, объект) через `DELETE /attachments/{id}/owners`
+   * (0.12.1; ошибка 8f9768c9). Если владелец последний — сначала общий диалог
+   * подтверждения (замечание Б2 приёмки b02ef1cf); своя обложка даёт 409 —
+   * внятное сообщение (требование 6b524569).
    */
   async function removeOwner(
     row: AttachmentPickerRow,
@@ -1322,14 +1330,24 @@ async function openCoverDialog(): Promise<void> {
       );
       if (!confirmed) return;
     }
-    // Строка-владелец уже есть в сгруппированных данных — берём её id напрямую.
-    const target = row.attachments.find(
-      (a) => a.owner_type === owner.owner_type && a.owner_id === owner.owner_id,
-    );
-    if (target === undefined) return;
+    // Носитель — одно вложение-строку на файл; владельцы лежат агрегатом
+    // `owners` в этой же строке, отдельной строки на владельца нет (0.12.1).
+    const target = representative(row);
+    // Снятие владения идёт через `DELETE /attachments/{id}/owners` — пара
+    // (вложение, объект), а не удаление вложения (0.12.1, требование 6b524569;
+    // ошибка 8f9768c9 — DELETE /attachments/{id} убран из публичного API).
     try {
-      await etn.attachments.remove(netId, target.id);
+      await etn.attachments.removeOwner(netId, target.id, {
+        owner_type: owner.owner_type,
+        owner_id: owner.owner_id,
+      });
     } catch (err) {
+      // 409 ATTACHMENT_OWNER_IS_ICON — вложение держит сама публикация как
+      // обложку: внятное сообщение вместо технической ошибки.
+      if (isIconOwnerBlock(err)) {
+        notice(t('publication.cover.removeOwnerBlocked'), 'error');
+        return;
+      }
       errorDialog(t('publication.cover.removeOwner'), err);
       return;
     }
@@ -1353,10 +1371,10 @@ async function openCoverDialog(): Promise<void> {
 
   /**
    * Применение выбранного вложения (нижняя «Применить», двойной клик,
-   * Ctrl+Enter): «своё» вложение публикации назначается напрямую, «чужое»
-   * сначала привязывается к публикации (сервер отвечает 422 на
-   * `cover_attachment_id` чужого владельца), загруженный файл — загружается
-   * во вложения публикации.
+   * Ctrl+Enter): «своё» вложение публикации назначается напрямую; «чужое»
+   * сначала привязывается к публикации — публикация становится ЕГО владельцем
+   * (`POST /attachments/{id}/owners`), вложение не копируется (тех.проект
+   * f9b8917c); загруженный файл — загружается во вложения публикации.
    */
   async function applyPick(pick: AttachmentPick, ctx: ResourceSourceContext): Promise<void> {
     if (pick.source !== undefined) {
@@ -1379,21 +1397,16 @@ async function openCoverDialog(): Promise<void> {
     }
     const attachment = pick.row !== undefined ? representative(pick.row) : pick.attachment;
     if (attachment === undefined) return;
-    if (attachment.owner_type === 'publication' && attachment.owner_id === pubId) {
+    if (isOwnedByPublication(attachment)) {
       queueSave({ cover_attachment_id: attachment.id, cover_url: null });
     } else {
       try {
-        const created = await etn.attachments.add(netId, 'publication', pubId, {
-          kind: attachment.kind,
-          url: attachment.kind === 'url' ? attachment.url : null,
-          file_path: attachment.kind === 'file' ? attachment.file_path : null,
-          file_size: attachment.file_size,
-          mime_type: attachment.mime_type,
-          title: attachment.title,
-          description: attachment.description,
+        await etn.attachments.addOwners(netId, attachment.id, {
+          owner_type: 'publication',
+          owner_ids: [pubId],
         });
         invalidatePublicationAttachments(pubId);
-        queueSave({ cover_attachment_id: created.id, cover_url: null });
+        queueSave({ cover_attachment_id: attachment.id, cover_url: null });
       } catch (err) {
         errorDialog(t('publication.error'), err);
         return;

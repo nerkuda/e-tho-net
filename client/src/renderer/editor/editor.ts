@@ -2482,6 +2482,9 @@ function changeThoughtIcon(thought: Thought): void {
       color: thought.icon_color ?? null,
       attachmentId: thought.icon_attachment_id ?? null,
     },
+    // Выбор чужой картинки-вложения добавляет ЭТУ мысль владельцем
+    // (тех.проект f9b8917c, ошибка c37981b7).
+    owner: { type: 'thought', id: thought.id },
     onPick: (result) => savePickedIcon(thought, result),
   });
 }
