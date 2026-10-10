@@ -560,12 +560,17 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
       return compact([ref(ownerTableOf(r.owner_type), r.owner_id)]);
     case 'comment_targets':
       return compact([ref('comments', r.comment_id), ref(ownerTableOf(r.owner_type), r.owner_id)]);
-    // 0.12.1 (ADR 9f90b010, тех.проект f9b8917c): владелец вложения живёт в
-    // `attachment_owners` — строка вложения сама ни на кого не ссылается.
-    // Осознанный переходный период: owner-колонки `attachments` ещё существуют
-    // (их снимет задача домена 7678876a), но замыкание идёт по строкам владений.
+    // ПЕРЕХОДНЫЙ ПЕРИОД (0.12.1 → задача домена 7678876a): замыкание читает ОБА
+    // источника. Целевая модель (ADR 9f90b010, тех.проект f9b8917c) — владелец
+    // живёт в `attachment_owners` (строка владения замыкается ниже), а строка
+    // вложения сама ни на кого не ссылается. Но пока домен пишет только
+    // owner-колонки `attachments` (attachment-service) и снимает их задача
+    // 7678876a, замыкание строки вложения по owner-колонкам СОХРАНЯЕТСЯ —
+    // иначе вложение слоя, созданное доменным кодом, выпадало бы из набора.
+    // После 7678876a ветка станет недостижимой (`owner_type` = undefined → []),
+    // двойное чтение убирается вместе со снятием колонок.
     case 'attachments':
-      return [];
+      return compact([ref(ownerTableOf(r.owner_type), r.owner_id)]);
     // Владение ссылается на своё вложение (attachment_id) и на объект-владельца:
     // без живого вложения или владельца строка владения бессмысленна.
     case 'attachment_owners':
@@ -1043,8 +1048,11 @@ function mergeLayerInner(
   // затронутых слиянием (надгробия владений отреплеены, строки слоя уже
   // убраны в Phase E), без живого владения строка вложения убирается из цели, а
   // висячие указатели иконки мысли / обложки публикации обнуляются (как и в
-  // физическом каскаде — пойнтер не ссылка замыкания). Физический файл — вне
-  // слияния: его носитель один на все слои.
+  // физическом каскаде — пойнтер не ссылка замыкания).
+  //
+  // Физический файл здесь НЕ трогается: носитель один на все слои, его судьбу
+  // по исчезновению последнего живого владельца решает owner-cleanup (задача
+  // da59a4cf), а не слияние.
   for (const attachmentId of touchedAttachmentIds) {
     if (hasLiveOwnershipAnywhere(ndb, attachmentId)) continue;
     const winner = resolveRow(ndb, 'attachments', attachmentId);
@@ -1143,9 +1151,16 @@ export function collectThoughtLayerRows(
     'property_values',
     layerIds(ndb, 'property_values', layerId, "owner_type = 'thought' AND owner_id = ?", thoughtId),
   );
-  // 0.12.1: вложения мысли собираются по строкам владений `attachment_owners`,
-  // а не по owner-колонкам `attachments` (ADR 9f90b010).
+  // Вложения мысли — ОБА источника, переходный период (ADR 9f90b010; снимется
+  // задачей домена 7678876a): строки владений `attachment_owners` (целевая
+  // модель) и вложения по owner-колонкам `attachments` (пока домен пишет их —
+  // именно этот путь создаёт вложение иконки/вложения в слое сегодня). Дубли
+  // схлопывает дедупликация на выходе.
   pushOwnedAttachments(ndb, layerId, 'thought', [thoughtId], selection);
+  push(
+    'attachments',
+    layerIds(ndb, 'attachments', layerId, "owner_type = 'thought' AND owner_id = ?", thoughtId),
+  );
   const commentIds = layerIds(
     ndb,
     'comments',
@@ -1177,8 +1192,19 @@ export function collectThoughtLayerRows(
         ...linkIds,
       ),
     );
-    // Вложения связей — тем же механизмом владений (0.12.1).
+    // Вложения связей — тем же двойным чтением (переходный период, 7678876a):
+    // строки владений + owner-колонки `attachments`.
     pushOwnedAttachments(ndb, layerId, 'link', linkIds, selection);
+    push(
+      'attachments',
+      layerIds(
+        ndb,
+        'attachments',
+        layerId,
+        `owner_type = 'link' AND owner_id IN (${placeholders})`,
+        ...linkIds,
+      ),
+    );
     const linkCommentIds = layerIds(
       ndb,
       'comments',

@@ -28,8 +28,13 @@ import DatabaseConstructor from 'better-sqlite3';
 import { BASE_LAYER_ID, EtnError } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
-import { materializeTombstone } from '../src/db/layer-write.js';
-import { mergeLayer, type MergeSelection } from '../src/domain/merge-service.js';
+import { materializeShadow, materializeTombstone } from '../src/db/layer-write.js';
+import {
+  discardLayerThought,
+  mergeLayer,
+  mergeLayerThought,
+  type MergeSelection,
+} from '../src/domain/merge-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -56,7 +61,7 @@ function seedLayer(ndb: NetworkDb): string {
 }
 
 /** Мысль в указанном слое (сырые данные). */
-function seedThought(ndb: NetworkDb, id: string, title: string, layerId = BASE_LAYER_ID): void {
+function seedThought(ndb: NetworkDb, id: string, title: string, layerId: string = BASE_LAYER_ID): void {
   const now = new Date().toISOString();
   ndb
     .prepare(
@@ -67,16 +72,34 @@ function seedThought(ndb: NetworkDb, id: string, title: string, layerId = BASE_L
     .run(id, layerId, title, title.toLowerCase(), now, now);
 }
 
-/** Строка вложения-хоста (владельцы живут в `attachment_owners`). */
-function seedAttachment(ndb: NetworkDb, id: string, layerId = BASE_LAYER_ID): void {
+/** Строка вложения (owner-колонки — легаси-путь домена, переходный период). */
+function seedAttachment(
+  ndb: NetworkDb,
+  id: string,
+  layerId: string = BASE_LAYER_ID,
+  ownerType = 'thought',
+  ownerId = 'legacy-owner',
+): void {
   const now = new Date().toISOString();
   ndb
     .prepare(
       `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, position,
          created_at, created_by)
-       VALUES (?, ?, 'thought', 'legacy-owner', 'url', 'http://example.test/a', 0, ?, 'u')`,
+       VALUES (?, ?, ?, ?, 'url', 'http://example.test/a', 0, ?, 'u')`,
     )
-    .run(id, layerId, now);
+    .run(id, layerId, ownerType, ownerId, now);
+}
+
+/** Публикация с обложкой-вложением (сырые данные). */
+function seedPublication(ndb: NetworkDb, id: string, title: string, coverId: string): void {
+  const now = new Date().toISOString();
+  ndb
+    .prepare(
+      `INSERT INTO publications (id, layer_id, title, cover_attachment_id,
+         created_at, created_by, updated_at, updated_by)
+       VALUES (?, ?, ?, ?, ?, 'u', ?, 'u')`,
+    )
+    .run(id, BASE_LAYER_ID, title, coverId, now, now);
 }
 
 /** Одна строка владения (attachment_owners) напрямую. */
@@ -109,6 +132,15 @@ function seedOwnership(
       args.position ?? 0,
       now,
     );
+}
+
+/** Строки вложения `id` в конкретном слое, включая надгробия. */
+function attachmentRowsInLayer(ndb: NetworkDb, id: string, layerId: string): number {
+  return (
+    ndb
+      .prepare('SELECT COUNT(*) AS c FROM attachments WHERE id = ? AND layer_id = ?')
+      .get(id, layerId) as { c: number }
+  ).c;
 }
 
 /** Живые строки вложения `id` в рабочих (не служебных) слоях. */
@@ -264,6 +296,128 @@ describe(
             .get(t, BASE_LAYER_ID) as { icon_attachment_id: string | null }
         ).icon_attachment_id;
         assert.equal(icon, att);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('переходный период: вложение слоя по owner-колонкам едет с мыслью (mergeLayerThought), без висячего icon', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = randomUUID();
+        const att = randomUUID();
+        seedThought(ndb, t, 'T');
+
+        const layer = seedLayer(ndb);
+        ndb.useLayer(layer);
+        // Доменный путь 0.12.1: вложение создано в слое с owner-колонками,
+        // строк владений attachment_owners не появилось (их пишет только
+        // миграция 050). Мысль ссылается на вложение как на иконку.
+        seedAttachment(ndb, att, layer, 'thought', t);
+        assert.equal(materializeShadow(ndb, 'thoughts', t), true);
+        ndb
+          .prepare('UPDATE thoughts SET icon_attachment_id = ? WHERE id = ? AND layer_id = ?')
+          .run(att, t, layer);
+        ndb.useLayer(BASE_LAYER_ID);
+
+        mergeLayerThought(ndb, layer, t, 'overwrite', 'u');
+
+        // Вложение доехало ДО ОСНОВЫ (а не осталось в слое)…
+        assert.equal(attachmentRowsInLayer(ndb, att, BASE_LAYER_ID), 1);
+        assert.equal(attachmentRowsInLayer(ndb, att, layer), 0);
+        // …и потому указатель иконки мысли в основе разрешим (не висячий).
+        const icon = (
+          ndb
+            .prepare('SELECT icon_attachment_id FROM thoughts WHERE id = ? AND layer_id = ?')
+            .get(t, BASE_LAYER_ID) as { icon_attachment_id: string | null }
+        ).icon_attachment_id;
+        assert.equal(icon, att);
+        assert.equal(attachmentRowsInLayer(ndb, att, BASE_LAYER_ID), 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('переходный период: отбрасывание мысли убирает вложение слоя по owner-колонкам, основу не трогает', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = randomUUID();
+        const att = randomUUID();
+        seedThought(ndb, t, 'T');
+
+        const layer = seedLayer(ndb);
+        ndb.useLayer(layer);
+        seedAttachment(ndb, att, layer, 'thought', t);
+        assert.equal(materializeShadow(ndb, 'thoughts', t), true);
+        ndb
+          .prepare('UPDATE thoughts SET icon_attachment_id = ? WHERE id = ? AND layer_id = ?')
+          .run(att, t, layer);
+        ndb.useLayer(BASE_LAYER_ID);
+
+        const discarded = discardLayerThought(ndb, layer, t);
+
+        assert.equal(discarded.discarded.attachments, 1);
+        assert.equal(discarded.discarded.thoughts, 1);
+        // В основе вложения нет и не было — отбрасывание его не создаёт.
+        assert.equal(liveAttachmentRows(ndb, att), 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('исчезновение вложения обнуляет cover_attachment_id публикации', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const pub = randomUUID();
+        const att = randomUUID();
+        seedPublication(ndb, pub, 'Публикация', att);
+        seedAttachment(ndb, att);
+        seedOwnership(ndb, {
+          id: 'own-pub',
+          attachmentId: att,
+          ownerId: pub,
+          ownerType: 'publication',
+        });
+
+        const layer = seedLayer(ndb);
+        ndb.useLayer(layer);
+        assert.equal(materializeTombstone(ndb, 'attachment_owners', 'own-pub'), true);
+        ndb.useLayer(BASE_LAYER_ID);
+
+        mergeLayer(ndb, layer, undefined, 'u');
+
+        assert.equal(liveAttachmentRows(ndb, att), 0);
+        const cover = (
+          ndb
+            .prepare('SELECT cover_attachment_id FROM publications WHERE id = ? AND layer_id = ?')
+            .get(pub, BASE_LAYER_ID) as { cover_attachment_id: string | null }
+        ).cover_attachment_id;
+        assert.equal(cover, null);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('исчезновение вложения с владением owner_type=link', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const att = randomUUID();
+        seedAttachment(ndb, att);
+        seedOwnership(ndb, {
+          id: 'own-link',
+          attachmentId: att,
+          ownerId: randomUUID(),
+          ownerType: 'link',
+        });
+
+        const layer = seedLayer(ndb);
+        ndb.useLayer(layer);
+        assert.equal(materializeTombstone(ndb, 'attachment_owners', 'own-link'), true);
+        ndb.useLayer(BASE_LAYER_ID);
+
+        mergeLayer(ndb, layer, undefined, 'u');
+
+        assert.equal(liveAttachmentRows(ndb, att), 0);
       } finally {
         ndb.close();
       }
