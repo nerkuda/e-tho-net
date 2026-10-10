@@ -127,9 +127,9 @@
 ## Как попробовать у себя
 
 1. Поднимите сервер ETN — Docker или Node.js 22,
-   [`install-server.md`](install-server.md).
+   [`userdocs/install.md`](userdocs/install.md).
 2. Подключите своего агента по MCP — инструкции для популярных сред
-   в [`mcp-clients.md`](mcp-clients.md).
+   в [`userdocs/ai-agents.md`](userdocs/ai-agents.md).
 3. Начните с малого: перенесите в сеть один раздел знаний — скажем, правила
    работы с вашим проектом — и посмотрите, как агент начнёт сам находить
    и выполнять их.
