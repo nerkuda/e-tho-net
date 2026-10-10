@@ -127,7 +127,7 @@ import {
   recomputeOverflow,
   type StripElements,
 } from '../screens/tabs/tab-overflow.js';
-import { showIconDialog, type IconPickResult } from './icon-dialog.js';
+import { showIconDialog, type IconPickOutcome, type IconPickResult } from './icon-dialog.js';
 import { editMarkdownField, focusMarkdownFieldAt, focusMarkdownFieldSelection, type MdSourceSelection } from './markdown-field.js';
 import { commentFocusStep } from './comment-focus.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
@@ -2487,7 +2487,10 @@ function changeThoughtIcon(thought: Thought): void {
 }
 
 /** Persists a picked icon; file picks store the original as an attachment (L16). */
-async function savePickedIcon(thought: Thought, result: IconPickResult): Promise<boolean> {
+async function savePickedIcon(
+  thought: Thought,
+  result: IconPickResult,
+): Promise<boolean | IconPickOutcome> {
   const networkId = requireNetworkId();
   // Применение текущего вложения-иконки без изменений сохраняет его id
   // (ошибка 846c426a); новый файл перезапишет его ниже после загрузки.
@@ -2512,12 +2515,14 @@ async function savePickedIcon(thought: Thought, result: IconPickResult): Promise
     invalidateQueries(queryKeys.attachments('thought', thought.id));
   }
   // `icon_attachment_id: null` clears a stale link on emoji/URL/clear picks.
-  return saveThought({
+  const ok = await saveThought({
     icon: result.icon,
     icon_kind: result.kind,
     icon_color: result.color,
     icon_attachment_id: attachmentId,
   });
+  // id созданного вложения — для истории последних иконок (задача 0fc95a2b).
+  return ok ? { ok: true, attachmentId } : false;
 }
 
 /**

@@ -151,7 +151,7 @@ import { buildViewsTab } from './thought-type/views-tab.js';
 import type { CataloguePanel } from './type-catalogue.js';
 import { store } from '../state.js';
 import { renderNewTypeHint } from '../lib/type-editor-hints.js';
-import { showIconDialog } from '../editor/icon-dialog.js';
+import { showIconDialog, type IconPickOutcome } from '../editor/icon-dialog.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showThoughtStyleDialog } from '../editor/style-dialog.js';
 import { renderMarkdown } from '@etn/markdown';
@@ -1004,12 +1004,15 @@ export function showThoughtTypeEditor(
   iconBox.addEventListener('click', () => {
     showIconDialog({
       current: { icon: draft.icon, kind: draft.icon_kind, color: draft.icon_color ?? null },
-      onPick: (result) => {
+      onPick: (result): Promise<IconPickOutcome> => {
         draft.icon = result.icon;
         draft.icon_kind = result.kind;
         draft.icon_color = result.color;
         renderIcon();
-        return Promise.resolve(true);
+        // У типов вложений нет: картинка-файл ложится самодостаточным
+        // data:-превью в сам тип, id вложения отсутствует (в историю последних
+        // иконок такие картинки не пишутся — в localStorage data: не хранится).
+        return Promise.resolve({ ok: true, attachmentId: null });
       },
     });
   });

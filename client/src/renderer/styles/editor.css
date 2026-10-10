@@ -878,6 +878,56 @@
   color: var(--danger);
 }
 
+/* Строка последних выбранных иконок НАД вкладками диалога иконки
+   (0.12.1, задача 0fc95a2b): ≤10 ячеек 24×24 любых видов (эмодзи, значок
+   библиотеки с цветом, превью вложения, URL). Ячейка проходит тач-таргет
+   (24 ≥ 18). */
+.recent-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.recent-icon-cell {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.recent-icon-cell:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.recent-icon-cell img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.recent-icon-cell svg.icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* Превью вложения резолвится лениво — до готовности ячейка приглушена. */
+.recent-icon-cell-loading {
+  opacity: 0.4;
+}
+
 .group {
   border: 1px solid var(--border);
   border-radius: var(--radius);

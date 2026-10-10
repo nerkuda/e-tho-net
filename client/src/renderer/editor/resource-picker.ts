@@ -85,6 +85,13 @@ export interface ResourcePickerConfig {
   tabs: ResourceSourceTab[];
   /** Активная вкладка при открытии; по умолчанию — первая. */
   activeTab?: string;
+  /**
+   * Слот «над вкладками»: постоянный блок между заголовком диалога и полосой
+   * вкладок, общий для всех вкладок (не переключается с ними). Диалог иконки
+   * кладёт сюда строку последних выбранных иконок (задача 0fc95a2b); прокрутки
+   * блок не имеет, высота — по содержимому.
+   */
+  aboveTabs?: HTMLElement;
   /** Подпись нижней «Применить». */
   applyLabel: string;
   /** Подпись кнопки «без ресурса»; не задана — кнопки нет. */
@@ -178,6 +185,7 @@ export function createResourcePicker(config: ResourcePickerConfig): () => void {
     title: config.title,
     size: config.size ?? 'm',
     activeTab: activeTabId,
+    ...(config.aboveTabs !== undefined ? { headerExtra: config.aboveTabs } : {}),
     onTabChange: (id) => {
       activeTabId = id;
       refreshApply();

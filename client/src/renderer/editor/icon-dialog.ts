@@ -5,7 +5,7 @@
  * Раньше диалог был самостоятельной реализацией; теперь вся общая механика
  * (вкладки-источники, доступность «Применить», «Очистить»/«Отменить»/«Применить»,
  * закрытие) живёт в {@link createResourcePicker}, а здесь остаётся только
- * конфигурация под иконку и мостик к прежнему контракту `onPick`.
+ * конфигурация под иконку и мостик к контракту `onPick`.
  *
  * Источники: «Эмодзи» (полный набор Unicode 16.0), «Библиотека» (значки
  * иконочной библиотеки с поиском), «Иконки мыслей» (сетка иконок типов),
@@ -23,12 +23,21 @@
  * Разворачивается категория эмодзи и выделяется текущий значок; на вкладке
  * «Библиотека» уже выбранный значок делает «Применить» активной — смена только
  * цвета не требует повторного поиска.
+ *
+ * 0.12.1, цикл приёмки. Над вкладками — строка ПОСЛЕДНИХ иконок (задача
+ * 0fc95a2b): ≤10 ячеек 24×24 любых видов, свежие первыми, без дублей; клик
+ * применяет иконку и (при успехе) закрывает диалог. История — клиент-локальная
+ * (`editor/recent-icons.ts`, ключ по пользователю), записывается только при
+ * успешном `onPick`.
  */
 
 import type { Attachment, IconKind } from '@etn/shared';
+import { div } from '../lib/dom.js';
+import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
 import { dataUrlBytes, ICON_MAX_BYTES, makeIconPreview } from '../lib/image-preview.js';
 import { notice } from '../lib/notice.js';
+import { renderLibraryIcon } from '../lib/ui/icon.js';
 import { store } from '../state.js';
 import { etnimgUrl } from './markdown-field.js';
 import {
@@ -41,6 +50,12 @@ import {
   type ResourceSourceContext,
 } from './resource-picker.js';
 import { attachmentPickerSourceTab, type AttachmentPick } from './attachment-picker.js';
+import {
+  loadRecentIcons,
+  recordRecentIcon,
+  renderRecentIcons,
+  type RecentIconEntry,
+} from './recent-icons.js';
 
 /** The original picked file, carried to the caller for the attachment upload. */
 export type IconPickSource = ResourceFileSource;
@@ -65,6 +80,18 @@ export interface IconPickResult {
   attachmentId?: string | null;
 }
 
+/**
+ * Обратная совместимая расширенная форма успеха `onPick` (задача 0fc95a2b):
+ * для файловых/буферных выборов вложение создаёт ВЫЗЫВАЮЩАЯ сторона, и только
+ * она знает его id — возвращает его для записи в историю последних иконок.
+ * Прежняя форма `boolean` поддержана (`true`/`false`).
+ */
+export interface IconPickOutcome {
+  ok: boolean;
+  /** id созданного вложения (картинка-файл); `null` — вложения нет. */
+  attachmentId?: string | null;
+}
+
 /** Opens the icon picker. `onPick` should persist the result and return success. */
 export function showIconDialog(opts: {
   current: {
@@ -77,7 +104,7 @@ export function showIconDialog(opts: {
      */
     attachmentId?: string | null;
   };
-  onPick: (result: IconPickResult) => Promise<boolean>;
+  onPick: (result: IconPickResult) => Promise<boolean | IconPickOutcome>;
 }): void {
   const { current, onPick } = opts;
 
@@ -111,11 +138,32 @@ export function showIconDialog(opts: {
       ? current.icon
       : undefined;
 
-  /** Применяет результат и закрывает диалог при успехе сохранения. */
+  /** Закрытие каркаса — нужно клику по строке последних иконок. */
+  let pickerClose: (() => void) | null = null;
+  /** Контекст источника для кликов вне вкладок (строка последних иконок). */
+  const pickerContext = (): ResourceSourceContext => ({
+    close: () => pickerClose?.(),
+    setReady: () => undefined,
+  });
+
+  /**
+   * Применяет результат и (при успехе) закрывает диалог. Успех фиксирует иконку
+   * в истории последних выбранных (задача 0fc95a2b); id вложения знает
+   * вызывающая сторона — оно приходит в расширенной форме {@link IconPickOutcome}.
+   */
   const submit =
     (result: IconPickResult) =>
     async (ctx: ResourceSourceContext): Promise<void> => {
-      if (await onPick(result)) ctx.close();
+      const outcome = await onPick(result);
+      const ok = typeof outcome === 'boolean' ? outcome : outcome.ok;
+      if (!ok) return;
+      const resolvedAttachmentId =
+        typeof outcome === 'boolean'
+          ? (result.attachmentId ?? null)
+          : (outcome.attachmentId ?? result.attachmentId ?? null);
+      const entry = entryFromResult(result, resolvedAttachmentId);
+      if (entry !== null) recordRecentIcon(currentUserId(), entry);
+      ctx.close();
     };
 
   /**
@@ -160,17 +208,24 @@ export function showIconDialog(opts: {
     await submit({ icon, kind: 'image', color: null, attachmentId: a.id })(ctx);
   }
 
-  createResourcePicker({
+  // --- Строка последних иконок (задача 0fc95a2b) ---------------------------
+  const recentEntries = loadRecentIcons(currentUserId());
+  const aboveTabs =
+    recentEntries.length > 0 ? buildRecentRow(recentEntries, submit, pickerContext) : undefined;
+
+  pickerClose = createResourcePicker({
     title: 'Иконка',
     size: 'm',
     // Открытие на вкладке вида текущей иконки; без выбора — «Эмодзи».
     activeTab,
+    ...(aboveTabs !== undefined ? { aboveTabs } : {}),
     applyLabel: t('actions.apply'),
     noneLabel: t('actions.reset'),
     noneDanger: true,
     nonePlacement: 'leading',
     onNone: (close) => {
-      void onPick({ icon: null, kind: 'emoji', color: null }).then((ok) => {
+      void onPick({ icon: null, kind: 'emoji', color: null }).then((outcome) => {
+        const ok = typeof outcome === 'boolean' ? outcome : outcome.ok;
         if (ok) close();
       });
     },
@@ -207,6 +262,97 @@ export function showIconDialog(opts: {
       }),
     ],
   });
+}
+
+// ---------------------------------------------------------------------------
+// Последние иконки (задача 0fc95a2b)
+// ---------------------------------------------------------------------------
+
+/** id текущего пользователя для ключа истории; до входа — общий `anon`. */
+function currentUserId(): string {
+  return store.state.me?.id ?? 'anon';
+}
+
+/**
+ * Запись истории по результату выбора (задача 0fc95a2b). Формы без хранения:
+ * `data:`-превью иконки ТИПА (у типов нет вложений) и «Очистить» — `null`.
+ * Картинка-вложение хранится по `attachmentId`, картинка-URL — по адресу.
+ */
+function entryFromResult(
+  result: IconPickResult,
+  resolvedAttachmentId: string | null,
+): RecentIconEntry | null {
+  if (result.icon === null) return null;
+  if (result.kind === 'emoji') return { kind: 'emoji', icon: result.icon, color: null };
+  if (result.kind === 'icon') return { kind: 'icon', icon: result.icon, color: result.color };
+  // kind === 'image'
+  if (result.source !== undefined) {
+    // Файл/буфер: id вложения знает только вызывающая сторона.
+    return resolvedAttachmentId !== null
+      ? { kind: 'image-attachment', attachmentId: resolvedAttachmentId, color: null }
+      : null;
+  }
+  const attId = resolvedAttachmentId ?? result.attachmentId ?? null;
+  if (attId !== null) return { kind: 'image-attachment', attachmentId: attId, color: null };
+  if (result.icon.startsWith('data:')) return null; // data:-превью типа — не храним
+  return { kind: 'image-url', icon: result.icon, color: null };
+}
+
+/** Восстанавливает результат выбора из записи истории (для клика по ячейке). */
+function resultFromEntry(entry: RecentIconEntry, preview?: string): IconPickResult | null {
+  switch (entry.kind) {
+    case 'emoji':
+      return { icon: entry.icon, kind: 'emoji', color: null };
+    case 'icon':
+      return { icon: entry.icon, kind: 'icon', color: entry.color };
+    case 'image-url':
+      return { icon: entry.icon, kind: 'image', color: null };
+    case 'image-attachment':
+      if (preview === undefined) return null;
+      return { icon: preview, kind: 'image', color: null, attachmentId: entry.attachmentId };
+  }
+}
+
+/**
+ * Строит строку последних иконок «над вкладками» (слот каркаса `aboveTabs`).
+ * Виды рисует {@link renderRecentIcons}; превью вложения резолвится лениво.
+ */
+function buildRecentRow(
+  entries: readonly RecentIconEntry[],
+  submit: (result: IconPickResult) => (ctx: ResourceSourceContext) => Promise<void>,
+  pickerContext: () => ResourceSourceContext,
+): HTMLElement {
+  const host = div('recent-icons');
+  host.title = t('icons.recent.title');
+  host.setAttribute('aria-label', t('icons.recent.title'));
+  renderRecentIcons(host, entries, {
+    renderLibrary: (cell, name, color) => {
+      const options: { size: number; color?: string } = { size: 18 };
+      if (color !== null) options.color = color;
+      void renderLibraryIcon(cell, name, options, '💭');
+    },
+    resolveAttachment: (id) => resolveRecentAttachmentPreview(id),
+    onPick: (entry, preview) => {
+      const result = resultFromEntry(entry, preview);
+      if (result === null) return;
+      void submit(result)(pickerContext());
+    },
+    labelFor: () => t('icons.recent.apply'),
+  });
+  return host;
+}
+
+/** Лениво резолвит превью вложения истории (по id) в `data:`- или URL-строку. */
+async function resolveRecentAttachmentPreview(attachmentId: string): Promise<string | null> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return null;
+  try {
+    const a = await etn.attachments.get(networkId, attachmentId);
+    if (a.kind === 'url') return a.url ?? null;
+    return await attachmentIconPreview(a);
+  } catch {
+    return null;
+  }
 }
 
 /**
