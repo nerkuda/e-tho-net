@@ -26,7 +26,7 @@
 
 import type { IconKind, ThoughtType } from '@etn/shared';
 import { button, div, el, span } from '../lib/dom.js';
-import { showDialog, type DialogSize } from '../lib/dialog.js';
+import { showDialog, type DialogButton, type DialogSize } from '../lib/dialog.js';
 import { EMOJI_GROUPS } from '../lib/emoji-data.js';
 import { t } from '../lib/i18n.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
@@ -94,6 +94,12 @@ export interface ResourcePickerConfig {
   aboveTabs?: HTMLElement;
   /** Подпись нижней «Применить». */
   applyLabel: string;
+  /**
+   * Дополнительные кнопки футера ПЕРЕД «Отменой» (слот каркаса). Диалог иконки
+   * ставит сюда «Вставить из буфера» (задача 78eaf07a). Порядок: «без ресурса»
+   * (leading) → эти кнопки → «Отмена» → «без ресурса» (trailing) → «Применить».
+   */
+  footerLeadingButtons?: DialogButton[];
   /** Подпись кнопки «без ресурса»; не задана — кнопки нет. */
   noneLabel?: string;
   /** «Без ресурса» — опасное действие (красная кнопка), по умолчанию `false`. */
@@ -176,6 +182,7 @@ export function createResourcePicker(config: ResourcePickerConfig): () => void {
   };
   const buttons = [
     ...(noneButton !== null && config.nonePlacement === 'leading' ? [noneButton] : []),
+    ...(config.footerLeadingButtons ?? []),
     cancelButton,
     ...(noneButton !== null && config.nonePlacement !== 'leading' ? [noneButton] : []),
     applyButton,

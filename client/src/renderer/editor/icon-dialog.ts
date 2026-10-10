@@ -28,11 +28,14 @@
  * 0fc95a2b): ≤10 ячеек 24×24 любых видов, свежие первыми, без дублей; клик
  * применяет иконку и (при успехе) закрывает диалог. История — клиент-локальная
  * (`editor/recent-icons.ts`, ключ по пользователю), записывается только при
- * успешном `onPick`.
+ * успешном `onPick`. В футере — «Вставить из буфера» (задача 78eaf07a):
+ * доступна, если буфер содержит эмодзи-текст или картинку; эмодзи применяется
+ * как обычный выбор, картинка проходит по пути файла (`source`).
  */
 
 import type { Attachment, IconKind } from '@etn/shared';
 import { div } from '../lib/dom.js';
+import type { DialogButton } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
 import { dataUrlBytes, ICON_MAX_BYTES, makeIconPreview } from '../lib/image-preview.js';
@@ -50,6 +53,7 @@ import {
   type ResourceSourceContext,
 } from './resource-picker.js';
 import { attachmentPickerSourceTab, type AttachmentPick } from './attachment-picker.js';
+import { emojiFromClipboardText, fileFromImageDataUrl } from './clipboard-icon.js';
 import {
   loadRecentIcons,
   recordRecentIcon,
@@ -213,12 +217,73 @@ export function showIconDialog(opts: {
   const aboveTabs =
     recentEntries.length > 0 ? buildRecentRow(recentEntries, submit, pickerContext) : undefined;
 
+  /** Применяет иконку-картинку из буфера по пути файла (`source`). */
+  async function applyClipboardImage(dataUrl: string): Promise<void> {
+    let preview = dataUrl;
+    try {
+      if (dataUrlBytes(preview) > ICON_MAX_BYTES) preview = await makeIconPreview(preview);
+    } catch {
+      return; // нечитаемая картинка — тихо ничего не делаем
+    }
+    const file = fileFromImageDataUrl(preview, Date.now());
+    if (file === null) return;
+    await submit({
+      icon: preview,
+      kind: 'image',
+      color: null,
+      source: { dataUrl: preview, mime: file.type, name: file.name },
+    })(pickerContext());
+  }
+
+  // --- «Вставить из буфера» (задача 78eaf07a) ------------------------------
+  /** Прочитанное содержимое буфера: эмодзи либо картинка (`null` — непригоден). */
+  let clipboardPick: { emoji: string } | { image: string } | null = null;
+  let clipboardBtn: HTMLButtonElement | null = null;
+  const clipboardButton: DialogButton = {
+    label: t('icons.clipboard.paste'),
+    keepOpen: true,
+    ref: (node) => {
+      clipboardBtn = node;
+      node.disabled = true;
+    },
+    onClick: () => {
+      const pick = clipboardPick;
+      if (pick === null) return;
+      if ('emoji' in pick) {
+        void submit({ icon: pick.emoji, kind: 'emoji', color: null })(pickerContext());
+      } else {
+        void applyClipboardImage(pick.image);
+      }
+    },
+  };
+
+  /**
+   * Читает буфер один раз при открытии (в буфер не пишем): эмодзи-текст или
+   * картинка → кнопка доступна; пусто/сбой → недоступна, без сообщений.
+   */
+  async function readClipboardPick(): Promise<void> {
+    let result: { text: string | null; imagePngDataUrl: string | null };
+    try {
+      result = await etn.system.readClipboard();
+    } catch {
+      return;
+    }
+    if (result.imagePngDataUrl !== null) clipboardPick = { image: result.imagePngDataUrl };
+    else {
+      const emoji = emojiFromClipboardText(result.text);
+      if (emoji === null) return;
+      clipboardPick = { emoji };
+    }
+    if (clipboardBtn !== null) clipboardBtn.disabled = false;
+  }
+
   pickerClose = createResourcePicker({
     title: 'Иконка',
     size: 'm',
     // Открытие на вкладке вида текущей иконки; без выбора — «Эмодзи».
     activeTab,
     ...(aboveTabs !== undefined ? { aboveTabs } : {}),
+    footerLeadingButtons: [clipboardButton],
     applyLabel: t('actions.apply'),
     noneLabel: t('actions.reset'),
     noneDanger: true,
@@ -262,6 +327,7 @@ export function showIconDialog(opts: {
       }),
     ],
   });
+  void readClipboardPick();
 }
 
 // ---------------------------------------------------------------------------

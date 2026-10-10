@@ -457,6 +457,7 @@ function buildApi(): EtnBridgeApi {
     },
     system: {
       appInfo: () => invoke('system.appInfo'),
+      readClipboard: () => invoke('system.readClipboard'),
       health: () => invoke('system.health'),
       version: () => invoke('system.version'),
       export: (networkId, request) => invoke('system.export', networkId, request),

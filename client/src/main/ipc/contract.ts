@@ -247,6 +247,18 @@ export type PickFileResult =
   | { status: 'cancel' };
 
 /**
+ * Содержимое системного буфера обмена, прочитанное главным процессом
+ * (задача 78eaf07a). Картинки из буфера рендереру недоступны
+ * (`navigator.clipboard` умеет только текст; требование «Разделение процессов
+ * клиента» 7f7b2d57), поэтому буфер читает main: `text` — текстовое содержимое
+ * (или `null`), `imagePngDataUrl` — картинка как `data:`-URL PNG (или `null`).
+ */
+export interface ClipboardReadResult {
+  text: string | null;
+  imagePngDataUrl: string | null;
+}
+
+/**
  * Client application info for the «О программе» dialog (08-ui-spec.md §8.2).
  * All fields are read in the main process (`app.getVersion()` /
  * `process.versions`) — no server connection is involved.
@@ -1368,6 +1380,13 @@ export interface EtnApi {
      * a connection.
      */
     appInfo(): Promise<AppInfo>;
+    /**
+     * Читает системный буфер обмена главным процессом (задача 78eaf07a):
+     * текст и/или картинку как `data:`-URL PNG. Рендерер не имеет доступа к
+     * картинкам буфера (`navigator.clipboard` — только текст), поэтому чтение
+     * живёт в main. Ничего в буфер не пишется; сбой чтения → оба поля `null`.
+     */
+    readClipboard(): Promise<ClipboardReadResult>;
     health(): Promise<HealthResponse>;
     version(): Promise<VersionResponse>;
     export(networkId: string, request: ExportRequest): Promise<ExportJobStartResult>;

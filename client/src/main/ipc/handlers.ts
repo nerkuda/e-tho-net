@@ -21,7 +21,8 @@ import { CLIENT_META_KEY, type CurrentUser, type FocusDir, type LinkTypeFilterIn
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
-import type { AppInfo, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
+import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
+import { readClipboard } from './clipboard.js';
 import { classifyOpenTarget } from './open-target.js';
 import { printHtmlToPdf, type PdfPrintWindow } from '../print-pdf.js';
 import { errText } from '../../renderer/lib/dom.js';
@@ -1859,6 +1860,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set('system.pickImage', bind(() => pickImageFile()));
   handlers.set('system.pickFile', bind(() => pickAnyFile()));
+  handlers.set('system.readClipboard', bind(() => readSystemClipboard()));
   handlers.set('system.openPath', bind((filePath: string) => openPathShell(filePath)));
   handlers.set(
     'system.openAttachment',
@@ -2153,6 +2155,20 @@ const IMAGE_MIME: Record<string, string> = {
   svg: 'image/svg+xml',
   bmp: 'image/bmp',
 };
+
+/**
+ * Reads the OS clipboard for the icon dialog (задача 78eaf07a): text and/or an
+ * image (`data:` PNG URL). Electron is imported lazily so this module stays
+ * loadable in the Node test runner; a missing runtime (Node) or an OS failure
+ * resolves the empty result via {@link readClipboard}.
+ */
+async function readSystemClipboard(): Promise<ClipboardReadResult> {
+  const { clipboard } = (await import('electron')) as unknown as {
+    clipboard?: import('./clipboard.js').ClipboardReader;
+  };
+  if (clipboard === undefined) return { text: null, imagePngDataUrl: null };
+  return readClipboard(clipboard);
+}
 
 /**
  * Opens the OS file picker for an image and returns the ORIGINAL file as a
