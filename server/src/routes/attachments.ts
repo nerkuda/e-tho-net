@@ -78,6 +78,24 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
   return async (app: FastifyInstance) => {
     const { requireNetworkMember } = app.accessControl;
 
+    /**
+     * События добавления владений (0.12.1, задача f77382ba, сущность 109be255):
+     * на каждое новое владение — один `attachment.owner.added` с парой
+     * (вложение, объект). Подписчики перечитывают список/счётчики владельца.
+     */
+    const ownerAddedEvents = (
+      attachmentId: string,
+      refs: readonly { owner_type: AttachmentOwnerType; owner_id: string }[],
+    ): AnyWriteEvent[] =>
+      refs.map((ref) => ({
+        type: 'attachment.owner.added' as const,
+        data: {
+          attachment_id: attachmentId,
+          owner_type: ref.owner_type,
+          owner_id: ref.owner_id,
+        },
+      }));
+
     /** Register list/create for one owner kind. */
     const registerOwnerRoutes = (pathBase: string, ownerType: AttachmentOwnerType) => {
       app.get(
@@ -146,7 +164,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           };
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
           const outcome = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-            const { attachment: created, reused } = createAttachmentFileResult(
+            const { attachment: created, reused, ownership_added } = createAttachmentFileResult(
               ndb,
               ownerType,
               input.owner_id,
@@ -155,7 +173,18 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             );
             return {
               result: { created, reused },
-              events: [{ type: 'attachment.created', data: { attachment: created } }],
+              // Дедуп-переиспользование (ADR e3a35864): новой строки нет, к
+              // существующему вложению добавлен владелец — эмитим владение, не
+              // `attachment.created` (задача f77382ba, сущность 109be255).
+              // Повторная загрузка тому же владельцу нового владения не даёт —
+              // событий нет (запись не изменилась).
+              events: reused
+                ? ownership_added
+                  ? ownerAddedEvents(created.id, [
+                      { owner_type: ownerType, owner_id: input.owner_id },
+                    ])
+                  : []
+                : [{ type: 'attachment.created', data: { attachment: created } }],
               activity: [{ kind: 'attachment', action: 'created', attachment: created }],
             };
           });
@@ -237,14 +266,9 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
           const copied = copyAttachment(ndb, input.attachment_id, parsed, req.auth!.user.id);
           // С муль-владением (0.12.1) копия = добавление владельцев той же
-          // строке; новых строк нет. Отдельные события владельцев —
-          // `attachment.owner.added` (задача f77382ba). Пока эмитим одно
-          // `attachment.updated`, чтобы подписчики перечитали вложение.
-          const events: AnyWriteEvent[] =
-            copied.added.length === 0
-              ? []
-              : [{ type: 'attachment.updated', data: { id: input.attachment_id, changes: {} } }];
-          return { result: copied, events };
+          // строке; на каждое новое владение — `attachment.owner.added`
+          // (задача f77382ba, операция 45903e1d).
+          return { result: copied, events: ownerAddedEvents(input.attachment_id, copied.added) };
         });
         sendSuccess(reply, result);
       },
@@ -292,8 +316,8 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
     // Владельцы вложения (0.12.1, задачи 6ba247cc/4924d61e, ADR 9f90b010):
     // добавить одного/нескольких владельцев и снять ОДНО владение. Снятие
     // последнего живого владельца во всех слоях удаляет вложение (owner-cleanup).
-    // События владельцев (`attachment.owner.added`/`removed`) ставит задача
-    // f77382ba; здесь — одно `attachment.updated`, чтобы подписчики перечитали.
+    // События владений (`attachment.owner.added`/`removed`) — задача f77382ba,
+    // сущность 109be255, операции 6ba247cc/4924d61e.
     app.post(
       '/networks/:networkId/attachments/:id/owners',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
@@ -308,11 +332,8 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             input.owner_ids as string[],
             req.auth!.user.id,
           );
-          const events: AnyWriteEvent[] =
-            added.added.length === 0
-              ? []
-              : [{ type: 'attachment.updated', data: { id: input.attachment_id, changes: {} } }];
-          return { result: added, events };
+          // На каждое новое владение — `attachment.owner.added` (операция 6ba247cc).
+          return { result: added, events: ownerAddedEvents(input.attachment_id, added.added) };
         });
         sendSuccess(reply, result);
       },
@@ -323,18 +344,32 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestAttachmentOwnerRemove, req);
+        const ownerType = input.owner_type as AttachmentOwnerType;
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const result = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
           const removed = removeOwner(
             ndb,
             input.attachment_id,
-            input.owner_type as AttachmentOwnerType,
+            ownerType,
             input.owner_id as string,
             input.confirm === true,
           );
-          const events: AnyWriteEvent[] = removed.attachment_deleted
-            ? [{ type: 'attachment.deleted', data: { id: input.attachment_id } }]
-            : [{ type: 'attachment.updated', data: { id: input.attachment_id, changes: {} } }];
+          // Снятие владения — `attachment.owner.removed` (операция 4924d61e);
+          // уход последнего владельца дополнительно удаляет вложение —
+          // `attachment.deleted`, чтобы подписчики сбросили запись из кэша.
+          const events: AnyWriteEvent[] = [
+            {
+              type: 'attachment.owner.removed',
+              data: {
+                attachment_id: input.attachment_id,
+                owner_type: ownerType,
+                owner_id: input.owner_id as string,
+              },
+            },
+            ...(removed.attachment_deleted
+              ? ([{ type: 'attachment.deleted', data: { id: input.attachment_id } }] as const)
+              : []),
+          ];
           return { result: removed, events };
         });
         sendSuccess(reply, result);

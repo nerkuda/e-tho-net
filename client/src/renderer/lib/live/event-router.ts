@@ -134,23 +134,56 @@ const NEIGHBOURHOOD_KEYS = (): string[] => [
  */
 const PUBLICATION_COMPOSITION_KEYS = (): string[] => [queryKeys.publicationAssemblyAll()];
 
-/** Владелец вложения из нормализованного кэша (для точной инвалидации). */
-function attachmentOwnerKeyFromCache(attachmentId: string): string | null {
-  const entity = getEntity<{ owner_type?: unknown; owner_id?: unknown }>(
+/** Владельцы вложения из нормализованного кэша (для точной инвалидации). */
+function attachmentOwnerRefsFromCache(
+  attachmentId: string,
+): { owner_type: string; owner_id: string }[] {
+  const entity = getEntity<{ owner_type?: unknown; owner_id?: unknown; owners?: unknown }>(
     'attachment',
     attachmentId,
   );
+  // Мульти-владение (0.12.1): запись несёт агрегат `owners[]` — гасим списки
+  // ВСЕХ владельцев, а не только первичного. Старые записи без агрегата —
+  // падение на одиночные `owner_type`/`owner_id` (обратная совместимость).
+  const owners = entity?.owners;
+  if (Array.isArray(owners)) {
+    const refs = owners
+      .filter(
+        (o): o is { owner_type: string; owner_id: string } =>
+          typeof (o as { owner_type?: unknown })?.owner_type === 'string' &&
+          typeof (o as { owner_id?: unknown })?.owner_id === 'string' &&
+          (o as { owner_id: string }).owner_id !== '',
+      )
+      .map((o) => ({ owner_type: o.owner_type, owner_id: o.owner_id }));
+    if (refs.length > 0) return refs;
+  }
   const ownerType = entity?.owner_type;
   const ownerId = entity?.owner_id;
   if (typeof ownerType === 'string' && typeof ownerId === 'string' && ownerId !== '') {
-    return queryKeys.attachments(ownerType, ownerId);
+    return [{ owner_type: ownerType, owner_id: ownerId }];
   }
-  return null;
+  return [];
 }
 
-/** Инвалидация списков вложений после изменения: точный ключ владельца или все. */
+/** Инвалидация списков вложений после изменения: ключи владельцев или все. */
 function attachmentListKeys(attachmentId: string): string[] {
-  return [attachmentOwnerKeyFromCache(attachmentId) ?? queryKeys.attachmentsAll()];
+  const refs = attachmentOwnerRefsFromCache(attachmentId);
+  return refs.length > 0
+    ? refs.map((ref) => queryKeys.attachments(ref.owner_type, ref.owner_id))
+    : [queryKeys.attachmentsAll()];
+}
+
+/**
+ * Ключи, гасимые изменением состава владельцев вложения (`attachment.owner.*`,
+ * а также создание/удаление): список и счётчики-индикаторы затронутого
+ * владельца (требование `0502e045` — счётчики считают владения объекта).
+ */
+function attachmentOwnerKeys(ownerType: string, ownerId: string): string[] {
+  return [
+    queryKeys.indicators(ownerId),
+    queryKeys.attachments(ownerType, ownerId),
+    ...(ownerType === 'thought' ? [queryKeys.focus(ownerId)] : []),
+  ];
 }
 
 /**
@@ -298,11 +331,17 @@ export const realtimeRoutes: RouteTable = {
   'attachment.created': [
     ruleFor<'attachment.created'>({
       patch: (evt) => put('attachment', evt.data.attachment.id, evt.data.attachment, evt),
-      invalidate: (evt) => [
-        queryKeys.indicators(evt.data.attachment.owner_id),
-        queryKeys.attachments(evt.data.attachment.owner_type, evt.data.attachment.owner_id),
-        queryKeys.focus(evt.data.attachment.owner_id),
-      ],
+      // Мульти-владение (0.12.1): снимок несёт `owners[]` — гасим списки и
+      // счётчики ВСЕХ владельцев, не только первичного (требование 0502e045).
+      // Без агрегата — падение на одиночные `owner_type`/`owner_id`.
+      invalidate: (evt) => {
+        const a = evt.data.attachment;
+        const owners =
+          a.owners !== undefined && a.owners.length > 0
+            ? a.owners
+            : [{ owner_type: a.owner_type, owner_id: a.owner_id }];
+        return owners.flatMap((o) => attachmentOwnerKeys(o.owner_type, o.owner_id));
+      },
     }),
   ],
   'attachment.updated': [
@@ -322,6 +361,19 @@ export const realtimeRoutes: RouteTable = {
     }),
     ruleFor<'attachment.deleted'>({
       patch: (evt) => drop('attachment', evt.data.id),
+    }),
+  ],
+  // Владения общего вложения (0.12.1, задача f77382ba, сущность 109be255):
+  // состав владений изменился у ДРУГОГО клиента — гасим список и счётчики
+  // затронутого владельца, подписчики вкладки перечитывают набор (0502e045).
+  'attachment.owner.added': [
+    ruleFor<'attachment.owner.added'>({
+      invalidate: (evt) => attachmentOwnerKeys(evt.data.owner_type, evt.data.owner_id),
+    }),
+  ],
+  'attachment.owner.removed': [
+    ruleFor<'attachment.owner.removed'>({
+      invalidate: (evt) => attachmentOwnerKeys(evt.data.owner_type, evt.data.owner_id),
     }),
   ],
   'property-value.set': [

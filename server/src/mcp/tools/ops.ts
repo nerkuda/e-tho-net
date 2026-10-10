@@ -88,7 +88,7 @@ import {
 import {
   AttachmentFileCopier,
   copyAttachment,
-  createAttachmentFromInput,
+  createAttachmentFromInputResult,
   listAttachmentUsage,
   removeOwner,
   searchAttachments,
@@ -294,7 +294,7 @@ const HANDLERS: Record<string, OpHandler> = {
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
       const attachment = runWrite(ndb, fx, () => {
-        const created = createAttachmentFromInput(
+        const { attachment: created, reused, ownership_added } = createAttachmentFromInputResult(
           ndb,
           a.owner_type,
           a.owner_id,
@@ -326,7 +326,24 @@ const HANDLERS: Record<string, OpHandler> = {
         }
         return {
           result: created,
-          events: [{ type: 'attachment.created', data: { attachment: created } }],
+          // Дедуп-переиспользование: строки нет, добавлен владелец —
+          // `attachment.owner.added` вместо ложного `attachment.created`
+          // (0.12.1, задача f77382ba). Повтор тому же владельцу нового
+          // владения не даёт — событий нет.
+          events: reused
+            ? ownership_added
+              ? [
+                  {
+                    type: 'attachment.owner.added' as const,
+                    data: {
+                      attachment_id: created.id,
+                      owner_type: a.owner_type,
+                      owner_id: a.owner_id,
+                    },
+                  },
+                ]
+              : []
+            : [{ type: 'attachment.created', data: { attachment: created } }],
           activity: [{ kind: 'attachment', action: 'created', attachment: created }],
           audit: {
             action: 'etn.attachments.add',
@@ -355,11 +372,16 @@ const HANDLERS: Record<string, OpHandler> = {
         );
         return {
           result: copied,
-          // Нет новых строк-копий (муль-владение): одно событие правки вложения.
-          events:
-            copied.added.length === 0
-              ? []
-              : [{ type: 'attachment.updated' as const, data: { id: a.attachment_id, changes: {} } }],
+          // Нет новых строк-копий (муль-владение): на каждое добавленное
+          // владение — `attachment.owner.added` (операция 45903e1d).
+          events: copied.added.map((ref) => ({
+            type: 'attachment.owner.added' as const,
+            data: {
+              attachment_id: a.attachment_id,
+              owner_type: ref.owner_type,
+              owner_id: ref.owner_id,
+            },
+          })),
           activity: [],
           audit: {
             action: 'etn.attachments.copy',
@@ -439,12 +461,21 @@ const HANDLERS: Record<string, OpHandler> = {
         const result = removeOwner(ndb, a.attachment_id, a.owner_type, a.owner_id);
         return {
           result,
-          // Вложение удалено owner-cleanup'ом — `attachment.deleted`; иначе
-          // событие правки, чтобы подписчики перечитали вложение.
+          // Снятие владения — `attachment.owner.removed` (операция 4924d61e);
+          // уход последнего владельца дополнительно удаляет вложение —
+          // `attachment.deleted` (0.12.1, задача f77382ba).
           events: [
-            result.attachment_deleted
-              ? { type: 'attachment.deleted' as const, data: { id: a.attachment_id } }
-              : { type: 'attachment.updated' as const, data: { id: a.attachment_id, changes: {} } },
+            {
+              type: 'attachment.owner.removed' as const,
+              data: {
+                attachment_id: a.attachment_id,
+                owner_type: a.owner_type,
+                owner_id: a.owner_id,
+              },
+            },
+            ...(result.attachment_deleted
+              ? ([{ type: 'attachment.deleted' as const, data: { id: a.attachment_id } }] as const)
+              : []),
           ],
           audit: {
             action: 'etn.attachments.removeOwner',

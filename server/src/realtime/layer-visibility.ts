@@ -101,6 +101,27 @@ function extractRowRef(event: AnyRealtimeEvent): RowRef | null {
     case 'attachment.updated':
     case 'attachment.deleted':
       return byId('attachments', data.id);
+    case 'attachment.owner.added':
+    case 'attachment.owner.removed': {
+      // Владение — ветвимая строка `attachment_owners` с естественным ключом
+      // (attachment_id, owner_type, owner_id); снятие в основе удаляет её
+      // физически, поэтому отсутствие строки тоже означает видимость (0.12.1,
+      // задача f77382ba).
+      const d = data as { attachment_id?: unknown; owner_type?: unknown; owner_id?: unknown };
+      if (
+        typeof d.attachment_id !== 'string' ||
+        typeof d.owner_type !== 'string' ||
+        typeof d.owner_id !== 'string'
+      ) {
+        return null;
+      }
+      return {
+        table: 'attachment_owners',
+        where: 't.attachment_id = ? AND t.owner_type = ? AND t.owner_id = ?',
+        params: [d.attachment_id, d.owner_type, d.owner_id],
+        visibleWhenMissing: event.type === 'attachment.owner.removed',
+      };
+    }
     case 'property-value.set':
     case 'property-value.deleted': {
       const d = data as { owner_type?: unknown; owner_id?: unknown; property_id?: unknown };

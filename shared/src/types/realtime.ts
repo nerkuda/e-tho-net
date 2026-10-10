@@ -10,6 +10,7 @@
 import type {
   CommentKind,
   CommentOwnerType,
+  AttachmentOwnerType,
   FocusDir,
   NetworkRole,
   PropertyOwnerType,
@@ -93,6 +94,9 @@ export const REALTIME_EVENT_TYPES = [
   'attachment.created',
   'attachment.updated',
   'attachment.deleted',
+  // ownership of a shared attachment (0.12.1, задача f77382ba)
+  'attachment.owner.added',
+  'attachment.owner.removed',
   // property values (§4.5)
   'property-value.set',
   'property-value.deleted',
@@ -273,6 +277,18 @@ export interface AttachmentUpdatedData {
 }
 export interface AttachmentDeletedData {
   id: string;
+}
+/**
+ * Нагрузка событий владений вложения (0.12.1, задача f77382ba, сущность
+ * `109be255`): `attachment.owner.added` / `attachment.owner.removed` несут пару
+ * (вложение, объект), к которой добавилось/ушло владение. Полный снимок
+ * вложения НЕ прикладывается: подписчики перечитывают список по владельцу
+ * (ключ `attachments:@<owner_type>:@<owner_id>`) и его счётчики-индикаторы.
+ */
+export interface AttachmentOwnerChangedData {
+  attachment_id: string;
+  owner_type: AttachmentOwnerType;
+  owner_id: string;
 }
 
 // property values
@@ -531,6 +547,8 @@ export interface RealtimeEventMap {
   'attachment.created': AttachmentCreatedData;
   'attachment.updated': AttachmentUpdatedData;
   'attachment.deleted': AttachmentDeletedData;
+  'attachment.owner.added': AttachmentOwnerChangedData;
+  'attachment.owner.removed': AttachmentOwnerChangedData;
   'property-value.set': PropertyValueSetData;
   'property-value.deleted': PropertyValueDeletedData;
   'network.updated': NetworkUpdatedData;
@@ -634,6 +652,8 @@ export const REALTIME_EVENT_AUDIENCE = {
   'attachment.created': 'network',
   'attachment.updated': 'network',
   'attachment.deleted': 'network',
+  'attachment.owner.added': 'network',
+  'attachment.owner.removed': 'network',
   'property-value.set': 'network',
   'property-value.deleted': 'network',
   'network.updated': 'network',

@@ -784,7 +784,7 @@ export function createAttachmentResult(
         // её в текущий слой, затем пишем владение.
         const position = typeof input.position === 'number' ? Math.trunc(input.position) : nextOwnerPosition(ndb, ot, ownerId);
         const reused = reuseAttachmentRow(ndb, reusedId, ot, ownerId, position, actorUserId);
-        if (reused !== null) return { attachment: reused, reused: true };
+        if (reused !== null) return { attachment: reused.attachment, reused: true };
       }
     }
     const id = randomUUID();
@@ -857,14 +857,17 @@ function reuseAttachmentRow(
   ownerId: string,
   position: number,
   actorUserId: string,
-): Attachment | null {
+): { attachment: Attachment; ownership_added: boolean } | null {
   if (getAttachment(ndb, attachmentId) === null) {
     if (!materializeShadowFromAnyLayer(ndb, 'attachments', attachmentId)) return null;
   }
+  let ownershipAdded = false;
   if (liveOwnership(ndb, attachmentId, ownerType, ownerId) === undefined) {
     insertOwnership(ndb, attachmentId, ownerType, ownerId, position, actorUserId);
+    ownershipAdded = true;
   }
-  return getAttachment(ndb, attachmentId);
+  const attachment = getAttachment(ndb, attachmentId);
+  return attachment === null ? null : { attachment, ownership_added: ownershipAdded };
 }
 
 /** Maximum decoded size of an uploaded attachment file, 10 MiB. */
@@ -929,7 +932,7 @@ export function createAttachmentFileResult(
   ownerId: string,
   input: AttachmentFileInput,
   actorUserId: string,
-): { attachment: Attachment; reused: boolean } {
+): { attachment: Attachment; reused: boolean; ownership_added: boolean } {
   const ot = validateOwnerType(ownerType);
   const mime = input.mime_type.trim().toLowerCase();
   if (mime === '') {
@@ -970,7 +973,13 @@ export function createAttachmentFileResult(
     const reused = ndb.transaction(() =>
       reuseAttachmentRow(ndb, reusedId, ot, ownerId, nextOwnerPosition(ndb, ot, ownerId), actorUserId),
     );
-    if (reused !== null) return { attachment: reused, reused: true };
+    if (reused !== null) {
+      return {
+        attachment: reused.attachment,
+        reused: true,
+        ownership_added: reused.ownership_added,
+      };
+    }
   }
 
   const dir = path.join(path.dirname(ndb.dbPath), 'attachments');
@@ -983,7 +992,7 @@ export function createAttachmentFileResult(
   const filePath = path.join(dir, name);
   writeFileSync(filePath, buffer);
 
-  return createAttachmentResult(
+  const created = createAttachmentResult(
     ndb,
     ot,
     ownerId,
@@ -996,6 +1005,8 @@ export function createAttachmentFileResult(
     },
     actorUserId,
   );
+  // Новая строка — владение создано вместе с ней.
+  return { ...created, ownership_added: true };
 }
 
 /**
@@ -1033,6 +1044,23 @@ export function createAttachmentFromInput(
   input: AttachmentCreateInput,
   actorUserId: string,
 ): Attachment {
+  return createAttachmentFromInputResult(ndb, ownerType, ownerId, input, actorUserId).attachment;
+}
+
+/**
+ * {@link createAttachmentFromInput} с признаком переиспользования (0.12.1,
+ * задача f77382ba): при дедупликации файла по хэшу (ADR `e3a35864`) строка не
+ * создаётся — к существующему вложению добавляется владелец, `reused: true`.
+ * Фасадам это нужно, чтобы вместо `attachment.created` (ложного «создано»)
+ * эмитить `attachment.owner.added` для нового владения.
+ */
+export function createAttachmentFromInputResult(
+  ndb: NetworkDb,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+  input: AttachmentCreateInput,
+  actorUserId: string,
+): { attachment: Attachment; reused: boolean; ownership_added: boolean } {
   const hasData =
     input.data_base64 !== undefined &&
     input.data_base64 !== null &&
@@ -1066,7 +1094,11 @@ export function createAttachmentFromInput(
         },
       );
     }
-    return createAttachment(ndb, ownerType, ownerId, input, actorUserId);
+    return {
+      attachment: createAttachment(ndb, ownerType, ownerId, input, actorUserId),
+      reused: false,
+      ownership_added: true,
+    };
   }
   if (input.kind !== 'file') {
     throw new EtnError('VALIDATION_ERROR', "data_base64 requires kind='file'", {
@@ -1083,7 +1115,7 @@ export function createAttachmentFromInput(
       { fields: conflicts },
     );
   }
-  return createAttachmentFile(
+  return createAttachmentFileResult(
     ndb,
     ownerType,
     ownerId,

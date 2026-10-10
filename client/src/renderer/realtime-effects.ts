@@ -25,11 +25,37 @@ import { PREF_KEY, parseStoredCanvasLinkFilter, type AnyRealtimeEvent } from '@e
 
 import { resyncAfterLayerSwitch, scheduleRefresh } from './app.js';
 import { invalidateRef } from './canvas/canvas.js';
-import { inNeighbourhood } from './lib/focus-neighbourhood.js';
+import { inFocusNeighbourhood, inNeighbourhood } from './lib/focus-neighbourhood.js';
 import { reloadTypeCatalogues } from './lib/type-catalogues.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { syncLayersForTab } from './screens/layers.js';
 import { store } from './state.js';
+
+/**
+ * Участвует ли владелец события вложения в текущей окрестности: мысль — по
+ * `inNeighbourhood`, связь — по рёбрам окрестности (`inFocusNeighbourhood`);
+ * публикации окрестность холста не ведёт (0.12.1, задача f77382ba).
+ */
+function attachmentOwnerInNeighbourhood(ownerType: string, ownerId: string): boolean {
+  return ownerType === 'thought'
+    ? inNeighbourhood(ownerId)
+    : ownerType === 'link'
+      ? inFocusNeighbourhood('link', ownerId)
+      : false;
+}
+
+/** Любой владелец снимка вложения в окрестности (мульти-владение, 0502e045). */
+function attachmentOwnersInNeighbourhood(attachment: {
+  owner_type: string;
+  owner_id: string;
+  owners?: readonly { owner_type: string; owner_id: string }[];
+}): boolean {
+  const owners =
+    attachment.owners !== undefined && attachment.owners.length > 0
+      ? attachment.owners
+      : [{ owner_type: attachment.owner_type, owner_id: attachment.owner_id }];
+  return owners.some((o) => attachmentOwnerInNeighbourhood(o.owner_type, o.owner_id));
+}
 
 /**
  * Применяет производные эффекты одного принятого realtime-события.
@@ -66,7 +92,18 @@ export function applyDerivedRealtime(evt: AnyRealtimeEvent): void {
     case 'attachment.created':
       // Вложения — подобъекты сущности и фокус-ответ не меняют, но появление
       // вложения в окрестности фокуса освежает холст (индикатор — слой).
-      if (inNeighbourhood(evt.data.attachment.owner_id)) scheduleRefresh();
+      // Мульти-владение (0.12.1): гейт считает ВСЕ владельцы снимка
+      // (требование 0502e045), с падением на первичного владельца.
+      if (attachmentOwnersInNeighbourhood(evt.data.attachment)) scheduleRefresh();
+      break;
+
+    case 'attachment.owner.added':
+    case 'attachment.owner.removed':
+      // Другой клиент добавил/снял владение вложения (задача f77382ba):
+      // для показанной сущности меняется индикатор 📎 — освежаем окрестность.
+      if (attachmentOwnerInNeighbourhood(evt.data.owner_type, evt.data.owner_id)) {
+        scheduleRefresh();
+      }
       break;
 
     case 'user-preference.updated':
