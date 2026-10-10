@@ -165,3 +165,38 @@ describe('CSS: растяжение вкладки «Иконки мыслей»
     );
   });
 });
+
+describe('вкладка «Библиотека»: поиск и цвет закреплены сверху (ошибка 705d834b)', () => {
+  beforeEach(() => installShim());
+
+  it('поиск и выбор цвета — в одной закреплённой строке, сетка отдельно', () => {
+    const tab = libraryIconSourceTab({ onPick: () => undefined });
+    const root = tab.build(ctx()) as unknown as ShimElement;
+    const head = root.querySelector('.icon-source-head');
+    assert.ok(head !== null, 'закреплённая строка построена');
+    assert.ok(head!.querySelector('.icon-color-row') !== null, 'выбор цвета — в закреплённой строке');
+    assert.ok(
+      findByTag(head!, 'input').some((el) => (el as any).type === 'search'),
+      'поиск — в закреплённой строке',
+    );
+    const grid = root.querySelector('.icon-library-grid');
+    assert.ok(grid !== null, 'сетка построена');
+    assert.ok(head!.parent === root && grid!.parent === root, 'строка и сетка — соседи на корне');
+  });
+});
+
+describe('CSS: поиск и цвет вкладки «Библиотека» закреплены (ошибка 705d834b)', () => {
+  it('строка закреплена сверху, сетка прокручивается внутри себя', () => {
+    const css = fs.readFileSync(
+      path.resolve(import.meta.dirname, '..', 'src', 'renderer', 'styles', 'editor.css'),
+      'utf8',
+    );
+    assert.match(css, /\.icon-source-head\s*\{[^}]*flex:\s*none/s, 'строка не сжимается и не уезжает');
+    assert.match(css, /\.icon-source-head\s*\{[^}]*position:\s*sticky/s, 'строка приклеена сверху');
+    assert.match(
+      css,
+      /\.icon-source\s*>\s*\.icon-library-grid\s*\{[^}]*max-height:\s*none/s,
+      'сетка прокручивается внутри себя, а не тянет строку поиска',
+    );
+  });
+});

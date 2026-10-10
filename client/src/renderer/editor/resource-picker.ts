@@ -344,13 +344,16 @@ export function libraryIconSourceTab(opts: {
       });
       colorRow.append(colorToggle.row, colorControl.root);
 
-      const row = div('icon-source-row');
+      // Поиск и выбор цвета — на ОДНОЙ закреплённой сверху строке (ошибка
+      // 705d834b): строка не прокручивается вместе с сеткой значков (её высоту
+      // забирает прокручиваемая сетка, см. `.icon-source-head` в editor.css).
+      const head = div('icon-source-head');
       const input = fieldInput({ type: 'search', placeholder: t('icons.library.search') });
-      row.append(input);
+      head.append(colorRow, input);
 
       const hint = el('p', 'muted', t('icons.library.loading'));
       const grid = div('icon-library-grid');
-      box.append(colorRow, row, hint, grid);
+      box.append(head, hint, grid);
 
       let catalog: IconCatalog | null = null;
       /** Текущий выбор значка (начальный или кликнутый) — источник `apply`. */

@@ -755,6 +755,43 @@
 /* Вкладка «Библиотека» диалога иконки (задача 4b80a1b3): живой поиск +
    сетка значков каталога. Значок рисует фасад lib/ui/icon.ts, ячейка —
    обёртка-кнопка. */
+.icon-source {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Строка «поиск + выбор цвета» закреплена СВЕРХУ вкладки и не прокручивается
+   вместе с сеткой значков (ошибка 705d834b): flex:none + sticky, поиск
+   забирает остаток ширины, сетка прокручивается ВНУТРИ себя. */
+.icon-source-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.icon-source-head .icon-color-row {
+  margin-bottom: 0;
+}
+
+.icon-source-head .ui-input {
+  flex: 1 1 auto;
+}
+
+.icon-source > .icon-library-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
 .icon-library-grid {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
