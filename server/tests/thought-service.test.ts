@@ -17,7 +17,7 @@ import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
-import { createAttachment } from '../src/domain/attachment-service.js';
+import { addOwners, createAttachment } from '../src/domain/attachment-service.js';
 import {
   addSynonyms,
   countNeighbors,
@@ -356,6 +356,34 @@ describe(
                 ),
               (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
             );
+          } finally {
+            ndb.close();
+          }
+        });
+
+        it('accepts a foreign image attachment once this thought becomes its owner (0.12.1)', () => {
+          const ndb = createInMemoryNetworkDb();
+          try {
+            const a = createThought(ndb, { title: 'A' }, USER);
+            const b = createThought(ndb, { title: 'B' }, USER);
+            const attachmentId = seedIconAttachment(ndb, b.id);
+            // Клиентский сценарий «выбрать недавнюю иконку из другого объекта»:
+            // объект сначала становится владельцем вложения (addOwners), и лишь
+            // затем валидация иконки по ЖИВОМУ ВЛАДЕНИЮ (hasOwnership, 0.12.1,
+            // задача 08869cfc) пропускает ссылку на чужую прежде картинку.
+            addOwners(ndb, attachmentId, 'thought', [a.id], USER);
+            const updated = updateThought(
+              ndb,
+              a.id,
+              {
+                icon: 'data:image/png;base64,AAAA',
+                icon_kind: 'image',
+                icon_attachment_id: attachmentId,
+              },
+              a.version,
+              USER,
+            );
+            assert.equal(updated.icon_attachment_id, attachmentId);
           } finally {
             ndb.close();
           }
