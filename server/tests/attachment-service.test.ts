@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { EtnError } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError } from '@etn/shared';
 
 import { DEFAULT_MAX_LENGTH } from '@etn/markdown';
 
@@ -31,6 +31,7 @@ import {
   getAttachment,
   getAttachmentContent,
   getAttachmentRawByPath,
+  hasLiveOwnershipAnywhere,
   hasOwnership,
   listAttachments,
   removeOwner,
@@ -1164,6 +1165,142 @@ describe(
         assert.equal(listAttachments(ndb, 'thought', t)[0]!.title, 'Новое имя');
       } finally {
         ndb.close();
+      }
+    });
+
+    // --- дедуп и судьба файла МЕЖДУ слоями (0.12.1, ADR e3a35864) ------------
+
+    const LAYER_A = '11111111-1111-4111-8111-aaaaaaaaaaaa';
+    const LAYER_B = '22222222-2222-4222-8222-bbbbbbbbbbbb';
+    const LAYER_SERVICE = '33333333-3333-4333-8333-cccccccccccc';
+
+    /** Вставить строку слоя (is_service по умолчанию 0). */
+    function seedLayerRow(
+      ndb: NetworkDb,
+      id: string,
+      parentId: string,
+      service = false,
+    ): void {
+      const now = new Date().toISOString();
+      ndb
+        .prepare(
+          `INSERT INTO layers (id, parent_id, title, is_service, is_base, depth, created_by, created_at, last_activity_at)
+           VALUES (?, ?, 'Слой', ?, 0, ?, 'u', ?, ?)`,
+        )
+        .run(id, parentId, service ? 1 : 0, parentId === BASE_LAYER_ID ? 1 : 2, now, now);
+    }
+
+    it('dedup reuses a row found in another layer (raw search across all layers)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-xl-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-xl', path.join(tmp, 'data.db'));
+      try {
+        seedLayerRow(ndb, LAYER_A, BASE_LAYER_ID);
+        seedLayerRow(ndb, LAYER_B, LAYER_A);
+        const ownerA = seedThought(ndb, 'Владелец A');
+        const ownerBase = seedThought(ndb, 'Владелец основы');
+        const ownerB = seedThought(ndb, 'Владелец B');
+        const b64 = Buffer.from('cross-layer-bytes').toString('base64');
+
+        // 1) Строка рождается в слое A.
+        ndb.useLayer(LAYER_A);
+        const first = createAttachmentFileResult(
+          ndb,
+          'thought',
+          ownerA,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(first.reused, false);
+        const filePath = first.attachment.file_path!;
+        assert.ok(existsSync(filePath));
+
+        // 2) Та же картинка в ОСНОВЕ — строка из слоя A не видна, но дедуп
+        //    обязан найти её по СЫРОЙ таблице и переиспользовать.
+        ndb.useLayer(BASE_LAYER_ID);
+        const inBase = createAttachmentFileResult(
+          ndb,
+          'thought',
+          ownerBase,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(inBase.reused, true);
+        assert.equal(inBase.attachment.id, first.attachment.id);
+        assert.equal(inBase.attachment.file_path, filePath);
+
+        // 3) Та же картинка в СЛОЕ B — тоже переиспользование.
+        ndb.useLayer(LAYER_B);
+        const inB = createAttachmentFileResult(
+          ndb,
+          'thought',
+          ownerB,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(inB.reused, true);
+        assert.equal(inB.attachment.id, first.attachment.id);
+
+        // Физически строка одна, файл один; владения — по слоям.
+        const rawCount = ndb
+          .prepare('SELECT COUNT(*) AS n FROM attachments WHERE content_hash IS NOT NULL')
+          .get() as { n: number };
+        assert.equal(rawCount.n, 1, 'физические байты не дублируются');
+        const ownedIn = (ownerId: string, layerId: string): boolean =>
+          ndb
+            .prepare(
+              'SELECT 1 FROM attachment_owners WHERE attachment_id = ? AND owner_id = ? AND layer_id = ?',
+            )
+            .get(first.attachment.id, ownerId, layerId) !== undefined;
+        assert.ok(ownedIn(ownerA, LAYER_A));
+        assert.ok(ownedIn(ownerBase, BASE_LAYER_ID));
+        assert.ok(ownedIn(ownerB, LAYER_B), 'владение записано в ТЕКУЩЕМ слое');
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('removeOwner ignores SERVICE layers when deciding the file fate (1d0620a8)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-svc-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-svc', path.join(tmp, 'data.db'));
+      try {
+        seedLayerRow(ndb, LAYER_SERVICE, BASE_LAYER_ID, true);
+        const owner = seedThought(ndb, 'Владелец');
+        const other = seedThought(ndb, 'Другой');
+        const up = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'p', mime_type: 'image/png', data_base64: Buffer.from('svc-bytes').toString('base64') },
+          USER,
+        ).attachment;
+        const fp = up.file_path!;
+        // Копия строки владения в служебном (резервном) слое — как её кладёт
+        // merge-резерв. Она НЕ должна удерживать файл.
+        ndb
+          .prepare(
+            `INSERT INTO attachment_owners
+               (id, layer_id, deleted, base_version, attachment_id, owner_type, owner_id, position, created_at, created_by)
+             VALUES (?, ?, 0, 0, ?, 'thought', ?, 0, ?, 'u')`,
+          )
+          .run(randomUUID(), LAYER_SERVICE, up.id, other, new Date().toISOString());
+
+        const r = removeOwner(ndb, up.id, 'thought', owner);
+        assert.deepEqual(r, { removed: true, attachment_deleted: true });
+        assert.equal(getAttachment(ndb, up.id), null);
+        assert.equal(hasLiveOwnershipAnywhere(ndb, up.id), false);
+        assert.equal(existsSync(fp), false, 'служебный слой не удерживает файл');
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
       }
     });
   },
