@@ -162,8 +162,16 @@ describe('волна 7, п.2: пустые мысли-тексты видны б
       /if \(empty\)\s*\{[\s\S]*?el\('p',\s*'pub-doc-text-line'\)/,
       'пустой текст получает абзац-заглушку',
     );
-    assert.match(WS, /renderTextBody\(node,\s*block\.html\)/, 'текст-блок идёт через renderTextBody');
-    assert.match(WS, /renderTextBody\(node,\s*html\)/, 'точечная правка пустого текста — тоже');
+    assert.match(
+      WS,
+      /renderTextBody\(node,\s*block\.html,\s*block\.md\)/,
+      'текст-блок идёт через renderTextBody (аргументом и исходный md)',
+    );
+    assert.match(
+      WS,
+      /renderTextBody\(node,\s*html,/,
+      'точечная правка пустого текста — тоже',
+    );
     assert.match(WS, /addEventListener\('dblclick'/, 'пустой блок редактируется двойным кликом');
     assert.match(CSS, /\.pub-doc-text-empty\s*\{[^}]*min-height/s, 'пустому блоку задана высота строки');
   });

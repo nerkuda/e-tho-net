@@ -69,6 +69,10 @@ import {
 } from '../../lib/ui/drag-list.js';
 import { buildCover } from './cover.js';
 import {
+  htmlHasTransclusionMarkup,
+  renderExpandedTransclusionHtml,
+} from '../../editor/transclusion.js';
+import {
   feedSelectionFromDom,
   type DomSelectionLike,
   type FeedSourceSelection,
@@ -850,6 +854,7 @@ export function mountPublicationWorkspace(
    */
   function patchBlockText(thoughtId: string, html: string): void {
     for (const node of blockNodesForThought(thoughtId)) {
+      const block = blockForKey(node.dataset?.['blockKey']);
       if (node.classList.contains('pub-doc-section')) {
         const target = node.querySelector<HTMLElement>('.pub-doc-preamble');
         if (target === null) continue;
@@ -857,11 +862,10 @@ export function mountPublicationWorkspace(
       } else {
         // Текст-блок: `renderTextBody` сам решает, что показать при пустом
         // комментарии; `renderHtml` внутри сносит грип DnD — возвращаем его.
-        renderTextBody(node, html);
+        renderTextBody(node, html, block !== null && block.kind === 'text' ? block.md : '');
         node.prepend(makeGrip(t('publications.ws.dragHandle')));
       }
       // Синхронизируем модель (иначе сигнатура не отразит правку).
-      const block = blockForKey(node.dataset?.['blockKey']);
       if (block === null) continue;
       if (block.kind === 'section') block.preambleHtml = html;
       else if (block.kind === 'text') block.html = html;
@@ -1824,7 +1828,7 @@ export function mountPublicationWorkspace(
    * и скрыть (исключение). Заглушка — пустой абзац, высоту даёт CSS
    * `.pub-doc-text-line`; на неё же опирается фиттинг/навигация.
    */
-  function renderTextBody(node: HTMLElement, html: string): void {
+  function renderTextBody(node: HTMLElement, html: string, md: string): void {
     renderHtml(node, html);
     const empty = html.trim() === '';
     node.classList.toggle('pub-doc-text-empty', empty);
@@ -1833,6 +1837,32 @@ export function mountPublicationWorkspace(
       line.setAttribute('aria-hidden', 'true');
       node.append(line);
     }
+    // Серверный `body_html` собран из исходного `body_md` и ссылку-трансклюзию
+    // не разворачивает (ошибка 075602b4) — блок показывает только ссылку.
+    // Тексты с такой ссылкой достраиваем развёрнутым HTML общим путём просмотра
+    // (`renderExpandedTransclusionHtml`) — тем же, что и комментарий мысли.
+    if (htmlHasTransclusionMarkup(html)) void expandTextTransclusions(node, md);
+  }
+
+  /**
+   * Асинхронно заменяет серверный HTML текста развёрнутым (трансклюзии). Грип
+   * ручного порядка снимается `replaceChildren` — возвращаем его после
+   * перерисовки. Сбой/отсутствие развёртки — серверный HTML остаётся.
+   */
+  async function expandTextTransclusions(node: HTMLElement, md: string): Promise<void> {
+    const networkId = store.state.networkId;
+    if (networkId === null || md.trim() === '') return;
+    const expanded = await renderExpandedTransclusionHtml(md, networkId);
+    if (expanded === null || !node.isConnected) return;
+    const grip =
+      node.firstElementChild !== null &&
+      node.firstElementChild.classList.contains(DRAG_HANDLE_CLASS)
+        ? node.firstElementChild
+        : null;
+    // `renderHtml` сносит содержимое (и грип) через innerHTML — возвращаем грип.
+    renderHtml(node, expanded);
+    node.classList.remove('pub-doc-text-empty');
+    if (grip !== null) node.prepend(grip);
   }
 
   function buildBlock(block: DocBlock): HTMLElement {
@@ -1898,7 +1928,7 @@ export function mountPublicationWorkspace(
       node.dataset['thoughtId'] = block.thoughtId;
       node.dataset['blockKey'] = block.key;
       node.tabIndex = -1;
-      renderTextBody(node, block.html);
+      renderTextBody(node, block.html, block.md);
       // Ручка ручного порядка текста среди текстов своего раздела (d13fd645).
       setTooltip(node, t('publications.ws.dragKeyboardHint'));
       node.prepend(makeGrip(t('publications.ws.dragHandle')));

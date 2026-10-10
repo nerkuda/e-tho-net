@@ -963,6 +963,31 @@ export async function expandTransclusionsForClipboard(raw: string): Promise<stri
   }
 }
 
+/**
+ * Разворачивает трансклюзии текста и рендерит его HTML с блочными обёртками —
+ * ОБЩИЙ путь просмотра (тот же `expandWithLoader`, что у поля markdown и
+ * комментария мысли). Нужен лентам, рисующим серверный `body_html`: тот собран
+ * из исходного `body_md`, где ссылка-трансклюзия не развёрнута, и блок остаётся
+ * невидимым (ошибка e5e1f609). Разбор и развёртка — только через
+ * `@etn/markdown` (сторож `own-transclusion-outside-package`).
+ *
+ * `null` — в тексте нет трансклюзий (рендерить нечего) либо сбой загрузки
+ * источника: вызывающий оставляет серверный HTML как есть.
+ */
+export async function renderExpandedTransclusionHtml(
+  raw: string,
+  networkId: string,
+  load: TransclusionSourceLoader = defaultTransclusionLoader(networkId),
+): Promise<string | null> {
+  if (parseTransclusions(raw).length === 0) return null;
+  try {
+    const { text } = await expandWithLoader(raw, load);
+    return renderTransclusionMarkdown(text);
+  } catch {
+    return null;
+  }
+}
+
 /** Строит данные ссылки для отрисовки (развёртка и состояния ошибок). */
 async function loadEntry(
   ref: TransclusionRef,
