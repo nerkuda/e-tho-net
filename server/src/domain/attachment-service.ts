@@ -295,7 +295,17 @@ function nextOwnerPosition(ndb: NetworkDb, ownerType: AttachmentOwnerType, owner
   return row.m + 1;
 }
 
-/** Вставить строку владения в текущем слое. */
+/**
+ * Вставить строку владения в текущем слое. Если в этом слое УЖЕ есть строка
+ * владения той же пары `(вложение, тип, объект)` — она переиспользуется:
+ * живая (idempotent-путь уже отсёк этот случай выше) либо НАДГРОБНАЯ
+ * (`deleted = 1`) — последняя ВОСКРЕШАЕТСЯ, а не вставляется заново. Физическая
+ * строка надгробия остаётся после `removeOwner` в слое, а UNIQUE-индекс
+ * `attachment_owners (attachment_id, owner_type, owner_id, layer_id)` не
+ * учитывает `deleted` — прямой INSERT падал бы с `UNIQUE constraint failed`
+ * (требование 9ff3accb: владение идемпотентно; сценарий «снять вложение и
+ * вернуть ту же картинку»).
+ */
 function insertOwnership(
   ndb: NetworkDb,
   attachmentId: string,
@@ -304,6 +314,26 @@ function insertOwnership(
   position: number,
   actorUserId: string,
 ): string {
+  // layers:physical-read — ищем и живую, и надгробную строку в целевом слое.
+  const existing = ndb
+    .prepare(
+      `SELECT id, deleted FROM attachment_owners -- layers:physical-read
+        WHERE attachment_id = ? AND owner_type = ? AND owner_id = ? AND layer_id = ? LIMIT 1`,
+    )
+    .get(attachmentId, ownerType, ownerId, ndb.layerId) as
+    | { id: string; deleted: number }
+    | undefined;
+  if (existing !== undefined) {
+    if (existing.deleted !== 0) {
+      // Воскрешение надгробия владения (§5.2): строка слоя снова жива.
+      ndb
+        .prepare(
+          'UPDATE attachment_owners SET deleted = 0, position = ? WHERE id = ? AND layer_id = ?',
+        )
+        .run(position, existing.id, ndb.layerId);
+    }
+    return existing.id;
+  }
   const id = randomUUID();
   const now = new Date().toISOString();
   ndb

@@ -1367,5 +1367,79 @@ describe(
         rmSync(tmp, { recursive: true, force: true });
       }
     });
+
+    it('removing then re-adding the same ownership in a layer does not collide (S4/S5)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-revive-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-revive', path.join(tmp, 'data.db'));
+      try {
+        seedLayerRow(ndb, LAYER_A, BASE_LAYER_ID);
+        const owner = seedThought(ndb, 'Владелец');
+        const b64 = Buffer.from('revive-bytes').toString('base64');
+
+        // Вложение живёт в ОСНОВЕ (владелец — owner), видно и в слое A.
+        ndb.useLayer(BASE_LAYER_ID);
+        const att = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        ).attachment;
+
+        // --- S5: removeOwner → addOwners той же пары в слое ------------------
+        ndb.useLayer(LAYER_A);
+        const r = removeOwner(ndb, att.id, 'thought', owner);
+        assert.equal(r.removed, true);
+        // Надгробная строка владения физически осталась в слое A.
+        const tomb = ndb
+          .prepare(
+            'SELECT deleted FROM attachment_owners WHERE attachment_id = ? AND owner_id = ? AND layer_id = ?',
+          )
+          .get(att.id, owner, LAYER_A) as { deleted: number } | undefined;
+        assert.equal(tomb?.deleted, 1, 'в слое A надгробие владения');
+
+        const added = addOwners(ndb, att.id, 'thought', [owner], USER);
+        assert.equal(added.skipped.length, 0, 'S5: владение возвращено без throw');
+        assert.ok(hasOwnership(ndb, att.id, 'thought', owner), 'S5: владение живо в слое A');
+        assert.equal(listAttachments(ndb, 'thought', owner).length, 1, 'S5: listAttachments=1');
+        assert.equal(
+          (
+            ndb
+              .prepare(
+                'SELECT deleted FROM attachment_owners WHERE attachment_id = ? AND owner_id = ? AND layer_id = ?',
+              )
+              .get(att.id, owner, LAYER_A) as { deleted: number }
+          ).deleted,
+          0,
+          'S5: надгробие воскрешено',
+        );
+
+        // --- S4: снять владение в слое → повторная загрузка тех же байт ------
+        removeOwner(ndb, att.id, 'thought', owner);
+        const again = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(again.reused, true, 'S4: байты переиспользованы, без throw');
+        assert.equal(again.attachment.id, att.id);
+        assert.notEqual(getAttachment(ndb, att.id), null, 'S4: вложение видно в слое A');
+        assert.equal(listAttachments(ndb, 'thought', owner).length, 1, 'S4: listAttachments=1');
+
+        // Основу не задели: владение и строка вложения там живы.
+        ndb.useLayer(BASE_LAYER_ID);
+        assert.ok(hasOwnership(ndb, att.id, 'thought', owner), 'основа не затронута');
+        assert.notEqual(getAttachment(ndb, att.id), null);
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
   },
 );

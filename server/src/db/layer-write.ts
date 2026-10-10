@@ -159,9 +159,21 @@ export function materializeShadowFromAnyLayer(
   id: string,
 ): boolean {
   const own = ndb
-    .prepare(`SELECT 1 FROM ${table} WHERE id = ? AND layer_id = ? LIMIT 1`)
-    .get(id, ndb.layerId);
-  if (own) return true;
+    .prepare(`SELECT deleted FROM ${table} WHERE id = ? AND layer_id = ? LIMIT 1`)
+    .get(id, ndb.layerId) as { deleted: number } | undefined;
+  if (own) {
+    if (own.deleted === 0) return true;
+    // Слой прятал строку (надгробие от прежнего удаления) — при переиспользовании
+    // она снова становится живой: UPDATE `deleted = 0`, а не no-op (иначе строка
+    // осталась бы невидимой, а владение — висячим). `base_version`/`version` не
+    // трогаем: у безверсионных таблиц (attachments) их нет, а воскрешение того же
+    // id не является новой правкой предка.
+    ndb
+      .prepare(`UPDATE ${table} SET deleted = 0 WHERE id = ? AND layer_id = ?`)
+      .run(id, ndb.layerId);
+    touchLayerActivity(ndb);
+    return true;
+  }
   // layers:physical-read — ищем живую сырую строку во всех слоях осознанно.
   // `pk` — суррогатный INTEGER PRIMARY KEY, он же rowid (у ветвимых таблиц
   // всегда есть, 13-layers.md §3.0.1); `SELECT rowid` вернул бы столбец под
