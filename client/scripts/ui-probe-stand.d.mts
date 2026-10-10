@@ -22,3 +22,29 @@ export interface StandOptions {
 
 export declare function parseArgs(argv: string[]): StandOptions;
 export declare function parseInitKey(log: string): string;
+
+/** Порты/адреса стенда для сборки команды прогона. */
+export interface StandPorts {
+  cdp: number;
+  serverRoot: string;
+  apiBase: string;
+}
+
+/** Сеид пробной сети (id сущностей для подстановок сценария). */
+export interface StandSeed {
+  networkId: string;
+  networkName: string;
+  homeId: string;
+  thoughtId: string;
+}
+
+/**
+ * Собрать argv для `ui-probe.mjs`. В интерактивном режиме (`opts.scenario ===
+ * null`) флаг `--scenario` не добавляется; `null` в аргументах не бывает.
+ */
+export declare function buildProbeArgs(
+  opts: StandOptions,
+  ports: StandPorts,
+  seed: StandSeed | null,
+  key: string,
+): string[];

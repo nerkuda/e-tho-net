@@ -150,6 +150,31 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Убрать каталог стенда не роняя прогон. Лок профиля Electron может держаться
+ * ещё мгновение после `taskkill` (`EBUSY`/`EPERM` на leveldb) — повторяем с
+ * паузой. Уборка НИКОГДА не бросает: её сбой не должен перекрывать код прогона
+ * (успешный сценарий обязан вернуть 0). Недоступный каталог оставляем на диске.
+ * @returns {Promise<boolean>} true — каталог удалён.
+ */
+async function removeDirWithRetry(dir, attempts = 6) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return true;
+    } catch (err) {
+      const code = err instanceof Error ? err.code : undefined;
+      // Занят/нет прав — дать локену отпустить; прочие ошибки тоже не фатальны.
+      if (attempt === attempts - 1) return false;
+      if (code !== 'EBUSY' && code !== 'EPERM' && code !== 'ENOTEMPTY' && code !== 'ENOENT') {
+        return false;
+      }
+      await sleep(300);
+    }
+  }
+  return false;
+}
+
 /** Свободный TCP-порт (0.0.0.0:0 → системный выбор). */
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -271,13 +296,12 @@ async function seedStand(base, key, opts) {
 }
 
 /** Подтянуть id/ключ/адрес сценарию; собрать команду ui-probe. */
-function buildProbeArgs(opts, ports, seed, key) {
-  const args = [
-    path.join(clientDir, 'scripts', 'ui-probe.mjs'),
-    '--scenario',
-    opts.scenario,
-    '--out',
-    opts.out,
+export function buildProbeArgs(opts, ports, seed, key) {
+  const args = [path.join(clientDir, 'scripts', 'ui-probe.mjs')];
+  // В интерактивном режиме сценария нет — не подставляем «--scenario null».
+  if (opts.scenario !== null) args.push('--scenario', opts.scenario);
+  if (opts.out !== null) args.push('--out', opts.out);
+  args.push(
     '--port',
     String(ports.cdp),
     '--api',
@@ -293,7 +317,7 @@ function buildProbeArgs(opts, ports, seed, key) {
     `seedTitle=${opts.seedTitle}`,
     '--var',
     `seedComment=${opts.seedComment}`,
-  ];
+  );
   if (seed !== null) {
     args.push('--var', `networkId=${seed.networkId}`);
     args.push('--var', `networkName=${seed.networkName}`);
@@ -406,9 +430,10 @@ async function main(argv) {
     }
 
     // --- 5б. Интерактивный стенд ------------------------------------------
+    const printable = probeArgs.filter((arg) => arg != null);
     process.stdout.write(
       'ui-probe-stand: стенд поднят. Прогон сценария:\n' +
-        `  node ${probeArgs.map((a) => (a.includes(' ') ? JSON.stringify(a) : a)).join(' ')}\n` +
+        `  node ${printable.map((arg) => (arg.includes(' ') ? JSON.stringify(arg) : arg)).join(' ')}\n` +
         `ui-probe-stand: каталог стенда ${work}\n` +
         'ui-probe-stand: Ctrl+C — остановить стенд.\n',
     );
@@ -420,7 +445,14 @@ async function main(argv) {
   } finally {
     stopAll();
     if (opts.scenario !== null && !opts.keep) {
-      rmSync(work, { recursive: true, force: true });
+      // Уборка не должна перекрывать код прогона: лок профиля после taskkill
+      // может держаться ещё мгновение (EBUSY) — повторяем, но не бросаем.
+      const removed = await removeDirWithRetry(work);
+      if (!removed) {
+        process.stderr.write(
+          `ui-probe-stand: временный каталог занят, оставлен: ${work}\n`,
+        );
+      }
     }
   }
 }

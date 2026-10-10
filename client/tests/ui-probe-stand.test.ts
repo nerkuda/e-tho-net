@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
-import { parseArgs, parseInitKey } from '../scripts/ui-probe-stand.mjs';
+import { parseArgs, parseInitKey, buildProbeArgs } from '../scripts/ui-probe-stand.mjs';
 
 test('parseArgs: значения по умолчанию', () => {
   const opts = parseArgs([]);
@@ -62,4 +62,40 @@ test('parseInitKey: извлекает ключ etn_… из вывода init',
   const log = 'ETN инициализирован.\n\nПервичный API-key:\n  etn_0123456789abcdef0123456789abcdef\n';
   assert.equal(parseInitKey(log), 'etn_0123456789abcdef0123456789abcdef');
   assert.throws(() => parseInitKey('нет ключа'), /не удалось извлечь/);
+});
+
+test('buildProbeArgs: со сценарием содержит --scenario и подстановки id', () => {
+  const opts = parseArgs(['--scenario', 's.json', '--out', 'out']);
+  const seed = {
+    networkId: 'n1',
+    networkName: 'Сеть',
+    homeId: 'h1',
+    thoughtId: 't1',
+  };
+  const args = buildProbeArgs(
+    opts,
+    { cdp: 9455, serverRoot: 'http://127.0.0.1:4455', apiBase: 'http://127.0.0.1:4455/api/v1' },
+    seed,
+    'etn_key',
+  );
+  assert.ok(args.includes('--scenario'));
+  assert.equal(args[args.indexOf('--scenario') + 1], opts.scenario);
+  assert.ok(args.includes('--var'));
+  assert.ok(args.includes('thoughtId=t1'));
+  assert.equal(args.includes('--api-key') ? args[args.indexOf('--api-key') + 1] : null, 'etn_key');
+  assert.equal(args.some((arg) => arg === null || arg === undefined), false);
+});
+
+test('buildProbeArgs: интерактив (scenario=null) без --scenario и без null-аргументов', () => {
+  const opts = parseArgs([]);
+  const args = buildProbeArgs(
+    opts,
+    { cdp: 9455, serverRoot: 'http://127.0.0.1:4455', apiBase: 'http://127.0.0.1:4455/api/v1' },
+    null,
+    'etn_key',
+  );
+  assert.equal(args.includes('--scenario'), false);
+  assert.equal(args.some((arg) => arg === null || arg === undefined), false);
+  // Печатная команда строится из тех же аргументов — «.includes» по null не падает.
+  assert.doesNotThrow(() => args.map((arg) => arg.includes(' ')));
 });
