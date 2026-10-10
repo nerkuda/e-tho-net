@@ -1190,7 +1190,7 @@ describe(
         .run(id, parentId, service ? 1 : 0, parentId === BASE_LAYER_ID ? 1 : 2, now, now);
     }
 
-    it('dedup reuses a row found in another layer (raw search across all layers)', () => {
+    it('dedup reuses a row found in another layer (raw search across layers, materializes across branches)', () => {
       const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-xl-'));
       const db = new DatabaseConstructor(':memory:');
       db.pragma('foreign_keys = ON');
@@ -1198,66 +1198,130 @@ describe(
       runMigrations(db, networkMigrationsDir());
       const ndb = new NetworkDb(db, 'att-xl', path.join(tmp, 'data.db'));
       try {
+        // Истинные братья: A и B — оба прямые дети основы.
         seedLayerRow(ndb, LAYER_A, BASE_LAYER_ID);
-        seedLayerRow(ndb, LAYER_B, LAYER_A);
-        const ownerA = seedThought(ndb, 'Владелец A');
+        seedLayerRow(ndb, LAYER_B, BASE_LAYER_ID);
         const ownerBase = seedThought(ndb, 'Владелец основы');
+        const ownerA = seedThought(ndb, 'Владелец A');
+        const ownerA2 = seedThought(ndb, 'Владелец A2');
         const ownerB = seedThought(ndb, 'Владелец B');
-        const b64 = Buffer.from('cross-layer-bytes').toString('base64');
+        const ownerA3 = seedThought(ndb, 'Владелец A3');
+        const ownerBase3 = seedThought(ndb, 'Владелец основы 3');
 
-        // 1) Строка рождается в слое A.
-        ndb.useLayer(LAYER_A);
-        const first = createAttachmentFileResult(
-          ndb,
-          'thought',
-          ownerA,
-          { title: 'x', mime_type: 'image/png', data_base64: b64 },
-          USER,
-        );
-        assert.equal(first.reused, false);
-        const filePath = first.attachment.file_path!;
-        assert.ok(existsSync(filePath));
+        const upload = (
+          owner: string,
+          bytes: string,
+        ): { id: string; file_path: string | null; reused: boolean } => {
+          const r = createAttachmentFileResult(
+            ndb,
+            'thought',
+            owner,
+            { title: 'x', mime_type: 'image/png', data_base64: Buffer.from(bytes).toString('base64') },
+            USER,
+          );
+          return { id: r.attachment.id, file_path: r.attachment.file_path, reused: r.reused };
+        };
 
-        // 2) Та же картинка в ОСНОВЕ — строка из слоя A не видна, но дедуп
-        //    обязан найти её по СЫРОЙ таблице и переиспользовать.
+        // S1. Подъём к предку: строка в ОСНОВЕ, загрузка в ПОТОМКЕ A — строка
+        //     видна через цепочку, материализация не нужна.
         ndb.useLayer(BASE_LAYER_ID);
-        const inBase = createAttachmentFileResult(
-          ndb,
-          'thought',
-          ownerBase,
-          { title: 'x', mime_type: 'image/png', data_base64: b64 },
-          USER,
-        );
-        assert.equal(inBase.reused, true);
-        assert.equal(inBase.attachment.id, first.attachment.id);
-        assert.equal(inBase.attachment.file_path, filePath);
+        const baseRow = upload(ownerBase, 'payload-ancestor');
+        assert.equal(baseRow.reused, false);
+        ndb.useLayer(LAYER_A);
+        const inA = upload(ownerA, 'payload-ancestor');
+        assert.equal(inA.reused, true, 'S1: предок виден из потомка');
+        assert.equal(inA.id, baseRow.id);
+        assert.notEqual(getAttachment(ndb, inA.id), null, 'S1: вложение видно в слое A');
+        assert.equal(listAttachments(ndb, 'thought', ownerA).length, 1, 'S1: listAttachments=1');
 
-        // 3) Та же картинка в СЛОЕ B — тоже переиспользование.
+        // S2. Брат→брат: строка в СЛОЕ A, загрузка в СЛОЕ B (вне цепочки) —
+        //     строка МАТЕРИАЛИЗУЕТСЯ в B, затем видна.
+        ndb.useLayer(LAYER_A);
+        const aRow = upload(ownerA2, 'payload-sibling');
+        assert.equal(aRow.reused, false);
         ndb.useLayer(LAYER_B);
-        const inB = createAttachmentFileResult(
-          ndb,
-          'thought',
-          ownerB,
-          { title: 'x', mime_type: 'image/png', data_base64: b64 },
-          USER,
-        );
-        assert.equal(inB.reused, true);
-        assert.equal(inB.attachment.id, first.attachment.id);
+        const inB = upload(ownerB, 'payload-sibling');
+        assert.equal(inB.reused, true, 'S2: брат переиспользован');
+        assert.equal(inB.id, aRow.id);
+        assert.notEqual(getAttachment(ndb, inB.id), null, 'S2: вложение видно в слое B');
+        assert.equal(listAttachments(ndb, 'thought', ownerB).length, 1, 'S2: listAttachments=1');
 
-        // Физически строка одна, файл один; владения — по слоям.
-        const rawCount = ndb
-          .prepare('SELECT COUNT(*) AS n FROM attachments WHERE content_hash IS NOT NULL')
-          .get() as { n: number };
-        assert.equal(rawCount.n, 1, 'физические байты не дублируются');
+        // S3. Потомок→предок: строка в СЛОЕ A, загрузка в ОСНОВЕ (вне цепочки
+        //     основы) — материализуется в основу, затем видна.
+        ndb.useLayer(LAYER_A);
+        const a2Row = upload(ownerA3, 'payload-up');
+        assert.equal(a2Row.reused, false);
+        ndb.useLayer(BASE_LAYER_ID);
+        const upBase = upload(ownerBase3, 'payload-up');
+        assert.equal(upBase.reused, true, 'S3: строка из потомка переиспользована');
+        assert.equal(upBase.id, a2Row.id);
+        assert.notEqual(getAttachment(ndb, upBase.id), null, 'S3: вложение видно в основе');
+        assert.equal(listAttachments(ndb, 'thought', ownerBase3).length, 1, 'S3: listAttachments=1');
+
+        // Байты не дублируются: на каждый payload — ровно один физический файл.
+        const files = new Set(
+          (
+            ndb
+              .prepare(
+                'SELECT DISTINCT file_path FROM attachments WHERE content_hash IS NOT NULL AND deleted = 0',
+              )
+              .all() as { file_path: string }[]
+          ).map((r) => r.file_path),
+        );
+        assert.equal(files.size, 3, 'три разных payload → три файла');
+        // Владения — в своих слоях.
         const ownedIn = (ownerId: string, layerId: string): boolean =>
           ndb
             .prepare(
               'SELECT 1 FROM attachment_owners WHERE attachment_id = ? AND owner_id = ? AND layer_id = ?',
             )
-            .get(first.attachment.id, ownerId, layerId) !== undefined;
-        assert.ok(ownedIn(ownerA, LAYER_A));
+            .get(baseRow.id, ownerId, layerId) !== undefined;
         assert.ok(ownedIn(ownerBase, BASE_LAYER_ID));
-        assert.ok(ownedIn(ownerB, LAYER_B), 'владение записано в ТЕКУЩЕМ слое');
+        assert.ok(ownedIn(ownerA, LAYER_A), 'S1: владение в слое A');
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('dedup does not reuse a tombstoned row (deleted = 0 only)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-tomb-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-tomb', path.join(tmp, 'data.db'));
+      try {
+        seedLayerRow(ndb, LAYER_A, BASE_LAYER_ID);
+        const owner = seedThought(ndb, 'Владелец');
+        const b64 = Buffer.from('tombstone-bytes').toString('base64');
+        ndb.useLayer(LAYER_A);
+        const first = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(first.reused, false);
+        // Снятие единственного владельца в слое → надгробие строки вложения.
+        const r = removeOwner(ndb, first.attachment.id, 'thought', owner);
+        assert.equal(r.removed, true);
+        assert.equal(getAttachment(ndb, first.attachment.id), null);
+
+        // Повторная загрузка тех же байт: НЕ reused (надгробие не переиспользуем),
+        // создаётся свежая строка, видимая в слое.
+        const again = createAttachmentFileResult(
+          ndb,
+          'thought',
+          owner,
+          { title: 'x', mime_type: 'image/png', data_base64: b64 },
+          USER,
+        );
+        assert.equal(again.reused, false, 'надгробие не переиспользуется');
+        assert.notEqual(again.attachment.id, first.attachment.id);
+        assert.notEqual(getAttachment(ndb, again.attachment.id), null);
+        assert.equal(listAttachments(ndb, 'thought', owner).length, 1);
       } finally {
         ndb.close();
         rmSync(tmp, { recursive: true, force: true });

@@ -143,6 +143,40 @@ export function materializeTombstone(ndb: NetworkDb, table: BranchableTable, id:
 }
 
 /**
+ * Материализовать конкретную СЫРУЮ строку (по логическому `id`) из ЛЮБОГО слоя
+ * в текущий — в обход представления `*_v`. Нужно дедупликации вложений
+ * (ADR `e3a35864`): найденная по хэшу строка может физически жить в слое ВНЕ
+ * цепочки текущего контекста (истинные братья, потомок для основы) — тогда
+ * {@link materializeShadow} её через представление не найдёт, а владение в
+ * текущем слое без собственной строки вложения осталось бы висячим. Копия —
+ * метаданные строки (байты не дублируются: `file_path` тот же), `id`
+ * сохраняется. No-op, если строка в текущем слое уже есть или живых сырых строк
+ * нет. Возвращает `true`, когда строка стала видимой в текущем слое.
+ */
+export function materializeShadowFromAnyLayer(
+  ndb: NetworkDb,
+  table: BranchableTable,
+  id: string,
+): boolean {
+  const own = ndb
+    .prepare(`SELECT 1 FROM ${table} WHERE id = ? AND layer_id = ? LIMIT 1`)
+    .get(id, ndb.layerId);
+  if (own) return true;
+  // layers:physical-read — ищем живую сырую строку во всех слоях осознанно.
+  // `pk` — суррогатный INTEGER PRIMARY KEY, он же rowid (у ветвимых таблиц
+  // всегда есть, 13-layers.md §3.0.1); `SELECT rowid` вернул бы столбец под
+  // именем `pk`, поэтому берём его явно.
+  const raw = ndb
+    .prepare(
+      `SELECT pk FROM ${table} WHERE id = ? AND deleted = 0 ORDER BY pk ASC LIMIT 1`, // layers:physical-read
+    )
+    .get(id) as { pk: number } | undefined;
+  if (!raw) return false;
+  insertShadowCopy(ndb, table, raw.pk, false);
+  return true;
+}
+
+/**
  * Удаление строки как прикладная операция: в основе — физический `DELETE`
  * (выметает строки всех слоёв — поведение до S4), в слое — надгробие
  * ({@link materializeTombstone}). Возвращает число физически удалённых строк

@@ -53,7 +53,7 @@ import {
 import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
+import { isBaseContext, materializeShadow, materializeShadowFromAnyLayer, materializeTombstone } from '../db/layer-write.js';
 
 /** Raw `attachments` row shape. */
 interface AttachmentRow {
@@ -529,23 +529,6 @@ function getAttachmentOrThrow(ndb: NetworkDb, id: string): Attachment {
 }
 
 /**
- * Вложение по логическому id из СЫРОЙ таблицы `attachments` — БЕЗ фильтра
- * видимости слоя. Нужно дедупликации (ADR `e3a35864`): переиспользуемая строка
- * могла быть найдена по хэшу в ДРУГОМ слое и не быть видимой в текущем. Владелец
- * в DTO — первичное видимое владение, иначе зеркальные колонки строки.
- */
-function getAttachmentAnyLayerOrThrow(ndb: NetworkDb, id: string): Attachment {
-  // layers:physical-read — дедупликация ищет и переиспользует строки всех слоёв.
-  const row = ndb
-    .prepare('SELECT * FROM attachments WHERE id = ? ORDER BY deleted ASC LIMIT 1') // layers:physical-read
-    .get(id) as AttachmentRow | undefined;
-  if (row === undefined) {
-    throw new EtnError('NOT_FOUND', `attachment ${id} not found`, { entity: 'attachment', id });
-  }
-  return rowToAttachment(row, primaryOwnership(ndb, id));
-}
-
-/**
  * List attachments attached to an owner (docs/03-server-api.md §11; 0.12.1, ADR
  * `9f90b010`): вложения-владения объекта, порядок — `attachment_owners.position`
  * (у каждого владельца свой порядок), при равенстве — по времени создания.
@@ -685,12 +668,11 @@ export function createAttachmentResult(
       const reusedId = findReusableByHash(ndb, hash);
       if (reusedId !== null) {
         // Переиспользование строки из ЛЮБОГО слоя (ADR e3a35864): строку и файл
-        // не создаём, владение пишем в ТЕКУЩЕМ слое.
+        // не создаём; если строка вне цепочки текущего контекста — материализуем
+        // её в текущий слой, затем пишем владение.
         const position = typeof input.position === 'number' ? Math.trunc(input.position) : nextOwnerPosition(ndb, ot, ownerId);
-        if (liveOwnership(ndb, reusedId, ot, ownerId) === undefined) {
-          insertOwnership(ndb, reusedId, ot, ownerId, position, actorUserId);
-        }
-        return { attachment: getAttachmentAnyLayerOrThrow(ndb, reusedId), reused: true };
+        const reused = reuseAttachmentRow(ndb, reusedId, ot, ownerId, position, actorUserId);
+        if (reused !== null) return { attachment: reused, reused: true };
       }
     }
     const id = randomUUID();
@@ -733,16 +715,44 @@ export function createAttachmentResult(
 
 /**
  * Id вложения с тем же хэшем файла, уже существующего в сети — по СЫРОЙ таблице
- * `attachments` ПО ВСЕМ слоям (ADR `e3a35864`); предпочтение — живой строке.
+ * `attachments` ПО ВСЕМ слоям (ADR `e3a35864`). Переиспользуются только ЖИВЫЕ
+ * строки (`deleted = 0`): надгробие в слое — «слой тоже удалил это вложение»,
+ * воскрешать его нельзя (иначе повторная загрузка тех же байт дала бы
+ * невидимое reused-вложение).
  */
 function findReusableByHash(ndb: NetworkDb, hash: string): string | null {
   // layers:physical-read — дедупликация ищет по всем слоям: байты не дублируются.
   const row = ndb
     .prepare(
-      "SELECT id FROM attachments WHERE kind = 'file' AND content_hash = ? ORDER BY deleted ASC LIMIT 1", // layers:physical-read
+      "SELECT id FROM attachments WHERE kind = 'file' AND content_hash = ? AND deleted = 0 LIMIT 1", // layers:physical-read
     )
     .get(hash) as { id: string } | undefined;
   return row?.id ?? null;
+}
+
+/**
+ * Переиспользовать найденную по хэшу строку вложения в текущем слое (ADR
+ * `e3a35864`): если строка физически лежит ВНЕ цепочки текущего контекста,
+ * материализуем её в текущий слой (тот же id, теневая копия метаданных без
+ * копии байт) — иначе владение осталось бы висячим; затем добавляем владение.
+ * Возвращает вложение (видимое в текущем слое) либо `null`, если материализовать
+ * не удалось (нет живой сырой строки) — тогда вызывающий создаёт новую.
+ */
+function reuseAttachmentRow(
+  ndb: NetworkDb,
+  attachmentId: string,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+  position: number,
+  actorUserId: string,
+): Attachment | null {
+  if (getAttachment(ndb, attachmentId) === null) {
+    if (!materializeShadowFromAnyLayer(ndb, 'attachments', attachmentId)) return null;
+  }
+  if (liveOwnership(ndb, attachmentId, ownerType, ownerId) === undefined) {
+    insertOwnership(ndb, attachmentId, ownerType, ownerId, position, actorUserId);
+  }
+  return getAttachment(ndb, attachmentId);
 }
 
 /** Maximum decoded size of an uploaded attachment file, 10 MiB. */
@@ -840,16 +850,15 @@ export function createAttachmentFileResult(
 
   // Дедупликация по хэшу содержимого (ADR e3a35864): совпало — не пишем файл и
   // не создаём строку, лишь добавляем владение существующему вложению. Строка
-  // ищется по СЫРОЙ таблице во ВСЕХ слоях (включая невидимые в текущем).
+  // ищется по СЫРОЙ таблице во ВСЕХ живых слоях; если она вне цепочки текущего
+  // контекста — материализуется в текущий слой.
   const hash = sha256Hex(buffer);
   const reusedId = findReusableByHash(ndb, hash);
   if (reusedId !== null) {
-    return ndb.transaction(() => {
-      if (liveOwnership(ndb, reusedId, ot, ownerId) === undefined) {
-        insertOwnership(ndb, reusedId, ot, ownerId, nextOwnerPosition(ndb, ot, ownerId), actorUserId);
-      }
-      return { attachment: getAttachmentAnyLayerOrThrow(ndb, reusedId), reused: true };
-    });
+    const reused = ndb.transaction(() =>
+      reuseAttachmentRow(ndb, reusedId, ot, ownerId, nextOwnerPosition(ndb, ot, ownerId), actorUserId),
+    );
+    if (reused !== null) return { attachment: reused, reused: true };
   }
 
   const dir = path.join(path.dirname(ndb.dbPath), 'attachments');
