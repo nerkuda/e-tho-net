@@ -26,11 +26,28 @@ describe('emojiFromClipboardText: эмодзи из текста буфера (7
     assert.equal(emojiFromClipboardText('👍🏽'), '👍🏽');
   });
 
+  it('принимает ФЛАГИ — пара Regional_Indicator без Extended_Pictographic (78eaf07a)', () => {
+    assert.equal(emojiFromClipboardText('🇷🇺'), '🇷🇺');
+    assert.equal(emojiFromClipboardText('🇺🇸'), '🇺🇸');
+    assert.equal(emojiFromClipboardText('  🇩🇪 '), '🇩🇪', 'флаг с пробелами вокруг');
+    // Одиночный региональный индикатор — не флаг.
+    assert.equal(emojiFromClipboardText('\u{1F1F7}'), null);
+  });
+
+  it('принимает keycap-последовательности (78eaf07a)', () => {
+    assert.equal(emojiFromClipboardText('#️⃣'), '#️⃣');
+    assert.equal(emojiFromClipboardText('*️⃣'), '*️⃣');
+    assert.equal(emojiFromClipboardText('1️⃣'), '1️⃣');
+    // Решётка/звёздочка/цифра БЕЗ U+20E3 — не keycap.
+    assert.equal(emojiFromClipboardText('#'), null);
+    assert.equal(emojiFromClipboardText('*'), null);
+  });
+
   it('отвергает буквы/цифры и обычный текст', () => {
     assert.equal(emojiFromClipboardText('abc'), null);
     assert.equal(emojiFromClipboardText('a😀'), null, 'буква рядом — не эмодзи-иконка');
     assert.equal(emojiFromClipboardText('1'), null);
-    assert.equal(emojiFromClipboardText('1️⃣'), null, 'keycap содержит цифру — по требованию отвергается');
+    assert.equal(emojiFromClipboardText('12'), null, 'две цифры — не keycap');
     assert.equal(emojiFromClipboardText('тест'), null);
   });
 

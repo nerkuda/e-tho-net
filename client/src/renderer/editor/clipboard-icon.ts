@@ -12,10 +12,26 @@
 const GRAPHEME = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
 /**
- * Эмодзи из текста буфера: трим → РОВНО один графемный кластер, содержащий
- * `\p{Extended_Pictographic}` и НЕ содержащий букв/цифр. Иначе `null`
- * (текст не эмодзи-иконка). Составные эмодзи с цифрой (keycap `1️⃣`) сюда не
- * попадают — по требованию «нет цифр».
+ * Один графемный кластер — эмодзи-иконка: pictographic-эмодзи (в т.ч.
+ * ZWJ-наборы, тон кожи, теги), флаг (ровно пара `\p{Regional_Indicator}`) или
+ * keycap (`[0-9#*]` + необязательный VS16 + `\u20E3`). Цифра/решётка без
+ * `\u20E3` (`#`, `*`, `12`) под шаблон не попадает.
+ */
+const EMOJI_ICON_CLUSTER =
+  /\p{Extended_Pictographic}|^\p{Regional_Indicator}{2}$|^[0-9#*]\uFE0F?\u20E3$/u;
+
+/**
+ * Эмодзи из текста буфера: трим → РОВНО один графемный кластер, являющийся
+ * эмодзи-иконкой. Иначе `null` (обычный текст). Эмодзи-иконкой считается
+ * кластер, который:
+ *   • содержит `\p{Extended_Pictographic}` (большинство эмодзи, ZWJ-наборы,
+ *     тон кожи); ИЛИ
+ *   • ровно пара `\p{Regional_Indicator}` (флаги 🇷🇺/🇺🇸 — у них
+ *     `Extended_Pictographic` НЕ выставлено, ошибка приёмки 78eaf07a); ИЛИ
+ *   • keycap-последовательность `[0-9#*]` + необязательный VS16 + `\u20E3`
+ *     (COMBINING ENCLOSING KEYCAP): #️⃣, *️⃣, 1️⃣.
+ * Обычные буквы/цифры самостоятельным текстом эмодзи не являются («12»,
+ * «abc» → `null`); цифра/решётка сама по себе (без `\u20E3`) — тоже.
  */
 export function emojiFromClipboardText(text: string | null): string | null {
   if (text === null) return null;
@@ -29,9 +45,8 @@ export function emojiFromClipboardText(text: string | null): string | null {
   }
   if (clusters.length !== 1) return null;
   const cluster = clusters[0] ?? '';
-  if (!/\p{Extended_Pictographic}/u.test(cluster)) return null;
-  if (/[\p{L}\p{N}]/u.test(cluster)) return null;
-  return cluster;
+  if (EMOJI_ICON_CLUSTER.test(cluster)) return cluster;
+  return null;
 }
 
 /** Расширение файла по mime-типу картинки. */

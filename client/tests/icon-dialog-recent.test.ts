@@ -212,4 +212,16 @@ describe('диалог иконки: «Вставить из буфера» (78e
     await flush();
     assert.equal(footerBtn(t('icons.clipboard.paste')).disabled, true);
   });
+
+  it('флаг в буфере — кнопка доступна и применяет его (78eaf07a)', async () => {
+    clipboardResult = { text: '🇷🇺', imagePngDataUrl: null };
+    const { results } = open();
+    await flush();
+    const btn = footerBtn(t('icons.clipboard.paste'));
+    assert.equal(btn.disabled, false, 'флаг-эмодзи — кнопка доступна');
+    btn.emit('click');
+    await flush();
+    assert.deepEqual(results[0], { icon: '🇷🇺', kind: 'emoji', color: null });
+    assert.equal(dialogOpen(), false, 'успех закрыл диалог');
+  });
 });
