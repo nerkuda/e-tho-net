@@ -584,6 +584,65 @@ describe(
       }
     });
 
+    it('getAttachmentContent читает ограниченный префикс большого файла (0dbe5d72)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-bounded', path.join(tmp, 'data.db'));
+      try {
+        const t = seedThought(ndb);
+        const txt = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          { title: 'Лог', mime_type: 'text/plain', data_base64: Buffer.from('seed').toString('base64') },
+          USER,
+        );
+        // Ровно лимит символов — файл читается целиком, обрезки нет.
+        writeFileSync(txt.file_path!, 'a'.repeat(200_000), 'utf8');
+        const exact = getAttachmentContent(ndb, txt.id);
+        assert.equal(exact.text, 'a'.repeat(200_000), 'ровно лимит — содержимое целиком');
+        assert.equal(exact.truncated, false, 'ровно лимит — не обрезка');
+
+        // Больше лимита — отдаются первые 200 000 символов, хвост не читается.
+        writeFileSync(txt.file_path!, 'b'.repeat(200_000) + 'C'.repeat(1_000_000), 'utf8');
+        const big = getAttachmentContent(ndb, txt.id);
+        assert.equal(big.text?.length, 200_000);
+        assert.equal(big.text, 'b'.repeat(200_000), 'отдан именно префикс, не хвост');
+        assert.equal(big.truncated, true);
+
+        // Ровно лимит (ASCII) — граница не считает файл обрезанным.
+        writeFileSync(txt.file_path!, 'z'.repeat(200_000), 'utf8');
+        assert.equal(getAttachmentContent(ndb, txt.id).truncated, false);
+
+        // Многобайтный файл больше лимита: ограниченное чтение рвёт UTF-8
+        // на границе байтов, но отданный префикс символов — корректный,
+        // без replacement-символов (обрезка по символам, не по байтам).
+        writeFileSync(txt.file_path!, '你'.repeat(300_000), 'utf8'); // 3 байта/символ
+        const mb = getAttachmentContent(ndb, txt.id);
+        assert.equal(mb.text, '你'.repeat(200_000), 'многобайтный префикс не бит');
+        assert.equal(mb.truncated, true);
+        assert.ok(!(mb.text ?? '').includes('\uFFFD'), 'в префиксе нет replacement-символов');
+
+        // Нечитаемый (удалённый) файл — прежний код ошибки.
+        writeFileSync(txt.file_path!, 'gone', 'utf8');
+        rmSync(txt.file_path!);
+        assert.throws(
+          () => getAttachmentContent(ndb, txt.id),
+          (err: unknown) => {
+            assert.ok(err instanceof EtnError);
+            assert.equal(err.code, 'VALIDATION_ERROR');
+            return true;
+          },
+        );
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
     it('updateAttachmentContent rewrites the file and refreshes the row (L7)', () => {
       const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
       const db = new DatabaseConstructor(':memory:');

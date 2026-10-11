@@ -55,3 +55,22 @@ describe('guard: файлы отдаются потоком, а не читаю�
     );
   });
 });
+
+describe('guard: текст вложения читается ограниченным префиксом, а не целиком', () => {
+  it('getAttachmentContent не читает файл целиком ради обрезки (0dbe5d72)', () => {
+    const src = fs.readFileSync(path.join(SERVER_SRC, 'domain', 'attachment-service.ts'), 'utf8');
+    const start = src.indexOf('export function getAttachmentContent');
+    assert.notEqual(start, -1, 'getAttachmentContent не найден');
+    const block = src.slice(start, src.indexOf('\n}', start));
+    assert.doesNotMatch(
+      block,
+      /readFileSync\s*\(/,
+      'текст вложения снова читается целиком (readFileSync) — нужен ограниченный префикс',
+    );
+    assert.match(
+      block,
+      /readUtf8Prefix\s*\(/,
+      'ожидается ограниченное чтение префикса (readUtf8Prefix) вместо чтения всего файла',
+    );
+  });
+});

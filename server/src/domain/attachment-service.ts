@@ -15,10 +15,14 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  closeSync,
   copyFileSync,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -1600,6 +1604,39 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
 const CONTENT_TEXT_MAX_CHARS = 200_000;
 
 /**
+ * Byte budget for the bounded read behind {@link getAttachmentContent}: a UTF-8
+ * code point is at most 4 bytes and a JS string counts a surrogate pair as 2
+ * code units (≤ 2 bytes each), so {@link CONTENT_TEXT_MAX_CHARS} characters
+ * always fit within 4× that many bytes. Reading this prefix is enough to know
+ * both the returned text and whether the file is longer (ошибка 0dbe5d72).
+ */
+const CONTENT_TEXT_MAX_BYTES = CONTENT_TEXT_MAX_CHARS * 4;
+
+/**
+ * Read at most `maxBytes` bytes from the start of `filePath` and decode them as
+ * UTF-8 — a bounded read that never loads more than `maxBytes` into memory
+ * (ошибка 0dbe5d72). A multi-byte sequence split at the byte cap decodes to
+ * U+FFFD at the very tail, always beyond the caller's character cap, so the
+ * returned prefix has no replacement characters. Throws on I/O failure.
+ */
+function readUtf8Prefix(filePath: string, maxBytes: number): string {
+  const fd = openSync(filePath, 'r');
+  try {
+    const toRead = Math.min(fstatSync(fd).size, maxBytes);
+    const buf = Buffer.allocUnsafe(toRead);
+    let read = 0;
+    while (read < toRead) {
+      const n = readSync(fd, buf, read, toRead - read, read);
+      if (n === 0) break;
+      read += n;
+    }
+    return buf.toString('utf8', 0, read);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * True when the attachment is a `kind='file'` whose content is text-like:
  * `text/*` mime or a `.txt`/`.md`/`.markdown` path. Mirrors the client-side
  * `isViewableText` check (attachments.ts).
@@ -1622,6 +1659,12 @@ function isMarkdownFile(a: Attachment): boolean {
  * the text (truncated at {@link CONTENT_TEXT_MAX_CHARS}) and, for markdown
  * files, the server-rendered html. Non-text attachments return `text: null`.
  *
+ * The backing file is read as a bounded UTF-8 prefix
+ * ({@link CONTENT_TEXT_MAX_BYTES} bytes, ≤ {@link CONTENT_TEXT_MAX_CHARS}
+ * characters) rather than whole — a multi-hundred-MB `.log`/`.txt` no longer
+ * spikes memory just to be truncated (ошибка 0dbe5d72). Response contract
+ * (`text`/`html`/`truncated`) is unchanged.
+ *
  * Throws `NOT_FOUND` (404) for a missing attachment and `VALIDATION_ERROR`
  * (422) when the backing file cannot be read.
  */
@@ -1632,7 +1675,7 @@ export function getAttachmentContent(ndb: NetworkDb, id: string): AttachmentCont
   }
   let raw: string;
   try {
-    raw = readFileSync(a.file_path!, 'utf8');
+    raw = readUtf8Prefix(a.file_path!, CONTENT_TEXT_MAX_BYTES);
   } catch {
     throw new EtnError('VALIDATION_ERROR', 'файл вложения недоступен для чтения', {
       field: 'file_path',
