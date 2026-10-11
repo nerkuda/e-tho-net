@@ -95,6 +95,7 @@ import {
 } from '../../lib/record-search.js';
 import { iconButton, uiButton } from '../../lib/ui/button.js';
 import { commentShell } from '../../lib/ui/comment.js';
+import { bindWikiCreateContext } from '../../lib/wiki-create-context.js';
 import { operationError } from '../../lib/ui/messages.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
@@ -1263,6 +1264,15 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
    */
   const currentOwner = (): { ownerType: 'thought'; ownerId: string } | null =>
     attachmentOwnerForRow(row.targets, homeId);
+
+  // Просмотр записи — статичный `body_html` БЕЗ поля markdown (`.md-field`),
+  // поэтому клик по легаси-ссылке `[[Имя]]` в ленте не находил контекста
+  // владельца и показывал «Мысль «…» не найдена.» вместо диалога создания
+  // (дефект визуальной проверки, задача 8e4e3dc5). Привязываем владельца
+  // записи к корню оболочки ленивым источником: `homeId` разрешается позже
+  // сборки карточки, а к моменту клика — уже да (`attachmentOwnerForRow`
+  // отдаёт HOME, когда у записи нет привязанных мыслей).
+  bindWikiCreateContext(shell.root, () => currentOwner());
 
   /**
    * Создать поле markdown тела при первом входе в правку (ленивое создание).

@@ -10,15 +10,17 @@
  *   ПРАВКА — конвертация в буфер без перехода (`convert: true`,
  *     `navigate: false`), КРОМЕ единственной ЗАХВАЧЕННОЙ цели — её открыть
  *     без конвертации.
- *   «Одна мысль» — ровно одно ТОЧНОЕ совпадение по названию ИЛИ синониму
- *   среди актуальных; имя трактуется буквально (partial/`*`-синонимы — не
- *   совпадение).
+ *   Кандидат — точное совпадение по названию ИЛИ синониму среди актуальных;
+ *   точность классифицирует СЕРВЕР (`matched_on`: title/synonym/partial), в т.ч.
+ *   `*`-синонимы («исправ* ошиб*» → «исправленные ошибки», уточнение дефекта
+ *   визуальной проверки 2026-10-11).
  *
  * Чистая часть — без DOM; `resolveLegacyWikiCandidates` — с подменой
  * `window.etn` (живой прокси `lib/etn.ts`, как в `add-dialog.test.ts`).
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, it } from 'node:test';
 
 import type { DuplicateHit } from '../src/main/ipc/contract.js';
@@ -44,6 +46,7 @@ function hit(partial: Partial<DuplicateHit> & { title: string }): DuplicateHit {
     title: partial.title,
     synonyms: partial.synonyms ?? [],
     matched_on: partial.matched_on ?? 'title',
+    ...(partial.matched_synonym !== undefined ? { matched_synonym: partial.matched_synonym } : {}),
     type_id: null,
     icon: null,
     icon_kind: 'emoji',
@@ -64,39 +67,69 @@ describe('legacyNameKey: нормализация имени', () => {
   });
 });
 
-describe('exactLegacyCandidates: точное совпадение по названию ИЛИ синониму', () => {
-  it('совпадение по названию — кандидат', () => {
-    const hits = [hit({ title: 'Иванов' }), hit({ title: 'Петров' })];
+describe('exactLegacyCandidates: точность по классификации сервера (matched_on)', () => {
+  it('точное название (matched_on=title) — кандидат', () => {
+    const hits = [hit({ title: 'Иванов' }), hit({ title: 'Петров', matched_on: 'partial' })];
     assert.deepEqual(
       exactLegacyCandidates(hits, 'Иванов').map((h) => h.title),
       ['Иванов'],
     );
   });
 
-  it('совпадение по синониму — кандидат (буквально)', () => {
-    const hits = [hit({ title: 'Пётр', synonyms: ['Петя', 'Petr'] })];
+  it('точный синоним (matched_on=synonym) — кандидат', () => {
+    const hits = [hit({ title: 'Пётр', synonyms: ['Петя', 'Petr'], matched_on: 'synonym' })];
     assert.equal(exactLegacyCandidates(hits, 'Петя').length, 1);
   });
 
-  it('partial-совпадение не берётся (имя буквально)', () => {
+  it('partial-совпадение не берётся', () => {
     const hits = [hit({ title: 'Ивановский', matched_on: 'partial' })];
     assert.deepEqual(exactLegacyCandidates(hits, 'Иванов'), []);
   });
 
-  it('`*`-синоним, не равный имени буквально, не берётся', () => {
-    // Синоним «Игорян*» матчит ввод «Игорянский» у find_duplicates — но имя
-    // трактуется буквально, поэтому это НЕ точное совпадение.
-    const hits = [hit({ title: 'Игорь', synonyms: ['Игорян*'], matched_on: 'synonym' })];
-    assert.deepEqual(exactLegacyCandidates(hits, 'Игорянский'), []);
-  });
-
-  it('совпадения не зависят от регистра и пробелов', () => {
-    const hits = [hit({ title: '  ПРОБА ' })];
-    assert.equal(exactLegacyCandidates(hits, 'проба').length, 1);
+  it('WILDCARD-синоним («исправ* ошиб*» → «исправленные ошибки») — кандидат (дефект визуальной проверки)', () => {
+    // Красная фиксация: `find_duplicates` уже вернул `matched_on: 'synonym'`
+    // для совпавшего `*`-паттерна синонима (общий матчер `synonymPatternToRegex`,
+    // анкорится на ВСЁ имя). Прежняя ЛИТЕРАЛЬНАЯ фильтрация клиента сравнивала
+    // «исправ* ошиб*» с «исправленные ошибки» буквально и отсеивала кандидата —
+    // тест краснеет на литеральном сравнении.
+    const hits = [
+      hit({
+        title: 'Ошибки',
+        synonyms: ['исправ* ошиб*'],
+        matched_on: 'synonym',
+        matched_synonym: 'исправ* ошиб*',
+      }),
+    ];
+    assert.deepEqual(
+      exactLegacyCandidates(hits, 'исправленные ошибки').map((h) => h.title),
+      ['Ошибки'],
+    );
   });
 
   it('пустое имя — пустой список', () => {
     assert.deepEqual(exactLegacyCandidates([hit({ title: 'x' })], '   '), []);
+  });
+});
+
+describe('ветка «создать»: просмотр не отказывает уведомлением (дефект визуальной проверки)', () => {
+  it('в wiki-link.ts упразднено уведомление об отсутствии мысли', () => {
+    // Красная фиксация дефекта: раньше ветка `create` при отсутствии контекста
+    // владельца звала notice «Мысль «…» не найдена.» вместо открытия диалога.
+    const src = readFileSync(
+      new URL('../src/renderer/editor/wiki-link.ts', import.meta.url),
+      'utf8',
+    );
+    assert.equal(src.includes('» не найдена.'), false);
+  });
+
+  it('tryCreateThoughtFromLegacyLink не гейтит диалог контекстом владельца', () => {
+    const src = readFileSync(
+      new URL('../src/renderer/editor/wiki-link-create.ts', import.meta.url),
+      'utf8',
+    );
+    // Раннего отказа по отсутствию контекста (`if (ctx === null) return false`)
+    // больше нет — диалог открывается на любой поверхности.
+    assert.equal(src.includes('return false'), false);
   });
 });
 

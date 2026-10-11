@@ -13,10 +13,12 @@
  * трансклюзии). Сам этот модуль текст комментария НЕ трогает: автопереписывание
  * `body_md` из просмотра отменено решением пользователя 2026-10-11 (вечер).
  *
- * Вход в флоу — ветка «ни одной мысли» развилки; контекст комментария
- * (владелец, вид) — из реестра `lib/wiki-create-context.ts`, куда поле
- * привязывает себя при создании (`commentContext`-опция
- * `editor/markdown-field.ts`).
+ * Вход в флоу — ветка «ни одной мысли» развилки; контекст владельца (родитель
+ * новой мысли) — из реестра `lib/wiki-create-context.ts`, куда поверхность
+ * привязывает свой корень (`commentContext`-опция `editor/markdown-field.ts`
+ * либо прямая привязка статичного просмотра, например ленты «Дневника»).
+ * Контекста нет — диалог всё равно открывается, мысль создаётся без родителя:
+ * клик в просмотре никогда не отказывает уведомлением «мысль не найдена».
  */
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
@@ -30,10 +32,12 @@ import { notice } from '../lib/notice.js';
 import { findWikiCreateContext, type WikiCreateCommentContext } from '../lib/wiki-create-context.js';
 
 /**
- * Runs the create flow for an unresolvable legacy link. Returns `true` when
- * the flow took the click over (a comment context was found — the caller must
- * NOT show its «мысль не найдена» notice), `false` when the element is not
- * inside an opted-in comment field (the caller falls back to the notice).
+ * Runs the create flow for an unresolvable legacy link. Always takes the click
+ * over — no caller-side «мысль не найдена» notice remains (дефект визуальной
+ * проверки, задача 8e4e3dc5): диалог открывается на ЛЮБОЙ поверхности, где
+ * клик в просмотре не нашёл ни одного кандидата. Контекст владельца лишь
+ * уточняет родителя создаваемой мысли; его отсутствие (статичный просмотр без
+ * привязанного корня) даёт мысль без родителя, а не отказ.
  *
  * `options.onCreated` — что сделать с первым успешно созданной/связанной
  * мыслью (её id): открыть (просмотр) или заменить ссылку в буфере (правка).
@@ -42,19 +46,17 @@ export async function tryCreateThoughtFromLegacyLink(
   linkEl: HTMLElement,
   name: string,
   options: { onCreated: (thoughtId: string) => Promise<void> | void },
-): Promise<boolean> {
-  const ctx = findWikiCreateContext(linkEl);
-  if (ctx === null) return false;
+): Promise<void> {
   if (!canSave()) {
     offlineNotice();
-    return true;
+    return;
   }
 
   let networkId: string;
   try {
     networkId = requireNetworkId();
   } catch {
-    return true; // no network open — nothing sensible to do either way
+    return; // no network open — nothing sensible to do either way
   }
 
   // Alias: the legacy span's visible text is `alias ?? target`, so a label
@@ -63,22 +65,26 @@ export async function tryCreateThoughtFromLegacyLink(
   const label = linkEl.textContent?.trim() ?? '';
   const alias = label !== '' && label !== name ? label : null;
 
-  // Parent: the comment owner; for a link's comment — the link's source.
-  let parentId: string;
-  let parentTitle: string;
-  try {
-    const parent = await resolveParentThought(networkId, ctx);
-    parentId = parent.id;
-    parentTitle = parent.title;
-  } catch (err) {
-    notice(`Не удалось определить родителя для новой мысли: ${errText(err)}`, 'error');
-    return true;
+  // Parent: the surface's owner (comment owner; for a link's comment — the
+  // link's source). No bound owner — the thought is created without a parent.
+  const ctx = findWikiCreateContext(linkEl);
+  let parentId: string | null = null;
+  let parentTitle: string | undefined;
+  if (ctx !== null) {
+    try {
+      const parent = await resolveParentThought(networkId, ctx);
+      parentId = parent.id;
+      parentTitle = parent.title;
+    } catch (err) {
+      notice(`Не удалось определить родителя для новой мысли: ${errText(err)}`, 'error');
+      return;
+    }
   }
 
   const result = await pickThoughtsDialog({
     networkId,
-    anchor: { id: parentId, direction: 'child' },
-    anchorTitle: parentTitle,
+    anchor: parentId !== null ? { id: parentId, direction: 'child' } : null,
+    ...(parentTitle !== undefined ? { anchorTitle: parentTitle } : {}),
     allowCreate: true,
     allowLinkType: true,
     // Single mode with the name in the input: `имя|алиас` — the existing
@@ -86,7 +92,7 @@ export async function tryCreateThoughtFromLegacyLink(
     // после `|` автоматически добавляется в синонимы).
     prefillText: alias !== null ? `${name}|${alias}` : name,
   });
-  if (result === null) return true; // cancelled — nothing changes
+  if (result === null) return; // cancelled — nothing changes
 
   // Create/link everything the user queued; the FIRST successfully added
   // thought (new or existing — an exact candidate may have been picked) is the
@@ -99,7 +105,10 @@ export async function tryCreateThoughtFromLegacyLink(
       if (item.kind === 'existing') {
         // 0.8.1 (6dcd6db7): `POST /links` снят — связь с существующей мыслью
         // создаётся пакетной операцией (уже связанная пара не дублируется).
-        throwOnFailures(await ensureLink(networkId, parentId, item.id, result.linkTypeId));
+        // Без родителя связывать не с чем — мысль просто выбрана.
+        if (parentId !== null) {
+          throwOnFailures(await ensureLink(networkId, parentId, item.id, result.linkTypeId));
+        }
         if (firstAddedId === null) firstAddedId = item.id;
       } else {
         const newThought = await etn.thoughts.create(networkId, {
@@ -108,12 +117,17 @@ export async function tryCreateThoughtFromLegacyLink(
           type_id: result.thoughtTypeId,
           // REST semantics (03-server-api.md §6.3): 'parent' — parentId (the
           // target) becomes the parent of the new thought, i.e. the new
-          // thought is attached UNDER parentId as its child.
-          create_link: {
-            direction: 'parent',
-            target_thought_id: parentId,
-            type_id: result.linkTypeId,
-          },
+          // thought is attached UNDER parentId as its child. Без родителя
+          // (просмотр без владельца) мысль создаётся корневой.
+          ...(parentId !== null
+            ? {
+                create_link: {
+                  direction: 'parent' as const,
+                  target_thought_id: parentId,
+                  type_id: result.linkTypeId,
+                },
+              }
+            : {}),
         });
         if (result.thoughtTypeId !== null) {
           await applyCommentTemplateIfEmpty(networkId, newThought.id, result.thoughtTypeId);
@@ -134,13 +148,12 @@ export async function tryCreateThoughtFromLegacyLink(
   // (просмотр) или замена в буфере (правка) — за вызывающим.
   scheduleRefresh();
 
-  if (firstAddedId === null) return true; // every creation failed — nothing to do
+  if (firstAddedId === null) return; // every creation failed — nothing to do
   try {
     await options.onCreated(firstAddedId);
   } catch (err) {
     notice(`Не удалось обновить ссылку: ${errText(err)}`, 'error');
   }
-  return true;
 }
 
 /** The comment owner as the parent thought for the created ones. */

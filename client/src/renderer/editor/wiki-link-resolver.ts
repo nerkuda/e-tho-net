@@ -456,21 +456,28 @@ export function legacyNameKey(value: string): string {
 }
 
 /**
- * ТОЧНЫЕ кандидаты по названию ИЛИ синониму (литерально, после нормализации),
- * в порядке выдачи `findDuplicates`. Partial-совпадения и `*`-синонимы
- * отсеиваются: имя трактуется буквально (уточнение DoD 2). Чистая.
+ * ТОЧНЫЕ кандидаты по названию ИЛИ синониму, в порядке выдачи
+ * `findDuplicates`. Классификацию точности делает СЕРВЕР и отдаёт в
+ * `matched_on`:
+ *
+ * - `title` — точное название (`title_norm = norm(имя)`);
+ * - `synonym` — точный синоним ИЛИ совпавший `*`-паттерн синонима (общий
+ *   матчер `synonymPatternToRegex` из `@etn/shared` — тот же, что у
+ *   авто-упоминаний; паттерн синонима анкорится на ВСЁ имя);
+ * - `partial` — слабый кандидат по вхождению фрагмента.
+ *
+ * Берём `title`/`synonym` и отбрасываем `partial`. `*`-синонимы (`исправ*
+ * ошиб*`) поэтому совпадают с именем-целью как полноценные кандидаты:
+ * литеральное сравнение их ранее ошибочно отсеивало (дефект визуальной
+ * проверки, задача 8e4e3dc5). Второго матчера здесь нет — переиспользуется
+ * классификация сервера. Чистая.
  */
 export function exactLegacyCandidates(
   hits: readonly DuplicateHit[],
   name: string,
 ): DuplicateHit[] {
-  const key = legacyNameKey(name);
-  if (key === '') return [];
-  return hits.filter(
-    (hit) =>
-      legacyNameKey(hit.title) === key ||
-      hit.synonyms.some((synonym) => legacyNameKey(synonym) === key),
-  );
+  if (legacyNameKey(name) === '') return [];
+  return hits.filter((hit) => hit.matched_on !== 'partial');
 }
 
 /** Ветка развилки по числу точных актуальных кандидатов. */

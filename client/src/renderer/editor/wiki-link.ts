@@ -337,16 +337,19 @@ export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<v
 
   switch (plan.action) {
     case 'create': {
-      // Ветка 3: диалог создания. Вне поля комментария флоу не срабатывает —
-      // прежнее поведение (уведомление «не найдена»). После создания: в
-      // просмотре — открыть созданную, в правке — заменить ссылку в буфере.
-      const handled = await tryCreateThoughtFromLegacyLink(target.anchorEl, target.name, {
+      // Ветка 3: диалог создания/подбора открывается ВСЕГДА (в просмотре — на
+      // любой поверхности, включая статичные без поля markdown; дефект
+      // визуальной проверки). Отдельного уведомления «не найдена» больше нет:
+      // прежний отказ возникал только из-за отсутствия контекста владельца и
+      // был неотличим для пользователя от поломки перехода. После создания: в
+      // просмотре — открыть созданную (формат ссылки НЕ меняется), в правке —
+      // заменить ссылку в буфере.
+      await tryCreateThoughtFromLegacyLink(target.anchorEl, target.name, {
         onCreated: (thoughtId) =>
           plan.navigate
             ? openResolvedThought(networkId, thoughtId, target.name)
             : doConvert(thoughtId),
       });
-      if (!handled) notice(`Мысль «${target.name}» не найдена.`, 'error');
       return;
     }
     case 'open-only': {
@@ -376,7 +379,7 @@ export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<v
   }
 }
 
-/** Поповер кандидатов: облачка мысли + подсказка родителя, ≤10 + пометка. */
+/** Поповер кандидатов: группы «подпись родителя → облачко мысли», ≤10 + пометка. */
 function showLegacyCandidatesPopover(
   target: LegacyForkTarget,
   candidates: readonly DuplicateHit[],
@@ -386,8 +389,15 @@ function showLegacyCandidatesPopover(
   const body = div('legacy-candidates');
   let handle: { close(): void } | null = null;
   for (const candidate of shown) {
-    const row = div('legacy-candidate-row');
-    row.append(
+    // Группа «родитель → облачко»: подпись родительской мысли СВЕРХУ, под ней
+    // — своё облачко. Внутригрупповой зазор (2px) меньше межгруппового
+    // (`--space-4`), поэтому облачко не «прилипает» к подписи следующей мысли
+    // (дефект визуальной проверки, задача 8e4e3dc5).
+    const group = div('legacy-candidate-group');
+    if (candidate.parent_title !== null && candidate.parent_title !== '') {
+      group.append(el('span', 'legacy-candidate-parent', candidate.parent_title));
+    }
+    group.append(
       createThoughtCloud(
         { ...candidate },
         {
@@ -402,10 +412,7 @@ function showLegacyCandidatesPopover(
         },
       ),
     );
-    if (candidate.parent_title !== null && candidate.parent_title !== '') {
-      row.append(el('span', 'legacy-candidate-parent', candidate.parent_title));
-    }
-    body.append(row);
+    body.append(group);
   }
   if (truncated) {
     body.append(el('p', 'muted', `Показаны первые ${LEGACY_CANDIDATE_LIMIT}, уточните имя.`));
