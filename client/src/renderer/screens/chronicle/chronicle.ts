@@ -47,7 +47,7 @@ import {
 } from '@etn/shared';
 
 import { findRootThought, requireNetworkId } from '../../app.js';
-import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
+import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { registerDropActions } from '../../canvas/drag-cloud.js';
 import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
@@ -1733,14 +1733,82 @@ async function detachChip(rowId: string, target: ChronicleTarget): Promise<void>
   }
 }
 
+/**
+ * «+ мысль» на карточке записи: диалог открывается с ВКЛЮЧЁННЫМ созданием —
+ * в слоте комментария можно не только найти, но и создать новую мысль (ошибка
+ * 0c3a8b69). Созданные мысли привязываются к записи тем же путём, что найденные
+ * (`attachToRecord`); их родителями становятся мысли-владельцы записи.
+ */
 async function pickAndAttach(rowId: string): Promise<void> {
+  const networkId = requireNetworkId();
   const result = await pickThoughtsDialog({
-    networkId: requireNetworkId(),
-    allowCreate: false,
+    networkId,
+    allowCreate: true,
     allowLinkType: false,
   });
   if (result === null) return;
-  await attachToRecord(rowId, pickedThoughtIds(result));
+  // Родители НОВЫХ мыслей — мысли-владельцы записи (ТЗ5 «Дневник без
+  // псевдослота»): тот же контракт, что у команд вставки мысли в комментарий.
+  const parentIds = await recordParentThoughtIds(networkId, rowId);
+  const thoughtIds: string[] = [];
+  let failed = 0;
+  for (const item of result.items) {
+    if (item.kind === 'existing') {
+      thoughtIds.push(item.id);
+      continue;
+    }
+    try {
+      const created = await etn.thoughts.create(networkId, {
+        title: item.title,
+        synonyms: [...item.synonyms],
+        type_id: result.thoughtTypeId,
+      });
+      // Структурные рёбра родителям ставит отдельная операция: `create_link`
+      // знает только тип связи, не родителя, а владельцев у записи может быть
+      // несколько (паритет с `linkParents` команд вставки мысли).
+      if (parentIds.length > 0) {
+        await etn.thoughts.batch(networkId, {
+          ids: [created.id],
+          op: 'link_parents',
+          args: { parent_ids: [...parentIds], link_type_id: null },
+        });
+      }
+      thoughtIds.push(created.id);
+    } catch {
+      failed++;
+    }
+  }
+  if (failed > 0) notice(`${t('comment.create.error')}: ${failed}`, 'error');
+  await attachToRecord(rowId, thoughtIds);
+}
+
+/**
+ * Мысли-владельцы записи по её привязкам — родители новой мысли. Мысль-привязка
+ * даёт свой id, привязка-связь — источник связи (паритет с `parentThoughtIds`
+ * из `./diary.js`), дубли схлопываются. Ошибка чтения записи или связи —
+ * пустой список (родителей не ставим, но мысль всё равно создаётся).
+ */
+async function recordParentThoughtIds(networkId: string, rowId: string): Promise<string[]> {
+  try {
+    const fresh = await etn.comments.get(networkId, rowId);
+    const ids: string[] = [];
+    for (const target of fresh.targets) {
+      let id: string | null = null;
+      if (target.owner_type === 'thought') {
+        id = target.owner_id;
+      } else {
+        try {
+          id = (await etn.links.get(networkId, target.owner_id)).source_id;
+        } catch {
+          id = null;
+        }
+      }
+      if (id !== null && id !== '' && !ids.includes(id)) ids.push(id);
+    }
+    return ids;
+  } catch {
+    return [];
+  }
 }
 
 async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void> {

@@ -376,10 +376,17 @@ async function doApi(step, apiConfig) {
   const url = `${apiConfig.base.replace(/\/+$/, '')}${step.api.path}`;
   const headers = {};
   if (apiConfig.key !== null) headers.authorization = `Bearer ${apiConfig.key}`;
+  // Необязательное тело запроса (`step.api.body`): сценарий может не только
+  // проверять эффект, но и засеивать данные (например, дневниковую запись).
+  const init = { method: step.api.method, headers };
+  if (step.api.body !== undefined && step.api.body !== null) {
+    headers['content-type'] = 'application/json';
+    init.body = JSON.stringify(step.api.body);
+  }
   let response;
   let text;
   try {
-    response = await fetch(url, { method: step.api.method, headers });
+    response = await fetch(url, init);
     text = await response.text();
   } catch (err) {
     throw new Error(`api ${step.api.method} ${step.api.path}: ${err.message}`);

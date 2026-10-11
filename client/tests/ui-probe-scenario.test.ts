@@ -305,6 +305,35 @@ test('api: метод/путь/выражение и ожидание как м�
   assert.deepEqual(scenario.steps[1]?.api, { name: 'api2', method: 'GET', path: '/networks', expression: null });
 });
 
+test('api: необязательное JSON-тело запроса', () => {
+  const scenario = validateScenario(
+    scenarioFrom([
+      {
+        name: 'seed',
+        api: {
+          name: 'seed-record',
+          method: 'POST',
+          path: '/networks/{{networkId}}/thoughts/{{thoughtId}}/comments',
+          body: { kind: 'chronological', body_md: 'текст' },
+          expression: 'data.id',
+        },
+      },
+    ]),
+  );
+  assert.deepEqual(scenario.steps[0]?.api, {
+    name: 'seed-record',
+    method: 'POST',
+    path: '/networks/{{networkId}}/thoughts/{{thoughtId}}/comments',
+    expression: 'data.id',
+    body: { kind: 'chronological', body_md: 'текст' },
+  });
+  // Тело не объект — ошибка валидации.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ api: { path: '/x', body: 'text' } }])),
+    ScenarioError,
+  );
+});
+
 test('api: ошибки метода/пути и формы', () => {
   assert.throws(() => validateScenario(scenarioFrom([{ api: { path: 'networks' } }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ api: { method: 'TRACE', path: '/x' } }])), ScenarioError);
