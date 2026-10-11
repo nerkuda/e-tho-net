@@ -48,6 +48,10 @@ import { t } from '../lib/i18n.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import type { ThoughtCloudInput } from '../lib/thought-cloud.js';
 import { openLinkInEditor } from '../editor/editor.js';
+import {
+  paintWikiIdsInSnippet,
+  resolveWikiIdsInSnippet,
+} from '../editor/wiki-link-resolver.js';
 import { div, el, renderHtml, setTooltip, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
@@ -839,6 +843,7 @@ function renderResults(response: SearchResponse | null): void {
     resultsBox.append(el('p', 'muted', 'Введите запрос (минимум 3 символа).'));
     return;
   }
+  const networkId = requireNetworkId();
   // Группы результатов. Для мыслей иконка, название, цвета и начертание
   // приходят из общей фабрики облачка (мысли выглядят как на холсте); строки
   // связей и хронологии не несут мысли и остаются простыми строками.
@@ -1001,7 +1006,13 @@ function renderResults(response: SearchResponse | null): void {
           info.append(el('div', 'hit-title', hit.title));
         }
         const snippet = el('div', 'hit-snippet');
-        renderHtml(snippet, hit.snippet);
+        // Сниппет несёт сырой `[[#<id>]]` — подставляем имена мыслей: синхронно
+        // из кеша (id не мелькает на экране), затем дорезолвиваем батчем
+        // (ошибка 2a8181f4).
+        renderHtml(snippet, paintWikiIdsInSnippet(hit.snippet, networkId));
+        void resolveWikiIdsInSnippet(hit.snippet, networkId).then((resolved) => {
+          if (snippet.isConnected) renderHtml(snippet, resolved);
+        });
         info.append(snippet);
         row.append(info);
         hit.markPreview(row);
