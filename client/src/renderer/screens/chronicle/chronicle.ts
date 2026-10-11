@@ -60,7 +60,11 @@ import {
   insertMentionLinkIntoField,
 } from '../../editor/markdown-field.js';
 import { annotateMentions } from '../../editor/mentions-annotate.js';
-import { resolveWikiLinksInDom } from '../../editor/wiki-link-resolver.js';
+import {
+  paintWikiIdsInSnippet,
+  resolveWikiIdsInSnippet,
+  resolveWikiLinksInDom,
+} from '../../editor/wiki-link-resolver.js';
 import { createCommentCollapseState, decorateCommentView } from '../../editor/comment-collapse.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { div, el, errText, span } from '../../lib/dom.js';
@@ -1415,8 +1419,9 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     if (title !== null) {
       title.setContent(
         updated.title ?? '',
-        recordDisplayTitle(updated.title, updated.body_md) || t('diary.emptyTitle'),
+        derivedTitleLabel(updated.title, updated.body_md),
       );
+      refreshDerivedTitle(title, updated.title, updated.body_md);
     }
   };
 
@@ -1476,6 +1481,11 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     },
   });
   title = head.title;
+  // Производный заголовок записи может нести сырую ID-форму wiki-ссылки
+  // (`[[#<id>]]`, ошибка 6b4e402a): синхронную подстановку из кеша уже сделал
+  // `recordTitleLabel` (`derivedTitleLabel`), здесь дорезолвиваем имена мыслей
+  // батчем и обновляем надпись (id не мелькает на экране).
+  refreshDerivedTitle(title, row.title, row.snippet);
   cardEditors.set(card, editor);
 
   // Двойной клик по СТАТИЧНОМУ просмотру (поле ещё не создано) входит в правку
@@ -1498,7 +1508,45 @@ function recordDateLabel(row: ChronicleRow): string {
 
 /** Отображаемый заголовок записи; пустой — «Пустая запись» из словаря. */
 function recordTitleLabel(row: ChronicleRow): string {
-  return recordDisplayTitle(row.title, row.snippet) || t('diary.emptyTitle');
+  return derivedTitleLabel(row.title, row.snippet);
+}
+
+/**
+ * Надпись производного заголовка записи с резолвом ID-форм wiki-ссылок (ошибка
+ * 6b4e402a): поле `title` либо, при пустом, первая строка тела/сниппета.
+ * ID-формы (`[[#<id>]]` / `[[n:<net>#<id>]]`) подменяются именами мыслей ОБЩИМ
+ * резолвером сниппетов (`editor/wiki-link-resolver.ts`) — синхронно из кеша
+ * слоя, поэтому id не мелькает на экране; пропущенное дорезолвит
+ * {@link refreshDerivedTitle}. Снятие ведущих markdown-маркеров, разэкранирование
+ * HTML и обрезка — {@link recordDisplayTitle} (потребитель тот же, путь — тот же).
+ */
+function derivedTitleLabel(title: string | null | undefined, source: string): string {
+  const networkId = store.state.networkId;
+  const painted =
+    networkId === null || !source.includes('[[')
+      ? source
+      : paintWikiIdsInSnippet(source, networkId);
+  return recordDisplayTitle(title, painted) || t('diary.emptyTitle');
+}
+
+/**
+ * Дорезолвить ID-формы wiki-ссылок в производном заголовке и обновить надпись
+ * компонента (ошибка 6b4e402a). Best-effort: без сети/ID-форм ничего не делает,
+ * ошибка резолва не ломает показ (надпись остаётся как после синхронной
+ * подстановки). Карточка могла быть перерисована — обновляем только связанный
+ * узел (`isConnected`).
+ */
+function refreshDerivedTitle(
+  handle: RecordTitleHandle | null,
+  title: string | null | undefined,
+  source: string,
+): void {
+  const networkId = store.state.networkId;
+  if (handle === null || networkId === null || !source.includes('[[')) return;
+  void resolveWikiIdsInSnippet(source, networkId).then((resolved) => {
+    if (!handle.node().isConnected) return;
+    handle.setContent(title ?? '', recordDisplayTitle(title, resolved) || t('diary.emptyTitle'));
+  });
 }
 
 function recordMenuItems(row: ChronicleRow): MenuItem[] {
