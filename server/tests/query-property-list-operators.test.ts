@@ -328,3 +328,196 @@ function seedPermanentComment(ndb: NetworkDb, thoughtId: string): void {
     )
     .run(randomUUID(), thoughtId);
 }
+
+/** Свойство типа `url` (одиночное или множественное) для регрессов 55cb51f8. */
+function seedUrlProperty(ndb: NetworkDb, key: string, config: Record<string, unknown> | null = null): string {
+  const id = randomUUID();
+  ndb
+    .prepare(
+      `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+       VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), 'url', ?, NULL, '2024', '2024')`,
+    )
+    .run(id, key, key, config === null ? null : JSON.stringify(config));
+  return id;
+}
+
+/** Хранимая форма url-значения: строка целиком либо JSON-массив строк. */
+function seedUrlValue(ndb: NetworkDb, thoughtId: string, propertyId: string, value: string): void {
+  ndb
+    .prepare(
+      `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_text, updated_at)
+       VALUES (?, 'thought', ?, ?, ?, '2024')`,
+    )
+    .run(randomUUID(), thoughtId, propertyId, value);
+}
+
+/**
+ * Регресс ошибки 55cb51f8-2f9b-41dd-a484-1370398dd59a: `in`/`not_in` по
+ * МНОЖЕСТВЕННОМУ `url`-свойству (`config.multiple`) должны матчить
+ * ПОЭЛЕМЕНТНО. Значение такого свойства хранится JSON-массивом строк
+ * (`value_text`, напр. `["https://a","https://b"]`, 02-data-model §3.4–3.5),
+ * а движок сравнивал строку целиком — мысль со значением `["https://a",…]`
+ * не находилась условием `in ["https://a"]`. Наборные операторы уже работали
+ * (через `json_each`); расходились только `in`/`not_in`.
+ *
+ * Требование 00eb824b уже заявляет для `url` поэлементный матчинг; тест
+ * фиксирует контракт. Пути покрыты оба: MCP (поле `operator`, прямой вызов
+ * `queryThoughts`) и REST (`op` через `parseStructureFilter` →
+ * `structureRequestToQuery` → `queryThoughts`).
+ */
+describe('in/not_in по множественному url: поэлементно (ошибка 55cb51f8)', {
+  skip: !nativeAvailable(),
+}, () => {
+  /** Канонический запрос (как его строит MCP-фасад) — `operator`, не `op`. */
+  function canonical(properties: Array<Record<string, unknown>>) {
+    return {
+      sort: 'alpha' as const,
+      order: 'asc' as const,
+      limit: 100,
+      offset: 0,
+      properties: properties as never,
+    };
+  }
+
+  /**
+   * Множественное url-свойство: A = [a, b], B = [b], C = [c], D = [a0]
+   * (граничный случай — не элемент `a`).
+   */
+  function setup() {
+    const ndb = createInMemoryNetworkDb();
+    const propId = seedUrlProperty(ndb, 'ссылки', { multiple: true });
+    const a = seedThought(ndb, 'A');
+    const b = seedThought(ndb, 'B');
+    const c = seedThought(ndb, 'C');
+    const d = seedThought(ndb, 'D');
+    seedUrlValue(ndb, a, propId, JSON.stringify(['https://a.example', 'https://b.example']));
+    seedUrlValue(ndb, b, propId, JSON.stringify(['https://b.example']));
+    seedUrlValue(ndb, c, propId, JSON.stringify(['https://c.example']));
+    seedUrlValue(ndb, d, propId, JSON.stringify(['https://a0.example']));
+    return { ndb, propId, a, b, c, d };
+  }
+
+  it('in ["https://a.example"] матчит мысль со значением [a, b] (MCP-путь)', () => {
+    const { ndb, propId, a } = setup();
+    const res = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'in', value: ['https://a.example'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(res.items.map((i) => i.id), [a]);
+  });
+
+  it('in ["https://b.example"] матчит обе мысли с этим элементом (REST-путь)', () => {
+    const { ndb, propId, a, b } = setup();
+    const res = runRestBody(ndb, {
+      properties: [{ property_id: propId, op: 'in', value: ['https://b.example'] }],
+    });
+    assert.deepEqual(res.items.map((i) => i.id).sort(), [a, b].sort());
+  });
+
+  it('элемент матчится целиком, а не по префиксу', () => {
+    const { ndb, propId, d } = setup();
+    const res = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'in', value: ['https://a.example'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.ok(!res.items.some((i) => i.id === d), '[a0] не содержит элемент a');
+  });
+
+  it('any_of ["https://a.example"] матчит мысль со значением [a, b]', () => {
+    const { ndb, propId, a } = setup();
+    const res = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'any_of', value: ['https://a.example'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(res.items.map((i) => i.id), [a]);
+  });
+
+  it('all_of [a, b] матчит; all_of [a, c] — нет', () => {
+    const { ndb, propId, a } = setup();
+    const hit = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'all_of', value: ['https://a.example', 'https://b.example'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(hit.items.map((i) => i.id), [a]);
+    const miss = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'all_of', value: ['https://a.example', 'https://c.example'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(miss.items, []);
+  });
+
+  it('none_of ["https://b.example"] исключает мысли с этим элементом', () => {
+    const { ndb, propId, c, d } = setup();
+    const res = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'none_of', value: ['https://b.example'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(res.items.map((i) => i.id).sort(), [c, d].sort());
+  });
+
+  it('not_in ["https://b.example"] исключает мысли с этим элементом (REST-путь)', () => {
+    const { ndb, propId, c, d } = setup();
+    const res = runRestBody(ndb, {
+      properties: [{ property_id: propId, op: 'not_in', value: ['https://b.example'] }],
+    });
+    assert.deepEqual(res.items.map((i) => i.id).sort(), [c, d].sort());
+  });
+
+  it('in ["https://a.example","https://c.example"] + has_comment: лишние мысли не просачиваются', () => {
+    const ndb = createInMemoryNetworkDb();
+    const propId = seedUrlProperty(ndb, 'ссылки-combo', { multiple: true });
+    const a = seedThought(ndb, 'A');
+    const c = seedThought(ndb, 'C');
+    seedUrlValue(ndb, a, propId, JSON.stringify(['https://a.example', 'https://b.example']));
+    seedUrlValue(ndb, c, propId, JSON.stringify(['https://c.example']));
+    seedPermanentComment(ndb, a);
+    const res = queryThoughts(
+      ndb,
+      'u',
+      {
+        ...canonical([
+          { property_id: propId, operator: 'in', value: ['https://a.example', 'https://c.example'] },
+        ]),
+        has_comment: true,
+      },
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(res.items.map((i) => i.id), [a], 'только мысль с комментарием и совпавшим элементом');
+  });
+
+  it('одиночное url-свойство сохраняет точное сравнение', () => {
+    const ndb = createInMemoryNetworkDb();
+    const propId = seedUrlProperty(ndb, 'адрес', null);
+    const msk = seedThought(ndb, 'msk');
+    seedUrlValue(ndb, msk, propId, 'https://a.example,https://b.example');
+    // Одиночное свойство — значение целиком; элемент a не совпадает.
+    const no = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'in', value: ['https://a.example'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(no.items, []);
+    const yes = queryThoughts(
+      ndb,
+      'u',
+      canonical([
+        { property_id: propId, operator: 'in', value: ['https://a.example,https://b.example'] },
+      ]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(yes.items.map((i) => i.id), [msk]);
+  });
+});

@@ -796,14 +796,14 @@ function multipleValueElementsSql(column: string): string {
 }
 
 /**
- * `true`, когда `text`-свойство множественное (`config.multiple = true`).
- * Значение такого свойства хранится одной comma-joined строкой (напр.
- * `"Москва, Питер"`, 02-data-model §3.4–3.5), а не JSON-массивом — поэтому
- * оно раскрывается собственным элементом (см. {@link textListClause}), а не
- * {@link multipleValueElementsSql}.
+ * `true`, когда свойство указанного типа множественное (`config.multiple = true`).
+ * Формат хранения множественного значения зависит от типа: `text` — одна
+ * comma-joined строка (напр. `"Москва, Питер"`, 02-data-model §3.4–3.5), `url`
+ * — JSON-массив строк. Поэтому `text` раскрывается собственным элементом (см.
+ * {@link textListClause}), а `url` — через {@link multipleValueElementsSql}.
  */
-function isMultipleTextProperty(def: RegistryPropertyRow): boolean {
-  if (def.value_type !== 'text' || def.config === null) return false;
+function isMultipleProperty(def: RegistryPropertyRow, valueType: PropertyValueType): boolean {
+  if (def.value_type !== valueType || def.config === null) return false;
   try {
     return (JSON.parse(def.config) as PropertyConfig).multiple === true;
   } catch {
@@ -861,6 +861,39 @@ function textListClause(
   return operator === 'any_of' || operator === 'in'
     ? any
     : { sql: `NOT (${any.sql})`, params: any.params };
+}
+
+/**
+ * Клауза оператора со списком значений (`in`/`not_in`) по `url`-свойству с
+ * ПОЭЛЕМЕНТНЫМ совпадением для множественного значения (ошибка 55cb51f8).
+ *
+ * Множественное `url` (`config.multiple`) хранится JSON-массивом строк в
+ * `value_text` (напр. `["https://a","https://b"]`, 02-data-model §3.4–3.5):
+ * элементы раскрываются через `json_each` — тем же хелпером, что и наборные
+ * операторы ({@link multipleValueSetClause}). Одиночное `url` — точное
+ * сравнение хранимой строки (элемент один; поведение скалярных операций не
+ * меняется, требование 00eb824b). Семантика: `in` — совпал хотя бы один
+ * элемент; `not_in` — не совпал ни один.
+ */
+function urlListClause(
+  propertyId: string,
+  column: string,
+  multiple: boolean,
+  operator: 'in' | 'not_in',
+  value: ThoughtQueryPropertyCondition['value'],
+  requestId?: string,
+): Clause {
+  const values = coerceValueList(value, operator, requestId);
+  const placeholders = values.map(() => '?').join(',');
+  const matchSql = multiple
+    ? `SELECT 1 FROM property_values_v pv, ${multipleValueElementsSql(column)} je
+       WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+         AND pv.${column} IS NOT NULL AND je.value IN (${placeholders})`
+    : `SELECT 1 FROM property_values_v pv
+       WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+         AND pv.${column} IN (${placeholders})`;
+  const match: Clause = { sql: `EXISTS (${matchSql})`, params: [propertyId, ...values] };
+  return operator === 'in' ? match : { sql: `NOT (${match.sql})`, params: match.params };
 }
 
 /** Клауза `any_of`/`all_of`/`none_of` по множественному свойству. */
@@ -1123,7 +1156,21 @@ function propertyClauses(
         cond.operator === 'none_of')
     ) {
       out.push(
-        textListClause(def.id, column, isMultipleTextProperty(def), cond.operator, cond.value, requestId),
+        textListClause(def.id, column, isMultipleProperty(def, 'text'), cond.operator, cond.value, requestId),
+      );
+      continue;
+    }
+
+    // Множественное `url` (`config.multiple`, JSON-массив строк) хранит значение
+    // как набор: `in`/`not_in` матчат ПОЭЛЕМЕНТНО (ошибка 55cb51f8), как у
+    // `text`. Одиночное `url` — точное сравнение хранимой строки. Наборные
+    // `any_of`/`all_of`/`none_of` идут общим путём по JSON-элементам ниже.
+    if (
+      def.value_type === 'url' &&
+      (cond.operator === 'in' || cond.operator === 'not_in')
+    ) {
+      out.push(
+        urlListClause(def.id, column, isMultipleProperty(def, 'url'), cond.operator, cond.value, requestId),
       );
       continue;
     }
