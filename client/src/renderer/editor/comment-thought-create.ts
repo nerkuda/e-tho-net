@@ -870,15 +870,12 @@ async function createUnitRef(
   port: CommentThoughtCreatePort,
   parentId: string,
   node: SplitSelectionNode,
-): Promise<{ ref: SelectionThoughtRef; id: string }> {
+): Promise<SelectionThoughtRef> {
   const created = await port.create({ parentId, title: node.title, bodyMd: node.bodyMd });
   return {
-    id: created.id,
-    ref: {
-      ref: node.bodyMd === '' ? thoughtLinkRef(created.id, '') : formatTransclusionRef(created.id),
-      title: null,
-      whole: true,
-    },
+    ref: node.bodyMd === '' ? thoughtLinkRef(created.id, '') : formatTransclusionRef(created.id),
+    title: null,
+    whole: true,
   };
 }
 
@@ -914,47 +911,29 @@ async function runPlanUnits(
 
     const refs: Array<SelectionThoughtRef | null> = [];
 
-    // Замыкание «отказ»: сама единица и всё её поддерево остаются без правок,
-    // но позиции в плоском списке сохраняются (сверка с перепрокладкой).
-    const pushSkipped = (node: SplitSelectionNode): void => {
-      refs.push(null);
-      for (const child of node.children) pushSkipped(child);
-    };
-
-    // Обход в порядке документа: подраздел создаётся под родительской мыслью
-    // (её id — существующий или только что созданный), прочее — под текущей.
-    const walk = async (
-      list: readonly SplitSelectionNode[],
-      parent: string,
-    ): Promise<void> => {
-      for (const node of list) {
-        const candidates = await port.candidates(node.title);
-        if (candidates.length === 1) {
-          refs.push(await existingRef(port, candidates[0]!.id));
-          await walk(node.children, candidates[0]!.id);
-          continue;
-        }
-        if (candidates.length > 1) {
-          const anchor = editor.pointAt?.(node.start) ?? { x: 0, y: 0 };
-          const chosen = await port.choose(anchor, node.title, candidates);
-          if (chosen !== null) {
-            refs.push(await existingRef(port, chosen));
-            await walk(node.children, chosen);
-          } else if (refuseCreates) {
-            pushSkipped(node); // отказ — элемент (и вложенные) без изменений
-          } else {
-            const created = await createUnitRef(port, parent, node);
-            refs.push(created.ref);
-            await walk(node.children, created.id);
-          }
-          continue;
-        }
-        const created = await createUnitRef(port, parent, node);
-        refs.push(created.ref);
-        await walk(node.children, created.id);
+    // Обход в порядке документа. Под-мыслей НЕ создаётся: `children` у узлов
+    // всегда пусто (подразделы и вложенные элементы списка — ТЕКСТ тела,
+    // `fullEnd` покрывает поддерево), поэтому все мысли — дети текущей.
+    for (const node of nodes) {
+      const candidates = await port.candidates(node.title);
+      if (candidates.length === 1) {
+        refs.push(await existingRef(port, candidates[0]!.id));
+        continue;
       }
-    };
-    await walk(nodes, parentId);
+      if (candidates.length > 1) {
+        const anchor = editor.pointAt?.(node.start) ?? { x: 0, y: 0 };
+        const chosen = await port.choose(anchor, node.title, candidates);
+        if (chosen !== null) {
+          refs.push(await existingRef(port, chosen));
+        } else if (refuseCreates) {
+          refs.push(null); // отказ от поповера — элемент без изменений
+        } else {
+          refs.push(await createUnitRef(port, parentId, node));
+        }
+        continue;
+      }
+      refs.push(await createUnitRef(port, parentId, node));
+    }
 
     // Позиции плана сняты ДО сетевых await — перепрокладываем по актуальному
     // документу; расхождение контекста отменяет правку (`da5e74b0`).
