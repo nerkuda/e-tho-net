@@ -17,12 +17,12 @@ node client/scripts/version-metrics.mjs 30a10102-2c4b-4702-83f2-f6f220bedf1a --j
 
 # сравнение двух версий (таблица метрика → A → B → Δ)
 node client/scripts/version-metrics.mjs --compare v0.11.2 v0.12.1
-node client/scripts/version-metrics.mjs --compare v0.11.2..v0.12.1 v0.12.1..HEAD
+node client/scripts/version-metrics.mjs --compare v0.11.2..v0.12.1 v0.12.1
 ```
 
 Для git-диапазона берётся «предыдущий тег..тег версии» (например
-`v0.11.2..v0.12.1`); в `--compare` правый конец диапазона задаёт версию, по
-которой читается база.
+`v0.11.2..v0.12.1`); каждый аргумент `--compare` — версия (тег, номер, id или
+git-диапазон, ПРАВЫЙ конец которого задаёт версию для чтения базы).
 
 ### Доступ к базе
 
@@ -35,9 +35,10 @@ node client/scripts/version-metrics.mjs --compare v0.11.2..v0.12.1 v0.12.1..HEAD
    `~/.zcode/config.json`. Из блока берётся `url` (без хвоста `/mcp`) и
    заголовок `Authorization: Bearer …`.
 
-Из локального `.zcode/config.json` берётся полигон `etn-dev` (не источник
-знаний). Для проектной базы укажите `--config` на конфиг с `etn-remote` либо
-`ETN_REMOTE_URL` / `ETN_REMOTE_TOKEN`.
+Репозиторийный `.zcode/config.json` содержит только полигон `etn-dev` — скрипт
+его пропускает (ищет блок `etn-remote`) и доходит до пользовательских
+конфигов; надёжнее всего для проектной базы — `--config` на конфиг с
+`etn-remote` либо `ETN_REMOTE_URL` / `ETN_REMOTE_TOKEN`.
 
 ## Что и как считается
 
