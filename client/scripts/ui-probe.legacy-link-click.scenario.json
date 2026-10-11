@@ -1,0 +1,74 @@
+{
+  "name": "legacy-wiki-link-click-fork",
+  "description": "Ключевой сценарий задачи 8e4e3dc5 (0.12.2): клик по легаси-ссылке [[Имя]] — резолв имени, конвертация в id-формат и открытие. Покрывает 4 ветки, alias, несколько кандидатов, >10 (пометка), синоним, неактуальную цель (диалог с существующим кандидатом — дубль не создаётся), отказ, грязный буфер в правке (правка не теряется), конвертацию в сохранённый body_md и в буфер редактора. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.legacy-link-click.scenario.json --seed-comment $'Легаси-ссылки 0.12.2:\\n- [[Проба стенда]]\\n- [[Стенд-Алиас|подпись]]\\n- [[Стенд-Синоним]]\\n- [[Стенд-Несколько]]\\n- [[Стенд-Много]]\\n- [[Стенд-Архив]]\\n- [[Стенд-Новая|подпись]]'. Данные кандидатов засеваются в шаге seed-candidates через window.etn. Взаимодействие — синтетические события в контексте страницы (клик по спану просмотра, mousedown по легаси-виджету редактора, Escape/pointerdown вне). Захваченная цель стендом не автоматизируется (нужен второй пользователь с ключом) — покрыта юнит-тестом decideLegacyFork(1,true)='open-only'.",
+  "timeout": 90000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "seeded-cloud-visible", "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null" },
+    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    { "name": "thought-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'" },
+    { "name": "comment-visible", "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Легаси-ссылки 0.12.2') === true" },
+
+    {
+      "name": "define-helpers",
+      "eval": "(() => { const visible = (sel) => Array.from(document.querySelectorAll(sel)).find((e) => e.getClientRects().length > 0 && e.getBoundingClientRect().width > 0); window.__st = { link: (n) => document.querySelector('.ui-comment .md-field-view .wiki-link[data-wiki-target=\"' + n + '\"]'), clickView: (n) => { const el = window.__st.link(n); if (!el) throw new Error('нет ссылки просмотра: ' + n); el.scrollIntoView({ block: 'center' }); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; }, editLink: (n) => visible('.md-field--editing .cm-content .wiki-link[data-wiki-target=\"' + n + '\"]'), mdownEdit: (n) => { const el = window.__st.editLink(n); if (!el) throw new Error('нет видимого легаси-виджета правки: ' + n); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: r.left + 2, clientY: r.top + 2 })); return true; }, esc: () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return true; }, outside: () => { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true })); return true; }, body: async () => { const c = await window.etn.comments.list('{{networkId}}', 'thought', '{{thoughtId}}'); const p = c.find((x) => x.kind === 'permanent'); return p ? p.body_md : ''; } }; return true; })()"
+    },
+
+    {
+      "name": "seed-candidates",
+      "probe": "(async () => { const nid = '{{networkId}}'; const api = window.etn; const mk = (title, synonyms) => api.thoughts.create(nid, { title, synonyms: synonyms || [] }); const mkChild = (title) => api.thoughts.create(nid, { title, synonyms: [], create_link: { direction: 'parent', target_thought_id: '{{homeId}}' } }); await mk('Стенд-Алиас'); await mk('Стенд-Синоним-Мысль', ['Стенд-Синоним']); await mkChild('Стенд-Несколько'); await mkChild('Стенд-Несколько'); for (let i = 0; i < 11; i++) await mk('Стенд-Много'); const inv = await mk('Стенд-Архив'); const cur = await api.thoughts.get(nid, inv.id); await api.thoughts.update(nid, inv.id, { active: false }, cur.version); return true; })()",
+      "expect": true
+    },
+    { "name": "links-present", "waitFor": "window.__st.link('Стенд-Новая') !== null" },
+
+    { "name": "b2-click-multi", "eval": "window.__st.clickView('Стенд-Несколько')" },
+    { "name": "b2-popover-open", "waitFor": "document.querySelector('.ui-popover .legacy-candidates') !== null" },
+    { "name": "b2-popover-rows", "probe": "document.querySelectorAll('.ui-popover .legacy-candidate-row').length", "expect": 2 },
+    { "name": "b2-parent-hint", "probe": "Array.from(document.querySelectorAll('.ui-popover .legacy-candidate-parent')).some((e) => (e.textContent || '').trim().length > 0)", "expect": true },
+    { "name": "b2-refuse-outside", "eval": "window.__st.outside()" },
+    { "name": "b2-popover-closed", "waitFor": "document.querySelector('.ui-popover .legacy-candidates') === null" },
+    { "name": "b2-refusal-keeps-link", "probe": "(async () => (await window.__st.body()).includes('[[Стенд-Несколько]]'))()", "expect": true },
+
+    { "name": "b2-many-click", "eval": "window.__st.clickView('Стенд-Много')" },
+    { "name": "b2-many-popover", "waitFor": "document.querySelector('.ui-popover .legacy-candidates') !== null" },
+    { "name": "b2-many-rows-capped", "probe": "document.querySelectorAll('.ui-popover .legacy-candidate-row').length", "expect": 10 },
+    { "name": "b2-many-note", "probe": "document.querySelector('.ui-popover .legacy-candidates .muted')?.textContent?.includes('Показаны первые') ?? false", "expect": true },
+    { "name": "b2-many-refuse", "eval": "window.__st.outside()" },
+    { "name": "b2-many-closed", "waitFor": "document.querySelector('.ui-popover .legacy-candidates') === null" },
+
+    { "name": "b3-none-click", "eval": "window.__st.clickView('Стенд-Новая')" },
+    { "name": "b3-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null" },
+    { "name": "b3-prefilled-alias", "probe": "(document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value ?? '').includes('Стенд-Новая|подпись')", "expect": true },
+    { "name": "b3-apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "b3-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "b3-converted-alias", "waitFor": "(async () => /\\[\\[#[0-9a-f-]+\\|подпись\\]\\]/.test(await window.__st.body()))()" },
+
+    { "name": "b4-inactive-click", "eval": "window.__st.clickView('Стенд-Архив')" },
+    { "name": "b4-inactive-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null" },
+    { "name": "b4-inactive-candidate-shown", "waitFor": "document.querySelector('.add-candidates')?.textContent?.includes('Стенд-Архив') === true" },
+    { "name": "b4-inactive-refuse", "eval": "window.__st.esc()" },
+    { "name": "b4-inactive-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "b4-inactive-keeps-link", "probe": "(async () => (await window.__st.body()).includes('[[Стенд-Архив]]'))()", "expect": true },
+
+    { "name": "b1-self-click", "eval": "window.__st.clickView('Проба стенда')" },
+    { "name": "b1-self-converted", "waitFor": "(async () => (await window.__st.body()).includes('[[#{{thoughtId}}]]'))()" },
+
+    { "name": "edit-enter", "click": "[data-action=\"edit\"]" },
+    { "name": "edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "edit-type-marker", "text": "МАРКЕР-ПРАВКИ " },
+    { "name": "edit-marker-in-buffer", "probe": "document.querySelector('.md-field--editing')?.textContent?.includes('МАРКЕР-ПРАВКИ') ?? false", "expect": true },
+    { "name": "edit-click-synonym", "click": { "selector": ".md-field--editing .cm-content .wiki-link[data-wiki-target=\"Стенд-Синоним\"]" } },
+    { "name": "edit-converts-synonym", "waitFor": "!window.__st.editLink('Стенд-Синоним')", "timeout": 15000 },
+    { "name": "edit-marker-survives", "probe": "document.querySelector('.md-field--editing')?.textContent?.includes('МАРКЕР-ПРАВКИ') ?? false", "expect": true },
+    { "name": "edit-save", "click": "[data-action=\"save\"]" },
+    { "name": "edit-back-view", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    { "name": "edit-synonym-converted-in-db", "waitFor": "(async () => { const b = await window.__st.body(); return b.includes('МАРКЕР-ПРАВКИ') && /\\[\\[#[0-9a-f-]+\\]\\]/.test(b) && !b.includes('[[Стенд-Синоним]]'); })()" }
+  ]
+}

@@ -1352,6 +1352,27 @@
   font-style: italic;
 }
 
+/* Поповер выбора кандидата легаси-ссылки (0.12.2, задача 8e4e3dc5): список
+   облачков найденных мыслей с подсказкой родительской мысли. Панель собирает
+   общий компонент lib/ui (`openPopover`), здесь — только содержимое. */
+.legacy-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.legacy-candidate-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.legacy-candidate-parent {
+  color: var(--text-faint);
+  font-size: 0.85em;
+}
+
 /* Трансклюзии комментариев в редакторе (0.12.1, ТП2, задача f72a9134):
    блок развёрнутого текста с шапкой-чипом «имя · раздел» (задача 68591b8a).
    Фон по уровням, анимация и неделимость навигации — задача a2b68d72. */

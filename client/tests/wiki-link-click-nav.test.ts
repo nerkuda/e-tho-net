@@ -17,6 +17,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -128,4 +129,28 @@ test('виджет публикации не несёт навигации по 
   const source = `[[#pub:${ID_A}]]`;
   const widget = labelWidget(source, new Map(), CUR);
   assert.equal(widget.navId, null);
+});
+
+/**
+ * Расщепление контракта клика (0.12.2, задача 8e4e3dc5): навигация по клику
+ * (`initWikiLinkNavigation`) обслуживает ID-форму и спан просмотра; легаси-
+ * ссылка в редакторе (`md-widget wiki-link`) переходит в НОВУЮ развилку,
+ * которая перехватывает `mousedown` до снятия виджета. Здесь — связка
+ * «виджет несёт цель» + «навигация регистрирует развилку» (поведение самого
+ * `mousedown` проверяет `md-live-widget-click.test.ts`).
+ */
+test('легаси-виджет несёт data-wiki-target, навигация регистрирует развилку клика', () => {
+  const mdLive = readFileSync(new URL('../src/renderer/editor/md-live.ts', import.meta.url), 'utf8');
+  assert.match(
+    mdLive,
+    /span\.dataset\.wikiTarget\s*=\s*this\.target/,
+    'виджет легаси-ссылки несёт data-wiki-target (образец — WikiLinkLabelWidget)',
+  );
+  const nav = readFileSync(new URL('../src/renderer/editor/wiki-link.ts', import.meta.url), 'utf8');
+  assert.match(
+    nav,
+    /setLegacyWikiLinkClickHandler\(/,
+    'навигация регистрирует обработчик развилки для легаси-виджета',
+  );
+  assert.match(nav, /runLegacyWikiLinkFork\(/, 'развилка вызывается из навигации');
 });

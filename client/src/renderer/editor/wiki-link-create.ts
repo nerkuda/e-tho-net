@@ -40,6 +40,15 @@ import { findWikiCreateContext, type WikiCreateCommentContext } from '../lib/wik
 export async function tryCreateThoughtFromLegacyLink(
   linkEl: HTMLElement,
   name: string,
+  /**
+   * Способ замены ссылки после создания мысли. Не задан — прежнее поведение
+   * (ветка «нет мысли» в ПРОСМОТРЕ): перезапись сохранённого `body_md`
+   * комментария через API + перерисовка поля. Задан — развилка клика в режиме
+   * ПРАВКИ (0.12.2, задача 8e4e3dc5): замену делает вызывающий ТОЛЬКО в буфере
+   * редактора, сохранённый текст не трогается (`ctx.refresh` при активной
+   * правке не зовём — иначе теряются несохранённые правки).
+   */
+  options?: { convert?: (thoughtId: string) => Promise<void> | void },
 ): Promise<boolean> {
   const ctx = findWikiCreateContext(linkEl);
   if (ctx === null) return false;
@@ -134,8 +143,19 @@ export async function tryCreateThoughtFromLegacyLink(
 
   if (firstAddedId === null) return true; // every creation failed — nothing to replace
 
+  // Режим правки: замену делает вызывающий в БУФЕРЕ редактора (без записи в
+  // `body_md` и без `ctx.refresh`).
+  if (options?.convert !== undefined) {
+    try {
+      await options.convert(firstAddedId);
+    } catch (err) {
+      notice(`Не удалось обновить ссылку: ${errText(err)}`, 'error');
+    }
+    return true;
+  }
+
   try {
-    await replaceLinksInComment(networkId, ctx, name, firstAddedId);
+    await replaceLegacyLinksInComment(networkId, ctx, name, firstAddedId);
   } catch (err) {
     notice(`Не удалось обновить ссылки в комментарии: ${errText(err)}`, 'error');
   }
@@ -161,8 +181,12 @@ async function resolveParentThought(
  * `[[#<id>]]` form and repaints the field. The fresh body/version are read via
  * the API (never from a cached DOM/store state), so a concurrent edit simply
  * fails the version check instead of silently losing changes.
+ *
+ * Экспортируется: тем же переходом `[[Имя]] → [[#<id>]]` пишут в сохранённый
+ * `body_md` ветки 1–2 развилки клика в режиме просмотра (0.12.2, задача
+ * 8e4e3dc5).
  */
-async function replaceLinksInComment(
+export async function replaceLegacyLinksInComment(
   networkId: string,
   ctx: WikiCreateCommentContext,
   name: string,

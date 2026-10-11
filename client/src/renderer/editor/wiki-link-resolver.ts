@@ -20,6 +20,7 @@ import type { ThoughtRef } from '@etn/shared';
 
 import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_TARGET_ATTR } from '@etn/markdown';
 
+import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { etn } from '../lib/etn.js';
 import { commitEntity, getEntity } from '../lib/live/index.js';
 import { t } from '../lib/i18n.js';
@@ -433,6 +434,104 @@ export async function searchLegacyWikiTarget(
   const hit = res.by_names.find((h) => h.title === name) ?? res.by_names[0];
   if (hit === undefined) return null;
   return { thoughtId: hit.thought_id, title: hit.title };
+}
+
+// ---------------------------------------------------------------------------
+// Legacy wiki-link click fork (задача 8e4e3dc5, 0.12.2)
+//
+// Клик по легаси-ссылке `[[Имя]]` больше не просто открывает мысль: имя
+// проверяется среди АКТУАЛЬНЫХ мыслей по ТОЧНОМУ совпадению названия ИЛИ
+// синонима (`findDuplicates` различает title/synonym/partial), и результат
+// уходит в развилку из 4 веток (см. `editor/wiki-link.ts`). Здесь — источник
+// кандидатов и чистые решатели, чтобы развилка и лимит выдачи (≤10 + пометка)
+// были покрыты юнит-тестами без DOM.
+// ---------------------------------------------------------------------------
+
+/** Предел числа показанных кандидатов в поповере (уточнение DoD 3). */
+export const LEGACY_CANDIDATE_LIMIT = 10;
+
+/** Нормализация имени как у серверного `find_duplicates` (NFC+trim+lower). */
+export function legacyNameKey(value: string): string {
+  return value.normalize('NFC').trim().toLowerCase();
+}
+
+/**
+ * ТОЧНЫЕ кандидаты по названию ИЛИ синониму (литерально, после нормализации),
+ * в порядке выдачи `findDuplicates`. Partial-совпадения и `*`-синонимы
+ * отсеиваются: имя трактуется буквально (уточнение DoD 2). Чистая.
+ */
+export function exactLegacyCandidates(
+  hits: readonly DuplicateHit[],
+  name: string,
+): DuplicateHit[] {
+  const key = legacyNameKey(name);
+  if (key === '') return [];
+  return hits.filter(
+    (hit) =>
+      legacyNameKey(hit.title) === key ||
+      hit.synonyms.some((synonym) => legacyNameKey(synonym) === key),
+  );
+}
+
+/** Ветка развилки по числу точных актуальных кандидатов. */
+export type LegacyBranch = 'single' | 'many' | 'none';
+
+/** Классификация развилки: 0 → создать, 1 → открыть, ≥2 → поповер. Чистая. */
+export function classifyLegacyCandidates(count: number): LegacyBranch {
+  if (count <= 0) return 'none';
+  return count === 1 ? 'single' : 'many';
+}
+
+/** Действие развилки клика (уточнения DoD 1–4). */
+export type LegacyForkAction = 'create' | 'open-only' | 'convert-open' | 'popover';
+
+/**
+ * Решение развилки: 0 кандидатов → создать; единственный ЗАХВАЧЕННЫЙ →
+ * открыть без конвертации (`open-only`); единственный свободный → конвертировать
+ * и открыть; несколько → поповер. Чистая — ветки покрываются юнит-тестами.
+ */
+export function decideLegacyFork(candidateCount: number, singleLocked: boolean): LegacyForkAction {
+  switch (classifyLegacyCandidates(candidateCount)) {
+    case 'none':
+      return 'create';
+    case 'many':
+      return 'popover';
+    default:
+      return singleLocked ? 'open-only' : 'convert-open';
+  }
+}
+
+/** Окно выдачи поповера: первые ≤10 + признак обрезки. Чистая. */
+export function legacyCandidateWindow<T>(items: readonly T[]): {
+  shown: T[];
+  truncated: boolean;
+} {
+  if (items.length > LEGACY_CANDIDATE_LIMIT) {
+    return { shown: items.slice(0, LEGACY_CANDIDATE_LIMIT), truncated: true };
+  }
+  return { shown: [...items], truncated: false };
+}
+
+/**
+ * Точные АКТУАЛЬНЫЕ кандидаты легаси-ссылки. Неактуальные исключаются из
+ * резолва (уточнение DoD 2): `findDuplicates` их не различает, поэтому
+ * актуальность читается батчем `etn.thoughts.resolve` — best-effort (сбой
+ * резолва оставляет кандидатов: клик всё равно должен открыть мысль).
+ */
+export async function resolveLegacyWikiCandidates(
+  networkId: string,
+  name: string,
+): Promise<DuplicateHit[]> {
+  const hits = await etn.thoughts.findDuplicates(networkId, name);
+  const exact = exactLegacyCandidates(hits, name);
+  if (exact.length === 0) return [];
+  try {
+    const refs = await etn.thoughts.resolve(networkId, exact.map((hit) => hit.id));
+    const activeById = new Map(refs.map((ref) => [ref.id, ref.active]));
+    return exact.filter((hit) => activeById.get(hit.id) !== false);
+  } catch {
+    return exact;
+  }
 }
 
 /** Test-only hook. */

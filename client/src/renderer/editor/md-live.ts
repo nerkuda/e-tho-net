@@ -36,6 +36,26 @@ import { renderMermaidBlocks } from './md-mermaid.js';
 export const MD_WIDGET_CLASS = 'md-widget';
 
 /**
+ * Обработчик левого клика по легаси-виджету wiki-ссылки. Ставит `wiki-link.ts`
+ * при инициализации (`initWikiLinkNavigation`) — так развилка «резолв имени →
+ * конвертация в id-формат → открытие» (0.12.2, задача 8e4e3dc5) живёт рядом с
+ * навигацией по ссылкам, а `md-live` не тянет её модуль в себя (иначе цикл
+ * `wiki-link ↔ md-live`). Клик по легаси-ссылке НЕ раскрывает исходник (M6 для
+ * прочих виджетов сохраняется) — развилка выполняется прямо на `mousedown`,
+ * пока виджет ещё в DOM.
+ */
+let legacyWikiLinkClickHandler:
+  | ((widget: HTMLElement, view: EditorView, event: MouseEvent) => void)
+  | null = null;
+
+/** Регистрирует обработчик легаси-виджета (см. {@link legacyWikiLinkClickHandler}). */
+export function setLegacyWikiLinkClickHandler(
+  handler: ((widget: HTMLElement, view: EditorView, event: MouseEvent) => void) | null,
+): void {
+  legacyWikiLinkClickHandler = handler;
+}
+
+/**
  * Блочное правило (M6-фикс): блок активен, пока каретка/выделение
  * пересекает его диапазон ВКЛЮЧИТЕЛЬНО — от первого до последнего символа
  * блока маркеры не скрываются.
@@ -102,12 +122,27 @@ class WikiLinkWidget extends WidgetType {
     readonly from: number,
     readonly to: number,
     readonly label: string,
+    /**
+     * Имя цели легаси-ссылки `[[Имя|алиас]]` (пробелы обрезаны). Виджет несёт
+     * его в `data-wiki-target` — по образцу виджета имени ID-формы
+     * (`WikiLinkLabelWidget`, `wiki-id-plugin`): клик по легаси-ссылке в
+     * редакторе идёт в развилку «резолв имени → конвертация → открытие»
+     * (0.12.2, задача 8e4e3dc5), а к моменту `click` узел уже снят
+     * (`mdWidgetMouseDown` уводит каретку и раскрывает исходник), поэтому
+     * перехват делает сам `mousedown`.
+     */
+    readonly target: string,
   ) {
     super();
   }
 
   override eq(other: WikiLinkWidget): boolean {
-    return other.from === this.from && other.to === this.to && other.label === this.label;
+    return (
+      other.from === this.from &&
+      other.to === this.to &&
+      other.label === this.label &&
+      other.target === this.target
+    );
   }
 
   override toDOM(): HTMLElement {
@@ -116,6 +151,7 @@ class WikiLinkWidget extends WidgetType {
     span.textContent = this.label;
     span.dataset.mdFrom = String(this.from);
     span.dataset.mdTo = String(this.to);
+    span.dataset.wikiTarget = this.target;
     return span;
   }
 
@@ -555,7 +591,7 @@ function buildDecorations(state: EditorState): DecorationSet {
                 from,
                 to,
                 value: Decoration.replace({
-                  widget: new WikiLinkWidget(from, to, parsed.label),
+                  widget: new WikiLinkWidget(from, to, parsed.label, parsed.target),
                 }),
               });
               return false;
@@ -623,6 +659,20 @@ export function mdWidgetMouseDown(event: MouseEvent, view: EditorView): boolean 
   const target = event.target as Element | null;
   const widget = target?.closest?.(`.${MD_WIDGET_CLASS}`);
   if (!(widget instanceof HTMLElement)) return false;
+
+  // Легаси-виджет wiki-ссылки: левый клик уходит в развилку (резолв имени →
+  // конвертация → открытие), исходник НЕ раскрывается (0.12.2, задача
+  // 8e4e3dc5). Проверяем до общего «увести каретку в диапазон».
+  if (
+    widget.classList.contains('wiki-link') &&
+    (widget.dataset.wikiTarget ?? '') !== '' &&
+    legacyWikiLinkClickHandler !== null
+  ) {
+    event.preventDefault();
+    legacyWikiLinkClickHandler(widget, view, event);
+    return true;
+  }
+
   const fromRaw = widget.dataset.mdFrom;
   const toRaw = widget.dataset.mdTo;
   if (fromRaw === undefined || toRaw === undefined) return false;
