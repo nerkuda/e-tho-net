@@ -1318,3 +1318,127 @@ describe('T2 S8: дедуп команды «Создать мысль из ра
   });
 });
 
+/* ------------------------------------------------------------------ *
+ * Привязка созданной из дневниковой записи мысли к записи
+ * (задача e36d23a3, требование d6361b9c, сценарий f4e0e6bb).
+ * ------------------------------------------------------------------ */
+
+describe('привязка созданной мысли к записи (задача e36d23a3)', () => {
+  /** Хост поля-дневниковой записи: тот же, что обычный, плюс хук привязки. */
+  function diaryHost(editor: unknown, attached: string[]) {
+    return {
+      getEditor: () => editor,
+      root: new ShimElement('div'),
+      getCommentOwner: () => ({ ownerType: 'thought', ownerId: PARENT_ID }),
+      attachCreatedThought: (thoughtId: string) => {
+        attached.push(thoughtId);
+      },
+    } as any;
+  }
+
+  it('из выделенного (диалог): созданная мысль привязывается к записи', async () => {
+    const text = 'до\n\nзаметка\n\nпосле';
+    const from = text.indexOf('заметка');
+    const to = from + 'заметка'.length;
+    const editor = fakeEditor(text, from, to);
+    const attached: string[] = [];
+    const { port, created } = fakePort({
+      pick: async () => ({ items: [{ kind: 'new', title: 'заметка', synonyms: [] }] }),
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, diaryHost(editor, attached));
+    await flush();
+
+    assert.equal(created.length, 1, 'мысль создана');
+    assert.deepEqual(attached, [NEW_ID], 'хук привязки вызван с id созданной мысли');
+    // Вставка в комментарий не отменяется привязкой.
+    assert.deepEqual(editor.edits[0].changes[0], { from, to, insert: `[[#${NEW_ID}]]` });
+  });
+
+  it('из раздела: созданная мысль привязывается к записи', async () => {
+    const text = '# Раздел\n\nтело раздела';
+    const editor = fakeEditor(text, text.indexOf('тело') + 2);
+    const attached: string[] = [];
+    const { port, created } = fakePort();
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SECTION_COMMAND, diaryHost(editor, attached));
+    await flush();
+
+    assert.equal(created.length, 1);
+    assert.deepEqual(attached, [NEW_ID]);
+  });
+
+  it('пакетный путь (список): привязывается КАЖДАЯ созданная мысль', async () => {
+    const text = '- один\n- два';
+    const editor = fakeEditor(text, 0, text.length);
+    const attached: string[] = [];
+    const { port } = sequencePort();
+    create.setCommentThoughtCreatePort(port);
+
+    const h = diaryHost(editor, attached);
+    commands.runCommentCommand('comment.split', h);
+    await flush();
+
+    assert.deepEqual(attached, [UNIT_IDS[0], UNIT_IDS[1]], 'привязка на каждую единицу');
+  });
+
+  it('существующая (найденная дедупом) мысль к записи НЕ привязывается', async () => {
+    const text = '- один\n- два';
+    const editor = fakeEditor(text, 0, text.length);
+    const attached: string[] = [];
+    const { port, created } = fakePort({
+      candidates: async (title) => (title === 'один' ? [hit('EXIST-1', 'один')] : []),
+      thoughtTitle: async () => 'один',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, diaryHost(editor, attached));
+    await flush();
+
+    assert.deepEqual(created.map((request) => request.title), ['два'], 'дубль не создан');
+    assert.deepEqual(attached, [NEW_ID], 'привязана только СОЗДАННАЯ мысль');
+  });
+
+  it('вне дневника (хук не задан): команда работает, привязки нет', async () => {
+    const text = 'до\n\nзаметка\n\nпосле';
+    const from = text.indexOf('заметка');
+    const to = from + 'заметка'.length;
+    const editor = fakeEditor(text, from, to);
+    const { port, created } = fakePort({
+      pick: async () => ({ items: [{ kind: 'new', title: 'заметка', synonyms: [] }] }),
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    // Обычное поле комментария мысли: `attachCreatedThought` не задан.
+    const handled = commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(handled, true, 'команда исполняется и без хука');
+    assert.equal(created.length, 1);
+    assert.deepEqual(editor.edits[0].changes[0], { from, to, insert: `[[#${NEW_ID}]]` });
+  });
+
+  it('ошибка хука привязки не отменяет вставку в комментарий', async () => {
+    const text = 'до\n\nзаметка\n\nпосле';
+    const from = text.indexOf('заметка');
+    const to = from + 'заметка'.length;
+    const editor = fakeEditor(text, from, to);
+    const { port, created } = fakePort({
+      pick: async () => ({ items: [{ kind: 'new', title: 'заметка', synonyms: [] }] }),
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    const h = diaryHost(editor, []);
+    h.attachCreatedThought = async () => {
+      throw new Error('сеть привязки недоступна');
+    };
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, h);
+    await flush();
+
+    assert.equal(created.length, 1, 'мысль создана');
+    assert.deepEqual(editor.edits[0].changes[0], { from, to, insert: `[[#${NEW_ID}]]` });
+  });
+});
+

@@ -1322,6 +1322,10 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
               ownerId: owner.ownerId,
               getCommentId: () => row.id,
               getParentThoughtIds: () => parentThoughtIds(row.targets),
+              // Мысль, созданная командой из текста тела записи, привязывается к
+              // самой записи (0.12.2, задача e36d23a3, требование d6361b9c) —
+              // тем же механизмом, что «+ мысль» (attachToRecord).
+              attachCreatedThought: (thoughtId) => attachToRecord(row.id, [thoughtId]),
             },
           }
         : {}),

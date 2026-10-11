@@ -87,6 +87,16 @@ export interface CommentCommandHost {
    */
   getCommentParents?(): readonly string[] | null;
   /**
+   * Хук привязки СОЗДАННОЙ мысли к контейнеру поля (0.12.2, задача e36d23a3,
+   * требование `d6361b9c`): у дневниковой записи привязывает мысль к этой
+   * записи — она попадает в слот мыслей записи (прецедент «+ мысль», ошибка
+   * `0c3a8b69`). Задаётся владельцем поля из опции `commentContext`; у команды,
+   * выполненной ВНЕ дневника, хука нет — привязки не происходит. Ошибку
+   * обрабатывает сам хук: привязка не должна отменять вставку ссылки или
+   * трансклюзии в комментарий.
+   */
+  attachCreatedThought?(thoughtId: string): void | Promise<void>;
+  /**
    * Команды уровня поля, которые знает само поле (отмена, сохранение и
    * прочие команды режима правки). `true` — команда обработана.
    */
@@ -139,6 +149,13 @@ export interface CommentCommandContext {
    * родитель выводится из `getCommentOwner`.
    */
   getCommentParents(): readonly string[] | null;
+  /**
+   * Хук привязки созданной мысли к контейнеру поля (0.12.2, задача
+   * e36d23a3, требование `d6361b9c`): у дневниковой записи — привязка к
+   * записи, вне дневника хук не задан — привязки нет. См.
+   * {@link CommentCommandHost.attachCreatedThought}.
+   */
+  attachCreatedThought?(thoughtId: string): void | Promise<void>;
   /** Запустить другую команду этого же поля (для составных команд). */
   run(command: string): boolean;
   /**
@@ -211,6 +228,7 @@ function contextOf(host: CommentCommandHost, editor: MdEditor): CommentCommandCo
     root: host.root,
     getCommentOwner: () => host.getCommentOwner?.() ?? null,
     getCommentParents: () => host.getCommentParents?.() ?? null,
+    attachCreatedThought: (thoughtId) => host.attachCreatedThought?.(thoughtId),
     run: (nested) => runCommentCommand(nested, host),
     getActiveInsertEditor: () => host.getActiveInsertEditor?.() ?? null,
   };

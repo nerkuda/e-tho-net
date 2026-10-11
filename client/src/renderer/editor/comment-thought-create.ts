@@ -865,13 +865,38 @@ async function existingRef(
   return { ref: thoughtLinkRef(id, ''), title: await port.thoughtTitle(id), whole: false };
 }
 
+/**
+ * Хук привязки СОЗДАННОЙ мысли к контейнеру поля (0.12.2, задача e36d23a3,
+ * требование `d6361b9c`): у дневниковой записи привязывает мысль к записи
+ * (слот мыслей записи), вне дневника хука нет. Привязывается ТОЛЬКО созданная
+ * мысль — существующая (найденная дедупом) к записи автоматически не идёт.
+ *
+ * Ошибку хука не пропускаем наружу: мысль уже создана, вставка ссылки/
+ * трансклюзии в комментарий обязана состояться, а сообщение об ошибке привязки
+ * показывает сам хук (`CommentCommandHost.attachCreatedThought`).
+ */
+async function attachCreated(
+  attach: ((thoughtId: string) => void | Promise<void>) | undefined,
+  thoughtId: string,
+): Promise<void> {
+  if (attach === undefined) return;
+  try {
+    await attach(thoughtId);
+  } catch {
+    // Сообщение об ошибке привязки — забота самого хука (например,
+    // `attachToRecord` показывает notice). Вставку в комментарий не прерываем.
+  }
+}
+
 /** Создаёт новую мысль по узлу; форма вставки — по непустоте ТЕЛА (`23c11231`). */
 async function createUnitRef(
   port: CommentThoughtCreatePort,
   parentId: string,
   node: SplitSelectionNode,
+  attach?: (thoughtId: string) => void | Promise<void>,
 ): Promise<SelectionThoughtRef> {
   const created = await port.create({ parentId, title: node.title, bodyMd: node.bodyMd });
+  await attachCreated(attach, created.id);
   return {
     ref: node.bodyMd === '' ? thoughtLinkRef(created.id, '') : formatTransclusionRef(created.id),
     title: null,
@@ -891,7 +916,10 @@ async function createUnitRef(
  * @param rebuild — перестроение плана по актуальному снимку (для перепрокладки);
  * @param refuseCreates — при отказе от поповера создавать новую мысль (`false`
  *   — «Создать мысль из раздела»: отказ → прежнее поведение без дедупа) или
- *   оставить элемент без изменений (`true` — список и «Разделить»).
+ *   оставить элемент без изменений (`true` — список и «Разделить»);
+ * @param attach — хук привязки СОЗДАННОЙ мысли к контейнеру поля (0.12.2,
+ *   задача e36d23a3): у дневниковой записи — привязка к записи, вне дневника —
+ *   не задан. Существующие (из дедупа) мысли не привязываются.
  */
 async function runPlanUnits(
   editor: MdEditor,
@@ -899,6 +927,7 @@ async function runPlanUnits(
   owner: CommentOwnerRef,
   rebuild: (snap: MdEditorSnapshot) => SplitSelectionNode[] | null,
   refuseCreates: boolean,
+  attach?: (thoughtId: string) => void | Promise<void>,
 ): Promise<void> {
   const port = commentThoughtCreatePort();
   const before = editor.snapshot();
@@ -928,11 +957,11 @@ async function runPlanUnits(
         } else if (refuseCreates) {
           refs.push(null); // отказ от поповера — элемент без изменений
         } else {
-          refs.push(await createUnitRef(port, parentId, node));
+          refs.push(await createUnitRef(port, parentId, node, attach));
         }
         continue;
       }
-      refs.push(await createUnitRef(port, parentId, node));
+      refs.push(await createUnitRef(port, parentId, node, attach));
     }
 
     // Позиции плана сняты ДО сетевых await — перепрокладываем по актуальному
@@ -993,6 +1022,7 @@ function runCreate(ctx: CommentCommandContext, build: CommentThoughtPlanBuilder)
       return next === null ? null : [sectionNodeFromPlan(next)];
     },
     false,
+    ctx.attachCreatedThought,
   );
   return true;
 }
@@ -1007,11 +1037,14 @@ function runCreate(ctx: CommentCommandContext, build: CommentThoughtPlanBuilder)
  * сняты до сетевых `await` — после них план перепрокладывается по актуальному
  * документу ({@link relocatedSelection}); расхождение контекста отменяет правку
  * (ошибка `da5e74b0`). Отмена диалога и отсутствие владельца текст не меняют.
+ * Созданные мысли привязываются хуком `attach` (дневниковая запись, задача
+ * e36d23a3); выбранные существующие — нет.
  */
 async function runSelectionDialog(
   editor: MdEditor,
   plan: SelectionDialogPlan,
   owner: CommentOwnerRef,
+  attach?: (thoughtId: string) => void | Promise<void>,
 ): Promise<void> {
   const port = commentThoughtCreatePort();
   const before = editor.snapshot();
@@ -1042,6 +1075,7 @@ async function runSelectionDialog(
         title: item.title ?? plan.prefill,
         bodyMd: plan.bodyMd,
       });
+      await attachCreated(attach, created.id);
       // Форма вставки — по ФАКТИЧЕСКОЙ непустоте тела (требования `23c11231`,
       // `d4f3d8a0`), а не по «короткости» случая.
       refs.push({
@@ -1083,10 +1117,10 @@ function runSelectionCommand(ctx: CommentCommandContext): boolean {
   if (plan.batch) {
     const nodes = planBatchSelection(snap);
     if (nodes === null) return false;
-    void runPlanUnits(ctx.editor, nodes, owner, planBatchSelection, true);
+    void runPlanUnits(ctx.editor, nodes, owner, planBatchSelection, true, ctx.attachCreatedThought);
     return true;
   }
-  void runSelectionDialog(ctx.editor, plan, owner);
+  void runSelectionDialog(ctx.editor, plan, owner, ctx.attachCreatedThought);
   return true;
 }
 
@@ -1100,7 +1134,7 @@ function runSplit(ctx: CommentCommandContext): boolean {
   if (nodes === null) return false;
   const owner = ctx.getCommentOwner();
   if (owner === null) return false;
-  void runPlanUnits(ctx.editor, nodes, owner, planSplitSelection, true);
+  void runPlanUnits(ctx.editor, nodes, owner, planSplitSelection, true, ctx.attachCreatedThought);
   return true;
 }
 
