@@ -1,0 +1,23 @@
+{
+  "mcp": {
+    "servers": {
+      "etn-dev": {
+        "type": "stdio",
+        "command": "node",
+        "args": [
+          "server/dist/cli.js",
+          "mcp",
+          "--api-key",
+          "etn_local"
+        ]
+      },
+      "etn-remote": {
+        "type": "http",
+        "url": "https://etn.example.org/mcp",
+        "headers": {
+          "Authorization": "Bearer etn_TEST0000000000000000000000000000"
+        }
+      }
+    }
+  }
+}

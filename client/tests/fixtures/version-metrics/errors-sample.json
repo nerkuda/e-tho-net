@@ -1,0 +1,571 @@
+{
+ "works": [
+  {
+   "id": "9c2e077a-72dc-4114-8eb3-e9cbf3d96088",
+   "title": "Правка блока трансклюзии: вместо вложенного поля — обведённые рамкой строки окружения",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "3c51aee8-2950-48e2-8a88-e38870554087",
+   "title": "Ctrl+Enter при правке блока трансклюзии растворяет трансклюзию в тексте окружения",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "475fc35e-89f4-4b25-b802-dc22d938b1c5",
+   "title": "Маркеры ==…== видны постоянно в режиме правки — живой просмотр не скрывает их вне слова",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "61329f12-fcc9-42e7-8476-fb198073e629",
+   "title": "Текст комментария в режиме правки должен быть бледнее основного текста",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "64b18420-8eed-478d-97c9-1f2c88596189",
+   "title": "Команда контекстного меню комментария не применяется — поле уходит в просмотр",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "333aa879-4386-43db-b97b-7b1e540247d4",
+   "title": "Отступы блоков кода и цитат в правке отличаются от просмотра",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "0e39d301-f0fa-4bf7-a655-038f46afe0b4",
+   "title": "Двойной клик по пробелам в просмотре выделяет пробелы при переходе в правку",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "5312142d-4c85-4962-b182-d620d75caecf",
+   "title": "Блок трансклюзии не выделяется как единое целое; Enter рядом с блоком входит в его правку",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "640c0ade-572a-4a3b-9dc9-08af1ffc4820",
+   "title": "После Ctrl+Enter в правке блока трансклюзии каретка над блоком и блок невидим",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "39553204-2d7a-4b98-b278-140b6e37e28d",
+   "title": "Выделение блока трансклюзии показывается подсветкой текста внутри, а не рамкой вокруг блока",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "c91a0067-98a7-4f18-8170-301f9632ca8c",
+   "title": "Дневниковые записи: заголовки комментариев не сворачиваются в режиме просмотра",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "075602b4-aec0-4e4f-b278-1931c5bdf85f",
+   "title": "Лента публикации: трансклюзии показываются ссылками, текст не разворачивается",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "d79f7254-2da6-41e9-bb42-ce7a77ea550d",
+   "title": "Лента публикации: выделение текста не подсвечивает раздел в оглавлении",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "4773b34f-86f9-4d14-91cc-4324417b43ea",
+   "title": "Редактор публикации: группы фильтров сами сворачиваются/разворачиваются при изменении значений",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "4e93119e-ecd6-42b8-94f0-fd71b9de28db",
+   "title": "Режим просмотра: отступы вокруг картинки в комментарии больше, чем в редакторе",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "705d834b-09d4-4467-9890-0632b3bc9f00",
+   "title": "Вкладка «Библиотека»: поиск и выбор цвета уезжают при скролле — закрепить сверху на одной строке",
+   "type_id": "3d31c615-d6b0-42e9-a027-e8197f7cbe8b",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  }
+ ],
+ "comments": {
+  "9c2e077a-72dc-4114-8eb3-e9cbf3d96088": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nПри двойном клике по трансклюзии пользователь входит в правку блока, но вместо вложенного ПОЛЯ внутри окружения видит «обведённые рамкой строки» — правка разворачивается в строки текста окружения, а не отдельное прямоугольное поле.\n\n## Как воспроизвести\nОткрыть мысль с трансклюзией в комментарии; дважды кликнуть по блоку трансклюзии.\n\n## Ожидаемое поведение (со слов пользователя)\nВнутри «окружения» должно быть прямоугольное вложенное поле, в котором редактируется постоянный комментарий мысли-источника трансклюзии — визуально отдельная прямоугольная область, а не рамки вокруг строк окружения.\n\n**Обнаружено:** визуальная проверка пользователя 2026-10-07."
+   },
+   {
+    "kind": "chronological",
+    "title": "Исправлено: вложенное поле вместо обведённых строк (коммит 858dba6a)",
+    "body_md": "**Диагноз.** Рамка правки блока рисовалась ОДНОЙ inline-`mark`-декорацией (`Decoration.mark({class:'cm-transclusion-edit-range'})`) на весь диапазон вставленного текста. CM6 разбивает inline-декорацию по границам строк, и `box-shadow: inset …` обводил каждую строку отдельно — отсюда «обведённые рамкой строки» вместо вложенного поля.\n\n**Фикс.** `client/src/renderer/editor/transclusion.ts`: рамка строится ЛИНЕЙНЫМИ декорациями (`Decoration.line`) — боковые границы на каждой строке диапазона, верх/низ и скругления — на первой/последней (`cm-transclusion-edit-range--first/--last`). `client/src/renderer/styles/editor.css`: непрерывные `border-left/right` на строках + `border-top/bottom` и радиусы на крайних — одно сплошное прямоугольное вложенное поле внутри окружения. Ссылки внутри диапазона остаются редактируемым текстом, виджеты не ставятся.\n\n**Проверено.** `client/tests/transclusion.test.ts`: «текст блока в правке — линейные декорации поля» и «многострочное поле правки — сплошная рамка (first/mid/last)»; сторож `client/tests/guard-transclusion-visual.test.ts` фиксирует CSS контейнера (нет per-line `box-shadow`, есть боковые/верхняя/нижняя границы). typecheck/eslint/затронутые тесты зелёные."
+   },
+   {
+    "kind": "chronological",
+    "title": "Вердикт верификатора: принято",
+    "body_md": "Проверка `858dba6a` на живом стенде: рамка поля правки блока строится линейными декорациями `cm-transclusion-edit-range` с `--first/--last` — один сплошной прямоугольник (верх/низ на крайних строках, бока на всех, `box-shadow` нет), а не обводка каждой строки. Вложенное прямоугольное поле подтверждено DOM-пробой."
+   }
+  ],
+  "3c51aee8-2950-48e2-8a88-e38870554087": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nПосле изменения текста внутри блока трансклюзии и нажатия `Ctrl+Enter` трансклюзия ИСЧЕЗЛА — её текст визуально стал частью текста окружения. Возможна порча данных (текст записался не в мысль-источник, а в комментарий контейнера, заменив ссылку).\n\n## Как воспроизвести\nВойти в правку блока трансклюзии (двойной клик), изменить текст, нажать `Ctrl+Enter`.\n\n## Ожидаемое поведение (со слов пользователя)\n`Ctrl+Enter` записывает изменения в ту мысль, текст которой редактировался в текущем блоке; на месте блока остаётся трансклюзия; текст окружения не меняется.\n\n## Приоритет\nПодозрение на порчу данных — проверь и в БД: ушла ли правка в комментарий контейнера вместо источника, и восстановима ли ссылка.\n\n**Обнаружено:** визуальная проверка пользователя 2026-10-07."
+   },
+   {
+    "kind": "chronological",
+    "title": "Исправлено: правка блока не коммитит контейнер (коммит 858dba6a)",
+    "body_md": "**Диагноз.** При входе в правку блока ссылка `![[#id]]` в документе поля заменяется текстом источника (`beginBlockEdit`), а `saveBlockEdit` (Ctrl+Enter/кнопка) асинхронно пишет текст в постоянный комментарий ИСТОЧНИКА и восстанавливает ссылку (`restoreBlockEdit`). In-process проба на реальных модулях (`transclusionState` + `saveBlockEdit`) с заглушкой `etn` подтвердила: правка уходит в комментарий источника, ссылка восстанавливается, `blockEdit` очищается — путь записи верен. Опасность — в коммите КОНТЕЙНЕРА: пока в поле лежит вставленный текст источника, любое сохранение поля (уход фокуса → `commitOrRevert` → `onSave`; сбой `saveBlockEdit`, оставляющий блок в правке) могло увековечить подменённый текст и потерять ссылку.\n\n**Фикс.** Коммит поля заблокирован, пока идёт правка блока: `client/src/renderer/editor/markdown-field.ts` (`commitOrRevert`) сперва пишет блок в источник и восстанавливает ссылку, при сбое откатывает блок, и лишь затем обычный коммит. `client/src/renderer/editor/md-editor.ts`: обработчик `Mod-Enter` не коммитит окружение при активной правке блока (новый `MdEditor.isTransclusionEditing`).\n\n**Проверено.** `client/tests/transclusion.test.ts`: «Mod-Enter в правке блока пишет в источник и НЕ коммитит окружение» — через реальный keymap (`runScopeHandlers` + `transclusionExtensions`): правка ушла в источник, `body_md` контейнера не изменён, ссылка на месте; «Enter в правке блока отдаётся родительскому редактору». `npm -w @etn/client run typecheck` зелёный; eslint по изменённым файлам чист; затронутые тесты зелёные.\n\n**Уже испорченные данные (БД пользователя не трогал).** Признак: в `body_md` контейнера на месте ожидаемой ссылки `![[#<sourceId>]]` стоит текст источника (ссылка исчезла). Диагностика: `SELECT id, owner_id, body_md FROM comments WHERE kind='permanent' AND body_md LIKE '%![[#%'` — инвентаризация живых трансклюзий; для конкретного контейнера сверить с черновиком и `audit_log`. Восстановление ручное: вернуть `![[#<sourceId>]]` в `body_md` контейнера (текст источника уже записан в комментарий источника и не теряется). Побочный дефект с черновиком зарегистрирован отдельно (`59d9b5f3`)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Вердикт верификатора: принято",
+    "body_md": "Проверка `858dba6a` на живом стенде (скрытое окно + изолированная БД): двойной клик → правка блока; изменение текста → `Ctrl+Enter` → правка записана в ПОСТОЯННЫЙ КОММЕНТАРИЙ ИСТОЧНИКА (version 1→2), `body_md` контейнера НЕ изменён (version 1), на месте блока — трансклюзия; уход фокуса при активной правке — контейнер не коммитится с подменённым текстом (вектор порчи закрыт). Обычный Enter — перевод строки; сохранение окружения после выхода — работает.\n\n**Уточнение способа восстановления (по замечанию верификатора):** вариант порчи бывает ДВУХ видов. (1) Правка успела уйти в источник, а контейнер сохранился с подменённым текстом без ссылки — тогда достаточно вернуть `![[#<sourceId>]]` в контейнер. (2) Порча через коммит контейнера БЕЗ `saveBlockEdit` (старый путь): правка блока есть ТОЛЬКО в `body_md` контейнера, источник не обновлён — перед возвращением ссылки текст блока надо перенести в постоянный комментарий источника, иначе он потеряется."
+   }
+  ],
+  "475fc35e-89f4-4b25-b802-dc22d938b1c5": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nПосле пометки слова выделением (`Ctrl+Shift+H`, маркеры `==…==`) символы `==` видны ПОСТОЯННО, даже когда каретка вне этого слова. Для жирного (`**`) живой просмотр работает: внутри/рядом — маркеры видны, вышел за пределы — скрыты, слово отрисовано жирным.\n\n## Как воспроизвести\nВ правке комментария применить `Ctrl+Shift+H` к слову; убрать каретку из слова — маркеры `==` остаются видимыми.\n\n## Ожидаемое поведение\nЖивой просмотр должен работать со ВСЕМ форматированием текста как с жирным: каретка внутри/рядом с конструкцией — маркеры видны; вне — маркеры скрыты, конструкция отрисована (выделение подсветкой). Проверить все конструкции ТП1: `==` (mark), `<u>`, `~~`, инлайн-код, task-списки.\n\n**Обнаружено:** визуальная проверка пользователя 2026-10-07."
+   },
+   {
+    "kind": "chronological",
+    "title": "Живой просмотр: маркеры ==, <u> и task скрыты вне конструкции",
+    "body_md": "**Сделано.** Живой просмотр (`client/src/renderer/editor/md-live.ts`) теперь работает со всеми конструкциями ТП1 по правилу «как с жирным»: каретка внутри/вплотную — исходные маркеры, вне — маркеры скрыты и конструкция отрисована.\n\n**Корень.** Лексер `@codemirror/lang-markdown` не знал `==…==` (обычный текст, узлов нет) и разбирал `<u>…</u>` как `HTMLTag`; `md-live.ts` обрабатывал только emphasis/strike/inline-code, поэтому маркеры `==` не скрывались никогда.\n\n**Изменения.**\n- `editor/wiki-link.ts`: добавлены инлайн-узлы `Mark`/`MarkMark` (`==…==`) и `Underline`/`UnderlineMark` (`<u>…</u>`) через `MarkdownExtension` (delimiter-механика как у GFM Strikethrough, вложенный inline парсится). Дефиниции живут здесь, потому что `md-editor.ts` править запрещено, а `wikiLinkLanguage()` — единственная точка подключения расширений языка.\n- `md-live.ts`: `Mark`/`Underline` — инлайн-родители; маркеры (`MarkMark`/`UnderlineMark`) скрываются вне активности; содержимое всегда оформлено классами `cm-md-mark`/`cm-md-underline`; `Task`/`TaskMarker` — `[ ]`/`[x]` заменяется чекбоксом (`choiceControl` из `lib/ui`) вне активного пункта.\n- `styles/markdown.css` (новый модуль, импорт в `styles.css`): фон выделения и подчёркивание.\n- Тесты `client/tests/md-live.test.ts`: mark/underline/strike/task (вне — маркеры скрыты и конструкция отрисована; внутри — маркеры видны) + регресс жирного/курсива.\n\n**Проверено.** `npm run typecheck` — зелёный; `npm run lint` — чистый; `npm -w @etn/client test` — 3438/3438 зелёных (включая сторожа `guard-ui-fields`, `guard-markdown-single-renderer`, `guard-styles-modules`). Единый рендерер не затронут, второй парсер не заводился.\n\n**Коммит.** `5d16e8b6` ([475fc35e] fix(comment): живой просмотр скрывает маркеры ==, <u> и task вне конструкции).\n\n**Осталось.** Побочный дефект (маркер списка `-` в task-пункте не скрывается) заведён отдельной ошибкой на версию 0.12.1."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка субагента-тестировщика (5d16e8b6): не принято — блокер по пустым ==/<u>",
+    "body_md": "**Вердикт: не принято.** Один блокер — режим правки стирает текст для «пустых» конструкций (новый регресс этого коммита), плюс мелкие замечания.\n\n**DoD**\n- `==…==` (mark): каретка вне — `==` скрыты, содержимое подсвечено `cm-md-mark`; внутри/вплотную — маркеры видны → **pass**.\n- `<u>…</u>` (underline): вне — `<u>`/`</u>` скрыты, содержимое `cm-md-underline`; внутри — видны → **pass**.\n- `~~…~~` (strike) — без изменений → **pass**.\n- инлайн-код — не затронут → **pass**.\n- task `- [ ]`/`- [x]`: вне пункта `[ ]` заменяется чекбоксом (checked по `x`), внутри — исходник → **pass**.\n- Регресс жирный/курсив, wiki-ссылки/трансклюзии → **pass**.\n- Сторож `guard-markdown-single-renderer` зелёный; новых рендереров нет — узлы это lezer-расширение редактора, ADR о едином рендерере не нарушен → **pass**.\n- `npm run typecheck`, `npm run lint`, `npm -w @etn/client test` → **pass**.\n- Побочная ошибка `9d611f5f` заведена отдельно и корректно (черновик, версия 0.12.1, причина и ожидание описаны) → **pass**.\n- Тесты не фиктивны — независимая проба декораций подтверждает находки → **pass**.\n\n**Претензии**\n\n[блокер] Живой просмотр стирает текст для пустых пар `==…==`/`<u>…</u>` — расходится с единым рендерером (регресс, внесённый `5d16e8b6`).\nВоспроизведение: в правке комментария набрать `x ==== y` (или `x <u></u> y`, `========`), увести каретку — живой просмотр показывает `x  y` (обе пары маркеров скрываются `Decoration.replace`), тогда как просмотр/`renderMarkdown` отдаёт литерал `x ==== y` / `x &lt;u&gt;&lt;/u&gt; y`.\nПричина: лексер-делимитеры `Mark`/`Underline` (`editor/wiki-link.ts`) разрешают пару с ПУСТЫМ содержимым (`====`, `<u></u>`); `editor/md-live.ts` скрывает `MarkMark`/`UnderlineMark` безусловно (по активности родителя), а единый рендерер такие пары отвергает (`markdown/src/mark.ts`: `close === openEnd → false`; `markdown/src/underline.ts`: `close === openEnd → false`) — в просмотре они остаются текстом. До коммита лексер не знал `==`, и паритет сохранялся.\nДоказательство: независимые пробы `x ==== y` → дерево `Mark@2-6 MarkMark@2-4 MarkMark@4-6`, декорации `2-4:hide, 4-6:hide`, RENDER `<p>x ==== y</p>`; `x <u></u> y` → `Underline@2-9`, `2-5:hide, 5-9:hide`, RENDER `<p>x &lt;u&gt;&lt;/u&gt; y</p>`.\nГде править: `client/src/renderer/editor/md-live.ts:342-356` — не скрывать маркеры `MarkMark`/`UnderlineMark`, когда у родителя `Mark`/`Underline` пустое содержимое (`to - from <= openLen + closeLen`), зеркаля guard единого рендерера; добавить сторож-тест на `====`, `…"
+   },
+   {
+    "kind": "chronological",
+    "title": "Ревью (не принято): блокер пустых пар исправлен, замечания закрыты",
+    "body_md": "**Блокер (не принято).** Лексер разрешал пустые пары `==`/`<u>` в узел с пустым содержимым, а `md-live.ts` скрывал маркеры безусловно — текст стирался (`x ==== y` → `x  y`, `========`, `x <u></u> y`), расходясь с просмотром (единый рендерер такие пары оставляет литералом: `markdown/src/mark.ts` — `close === openEnd → false`, `underline.ts`).\n\n**Фикс.** В `md-live.ts` маркеры `MarkMark`/`UnderlineMark` не скрываются, когда содержимое родителя пусто (`to - from <= openLen + closeLen`), — зеркально guard-у рендерера. Тесты-сторожа: `====`, `<u></u>`, `x ==== y`, `========` (маркеры не скрыты) и несбалансированные `== x`/`x ==`/`<u>u`/`u</u>` (литерал без декораций).\n\n**Замечания.** (1) Узлы ТП1 вынесены из `wiki-link.ts` в новый модуль `client/src/renderer/editor/markdown-inline-ext.ts` (несвязанные обязанности разведены; `wiki-linkLanguage()` теперь только компонует wiki-узлы и `markdownInlineExt`). Дублирование `isUChar` с приватным `isU` рендерера оставлено осознанно — экспорт из `@etn/markdown` был вне границ задачи. (2) CSS-правила `cm-md-mark`/`cm-md-underline`/`cm-md-task-checkbox` перенесены из временного `styles/markdown.css` в `styles/editor.css` парными к `.comment-view mark` и `.comment-view .task-list-item-checkbox` (single source с просмотром); временный модуль, его `@import` и запись в снапшоте `guard-styles-modules` удалены.\n\n**Проверено.** `npm run typecheck` — зелёный; `npm run lint` — чистый; `npm -w @etn/client test` — 3440/3440 зелёных. Единый рендерер не тронут.\n\n**Коммит.** `17c0d090` (поверх `5d16e8b6`)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка субагента-тестировщика (17c0d090): принято — блокер пустых пар закрыт",
+    "body_md": "**Вердикт: принято.** Закрытый ранее блокер (пустые пары `==`/`<u>` стирали текст в правке) закрыт; замечания прошлого раунда сняты. Блокеров нет.\n\n**DoD**\n- Пустые пары `====`, `x ==== y`, `========`, `<u></u>`, `x <u></u> y` — в правке ЛИТЕРАЛ, маркеры не скрыты → **pass** (независимая проба: декораций 0; `renderMarkdown` отдаёт literal).\n- Пустые пары с пробелом `== ==`, `<u> </u>` — по рендереру НЕ пустые: правка подсвечивает содержимое → **pass** (deco `2-3:cm-md-mark` / `3-4:cm-md-underline`; renderer `<mark> </mark>` / `<u> </u>`).\n- Несбалансированные `== x`, `x ==`, `x == y`, `<u>u`, `u</u>`, `<u>x`, `x</u>` → литерал без декораций → **pass** (TREE пусто, DECO пусто, renderer literal).\n- Непустые пары `==m==`, `<u>u</u>`, `~~s~~`, инлайн-код — вне маркеры скрыты/класс, внутри исходник → **pass** (проба + md-live-тесты).\n- task `- [ ]`/`- [x]` — вне пункта маркер заменён виджетом-чекбоксом (checked по `x`), внутри — исходный `[ ]` → **pass** (проба: `2-5:widget`).\n- Регресс: жирный/курсив, `**_x_**`, wiki-ссылки `[[…]]` (виджет вне/исходник внутри), трансклюзия `![[…]]` → **pass**.\n- Побочные пробы `======`, `=======`, `==========`, `a====b`, `<U></U>`, `<u></u></u>` — правка литерал, renderer literal → **pass**.\n- Замечания прошлого раунда: узлы ТП1 вынесены в `editor/markdown-inline-ext.ts`; `wiki-link.ts` чист (только композиция `wikiLinkMarkdownExt` + `markdownInlineExt`, строки 85-88); CSS `cm-md-mark`/`cm-md-underline`/`cm-md-task-checkbox` живут в `editor.css` парными к `.comment-view mark`/`.task-list-item-checkbox`; `styles/markdown.css` удалён, снапшот `guard-styles-modules` обновлён → **pass**.\n- `npm run typecheck` — зелёный; `npm run lint` — чисто; `npm -w @etn/client test` — 3440/3440 pass, 0 fail; `npm -w @etn/markdown test` — 235/235 → **pass**.\n- Единый рендерер не тронут (`git diff 5d16e8b6~1 17c0d090 -- markdown/ shared/ server/` пуст), сторож `guard-markdown-single-renderer` зелёный и содержателен → **pass**.\n\n**Претензии**\n- [замечание] `isUChar` в `markdown-inline-ext.ts:28-31` дублирует приватный `isU` единого рендерера (`markdown/src/underline.ts:23`). Исполнитель оставил осознанно (экспорт из `@etn/markdown` вне границ задачи); на корректность не влияет, блокером не считаю — при следующем касании ТП1 желательно вынести общий хелпер.\n\n**Проверено (независимо, своим кодом)**\n- Собственная проба `.tmp/verify-475fc35e/probe*.ts` (лексерное дерево + `DecorationSet` + `renderMarkdown`), ~50 входов: пустые/несбалансированные/непус…"
+   },
+   {
+    "kind": "chronological",
+    "title": "Вердикт верификатора: принято (повторная проверка)",
+    "body_md": "Коммит `17c0d090` (поверх отклонённого `5d16e8b6`). Закрытый блокер подтверждён закрытым: пустые пары `====`, `x ==== y`, `========`, `<u></u>` в правке — литерал (паритет с единым рендерером), несбалансированные — без декораций; непустые пары `==`/`<u>`/`~~`/инлайн-код/task — правило «как с жирным». Замечания прошлого раунда закрыты: узлы ТП1 вынесены в `markdown-inline-ext.ts`, CSS в `editor.css` парными к `.comment-view`. Прогоны: typecheck/lint зелёные, client 3440/3440, markdown 235/235. Остаток: `isUChar` дублирует приватный `isU` рендерера — при следующем касании вынести общий хелпер."
+   }
+  ],
+  "61329f12-fcc9-42e7-8476-fb198073e629": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nТекст комментария в режиме редактирования визуально не отличается по насыщенности от основного текста — режим правки не считывается.\n\n## Как воспроизвести\nОткрыть правку комментария — сравнить цвет текста с просмотром/основным текстом.\n\n## Ожидаемое поведение (со слов пользователя)\nТекст комментария в режиме редактирования выделяется цветом более бледным по отношению к цвету основного текста (просмотра). Оформление — из дизайн-системы `lib/ui`.\n\n**Обнаружено:** визуальная проверка пользователя 2026-10-07."
+   },
+   {
+    "kind": "chronological",
+    "title": "Исправлено: текст поля в правке приглушён",
+    "body_md": "**Что сделано.** В режиме правки текст поля markdown приглушён цветом `--text-dim` (дизайн-система, токен темы), в просмотре остаётся обычным (`--text`); выход из правки возвращает обычный цвет. Правило добавлено в `client/src/renderer/styles/editor.css` в конец блока режимов поля: `.md-field--editing .cm-editor, .md-field--editing .cm-editor .cm-content { color: var(--text-dim); }` — цвет привязан к классу `.md-field--editing`, который снимается при выходе из правки (`editor/markdown-field.ts`). Различие только по цвету: типографика просмотра и редактора по-прежнему общая (ошибка 45989471 не затронута).\n\n**Чем проверено.**\n- Живой прогон скрытым окном (сборка `client/out`, тестовый клиент `ui-probe`, CDP-порт 9334, полигон «Тест 1»): просмотр `.md-field-view` — `rgb(32,36,45)` (`--text` #20242d), правка `.cm-content`/`.cm-editor` — `rgb(92,102,117)` (`--text-dim` #5c6675), после Esc снова `rgb(32,36,45)`; `data-mode` прошёл `view → edit → view`.\n- Тест-сторож `client/tests/guard-md-field-edit-color.test.ts` (4 проверки) — зелёный.\n- `npm run typecheck`, `npm run lint` — зелёные; `npm -w @etn/client test` — 3432/3432 ok.\n\n**Коммит:** dc66384f — `fix(comment): [61329f12] приглушённый цвет текста поля в режиме правки`.\n\n**Осталось:** независимая проверка (`etn-verifier`); актуальность не снимаю."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка etn-verifier: принято",
+    "body_md": "## Независимая проверка (etn-verifier, субагент-тестировщик)\n\n**Вердикт: принято.** Коммит `dc66384f` (`fix(comment): [61329f12] приглушённый цвет текста поля в режиме правки`); в HEAD `5d16e8b6` правило и сторож на месте, рабочее дерево чистое (коммитов тестировщика нет).\n\n### DoD\n- **Только цвет, токен дизайн-системы.** Правило `.md-field--editing .cm-editor, .md-field--editing .cm-editor .cm-content { color: var(--text-dim); }` (`client/src/renderer/styles/editor.css:1540-1545`); `--text-dim` объявлен в `styles/tokens.css:29` (#5c6675, светлая) и `:345` (#9aa3b5, тёмная); в теле правила только `color`, hex-литералов нет. — **pass**\n- **Правка бледнее просмотра, выход возвращает цвет** (живой прогон, скрытое окно, CDP 9350, стенд `http://127.0.0.1:7535`, сеть «Тест 1»): просмотр `.md-field-view` — `rgb(32,36,45)` (`--text`); правка `.cm-content`/`.cm-editor` — `rgb(92,102,117)` (`--text-dim`); после Esc снова `rgb(32,36,45)`; `data-mode` view→edit→view. — **pass**\n- **Типографика не затронута (грабли 45989471).** Правило добавляет только `color`; замер view/edit совпал (font ui-sans-serif, 13px, line-height 20.15px). — **pass**\n- **Правило не накрывает лишнее.** Просмотр остаётся `--text`; постороннее поле в момент правки (`.search-input`) — `rgb(32,36,45)`, не приглушено. — **pass**\n- **Сторож не фиктивен** (мутации с восстановлением, все краснеют): `--text-dim`→`--text` (2 fail), токен→hex `#5c6675` (2 fail), удаление `classList.remove('md-field--editing')` (1 fail), удаление `classList.add('md-field--editing')` (1 fail). Базовый прогон `guard-md-field-edit-color.test.ts` — 4/4 ok. — **pass**\n- **Прогоны:** `npm run typecheck` — ok; `npm run lint` — ok; `npm -w @etn/client test` — 3438/3438 ok, 0 fail. — **pass**\n- **Побочная `d0bc4c1c` заведена отдельно и корректно.** `grep -rnE \"var\\\\(--(muted|text-muted)\" client/src/renderer/styles` — 23 вхождения, объявлений `--muted`/`--text-muted` нигде нет; фикс 61329f12 использует `--text-dim`, к этому дефекту не относится. — **pass**\n\n### Замечания\nНет.\n\n### Чем проверено\n`git show dc66384f`, grep токенов/`--muted`, мутации сторожа (с восстановлением через `git checkout`), `npm run typecheck`/`lint`/`npm -w @etn/client test`, живой прогон `ui-probe-launch`+`ui-probe` (CDP 9350), REST-проверка стенда 7535.\n\n### Скриншоты\nНе приложены: ошибок GUI и сомнительных мест не найдено; визуальная приёмка — за пользователем."
+   }
+  ],
+  "64b18420-8eed-478d-97c9-1f2c88596189": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nВ режиме правки комментария выбор команды из КОНТЕКСТНОГО МЕНЮ (в частности из подменю) переводит поле в режим просмотра, и команда к тексту не применяется. Из тулбара та же команда работает.\n\n## Как воспроизвести\nОткрыть постоянный комментарий в правке, правым кликом вызвать контекстное меню, выбрать команду из подменю. Поле схлопывается в просмотр; форматирование не применено.\n\n## Причина\n`client/src/renderer/editor/comment-commands.ts:610-614` `guardCommentMenuFocus()` вешает `mousedown → preventDefault()` только на уже существующие `.menu-item`. Подменю строятся лениво в `client/src/renderer/lib/menu.ts:180-198` (`mouseenter`) и появляются в DOM ПОСЛЕ вызова guard, поэтому их строки не перехватывают `mousedown`; клик уводит фокус из CodeMirror → `focusout` (`editor/md-editor.ts:475-477` → `onBlur`) → `showView`. Тулбар защищён прямыми `mousedown`-обработчиками (`comment-commands.ts:626-654`), поэтому работает.\n\n## Ожидаемое\nКлик по любому пункту контекстного меню (включая ленивые подменю) не переводит поле в просмотр и не теряет каретку/выделение; выбранная команда применяется к тексту.\n\n**Выявлено:** визуальная проверка пользователя 2026-10-07 (свежий клиент)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Исправлено: защита фокуса покрывает ленивые подменю",
+    "body_md": "Исправлено по корню. **Причина:** `guardCommentMenuFocus` вешал `mousedown → preventDefault()` только на строки `.menu-item`, существовавшие на момент открытия меню; подменю строятся лениво на `mouseenter` (`lib/menu.ts`, `buildMenu`) и попадают в DOM уже после установки защиты, поэтому их строки не гасили `mousedown` — клик уводил фокус из CodeMirror → `focusout` (`md-editor.ts:475-477` → `onBlur`) → `showView`, команда не применялась. Тулбар был защищён прямыми `mousedown`-обработчиками, поэтому работал.\n\n**Как исправлено:** защита фокуса вынесена в общий механизм меню — `guardMenuFocus(menuRoot)` в `lib/menu.ts` ставит ОДИН делегированный обработчик на контейнере меню в фазе capture и гасит `mousedown` по любой строке-потомку `.menu-item` — включая лениво построенные подменю любого уровня вложенности (они добавляются в поддерево корня меню). `guardCommentMenuFocus` удалён; `comment-commands.ts` (тулбарное подменю) и `markdown-field.ts` (контекстное меню поля) используют общий guard. Логика не дублируется.\n\n**Проверено:** `npm run typecheck` — зелёный; `npm -w @etn/client test` — 3496 тестов, 0 fail; `npm run lint` — чисто. Регресс-тест `client/tests/menu-focus-guard.test.ts`: строки ленивого и вложенного подменю, появившиеся в DOM ПОСЛЕ установки защиты, гасят `mousedown`; команда пункта применяется; меню закрывается; разделитель (`menu-sep`) не гасится (защита точечная). **Мутационно:** возврат старого построчного guard роняет 2 теста (ленивое и вложенное подменю) — тест действительно ловит поломку.\n\n**Коммит:** c917be19. Живой GUI-прогон не делался — контракт покрыт unit-тестом; остаётся проверка пользователем на свежем клиенте."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка etn-verifier: принято (без блокеров)",
+    "body_md": "**Вердикт: принято.** Коммит `c917be19` (ветка releases/0.12.1, слой 6f29e84c) проверен независимо. Скриншоты-доказательства не прикладывались (визуальную приёмку выполняет пользователь; ошибок GUI не зафиксировано).\n\n**DoD**\n1. Клик по любому пункту контекстного меню (включая ленивые подменю любого уровня) не уводит поле в просмотр, команда применяется → **pass**. `guardMenuFocus` (`lib/menu.ts:217-225`) ставит ОДИН делегированный `mousedown`-обработчик на контейнер меню; подменю строятся лениво на `mouseenter` и добавляются в ПОДДЕРЕВО корня (`lib/menu.ts:188-190` `sub.classList.add('menu-sub'); root.append(sub)`), поэтому делегирование покрывает строки, появившиеся в DOM после установки защиты, на любой глубине. Не «поштучный» обход.\n2. Реализация покрывает ленивые подменю, не хрупкий построчный обход → **pass** (тот же пункт 1; подтверждено мутационно).\n3. Мутационная проверка → **pass**: замена тела `guardMenuFocus` на старый построчный обход `for (row of menuRoot.querySelectorAll('.menu-item')) row.addEventListener('mousedown', e => e.preventDefault())` роняет ровно 2 теста из 4 — «ленивое подменю» и «вложенное подменю» (`# pass 2 / # fail 2`). Файл восстановлен `git checkout`, дерево чистое.\n4. Закрытие меню кликом, применение команд тулбара, правый клик, точечность → **pass**: guard не вызывает `stopPropagation`; закрытие — на `click` строки, внешний клик — `onDown` (проверяет `root.contains(target)`); кнопки тулбара сохранили собственные `mousedown`-preventDefault (`comment-commands.ts:631,644`); ряд «разделитель» `menu-sep` не является `menu-item` и не гасится (тест «защита точечная»).\n\n**Проверено:** `npm run typecheck` — зелёный (server/client/shared/markdown); `npm -w @etn/client test` — 3496 тестов, 0 fail; `npm run lint` — чисто. Ссылок на удалённый `guardCommentMenuFocus` не осталось. Коммитов тестировщика нет.\n\n**Замечание (не блокер).** Меню блока трансклюзии (`editor/transclusion.ts:1178`, `transclusionContextMenuHandler` → `showMenuAt(...)` БЕЗ `guardMenuFocus`) имеет тот же корень: клик по его строке уводит фокус из CodeMirror → `focusout` (`md-editor.ts:475-477` → `onBlur` → `editorBlurCommits`, `markdown-field.ts:1051-1054`) → `commitOrRevert` → просмотр. Меню доступно в правке комментария (расширение `transclusionContextMenu` в `transclusionExtensions`, подключено в `md-editor.ts:461`). Рекомендую завести отдельной ошибкой — симптом и DoD этой ошибки охватывают команды контекстного меню комментария/тулбара (ленивые подменю), а не ме…"
+   }
+  ],
+  "333aa879-4386-43db-b97b-7b1e540247d4": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nВ режиме правки вертикальные отступы от блоков кода (fenced) и цитат до соседних блоков отличаются от режима просмотра.\n\n## Как воспроизвести\nПостоянный комментарий с блоком кода и цитатой; сравнить отступы в правке (CodeMirror, живой просмотр) и в просмотре.\n\n## Причина\n- Fenced-код: парного правила для `pre` нет. Просмотр `.comment-view pre` — `padding: 8px`, без margin (`styles/editor.css:1064-1073`); в правке виджет обёрнут `.cm-editor .md-widget { padding: 2px 0 }` (`editor.css:1354-1356`) → расхождение (8px против 8px+2px).\n- Цитата: пары согласованы не полностью — `.comment-view blockquote` даёт `margin-block` + `padding-block: 6px` (`editor.css:1113-1145`), а в правке отступ идёт padding-ом первого/последнего элемента (margin-collapsing даёт иной результат).\n\n## Ожидаемое\nВсе стили, включая размеры отступов, у блоков кода и цитат в правке и просмотре совпадают. Сторож `client/tests/comment-style-parity.test.ts` сейчас не содержит пары для `pre`/fenced-кода — добавить.\n\n**Выявлено:** визуальная проверка пользователя 2026-10-07 (свежий клиент)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Исправлено: отступы блоков кода и цитат в правке = просмотр",
+    "body_md": "Коммит `fa76a518` (`fix(styles): отступы блоков кода и цитат в правке выровнены с просмотром (333aa879)`).\n\n**Диагноз.** Оба расхождения — в `client/src/renderer/styles/editor.css`.\n- Fenced-код: общий паддинг виджетов `.cm-editor .md-widget { padding: 2px 0 }` применялся и к блочным HTML-виджетам (`.md-widget.comment-view` — fenced-код/таблица/картинка), прибавляясь к паддингу самого `pre`.\n- Цитата: просмотр задавал внешний `margin-block: var(--md-quote-gap)` (6px) ПЛЮС внутренний `padding-block`; правка — только `padding` первой/последней строки (`.cm-md-quote-first/-last`).\n\n**Правка.**\n1. `.cm-editor .md-widget` → `.cm-editor .md-widget:not(.comment-view)` — обёртка блочного виджета вертикальных полей не добавляет; блок берёт отступ из того же правила просмотра `.comment-view pre` (виджет несёт класс `comment-view`). Сохранён принцип ADR/высотной карты: отступ — padding, не margin.\n2. `.comment-view blockquote { margin-block: var(--md-quote-gap) }` → `margin-block: 0` — цитата в обоих режимах задаёт вертикальный зазор ТОЛЬКО паддингом из одного токена `--md-quote-gap`.\n\n**Числа (вертикальный отступ элемента, на сторону).**\n- `pre`: просмотр 8px; правка было 2px (обёртка) + 8px (pre) = 10px → стало 8px. Расхождение 2px устранено.\n- `blockquote`: просмотр было margin 6px + padding 6px = 12px → стало padding 6px; правка 6px. Расхождение 6px устранено.\n\n**Проверка.** `npm run typecheck` зелёный; `npm run lint` чистый; `npm -w @etn/client test` — 3519/3519. Сторож `client/tests/comment-style-parity.test.ts` дополнен блоком «вертикальные отступы блоков кода и цитат совпадают (333aa879)»: пара для fenced-кода (`.comment-view pre` + нейтральность обёртки `.md-widget` для `.comment-view`) и проверка вертикальных отступов цитаты (padding-токен в обоих режимах, отсутствие внешнего margin в просмотре). Мутационно: возврат `.md-widget:not(.comment-view)` → `.md-widget` даёт red; возврат `margin-block: 0` → `var(--md-quote-gap)` даёт red (обе мутации проверены, затем откачены).\n\n**Осталось:** визуальная приёмка — за пользователем на свежем клиенте."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка etn-verifier: принято (коммит fa76a518)",
+    "body_md": "**Вердикт: принято.** Независимая проверка коммита `fa76a518`, ветка `releases/0.12.1`, слой `6f29e84c`.\n\n**DoD (постоянный комментарий).**\n- Вертикальные отступы fenced-кода в правке = просмотр → **pass**: просмотр `.comment-view pre { padding: 8px }` (`editor.css:1064-1073`), margin нет; правка — `<pre>` внутри `.md-widget.comment-view` берёт то же правило (виджет несёт `comment-view`, `md-live.ts:82`), обёртка `.cm-editor .md-widget:not(.comment-view)` паддинг не добавляет (`editor.css:1365-1367`). Итог 8px / 8px (было 10px).\n- Вертикальные отступы цитаты в правке = просмотр → **pass**: просмотр `.comment-view blockquote { margin-block: 0; padding-block: var(--md-quote-gap) }` = 6px/сторону (`editor.css:1128-1141`, токен `--md-quote-gap: 6px`, `tokens.css:299`); правка — `.cm-md-quote-first/-last { padding 6px }` (`editor.css:1143-1149`), margin нет. Итог 6px / 6px (было 12px).\n- Сторож дополнен парой под fenced-код → **pass**: `comment-style-parity.test.ts` блок «вертикальные отступы блоков кода и цитат совпадают (333aa879)» проверяет `padding: 8px` у `.comment-view pre` и `:not(.comment-view)` на всех padding-правилах `.cm-editor .md-widget`, а также вертикальный зазор цитаты (padding-токен в обоих режимах, обнулённый margin в просмотре).\n\n**Мутации (внёс, прогнал, снял `git checkout`).** Возврат `.md-widget:not(.comment-view)` → `.md-widget`: сторож краснеет (1 fail). Возврат `margin-block: 0` → `var(--md-quote-gap)`: сторож краснеет (1 fail). Дерево восстановлено (`git status` чист).\n\n**Принцип высотной карты.** Правка margin виджетам не добавляет (`.md-widget:not(.comment-view)` использует `padding`); margin у `.md-widget.md-hr` — существующая строка, не входит в коммит. Блочные виджеты по-прежнему несут `comment-view` (`md-live.ts:82` не менялся — коммит трогает только CSS и тест). Побочно: снятие 2px-обёртки выравнивает и таблицу/картинку (в просмотре `.comment-view table`/`img` без вертикальных полей).\n\n**Смежная ошибка `47bce601` — подтверждена по CSS.** Просмотр `.comment-view hr { margin: 6px 0 }` (`editor.css:1075-1079`), паддинга нет; правка `<hr class=\"md-widget md-hr\">` (`md-live.ts:142`, без `comment-view`) получает `.cm-editor .md-widget.md-hr { margin: 6px 0 }` (`1369-1373`) ПЛЮС `.cm-editor .md-widget:not(.comment-view) { padding: 2px 0 }` (`1365-1367`) → 8px против 6px, плюс margin на виджете не входит в `getBoundingClientRect()` (карта высот). Отдельный дефект, не блокер этой ошибки.\n\n**Прогоны.** `npm run typecheck` — exit 0; `npm …"
+   }
+  ],
+  "0e39d301-f0fa-4bf7-a655-038f46afe0b4": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nДвойной клик по комментарию в просмотре: если клик пришёлся на пробелы/пустые строки, после перехода в правку выделяются пробелы/пустые строки.\n\n## Как воспроизвести\nВ просмотре дважды кликнуть по пустому месту (пробелы, табы, переводы строк). Поле переходит в правку с выделением этого пустого участка.\n\n## Причина\n`markdown-field.ts:1228-1235` `dblclick` → `showEdit(undefined, selectionInView())`; `sourceRangeFromSelection` (`454-470`) переводит DOM-выделение в исходник без проверки, что выделение непустое и не из одних пробелов/переводов строк, поэтому пустая/пробельная выборка даёт валидный диапазон выделения.\n\n## Ожидаемое\nДвойной клик по слову — в правке это слово выделено. Двойной клик по пустому месту (пробелы/табы/переводы строк) — каретка в месте клика БЕЗ выделения.\n\n**Выявлено:** визуальная проверка пользователя 2026-10-07 (свежий клиент)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Исправлено: пустое выделение при входе в правку",
+    "body_md": "Двойной клик по пустому месту (пробелы/табы/переводы строк) в просмотре больше не выделяет пустой участок при входе в правку — каретка встаёт в место клика БЕЗ выделения.\n\n**Как исправлено.** `viewSelectionToSourceRange` (`client/src/renderer/editor/markdown-field.ts`) переводила DOM-выделение в диапазон исходника без проверки на пустоту/пробельность. Добавлена `isBlankViewSelection` (экспортируется для тестов): выделение считается пустым, если оно схлопнуто (`isCollapsed`) или его текст (`Selection.toString().trim()`) пуст. Для такого выделения возвращается схлопнутый диапазон `{anchor: p, head: p}`, где `p` — перевод начала выделения (`anchor`) в исходник; выделение слова проходит как есть. Если текст выделения недоступен (`toString` нет), поведение прежнее.\n\n**Чем проверено.** `client/tests/md-view-caret.test.ts` — 4 новых кейса: двойной клик по слову → непустой диапазон слова; по пробелам/переводам строк/пустому выделению → схлопнутая каретка. Мутационно: при отключённой проверке `isBlankViewSelection` краснеют 2 кейса (пробелы, переводы строк), «слово» и «collapsed» остаются зелёными. `npm run typecheck`, `npm run lint` чистые; `npm -w @etn/client test` — 3517 тестов зелёные.\n\nКоммит: `7286160d`."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка etn-verifier: принято (коммит 7286160d)",
+    "body_md": "**Вердикт: принято** (независимая проверка субагентом-тестировщиком, ветка `releases/0.12.1`, слой `6f29e84c`).\n\n**DoD.**\n- Двойной клик по слову → в правке слово выделено: pass. `client/tests/md-view-caret.test.ts:533` (слово «слово» → `{anchor:10, head:15}`); `showEdit` применяет `editor.setSelection(locate.anchor, locate.head)` (`markdown-field.ts:1193`).\n- Двойной клик по пустому месту → каретка без выделения: pass. Кейсы «пробелы»/«переводы строк» (`md-view-caret.test.ts:543,560`) дают схлопнутый `{anchor:p, head:p}`.\n\n**Независимые пробы (10 кейсов, временный файл удалён).** Слово → непустой диапазон; слово с краевыми пробелами (`\" мир \"`) → диапазон сохранён; два пробела, таб, `\\n\\n\\n`, смешанные ` \\t\\n `, NBSP U+00A0 → схлопнутая каретка; collapsed → каретка; селект вне поля → `undefined`; без `toString` → прежнее поведение. Все 10 зелёные.\n\n**Мутация.** Отключение `isBlankViewSelection` (`if (false && ...)`) → краснеют ровно 2 кейса (пробелы, переводы строк), «слово» и «collapsed» остаются зелёными — совпало с заявлением исполнителя.\n\n**Семантика кода.** `isBlankViewSelection` (`markdown-field.ts:510`): `isCollapsed` либо `toString().trim()===''`; при недоступном `toString` — false (прежнее поведение). Условие «пробельное» корректно: `trim()` убирает пробел/таб/`\\n`/NBSP. `viewSelectionToSourceRange` (`:485`) при пробельном/пустом выделении возвращает `{anchor: range.anchor, head: range.anchor}` — collapsed-выделение тоже даёт каретку; слово проходит без изменений.\n\n**Проверки.** `npm run typecheck` — зелёно; `npm run lint` — чисто; `npm -w @etn/client test` — 3517/3517 pass. Дерево чистое, коммитов тестировщика нет.\n\n**Оговорка о длинном пробельном прогоне — замечание (не блокер).** Каретка ставится в `range.anchor` = начало выделенного браузером пробельного прогона, поэтому для прогона длиной N расхождение с координатой клика в худшем случае N−1 символов (клик в конце прогона). Для одиночного пробела/короткого прогона совпадает с местом клика. Требование «БЕЗ выделения» выполнено всегда; «в месте клика» — точно для коротких прогонов, приближённо для длинных. Расхождение ограничено длиной пробельного прогона и невидимо на фоне отсутствия выделения; тот же принцип (каретка по границе токена) уже действует и для слова (`markdown-field.ts:1193`, тест `:238`), где он считается соответствующим месту клика. Предлагается принять как есть; при желании — отдельной правкой уточнять позицию каретки по координатам указателя (нужен маппинг `caretRangeFromPoin…"
+   }
+  ],
+  "5312142d-4c85-4962-b182-d620d75caecf": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nВ правке комментария с блоком трансклюзии блок не выделяется как единое целое: со строки перед блоком нажатие «вниз»/«вправо» перескакивает на строку после блока (блок пропускается); кликом мыши тоже не выделяется. Нажатие Enter на строке ПЕРЕД или ПОСЛЕ блока переводит блок в режим правки, из-за чего нельзя вставить новую строку рядом.\n\n## Как воспроизвести\nКомментарий с трансклюзией; курсор на строке перед блоком, стрелки вниз/вправо; клик по блоку; Enter на строке перед/после блока.\n\n## Причина\n- Атомарность блока намеренная (`transclusion.ts:781-926`, `transclusionAtomicRanges` `1036-1039`), но реализована как «пропуск»: `transclusionMouseDown` (`1054-1094`) поглощает клик, не ставя выделение.\n- Enter рядом входит в правку из-за ВКЛЮЧАЮЩИХ границ в `transclusionAtCaret` (`184-203`): условие `pos < ref.start || pos > ref.end` — позиция ровно на границе считается «внутри».\n- `restoreBlockEdit` (`1232-1240`) не ставит каретку/выделение.\n\n## Ожидаемое\nБлок — единый атом, который ВЫДЕЛЯЕТСЯ как целое (кликом и стрелками), чтобы работали Enter, Delete и контекстное меню; при этом блок НЕ разбивается. Новые строки перед/после блока вставляются свободно: в правку блока переводят только Enter или двойной клик НА самом блоке (границы `transclusionAtCaret` — исключающие).\n\n**Уточнение.** Требование «неделимость при навигации» (задача `a2b68d72`) трактуется как «блок — выделяемый атом», а не «блок пропускается».\n\n**Выявлено:** визуальная проверка пользователя 2026-10-07 (свежий клиент)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Реализовано: выделяемый блок-атом и исключающие границы",
+    "body_md": "Блок трансклюзии теперь ВЫДЕЛЯЕТСЯ как единое целое, оставаясь неделимым атомом (`client/src/renderer/editor/transclusion.ts`).\n\n- Выделение блока: `transclusionMouseDown` по блоку диспатчит выделение на весь диапазон `[ref.start, ref.end]` (по `data-md-from/to` виджета); нового обработчика не заводили.\n- Режим правки ссылки включается только при ПЕРЕСЕЧЕНИИ без ПОЛНОГО покрытия (`linkEditMode` в `buildTransclusionDecorations`): полное выделение оставляет replace-виджет блока, а не разбирает его в markdown.\n- Стрелки: `transclusionBlockArrow` в `Prec.high`-keymap жестов — ArrowRight/Left от границы блока и ArrowDown/Up со строки перед/после выделяют блок целиком одним шагом; следующее нажатие уводит каретку за блок. Вертикальные шаги определяются по строкам (блок занимает строку целиком).\n- Границы `transclusionAtCaret` сделаны ИСКЛЮЧАЮЩИМИ (`pos <= ref.start || pos >= ref.end`): Enter ровно на границе (строки перед/после) — обычный перевод строки. Enter на ВЫДЕЛЕННОМ блоке (`refCoveringSelection`) и двойной клик по блоку (`transclusionDblClick`, ссылка из DOM-элемента) переводят в правку блока.\n- Сопутствующее: `transclusionRefStartingAt` для поиска ссылки по началу диапазона (используют `transclusionWidgetRefAt`, `startBlockEdit`, `beginNestedTransclusionEdit` в `editor/md-editor.ts`).\n\nКоммит: `e5ff5b9d` (fix(comment)).\n\nПроверка: обновлён старый контракт (`transclusion-context-click.test.ts` — клик по блоку ставит выделение) и добавлены тесты в `client/tests/transclusion.test.ts`: выделение блока кликом, выделение стрелкой из позиций перед/после (все четыре направления), уход за блок на следующем шаге, Enter на границе — перевод строки, Enter на выделенном блоке и двойной клик — правка, Delete на выделенном блоке удаляет его, выделение целиком сохраняет replace-виджет блока. Мутационно проверены: возврат включающих границ, снятие `covers`-условия, отключение стрелок, снятие ветки Enter-на-выделенном — соответствующие тесты краснеют. `npm run typecheck`, `npm run lint`, полный `npm -w @etn/client test` (3511) — зелёные.\n\nОсталось: независимая проверка оркестратором; живой прогон на свежем клиенте — за пользователем. Актуальность не снималась."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка тестировщиком (независимая): принято",
+    "body_md": "Независимая проверка субагентом-тестировщиком (слой 0.12.1, ветка releases/0.12.1, коммит `e5ff5b9d`). Визуальная приёмка не делалась, PNG не снимались.\n\n**Вердикт: принято.**\n\nDoD (свои пробы на реальном `EditorState`/декорациях с shim-виджетами, как в `transclusion.test.ts`):\n- (а) клик по блоку ставит выделение на весь диапазон блока, блок не разбирается → pass. `transclusionMouseDown` (`transclusion.ts:1224-1239`) диспатчит `{anchor: from, head: to}`; `buildTransclusionDecorations` при полном покрытии оставляет `TransclusionBlockWidget` (`linkEditMode`/`coversRef`, `transclusion.ts:778-790`), atomic.size=1.\n- (б) стрелки Right/Left/Down/Up, входящие в блок, выделяют его целиком одним шагом; следующее нажатие уводит за блок → pass. `transclusionBlockArrow` (`transclusion.ts:1163`), четыре направления из позиций до/после; следующий шаг даёт пустую каретку на границе.\n- (в) Enter ровно на границе start/end — обычный перевод строки; границы `transclusionAtCaret` исключающие (`pos <= ref.start || pos >= ref.end`, строка 193) → pass.\n- (г) Enter на выделенном блоке и двойной клик по блоку → режим правки → pass (`refCoveringSelection` в ветке Enter, строка 1610; `transclusionDblClick`, строка 1585).\n- (д) Delete на выделенном блоке удаляет блок целиком → pass (`deleteCharForward`).\n- (е) блок неделим, каретка внутрь не встаёт → pass (atomicRanges на весь диапазон, клик/стрелки дают полное покрытие).\n\nМутации (вносил и снимал через `git checkout`), все краснят соответствующие тесты: возврат включающих границ в `transclusionAtCaret` → краснеют «границы исключающие» и «Enter ровно на границе»; снятие условия `covers` (полного покрытия) в `linkEditMode` → краснеет «выделение покрывает блок целиком — остаётся блок» и «следующая стрелка уводит за блок»; отключение стрелок → краснеют 5 стрелочных тестов; снятие ветки «Enter на выделенном блоке» → краснеет тест Enter-на-выделенном.\n\nТест `transclusion-context-click.test.ts` обновлён по существу: левый клик по блоку теперь проверяет новый контракт (полное выделение `[start,end]`, одна транзакция), не подогнан под вспомогательную функцию.\n\nРегресс: клик по свёрнутой ссылке (каретка внутрь), контекстное меню блока, вложенная правка из просмотра, сворачивание заголовков, стрелки вне блока — не сломаны (целевые тесты зелёные). Изменение двойного клика по СВЁРНУТОЙ ссылке (теперь только блок) соответствует «Ожидаемому» карточки («двойной клик НА самом блоке»).\n\nПроверено: `npm run typecheck`, `npm run lint` зелёные; `npm -…"
+   }
+  ],
+  "640c0ade-572a-4a3b-9dc9-08af1ffc4820": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nВ правке блока трансклюзии Ctrl+Enter (как и кнопка «Сохранить трансклюзию»): каретка оказывается на строке выше блока, сам блок становится невидимым, пока не переместишь каретку вверх/вниз.\n\n## Как воспроизвести\nВойти в правку блока трансклюзии, нажать Ctrl+Enter (или «Сохранить трансклюзию»). Каретка — над блоком; блок не отрисован до движения каретки.\n\n## Причина\n- `transclusion.ts:1346-1395` `saveBlockEdit`: восстановление ссылки и закрытие `blockEdit` (сброс `dropEntries`) идут разными dispatch-ами; каретка остаётся на позиции, посчитанной до замены развёрнутого текста на ссылку → визуально выше блока.\n- `restoreBlockEdit` (`1232-1240`) не ставит каретку за блок.\n- `transclusionLoader` (`1555-1594`) перепланируется только при `docChanged || selectionSet`; смена режима без изменения doc/selection не вызывает пересчёт декораций → блок невидим до движения каретки.\n\n## Ожидаемое\nПо завершении правки блока (Ctrl+Enter или «Сохранить трансклюзию») каретка оказывается ПОСЛЕ блока, блок остаётся видимым и переключён в просмотр; декорации пересчитываются сразу.\n\n**Выявлено:** визуальная проверка пользователя 2026-10-07 (свежий клиент)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Реализовано: каретка за блоком и мгновенный пересчёт после правки",
+    "body_md": "Завершение правки блока (Ctrl+Enter и кнопка «Сохранить трансклюзию») теперь уезжает ОДНОЙ транзакцией и ставит каретку ЗА блоком (`client/src/renderer/editor/transclusion.ts`).\n\n- `restoreBlockEdit` получил третий параметр `extraEffects` и в своей транзакции теперь задаёт `selection: { anchor: from + refRaw.length }` (правая граница блока). Автоматическое отображение позиции оставляло каретку на месте прежнего текста — визуально над блоком; явная позиция на границе (границы `transclusionAtCaret` исключающие, `linkEditMode`/полное покрытие из `e5ff5b9d` не задеваются) сразу оставляет блок в режиме просмотра.\n- `saveBlockEdit` больше не делает второй dispatch: сброс кэша (`dropEntries`) передан в `restoreBlockEdit` тем же вызовом. Тогда `transclusionState` пересчитывает декорации сразу, а `transclusionLoader` (ViewPlugin) в своём `update` видит `docChanged` уже с пустым кэшем и перечитывает источник — блок отрисовывается без ручного движения каретки.\n\nКоммит: `522ec16f` (fix(comment)).\n\nПроверка: в `client/tests/transclusion.test.ts` добавлены тесты для обоих путей (Ctrl+Enter и `saveBlockEdit`): каретка после блока (`selection.head === ref.end`), режим правки закрыт, ссылка восстановлена, replace-виджет блока присутствует сразу; счётчик транзакций = 1 (в headless ViewPlugin не инстанцируется — одна транзакция служит прокси того, что загрузчик видит изменение документа вместе с пустым кэшем). Мутационно проверены оба рычага: снятие `selection` — красные тесты каретки; возврат к двум dispatch — красные тесты счётчика. `npm run typecheck`, `npm run lint`, полный `npm -w @etn/client test` (3513) — зелёные.\n\nОсталось: независимая проверка оркестратором; живой прогон на свежем клиенте — за пользователем. Актуальность не снималась."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка (etn-verifier): принято, блокеров нет",
+    "body_md": "**Вердикт: принято** (независимая проверка 2026-10-07, коммит `522ec16f`, ветка `releases/0.12.1`, слой `6f29e84c`). Код не менялся; PNG не снимались.\n\n**DoD по пунктам (все pass).**\n1. Ctrl+Enter: каретка ПОСЛЕ блока → pass. `client/tests/transclusion.test.ts` тест `Ctrl+Enter: каретка за блоком... (640c0ade)` — `selection.main.head === ref.end` (53 === 53).\n2. Ctrl+Enter: блок видим и в просмотре → pass: `blockEdit === null`, replace-виджет с `spec.block === true` присутствует сразу (та же проба).\n3. Ctrl+Enter: декорации пересчитываются сразу → pass. Проба на реальных `EditorState`-транзакциях (модель `transclusionLoader.update`→`schedule`): одна транзакция ⇒ `reloads=1` (загрузчик перепланируется и перечитывает источник); две транзакции ⇒ `reloads=0`.\n4. «Сохранить трансклюзию» — то же → pass: тест `«Сохранить трансклюзию»: каретка за блоком... (640c0ade)`.\n5. Ровно ОДНА транзакция → pass: счётчик в обоих тестах = 1.\n6. Согласованность кода → pass: `restoreBlockEdit` (`transclusion.ts:1424`) ставит `selection.anchor = from + refRaw.length` + `scrollIntoView`, `saveBlockEdit` (`:1594`) передаёт `dropEntries` тем же вызовом (`extraEffects`), `cancelBlockEdit` (`:1441`) идёт через `restoreBlockEdit`.\n\n**Мутации (внесены и сняты `git checkout`):**\n- Снятие `selection` из `restoreBlockEdit` → оба теста краснеют на ассерции каретки (`head 0 !== 53`).\n- Возврат к двум dispatch (`restoreBlockEdit` без extra + отдельный `dropEntries`) → оба теста краснеют на счётчике (`2 !== 1`).\n\n**Смежное (не сломано):** полный `npm -w @etn/client test` — 3513/3513 pass; вложенная правка (23570aef), Enter на границе, стрелки/выделение блока (5312142d, e5ff5b9d), меню (1b847110) — зелёные. Отдельные пробы: `cancelBlockEdit` (Esc/«Отменить») восстанавливает ссылку, `blockEdit=null`, каретка за блоком (не регресс); при ошибке записи в источник (аналог 409 LOCKED) `blockEdit` остаётся открыт, документ не восстановлен — путь ошибки не затронут. `npm run typecheck` и `npm run lint` — зелёные; рабочее дерево чистое.\n\n**Замечание (не блокер):** прокси «счётчик транзакций = 1» достаточен — сильнее он подтверждён прямой моделью решения загрузчика (`reloads=1` против `0`). Тест входит в правку блока эффектом, без позиционирования каретки внутри (перед завершением `selection=0`); на результат не влияет, т.к. фикс задаёт каретку явно.\n\n**Скриншотов-доказательств:** 0 (штатные состояния не снимались).\n\n**На живой клиент (за пользователем):** визуально подтвердить, что после Ctrl+Enter и «С…"
+   }
+  ],
+  "39553204-2d7a-4b98-b278-140b6e37e28d": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "## Симптом\nПри выделении блока трансклюзии (стрелками или мышью) в режиме просмотра вместо рамки ВОКРУГ блока выделяется весь текст и все пробелы внутри него.\n\n## Как воспроизвести\nОткрыть комментарий с трансклюзией в живом просмотре (правка); выделить блок стрелками или кликом.\n\n## Причина\nБлок — replace-виджет `TransclusionBlockWidget` (`client/src/renderer/editor/transclusion.ts:673-766`), внутри — HTML-содержимое. **Блочный виджет CodeMirror вставляется прямым потомком `.cm-content`, ВНЕ `.cm-line`**, поэтому селекторы подавления нативной подсветки (`.cm-line ::selection` в теме CM и прежний селектор фикса `477293fb`) до текста блока не доставали — браузер рисовал нативное `::selection` цветом `.comment-view ::selection`. Слой выделения CM (`.cm-selectionBackground`) при этом блок не накрывал (у блочного виджета сегменты нулевой ширины). Рамки-обводки не было; внешний `outline` уходил за границы поля из-за ширины блока.\n\n**Уточнение к исходной версии (проверка на живом клиенте, 2026-10-07):** источник подсветки — именно нативное `::selection` (а не слой `.cm-selectionBackground`), причина — отсутствие `.cm-line`-обёртки у блочного виджета.\n\n**Исправлено `9dc0695a`:** рамка — внутренняя `box-shadow: inset 0 0 0 2px var(--selection)` (видна со всех сторон, не обрезается `overflow`), подавление подсветки — селектор без `.cm-line`.\n\n## Ожидаемое\nДля пользователя блок трансклюзии — единый блок. При выделении (стрелками или мышью) вокруг него появляется РАМКА, показывающая, что он выделен целиком; подсветка внутреннего текста/пробелов не показывается.\n\n**Выявлено:** визуальная проверка пользователя 2026-10-07 (уточнение к `5312142d`)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Исправлено: рамка вокруг выделенного целиком блока",
+    "body_md": "**Реализовано.** При полном покрытии блока выделением (`coversRef`) на виджет блока `TransclusionBlockWidget` вешается флаг `covered` (учитывается в `eq` — блок перерисовывается при смене состояния) и класс `cm-transclusion-block--covered`. CSS: рамка ВОКРУГ блока (`outline: 2px solid var(--selection)`, токен темы) + подавление нативной подсветки текста/пробелов внутри (`::selection` → `background-color: transparent !important`). Подсветка внутреннего текста больше не показывается.\n\n**Коммит:** `477293fb` (`fix(comment): рамка вокруг выделенного целиком блока трансклюзии (39553204)`).\n\n**Файлы:** `client/src/renderer/editor/transclusion.ts`, `client/src/renderer/styles/editor.css`.\n\n**Чем проверено:** `npm run typecheck` — зелёный; `npm -w @etn/client test` — 3525 pass, 0 fail; `npm run lint` — чисто. Тесты: `client/tests/transclusion.test.ts` (флаг `covered` при покрытии и его отсутствие без/вне выделения; `eq` учитывает флаг; DOM-класс в `toDOM`), сторож `client/tests/guard-transclusion-visual.test.ts` (рамка от токена темы, без hex; подавление `::selection`). Мутационно: снятие класса и снятие учёта `covered` в `eq` роняют соответствующие тесты.\n\nНеделимость блока, навигация/клик (`5312142d`), режим правки блока, свёрнутая ссылка и вложенные трансклюзии не затронуты. Открытых вопросов нет."
+   },
+   {
+    "kind": "chronological",
+    "title": "Доделано: рамка видна со всех сторон, внутренней подсветки нет",
+    "body_md": "**Реализовано (доводка 477293fb по итогам живой проверки пользователя).**\n\n**Что оказалось источником подсветки.** Блок рисуется replace-виджетом `block: true`, и CodeMirror (`addBlockWidget`) кладёт его ПРЯМЫМ потомком `.cm-content`, а НЕ внутрь `.cm-line` (живая проба: `hasCmLineAncestor: false`). Поэтому и тема CM (`hideNativeSelection`, `.cm-line ::selection`), и прежнее правило подавления с `.cm-line` в селекторе до текста блока не доставали — браузер рисовал НАТИВНОЕ выделение текста цветом `.comment-view ::selection` (`--selection-bg`). Прежнее `::selection { transparent !important }` «не работало» именно из-за привязки к `.cm-line`. Слой `.cm-selectionLayer` тут ни при чём: сегменты выделения блочного виджета нулевой ширины (нулевой сегмент не пересекает блок), ни один сегмент блок не накрывает, и слой лежит под непрозрачным фоном блока.\n\n**Как сделана рамка (со всех сторон).** Вместо внешнего `outline` с `outline-offset: 1px` (выходил за границы блока, края обрезались — блок занимает всю ширину поля: rect блока l=935/r=1254 совпадает с `.cm-editor` l=935/r=1254) — `box-shadow: inset 0 0 0 2px var(--selection, var(--accent))`. Рамка рисуется внутри бокса блока, видна со всех четырёх сторон и не обрезается overflow контейнера. Цвет — токен темы, без hex.\n\n**Файлы.** `client/src/renderer/styles/editor.css` (рамка inset + селектор подавления БЕЗ `.cm-line`), `client/src/renderer/editor/transclusion.ts` (доккомментарий о том, что блочный виджет лежит в `.cm-content`).\n\n**Коммит:** `9dc0695a` (`fix(comment): рамка выделенного блока трансклюзии внутри поля, без внутренней подсветки (39553204)`).\n\n**Чем проверено.** Живой прогон на скрытом окне (ui-probe, порт 9350, изолированный профиль, стенд на порту 4421). Числа/computed styles на покрытом блоке: `boxShadow = rgb(15, 143, 134) 0px 0px 0px 2px inset` (inset-рамка от токена `--selection`), `outline = 0px none`, `leafSelectionBg = rgba(0, 0, 0, 0)` (нативная подсветка внутри подавлена); контрольный элемент `.comment-view` вне `.cm-line` даёт `rgba(47, 111, 237, 0.4)` — метод замера различает наличие подсветки. Сегменты `.cm-selectionLayer` блок не пересекают. Блок целиком внутри поля (`fullyInsideEditor: true`), padding 4/6/4/8 — inset 2px в отступе, контент не перекрыт. Приложен один PNG-скриншот блока — рамка по всему периметру, внутренней подсветки нет (локально `.tmp/39553204-fixed.png`; в этот отчёт файл не приложен из-за ограничения передачи base64 в текущей сессии).\n\n`npm run typecheck` — зелёный;…"
+   },
+   {
+    "kind": "chronological",
+    "title": "Независимая проверка (etn-verifier): вердикт «принято» (коммит 9dc0695a)",
+    "body_md": "**Независимая проверка сданной ошибки, коммит `9dc0695a` (поверх `477293fb`). Вердикт: принято, блокеров нет. Скриншотов не снимал/не читал.**\n\n**DoD — по пунктам.**\n1. *При выделении блока целиком видна РАМКА вокруг него со всех сторон* → **pass**. Живой прогон (ui-probe, скрытый клиент, изолированный профиль, порт 9350, стенд 4421, сценарий `v-39553204-fix`): после клика по `.cm-transclusion-block` класс `cm-transclusion-block comment-view cm-transclusion-block--covered`, `boxShadow = \"rgb(15, 143, 134) 0px 0px 0px 2px inset\"` (токен `--selection` = `#0f8f86`, tokens.css:48), `outline = 0px none`. Рамка внутри бокса (inset), четыре стороны видны — блок-прямоугольник целиком внутри поля: `blockRect {x:935,y:506,w:319,h:116}` ⊂ `editorRect {x:935,y:444,w:319,h:241}`, `insideEditor {left:true,right:true,top:true,bottom:true}`. Это подтверждает диагноз: блок занимает всю ширину поля (ширины совпадают, 319=319), поэтому прежний `outline`+`outline-offset:1px` уходил за край и обрезался, а `box-shadow: inset` этого не допускает. `overflow` блока — `auto`, но собственный box-shadow не обрезается своим же overflow.\n2. *Подсветка внутреннего текста/пробелов отсутствует* → **pass**. На покрытом блоке `getComputedStyle(leaf,'::selection').backgroundColor = rgba(0, 0, 0, 0)` и `selfSelectionBg = rgba(0, 0, 0, 0)`; контрольный `.comment-view` вне блока даёт `rgba(47, 111, 237, 0.4)` (= `--selection-bg`). Источник подсветки был именно нативным `::selection` цветом `.comment-view ::selection`, как и записано в причине — подтверждаю.\n3. *Появление рамки не сдвигает содержимое* → **pass**. rect блока до клика `{x:935,y:506,w:319,h:116}` и после клика — идентичен.\n\n**Обоснование разработчика подтверждено по коду CM-окружения.** В `node_modules/@codemirror/view/dist/index.js` расширение `hideNativeSelection` задаёт прозрачность выделения ТОЛЬКО для `.cm-line` (`\".cm-line\": { \"& ::selection, &::selection\": { backgroundColor: transparent !important } }`), а `.cm-content` отдельного гашения не даёт. Live-проба: `hasCmLineAncestor = false` — блочный replace-виджет лежит прямым потомком `.cm-content`, поэтому прежний селектор с `.cm-line` блок не матчил; в `.cm-selectionLayer` все прямоугольники `overlapBlock = false` (в т.ч. нулевой ширины `{w:0,h:134}`), т.е. слой блок не накрывает — версия про `.cm-selectionBackground` несостоятельна. Новый селектор `.cm-editor .cm-transclusion-block--covered ::selection` (без `.cm-line`, `!important`) перекрывает `.comment-view ::selection` …"
+   }
+  ],
+  "c91a0067-98a7-4f18-8170-301f9632ca8c": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Симптом.** В дневниковых записях заголовки в текстах комментариев сворачиваются/разворачиваются только в режиме редактирования; в режиме просмотра возможности свернуть/развернуть нет.\n\n**Ожидаемое.** Сворачивание/разворачивание заголовков работает и в режиме просмотра.\n\n**Причина.** Сворачивание в просмотре существует (`decorateCommentView`, comment-collapse.ts), но дневниковый просмотрщик комментария его, видимо, не монтирует — уточнить при диагностике (компонент дневниковых записей)."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (etn-verifier), 2026-10-10\n\n**Вердикт: принято.** Коммит d37375bc.\n\n**Проверено.** Дифф `chronicle.ts`: в `fillRecordCard` к `recordView` (возврат `renderRecordView`, это СТАТИЧНЫЙ просмотр `.diary-body`) подключается общий `decorateCommentView` с `createCommentCollapseState(networkId, row.id)` — владелец состояния сам хроно-комментарий; пустая запись (`body_html.trim()===''`) не декорируется. Монтирование — именно в просмотре: `renderRecordView` вызывается в рендерере ТОЛЬКО здесь (`chronicle.ts:1230`), а `decorateCommentView` в клиенте подключается ещё лишь в правке поля (`markdown-field.ts:1136`) и в блоках трансклюзий (`transclusion.ts:1354`) — других вызовов на просмотре дневниковой записи нет, задвоения в редакторе нет. `decorateCommentView` идемпотентна (`removeRail` снимает прежнюю полосу и наблюдение через `hostWatchers`, комментарий строки 360-364). Тест `chronicle-record-collapse.test.ts`. Мутация: откат `chronicle.ts` к `d37375bc^` → `not ok 1` (0 pass / 2 fail), фикс возвращён.\n\n**Замечание.** Тест — якоря проводки (`chronicle.ts` под Node не импортируется — тянет Electron-каркас); сам механизм сворачивания проверен поведенчески в `comment-collapse.test.ts`, сторож `guard-chronicle-record-collapse.test.ts` зелёный.\n\nПолные прогоны: typecheck/lint — зелёные, client 3758/3758, server 1776/1776, markdown 250/250."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Исправлено.** Корень: в правке заголовки сворачиваются гаттером CodeMirror, а в просмотре запись — статичный `body_html` без декоратора `decorateCommentView` (лента его не монтировала).\n\n**Фикс.** `client/src/renderer/screens/chronicle/chronicle.ts`: после `renderRecordView` к телу просмотра подключается общий механизм `decorateCommentView` с состоянием `createCommentCollapseState(networkId, row.id)` (владелец — сам хроно-комментарий; пустая запись не декорируется). `record-body.ts` остаётся чистым (сторож 616207a9 требует, чтобы декорации навешивал экран).\n\n**Проверено.** Тест `client/tests/chronicle-record-collapse.test.ts` (якоря проводки: вызов декоратора, владелец `row.id`, общий модуль); сам механизм сворачивания проверен поведенчески в `comment-collapse.test.ts`. Полные прогоны: клиент 3758/3758, сервер 1776/1776, markdown 250/250.\n\n**Прогоны.** typecheck — зелёный, lint — чистый. Коммит d37375bc."
+   }
+  ],
+  "075602b4-aec0-4e4f-b278-1931c5bdf85f": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Симптом.** В ленте публикации тексты трансклюзий не отображаются — вместо развёрнутого текста видны только ссылки (скриншот пользователя 2026-10-10: мысль «Что реализовано» в ленте показывает ссылки вместо содержимого).\n\n**Воспроизведение.** Мысль с трансклюзиями в публикации → лента текстов → вместо текстов трансклюзий — ссылки.\n\n**Причина.** Лента рендерит body_md без развёртки трансклюзий (расширение `expandTransclusions` из `@etn/markdown` не подключено к ленте) — уточнить при диагностике (в просмотре мысли развёртка работает).\n\n**Ожидаемое.** В ленте публикации трансклюзии отображаются развёрнутым текстом, как в просмотре мысли."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (etn-verifier), 2026-10-10\n\n**Вердикт: принято.** Коммит c394c6af.\n\n**Проверено.** Дифф: новая общая `renderExpandedTransclusionHtml` (`transclusion.ts`) = `expandWithLoader` + `renderTransclusionMarkdown` — тот же путь, что у комментария мысли, свой парсер НЕ заведён (сторож `guard-markdown-single-renderer` и `own-transclusion-outside-package` зелёные в полном прогоне); `model.ts` несёт `md` (= `body_md`); `workspace.ts` по признаку `htmlHasTransclusionMarkup` асинхронно перерисовывает текст, возвращая грип порядка. Мои пробы: `renderExpandedTransclusionHtml` для ЦЕЛОЙ мысли `![[#id]]` даёт `<div class=\"md-transclusion\" data-transclusion-source=…>` с текстом источника; для РАЗДЕЛА `![[#id#Раздел]]` — блок с `data-transclusion-section=\"Раздел\"` и только текстом раздела. Обе формы неразвёрнутой ссылки `@etn/markdown` пишет как `!<span class=\"wiki-link\"`, поэтому признак срабатывает в обоих случаях. Тест `publication-feed-transclusion.test.ts`. Мутации: откат `transclusion.ts`+`model.ts`+`workspace.ts` → файл красный; откат только `workspace.ts`+`model.ts` (функция развёртки на месте) → юнит-часть `ok`, якоря ленты `not ok 2` — проводка покрыта.\n\n**Замечание.** Часть теста про ленту — якоря исходника (реальный DOM-рендер требует движка). Кейс «#раздел» в тесте не заведён — проверен моей пробой выше.\n\nПолные прогоны: typecheck/lint — зелёные, client 3758/3758, server 1776/1776, markdown 250/250."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Исправлено.** Корень: лента рисовала серверный `body_html` текста напрямую; он собран из исходного `body_md`, где ссылка-трансклюзия не развёрнута, — блок показывал ссылку.\n\n**Фикс.** Общий путь развёртки в `client/src/renderer/editor/transclusion.ts`: новая `renderExpandedTransclusionHtml(raw, networkId, load)` — `expandWithLoader` + `renderTransclusionMarkdown` (тот же путь, что у комментария мысли; свой парсер не заводил). `client/src/renderer/screens/publications/model.ts`: блок текста несёт `md` (= `body_md` сборки). `client/src/renderer/screens/publications/workspace.ts`: `renderTextBody` по признаку `htmlHasTransclusionMarkup` асинхронно перерисовывает текст развёрнутым HTML, сохраняя грип порядка.\n\n**Проверено.** Тест `client/tests/publication-feed-transclusion.test.ts`: юнит развёртки (ссылка → HTML с текстом источника, без трансклюзий → null) и якоря ленты. Строка-сторож wave7 обновлена под новую сигнатуру `renderTextBody`. Полный клиентский — 3756/3756, markdown — 250/250.\n\n**Прогоны.** typecheck — зелёный, lint — чистый. Коммит c394c6af."
+   }
+  ],
+  "d79f7254-2da6-41e9-bb42-ce7a77ea550d": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Симптом.** В ленте публикации при выделении раздела (текста) в «Оглавлении» он не подсвечивается — непонятно, в каком месте публикации находишься. Обратное направление (клик в оглавлении → рамка текущего в ленте) работает.\n\n**Ожидаемое.** Двусторонняя синхронизация: выделение текста в ленте подсвечивает его раздел рамкой текущего в оглавлении.\n\n**Причина.** Обратная связь лента → оглавление не реализована — уточнить при диагностике."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (etn-verifier), 2026-10-10\n\n**Вердикт: принято.** Коммит f0792d8a.\n\n**Проверено.** Дифф `workspace.ts`: подсветка текущего раздела вынесена в общий `applyCurrentAnchor` (используют и скролл `updateCurrentSection`, и `scrollToAnchor`); `sectionAnchorForNode` находит охватывающий раздел по узлу (последний `.pub-doc-section` выше него, ограничение `docHost.contains`); слушатель `document.selectionchange` → `onSelectionChange` берёт `selection.anchorNode`, игнорирует пустое выделение и выделение вне ленты; снимается в `destroy`. Тест `publication-toc-selection.test.ts`. Мутация: откат `workspace.ts` к `f0792d8a^` → все 4 теста `not ok` (0 pass / 4 fail), фикс возвращён.\n\n**Замечание.** Тест — якоря исходника (реальное выделение требует движка раскладки, которого нет в DOM-шиме; так же сделаны родственные приёмочные тесты публикаций `publications-acceptance-wave1`). Он ловит снятие/подключение слушателя, общий механизм и выход за пределы ленты, но НЕ проверяет поведенчески, что выделение подсвечивает строку оглавления. Полные прогоны: typecheck/lint — зелёные, client 3758/3758, server 1776/1776, markdown 250/250."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Исправлено.** Корень: подсветку текущего раздела вела только прокрутка (`updateCurrentSection` на `scroll`); выделение текста в ленте не влияло на оглавление.\n\n**Фикс.** `client/src/renderer/screens/publications/workspace.ts`: добавлен общий механизм записи текущего раздела `applyCurrentAnchor` (использован в `updateCurrentSection` и `scrollToAnchor`); новый `sectionAnchorForNode` находит охватывающий раздел по узлу; слушатель `document.selectionchange` → `onSelectionChange` назначает раздел текущим (снимается в `destroy`).\n\n**Проверено.** Тест `client/tests/publication-toc-selection.test.ts` (ошибка d79f7254): слушатель подключён/снимается, обработчик берёт `anchorNode`, находка раздела ограничена `docHost`, скролл и выделение пишут через общий `applyCurrentAnchor`. Полный клиентский прогон — 3752/3752.\n\n**Прогоны.** typecheck — зелёный, lint — чистый, клиентские тесты — 3752/3752. Коммит f0792d8a."
+   }
+  ],
+  "4773b34f-86f9-4d14-91cc-4324417b43ea": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Симптом.** Редактор публикации, вкладка «Рецепт»: раскрываю группу «Дополнительно», выбираю для «Только актуальные» вариант «Актуальные» — группа «Дополнительно» сама сворачивается, группа «Свойства» сама разворачивается.\n\n**Воспроизведение.** Рецепт → раскрыть «Дополнительно» → сменить «Только актуальные» → группы меняют состояние сами.\n\n**Причина.** Изменение значения триггерит перерисовку панели фильтров, при которой состояние collapsed групп не сохраняется — уточнить при диагностике.\n\n**Ожидаемое.** Группы не сворачиваются/не разворачиваются самостоятельно при изменении значений в полях отбора."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (etn-verifier), 2026-10-10\n\n**Вердикт: принято.** Коммит 1ae99aa7.\n\n**Проверено.** Дифф: `recipe.ts` — состояние свёрнутости вынесено в `RecipeCollapseState` (`createRecipeCollapseState`), `buildRecipeBuilder` принимает его параметром `collapse`; `publication-card.ts` создаёт держатель один раз в `buildRecipePane` и передаёт в билдер, поэтому серверное эхо (пересборка) не сбрасывает `propsCollapsed/extrasCollapsed`. Тест `publication-card-recipe-save.test.ts` (describe «сворачивание групп рецепта»): задаёт пользовательское состояние, меняет «Только актуальные», проверяет состояние СРАЗУ и ПОСЛЕ эха. Мутационная проба: откат `recipe.ts`+`publication-card.ts` к `1ae99aa7^` → `not ok 2` (падает проверка после эха), фикс возвращён — тест ВОСПРОИЗВОДИЛ симптом ДО фикса.\n\nПолные прогоны: typecheck/lint — зелёные, client 3758/3758, server 1776/1776, markdown 250/250. Скриншоты не снимались."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Исправлено.** Корень (подтверждён воспроизводящим тестом): правка отбора шлёт автосохранение, серверное эхо вызывает `updater` карточки, который пересобирает билдер рецепта (`buildRecipeBuilder`), а его локальные `propsCollapsed`/`extrasCollapsed` при пересборке сбрасывались к умолчаниям — «Свойства» разворачивались, «Дополнительно» сворачивались.\n\n**Фикс.** `client/src/renderer/screens/publications/recipe.ts`: состояние свёрнутости вынесено в внешний держатель `RecipeCollapseState` (`createRecipeCollapseState`), принимается параметром `collapse` у `buildRecipeBuilder`; `client/src/renderer/editor/publication-card.ts`: держатель создаётся один раз в `buildRecipePane` и передаётся в билдер — состояние переживает пересборку на эхе.\n\n**Проверено.** Тест в `client/tests/publication-card-recipe-save.test.ts` (describe «сворачивание групп рецепта», ошибка 4773b34f): смена «Только актуальные» не меняет свёрнутость «Свойства»/«Дополнительно» — и сразу, и после эха сохранения. До фикса тест падал на проверке после эха.\n\n**Прогоны.** typecheck — зелёный, lint — чистый, publication-card-recipe-save — 8/8. Коммит 1ae99aa7."
+   }
+  ],
+  "4e93119e-ecd6-42b8-94f0-fd71b9de28db": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Симптом.** В режиме просмотра комментария отступы до и после вставленной картинки значительно больше, чем в режиме редактирования.\n\n**Воспроизведение.** Вставить картинку в комментарий → сравнить редактирование и просмотр.\n\n**Причина.** CSS просмотра (рендер markdown-картинки в комментарии) добавляет вертикальные отступы — уточнить при диагностике (стили просмотра комментария).\n\n**Ожидаемое.** Отступы вокруг картинки в режиме просмотра такие же, как в режиме редактирования."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (etn-verifier), 2026-10-10\n\n**Вердикт: принято.** Коммит 3f40b5ef.\n\n**Проверено.** Дифф `editor.css`: `.comment-view img` получил `margin-block: var(--md-widget-gap)` (2px, токен `tokens.css:312`) вместо абзацного `--md-block-gap`; добавлены обнуляющие правила `.comment-view p:has(> img:only-child){margin-block:0}` и `.comment-view p:has(+ p > img:only-child){margin-block-end:0}`. Селектор применяется ИМЕННО к просмотру: класс `.comment-view` несут просмотр (`markdown-field.ts:783`, `md-field-view comment-view`) и блок-виджеты правки (`md-live.ts:82`, `md-widget comment-view`), так что зазор одинаков в обоих режимах. Рендер-проба `@etn/markdown`: `![alt|100](etnimg://attachment/abc)` → `<p><img .../></p>` — селектор `p:has(> img:only-child)` реально совпадает; соседний `<p>` совпадает со вторым правилом. Специфичность новых правил (0,2,2) выше `.comment-view :is(p,ul,ol):has(+ *)` (0,1,1). Тест `comment-style-parity.test.ts` (describe 4e93119e). Мутация: откат `editor.css` к `3f40b5ef^` → `not ok 4` (и ещё один якорь), фикс возвращён.\n\nПолные прогоны: typecheck/lint — зелёные, client 3758/3758, server 1776/1776, markdown 250/250. Скриншоты не снимались (визуальную оценку отступов делает пользователь)."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Исправлено.** Корень: единый рендерер оборачивает картинку в абзац `<p>`, и в просмотре он получал абзацный зазор `--md-block-gap` с двух сторон (правило `:is(p,ul,ol):has(+ *)`), тогда как в правке картинка — блок-виджет `.md-widget.comment-view` без абзацных полей; отступы расходились (карточка помечала «значительно больше в просмотре»).\n\n**Фикс.** `client/src/renderer/styles/editor.css`: `.comment-view img` получил общий для обоих режимов вертикальный зазор `margin-block: var(--md-widget-gap)` (правило обслуживает и просмотр, и `<img>` внутри блок-виджета правки); абзац с одинокой картинкой (`p:has(> img:only-child)`) и абзац перед ней (`p:has(+ p > img:only-child)`) обнуляют свой абзацный зазор, чтобы не дублировать отступ картинки.\n\n**Проверено.** Тесты `client/tests/comment-style-parity.test.ts` (describe «отступы картинки», ошибка 4e93119e): зазор из `--md-widget-gap`, два обнуляющих правила. Сторож единой шкалы отступов зелёный.\n\n**Прогоны.** typecheck — зелёный, lint — чистый, comment-style-parity — 11/11. Коммит 3f40b5ef."
+   }
+  ],
+  "705d834b-09d4-4467-9890-0632b3bc9f00": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Симптом.** На вкладке «Библиотека» диалога выбора иконки при прокрутке сетки значков строка поиска и выбор цвета символа уезжают вместе со списком.\n\n**Воспроизведение.** Диалог иконки → вкладка «Библиотека» → прокрутить список значков → поиск и цвет пропадают из виду.\n\n**Причина.** Контейнер вкладки скроллится целиком, включая поиск и цвет; закрепления нет — уточнить при диагностике (libraryIconSourceTab, styles).\n\n**Ожидаемое.** Поиск и выбор цвета — на ОДНОЙ строке, «приклеены» (sticky/flex) к верхней части вкладки и не скроллятся со списком значков."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (etn-verifier), 2026-10-10\n\n**Вердикт: принято.** Коммит 63b9c726.\n\n**Проверено.** Дифф: `resource-picker.ts` собирает поиск и выбор цвета в один блок `.icon-source-head` (перед сеткой); `editor.css` — `.icon-source` flex-колонка на высоту панели, `.icon-source-head` `flex:none` + `position:sticky;top:0`, `.icon-source > .icon-library-grid` `flex:1 1 auto; max-height:none`. Тест `icon-color.test.ts`: DOM — поиск и `.icon-color-row` внутри `.icon-source-head`, сетка сосед на корне; CSS-якоря flex/sticky/max-height. Мутация: откат обоих файлов к `63b9c726^` → `not ok 4` и `not ok 5`, фикс возвращён.\n\n**Прокрутка/раскладка.** Скролл-хост вкладки — `.ui-tabpanel` (`dialogs.css:254`: `flex:1 1 auto; min-height:0; overflow-y:auto; padding:14px`); `.icon-source` заполняет его по высоте, прокрутка уходит ВНУТРЬ `overflow-y:auto` сетки (`.icon-library-grid`). Класс `.icon-source` общий с вкладкой «URL» (`resource-picker.ts:515`) — базовых стилей у него раньше не было, теперь flex-колонка `height:100%`; дети URL-вкладки (строка + превью 96px) не растягиваются, деградации по коду не видно. `flex-wrap:wrap` в шапке допускает перенос на узкой ширине — на штатном размере диалога строка одна.\n\nПолные прогоны: typecheck/lint — зелёные, client 3758/3758, server 1776/1776, markdown 250/250. Визуальную приёмку делает пользователь; скриншоты штатных состояний не снимались."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Исправлено.** Корень: вкладка «Библиотека» (`libraryIconSourceTab`) строила поиск и цвет отдельными строками внутри прокручиваемого контейнера — при скролле сетки они уезжали.\n\n**Фикс.** `client/src/renderer/editor/resource-picker.ts`: поиск и выбор цвета собраны в одну закреплённую строку `.icon-source-head` (перед сеткой); `client/src/renderer/styles/editor.css`: `.icon-source` — flex-колонка на высоту панели, `.icon-source-head` — `flex: none` + `position: sticky`, `.icon-source > .icon-library-grid` — `flex: 1 1 auto; max-height: none` (прокрутка внутри сетки).\n\n**Проверено.** Тесты `client/tests/icon-color.test.ts`: DOM — поиск и `.icon-color-row` в `.icon-source-head`, сетка отдельно; CSS — якоря flex/sticky/max-height. Прежние тесты цвета зелёные.\n\n**Прогоны.** typecheck — зелёный, lint — чистый, resource-picker/icon-color — зелёные. Коммит 63b9c726."
+   }
+  ]
+ },
+ "expectedUserFindings": 10
+}

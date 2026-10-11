@@ -1,0 +1,563 @@
+{
+ "works": [
+  {
+   "id": "369241e4-bbf0-444e-beaa-2f52975575b8",
+   "title": "0.12.1: миграция схемы — attachment_owners, content_hash, снятие owner-колонок",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "fbc276df-8386-4352-bab2-31a3eb3dc8fe",
+   "title": "0.12.1: слои — регистрация attachment_owners в BRANCHABLE_TABLES",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "ff69343a-d1fd-4ff9-9ae2-147ae59d000a",
+   "title": "0.12.1: слияние слоёв — attachment_owners в selection/replay/closure",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "7678876a-3c20-4dca-be5e-13f51c733e7c",
+   "title": "0.12.1: домен вложений — владельцы, дедуп по хэшу, правки копирования и валидаций",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "da59a4cf-92db-4e94-a57d-4218a0843906",
+   "title": "0.12.1: owner-cleanup — снятие владений при удалении владельца",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "08869cfc-a260-4e89-a9db-4c020a79f12e",
+   "title": "0.12.1: валидация иконки/обложки по владениям, а не по единственному владельцу",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "478f8c1f-d29d-47c6-8a31-14b054968880",
+   "title": "0.12.1: REST/MCP — операции владельцев, правка заголовка, ответы дедупа",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "f77382ba-46e9-4c58-90a6-eb5210908d84",
+   "title": "0.12.1: realtime — события владений и гейт клиента",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "04555029-31cf-4258-a525-77832fcc4f27",
+   "title": "0.12.1: клиент — вкладка «Вложения»: владельцы, переименование, защита снятия",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "d4c528d2-a137-4bb1-bdf2-e9d9595647dd",
+   "title": "0.12.1: клиент — выбор чужого вложения добавляет владельца; переименование в списке",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "87c455db-b693-44d3-9c93-01547ddf6b2f",
+   "title": "0.12.1: клиент — вставка картинки в текст (Ctrl+V/Drag&Drop/команда) через каркас",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "36264cdd-f6b2-465c-bcd6-6a46563888e1",
+   "title": "0.12.1: экспорт публикаций и печать — картинки-вложения по id в текстах",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "2f38cd51-f3b4-48b6-95e3-de15e1b37d50",
+   "title": "0.12.1: клиент — пункты контекстного меню вложения на операции владения",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  },
+  {
+   "id": "8a4b7270-df98-498a-824a-bd4e2c0f9514",
+   "title": "0.12.1: layer-integrity — проверка владельцев вложений по attachment_owners",
+   "type_id": "8ea58f4c-1132-4f0a-93b8-41b6c83ac19d",
+   "icon": null,
+   "icon_kind": "emoji",
+   "icon_attachment_id": null,
+   "icon_color": null,
+   "active": false,
+   "marked_for_deletion": false,
+   "fg_color": null,
+   "bg_color": null,
+   "font_bold": null,
+   "font_italic": null,
+   "font_underline": null,
+   "font_strike": null
+  }
+ ],
+ "groups": [
+  {
+   "name": "Общие вложения: мульти-владение, каталог файлов и картинки в комментариях",
+   "taskIds": [
+    "369241e4-bbf0-444e-beaa-2f52975575b8",
+    "fbc276df-8386-4352-bab2-31a3eb3dc8fe",
+    "ff69343a-d1fd-4ff9-9ae2-147ae59d000a",
+    "7678876a-3c20-4dca-be5e-13f51c733e7c",
+    "da59a4cf-92db-4e94-a57d-4218a0843906",
+    "08869cfc-a260-4e89-a9db-4c020a79f12e",
+    "478f8c1f-d29d-47c6-8a31-14b054968880",
+    "f77382ba-46e9-4c58-90a6-eb5210908d84",
+    "04555029-31cf-4258-a525-77832fcc4f27",
+    "d4c528d2-a137-4bb1-bdf2-e9d9595647dd",
+    "87c455db-b693-44d3-9c93-01547ddf6b2f",
+    "36264cdd-f6b2-465c-bcd6-6a46563888e1",
+    "2f38cd51-f3b4-48b6-95e3-de15e1b37d50",
+    "8a4b7270-df98-498a-824a-bd4e2c0f9514"
+   ]
+  }
+ ],
+ "comments": {
+  "369241e4-bbf0-444e-beaa-2f52975575b8": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Новая сетевая NNN-миграция: создать ветвимую таблицу `attachment_owners` (id, layer_id, deleted, base_version, attachment_id, owner_type, owner_id, position, created_at, created_by; уникальность (attachment_id,owner_type,owner_id,layer_id); индексы); добавить `attachments.content_hash` (SHA-256; best-effort заполнить существующим файловым вложениям); перенести старых владельцев (`attachments.owner_type/owner_id`) в `attachment_owners`; снять owner-колонки из `attachments`.\n\n**DoD.** Миграция применяется на копии живой БД; у существующего вложения ровно один владелец; `npm -w @etn/server test` зелёные; списки файлов в тестах-граблях обновлены.\n\n**Зависит от:** ADR `9f90b010`, сущности `19dd0b5d`/`2868dac0`, спеки слоёв `b80cba23`.\n\n**Уточнение DoD (аудит, K1).** `owner_type ∈ thought|link|publication`: проба миграции — на сети с вложениями СВЯЗЕЙ (`owner_type='link'`) — владения переносятся как есть.\n\n**Уточнение приёмки (аудит, 2026-10-10).** Принят вариант объёма «а»: миграция 050 создаёт `attachment_owners` + `content_hash`, переносит владения (вкл. link), но owner-колонки `attachments` СОХРАНЯЮТСЯ до перевода домена на владельцев — их снимает финальная миграция задачи `7678876a` (фаза 2). К этому же моменту правятся сущность `19dd0b5d` и ADR `9f90b010` (сейчас — поэтапная оговорка)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Миграция 050 — attachment_owners, content_hash, перенос владельцев",
+    "body_md": "**Сделано.** Новая сетевая миграция `server/migrations/network/050_attachment_owners.sql` (следующий свободный номер после 049):\n\n1. Ветвимая таблица `attachment_owners` (`pk, id, layer_id, deleted, base_version, attachment_id, owner_type, owner_id, position, created_at, created_by`; UNIQUE `(attachment_id, owner_type, owner_id, layer_id)`; UNIQUE `(id, layer_id)`; индексы по слою, по `(owner_type, owner_id)`, по `attachment_id`) — шаблон ветвимой таблицы из 025.\n2. `attachments.content_hash` (TEXT, SHA-256 hex, nullable) + best-effort заполнение существующим файловым вложениям по фактическому файлу. Для этого в `registerMigrationHelpers` зарегистрирована SQL-функция `etn_file_sha256(path)` (нечитаемый/отсутствующий файл → NULL).\n3. Перенос прежних владельцев из `attachments.owner_type/owner_id` в `attachment_owners` — по одной строке владения на строку вложения, `position` — прежний `attachments.position`; копия идёт в том же слое и с тем же надгробием (паритет слоевых снапшотов). `owner_type ∈ thought|link|publication` переносится как есть, включая владения СВЯЗЕЙ (уточнение аудита K1).\n4. Таблица добавлена в `BRANCHABLE_TABLES` (`server/src/db/layer-chain.ts`).\n\n**Вариант объёма — «а» (выбран, обоснование).** Колонки `attachments.owner_type/owner_id` НЕ снимаются: код 0.12.1 их ещё читает и пишет, а перевод домена на `attachment_owners` и снятие owner-колонок — задача домена `7678876a` (финальная миграция). Это держит задачу миграции атомарной и репозиторий зелёным: существующие запросы продолжают работать, новая таблица наполняется параллельно. Снятие колонок «тонкой совместимостью» (вариант «б») потребовало бы правок attachment-service/routes/merge — выход за границы задачи (домен/сервисы/API не трогаем).\n\n**Чем проверено.**\n- Новые тесты в `server/tests/network-migrations.test.ts` (4 теста): состав/индексы `attachment_owners` и сохранение owner-колонок; перенос владельцев thought/link/publication с сохранением `position`; паритет слоя и надгробия; best-effort `content_hash` (реальный файл → sha256, недоступный путь и url → NULL).\n- **Изолированная копия полигона** (инструкция `4da525c7`): копия сети `449e1f67` (на 049) в temp, в неё засеяно вложение СВЯЗИ (`owner_type='link'`), миграция применена — перенесено 5/5 владений без расхождений (publication 2, thought 2, link 1), link-владение присутствует, `content_hash` совпал с sha256 фактических файлов (url-вложения → NULL), owner-колонки сохранены. Temp-каталог удалён.\n- `npm run typecheck` зелёный; `n…"
+   },
+   {
+    "kind": "chronological",
+    "title": "Независимая проверка (etn-verifier): вердикт принято",
+    "body_md": "**Вердикт: принято.** Коммит `db2368b5`. Проверка выполнена свежей сессией, код не правился; дерево чистое.\n\n**Состав диффа.** Ожидаемые 4 файла: `server/migrations/network/050_attachment_owners.sql`, `server/src/db/layer-chain.ts` (+`attachment_owners` в BRANCHABLE_TABLES), `server/src/db/network-db.ts` (SQL-функция `etn_file_sha256`), `server/tests/network-migrations.test.ts`; лишнего нет.\n\n**DoD по пунктам.**\n- Миграция применяется (эквивалент копии живой БД — независимая изолированная проба): **pass**.\n- У существующего вложения ровно один владелец: **pass** (проба 4/4, по одному владению на вложение; тест `perAttachment.c === 1`).\n- `npm -w @etn/server test`: **pass** 1731/1731, 0 fail.\n- `npm run typecheck` **pass** (4 workspace), `npm run lint` **pass** (eslint чистый).\n- Списки в тестах обновлены: **pass** (`EXPECTED_TABLES` + список таблиц со слой-колонками в network-migrations.test.ts).\n\n**Чем проверено.**\n- `git show db2368b5` — состав и содержание.\n- Независимая проба миграции 050 на свежей БД: применены миграции до 049, засеяны 4 вложения (link/thought/publication, url и файл), затем — 050. Перенос 4/4; `owner_type='link'` сохранён (уточнение K1), `position` сохранён, `layer_id`/`deleted` скопированы; `content_hash`: реальный файл → sha256, url → NULL, недоступный путь → NULL; owner-колонки `attachments` сохранены; повторный прогон идемпотентен (applied 0, skipped 51). Временные скрипты удалены.\n- Прогоны: `npm run typecheck`, `npm run lint`, `npm -w @etn/server test` (1731/1731).\n\n**Замечания (не блокеры).**\n1. Вариант «а»: owner-колонки `attachments` сохранены, однако карточка задачи (заголовок и «Что сделать»), сущность `19dd0b5d` («Колонки owner_type/owner_id удалены») и ADR `9f90b010` («Запрет. Хранить владельца в строке attachments») по-прежнему требуют удаления колонок. Расхождение нужно зафиксировать в базе правкой карточки/ADR (оркестратор).\n2. Сторож `server/tests/layers-s3.test.ts:322`: регекс DIRECT_READ не содержит `attachment_owners` (как ранее не содержал `properties` и `thought_type_views`). Проверено: `FROM attachment_owners` сторожем не ловится — правило «чтения только через `*_v`» для новой таблицы не enforced. Пробел предсуществующий, этим коммитом добавлена третья непокрытая ветвимая таблица; список стоит дополнить.\n3. Задача `fbc276df` (регистрация в слоях): `*_v`-представления, снапшот и materializeShadow покрываются автоматически итерацией по BRANCHABLE_TABLES (layer-chain.ts:180/222/265; layer-write.ts materializeShado…"
+   }
+  ],
+  "fbc276df-8386-4352-bab2-31a3eb3dc8fe": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Внести `attachment_owners` в `BRANCHABLE_TABLES` (layer-chain.ts) и обеспечить корректную работу слоевых механизмов (представления `*_v`, снапшот, materializeShadow/материализация теней) — по образцу публикаций. Гейт `layers-s3` (чтения только через `*_v`).\n\n**DoD.** Вложение с двумя владельцами: снятие одного владения в слое — надгробие только его строки; основа не тронута; `npm run typecheck`/тесты зелёные.\n\n**Зависит от:** t1; спека `b80cba23`.\n\n**Корректировка объёма (приёмка задачи 369241e4, 2026-10-10).** Регистрация `attachment_owners` в `BRANCHABLE_TABLES` уже выполнена миграционной задачей `369241e4` (коммит db2368b5). Остаток объёма этой задачи: 1) протокольный DoD-тест слоёв на доменных записях владений (владение в слое, надгробие, основа не тронута); 2) сторож `layers-s3` — добавить `attachment_owners` в регекс DIRECT_READ (сейчас таблица не покрыта, пробел предсуществующий); 3) сверить представления `*_v`/снапшот/materializeShadow для новой таблицы (по коду они итерируют по BRANCHABLE_TABLES — подтверди пробами). Merge-service — НЕ здесь (задача `ff69343a`)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Реализовано: слоевые пробы владений attachment_owners",
+    "body_md": "**Сделано.** Коммит `1b1f9730`, ветка `releases/0.12.1`, слой `6f29e84c`. Объём — остаток из дополнения при приёмки задачи миграции `369241e4` (регистрация в `BRANCHABLE_TABLES` уже сделана, коммит db2368b5).\n\n1. **Протокольный DoD-тест** `server/tests/layers-attachment-owners.test.ts` (4 теста, доменные записи владений):\n   - снятие ОДНОГО владения в слое (`deleteRowLayered` → `materializeTombstone`) ставит надгробие только в строке слоя; второе владение остаётся видимым, физические строки основы живы (`deleted = 0`); повторное снятие — no-op; в контексте основы оба владения снова видны;\n   - владение, созданное в слое, видно только в слое (основа его не видит); снятие владения основы — только в слое;\n   - `materializeShadow` копирует строку-победителя основы в слой; правка тени видна через `attachment_owners_v` и не трогает основу (позиция у слоя и основы расходится);\n   - представление и temp-снапшот `attachment_owners_snap` реально создаются/наполняются для новой таблицы, снапшот совпадает с видимыми строками представления и пересобирается после надгробия — механизмы итерируют `BRANCHABLE_TABLES`, а не прошиты по именам.\n2. **Сторож `server/tests/layers-s3.test.ts`** — `attachment_owners` добавлен в регекс DIRECT_READ: чтения ветвимой таблицы только через `*_v`.\n\n**Чем проверено.**\n- Проба сторожа: временный файл `server/src/domain/__probe_ao.ts` со строкой `SELECT * FROM attachment_owners` → гейт покраснел (`domain\\__probe_ao.ts:1` в списке нарушений), после пробы файл удалён; регулярный прогон гейта зелёный.\n- `npm run typecheck` — зелёный (4 workspace); `npm run lint` — чистый; `npm -w @etn/server test` — **1735/1735**, 0 fail (было 1731 + 4 новых).\n\n**Осталось / границы.** Merge-service — задача `ff69343a` (не здесь). Домен на `attachment_owners` переводит задача `7678876a` (owner-колонки `attachments` пока сохранены, вариант «а»). Независимая проверка — за `etn-verifier`; Статус `реализовано`, актуальность не снята."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка etn-verifier: принято",
+    "body_md": "**Вердикт: принято.** Независимая проверка коммита `1b1f9730` (ветка `releases/0.12.1`, слой `6f29e84c`), объём — остаток из корректировки при приёмке `369241e4`.\n\n**Дифф.** `git show 1b1f9730` — ровно 2 файла: новый `server/tests/layers-attachment-owners.test.ts` (+279) и правка регекса `server/tests/layers-s3.test.ts` (−1/+1). Лишнего нет.\n\n**DoD по пунктам.**\n1) Протокольный DoD-тест (4 теста, доменные записи владений) → pass. Прогон файла отдельно: `# tests 4 / # pass 4 / # fail 0`. Тесты по существу: надгробие реально `ownerRow('own-1', layer).deleted = 1`, `base_version = 0` (таблица безверсионная), вторая строка владения в слой не материализована (`undefined`), физические строки основы `deleted = 0`; повторное `deleteRowLayered` — no-op по видимости; владение, созданное в слое, видно только в слое; `materializeShadow` копирует победителя (`base_version = 0`), правка тени видна через `attachment_owners_v` (position 7) и не трогает основу (position 3); `attachment_owners_v`/`attachment_owners_snap` присутствуют в `sqlite_temp_master`, снапшот совпадает с видимыми строками и пересобирается после надгробия.\n2) Сторож `layers-s3` (`attachment_owners` в DIRECT_READ, строка 322) → pass. Мутационная проба: временный `server/src/domain/__mutation_probe.ts` со строкой `export const mutationProbe = 'SELECT * FROM attachment_owners';` → гейт покраснел (`not ok`, нарушение `domain\\__mutation_probe.ts:1`), файл удалён, повторный прогон `layers-s3` — 5/5 зелёный. Дерево чистое (`git status` пусто).\n3) Сверка `*_v`/снапшот/materializeShadow → pass. По коду механизмы итерируют `BRANCHABLE_TABLES` (`layer-chain.ts:180,222,265`; `layer-write.ts` — `materializeShadow`/`materializeTombstone` через `*_v`), регистрация `attachment_owners` подтверждена `git blame layer-chain.ts:88` = коммит `db2368b5` (задача `369241e4`); пробы 4-го теста подтверждают создание представления и снапшота в рантайме.\n\n**Прогоны.** `npm run typecheck` — зелёный (4 workspace); `npm run lint` — чистый; `npm -w @etn/server test` — **1735/1735, 0 fail, 0 skipped** (261 suite).\n\n**Претензии.** Блокеров и замечаний нет. На усмотрение пользователя: в тесте 1 «повторное снятие — no-op» проверяется через неизменность видимости (возврат `deleteRowLayered` в обоих вызовах = 1, физика повторной записи не проверяется) — для протокольной пробы достаточно.\n\n**Вне границ (не проверялось).** merge-service (`ff69343a`), домен на `attachment_owners` (`7678876a`), клиент; PNG не читались. Статус работы не менялся."
+   }
+  ],
+  "ff69343a-d1fd-4ff9-9ae2-147ae59d000a": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Обновить merge-service: сбор замыкания владельца по `attachment_owners` (вместо owner-колонок `attachments`), посрочный реплей и клоужер-проверки; обработка исчезновения вложения при слиянии (когда во всех слоях не осталось владений) и обнуления висячих `icon_attachment_id`.\n\n**DoD.** Слияние слоя с правками владений/вложений проходит/отклоняется по конфликтам как раньше; тесты merge зелёные.\n\n**Зависит от:** t1, t2."
+   },
+   {
+    "kind": "chronological",
+    "title": "Проверка (круг 2, дельта b9e1ec82): принято",
+    "body_md": "**Вердикт: принято.** Проверялась только дельта `b9e1ec82` поверх `cc0e6bdb` (ветка `releases/0.12.1`, слой `6f29e84c`). Код не правился, дерево чистое; PNG не читались (проверка текстовая, GUI вне границ лишь постольку, поскольку delta — серверная).\n\n**Состав дельты.** Ровно 2 файла: `server/src/domain/merge-service.ts` (+46/−17), `server/tests/layers-merge-attachment-owners.test.ts` (+168, только добавления — существующие 4 теста и ассерты не тронуты). Лишнего нет.\n\n**Двойное чтение переходного периода.** `rowReferences` для `attachments` снова замыкается на владельца по owner-колонкам (merge-service.ts:563–573, пометка «ПЕРЕХОДНЫЙ ПЕРИОД → 7678876a»); `collectThoughtLayerRows` собирает вложения и по `pushOwnedAttachments`, и по owner-колонкам — для мысли (:1159–1163) и связей (:1197–1207); дедуп — `[...new Set(...)]` на выходе (:1219–1221). После снятия колонок (7678876a) ветка даёт `[]`: `ref('thoughts', r.owner_id)` при `owner_id === undefined` → null (ref:511–513), даже несмотря на то что `ownerTableOf(undefined)` → `'thought'`. Т.е. недостижимость держится на удалении ОБЕИХ колонок (ADR 9f90b010: «колонки owner_type/owner_id у attachments удаляются», миграция 050 их сохраняет — taskы 369241e4/7678876a). Рассуждение подтверждено.\n\n**Тесты дельты.** `node --test … --import tsx tests/layers-merge-attachment-owners.test.ts` — **8/8 ok**. Добавленные: (5) mergeLayerThought overwrite с вложением слоя по owner-колонкам — доезжает до основы, слой очищен, `icon_attachment_id` разрешим; (6) discardLayerThought — `discarded.attachments === 1`, основы не касается; (7) E2 обнуляет `publications.cover_attachment_id`; (8) E2 с владением `owner_type='link'`. Ассерты осмысленные (проверяют реальные строки/указатели, а не наличие кода). Замечание: в тесте 5 дублируется `attachmentRowsInLayer(..., BASE)` (:326 и :335) — косметика; тест 8 проверяет только исчезновение вложения (E2 не ветвится по owner_type) — покрытие тонкое, но требование выполнено.\n\n**Мутационная проба.** Временно снят легаси-`push('attachments', … owner-колонки)` в `collectThoughtLayerRows` → тесты 5 и 6 краснеют (`# pass 6, # fail 2`), остальные зелёные; код восстановлен (`git status` чист, HEAD = b9e1ec82). Тесты ловят именно путь блокера.\n\n**Физический файл + ADR.** Комментарий фазы E2 присутствует (merge-service.ts:1053–1055: «Физический файл здесь НЕ трогается… решает owner-cleanup (задача da59a4cf)»). ADR `9f90b010` дополнен блоком «Семантика слияния слоёв (уточнение, аудит задачи ff69343a)» —…"
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Реализовано.** Коммит `cc0e6bdb` (ветка `releases/0.12.1`, слой `6f29e84c`).\n\n**Что сделано (merge-service).**\n- Замыкание владельца переведено на `attachment_owners`: `rowReferences` для строки владения даёт ссылки на вложение (`attachment_id`) и на объект-владельца (`owner_type/owner_id`); строка `attachments` больше не ссылается на владельца через owner-колонки (переходный период — колонки ещё живут, их снимет задача домена `7678876a`).\n- Вложения одной мысли/её связей в `collectThoughtLayerRows` собираются по строкам владений (новый `pushOwnedAttachments`): в набор идут строки `attachment_owners` объекта и строки вложений, созданных в слое; живущее только в основе вложение разрешает замыкание по цепочке.\n- Посрочный реплей/клоужер-проверки строк владений — через общий механизм `BRANCHABLE_TABLES` (версионных конфликтов нет: у `attachment_owners` нет колонки `version`).\n- Исчезновение вложения: после реплея и удаления строк слоя (Phase E) по затронутым вложениям проверяется живое владение во ВСЕХ рабочих слоях (`hasLiveOwnershipAnywhere`, служебные слои-резервы не считаются). Если живых владений не осталось — строка вложения убирается из цели и обнуляются висячие `thoughts.icon_attachment_id` / `publications.cover_attachment_id` в целевой слой. Физический файл — вне слияния (носитель один на все слои).\n\n**Чем проверено.** Новый `server/tests/layers-merge-attachment-owners.test.ts` (4 теста, сырые слоевые данные — владения вставляются напрямую, как допускает карточка): реплей владения слоя в основу с замыканием по цепочке; `missing_closure` для владения с неразрешимым вложением; исчезновение вложения при снятии последнего владельца + обнуление `icon_attachment_id`; вложение с другим живым владельцем не исчезает и указатель цел.\n\n**Прогоны.** `npm run typecheck` — зелёный (4 workspace); `npm run lint` — чисто; `npm -w @etn/server test` — **1739/1739**.\n\n**Осталось.** Полигон `etn-dev` не использовался: сценарий чисто доменный (слияние на сырых слоевых данных), сквозной in-process тест исчерпывающ. Задача домена `7678876a` (перевод записи владений и снятие owner-колонок) — следующий шаг, вне этой задачи."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (etn-verifier, свежая сессия): вердикт НЕ ПРИНЯТО\n\nКоммит `cc0e6bdb`, ветка `releases/0.12.1`, слой `6f29e84c`. Код не правился, статусы не менялись, дерево чистое; скриншотов нет (PNG не читались — проверка чисто текстовая, GUI вне границ).\n\n**Состав диффа.** Ровно 2 заявленных файла: `server/src/domain/merge-service.ts` (+148/−35), `server/tests/layers-merge-attachment-owners.test.ts` (новый, 272 стр.); лишнего нет (`git show --stat cc0e6bdb`).\n\n**DoD.** «Слияние слоя с правками владений/вложений проходит/отклоняется по конфликтам как раньше; тесты merge зелёные» — **fail** (см. блокер). Часть «тесты merge зелёные» — pass; часть «по конфликтам как раньше» для вложений, созданных в слое, — fail.\n\n**Проверено.** `npm run typecheck` зелёный (4 workspace); `npm run lint` чистый; `npm -w @etn/server test` — **1739/1739, 0 fail** (1731 на db2368b5 + 4 от 1b1f9730 + 4 новых = 1739, тесты не удалялись/не ослаблялись; ни один существующий тест-файл в cc0e6bdb не менялся). `attachment_owners` в `BRANCHABLE_TABLES` (`layer-chain.ts:88`), реплей/клоужер идут общим механизмом. `rowReferences`: `attachments → []`, `attachment_owners → [attachments, owner]` — замыкание по владениям подтверждено тестом missing_closure. Фаза E2 (исчезновение вложения + обнуление `thoughts.icon_attachment_id` / `publications.cover_attachment_id`) реализована (`hasLiveOwnershipAnywhere` учитывает только рабочие слои `is_service=0`). Owner-колонки `attachments` живы (миграция 050 вариант «а»; `attachment-service.ts:332,770` пишут только их), чтения через `attachments_v` не сломаны. Новые тесты осмысленны: реальный реплей с замыканием, missing_closure, исчезновение+обнуление иконки, выживание при живом другом владельце.\n\n**Блокер (переходный период сломан для частичного слияния/отбрасывания).** `collectThoughtLayerRows` теперь собирает вложения мысли/связей только по строкам `attachment_owners` (`pushOwnedAttachments`), а доменный код 0.12.1 вложения в слое по-прежнему создаёт ТОЛЬКО через owner-колонки `attachments` (строку владения никто, кроме миграции 050, не пишет: `grep` по `server/src` — вставок в `attachment_owners` нет, триггеров нет). Итог: вложение, созданное в слое, не попадает в набор слияния → при `mergeLayerThought`/`discardLayerThought` оно остаётся в слое, а в основу уезжает мысль с висячим `icon_attachment_id`.\nВоспроизведение (проба tsx на `createInMemoryNetworkDb`, удалена): вложение в слое с owner-колонками (`owner_type='thought'`, без строки влад…"
+   },
+   {
+    "kind": "chronological",
+    "title": "Круг 2: блокер переходного периода устранён",
+    "body_md": "**Блокер (доказан тестировщиком) устранён.** Коммит `b9e1ec82` (ветка `releases/0.12.1`, слой `6f29e84c`).\n\n**Корень.** `collectThoughtLayerRows` собирал вложения только по `attachment_owners`, а рантайм 0.12.1 строк владений не создаёт — домен пишет только owner-колонки `attachments`. Вложение, созданное в слое доменным кодом (иконка мысли), выпадало из набора: `mergeLayerThought` его терял, в основе оставался висячий `icon_attachment_id`.\n\n**Исправление (решение оркестратора).** Переходный период: `collectThoughtLayerRows` и замыкание читают ОБА источника и дедуплицируют —\n- `rowReferences` для строки `attachments` снова замыкается по owner-колонкам (целевая модель `attachment_owners` — отдельная ветка, ниже), с пометкой «ПЕРЕХОДНЫЙ ПЕРИОД → 7678876a»; после снятия колонок ветка станет недостижимой (`owner_type` = undefined → `[]`);\n- `collectThoughtLayerRows` добавляет вложения и по `pushOwnedAttachments` (строки владений), и по owner-колонкам `attachments` (мысль и её связи); дубли схлопывает штатная дедупликация на выходе.\n\n**Замечание тестировщика по ADR закрыто комментарием.** В фазе E2 добавлено явное пояснение: физический файл не трогается — носитель один на все слои, его судьбу по исчезновению последнего живого владельца решает owner-cleanup (`da59a4cf`), а не слияние.\n\n**Тесты (расширены до 8).** Добавлено покрытие:\n- частичное слияние мысли `mergeLayerThought` с вложением, созданным в слое ЧЕРЕЗ OWNER-КОЛОНКИ: вложение доезжает ДО ОСНОВЫ, слой очищен, `icon_attachment_id` разрешим (не висячий);\n- отбрасывание мысли `discardLayerThought`: вложение слоя убирается, основа не затронута;\n- E2-обнуление `publications.cover_attachment_id` при исчезновении вложения;\n- E2 с владением `owner_type='link'`.\nТесты проверены мутацией: снятие легаси-сборки вложений в `collectThoughtLayerRows` красит оба теста переходного периода (5 и 6) — теперь они ловят именно путь блокера.\n\n**Прогоны.** `npm run typecheck` — зелёный; `npm run lint` — чисто; `npm -w @etn/server test` — **1743/1743**.\n\n**Коммиты задачи:** `cc0e6bdb` (feat — перевод на владения) + `b9e1ec82` (fix — переходный период). Не пушил."
+   }
+  ],
+  "7678876a-3c20-4dca-be5e-13f51c733e7c": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** attachment-service: CRUD владений (`addOwners`/`removeOwner` с идемпотентностью), `listAttachments(owner)` — по владениям; дедупликация загрузки по `content_hash`, вырождение `copyAttachmentsToTargets` в добавление владельцев; судьба файла/вложения по исчезновению последнего живого владельца во всех слоях; правка заголовка вложения без смены владельца.\n\n**DoD.** Юнит-тесты дедупа (та же картинка → одно вложение + владелец), липкого владения, судьбы файла; `npm -w @etn/server test` зелёные.\n\n**Зависит от:** t1; ADR `9f90b010`, `e3a35864`; требования `9ff3accb`, `6b524569`, `fabc1231`, `1d901f26`."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Реализовано: домен вложений на владельцах (0.12.1)\n\n**Коммит:** `aba7fb7f` — `[7678876a] feat(server): домен вложений на владельцах — addOwners/removeOwner, дедуп по content_hash, copy через владения, валидации иконки/обложки`.\n\n### Что сделано (server/domain/attachment-service.ts и связанное)\n- **CRUD владений:** `addOwners` (идемпотентно, `added`/`skipped` в порядке ids), `removeOwner` (404 без владения; 409 `ATTACHMENT_OWNER_IS_ICON` при иконке мысли/обложке публикации; текстовый скан НЕ реализован — точка расширения 87c455db), `hasOwnership`.\n- **`listAttachments(owner)`** читает владения (`attachment_owners_v` JOIN `attachments_v`), порядок — `attachment_owners.position`.\n- **`getAttachment`/`searchAttachments`** владелец DTO берётся из первичного владения; `exclude_owner_*` — по владениям.\n- **Дедуп загрузки по `content_hash`** (SHA-256): поиск по СЫРОЙ `attachments` ПО ВСЕМ слоям; при совпадении строка/файл не создаются, текущий объект становится владельцем (`createAttachmentFileResult(...).reused=true`, REST `meta.reused`). Хэш пишется и для серверных `file_path`.\n- **`copyAttachment`** вырожден в `addOwners` (ответ `added`/`skipped` — `AttachmentOwnerRef[]`).\n- **Судьба файла** — по исчезновению последнего живого владельца ВО ВСЕХ слоях (`hasLiveOwnershipAnywhere`): база удаляет строку+файл, слой ставит надгробия владения/строки (файл не трогает).\n- **Переименование** (`updateAttachment` title/description/icon) владельца не меняет; перенос владельца синхронно двигает строку владения.\n- **Валидации:** иконочная (`thought-service.ts`) и обложечная (`publication-service.ts`) переведены на владения (были бы «лживы» при выборе чужой картинки после перевода записи).\n\n### Выбранный вариант поэтапности: owner-колонки НЕ сняты (dual-write)\nФинальная миграция снятия `attachments.owner_type/owner_id/position` в этой задаче не выполнена: снятие НЕ оставляет прогоны зелёными. Колонки читают: `merge-service.ts` (резервная ветка слияния, стр. 1162), `owner-cleanup.ts` (purge/надгробия, стр. 159/230/235), импорт/экспорт `.etnx` (`etnx-format.ts`, `shared/types/etnx.ts`), клиентский DTO (`owner_type/owner_id` в realtime-effects/editor). Домен уже ЧИТАЕТ И ПИШЕТ владения только через `attachment_owners`; колонки поддерживаются как зеркало первичного владельца (dual-write) до задач `478f8c1f`/`f77382ba` (DTO/realtime) и `da59a4cf` (owner-cleanup). Новый файл миграции не добавлялся.\n\n### Проверки\n- `npm run typecheck` — зелёный (server+client+shared+markdown); `np…"
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка задачи 7678876a (коммит aba7fb7f) — вердикт: НЕ ПРИНЯТО\n\nПроверял: слой `6f29e84c`, ветка `releases/0.12.1`, рабочее дерево чистое (коммитов тестировщика нет).\n\n### Прогоны (все зелёные, числа совпали)\n- `nvm use 22` → Node v22.23.2\n- `npm run typecheck` — зелёный; `npm run lint` — чистый\n- `npm -w @etn/server test` — **1749/1749**\n- `npm -w @etn/client test` — **3709/3709**\n- `npm -w @etn/shared test` — **61/61**\n\n### DoD\n1. CRUD владений addOwners/removeOwner идемпотентны → pass (тесты `addOwners is idempotent`, `copyAttachment skips…`, 409 `ATTACHMENT_OWNER_IS_ICON`).\n2. `listAttachments(owner)` по владениям, порядок `attachment_owners.position` → pass.\n3. Дедуп по `content_hash` → **fail**: по одному слою pass (`uploading the same bytes reuses…`), МЕЖСЛОЙНО — не переиспользует и плодит копии файлов (блокер 1).\n4. `copyAttachmentsToTargets`→addOwners (`added`/`skipped`) → pass.\n5. Судьба файла по последнему живому владельцу во всех слоях → **fail**: служебный (резервный) слой удерживает файл (блокер 2).\n6. Переименование (title) без смены владельца → pass (`rename changes the shared title only`).\n7. Юнит-тесты дедупа/липкого владения/судьбы файла → pass по одному слою; межслойного дедупа и кросс-слоевой судьбы файла тестов нет (замечание 3).\n\n### Претензии\n**[блокер 1] Межслойный дедуп по хэшу не работает — дубли строк и файлов.** ADR `e3a35864` требует искать по СЫРОЙ `attachments` ПО ВСЕМ слоям (в т.ч. невидимым) и переиспользовать вложение. `createAttachmentResult`/`createAttachmentFileResult` (`server/src/domain/attachment-service.ts:655-661,812-819`) находят строку, но требуют `getAttachment(ndb, reusedId) !== null` — т.е. видимости строки в ТЕКУЩЕМ слое; иначе создаётся новая строка и НОВАЯ копия файла. Воспроизведение (проба): строка в слое A → та же картинка в основе/сестринском слое B → `reused=false`, строк 2, файлы разные. Обратный случай (строка в основе → загрузка в слое) — `reused=true`. Итог: байты дублируются вопреки ADR. Где править: `attachment-service.ts:655-661` и `:812-819` (материализовать тень строки в текущий слой вместо отказа от переиспользования).\n\n**[блокер 2] `hasLiveOwnershipAnywhere` считает служебные (резервные) слои.** `server/src/domain/attachment-service.ts:265-273` выбирает живые владения по ВСЕМ слоям без фильтра `layers.is_service = 0`. Правило проекта (ошибка `1d0620a8`, `holding-layers.ts:24-33`; twin-функция `merge-service.ts:186-203` с `JOIN layers l … AND l.is_service = 0`): резерв слиян…"
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Исправление по вердикту тестировщика: два блокера закрыты (0.12.1)\n\n**Коммит:** `a61343f0` — `[7678876a] fix(server): межслойный дедуп вложений по сырой таблице и исключение служебных слоёв из судьбы файла` (поверх `aba7fb7f`).\n\n### Блокер 1 — межслойный дедуп (ADR e3a35864)\nСнят фильтр видимости в ветках переиспользования `createAttachmentResult`/`createAttachmentFileResult`: поиск по `content_hash` идёт по СЫРОЙ `attachments` ПО ВСЕМ слоям, найденная строка переиспользуется БЕЗ оглядки на видимость в текущем слое, владение пишется в текущем слое. Для ответа добавлен резолвер `getAttachmentAnyLayerOrThrow` (сырая строка + первичное видимое владение).\n\n### Блокер 2 — служебные слои в судьбе файла (1d0620a8)\n`hasLiveOwnershipAnywhere` теперь JOIN `layers l ON l.id = o.layer_id AND l.is_service = 0` — синхронно с twin-функцией `merge-service`; резервный слой больше не удерживает файл.\n\n### Замечания тестов\n- **3.** Добавлены кросс-слойные пробы: дедуп A→base, A→B, base→layer (все `reused=true`, одна сырая строка, один файл, владение в текущем слое) и судьба файла при владении в основе + копии строки владения в служебном слое (`attachment_deleted=true`, файл удалён).\n- **4.** Owner-колонки не тронуты (переходный dual-write); в код добавлено предупреждение, что это НЕТОЧНОЕ зеркало (addOwners/removeOwner их не обновляют), — учесть в `da59a4cf`.\n\n### Проверки (после правок)\n- `npm run typecheck` — зелёный; `npm run lint` — чисто.\n- `npm -w @etn/server test` — **1751/1751**; `npm -w @etn/client test` — **3709/3709**; `npm -w @etn/shared test` — **61/61**.\n- Статус: реализовано; актуальность НЕ снята. Готово к повторной проверке дельты."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (второй раунд, дельта `a61343f0`) — вердикт: НЕ ПРИНЯТО\n\nПроверял: слой `6f29e84c`, ветка `releases/0.12.1`, дерево чистое, коммитов тестировщика нет. PNG не читались, скриншоты не снимались (серверный дефект, доказательства текстовые).\n\n### Блокеры первого раунда — закрыты\n- **Блокер 1 (межслойный дедуп):** фильтр видимости убран в обеих ветках (`attachment-service.ts:685-693`, `845-851`), поиск `content_hash` по сырой `attachments`, добавлен `getAttachmentAnyLayerOrThrow` (`:537-545`). Проба подтвердила: A→base, A→B, base→layer — `reused=true`, одна сырая строка, один файл, владение в текущем слое.\n- **Блокер 2 (служебные слои):** `hasLiveOwnershipAnywhere` (`:275-288`) теперь JOIN `layers l ON l.id=o.layer_id AND l.is_service=0`; синхронно с `merge-service.ts:192-200` (идентичный SQL). Проба: владение в основе + копия в служебном слое → `removeOwner` → `attachment_deleted=true`, файл удалён.\n\n### НОВЫЕ блокеры (найдены в дельте)\n- **[блокер 1] Кросс-слойное переиспользование из НЕпредкового слоя даёт «висячее владение».** Проба: строка в слое A → та же картинка в основе (или в истинно сестринском слое B, оба ребёнка основы) → `reused=true`, строка владения пишется в текущем слое, НО вложение невидимо: `getAttachment()=null`, `listAttachments(owner)=0`. Требования `9ff3accb` и ADR `9f90b010` («список вложений владельца = его владения») нарушены. Причина: строка живёт в слое, которого нет в `layer_chain` текущего контекста, а теневой копии строки в текущий слой не делается. В изменённом тесте дельты `LAYER_B` — потомок A, поэтому случай не покрыт; проверяется только `id` и число сырых строк, без видимости/списка. Где править: `attachment-service.ts` ветки переиспользования (`:685-693`, `:845-851`) — при найденной строке вне цепочки текущего слоя материализовать видимую строку вложений в текущем слое (или иным способом обеспечить видимость); уточнить ADR `e3a35864` («новая строка не создаётся»).\n- **[блокер 2] `findReusableByHash` может вернуть надгробие.** Запрос (`attachment-service.ts:738-747`) — `ORDER BY deleted ASC LIMIT 1` без `WHERE deleted=0`. Проба (в том же слое): загрузка → снятие единственного владельца (надгробие) → повторная загрузка тех же байт → `reused=true`, но строка `deleted=1`: `getAttachment()=null`, `listAttachments=0`. Повторная загрузка молча привязывает владельца к удалённому вложению. Где править: `findReusableByHash` — добавить `AND deleted = 0`.\n\n### Замечания\n- Тест дельты `dedup reuses a row found in …"
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Третий раунд: оба блокера закрыты (0.12.1)\n\n**Коммит:** `5c07a9e8` — `[7678876a] fix(server): материализация переиспользуемой строки вложения вне цепочки слоя и запрет переиспользования надгробий` (поверх `a61343f0`, `aba7fb7f`).\n\n### Блокер 1 — висячее владение при переиспользовании из чужого слоя\nПри найденной по хэшу строке, физически лежащей ВНЕ цепочки текущего контекста (истинные братья, потомок для основы), строка МАТЕРИАЛИЗУЕТСЯ в текущий слой (`materializeShadowFromAnyLayer` в `layer-write.ts` — теневая копия метаданных, `id` тот же, байты не дублируются), затем пишется владение. Если строка уже в цепочке (предок) — материализация не нужна: `reuseAttachmentRow` делает её только при `getAttachment()===null`. После этого `getAttachment`/`listAttachments` видят вложение.\n**Найденный по ходу баг:** `SELECT rowid` на физической таблице с `pk INTEGER PRIMARY KEY` возвращает колонку под именем `pk`, а не `rowid` — исправлено на явный `SELECT pk`.\n\n### Блокер 2 — переиспользование надгробий\n`findReusableByHash` теперь `AND deleted = 0`: ищутся только ЖИВЫЕ строки во всех слоях. Надгробие не воскрешается — повторная загрузка тех же байт создаёт свежее вложение.\n\n### Закрытие замечаний тестов (раунд 2)\n1. Слои A и B сделаны ИСТИННО сестринскими (оба ребёнка основы); добавлены кейсы S1 предок-виден-из-потомка (без материализации), S2 брат→брат (материализация), S3 потомок→основа (материализация).\n2. Ассерты усилены: в целевом слое проверяются `reused`, общий id, `getAttachment()!=null` и `listAttachments(owner)==1` для каждого кейса; отдельно — отсутствие дублей физических файлов.\n3. Добавлен кейс «надгробие → повторная загрузка»: `reused=false`, свежий id, `getAttachment()!=null`, `listAttachments==1`.\n\n### Проверки\n- `npm run typecheck` — зелёный; `npm run lint` — чисто.\n- `npm -w @etn/server test` — **1752/1752**; `npm -w @etn/client test` — **3709/3709**; `npm -w @etn/shared test` — **61/61**.\n- Статус: реализовано; актуальность НЕ снята. Готово к третьей проверке дельты."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (третий раунд, дельта `5c07a9e8`) — вердикт: НЕ ПРИНЯТО\n\nПроверял: слой `6f29e84c`, ветка `releases/0.12.1`, дерево чистое, коммитов тестировщика нет. PNG не снимались/не читались (серверный дефект, доказательства текстовые).\n\n### Заявленные блокеры дельты — закрыты\n- **Блокер 1 (висячее владение при переиспользовании из чужого слоя).** Проба на реальном коде: S1 предок→потомок (`reused=true`, общий id, `getAttachment≠null`, `listAttachments=1`, теневой строки в слое A НЕТ) — материализация не нужна и не делается; S2 брат→брат (истинно сестринские A/B, оба ребёнка основы) — `reused=true`, общий id, вложение видно, `listAttachments=1`, теневая строка материализована в B; S3 потомок→основа — материализация в основу, видно. Байты не дублируются: 3 payload → 3 физических файла.\n- **Блокер 2 (переиспользование надгробия).** `findReusableByHash` содержит `AND deleted = 0`; проба «надгробие → повторная загрузка»: `reused=false`, свежий id, вложение видно, `listAttachments=1`.\n- **Побочный `SELECT rowid` → `SELECT pk`.** Подтвердил: на таблице с `pk INTEGER PRIMARY KEY` `SELECT rowid FROM attachments` возвращает колонку с именем `pk` (`{\"pk\":1}`); `SELECT pk` даёт то же значение. Правка корректна; ветвимые таблицы не `WITHOUT ROWID` (в миграциях нет), `insertShadowCopy` (`WHERE rowid = ?`) работает через алиас.\n- **Тесты:** слои A/B истинно сестринские, ассерты усилены (`reused`+общий id+`getAttachment≠null`+`listAttachments==1`+отсутствие дублей файлов). `node --test server/tests/attachment-service.test.ts` — 39/39.\n- **Прогоны:** typecheck зелёный, lint чистый; сервер **1752/1752**, клиент **3709/3709**, shared **61/61**. Коммит `5c07a9e8` содержит только дельту (3 файла). ADR `e3a35864` (блок «Видимость при кросс-слойном переиспользовании») реализации соответствует.\n\n### НОВЫЙ блокер (предсуществующий, не внесён `5c07a9e8`, но лежит в изменённом дельтой пути переиспользования/владения)\n**[блокер] Снятие владения в слое и повторное добавление той же пары (вложение, объект) падает сырой ошибкой SQLite `UNIQUE constraint failed: attachment_owners.attachment_id, owner_type, owner_id, layer_id` → 500.** Корень: `removeOwner` в слое ставит надгробие владения (`materializeTombstone`), не удаляя строку; `liveOwnership` его не видит (view скрывает `deleted=1`), а `insertOwnership` делает `INSERT` новой строки — старая физически на месте и упирается в UNIQUE (индекс не учитывает `deleted`). Метка `delete=1` не «снимается» повторным добавлением.\nВо…"
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Последний круг: UNIQUE-коллизия владения в слое закрыта (0.12.1)\n\n**Коммит:** `884e9cb9` — `[7678876a] fix(server): воскрешение надгробия владения при повторном добавлении и учёт deleted при материализации` (поверх `5c07a9e8`).\n\n### Блокер: повторное добавление пары (вложение, объект) после removeOwner в слое\n- `insertOwnership` (`attachment-service.ts`) перед `INSERT` ищет в ЦЕЛЕВОМ слое строку владения той же пары `(attachment_id, owner_type, owner_id)` БЕЗ фильтра `deleted` (маркер `layers:physical-read`); надгробие ВОСКРЕШАЕТСЯ `UPDATE deleted = 0, position = ?` вместо нового INSERT. Устранён `UNIQUE constraint failed: attachment_owners.attachment_id, owner_type, owner_id, layer_id` → 500 (требование 9ff3accb, сценарий «снять вложение и вернуть ту же картинку»).\n- `materializeShadowFromAnyLayer` (`layer-write.ts`) перестал делать слепой `return true` при наличии строки по id в слое: читает `deleted`; живая — no-op, надгробная — воскрешается (`UPDATE deleted = 0` + touchLayerActivity).\n\n### Тесты (S4/S5, добавлены)\n- **S5:** в слое A `removeOwner` → надгробие владения (проверено `deleted=1`) → `addOwners` той же пары без throw, владение живо (`deleted=0`), `listAttachments=1`.\n- **S4:** снять владение в слое → повторная загрузка тех же байт → `reused=true`, без throw, `getAttachment!=null`, `listAttachments=1`.\n- Основа не затронута (владение и строка живы в основе).\n\n### Проверки\n- `npm run typecheck` — зелёный; `npm run lint` — чисто.\n- `npm -w @etn/server test` — **1753/1753**; `npm -w @etn/client test` — **3709/3709**; `npm -w @etn/shared test` — **61/61**.\n- Статус: реализовано; актуальность НЕ снята."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Проверка (4-й раунд, дельта `884e9cb9`)** — независимый тестировщик, слой `6f29e84c`.\n\n**Вердикт: принято.**\n\n**Прогоны:** `npm run typecheck` — зелёный; `npm run lint` — чисто; `npm -w @etn/server test` — 1753 pass/0 fail; `npm -w @etn/shared test` — 61 pass/0 fail; `npm -w @etn/client test` — 1-й прогон 3708/1 (флейк), 5 последующих прогонов 3709/0. `node --test server/tests/attachment-service.test.ts` — 40 pass/0 fail. Guard `layers-s3` — 5 pass/0 fail.\n\n**Независимые пробы (свои, не из теста дельты):**\n- A) слой A, вложение в основе: `removeOwner` → надгробие владения (deleted=1) → `addOwners` той же пары — без throw, владение живо (deleted=0), `listAttachments`=1;\n- B) основа: повторное `addOwners` живого владельца → skipped (идемпотентность), добавление второго владельца → added;\n- C) надгробная СТРОКА вложения в слое при живой копии в основе: повторная загрузка тех же байт в слое → `reused=true`, тот же id, вложение видно, дублей строк нет (ветка `materializeShadowFromAnyLayer`, ранее возвращавшая слепой `true`).\n\n**Содержимое дельты:** только 3 файла (`layer-write.ts`, `attachment-service.ts`, `attachment-service.test.ts`); маркер `layers:physical-read` перенесён на строку `FROM` — guard зелёный; рабочее дерево чисто.\n\n**Замечания (не блокеры):**\n- тест S4/S5 дельты не покрывает ветку воскрешения строки вложения в `materializeShadowFromAnyLayer` (покрыта только моей пробой C) — второй код-путь дельты без dedicated-теста;\n- `npm -w @etn/client test` дал один однократный флейк (тест не идентифицирован; клиент дельтой не затронут, 5 повторов зелёные).\n\nПретензий-блокеров нет."
+   }
+  ],
+  "da59a4cf-92db-4e94-a57d-4218a0843906": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Переработать физический purge и слоевые надгробия владельца: удалять только его строки владений; вложение/файл — по исчезновению последнего живого владельца во всех слоях; сохранить чистку висячих `icon_attachment_id`. Удаление мысли/публикации не трогает чужие владения.\n\n**DoD.** Тесты: удаление мысли с общим вложением оставляет вложение и владение другого объекта; удаление последнего владельца удаляет вложение и файл.\n\n**Зависит от:** t1, t4; требования `a5456b79`, `6b524569`."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Независимая проверка (etn-verifier): вердикт ПРИНЯТО.** Коммит `7bef145e`, ветка `releases/0.12.1`, дерево чистое, коммитов тестировщика нет.\n\n**Состав.** `git show --stat` — 4 файла ровно по объёму: `owner-cleanup.ts` (+178/−58), `publication-service.ts` (+29), `owner-cleanup.test.ts` (+249), `layers-s4.test.ts` (+9). Расширение на publication-service обоснованно: постоянный комментарий карточки прямо говорит «удаление мысли/ПУБЛИКАЦИИ не трогает чужие владения», ADR `9f90b010` относит `publication` к типам владельцев, требование `a5456b79` — снятие только ЕГО владений.\n\n**DoD карточки (pass).**\n- «удаление мысли с общим вложением оставляет вложение и владение другого объекта» → pass: тест `deleteThought keeps a shared attachment…` зелёный; `hasOwnership(A)=false`, `getAttachment≠null`, файл на диске цел, `listAttachments(B)=[file]`.\n- «удаление последнего владельца удаляет вложение и файл» → pass: тест `…removes the attachment and its file once the last owner is gone`; строки `attachments`=0, `attachment_owners`=0, файла нет.\n\n**Объём (pass).** 1) `purgeOwnerAttachments` (`owner-cleanup.ts:281-323`) читает СЫРУЮ `attachment_owners` (все слои), снимает только владения владельца, `hasLiveOwnershipAnywhere` — последний живой владелец в РАБОЧИХ слоях. 2) Надгробия (`:176-193`): надгробим владение, строку вложения прячем при отсутствии живых владений в цепочке слоя, файл из слоя не трогается. 3) `removeOrphanAttachments` (`:330-364`) чистит и `icon_attachment_id`, и `cover_attachment_id` публикаций. 4) `purgePublication` переведён на `purgeOwnerAttachments('publication',[id])`. 5) 6 новых тестов + сид `attachment_owners` в `layers-s4.test.ts:141-148`.\n\n**Grep (pass).** `owner-cleanup.ts` и `publication-service.ts` больше НЕ читают `attachments.owner_type/owner_id` (остались только текстовые упоминания в комментариях); сбор вложений — по id/`attachment_owners`.\n\n**Прогоны (сам).** `npm run typecheck` — зелёный (4 workspace); `npm run lint` — exit 0, без вывода; `node --test --import tsx tests/owner-cleanup.test.ts tests/layers-s4.test.ts` — 17/17 pass, 0 fail; `npm -w @etn/server test` — 1759/1759 pass, 0 fail.\n\n**Независимая проба (сверх тестов).** In-process проба на `NetworkDb`: вложение принадлежит A в основе и B в СЛУЖЕБНОМ слое (`is_service=1`); после `deleteThought(A)` — строк `attachments`=0, файл удалён. Подтверждает «служебные слои не удерживают файл».\n\n**Замечание (не блокер, вне диффа).** `server/src/domain/layer-integrity.ts:170-198` по-прежнему…"
+   },
+   {
+    "kind": "chronological",
+    "title": "Реализовано: owner-cleanup на владениях attachment_owners",
+    "body_md": "**Коммит:** `7bef145e` — `[da59a4cf] fix(server): owner-cleanup снимает владения по attachment_owners, а не строки вложений`.\n\n**Что сделано** (`server/src/domain/owner-cleanup.ts`, `server/src/domain/publication-service.ts`):\n- Физический purge (мысли/связи, `purgeOwnerDependants`/`purgeThoughtDeletionDependants`) больше не работает по owner-колонкам `attachments`. Новый `purgeOwnerAttachments(ownerType, ownerIds)` собирает вложения по СЫРОЙ `attachment_owners` (все слои), снимает ТОЛЬКО строки владений удаляемого объекта и удаляет вложение+файл лишь при `!hasLiveOwnershipAnywhere` (последний живой владелец во всех РАБОЧИХ слоях; служебные не считаются — синхронно с задачей 4 и merge-service, ошибка `1d0620a8`).\n- Попутно удаляются оставшиеся строки владений осиротевшего вложения (в т.ч. в служебных слоях) — висячих владений нет.\n- Слоевые надгробия (`tombstoneOwnerDependants`): надгробим владение (`attachment_owners_v`), а строку вложения прячем, лишь когда в цепочке ЭТОГО слоя не осталось живых владений (`attachment_owners_v`); файл из слоя не трогается (§5.3).\n- Чистка висячих `icon_attachment_id` сохранена и РАСШИРЕНА на `cover_attachment_id` публикаций (`removeOrphanAttachments`).\n- `purgePublication` переведён на тот же `purgeOwnerAttachments('publication', [id])` — удаление публикации снимает только её владения-обложки, общее вложение и файл живут у других владельцев (требование `a5456b79`, ADR `9f90b010`).\n- owner-колонки `attachments` не читаются как источник истины (неточное зеркало, предупреждение в `attachment-service.ts:177-182`).\n\n**Чем проверено:**\n- `npm run typecheck` — зелёный (4 workspace); `npm run lint` — чисто.\n- `npm -w @etn/server test` — **1759/1759** pass, 0 fail (было 1753 + 6 новых).\n- 6 новых тестов в `server/tests/owner-cleanup.test.ts`: общее вложение переживает удаление одного владельца (владение другого, вложение и файл целы); удаление последнего владельца удаляет вложение и файл (и строки владений); удаление в основе сохраняет файл, если живой владелец есть в рабочем слое; удаление в слое прячет вложение только в слое, основа и файл целы; висячие `icon_attachment_id`/`cover_attachment_id` почищены при удалении владельца; `purgePublication` сохраняет общее вложение-обложку чужого владельца.\n- Обновлён `server/tests/layers-s4.test.ts`: сид вложения дополнен строкой `attachment_owners` (источник истины о владении с 0.12.1).\n\n**Осталось/риски:** переходный период — owner-колонки `attachments` ещё пишет старый код (финальная м…"
+   }
+  ],
+  "08869cfc-a260-4e89-a9db-4c020a79f12e": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** thought-service (и публикация-обложка): `icon_attachment_id`/`cover_attachment_id` допустимы, если у вложения есть живое владение (объект, данный объект) — чужое вложение сначала делает текущий объект владельцем; убрать ветку «копировать при выборе чужого» из обхода ошибки `c37981b7`. Прямая подстановка чужого `attachment_id` без владельца по-прежнему отвергается.\n\n**DoD.** Клик по чужой недавней иконке‑вложении применяется без ошибки и добавляет владельца; тесты валидации зелёные.\n\n**Зависит от:** t4; ADR `9f90b010`; требование `9ff3accb`."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Сделано.** Код валидации иконки (`thought-service.ts:1031-1050`) и обложки (`publication-service.ts:381-396`) переведён на `hasOwnership` (живое владение, а не owner-колонки) в составе задачи `7678876a` (коммит `aba7fb7f`) — фактического кода по `08869cfc` не осталось, закрываю задачу тестами.\n\n**Добавлены недостающие тесты.** `server/tests/thought-service.test.ts`: чужое вложение-картинка принимается иконкой мысли после `addOwners` (клиентский сценарий «выбрать недавнюю иконку из другого объекта»); без владения — `VALIDATION_ERROR` (было ранее). `server/tests/publication-service.test.ts`: чужая обложка принимается после `addOwners` публикации.\n\n**Проверено.** `npm run typecheck` — зелёный; `npm run lint` — чисто; `npm -w @etn/server test` — 1762 теста, 328 сьютов, 0 fail, 0 skipped.\n\n**Коммит.** `226748e9` (не пушен)."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Проверка (независимый тестировщик, слой `6f29e84c`).** Коммит `226748e9`, ветка `releases/0.12.1`, дерево чистое, коммитов тестировщика нет. PNG не снимались/не читались (серверная работа, доказательства текстовые).\n\n**Вердикт: принято.**\n\n**DoD по пунктам:**\n- Чужое вложение-иконка без владения → `VALIDATION_ERROR`: **pass** (негативный тест `server/tests/thought-service.test.ts:342-362`; независимая проба A1).\n- После `addOwners` «чужая» картинка принимается иконкой: **pass** (новый тест `226748e9`, `thought-service.test.ts:364-388`; независимая проба A2 — `icon_attachment_id` проставлен).\n- Обложка публикации: без владения → `VALIDATION_ERROR`, после `addOwners` принимается: **pass** (негатив `server/tests/publication-service.test.ts:179-184`, новый тест `:190-209`; пробы A3/A4).\n- Валидации действительно на `hasOwnership` (живое владение, не owner-колонки): **pass** (`server/src/domain/thought-service.ts:1042`, `server/src/domain/publication-service.ts:389`; `hasOwnership` — `server/src/domain/attachment-service.ts:230`, читает `attachment_owners_v`).\n- Тесты валидации зелёные: **pass** (адресно 2/2; `npm -w @etn/server test` — 1762 pass / 0 fail, 328 сьютов).\n\n**Претензий-блокеров нет.**\n**Замечание (не блокер).** Постоянная карточка: «чужое вложение сначала делает текущий объект владельцем»; DoD: «клик … добавляет владельца». В домене `updateThought`/`updatePublication` владелец НЕ добавляется — только валидируется; добавление владельца выполняет вызывающая сторона (REST/client, задача `478f8c1f`), что вне границ этой проверки. Принятие после добавленного владения проверено.\n**Проверено:** `git show 226748e9` (только 2 тест-файла, +54/−2); адресные тесты; `npm run typecheck`, `npm run lint`, `npm -w @etn/server test` — зелёные; собственная проба на in-memory NetworkDb (8/8).\n**Не проверено:** клиентский клик и REST-путь авто-добавления владельца (вне границ); слой/ветка — по эху `meta.layer`.\n**Скриншотов-доказательств ошибок: 0** (ошибок GUI нет)."
+   }
+  ],
+  "478f8c1f-d29d-47c6-8a31-14b054968880": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** REST: `POST/DELETE /attachments/{id}/owners` (защиты 409), `PATCH /attachments/{id}` — только title/description/icon, `POST /attachments/file` — `meta.reused`, `POST /attachments/{id}/copy` — владельцы, `GET /attachments` — уникальные + число владельцев/exclude по владениям. MCP (`etn.ops` attachments.*): те же смыслы. Контракты входа — `contracts.ts`.\n\n**DoD.** REST-пробы на полигоне: добавить/снять владельца (409 запрет/предупреждение), дедуп, переименование; серверные тесты зелёные.\n\n**Зависит от:** t4, t6; операции `6ba247cc`, `4924d61e`, `28ecc295`, `45903e1d`, `47215aab`, `f3203ce4`.\n\n**Уточнения (аудит).** `owner_type ∈ thought|link|publication`. `DELETE /attachments/{id}` УБРАТЬ из публичного REST-фасада (полное удаление — только owner-cleanup). MCP: новое действие `attachments.removeOwner` (confirm), `attachments.usage` — по id вложения; обновить ops-catalog. Клиентское меню — в отдельной задаче миграции меню."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Сделано.** Коммит `662d3278` (ветка `releases/0.12.1`, не пушен).\n\n**REST** (`server/src/routes/attachments.ts`, `contracts.ts`):\n- `POST /networks/{nid}/attachments/{id}/owners` — добавление владельцев существующему вложению (идемпотентно, `added`/`skipped`); вызывает доменный `addOwners`.\n- `DELETE /networks/{nid}/attachments/{id}/owners` — снятие ОДНОГО владения (body `{ owner_type, owner_id, confirm? }`); 409 `ATTACHMENT_OWNER_IS_ICON` при своей иконке/обложке; owner-cleanup удаляет вложение после последнего живого владельца (`attachment_deleted`).\n- `PATCH /attachments/{id}` — только `title`/`description`/`icon` (смена владельца и местоположения убрана).\n- `DELETE /attachments/{id}` УБРАН из публичного фасада (404).\n- `POST /attachments/{id}/copy` — уже `added`/`skipped` (подтверждено, 7678876a).\n- `GET /attachments/{id}/usage` — владельцы + `usages` (icon/cover; `text` — точка расширения 87c455db).\n- DTO `Attachment` (сущность 109be255) получил `owners`/`owner_count`/`owned_by_current`; заполняется в `get`/`list`/`search` (`listAttachmentUsage`, батч-агрегаты).\n\n**Транспорт.** `server/src/http/errors.ts` научен уважать `details.status` (400–599) — защита снятия владения иначе отдавалась бы 422 вместо требуемого 409 (требование 6b524569). Единственный носитель `details.status` — защита иконки/обложки.\n\n**MCP** (`ops.ts`, `ops-catalog.ts`):\n- новое действие `attachments.removeOwner` (destructive → верхнеуровневый `confirm: true`) — доменный `removeOwner`;\n- `attachments.usage` — владельцы + usages;\n- `attachments.update` — только метаданные (`title`/`description`/`icon`);\n- `attachments.add` — создаёт/переиспользует по хэшу (дедуп) и добавляет владельца (описания актуализированы);\n- `attachments.delete` СНЯТ с публичного фасада (нет записи в каталоге, нет обработчика, контракт удалён).\n\n**window.etn.** `client/src/main/ipc/contract.ts` (+preload, handlers, rest-client): методы `attachments.addOwners`/`attachments.removeOwner`; оба — в `SELF_MUTATING_IPC_METHODS`. Старый `attachments.remove` оставлен (клиентские пункты меню мигрируют задачами 04555029/d4c528d2/2f38cd51).\n\n**Проверено.** `npm run typecheck` — зелёный; `npm run lint` — чисто; `npm -w @etn/server test` — **1767 pass / 0 fail** (331 сьют; новый файл `routes-attachment-owners.test.ts` — 5 тестов: owners+идемпотентность+409+358/404+owner-cleanup, PATCH-переименование, usage icon/cover, `attachments.delete` отсутствует в каталоге, MCP removeOwner confirm+usage); `npm -w @etn/client test` — *…"
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Независимая проверка (etn-verifier). Вердикт: ПРИНЯТО.** Слой `6f29e84c` включён; коммит `662d3278`, ветка `releases/0.12.1`.\n\n**DoD.**\n- REST `POST/DELETE /attachments/{id}/owners` — pass (полигон: add идемпотентен, `skipped`; 404 нет вложения; 422 несуществующий владелец; снятие → `{removed, attachment_deleted}`; повтор → 404).\n- 409 `ATTACHMENT_OWNER_IS_ICON` с `details.status=409` — pass (полигон: своя иконка → 409, `details.code=ATTACHMENT_OWNER_IS_ICON`).\n- `PATCH` только title/description/icon — pass (полигон: переименование; `owner_id` в теле игнорируется, владелец не меняется).\n- `DELETE /attachments/{id}` убран — pass (полигон и тест: 404).\n- `GET /attachments/{id}/usage` (владельцы + usages icon/cover) — pass (полигон: 3 владельца; icon-использование мысли попало в `usages`).\n- `POST /attachments/file` — `meta.reused` (дедуп по хэшу) — pass (полигон: повтор тех же байтов → `reused=true`, та же строка вложения).\n- `GET /attachments` — уникальные + `owner_count`/`owned_by_current`/exclude по владениям — pass (полигон: search без exclude → `owner_count=2`, поля `owned_by_current` нет; с exclude → `owned_by_current=false`; список объекта → `owned_by_current=true`).\n- MCP `attachments.removeOwner` (destructive/confirm), `attachments.usage`, отсутствие `attachments.delete` в каталоге — pass.\n- Серверные тесты зелёные — pass (`1767/0`).\n\n**Претензии.** [замечание] агрегаты DTO `owners`/`owner_count`/`owned_by_current` (сущность `109be255`) не покрыты ни одним тестом (grep по server/tests, client/tests, shared/tests — 0 совпадений); поведение подтверждено только ручной полигонной пробой → регрессия не сторожится; править: `server/tests/routes-attachment-owners.test.ts`. [на усмотрение пользователя] именованный код `ATTACHMENT_OWNER_IS_ICON` лежит в `error.details.code`, канонический `error.code` = `VALIDATION_ERROR` (требование `6b524569` называет ошибку «409 ATTACHMENT_OWNER_IS_ICON»); клиенту нужен дискриминатор в `details.code` — решить, нужен ли первоклассный код. [на усмотрение пользователя] текстовое предупреждение `ATTACHMENT_OWNER_IN_TEXT` не реализовано — обоснованно отнесено к `87c455db` (текстовых использований ещё нет, клиент их не создаёт); `owned_by_current` отсутствует без контекста владельца — соответствует `109be255` («определён только там, где есть контекст владельца»).\n\n**Проверено.** `git show 662d3278` — состав в рамках задачи, лишнего нет. `npm run typecheck` зелёный; `npm run lint` чист; `npm -w @etn/server test` — 1767 pass/0 f…"
+   }
+  ],
+  "f77382ba-46e9-4c58-90a6-eb5210908d84": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Ввести события `attachment.owner.added/removed`, доставлять в открытый редактор; клиентский гейт считает показанную сущность по владениям. Открытая вкладка «Вложения» и счётчики обновляются без переоткрытия.\n\n**DoD.** Второй клиент добавляет/снимает владельца — у первого обновляются список и счётчик; тесты клиента зелёные.\n\n**Зависит от:** t7."
+   },
+   {
+    "kind": "chronological",
+    "title": "Реализовано: realtime-события владений и гейт клиента",
+    "body_md": "**Сделано.** Коммит `350719ce` (ветка releases/0.12.1, не пушен). НЕзависимая проверка не пройдена — актуальность не снята.\n- **shared** (`shared/src/types/realtime.ts`): события `attachment.owner.added`/`attachment.owner.removed` с нагрузкой `{attachment_id, owner_type, owner_id}` (тип `AttachmentOwnerChangedData`); внесены в каталог, RealtimeEventMap, audience `network`; метки статус-строки (`client/src/renderer/lib/pure.ts`).\n- **server REST** (`server/src/routes/attachments.ts`): `POST …/owners` и `POST …/copy` — по `attachment.owner.added` на каждое новое владение; `DELETE …/owners` — `attachment.owner.removed`, при уходе последнего владельца ещё `attachment.deleted`; `POST …/attachments/file` при дедуп-переиспользовании эмитит `attachment.owner.added` вместо ложного `attachment.created`.\n- **server MCP** (`server/src/mcp/tools/ops.ts`): то же для `attachments.add`/`copy`/`removeOwner`. `createAttachmentFileResult`/`createAttachmentFromInputResult` теперь отдают `ownership_added` — повтор тому же владельцу событий не даёт.\n- **server layer-visibility**: видимость owner-событий по строке `attachment_owners` (для removed — `visibleWhenMissing`).\n- **client** (`lib/live/event-router.ts`, `realtime-effects.ts`): гейт считает владельцев снимка/события (требование 0502e045); `attachment.created` гасит списки/индикаторы ВСЕХ владельцев из `owners[]`; owner-события адресуют список и индикаторы владельца; владелец в окрестности освежает её.\n\n**Проверки.** `npm run typecheck` и `npm run lint` зелёные; server **1770/0**, client **3712/0**, shared **61/0**. События владений и DTO-агрегаты подтверждены сквозными in-process REST/MCP тестами (`server/tests/routes-attachment-owners.test.ts`: add/copy/дедуп/removed+deleted, `owners`/`owner_count`/`owned_by_current` в get/list/search); клиентский роутер и гейт окрестности — `client/tests/realtime-attachment-owners.test.ts`. Полигон `etn-dev` события не наблюдает (старая сборка) — способ подтверждения: in-process тесты.\n\n**Формат событий.** `attachment.owner.added` / `attachment.owner.removed`: `data = { attachment_id, owner_type ('thought'|'link'|'publication'), owner_id }`.\n\n**Осталось.** Независимая проверка (etn-verifier). UI вкладки «Вложения» (компонент 7312ac1c) на муль-владение ещё не переведён — отдельная работа тех.проекта."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Независимая проверка (etn-verifier), 2026-10-10. Вердикт: не принято.** Коммит `350719ce`, ветка `releases/0.12.1`. Скриншотов-доказательств ошибок — 0 (GUI-ошибок не искали; живой двухклиентный прогон не делался — визуальная приёмка за пользователем).\n\n**DoD карточки** («второй клиент добавляет/снимает владельца — у первого обновляются список и счётчик; тесты клиента зелёные») — **pass**: роутер гасит `attachments(ownerType,ownerId)`+`indicators(ownerId)` на `attachment.owner.added/removed` и `owners[]` на `attachment.created`; гейт `realtime-effects` освежает окрестность по владельцу; client 3712/0.\n\n**[блокер] Дедуп по хэшу через `kind=file`+`file_path` эмитит `attachment.created` вместо `attachment.owner.added` (REST и MCP).** Исправлен только путь загрузки `data_base64`. Ветка `createAttachmentFromInputResult` без `data_base64` (`server/src/domain/attachment-service.ts:1094-1098`) жёстко отдаёт `reused:false, ownership_added:true`, хотя `createAttachment`→`createAttachmentResult` внутри дедуплицирует (`attachment-service.ts:779-788`), а флаг теряется (`attachment-service.ts:735`). Как следствие: REST-маршрут метаданных `POST …/thoughts/:id/attachments` эмитит `attachment.created` безусловно (`server/src/routes/attachments.ts:130-144`), и MCP `etn.attachments.add` с `file_path` — тоже (`server/src/mcp/tools/ops.ts:297,346`). Воспроизведение (probe, `npx tsx`): REST — два `POST /thoughts/{A,B}/attachments` с одним `{kind:'file',file_path:<читаемый файл>}` дают одинаковый `id` (строка переиспользована, `owners[]` вырос до 2), но второе событие — `['attachment.created']`; MCP — два `etn.attachments.add {kind:'file',file_path}` к разным владельцам дают тот же `id`, второе событие — `['attachment.created']`. Противоречит заявленному объёму задачи («дедуп-переиспользование — `attachment.owner.added` вместо created») и тексту каталога (`ops-catalog.ts:258`). Функционально DoD не страдает: снимок `attachment.created` несёт `owners[]`, и клиентский обработчик гасит списки всех владельцев, — но контракт события неверен. Где править: `attachment-service.ts:735` (пробросить `reused` из `createAttachmentResult`), `routes/attachments.ts:130-144`, `ops.ts:297`.\n\n**[замечание]** Нет теста на видимость owner-событий по слоям: `layer-visibility.ts:104-124` добавлен, но `isEventVisibleInLayer` для `attachment.owner.*` (особенно `visibleWhenMissing` при `removed`) автоматически не покрыт — проверено чтением кода (база физически удаляет строку, `attachment-service.ts:511…"
+   },
+   {
+    "kind": "chronological",
+    "title": "Исправлен блокер ревью: дедуп метаданного file_path",
+    "body_md": "**Исправление блокера независимой проверки.** Коммит `10a44a6b` (ветка releases/0.12.1, не пушен).\n\n**Корень.** `kind=file` + метаданный `file_path` (REST `POST /thoughts/:id/attachments`, MCP `attachments.add`) дедуплицировался по `content_hash`, но фасад эмитил ложное `attachment.created`: флаг `reused` терялся — `createAttachmentResult` отдавал только `{attachment, reused}`, без признака нового владения, а ветка `createAttachmentFromInputResult` без `data_base64` жёстко возвращала `reused:false, ownership_added:true`, и REST-маршрут звал `createAttachment` (только `.attachment`).\n\n**Правка.** `createAttachmentResult` теперь отдаёт `{attachment, reused, ownership_added}` (через `reuseAttachmentRow`); `createAttachmentFromInputResult` и REST-маршрут пробрасывают флаги: при `reused && ownership_added` — `attachment.owner.added`, повтор тому же владельцу — без событий, иначе `attachment.created`. Путь `data_base64` не затронут.\n\n**Новые тесты.** REST и MCP — дедуп по метаданному `file_path` (та же строка, второе событие `attachment.owner.added`, повтор без событий); отдельный набор `server/tests/realtime-owner-events-visibility.test.ts` — слоевая видимость owner-событий через `isEventVisibleInLayer`: владение слоя видно слою и не видно основе; `attachment.owner.removed` с физически удалённой строкой доставляется потомку (`visibleWhenMissing`); `attachment.owner.added` без строки — нет; надгробие слоя перекрывает событие основы.\n\n**Проверки.** typecheck/lint зелёные; server **1775/0**, client **3712/0**, shared **61/0**. Готово к повторной проверке дельты."
+   },
+   {
+    "kind": "chronological",
+    "title": "Независимая проверка (2-й раунд, дельта): принято",
+    "body_md": "**Вердикт: принято.** Второй независимый тестировщик (не участвовал в разработке и 1-м раунде), 2026-10-10. Слой `6f29e84c`. Проверялась только дельта коммита `10a44a6b` (HEAD); коммит `d6746eb0` (docs) в проверку не включён.\n\n**Дельта.** 4 файла, все по фиксу: `server/src/domain/attachment-service.ts`, `server/src/routes/attachments.ts`, `server/tests/routes-attachment-owners.test.ts`, новый `server/tests/realtime-owner-events-visibility.test.ts`. Посторонних хунков нет, рабочее дерево чистое.\n\n**Блокер 1-го раунда снят.** `createAttachmentResult` теперь отдаёт `{attachment, reused, ownership_added}` (dedup → `reuseAttachmentRow().ownership_added`; новая строка → `true`); `createAttachmentFileResult` больше не перетирает флаг; метаданная ветка `createAttachmentFromInputResult` делегирует в `createAttachmentResult` и пробрасывает флаги; REST `POST /thoughts/:id/attachments` при `reused && ownership_added` издаёт `attachment.owner.added`, повтор тому же владельцу — без событий, иначе `attachment.created`; MCP `attachments.add` (ops.ts:297) — то же через наследование.\n\n**Независимая проба (npx tsx, удалена).** REST: два `POST` с одним `{kind:'file', file_path}` дают один id `8953f65e…`, события `[created]` → `[attachment.owner.added]`, повтор тому же владельцу — `[]`. MCP: один id `9ddee7a5…`, `[created]` → `[attachment.owner.added]`, повтор — `[]`. Подтверждено на живом in-process контексте, не только тестами исполнителя.\n\n**Новые тесты (адресно зелёные).** `realtime-owner-events-visibility.test.ts` 3/3 (владение слоя видно слою/не видно основе; `owner.removed` без строки → доставка `visibleWhenMissing`; `owner.added` без строки → нет; надгробие слоя перекрывает событие основы) — прогон на реальном `layer_chain`, реализация `layer-visibility.ts:104-122` реально ветвит owner-события (не тавтология). `routes-attachment-owners.test.ts` — REST и MCP кейсы «дедуп метаданного file_path — owner.added, не created» — pass (10/10 в файле).\n\n**Прогоны.** `npm run typecheck` (все workspace) зелёный; `npm run lint` чистый; server **1775/0**, client **3712/0**, shared **61/0**.\n\n**Остаточные замечания (не блокеры).** (1) В журнале активности (`activity`) dedup-переиспользование по-прежнему пишется `action:'created'` (routes/attachments.ts:159, ops.ts:347) — та же картина в ранее принятом пути `data_base64`; `action` — свободная строка, но семантически строка не создана (на усмотрение пользователя). (2) Комментарий в `createAttachmentFromInputResult` (attachment-service.t…"
+   }
+  ],
+  "04555029-31cf-4258-a525-77832fcc4f27": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Вкладка «Вложения» (editor/attachments.ts): строки показывают заголовок (переименование прямо в списке), облачка владельцев, кнопку снятия владения; диалоги защиты (запрет своей иконки/обложки, предупреждение о текстах). Счётчик — по владениям.\n\n**DoD.** Ручные/GUI-проверки на свежем клиенте; тесты клиента зелёные.\n\n**Зависит от:** t7; элемент `d3c419a9`; требования `6b524569`, `fabc1231`, `0502e045`."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Сделано.** Коммит `85d5b212` (ветка `releases/0.12.1`, не пушен). Слой `6f29e84c`.\n\nВкладка «Вложения» (`client/src/renderer/editor/attachments.ts`) переведена на модель владений (элемент `d3c419a9`):\n- строка списка: заголовок (переименование ПРЯМО в строке), бейдж числа владельцев, кнопки переименования и снятия владения;\n- переименование — `PATCH /attachments/{id} {title}` (общий заголовок, требование `fabc1231`): кнопка-иконка в строке и пункт меню «Переименовать…»; Enter — сохранить, Esc/blur — отменить; клавиатура через общеклиентский диспетчер (`defineKeyContext`/`pushKeyContext`, ADR `b420b08c`) — локальный `keydown` запрещён сторожем `guard-keymap-single-point`;\n- бейдж «N владельцев» для `owner_count > 1` (требование `0502e045`); тихий счётчик `lib/ui/badge`;\n- снятие владения — кнопка в строке и «Удалить…» меню: `window.etn.attachments.removeOwner` (`DELETE /attachments/{id}/owners`) с парой (owner_type, owner_id); 409 `ATTACHMENT_OWNER_IS_ICON` (код в `err.details.code`) — внятное сообщение «сначала смените/очистите иконку» (требование `6b524569`);\n- вызов снятого `DELETE /attachments/{id}` из вкладки убран (обновлён regex-сторож `renderer-attachments-panes.test.ts`).\n\n**Realtime (п.5).** Совместимость подтверждена: списки владельцев гасит роутер слоя (`attachment.owner.added/removed`, задача `f77382ba`); поведение покрыто новым тестом.\n\n**Проверка.** `npm run typecheck` зелёный; `npm run lint` чистый; `npm -w @etn/client test` — **3718/3718**; `npm -w @etn/server test` — **1775/1775**. Новый набор `client/tests/renderer-attachments-owners.test.ts` (6 подтестов): бейдж владельцев, переименование (Enter/Esc), снятие владения через removeOwner (не удаление), 409 → сообщение, realtime-переинвалидация списка. GUI-проверка — на свежем клиенте (по DoD).\n\n**Границы.** «Перенести в мысль…»/«Скопировать в мысли…» меню не трогались — их перевод на операции владения задача `2f38cd51`.\n\n**Попутный дефект.** `publication-card.ts` (снятие владельца в диалоге обложки) зовёт снятый `DELETE /attachments/{id}` → ошибка `8f9768c9` (черновик, версия 0.12.1)."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Проверка субагентом-тестировщиком — принято\n\nКоммит `85d5b212`, ветка `releases/0.12.1`, слой 0.12.1.\n\n**Состав (git show --stat):** `editor/attachments.ts`, `lib/locales/ru.ts`, `styles/editor.css`, `tests/renderer-attachments-owners.test.ts` (новый), `tests/renderer-attachments-panes.test.ts` — лишнего нет.\n\n**Прогоны (все зелёные):** `npm run typecheck`; `npm run lint`; `npm -w @etn/client test` — 3718/3718; `npm -w @etn/server test` — 1775/1775; адресно новый набор — 6/6, сторож `guard-keymap-single-point` — зелёный.\n\n**По существу подтверждено:**\n- снятие = `removeOwner(networkId, id, {owner_type, owner_id})` (attachments.ts:905), не `DELETE /attachments/{id}`; прямых `etn.attachments.remove(` в файле нет (такой вызов остался только в `publication-card.ts:1331` — ошибка 8f9768c9, вне границ);\n- 409 `ATTACHMENT_OWNER_IS_ICON` ловится по `err.details.code` (`isIconOwnerBlock`) и показывает словарную строку `attachments.remove.iconBlocked` «сначала смените или очистите иконку»; форма провода подтверждена серверным REST-тестом (`routes-attachment-owners.test.ts:143-149`: 409 + `body.error.details.code === 'ATTACHMENT_OWNER_IS_ICON'`) и цепочкой `http/errors.ts` (details.status) → `rest-client.ts:484` → `ipc/contract.ts:210` → `renderer/lib/etn.ts:42` (details сохраняются);\n- переименование — `PATCH /attachments/{id} {title}` (сервер применяет только title/description/icon, routes/attachments.ts:398-415), Enter/Esc через диспетчер `defineKeyContext`/`pushKeyContext` — локального `keydown` нет, сторож `guard-keymap-single-point` зелёный;\n- бейдж «N владельцев» при `owner_count > 1` (русская форма по mod10/mod100); серверный list DTO отдаёт `owners`/`owner_count` (`withOwnershipAggregates`, attachment-service.ts:656-663);\n- realtime совместим: имена ключей совпадают с роутером владений (`event-router.ts:181-185` гасит `attachments(ownerType, ownerId)` и `indicators(ownerId)`; панель на них подписана, attachments.ts:358-372).\n\n**Претензии:** блокеров нет.\n- [замечание] Контекстное меню (`showAttachmentMenu`, attachments.ts:943-951) тестом не покрыто — новый набор проверяет только кнопки строки, «снятие/переименование из меню» не подтверждено автотестом.\n- [на усмотрение пользователя] «Перенести в мысль…»/«Скопировать в мысли…» остались на старой модели (PATCH owner и POST /copy) — вне границ задачи (2f38cd51), но в текущей сборке эти пункты меню устарели.\n- [на усмотрение пользователя] `startRename` объявляет новый контекст `attachment-rename-N` без `undef…"
+   }
+  ],
+  "d4c528d2-a137-4bb1-bdf2-e9d9595647dd": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Диалог иконки и диалог обложки публикации: выбор чужого вложения больше не копирует и не падает — добавляет владельца (`POST /owners`) и применяет; в списке «Вложения» — переименование вложения (общий заголовок). Отработать ошибку `c37981b7`.\n\n**DoD.** Сценарий: иконка мысли B из картинки мысли A — без ошибки, у вложения 2 владельца; тесты/ручная проверка.\n\n**Зависит от:** t7; элементы `91367509`, `c3e44cab`; требование `fabc1231`."
+   },
+   {
+    "kind": "chronological",
+    "title": "Клиент: чужое вложение — владельцем; переименование в списке",
+    "body_md": "**Сделано.** Коммит `ae8c6f8d` (ветка `releases/0.12.1`, не пушен); тем же коммитом закрыта ошибка `8f9768c9`.\n\n- **Диалог иконки** (`editor/icon-dialog.ts`, `editor/editor.ts`): выбор чужого вложения-картинки добавляет текущую мысль владельцем (`POST /attachments/{id}/owners`, идемпотентно) и применяет его (`attachmentId`) — исправляет ошибку `c37981b7`; путь переиспользования своего текущего вложения владельца не добавляет (846c426a); для ТИПОВ мыслей владельца нет — прежний путь `data:`-превью. Владелец передаётся из `changeThoughtIcon`.\n- **Диалог обложки** (`publication-card.ts`): чужое вложение делает публикацию владельцем (`POST …/owners`), а не копируется (`POST /attachments`); своё — напрямую. Владение определяется по агрегату `owners` (запас — поля `owner_type`/`owner_id`).\n- **Список выбора вложения** (`editor/attachment-picker.ts`): переименование самогó вложения прямо в строке — `PATCH /attachments/{id} {title}` (кнопка-карандаш, Enter/blur — запись, Esc — отмена); заголовок общий для владельцев, участвует в поиске (fabc1231).\n- **Ошибка `8f9768c9`**: снятие владельца в диалоге обложки — `removeOwner` (`DELETE …/owners`) с защитой 409 вместо снятого `DELETE /attachments/{id}`; цель — представитель строки носителя (одно вложение на файл, владельцы агрегатом).\n\n**Проверки.** `typecheck` и `lint` зелёные; клиент **3723/3723**, сервер **1775/1775**. Новый набор `client/tests/attachment-owner-actions.test.ts` (5 тестов): переименование из списка; чужое вложение в диалоге иконки (addOwners + onPick attachmentId); своё текущее (без addOwners); чужое вложение обложкой (addOwners); снятие обложки через removeOwner (defect-тест: `remove` не вызывается).\n\n**Realtime.** Списки диалогов по-прежнему гаснут роутером слоя (f77382ba); операции владельцев/переименование не заводят нового канала — диалог перечитывает список сам. Совместимо.\n\n**Осталось.** Независимая проверка (`etn-verifier`)."
+   },
+   {
+    "kind": "chronological",
+    "title": "Независимая проверка (etn-verifier): принято",
+    "body_md": "**Вердикт: принято.** Коммит `ae8c6f8d` (ветка `releases/0.12.1`, HEAD; рабочее дерево чистое). Блокеров нет.\n\n**Прогоны.** `npm run typecheck` — зелёный (server/client/shared/markdown); `npm run lint` — чисто; `npm -w @etn/client test` — **3723/3723, fail 0**; `npm -w @etn/server test` — **1775/1775, fail 0**; адресно `npx tsx --test tests/attachment-owner-actions.test.ts` — 5/5.\n\n**DoD по коду.** Диалог иконки: `submit` перед записью зовёт `ensureAttachmentOwner` (`POST /attachments/{id}/owners`, идемпотентно) при заданном `owner`; `owner` передан только из `changeThoughtIcon` (`editor.ts:2487`); путь переиспользования своего вложения — `ensureOwner:false` (icon-dialog.ts:240-244); типы (`type-manager.ts:1005`) владельца не передают → прежний `data:`-путь. Строка «последних иконок» идёт через тот же `submit` (`buildRecentRow`, icon-dialog.ts:261/447) → владелец добавляется — ошибка c37981b7 закрыта. Обложка: чужое вложение — `addOwners` (`publication-card.ts:1404`), копирование `attachments.add` удалено; снятие — `removeOwner` (`DELETE …/owners`, :1340), `DELETE /attachments/{id}` не вызывается; 409 `ATTACHMENT_OWNER_IS_ICON` → `notice(t('publication.cover.removeOwnerBlocked'))` (:1347) — ошибка 8f9768c9 закрыта. Переименование: `PATCH /attachments/{id} {title}` с перечитыванием (`attachment-picker.ts:264-265`), inline-поле через диспетчер сочетаний. `IconPickOutcome` не сломан (boolean + расширенная форма сохранены). Дифф — 8 файлов, лишнего нет.\n\n**Тесты.** `attachment-owner-actions.test.ts` (5): переименование PATCH+refresh; чужое вложение иконки (addOwners c парой (att, мысль B) + onPick с attachmentId); своё текущее (addOwners не вызван); обложка чужое (addOwners; `add` запрещён и не вызван); снятие обложки (removeOwner вызван, `remove` — нет). Ассерты осмысленны.\n\n**Серверное подтверждение закрытия c37981b7.** `thought-service.ts:1042` проверяет живое владение `hasOwnership`; серверный тест `thought-service.test.ts:364` «accepts a foreign image attachment once this thought becomes its owner» воспроизводит клиентский сценарий (addOwners → icon_attachment_id) и проходит. Модель строк: `searchAttachments` отдаёт одно вложение на запись с агрегатом `owners` (attachment-service.ts:1336) — клиентская группировка совпадает.\n\n**Realtime.** Новых каналов нет; `attachment.owner.added/removed` уже гасят `queryKeys.attachments(owner_type, owner_id)` (event-router.ts:371-377) — совместимо.\n\n**Замечания (не блокеры).** (1) В карточке c37981b7 «Ожидаемое поведени…"
+   }
+  ],
+  "87c455db-b693-44d3-9c93-01547ddf6b2f": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Адаптер `resource-picker` для вставки в позицию курсора: эмодзи — глифом, картинка-вложение — `![подпись](etnimg://attachment/<id>)`; объект-владелец комментария становится владельцем вложения. Триггеры: Ctrl+V, Drag&Drop, команда контекстного меню «Вставить картинку».\n\n**DoD.** Вставка рендерится, добавляет владельца, переживает переоткрытие и realtime; тесты клиента.\n\n**Зависит от:** t7, t10; ADR `d85e17b6`; элемент `d87b8f32`; требование `5943e3e8`."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Реализация (коммит `d1e3bca3`, ветка `releases/0.12.1`, слой `6f29e84c`)\n\n**Что сделано.** Вставка картинки в текст комментария по трём триггерам; вставка уходит ВЛАДЕЛЬЦЕМ вложения.\n\n- **Ctrl+V** (файл-картинка в буфере): формат ссылки изменён с `etnimg://<путь>` на устойчивую форму по id — `![подпись](etnimg://attachment/<id>)` (требование `5943e3e8`). Новый файл загружается вложением на владельца (`uploadFile`), не-картинки по-прежнему ссылкой по пути.\n- **Drag&Drop** файла-картинки в поле: обработчики `dragover`/`drop` на DOM редактора; тот же путь, что и вставка из буфера (`insertClipboardFiles`). Прочие переносимые данные не перехватываются.\n- **Команда контекстного меню «Вставить картинку…»** (в правке, у поля с владельцем): новый адаптер `client/src/renderer/editor/insert-image-dialog.ts` на каркасе `createResourcePicker` (ADR `d85e17b6`, ADR `a2cc7e9e`). Вкладки: «Эмодзи» (глиф), «Иконки мыслей» (только `icon_kind='emoji'`), «Вложения» (общий `attachment-picker`), «URL». Библиотечные значки не вставляются — вкладка «Библиотека» СКРЫТА (ADR `348c9f68`). Выбор существующего вложения добавляет владельца (`addOwners`, идемпотентно); новый файл — `uploadFile` на владельца; эмодзи — глифом; URL — `![…](<url>)`.\n- Адаптер только ВОЗВРАЩАЕТ выбор (`InsertResourceResult`); загрузку/дедуп/владельца делает вызывающая сторона (ADR `d85e17b6`).\n\n**Файлы.** `editor/markdown-field.ts` (+`attachmentImageRef`, `imageFilesFrom`, `uploadAttachment`, `ensureAttachmentOwner`, `insertResourceAt`, DnD, пункт меню), новый `editor/insert-image-dialog.ts`, строки `lib/locales/ru.ts`.\n\n**Проверки.** typecheck, lint — зелёные; клиент **3741/3741**, markdown **250/250**, сервер **1775/1775**. Тесты: новый `client/tests/insert-image.test.ts` (Ctrl+V → вложение+ссылка; не-картинка → ссылка по пути; DnD-фильтр; эмодзи/URL/вложение+addOwners/файл; якоря меню и диалога); markdown-тест на `![…](etnimg://attachment/<id>)`. Сторожа обновлены осознанно: `guard-resource-picker` (новый штатный потребитель каркаса), `guard-thought-cloud` (фильтр `icon_kind` — редактор выбора, не представление мысли).\n\n**Серверная часть** не менялась (клиент + markdown-тест).\n\n**Осталось.** Независимая проверка. Вкладка «Иконки мыслей» вставляет только эмодзи-иконки типов (библиотечные/`image`-иконки в текст не идут по ADR `348c9f68`)."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (коммит `d1e3bca3`, ветка `releases/0.12.1`, слой `6f29e84c`)\n\n**вердикт: принято** (с замечанием). Скриншоты не снимались (штатные состояния не трогал), PNG не читал.\n\n**DoD.**\n- Вставка рендерится → pass: `markdown/tests/renderer.test.ts:222` `![подпись](etnimg://attachment/<id>)` → `<img src=…>` и с размером `|600px`; прогон markdown 250/250.\n- Добавляет владельца → pass: `insertResourceAt` при `kind:'attachment'` зовёт `addOwners` (тест `insert-image.test.ts:268`, `calls.owners`); новый файл/вставка из буфера — `uploadFile` на владельца (`:182`, `:283`).\n- Тесты клиента → pass: 3741/3741 (`npm -w @etn/client test`).\n- «Переживает переоткрытие и realtime» → не проверено живьём (нет GUI-прогона): текст картинки — часть тела комментария, резолв `etnimg://attachment/<id>` без состояния; отдельного живого прогона не делал.\n\n**Проверено.** typecheck (server/client/shared/markdown) — зелёный; lint — чисто; клиент 3741/3741, markdown 250/250, сервер 1775/1775 (5 прогонов; в одном первом прогоне под нагрузкой был 1 флейк, 5 повторных — 0 fail, серверный код не менялся). Адресно: `insert-image.test.ts` 11/11, `renderer.test.ts` 65/65. Состав коммита — 7 файлов, соответствуют заявленному. Дерево чистое, коммитов тестировщика нет.\n\n**По коду.** Ctrl+V (capture-фаза) перехватывает только при наличии файлов; текст из буфера идёт нативным путём — не сломан. Формат ссылки по id (`attachmentImageRef`, требование 5943e3e8); не-картинки — прежний путь. Диалог — адаптер `createResourcePicker` (ADR d85e17b6), вкладки Эмодзи/Иконки мыслей (только `icon_kind='emoji'`)/Вложения (`attachment-picker`)/URL; «Библиотека» отсутствует (ADR 348c9f68). Сторожевые allow-list `guard-resource-picker` и `guard-thought-cloud` обоснованы: новый файл — штатный потребитель каркаса и селектор (читает `icon_kind` для фильтра эмодзи-иконок), не второй диалог и не представление мысли.\n\n**Претензии.**\n- [замечание] DnD-обработчик `drop` навешен в bubble-фазе, тогда как у Ctrl+V — capture (иначе CM6 успевает вставить). CodeMirror сам обрабатывает файловый drop (`@codemirror/view` `handlers.drop`, строки 5105-5127) и для файлов, читаемых как текст без управляющих байтов, вставляет их содержимое. Растровые картинки защищены guard-ом CM6 (бинарные байты), но текстовый образ (например `image/svg+xml`) даст ДВОЙНУЮ вставку: сырой SVG-текст от CM6 + `![…](etnimg://attachment/<id>)` от нашего обработчика. Воспроизведение: перетащить `.svg` в поле комментария. Доказательство: `node…"
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Фикс по замечанию проверки (коммит `ad79a1f8`)\n\n**Замечание.** DnD-обработчик `drop` был навешен в bubble-фазе (`markdown-field.ts`), а CodeMirror сам обрабатывает файловый drop на contentDOM раньше bubble-слушателя и для ТЕКСТОВЫХ файлов вставляет их содержимое. Растровые картинки отсекает бинарный guard CM6, но `.svg` (image/svg+xml — текстовый образ) давал ДВОЙНУЮ вставку: сырой SVG-текст от CM6 + наша ссылка.\n\n**Исправление.** Обработчики `dragover` и `drop` переведены в CAPTURE-фазу (третий аргумент `true`) — тем же приёмом, что и `paste` (ошибка 731a9d16). В capture наш обработчик идёт первым и `preventDefault` гасит ветку CM6. Перехват по-прежнему только при наличии файлов-картинок (`imageFilesFrom`): нет картинок — возвращаем управление CM6 без вмешательства.\n\n**Тесты.** `client/tests/insert-image.test.ts` +два: `.svg` (image/svg+xml) даёт одну ссылку `![icon.svg](etnimg://attachment/<id>)`, без сырого SVG-текста; якорь capture-фазы для `drop`/`dragover`.\n\n**Проверки.** typecheck, lint зелёные; клиент **3742/3742**. Серверная часть не менялась.\n\n**Осталось.** Независимая проверка дельты."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Проверка №2 (дельта фикса, ветка `releases/0.12.1`, коммит `ad79a1f8`).** Вердикт: **принято**.\n\n**DoD дельты:**\n1. capture-фаза для `dragover`/`drop`, перехват только при картинках → **pass** (`markdown-field.ts:1524-1546`, третий аргумент `true`; `if (files.length === 0) return`).\n2. Тесты +2 → **pass** (`.svg` → 1 вложение/1 ссылка; якорь capture `addEventListener('drop',…,true)`), адресный прогон `node --test --import tsx client/tests/insert-image.test.ts` — 12/12.\n3. Прогоны → **pass**: `npm run typecheck` зелёный; `npm run lint` чистый; `npm -w @etn/client test` — **3742 pass / 0 fail** (suites 902).\n4. Коммит — только дельта → **pass** (2 файла: `markdown-field.ts` + `insert-image.test.ts`, дерево чистое, лишних коммитов нет).\n\n**Механизм подтверждён по исходнику CM6:** `handlers.drop` (`@codemirror/view/dist/index.js:5105`) читает файл как текст и вставляет его; бинарный guard `/\\x00-\\x08\\x0e-\\x1f/` отсекает растровые, но не `.svg`. `eventBelongsToEditor` (стр. 4565) возвращает `false` при `event.defaultPrevented`, `runHandlers` (стр. 4869) прерывается — значит capture-`preventDefault` действительно гасит ветку CM6. Фикс корректен и устраняет двойную вставку.\n\n**Замечание:** новый unit-тест `.svg` не является сторожем названного регресса — он вызывает `insertClipboardFiles` напрямую (минуя CM6), а `fakeEditor.insertAtCaret` пишет только строки, переданные кодом; поэтому ассерт `!inserted.includes('<svg')` тождественно истинен и не покраснеет без capture-фикса. Реальная защита — якорный тест capture-фазы. Блокеров нет.\n\n**Проверено:** `git show ad79a1f8`; `git status/log`; CM6 `@codemirror/view`; typecheck/lint/client test. Скриншоты не снимались (визуальная часть — за пользователем)."
+   }
+  ],
+  "36264cdd-f6b2-465c-bcd6-6a46563888e1": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Обеспечить, чтобы `etnimg://attachment/<id>` в текстах корректно резолвился при сборке экспорта/печати публикации (встраивание как data-URI/ассеты), а серверный рендер @etn/markdown разрешал схему `etnimg` в позиции изображения.\n\n**DoD.** Экспорт публикации с картинкой из текста содержит изображение; печатный HTML не теряет картинку; тесты.\n\n**Зависит от:** t11; требование `5943e3e8`.\n\n**DoD (уточнён аудитом, N7).** `etnimg://attachment/<id>`: резолв id→`file_path` при сборке; файл недоступен — плейсхолдер + предупреждение в экспорте; совместимость с `data:`-URI и `assets/` (zip-ассеты, переписывание ссылок)."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Реализовано (0.12.1, коммит `37bf0538`)\n\n**Суть.** `etnimg://attachment/<id>` в текстах публикаций корректно резолвится при сборке экспорта и печати: id → `file_path` вложения по `attachments_v` (владелец-объект может быть в другом слое — берётся текущий контекст сборки).\n\n**Изменения** (`server/src/domain/publication-export-service.ts`):\n- вместо `decodeEtnimgUrl` (знал только форму по пути и трактовал host `attachment` как POSIX-сегмент → путь вне каталога → ложное предупреждение) введён `resolveEtnimgPath(ndb, href)`, возвращающий `{ absPath } | { error }`. Форма по id (`host === 'attachment'`, паритет с клиентским `parseEtnimgTarget`, id проходит `^[0-9a-zA-Z-]{1,64}$`) резолвится через `getAttachment`; прежняя форма по пути сохранена без изменений.\n- обе точки сборки ассетов — zip (`collectAssets`, картинка в `assets/` + переписывание ссылки) и печать (`collectInlineAssets`, data-URI) — используют общий резолвер. Недоступное вложение (не найден id, не файл, путь вне каталога, файл отсутствует) → предупреждение «вложение недоступно: …» в отчёт/сборку, документ не падает. `data:`-URI, `assets/` и прежняя форма `etnimg://<путь>` не затронуты.\n\n**Проверка.** Тест `server/tests/publication-export.test.ts` (новый, +1): реальное вложение (`createAttachmentFile`) по id попадает в zip как ассет и в печать как data-URI; несуществующий id → предупреждение «вложение не найдено», документ цел; прежняя форма по пути и `missing`-ссылка не сломаны.\n- `node --test --import tsx server/tests/publication-export.test.ts` — 7/7;\n- `npm run typecheck` — зелёный; `npm run lint` — чисто;\n- `npm -w @etn/server test` — **1776 pass / 0 fail** (было 1775).\n\nСерверный код; полигон не использовался — покрыто сквозным REST-тестом (реальные `data.db` сети, экспорт джобой и `/print`).\n\n**Осталось.** Независимая проверка субагентом-тестировщиком (оркестратор: Статус `тестируется`). Актуальность не снимаю."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "## Независимая проверка (субагент-тестировщик, итерация 1)\n\n**Вердикт: принято.** Коммит `37bf0538`, ветка `releases/0.12.1`, слой `6f29e84c`.\n\n**Состав диффа.** `git show --stat 37bf0538` — ровно 2 файла: `server/src/domain/publication-export-service.ts` (+56/−17) и `server/tests/publication-export.test.ts` (+72). Лишнего нет.\n\n**По существу.** `decodeEtnimgUrl` заменён на `resolveEtnimgPath(ndb, href)` (`publication-export-service.ts:359-394`). Форма по id (`host==='attachment'`, id `^[0-9a-zA-Z-]{1,64}$`, паритет с клиентским `parseEtnimgTarget` — `client/src/main/etnimg.ts:54-88`) резолвится через `getAttachment` → `attachments_v` (`attachment-service.ts:544`); прежняя форма по пути оставлена без изменений (сравнение старой и новой ветвей кода идентично). Один резолвер питает обе точки: zip `collectAssets` (`:448`) и печать `collectInlineAssets` (`:524`). Security-гейт `isInsideAttachments` применён к `resolved.absPath` в обоих сборщиках (`:454`, `:530`) — путь вне каталога даёт предупреждение, файл не читается. Недоступный id → `вложение недоступно: вложение не найдено (<id>)`, документ/печать не падают. `data:`/`assets/` не затронуты (regex ловит только `etnimg://`). Серверный markdown уже разрешает `etnimg` в позиции изображения (`markdown/src/url.ts:12-19`) — подпункт DoD выполнен ранее.\n\n**Прогоны.** `node --test --import tsx server/tests/publication-export.test.ts` — 7/7; `npm run typecheck` — зелёный; `npm run lint` — чисто; `npm -w @etn/server test` — **1776 pass / 0 fail**.\n\n**Замечание (не блокер).** Ассерты нового теста (5-й, `publication-export.test.ts:384-453`) осмысленны, но форму «по пути» тест не изолирует: id-форма и путь ведут к одному файлу → одинаковое имя ассета, поэтому провал путь-формы не покрасил бы эту проверку. Прежняя форма отдельно покрыта тестами №1 (md) и №4 (print) и подтверждена чтением кода.\n\n**Не проверено.** Клиент — вне границ; визуальная приёмка — за пользователем; PNG не снимались (ошибок GUI не найдено), скриншотов-доказательств 0. Межслойное владение вложения (владелец в другом слое) в тесте не воспроизводилось — подтверждено структурно: `getAttachment` не фильтрует по владельцу."
+   }
+  ],
+  "2f38cd51-f3b4-48b6-95e3-de15e1b37d50": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** Перевести контекстное меню строки вложения (editor/attachments.ts) на операции владения (K2):\n- **«Удалить…»** → `DELETE /attachments/{id}/owners` с защитами `6b524569` (было — `DELETE /attachments/{id}`, сносившее вложение со всеми владениями в обход защит);\n- **«Перенести в мысль…»** → `POST /attachments/{id}/owners` (новый владелец) + `DELETE /owners` (своё владение); было `PATCH owner`;\n- **«Скопировать в мысли…»** → `POST /attachments/{id}/owners` (не `POST /copy`).\n\n**DoD.** Пункты меню работают через операции владения; `PATCH owner` и `DELETE вложения` клиент не зовёт; ручная/GUI-проверка.\n\n**Зависит от:** t `478f8c1f`; операции `4924d61e`, `45903e1d`, `28ecc295`; элемент `d3c419a9`; требование `6b524569`."
+   },
+   {
+    "kind": "chronological",
+    "title": "Контекстное меню вложения переведено на операции владения",
+    "body_md": "**Реализовано.** Коммит `1966f6bd`, ветка `releases/0.12.1`, слой `6f29e84c`. Актуальность НЕ снята (маршрут статусов ведёт оркестратор).\n\n**Файлы.**\n- `client/src/renderer/editor/attachments.ts` — `moveToThought`, `copyToThoughts`, ключ словаря просмотрщика;\n- `client/src/renderer/lib/locales/ru.ts` — 9 новых строк (`attachments.viewer.hint`, `attachments.move.*`, `attachments.copy.*`);\n- `client/tests/renderer-attachments-menu-owners.test.ts` — новый набор (7 подтестов).\n\n**Поведение (элемент спеки d3c419a9).**\n- «Перенести в мысль…» — одна пользовательская операция из двух шагов: сначала `attachments.addOwners` (новый владелец-мысль), затем `attachments.removeOwner` (своё владение). Порядок обязателен: отказ `addOwners` — прежнее владение НЕ снимается; 409 `ATTACHMENT_OWNER_IS_ICON` на снятии — внятное сообщение (`attachments.move.iconBlocked`), добавленное владение у цели остаётся. Прежний `PATCH {owner_type,owner_id}` (тихий no-op) убран.\n- «Скопировать в мысли…» — один `attachments.addOwners` на весь мультивыбор (а не `POST /copy`); идемпотентность сервера покрывает повторы, итог «Скопировано в N мыслей / уже было в M» через словарь.\n- «Удалить…» (вкладка и меню, коммит `85d5b212`) уже зовёт `removeOwner` — сообщения консистентны (общий `removeOwnership`).\n\n**Проверки.** typecheck и lint зелёные. Клиент **3730/3730**, сервер **1775/1775**. Новый набор проверяет порядок addOwners→removeOwner, отказ добавления (владение не снято), 409 на снятии, один addOwners на мультивыбор, отсутствие вызовов `attachments.update` с `owner_id` и `attachments.copy` (поведенчески + страж исходника).\n\n**Осталось.** Независимая проверка (etn-verifier) и приёмка."
+   },
+   {
+    "kind": "chronological",
+    "title": "Независимая проверка (etn-verifier): принято",
+    "body_md": "**Вердикт: принято.** Проверена ветка `releases/0.12.1`, коммит `1966f6bd`.\n\n**DoD.**\n- Пункты меню через операции владения → pass: `moveToThought` (editor/attachments.ts:837-876) — `addOwners` → `removeOwner`; `copyToThoughts` (:884-910) — один `addOwners` на мультивыбор; `removeOwnership` (:919-946) общий для меню (:973) и вкладки (:539).\n- Отказ `addOwners` — прежнее владение не снято → pass: catch на :847-850 с `return` до `removeOwner`.\n- 409 на снятии — внятное сообщение, добавленное у цели остаётся → pass: :860-868, `isIconOwnerBlock` → `attachments.move.iconBlocked`, откат не делается.\n- `PATCH owner` и `POST /copy` клиент не зовёт → pass: `grep -rn \"attachments\\.copy(\\|attachments\\.remove(\" client/src/` — пусто; в attachments.ts `update` только title/description/content; поведенческий тест + страж исходника.\n- Строки словаря через t() → pass: 9 новых ключей в ru.ts, хардкод в изменённых путях заменён.\n\n**Прогоны.** `npm run typecheck` — зелёный (server/client/shared/markdown); `npm run lint` — чисто; `npm -w @etn/client test` — 3730/3730, fail 0; `npm -w @etn/server test` — 1775/1775, fail 0. Новый набор `renderer-attachments-menu-owners.test.ts` адресно — 7/7 (2 сюиты).\n\n**Состав коммита.** attachments.ts, locales/ru.ts, новый тест — 3 файла, лишнего нет.\n\n**Не проверено.** GUI-приёмка (вне границ проверки, за пользователем); стенд/live-полигон не поднимался — работа чисто клиентская, покрыта DOM-шим-тестами.\n\nПретензий нет."
+   }
+  ],
+  "8a4b7270-df98-498a-824a-bd4e2c0f9514": [
+   {
+    "kind": "permanent",
+    "title": "",
+    "body_md": "**Что сделать.** `server/src/domain/layer-integrity.ts:170-198` читает owner-колонки `attachments.owner_type/owner_id` как источник истины и объявляет владельца мёртвым, если его нет в `thoughts/links/publications`. При мульти-владении колонки — НЕТОЧНОЕ зеркало (addOwners/removeOwner их не обновляют — предупреждение в attachment-service ~177-182), поэтому после снятия зеркального владельца при живом втором аудит целостности выдаёт ложное «attachments owner missing».\n\n**Как.** Источник истины — `attachment_owners`: проверять живые владения (по всем рабочим слоям) вместо owner-колонок; на переходный период учесть, что колонки могут отставать.\n\n**Зачем.** Выявлено проверкой задачи `da59a4cf` (коммит 7bef145e): cleanup от зеркала не зависит, но layer-integrity — зависит; ложные срабатывания дезинформируют.\n\n**DoD.** Тест: вложение с двумя владельцами, удаление первичного (зеркального) — НЕТ ложного «owner missing» при живом втором владельце; прогоны зелёные."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Сделано.** `server/src/domain/layer-integrity.ts`: проверка вложений переведена с owner-колонок `attachments.owner_type/owner_id` на живые владения `attachment_owners` (рабочие слои, `layers.is_service = 0`; служебные копии не считаются). Владелец считается живым, если его объект есть во множестве живых thoughts/links/publications (публикации — владельцы с 0.11.1). Owner-колонки учитываются аддитивно как переходный fallback, чтобы их отставание (`addOwners`/`removeOwner` колонки не трогают) не давало ложных срабатываний.\n\n**Тест.** `server/tests/layers-s12.test.ts`: вложение с двумя владельцами, снятие зеркального владельца (`removeOwner`) и удаление его мысли — аудит целостности не выдаёт «attachments owner missing» при живом втором владельце.\n\n**Проверено.** `npm run typecheck` — зелёный; `npm run lint` — чисто; `npm -w @etn/server test` — 1762 теста, 328 сьютов, 0 fail, 0 skipped.\n\n**Коммит.** `ea48db71` (не пушен)."
+   },
+   {
+    "kind": "chronological",
+    "title": "",
+    "body_md": "**Проверка (независимый тестировщик, слой `6f29e84c`).** Коммит `ea48db71`, ветка `releases/0.12.1`, дерево чистое, коммитов тестировщика нет. PNG не снимались/не читались.\n\n**Вердикт: принято.**\n\n**DoD по пунктам:**\n- Тест: вложение с двумя владельцами, удаление первичного (зеркального) — нет ложного «owner missing» при живом втором: **pass** (тест `server/tests/layers-s12.test.ts:249-279` зелёный; независимая проба B1-B3: owner-колонки вложения указывают на мёртвого первого, живой второй владелец держит вложение, `checkLayerIntegrity` пуст).\n- Источник истины — живые владения `attachment_owners` рабочих слоёв (`layers.is_service = 0`): **pass** (`server/src/domain/layer-integrity.ts:192-205`).\n- Owner-колонки остались аддитивным fallback: **pass** (`layer-integrity.ts:214-215`).\n- Негативный контроль (фикс не глушит детект): при двух мёртвых владельцах нарушение всё ещё обнаруживается: **pass** (проба B4; существующий тест `layers-s12.test.ts:235-240` — ровно одна оборванная ссылка, `table=attachments`, `ref=owner`).\n- Связь «затрагивает» на `attachment-service` (`4ed96700`): **pass** (ребро `ba40b6c7`, `has_comment=true`).\n- Прогоны зелёные: **pass** (`npm run typecheck` — зелёный; `npm run lint` — чисто; `npm -w @etn/server test` — 1762 pass / 0 fail, 328 сьютов).\n\n**Претензий-блокеров нет.**\n**Проверено:** `git show ea48db71` (только `layer-integrity.ts` и `layers-s12.test.ts`, +84/−29); адресный прогон `layers-s12` (5/5); полные `typecheck`/`lint`/`server test`; собственная проба на in-memory NetworkDb (8/8, включая негативный контроль).\n**Не проверено:** REST/MCP (`478f8c1f`), realtime, клиент — вне границ.\n**Скриншотов-доказательств ошибок: 0.**"
+   }
+  ]
+ }
+}
