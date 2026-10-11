@@ -1310,7 +1310,6 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
             commentContext: {
               ownerType: 'thought' as const,
               ownerId: owner.ownerId,
-              commentKind: 'chronological' as const,
               getCommentId: () => row.id,
               getParentThoughtIds: () => parentThoughtIds(row.targets),
             },

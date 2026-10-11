@@ -722,16 +722,15 @@ export function createMarkdownField(opts: {
   /**
    * Контекст комментария для флоу «создать отсутствующую мысль по
    * legacy-ссылке» (карточка ETN 34ffbd75): клик по неразолвленной ссылке
-   * `[[имя|текст]]` в view-режиме открывает диалог добавления мысли с
-   * родителем-владельцем комментария. Передаётся вкладками комментариев
-   * (постоянный `comments.ts`, хроно `chrono-tab.ts`, экран «Дневник»);
-   * без опции клик по отсутствующей цели остаётся прежним поведением
-   * (notice «не найдена»), а команды ТЗ5 недоступны.
+   * `[[имя|текст]]` открывает диалог добавления мысли с родителем-владельцем
+   * комментария. Передаётся вкладками комментариев (постоянный `comments.ts`,
+   * хроно `chrono-tab.ts`, экран «Дневник»); без опции клик по отсутствующей
+   * цели остаётся прежним поведением (notice «не найдена»), а команды ТЗ5
+   * недоступны. Владелец поля также биндится для `etnimg://`-вложений.
    */
   commentContext?: {
     ownerType: 'thought' | 'link';
     ownerId: string;
-    commentKind: 'permanent' | 'chronological';
     getCommentId: () => string | null;
     /**
      * Мысли-владельцы комментария (родители новой мысли, ТЗ5): у дневниковой
@@ -740,8 +739,6 @@ export function createMarkdownField(opts: {
      * источник).
      */
     getParentThoughtIds?: () => readonly string[];
-    /** Вызывается после успешной замены ссылок (обновить таблицу хроно и т.п.). */
-    onLinksReplaced?: () => void;
   };
   /**
    * Плейсхолдер для пустого комментария (задача 8ab775d9). Показывается
@@ -1809,18 +1806,13 @@ export function createMarkdownField(opts: {
     },
   });
 
-  // Комментарийный контекст (карточка ETN 34ffbd75): после замены legacy-ссылок
-  // на [[#<id>]] поле перерисовывается через тот же handle, что и внешние
-  // обновления (setMarkdownField).
+  // Комментарийный контекст (карточка ETN 34ffbd75): владелец поля нужен флоу
+  // «создать отсутствующую мысль по legacy-ссылке» и открытию `etnimg://`.
   if (opts.commentContext !== undefined) {
     const cc = opts.commentContext;
     bindWikiCreateContext(root, {
       ownerType: cc.ownerType,
       ownerId: cc.ownerId,
-      commentKind: cc.commentKind,
-      getCommentId: cc.getCommentId,
-      refresh: (md, html) => setMarkdownField(root, md, html),
-      afterLinksReplaced: cc.onLinksReplaced,
     });
   }
 

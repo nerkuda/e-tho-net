@@ -442,7 +442,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
         commentContext: {
           ownerType: ctx.ownerType,
           ownerId: ctx.ownerId,
-          commentKind: 'chronological',
           getCommentId: () => commentId,
           // Родители новой мысли (ТЗ5): все цели-мысли записи; чипсы-связи
           // синхронно не резолвятся — при их отсутствии берётся владелец-мысль.
@@ -450,7 +449,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
             existing.targets
               .filter((target) => target.owner_type === 'thought')
               .map((target) => target.owner_id),
-          onLinksReplaced: () => void reload(),
         },
         onInput: (md) => {
           bodyDraft = md;

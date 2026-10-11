@@ -258,7 +258,6 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       commentContext: {
         ownerType: ctx.ownerType,
         ownerId: ctx.ownerId,
-        commentKind: 'permanent',
         getCommentId: () => permanent?.id ?? null,
         // Родитель новой мысли (ТЗ5): владелец-мысль; у комментария связи
         // список пуст — порт вставки выведет источник связи.

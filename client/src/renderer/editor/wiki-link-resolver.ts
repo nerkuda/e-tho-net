@@ -406,7 +406,7 @@ export async function resolveWikiLinksInDom(root: HTMLElement, networkId: string
 }
 
 // ---------------------------------------------------------------------------
-// Legacy name-target lookup (shared by navigation and hover preview)
+// Legacy name-target lookup (hover preview)
 // ---------------------------------------------------------------------------
 
 /** A legacy `[[имя|текст]]` link resolved by name to a thought. */
@@ -416,15 +416,15 @@ export interface LegacyWikiTargetHit {
 }
 
 /**
- * Resolves a legacy name-only wiki-link target with the ONE lookup both the
- * click navigation (`openWikiTarget` in `editor/wiki-link.ts`) and the
- * Ctrl-hover preview (`resolveWikiLegacyNameContent` in
- * `lib/hover-preview.ts`) use: FTS `scope=names`, exact title match first,
- * else the first hit — so what the preview shows is exactly what a click
- * would open. Lives here (not in either consumer) because hover-preview must
- * not import `editor/wiki-link.ts` (module cycle, see its doc comment), while
- * both already import this module. Returns `null` when nothing matches;
- * API errors propagate to the caller (each consumer has its own error UX).
+ * Resolves a legacy name-only wiki-link target for the Ctrl-hover preview
+ * (`resolveWikiLegacyNameContent` in `lib/hover-preview.ts`): FTS `scope=names`,
+ * exact title match first, else the first hit. Click navigation по легаси-ссылке
+ * этой функцией больше НЕ пользуется — она идёт развилкой
+ * {@link resolveLegacyWikiCandidates} (точное совпадение названия/синонима,
+ * поповер, создание; задача 8e4e3dc5). Живёт здесь, потому что hover-preview
+ * не имеет права импортировать `editor/wiki-link.ts` (цикл модулей, см. его
+ * doc-комментарий). Returns `null` when nothing matches; API errors propagate to
+ * the caller (each consumer has its own error UX).
  */
 export async function searchLegacyWikiTarget(
   networkId: string,
