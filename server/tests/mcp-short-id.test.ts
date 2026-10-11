@@ -166,6 +166,52 @@ describe('MCP: короткие id мыслей', { skip: !nativeAvailable() }, 
     }
   });
 
+  it('значение свойства-связи принимает короткий id, как id-слоты (68802297)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const parent = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Родитель для свойства-связи',
+          link: { direction: 'parent', target_thought_id: ctx.homeId },
+        });
+        const shortParent = parent.id.slice(0, 8);
+
+        // Короткий id как ЗНАЧЕНИЕ структурного свойства «Родители» (не id-слот).
+        // Префиксная форма обязана приниматься так же, как в `links[].target_id`
+        // и в читающих фасадах; раньше падало `VALIDATION_ERROR`
+        // «referenced thought <short> does not exist».
+        const written = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              {
+                ref: 'child',
+                thought: { title: 'Потомок через свойство-связь' },
+                properties: { Родители: shortParent },
+              },
+            ],
+          },
+        });
+        assert.equal(written.isError, undefined, toolText(written));
+        const childId = toolJson<{ items: Array<{ id: string }> }>(written).items[0]!.id;
+
+        // Ребро создано к ПОЛНОМУ id родителя (а не к мусорной цели).
+        const parents = await handle.client.callTool({
+          name: 'etn.thoughts.neighbors',
+          arguments: { network_id: ctx.networkId, thought_id: childId, dir: 'parents' },
+        });
+        const ids = toolJson<{ neighbors: Array<{ id: string }> }>(parents).neighbors.map((n) => n.id);
+        assert.ok(ids.includes(parent.id), `родитель ${parent.id} должен быть в ${ids.join(',')}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('resolve: неразрешимый короткий id уходит в missing[], а не рушит батч (8f42dbf3)', async () => {
     const ctx = await buildMcpContext();
     try {

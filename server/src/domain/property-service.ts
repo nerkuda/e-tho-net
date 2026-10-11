@@ -96,6 +96,7 @@ import {
   typeAncestors,
   type TypeTable,
 } from './type-hierarchy.js';
+import { resolveThoughtId } from './thought-id.js';
 
 // ===========================================================================
 // Shared helpers
@@ -874,8 +875,27 @@ export function getLinkPropertyValues(
 // Link property write (0.8.1) — запись рёбер через заполнение свойств-связей
 // ===========================================================================
 
+/**
+ * Резолв короткого id (hex-префикса UUID) в полный для ЗНАЧЕНИЯ-цели свойства
+ * (ошибка 68802297-8056-46ca-a41c-3e7b2b8fb11f). Читающие фасады
+ * (`etn.thoughts.get`/`resolve`) и id-слоты границы MCP (`mcp/id-args.ts`)
+ * давно принимают короткую форму, но значения `properties[*]` в батч-записи
+ * в слоты не входят — форма унифицируется здесь, на записи значения. Полная и
+ * неподходящая строка возвращается как есть; неоднозначный префикс —
+ * `VALIDATION_ERROR` со списком кандидатов (как везде, см. `resolveThoughtId`);
+ * неизвестный префикс — как есть (дальше обычное «reference does not exist»).
+ */
+function resolveTargetThoughtId(ndb: NetworkDb, id: string): string {
+  return resolveThoughtId(ndb, id) ?? id;
+}
+
 /** Нормализовать входящее значение свойства-связи в список id целей. */
-function normalizeLinkTargets(value: PropertyValueValue, key: string): string[] {
+function normalizeLinkTargets(
+  ndb: NetworkDb,
+  value: PropertyValueValue,
+  key: string,
+): string[] {
+  const resolve = (ids: string[]): string[] => ids.map((id) => resolveTargetThoughtId(ndb, id));
   if (value === null || value === undefined) return [];
   // Свойство-связь — строковые id (или массив id). Расширение типа
   // `PropertyValueValue` вариантом `CrossNetworkRefValue[]` (задача 7849008a)
@@ -886,9 +906,9 @@ function normalizeLinkTargets(value: PropertyValueValue, key: string): string[] 
     if (value.some((v) => typeof v !== 'string' || v === '')) {
       throw new EtnError('VALIDATION_ERROR', `свойство «${key}» ожидает id мыслей`, { key });
     }
-    return [...new Set(value as string[])];
+    return [...new Set(resolve(value as string[]))];
   }
-  if (typeof value === 'string' && value !== '') return [value];
+  if (typeof value === 'string' && value !== '') return resolve([value]);
   throw new EtnError('VALIDATION_ERROR', `свойство «${key}» ожидает id мысли или массив id`, {
     key,
   });
@@ -984,7 +1004,9 @@ function normalizeLinkDefaultValue(
       { key: prop.name, expected: 'link' },
     );
   }
-  const ids = [...new Set(value as string[])];
+  const ids = [
+    ...new Set((value as string[]).map((id) => resolveTargetThoughtId(ndb, id))),
+  ];
   for (const id of ids) validateLinkTargetType(ndb, prop, id);
   return ids.length > 0 ? ids : null;
 }
@@ -1006,7 +1028,9 @@ function normalizeLinkDefaultValueTarget(
       field: `${field}.default_value_target`,
     });
   }
-  const ids = [...new Set(value)];
+  const ids = [
+    ...new Set((value as string[]).map((id) => resolveTargetThoughtId(ndb, id))),
+  ];
   for (const id of ids) {
     const row = ndb.prepare('SELECT id FROM thoughts_v WHERE id = ?').get(id);
     if (!row) {
@@ -1240,15 +1264,20 @@ export function setLinkPropertySourcesForTarget(
   return ndb.transaction(() => {
     const cfg = prop.config ?? {};
     const linkTypeId = linkPropertyLinkTypeId(cfg);
+    // Короткий id источника → полный (ошибка 68802297): единая форма id для
+    // значения-цели свойства, как в читающих фасадах и id-слотах границы MCP.
+    const resolvedSourceIds = [
+      ...new Set(sourceIds.map((id) => resolveTargetThoughtId(ndb, id))),
+    ];
     // owner — цель: рёбра ищем направлением `in`, противоположный конец — источник.
     const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, 'in');
-    const wanted = new Set(sourceIds);
+    const wanted = new Set(resolvedSourceIds);
     for (const [sourceId, link] of existing) {
       if (!wanted.has(sourceId)) markLinkForDeletion(ndb, link.id, actorUserId);
     }
     const result: string[] = [];
     const createdLinkIds: string[] = [];
-    for (const sourceId of sourceIds) {
+    for (const sourceId of resolvedSourceIds) {
       if (sourceId === ownerId) continue;
       if (existing.has(sourceId)) {
         result.push(sourceId);
@@ -4205,17 +4234,23 @@ function validateAndCoerce(
             { key: prop.name, expected: 'thought_ref', multiple: false },
           );
         }
-        const ids = [...new Set(value as string[])];
-        if (ids.length === 0) {
+        if (value.length === 0) {
           // An empty selection clears the value (same as null).
           return { column, raw: null };
         }
-        if (ids.some((id) => typeof id !== 'string')) {
+        if (value.some((id) => typeof id !== 'string')) {
           throw new EtnError(
             'VALIDATION_ERROR',
             `property "${prop.name}" expects thought ids`,
             { key: prop.name, expected: 'thought_ref' },
           );
+        }
+        // Короткий id цели → полный (ошибка 68802297), дедуп уже после резолва.
+        const ids = [
+          ...new Set((value as string[]).map((id) => resolveTargetThoughtId(ndb, id))),
+        ];
+        if (ids.length === 0) {
+          return { column, raw: null };
         }
         for (const id of ids) {
           validateThoughtRefTarget(ndb, prop, id);
@@ -4229,8 +4264,13 @@ function validateAndCoerce(
           { key: prop.name, expected: 'thought_ref' },
         );
       }
-      validateThoughtRefTarget(ndb, prop, value);
-      return { column, raw: isMultipleProperty(prop) ? JSON.stringify([value]) : value };
+      // Короткий id цели → полный (ошибка 68802297).
+      const resolvedId = resolveTargetThoughtId(ndb, value);
+      validateThoughtRefTarget(ndb, prop, resolvedId);
+      return {
+        column,
+        raw: isMultipleProperty(prop) ? JSON.stringify([resolvedId]) : resolvedId,
+      };
     }
     case 'cross_network_ref': {
       // Адрес n:<network_id>#<thought_id>; single — строка, multiple —
@@ -4515,7 +4555,7 @@ function setPropertyValueForProperty(
       ndb,
       ownerId,
       prop,
-      normalizeLinkTargets(value, errKey.key),
+      normalizeLinkTargets(ndb, value, errKey.key),
       actorUserId,
       nameDirection,
     );
@@ -4784,6 +4824,9 @@ export function addLinkPropertyValue(
         key,
       });
     }
+    // Короткий id цели → полный (ошибка 68802297): иначе `existing` и
+    // addLinkPropertyTarget ищут живое ребро по усечённому id и его не находят.
+    targetId = resolveTargetThoughtId(ndb, targetId);
     const existing = listLiveLinkTargets(
       ndb,
       ownerId,
@@ -4835,6 +4878,9 @@ export function removeLinkPropertyValue(
         key,
       });
     }
+    // Короткий id цели → полный (ошибка 68802297): иначе живое ребро по
+    // усечённому id не находится и `remove` молча ничего не делает.
+    targetId = resolveTargetThoughtId(ndb, targetId);
     const id = removeLinkPropertyTarget(
       ndb,
       ownerId,

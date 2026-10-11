@@ -68,6 +68,45 @@ describe(
       }
     });
 
+    it('значение-цель свойства-связи принимает короткий id: set/add/remove (68802297)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'ссылается на', name_reverse: 'сослано из' },
+          USER,
+        );
+        const t = createThoughtType(ndb, { name: 'Узел ссылок' }, USER);
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          t.id,
+          { key: 'ссылается на', value_type: 'link', config: { link_type_id: lt.id, direction: 'out' } },
+          USER,
+        );
+        const owner = createThought(ndb, { title: 'Владелец', type_id: t.id }, USER);
+        const target = createThought(ndb, { title: 'Цель', type_id: t.id }, USER);
+        const short = target.id.slice(0, 8);
+
+        // set: короткая форма резолвится в полный id — живое ребро создано.
+        setPropertyValue(ndb, 'thought', owner.id, 'ссылается на', short, USER);
+        let values = getLinkPropertyValues(ndb, 'thought', owner.id, lt.id, 'out');
+        assert.deepEqual(values.map((v) => v.target_id), [target.id]);
+
+        // add: тот же короткий id идемпотентен — ребро уже есть.
+        const added = addLinkPropertyValue(ndb, 'thought', owner.id, 'ссылается на', short, null, USER);
+        assert.equal(added.created, false);
+
+        // remove: короткий id снимает то же ребро.
+        const removed = removeLinkPropertyValue(ndb, 'thought', owner.id, 'ссылается на', short, USER);
+        assert.notEqual(removed.link_id, null);
+        values = getLinkPropertyValues(ndb, 'thought', owner.id, lt.id, 'out');
+        assert.deepEqual(values.map((v) => v.target_id), []);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('симметрия: заполнение обратного свойства создаёт то же ребро', () => {
       const ndb = createInMemoryNetworkDb();
       try {
