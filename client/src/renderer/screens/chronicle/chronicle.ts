@@ -60,6 +60,7 @@ import {
   insertMentionLinkIntoField,
 } from '../../editor/markdown-field.js';
 import { annotateMentions } from '../../editor/mentions-annotate.js';
+import { resolveWikiLinksInDom } from '../../editor/wiki-link-resolver.js';
 import { createCommentCollapseState, decorateCommentView } from '../../editor/comment-collapse.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { div, el, errText, span } from '../../lib/dom.js';
@@ -1236,6 +1237,15 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // свёрнутость. Это забота ЭКРАНА: `record-body.ts` остаётся чистым.
   const collapseNetworkId = store.state.networkId;
   if (collapseNetworkId !== null && row.body_html.trim() !== '') {
+    // Резолв ID-форм wiki-ссылок (`[[#<id>]]` / `[[n:<net>#<id>]]`) в просмотре
+    // записи (ошибка ab8b6da8): серверный `body_html` отдаёт такие ссылки пустым
+    // спаном `<span class="wiki-link" data-wiki-id>` — имя мысли подставляет
+    // клиент. Просмотр комментария несёт одни и те же декорации в любом месте
+    // (требование d574d116, «Подключается в полях просмотра комментария,
+    // дневника и в сниппетах»): поле markdown резолвит ссылки в своём
+    // `paintView`, лента «Дневника» обязана делать то же — иначе в режиме
+    // ПРОСМОТРА ссылки на мысли невидимы (в правке имя подтягивает wikiIdPlugin).
+    void resolveWikiLinksInDom(recordView, collapseNetworkId);
     decorateCommentView(
       recordView,
       createCommentCollapseState(collapseNetworkId, row.id),

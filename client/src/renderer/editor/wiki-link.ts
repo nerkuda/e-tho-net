@@ -29,6 +29,7 @@ import { openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
 import { markdownInlineExt } from './markdown-inline-ext.js';
+import { MD_WIDGET_CLASS } from './md-live.js';
 import { searchLegacyWikiTarget, WIKI_LINK_PUB_ATTR } from './wiki-link-resolver.js';
 import { tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
 import { transclusionSectionCompletions } from './transclusion.js';
@@ -329,6 +330,32 @@ function safeCurrentNetworkId(): string | null {
 
 let navigationWired = false;
 
+/**
+ * Минимальный контракт узла-ссылки для {@link shouldNavigateWikiLink}: нужны
+ * только связность, класс и ближайший редактор. Структурный тип позволяет
+ * юнит-тесту подставить простой объект вместо DOM-элемента.
+ */
+export interface WikiLinkClickTarget {
+  isConnected: boolean;
+  classList: { contains(cls: string): boolean };
+  closest(selector: string): unknown;
+}
+
+/**
+ * Должен ли клик по спану wiki-ссылки выполнить переход к цели (ошибка
+ * ab8b6da8). Внутри редактора live-preview виджет (класс `md-widget`) при клике
+ * раскрывает исходник блока (M6), поэтому переход для него пропускаем; снятый
+ * со страницы виджет (клик уже раскрыл блок) тоже не переходит. ID-форма в
+ * редакторе показывается виджетом имени БЕЗ `md-widget` (`wiki-id-plugin`) и
+ * переходит по клику так же, как спан просмотра — требование d574d116 и элемент
+ * интерфейса «Редактор постоянного комментария»: «Клик по ссылке открывает
+ * мысль». Экспортируется ради юнит-тестов.
+ */
+export function shouldNavigateWikiLink(link: WikiLinkClickTarget): boolean {
+  if (!link.isConnected) return false;
+  return !(link.closest('.cm-editor') !== null && link.classList.contains(MD_WIDGET_CLASS));
+}
+
 /** Installs the delegated view-mode click handler (call once from main.ts). */
 export function initWikiLinkNavigation(): void {
   if (navigationWired) return;
@@ -337,9 +364,7 @@ export function initWikiLinkNavigation(): void {
     const target = event.target as Element | null;
     const link = target?.closest?.(`.${WIKI_LINK_CLASS}`);
     if (!(link instanceof HTMLElement)) return;
-    // Внутри редактора клик раскрывает исходник блока (M6), а не переходит;
-    // снятые со страницы виджеты (клик уже раскрыл блок) тоже пропускаются.
-    if (!link.isConnected || link.closest('.cm-editor') !== null) return;
+    if (!shouldNavigateWikiLink(link)) return;
 
     // Pub-ссылка (0.11.1, задача 3275fd8d, требование 7f583ef9): резолвер
     // пометил серверную legacy-форму атрибутом `data-wiki-pub` — открываем
