@@ -209,11 +209,16 @@ describe('план: название и тело (правило f64f5893)', () 
     assert.equal(plan?.end, text.length);
   });
 
-  it('«из раздела»: раздел без собственного текста даёт пустое тело', () => {
+  it('«из раздела»: текст подчинённого раздела входит в тело (не под-мысль)', () => {
     const text = '# A\n## B\nтекст B';
     const plan = create.planFromSection({ text, from: 1, to: 1 });
     assert.equal(plan?.title, 'A');
-    assert.equal(plan?.bodyMd, '', 'заголовок ушёл в название, тела нет');
+    assert.equal(
+      plan?.bodyMd,
+      '## B\nтекст B',
+      'подчинённый раздел — ТЕКСТ тела, включая строку заголовка (f5695a1e п.2)',
+    );
+    assert.equal(plan?.end, text.length, 'замена покрывает подраздел целиком');
   });
 
   it('«из раздела»: каретка вне раздела (до первого заголовка) — плана нет', () => {
@@ -489,37 +494,47 @@ describe('разделение: правило разбора единиц (тр
     assert.equal(plan![0]!.bodyMd, `${long}\n  - вложенный`, 'весь текст строки + вложенные');
   });
 
-  it('разделы: заголовок — мысль, подраздел — под-мысль', () => {
+  it('разделы: подчинённый раздел — ТЕКСТ тела, под-мыслей нет', () => {
     const text = '# A\nтело A\n## B\nтело B';
     const plan = create.planSplitSelection({ text, from: 0, to: text.length });
     assert.equal(plan?.length, 1, 'один раздел верхнего уровня');
     assert.equal(plan![0]!.title, 'A', 'символы # уходят из названия');
-    // Тело раздела — без строки заголовка: заголовок ушёл в название, в
-    // развёртке трансклюзии его нет (требование 23c11231).
-    assert.equal(plan![0]!.bodyMd, 'тело A');
-    assert.equal(plan![0]!.children.length, 1);
-    assert.equal(plan![0]!.children[0]!.title, 'B');
-    assert.equal(plan![0]!.children[0]!.bodyMd, 'тело B');
+    // Тело раздела — без строки заголовка; подчинённый раздел входит ТЕКСТОМ
+    // (требование f5695a1e п.2, walkthrough 2026-10-12).
+    assert.equal(plan![0]!.bodyMd, 'тело A\n## B\nтело B');
+    assert.equal(plan![0]!.children.length, 0, 'под-мыслей не создаётся');
+    assert.equal(plan![0]!.fullEnd, text.length, 'замена покрывает подраздел целиком');
   });
 
-  it('раздел без собственного текста — мысль без тела, подраздел — под-мысль', () => {
+  it('раздел без собственного текста — тело из текста подраздела', () => {
     const text = '# A\n## B\nтекст B';
     const plan = create.planSplitSelection({ text, from: 0, to: text.length });
     assert.equal(plan?.length, 1);
     assert.equal(plan![0]!.title, 'A');
-    assert.equal(plan![0]!.bodyMd, '', 'у раздела нет собственного текста');
-    assert.equal(plan![0]!.children.length, 1);
-    assert.equal(plan![0]!.children[0]!.title, 'B');
-    assert.equal(plan![0]!.children[0]!.bodyMd, 'текст B');
+    assert.equal(plan![0]!.bodyMd, '## B\nтекст B');
+    assert.equal(plan![0]!.children.length, 0);
   });
 
-  it('последний подраздел без собственного текста — тоже пустое тело', () => {
+  it('последний подраздел без собственного текста — заголовок как текст тела', () => {
     const text = '# A\nтело A\n## B';
     const plan = create.planSplitSelection({ text, from: 0, to: text.length });
-    assert.equal(plan![0]!.bodyMd, 'тело A');
-    assert.equal(plan![0]!.children.length, 1);
-    assert.equal(plan![0]!.children[0]!.title, 'B');
-    assert.equal(plan![0]!.children[0]!.bodyMd, '');
+    assert.equal(plan![0]!.bodyMd, 'тело A\n## B');
+    assert.equal(plan![0]!.children.length, 0);
+  });
+
+  it('выделение, начинающееся с ### — подразделы единицы (дети текущей мысли)', () => {
+    // Подтверждённое поведение (fe023652): если выделение НЕ содержит
+    // родительского ##, подразделы становятся ВЕРХНЕУРОВНЕВЫМИ единицами.
+    const text = '### B1\nтекст B1\n### B2\nтекст B2';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.deepEqual(
+      plan!.map((node) => node.title),
+      ['B1', 'B2'],
+      'подразделы — отдельные единицы верхнего уровня',
+    );
+    assert.equal(plan![0]!.children.length, 0);
+    assert.equal(plan![0]!.bodyMd, 'текст B1');
+    assert.equal(plan![1]!.bodyMd, 'текст B2');
   });
 
   it('абзацы: без пустой строки блок кода — продолжение абзаца; тело = остаток', () => {
@@ -674,34 +689,44 @@ describe('разделение: доступность и исполнение',
     assert.equal(commands.hasCommentCommandRunner(create.SPLIT_SELECTION_COMMAND), true);
   });
 
-  it('раздел без тела: мысль без comment → на месте ССЫЛКА; подраздел — трансклюзия', async () => {
-    const text = '# A\n## B\nтекст B';
+  it('walkthrough: ## + ### + список + цитата → ОДНА мысль, подраздел — текст тела', async () => {
+    const text = '## Раздел W\nАбзац W.\n### Подраздел W\nтекст подраздела W\n- список W\n> цитата W';
     const editor = fakeEditor(text, 0, text.length);
     const { port, requests } = sequencePort();
     create.setCommentThoughtCreatePort(port);
 
     const handled = commands.runCommentCommand('comment.split', host(editor));
-    assert.equal(handled, true, 'команда доступна (2 единицы разбора)');
+    assert.equal(handled, true, 'команда доступна (единиц разбора ≥ 2)');
     await flush();
 
-    assert.deepEqual(
-      requests.map((request) => request.title),
-      ['A', 'B'],
-    );
+    assert.deepEqual(requests.map((request) => request.title), ['Раздел W'], 'ОДНА мысль');
     assert.deepEqual(
       requests.map((request) => request.bodyMd),
-      ['', 'текст B'],
+      ['Абзац W.\n### Подраздел W\nтекст подраздела W\n- список W\n> цитата W'],
+      'тело — весь текст раздела без строки заголовка, подраздел как ТЕКСТ',
     );
-    assert.deepEqual(
-      requests.map((request) => request.parentId),
-      [PARENT_ID, UNIT_IDS[0]],
-      'подраздел B — под-мысль мысли A',
-    );
-    assert.equal(editor.edits.length, 1, 'правка применена, команда не упала');
-    // A без тела → ссылка (требование 23c11231); B с телом → трансклюзия.
+    assert.deepEqual(requests.map((request) => request.parentId), [PARENT_ID]);
+    assert.equal(editor.edits.length, 1);
     assert.deepEqual(editor.edits[0].changes, [
-      { from: 0, to: 3, insert: `[[#${UNIT_IDS[0]}]]` },
-      { from: 4, to: 16, insert: `![[#${UNIT_IDS[1]}]]` },
+      { from: 0, to: text.length, insert: `![[#${UNIT_IDS[0]}]]` },
+    ]);
+  });
+
+  it('walkthrough «Создать мысль из выделенного»: ## + ### → ОДНА мысль, под-мыслей нет', async () => {
+    const text = '## Раздел W\nАбзац W.\n### Подраздел W\nтекст подраздела W';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, created, picks } = fakePort();
+    create.setCommentThoughtCreatePort(port);
+
+    const handled = commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    assert.equal(handled, true);
+    await flush();
+
+    assert.equal(picks.length, 0, 'пакетный путь без диалога');
+    assert.deepEqual(created.map((request) => request.title), ['Раздел W']);
+    assert.equal(created[0]!.bodyMd, 'Абзац W.\n### Подраздел W\nтекст подраздела W');
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: text.length, insert: `![[#${NEW_ID}]]` },
     ]);
   });
 

@@ -446,7 +446,9 @@ function lastSection(units: readonly MarkdownUnit[]): MarkdownUnit | null {
 
 /**
  * План команды «Создать мысль из раздела»: раздел, где стоит каретка, либо
- * раздел, содержащий всё выделение. `null` — позиция вне раздела.
+ * раздел, содержащий всё выделение. `null` — позиция вне раздела. Тело —
+ * {@link sectionUnitBody}: собственный текст раздела без строки заголовка плюс
+ * ТЕКСТ подчинённых разделов (требование `f5695a1e` п.2, walkthrough 2026-10-12).
  */
 export function planFromSection(snap: MdEditorSnapshot): CommentThoughtPlan | null {
   const unit = findSectionUnitAt(snap.text, snap.from);
@@ -454,7 +456,12 @@ export function planFromSection(snap: MdEditorSnapshot): CommentThoughtPlan | nu
   if (snap.from !== snap.to && snap.to > unit.end) return null;
   const title = thoughtTitle(unit.text);
   if (title === '') return null;
-  return { start: unit.start, end: unit.end, title, bodyMd: sectionBody(unit.text) };
+  return {
+    start: unit.start,
+    end: subtreeEnd(unit),
+    title,
+    bodyMd: sectionUnitBody(unit, snap.text),
+  };
 }
 
 /**
@@ -488,9 +495,10 @@ export function planFromSelection(snap: MdEditorSnapshot): CommentThoughtPlan | 
  * внутри него, остальное остаётся); `fullStart`/`fullEnd` — диапазон всей
  * единицы, включая вложенное содержимое, которое уходит в ТЕЛО (для новой
  * мысли с телом весь диапазон заменяется трансклюзией, чтобы вложенный текст не
- * остался в комментарии дважды); `children` — вложенные единицы, которые
- * становятся ПОД-МЫСЛЯМИ (только подразделы; вложенные элементы списка
- * под-мыслей не создают — требование `45b53e11`).
+ * остался в комментарии дважды). Под-мыслей НЕ создаётся (`children` оставлено
+ * для совместимости обхода — всегда пусто): вложенные элементы списка и
+ * подчинённые разделы входят в тело ТЕКСТОМ (`45b53e11`, `f5695a1e` п.2,
+ * walkthrough 2026-10-12).
  */
 export interface SplitSelectionNode {
   /** Начало собственного диапазона единицы (включительно). */
@@ -505,7 +513,7 @@ export interface SplitSelectionNode {
   title: string;
   /** Тело новой мысли: `''` — без тела (вставка — ссылка). */
   bodyMd: string;
-  /** Вложенные единицы — под-мысли (только подразделы). */
+  /** Вложенные единицы — под-мысли (не создаются; всегда пусто). */
   children: SplitSelectionNode[];
 }
 
@@ -516,12 +524,20 @@ function subtreeEnd(unit: MarkdownUnit): number {
   return end;
 }
 
+/** Число единиц разбора в дереве (рекурсивно) — порог доступности «Разделить». */
+function countUnits(units: readonly MarkdownUnit[]): number {
+  let total = 0;
+  for (const unit of units) total += 1 + countUnits(unit.children);
+  return total;
+}
+
 /**
- * Вложенный текст элемента списка с маркерами — сырой текст от первого
+ * Вложенный текст единицы с маркерами/заголовками — сырой текст от первого
  * подчинённого элемента до конца поддерева (пробелы/пустые строки между
- * вложенными сохраняются: структура читается в комментарии).
+ * вложенными сохраняются: структура читается в комментарии). Подчинённые
+ * разделы входят как есть — включая строку их заголовка (`### …`).
  */
-function nestedListText(unit: MarkdownUnit, source: string): string {
+function nestedUnitText(unit: MarkdownUnit, source: string): string {
   if (unit.children.length === 0) return '';
   let end = 0;
   for (const child of unit.children) end = Math.max(end, subtreeEnd(child));
@@ -536,7 +552,7 @@ function nestedListText(unit: MarkdownUnit, source: string): string {
  */
 export function listItemBody(unit: MarkdownUnit, source: string): string {
   const own = unit.text;
-  const nested = nestedListText(unit, source);
+  const nested = nestedUnitText(unit, source);
   const ownLong = own.includes('\n') || own.length > TITLE_MAX_LENGTH;
   const parts: string[] = [];
   if (ownLong) parts.push(own);
@@ -545,10 +561,27 @@ export function listItemBody(unit: MarkdownUnit, source: string): string {
 }
 
 /**
- * Строит лес узлов пакетного плана из дерева единиц разбора, смещая диапазоны
- * на `offset` (начало выделения). Единица без значимой строки своей мысли не
- * даёт (пропускается). Вложенные единицы списка НЕ становятся под-мыслями
- * (их текст входит в тело); подразделы — становятся.
+ * Тело мысли-раздела (требования `f5695a1e` п.2, `f64f5893`, walkthrough
+ * 2026-10-12): текст раздела БЕЗ строки заголовка, а подчинённые разделы
+ * (подразделы) и их содержимое — ТЕКСТОМ (включая строку заголовка `### …`),
+ * не отдельными мыслями. Пусто, если у раздела нет собственного текста и
+ * подразделов.
+ */
+export function sectionUnitBody(unit: MarkdownUnit, source: string): string {
+  const own = sectionBody(unit.text);
+  const nested = nestedUnitText(unit, source);
+  const parts: string[] = [];
+  if (own !== '') parts.push(own);
+  if (nested !== '') parts.push(nested);
+  return parts.join('\n');
+}
+
+/**
+ * Строит список узлов пакетного плана из ВЕРХНЕУРОВНЕВЫХ единиц разбора, смещая
+ * диапазоны на `offset` (начало выделения). Единица без значимой строки своей
+ * мысли не даёт (пропускается). Вложенные единицы (подчинённые элементы списка,
+ * подразделы) НЕ становятся под-мыслями — их текст входит в тело; под-мыслей
+ * не создаётся вовсе.
  */
 function buildUnitNodes(
   units: readonly MarkdownUnit[],
@@ -580,10 +613,10 @@ function buildUnitNodes(
         start,
         end: unit.end + offset,
         fullStart: start,
-        fullEnd: unit.end + offset,
+        fullEnd: subtreeEnd(unit) + offset,
         title,
-        bodyMd: sectionBody(unit.text),
-        children: buildUnitNodes(unit.children, source, offset),
+        bodyMd: sectionUnitBody(unit, source),
+        children: [],
       });
       continue;
     }
@@ -605,17 +638,13 @@ function buildUnitNodes(
   return nodes;
 }
 
-/** Число мыслей плана (включая под-мысли подразделов). */
-function countSplitNodes(nodes: readonly SplitSelectionNode[]): number {
-  let total = 0;
-  for (const node of nodes) total += 1 + countSplitNodes(node.children);
-  return total;
-}
-
 /**
- * План команды «Разделить выделение на мысли»: лес единиц разбора текущего
- * выделения. `null` — выделения нет, оно пустое или содержит менее
- * {@link SPLIT_MIN_UNITS} единиц (команда недоступна, ТП3).
+ * План команды «Разделить выделение на мысли»: список мыслей (верхнеуровневые
+ * единицы разбора). `null` — выделения нет, оно пустое или содержит менее
+ * {@link SPLIT_MIN_UNITS} единиц РАЗБОРА (команда недоступна, ТП3). Порог
+ * считается по единицам разбора (включая вложенные: подчинённые разделы,
+ * элементы списка) — выделение `## A` + `### B` команду активирует, давая ОДНУ
+ * мысль с текстом подраздела в теле (требование `f5695a1e` п.2).
  *
  * Разбор — только `parseSelectionUnits` из `@etn/markdown`; собственной нарезки
  * модуль не содержит (ADR `01ec1467`, сторож `guard-selection-single-parser`).
@@ -624,9 +653,10 @@ export function planSplitSelection(snap: MdEditorSnapshot): SplitSelectionNode[]
   if (snap.from === snap.to) return null;
   const selected = snap.text.slice(snap.from, snap.to);
   if (selected.trim() === '') return null;
-  const nodes = buildUnitNodes(parseSelectionUnits(selected), selected, snap.from);
-  if (countSplitNodes(nodes) < SPLIT_MIN_UNITS) return null;
-  return nodes;
+  const units = parseSelectionUnits(selected);
+  if (countUnits(units) < SPLIT_MIN_UNITS) return null;
+  const nodes = buildUnitNodes(units, selected, snap.from);
+  return nodes.length === 0 ? null : nodes;
 }
 
 /**

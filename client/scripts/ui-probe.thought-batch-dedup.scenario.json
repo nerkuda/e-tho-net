@@ -270,6 +270,58 @@
       "name": "S9-insertion-preserves-gap",
       "probe": "(async () => { const b=await window.__st.body(); return /^\\[\\[#[0-9a-f-]+\\]\\]\\n\\n\\[\\[#[0-9a-f-]+\\]\\]$/.test(b); })()",
       "expect": true
+    },
+
+    {
+      "name": "S10-seed-section",
+      "eval": "window.__st.setBody('## Раздел W\\nАбзац W.\\n### Подраздел W\\nтекст подраздела W\\n- список W\\n> цитата W')"
+    },
+    { "name": "S10-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S10-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S10-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S10-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('текст подраздела W') === true"
+    },
+    { "name": "S10-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S10-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S10-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S10-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S10-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S10-pick", "eval": "window.__st.menu('Создать мысль из выделенного')" },
+    { "name": "S10-settle", "eval": "(async () => { await new Promise((r) => setTimeout(r, 1000)); return true; })()" },
+    { "name": "S10-save", "click": "[data-action=\"save\"]" },
+    { "name": "S10-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S10-one-thought-subsection-as-text",
+      "probe": "(async () => { const t=await window.__st.children(); const b=await window.__st.childBody('Раздел W'); return { oneSection: t.filter((x)=>x==='Раздел W').length, noSubThought: !t.includes('Подраздел W'), hasSubheading: b ? b.includes('### Подраздел W') : false, hasBody: b ? b.includes('Абзац W.') : false, hasList: b ? b.includes('- список W') : false, hasQuote: b ? b.includes('> цитата W') : false }; })()",
+      "expect": { "oneSection": 1, "noSubThought": true, "hasSubheading": true, "hasBody": true, "hasList": true, "hasQuote": true }
+    },
+
+    {
+      "name": "S11-seed-section",
+      "eval": "window.__st.setBody('## Раздел X\\nАбзац X.\\n### Подраздел X\\nтекст подраздела X')"
+    },
+    { "name": "S11-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S11-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S11-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S11-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('текст подраздела X') === true"
+    },
+    { "name": "S11-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S11-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S11-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S11-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S11-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S11-pick", "eval": "window.__st.menu('Разделить выделение на мысли')" },
+    { "name": "S11-settle", "eval": "(async () => { await new Promise((r) => setTimeout(r, 1000)); return true; })()" },
+    { "name": "S11-save", "click": "[data-action=\"save\"]" },
+    { "name": "S11-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S11-one-thought-subsection-as-text",
+      "probe": "(async () => { const t=await window.__st.children(); const b=await window.__st.childBody('Раздел X'); return { oneSection: t.filter((x)=>x==='Раздел X').length, noSubThought: !t.includes('Подраздел X'), hasSubheading: b ? b.includes('### Подраздел X') : false, hasSubtext: b ? b.includes('текст подраздела X') : false }; })()",
+      "expect": { "oneSection": 1, "noSubThought": true, "hasSubheading": true, "hasSubtext": true }
     }
   ]
 }
