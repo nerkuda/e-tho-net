@@ -123,6 +123,10 @@ function fakePort(overrides: Partial<CommentThoughtCreatePort> = {}) {
       return { id: NEW_ID };
     },
     thoughtTitle: async (id: string) => `Заголовок ${id}`,
+    // Дедуп по умолчанию выключен (нет кандидатов) — тесты, проверяющие
+    // создание, не зависят от резолва 8e4e3dc5.
+    candidates: async () => [],
+    choose: async () => null,
     ...overrides,
     // Обёртка ПОСЛЕ `...overrides`: вызов диалога фиксируется всегда, даже
     // когда тест подменяет `pick`.
@@ -448,12 +452,14 @@ function sequencePort() {
     },
     pick: async () => null,
     thoughtTitle: async (id: string) => `Заголовок ${id}`,
+    candidates: async () => [],
+    choose: async () => null,
   };
   return { port, requests };
 }
 
 describe('разделение: правило разбора единиц (требование f5695a1e)', () => {
-  it('список: элемент — единица, вложенный — под-мысль', () => {
+  it('список: элемент — единица, вложенные входят в ТЕЛО, под-мыслей нет', () => {
     const text = '- один\n- два\n  - вложенный';
     const plan = create.planSplitSelection({ text, from: 0, to: text.length });
     assert.equal(plan?.length, 2, 'два элемента верхнего уровня');
@@ -461,13 +467,26 @@ describe('разделение: правило разбора единиц (тр
       plan!.map((node) => node.title),
       ['один', 'два'],
     );
+    // Вложенные элементы списка под-мыслей НЕ создают (требование 45b53e11,
+    // walkthrough 2026-10-12): их текст с маркерами — в ТЕЛЕ мысли-элемента.
     assert.equal(plan![0]!.children.length, 0);
-    assert.equal(plan![1]!.children.length, 1);
-    assert.equal(plan![1]!.children[0]!.title, 'вложенный');
-    // Тело — полный текст единицы (маркер сохранён).
-    assert.equal(plan![1]!.bodyMd, '- два');
-    assert.equal(plan![1]!.children[0]!.bodyMd, '  - вложенный');
-    assert.equal(plan![1]!.children[0]!.start, text.indexOf('  - вложенный'));
+    assert.equal(plan![1]!.children.length, 0);
+    assert.equal(plan![1]!.bodyMd, '  - вложенный', 'строка ≤ 250 с подчинёнными → тело из вложенных');
+    // Диапазон замены единицы целиком покрывает вложенный текст.
+    assert.equal(plan![1]!.start, text.indexOf('- два'));
+    assert.equal(plan![1]!.end, text.indexOf('- два') + '- два'.length);
+    assert.equal(plan![1]!.fullEnd, text.length, 'замена целиком захватывает вложенные строки');
+  });
+
+  it('список: строка > 250 и есть подчинённые (комбинированный) — тело = текст + вложенные', () => {
+    const long = `- ${'x'.repeat(300)}`;
+    const text = `${long}\n  - вложенный`;
+    // Одна единица верхнего уровня — «Разделить» недоступна (нужно ≥2), план
+    // пакетного пути смотрим через planBatchSelection (список — пакетный путь).
+    const plan = create.planBatchSelection({ text, from: 0, to: text.length });
+    assert.equal(plan?.length, 1);
+    assert.equal(plan![0]!.title.length, create.TITLE_MAX_LENGTH, 'название обрезано до 250');
+    assert.equal(plan![0]!.bodyMd, `${long}\n  - вложенный`, 'весь текст строки + вложенные');
   });
 
   it('разделы: заголовок — мысль, подраздел — под-мысль', () => {
@@ -503,12 +522,13 @@ describe('разделение: правило разбора единиц (тр
     assert.equal(plan![0]!.children[0]!.bodyMd, '');
   });
 
-  it('абзацы: без пустой строки блок кода — продолжение абзаца', () => {
+  it('абзацы: без пустой строки блок кода — продолжение абзаца; тело = остаток', () => {
     const cont = 'первый абзац\n\nвторой абзац\n```\nкод\n```';
     const plan = create.planSplitSelection({ text: cont, from: 0, to: cont.length });
     assert.equal(plan?.length, 2, 'код без пустой строки не открывает новую единицу');
     assert.equal(plan![1]!.title, 'второй абзац');
-    assert.equal(plan![1]!.bodyMd, 'второй абзац\n```\nкод\n```');
+    // Тело абзаца — остаток после заголовочной строки (требование 59ec432f).
+    assert.equal(plan![1]!.bodyMd, '```\nкод\n```');
   });
 
   it('абзацы: блок кода отделён пустой строкой — новая единица по первой строке блока', () => {
@@ -572,7 +592,7 @@ describe('разделение: доступность и исполнение',
     );
   });
 
-  it('создаёт мысль на единицу, вложенные — под-мысли, трансклюзии на месте', async () => {
+  it('создаёт мысль на единицу верхнего уровня; вложенные — в тело, не под-мысль', async () => {
     const text = '- один\n- два\n  - вложенный';
     const editor = fakeEditor(text, 0, text.length);
     const { port, requests } = sequencePort();
@@ -584,25 +604,24 @@ describe('разделение: доступность и исполнение',
 
     assert.deepEqual(
       requests.map((request) => request.title),
-      ['один', 'два', 'вложенный'],
-      'порядок мысли как в документе',
+      ['один', 'два'],
+      'только элементы верхнего уровня — под-мыслей нет',
     );
     assert.deepEqual(
       requests.map((request) => request.parentId),
-      [PARENT_ID, PARENT_ID, UNIT_IDS[1]],
-      'вложенная единица — под-мысль созданного родителя, не текущей мысли',
+      [PARENT_ID, PARENT_ID],
+      'все мысли — дети текущей (вложенные под-мыслей не создают)',
     );
     assert.deepEqual(
       requests.map((request) => request.bodyMd),
-      ['- один', '- два', '  - вложенный'],
-      'тело — единица целиком (требование f64f5893)',
+      ['', '  - вложенный'],
+      'без тела; у второго — вложенные строки как текст с маркерами',
     );
 
     assert.equal(editor.edits.length, 1, 'одна транзакция редактора');
     assert.deepEqual(editor.edits[0].changes, [
-      { from: 0, to: 6, insert: `![[#${UNIT_IDS[0]}]]` },
-      { from: 7, to: 12, insert: `![[#${UNIT_IDS[1]}]]` },
-      { from: 13, to: 26, insert: `![[#${UNIT_IDS[2]}]]` },
+      { from: 0, to: 6, insert: `[[#${UNIT_IDS[0]}]]` },
+      { from: 7, to: 26, insert: `![[#${UNIT_IDS[1]}]]` },
     ]);
   });
 
@@ -615,9 +634,10 @@ describe('разделение: доступность и исполнение',
     await flush();
 
     assert.equal(requests.length, 2);
+    // Однострочный абзац: тело пусто (остаток после заголовка) → ссылка.
     assert.deepEqual(editor.edits[0].changes, [
-      { from: 0, to: 10, insert: `![[#${UNIT_IDS[0]}]]` },
-      { from: 12, to: 21, insert: `![[#${UNIT_IDS[1]}]]` },
+      { from: 0, to: 10, insert: `[[#${UNIT_IDS[0]}]]` },
+      { from: 12, to: 21, insert: `[[#${UNIT_IDS[1]}]]` },
     ]);
     // Пустая строка `[10, 12)` не входит ни в одну правку.
     assert.ok(
@@ -654,7 +674,7 @@ describe('разделение: доступность и исполнение',
     assert.equal(commands.hasCommentCommandRunner(create.SPLIT_SELECTION_COMMAND), true);
   });
 
-  it('раздел без тела: мысль создаётся без comment, трансклюзия всё равно ставится', async () => {
+  it('раздел без тела: мысль без comment → на месте ССЫЛКА; подраздел — трансклюзия', async () => {
     const text = '# A\n## B\nтекст B';
     const editor = fakeEditor(text, 0, text.length);
     const { port, requests } = sequencePort();
@@ -678,8 +698,9 @@ describe('разделение: доступность и исполнение',
       'подраздел B — под-мысль мысли A',
     );
     assert.equal(editor.edits.length, 1, 'правка применена, команда не упала');
+    // A без тела → ссылка (требование 23c11231); B с телом → трансклюзия.
     assert.deepEqual(editor.edits[0].changes, [
-      { from: 0, to: 3, insert: `![[#${UNIT_IDS[0]}]]` },
+      { from: 0, to: 3, insert: `[[#${UNIT_IDS[0]}]]` },
       { from: 4, to: 16, insert: `![[#${UNIT_IDS[1]}]]` },
     ]);
   });
@@ -720,6 +741,8 @@ describe('перепрокладка правки после await создан�
       resolveParent: async () => PARENT_ID,
       pick: async () => ({ items: [{ kind: 'new', title: 'выделение', synonyms: [] }] }),
       thoughtTitle: async () => 'выделение',
+      candidates: async () => [],
+      choose: async () => null,
       create: async (request) => {
         requests.push(request);
         // Пользователь вставил символ в начало — выделение (CM6) сдвинулось на +1.
@@ -756,6 +779,8 @@ describe('перепрокладка правки после await создан�
       },
       pick: async () => null,
       thoughtTitle: async () => 'Раздел',
+      candidates: async () => [],
+      choose: async () => null,
     });
 
     commands.runCommentCommand(create.CREATE_FROM_SECTION_COMMAND, host(editor));
@@ -778,6 +803,8 @@ describe('перепрокладка правки после await создан�
       resolveParent: async () => PARENT_ID,
       pick: async () => ({ items: [{ kind: 'new', title: 'выделение', synonyms: [] }] }),
       thoughtTitle: async () => 'выделение',
+      candidates: async () => [],
+      choose: async () => null,
       create: async () => {
         // Пользователь изменил сам выделенный текст — перепрокладка невозможна.
         editor.set(text.replace('выделение', 'ДРУГОЕ!!'), from, from + 'ДРУГОЕ!!'.length);
@@ -909,6 +936,8 @@ describe('случаи 1–2: команда (диалог, создание, в
       resolveParent: async () => PARENT_ID,
       pick: async () => ({ items: [{ kind: 'new', title: 'заметка', synonyms: [] }] }),
       thoughtTitle: async () => 'заметка',
+      candidates: async () => [],
+      choose: async () => null,
       create: async () => {
         // Диалог увёл фокус — выделение в поле свернулось, текст не изменился.
         editor.set(text, to, to);
@@ -955,7 +984,7 @@ describe('случаи 1–2: команда (диалог, создание, в
     assert.equal(editor.edits.length, 0);
   });
 
-  it('пакетный (список) путь сохранён: одна мысль из выделения с телом', async () => {
+  it('пакетный (список) путь: диалог не открывается, мысль на каждый элемент', async () => {
     const text = '- один\n- два';
     const editor = fakeEditor(text, 0, text.length);
     const { port, created, picks } = fakePort();
@@ -965,12 +994,21 @@ describe('случаи 1–2: команда (диалог, создание, в
     await flush();
 
     assert.equal(picks.length, 0, 'диалог не открывается');
-    assert.equal(created[0]!.bodyMd, text);
-    assert.deepEqual(editor.edits[0].changes[0], {
-      from: 0,
-      to: text.length,
-      insert: `![[#${NEW_ID}]]`,
-    });
+    assert.deepEqual(
+      created.map((request) => request.title),
+      ['один', 'два'],
+      'пакетно по элементам уровня первого выделенного (требование 45b53e11)',
+    );
+    assert.deepEqual(
+      created.map((request) => request.bodyMd),
+      ['', ''],
+      'однострочные элементы без подчинённых — без тела',
+    );
+    // Без тела → на месте ссылка (требование 23c11231).
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: 6, insert: `[[#${NEW_ID}]]` },
+      { from: 7, to: 12, insert: `[[#${NEW_ID}]]` },
+    ]);
   });
 });
 
@@ -1029,7 +1067,7 @@ describe('выбор существующей (требования ee64ce46, d4
 });
 
 describe('перепрокладка разделения (ошибка da5e74b0)', () => {
-  it('разделение: все трансклюзии уезжают по сдвинутым позициям', async () => {
+  it('разделение: правки уезжают по сдвинутым позициям', async () => {
     const text = 'абзац один\n\nабзац два';
     const editor = mutableEditor(text, 0, text.length);
     let mutated = false;
@@ -1049,10 +1087,209 @@ describe('перепрокладка разделения (ошибка da5e74b0
     commands.runCommentCommand('comment.split', host(editor));
     await flush();
 
+    // Однострочные абзацы без тела → ссылки на сдвинутых позициях.
     assert.deepEqual(editor.edits[0].changes, [
-      { from: 2, to: 12, insert: `![[#${UNIT_IDS[0]}]]` },
-      { from: 14, to: 23, insert: `![[#${UNIT_IDS[1]}]]` },
+      { from: 2, to: 12, insert: `[[#${UNIT_IDS[0]}]]` },
+      { from: 14, to: 23, insert: `[[#${UNIT_IDS[1]}]]` },
     ]);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * T2 (026241f2): тела абзацев/кода и пакетный дедуп (14539728).
+ * ------------------------------------------------------------------ */
+
+describe('T2: тело единиц-абзацев и блоков кода (требование 59ec432f)', () => {
+  it('абзац: тело = остаток после заголовочной строки', () => {
+    const text = 'Первая строка\nостаток тела\n\nвторой абзац';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.equal(plan?.length, 2);
+    assert.equal(plan![0]!.title, 'Первая строка');
+    assert.equal(plan![0]!.bodyMd, 'остаток тела');
+    assert.equal(plan![1]!.bodyMd, '', 'однострочный абзац — без тела');
+  });
+
+  it('абзац: первая строка > 250 — тело = весь текст единицы', () => {
+    const text = `${'x'.repeat(300)}\nхвост\n\nвторой`;
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.equal(plan![0]!.bodyMd, `${'x'.repeat(300)}\nхвост`);
+  });
+
+  it('блок кода: название — первая непустая строка КАК ЕСТЬ, тело — весь блок', () => {
+    const text = 'абзац\n\n```\n## foo\nbar\n```';
+    const plan = create.planSplitSelection({ text, from: 0, to: text.length });
+    assert.equal(plan![1]!.title, '## foo', '# внутри кода — контент, не снимается');
+    assert.equal(plan![1]!.bodyMd, '```\n## foo\nbar\n```');
+  });
+
+  it('S9: смешанное выделение «абзац + список» — пакетный путь по единицам', async () => {
+    const text = 'абзац\n\n- пункт';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, created, picks } = fakePort();
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(picks.length, 0, 'диалог не открывается — пакетный путь');
+    assert.deepEqual(
+      created.map((request) => request.title),
+      ['абзац', 'пункт'],
+      'абзац — по правилам абзаца, список — по правилам списка',
+    );
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: 5, insert: `[[#${NEW_ID}]]` },
+      { from: 7, to: 14, insert: `[[#${NEW_ID}]]` },
+    ]);
+  });
+});
+
+/** Хит кандидата нужной формы для портов дедупа. */
+function hit(id: string, title: string, matchedOn: 'title' | 'synonym' = 'title'): any {
+  return {
+    id,
+    title,
+    synonyms: [],
+    matched_on: matchedOn,
+    type_id: null,
+    icon: null,
+    icon_kind: 'none',
+    fg_color: null,
+    bg_color: null,
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
+    parent_title: null,
+  };
+}
+
+describe('T2: дедуп по точному названию/синониму (требование 14539728)', () => {
+  it('ровно одно совпадение — используется существующая, дубль не создаётся', async () => {
+    const text = '- один\n- два';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, created } = fakePort({
+      candidates: async (title) => (title === 'один' ? [hit('EXIST-1', 'один')] : []),
+      thoughtTitle: async (id) => (id === 'EXIST-1' ? 'один' : `Заголовок ${id}`),
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.deepEqual(created.map((request) => request.title), ['два'], 'дубль «один» не создан');
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 2, to: 6, insert: '[[#EXIST-1]]' },
+      { from: 7, to: 12, insert: `[[#${NEW_ID}]]` },
+    ]);
+  });
+
+  it('совпадение по wildcard-синониму учитывается (классификация сервера)', async () => {
+    const text = '- исправленные ошибки';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, created } = fakePort({
+      candidates: async () => [hit('WILD-1', 'Исправленные ошибки', 'synonym')],
+      thoughtTitle: async () => 'другой заголовок',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(created.length, 0, 'wildcard-синоним — совпадение, дубль не создаётся');
+    assert.deepEqual(editor.edits[0].changes, [{ from: 0, to: 0, insert: '[[#WILD-1]]' }]);
+  });
+
+  it('несколько совпадений — поповер у элемента с анкер-координатой; выбор → ссылка', async () => {
+    const text = '- один\n- два';
+    const edits: any[] = [];
+    const choices: Array<{ x: number; y: number; name: string; count: number }> = [];
+    const editor = {
+      snapshot: () => ({ text, from: 0, to: text.length }),
+      applyEdit: (edit: any) => edits.push(edit),
+      pointAt: (pos: number) => ({ x: 100 + pos, y: 200 }),
+    };
+    const { port, created } = fakePort({
+      candidates: async (title) => (title === 'один' ? [hit('A', 'один'), hit('B', 'один')] : []),
+      choose: async (anchor, name, candidates) => {
+        choices.push({ ...anchor, name, count: candidates.length });
+        return 'B';
+      },
+      thoughtTitle: async () => 'один',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.deepEqual(choices, [{ x: 100, y: 200, name: 'один', count: 2 }], 'анкер — координата элемента');
+    assert.deepEqual(created.map((request) => request.title), ['два'], 'создан только элемент без кандидатов');
+    assert.equal(edits[0].changes[0].insert, '[[#B]]', 'выбранная существующая → ссылка');
+  });
+
+  it('отказ от поповера — элемент остаётся без изменений', async () => {
+    const text = '- один\n- два';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, created } = fakePort({
+      candidates: async (title) => (title === 'один' ? [hit('A', 'один'), hit('B', 'один')] : []),
+      choose: async () => null,
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.deepEqual(created.map((request) => request.title), ['два'], 'создан только элемент без кандидатов');
+    assert.deepEqual(editor.edits[0].changes, [{ from: 7, to: 12, insert: `[[#${NEW_ID}]]` }]);
+  });
+});
+
+describe('T2 S8: дедуп команды «Создать мысль из раздела» (14539728)', () => {
+  it('ровно одно совпадение → существующая мысль, дубль не создаётся', async () => {
+    const text = '# Раздел\n\nтело';
+    const editor = fakeEditor(text, 0, 0); // каретка в разделе
+    const { port, created } = fakePort({
+      candidates: async () => [hit('EXIST-1', 'Раздел')],
+      thoughtTitle: async (id) => (id === 'EXIST-1' ? 'Раздел' : `Заголовок ${id}`),
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    // Каретка в разделе: planFromSection нужен from внутри раздела.
+    const caught = { text, from: 2, to: 2 };
+    const ed = { ...editor, snapshot: () => caught };
+    commands.runCommentCommand(create.CREATE_FROM_SECTION_COMMAND, host(ed));
+    await flush();
+
+    assert.equal(created.length, 0, 'существующая — дубль не создаётся');
+    // Литеральное вхождение «Раздел» в «# Раздел…» заменяется ссылкой.
+    assert.deepEqual(ed.edits[0].changes, [{ from: 2, to: 8, insert: '[[#EXIST-1]]' }]);
+  });
+
+  it('несколько совпадений → поповер; отказ → создание новой по штатным правилам', async () => {
+    const text = '# Раздел\n\nтело';
+    const edits: any[] = [];
+    const ed = {
+      snapshot: () => ({ text, from: 2, to: 2 }),
+      applyEdit: (edit: any) => edits.push(edit),
+      pointAt: () => ({ x: 5, y: 6 }),
+    };
+    const { port, created } = fakePort({
+      candidates: async () => [hit('A', 'Раздел'), hit('B', 'Раздел')],
+      choose: async () => null,
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SECTION_COMMAND, host(ed));
+    await flush();
+
+    assert.equal(created.length, 1, 'отказ от поповера — прежнее поведение без дедупа');
+    assert.equal(created[0]!.title, 'Раздел');
+    assert.equal(created[0]!.bodyMd, 'тело');
+    assert.deepEqual(edits[0].changes[0], {
+      from: 0,
+      to: text.length,
+      insert: `![[#${NEW_ID}]]`,
+    });
   });
 });
 

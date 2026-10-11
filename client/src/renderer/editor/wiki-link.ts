@@ -28,7 +28,7 @@ import { otherHolder } from '../lib/lock-cache.js';
 import { notice } from '../lib/notice.js';
 import { replaceLegacyWikiLinks } from '../lib/pure.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
-import { openPopover } from '../lib/ui/popover.js';
+import { openPopover, type PopoverAnchor } from '../lib/ui/popover.js';
 import { isThoughtInResults, openStructuresThought } from '../screens/structures/structures.js';
 import { focusThoughtOnMap, openPublicationInWorkspace, setActiveView } from '../screens/active-view.js';
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
@@ -385,9 +385,29 @@ function showLegacyCandidatesPopover(
   candidates: readonly DuplicateHit[],
   pick: (thoughtId: string) => void,
 ): void {
+  openCandidatePopover({ element: target.anchorEl }, target.name, candidates, pick);
+}
+
+/**
+ * Поповер выбора среди НЕСКОЛЬКИХ кандидатов (требование `14539728`, задача
+ * `026241f2`): группы «подпись родителя → облачко мысли», ≤10 + пометка.
+ * ВЫНЕСЕН и экспортирован для ПАКЕТНЫХ путей создания мыслей: принимает
+ * произвольный АНКЕР — координату диапазона элемента (`{x, y}`, режим точки)
+ * либо DOM-элемент места клика (легаси-развилка). `onCancel` вызывается, если
+ * панель закрыта без выбора (отказ) — пакетный путь оставляет элемент без
+ * изменений. Второй механики поповера не создаётся: панель — `lib/ui/popover`.
+ */
+export function openCandidatePopover(
+  anchor: PopoverAnchor,
+  displayName: string,
+  candidates: readonly DuplicateHit[],
+  pick: (thoughtId: string) => void,
+  onCancel?: () => void,
+): void {
   const { shown, truncated } = legacyCandidateWindow(candidates);
   const body = div('legacy-candidates');
   let handle: { close(): void } | null = null;
+  let picked = false;
   for (const candidate of shown) {
     // Группа «родитель → облачко»: подпись родительской мысли СВЕРХУ, под ней
     // — своё облачко. Внутригрупповой зазор (2px) меньше межгруппового
@@ -405,6 +425,7 @@ function showLegacyCandidatesPopover(
           width: 'container',
           actions: {
             onClick: (thoughtId) => {
+              picked = true;
               handle?.close();
               pick(thoughtId);
             },
@@ -418,9 +439,12 @@ function showLegacyCandidatesPopover(
     body.append(el('p', 'muted', `Показаны первые ${LEGACY_CANDIDATE_LIMIT}, уточните имя.`));
   }
   handle = openPopover({
-    anchor: { element: target.anchorEl },
-    content: { title: `Найдено несколько мыслей: «${target.name}»`, body },
+    anchor,
+    content: { title: `Найдено несколько мыслей: «${displayName}»`, body },
     extraClass: 'legacy-candidates-popover',
+    onClose: () => {
+      if (!picked) onCancel?.();
+    },
   });
 }
 

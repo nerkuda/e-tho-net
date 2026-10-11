@@ -1,52 +1,57 @@
 /**
  * Команды «Создать мысль из раздела», «Создать мысль из выделенного» и
  * «Разделить выделение на мысли» (0.12.1, задачи 5f854e7a и 578c8525, ТП3
- * «Манипуляции с выделением в комментарии»; элемент интерфейса `2a21c27e`).
+ * «Манипуляции с выделением в комментарии»; элемент интерфейса `2a21c27e`;
+ * проработка 0.12.2 — задачи T1 `785c7fac` и T2 `026241f2`).
  *
  * Модуль владеет телами трёх команд поля комментария:
  *  - «из раздела» — каретка (или выделение) стоит в разделе: заголовок
  *    становится названием новой мысли, тело — текстом раздела без заголовка;
- *  - «из выделенного» — разветвляется (проработка 0.12.2, требование `dc24a8b1`):
- *    одиночное выделение ВНЕ списков и заголовков раздела открывает СУЩЕСТВУЮЩИЙ
- *    диалог поиска/создания с предзаполнением (случаи 1–2, см.
- *    {@link planSelectionCommand}); пакетное выделение (список/раздел) пока идёт
- *    прежним путём «одна мысль из всего выделения» (разбор пакетов — задача T2);
- *  - «разделить выделение на мысли» — выделение разбирается на единицы
- *    (`parseSelectionUnits`), по мысли на единицу с учётом вложенности
- *    (вложенные единицы — под-мысли созданной мысли-родителя), на месте каждой
- *    единицы — трансклюзия. Доступна при не менее 2 единицах разбора, диалога
- *    и предпросмотра нет.
+ *    перед созданием выполняется ПРЕДВАРИТЕЛЬНЫЙ дедуп по названию/синониму
+ *    (требование `14539728`), ровно одно совпадение → используется существующая;
+ *  - «из выделенного» — разветвляется (требование `a2`/`dc24a8b1`):
+ *    одиночное выделение ВНЕ списков и заголовков раздела открывает
+ *    СУЩЕСТВУЮЩИЙ диалог поиска/создания с предзаполнением (случаи 1–2);
+ *    пакетное выделение (список/раздел или смешанное) идёт ПАКЕТНЫМ путём по
+ *    единицам разбора (диалог не открывается);
+ *  - «разделить выделение на мысли» — те же пакетные правила ко ВСЕМ единицам
+ *    разбора, диалога и предпросмотра нет.
  *
- * Общее для всех команд (ТП3): новая мысль — ребёнок текущей мысли
- * (владелец комментария), тип не назначается, позиция — в конец списка детей;
- * на месте исходного фрагмента ставится трансклюзия полного постоянного
- * комментария новой мысли (без `#раздел` — заголовок ушёл в название,
- * требования `23c11231`, `f64f5893`, `fe023652`).
+ * Пакетный путь (требования `45b53e11`, `14539728`, `59ec432f`, `23c11231`):
+ *  - единицы — единого уровня разбора `parseSelectionUnits` (`@etn/markdown`);
+ *  - имя — первая значимая строка единицы, обрезанная до 250 (`f64f5893`),
+ *    для единицы-блока кода — первая непустая строка блока КАК ЕСТЬ (`f5695a1e`);
+ *  - тело — по виду единицы: список (`45b53e11`) — при строке > 250 (весь текст)
+ *    И/ИЛИ при подчинённых (вложенные строки как текст с маркерами); абзац —
+ *    остаток после заголовочной строки; раздел — текст без строки заголовка;
+ *    блок кода — весь блок; строка ≤ 250 без подчинённых — без тела;
+ *  - ВЛОЖЕННЫЕ элементы списка отдельных мыслей НЕ создают — их текст (с
+ *    маркерами) входит в ТЕЛО мысли-элемента (решение пользователя, walkthrough
+ *    2026-10-12; требование `fe023652`); подразделы остаются под-мыслями
+ *    («подчинённые разделы — текст» — тот же walkthrough);
+ *  - дедуп — по ТОЧНОМУ названию/синониму (с wildcard) РЕЗОЛВОМ кандидатов
+ *    `8e4e3dc5` (`resolveLegacyWikiCandidates`): ровно одно совпадение →
+ *    существующая без вопроса; несколько → поповер У ЭЛЕМЕНТА (анкер-координата
+ *    диапазона), отказ → элемент без изменений; не найдено → создаётся;
+ *  - вставка на месте — по развилке `23c11231`: существующая/новая без тела →
+ *    ссылка `[[#<id>]]`, новая с телом → трансклюзия (форма — `formatTransclusionRef`); для
+ *    существующей заменяется ЛИТЕРАЛЬНО совпавшая с заголовком часть (`ee64ce46`),
+ *    иначе ссылка встаёт в НАЧАЛО единицы.
  *
- * Случаи 1–2 «из выделенного» (требования `dc24a8b1`, `ee64ce46`, `d4f3d8a0`):
- * короткое (единственная строка ≤ 250 без переносов, ровно 250 — короткое)
- * выделение даёт мысль БЕЗ тела и обычную ссылку `[[#<id>]]` на месте; длинное
- * (> 250 или с переносом) — заголовок из первой строки, тело из остатка (или
- * весь текст, если первая строка > 250), на месте — трансклюзия мысли;
- * выбранная СУЩЕСТВУЮЩАЯ мысль заменяет ЛИТЕРАЛЬНО совпавшую с её заголовком
- * часть выделения ссылкой, а при отсутствии совпадения ссылка встаёт в НАЧАЛО
- * выделения (текст не меняется). Отказ от диалога оставляет текст как есть.
- *
- * Разбор выделения — существующей функцией `parseSelectionUnits`
- * (`@etn/markdown`); второй парсер не создаётся (ADR `01ec1467`, сторож
- * `guard-markdown-single-renderer`). Форма ссылки трансклюзии собирается
- * экспортом `formatTransclusionRef` того же пакета — собственных шаблонов
- * ссылок вне пакета быть не может. Запись — одной клиентской операцией «мысль +
- * постоянный комментарий»: REST `POST /thoughts` с телом `comment { body_md }`
- * (задача `aa79c82d`, ADR `56db189a`), раздельные вызовы не используются.
+ * Разбор выделения — существующей `parseSelectionUnits` (`@etn/markdown`);
+ * второй парсер не создаётся (ADR `01ec1467`, сторож
+ * `guard-markdown-single-renderer`, `guard-selection-single-parser`). Форма
+ * трансклюзии — `formatTransclusionRef` того же пакета; ссылка — `thoughtLinkRef`.
  *
  * Сеть и запись спрятаны за портом {@link CommentThoughtCreatePort}: юнит-тесты
- * подменяют его и проверяют план/название/тело/родителя без сервера.
+ * подменяют его и проверяют план/название/тело/родителя/дедуп/вставку без
+ * сервера и DOM.
  */
 
 import { formatTransclusionRef, parseSelectionUnits, type MarkdownUnit } from '@etn/markdown';
 import type { ThoughtCreateInput } from '@etn/shared';
 
+import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { requireNetworkId } from '../app.js';
 import { errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -116,11 +121,17 @@ export interface CommentThoughtPick {
   items: CommentThoughtPickItem[];
 }
 
+/** Анкер поповера кандидатов — координата диапазона элемента в окне. */
+export interface CommentThoughtAnchor {
+  x: number;
+  y: number;
+}
+
 /**
- * Сеть, диалог и запись для команд создания мыслей. Разделено на «определить
- * родителя», «открыть диалог», «узнать заголовок» и «создать» — так тесты
- * проверяют и разрешение владельца-связи, и саму операцию, не поднимая сервер и
- * DOM-диалог.
+ * Сеть, диалог, дедуп и запись для команд создания мыслей. Разделено на
+ * «определить родителя», «открыть диалог», «подобрать кандидатов», «показать
+ * поповер» и «создать» — так тесты проверяют и разрешение владельца-связи, и
+ * сам процесс, не поднимая сервер и DOM-поповер.
  */
 export interface CommentThoughtCreatePort {
   /** Мысль-родитель для владельца комментария; `null` — родитель не найден. */
@@ -139,6 +150,21 @@ export interface CommentThoughtCreatePort {
   }): Promise<CommentThoughtPick | null>;
   /** Канонический заголовок мысли — для частичной замены (требование `ee64ce46`). */
   thoughtTitle(id: string): Promise<string>;
+  /**
+   * ТОЧНЫЕ актуальные кандидаты по названию/синониму заголовка (резолв
+   * `8e4e3dc5` — `resolveLegacyWikiCandidates`, требование `14539728`):
+   * классификация `title`/`synonym` (с wildcard), `partial` отбрасывается.
+   */
+  candidates(title: string): Promise<DuplicateHit[]>;
+  /**
+   * Поповер выбора среди НЕСКОЛЬКИХ кандидатов у анкер-координаты диапазона
+   * элемента (требование `14539728`); `null` — отказ (элемент без изменений).
+   */
+  choose(
+    anchor: CommentThoughtAnchor,
+    displayName: string,
+    candidates: readonly DuplicateHit[],
+  ): Promise<string | null>;
 }
 
 let createPort: CommentThoughtCreatePort | null = null;
@@ -157,8 +183,7 @@ export function commentThoughtCreatePort(): CommentThoughtCreatePort {
  * Вход REST-создания мысли по запросу порта: постоянный комментарий добавляется,
  * только если тело непустое. Сервер отклоняет пустой `comment.body_md`
  * (требование `26f0aa52`), а отсутствие поля `comment` — валидно; поэтому
- * единица-раздел без собственного текста даёт мысль без тела, но трансклюзия
- * на её месте всё равно ставится (требование `f64f5893`).
+ * единица без собственного тела даёт мысль без тела.
  */
 export function buildCommentThoughtCreateInput(
   request: CommentThoughtCreateRequest,
@@ -176,6 +201,8 @@ export function buildCommentThoughtCreateInput(
  * Системный порт: родитель — сама мысль-владелец (для комментария связи —
  * её источник, как в `wiki-link-create.ts`); создание — REST `POST /thoughts`
  * со связью-родителем `direction: 'parent'` (новая мысль встаёт ПОД текущей).
+ * Дедуп переиспользует резолв кандидатов `8e4e3dc5`; поповер — общий компонент
+ * `lib/ui/popover` через экспорт `openCandidatePopover` (`wiki-link.ts`).
  */
 function restCreatePort(): CommentThoughtCreatePort {
   return {
@@ -214,6 +241,16 @@ function restCreatePort(): CommentThoughtCreatePort {
     },
     async thoughtTitle(id) {
       return (await etn.thoughts.get(requireNetworkId(), id)).title;
+    },
+    async candidates(title) {
+      const { resolveLegacyWikiCandidates } = await import('./wiki-link-resolver.js');
+      return resolveLegacyWikiCandidates(requireNetworkId(), title);
+    },
+    async choose(anchor, displayName, candidates) {
+      const { openCandidatePopover } = await import('./wiki-link.js');
+      return new Promise<string | null>((resolve) => {
+        openCandidatePopover(anchor, displayName, candidates, resolve, () => resolve(null));
+      });
     },
   };
 }
@@ -303,6 +340,35 @@ export function thoughtTitle(text: string): string {
   return truncateMarkdownTitle(firstSignificantLine(text));
 }
 
+/** Первая непустая строка текста (без снятия маркеров разметки); `null` — нет. */
+function firstNonEmptyLine(text: string): string | null {
+  for (const raw of text.split(/\r?\n/)) {
+    if (raw.trim() !== '') return raw;
+  }
+  return null;
+}
+
+/** Единица — блок кода: первая непустая строка открывает ограждение. */
+function isCodeUnit(text: string): boolean {
+  const first = firstNonEmptyLine(text);
+  return first !== null && FENCE_RE.test(first.trim());
+}
+
+/**
+ * Название единицы-блока кода (требование `f5695a1e` п.9): первая непустая
+ * строка содержимого КАК ЕСТЬ — строки-ограждения пропускаются, символы `#` и
+ * подобные внутри кода НЕ снимаются. Ограничена 250 символами (`f64f5893`).
+ */
+export function codeUnitTitle(text: string): string {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === '') continue;
+    if (FENCE_RE.test(line)) continue;
+    return truncateMarkdownTitle(line);
+  }
+  return '';
+}
+
 /**
  * Тело единицы-раздела без строки заголовка (ведущие пустые строки сняты):
  * заголовок уходит в название, тело становится постоянным комментарием.
@@ -311,6 +377,31 @@ export function sectionBody(text: string): string {
   const nl = text.indexOf('\n');
   if (nl === -1) return '';
   return text.slice(nl + 1).replace(/^(?:[ \t]*\r?\n)+/, '').replace(/[ \t]+$/, '');
+}
+
+/**
+ * Тело единицы-абзаца/строки (требование `59ec432f`): остаток после
+ * заголовочной (первой физической) строки; если эта строка длиннее 250 —
+ * тело равно всему тексту единицы. Одиночная строка ≤ 250 даёт пустое тело.
+ */
+export function paragraphBody(text: string): string {
+  const nl = text.indexOf('\n');
+  const first = (nl === -1 ? text : text.slice(0, nl)).replace(/\r$/, '');
+  if (first.length > TITLE_MAX_LENGTH) return text;
+  return restAfterFirstLine(text);
+}
+
+/**
+ * Тело длинного выделения — остаток после первой строки: ведущие пустые строки
+ * и хвостовые пробелы снимаются (та же механика, что у {@link sectionBody}).
+ */
+function restAfterFirstLine(text: string): string {
+  const nl = text.indexOf('\n');
+  if (nl === -1) return '';
+  return text
+    .slice(nl + 1)
+    .replace(/^(?:[ \t]*\r?\n)+/, '')
+    .replace(/[ \t]+$/, '');
 }
 
 /**
@@ -386,64 +477,135 @@ export function planFromSelection(snap: MdEditorSnapshot): CommentThoughtPlan | 
 }
 
 /* ------------------------------------------------------------------ *
- * План команды «Разделить выделение на мысли» (задача 578c8525).
+ * Пакетный план: единицы разбора → мысли (задачи T2 026241f2 / 59ec432f).
  * ------------------------------------------------------------------ */
 
 /**
- * Узел плана разделения: одна единица разбора → будущая мысль. `start`/`end` —
- * диапазон единицы в тексте редактора `[start, end)`; `children` — вложенные
- * единицы, которые станут под-мыслями созданной мысли-родителя.
+ * Узел пакетного плана: одна единица разбора → будущая мысль.
+ *
+ * `start`/`end` — диапазон СОБСТВЕННОГО содержимого единицы в тексте редактора
+ * `[start, end)` (для существующей мысли ссылкой заменяется совпавшая часть
+ * внутри него, остальное остаётся); `fullStart`/`fullEnd` — диапазон всей
+ * единицы, включая вложенное содержимое, которое уходит в ТЕЛО (для новой
+ * мысли с телом весь диапазон заменяется трансклюзией, чтобы вложенный текст не
+ * остался в комментарии дважды); `children` — вложенные единицы, которые
+ * становятся ПОД-МЫСЛЯМИ (только подразделы; вложенные элементы списка
+ * под-мыслей не создают — требование `45b53e11`).
  */
 export interface SplitSelectionNode {
-  /** Начало заменяемого фрагмента в тексте редактора (включительно). */
+  /** Начало собственного диапазона единицы (включительно). */
   start: number;
-  /** Конец заменяемого фрагмента в тексте редактора (исключительно). */
+  /** Конец собственного диапазона единицы (исключительно). */
   end: number;
+  /** Начало диапазона замены единицы целиком (включительно). */
+  fullStart: number;
+  /** Конец диапазона замены единицы целиком (исключительно). */
+  fullEnd: number;
   /** Название новой мысли (первая значимая строка, ≤250). */
   title: string;
-  /**
-   * Тело новой мысли — постоянный комментарий: полный текст единицы, для
-   * единицы-раздела — без строки заголовка (`sectionBody`, требование
-   * `23c11231`).
-   */
+  /** Тело новой мысли: `''` — без тела (вставка — ссылка). */
   bodyMd: string;
-  /** Вложенные единицы — под-мысли этой мысли. */
+  /** Вложенные единицы — под-мысли (только подразделы). */
   children: SplitSelectionNode[];
 }
 
+/** Конец диапазона единицы с учётом всех вложенных единиц. */
+function subtreeEnd(unit: MarkdownUnit): number {
+  let end = unit.end;
+  for (const child of unit.children) end = Math.max(end, subtreeEnd(child));
+  return end;
+}
+
 /**
- * Строит лес узлов плана из дерева единиц разбора, смещая их диапазоны на
- * `offset` (начало выделения в тексте редактора). Единица без значимой строки
- * своей мысли не даёт — её вложенные единицы поднимаются на уровень выше.
- *
- * Тело единицы: для раздела — текст БЕЗ строки заголовка (`sectionBody`):
- * заголовок уходит в название, «раздела с таким заголовком в новой мысли нет»,
- * поэтому в развёртке трансклюзии заголовок не появляется (требование
- * `23c11231`, правило разбора `f5695a1e`; та же механика, что у команды
- * «Создать мысль из раздела» в задаче `5f854e7a`). Для остальных единиц тело —
- * полный текст единицы.
+ * Вложенный текст элемента списка с маркерами — сырой текст от первого
+ * подчинённого элемента до конца поддерева (пробелы/пустые строки между
+ * вложенными сохраняются: структура читается в комментарии).
  */
-function buildSplitNodes(units: readonly MarkdownUnit[], offset: number): SplitSelectionNode[] {
+function nestedListText(unit: MarkdownUnit, source: string): string {
+  if (unit.children.length === 0) return '';
+  let end = 0;
+  for (const child of unit.children) end = Math.max(end, subtreeEnd(child));
+  return source.slice(unit.children[0]!.start, end).replace(/[ \t]+$/, '');
+}
+
+/**
+ * Тело мысли-элемента списка (требование `45b53e11`): при строке > 250 (весь
+ * текст единицы) И/ИЛИ при подчинённых (вложенные строки как текст с маркерами).
+ * Комбинированный случай — весь текст строки + вложенные. Строка ≤ 250 без
+ * подчинённых — без тела. Вложенные элементы под-мыслей НЕ создают.
+ */
+export function listItemBody(unit: MarkdownUnit, source: string): string {
+  const own = unit.text;
+  const nested = nestedListText(unit, source);
+  const ownLong = own.includes('\n') || own.length > TITLE_MAX_LENGTH;
+  const parts: string[] = [];
+  if (ownLong) parts.push(own);
+  if (nested !== '') parts.push(nested);
+  return parts.join('\n').replace(/[ \t]+$/, '');
+}
+
+/**
+ * Строит лес узлов пакетного плана из дерева единиц разбора, смещая диапазоны
+ * на `offset` (начало выделения). Единица без значимой строки своей мысли не
+ * даёт (пропускается). Вложенные единицы списка НЕ становятся под-мыслями
+ * (их текст входит в тело); подразделы — становятся.
+ */
+function buildUnitNodes(
+  units: readonly MarkdownUnit[],
+  source: string,
+  offset: number,
+): SplitSelectionNode[] {
   const nodes: SplitSelectionNode[] = [];
   for (const unit of units) {
-    const children = buildSplitNodes(unit.children, offset);
-    const title = thoughtTitle(unit.text);
-    if (title === '') {
-      nodes.push(...children);
+    if (unit.kind === 'list') {
+      const title = thoughtTitle(unit.text);
+      if (title === '') continue;
+      const start = unit.start + offset;
+      nodes.push({
+        start,
+        end: unit.end + offset,
+        fullStart: start,
+        fullEnd: subtreeEnd(unit) + offset,
+        title,
+        bodyMd: listItemBody(unit, source),
+        children: [],
+      });
       continue;
     }
+    if (unit.kind === 'section') {
+      const title = thoughtTitle(unit.text);
+      if (title === '') continue;
+      const start = unit.start + offset;
+      nodes.push({
+        start,
+        end: unit.end + offset,
+        fullStart: start,
+        fullEnd: unit.end + offset,
+        title,
+        bodyMd: sectionBody(unit.text),
+        children: buildUnitNodes(unit.children, source, offset),
+      });
+      continue;
+    }
+    // Абзац, строка или блок кода.
+    const code = isCodeUnit(unit.text);
+    const title = code ? codeUnitTitle(unit.text) : thoughtTitle(unit.text);
+    if (title === '') continue;
+    const start = unit.start + offset;
     nodes.push({
-      start: unit.start + offset,
+      start,
       end: unit.end + offset,
+      fullStart: start,
+      fullEnd: unit.end + offset,
       title,
-      bodyMd: unit.kind === 'section' ? sectionBody(unit.text) : unit.text,
-      children,
+      bodyMd: code ? unit.text : paragraphBody(unit.text),
+      children: [],
     });
   }
   return nodes;
 }
 
-/** Число единиц разбора в лесе (включая вложенные). */
+/** Число мыслей плана (включая под-мысли подразделов). */
 function countSplitNodes(nodes: readonly SplitSelectionNode[]): number {
   let total = 0;
   for (const node of nodes) total += 1 + countSplitNodes(node.children);
@@ -452,8 +614,8 @@ function countSplitNodes(nodes: readonly SplitSelectionNode[]): number {
 
 /**
  * План команды «Разделить выделение на мысли»: лес единиц разбора текущего
- * выделения (вложенность сохраняется). `null` — выделения нет, оно пустое или
- * содержит менее {@link SPLIT_MIN_UNITS} единиц (команда недоступна, ТП3).
+ * выделения. `null` — выделения нет, оно пустое или содержит менее
+ * {@link SPLIT_MIN_UNITS} единиц (команда недоступна, ТП3).
  *
  * Разбор — только `parseSelectionUnits` из `@etn/markdown`; собственной нарезки
  * модуль не содержит (ADR `01ec1467`, сторож `guard-selection-single-parser`).
@@ -462,9 +624,22 @@ export function planSplitSelection(snap: MdEditorSnapshot): SplitSelectionNode[]
   if (snap.from === snap.to) return null;
   const selected = snap.text.slice(snap.from, snap.to);
   if (selected.trim() === '') return null;
-  const nodes = buildSplitNodes(parseSelectionUnits(selected), snap.from);
+  const nodes = buildUnitNodes(parseSelectionUnits(selected), selected, snap.from);
   if (countSplitNodes(nodes) < SPLIT_MIN_UNITS) return null;
   return nodes;
+}
+
+/**
+ * План ПАКЕТНОГО пути команды «Создать мысль из выделенного» (диалог не
+ * открывается): `null` — выделение не пакетное (одиночное вне списков/разделов),
+ * пустое или без единиц с названием.
+ */
+export function planBatchSelection(snap: MdEditorSnapshot): SplitSelectionNode[] | null {
+  if (snap.from === snap.to) return null;
+  const selected = snap.text.slice(snap.from, snap.to);
+  if (selected.trim() === '' || !selectionUsesBatchPath(selected)) return null;
+  const nodes = buildUnitNodes(parseSelectionUnits(selected), selected, snap.from);
+  return nodes.length === 0 ? null : nodes;
 }
 
 /* ------------------------------------------------------------------ *
@@ -475,7 +650,7 @@ export function planSplitSelection(snap: MdEditorSnapshot): SplitSelectionNode[]
  * План одиночного выделения для команды «Создать мысль из выделенного»
  * (требование `dc24a8b1`): предзаполнение диалога, разбиение на имя/тело и
  * признак пакетного пути. Диалог открывается только для одиночного выделения
- * ВНЕ списков и заголовков раздела; прочее идёт пакетным путём (задача T2).
+ * ВНЕ списков и заголовков раздела; прочее идёт пакетным путём.
  */
 export interface SelectionDialogPlan {
   /** Начало выделения в тексте редактора (включительно). */
@@ -498,23 +673,9 @@ export interface SelectionDialogPlan {
 }
 
 /**
- * Тело длинного выделения — остаток после первой строки: ведущие пустые строки
- * и хвостовые пробелы снимаются (та же механика, что у {@link sectionBody}).
- */
-function restAfterFirstLine(text: string): string {
-  const nl = text.indexOf('\n');
-  if (nl === -1) return '';
-  return text
-    .slice(nl + 1)
-    .replace(/^(?:[ \t]*\r?\n)+/, '')
-    .replace(/[ \t]+$/, '');
-}
-
-/**
  * Пакетный ли путь у выделения: первый или любой верхнеуровневый элемент —
  * список либо раздел (заголовок). Такие выделения диалог не открывают
- * (элемент интерфейса `2a21c27e`, требование `dc24a8b1`); их разбор — задача T2,
- * текущее поведение «одна мысль из всего выделения» сохраняется.
+ * (элемент интерфейса `2a21c27e`, требование `dc24a8b1`).
  */
 export function selectionUsesBatchPath(selected: string): boolean {
   return parseSelectionUnits(selected).some(
@@ -552,20 +713,19 @@ export function planSelectionCommand(snap: MdEditorSnapshot): SelectionDialogPla
 }
 
 /**
- * Разрешённая ссылка/трансклюзия случая 1–2: готовая конструкция и признак
- * «заменяет всё выделение» (новая мысль) либо «заголовок для частичной замены»
- * (существующая мысль).
+ * Разрешённая ссылка/трансклюзия: готовая конструкция и признак «заменяет всё
+ * выделение» (новая мысль) либо «заголовок для частичной замены» (существующая).
  */
 export interface SelectionThoughtRef {
   /** Готовая вставка: ссылка `[[#<id>]]` либо трансклюзия мысли. */
   ref: string;
   /** Заголовок существующей мысли — для частичной замены; `null` — новая. */
   title: string | null;
-  /** `true` — вставка заменяет всё выделение (новая мысль из выделения). */
+  /** `true` — вставка заменяет всю единицу (новая мысль). */
   whole: boolean;
 }
 
-/** Правка редактора случая 1–2: набор изменений и новый курсор. */
+/** Правка редактора: набор изменений и новый курсор. */
 export interface SelectionEdit {
   changes: Array<{ from: number; to: number; insert: string }>;
   anchor: number;
@@ -577,12 +737,12 @@ function indexOfInsensitive(haystack: string, needle: string): number {
 }
 
 /**
- * Собирает правки случая 1–2 (требования `ee64ce46`, `d4f3d8a0`):
- * - если есть новая мысль (`whole`) — всё выделение заменяется конструкциями
- *   (новая с телом → трансклюзия, новая без тела → ссылка);
- * - иначе для каждой существующей мысли ссылкой заменяется ЛИТЕРАЛЬНО совпавшая
- *   с её заголовком часть выделения (регистронезависимо, по `trim`), а без
- *   совпадения — ссылка вставляется в НАЧАЛО выделения, текст не меняется.
+ * Собирает правки ОДНОЙ единицы (требования `ee64ce46`, `d4f3d8a0`):
+ * - если есть новая мысль (`whole`) — вся единица заменяется конструкцией
+ *   (с телом → трансклюзия, без тела → ссылка);
+ * - иначе для существующей мысли ссылкой заменяется ЛИТЕРАЛЬНО совпавшая
+ *   с её заголовком часть текста единицы (регистронезависимо, по `trim`), а без
+ *   совпадения — ссылка вставляется в НАЧАЛО, текст не меняется.
  */
 export function buildSelectionEdits(
   selected: string,
@@ -626,37 +786,92 @@ export type CommentThoughtPlanBuilder = (
   snap: MdEditorSnapshot,
 ) => CommentThoughtPlan | null;
 
-/**
- * Перепрокладывает план на актуальное состояние документа после асинхронного
- * создания мыслей (ошибка `da5e74b0`, приём исправления `486d0ef1`).
- *
- * Позиции `plan.start`/`plan.end` сняты ДО сетевого ожидания и к моменту правки
- * могли устареть (CM6 смещает выделение вместе с чужими правками, но не наши
- * сохранённые офсеты). {@link relocatedSelection} даёт актуальные границы
- * выделения, если его текст не изменился; по ним план строится заново. Возврат
- * `null` — контекст изменился (текст выделения/раздела другой), правку применять
- * нельзя: команда безопасно отменяется, чтобы не испортить текст.
- */
-function relocatePlan(
-  before: MdEditorSnapshot,
-  after: MdEditorSnapshot,
-  build: CommentThoughtPlanBuilder,
-  plan: CommentThoughtPlan,
-): CommentThoughtPlan | null {
-  const sel = relocatedSelection(before, after);
-  if (sel === null) return null;
-  const next = build({ text: after.text, from: sel.from, to: sel.to });
-  if (next === null) return null;
-  if (next.title !== plan.title || next.bodyMd !== plan.bodyMd) return null;
-  return next;
+/** Собирает узлы леса в порядке документа (pre-order). */
+function flattenSplit(nodes: readonly SplitSelectionNode[]): SplitSelectionNode[] {
+  const flat: SplitSelectionNode[] = [];
+  const walk = (list: readonly SplitSelectionNode[]): void => {
+    for (const node of list) {
+      flat.push(node);
+      walk(node.children);
+    }
+  };
+  walk(nodes);
+  return flat;
 }
 
-/** Создаёт мысль по плану и ставит трансклюзию на месте фрагмента. */
-async function createAndReplace(
+/** Совпадает ли лес единиц до и после ожидания (структура, названия, тела). */
+function sameSplitShape(
+  a: readonly SplitSelectionNode[],
+  b: readonly SplitSelectionNode[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.title !== y.title || x.bodyMd !== y.bodyMd) return false;
+    if (!sameSplitShape(x.children, y.children)) return false;
+  }
+  return true;
+}
+
+/** План раздела → один узел пакетного плана. */
+function sectionNodeFromPlan(plan: CommentThoughtPlan): SplitSelectionNode {
+  return {
+    start: plan.start,
+    end: plan.end,
+    fullStart: plan.start,
+    fullEnd: plan.end,
+    title: plan.title,
+    bodyMd: plan.bodyMd,
+    children: [],
+  };
+}
+
+/** Заголовок существующей мысли → ссылка для частичной замены. */
+async function existingRef(
+  port: CommentThoughtCreatePort,
+  id: string,
+): Promise<SelectionThoughtRef> {
+  return { ref: thoughtLinkRef(id, ''), title: await port.thoughtTitle(id), whole: false };
+}
+
+/** Создаёт новую мысль по узлу; форма вставки — по непустоте ТЕЛА (`23c11231`). */
+async function createUnitRef(
+  port: CommentThoughtCreatePort,
+  parentId: string,
+  node: SplitSelectionNode,
+): Promise<{ ref: SelectionThoughtRef; id: string }> {
+  const created = await port.create({ parentId, title: node.title, bodyMd: node.bodyMd });
+  return {
+    id: created.id,
+    ref: {
+      ref: node.bodyMd === '' ? thoughtLinkRef(created.id, '') : formatTransclusionRef(created.id),
+      title: null,
+      whole: true,
+    },
+  };
+}
+
+/**
+ * Общий движок пакетного пути (список, «Разделить», «Создать мысль из
+ * раздела»): по каждой единице — дедуп `14539728` (одно совпадение →
+ * существующая, несколько → поповер у элемента, отказ → по `refuseCreates`),
+ * иначе создание; затем вставка по `23c11231`/`ee64ce46`. Позиции сняты ДО
+ * сетевых `await` — после них план перепрокладывается по актуальному документу
+ * ({@link relocatedSelection}, ошибка `da5e74b0`); расхождение контекста
+ * отменяет правку.
+ *
+ * @param rebuild — перестроение плана по актуальному снимку (для перепрокладки);
+ * @param refuseCreates — при отказе от поповера создавать новую мысль (`false`
+ *   — «Создать мысль из раздела»: отказ → прежнее поведение без дедупа) или
+ *   оставить элемент без изменений (`true` — список и «Разделить»).
+ */
+async function runPlanUnits(
   editor: MdEditor,
-  plan: CommentThoughtPlan,
-  build: CommentThoughtPlanBuilder,
+  nodes: readonly SplitSelectionNode[],
   owner: CommentOwnerRef,
+  rebuild: (snap: MdEditorSnapshot) => SplitSelectionNode[] | null,
+  refuseCreates: boolean,
 ): Promise<void> {
   const port = commentThoughtCreatePort();
   const before = editor.snapshot();
@@ -666,31 +881,115 @@ async function createAndReplace(
       notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`, 'error');
       return;
     }
-    const created = await port.create({ parentId, title: plan.title, bodyMd: plan.bodyMd });
-    const next = relocatePlan(before, editor.snapshot(), build, plan);
-    if (next === null) return; // документ изменился — правку не применяем
-    const insert = formatTransclusionRef(created.id);
+
+    const refs: Array<SelectionThoughtRef | null> = [];
+
+    // Замыкание «отказ»: сама единица и всё её поддерево остаются без правок,
+    // но позиции в плоском списке сохраняются (сверка с перепрокладкой).
+    const pushSkipped = (node: SplitSelectionNode): void => {
+      refs.push(null);
+      for (const child of node.children) pushSkipped(child);
+    };
+
+    // Обход в порядке документа: подраздел создаётся под родительской мыслью
+    // (её id — существующий или только что созданный), прочее — под текущей.
+    const walk = async (
+      list: readonly SplitSelectionNode[],
+      parent: string,
+    ): Promise<void> => {
+      for (const node of list) {
+        const candidates = await port.candidates(node.title);
+        if (candidates.length === 1) {
+          refs.push(await existingRef(port, candidates[0]!.id));
+          await walk(node.children, candidates[0]!.id);
+          continue;
+        }
+        if (candidates.length > 1) {
+          const anchor = editor.pointAt?.(node.start) ?? { x: 0, y: 0 };
+          const chosen = await port.choose(anchor, node.title, candidates);
+          if (chosen !== null) {
+            refs.push(await existingRef(port, chosen));
+            await walk(node.children, chosen);
+          } else if (refuseCreates) {
+            pushSkipped(node); // отказ — элемент (и вложенные) без изменений
+          } else {
+            const created = await createUnitRef(port, parent, node);
+            refs.push(created.ref);
+            await walk(node.children, created.id);
+          }
+          continue;
+        }
+        const created = await createUnitRef(port, parent, node);
+        refs.push(created.ref);
+        await walk(node.children, created.id);
+      }
+    };
+    await walk(nodes, parentId);
+
+    // Позиции плана сняты ДО сетевых await — перепрокладываем по актуальному
+    // документу; расхождение контекста отменяет правку (`da5e74b0`).
+    const after = editor.snapshot();
+    const sel =
+      relocatedSelection(before, after) ??
+      (after.text === before.text ? { from: before.from, to: before.to } : null);
+    if (sel === null) return;
+    const next = rebuild({ text: after.text, from: sel.from, to: sel.to });
+    if (next === null || !sameSplitShape(nodes, next)) return;
+    const flatAfter = flattenSplit(next);
+    if (flatAfter.length !== refs.length) return;
+
+    const changes: Array<{ from: number; to: number; insert: string }> = [];
+    for (let i = 0; i < flatAfter.length; i++) {
+      const ref = refs[i]!;
+      if (ref === null) continue;
+      const node = flatAfter[i]!;
+      const from = ref.whole ? node.fullStart : node.start;
+      const to = ref.whole ? node.fullEnd : node.end;
+      const edit = buildSelectionEdits(after.text.slice(from, to), from, [ref]);
+      changes.push(...edit.changes);
+    }
+    if (changes.length === 0) return;
+    changes.sort((a, b) => a.from - b.from);
+    const first = changes[0]!;
     editor.applyEdit({
-      changes: [{ from: next.start, to: next.end, insert }],
-      selection: { anchor: next.start + insert.length },
+      changes,
+      selection: { anchor: first.from + first.insert.length },
     });
   } catch (err) {
     notice(`${t('comment.create.error')}: ${errText(err)}`, 'error');
   }
 }
 
-/** Общий ход команды: план → владелец → асинхронное создание. */
+/* ------------------------------------------------------------------ *
+ * Тело команды «Создать мысль из раздела» (дедуп S8, требование 14539728).
+ * ------------------------------------------------------------------ */
+
+/**
+ * Ход команды «Создать мысль из раздела»: предварительный дедуп по
+ * названию/синониму (одно → существующая, несколько → поповер, отказ → прежнее
+ * поведение без дедупа), затем вставка по развилке `23c11231`.
+ */
 function runCreate(ctx: CommentCommandContext, build: CommentThoughtPlanBuilder): boolean {
   const plan = build(ctx.editor.snapshot());
   if (plan === null) return false;
   const owner = ctx.getCommentOwner();
   if (owner === null) return false;
-  void createAndReplace(ctx.editor, plan, build, owner);
+  const node = sectionNodeFromPlan(plan);
+  void runPlanUnits(
+    ctx.editor,
+    [node],
+    owner,
+    (snap) => {
+      const next = build(snap);
+      return next === null ? null : [sectionNodeFromPlan(next)];
+    },
+    false,
+  );
   return true;
 }
 
 /* ------------------------------------------------------------------ *
- * Тело команды «Создать мысль из выделенного» (случаи 1–2, задача 785c7fac).
+ * Тело команды «Создать мысль из выделенного» (T1 случаи 1–2 + T2 пакет).
  * ------------------------------------------------------------------ */
 
 /**
@@ -724,7 +1023,7 @@ async function runSelectionDialog(
     const refs: SelectionThoughtRef[] = [];
     for (const item of result.items) {
       if (item.kind === 'existing' && item.id !== undefined) {
-        refs.push({ ref: thoughtLinkRef(item.id, ''), title: await port.thoughtTitle(item.id), whole: false });
+        refs.push(await existingRef(port, item.id));
         continue;
       }
       // Новая мысль: заголовок и синонимы из диалога (поле могло быть
@@ -735,9 +1034,7 @@ async function runSelectionDialog(
         bodyMd: plan.bodyMd,
       });
       // Форма вставки — по ФАКТИЧЕСКОЙ непустоте тела (требования `23c11231`,
-      // `d4f3d8a0`), а не по «короткости» случая: длинное выделение с пустым
-      // остатком после первой строки (например, хвостовые пустые строки) даёт
-      // мысль без тела, и на месте должна быть обычная ссылка, не трансклюзия.
+      // `d4f3d8a0`), а не по «короткости» случая.
       refs.push({
         ref: plan.bodyMd === '' ? thoughtLinkRef(created.id, '') : formatTransclusionRef(created.id),
         title: null,
@@ -765,8 +1062,8 @@ async function runSelectionDialog(
 
 /**
  * Ход команды «Создать мысль из выделенного»: одиночное выделение вне списков и
- * заголовков идёт через диалог (случаи 1–2); пакетное (список/раздел) — прежним
- * путём «одна мысль из всего выделения» до задачи T2.
+ * заголовков идёт через диалог (случаи 1–2); пакетное (список/раздел/смешанное)
+ * — пакетным путём по единицам (T2).
  */
 function runSelectionCommand(ctx: CommentCommandContext): boolean {
   const snap = ctx.editor.snapshot();
@@ -775,9 +1072,9 @@ function runSelectionCommand(ctx: CommentCommandContext): boolean {
   const owner = ctx.getCommentOwner();
   if (owner === null) return false;
   if (plan.batch) {
-    const legacy = planFromSelection(snap);
-    if (legacy === null) return false;
-    void createAndReplace(ctx.editor, legacy, planFromSelection, owner);
+    const nodes = planBatchSelection(snap);
+    if (nodes === null) return false;
+    void runPlanUnits(ctx.editor, nodes, owner, planBatchSelection, true);
     return true;
   }
   void runSelectionDialog(ctx.editor, plan, owner);
@@ -785,104 +1082,8 @@ function runSelectionCommand(ctx: CommentCommandContext): boolean {
 }
 
 /* ------------------------------------------------------------------ *
- * Тело команды «Разделить выделение на мысли» (задача 578c8525).
+ * Тело команды «Разделить выделение на мысли» (задача T2 026241f2).
  * ------------------------------------------------------------------ */
-
-/**
- * Собирает узлы леса в порядке документа (pre-order) — сверка и правки идут по
- * одному порядку, поэтому id созданных мыслей сопоставляются позициям по индексу.
- */
-function flattenSplit(nodes: readonly SplitSelectionNode[]): SplitSelectionNode[] {
-  const flat: SplitSelectionNode[] = [];
-  const walk = (list: readonly SplitSelectionNode[]): void => {
-    for (const node of list) {
-      flat.push(node);
-      walk(node.children);
-    }
-  };
-  walk(nodes);
-  return flat;
-}
-
-/** Совпадает ли лес единиц до и после ожидания (структура, названия, тела). */
-function sameSplitShape(
-  a: readonly SplitSelectionNode[],
-  b: readonly SplitSelectionNode[],
-): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i]!;
-    const y = b[i]!;
-    if (x.title !== y.title || x.bodyMd !== y.bodyMd) return false;
-    if (!sameSplitShape(x.children, y.children)) return false;
-  }
-  return true;
-}
-
-/**
- * Создаёт по мысли на каждую единицу плана и заменяет каждую единицу её
- * трансклюзией. Обход — в порядке документа, родитель создаётся прежде
- * ребёнка: под-мысль вложенной единицы получает родителем id мысли-родителя,
- * а не текущую мысль контейнера (элемент интерфейса `2a21c27e`). Правки
- * диапазонов не пересекаются (`parseSelectionUnits`), поэтому уезжают одной
- * транзакцией редактора; текст вне единиц остаётся на месте.
- *
- * Создание мыслей — сетевые `await`; после них план перепрокладывается по
- * актуальному документу, а при расхождении контекста правка отменяется
- * (ошибка `da5e74b0`, приём `486d0ef1`).
- */
-async function splitAndReplace(
-  editor: MdEditor,
-  nodes: readonly SplitSelectionNode[],
-  owner: CommentOwnerRef,
-): Promise<void> {
-  const port = commentThoughtCreatePort();
-  const before = editor.snapshot();
-  try {
-    const parentId = await port.resolveParent(owner);
-    if (parentId === null) {
-      notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`, 'error');
-      return;
-    }
-    // id созданных мыслей в порядке документа (pre-order) — сверяется с планом.
-    const ids: string[] = [];
-    const walk = async (
-      list: readonly SplitSelectionNode[],
-      parent: string,
-    ): Promise<void> => {
-      for (const node of list) {
-        const created = await port.create({
-          parentId: parent,
-          title: node.title,
-          bodyMd: node.bodyMd,
-        });
-        ids.push(created.id);
-        await walk(node.children, created.id);
-      }
-    };
-    await walk(nodes, parentId);
-
-    // Позиции плана сняты ДО сетевых await — перепрокладываем по актуальному
-    // выделению; расхождение контекста отменяет правку (`da5e74b0`).
-    const after = editor.snapshot();
-    const sel = relocatedSelection(before, after);
-    const next =
-      sel === null ? null : planSplitSelection({ text: after.text, from: sel.from, to: sel.to });
-    if (next === null || !sameSplitShape(nodes, next)) return;
-    const flat = flattenSplit(next);
-    if (flat.length !== ids.length) return;
-    const inserts = ids.map((id) => formatTransclusionRef(id));
-    const changes = flat.map((node, i) => ({
-      from: node.start,
-      to: node.end,
-      insert: inserts[i]!,
-    }));
-    const caret = flat[0] === undefined ? 0 : flat[0].start + inserts[0]!.length;
-    editor.applyEdit({ changes, selection: { anchor: caret } });
-  } catch (err) {
-    notice(`${t('comment.create.error')}: ${errText(err)}`, 'error');
-  }
-}
 
 /** Ход команды «Разделить выделение на мысли»: план → владелец → создание. */
 function runSplit(ctx: CommentCommandContext): boolean {
@@ -890,7 +1091,7 @@ function runSplit(ctx: CommentCommandContext): boolean {
   if (nodes === null) return false;
   const owner = ctx.getCommentOwner();
   if (owner === null) return false;
-  void splitAndReplace(ctx.editor, nodes, owner);
+  void runPlanUnits(ctx.editor, nodes, owner, planSplitSelection, true);
   return true;
 }
 
