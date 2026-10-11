@@ -734,8 +734,12 @@ async function runSelectionDialog(
         title: item.title ?? plan.prefill,
         bodyMd: plan.bodyMd,
       });
+      // Форма вставки — по ФАКТИЧЕСКОЙ непустоте тела (требования `23c11231`,
+      // `d4f3d8a0`), а не по «короткости» случая: длинное выделение с пустым
+      // остатком после первой строки (например, хвостовые пустые строки) даёт
+      // мысль без тела, и на месте должна быть обычная ссылка, не трансклюзия.
       refs.push({
-        ref: plan.short ? thoughtLinkRef(created.id, '') : formatTransclusionRef(created.id),
+        ref: plan.bodyMd === '' ? thoughtLinkRef(created.id, '') : formatTransclusionRef(created.id),
         title: null,
         whole: true,
       });

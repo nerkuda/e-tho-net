@@ -838,6 +838,13 @@ describe('случаи 1–2: план имени/тела (требование
     assert.equal(p?.bodyMd, text);
   });
 
+  it('многострочное с пустым остатком (хвостовые пустые строки) — тело пусто', () => {
+    const p = create.planSelectionCommand(snap('Заголовок края\n\n'));
+    assert.equal(p?.short, false, 'есть перенос — не короткое');
+    assert.equal(p?.prefill, 'Заголовок края');
+    assert.equal(p?.bodyMd, '', 'остаток после первой строки пуст');
+  });
+
   it('список и заголовок — пакетный путь (диалог не открывается)', () => {
     assert.equal(create.selectionUsesBatchPath('- пункт'), true);
     assert.equal(create.selectionUsesBatchPath('# Раздел\nтело'), true);
@@ -913,6 +920,28 @@ describe('случаи 1–2: команда (диалог, создание, в
     await flush();
 
     assert.deepEqual(editor.edits[0].changes[0], { from, to, insert: `[[#${NEW_ID}]]` });
+  });
+
+  it('многострочное с пустым остатком (хвостовые пустые строки) → без тела и ССЫЛКА', async () => {
+    // Блокер верификатора: форма вставки определяется непустотой ТЕЛА, а не
+    // «короткостью» случая. server сохраняет «Заголовок края\n\n»; остаток после
+    // первой строки пуст ⇒ мысль без тела ⇒ на месте обычная ссылка, не трансклюзия.
+    const text = 'Заголовок края\n\n';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, created } = fakePort({
+      pick: async () => ({ items: [{ kind: 'new', title: 'Заголовок края', synonyms: [] }] }),
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(created[0]!.bodyMd, '', 'остаток пуст — тело не создаётся');
+    assert.deepEqual(editor.edits[0].changes[0], {
+      from: 0,
+      to: text.length,
+      insert: `[[#${NEW_ID}]]`,
+    });
   });
 
   it('отказ от диалога — ничего не меняется', async () => {    const editor = fakeEditor('заметка', 0, 6);

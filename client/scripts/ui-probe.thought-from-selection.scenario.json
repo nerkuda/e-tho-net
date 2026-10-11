@@ -211,6 +211,44 @@
       "name": "S-refuse-body-unchanged",
       "probe": "(async () => (await window.__st.body()) === 'Отказ не меняет текст')()",
       "expect": true
+    },
+
+    {
+      "name": "S-edge-seed",
+      "eval": "window.__st.setBody('Заголовок края\\n\\n')"
+    },
+    { "name": "S-edge-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S-edge-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S-edge-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S-edge-comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Заголовок края') === true"
+    },
+    { "name": "S-edge-enter-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S-edge-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S-edge-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S-edge-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S-edge-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S-edge-pick-command", "eval": "window.__st.menu('Создать мысль из выделенного')" },
+    { "name": "S-edge-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    {
+      "name": "S-edge-prefill",
+      "probe": "document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value ?? null",
+      "expect": "Заголовок края"
+    },
+    { "name": "S-edge-apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "S-edge-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S-edge-save", "click": "[data-action=\"save\"]" },
+    { "name": "S-edge-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S-edge-body-is-link-not-transclusion",
+      "probe": "(async () => { const b = await window.__st.body(); return { isLink: /^\\[\\[#[0-9a-f-]+\\]\\]$/.test(b), isTransclusion: b.startsWith('![[') }; })()",
+      "expect": { "isLink": true, "isTransclusion": false }
+    },
+    {
+      "name": "S-edge-new-thought-no-body",
+      "probe": "(async () => { const t = await window.__st.find('Заголовок края'); return t ? { body: t.body } : null; })()",
+      "expect": { "body": null }
     }
   ]
 }
