@@ -1,0 +1,22 @@
+{
+  "data": {
+    "id": "475d88a6-ce99-443a-8669-155d192fbb00",
+    "title": "Проверка  длинных текстов",
+    "type_id": "544ebfbf-d320-4df2-9d6c-9a065c29374d",
+    "icon": null,
+    "icon_kind": "emoji",
+    "icon_color": null,
+    "fg_color": null,
+    "bg_color": null,
+    "font_bold": null,
+    "font_italic": null,
+    "font_underline": null,
+    "font_strike": null,
+    "active": true,
+    "is_protected": false,
+    "is_root": false,
+    "marked_for_deletion": false,
+    "synonyms": [],
+    "icon_attachment_id": null
+  }
+}

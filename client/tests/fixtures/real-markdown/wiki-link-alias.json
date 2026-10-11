@@ -1,0 +1,24 @@
+{
+  "data": {
+    "id": "8b2aeb29-8438-4bdd-b4bd-35dcad0e7fbf",
+    "title": "Эта мысль создана по клику на ссылке",
+    "type_id": null,
+    "icon": null,
+    "icon_kind": "emoji",
+    "icon_color": null,
+    "fg_color": null,
+    "bg_color": null,
+    "font_bold": null,
+    "font_italic": null,
+    "font_underline": null,
+    "font_strike": null,
+    "active": true,
+    "is_protected": false,
+    "is_root": false,
+    "marked_for_deletion": false,
+    "synonyms": [
+      "новая мысль из ссылки"
+    ],
+    "icon_attachment_id": null
+  }
+}
