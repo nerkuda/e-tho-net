@@ -27,6 +27,7 @@ import {
   buildRestContext,
   closeRestContext,
   nativeAvailable,
+  waitForRealtimeRelay,
   type RestTestContext,
 } from './rest-helpers.js';
 import {
@@ -340,6 +341,9 @@ describe('REST: DTO-агрегаты владений (109be255, замечан�
 describe('REST: realtime-события владений (109be255, f77382ba)', { skip: !nativeAvailable() }, () => {
   it('add/copy/дедуп эмитят owner.added, снятие — owner.removed (+deleted)', async () => {
     const ctx = await buildRestContext();
+    // Подписываемся только после того, как реле подхватило сеть: иначе его
+    // первый опрос разошлёт уже записанные события повторно (утечка-дубликаты).
+    await waitForRealtimeRelay(ctx);
     const seen: AnyRealtimeEvent[] = [];
     const unsubscribe = ctx.app.pubsub.subscribe(ctx.networkId, (e) =>
       seen.push(e as unknown as AnyRealtimeEvent),
@@ -442,6 +446,9 @@ describe('REST: realtime-события владений (109be255, f77382ba)', 
 
   it('дедуп по хэшу метаданного file_path — owner.added, не created (замечание проверки)', async () => {
     const ctx = await buildRestContext();
+    // Подписываемся только после того, как реле подхватило сеть: иначе его
+    // первый опрос разошлёт уже записанные события повторно (утечка-дубликаты).
+    await waitForRealtimeRelay(ctx);
     const seen: AnyRealtimeEvent[] = [];
     const unsubscribe = ctx.app.pubsub.subscribe(ctx.networkId, (e) =>
       seen.push(e as unknown as AnyRealtimeEvent),

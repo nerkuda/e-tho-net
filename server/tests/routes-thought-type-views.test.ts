@@ -32,6 +32,7 @@ import {
   buildRestContext,
   closeRestContext,
   nativeAvailable,
+  waitForRealtimeRelay,
   type RestTestContext,
 } from './rest-helpers.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
@@ -985,6 +986,9 @@ describe(
           // экземпляр, в который пишет `routeDeps.emit`). Новый `new PubSub()`
           // событий не увидит, потому что это будет параллельный брокер без
           // подписчиков серверного `realtimeGateway`.
+          // Ждём, пока реле подхватит сеть: до этого его первый опрос разошлёт
+          // уже записанные события повторно (см. waitForRealtimeRelay).
+          await waitForRealtimeRelay(ctx);
           const pubsub = ctx.app.pubsub;
           const received: AnyRealtimeEvent[] = [];
           const unsubscribe = pubsub.subscribe(
@@ -1026,6 +1030,9 @@ describe(
 
           // Подписываемся на серверный брокер — `routeDeps.emit` пишет именно
           // в `ctx.app.pubsub`. См. комментарий в предыдущем тесте.
+          // Ждём, пока реле подхватит сеть: до этого его первый опрос разошлёт
+          // уже записанные события повторно (см. waitForRealtimeRelay).
+          await waitForRealtimeRelay(ctx);
           const pubsub = ctx.app.pubsub;
           const received: AnyRealtimeEvent[] = [];
           const unsubscribe = pubsub.subscribe(
