@@ -121,3 +121,138 @@ describe('условия-списки по свойству: in/not_in (ошиб
     assert.ok(!res.items.some((i) => i.id === moscow || i.id === piter));
   });
 });
+
+/**
+ * Регресс ошибки 7489e4d9-4024-4d37-a4f3-c8094265514c: наборные операторы и
+ * `in`/`not_in` по МНОЖЕСТВЕННОМУ `text`-свойству (`config.multiple`) должны
+ * матчить ПОЭЛЕМЕНТНО. Значение такого свойства хранится одной comma-joined
+ * строкой (`"Москва, Питер"`, 02-data-model §3.4–3.5), а движок сравнивал её
+ * целиком — мысль со значением `"a, b"` не находилась условием `in ["a"]`.
+ *
+ * Пути исполнения покрыты оба: REST (`op`, через `parseStructureFilter` →
+ * `structureRequestToQuery` → `queryThoughts`) и канонический (MCP
+ * `etn.thoughts.query`, поле `operator` — прямой вызов `queryThoughts`;
+ * `parseStructureFilter` лишь транслирует `op` → `operator`, движок один).
+ */
+describe('наборные операторы по множественному text: поэлементно (ошибка 7489e4d9)', {
+  skip: !nativeAvailable(),
+}, () => {
+  /** Канонический запрос (как его строит MCP-фасад) — `operator`, не `op`. */
+  function canonical(properties: Array<Record<string, unknown>>) {
+    return {
+      sort: 'alpha' as const,
+      order: 'asc' as const,
+      limit: 100,
+      offset: 0,
+      properties: properties as never,
+    };
+  }
+
+  /**
+   * Множественное text-свойство: A = "Москва, Питер", B = "Питер",
+   * C = "Тверь", D = "Москва-река" (граничный случай — не элемент "Москва").
+   */
+  function setup() {
+    const ndb = createInMemoryNetworkDb();
+    const propId = seedTextProperty(ndb, 'города', { multiple: true, options: ['Москва', 'Питер', 'Тверь'] });
+    const a = seedThought(ndb, 'A');
+    const b = seedThought(ndb, 'B');
+    const c = seedThought(ndb, 'C');
+    const d = seedThought(ndb, 'D');
+    seedTextValue(ndb, a, propId, 'Москва, Питер');
+    seedTextValue(ndb, b, propId, 'Питер');
+    seedTextValue(ndb, c, propId, 'Тверь');
+    seedTextValue(ndb, d, propId, 'Москва-река');
+    return { ndb, propId, a, b, c, d };
+  }
+
+  it('in ["Москва"] матчит мысль со значением "Москва, Питер" (MCP-путь)', () => {
+    const { ndb, propId, a, d } = setup();
+    const res = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'in', value: ['Москва'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(res.items.map((i) => i.id), [a]);
+    assert.ok(!res.items.some((i) => i.id === d), 'элемент матчится по границе разделителя');
+  });
+
+  it('in ["Питер"] матчит обе мысли с этим элементом (REST-путь)', () => {
+    const { ndb, propId, a, b } = setup();
+    const res = runRestBody(ndb, {
+      properties: [{ property_id: propId, op: 'in', value: ['Питер'] }],
+    });
+    assert.deepEqual(res.items.map((i) => i.id).sort(), [a, b].sort());
+  });
+
+  it('any_of ["Москва"] матчит мысль со значением "Москва, Питер"', () => {
+    const { ndb, propId, a } = setup();
+    const res = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'any_of', value: ['Москва'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(res.items.map((i) => i.id), [a]);
+  });
+
+  it('all_of ["Москва","Питер"] матчит; all_of ["Москва","Тверь"] — нет', () => {
+    const { ndb, propId, a } = setup();
+    const hit = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'all_of', value: ['Москва', 'Питер'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(hit.items.map((i) => i.id), [a]);
+    const miss = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'all_of', value: ['Москва', 'Тверь'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(miss.items, []);
+  });
+
+  it('none_of ["Питер"] исключает мысли с элементом "Питер"', () => {
+    const { ndb, propId, c, d } = setup();
+    const res = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'none_of', value: ['Питер'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(res.items.map((i) => i.id).sort(), [c, d].sort());
+  });
+
+  it('not_in ["Питер"] исключает мысли с элементом "Питер" (REST-путь)', () => {
+    const { ndb, propId, c, d } = setup();
+    const res = runRestBody(ndb, {
+      properties: [{ property_id: propId, op: 'not_in', value: ['Питер'] }],
+    });
+    assert.deepEqual(res.items.map((i) => i.id).sort(), [c, d].sort());
+  });
+
+  it('одиночное text-свойство сохраняет точное сравнение', () => {
+    const ndb = createInMemoryNetworkDb();
+    const propId = seedTextProperty(ndb, 'страна', null);
+    const msk = seedThought(ndb, 'msk');
+    seedTextValue(ndb, msk, propId, 'Москва, Питер');
+    // Одиночное свойство — значение целиком; "Москва" не совпадает.
+    const no = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'in', value: ['Москва'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(no.items, []);
+    const yes = queryThoughts(
+      ndb,
+      'u',
+      canonical([{ property_id: propId, operator: 'in', value: ['Москва, Питер'] }]),
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(yes.items.map((i) => i.id), [msk]);
+  });
+});
