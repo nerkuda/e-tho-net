@@ -140,9 +140,12 @@ describe('вкладка «Дневник» редактора: таблица �
       /import \{ EDITOR_RECORD_TITLE_MAX, recordDisplayTitle \} from '\.\.\/lib\/record-title\.js'/,
       'общий разбор подключён',
     );
+    // Источник заголовка проходит через резолвер ID-форм (ошибка 8b647f6c):
+    // общий разбор вызывается на подставленном источнике, реализация — та же
+    // (`lib/record-title.ts`, лимит вкладки), второй нет.
     assert.match(
       tab,
-      /recordDisplayTitle\(comment\.title, comment\.body_md, EDITOR_RECORD_TITLE_MAX\)/,
+      /recordDisplayTitle\([^)]*EDITOR_RECORD_TITLE_MAX\)/,
       'ячейка — общий помощник с лимитом вкладки',
     );
     assert.ok(

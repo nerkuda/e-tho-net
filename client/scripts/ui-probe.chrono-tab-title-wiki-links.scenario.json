@@ -1,0 +1,151 @@
+{
+  "name": "chrono-tab-title-wiki-links",
+  "description": "Ключевой сценарий ошибки 8b647f6c: производный заголовок вкладки «Дневник» РЕДАКТОРА резолвит ID-форму wiki-ссылки в имя мысли. Проверяются обе поверхности: ячейка «Заголовок» таблицы (shadow DOM Vaadin Grid) и заголовок открытой записи (.chrono-title-view). Данные засеиваются шагом api: дневниковая запись БЕЗ title с телом, начинающимся с [[#<homeId>]] (id — корневая мысль HOME, ссылка ведёт на ДРУГУЮ мысль, не на саму запись). До фикса обе поверхности показывали сырой [[#<uuid>]]. Запускается стендом: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.chrono-tab-title-wiki-links.scenario.json. Без скриншотов: доказательства — пробы textContent и контроль в БД.",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+
+    {
+      "name": "seed-record-no-title",
+      "api": {
+        "name": "seed-record-no-title",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
+        "body": {
+          "kind": "chronological",
+          "body_md": "[[#{{homeId}}]] zzqchrono остальной текст записи"
+        },
+        "expression": "data.id ?? null"
+      }
+    },
+    {
+      "name": "record-seeded-in-db",
+      "api": {
+        "name": "record-seeded-in-db",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
+        "expression": "data.filter((c) => c.kind === 'chronological' && (c.body_md || '').includes('zzqchrono')).length"
+      },
+      "expect": 1
+    },
+
+    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "def-helpers",
+      "eval": {
+        "name": "defHelpers",
+        "expression": "(() => { window.__chrono = { texts: () => { const out = []; const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) walk(el.shadowRoot); if (el.children.length === 0 && el.textContent) out.push(el.textContent); } }; const wrap = document.querySelector('.chrono-table'); if (wrap) walk(wrap); return out; } }; return true; })()"
+      }
+    },
+    {
+      "name": "open-chrono-tab",
+      "eval": {
+        "name": "openChronoTab",
+        "expression": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((t) => (t.textContent || '').includes('Дневник')); if (!tab) throw new Error('вкладка «Дневник» не найдена'); tab.click(); return true; })()"
+      }
+    },
+
+    {
+      "name": "open-record-visible",
+      "waitFor": {
+        "expression": "document.querySelector('.chrono-title-view') !== null"
+      }
+    },
+    {
+      "name": "open-title-resolved",
+      "waitFor": {
+        "expression": "document.querySelector('.chrono-title-view')?.textContent?.includes('HOME zzqchrono') === true"
+      }
+    },
+    {
+      "name": "open-title-text",
+      "probe": {
+        "name": "chronoOpenTitleText",
+        "expression": "document.querySelector('.chrono-title-view')?.textContent ?? ''"
+      }
+    },
+    {
+      "name": "open-title-no-raw",
+      "probe": {
+        "name": "chronoOpenTitleHasRaw",
+        "expression": "(document.querySelector('.chrono-title-view')?.textContent ?? '').includes('[[#')"
+      },
+      "expect": false
+    },
+    {
+      "name": "open-title-no-uuid",
+      "probe": {
+        "name": "chronoOpenTitleHasUuid",
+        "expression": "/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(document.querySelector('.chrono-title-view')?.textContent ?? '')"
+      },
+      "expect": false
+    },
+    {
+      "name": "open-title-shows-name",
+      "probe": {
+        "name": "chronoOpenTitleShowsName",
+        "expression": "(document.querySelector('.chrono-title-view')?.textContent ?? '').includes('HOME zzqchrono')"
+      },
+      "expect": true
+    },
+
+    {
+      "name": "cell-resolved",
+      "waitFor": {
+        "expression": "window.__chrono.texts().join(' | ').includes('HOME zzqchrono') === true"
+      }
+    },
+    {
+      "name": "cell-text",
+      "probe": {
+        "name": "chronoCellText",
+        "expression": "window.__chrono.texts().join(' | ')"
+      }
+    },
+    {
+      "name": "cell-no-raw",
+      "probe": {
+        "name": "chronoCellHasRaw",
+        "expression": "window.__chrono.texts().join(' | ').includes('[[#')"
+      },
+      "expect": false
+    },
+    {
+      "name": "cell-no-uuid",
+      "probe": {
+        "name": "chronoCellHasUuid",
+        "expression": "/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(window.__chrono.texts().join(' | '))"
+      },
+      "expect": false
+    },
+    {
+      "name": "cell-shows-name",
+      "probe": {
+        "name": "chronoCellShowsName",
+        "expression": "window.__chrono.texts().join(' | ').includes('HOME zzqchrono')"
+      },
+      "expect": true
+    }
+  ]
+}
