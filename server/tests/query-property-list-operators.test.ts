@@ -255,4 +255,76 @@ describe('наборные операторы по множественному 
     );
     assert.deepEqual(yes.items.map((i) => i.id), [msk]);
   });
+
+  /**
+   * Регресс дефекта, найденного верификатором: OR-цепочка `in`/`any_of` с 2+
+   * значениями не была обёрнута во внешние скобки, а клаузы условий
+   * объединяются через AND — приоритет AND над OR разрывал WHERE и в
+   * комбинации с любым другим условием пропускал лишние мысли. Проверяем на
+   * комбинации «списковый оператор + has_comment» обоими фасадами.
+   */
+  it('in с 2 значениями + has_comment: лишние мысли не просачиваются (MCP-путь)', () => {
+    const { ndb, propId, a } = setupForCombination();
+    const res = queryThoughts(
+      ndb,
+      'u',
+      { ...canonical([{ property_id: propId, operator: 'in', value: ['Москва', 'Питер'] }]), has_comment: true },
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(res.items.map((i) => i.id), [a], 'только мысль с комментарием и совпавшим элементом');
+  });
+
+  it('in с 2 значениями + has_comment: лишние мысли не просачиваются (REST-путь)', () => {
+    const { ndb, propId, a } = setupForCombination();
+    const res = runRestBody(ndb, {
+      properties: [{ property_id: propId, op: 'in', value: ['Москва', 'Питер'] }],
+      has_comment: true,
+    });
+    assert.deepEqual(res.items.map((i) => i.id), [a]);
+  });
+
+  it('одиночное text: in с 2 значениями + has_comment не течёт (регресс generic-пути)', () => {
+    const ndb = createInMemoryNetworkDb();
+    const propId = seedTextProperty(ndb, 'город-single', null);
+    const a = seedThought(ndb, 'A');
+    seedThought(ndb, 'B');
+    seedTextValue(ndb, a, propId, 'Москва');
+    seedPermanentComment(ndb, a);
+    const res = queryThoughts(
+      ndb,
+      'u',
+      { ...canonical([{ property_id: propId, operator: 'in', value: ['Москва', 'Питер'] }]), has_comment: true },
+      { emptyFilterMode: 'all' },
+    );
+    assert.deepEqual(res.items.map((i) => i.id), [a]);
+  });
 });
+
+/**
+ * Множественное text-свойство `города`: A = "Москва, Питер" с постоянным
+ * комментарием, B = "Питер" без комментария, C = "Тверь"; для комбинации
+ * спискового оператора с другим условием (`has_comment`).
+ */
+function setupForCombination(): { ndb: NetworkDb; propId: string; a: string; b: string; c: string } {
+  const ndb = createInMemoryNetworkDb();
+  const propId = seedTextProperty(ndb, 'города-combo', { multiple: true, options: ['Москва', 'Питер'] });
+  const a = seedThought(ndb, 'A');
+  const b = seedThought(ndb, 'B');
+  const c = seedThought(ndb, 'C');
+  seedTextValue(ndb, a, propId, 'Москва, Питер');
+  seedTextValue(ndb, b, propId, 'Питер');
+  seedTextValue(ndb, c, propId, 'Тверь');
+  seedPermanentComment(ndb, a);
+  return { ndb, propId, a, b, c };
+}
+
+/** Постоянный комментарий мысли — для условия `has_comment`. */
+function seedPermanentComment(ndb: NetworkDb, thoughtId: string): void {
+  ndb
+    .prepare(
+      `INSERT INTO comments (id, owner_type, owner_id, kind, body_md, body_html, valid_from,
+                             version, created_at, updated_at, created_by, updated_by)
+       VALUES (?, 'thought', ?, 'permanent', 'x', 'x', '2024-01-01', 1, '2024', '2024', 'u', 'u')`,
+    )
+    .run(randomUUID(), thoughtId);
+}

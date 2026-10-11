@@ -851,7 +851,11 @@ function textListClause(
     return { sql: parts.join(' AND '), params };
   }
   const any: Clause = {
-    sql: values.map(() => `(${elementSql})`).join(' OR '),
+    // Внешние скобки обязательны: клаузы условий объединяются через AND
+    // (`where.push(clause.sql)`), а приоритет AND выше OR — без обёртки
+    // `in`/`any_of` с 2+ значениями разрывает WHERE и пропускает лишние
+    // мысли в комбинации с другим условием (ошибка 7489e4d9, верификация).
+    sql: `(${values.map(() => `(${elementSql})`).join(' OR ')})`,
     params: values.flatMap((v) => one(v).params),
   };
   return operator === 'any_of' || operator === 'in'
