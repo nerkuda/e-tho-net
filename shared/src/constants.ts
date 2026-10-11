@@ -560,6 +560,10 @@ export const ETNX_VERSION = '1.2' as const;
  */
 export const ETNX_MAX_BYTES = 50 * 1024 * 1024;
 
-/** Maximum descendant depth accepted by `ExportEtnxOptions.subtree_depth`. */
-export const ETNX_SUBTREE_DEPTH_MAX = 5;
+/**
+ * Maximum descendant depth accepted by `ExportEtnxOptions.subtree_depth`.
+ * Выровнен с MCP-контрактом `export.subgraph.etnx_options.subtree_depth`
+ * (задача 99c16033, 0.12.2): REST и клиент принимают те же 1..20.
+ */
+export const ETNX_SUBTREE_DEPTH_MAX = 20;
 

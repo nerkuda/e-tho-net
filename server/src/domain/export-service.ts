@@ -219,6 +219,9 @@ export async function startExportJob(
     const filePath = path.join(os.tmpdir(), `etn-export-${jobId}.zip`);
     await exportToEtnx(ndb, thoughtIds, opts.etnx, opts.source, filePath);
     entry.filePath = filePath;
+    // Рекомендуемое имя скачиваемого файла — `etn-<network>.etnx` (задача
+    // 99c16033): REST download-роут отдаёт его в `content-disposition`.
+    entry.filename = `etn-${sanitizeFilename(opts.source.network_name)}.etnx`;
   } else {
     const markdown = exportToMarkdown(ndb, thoughtIds);
     entry.content = format === 'html' ? markdownToHtml(markdown) : markdown;
@@ -237,10 +240,11 @@ export function getExportJob(jobId: string): ExportJob | null {
 /**
  * Rendered content of a finished export job, or `null` (not ready/unknown).
  *
- * For textual exports (markdown/html) the body is a `string`. For `.etnx`
- * the body is a `Buffer` loaded from the job's temp file — read fully into
- * memory so `reply.send` does not need to wait on a stream lifecycle, and
- * the route handler is the only place that touches the file.
+ * For textual exports (markdown/html) the body is a `string`. For `.etnx` the
+ * body is a `Buffer` loaded from the job's temp file. The file is NOT removed
+ * here (задача 99c16033): the result must stay retrievable for the whole job
+ * TTL, so a dropped/interrupted download can be retried. Cleanup happens in
+ * {@link sweepJobs} once the TTL expires.
  *
  * @param format - preferred output format; falls back to the format stored
  *   with the job when omitted (the REST download route does not know it).
@@ -258,17 +262,41 @@ export function getExportJobContent(
   if (entry.filePath !== undefined) {
     if (!existsSync(entry.filePath)) return null;
     const buf = readFileSync(entry.filePath);
-    // Best-effort cleanup: the file is no longer needed once the bytes are
-    // in memory. The TTL sweep would do this eventually anyway.
-    try {
-      unlinkSync(entry.filePath);
-    } catch {
-      // already gone — fine.
-    }
     return { body: buf, contentType, ...(filename === undefined ? {} : { filename }) };
   }
   if (entry.content === undefined) return null;
   return { body: entry.content, contentType, ...(filename === undefined ? {} : { filename }) };
+}
+
+/**
+ * File-backed content of a finished export job, for the streaming REST download
+ * route (задача 99c16033): the route pipes `createReadStream(filePath)` straight
+ * to the socket instead of buffering the whole archive in memory, and can serve
+ * the same job repeatedly until the TTL sweep removes the file.
+ *
+ * Returns `null` for unknown/not-done jobs and for jobs whose body lives in
+ * memory (markdown/html) — those go through {@link getExportJobContent}.
+ */
+export function getExportJobFile(jobId: string): {
+  filePath: string;
+  contentType: string;
+  size: number;
+  filename?: string;
+} | null {
+  sweepJobs();
+  const entry = jobs.get(jobId);
+  if (!entry || entry.status !== 'done' || entry.filePath === undefined) return null;
+  if (!existsSync(entry.filePath)) return null;
+  const effectiveFormat = entry.format ?? 'markdown';
+  const contentType = entry.contentType ?? contentTypeFor(effectiveFormat);
+  let size: number;
+  try {
+    size = statSync(entry.filePath).size;
+  } catch {
+    return null;
+  }
+  const filename = entry.filename;
+  return { filePath: entry.filePath, contentType, size, ...(filename === undefined ? {} : { filename }) };
 }
 
 /** MIME type for an export job's stored content. */
@@ -283,6 +311,23 @@ function contentTypeFor(format: ExportFormat): string {
 // .etnx (phase P, task P2)
 // ---------------------------------------------------------------------------
 
+/** Счётчики экспортированного среза (из манифеста `.etnx`). */
+export interface EtnxExportCounts {
+  thoughts: number;
+  links: number;
+  attachments: number;
+  thought_types: number;
+  link_types: number;
+}
+
+/** Куда MCP `export.subgraph` пишет `.etnx` (симметрично `import.subgraph.source`). */
+export interface EtnxFileDestination {
+  /** Абсолютный путь на ФС сервера. */
+  path: string;
+  /** Перезаписать существующий файл (по умолчанию — запрещено). */
+  overwrite?: boolean;
+}
+
 /**
  * Build a `.etnx` zip archive for the given root thoughts (phase P, P2). The
  * archive contains exactly two kinds of entries:
@@ -296,6 +341,9 @@ function contentTypeFor(format: ExportFormat): string {
  * file back to the client with a `createReadStream`. The file is the
  * caller's responsibility to delete (the job's TTL sweep does this for jobs
  * served through `startExportJob`).
+ *
+ * Returns the archive `size` and the manifest `counts` (задача 99c16033) —
+ * the latter feed the MCP `export.subgraph.destination` summary response.
  */
 export async function exportToEtnx(
   ndb: NetworkDb,
@@ -303,7 +351,7 @@ export async function exportToEtnx(
   opts: ExportEtnxOptions | undefined,
   source: EtnxManifestSource,
   outputPath: string,
-): Promise<{ size: number }> {
+): Promise<{ size: number; counts: EtnxExportCounts }> {
   const manifest = buildManifest(ndb, rootIds, opts, source, logger);
   const size = await collectZip(manifest, ndb, outputPath);
   if (size > ETNX_MAX_BYTES) {
@@ -314,7 +362,114 @@ export async function exportToEtnx(
       { limit: ETNX_MAX_BYTES, actual: size },
     );
   }
-  return { size };
+  return {
+    size,
+    counts: {
+      thoughts: manifest.thoughts.length,
+      links: manifest.links.length,
+      attachments: manifest.attachments.length,
+      thought_types: manifest.thought_types.length,
+      link_types: manifest.link_types.length,
+    },
+  };
+}
+
+/**
+ * Записать `.etnx` по абсолютному пути назначения (задача 99c16033).
+ *
+ * Отдельный вход (не через job store) для MCP `export.subgraph.destination`:
+ * сервер пишет архив прямо по пути и возвращает `{ path, size, counts }` —
+ * без base64 в ответе. Правила безопасности:
+ *
+ *   * `path` обязан быть абсолютным (`VALIDATION_ERROR` иначе);
+ *   * каталог назначения должен существовать, иначе `VALIDATION_ERROR`;
+ *   * существующий файл перезаписывается только при `overwrite: true`;
+ *   * сбой записи (нет прав/места) → `INTERNAL` с понятным сообщением; при
+ *     сбое недописанный файл удаляется.
+ */
+export async function exportToEtnxFile(
+  ndb: NetworkDb,
+  rootIds: string[],
+  opts: ExportEtnxOptions | undefined,
+  source: EtnxManifestSource,
+  destination: EtnxFileDestination,
+): Promise<{ path: string; size: number; counts: EtnxExportCounts }> {
+  const target = resolveEtnxTargetPath(destination);
+  try {
+    const { size, counts } = await exportToEtnx(ndb, rootIds, opts, source, target);
+    return { path: target, size, counts };
+  } catch (err) {
+    // Не оставляем недописанный/частичный архив на диске.
+    try {
+      unlinkSync(target);
+    } catch {
+      // файла нет или уже удалён — не мешает.
+    }
+    if (err instanceof EtnError) throw err;
+    const code = (err as NodeJS.ErrnoException).code;
+    throw new EtnError(
+      'INTERNAL',
+      `Не удалось записать .etnx по пути ${target}: ${err instanceof Error ? err.message : String(err)}`,
+      { path: target, ...(code === undefined ? {} : { code }) },
+    );
+  }
+}
+
+/**
+ * Проверить путь назначения и вернуть его как есть. Никаких побочных
+ * эффектов — файл ещё не создан. Бросает `VALIDATION_ERROR` с указанием
+ * поля `destination.path`.
+ */
+function resolveEtnxTargetPath(destination: EtnxFileDestination): string {
+  const target = destination.path;
+  if (!path.isAbsolute(target)) {
+    throw new EtnError('VALIDATION_ERROR', `destination.path должен быть абсолютным: ${target}`, {
+      field: 'destination.path',
+    });
+  }
+  const dir = path.dirname(target);
+  let dirStat;
+  try {
+    dirStat = statSync(dir);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    throw new EtnError('VALIDATION_ERROR', `Каталог назначения не найден: ${dir}`, {
+      field: 'destination.path',
+      ...(code === undefined ? {} : { code }),
+    });
+  }
+  if (!dirStat.isDirectory()) {
+    throw new EtnError('VALIDATION_ERROR', `Каталог назначения — не каталог: ${dir}`, {
+      field: 'destination.path',
+    });
+  }
+  if (existsSync(target)) {
+    if (destination.overwrite !== true) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Файл уже существует: ${target}. Передайте overwrite: true, чтобы перезаписать.`,
+        { field: 'destination.path' },
+      );
+    }
+    if (statSync(target).isDirectory()) {
+      throw new EtnError('VALIDATION_ERROR', `Путь назначения — каталог: ${target}`, {
+        field: 'destination.path',
+      });
+    }
+  }
+  return target;
+}
+
+/** Имя файла для download-роута: убрать символы, невалидные в имени файла. */
+function sanitizeFilename(name: string): string {
+  const cleaned = Array.from(name)
+    // Управляющие символы (код < 0x20) в имени файла недопустимы.
+    .filter((ch) => ch.charCodeAt(0) >= 0x20)
+    .join('')
+    .replace(/[<>:"/\\|?*]+/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/^[._]+|[._]+$/g, '');
+  return cleaned.length > 0 ? cleaned : 'network';
 }
 
 /**
