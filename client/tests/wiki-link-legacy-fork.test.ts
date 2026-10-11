@@ -16,7 +16,9 @@
  *   визуальной проверки 2026-10-11).
  *
  * Чистая часть — без DOM; `resolveLegacyWikiCandidates` — с подменой
- * `window.etn` (живой прокси `lib/etn.ts`, как в `add-dialog.test.ts`).
+ * `window.etn` (живой прокси `lib/etn.ts`, как в `add-dialog.test.ts`);
+ * поведенческая проверка флоу создания идёт под DOM-шимом (`dom-shim.ts`) и
+ * подменённым `window.etn`, как в `add-dialog.test.ts`.
  */
 
 import assert from 'node:assert/strict';
@@ -24,6 +26,8 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, it } from 'node:test';
 
 import type { DuplicateHit } from '../src/main/ipc/contract.js';
+import { store } from '../src/renderer/state.js';
+import { findWikiCreateContext } from '../src/renderer/lib/wiki-create-context.js';
 import {
   decideLegacyFork,
   exactLegacyCandidates,
@@ -33,6 +37,7 @@ import {
   planLegacyFork,
   resolveLegacyWikiCandidates,
 } from '../src/renderer/editor/wiki-link-resolver.js';
+import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -122,14 +127,105 @@ describe('ветка «создать»: просмотр не отказыва�
     assert.equal(src.includes('» не найдена.'), false);
   });
 
-  it('tryCreateThoughtFromLegacyLink не гейтит диалог контекстом владельца', () => {
-    const src = readFileSync(
-      new URL('../src/renderer/editor/wiki-link-create.ts', import.meta.url),
-      'utf8',
-    );
-    // Раннего отказа по отсутствию контекста (`if (ctx === null) return false`)
-    // больше нет — диалог открывается на любой поверхности.
-    assert.equal(src.includes('return false'), false);
+  it('tryCreateThoughtFromLegacyLink открывает диалог без контекста владельца', async () => {
+    // Поведенческая проверка (замена хрупкого скана исходника на подстроку):
+    // под DOM-шимом и подменённым `window.etn` вызываем РЕАЛЬНЫЙ флоу создания
+    // с элементом БЕЗ привязанного контекста владельца (корень дефекта) и
+    // убеждаемся, что диалог открылся и запустил поиск дублей по имени ссылки.
+    // На прежнем коде (`if (ctx === null) return false`) диалог не открывался.
+    const g = globalThis as any;
+    const saved = { window: g.window, document: g.document };
+    const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
+    const dupQueries: string[] = [];
+    try {
+      g.document = {
+        createElement: (tag: string) => new ShimElement(tag),
+        createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+        documentElement: new ShimElement('html'),
+        body: new ShimElement('body'),
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      g.window = {
+        innerWidth: 1200,
+        innerHeight: 800,
+        setTimeout: (fn: () => void) => {
+          fn();
+          return 1;
+        },
+        clearTimeout: () => undefined,
+        addEventListener: (type: string, listener: (event: any) => void) => {
+          windowListeners.push({ type, listener });
+        },
+        removeEventListener: (type: string, listener: (event: any) => void) => {
+          const index = windowListeners.findIndex((l) => l.type === type && l.listener === listener);
+          if (index >= 0) windowListeners.splice(index, 1);
+        },
+        etn: {
+          thoughts: {
+            findDuplicates: async (_networkId: string, title: string) => {
+              dupQueries.push(title);
+              return [];
+            },
+            findDuplicatesAcrossNetworks: async () => ({ hits: [], networks: { networks: [] } }),
+          },
+          networks: { list: async () => [] },
+          ui: { setState: async () => undefined },
+        },
+      };
+      store.update({ networkId: 'n1', rtStatus: 'connected' });
+
+      const mod = (await import('../src/renderer/editor/wiki-link-create.js')) as {
+        tryCreateThoughtFromLegacyLink: (
+          el: HTMLElement,
+          name: string,
+          options: { onCreated: (id: string) => void },
+        ) => Promise<void>;
+      };
+      const linkEl = new ShimElement('span', undefined, 'Стенд-Отсутствующая');
+      // Контекста владельца у элемента нет — ровно тот случай, что раньше
+      // приводил к уведомлению «Мысль «…» не найдена.».
+      assert.equal(findWikiCreateContext(linkEl as unknown as Element), null);
+
+      let created = false;
+      const flow = mod.tryCreateThoughtFromLegacyLink(
+        linkEl as unknown as HTMLElement,
+        'Стенд-Отсутствующая',
+        {
+          onCreated: () => {
+            created = true;
+          },
+        },
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const body = g.document.body as ShimElement;
+      assert.ok(
+        body.children.some((child) => child.className === 'dialog-backdrop'),
+        'диалог создания обязан открыться без контекста владельца',
+      );
+      assert.ok(
+        dupQueries.includes('Стенд-Отсутствующая'),
+        'диалог запускает поиск дублей по имени ссылки',
+      );
+
+      // Отказ (Esc) завершает поток без создания — и без залипшего промиса.
+      for (const { type, listener } of [...windowListeners]) {
+        if (type === 'keydown') {
+          listener({
+            key: 'Escape',
+            preventDefault: () => undefined,
+            stopPropagation: () => undefined,
+            stopImmediatePropagation: () => undefined,
+          });
+        }
+      }
+      await flow;
+      assert.equal(created, false);
+    } finally {
+      g.window = saved.window;
+      g.document = saved.document;
+    }
   });
 });
 
