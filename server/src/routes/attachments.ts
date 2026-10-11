@@ -22,6 +22,7 @@
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { createReadStream } from 'node:fs';
 
 import {
   EtnError,
@@ -259,10 +260,14 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestAttachmentRaw, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const file = getAttachmentRawByPath(ndb, input.path as string);
-        reply
+        // Потоковая отдача: файл не читается целиком в память (ошибка
+        // 24d75c96, тот же класс, что 99c16033 для `jobs/:id/download`);
+        // `content-length` — из `stat`, размер известен заранее.
+        return reply
           .header('content-type', file.mime_type)
+          .header('content-length', String(file.size))
           .header('content-disposition', `inline; filename="${encodeURIComponent(file.filename)}"`)
-          .send(file.body);
+          .send(createReadStream(file.filePath));
       },
     );
 

@@ -13,6 +13,7 @@
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { createReadStream } from 'node:fs';
 
 import { EtnError, type SystemLoggingStatus } from '@etn/shared';
 
@@ -82,14 +83,18 @@ export const systemLoggingRoutes: FastifyPluginAsync = async (app: FastifyInstan
           req.id,
         );
       }
-      const content = fileLog.readFile(filename);
-      if (content === null) {
+      // Потоковая отдача журнала (ошибка 24d75c96): не читаем файл целиком в
+      // память; `content-length` — из `stat`.
+      const file = fileLog.fileStat(filename);
+      if (file === null) {
         throw new EtnError('NOT_FOUND', `Файл журнала ${filename} не найден.`, undefined, req.id);
       }
       reply
         .header('content-type', 'text/plain; charset=utf-8')
+        .header('content-length', String(file.size))
         .header('content-disposition', `attachment; filename="${filename}"`)
-        .send(content);
+        .send(createReadStream(file.filePath));
+      return reply;
     },
   );
 

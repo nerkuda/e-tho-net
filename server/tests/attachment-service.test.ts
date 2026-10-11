@@ -728,7 +728,11 @@ describe(
           USER,
         );
         const raw = getAttachmentRawByPath(ndb, stored.file_path!);
-        assert.equal(raw.body.toString(), 'fakejpg');
+        // 24d75c96: сервис больше не читает файл в память — отдаёт путь и
+        // размер; байты льются потоком. Проверяем содержимое по пути.
+        assert.equal(raw.filePath, path.resolve(stored.file_path!));
+        assert.equal(raw.size, Buffer.byteLength('fakejpg'));
+        assert.equal(readFileSync(raw.filePath).toString(), 'fakejpg');
         assert.equal(raw.mime_type, 'image/jpeg');
         assert.equal(raw.filename, path.basename(stored.file_path!));
 

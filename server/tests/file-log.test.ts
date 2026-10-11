@@ -96,6 +96,19 @@ describe('FileLog', () => {
     assert.match(log.readFile(fileNameOf('2026-09-01')) ?? "", /path="\/a b"/);
   });
 
+  it('fileStat resolves path and size for streaming without reading contents (24d75c96)', () => {
+    const log = logAt('2026-09-01');
+    log.error('c', 'boom');
+    const name = fileNameOf('2026-09-01');
+    const stat = log.fileStat(name);
+    assert.notEqual(stat, null);
+    assert.equal(stat!.filePath, path.join(dataDir, 'logs', name));
+    assert.equal(stat!.size, fs.statSync(stat!.filePath).size);
+    assert.ok(stat!.size > 0);
+    // Отсутствующий файл — null (прежний код 404 маршрута), без исключения.
+    assert.equal(log.fileStat(fileNameOf('2020-01-01')), null);
+  });
+
   it('rolls over to a new file at a UTC day change and keeps the old one', () => {
     let current = new Date('2026-09-01T23:59:30.000Z');
     const log = new FileLog(freshDir(), { now: () => current });

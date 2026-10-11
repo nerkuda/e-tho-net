@@ -176,6 +176,21 @@ export class FileLog {
   }
 
   /**
+   * Resolve one journal file for streaming (`GET /system/logs/:filename`,
+   * ошибка 24d75c96): absolute path + size, without reading the contents.
+   * `null` when the file does not exist. The route pipes {@link filePath} with
+   * `createReadStream` and uses {@link size} for `content-length`.
+   */
+  fileStat(name: string): { filePath: string; size: number } | null {
+    const file = path.join(this.logDir, name);
+    try {
+      return { filePath: file, size: fs.statSync(file).size };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Delete one journal file. The current daily file is truncated in place
    * instead (the writer keeps appending to it). `null` when the file does
    * not exist. The action is always journaled.

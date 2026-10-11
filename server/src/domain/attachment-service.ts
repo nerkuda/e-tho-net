@@ -1645,19 +1645,25 @@ export function getAttachmentContent(ndb: NetworkDb, id: string): AttachmentCont
 }
 
 /**
- * A server-stored attachment file served as raw bytes (remote clients).
+ * A server-stored attachment file resolved for streaming (remote clients).
  * `filename` is the base name of the stored copy; `mime_type` falls back to
- * `application/octet-stream` when the row carries no hint.
+ * `application/octet-stream` when the row carries no hint. The bytes are
+ * **not** read here — the route pipes {@link filePath} with `createReadStream`
+ * (ошибка 24d75c96: больше нет чтения файла целиком в память), and
+ * {@link size} feeds `content-length`.
  */
 export interface AttachmentRawFile {
   mime_type: string;
   filename: string;
-  body: Buffer;
+  /** Absolute path of the stored file — streamed by the route. */
+  filePath: string;
+  /** Size in bytes from `stat` — used for `content-length`. */
+  size: number;
 }
 
 /**
- * Read the raw bytes of a server-stored attachment file by its absolute
- * `file_path` (the path the `etnimg:` scheme of a remote client resolves to).
+ * Resolve a server-stored attachment file by its absolute `file_path` (the
+ * path the `etnimg:` scheme of a remote client resolves to) for streaming.
  *
  * Only files stored **inside the network's `attachments/` directory** (uploads
  * of `POST …/attachments/file`, the same rule as {@link removeStoredFile}) are
@@ -1666,7 +1672,7 @@ export interface AttachmentRawFile {
  *
  * Throws `NOT_FOUND` (404) when no `kind='file'` attachment resolves to the
  * path, the path is outside the stored-files directory or the backing file is
- * missing; `VALIDATION_ERROR` (422) when it cannot be read.
+ * missing; `VALIDATION_ERROR` (422) when its size cannot be read.
  */
 export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): AttachmentRawFile {
   const resolved = path.resolve(filePath);
@@ -1681,9 +1687,9 @@ export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): Attach
   if (row === undefined) {
     throw new EtnError('NOT_FOUND', 'файл вложения не найден', { field: 'path' });
   }
-  let body: Buffer;
+  let size: number;
   try {
-    body = readFileSync(resolved);
+    size = statSync(resolved).size;
   } catch {
     throw new EtnError('VALIDATION_ERROR', 'файл вложения недоступен для чтения', {
       field: 'path',
@@ -1692,7 +1698,8 @@ export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): Attach
   return {
     mime_type: row.mime_type ?? 'application/octet-stream',
     filename: path.basename(resolved),
-    body,
+    filePath: resolved,
+    size,
   };
 }
 
