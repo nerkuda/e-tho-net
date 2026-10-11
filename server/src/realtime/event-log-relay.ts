@@ -12,10 +12,12 @@
  *   * `start()` seeds the scan position at the current log head per network, so
  *     the pre-start history is never broadcast (clients replay it via
  *     `resume`);
- *   * a broker subscription marks every event published in-process (REST/MCP
- *     HTTP) as delivered, so the poll never re-broadcasts own writes — while a
- *     foreign event sitting *between* two in-process events is still caught
- *     (the scan advances by the last polled seq, not the last seen one);
+ *   * a single broker-wide subscription marks every event published in-process
+ *     (REST/MCP HTTP) as delivered, so the poll never re-broadcasts own writes —
+ *     including writes to a network created *after* start, whose per-network
+ *     channel did not exist at boot; while a foreign event sitting *between* two
+ *     in-process events is still caught (the scan advances by the last polled
+ *     seq, not the last seen one);
  *   * delivery latency for foreign writes is bounded by `pollIntervalMs`.
  */
 
@@ -76,8 +78,8 @@ export class EventLogRelay {
   private readonly published = new Set<string>();
   /** Per-network seq up to which the last scan has read the log. */
   private readonly lastPolled = new Map<string, number>();
-  /** Broker subscriptions per known network (unsubscribe on stop). */
-  private readonly unsubscribers = new Map<string, () => void>();
+  /** Broker-wide subscription marking in-process writes (unsubscribe on stop). */
+  private allUnsubscribe: (() => void) | null = null;
   private timer: NodeJS.Timeout | null = null;
   private pollCountValue = 0;
 
@@ -93,9 +95,16 @@ export class EventLogRelay {
     return this.pollCountValue;
   }
 
-  /** Subscribe to known networks and start the periodic scan. */
+  /** Subscribe to the broker and start the periodic scan. */
   start(): void {
-    this.syncNetworks();
+    // Observe every in-process publish — not just those of networks known now —
+    // so an own write to a network created after start is recorded as delivered
+    // before the first scan sees it. A per-network subscription would be attached
+    // only at discovery, leaving own writes in the window "network created →
+    // subscription attached" to be re-broadcast with the same `seq`.
+    this.allUnsubscribe = this.pubsub.subscribeAll((event) => {
+      this.published.add(eventKey(event.network_id, event.seq));
+    });
     // Seed the scan position at the log head: pre-start history must not be
     // broadcast live — clients replay it through `resume` on connect.
     for (const networkId of this.systemDb.listAllNetworkIds()) {
@@ -105,35 +114,24 @@ export class EventLogRelay {
     this.timer.unref?.();
   }
 
-  /** Stop the timer and drop every broker subscription. */
+  /** Stop the timer and drop the broker subscription. */
   stop(): void {
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
-    for (const unsubscribe of this.unsubscribers.values()) unsubscribe();
-    this.unsubscribers.clear();
+    this.allUnsubscribe?.();
+    this.allUnsubscribe = null;
     this.published.clear();
     this.lastPolled.clear();
-  }
-
-  /** Attach a broker subscription to every known network (new networks too). */
-  private syncNetworks(): void {
-    for (const networkId of this.systemDb.listAllNetworkIds()) {
-      if (this.unsubscribers.has(networkId)) continue;
-      const unsubscribe = this.pubsub.subscribe(networkId, (event) => {
-        this.published.add(eventKey(networkId, event.seq));
-      });
-      this.unsubscribers.set(networkId, unsubscribe);
-    }
   }
 
   /** Scan every network's log once and publish events not yet delivered. */
   private poll(): void {
     this.pollCountValue += 1;
-    this.syncNetworks();
     for (const networkId of this.systemDb.listAllNetworkIds()) {
-      // Networks discovered after start() scan from 0: their events were all
-      // written after this relay was alive, so none of them is pre-start
-      // history — everything not yet delivered gets broadcast.
+      // A network discovered after start() has no seeded position and scans from
+      // 0: its own writes are already marked by the broker-wide subscription, so
+      // only genuinely foreign events are broadcast — including one written
+      // before the relay first noticed the network.
       const after = this.lastPolled.get(networkId) ?? 0;
       let events: AnyRealtimeEvent[];
       try {

@@ -39,6 +39,14 @@ function channelOf(networkId: string): string {
 }
 
 /**
+ * Channel receiving *every* published event regardless of network. Used by the
+ * event-log relay, which must observe in-process writes for networks it has not
+ * discovered yet (a network created after start) — a per-network subscription
+ * cannot be in place before the network exists.
+ */
+const ALL_CHANNEL = '__all__';
+
+/**
  * Typed in-memory broker routing {@link RealtimeEvent}s by `network_id`.
  *
  * Construct once per server process. `publish` is synchronous and delivers to
@@ -67,6 +75,7 @@ export class PubSub {
       );
     }
     this.emitter.emit(channelOf(networkId), event);
+    this.emitter.emit(ALL_CHANNEL, event);
   }
 
   /**
@@ -104,6 +113,27 @@ export class PubSub {
   /** Remove a previously returned subscription handle (alias for clarity). */
   unsubscribe(handle: () => void): void {
     handle();
+  }
+
+  /**
+   * Subscribe to every event of every network (current and future). Returns an
+   * `unsubscribe` function. The event-log relay uses this to observe in-process
+   * writes as *delivered* even for a network created after start, whose
+   * per-network channel did not exist when the relay booted.
+   */
+  subscribeAll(listener: (event: AnyRealtimeEvent) => void): () => void {
+    const wrapped = (event: AnyRealtimeEvent): void => {
+      try {
+        listener(event);
+      } catch (err) {
+        // A faulty listener must not interrupt delivery to others.
+        console.error('pubsub: listener threw', err);
+      }
+    };
+    this.emitter.on(ALL_CHANNEL, wrapped);
+    return () => {
+      this.emitter.off(ALL_CHANNEL, wrapped);
+    };
   }
 
   /** Number of listeners currently attached to `networkId` (introspection/tests). */

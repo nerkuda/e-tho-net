@@ -21,6 +21,7 @@ import { runMigrations } from '../src/db/migrator.js';
 import { systemMigrationsDir } from '../src/paths.js';
 import { EventLogRelay, type EventLogReader } from '../src/realtime/event-log-relay.js';
 import { PubSub } from '../src/realtime/pubsub.js';
+import { emitDomainEvent } from '../src/realtime/emit.js';
 
 /** Build a minimal network-audience event envelope for a log entry. */
 function makeEvent(networkId: string, seq: number): AnyRealtimeEvent {
@@ -187,6 +188,33 @@ describe('EventLogRelay (unit, fake log)', () => {
       pubsub.clear();
     }
   });
+
+  it('does not re-broadcast own writes of a network created after start', async () => {
+    const log = new FakeLog();
+    log.addNetwork('n1');
+    const pubsub = new PubSub();
+    const received: AnyRealtimeEvent[] = [];
+    const relay = new EventLogRelay({ systemDb: log, pubsub, options: { pollIntervalMs: 10 } });
+    try {
+      relay.start();
+      // The network appears after start. An in-process write appends to the log
+      // and reaches the broker the way emitDomainEvent delivers it — before the
+      // relay's first scan has had a chance to notice the network.
+      log.addNetwork('n2');
+      const unsubscribeN2 = pubsub.subscribe('n2', (e: AnyRealtimeEvent) => received.push(e));
+      const own = makeEvent('n2', 1);
+      log.write(own);
+      pubsub.publish('n2', own);
+      await waitUntil(() => relay.pollCount() >= 3);
+      relay.stop();
+      const n2Events = received.filter((e) => e.network_id === 'n2');
+      assert.equal(n2Events.length, 1, 'own write of a new network must arrive exactly once');
+      assert.equal(n2Events[0]?.seq, 1);
+      unsubscribeN2();
+    } finally {
+      pubsub.clear();
+    }
+  });
 });
 
 function nativeAvailable(): boolean {
@@ -248,6 +276,55 @@ describe(
         assert.equal(received[0]?.type, 'thought.updated');
       } finally {
         unsubscribe();
+        pubsub.clear();
+        sys.close();
+      }
+    });
+
+    it('broadcasts own writes of a network created after start exactly once', async () => {
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, systemMigrationsDir());
+      const sys = new SystemDb(db);
+      const ownerId = randomUUID();
+      sys.createUser({ id: ownerId, username: 'owner', displayName: 'Owner' });
+      const pubsub = new PubSub();
+      const relay = new EventLogRelay({ systemDb: sys, pubsub, options: { pollIntervalMs: 10 } });
+      try {
+        relay.start();
+        // The network is created only after the relay booted — its channel did
+        // not exist when start() ran.
+        const networkId = randomUUID();
+        sys.createNetworkRow(networkId, ownerId, 'Late Net', null);
+        const received: AnyRealtimeEvent[] = [];
+        const unsubscribe = pubsub.subscribe(networkId, (e: AnyRealtimeEvent) =>
+          received.push(e),
+        );
+        // Own writes take the real emit path: append to event_log, then publish.
+        emitDomainEvent(
+          { systemDb: sys, pubsub },
+          networkId,
+          'thought.created',
+          { thought: { id: 't1', title: 'T' } } as never,
+          { user_id: ownerId, client_id: null },
+        );
+        emitDomainEvent(
+          { systemDb: sys, pubsub },
+          networkId,
+          'thought.created',
+          { thought: { id: 't2', title: 'T2' } } as never,
+          { user_id: ownerId, client_id: null },
+        );
+        await waitUntil(() => relay.pollCount() >= 3);
+        relay.stop();
+        const seqs = received.map((e) => e.seq).sort((a, b) => a - b);
+        assert.deepEqual(
+          seqs,
+          [1, 2],
+          'own events of a late network must arrive exactly once, no duplicate seq',
+        );
+        unsubscribe();
+      } finally {
         pubsub.clear();
         sys.close();
       }

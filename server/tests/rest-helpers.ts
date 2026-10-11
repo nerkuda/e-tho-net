@@ -136,33 +136,6 @@ export function authHeaders(ctx: RestTestContext): Record<string, string> {
 }
 
 /**
- * Дождаться, пока встроенный `EventLogRelay` сервера «подхватит» сеть
- * контекста, и только потом подписываться на брокер напрямую.
- *
- * Сеть REST-контекста создаётся ПОСЛЕ `createServer`, а реле стартует внутри
- * `createServer` и на старте подписывается лишь на уже существующие сети. Новую
- * сеть оно обнаруживает на первом опросе (интервал по умолчанию 300 мс) и там
- * же подписывается на её канал. События, записанные в окне «сеть создана — реле
- * ещё не подписалось», реле считает чужими и рассылает повторно (с тем же
- * `seq`). Подписчик, взятый ДО этой точки, видит дубликаты `attachment.created`
- * и т.п. и рушит проверки точного набора событий — так тест становится флаки
- * при замедлении полного прогона.
- *
- * Ожидание — по факту (на канале появился подписчик реле), не по таймеру:
- * после первого опроса свои записи реле помечает доставленными и не повторяет,
- * поэтому подписка теста получает каждое событие ровно один раз.
- */
-export async function waitForRealtimeRelay(
-  ctx: RestTestContext,
-  timeoutMs = 5000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (ctx.app.pubsub.listenerCount(ctx.networkId) === 0 && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
-/**
  * Create a plain, non-admin, non-member user with an API-key inside the
  * context's system DB (task 0.4.2 bug-fix tests: `buildRestContext`'s own
  * user is always a global admin, which now bypasses membership checks by
