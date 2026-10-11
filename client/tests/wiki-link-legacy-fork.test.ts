@@ -1,16 +1,18 @@
 /**
  * Развилка клика по легаси-ссылке `[[Имя]]` (0.12.2, задача 8e4e3dc5) —
  * чистые решатели и сбой источника кандидатов. Поведение согласовано
- * пользователем 2026-10-11 (карточка задачи, «Предполёт и итоговый DoD»):
+ * пользователем (уточнение 2026-10-11, вечер):
  *
- *   1. ровно одна актуальная мысль по ТОЧНОМУ совпадению названия ИЛИ синонима
- *      и цель не захвачена — конвертация + открытие;
- *   2. несколько точных — поповер (≤10 + пометка обрезки);
- *   3. ни одной — создание;
- *   4. отказ — без изменений (решается развилкой на стороне вызова);
- *   плюс: захваченная единственная цель — открыть без конвертации;
- *   неактуальные исключаются из резолва; имя трактуется буквально
- *   (partial/`*`-синонимы — не совпадение).
+ *   ПРОСМОТР — конвертации НЕТ НИКОГДА (`convert: false`): ссылка остаётся
+ *     `[[Имя]]`, работает только переход по развилке (одна → открыть;
+ *     несколько → поповер → открыть выбранную; ни одной → создать → открыть
+ *     созданную).
+ *   ПРАВКА — конвертация в буфер без перехода (`convert: true`,
+ *     `navigate: false`), КРОМЕ единственной ЗАХВАЧЕННОЙ цели — её открыть
+ *     без конвертации.
+ *   «Одна мысль» — ровно одно ТОЧНОЕ совпадение по названию ИЛИ синониму
+ *   среди актуальных; имя трактуется буквально (partial/`*`-синонимы — не
+ *   совпадение).
  *
  * Чистая часть — без DOM; `resolveLegacyWikiCandidates` — с подменой
  * `window.etn` (живой прокси `lib/etn.ts`, как в `add-dialog.test.ts`).
@@ -26,6 +28,7 @@ import {
   legacyCandidateWindow,
   legacyNameKey,
   LEGACY_CANDIDATE_LIMIT,
+  planLegacyFork,
   resolveLegacyWikiCandidates,
 } from '../src/renderer/editor/wiki-link-resolver.js';
 
@@ -113,6 +116,63 @@ describe('decideLegacyFork: ветки развилки', () => {
   it('несколько кандидатов → поповер (ветка 2)', () => {
     assert.equal(decideLegacyFork(2, false), 'popover');
     assert.equal(decideLegacyFork(50, false), 'popover');
+  });
+});
+
+describe('planLegacyFork: просмотр — без конвертации; правка — буфер (уточнение 2026-10-11, вечер)', () => {
+  it('ПРОСМОТР: все ветки — только переход, конвертации НЕТ', () => {
+    // одна свободная, одна захваченная, несколько, ни одной — везде convert=false.
+    for (const [count, locked] of [
+      [1, false],
+      [1, true],
+      [2, false],
+      [11, false],
+      [0, false],
+    ] as const) {
+      const plan = planLegacyFork(count, locked, true);
+      assert.equal(plan.convert, false, `просмотр, count=${count}, locked=${locked}: без конвертации`);
+      assert.equal(plan.navigate, true, `просмотр, count=${count}, locked=${locked}: переход`);
+    }
+  });
+
+  it('ПРАВКА: одна свободная — конвертация в буфер, без перехода', () => {
+    assert.deepEqual(planLegacyFork(1, false, false), {
+      action: 'convert-open',
+      convert: true,
+      navigate: false,
+    });
+  });
+
+  it('ПРАВКА: несколько — конвертация выбранной в буфер, без перехода', () => {
+    assert.deepEqual(planLegacyFork(3, false, false), {
+      action: 'popover',
+      convert: true,
+      navigate: false,
+    });
+  });
+
+  it('ПРАВКА: ни одной — создание, затем конвертация в буфер (без перехода)', () => {
+    assert.deepEqual(planLegacyFork(0, false, false), {
+      action: 'create',
+      convert: true,
+      navigate: false,
+    });
+  });
+
+  it('ПРАВКА: единственная ЗАХВАЧЕННАЯ — ОТКРЫТЬ без конвертации', () => {
+    assert.deepEqual(planLegacyFork(1, true, false), {
+      action: 'open-only',
+      convert: false,
+      navigate: true,
+    });
+  });
+
+  it('ПРОСМОТР: единственная захваченная — тоже просто открыть (конвертации нет)', () => {
+    assert.deepEqual(planLegacyFork(1, true, true), {
+      action: 'open-only',
+      convert: false,
+      navigate: true,
+    });
   });
 });
 

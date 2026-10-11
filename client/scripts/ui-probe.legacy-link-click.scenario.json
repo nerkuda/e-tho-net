@@ -1,6 +1,6 @@
 {
-  "name": "legacy-wiki-link-click-fork",
-  "description": "Ключевой сценарий задачи 8e4e3dc5 (0.12.2): клик по легаси-ссылке [[Имя]] — резолв имени, конвертация в id-формат и открытие. Покрывает 4 ветки, alias, несколько кандидатов, >10 (пометка), синоним, неактуальную цель (диалог с существующим кандидатом — дубль не создаётся), отказ, грязный буфер в правке (правка не теряется), конвертацию в сохранённый body_md и в буфер редактора. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.legacy-link-click.scenario.json --seed-comment $'Легаси-ссылки 0.12.2:\\n- [[Проба стенда]]\\n- [[Стенд-Алиас|подпись]]\\n- [[Стенд-Синоним]]\\n- [[Стенд-Несколько]]\\n- [[Стенд-Много]]\\n- [[Стенд-Архив]]\\n- [[Стенд-Новая|подпись]]'. Данные кандидатов засеваются в шаге seed-candidates через window.etn. Взаимодействие — синтетические события в контексте страницы (клик по спану просмотра, mousedown по легаси-виджету редактора, Escape/pointerdown вне). Захваченная цель стендом не автоматизируется (нужен второй пользователь с ключом) — покрыта юнит-тестом decideLegacyFork(1,true)='open-only'.",
+  "name": "legacy-wiki-link-click-fork-v2",
+  "description": "Ключевой сценарий задачи 8e4e3dc5 (0.12.2), семантика уточнена пользователем 2026-10-11 (вечер): ПРОСМОТР — конвертации НЕТ, только переход по развилке (одна → открыть; несколько → поповер → открыть выбранную; нет → создать → открыть созданную); ПРАВКА — конвертация в буфер без перехода; блок трансклюзии (вложенный режим правки) — та же развилка, конвертация пишется в буфер вложенного редактора и сохраняется в ИСТОЧНИК. Проверяется: ссылка в body_md НЕ меняется во всех ветках просмотра, переход состоялся; правка конвертирует в буфере и сохраняет; трансклюзионный блок конвертирует источник. Данные (кандидаты, источник, трансклюзия) засеваются шагом seed-all через window.etn; комментарий затравки перезаписывается там же. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.legacy-link-click.scenario.json. Захваченная цель стендом не автоматизируется (нужен второй пользователь) — покрыта юнит-тестом planLegacyFork(1,true,false)={convert:false,navigate:true}.",
   "timeout": 90000,
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
@@ -14,18 +14,21 @@
     { "name": "seeded-cloud-visible", "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null" },
     { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
     { "name": "thought-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'" },
-    { "name": "comment-visible", "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Легаси-ссылки 0.12.2') === true" },
 
     {
       "name": "define-helpers",
-      "eval": "(() => { const visible = (sel) => Array.from(document.querySelectorAll(sel)).find((e) => e.getClientRects().length > 0 && e.getBoundingClientRect().width > 0); window.__st = { link: (n) => document.querySelector('.ui-comment .md-field-view .wiki-link[data-wiki-target=\"' + n + '\"]'), clickView: (n) => { const el = window.__st.link(n); if (!el) throw new Error('нет ссылки просмотра: ' + n); el.scrollIntoView({ block: 'center' }); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; }, editLink: (n) => visible('.md-field--editing .cm-content .wiki-link[data-wiki-target=\"' + n + '\"]'), mdownEdit: (n) => { const el = window.__st.editLink(n); if (!el) throw new Error('нет видимого легаси-виджета правки: ' + n); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: r.left + 2, clientY: r.top + 2 })); return true; }, esc: () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return true; }, outside: () => { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true })); return true; }, body: async () => { const c = await window.etn.comments.list('{{networkId}}', 'thought', '{{thoughtId}}'); const p = c.find((x) => x.kind === 'permanent'); return p ? p.body_md : ''; } }; return true; })()"
+      "eval": "(() => { const visible = (sel) => Array.from(document.querySelectorAll(sel)).find((e) => e.getClientRects().length > 0 && e.getBoundingClientRect().width > 0); window.__st = { link: (n) => document.querySelector('.ui-comment .md-field-view .wiki-link[data-wiki-target=\"' + n + '\"]'), clickView: (n) => { const el = window.__st.link(n); if (!el) throw new Error('нет ссылки просмотра: ' + n); el.scrollIntoView({ block: 'center' }); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; }, editLink: (n) => visible('.md-field--editing .cm-content .wiki-link[data-wiki-target=\"' + n + '\"]'), esc: () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return true; }, outside: () => { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true })); return true; }, focus: (id) => { const el = document.querySelector('[data-id=\"' + id + '\"].cloud'); if (!el) return false; el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; }, body: async () => { const c = await window.etn.comments.list('{{networkId}}', 'thought', '{{thoughtId}}'); const p = c.find((x) => x.kind === 'permanent'); return p ? p.body_md : ''; }, sourceBody: async () => { const c = await window.etn.comments.list('{{networkId}}', 'thought', window.__st.srcId); const p = c.find((x) => x.kind === 'permanent'); return p ? p.body_md : ''; } }; return true; })()"
     },
 
     {
-      "name": "seed-candidates",
-      "probe": "(async () => { const nid = '{{networkId}}'; const api = window.etn; const mk = (title, synonyms) => api.thoughts.create(nid, { title, synonyms: synonyms || [] }); const mkChild = (title) => api.thoughts.create(nid, { title, synonyms: [], create_link: { direction: 'parent', target_thought_id: '{{homeId}}' } }); await mk('Стенд-Алиас'); await mk('Стенд-Синоним-Мысль', ['Стенд-Синоним']); await mkChild('Стенд-Несколько'); await mkChild('Стенд-Несколько'); for (let i = 0; i < 11; i++) await mk('Стенд-Много'); const inv = await mk('Стенд-Архив'); const cur = await api.thoughts.get(nid, inv.id); await api.thoughts.update(nid, inv.id, { active: false }, cur.version); return true; })()",
+      "name": "seed-all",
+      "probe": "(async () => { const nid = '{{networkId}}'; const seed = '{{thoughtId}}'; const api = window.etn; const mk = (title, syn, parent) => { const input = { title, synonyms: syn || [] }; if (parent) input.create_link = { direction: 'parent', target_thought_id: parent }; return api.thoughts.create(nid, input); }; await mk('Стенд-Один', [], seed); await mk('Стенд-Синоним-Мысль', ['Стенд-Синоним'], seed); await mk('Стенд-Несколько', [], seed); await mk('Стенд-Несколько', [], seed); for (let i = 0; i < 11; i++) await mk('Стенд-Много', [], seed); const inv = await mk('Стенд-Архив', [], seed); const cur = await api.thoughts.get(nid, inv.id); await api.thoughts.update(nid, inv.id, { active: false }, cur.version); const src = await api.thoughts.create(nid, { title: 'Стенд-Источник', comment: { body_md: 'Источник: [[Стенд-Один]]' }, create_link: { direction: 'parent', target_thought_id: seed } }); window.__st.srcId = src.id; const cs = await api.comments.list(nid, 'thought', seed); const perm = cs.find((x) => x.kind === 'permanent'); const md = ['Легаси-ссылки 0.12.2:', '- [[Стенд-Один]]', '- [[Стенд-Синоним]]', '- [[Стенд-Несколько]]', '- [[Стенд-Много]]', '- [[Стенд-Архив]]', '- [[Стенд-Новая|подпись]]', '', 'Трансклюзия:', '![[#' + src.id + ']]'].join('\\n'); if (perm) { await api.comments.update(nid, perm.id, { body_md: md }, perm.version); } else { await api.comments.create(nid, 'thought', seed, { kind: 'permanent', body_md: md }); } return true; })()",
       "expect": true
     },
+
+    { "name": "reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "reload-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
     { "name": "links-present", "waitFor": "window.__st.link('Стенд-Новая') !== null" },
 
     { "name": "b2-click-multi", "eval": "window.__st.clickView('Стенд-Несколько')" },
@@ -43,13 +46,6 @@
     { "name": "b2-many-refuse", "eval": "window.__st.outside()" },
     { "name": "b2-many-closed", "waitFor": "document.querySelector('.ui-popover .legacy-candidates') === null" },
 
-    { "name": "b3-none-click", "eval": "window.__st.clickView('Стенд-Новая')" },
-    { "name": "b3-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null" },
-    { "name": "b3-prefilled-alias", "probe": "(document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value ?? '').includes('Стенд-Новая|подпись')", "expect": true },
-    { "name": "b3-apply", "click": ".dialog-footer .ui-btn--primary" },
-    { "name": "b3-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
-    { "name": "b3-converted-alias", "waitFor": "(async () => /\\[\\[#[0-9a-f-]+\\|подпись\\]\\]/.test(await window.__st.body()))()" },
-
     { "name": "b4-inactive-click", "eval": "window.__st.clickView('Стенд-Архив')" },
     { "name": "b4-inactive-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null" },
     { "name": "b4-inactive-candidate-shown", "waitFor": "document.querySelector('.add-candidates')?.textContent?.includes('Стенд-Архив') === true" },
@@ -57,18 +53,52 @@
     { "name": "b4-inactive-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
     { "name": "b4-inactive-keeps-link", "probe": "(async () => (await window.__st.body()).includes('[[Стенд-Архив]]'))()", "expect": true },
 
-    { "name": "b1-self-click", "eval": "window.__st.clickView('Проба стенда')" },
-    { "name": "b1-self-converted", "waitFor": "(async () => (await window.__st.body()).includes('[[#{{thoughtId}}]]'))()" },
+    { "name": "view-b1-click", "eval": "window.__st.clickView('Стенд-Один')" },
+    { "name": "view-b1-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Стенд-Один'" },
+    { "name": "view-b1-no-convert", "probe": "(async () => (await window.__st.body()).includes('[[Стенд-Один]]'))()", "expect": true },
 
+    { "name": "reopen-1", "eval": "window.__st.focus('{{thoughtId}}')" },
+    { "name": "reopen-1-ok", "waitFor": "window.__st.link('Стенд-Синоним') !== null" },
+    { "name": "view-synonym-click", "eval": "window.__st.clickView('Стенд-Синоним')" },
+    { "name": "view-synonym-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Стенд-Синоним-Мысль'" },
+    { "name": "view-synonym-no-convert", "probe": "(async () => (await window.__st.body()).includes('[[Стенд-Синоним]]'))()", "expect": true },
+
+    { "name": "reopen-2", "eval": "window.__st.focus('{{thoughtId}}')" },
+    { "name": "reopen-2-ok", "waitFor": "window.__st.link('Стенд-Несколько') !== null" },
+    { "name": "view-b2-click", "eval": "window.__st.clickView('Стенд-Несколько')" },
+    { "name": "view-b2-popover", "waitFor": "document.querySelector('.ui-popover .legacy-candidates') !== null" },
+    { "name": "view-b2-pick", "click": ".ui-popover .legacy-candidate-row" },
+    { "name": "view-b2-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Стенд-Несколько'" },
+    { "name": "view-b2-no-convert", "probe": "(async () => (await window.__st.body()).includes('[[Стенд-Несколько]]'))()", "expect": true },
+
+    { "name": "reopen-3", "eval": "window.__st.focus('{{thoughtId}}')" },
+    { "name": "reopen-3-ok", "waitFor": "window.__st.link('Стенд-Новая') !== null" },
+    { "name": "view-b3-click", "eval": "window.__st.clickView('Стенд-Новая')" },
+    { "name": "view-b3-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null" },
+    { "name": "view-b3-prefilled", "probe": "(document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value ?? '').includes('Стенд-Новая|подпись')", "expect": true },
+    { "name": "view-b3-apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "view-b3-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "view-b3-opened-created", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Стенд-Новая'" },
+    { "name": "view-b3-no-convert", "probe": "(async () => (await window.__st.body()).includes('[[Стенд-Новая|подпись]]'))()", "expect": true },
+
+    { "name": "reopen-4", "eval": "window.__st.focus('{{thoughtId}}')" },
+    { "name": "reopen-4-ok", "waitFor": "window.__st.link('Стенд-Синоним') !== null" },
     { "name": "edit-enter", "click": "[data-action=\"edit\"]" },
     { "name": "edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
     { "name": "edit-type-marker", "text": "МАРКЕР-ПРАВКИ " },
     { "name": "edit-marker-in-buffer", "probe": "document.querySelector('.md-field--editing')?.textContent?.includes('МАРКЕР-ПРАВКИ') ?? false", "expect": true },
     { "name": "edit-click-synonym", "click": { "selector": ".md-field--editing .cm-content .wiki-link[data-wiki-target=\"Стенд-Синоним\"]" } },
     { "name": "edit-converts-synonym", "waitFor": "!window.__st.editLink('Стенд-Синоним')", "timeout": 15000 },
-    { "name": "edit-marker-survives", "probe": "document.querySelector('.md-field--editing')?.textContent?.includes('МАРКЕР-ПРАВКИ') ?? false", "expect": true },
+    { "name": "edit-stays-in-buffer", "probe": "document.querySelector('.md-field--editing')?.textContent?.includes('МАРКЕР-ПРАВКИ') ?? false", "expect": true },
+
+    { "name": "transclusion-mount", "click": { "selector": ".md-field--editing .cm-transclusion-block p", "at": [6, 8] } },
+    { "name": "transclusion-nested-editor", "waitFor": "document.querySelector('.cm-transclusion-block .cm-content .wiki-link[data-wiki-target=\"Стенд-Один\"]') !== null", "timeout": 15000 },
+    { "name": "transclusion-click-link", "click": ".cm-transclusion-block .cm-content .wiki-link[data-wiki-target=\"Стенд-Один\"]" },
+    { "name": "transclusion-converted-in-nested", "waitFor": "document.querySelector('.cm-transclusion-block .cm-content .wiki-link[data-wiki-target=\"Стенд-Один\"]') === null", "timeout": 15000 },
+
     { "name": "edit-save", "click": "[data-action=\"save\"]" },
     { "name": "edit-back-view", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
-    { "name": "edit-synonym-converted-in-db", "waitFor": "(async () => { const b = await window.__st.body(); return b.includes('МАРКЕР-ПРАВКИ') && /\\[\\[#[0-9a-f-]+\\]\\]/.test(b) && !b.includes('[[Стенд-Синоним]]'); })()" }
+    { "name": "edit-synonym-converted-in-db", "waitFor": "(async () => { const b = await window.__st.body(); return b.includes('МАРКЕР-ПРАВКИ') && !b.includes('[[Стенд-Синоним]]') && /\\[\\[#[0-9a-f-]+\\]\\]/.test(b); })()" },
+    { "name": "transclusion-source-converted", "probe": "(async () => { const s = await window.__st.sourceBody(); return { converted: /\\[\\[#[0-9a-f-]+\\]\\]/.test(s), legacy: s.includes('[[Стенд-Один]]') }; })()", "expect": { "converted": true, "legacy": false } }
   ]
 }

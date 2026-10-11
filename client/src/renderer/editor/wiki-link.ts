@@ -29,7 +29,6 @@ import { notice } from '../lib/notice.js';
 import { replaceLegacyWikiLinks } from '../lib/pure.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { openPopover } from '../lib/ui/popover.js';
-import { findWikiCreateContext } from '../lib/wiki-create-context.js';
 import { isThoughtInResults, openStructuresThought } from '../screens/structures/structures.js';
 import { focusThoughtOnMap, openPublicationInWorkspace, setActiveView } from '../screens/active-view.js';
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
@@ -38,14 +37,13 @@ import { store } from '../state.js';
 import { markdownInlineExt } from './markdown-inline-ext.js';
 import { MD_WIDGET_CLASS, setLegacyWikiLinkClickHandler } from './md-live.js';
 import {
-  decideLegacyFork,
   legacyCandidateWindow,
   LEGACY_CANDIDATE_LIMIT,
+  planLegacyFork,
   resolveLegacyWikiCandidates,
-  searchLegacyWikiTarget,
   WIKI_LINK_PUB_ATTR,
 } from './wiki-link-resolver.js';
-import { replaceLegacyLinksInComment, tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
+import { tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
 import { transclusionSectionCompletions } from './transclusion.js';
 
 /** Chars allowed inside an in-progress wiki prefix (no closing/alias/newline). */
@@ -247,60 +245,23 @@ export async function openThoughtByRef(thought: Thought): Promise<void> {
   await setFocus(thought.id);
 }
 
-/**
- * Разрешает wiki-цель в мысль и открывает её по правилам режима (M11) через
- * {@link openThoughtByRef}. Когда цель не находится и `linkEl` (кликнутый
- * span) лежит в поле комментария с контекстом (карточка ETN 34ffbd75),
- * запускается флоу создания отсутствующей мысли — диалог добавления с
- * предзаполненным именем и последующей заменой ссылок; иначе — прежний
- * notice «не найдена».
- */
-export async function openWikiTarget(name: string, linkEl?: HTMLElement): Promise<void> {
-  const networkId = requireNetworkId();
-  let thoughtId: string | null = null;
-  try {
-    const hit = await searchLegacyWikiTarget(networkId, name);
-    thoughtId = hit?.thoughtId ?? null;
-  } catch (err) {
-    notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
-    return;
-  }
-  if (thoughtId === null) {
-    // Мысли нет: в комментарии (md-field с контекстом) — предложить создать
-    // её прямо отсюда; вне такого контекста — прежнее поведение.
-    if (linkEl !== undefined && (await tryCreateThoughtFromLegacyLink(linkEl, name))) return;
-    notice(`Мысль «${name}» не найдена.`, 'error');
-    return;
-  }
-
-  let thought: Thought;
-  try {
-    thought = await etn.thoughts.get(networkId, thoughtId);
-  } catch (err) {
-    notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
-    return;
-  }
-
-  await openThoughtByRef(thought);
-}
-
 // ---------------------------------------------------------------------------
 // Развилка клика по легаси-ссылке `[[Имя]]` (0.12.2, задача 8e4e3dc5)
 //
-// Поведение согласовано пользователем 2026-10-11 (карточка задачи + хроно
-// «Предполёт и итоговый DoD»):
-//   1. ровно одна актуальная мысль с именем и цель не захвачена — заменить
-//      ссылку на `[[#<id>]]` и открыть мысль;
-//   2. несколько — поповер у места клика (облачка, ≤10 + пометка родителя),
-//      выбор — заменить и открыть;
-//   3. ни одной — диалог создания (имя предзаполнено), после создания —
-//      заменить и остаться в контексте;
-//   4. отказ (поповер/диалог закрыт) — ничего не менять.
-// Захваченная единственная цель — открыть БЕЗ конвертации.
-// В ПРОСМОТРЕ замена пишется в сохранённый `body_md` комментария (через
-// `replaceLegacyLinksInComment`) и происходит переход к мысли; в ПРАВКЕ замена
-// идёт ТОЛЬКО в буфер редактора БЕЗ перехода (иначе поле пересобралось бы и
-// потеряло несохранённые правки — уточнение DoD «грязный буфер в правке»).
+// Поведение согласовано пользователем (уточнение 2026-10-11, вечер):
+//   ПРОСМОТР — конвертации НЕТ НИКОГДА: ссылка остаётся `[[Имя]]`; работает
+//     только ПЕРЕХОД по развилке — одна мысль → открыть её; несколько →
+//     поповер → открыть выбранную; ни одной → диалог создания → открыть
+//     созданную. Захваченность в просмотре роли не играет (менять текст
+//     нечем).
+//   ПРАВКА — конвертация пишется ТОЛЬКО в буфер редактора (без перехода),
+//     КРОМЕ единственной ЗАХВАЧЕННОЙ цели: её открываем без конвертации.
+//   Отказ (поповер/диалог закрыт) — ничего не менять.
+// Клик внутри блока трансклюзии (вложенный редактор «сплошным текстом»)
+// идёт той же развилкой: в правке конвертация ложится в буфер ВЛОЖЕННОГО
+// редактора (единая запись поля сохранит её в ИСТОЧНИК трансклюзии), в
+// просмотре — только переход. Вложенный редактор несёт тот же `md-live`, а
+// обработчик легаси-виджета зарегистрирован глобально (`initWikiLinkNavigation`).
 // ---------------------------------------------------------------------------
 
 /** Куда развилка клика пишет замену легаси-ссылки. */
@@ -313,29 +274,22 @@ export interface LegacyForkTarget {
   edit?: { view: EditorView; from: number; to: number };
 }
 
-/** Конвертер `[[Имя|алиас]] → [[#<id>|алиас]]` под режим (буфер / body_md). */
-function legacyForkConverter(
-  networkId: string,
-  target: LegacyForkTarget,
-): (thoughtId: string) => Promise<void> {
-  const edit = target.edit;
-  if (edit !== undefined) {
-    return async (thoughtId) => {
-      const { view, from, to } = edit;
-      const current = view.state.sliceDoc(from, to);
-      // Диапазон мог устареть (правка документа между mousedown и выбором) —
-      // заменяем только если там всё ещё легаси-ссылка.
-      if (!current.startsWith('[[') || !current.endsWith(']]')) return;
-      const { md } = replaceLegacyWikiLinks(current, target.name, thoughtId);
-      const insert = md === current ? `[[#${thoughtId}]]` : md;
-      view.dispatch({ changes: { from, to, insert } });
-    };
-  }
-  return async (thoughtId) => {
-    const ctx = findWikiCreateContext(target.anchorEl);
-    if (ctx === null) return; // вне поля комментария — писать в body_md некуда
-    await replaceLegacyLinksInComment(networkId, ctx, target.name, thoughtId);
-  };
+/**
+ * Замена легаси-ссылки ID-формой в БУФЕРЕ редактора (режим правки, в т.ч.
+ * вложенный редактор трансклюзии). Диапазон мог устареть — заменяем только
+ * если там всё ещё легаси-ссылка.
+ */
+function convertLegacyLinkInBuffer(
+  edit: { view: EditorView; from: number; to: number },
+  name: string,
+  thoughtId: string,
+): void {
+  const { view, from, to } = edit;
+  const current = view.state.sliceDoc(from, to);
+  if (!current.startsWith('[[') || !current.endsWith(']]')) return;
+  const { md } = replaceLegacyWikiLinks(current, name, thoughtId);
+  const insert = md === current ? `[[#${thoughtId}]]` : md;
+  view.dispatch({ changes: { from, to, insert } });
 }
 
 /** Открыть уже разрешённую мысль по правилам текущего вида. */
@@ -370,41 +324,54 @@ export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<v
     return;
   }
 
-  const convert = legacyForkConverter(networkId, target);
-  // Режим ПРАВКИ развилка НЕ навигирует: переход пересобрал бы поле и потерял
-  // несохранённые правки (уточнение DoD «грязный буфер в правке»). В просмотре
-  // переход выполняет `openThoughtByRef` по правилам вида.
-  const navigate = target.edit === undefined;
+  const edit = target.edit;
+  const viewMode = edit === undefined;
   const singleLocked =
     candidates.length === 1 && otherHolder('thought', candidates[0]!.id) !== null;
+  const plan = planLegacyFork(candidates.length, singleLocked, viewMode);
 
-  switch (decideLegacyFork(candidates.length, singleLocked)) {
+  /** Конвертация в буфер (только правка; в просмотре не вызывается). */
+  const doConvert = (thoughtId: string): void => {
+    if (edit !== undefined) convertLegacyLinkInBuffer(edit, target.name, thoughtId);
+  };
+
+  switch (plan.action) {
     case 'create': {
       // Ветка 3: диалог создания. Вне поля комментария флоу не срабатывает —
-      // прежнее поведение (уведомление «не найдена»).
-      const handled = await tryCreateThoughtFromLegacyLink(target.anchorEl, target.name, { convert });
+      // прежнее поведение (уведомление «не найдена»). После создания: в
+      // просмотре — открыть созданную, в правке — заменить ссылку в буфере.
+      const handled = await tryCreateThoughtFromLegacyLink(target.anchorEl, target.name, {
+        onCreated: (thoughtId) =>
+          plan.navigate
+            ? openResolvedThought(networkId, thoughtId, target.name)
+            : doConvert(thoughtId),
+      });
       if (!handled) notice(`Мысль «${target.name}» не найдена.`, 'error');
       return;
     }
     case 'open-only': {
-      // Захвачена другим пользователем — открыть без конвертации (решение
-      // пользователя 2026-10-11; ссылку не трогаем). В правке остаёмся в поле.
-      if (navigate) await openResolvedThought(networkId, candidates[0]!.id, target.name);
+      // Единственная ЗАХВАЧЕННАЯ цель: открыть БЕЗ конвертации в обоих
+      // режимах (решение пользователя 2026-10-11, вечер).
+      await openResolvedThought(networkId, candidates[0]!.id, target.name);
       return;
     }
     case 'convert-open': {
       const only = candidates[0]!;
-      await convert(only.id);
-      if (navigate) await openResolvedThought(networkId, only.id, target.name);
+      if (plan.navigate) {
+        // Просмотр: конвертации нет — только переход.
+        await openResolvedThought(networkId, only.id, target.name);
+      } else {
+        // Правка: конвертация в буфере без перехода.
+        doConvert(only.id);
+      }
       return;
     }
     default:
-      // Ветка 2: поповер у места клика.
+      // Ветка 2: поповер у места клика → выбор → открыть (просмотр) или
+      // конвертировать в буфере (правка).
       showLegacyCandidatesPopover(target, candidates, (thoughtId) => {
-        void (async () => {
-          await convert(thoughtId);
-          if (navigate) await openResolvedThought(networkId, thoughtId, target.name);
-        })();
+        if (plan.navigate) void openResolvedThought(networkId, thoughtId, target.name);
+        else doConvert(thoughtId);
       });
   }
 }

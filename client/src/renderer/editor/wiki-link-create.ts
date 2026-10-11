@@ -1,34 +1,32 @@
 /**
  * «Создание отсутствующих мыслей по legacy-ссылкам на них» (карточка ETN
- * 34ffbd75, критерии приёмки согласованы с пользователем).
+ * 34ffbd75; уточнено задачей 8e4e3dc5, 0.12.2).
  *
- * Клик по legacy-ссылке `[[имя|текст]]` в режиме ПРОСМОТРА комментария, чья
- * цель не резолвится поиском по именам, открывает диалог добавления мысли:
- * предзаполнено имя из ссылки (текст после `|` — в синонимы), родитель —
- * владелец комментария (для комментария связи — её источник, source). После
- * успешного создания ВСЕ legacy-ссылки с тем же именем цели в исходнике
- * (body_md) этого комментария заменяются на id-ссылки `[[#<id>|<текст>]]`
- * (каждая сохраняет свой текст; без `|` — `[[#<id>]]`), комментарий
- * перерисовывается, пользователь остаётся в текущем контексте.
+ * Клик по legacy-ссылке `[[имя|текст]]`, чья цель не резолвится (ни одной
+ * актуальной мысли с таким названием/синонимом), открывает диалог добавления
+ * мысли: предзаполнено имя из ссылки (текст после `|` — в синонимы), родитель —
+ * владелец комментария (для комментария связи — её источник, source).
  *
- * Вход в флоу — ветка «не найдено» в `openWikiTarget` (editor/wiki-link.ts);
- * контекст комментария (владелец, вид, id, перерисовка) — из реестра
- * `lib/wiki-create-context.ts`, куда поле привязывает себя при создании
- * (`commentContext`-опция `editor/markdown-field.ts`).
+ * Что делать после создания, решает ВЫЗЫВАЮЩИЙ через `onCreated`: развилка
+ * клика (`editor/wiki-link.ts`) в ПРОСМОТРЕ открывает созданную мысль, в
+ * ПРАВКЕ — заменяет ссылку в буфере редактора (в т.ч. вложенного редактора
+ * трансклюзии). Сам этот модуль текст комментария НЕ трогает: автопереписывание
+ * `body_md` из просмотра отменено решением пользователя 2026-10-11 (вечер).
+ *
+ * Вход в флоу — ветка «ни одной мысли» развилки; контекст комментария
+ * (владелец, вид) — из реестра `lib/wiki-create-context.ts`, куда поле
+ * привязывает себя при создании (`commentContext`-опция
+ * `editor/markdown-field.ts`).
  */
-
-import type { Comment } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { invalidateQueries, queryKeys } from '../lib/live/index.js';
 import { canSave, offlineNotice } from '../drafts.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
-import { replaceLegacyWikiLinks } from '../lib/pure.js';
 import { findWikiCreateContext, type WikiCreateCommentContext } from '../lib/wiki-create-context.js';
 
 /**
@@ -36,19 +34,14 @@ import { findWikiCreateContext, type WikiCreateCommentContext } from '../lib/wik
  * the flow took the click over (a comment context was found — the caller must
  * NOT show its «мысль не найдена» notice), `false` when the element is not
  * inside an opted-in comment field (the caller falls back to the notice).
+ *
+ * `options.onCreated` — что сделать с первым успешно созданной/связанной
+ * мыслью (её id): открыть (просмотр) или заменить ссылку в буфере (правка).
  */
 export async function tryCreateThoughtFromLegacyLink(
   linkEl: HTMLElement,
   name: string,
-  /**
-   * Способ замены ссылки после создания мысли. Не задан — прежнее поведение
-   * (ветка «нет мысли» в ПРОСМОТРЕ): перезапись сохранённого `body_md`
-   * комментария через API + перерисовка поля. Задан — развилка клика в режиме
-   * ПРАВКИ (0.12.2, задача 8e4e3dc5): замену делает вызывающий ТОЛЬКО в буфере
-   * редактора, сохранённый текст не трогается (`ctx.refresh` при активной
-   * правке не зовём — иначе теряются несохранённые правки).
-   */
-  options?: { convert?: (thoughtId: string) => Promise<void> | void },
+  options: { onCreated: (thoughtId: string) => Promise<void> | void },
 ): Promise<boolean> {
   const ctx = findWikiCreateContext(linkEl);
   if (ctx === null) return false;
@@ -137,27 +130,15 @@ export async function tryCreateThoughtFromLegacyLink(
   } else if (created > 0) {
     notice(`Готово: ${created}.`);
   }
-  // New thoughts show up in the canvas zones without moving the focus — the
-  // user stays in the current context (карточка: без перехода/фокуса).
+  // Новая мысль появляется на холсте без ручной перезагрузки; открытие
+  // (просмотр) или замена в буфере (правка) — за вызывающим.
   scheduleRefresh();
 
-  if (firstAddedId === null) return true; // every creation failed — nothing to replace
-
-  // Режим правки: замену делает вызывающий в БУФЕРЕ редактора (без записи в
-  // `body_md` и без `ctx.refresh`).
-  if (options?.convert !== undefined) {
-    try {
-      await options.convert(firstAddedId);
-    } catch (err) {
-      notice(`Не удалось обновить ссылку: ${errText(err)}`, 'error');
-    }
-    return true;
-  }
-
+  if (firstAddedId === null) return true; // every creation failed — nothing to do
   try {
-    await replaceLegacyLinksInComment(networkId, ctx, name, firstAddedId);
+    await options.onCreated(firstAddedId);
   } catch (err) {
-    notice(`Не удалось обновить ссылки в комментарии: ${errText(err)}`, 'error');
+    notice(`Не удалось обновить ссылку: ${errText(err)}`, 'error');
   }
   return true;
 }
@@ -174,41 +155,4 @@ async function resolveParentThought(
   const link = await etn.links.get(networkId, ctx.ownerId);
   const source = await etn.thoughts.get(networkId, link.source_id);
   return { id: source.id, title: source.title };
-}
-
-/**
- * Rewrites every same-named legacy link in the comment's body_md to the
- * `[[#<id>]]` form and repaints the field. The fresh body/version are read via
- * the API (never from a cached DOM/store state), so a concurrent edit simply
- * fails the version check instead of silently losing changes.
- *
- * Экспортируется: тем же переходом `[[Имя]] → [[#<id>]]` пишут в сохранённый
- * `body_md` ветки 1–2 развилки клика в режиме просмотра (0.12.2, задача
- * 8e4e3dc5).
- */
-export async function replaceLegacyLinksInComment(
-  networkId: string,
-  ctx: WikiCreateCommentContext,
-  name: string,
-  thoughtId: string,
-): Promise<void> {
-  let fresh: Comment | null = null;
-  const commentId = ctx.getCommentId();
-  if (commentId !== null) {
-    fresh = await etn.comments.get(networkId, commentId);
-  } else if (ctx.commentKind === 'permanent') {
-    // Permanent upsert semantics: the id may legitimately be unknown to the
-    // field (built before the comment was loaded) — find it by owner+kind.
-    const list = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
-    fresh = list.find((c) => c.kind === 'permanent') ?? null;
-  }
-  if (fresh === null) return; // nothing saved to rewrite (e.g. an unsaved new chrono entry)
-
-  const { md, count } = replaceLegacyWikiLinks(fresh.body_md, name, thoughtId);
-  if (count === 0) return;
-
-  const updated = await etn.comments.update(networkId, fresh.id, { body_md: md }, fresh.version);
-  invalidateQueries(queryKeys.indicators(ctx.ownerId));
-  ctx.refresh(updated.body_md, updated.body_html);
-  ctx.afterLinksReplaced?.();
 }

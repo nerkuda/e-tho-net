@@ -488,7 +488,8 @@ export type LegacyForkAction = 'create' | 'open-only' | 'convert-open' | 'popove
 /**
  * Решение развилки: 0 кандидатов → создать; единственный ЗАХВАЧЕННЫЙ →
  * открыть без конвертации (`open-only`); единственный свободный → конвертировать
- * и открыть; несколько → поповер. Чистая — ветки покрываются юнит-тестами.
+ * (правка) / открыть (просмотр); несколько → поповер. Чистая — ветки
+ * покрываются юнит-тестами.
  */
 export function decideLegacyFork(candidateCount: number, singleLocked: boolean): LegacyForkAction {
   switch (classifyLegacyCandidates(candidateCount)) {
@@ -499,6 +500,37 @@ export function decideLegacyFork(candidateCount: number, singleLocked: boolean):
     default:
       return singleLocked ? 'open-only' : 'convert-open';
   }
+}
+
+/** План выполнения развилки: что делать с мыслью и с текстом ссылки. */
+export interface LegacyForkPlan {
+  /** Ветка развилки. */
+  action: LegacyForkAction;
+  /** Заменять текст ссылки ID-формой (только правка; в просмотре — никогда). */
+  convert: boolean;
+  /** Переходить к мысли (просмотр и захваченная цель — да). */
+  navigate: boolean;
+}
+
+/**
+ * Плана развилки по режиму (уточнения пользователя 2026-10-11, вечер). Чистая.
+ *
+ * - **Просмотр** (`viewMode`): конвертации НЕТ НИКОГДА — только переход
+ *   (ветка 1/2 после выбора, ветка 3 после создания).
+ * - **Правка**: конвертация в буфере без перехода; ИСКЛЮЧЕНИЕ — единственная
+ *   ЗАХВАЧЕННАЯ цель: открыть без конвертации.
+ */
+export function planLegacyFork(
+  candidateCount: number,
+  singleLocked: boolean,
+  viewMode: boolean,
+): LegacyForkPlan {
+  const action = decideLegacyFork(candidateCount, singleLocked);
+  if (action === 'open-only') {
+    // Захваченная единственная цель: переход без конвертации в обоих режимах.
+    return { action, convert: false, navigate: true };
+  }
+  return { action, convert: !viewMode, navigate: viewMode };
 }
 
 /** Окно выдачи поповера: первые ≤10 + признак обрезки. Чистая. */
