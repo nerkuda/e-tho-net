@@ -1,0 +1,216 @@
+{
+  "name": "thought-from-selection",
+  "description": "Ключевые сценарии задачи 785c7fac (T1 тех.проекта ac212c41, 0.12.2): «Создать мысль из выделенного» для одиночного выделения вне списков/заголовков открывает существующий диалог поиска/создания с предзаполнением. S1 (805f0596): короткое выделение → мысль без тела + ссылка [[#id]] на месте. S2 (007a81ea): длинное (с переносом) → заголовок из первой строки, тело — остаток, трансклюзия на месте. S4 (b2e3ca0b): выбор существующей — литерально совпавшая часть заменяется ссылкой, при отсутствии совпадения ссылка встаёт в начало, текст не меняется. Отказ — текст не меняется. Данные: постоянный комментарий сид-мысли перезаписывается шагами (window.etn). Проверки — по сохранённому телу в БД (DOM скрытого окна троттлится rAF, грабли 03e33360). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.thought-from-selection.scenario.json. Без скриншотов.",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+
+    {
+      "name": "define-helpers",
+      "eval": "(() => { const nid = '{{networkId}}', seed = '{{thoughtId}}'; window.__st = { knownId: null, setBody: async (md) => { const cs = await window.etn.comments.list(nid, 'thought', seed); const p = cs.find((c) => c.kind === 'permanent'); if (p) { await window.etn.comments.update(nid, p.id, { body_md: md }, p.version); } else { await window.etn.comments.create(nid, 'thought', seed, { kind: 'permanent', body_md: md }); } return true; }, focus: (id) => { const el = document.querySelector('[data-id=\"' + id + '\"].cloud'); if (!el) return false; el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; }, openMenu: () => { const c = document.querySelector('.md-field--editing .cm-content'); if (!c) throw new Error('нет поля в правке'); const r = c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 10 })); return true; }, menu: (label) => { const rows = Array.from(document.querySelectorAll('.menu-item')); const row = rows.find((e) => (e.textContent || '').includes(label)); if (!row) throw new Error('нет пункта: ' + label); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; }, body: async () => { const cs = await window.etn.comments.list(nid, 'thought', seed); const p = cs.find((c) => c.kind === 'permanent'); return p ? p.body_md : ''; }, clearInput: () => { const t = document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]'); if (!t) throw new Error('нет поля диалога'); t.focus(); return true; }, pickCand: (title) => { const row = Array.from(document.querySelectorAll('.add-candidates .type-combo-item')).find((e) => (e.textContent || '').includes(title)); if (!row) throw new Error('нет кандидата: ' + title); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; }, find: async (title) => { const r = await window.etn.thoughts.search(nid, { q: title, scope: 'names', limit: 20 }); const h = (r.by_names || []).find((x) => x.title === title); if (!h) return null; const cs = await window.etn.comments.list(nid, 'thought', h.thought_id); const p = cs.find((c) => c.kind === 'permanent'); return { id: h.thought_id, title: h.title, body: p ? p.body_md : null }; }, children: async () => { const r = await window.etn.thoughts.neighbors(nid, seed, 'children', 100, 0); const list = Array.isArray(r) ? r : (r && (r.items || r.data)) || []; return list.map((x) => x.title || (x.thought && x.thought.title) || ''); } }; return true; })()"
+    },
+
+    {
+      "name": "seed-known",
+      "eval": "(async () => { const t = await window.etn.thoughts.create('{{networkId}}', { title: 'Известная мысль стенда' }); window.__st.knownId = t.id; return t.id; })()"
+    },
+
+    {
+      "name": "S1-seed-short",
+      "eval": "window.__st.setBody('Короткая заметка стенда')"
+    },
+    { "name": "S1-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S1-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S1-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S1-comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Короткая заметка стенда') === true"
+    },
+    { "name": "S1-enter-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S1-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S1-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S1-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S1-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S1-pick-command", "eval": "window.__st.menu('Создать мысль из выделенного')" },
+    { "name": "S1-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    {
+      "name": "S1-prefill",
+      "probe": "document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value ?? null",
+      "expect": "Короткая заметка стенда"
+    },
+    { "name": "S1-apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "S1-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S1-save", "click": "[data-action=\"save\"]" },
+    { "name": "S1-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S1-body-is-link",
+      "probe": "(async () => { const b = await window.__st.body(); return { link: /^\\[\\[#[0-9a-f-]+\\]\\]$/.test(b), noText: !b.includes('Короткая заметка стенда') }; })()",
+      "expect": { "link": true, "noText": true }
+    },
+    {
+      "name": "S1-new-thought-no-body",
+      "probe": "(async () => { const t = await window.__st.find('Короткая заметка стенда'); return t ? { body: t.body } : null; })()",
+      "expect": { "body": null }
+    },
+    {
+      "name": "S1-new-thought-child-of-seed",
+      "probe": "(async () => (await window.__st.children()).includes('Короткая заметка стенда'))()",
+      "expect": true
+    },
+
+    {
+      "name": "S2-seed-long",
+      "eval": "window.__st.setBody('Заголовок стенда\\nдлинное тело мысли стенда')"
+    },
+    { "name": "S2-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S2-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S2-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S2-comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Заголовок стенда') === true"
+    },
+    { "name": "S2-enter-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S2-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S2-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S2-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S2-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S2-pick-command", "eval": "window.__st.menu('Создать мысль из выделенного')" },
+    { "name": "S2-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    {
+      "name": "S2-prefill-first-line",
+      "probe": "document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value ?? null",
+      "expect": "Заголовок стенда"
+    },
+    { "name": "S2-apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "S2-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S2-save", "click": "[data-action=\"save\"]" },
+    { "name": "S2-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S2-body-transclusion",
+      "probe": "(async () => /^!\\[\\[#[0-9a-f-]+\\]\\]$/.test(await window.__st.body()))()",
+      "expect": true
+    },
+    {
+      "name": "S2-new-thought-body",
+      "probe": "(async () => { const t = await window.__st.find('Заголовок стенда'); return t ? { body: t.body } : null; })()",
+      "expect": { "body": "длинное тело мысли стенда" }
+    },
+
+    {
+      "name": "S4a-seed-partial",
+      "eval": "window.__st.setBody('Текст про Известная мысль стенда и хвост')"
+    },
+    { "name": "S4a-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S4a-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4a-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S4a-comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Текст про Известная мысль стенда') === true"
+    },
+    { "name": "S4a-enter-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4a-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4a-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4a-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S4a-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4a-pick-command", "eval": "window.__st.menu('Создать мысль из выделенного')" },
+    { "name": "S4a-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4a-clear-input", "eval": "window.__st.clearInput()" },
+    { "name": "S4a-select-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4a-type-title", "text": "Известная мысль стенда" },
+    {
+      "name": "S4a-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4a-pick-candidate", "eval": "window.__st.pickCand('Известная мысль стенда')" },
+    { "name": "S4a-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4a-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4a-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4a-body-partial-replace",
+      "probe": "(async () => { const b = await window.__st.body(); const id = window.__st.knownId; return { replaced: b.includes('[[#' + id + ']]'), noTitle: !b.includes('Известная мысль стенда'), tailKept: b.includes('и хвост'), headKept: b.includes('Текст про') }; })()",
+      "expect": { "replaced": true, "noTitle": true, "tailKept": true, "headKept": true }
+    },
+
+    {
+      "name": "S4b-seed-nomatch",
+      "eval": "window.__st.setBody('Совсем другой текст без совпадений')"
+    },
+    { "name": "S4b-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S4b-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4b-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S4b-comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Совсем другой текст') === true"
+    },
+    { "name": "S4b-enter-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4b-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4b-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4b-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S4b-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4b-pick-command", "eval": "window.__st.menu('Создать мысль из выделенного')" },
+    { "name": "S4b-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4b-clear-input", "eval": "window.__st.clearInput()" },
+    { "name": "S4b-select-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4b-type-title", "text": "Известная мысль стенда" },
+    {
+      "name": "S4b-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4b-pick-candidate", "eval": "window.__st.pickCand('Известная мысль стенда')" },
+    { "name": "S4b-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4b-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4b-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4b-body-link-at-start",
+      "probe": "(async () => (await window.__st.body()) === '[[#' + window.__st.knownId + ']]Совсем другой текст без совпадений')()",
+      "expect": true
+    },
+
+    {
+      "name": "S-refuse-seed",
+      "eval": "window.__st.setBody('Отказ не меняет текст')"
+    },
+    { "name": "S-refuse-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S-refuse-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S-refuse-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S-refuse-comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Отказ не меняет текст') === true"
+    },
+    { "name": "S-refuse-enter-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S-refuse-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S-refuse-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S-refuse-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S-refuse-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S-refuse-pick-command", "eval": "window.__st.menu('Создать мысль из выделенного')" },
+    { "name": "S-refuse-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S-refuse-esc", "key": "Escape" },
+    { "name": "S-refuse-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S-refuse-save", "click": "[data-action=\"save\"]" },
+    { "name": "S-refuse-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S-refuse-body-unchanged",
+      "probe": "(async () => (await window.__st.body()) === 'Отказ не меняет текст')()",
+      "expect": true
+    }
+  ]
+}

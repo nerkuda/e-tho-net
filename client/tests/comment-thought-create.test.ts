@@ -111,6 +111,8 @@ function host(editor: unknown, owner: unknown = { ownerType: 'thought', ownerId:
 function fakePort(overrides: Partial<CommentThoughtCreatePort> = {}) {
   const created: CommentThoughtCreateRequest[] = [];
   const resolved: unknown[] = [];
+  const picks: Array<{ anchorId: string; anchorTitle: string; prefillText: string }> = [];
+  const basePick = overrides.pick ?? (async () => null);
   const port: CommentThoughtCreatePort = {
     resolveParent: async (owner: { ownerType: 'thought' | 'link'; ownerId: string }) => {
       resolved.push(owner);
@@ -120,9 +122,16 @@ function fakePort(overrides: Partial<CommentThoughtCreatePort> = {}) {
       created.push(request);
       return { id: NEW_ID };
     },
+    thoughtTitle: async (id: string) => `Заголовок ${id}`,
     ...overrides,
+    // Обёртка ПОСЛЕ `...overrides`: вызов диалога фиксируется всегда, даже
+    // когда тест подменяет `pick`.
+    pick: async (input) => {
+      picks.push(input);
+      return basePick(input);
+    },
   };
-  return { port, created, resolved };
+  return { port, created, resolved, picks };
 }
 
 /** Дожидается завершения асинхронного тела команды (две `await`-ступени). */
@@ -242,12 +251,14 @@ describe('команды: создание, родитель, замена тр�
     assert.equal(commands.hasCommentCommandRunner(create.CREATE_FROM_SELECTION_COMMAND), true);
   });
 
-  it('из выделенного: одна мысль, родитель — владелец, трансклюзия на месте', async () => {
+  it('из выделенного: диалог, новая мысль, родитель — владелец, ссылка на месте', async () => {
     const text = 'до\n\nвыделение\n\nпосле';
     const from = text.indexOf('выделение');
     const to = from + 'выделение'.length;
     const editor = fakeEditor(text, from, to);
-    const { port, created, resolved } = fakePort();
+    const { port, created, resolved, picks } = fakePort({
+      pick: async () => ({ items: [{ kind: 'new', title: 'выделение', synonyms: [] }] }),
+    });
     create.setCommentThoughtCreatePort(port);
 
     const handled = commands.runCommentCommand(
@@ -258,15 +269,18 @@ describe('команды: создание, родитель, замена тр�
     await flush();
 
     assert.deepEqual(resolved, [{ ownerType: 'thought', ownerId: PARENT_ID }]);
-    assert.equal(created.length, 1, 'одна мысль из всего выделения');
+    assert.equal(picks.length, 1, 'диалог открыт один раз');
+    assert.equal(picks[0]!.anchorId, PARENT_ID);
+    assert.equal(picks[0]!.prefillText, 'выделение', 'поле предзаполнено выделением');
+    assert.equal(created.length, 1, 'одна мысль из выделения');
     assert.equal(created[0]!.parentId, PARENT_ID);
     assert.equal(created[0]!.title, 'выделение');
-    assert.equal(created[0]!.bodyMd, 'выделение');
+    assert.equal(created[0]!.bodyMd, '', 'короткое выделение — без тела');
 
     assert.equal(editor.edits.length, 1);
     const change = editor.edits[0].changes[0];
-    assert.deepEqual(change, { from, to, insert: `![[#${NEW_ID}]]` });
-    assert.equal(editor.edits[0].selection.anchor, from + `![[#${NEW_ID}]]`.length);
+    assert.deepEqual(change, { from, to, insert: `[[#${NEW_ID}]]` });
+    assert.equal(editor.edits[0].selection.anchor, from + `[[#${NEW_ID}]]`.length);
   });
 
   it('из раздела: каретка в разделе, замена всего раздела, тело без заголовка', async () => {
@@ -291,7 +305,9 @@ describe('команды: создание, родитель, замена тр�
 
   it('тип не задаётся: запрос порта несёт только родителя/название/тело', async () => {
     const editor = fakeEditor('текст', 0, 5);
-    const { port, created } = fakePort();
+    const { port, created } = fakePort({
+      pick: async () => ({ items: [{ kind: 'new', title: 'текст', synonyms: [] }] }),
+    });
     create.setCommentThoughtCreatePort(port);
     commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
     await flush();
@@ -305,6 +321,7 @@ describe('команды: создание, родитель, замена тр�
         assert.deepEqual(owner, { ownerType: 'link', ownerId: LINK_ID });
         return PARENT_ID;
       },
+      pick: async () => ({ items: [{ kind: 'new', title: 'текст', synonyms: [] }] }),
     });
     create.setCommentThoughtCreatePort(port);
     commands.runCommentCommand(
@@ -429,6 +446,8 @@ function sequencePort() {
       if (id === undefined) throw new Error('слишком много единиц в тесте');
       return { id };
     },
+    pick: async () => null,
+    thoughtTitle: async (id: string) => `Заголовок ${id}`,
   };
   return { port, requests };
 }
@@ -691,7 +710,7 @@ describe('разделение: доступность и исполнение',
  * ------------------------------------------------------------------ */
 
 describe('перепрокладка правки после await создания (ошибка da5e74b0)', () => {
-  it('из выделенного: правка уходит на сдвинутый диапазон, текст не портится', async () => {
+  it('из выделенного (диалог): правка уходит на сдвинутый диапазон, текст не портится', async () => {
     const text = 'до\n\nвыделение\n\nпосле';
     const from = text.indexOf('выделение');
     const to = from + 'выделение'.length;
@@ -699,6 +718,8 @@ describe('перепрокладка правки после await создан�
     const requests: CommentThoughtCreateRequest[] = [];
     create.setCommentThoughtCreatePort({
       resolveParent: async () => PARENT_ID,
+      pick: async () => ({ items: [{ kind: 'new', title: 'выделение', synonyms: [] }] }),
+      thoughtTitle: async () => 'выделение',
       create: async (request) => {
         requests.push(request);
         // Пользователь вставил символ в начало — выделение (CM6) сдвинулось на +1.
@@ -714,9 +735,9 @@ describe('перепрокладка правки после await создан�
     assert.deepEqual(editor.edits[0].changes[0], {
       from: from + 1,
       to: to + 1,
-      insert: `![[#${NEW_ID}]]`,
+      insert: `[[#${NEW_ID}]]`,
     });
-    assert.equal(editor.edits[0].selection.anchor, from + 1 + `![[#${NEW_ID}]]`.length);
+    assert.equal(editor.edits[0].selection.anchor, from + 1 + `[[#${NEW_ID}]]`.length);
   });
 
   it('из раздела: замена всего раздела по актуальным позициям', async () => {
@@ -733,6 +754,8 @@ describe('перепрокладка правки после await создан�
         editor.set(`X\n${text}`, caret + 2);
         return { id: NEW_ID };
       },
+      pick: async () => null,
+      thoughtTitle: async () => 'Раздел',
     });
 
     commands.runCommentCommand(create.CREATE_FROM_SECTION_COMMAND, host(editor));
@@ -753,6 +776,8 @@ describe('перепрокладка правки после await создан�
     const editor = mutableEditor(text, from, to);
     create.setCommentThoughtCreatePort({
       resolveParent: async () => PARENT_ID,
+      pick: async () => ({ items: [{ kind: 'new', title: 'выделение', synonyms: [] }] }),
+      thoughtTitle: async () => 'выделение',
       create: async () => {
         // Пользователь изменил сам выделенный текст — перепрокладка невозможна.
         editor.set(text.replace('выделение', 'ДРУГОЕ!!'), from, from + 'ДРУГОЕ!!'.length);
@@ -765,7 +790,216 @@ describe('перепрокладка правки после await создан�
 
     assert.equal(editor.edits.length, 0, 'устаревшую правку не применяем');
   });
+});
 
+/* ------------------------------------------------------------------ *
+ * Случаи 1–2 «Создать мысль из выделенного» (задача 785c7fac, 0.12.2).
+ * ------------------------------------------------------------------ */
+
+describe('случаи 1–2: план имени/тела (требование dc24a8b1)', () => {
+  const snap = (text: string) => ({ text, from: 0, to: text.length });
+
+  it('короткое однострочное (≤250) — без тела, предзаполнение = выделение', () => {
+    const p = create.planSelectionCommand(snap('короткая заметка'));
+    assert.equal(p?.short, true);
+    assert.equal(p?.prefill, 'короткая заметка');
+    assert.equal(p?.bodyMd, '');
+    assert.equal(p?.batch, false);
+  });
+
+  it('ровно 250 символов — короткое (без тела)', () => {
+    const text = 'x'.repeat(250);
+    const p = create.planSelectionCommand(snap(text));
+    assert.equal(p?.short, true);
+    assert.equal(p?.bodyMd, '');
+  });
+
+  it('251 символ — длинное: тело = весь текст, предзаполнение обрезано до 250', () => {
+    const text = 'y'.repeat(251);
+    const p = create.planSelectionCommand(snap(text));
+    assert.equal(p?.short, false);
+    assert.equal(p?.prefill.length, create.TITLE_MAX_LENGTH);
+    assert.equal(p?.bodyMd, text);
+  });
+
+  it('многострочное: заголовок — первая строка, тело — остаток', () => {
+    const text = 'Первая строка\nвторой абзац';
+    const p = create.planSelectionCommand(snap(text));
+    assert.equal(p?.short, false);
+    assert.equal(p?.prefill, 'Первая строка');
+    assert.equal(p?.bodyMd, 'второй абзац');
+  });
+
+  it('первая строка >250 — тело = всё выделение', () => {
+    const text = `${'z'.repeat(300)}\nхвост`;
+    const p = create.planSelectionCommand(snap(text));
+    assert.equal(p?.short, false);
+    assert.equal(p?.prefill.length, create.TITLE_MAX_LENGTH);
+    assert.equal(p?.bodyMd, text);
+  });
+
+  it('список и заголовок — пакетный путь (диалог не открывается)', () => {
+    assert.equal(create.selectionUsesBatchPath('- пункт'), true);
+    assert.equal(create.selectionUsesBatchPath('# Раздел\nтело'), true);
+    assert.equal(create.selectionUsesBatchPath('обычный абзац'), false);
+    assert.equal(create.planSelectionCommand(snap('- пункт'))?.batch, true);
+  });
+
+  it('пустое/без значимой строки — плана нет (команда недоступна)', () => {
+    assert.equal(create.planSelectionCommand({ text: 'x', from: 2, to: 2 }), null);
+    assert.equal(create.planSelectionCommand(snap('   ')), null);
+  });
+});
+
+describe('случаи 1–2: команда (диалог, создание, вставка)', () => {
+  it('S1: короткое → новая мысль без тела, ссылка [[#id]] на месте', async () => {
+    const text = 'до заметка после';
+    const from = text.indexOf('заметка');
+    const to = from + 'заметка'.length;
+    const editor = fakeEditor(text, from, to);
+    const { port, created, picks } = fakePort({
+      pick: async () => ({ items: [{ kind: 'new', title: 'заметка', synonyms: [] }] }),
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(picks.length, 1);
+    assert.equal(picks[0]!.prefillText, 'заметка');
+    assert.equal(created.length, 1);
+    assert.equal(created[0]!.bodyMd, '');
+    assert.deepEqual(editor.edits[0].changes[0], { from, to, insert: `[[#${NEW_ID}]]` });
+  });
+
+  it('S2: длинное → заголовок/тело, трансклюзия на месте', async () => {
+    const text = 'Заголовок\nдлинное тело мысли';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, created, picks } = fakePort({
+      pick: async () => ({ items: [{ kind: 'new', title: 'Заголовок', synonyms: [] }] }),
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(picks[0]!.prefillText, 'Заголовок');
+    assert.equal(created[0]!.title, 'Заголовок');
+    assert.equal(created[0]!.bodyMd, 'длинное тело мысли');
+    assert.deepEqual(editor.edits[0].changes[0], {
+      from: 0,
+      to: text.length,
+      insert: `![[#${NEW_ID}]]`,
+    });
+  });
+
+  it('диалог свернул выделение (текст не менялся) — правка по исходным позициям', async () => {
+    const text = 'до\n\nзаметка\n\nпосле';
+    const from = text.indexOf('заметка');
+    const to = from + 'заметка'.length;
+    const editor = mutableEditor(text, from, to);
+    create.setCommentThoughtCreatePort({
+      resolveParent: async () => PARENT_ID,
+      pick: async () => ({ items: [{ kind: 'new', title: 'заметка', synonyms: [] }] }),
+      thoughtTitle: async () => 'заметка',
+      create: async () => {
+        // Диалог увёл фокус — выделение в поле свернулось, текст не изменился.
+        editor.set(text, to, to);
+        return { id: NEW_ID };
+      },
+    });
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.deepEqual(editor.edits[0].changes[0], { from, to, insert: `[[#${NEW_ID}]]` });
+  });
+
+  it('отказ от диалога — ничего не меняется', async () => {    const editor = fakeEditor('заметка', 0, 6);
+    const { port, created } = fakePort(); // pick по умолчанию → null
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(created.length, 0);
+    assert.equal(editor.edits.length, 0);
+  });
+
+  it('пакетный (список) путь сохранён: одна мысль из выделения с телом', async () => {
+    const text = '- один\n- два';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, created, picks } = fakePort();
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(picks.length, 0, 'диалог не открывается');
+    assert.equal(created[0]!.bodyMd, text);
+    assert.deepEqual(editor.edits[0].changes[0], {
+      from: 0,
+      to: text.length,
+      insert: `![[#${NEW_ID}]]`,
+    });
+  });
+});
+
+describe('выбор существующей (требования ee64ce46, d4f3d8a0)', () => {
+  it('частичная замена: литерально совпавшая с заголовком часть → ссылка', async () => {
+    const text = 'Текст про Мысль тут';
+    const editor = fakeEditor(text, 0, text.length);
+    const at = text.indexOf('Мысль');
+    const { port, created } = fakePort({
+      pick: async () => ({ items: [{ kind: 'existing', id: LINK_ID }] }),
+      thoughtTitle: async () => 'Мысль',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.equal(created.length, 0, 'существующая мысль не создаётся');
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: at, to: at + 'Мысль'.length, insert: `[[#${LINK_ID}]]` },
+    ]);
+  });
+
+  it('нет совпадения — ссылка в НАЧАЛО, текст не меняется', async () => {
+    const text = 'Совсем другой текст';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port } = fakePort({
+      pick: async () => ({ items: [{ kind: 'existing', id: LINK_ID }] }),
+      thoughtTitle: async () => 'Иное',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.deepEqual(editor.edits[0].changes, [{ from: 0, to: 0, insert: `[[#${LINK_ID}]]` }]);
+  });
+
+  it('совпадение регистронезависимо и по trim заголовка', async () => {
+    const text = 'префикс мысль суффикс';
+    const editor = fakeEditor(text, 0, text.length);
+    const at = text.indexOf('мысль');
+    const { port } = fakePort({
+      pick: async () => ({ items: [{ kind: 'existing', id: LINK_ID }] }),
+      thoughtTitle: async () => '  Мысль  ',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: at, to: at + 'мысль'.length, insert: `[[#${LINK_ID}]]` },
+    ]);
+  });
+});
+
+describe('перепрокладка разделения (ошибка da5e74b0)', () => {
   it('разделение: все трансклюзии уезжают по сдвинутым позициям', async () => {
     const text = 'абзац один\n\nабзац два';
     const editor = mutableEditor(text, 0, text.length);
