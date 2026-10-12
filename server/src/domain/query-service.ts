@@ -40,6 +40,7 @@
 
 import {
   EtnError,
+  HIERARCHY_SUBTREE_MAX_NODES,
   STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
   STRUCTURES_QUERY_MAX_LIMIT,
   TRAVERSAL_DEFAULTS,
@@ -47,6 +48,7 @@ import {
   isLinkTypeFilterActive,
   parseFilterKeywords,
   type FilterAst,
+  type FilterAstHierarchyMode,
   type FilterAstLeaf,
   type FilterAstNode,
   type FilterAstOperator,
@@ -70,6 +72,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { collectHierarchySubtree } from './graph-traversal.js';
 import { getLinkDirections } from './link-service.js';
 import {
   getNetworkProperty,
@@ -1031,6 +1034,111 @@ function assertAstValueExecutable(value: FilterAstValue | undefined, path: strin
   }
 }
 
+// ---------------------------------------------------------------------------
+// Операторы «в иерархии»/«не в иерархии» (задача e62aa4db)
+// ---------------------------------------------------------------------------
+
+/** Режим обхода листа «в иерархии»: явный `mode` либо структурный по умолчанию. */
+function astHierarchyMode(leaf: FilterAstLeaf): FilterAstHierarchyMode {
+  return leaf.mode ?? 'structural';
+}
+
+/**
+ * Поддерево «в иерархии» от корней `roots` в заданном режиме, с кэшем в
+ * пределах одного исполнения запроса (ADR 588be3f3, п. 4). Превышение
+ * ресурсного бюджета — явная ошибка исполнения: молча усекать отбор запрещено
+ * (ADR 58b501d8 «неограниченная глубина вложенности»).
+ */
+function astHierarchySubtree(
+  ndb: NetworkDb,
+  mode: FilterAstHierarchyMode,
+  roots: string[],
+  astOpts: AstExecOptions | undefined,
+  path: string,
+  requestId?: string,
+): string[] {
+  const cache = astOpts?.hierarchyCache;
+  const key = `${mode}|${roots.join('\u0000')}`;
+  const cached = cache?.get(key);
+  if (cached !== undefined) return cached;
+  const res = collectHierarchySubtree(ndb, roots, mode, {
+    maxDepth: TRAVERSAL_DEFAULTS.MAX_DEPTH,
+    maxNodes: HIERARCHY_SUBTREE_MAX_NODES,
+    timeoutMs: TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS,
+  });
+  if (res.truncated) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Обход «в иерархии» прерван: превышен ресурсный бюджет ' +
+        (res.reason === 'timeout' ? '(время)' : '(число узлов)') +
+        '; сузьте набор корней или глубину отбора.',
+      {
+        field: path,
+        reason: 'hierarchy_budget',
+        limit: res.reason === 'timeout' ? TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS : HIERARCHY_SUBTREE_MAX_NODES,
+      },
+      requestId,
+    );
+  }
+  if (cache !== undefined) cache.set(key, res.ids);
+  return res.ids;
+}
+
+/** Клауза вхождения в список id (`IN`); пустой список — «нет совпадений». */
+function astIdInClause(columnExpr: string, ids: readonly string[]): Clause {
+  if (ids.length === 0) return AST_FALSE;
+  return { sql: `${columnExpr} IN (${ids.map(() => '?').join(',')})`, params: [...ids] };
+}
+
+/**
+ * Лист «в иерархии» по структурным «Родители»/«Потомки»: значение операнда
+ * (родитель/потомок мысли) входит в поддерево указанных корней (требование
+ * aa7a2aea). Режим обхода — `leaf.mode`: `structural` — только живые
+ * нетипизированные рёбра, `all_links` — любая живая связь считается
+ * родительской (ADR df23db45).
+ */
+function hierarchyStructuralLeafClause(
+  ndb: NetworkDb,
+  kind: 'parents' | 'children',
+  leaf: FilterAstLeaf,
+  astOpts: AstExecOptions | undefined,
+  path: string,
+  requestId?: string,
+): Clause {
+  const roots = astStringList(leaf.value, leaf.operator, path, requestId);
+  if (roots.length === 0) return leaf.operator === 'in_hierarchy' ? AST_FALSE : AST_TRUE;
+  const mode = astHierarchyMode(leaf);
+  const subtree = astHierarchySubtree(ndb, mode, roots, astOpts, path, requestId);
+  const ownCol = kind === 'parents' ? 'target_id' : 'source_id';
+  const otherCol = kind === 'parents' ? 'source_id' : 'target_id';
+  const edge =
+    mode === 'structural'
+      ? 'l.active = 1 AND l.marked_for_deletion = 0 AND l.type_id IS NULL'
+      : 'l.active = 1 AND l.marked_for_deletion = 0';
+  const membership = astIdInClause(`l.${otherCol}`, subtree);
+  const match: Clause = {
+    sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.${ownCol} = t.id AND ${edge} AND ${membership.sql})`,
+    params: membership.params,
+  };
+  return leaf.operator === 'in_hierarchy' ? match : astNegate(match);
+}
+
+/**
+ * Лист «в иерархии» по операнду «Тип»: тип мысли входит в поддерево указанных
+ * типов-корней (сам тип и его подтипы, ADR 9a356460); режим связей неприменим.
+ */
+function hierarchyTypeLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  const roots = astStringList(leaf.value, leaf.operator, path, requestId);
+  const expanded = roots.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'thought_types', roots);
+  const match = astIdInClause('t.type_id', expanded);
+  return leaf.operator === 'in_hierarchy' ? match : astNegate(match);
+}
+
 /**
  * Контекст разрешения токенов AST-листа (требование 1b77decd / ADR 0c02ab4f).
  * `nowMs` — часы в миллисекундах (сериализуемо: тот же объект уходит в
@@ -1347,6 +1455,12 @@ function lookupPropertyRow(ndb: NetworkDb, propertyId: string): RegistryProperty
 interface AstExecOptions {
   ctx?: AstTokenContext;
   unresolved?: TokenIssue[];
+  /**
+   * Кэш поддерева «в иерархии» в пределах одного исполнения запроса
+   * (ключ — режим + список корней). Поддерево не зависит от мысли-кандидата и
+   * считается один раз на условие (ADR 588be3f3, п. 4).
+   */
+  hierarchyCache?: Map<string, string[]>;
 }
 
 /** Свернуть дерево AST в один SQL-предикат над `thoughts_v t`. */
@@ -1407,9 +1521,13 @@ function filterAstLeafClause(
 
   switch (entity.kind) {
     case 'property':
-      return propertyLeafClause(ndb, leaf, `${path}.entity`, requestId);
+      return propertyLeafClause(ndb, leaf, `${path}.entity`, requestId, astOpts);
 
     case 'type': {
+      // «В иерархии» по типу: тип и его подтипы (ADR 9a356460).
+      if (operator === 'in_hierarchy' || operator === 'not_in_hierarchy') {
+        return hierarchyTypeLeafClause(ndb, leaf, `${path}.value`, requestId);
+      }
       // «Имеет свойство»/«не имеет» для операнда «Тип» (требование bd0348b3):
       // эффективный набор свойств самого типа с наследованием.
       if (operator === 'has' || operator === 'not_has') {
@@ -1456,6 +1574,11 @@ function filterAstLeafClause(
 
     case 'parents':
     case 'children':
+      // «В иерархии» по структурным «Родители»/«Потомки» — обход от корней,
+      // режим structural/all_links (задача e62aa4db).
+      if (operator === 'in_hierarchy' || operator === 'not_in_hierarchy') {
+        return hierarchyStructuralLeafClause(ndb, entity.kind, leaf, astOpts, `${path}.value`, requestId);
+      }
       return structuralLeafClause(entity.kind, leaf, `${path}.value`, requestId);
 
     case 'attachments':
@@ -1552,6 +1675,7 @@ function propertyLeafClause(
   leaf: FilterAstLeaf,
   entityPath: string,
   requestId?: string,
+  astOpts?: AstExecOptions,
 ): Clause {
   const { entity, operator } = leaf;
   if (entity.kind !== 'property') throw new Error('propertyLeafClause вызван не для свойства');
@@ -1573,6 +1697,15 @@ function propertyLeafClause(
       [{ property_id: propertyRef, operator: operator as ThoughtQueryPropertyOperator, value: leaf.value as ThoughtQueryPropertyCondition['value'] }],
       requestId,
     )[0] ?? AST_FALSE;
+
+  // «В иерархии» по свойству-ссылке: хотя бы одно значение (цель рёбер)
+  // входит в поддерево корней (требование aa7a2aea, задача e62aa4db).
+  if (operator === 'in_hierarchy' || operator === 'not_in_hierarchy') {
+    if (def.value_type !== 'link') {
+      astUnsupported(`Оператор «${operator}» для свойства типа ${def.value_type}`, entityPath, requestId);
+    }
+    return hierarchyLinkPropertyClause(ndb, def, directionRef, leaf, astOpts, entityPath, requestId);
+  }
 
   const numericValue = typeof leaf.value === 'number';
   const countShaped = AST_RANGE_OPS.has(operator) || AST_COMPARE_OPS.has(operator) || (numericValue && (operator === 'eq' || operator === 'ne'));
@@ -1809,6 +1942,73 @@ interface Clause {
   params: unknown[];
 }
 
+/** Рёбра свойства-связи: колонки сторон + фильтр типа связи (или структурности). */
+interface LinkPropertyEdges {
+  ownerCol: 'source_id' | 'target_id';
+  targetCol: 'source_id' | 'target_id';
+  typeSql: string;
+  typeParams: unknown[];
+}
+
+/**
+ * Разобрать `config` свойства-связи в параметры рёбер. `null` — некорректный
+ * config (не структурное и без `link_type_id`): условие не матчит ничего.
+ */
+function linkPropertyEdges(
+  def: RegistryPropertyRow,
+  directionRef: LinkPropertyDirection | null,
+): LinkPropertyEdges | null {
+  let config: PropertyConfig | null = null;
+  if (def.config !== null) {
+    try {
+      config = JSON.parse(def.config) as PropertyConfig;
+    } catch {
+      config = null;
+    }
+  }
+  const structural = isStructuralLinkProperty(config);
+  const linkTypeId = structural ? null : linkPropertyLinkTypeId(config);
+  if (!structural && linkTypeId === null) return null;
+  const direction = directionRef ?? linkPropertyDirection(config);
+  return {
+    ownerCol: direction === 'out' ? 'source_id' : 'target_id',
+    targetCol: direction === 'out' ? 'target_id' : 'source_id',
+    typeSql: linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?',
+    typeParams: linkTypeId === null ? [] : [linkTypeId],
+  };
+}
+
+/**
+ * Лист «в иерархии» по свойству-ссылке: истина, если хотя бы одно значение
+ * (цель рёбер стороны свойства) входит в поддерево корней (требование aa7a2aea,
+ * задача e62aa4db). Режим обхода поддерева — `leaf.mode` (по умолчанию
+ * структурный).
+ */
+function hierarchyLinkPropertyClause(
+  ndb: NetworkDb,
+  def: RegistryPropertyRow,
+  directionRef: LinkPropertyDirection | null,
+  leaf: FilterAstLeaf,
+  astOpts: AstExecOptions | undefined,
+  path: string,
+  requestId?: string,
+): Clause {
+  const roots = astStringList(leaf.value, leaf.operator, path, requestId);
+  if (roots.length === 0) return leaf.operator === 'in_hierarchy' ? AST_FALSE : AST_TRUE;
+  const edges = linkPropertyEdges(def, directionRef);
+  if (edges === null) return leaf.operator === 'in_hierarchy' ? AST_FALSE : AST_TRUE;
+  const subtree = astHierarchySubtree(ndb, astHierarchyMode(leaf), roots, astOpts, path, requestId);
+  const membership = astIdInClause(`l.${edges.targetCol}`, subtree);
+  const match: Clause = {
+    sql: `EXISTS (
+      SELECT 1 FROM links_v l
+      WHERE l.${edges.ownerCol} = t.id AND ${edges.typeSql}
+        AND l.active = 1 AND l.marked_for_deletion = 0 AND ${membership.sql})`,
+    params: [...edges.typeParams, ...membership.params],
+  };
+  return leaf.operator === 'in_hierarchy' ? match : astNegate(match);
+}
+
 /**
  * Клауза условия по свойству-связи (`value_type: 'link'`) — транслируется в
  * запрос по рёбрам (`links_v`), а не по `property_values` (ADR «проекция
@@ -1834,25 +2034,12 @@ function linkPropertyClause(
   requestId?: string,
   directionRef: LinkPropertyDirection | null = null,
 ): Clause {
-  let config: PropertyConfig | null = null;
-  if (def.config !== null) {
-    try {
-      config = JSON.parse(def.config) as PropertyConfig;
-    } catch {
-      config = null;
-    }
-  }
-  const structural = isStructuralLinkProperty(config);
-  const linkTypeId = structural ? null : linkPropertyLinkTypeId(config);
-  if (!structural && linkTypeId === null) {
+  const edges = linkPropertyEdges(def, directionRef);
+  if (edges === null) {
     // Некорректный config (валидируется при правке онтологии) — не матчит ничего.
     return { sql: '0', params: [] };
   }
-  const direction = directionRef ?? linkPropertyDirection(config);
-  const ownerCol = direction === 'out' ? 'source_id' : 'target_id';
-  const targetCol = direction === 'out' ? 'target_id' : 'source_id';
-  const typeSql = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
-  const typeParams = linkTypeId === null ? [] : [linkTypeId];
+  const { ownerCol, targetCol, typeSql, typeParams } = edges;
   const existsSql = (extraSql: string, extraParams: unknown[]): Clause => ({
     sql: `EXISTS (
       SELECT 1 FROM links_v l
@@ -2547,7 +2734,8 @@ function buildQuery(
 ): BuiltQuery {
   const walk = req.subtree === undefined ? null : walkSubtree(ndb, req.subtree);
   const unresolved: TokenIssue[] = [];
-  const astOpts: AstExecOptions = { unresolved };
+  // Кэш поддеревьев «в иерархии» живёт в пределах одного исполнения запроса.
+  const astOpts: AstExecOptions = { unresolved, hierarchyCache: new Map() };
   if (tokenContext !== undefined) astOpts.ctx = tokenContext;
   const sql = buildFilterQuerySql(ndb, userId, req, walk, emptyFilterMode, requestId, astOpts);
   return { sql, walk, unresolved };

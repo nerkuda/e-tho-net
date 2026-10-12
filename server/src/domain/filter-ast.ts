@@ -17,6 +17,7 @@
 import {
   EtnError,
   FILTER_AST_GROUP_OPS,
+  FILTER_AST_HIERARCHY_MODES,
   FILTER_AST_OPERATORS,
   FILTER_AST_VERSION,
   STRUCTURE_KEYWORD_SCOPES,
@@ -24,6 +25,7 @@ import {
   type FilterAstEntity,
   type FilterAstGroup,
   type FilterAstGroupOp,
+  type FilterAstHierarchyMode,
   type FilterAstLabels,
   type FilterAstLeaf,
   type FilterAstNode,
@@ -39,7 +41,7 @@ const ROOT_KEYS = ['version', 'filter', 'sort'] as const;
 /** Допустимые ключи группы. */
 const GROUP_KEYS = ['op', 'children'] as const;
 /** Допустимые ключи условия-листа. */
-const LEAF_KEYS = ['entity', 'operator', 'value', 'labels'] as const;
+const LEAF_KEYS = ['entity', 'operator', 'value', 'labels', 'mode'] as const;
 /** Допустимые ключи снапшотов подписей. */
 const LABELS_KEYS = ['entity', 'value'] as const;
 /** Допустимые ключи ключа сортировки. */
@@ -193,6 +195,16 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
   }
   if (input['labels'] !== undefined) {
     leaf.labels = parseLabels(input['labels'], `${path}.labels`, requestId);
+  }
+  if (input['mode'] !== undefined) {
+    const mode = input['mode'];
+    if (typeof mode !== 'string' || !(FILTER_AST_HIERARCHY_MODES as readonly string[]).includes(mode)) {
+      fail(`${path}.mode: недопустимый режим обхода «в иерархии».`, {
+        field: `${path}.mode`,
+        allowed: FILTER_AST_HIERARCHY_MODES,
+      }, requestId);
+    }
+    leaf.mode = mode as FilterAstHierarchyMode;
   }
   return leaf;
 }

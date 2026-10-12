@@ -45,6 +45,10 @@ export type FilterAstGroupOp = (typeof FILTER_AST_GROUP_OPS)[number];
  *   * `matches` — «Есть слова» (области поиска — в операнде `keywords`);
  *   * `in_hierarchy`/`not_in_hierarchy` — «в иерархии»/«не в иерархии» (два режима);
  *   * `has`/`not_has` — «имеет свойство»/«не имеет свойство» (набор свойств).
+ *
+ * Режим обхода «в иерархии» — параметр листа {@link FilterAstLeaf.mode}
+ * (требование aa7a2aea, ADR df23db45/588be3f3): по структурным связям либо по
+ * всем типам связей. Значение по умолчанию — структурный режим.
  */
 export const FILTER_AST_OPERATORS = [
   'eq',
@@ -71,6 +75,15 @@ export const FILTER_AST_OPERATORS = [
   'not_has',
 ] as const;
 export type FilterAstOperator = (typeof FILTER_AST_OPERATORS)[number];
+
+/**
+ * Режимы оператора «в иерархии»/«не в иерархии» (требование aa7a2aea, ADR
+ * df23db45): `structural` — обход по живым нетипизированным (структурным)
+ * рёбрам; `all_links` — любая живая связь считается родительской. Оба режима
+ * ограничены глубиной 20 и дедупликацией посещённых (циклы графа).
+ */
+export const FILTER_AST_HIERARCHY_MODES = ['structural', 'all_links'] as const;
+export type FilterAstHierarchyMode = (typeof FILTER_AST_HIERARCHY_MODES)[number];
 
 /** Скалярное значение-литерал. */
 export type FilterAstScalar = string | number | boolean;
@@ -160,6 +173,12 @@ export interface FilterAstLeaf {
   operator: FilterAstOperator;
   value?: FilterAstValue;
   labels?: FilterAstLabels;
+  /**
+   * Режим обхода «в иерархии» (только для `in_hierarchy`/`not_in_hierarchy`);
+   * отсутствие — структурный режим (`structural`). Для операнда «Тип» режим
+   * неприменим (у типов собственная иерархия подтипов) и игнорируется.
+   */
+  mode?: FilterAstHierarchyMode;
 }
 
 /** Группа: `and`/`or` — один и более детей; `not` — ровно один. Глубина не ограничена. */

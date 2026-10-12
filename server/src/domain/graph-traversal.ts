@@ -23,6 +23,7 @@
  */
 
 import {
+  HIERARCHY_SUBTREE_MAX_NODES,
   MCP_DEFAULTS,
   TRAVERSAL_DEFAULTS,
   type LinkTypeFilterInput,
@@ -125,6 +126,84 @@ export function traverse(
   }
 
   return { ids: order, truncated, reason };
+}
+
+/**
+ * Режим обхода поддерева «в иерархии» (требование aa7a2aea, ADR df23db45):
+ * `structural` — только живые нетипизированные (структурные) рёбра;
+ * `all_links` — любая живая связь считается родительской.
+ */
+export type HierarchyEdgeMode = 'structural' | 'all_links';
+
+/** Результат обхода поддерева «в иерархии». */
+export interface HierarchySubtreeResult {
+  /** Собранные id, начиная с корней (узлы дедуплицированы, до `maxDepth`). */
+  ids: string[];
+  /** Обход остановлен бюджетом (узлы/время) — вызывающий обязан дать ошибку, не усекать молча. */
+  truncated: boolean;
+  /** Причина остановки — для пояснения в ошибке исполнения. */
+  reason?: 'max_nodes' | 'timeout';
+}
+
+/**
+ * Обход поддерева ВНИЗ от `rootIds` одним запросом на шаг по целевому индексу
+ * связей (ADR 588be3f3) — обход от корней, а не пофайловый отбор «кто мой
+ * родитель» (запрет ADR; грабли «Отбор по родителю выполняется слишком долго»,
+ * ошибка 6d78ccab).
+ *
+ * Гарантии: visited-set (цикл графа не зацикливает обход), глубина ≤
+ * `maxDepth` (по умолчанию 20), рёбра — живые (`active = 1`) и не помеченные на
+ * удаление; в структурном режиме — ещё и нетипизированные. Ресурсные
+ * предохранители: число узлов и время; при исчерпании возвращается
+ * `truncated: true` (вызывающий даёт явную ошибку — ADR 58b501d8 запрещает молча
+ * усекать отбор).
+ */
+export function collectHierarchySubtree(
+  ndb: NetworkDb,
+  rootIds: readonly string[],
+  mode: HierarchyEdgeMode,
+  bounds: { maxDepth?: number; maxNodes?: number; timeoutMs?: number } = {},
+): HierarchySubtreeResult {
+  const maxDepth = bounds.maxDepth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH;
+  const maxNodes = bounds.maxNodes ?? HIERARCHY_SUBTREE_MAX_NODES;
+  const timeoutMs = bounds.timeoutMs ?? TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS;
+  const startedAt = Date.now();
+  // Структурный режим ограничен нетипизированными рёбрами; режим «все связи»
+  // берёт любое живое не-корзинное ребро, включая типизированное.
+  const typeSql = mode === 'structural' ? ' AND l.type_id IS NULL' : '';
+  const childrenOf = ndb.prepare(
+    `SELECT l.target_id AS nid FROM links_v l
+      WHERE l.source_id = ? AND l.active = 1 AND l.marked_for_deletion = 0${typeSql}`,
+  );
+
+  const visited = new Set<string>();
+  const ids: string[] = [];
+  const queue: Array<{ id: string; depth: number }> = rootIds.map((id) => ({ id, depth: 0 }));
+  let truncated = false;
+  let reason: HierarchySubtreeResult['reason'];
+
+  while (queue.length > 0) {
+    const { id, depth } = queue.shift() as { id: string; depth: number };
+    if (visited.has(id)) continue;
+    if (ids.length >= maxNodes) {
+      truncated = true;
+      reason = 'max_nodes';
+      break;
+    }
+    if (Date.now() - startedAt > timeoutMs) {
+      truncated = true;
+      reason = 'timeout';
+      break;
+    }
+    visited.add(id);
+    ids.push(id);
+    if (depth >= maxDepth) continue;
+    const rows = childrenOf.all(id) as Array<{ nid: string }>;
+    for (const { nid } of rows) {
+      if (!visited.has(nid)) queue.push({ id: nid, depth: depth + 1 });
+    }
+  }
+  return { ids, truncated, reason };
 }
 
 /**

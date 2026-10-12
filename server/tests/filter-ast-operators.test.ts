@@ -12,7 +12,8 @@
  *     для операнда «Тип» (эффективные свойства типа с наследованием);
  *   * «Есть слова»: области чекбоксами; ни одной (в т.ч. отсутствие `scope`) —
  *     условие отключено;
- *   * честный `unsupported` для чужих задач (под-выборки, «в иерархии»).
+ *   * честный `unsupported` для чужих задач (под-выборки; «в иерархии» для
+ *     операндов вне объёма задачи e62aa4db).
  *     Токены AST раскрываются резолвером с 0.13.1 (задача 0f1b9892) — их
  *     покрытие в `filter-ast-tokens.test.ts`.
  */
@@ -364,12 +365,14 @@ describe('AST operator vocabulary (aee021c8)', { skip: !nativeAvailable() }, () 
     assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'keywords' }, 'matches', 'альфа'))), ['Альфа мысль', 'Бета']);
   });
 
-  it('honest unsupported for other subprojects: subqueries, «в иерархии»', () => {
+  it('honest unsupported for other subprojects: subqueries and foreign operands', () => {
     const ndb = createInMemoryNetworkDb();
     const prop = seedProperty(ndb, 'срок', 'date');
     const cases: FilterAst[] = [
       ast(leaf({ kind: 'property', property_id: prop }, 'in', { query: leaf({ kind: 'type' }, 'in', ['t']), operator: 'in' })),
-      ast(leaf({ kind: 'property', property_id: prop }, 'in_hierarchy', [prop])),
+      // «В иерархии» поддержана (задача e62aa4db) только для родителей/потомков,
+      // типа и свойства-ссылки; чужой операнд честно отдаёт unsupported.
+      ast(leaf({ kind: 'attachments' }, 'in_hierarchy', ['t'])),
     ];
     for (const tree of cases) {
       assert.throws(
