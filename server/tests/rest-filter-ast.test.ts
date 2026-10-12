@@ -45,14 +45,15 @@ function nativeAvailable(): boolean {
 function seedThought(
   ndb: NetworkDb,
   title: string,
-  opts: { type_id?: string; created_at?: string } = {},
+  opts: { type_id?: string; created_at?: string; created_by?: string } = {},
 ): string {
   const id = randomUUID();
+  const author = opts.created_by ?? 'u';
   ndb
     .prepare(
       `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
                              version, created_at, created_by, updated_at, updated_by)
-       VALUES (?, ?, ?, ?, 1, 0, 0, 1, ?, 'u', ?, 'u')`,
+       VALUES (?, ?, ?, ?, 1, 0, 0, 1, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -60,7 +61,9 @@ function seedThought(
       title.normalize('NFC').trim().toLowerCase(),
       opts.type_id ?? null,
       opts.created_at ?? '2024-01-01T00:00:00.000Z',
+      author,
       opts.created_at ?? '2024-01-01T00:00:00.000Z',
+      author,
     );
   return id;
 }
@@ -266,6 +269,64 @@ describe('POST /thoughts/query: AST-тело через REST (задача c1376
 
       const unknown = await post(ctx, { ast, bogus_field: 1, sort: 'alpha', order: 'asc' });
       assert.equal(unknown.statusCode, 422);
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('веер: tokenContextFor разрешает токены по сети, unresolved агрегируется в ответе', async () => {
+    const ctx = await buildRestContext();
+    try {
+      // Мысль от имени вызывающего — чтобы проверить разрешение `$user`.
+      seedThought(ctx.ndb, 'REST-своя', { created_by: ctx.adminId });
+      seedThought(ctx.ndb, 'REST-чужая', { created_by: 'u' });
+
+      // `$user` разрешается контекстом сети (иначе created_by='' → 0 хитов).
+      const ok = await post(ctx, {
+        network_ids: [ctx.networkId],
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: { entity: { kind: 'author' as const }, operator: 'eq' as const, value: { token: '$user' } },
+        },
+        sort: 'alpha',
+        order: 'asc',
+        limit: 10,
+        count: true,
+      });
+      assert.equal(ok.statusCode, 200, JSON.stringify(ok.json));
+      const okData = ok.json['data'] as {
+        items: Array<{ title: string }>;
+        unresolved?: unknown[];
+      };
+      const titles = okData.items.map((i) => i.title);
+      assert.ok(titles.includes('REST-своя'), `$user обязан разрешиться: ${JSON.stringify(ok.json)}`);
+      assert.ok(!titles.includes('REST-чужая'), 'мысль другого автора не входит');
+      assert.equal(okData.unresolved, undefined);
+
+      // Неразрешимый в сетевом отборе токен — агрегирован по сетям, не молчание.
+      const bad = await post(ctx, {
+        network_ids: [ctx.networkId],
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            entity: { kind: 'created_at' as const },
+            operator: 'gte' as const,
+            value: { token: '$thought.id' },
+          },
+        },
+        sort: 'alpha',
+        order: 'asc',
+        limit: 10,
+      });
+      assert.equal(bad.statusCode, 200, JSON.stringify(bad.json));
+      const badData = bad.json['data'] as {
+        items: unknown[];
+        unresolved?: Array<{ network_id: string; token: string; reason: string }>;
+      };
+      assert.deepEqual(badData.items, []);
+      assert.equal(badData.unresolved?.length, 1, JSON.stringify(bad.json));
+      assert.equal(badData.unresolved?.[0]?.network_id, ctx.networkId);
+      assert.match(badData.unresolved?.[0]?.token ?? '', /\$thought/);
     } finally {
       await closeRestContext(ctx);
     }

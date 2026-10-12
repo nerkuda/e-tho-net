@@ -239,6 +239,12 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             truncated: result.response.truncated,
             reason: result.response.reason,
             networks: result.networks,
+            // Неразрешимые токены AST, агрегированные по сетям (требование
+            // b7fdab20) — та же семантика, что у одиночной выборки; поле
+            // формирует домен (`fanOutQuery`), здесь только проброс в JSON.
+            ...(result.response.unresolved !== undefined && result.response.unresolved.length > 0
+              ? { unresolved: result.response.unresolved }
+              : {}),
           });
           return;
         }
