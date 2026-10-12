@@ -76,6 +76,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
 import { collectHierarchySubtree } from './graph-traversal.js';
 import { getLinkDirections } from './link-service.js';
 import {
@@ -234,6 +235,30 @@ export interface ThoughtQueryOptions {
    * даёт неразрешимость.
    */
   tokenContext?: AstTokenContext;
+  /**
+   * Собирать статистику исполнения (требование 0f34a5ff «Статистика
+   * исполнения отборов при серверном логировании»). Флаг включается фасадом
+   * ТОЛЬКО когда серверное журналирование включено: при выключенном
+   * логировании счётчики не собираются — накладных расходов нет.
+   */
+  collectStats?: boolean;
+}
+
+/**
+ * Статистика одного исполнения отбора (требование 0f34a5ff). Наружу (в
+ * API-ответ) не выводится — пользователь фасада пишет её в серверный журнал.
+ */
+export interface QueryStats {
+  /** Время исполнения запроса, мс. */
+  duration_ms: number;
+  /** Число условий-листьев, попавших в план обхода. */
+  conditions: number;
+  /** Число обойдённых узлов (иерархия/под-выборки). */
+  nodes_walked: number;
+  /** Число обращений к обходу иерархии («в иерархии»). */
+  hierarchy_calls: number;
+  /** Сработавшие ресурсные предохранители (имена), без ошибки. */
+  limits_hit: string[];
 }
 
 /** Результат канонической выборки. */
@@ -262,6 +287,8 @@ export interface ThoughtQueryResult {
    * `items` пуст, пояснения — здесь. Отсутствует/пусто — всё разрешилось.
    */
   unresolved?: TokenIssue[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
 }
 
 /** Результат id-only выборки ({@link queryThoughtIds}). */
@@ -275,6 +302,8 @@ export interface ThoughtIdsQueryResult {
   next_cursor: string | null;
   /** Неразрешимые токены AST (непусто — `ids` пуст, см. {@link ThoughtQueryResult.unresolved}). */
   unresolved?: TokenIssue[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
 }
 
 // ---------------------------------------------------------------------------
@@ -1158,6 +1187,7 @@ function astSubqueryIdSet(
   const rows = ndb
     .prepare(`${select} LIMIT ?`)
     .all(...clause.params, AST_SUBQUERY_MAX_NODES + 1) as Array<{ v: string }>;
+  if (astOpts?.stats !== undefined) astOpts.stats.nodes_walked += rows.length;
   if (rows.length > AST_SUBQUERY_MAX_NODES) {
     throw new EtnError(
       'VALIDATION_ERROR',
@@ -1363,11 +1393,13 @@ function astHierarchySubtree(
   const key = `${mode}|${roots.join('\u0000')}`;
   const cached = cache?.get(key);
   if (cached !== undefined) return cached;
+  if (astOpts?.stats !== undefined) astOpts.stats.hierarchy_calls += 1;
   const res = collectHierarchySubtree(ndb, roots, mode, {
     maxDepth: TRAVERSAL_DEFAULTS.MAX_DEPTH,
     maxNodes: HIERARCHY_SUBTREE_MAX_NODES,
     timeoutMs: TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS,
   });
+  if (astOpts?.stats !== undefined) astOpts.stats.nodes_walked += res.ids.length;
   if (res.truncated) {
     throw new EtnError(
       'VALIDATION_ERROR',
@@ -1792,6 +1824,18 @@ interface AstExecOptions {
   subqueryDepth?: number;
   /** Общий на запрос счётчик материализованных id под-выборок (бюджет ширины). */
   subqueryBudget?: { ids: number };
+  /**
+   * Мутируемые счётчики статистики исполнения (требование 0f34a5ff). Присутствует
+   * ТОЛЬКО когда фасад запросил `collectStats` — тогда счётчики доступны во всех
+   * ветках обхода; иначе `undefined`, и инкременты пропускаются (нет накладных
+   * расходов при выключенном логировании).
+   */
+  stats?: {
+    conditions: number;
+    nodes_walked: number;
+    hierarchy_calls: number;
+    limits_hit: Set<string>;
+  };
 }
 
 /** Свернуть дерево AST в один SQL-предикат над `thoughts_v t`. */
@@ -1833,6 +1877,8 @@ function filterAstLeafClause(
   requestId?: string,
   astOpts?: AstExecOptions,
 ): Clause {
+  // Условие попало в план обхода — считаем его (только при сборе статистики).
+  if (astOpts?.stats !== undefined) astOpts.stats.conditions += 1;
   // Токен-значение раскрывается сервером; неразрешимый — лист даёт false и
   // уходит в коллектор (требование b7fdab20 «пустой результат с пояснением»).
   const resolved = astResolveLeafValue(leaf.value, astOpts?.ctx, astOpts?.unresolved, path);
@@ -3161,6 +3207,8 @@ interface BuiltQuery {
   walk: WalkResult | null;
   /** Неразрешимые токены AST (пусто — всё разрешено). */
   unresolved: TokenIssue[];
+  /** Мутируемые счётчики статистики (только при `collectStats`). */
+  stats?: NonNullable<AstExecOptions['stats']>;
 }
 
 function buildQuery(
@@ -3170,14 +3218,28 @@ function buildQuery(
   emptyFilterMode: 'home_orphans' | 'all',
   requestId?: string,
   tokenContext?: AstTokenContext,
+  collectStats?: boolean,
 ): BuiltQuery {
+  // Красная диагностика (требование 44d61c8a): явное AST-тело, ссылающееся на
+  // удалённую сущность, исполнять запрещено — заведомо неисполнимый отбор не
+  // запускается, пользователь видит причину со снапшотом имени. Применяется
+  // только к ЯВНОМУ wire-AST (`req.ast`); плоские критерии компилируются в AST
+  // внутри движка и проверяются при входе в REST/MCP отдельно (их ссылки —
+  // не AST-сущности пользователя).
+  if (req.ast !== undefined) {
+    const diag = diagnoseFilterAst(ndb, req.ast, { requestId });
+    if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
+  }
   const walk = req.subtree === undefined ? null : walkSubtree(ndb, req.subtree);
   const unresolved: TokenIssue[] = [];
   // Кэш поддеревьев «в иерархии» живёт в пределах одного исполнения запроса.
   const astOpts: AstExecOptions = { unresolved, hierarchyCache: new Map(), subqueryBudget: { ids: 0 } };
   if (tokenContext !== undefined) astOpts.ctx = tokenContext;
+  if (collectStats === true) {
+    astOpts.stats = { conditions: 0, nodes_walked: 0, hierarchy_calls: 0, limits_hit: new Set() };
+  }
   const sql = buildFilterQuerySql(ndb, userId, req, walk, emptyFilterMode, requestId, astOpts);
-  return { sql, walk, unresolved };
+  return { sql, walk, unresolved, ...(astOpts.stats !== undefined ? { stats: astOpts.stats } : {}) };
 }
 
 /**
@@ -3220,7 +3282,8 @@ export function queryThoughts(
   opts: ThoughtQueryOptions = {},
 ): ThoughtQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
-  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext);
+  const startedAt = opts.collectStats === true ? performance.now() : 0;
+  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true);
   // Неразрешимый токен AST — пустой результат с пояснением, а не молчаливая
   // потеря условия (требование b7fdab20).
   if (built.unresolved.length > 0) {
@@ -3234,6 +3297,9 @@ export function queryThoughts(
       truncated: false,
       reason: null,
       unresolved: built.unresolved,
+      ...(built.stats !== undefined
+        ? { stats: finalizeStats(built.stats, startedAt, built, req, opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT) }
+        : {}),
     };
   }
   const sql = built.sql;
@@ -3271,6 +3337,34 @@ export function queryThoughts(
     depths: walk === null ? null : new Map(items.map((i) => [i.id, walk.depths.get(i.id)]).filter((e): e is [string, number] => e[1] !== undefined)),
     truncated: walk?.truncated ?? false,
     reason: walk?.reason ?? null,
+    ...(built.stats !== undefined
+      ? { stats: finalizeStats(built.stats, startedAt, built, req, maxLimit) }
+      : {}),
+  };
+}
+
+/**
+ * Собрать итоговую статистику исполнения (требование 0f34a5ff) из мутируемых
+ * счётчиков обхода: время — от старта `queryThoughts`, плюс сработавшие
+ * предохранители, не приведшие к ошибке (обрезка обхода поддерева, потолок
+ * страницы). Вызывается только когда статистика собиралась.
+ */
+function finalizeStats(
+  counters: NonNullable<AstExecOptions['stats']>,
+  startedAt: number,
+  built: BuiltQuery,
+  req: ThoughtQueryRequest,
+  maxLimit: number,
+): QueryStats {
+  const limits = new Set(counters.limits_hit);
+  if (built.walk?.truncated === true) limits.add(`subtree_${built.walk.reason ?? 'nodes'}`);
+  if (req.limit > maxLimit) limits.add('page_limit');
+  return {
+    duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
+    conditions: counters.conditions,
+    nodes_walked: counters.nodes_walked,
+    hierarchy_calls: counters.hierarchy_calls,
+    limits_hit: [...limits],
   };
 }
 
@@ -3312,9 +3406,19 @@ export function queryThoughtIds(
   opts: ThoughtQueryOptions = {},
 ): ThoughtIdsQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
-  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext);
+  const startedAt = opts.collectStats === true ? performance.now() : 0;
+  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true);
   if (built.unresolved.length > 0) {
-    return { ids: [], total: req.count === true ? 0 : null, has_more: false, next_cursor: null, unresolved: built.unresolved };
+    return {
+      ids: [],
+      total: req.count === true ? 0 : null,
+      has_more: false,
+      next_cursor: null,
+      unresolved: built.unresolved,
+      ...(built.stats !== undefined
+        ? { stats: finalizeStats(built.stats, startedAt, built, req, opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT) }
+        : {}),
+    };
   }
   const sql = built.sql;
   const maxLimit = opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT;
@@ -3341,5 +3445,8 @@ export function queryThoughtIds(
     total: req.count === true ? countFilterMatches(ndb, sql) : null,
     has_more: hasMore,
     next_cursor: hasMore ? buildNextCursor(sql, req, pageRows) : null,
+    ...(built.stats !== undefined
+      ? { stats: finalizeStats(built.stats, startedAt, built, req, maxLimit) }
+      : {}),
   };
 }

@@ -75,6 +75,7 @@ function toThoughtQueryResult(flat: ReaderThoughtsQueryResult): ThoughtQueryResu
     truncated: flat.truncated,
     reason: flat.reason,
     ...(flat.unresolved !== undefined ? { unresolved: flat.unresolved as TokenIssue[] } : {}),
+    ...(flat.stats !== undefined ? { stats: flat.stats } : {}),
   };
 }
 
@@ -126,6 +127,7 @@ export async function queryThoughtIdsAsync(
     has_more: flat.has_more,
     next_cursor: flat.next_cursor,
     ...(flat.unresolved !== undefined ? { unresolved: flat.unresolved as TokenIssue[] } : {}),
+    ...(flat.stats !== undefined ? { stats: flat.stats } : {}),
   };
 }
 

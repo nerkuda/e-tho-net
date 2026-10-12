@@ -124,6 +124,7 @@ function execute(task: ReaderTask): ReaderTaskResponse {
         truncated: result.truncated,
         reason: result.reason,
         ...(result.unresolved !== undefined ? { unresolved: result.unresolved } : {}),
+        ...(result.stats !== undefined ? { stats: result.stats } : {}),
       };
       return { ok: true, result: flat };
     }
@@ -135,6 +136,7 @@ function execute(task: ReaderTask): ReaderTaskResponse {
         has_more: result.has_more,
         next_cursor: result.next_cursor,
         ...(result.unresolved !== undefined ? { unresolved: result.unresolved } : {}),
+        ...(result.stats !== undefined ? { stats: result.stats } : {}),
       };
       return { ok: true, result: flat };
     }

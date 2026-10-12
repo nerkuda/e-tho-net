@@ -88,6 +88,7 @@ import {
 import { validateLayerColors } from './domain/layer-service.js';
 import type { TraversalBounds } from './domain/graph-traversal.js';
 import type {
+  QueryStats,
   ThoughtQueryOptions,
   ThoughtQueryRequest,
 } from './domain/query-service.js';
@@ -4178,6 +4179,8 @@ export interface ReaderThoughtsQueryResult {
   reason: 'max_nodes' | null;
   /** Неразрешимые токены AST (требование b7fdab20); непусто — результат пуст. */
   unresolved?: ReaderTokenIssue[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
 }
 
 /** Результат `thoughts.queryIds`. */
@@ -4188,6 +4191,8 @@ export interface ReaderThoughtsQueryIdsResult {
   next_cursor: string | null;
   /** Неразрешимые токены AST (требование b7fdab20); непусто — `ids` пуст. */
   unresolved?: ReaderTokenIssue[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
 }
 
 /** Успешный ответ воркера. `result` конкретизируется по `op` на стороне пула. */

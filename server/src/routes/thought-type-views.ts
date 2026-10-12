@@ -62,6 +62,7 @@ import {
   updateThoughtTypeView,
 } from '../domain/thought-type-views-service.js';
 import { getThought } from '../domain/thought-service.js';
+import { logFilterStats } from '../log/filter-stats.js';
 
 /** Route params для `:networkId` + `:id` (id типа мысли). */
 interface TypeIdParams {
@@ -400,7 +401,10 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           // Контекст разрешения токенов AST (обязательный пункт задачи c13762b1):
           // часы/пользователь/первый день недели сети/профиль времени.
           tokenContext: restTokenContext(app, req.auth!.user.id, networkId),
+          // Статистика — только при включённом журналировании (0f34a5ff).
+          collectStats: app.fileLog.enabled,
         });
+        logFilterStats(app.fileLog, networkId, 'rest.view_run', result.stats);
 
         // 5. Если `unresolved` непустой — отдаём пустой результат с пояснением
         //    (требование b7fdab20). `sort`/`order`/`limit`/`offset` в этом
@@ -464,6 +468,11 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             view: { id: matched.id, name: matched.name, type_id: matched.defined_on },
             sort: result.sort,
             order: result.order,
+            // Жёлтая диагностика (требование 325efc13): свойство отвязано от
+            // типа — отбор исполнен, предупреждение видно пользователю/агенту.
+            ...(result.warnings !== undefined && result.warnings.length > 0
+              ? { warnings: result.warnings }
+              : {}),
           },
         });
       },

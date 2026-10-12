@@ -197,6 +197,11 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
                   })),
                 }
               : {}),
+            // Жёлтая диагностика (требование 325efc13): свойство отвязано от
+            // типа — отбор исполнен, предупреждение видно агенту.
+            ...(base.warnings !== undefined && base.warnings.length > 0
+              ? { warnings: base.warnings }
+              : {}),
           },
         };
       }),

@@ -276,8 +276,9 @@ describe('под-выборки как значения — квантифика
     const s1 = seedThought(ndb, 's1');
     seedLink(ndb, s1, a, { type_id: lt });
 
-    // Под-выборка пуста (тип, которого нет ни у одной мысли).
-    const emptySet = leaf({ kind: 'type' }, 'in', ['11111111-1111-4111-8111-111111111111']);
+    // Под-выборка пуста (существующий тип, которого нет ни у одной мысли).
+    const emptyType = seedThoughtType(ndb, 'пустое');
+    const emptySet = leaf({ kind: 'type' }, 'in', [emptyType]);
     assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'in', sub(emptySet, 'in')))), []);
     assert.deepEqual(
       runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'not_in', sub(emptySet, 'not_in')))),
@@ -295,7 +296,8 @@ describe('под-выборки как значения — квантифика
     const ndb = createInMemoryNetworkDb();
     const text = seedScalarProperty(ndb, 'статус', 'text');
     seedThought(ndb, 'x');
-    const set = leaf({ kind: 'type' }, 'in', ['22222222-2222-4222-8222-222222222222']);
+    const realType = seedThoughtType(ndb, 'тест');
+    const set = leaf({ kind: 'type' }, 'in', [realType]);
 
     // Скалярное свойство — не ссылка.
     assert.ok(expectEtnError(() => runAst(ndb, ast(leaf({ kind: 'property', property_id: text }, 'in', sub(set, 'in'))))));
@@ -308,7 +310,8 @@ describe('под-выборки как значения — квантифика
   it('отложенные операнды (вложения/дневник/цели/тип связи) — честный unsupported', () => {
     const ndb = createInMemoryNetworkDb();
     seedThought(ndb, 'x');
-    const set = leaf({ kind: 'type' }, 'in', ['33333333-3333-4333-8333-333333333333']);
+    const realType = seedThoughtType(ndb, 'тест');
+    const set = leaf({ kind: 'type' }, 'in', [realType]);
     for (const kind of ['attachments', 'chronology', 'targets', 'link_type'] as const) {
       assert.ok(
         expectEtnError(() => runAst(ndb, ast(leaf({ kind }, 'in', sub(set, 'in'))))),

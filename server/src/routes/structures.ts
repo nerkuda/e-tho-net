@@ -65,6 +65,7 @@ import {
 import { parseFilterAst } from '../domain/filter-ast.js';
 import { assertPropertyConditionsResolvable, structureRequestToQuery } from '../domain/query-service.js';
 import { queryThoughtIdsAsync, queryThoughtsAsync } from '../domain/heavy-read.js';
+import { logFilterStats } from '../log/filter-stats.js';
 import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
 import { getEdgesAmong, toFocusEdge } from '../domain/link-service.js';
 import {
@@ -271,7 +272,9 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
             emptyFilterMode: 'home_orphans',
             tokenContext,
+            collectStats: app.fileLog.enabled,
           });
+          logFilterStats(app.fileLog, networkId, 'rest.ids_only', result.stats);
           sendSuccess(reply, {
             ids: result.ids,
             total: result.total,
@@ -289,6 +292,9 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             emptyFilterMode: 'home_orphans',
             includeDirections: true,
             tokenContext,
+            // Статистика собирается ТОЛЬКО при включённом журналировании —
+            // при выключенном накладных расходов нет (требование 0f34a5ff).
+            collectStats: app.fileLog.enabled,
             // Эллипс раскрываемости считает те же рёбра, что и раскрытие
             // (ошибка 331ffb94): directionsOf обязан смотреть на корзину тем
             // же флагом, что getHierarchy, иначе заполненный эллипс
@@ -302,10 +308,17 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             ),
           },
         );
+        logFilterStats(app.fileLog, networkId, 'rest.query', result.stats);
         sendList(reply, result.items, result.total, query.offset, query.limit, {
           directions: result.directions,
           has_more: result.has_more,
           next_cursor: result.next_cursor,
+          // Неразрешимые токены AST одиночной выборки (требование b7fdab20,
+          // 30db3cea): пустой результат с пояснением, а не молчаливая потеря
+          // условия. Паритет с веерным режимом и MCP.
+          ...(result.unresolved !== undefined && result.unresolved.length > 0
+            ? { unresolved: result.unresolved }
+            : {}),
         });
       },
     );

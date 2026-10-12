@@ -42,6 +42,7 @@ import {
   THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
   THOUGHT_TYPE_VIEW_NAME_MAX,
   type EffectiveThoughtTypeView,
+  type FilterDiagnostic,
   type SortOrder,
   type StructureSort,
   type ThoughtTypeView,
@@ -54,9 +55,11 @@ import type { NetworkDb } from '../db/network-db.js';
 import { getPropertyValues } from './property-service.js';
 import { parseStructureFilter } from './structure-service.js';
 import { parseFilterAst } from './filter-ast.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
 import {
   structureRequestToQuery,
   type AstTokenContext,
+  type QueryStats,
   type ThoughtQueryRequest,
   type ThoughtQueryResult,
 } from './query-service.js';
@@ -243,6 +246,26 @@ function validateDefinition(definition: unknown, requestId?: string): string {
   return definition;
 }
 
+/**
+ * Красная диагностика на сохранении (требование 44d61c8a): AST-форма
+ * определения, ссылающаяся на удалённую сущность (свойство реестра, тип/тип
+ * связи, значение-мысль), не сохраняется — `VALIDATION_ERROR` со
+ * структурированными `details.diagnostics`. Определения старой плоской формы
+ * (`definition v1`, без поля `version`) пропускаются: их миграция в AST —
+ * отдельная задача 4be62d42.
+ */
+function assertAstDefinitionEntitiesResolvable(
+  ndb: NetworkDb,
+  parsedDefinition: Record<string, unknown>,
+  thoughtTypeId: string,
+  requestId?: string,
+): void {
+  if (parsedDefinition['version'] === undefined) return;
+  const ast = parseFilterAst(parsedDefinition, requestId);
+  const diag = diagnoseFilterAst(ndb, ast, { thoughtTypeId, requestId });
+  if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
+}
+
 /** Валидация `position`: целое число ≥ 0, опционально. */
 function validatePosition(position: unknown, requestId?: string): number | undefined {
   if (position === undefined) return undefined;
@@ -349,6 +372,8 @@ export function createThoughtTypeView(
     { thoughtType: { properties: getTypePropertyMeta(ndb, thoughtTypeId) } },
     requestId,
   );
+  // Красная диагностика: AST, ссылающийся на удалённую сущность, не сохраняется.
+  assertAstDefinitionEntitiesResolvable(ndb, parsedDefinition, thoughtTypeId, requestId);
 
   // Проверка типа — корневой тип нельзя «заселять отборами с холста».
   const root = getRootThoughtType(ndb);
@@ -466,6 +491,13 @@ export function updateThoughtTypeView(
       validateDefinitionForTokens(
         parsedDefinition,
         { thoughtType: { properties: getTypePropertyMeta(ndb, current.thought_type_id) } },
+        requestId,
+      );
+      // Красная диагностика: AST, ссылающийся на удалённую сущность, не сохраняется.
+      assertAstDefinitionEntitiesResolvable(
+        ndb,
+        parsedDefinition,
+        current.thought_type_id,
         requestId,
       );
     }
@@ -658,6 +690,14 @@ export interface RunViewResult {
   sort: StructureSort;
   /** Эффективное направление сортировки (см. {@link RunViewResult.sort}). */
   order: SortOrder;
+  /**
+   * Жёлтая диагностика (требование 325efc13): свойство условия отвязано от типа
+   * отбора — отбор исполнен по фактическим значениям вне типа. Пусто — жёлтых
+   * предупреждений нет. Красная диагностика не доходит сюда: она бросает ошибку.
+   */
+  warnings?: FilterDiagnostic[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
 }
 
 /**
@@ -681,6 +721,9 @@ export interface RunViewQueryOptions {
    *  в движок отбора (`queryThoughts`) — без него календарные токены AST не
    *  разрешатся. */
   tokenContext?: AstTokenContext;
+  /** Собирать статистику исполнения (требование 0f34a5ff) — только при
+   *  включённом серверном журналировании. */
+  collectStats?: boolean;
 }
 
 /**
@@ -851,18 +894,19 @@ export async function runViewForThought(
   // Старая плоская форма компилируется в AST тем же движком отбора (единый
   // вход, требование 91983c20); одноразовая миграция БД v1 → AST — отдельная
   // задача 4be62d42.
+  let warnings: FilterDiagnostic[] = [];
   const query: ThoughtQueryRequest = isAstDefinition
-    ? {
+    ? (() => {
         // Форму дерева валидирует доменный parseFilterAst (строгая проверка).
-        ast: parseFilterAst(resolvedDefinition, requestId),
-        sort,
-        order,
-        limit,
-        offset,
-        // Отбор типа отвечает полным числом совпадений — COUNT запрашивается
-        // явно (требование 5adebf61: по умолчанию подсчёта нет).
-        count: true,
-      }
+        const ast = parseFilterAst(resolvedDefinition, requestId);
+        // Диагностика AST отбора типа (требования 44d61c8a/325efc13): красное
+        // (удалённая сущность) — запрет применения; жёлтое (свойство отвязано
+        // от типа) — исполняем и отдаём предупреждение в ответе.
+        const diag = diagnoseFilterAst(ndb, ast, { thoughtTypeId: view.thought_type_id, requestId });
+        if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
+        warnings = diag.warnings;
+        return { ast, sort, order, limit, offset, count: true } satisfies ThoughtQueryRequest;
+      })()
     : structureRequestToQuery({
         ...parseStructureFilter(resolvedDefinition, requestId),
         sort,
@@ -875,6 +919,7 @@ export async function runViewForThought(
     emptyFilterMode: 'home_orphans',
     includeDirections: true,
     ...(options?.tokenContext !== undefined ? { tokenContext: options.tokenContext } : {}),
+    ...(options?.collectStats === true ? { collectStats: true } : {}),
   });
   // Исключаем саму контекстную мысль из результата: «отбор относительно
   // мысли» показывает СОСЕДЕЙ, удовлетворяющих критериям, а не саму мысль.
@@ -892,6 +937,8 @@ export async function runViewForThought(
     unresolved: result.unresolved ?? [],
     sort,
     order,
+    ...(warnings.length > 0 ? { warnings } : {}),
+    ...(result.stats !== undefined ? { stats: result.stats } : {}),
   };
 }
 
