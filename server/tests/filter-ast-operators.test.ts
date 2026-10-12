@@ -272,6 +272,59 @@ describe('AST operator vocabulary (aee021c8)', { skip: !nativeAvailable() }, () 
     assert.deepEqual(runAst(tdb, ast(leaf({ kind: 'property', property_id: tprop }, 'not_between', ['a', 'z']))), []);
   });
 
+  it('текстовые операторы регистронезависимы (ADR 9779dd21): eq/ne/contains/in и строковые gt/lt', () => {
+    const ndb = createInMemoryNetworkDb();
+    const prop = seedProperty(ndb, 'статус', 'text');
+    seedValue(ndb, seedThought(ndb, 'Мысль C'), prop, 'text', 'Черновик');
+    seedValue(ndb, seedThought(ndb, 'Мысль Z'), prop, 'text', 'закрыто');
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'eq', 'черновик'))), ['Мысль C']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'ne', 'ЧЕРНОВИК'))), ['Мысль Z']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'contains', 'ЕРН'))), ['Мысль C']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'in', ['черновик']))), ['Мысль C']);
+    // Строковые «больше/меньше» — тоже регистронезависимы ('ч' > 'п' > 'з').
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'gt', 'П'))), ['Мысль C']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'lt', 'п'))), ['Мысль Z']);
+  });
+
+  it('множественное свойство без значения = пустой набор: is_empty и «количество = 0» (блокер 2)', () => {
+    const ndb = createInMemoryNetworkDb();
+    const urlProp = seedProperty(ndb, 'сайты', 'url', { multiple: true });
+    const withValue = seedThought(ndb, 'Есть');
+    seedThought(ndb, 'Нет');
+    seedValue(ndb, withValue, urlProp, 'url', '["https://a","https://b"]');
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: urlProp }, 'is_empty'))), ['Нет']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: urlProp }, 'not_empty'))), ['Есть']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: urlProp }, 'eq', 0))), ['Нет']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: urlProp }, 'eq', 2))), ['Есть']);
+    // «Не между [1,1]» = количество вне диапазона: и 0, и 2 — вне → обе мысли.
+    assert.deepEqual(
+      runAst(ndb, ast(leaf({ kind: 'property', property_id: urlProp }, 'not_between', [1, 1]))),
+      ['Есть', 'Нет'],
+    );
+  });
+
+  it('явный entity.direction учитывается в eq/in свойства-связи (блокер 3)', () => {
+    const ndb = createInMemoryNetworkDb();
+    const lt = seedLinkType(ndb, 'зависит от', 'нужен для');
+    const prop = seedProperty(ndb, 'зависит от', 'link', { link_type_id: lt, direction: 'out' });
+    const a = seedThought(ndb, 'A');
+    seedThought(ndb, 'B');
+    const hub = seedThought(ndb, 'Хаб');
+    seedLink(ndb, a, hub, lt);
+    // Прямая сторона (out) по цели A — рёбер нет; обратная (in) — у хаба есть
+    // входящее от A.
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'eq', a))), []);
+    assert.deepEqual(
+      runAst(ndb, ast(leaf({ kind: 'property', property_id: prop, direction: 'in' }, 'eq', a))),
+      ['Хаб'],
+    );
+    // Обратное имя свойства-связи даёт ту же обратную сторону.
+    assert.deepEqual(
+      runAst(ndb, ast(leaf({ kind: 'property', property: 'нужен для' }, 'in', [a]))),
+      ['Хаб'],
+    );
+  });
+
   it('«имеет свойство»: thought effective+individual set; type effective set with inheritance', () => {
     const ndb = createInMemoryNetworkDb();
     const parentType = seedThoughtType(ndb, 'работа');

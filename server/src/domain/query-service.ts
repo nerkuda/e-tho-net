@@ -514,6 +514,19 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   publication: 'value_text',
 };
 
+/**
+ * Виды значений, для которых текстовое сравнение регистронезависимо
+ * (ADR 9779dd21 «равно — строгое, текст регистронезависимо»; требование
+ * f14e48ab для «содержит»). SQLite `COLLATE NOCASE` кириллицу не покрывает —
+ * регистр сворачивается функцией `unicode_lower` с обеих сторон.
+ */
+const CASE_FOLDED_VALUE_TYPES: ReadonlySet<PropertyValueType> = new Set<PropertyValueType>(['text', 'url']);
+
+/** Нужно ли сворачивать регистр текстового сравнения для этого вида значения. */
+function foldsCase(def: { value_type: PropertyValueType }): boolean {
+  return CASE_FOLDED_VALUE_TYPES.has(def.value_type);
+}
+
 /** Default keyword scope: title + synonyms only (the original behaviour). */
 const DEFAULT_KEYWORD_SCOPE: readonly StructureKeywordScope[] = ['title', 'synonyms'];
 
@@ -845,13 +858,15 @@ function textListClause(
   requestId?: string,
 ): Clause {
   const values = coerceValueList(value, operator, requestId);
+  // `text`-сравнение регистронезависимо (ADR 9779dd21): регистр сворачивается
+  // `unicode_lower` с обеих сторон — `COLLATE NOCASE` кириллицу не покрывает.
   const elementSql = `EXISTS (
     SELECT 1 FROM property_values_v pv
     WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
       AND pv.${column} IS NOT NULL AND ${
         multiple
-          ? `instr(', ' || pv.${column} || ', ', ', ' || ? || ', ') > 0`
-          : `pv.${column} = ?`
+          ? `instr(', ' || unicode_lower(pv.${column}) || ', ', ', ' || unicode_lower(?) || ', ') > 0`
+          : `unicode_lower(pv.${column}) = unicode_lower(?)`
       })`;
   const one = (v: string): Clause => ({ sql: elementSql, params: [propertyId, v] });
   if (operator === 'all_of') {
@@ -898,33 +913,40 @@ function urlListClause(
   requestId?: string,
 ): Clause {
   const values = coerceValueList(value, operator, requestId);
-  const placeholders = values.map(() => '?').join(',');
+  // `url` — текстовое значение: сравнение регистронезависимо (unicode_lower).
+  const placeholders = values.map(() => 'unicode_lower(?)').join(',');
   const matchSql = multiple
     ? `SELECT 1 FROM property_values_v pv, ${multipleValueElementsSql(column)} je
        WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-         AND pv.${column} IS NOT NULL AND je.value IN (${placeholders})`
+         AND pv.${column} IS NOT NULL AND unicode_lower(je.value) IN (${placeholders})`
     : `SELECT 1 FROM property_values_v pv
        WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-         AND pv.${column} IN (${placeholders})`;
+         AND unicode_lower(pv.${column}) IN (${placeholders})`;
   const match: Clause = { sql: `EXISTS (${matchSql})`, params: [propertyId, ...values] };
   return operator === 'in' ? match : { sql: `NOT (${match.sql})`, params: match.params };
 }
 
-/** Клауза `any_of`/`all_of`/`none_of` по множественному свойству. */
+/**
+ * Клауза `any_of`/`all_of`/`none_of` по множественному свойству. `fold` —
+ * регистронезависимое сравнение элементов (текстовые виды значений, ADR 9779dd21).
+ */
 function multipleValueSetClause(
   propertyId: string,
   column: string,
   operator: 'any_of' | 'all_of' | 'none_of',
   value: ThoughtQueryPropertyCondition['value'],
   requestId?: string,
+  fold = false,
 ): Clause {
   const values = coerceValueList(value, operator, requestId);
   const elementsSql = multipleValueElementsSql(column);
+  const elemExpr = fold ? 'unicode_lower(je.value)' : 'je.value';
+  const valExpr = fold ? 'unicode_lower(?)' : '?';
   const existsOne = (v: string): Clause => ({
     sql: `EXISTS (
       SELECT 1 FROM property_values_v pv, ${elementsSql} je
       WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-        AND pv.${column} IS NOT NULL AND je.value = ?)`,
+        AND pv.${column} IS NOT NULL AND ${elemExpr} = ${valExpr})`,
     params: [propertyId, v],
   });
   if (operator === 'all_of') {
@@ -937,12 +959,12 @@ function multipleValueSetClause(
     }
     return { sql: parts.join(' AND '), params };
   }
-  const placeholders = values.map(() => '?').join(',');
+  const placeholders = values.map(() => valExpr).join(',');
   const any: Clause = {
     sql: `EXISTS (
       SELECT 1 FROM property_values_v pv, ${elementsSql} je
       WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-        AND pv.${column} IS NOT NULL AND je.value IN (${placeholders}))`,
+        AND pv.${column} IS NOT NULL AND ${elemExpr} IN (${placeholders}))`,
     params: [propertyId, ...values],
   };
   return operator === 'any_of' ? any : { sql: `NOT ${any.sql}`, params: any.params };
@@ -1131,13 +1153,17 @@ function scalarCompareClause(
   requestId?: string,
 ): Clause {
   const column = VALUE_COLUMN[def.value_type];
+  // Текст — регистронезависимо, включая строковые «больше/меньше» (ADR 9779dd21).
+  const fold = foldsCase(def);
+  const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
+  const rhs = fold ? 'unicode_lower(?)' : '?';
   const one = (op: 'gte' | 'lte' | 'gt' | 'lt' | 'eq', value: FilterAstScalar): Clause => {
     const cmp = op === 'gt' ? '>' : op === 'gte' ? '>=' : op === 'lt' ? '<' : op === 'lte' ? '<=' : '=';
     return {
       sql: `EXISTS (
         SELECT 1 FROM property_values_v pv
         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-          AND pv.${column} ${cmp} ?)`,
+          AND ${lhs} ${cmp} ${rhs})`,
       params: [def.id, sqlScalar(def, value, requestId)],
     };
   };
@@ -1204,13 +1230,18 @@ function multiplePropertyCountClause(
   path: string,
   requestId?: string,
 ): Clause {
-  const countSql = `SELECT CASE
-      WHEN pv.${column} IS NULL OR pv.${column} = '' THEN 0
-      WHEN pv.${column} LIKE '[%' THEN json_array_length(pv.${column})
-      ELSE (length(pv.${column}) - length(replace(pv.${column}, ', ', ''))) / 2 + 1
-    END
-    FROM property_values_v pv
-    WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?`;
+  // COALESCE → 0: отсутствие значения = пустой набор (требование bd0348b3),
+  // иначе скалярный подзапрос без строк давал NULL, и «количество = 0» /
+  // «не заполнено» не срабатывали для мысли без значения.
+  const countSql = `SELECT COALESCE((
+      SELECT CASE
+        WHEN pv.${column} IS NULL OR pv.${column} = '' THEN 0
+        WHEN pv.${column} LIKE '[%' THEN json_array_length(pv.${column})
+        ELSE (length(pv.${column}) - length(replace(pv.${column}, ', ', ''))) / 2 + 1
+      END
+      FROM property_values_v pv
+      WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+    ), 0)`;
   return countLeafClause(countSql, [def.id], leaf, path, requestId);
 }
 
@@ -1450,10 +1481,18 @@ function propertyLeafClause(
   const numericValue = typeof leaf.value === 'number';
   const countShaped = AST_RANGE_OPS.has(operator) || AST_COMPARE_OPS.has(operator) || (numericValue && (operator === 'eq' || operator === 'ne'));
 
-  // Свойство-связь: числовые операторы — количество живых рёбер стороны.
+  // Свойство-связь: числовые операторы — количество живых рёбер стороны;
+  // остальные — напрямую через {@link linkPropertyClause}, чтобы учесть явный
+  // `entity.direction` (делегат `propertyClauses` сторону-переопределение не
+  // принимает — задача aee021c8, итерация 2).
   if (def.value_type === 'link') {
     if (countShaped) return linkPropertyCountClause(def, directionRef, leaf, entityPath, requestId);
-    return delegate();
+    return linkPropertyClause(
+      def,
+      { property_id: def.id, operator: operator as ThoughtQueryPropertyOperator, value: leaf.value as ThoughtQueryPropertyCondition['value'] },
+      requestId,
+      directionRef,
+    );
   }
 
   // Множественное скалярное свойство: количество значений (+ пустой набор).
@@ -1903,17 +1942,22 @@ function propertyClauses(
 
     // Операторы наборов (задача 20effcbd) — `url` и legacy `thought_ref`.
     if (cond.operator === 'any_of' || cond.operator === 'all_of' || cond.operator === 'none_of') {
-      out.push(multipleValueSetClause(def.id, column, cond.operator, cond.value, requestId));
+      out.push(multipleValueSetClause(def.id, column, cond.operator, cond.value, requestId, foldsCase(def)));
       continue;
     }
 
     if (cond.operator === 'contains') {
+      // «Содержит» — подстрочно и регистронезависимо (требование f14e48ab):
+      // регистр сворачивается unicode_lower с обеих сторон.
+      const fold = foldsCase(def);
       const pattern = buildLikePattern(String(cond.value));
+      const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
+      const rhs = fold ? 'unicode_lower(?)' : '?';
       out.push({
         sql: `EXISTS (
           SELECT 1 FROM property_values_v pv
           WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-            AND pv.${column} LIKE ? ESCAPE '\\')`,
+            AND ${lhs} LIKE ${rhs} ESCAPE '\\')`,
         params: [def.id, pattern],
       });
       continue;
@@ -1972,9 +2016,14 @@ function propertyClauses(
         );
       }
       const values = cond.value.map((v) => sqlScalar(def, v, requestId));
+      // «В списке» — равенство по правилам типа: текст регистронезависимо
+      // (требование 7f0e3f8c, ADR 9779dd21).
+      const fold = foldsCase(def);
+      const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
+      const rhs = fold ? 'unicode_lower(?)' : '?';
       const listSql = `SELECT 1 FROM property_values_v pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND pv.${column} IN (${values.map(() => '?').join(',')})`;
+           AND ${lhs} IN (${values.map(() => rhs).join(',')})`;
       out.push(cond.operator === 'in' ? { sql: `EXISTS (${listSql})`, params: [def.id, ...values] } : { sql: `NOT EXISTS (${listSql})`, params: [def.id, ...values] });
       continue;
     }
@@ -2000,11 +2049,16 @@ function propertyClauses(
       cond.operator === 'gt' ? '>' :
       cond.operator === 'gte' ? '>=' :
       cond.operator === 'lt' ? '<' : '<=';
+    // «Равно/сравнения» по правилам типа: текст регистронезависимо, включая
+    // строковые «больше/меньше» (ADR 9779dd21, требование 25324388).
+    const fold = foldsCase(def);
+    const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
+    const rhs = fold ? 'unicode_lower(?)' : '?';
     out.push({
       sql: `EXISTS (
         SELECT 1 FROM property_values_v pv
         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-          AND pv.${column} ${opSql} ?)`,
+          AND ${lhs} ${opSql} ${rhs})`,
       params: [def.id, value],
     });
   }
