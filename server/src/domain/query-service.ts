@@ -48,11 +48,13 @@ import {
   isLinkTypeFilterActive,
   parseFilterKeywords,
   type FilterAst,
+  type FilterAstEntity,
   type FilterAstHierarchyMode,
   type FilterAstLeaf,
   type FilterAstNode,
   type FilterAstOperator,
   type FilterAstScalar,
+  type FilterAstSubqueryValue,
   type FilterAstValue,
   type LinkPropertyDirection,
   type LinkTypeFilterInput,
@@ -1017,6 +1019,33 @@ const AST_COMPARE_OPS = new Set<FilterAstOperator>(['gt', 'gte', 'lt', 'lte']);
 /** Операторы «между»/«не между» — две границы, включительно. */
 const AST_RANGE_OPS = new Set<FilterAstOperator>(['between', 'not_between']);
 
+/**
+ * Операторы-листья, совместимые со значением-под-выборкой: наборные/ссылочные.
+ * Несовместимые (предикаты количества, «Есть слова», булевы, вхождение в
+ * иерархию) отвергаются {@link astSubqueryLeafClause} — значение-под-выборка
+ * доступно только на релевантных левых операндах (требование c088f9e1).
+ */
+const AST_SUBQUERY_LEAF_OPS = new Set<FilterAstOperator>([
+  'in',
+  'not_in',
+  'any_of',
+  'all_of',
+  'none_of',
+  'eq',
+  'ne',
+]);
+
+/**
+ * Ресурсные предохранители исполнения под-выборок (требование 64c90b05, ADR
+ * 58b501d8). Глубина вложенности моделью НЕ ограничена — это не семантический
+ * лимит, а защита ресурса: при исчерпании — явная ошибка исполнения
+ * (`VALIDATION_ERROR` с `reason`), а не молчаливое усечение. Ширина согласована
+ * с бюджетом обхода иерархии T4 ({@link HIERARCHY_SUBTREE_MAX_NODES}).
+ */
+export const AST_SUBQUERY_MAX_NODES = HIERARCHY_SUBTREE_MAX_NODES;
+/** Предохранитель глубины вложенности под-выборок (стек/SQL-выражение). */
+export const AST_SUBQUERY_MAX_DEPTH = 100;
+
 /** Ошибка «оператор/значение распознаны, но исполнение — отдельная задача ТП». */
 function astUnsupported(what: string, field: string, requestId?: string): never {
   throw new EtnError(
@@ -1027,10 +1056,250 @@ function astUnsupported(what: string, field: string, requestId?: string): never 
   );
 }
 
-/** Отвергнуть значения-под-выборку: её исполнение — отдельная задача ТП. */
-function assertAstValueExecutable(value: FilterAstValue | undefined, path: string, requestId?: string): void {
-  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-    if ('query' in value) astUnsupported('Исполнение под-выборки', `${path}.value`, requestId);
+/** Операнды, поддерживающие значение-под-выборку (релевантные, требование c088f9e1). */
+const AST_SUBQUERY_SUPPORTED = new Set<FilterAstEntity['kind']>([
+  'property',
+  'parents',
+  'children',
+  'type',
+]);
+
+/** Релевантные операнды, ждущие под-проекта сущностей (честный unsupported). */
+const AST_SUBQUERY_DEFERRED = new Set<FilterAstEntity['kind']>([
+  'attachments',
+  'chronology',
+  'targets',
+  'link_type',
+]);
+
+// ---------------------------------------------------------------------------
+// Значения-под-выборки: «в (выборке)»/«не в (выборке)»/«все в (выборке)»
+// (задача 8914ac36; требования 485ff29e/c088f9e1/64c90b05, ADR b0cf5433/58b501d8)
+// ---------------------------------------------------------------------------
+
+/** Значение-под-выборка (`{ query, operator }`) в позиции значения листа. */
+function isSubqueryValue(value: FilterAstValue | undefined): value is FilterAstSubqueryValue {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && 'query' in value;
+}
+
+/** Операторы под-выборки как значения: квантификация над набором значений операнда. */
+type SubqueryQuantifier = FilterAstSubqueryValue['operator'];
+
+/**
+ * Материализовать результат под-выборки: под-дерево AST компилируется тем же
+ * {@link filterAstNodeClause} (та же валидация/исполнение, рекурсивно) и
+ * исполняется над `thoughts_v` с предохранителями ресурса. Токены внутри
+ * под-выборки резолвит тот же `tokenContext` (собираются в общий `unresolved`).
+ *
+ * `mode`:
+ *   * `ids` — id выбранных мыслей (свойства-ссылки, «Родители»/«Потомки»);
+ *   * `types` — типы выбранных мыслей (операнд «Тип»: «под-выборка по типам»).
+ *
+ * Предохранители (требование 64c90b05): глубина вложенности и ширина набора
+ * (на одну под-выборку и суммарно за запрос). Исчерпание — явная ошибка, не
+ * молчаливое усечение (ADR 58b501d8).
+ */
+function astSubqueryIdSet(
+  ndb: NetworkDb,
+  subquery: FilterAstSubqueryValue,
+  astOpts: AstExecOptions | undefined,
+  path: string,
+  requestId?: string,
+  mode: 'ids' | 'types' = 'ids',
+): string[] {
+  const depth = astOpts?.subqueryDepth ?? 0;
+  if (depth >= AST_SUBQUERY_MAX_DEPTH) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Глубина вложенности под-выборок превысила предохранитель ресурса (${AST_SUBQUERY_MAX_DEPTH}); упростите отбор.`,
+      { field: `${path}.query`, reason: 'subquery_depth', limit: AST_SUBQUERY_MAX_DEPTH },
+      requestId,
+    );
+  }
+  const childOpts: AstExecOptions = { ...astOpts, subqueryDepth: depth + 1 };
+  const clause = filterAstNodeClause(ndb, subquery.query, `${path}.query`, requestId, childOpts);
+  const select =
+    mode === 'types'
+      ? `SELECT DISTINCT t.type_id AS v FROM thoughts_v t WHERE (${clause.sql}) AND t.type_id IS NOT NULL`
+      : `SELECT t.id AS v FROM thoughts_v t WHERE ${clause.sql}`;
+  const rows = ndb
+    .prepare(`${select} LIMIT ?`)
+    .all(...clause.params, AST_SUBQUERY_MAX_NODES + 1) as Array<{ v: string }>;
+  if (rows.length > AST_SUBQUERY_MAX_NODES) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Под-выборка вернула больше ${AST_SUBQUERY_MAX_NODES} элементов — превышен ресурсный бюджет; сузьте под-выборку.`,
+      { field: `${path}.query`, reason: 'subquery_budget', limit: AST_SUBQUERY_MAX_NODES },
+      requestId,
+    );
+  }
+  const budget = astOpts?.subqueryBudget;
+  if (budget !== undefined) {
+    budget.ids += rows.length;
+    if (budget.ids > AST_SUBQUERY_MAX_NODES) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Суммарный размер под-выборок отбора превысил ресурсный бюджет (${AST_SUBQUERY_MAX_NODES}); упростите отбор.`,
+        { field: `${path}.query`, reason: 'subquery_budget', limit: AST_SUBQUERY_MAX_NODES },
+        requestId,
+      );
+    }
+  }
+  return rows.map((r) => r.v);
+}
+
+/** Клауза `NOT EXISTS (SELECT 1 <fromAndWhere…>)`. */
+function notExistsClause(fromAndWhere: string, params: unknown[]): Clause {
+  return { sql: `NOT EXISTS (SELECT 1 ${fromAndWhere})`, params };
+}
+
+/**
+ * Квантификация набора значений множественного операнда относительно набора
+ * под-выборки: `in` — хотя бы одно значение входит; `not_in` — ни одно; `all_in`
+ * — каждое (вакуумно истинно при отсутствии значений). `base` — фрагмент
+ * `FROM … WHERE owner = t.id …`, `otherCol` — колонка значения (цели рёбер).
+ */
+function subqueryEdgeQuantClause(
+  base: string,
+  typeParams: unknown[],
+  otherCol: string,
+  ids: readonly string[],
+  quant: SubqueryQuantifier,
+): Clause {
+  const membership = astIdInClause(`l.${otherCol}`, ids);
+  const match: Clause = {
+    sql: `EXISTS (SELECT 1 ${base} AND ${membership.sql})`,
+    params: [...typeParams, ...membership.params],
+  };
+  if (quant === 'in') return match;
+  if (quant === 'not_in') return astNegate(match);
+  // all_in: ни одного значения вне набора. Пустой набор — ни одного ребра.
+  if (ids.length === 0) return notExistsClause(base, [...typeParams]);
+  const notIn: Clause = {
+    sql: `l.${otherCol} NOT IN (${ids.map(() => '?').join(',')})`,
+    params: [...ids],
+  };
+  return notExistsClause(`${base} AND ${notIn.sql}`, [...typeParams, ...notIn.params]);
+}
+
+/** Клауза под-выборки по свойству-ссылке (обе стороны, включая обратное имя). */
+function subqueryLinkPropertyClause(
+  def: RegistryPropertyRow,
+  directionRef: LinkPropertyDirection | null,
+  ids: readonly string[],
+  quant: SubqueryQuantifier,
+): Clause {
+  const edges = linkPropertyEdges(def, directionRef);
+  if (edges === null) return quant === 'in' ? AST_FALSE : AST_TRUE;
+  const base = `FROM links_v l
+      WHERE l.${edges.ownerCol} = t.id AND ${edges.typeSql}
+        AND l.active = 1 AND l.marked_for_deletion = 0`;
+  return subqueryEdgeQuantClause(base, edges.typeParams, edges.targetCol, ids, quant);
+}
+
+/** Клауза под-выборки по структурным «Родители»/«Потомки» (живые нетипизированные рёбра). */
+function subqueryStructuralClause(
+  kind: 'parents' | 'children',
+  ids: readonly string[],
+  quant: SubqueryQuantifier,
+): Clause {
+  const ownCol = kind === 'parents' ? 'target_id' : 'source_id';
+  const otherCol = kind === 'parents' ? 'source_id' : 'target_id';
+  const base = `FROM links_v l
+      WHERE l.${ownCol} = t.id AND l.active = 1 AND l.marked_for_deletion = 0 AND l.type_id IS NULL`;
+  return subqueryEdgeQuantClause(base, [], otherCol, ids, quant);
+}
+
+/** Клауза под-выборки по одиночному операнду «Тип» (тип мысли против id-набора). */
+function subqueryTypeClause(ids: readonly string[], quant: SubqueryQuantifier): Clause {
+  if (ids.length === 0) return quant === 'in' ? AST_FALSE : AST_TRUE;
+  const placeholders = ids.map(() => '?').join(',');
+  if (quant === 'in') return { sql: `t.type_id IN (${placeholders})`, params: [...ids] };
+  // not_in: тип не задан либо не входит в набор (NULL не «входит»).
+  return {
+    sql: `(t.type_id IS NULL OR t.type_id NOT IN (${placeholders}))`,
+    params: [...ids],
+  };
+}
+
+/**
+ * Лист со значением-под-выборкой. Сначала проверяется релевантность левого
+ * операнда (требование c088f9e1): нерелевантные — явная ошибка; релевантные, но
+ * ждущие под-проекта сущностей (вложения/дневник/цели/тип связи) — честный
+ * `unsupported`. Затем квантификация `value.operator` (`in`/`not_in`/`all_in`);
+ * `all_in` применим только к множественным операндам («Тип» — одиночный).
+ */
+function astSubqueryLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+  astOpts?: AstExecOptions,
+): Clause {
+  const entity = leaf.entity;
+  // 1. Релевантность левого операнда (требование c088f9e1).
+  if (AST_SUBQUERY_DEFERRED.has(entity.kind)) {
+    astUnsupported(`Исполнение под-выборки на операнде «${entity.kind}»`, `${path}.value`, requestId);
+  }
+  if (!AST_SUBQUERY_SUPPORTED.has(entity.kind)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Значение-под-выборка недоступно на операнде «${entity.kind}».`,
+      { field: `${path}.value`, operand: entity.kind, relevant: false },
+      requestId,
+    );
+  }
+  // 2. Совместимость оператора-листа (наборные/ссылочные, не предикаты).
+  if (!AST_SUBQUERY_LEAF_OPS.has(leaf.operator)) {
+    astUnsupported(`Оператор «${leaf.operator}» со значением-под-выборкой`, `${path}.operator`, requestId);
+  }
+  const subquery = leaf.value as FilterAstSubqueryValue;
+  const quant = subquery.operator;
+
+  switch (entity.kind) {
+    case 'property': {
+      const propertyRef = entity.property_id ?? entity.property;
+      const ref = propertyRef === undefined ? null : resolveConditionPropertyRef(ndb, propertyRef, requestId);
+      if (ref === null) return NO_MATCH_CLAUSE;
+      const def = lookupPropertyRow(ndb, ref.propertyId);
+      if (def === null) return NO_MATCH_CLAUSE;
+      if (def.value_type !== 'link') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `Значение-под-выборка доступно только на ссылочных операндах; свойство типа ${def.value_type} — не ссылка.`,
+          { field: `${path}.value`, operand: 'property', value_type: def.value_type },
+          requestId,
+        );
+      }
+      const ids = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId);
+      const directionRef = entity.direction ?? ref.direction;
+      return subqueryLinkPropertyClause(def, directionRef, ids, quant);
+    }
+    case 'parents':
+    case 'children': {
+      const ids = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId);
+      return subqueryStructuralClause(entity.kind, ids, quant);
+    }
+    case 'type': {
+      if (quant === 'all_in') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Оператор «все в (выборке)» применим только к множественным операндам; «Тип» — одиночный.',
+          { field: `${path}.value.operator`, operand: 'type' },
+          requestId,
+        );
+      }
+      // «Тип» — одиночный операнд: под-выборка по типам (типы выбранных мыслей).
+      const typeIds = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId, 'types');
+      return subqueryTypeClause(typeIds, quant);
+    }
+    default:
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'Неизвестный операнд значения-под-выборки.',
+        { field: `${path}.entity` },
+        requestId,
+      );
   }
 }
 
@@ -1461,6 +1730,10 @@ interface AstExecOptions {
    * считается один раз на условие (ADR 588be3f3, п. 4).
    */
   hierarchyCache?: Map<string, string[]>;
+  /** Текущая глубина вложенности под-выборок (ресурсный предохранитель, 64c90b05). */
+  subqueryDepth?: number;
+  /** Общий на запрос счётчик материализованных id под-выборок (бюджет ширины). */
+  subqueryBudget?: { ids: number };
 }
 
 /** Свернуть дерево AST в один SQL-предикат над `thoughts_v t`. */
@@ -1515,7 +1788,9 @@ function filterAstLeafClause(
   ) {
     leaf = { ...leaf, value: [leaf.value, leaf.value] };
   }
-  assertAstValueExecutable(leaf.value, path, requestId);
+  if (isSubqueryValue(leaf.value)) {
+    return astSubqueryLeafClause(ndb, leaf, path, requestId, astOpts);
+  }
   const { entity, operator } = leaf;
   const opPath = `${path}.operator`;
 
@@ -2735,7 +3010,7 @@ function buildQuery(
   const walk = req.subtree === undefined ? null : walkSubtree(ndb, req.subtree);
   const unresolved: TokenIssue[] = [];
   // Кэш поддеревьев «в иерархии» живёт в пределах одного исполнения запроса.
-  const astOpts: AstExecOptions = { unresolved, hierarchyCache: new Map() };
+  const astOpts: AstExecOptions = { unresolved, hierarchyCache: new Map(), subqueryBudget: { ids: 0 } };
   if (tokenContext !== undefined) astOpts.ctx = tokenContext;
   const sql = buildFilterQuerySql(ndb, userId, req, walk, emptyFilterMode, requestId, astOpts);
   return { sql, walk, unresolved };
