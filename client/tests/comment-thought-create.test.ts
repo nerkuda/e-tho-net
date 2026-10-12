@@ -635,7 +635,7 @@ describe('разделение: доступность и исполнение',
 
     assert.equal(editor.edits.length, 1, 'одна транзакция редактора');
     assert.deepEqual(editor.edits[0].changes, [
-      { from: 0, to: 6, insert: `[[#${UNIT_IDS[0]}]]` },
+      { from: 0, to: 6, insert: `- [[#${UNIT_IDS[0]}]]` },
       { from: 7, to: 26, insert: `![[#${UNIT_IDS[1]}]]` },
     ]);
   });
@@ -1029,17 +1029,18 @@ describe('случаи 1–2: команда (диалог, создание, в
       ['', ''],
       'однострочные элементы без подчинённых — без тела',
     );
-    // Без тела → на месте ссылка (требование 23c11231).
+    // Без тела → на месте ссылка (требование 23c11231); блочная разметка
+    // списка сохраняется (уточнение визуальной проверки) — список остаётся списком.
     assert.deepEqual(editor.edits[0].changes, [
-      { from: 0, to: 6, insert: `[[#${NEW_ID}]]` },
-      { from: 7, to: 12, insert: `[[#${NEW_ID}]]` },
+      { from: 0, to: 6, insert: `- [[#${NEW_ID}]]` },
+      { from: 7, to: 12, insert: `- [[#${NEW_ID}]]` },
     ]);
   });
 });
 
 describe('выбор существующей (требования ee64ce46, d4f3d8a0)', () => {
-  it('частичная замена: литерально совпавшая с заголовком часть → ссылка', async () => {
-    const text = 'Текст про Мысль тут';
+  it('ДЛИННОЕ выделение: частичная замена литерально совпавшей с заголовком части', async () => {
+    const text = 'Текст про Мысль тут\nвторая строка';
     const editor = fakeEditor(text, 0, text.length);
     const at = text.indexOf('Мысль');
     const { port, created } = fakePort({
@@ -1057,8 +1058,8 @@ describe('выбор существующей (требования ee64ce46, d4
     ]);
   });
 
-  it('нет совпадения — ссылка в НАЧАЛО, текст не меняется', async () => {
-    const text = 'Совсем другой текст';
+  it('ДЛИННОЕ выделение без совпадения — ссылка в НАЧАЛО, текст не меняется', async () => {
+    const text = 'Совсем другой текст\nвторая строка';
     const editor = fakeEditor(text, 0, text.length);
     const { port } = fakePort({
       pick: async () => ({ items: [{ kind: 'existing', id: LINK_ID }] }),
@@ -1072,8 +1073,8 @@ describe('выбор существующей (требования ee64ce46, d4
     assert.deepEqual(editor.edits[0].changes, [{ from: 0, to: 0, insert: `[[#${LINK_ID}]]` }]);
   });
 
-  it('совпадение регистронезависимо и по trim заголовка', async () => {
-    const text = 'префикс мысль суффикс';
+  it('ДЛИННОЕ: совпадение регистронезависимо и по trim заголовка', async () => {
+    const text = 'префикс мысль суффикс\nвторая строка';
     const editor = fakeEditor(text, 0, text.length);
     const at = text.indexOf('мысль');
     const { port } = fakePort({
@@ -1087,6 +1088,132 @@ describe('выбор существующей (требования ee64ce46, d4
 
     assert.deepEqual(editor.edits[0].changes, [
       { from: at, to: at + 'мысль'.length, insert: `[[#${LINK_ID}]]` },
+    ]);
+  });
+
+  it('КОРОТКОЕ выделение + существующая → ссылка с ПОДПИСЬЮ, выделение заменено целиком', async () => {
+    const text = 'Текст про Мысль тут';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port } = fakePort({
+      pick: async () => ({ items: [{ kind: 'existing', id: LINK_ID }] }),
+      thoughtTitle: async () => 'Мысль',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: text.length, insert: `[[#${LINK_ID}|Текст про Мысль тут]]` },
+    ]);
+  });
+
+  it('КОРОТКОЕ выделение, совпадает с названием цели → ссылка БЕЗ подписи', async () => {
+    const text = 'Мысль';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port } = fakePort({
+      pick: async () => ({ items: [{ kind: 'existing', id: LINK_ID }] }),
+      thoughtTitle: async () => '  мысль  ',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: text.length, insert: `[[#${LINK_ID}]]` },
+    ]);
+  });
+});
+
+describe('блочная разметка ссылки (требования 23c11231, d4f3d8a0)', () => {
+  it('blockPrefixOf: заголовок/список/чекбокс/цитата, абзац — пусто', () => {
+    assert.equal(create.blockPrefixOf('## Раздел'), '## ');
+    assert.equal(create.blockPrefixOf('- элемент'), '- ');
+    assert.equal(create.blockPrefixOf('1. элемент'), '1. ');
+    assert.equal(create.blockPrefixOf('- [ ] задача'), '- [ ] ');
+    assert.equal(create.blockPrefixOf('> цитата'), '> ');
+    assert.equal(create.blockPrefixOf('обычный абзац'), '');
+    assert.equal(create.blockPrefixOf('-строка без пробела'), '');
+  });
+
+  it('buildSelectionEdits: ссылка сохраняет маркер блока; трансклюзия — нет', () => {
+    const link = (ref: string): string =>
+      create.buildSelectionEdits('- старый', 0, [{ ref, title: null, whole: true }]).changes[0]!
+        .insert;
+    assert.equal(link(`[[#${NEW_ID}]]`), `- [[#${NEW_ID}]]`);
+    assert.equal(link(`[[#${NEW_ID}|подпись]]`), `- [[#${NEW_ID}|подпись]]`);
+    assert.equal(
+      link(`![[#${NEW_ID}]]`),
+      `![[#${NEW_ID}]]`,
+      'трансклюзия блочную разметку НЕ сохраняет (открытый вопрос)',
+    );
+    assert.equal(
+      create.buildSelectionEdits('## Раздел', 0, [
+        { ref: `[[#${NEW_ID}]]`, title: null, whole: true },
+      ]).changes[0]!.insert,
+      `## [[#${NEW_ID}]]`,
+    );
+    assert.equal(
+      create.buildSelectionEdits('> цитата', 0, [
+        { ref: `[[#${NEW_ID}]]`, title: null, whole: true },
+      ]).changes[0]!.insert,
+      `> [[#${NEW_ID}]]`,
+    );
+  });
+
+  it('«Разделить»: элементы списка остаются одним списком (маркер сохранён)', async () => {
+    const text = '- один\n- два';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port } = sequencePort();
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand('comment.split', host(editor));
+    await flush();
+
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: 6, insert: `- [[#${UNIT_IDS[0]}]]` },
+      { from: 7, to: 12, insert: `- [[#${UNIT_IDS[1]}]]` },
+    ]);
+    const inserts = (editor.edits[0].changes as Array<{ insert: string }>).map((c) => c.insert);
+    assert.ok(
+      inserts.every((s) => s.startsWith('- ')),
+      'каждый элемент остаётся элементом списка',
+    );
+  });
+
+  it('«Разделить»: раздел без тела → ссылка с сохранением `## `', async () => {
+    const text = '## A\n\n## B';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port, requests } = sequencePort();
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand('comment.split', host(editor));
+    await flush();
+
+    assert.deepEqual(
+      requests.map((r) => r.bodyMd),
+      ['', ''],
+      'разделы без собственного текста — без тела → ссылки',
+    );
+    const inserts = (editor.edits[0].changes as Array<{ insert: string }>).map((c) => c.insert);
+    assert.deepEqual(inserts, [`## [[#${UNIT_IDS[0]}]]`, `## [[#${UNIT_IDS[1]}]]`]);
+  });
+
+  it('КОРОТКАЯ цитата + существующая → `> [[#id|текст]]` (маркер + подпись)', async () => {
+    const text = '> цитата целиком';
+    const editor = fakeEditor(text, 0, text.length);
+    const { port } = fakePort({
+      pick: async () => ({ items: [{ kind: 'existing', id: LINK_ID }] }),
+      thoughtTitle: async () => 'Другое',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, host(editor));
+    await flush();
+
+    assert.deepEqual(editor.edits[0].changes, [
+      { from: 0, to: text.length, insert: `> [[#${LINK_ID}|цитата целиком]]` },
     ]);
   });
 });
@@ -1164,7 +1291,7 @@ describe('T2: тело единиц-абзацев и блоков кода (т�
     );
     assert.deepEqual(editor.edits[0].changes, [
       { from: 0, to: 5, insert: `[[#${NEW_ID}]]` },
-      { from: 7, to: 14, insert: `[[#${NEW_ID}]]` },
+      { from: 7, to: 14, insert: `- [[#${NEW_ID}]]` },
     ]);
   });
 });
@@ -1205,7 +1332,7 @@ describe('T2: дедуп по точному названию/синониму (
     assert.deepEqual(created.map((request) => request.title), ['два'], 'дубль «один» не создан');
     assert.deepEqual(editor.edits[0].changes, [
       { from: 2, to: 6, insert: '[[#EXIST-1]]' },
-      { from: 7, to: 12, insert: `[[#${NEW_ID}]]` },
+      { from: 7, to: 12, insert: `- [[#${NEW_ID}]]` },
     ]);
   });
 
@@ -1265,7 +1392,7 @@ describe('T2: дедуп по точному названию/синониму (
     await flush();
 
     assert.deepEqual(created.map((request) => request.title), ['два'], 'создан только элемент без кандидатов');
-    assert.deepEqual(editor.edits[0].changes, [{ from: 7, to: 12, insert: `[[#${NEW_ID}]]` }]);
+    assert.deepEqual(editor.edits[0].changes, [{ from: 7, to: 12, insert: `- [[#${NEW_ID}]]` }]);
   });
 });
 
@@ -1384,7 +1511,7 @@ describe('привязка созданной мысли к записи (зад
     assert.deepEqual(attached, [UNIT_IDS[0], UNIT_IDS[1]], 'привязка на каждую единицу');
   });
 
-  it('существующая (найденная дедупом) мысль к записи НЕ привязывается', async () => {
+  it('существующая (найденная дедупом) мысль ТОЖЕ привязывается к записи', async () => {
     const text = '- один\n- два';
     const editor = fakeEditor(text, 0, text.length);
     const attached: string[] = [];
@@ -1398,7 +1525,48 @@ describe('привязка созданной мысли к записи (зад
     await flush();
 
     assert.deepEqual(created.map((request) => request.title), ['два'], 'дубль не создан');
-    assert.deepEqual(attached, [NEW_ID], 'привязана только СОЗДАННАЯ мысль');
+    assert.deepEqual(
+      attached,
+      ['EXIST-1', NEW_ID],
+      'привязаны и подобранная существующая, и созданная (d6361b9c)',
+    );
+  });
+
+  it('выбор существующей в диалоге — привязка к записи', async () => {
+    const text = 'до\n\nзаметка\n\nпосле';
+    const from = text.indexOf('заметка');
+    const to = from + 'заметка'.length;
+    const editor = fakeEditor(text, from, to);
+    const attached: string[] = [];
+    const { port, created } = fakePort({
+      pick: async () => ({ items: [{ kind: 'existing', id: LINK_ID }] }),
+      thoughtTitle: async () => 'заметка',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, diaryHost(editor, attached));
+    await flush();
+
+    assert.equal(created.length, 0, 'существующая не создаётся');
+    assert.deepEqual(attached, [LINK_ID], 'выбранная существующая привязана к записи');
+  });
+
+  it('повторная привязка уже привязанной мысли идемпотентна (хук зовётся, дубль — за hook)', async () => {
+    // Клиентская сторона всегда зовёт хук; дедуп привязки — в `attachToRecord`
+    // (пропускает уже привязанные). Здесь фиксируем контракт вызова.
+    const text = 'заметка';
+    const editor = fakeEditor(text, 0, text.length);
+    const attached: string[] = [];
+    const { port } = fakePort({
+      pick: async () => ({ items: [{ kind: 'existing', id: LINK_ID }] }),
+      thoughtTitle: async () => 'заметка',
+    });
+    create.setCommentThoughtCreatePort(port);
+
+    const h = diaryHost(editor, attached);
+    commands.runCommentCommand(create.CREATE_FROM_SELECTION_COMMAND, h);
+    await flush();
+    assert.deepEqual(attached, [LINK_ID]);
   });
 
   it('вне дневника (хук не задан): команда работает, привязки нет', async () => {

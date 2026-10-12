@@ -1,6 +1,6 @@
 {
   "name": "thought-from-selection",
-  "description": "Ключевые сценарии задачи 785c7fac (T1 тех.проекта ac212c41, 0.12.2): «Создать мысль из выделенного» для одиночного выделения вне списков/заголовков открывает существующий диалог поиска/создания с предзаполнением. S1 (805f0596): короткое выделение → мысль без тела + ссылка [[#id]] на месте. S2 (007a81ea): длинное (с переносом) → заголовок из первой строки, тело — остаток, трансклюзия на месте. S4 (b2e3ca0b): выбор существующей — литерально совпавшая часть заменяется ссылкой, при отсутствии совпадения ссылка встаёт в начало, текст не меняется. Отказ — текст не меняется. Данные: постоянный комментарий сид-мысли перезаписывается шагами (window.etn). Проверки — по сохранённому телу в БД (DOM скрытого окна троттлится rAF, грабли 03e33360). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.thought-from-selection.scenario.json. Без скриншотов.",
+  "description": "Ключевые сценарии задачи 785c7fac (T1 тех.проекта ac212c41, 0.12.2): «Создать мысль из выделенного» для одиночного выделения вне списков/заголовков открывает существующий диалог поиска/создания с предзаполнением. S1 (805f0596): короткое выделение → мысль без тела + ссылка [[#id]] на месте. S2 (007a81ea): длинное (с переносом) → заголовок из первой строки, тело — остаток, трансклюзия на месте. S4 (b2e3ca0b, уточнение визуальной проверки): ДЛИННОЕ выделение + существующая — литерально совпавшая часть заменяется ссылкой, при отсутствии совпадения ссылка встаёт в начало, текст не меняется (S4a/S4b); КОРОТКОЕ выделение + существующая — выделение целиком заменяется ссылкой с ПОДПИСЬЮ [[#id|текст]] (S4c), при совпадении с названием цели — [[#id]] без подписи (S4d). Отказ — текст не меняется. Данные: постоянный комментарий сид-мысли перезаписывается шагами (window.etn). Проверки — по сохранённому телу в БД (DOM скрытого окна троттлится rAF, грабли 03e33360). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.thought-from-selection.scenario.json. Без скриншотов.",
   "timeout": 60000,
   "steps": [
     {
@@ -115,7 +115,7 @@
 
     {
       "name": "S4a-seed-partial",
-      "eval": "window.__st.setBody('Текст про Известная мысль стенда и хвост')"
+      "eval": "window.__st.setBody('Текст про Известная мысль стенда и хвост\\nвторая строка')"
     },
     { "name": "S4a-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
     { "name": "S4a-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
@@ -151,7 +151,7 @@
 
     {
       "name": "S4b-seed-nomatch",
-      "eval": "window.__st.setBody('Совсем другой текст без совпадений')"
+      "eval": "window.__st.setBody('Совсем другой текст без совпадений\\nвторая строка')"
     },
     { "name": "S4b-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
     { "name": "S4b-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
@@ -181,7 +181,79 @@
     { "name": "S4b-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
     {
       "name": "S4b-body-link-at-start",
-      "probe": "(async () => (await window.__st.body()) === '[[#' + window.__st.knownId + ']]Совсем другой текст без совпадений')()",
+      "probe": "(async () => (await window.__st.body()) === '[[#' + window.__st.knownId + ']]Совсем другой текст без совпадений\\nвторая строка')()",
+      "expect": true
+    },
+
+    {
+      "name": "S4c-seed-short",
+      "eval": "window.__st.setBody('Короткая фраза стенда')"
+    },
+    { "name": "S4c-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S4c-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4c-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S4c-comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Короткая фраза стенда') === true"
+    },
+    { "name": "S4c-enter-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4c-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4c-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4c-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S4c-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4c-pick-command", "eval": "window.__st.menu('Создать мысль из выделенного')" },
+    { "name": "S4c-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4c-clear-input", "eval": "window.__st.clearInput()" },
+    { "name": "S4c-select-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4c-type-title", "text": "Известная мысль стенда" },
+    {
+      "name": "S4c-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4c-pick-candidate", "eval": "window.__st.pickCand('Известная мысль стенда')" },
+    { "name": "S4c-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4c-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4c-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4c-body-signature",
+      "probe": "(async () => (await window.__st.body()) === '[[#' + window.__st.knownId + '|Короткая фраза стенда]]')()",
+      "expect": true
+    },
+
+    {
+      "name": "S4d-seed-match",
+      "eval": "window.__st.setBody('Известная мысль стенда')"
+    },
+    { "name": "S4d-reload-home", "eval": "window.__st.focus('{{homeId}}')" },
+    { "name": "S4d-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4d-reload-seed", "eval": "window.__st.focus('{{thoughtId}}')" },
+    {
+      "name": "S4d-comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Известная мысль стенда') === true"
+    },
+    { "name": "S4d-enter-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4d-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4d-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4d-open-menu", "eval": "window.__st.openMenu()" },
+    { "name": "S4d-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4d-pick-command", "eval": "window.__st.menu('Создать мысль из выделенного')" },
+    { "name": "S4d-dialog-open", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4d-clear-input", "eval": "window.__st.clearInput()" },
+    { "name": "S4d-select-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4d-type-title", "text": "Известная мысль стенда" },
+    {
+      "name": "S4d-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4d-pick-candidate", "eval": "window.__st.pickCand('Известная мысль стенда')" },
+    { "name": "S4d-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4d-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4d-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4d-body-no-signature",
+      "probe": "(async () => (await window.__st.body()) === '[[#' + window.__st.knownId + ']]')()",
       "expect": true
     },
 

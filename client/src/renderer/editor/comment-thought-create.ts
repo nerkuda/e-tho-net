@@ -37,7 +37,21 @@
  *  - вставка на месте — по развилке `23c11231`: существующая/новая без тела →
  *    ссылка `[[#<id>]]`, новая с телом → трансклюзия (форма — `formatTransclusionRef`); для
  *    существующей заменяется ЛИТЕРАЛЬНО совпавшая с заголовком часть (`ee64ce46`),
- *    иначе ссылка встаёт в НАЧАЛО единицы.
+ *    иначе ссылка встаёт в НАЧАЛО единицы;
+ *  - при вставке ССЫЛКИ блочная разметка единицы СОХРАНЯЕТСЯ (`23c11231`,
+ *    `d4f3d8a0`, уточнение визуальной проверки): маркер/префикс блока остаётся,
+ *    ссылка становится содержимым блока — `- [[#<id>]]`, `## [[#<id>]]`,
+ *    `> [[#<id>]]` (с подписью — `- [[#<id>|текст]]`). Трансклюзии оформление
+ *    НЕ меняют (открытый вопрос).
+ *
+ * Итерация по визуальной проверке пользователя (2026-10-12, хроно ТП):
+ *  1. КОРОТКОЕ выделение (≤250, одна строка) + СУЩЕСТВУЮЩАЯ мысль → выделение
+ *     целиком заменяется ссылкой с подписью `[[#<id>|выделенный текст]]`; при
+ *     совпадении текста с названием цели (регистронезависимо, trim) — `[[#<id>]]`
+ *     без подписи. Длинное выделение — прежнее поведение (`ee64ce46`).
+ *  2. Хук `attachCreatedThought` вызывается и для ПОДОБРАННЫХ существующих мыслей
+ *     (выбор в диалоге случаев 1–2, дедуп в пакетных путях, «из раздела»), а не
+ *     только для созданных (`d6361b9c`); идемпотентность — за `attachToRecord`.
  *
  * Разбор выделения — существующей `parseSelectionUnits` (`@etn/markdown`);
  * второй парсер не создаётся (ADR `01ec1467`, сторож
@@ -767,10 +781,37 @@ function indexOfInsensitive(haystack: string, needle: string): number {
   return haystack.toLowerCase().indexOf(needle.toLowerCase());
 }
 
+/** Трансклюзия ли готовая конструкция — по открывающему префиксу `!` + `[[`. */
+function isTransclusionRef(ref: string): boolean {
+  return ref.startsWith('![');
+}
+
 /**
- * Собирает правки ОДНОЙ единицы (требования `ee64ce46`, `d4f3d8a0`):
+ * Ведущий маркер/префикс блочной разметки первой строки единицы — для
+ * СОХРАНЕНИЯ структуры блока при вставке ссылки (`23c11231`, `d4f3d8a0`):
+ * заголовок → `## `, элемент списка (с чекбоксом задачи) → `- `, цитата →
+ * `> `. Абзац/строка без разметки → пусто. Префикс берётся КАК ЕСТЬ (пробелы
+ * сохранены), чтобы блок остался блоком: элемент списка → `- [[#<id>]]`.
+ */
+export function blockPrefixOf(text: string): string {
+  const nl = text.indexOf('\n');
+  const first = (nl === -1 ? text : text.slice(0, nl)).replace(/\r$/, '');
+  const heading = /^#{1,6}[ \t]+/.exec(first);
+  if (heading !== null) return heading[0];
+  const list = /^(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/.exec(first);
+  if (list !== null) return list[0];
+  const quote = /^(?:>[ \t]*)+/.exec(first);
+  if (quote !== null) return quote[0];
+  return '';
+}
+
+/**
+ * Собирает правки ОДНОЙ единицы (требования `ee64ce46`, `d4f3d8a0`,
+ * `23c11231`):
  * - если есть новая мысль (`whole`) — вся единица заменяется конструкцией
- *   (с телом → трансклюзия, без тела → ссылка);
+ *   (с телом → трансклюзия, без тела → ссылка); у ССЫЛКИ сохраняется блочный
+ *   префикс исходной единицы (`- [[#<id>]]`, `## [[#<id>]]`, `> [[#<id>]]`),
+ *   у трансклюзии оформление не меняется (открытый вопрос);
  * - иначе для существующей мысли ссылкой заменяется ЛИТЕРАЛЬНО совпавшая
  *   с её заголовком часть текста единицы (регистронезависимо, по `trim`), а без
  *   совпадения — ссылка вставляется в НАЧАЛО, текст не меняется.
@@ -781,7 +822,14 @@ export function buildSelectionEdits(
   refs: readonly SelectionThoughtRef[],
 ): SelectionEdit {
   if (refs.some((item) => item.whole)) {
-    const insert = refs.map((item) => item.ref).join('\n');
+    const prefix = blockPrefixOf(selected);
+    const insert = refs
+      .map((item) =>
+        item.whole && prefix !== '' && !isTransclusionRef(item.ref)
+          ? prefix + item.ref
+          : item.ref,
+      )
+      .join('\n');
     return {
       changes: [{ from: offset, to: offset + selected.length, insert }],
       anchor: offset + insert.length,
@@ -862,21 +910,27 @@ function sectionNodeFromPlan(plan: CommentThoughtPlan): SplitSelectionNode {
 async function existingRef(
   port: CommentThoughtCreatePort,
   id: string,
+  attach?: (thoughtId: string) => void | Promise<void>,
 ): Promise<SelectionThoughtRef> {
+  // Подобранная существующая мысль тоже привязывается к записи (итерация
+  // визуальной проверки, требование `d6361b9c`); идемпотентность — за хуком.
+  await attachThought(attach, id);
   return { ref: thoughtLinkRef(id, ''), title: await port.thoughtTitle(id), whole: false };
 }
 
 /**
- * Хук привязки СОЗДАННОЙ мысли к контейнеру поля (0.12.2, задача e36d23a3,
- * требование `d6361b9c`): у дневниковой записи привязывает мысль к записи
- * (слот мыслей записи), вне дневника хука нет. Привязывается ТОЛЬКО созданная
- * мысль — существующая (найденная дедупом) к записи автоматически не идёт.
+ * Хук привязки мысли к контейнеру поля (0.12.2, задача e36d23a3, требование
+ * `d6361b9c`, итерация визуальной проверки): у дневниковой записи привязывает
+ * мысль к записи (слот мыслей записи), вне дневника хука нет. Привязывается
+ * ЛЮБАЯ мысль, добавленная командой, — и СОЗДАННАЯ, и ПОДОБРАННАЯ существующая
+ * (выбор в диалоге, дедуп в пакетных путях). Идемпотентность — за хуком
+ * (`attachToRecord` пропускает уже привязанные мысли).
  *
- * Ошибку хука не пропускаем наружу: мысль уже создана, вставка ссылки/
+ * Ошибку хука не пропускаем наружу: мысль уже создана/подобрана, вставка ссылки/
  * трансклюзии в комментарий обязана состояться, а сообщение об ошибке привязки
  * показывает сам хук (`CommentCommandHost.attachCreatedThought`).
  */
-async function attachCreated(
+async function attachThought(
   attach: ((thoughtId: string) => void | Promise<void>) | undefined,
   thoughtId: string,
 ): Promise<void> {
@@ -897,7 +951,7 @@ async function createUnitRef(
   attach?: (thoughtId: string) => void | Promise<void>,
 ): Promise<SelectionThoughtRef> {
   const created = await port.create({ parentId, title: node.title, bodyMd: node.bodyMd });
-  await attachCreated(attach, created.id);
+  await attachThought(attach, created.id);
   return {
     ref: node.bodyMd === '' ? thoughtLinkRef(created.id, '') : formatTransclusionRef(created.id),
     title: null,
@@ -918,9 +972,10 @@ async function createUnitRef(
  * @param refuseCreates — при отказе от поповера создавать новую мысль (`false`
  *   — «Создать мысль из раздела»: отказ → прежнее поведение без дедупа) или
  *   оставить элемент без изменений (`true` — список и «Разделить»);
- * @param attach — хук привязки СОЗДАННОЙ мысли к контейнеру поля (0.12.2,
- *   задача e36d23a3): у дневниковой записи — привязка к записи, вне дневника —
- *   не задан. Существующие (из дедупа) мысли не привязываются.
+ * @param attach — хук привязки добавленной мысли к контейнеру поля (0.12.2,
+ *   задача e36d23a3, требование `d6361b9c`): у дневниковой записи — привязка к
+ *   записи, вне дневника — не задан. Привязываются И созданные, И подобранные
+ *   существующие мысли (итерация визуальной проверки).
  */
 async function runPlanUnits(
   editor: MdEditor,
@@ -947,14 +1002,14 @@ async function runPlanUnits(
     for (const node of nodes) {
       const candidates = await port.candidates(node.title);
       if (candidates.length === 1) {
-        refs.push(await existingRef(port, candidates[0]!.id));
+        refs.push(await existingRef(port, candidates[0]!.id, attach));
         continue;
       }
       if (candidates.length > 1) {
         const anchor = editor.pointAt?.(node.start) ?? { x: 0, y: 0 };
         const chosen = await port.choose(anchor, node.title, candidates);
         if (chosen !== null) {
-          refs.push(await existingRef(port, chosen));
+          refs.push(await existingRef(port, chosen, attach));
         } else if (refuseCreates) {
           refs.push(null); // отказ от поповера — элемент без изменений
         } else {
@@ -1038,8 +1093,8 @@ function runCreate(ctx: CommentCommandContext, build: CommentThoughtPlanBuilder)
  * сняты до сетевых `await` — после них план перепрокладывается по актуальному
  * документу ({@link relocatedSelection}); расхождение контекста отменяет правку
  * (ошибка `da5e74b0`). Отмена диалога и отсутствие владельца текст не меняют.
- * Созданные мысли привязываются хуком `attach` (дневниковая запись, задача
- * e36d23a3); выбранные существующие — нет.
+ * Созданные И выбранные существующие мысли привязываются хуком `attach`
+ * (дневниковая запись, задача e36d23a3, требование `d6361b9c`).
  */
 async function runSelectionDialog(
   editor: MdEditor,
@@ -1066,7 +1121,27 @@ async function runSelectionDialog(
     const refs: SelectionThoughtRef[] = [];
     for (const item of result.items) {
       if (item.kind === 'existing' && item.id !== undefined) {
-        refs.push(await existingRef(port, item.id));
+        if (plan.short) {
+          // Короткое выделение (≤250, одна строка): выделенный текст становится
+          // ПОДПИСЬЮ ссылки, выделение заменяется целиком; при совпадении с
+          // названием цели (регистронезависимо, trim) — без подписи
+          // (требования `ee64ce46`, `dc24a8b1`). Существующая тоже привязывается
+          // к записи (`d6361b9c`).
+          await attachThought(attach, item.id);
+          const target = await port.thoughtTitle(item.id);
+          // Подпись — выделенный текст без блочного префикса (у цитаты/строки
+          // с разметкой маркер сохраняется отдельно, требование `23c11231`).
+          const prefix = blockPrefixOf(plan.selected);
+          const signature = prefix === '' ? plan.selected : plan.selected.slice(prefix.length);
+          const same = signature.trim().toLowerCase() === target.trim().toLowerCase();
+          refs.push({
+            ref: thoughtLinkRef(item.id, same ? '' : signature),
+            title: null,
+            whole: true,
+          });
+          continue;
+        }
+        refs.push(await existingRef(port, item.id, attach));
         continue;
       }
       // Новая мысль: заголовок и синонимы из диалога (поле могло быть
@@ -1076,7 +1151,7 @@ async function runSelectionDialog(
         title: item.title ?? plan.prefill,
         bodyMd: plan.bodyMd,
       });
-      await attachCreated(attach, created.id);
+      await attachThought(attach, created.id);
       // Форма вставки — по ФАКТИЧЕСКОЙ непустоте тела (требования `23c11231`,
       // `d4f3d8a0`), а не по «короткости» случая.
       refs.push({
