@@ -252,3 +252,67 @@ describe(
     });
   },
 );
+
+describe(
+  'SystemDb: настройка сети «первый день недели» (0.13.1, задача 0f1b9892)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    it('createNetworkRow ставит первый день недели (по умолчанию — из ОС сервера)', () => {
+      const db = openDb();
+      const sys = new SystemDb(db);
+      try {
+        const userId = sys.createUser({ id: randomUUID(), username: 'owner', displayName: null }).id;
+        const n = sys.createNetworkRow(randomUUID(), userId, 'Сеть', null);
+        // Дефолт берётся из локали сервера (ISO 1..7).
+        assert.ok(n.first_day_of_week >= 1 && n.first_day_of_week <= 7);
+        // Прочитанная строка несёт то же значение.
+        assert.equal(sys.getNetworkById(n.id)!.first_day_of_week, n.first_day_of_week);
+      } finally {
+        sys.close();
+      }
+    });
+
+    it('existing rows (миграция) по умолчанию — понедельник (1)', () => {
+      const db = openDb();
+      const sys = new SystemDb(db);
+      try {
+        const userId = sys.createUser({ id: randomUUID(), username: 'owner2', displayName: null }).id;
+        const id = randomUUID();
+        const now = '2026-01-01T00:00:00.000Z';
+        // Вставка только обязательных колонок: first_day_of_week берёт DEFAULT 1.
+        db.prepare(
+          `INSERT INTO networks (id, display_name, owner_id, description, type_roles, created_at, updated_at)
+           VALUES (?, 'Легаси', ?, NULL, '{}', ?, ?)`,
+        ).run(id, userId, now, now);
+        const row = db.prepare('SELECT first_day_of_week AS f FROM networks WHERE id = ?').get(id) as { f: number };
+        assert.equal(row.f, 1);
+      } finally {
+        sys.close();
+      }
+    });
+
+    it('updateNetwork меняет настройку; без поля — сохраняет текущую', () => {
+      const db = openDb();
+      const sys = new SystemDb(db);
+      try {
+        const userId = sys.createUser({ id: randomUUID(), username: 'owner3', displayName: null }).id;
+        const n = sys.createNetworkRow(randomUUID(), userId, 'Сеть', null);
+        const base = {
+          displayName: n.display_name,
+          description: n.description,
+          when_to_use: n.when_to_use,
+          conventions: n.conventions,
+          examples: n.examples,
+          type_roles: n.type_roles,
+        };
+        sys.updateNetwork(n.id, { ...base, first_day_of_week: 7 });
+        assert.equal(sys.getNetworkById(n.id)!.first_day_of_week, 7);
+        // Поле не задано — значение столбца сохраняется (COALESCE).
+        sys.updateNetwork(n.id, { ...base });
+        assert.equal(sys.getNetworkById(n.id)!.first_day_of_week, 7);
+      } finally {
+        sys.close();
+      }
+    });
+  },
+);

@@ -45,6 +45,7 @@ import {
 } from './query-service.js';
 import { search } from './search-service.js';
 import { subgraph, type TraversalBounds } from './graph-traversal.js';
+import type { TokenIssue } from './thought-type-view-tokens.js';
 import type { SubgraphEdge } from '@etn/shared';
 
 /**
@@ -73,6 +74,7 @@ function toThoughtQueryResult(flat: ReaderThoughtsQueryResult): ThoughtQueryResu
     depths: flat.depths === null ? null : new Map(flat.depths.map((e) => [e.id, e.depth])),
     truncated: flat.truncated,
     reason: flat.reason,
+    ...(flat.unresolved !== undefined ? { unresolved: flat.unresolved as TokenIssue[] } : {}),
   };
 }
 
@@ -117,7 +119,14 @@ export async function queryThoughtIdsAsync(
     op: 'thoughts.queryIds',
     payload: { userId, request, options },
   };
-  return (await pool.run(task)) as ReaderThoughtsQueryIdsResult;
+  const flat = (await pool.run(task)) as ReaderThoughtsQueryIdsResult;
+  return {
+    ids: flat.ids,
+    total: flat.total,
+    has_more: flat.has_more,
+    next_cursor: flat.next_cursor,
+    ...(flat.unresolved !== undefined ? { unresolved: flat.unresolved as TokenIssue[] } : {}),
+  };
 }
 
 /** Полнотекстовый поиск (см. {@link search}) через пул. */

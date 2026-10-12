@@ -94,6 +94,21 @@ export function updateNetwork(
       : { ...existing.type_roles, ...validateTypeRoles(patch.type_roles) };
   const validatedRoles = networkService.validateTypeRoles(existing.id, mergedRoles);
 
+  // Первый день недели сети (требование 1b77decd, 0.13.1): `undefined` —
+  // сохранить текущий; иначе обязан быть целым 1..7 (ISO пн..вс).
+  let firstDayOfWeek = existing.first_day_of_week;
+  if (patch.first_day_of_week !== undefined) {
+    const value = patch.first_day_of_week;
+    if (!Number.isInteger(value) || value < 1 || value > 7) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'first_day_of_week должен быть целым числом от 1 (понедельник) до 7 (воскресенье).',
+        { field: 'first_day_of_week', value },
+      );
+    }
+    firstDayOfWeek = value;
+  }
+
   systemDb.updateNetwork(existing.id, {
     displayName,
     description,
@@ -101,6 +116,7 @@ export function updateNetwork(
     conventions,
     examples,
     type_roles: validatedRoles,
+    first_day_of_week: firstDayOfWeek,
   });
   systemDb.insertAuditLog({
     actorUserId: actor.userId,
@@ -116,6 +132,7 @@ export function updateNetwork(
       conventions,
       examples,
       type_roles: validatedRoles,
+      first_day_of_week: firstDayOfWeek,
       ...(actor.via !== undefined ? { via: actor.via } : {}),
     },
   });
@@ -130,6 +147,9 @@ export function updateNetwork(
   if (examples !== existing.examples) changes['examples'] = examples;
   if (JSON.stringify(validatedRoles) !== JSON.stringify(existing.type_roles)) {
     changes['type_roles'] = validatedRoles;
+  }
+  if (firstDayOfWeek !== existing.first_day_of_week) {
+    changes['first_day_of_week'] = firstDayOfWeek;
   }
 
   const network = systemDb.getNetworkById(existing.id);

@@ -79,6 +79,7 @@ function networkDto(n: Network) {
     examples: n.examples,
     type_roles: n.type_roles,
     has_structure: typeof n.type_roles.table_of_contents === 'string',
+    first_day_of_week: n.first_day_of_week,
     created_at: n.created_at,
     updated_at: n.updated_at,
   };

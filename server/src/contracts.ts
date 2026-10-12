@@ -1465,6 +1465,7 @@ export const NetworksWrite = defineContract(
       conventions: z.string().nullable().optional(),
       examples: z.string().nullable().optional(),
       type_roles: z.record(z.string(), z.string().nullable()).optional(),
+      first_day_of_week: z.number().int().min(1).max(7).optional(),
     })
     .strict(),
   {},
@@ -4091,6 +4092,14 @@ export interface ReaderDepthsEntry {
   depth: number;
 }
 
+/** Сериализованный неразрешимый токен AST (доменный `TokenIssue`). */
+export interface ReaderTokenIssue {
+  path: string;
+  token: string;
+  reason: string;
+  message: string;
+}
+
 /** Сериализованный результат `thoughts.query` (плоский `ThoughtQueryResult`). */
 export interface ReaderThoughtsQueryResult {
   items: ThoughtRef[];
@@ -4102,6 +4111,8 @@ export interface ReaderThoughtsQueryResult {
   depths: ReaderDepthsEntry[] | null;
   truncated: boolean;
   reason: 'max_nodes' | null;
+  /** Неразрешимые токены AST (требование b7fdab20); непусто — результат пуст. */
+  unresolved?: ReaderTokenIssue[];
 }
 
 /** Результат `thoughts.queryIds`. */
@@ -4110,6 +4121,8 @@ export interface ReaderThoughtsQueryIdsResult {
   total: number | null;
   has_more: boolean;
   next_cursor: string | null;
+  /** Неразрешимые токены AST (требование b7fdab20); непусто — `ids` пуст. */
+  unresolved?: ReaderTokenIssue[];
 }
 
 /** Успешный ответ воркера. `result` конкретизируется по `op` на стороне пула. */

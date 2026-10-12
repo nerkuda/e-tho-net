@@ -1517,6 +1517,7 @@ const HANDLERS: Record<string, OpHandler> = {
             ...(a.conventions !== undefined ? { conventions: a.conventions } : {}),
             ...(a.examples !== undefined ? { examples: a.examples } : {}),
             ...(requestedRoles !== undefined ? { type_roles: requestedRoles } : {}),
+            ...(a.first_day_of_week !== undefined ? { first_day_of_week: a.first_day_of_week } : {}),
           },
           { userId: rt.deps.auth.userId, via: 'mcp.etn.ops' },
         );
@@ -1546,6 +1547,7 @@ const HANDLERS: Record<string, OpHandler> = {
         examples: network.examples,
         type_roles: network.type_roles,
         has_structure: typeof network.type_roles.table_of_contents === 'string',
+        first_day_of_week: network.first_day_of_week,
         created_at: network.created_at,
         updated_at: network.updated_at,
         request_id: String(extra.requestId),

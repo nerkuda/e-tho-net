@@ -838,3 +838,166 @@ describe('токены границ года и арифметика ±Ny (0.10.
     }
   });
 });
+
+// ============================================================================
+// 5. Календарные границы, первый день недели, арифметика ±N, контекст времени
+//    (0.13.1, задача 0f1b9892; требования 84b52caa и 1b77decd)
+// ============================================================================
+
+describe('токены календарных границ (0.13.1, задача 0f1b9892)', () => {
+  const wed = (): Date => new Date('2026-09-09T10:30:00.000Z'); // среда
+
+  it('канон camelCase и легаси-синонимы дают одинаковый результат', () => {
+    const pairs: Array<[string, string]> = [
+      ['$weekStart', '$week.start'],
+      ['$weekEnd', '$week.end'],
+      ['$monthStart', '$month.start'],
+      ['$monthEnd', '$month.end'],
+      ['$yearStart', '$year.start'],
+      ['$yearEnd', '$year.end'],
+    ];
+    for (const [canon, legacy] of pairs) {
+      assert.deepEqual(
+        resolveGlobalDateTokens(canon, { now: wed }),
+        resolveGlobalDateTokens(legacy, { now: wed }),
+        `${canon} ↔ ${legacy}`,
+      );
+      assert.equal(
+        resolveGlobalDateTokens(canon, { now: wed }).unresolved.length,
+        0,
+        `${canon} должен быть известным токеном`,
+      );
+    }
+  });
+
+  it('$weekStart/$weekEnd — неделя с понедельника по умолчанию', () => {
+    assert.equal(resolveGlobalDateTokens('$weekStart', { now: wed }).value, '2026-09-07');
+    assert.equal(resolveGlobalDateTokens('$weekEnd', { now: wed }).value, '2026-09-13');
+  });
+
+  it('первый день недели сети учитывается ($weekStart=вс, ISO 7)', () => {
+    // Среда 09.09.2026 при первом дне «воскресенье»: неделя 06.09–12.09.
+    assert.equal(
+      resolveGlobalDateTokens('$weekStart', { now: wed, firstDayOfWeek: 7 }).value,
+      '2026-09-06',
+    );
+    assert.equal(
+      resolveGlobalDateTokens('$weekEnd', { now: wed, firstDayOfWeek: 7 }).value,
+      '2026-09-12',
+    );
+    // Суббота при первом дне «суббота» (6) — начало недели та же суббота.
+    const sat = (): Date => new Date('2026-09-12T10:00:00.000Z');
+    assert.equal(
+      resolveGlobalDateTokens('$weekStart', { now: sat, firstDayOfWeek: 6 }).value,
+      '2026-09-12',
+    );
+  });
+
+  it('$monthStart/$monthEnd и $yearStart/$yearEnd', () => {
+    assert.equal(resolveGlobalDateTokens('$monthStart', { now: wed }).value, '2026-09-01');
+    assert.equal(resolveGlobalDateTokens('$monthEnd', { now: wed }).value, '2026-09-30');
+    assert.equal(resolveGlobalDateTokens('$yearStart', { now: wed }).value, '2026-01-01');
+    assert.equal(resolveGlobalDateTokens('$yearEnd', { now: wed }).value, '2026-12-31');
+  });
+
+  it('клэмпинг месяца: 31.01 + 1mo → последний день февраля', () => {
+    const jan31 = (): Date => new Date('2026-01-31T10:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$today+1mo', { now: jan31 }).value, '2026-02-28');
+    const leap = (): Date => new Date('2024-01-31T10:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$today+1mo', { now: leap }).value, '2024-02-29');
+  });
+
+  it('клэмпинг года: 29.02 високосного + 1y → 28.02', () => {
+    const feb29 = (): Date => new Date('2024-02-29T10:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$today+1y', { now: feb29 }).value, '2025-02-28');
+    // 29.02 − 1y → 28.02 предыдущего (не високосного) года.
+    assert.equal(resolveGlobalDateTokens('$today-1y', { now: feb29 }).value, '2023-02-28');
+  });
+
+  it('неделя = ровно 7 суток (±Nw)', () => {
+    assert.equal(resolveGlobalDateTokens('$today+1w', { now: wed }).value, '2026-09-16');
+    assert.equal(resolveGlobalDateTokens('$today-2w', { now: wed }).value, '2026-08-26');
+  });
+
+  it('арифметика границ: $weekStart-1w, $monthEnd+1mo, $yearStart-1y', () => {
+    assert.equal(resolveGlobalDateTokens('$weekStart-1w', { now: wed }).value, '2026-08-31');
+    // $monthEnd — последний день сентября; +1mo → последний день октября.
+    assert.equal(resolveGlobalDateTokens('$monthEnd+1mo', { now: wed }).value, '2026-10-31');
+    assert.equal(resolveGlobalDateTokens('$yearStart-1y', { now: wed }).value, '2025-01-01');
+  });
+});
+
+describe('токены времени: контекст/профиль (ADR 0c02ab4f)', () => {
+  const now = (): Date => new Date('2026-09-09T13:37:45.123Z');
+
+  it('$now/$hourStart/$hourEnd раскрываются только при withTime', () => {
+    assert.equal(resolveGlobalDateTokens('$now', { now, withTime: true }).value, now().toISOString());
+    assert.equal(
+      resolveGlobalDateTokens('$hourStart', { now, withTime: true }).value,
+      '2026-09-09T13:00:00.000Z',
+    );
+    assert.equal(
+      resolveGlobalDateTokens('$hourEnd', { now, withTime: true }).value,
+      '2026-09-09T13:59:59.999Z',
+    );
+  });
+
+  it('в профиле без времени ($now/$hourStart) — неразрешимы', () => {
+    for (const token of ['$now', '$hourStart', '$hourEnd', '$now+1h', '$today+30mi']) {
+      const res = resolveGlobalDateTokens(token, { now, withTime: false });
+      assert.equal(res.unresolved.length, 1, token);
+      assert.equal(res.unresolved[0]!.reason, 'time_context_required', token);
+      assert.equal(res.value, token, 'значение не подменяется');
+    }
+  });
+
+  it('h/mi допустимы со временем и сдвигают момент', () => {
+    assert.equal(
+      resolveGlobalDateTokens('$now-2h', { now, withTime: true }).value,
+      '2026-09-09T11:37:45.123Z',
+    );
+    assert.equal(
+      resolveGlobalDateTokens('$hourStart+30mi', { now, withTime: true }).value,
+      '2026-09-09T13:30:00.000Z',
+    );
+  });
+
+  it('валидатор отвергает токен времени в профиле без времени', () => {
+    const def = parseOrThrow<Record<string, unknown>>(
+      '{"created_after":"$hourStart","sort":"alpha","order":"asc"}',
+    );
+    assert.throws(
+      () => validateDefinitionForTokens(def, { withTime: false }),
+      (err: unknown) => err instanceof EtnError &&
+        (err.details as { reason?: string }).reason === 'time_context_required',
+    );
+    // Со временем — проходит.
+    validateDefinitionForTokens(def, { withTime: true });
+  });
+
+  it('без флага withTime сохраняется историческое поведение ($now разрешён)', () => {
+    const res = resolveGlobalDateTokens('$now', { now });
+    assert.equal(res.unresolved.length, 0);
+    assert.equal(res.value, now().toISOString());
+  });
+
+  it('резолвер отбора: ctx.withTime=false делает $now неразрешимым', () => {
+    const ctxNoTime = buildResolveContext(
+      {
+        id: 't', title: 'T', synonyms: [], type_id: null, active: true,
+        created_by: 'u', updated_by: 'u',
+        created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      },
+      [],
+      'u',
+      now,
+      { withTime: false },
+    );
+    const res = resolveTokensInDefinition(
+      parseOrThrow('{"updated_after":"$now","sort":"alpha","order":"asc"}'),
+      ctxNoTime,
+    );
+    assert.equal(res.unresolved.length, 1);
+    assert.equal(res.unresolved[0]!.reason, 'time_context_required');
+  });
+});

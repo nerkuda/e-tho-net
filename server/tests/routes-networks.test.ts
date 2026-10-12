@@ -534,6 +534,41 @@ describe(
       }
     });
 
+    it('PATCH /networks/{id} sets first_day_of_week; invalid value → 422 (0.13.1, 0f1b9892)', async () => {
+      const { app, sys, db, admin } = await buildApp();
+      const networkId = seedNetwork(db, admin.userId);
+      try {
+        const ok = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${networkId}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: { first_day_of_week: 7 },
+        });
+        assert.equal(ok.statusCode, 200);
+        assert.equal((ok.json().data as { first_day_of_week: number }).first_day_of_week, 7);
+
+        // GET отдаёт настройку.
+        const get = await app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${networkId}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+        });
+        assert.equal((get.json().data as { first_day_of_week: number }).first_day_of_week, 7);
+
+        // Вне диапазона 1..7 — VALIDATION_ERROR.
+        const bad = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${networkId}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: { first_day_of_week: 9 },
+        });
+        assert.equal(bad.statusCode, 422);
+      } finally {
+        await app.close();
+        sys.close();
+      }
+    });
+
     it('PATCH /networks/{id} rejects an unknown type_roles.table_of_contents (O5 / ba024a45)', async () => {
       // Real data directory so the network has a data.db to query.
       const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-bad-section-'));

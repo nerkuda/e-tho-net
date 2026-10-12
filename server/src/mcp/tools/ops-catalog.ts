@@ -927,6 +927,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
       { name: 'conventions', desc: 'правила сети' },
       { name: 'examples', desc: 'примеры' },
       { name: 'type_roles', desc: 'карта ролей типов (`null` снимает роль)' },
+      { name: 'first_day_of_week', desc: 'первый день недели сети, ISO 1=пн…7=вс' },
     ],
     destructive: false,
     readOnly: false,

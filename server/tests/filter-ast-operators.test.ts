@@ -12,7 +12,9 @@
  *     для операнда «Тип» (эффективные свойства типа с наследованием);
  *   * «Есть слова»: области чекбоксами; ни одной (в т.ч. отсутствие `scope`) —
  *     условие отключено;
- *   * честный `unsupported` для чужих задач (токены, под-выборки, «в иерархии»).
+ *   * честный `unsupported` для чужих задач (под-выборки, «в иерархии»).
+ *     Токены AST раскрываются резолвером с 0.13.1 (задача 0f1b9892) — их
+ *     покрытие в `filter-ast-tokens.test.ts`.
  */
 
 import assert from 'node:assert/strict';
@@ -362,11 +364,10 @@ describe('AST operator vocabulary (aee021c8)', { skip: !nativeAvailable() }, () 
     assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'keywords' }, 'matches', 'альфа'))), ['Альфа мысль', 'Бета']);
   });
 
-  it('honest unsupported for other subprojects: tokens, subqueries, «в иерархии»', () => {
+  it('honest unsupported for other subprojects: subqueries, «в иерархии»', () => {
     const ndb = createInMemoryNetworkDb();
     const prop = seedProperty(ndb, 'срок', 'date');
     const cases: FilterAst[] = [
-      ast(leaf({ kind: 'property', property_id: prop }, 'eq', { token: '$today' })),
       ast(leaf({ kind: 'property', property_id: prop }, 'in', { query: leaf({ kind: 'type' }, 'in', ['t']), operator: 'in' })),
       ast(leaf({ kind: 'property', property_id: prop }, 'in_hierarchy', [prop])),
     ];

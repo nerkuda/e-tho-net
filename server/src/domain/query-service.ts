@@ -82,6 +82,7 @@ import {
 import { nameTrigramMatch } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause, listTypeNodes } from './type-hierarchy.js';
+import { resolveGlobalDateTokens, type TokenIssue } from './thought-type-view-tokens.js';
 
 // ---------------------------------------------------------------------------
 // Канонические типы запроса/ответа
@@ -218,6 +219,14 @@ export interface ThoughtQueryOptions {
    * раскрываемости обещает уровень, которого соседи не отдают.
    */
   showTrash?: boolean;
+  /**
+   * Контекст разрешения токенов AST-листьев (0.13.1, задача 0f1b9892):
+   * настройка сети «первый день недели», профиль со временем, часы для тестов.
+   * Не задан — токены раскрываются с дефолтами (понедельник, датовый профиль,
+   * реальные часы). `$thought.*` в сетевом запросе контекста мысли не имеет и
+   * даёт неразрешимость.
+   */
+  tokenContext?: AstTokenContext;
 }
 
 /** Результат канонической выборки. */
@@ -241,6 +250,11 @@ export interface ThoughtQueryResult {
   truncated: boolean;
   /** Причина обрезки (`max_nodes`) или null. */
   reason: 'max_nodes' | null;
+  /**
+   * Неразрешимые токены AST (требование b7fdab20). Непусто — отбор не выполнен:
+   * `items` пуст, пояснения — здесь. Отсутствует/пусто — всё разрешилось.
+   */
+  unresolved?: TokenIssue[];
 }
 
 /** Результат id-only выборки ({@link queryThoughtIds}). */
@@ -252,6 +266,8 @@ export interface ThoughtIdsQueryResult {
   has_more: boolean;
   /** Keyset-курсор следующей страницы; `null` — страниц больше нет. */
   next_cursor: string | null;
+  /** Неразрешимые токены AST (непусто — `ids` пуст, см. {@link ThoughtQueryResult.unresolved}). */
+  unresolved?: TokenIssue[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,12 +1024,70 @@ function astUnsupported(what: string, field: string, requestId?: string): never 
   );
 }
 
-/** Отвергнуть значения-токен/под-выборку: их разрешение — отдельные задачи ТП. */
+/** Отвергнуть значения-под-выборку: её исполнение — отдельная задача ТП. */
 function assertAstValueExecutable(value: FilterAstValue | undefined, path: string, requestId?: string): void {
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-    if ('token' in value) astUnsupported('Разрешение токена', `${path}.value`, requestId);
     if ('query' in value) astUnsupported('Исполнение под-выборки', `${path}.value`, requestId);
   }
+}
+
+/**
+ * Контекст разрешения токенов AST-листа (требование 1b77decd / ADR 0c02ab4f).
+ * `nowMs` — часы в миллисекундах (сериализуемо: тот же объект уходит в
+ * читающий пул, функция-часы через границу воркера не проходит). `userId` —
+ * владелец ключа для `$user`. `firstDayOfWeek` — настройка сети «первый день
+ * недели» (ISO 1=пн … 7=вс) для `$weekStart`/`$weekEnd`. `withTime` — профиль
+ * со временем (разрешает `$now`/`$hourStart`/`$hourEnd` и `h`/`mi`).
+ */
+export interface AstTokenContext {
+  nowMs?: number;
+  userId?: string;
+  firstDayOfWeek?: number;
+  withTime?: boolean;
+}
+
+/** Собрать опции резолвера из {@link AstTokenContext}. */
+function astResolveOptions(ctx: AstTokenContext | undefined): {
+  now?: () => Date;
+  userId?: string;
+  firstDayOfWeek?: number;
+  withTime?: boolean;
+} {
+  const out: { now?: () => Date; userId?: string; firstDayOfWeek?: number; withTime?: boolean } = {};
+  if (ctx?.nowMs !== undefined) out.now = () => new Date(ctx.nowMs!);
+  if (ctx?.userId !== undefined) out.userId = ctx.userId;
+  if (ctx?.firstDayOfWeek !== undefined) out.firstDayOfWeek = ctx.firstDayOfWeek;
+  if (ctx?.withTime !== undefined) out.withTime = ctx.withTime;
+  return out;
+}
+
+/**
+ * Разрешить токен-значение листа (`{ token: "$today+7d" }`) в скаляр. Возврат
+ * `{ ok: false }` — токен неразрешим (`unresolved` уже собран в `sink`), лист
+ * даёт `false`. Литералы и списки возвращаются как есть.
+ */
+function astResolveLeafValue(
+  value: FilterAstValue | undefined,
+  ctx: AstTokenContext | undefined,
+  sink: TokenIssue[] | undefined,
+  path: string,
+): { ok: boolean; value?: FilterAstValue } {
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    'token' in value
+  ) {
+    const res = resolveGlobalDateTokens(value.token, astResolveOptions(ctx));
+    if (res.unresolved.length > 0) {
+      if (sink !== undefined) {
+        for (const issue of res.unresolved) sink.push({ ...issue, path: `${path}.value` });
+      }
+      return { ok: false };
+    }
+    return { ok: true, value: res.value };
+  }
+  return { ok: true, value };
 }
 
 // ---------------------------------------------------------------------------
@@ -1269,13 +1343,20 @@ function lookupPropertyRow(ndb: NetworkDb, propertyId: string): RegistryProperty
   return { id: raw.id, value_type: raw.value_type as PropertyValueType, config: raw.config };
 }
 
+/** Опции исполнения AST-листьев: контекст токенов и коллектор неразрешимых. */
+interface AstExecOptions {
+  ctx?: AstTokenContext;
+  unresolved?: TokenIssue[];
+}
+
 /** Свернуть дерево AST в один SQL-предикат над `thoughts_v t`. */
 export function filterAstClause(
   ndb: NetworkDb,
   ast: FilterAst,
   requestId?: string,
+  astOpts?: AstExecOptions,
 ): Clause {
-  return filterAstNodeClause(ndb, ast.filter, 'filter', requestId);
+  return filterAstNodeClause(ndb, ast.filter, 'filter', requestId, astOpts);
 }
 
 function filterAstNodeClause(
@@ -1283,20 +1364,21 @@ function filterAstNodeClause(
   node: FilterAstNode,
   path: string,
   requestId?: string,
+  astOpts?: AstExecOptions,
 ): Clause {
   if ('op' in node) {
     if (node.op === 'not') {
-      const child = filterAstNodeClause(ndb, node.children[0]!, `${path}.children[0]`, requestId);
+      const child = filterAstNodeClause(ndb, node.children[0]!, `${path}.children[0]`, requestId, astOpts);
       return { sql: `NOT (${child.sql})`, params: child.params };
     }
     if (node.children.length === 0) return node.op === 'and' ? AST_TRUE : AST_FALSE;
     const parts = node.children.map((child, i) =>
-      filterAstNodeClause(ndb, child, `${path}.children[${i}]`, requestId),
+      filterAstNodeClause(ndb, child, `${path}.children[${i}]`, requestId, astOpts),
     );
     const sql = parts.map((p) => `(${p.sql})`).join(node.op === 'and' ? ' AND ' : ' OR ');
     return { sql: `(${sql})`, params: parts.flatMap((p) => p.params) };
   }
-  return filterAstLeafClause(ndb, node, path, requestId);
+  return filterAstLeafClause(ndb, node, path, requestId, astOpts);
 }
 
 function filterAstLeafClause(
@@ -1304,7 +1386,21 @@ function filterAstLeafClause(
   leaf: FilterAstLeaf,
   path: string,
   requestId?: string,
+  astOpts?: AstExecOptions,
 ): Clause {
+  // Токен-значение раскрывается сервером; неразрешимый — лист даёт false и
+  // уходит в коллектор (требование b7fdab20 «пустой результат с пояснением»).
+  const resolved = astResolveLeafValue(leaf.value, astOpts?.ctx, astOpts?.unresolved, path);
+  if (!resolved.ok) return AST_FALSE;
+  if (resolved.value !== leaf.value) leaf = { ...leaf, value: resolved.value };
+  // «Между» с обеими совпавшими границами (одиночный скаляр, в т.ч. раскрытый
+  // токен) — эквивалент равенства (сценарий cbc22d19, шаг 3, границы включительны).
+  if (
+    (leaf.operator === 'between' || leaf.operator === 'not_between') &&
+    (typeof leaf.value === 'string' || typeof leaf.value === 'number')
+  ) {
+    leaf = { ...leaf, value: [leaf.value, leaf.value] };
+  }
   assertAstValueExecutable(leaf.value, path, requestId);
   const { entity, operator } = leaf;
   const opPath = `${path}.operator`;
@@ -2271,6 +2367,7 @@ function buildFilterQuerySql(
   walk: WalkResult | null,
   emptyFilterMode: 'home_orphans' | 'all',
   requestId?: string,
+  astOpts?: AstExecOptions,
 ): FilterQuerySql {
   const homeFirst = emptyFilterMode === 'home_orphans' && isFilterEmpty(req);
   const { keys, joinSql, joinParams } = sortKeysFor(userId, req, homeFirst);
@@ -2284,7 +2381,7 @@ function buildFilterQuerySql(
   // Дерево AST — единственный источник критериев (плоские поля не применяются,
   // неявные дефолты active/trashed не навязываются; требование 76e30d9a).
   if (req.ast !== undefined) {
-    const clause = filterAstClause(ndb, req.ast, requestId);
+    const clause = filterAstClause(ndb, req.ast, requestId, astOpts);
     return {
       baseSql: `FROM thoughts_v t ${joinSql} WHERE ${clause.sql === '' ? '1=1' : clause.sql}`,
       joinParams,
@@ -2436,6 +2533,8 @@ function countFilterMatches(ndb: NetworkDb, sql: FilterQuerySql): number {
 interface BuiltQuery {
   sql: FilterQuerySql;
   walk: WalkResult | null;
+  /** Неразрешимые токены AST (пусто — всё разрешено). */
+  unresolved: TokenIssue[];
 }
 
 function buildQuery(
@@ -2444,10 +2543,14 @@ function buildQuery(
   req: ThoughtQueryRequest,
   emptyFilterMode: 'home_orphans' | 'all',
   requestId?: string,
+  tokenContext?: AstTokenContext,
 ): BuiltQuery {
   const walk = req.subtree === undefined ? null : walkSubtree(ndb, req.subtree);
-  const sql = buildFilterQuerySql(ndb, userId, req, walk, emptyFilterMode, requestId);
-  return { sql, walk };
+  const unresolved: TokenIssue[] = [];
+  const astOpts: AstExecOptions = { unresolved };
+  if (tokenContext !== undefined) astOpts.ctx = tokenContext;
+  const sql = buildFilterQuerySql(ndb, userId, req, walk, emptyFilterMode, requestId, astOpts);
+  return { sql, walk, unresolved };
 }
 
 /**
@@ -2490,7 +2593,22 @@ export function queryThoughts(
   opts: ThoughtQueryOptions = {},
 ): ThoughtQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
-  const built = buildQuery(ndb, userId, req, emptyFilterMode);
+  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext);
+  // Неразрешимый токен AST — пустой результат с пояснением, а не молчаливая
+  // потеря условия (требование b7fdab20).
+  if (built.unresolved.length > 0) {
+    return {
+      items: [],
+      total: req.count === true ? 0 : null,
+      has_more: false,
+      next_cursor: null,
+      directions: {},
+      depths: null,
+      truncated: false,
+      reason: null,
+      unresolved: built.unresolved,
+    };
+  }
   const sql = built.sql;
   const walk = built.walk;
   const maxLimit = opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT;
@@ -2567,7 +2685,11 @@ export function queryThoughtIds(
   opts: ThoughtQueryOptions = {},
 ): ThoughtIdsQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
-  const sql = buildQuery(ndb, userId, req, emptyFilterMode).sql;
+  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext);
+  if (built.unresolved.length > 0) {
+    return { ids: [], total: req.count === true ? 0 : null, has_more: false, next_cursor: null, unresolved: built.unresolved };
+  }
+  const sql = built.sql;
   const maxLimit = opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT;
   const limit = Math.min(Math.max(req.limit, 1), maxLimit);
   const offset = Math.max(req.offset, 0);

@@ -29,6 +29,7 @@ const EXPECTED_FILES = [
   '012_mcp_tool_call_metrics.sql',
   '013_networks_type_roles.sql',
   '014_user_settings.sql',
+  '015_networks_first_day_of_week.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */

@@ -32,7 +32,7 @@ import type {
   TypeRoles,
   User,
 } from '@etn/shared';
-import { BASE_LAYER_ID, IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
+import { BASE_LAYER_ID, defaultFirstDayOfWeek, IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
 import { systemDbPath, systemMigrationsDir } from '../paths.js';
@@ -138,6 +138,7 @@ interface NetworkRow {
   conventions: string | null;
   examples: string | null;
   type_roles: string;
+  first_day_of_week: number;
   created_at: string;
   updated_at: string;
 }
@@ -153,6 +154,10 @@ export function rowToNetwork(r: NetworkRow): Network {
     conventions: r.conventions,
     examples: r.examples,
     type_roles: parseTypeRolesColumn(r.type_roles),
+    first_day_of_week:
+      typeof r.first_day_of_week === 'number' && r.first_day_of_week >= 1 && r.first_day_of_week <= 7
+        ? r.first_day_of_week
+        : 1,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -340,14 +345,15 @@ export class SystemDb {
     this.stInsertNetwork = db.prepare(
       `INSERT INTO networks (id, display_name, owner_id, description,
                              when_to_use, conventions, examples,
-                             type_roles,
+                             type_roles, first_day_of_week,
                              created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stGetNetworkById = db.prepare('SELECT * FROM networks WHERE id = ? LIMIT 1');
     this.stUpdateNetwork = db.prepare(
       `UPDATE networks SET display_name = ?, description = ?, when_to_use = ?,
               conventions = ?, examples = ?, type_roles = ?,
+              first_day_of_week = COALESCE(?, first_day_of_week),
               updated_at = ?
        WHERE id = ?`,
     );
@@ -774,8 +780,11 @@ export class SystemDb {
     displayName: string,
     description: string | null,
     typeRoles: TypeRoles = {},
+    firstDayOfWeek: number = defaultFirstDayOfWeek(),
   ): Network {
     const now = new Date().toISOString();
+    const firstDay =
+      firstDayOfWeek >= 1 && firstDayOfWeek <= 7 ? firstDayOfWeek : defaultFirstDayOfWeek();
     this.stInsertNetwork.run(
       id,
       displayName,
@@ -785,6 +794,7 @@ export class SystemDb {
       null,
       null,
       encodeTypeRolesColumn(typeRoles),
+      firstDay,
       now,
       now,
     );
@@ -797,6 +807,7 @@ export class SystemDb {
       conventions: null,
       examples: null,
       type_roles: typeRoles,
+      first_day_of_week: firstDay,
       created_at: now,
       updated_at: now,
     };
@@ -816,6 +827,8 @@ export class SystemDb {
    * underlying UPDATE statement, so callers must read-modify-write the full
    * record via {@link getNetworkById}. `type_roles` (task ba024a45 / 0.7.2)
    * replaces the legacy `node_section_type_id` and is encoded as JSON.
+   * `first_day_of_week` (0.13.1) is optional: когда не задан, значение столбца
+   * сохраняется (`COALESCE`) — так частичный вызов не сбрасывает настройку.
    */
   updateNetwork(
     id: string,
@@ -826,6 +839,7 @@ export class SystemDb {
       conventions: string | null;
       examples: string | null;
       type_roles: TypeRoles;
+      first_day_of_week?: number;
     },
   ): void {
     this.stUpdateNetwork.run(
@@ -835,6 +849,7 @@ export class SystemDb {
       fields.conventions,
       fields.examples,
       encodeTypeRolesColumn(fields.type_roles),
+      fields.first_day_of_week ?? null,
       new Date().toISOString(),
       id,
     );
@@ -891,25 +906,9 @@ export class SystemDb {
   /** List every network on the server (admin view, 03-server-api.md §4.2). */
   listAllNetworks(): Network[] {
     const rows = this.db
-      .prepare(
-        `SELECT id, display_name, description, when_to_use, conventions, examples,
-                type_roles, owner_id, created_at, updated_at
-           FROM networks
-          ORDER BY created_at ASC`,
-      )
+      .prepare('SELECT * FROM networks ORDER BY created_at ASC')
       .all() as NetworkRow[];
-    return rows.map((r) => ({
-      id: r.id,
-      display_name: r.display_name,
-      description: r.description,
-      when_to_use: r.when_to_use,
-      conventions: r.conventions,
-      examples: r.examples,
-      type_roles: parseTypeRolesColumn(r.type_roles),
-      owner_id: r.owner_id,
-      created_at: r.created_at,
-      updated_at: r.updated_at,
-    }));
+    return rows.map(rowToNetwork);
   }
 
   /** Add a member row. Caller validates role/owner invariants. */

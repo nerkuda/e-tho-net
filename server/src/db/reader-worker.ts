@@ -123,6 +123,7 @@ function execute(task: ReaderTask): ReaderTaskResponse {
         depths: result.depths === null ? null : [...result.depths].map(([id, depth]) => ({ id, depth })),
         truncated: result.truncated,
         reason: result.reason,
+        ...(result.unresolved !== undefined ? { unresolved: result.unresolved } : {}),
       };
       return { ok: true, result: flat };
     }
@@ -133,6 +134,7 @@ function execute(task: ReaderTask): ReaderTaskResponse {
         total: result.total,
         has_more: result.has_more,
         next_cursor: result.next_cursor,
+        ...(result.unresolved !== undefined ? { unresolved: result.unresolved } : {}),
       };
       return { ok: true, result: flat };
     }
