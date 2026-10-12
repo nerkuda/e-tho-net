@@ -26,6 +26,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { parseFilterAst } from '../src/domain/filter-ast.js';
+import { collectHierarchySubtree } from '../src/domain/graph-traversal.js';
 import {
   queryThoughts,
   type ThoughtQueryRequest as CanonicalQueryRequest,
@@ -197,6 +198,25 @@ describe('«в иерархии» — два режима и обход с visit
       runAst(ndb, ast(leaf({ kind: 'parents' }, 'in_hierarchy', [root], 'all_links'))),
       ['a', 'b', 'm'],
     );
+
+    // Ветвящийся цикл: r → a → c → a, r → b → c. Обход с visited-set обязан
+    // собрать каждый узел ровно один раз и не обрезаться по бюджету. Снятие
+    // visited-заслонов (`graph-traversal.ts`, страж в queue и добавлении) даёт
+    // дубликаты и упирается в бюджет — тест краснеет (мутация M6).
+    const r = seedThought(ndb, 'r');
+    const ca = seedThought(ndb, 'ca');
+    const cb = seedThought(ndb, 'cb');
+    const cc = seedThought(ndb, 'cc');
+    seedLink(ndb, r, ca);
+    seedLink(ndb, r, cb);
+    seedLink(ndb, ca, cc);
+    seedLink(ndb, cb, cc);
+    seedLink(ndb, cc, ca); // цикл ca ↔ cc
+
+    const walk = collectHierarchySubtree(ndb, [r], 'structural');
+    assert.equal(walk.truncated, false, 'цикл не должен упираться в бюджет обхода');
+    assert.deepEqual([...walk.ids].sort(), [r, ca, cb, cc].sort(), 'полнота обхода: все узлы и только они');
+    assert.equal(new Set(walk.ids).size, walk.ids.length, 'ids обхода не должны содержать дубликатов');
   });
 
   it('глубина > 20: обход останавливается на 20 уровне', () => {
