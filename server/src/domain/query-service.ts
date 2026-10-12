@@ -46,6 +46,10 @@ import {
   buildLikePattern,
   isLinkTypeFilterActive,
   parseFilterKeywords,
+  type FilterAst,
+  type FilterAstLeaf,
+  type FilterAstNode,
+  type FilterAstValue,
   type LinkPropertyDirection,
   type LinkTypeFilterInput,
   type PropertyConfig,
@@ -166,6 +170,13 @@ export interface ThoughtQueryRequest {
   link_filter?: LinkTypeFilterInput;
   /** Ограничение поддерева (REST `parent_ids` / MCP `in_subtree_of`). */
   subtree?: ThoughtQuerySubtree;
+  /**
+   * Дерево условий AST (задача 9c156b8c). Задано — критерии берутся только из
+   * него (единый исполнитель {@link filterAstClause}), плоские поля-критерии
+   * игнорируются, неявные дефолты `active`/`trashed` не применяются: отбор
+   * выражен деревом целиком. Сортировка/пагинация/курсор действуют как обычно.
+   */
+  ast?: FilterAst;
   /** Сортировка — единый набор REST; MCP-имена маппятся адаптером. */
   sort: StructureSort;
   order: SortOrder;
@@ -934,6 +945,403 @@ function multipleValueSetClause(
   return operator === 'any_of' ? any : { sql: `NOT ${any.sql}`, params: any.params };
 }
 
+// ---------------------------------------------------------------------------
+// Единый исполнитель AST отбора (задача 9c156b8c)
+// ---------------------------------------------------------------------------
+
+/**
+ * Единый исполнитель дерева AST (тех.проект «Ядро AST и операторы», требование
+ * «Один исполнитель AST для REST, MCP и UI» 76e30d9a). Второго движка нет:
+ * группы сворачиваются булево (И/ИЛИ/НЕ), а каждый лист транслируется в SQL
+ * тем же набором помощников, что и плоские критерии `definition v1`
+ * ({@link propertyClauses}, раскрытие типов, авторские/датовые/предикатные
+ * клаузы). Поэтому одинаковый отбор даёт одинаковый результат во всех контурах.
+ *
+ * Семантика групп:
+ *   * `and` — конъюнкция детей; пустая группа нейтральна (`1=1`);
+ *   * `or` — дизъюнкция детей; пустая группа нейтральна (`0` — вклада не даёт);
+ *   * `not` — отрицание ровно одного ребёнка (гарантировано валидатором формы).
+ */
+
+/** Константа-клауза «истина» (нейтральный элемент `and` и отключённых условий). */
+const AST_TRUE: Clause = { sql: '1=1', params: [] };
+/** Константа-клауза «ложь» (нейтральный элемент `or`). */
+const AST_FALSE: Clause = { sql: '0', params: [] };
+
+/** Операторы AST, прямо соответствующие операторам канонического движка. */
+const AST_TO_CANONICAL_PROPERTY_OP: Partial<Record<string, ThoughtQueryPropertyOperator>> = {
+  eq: 'eq',
+  ne: 'ne',
+  contains: 'contains',
+  gt: 'gt',
+  gte: 'gte',
+  lt: 'lt',
+  lte: 'lte',
+  in: 'in',
+  not_in: 'not_in',
+  is_empty: 'is_empty',
+  not_empty: 'not_empty',
+  any_of: 'any_of',
+  all_of: 'all_of',
+  none_of: 'none_of',
+};
+
+/** Ошибка «оператор/значение распознаны, но исполнение — отдельная задача ТП». */
+function astUnsupported(what: string, field: string, requestId?: string): never {
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    `${what} пока не поддержано доменным исполнителем отбора.`,
+    { field, unsupported: true },
+    requestId,
+  );
+}
+
+/** Отвергнуть значения-токен/под-выборку: их разрешение — отдельные задачи ТП. */
+function assertAstValueExecutable(value: FilterAstValue | undefined, path: string, requestId?: string): void {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    if ('token' in value) astUnsupported('Разрешение токена', `${path}.value`, requestId);
+    if ('query' in value) astUnsupported('Исполнение под-выборки', `${path}.value`, requestId);
+  }
+}
+
+/** Свернуть дерево AST в один SQL-предикат над `thoughts_v t`. */
+export function filterAstClause(
+  ndb: NetworkDb,
+  ast: FilterAst,
+  requestId?: string,
+): Clause {
+  return filterAstNodeClause(ndb, ast.filter, 'filter', requestId);
+}
+
+function filterAstNodeClause(
+  ndb: NetworkDb,
+  node: FilterAstNode,
+  path: string,
+  requestId?: string,
+): Clause {
+  if ('op' in node) {
+    if (node.op === 'not') {
+      const child = filterAstNodeClause(ndb, node.children[0]!, `${path}.children[0]`, requestId);
+      return { sql: `NOT (${child.sql})`, params: child.params };
+    }
+    if (node.children.length === 0) return node.op === 'and' ? AST_TRUE : AST_FALSE;
+    const parts = node.children.map((child, i) =>
+      filterAstNodeClause(ndb, child, `${path}.children[${i}]`, requestId),
+    );
+    const sql = parts.map((p) => `(${p.sql})`).join(node.op === 'and' ? ' AND ' : ' OR ');
+    return { sql: `(${sql})`, params: parts.flatMap((p) => p.params) };
+  }
+  return filterAstLeafClause(ndb, node, path, requestId);
+}
+
+function filterAstLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  assertAstValueExecutable(leaf.value, path, requestId);
+  const { entity, operator } = leaf;
+  const opPath = `${path}.operator`;
+
+  switch (entity.kind) {
+    case 'property':
+      return propertyLeafClause(ndb, leaf, `${path}.entity`, requestId);
+
+    case 'type': {
+      const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
+      if (operator !== 'in' && operator !== 'not_in' && operator !== 'eq' && operator !== 'ne') {
+        astUnsupported(`Оператор «${operator}» для операнда «Тип»`, opPath, requestId);
+      }
+      const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
+      const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'thought_types', list);
+      if (expanded.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
+      const match: Clause = {
+        sql: `t.type_id IN (${expanded.map(() => '?').join(',')})`,
+        params: [...expanded],
+      };
+      return operator === 'in' || operator === 'eq' ? match : { sql: `NOT (${match.sql})`, params: match.params };
+    }
+
+    case 'link_type': {
+      const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
+      if (operator !== 'in' && operator !== 'not_in' && operator !== 'eq' && operator !== 'ne') {
+        astUnsupported(`Оператор «${operator}» для операнда «Тип связи»`, opPath, requestId);
+      }
+      const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
+      const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'link_types', list);
+      if (expanded.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
+      const match: Clause = {
+        sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.active = 1
+          AND l.type_id IN (${expanded.map(() => '?').join(',')})
+          AND (l.source_id = t.id OR l.target_id = t.id))`,
+        params: [...expanded],
+      };
+      return operator === 'in' || operator === 'eq' ? match : { sql: `NOT (${match.sql})`, params: match.params };
+    }
+
+    case 'parents':
+    case 'children':
+      return structuralLeafClause(entity.kind, leaf, `${path}.value`, requestId);
+
+    case 'attachments':
+      return boolPresenceClause(
+        'EXISTS (SELECT 1 FROM attachments_v a WHERE a.owner_type = \'thought\' AND a.owner_id = t.id)',
+        leaf,
+        path,
+        requestId,
+      );
+
+    case 'chronology':
+      return boolPresenceClause(
+        "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'chronological')",
+        leaf,
+        path,
+        requestId,
+      );
+
+    case 'comment':
+      return boolPresenceClause(
+        "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'permanent')",
+        leaf,
+        path,
+        requestId,
+      );
+
+    case 'active':
+      return boolColumnClause('t.active', leaf, path, requestId);
+
+    case 'trashed':
+      return boolColumnClause('t.marked_for_deletion', leaf, path, requestId);
+
+    case 'keywords':
+      return keywordsLeafClause(entity, leaf, path, requestId);
+
+    case 'author':
+      return authorLeafClause('t.created_by', leaf, path, requestId);
+
+    case 'editor':
+      return authorLeafClause('t.updated_by', leaf, path, requestId);
+
+    case 'created_at':
+      return dateLeafClause('t.created_at', leaf, path, requestId);
+
+    case 'updated_at':
+      return dateLeafClause('t.updated_at', leaf, path, requestId);
+
+    case 'properties':
+      return hasPropertiesLeafClause(leaf, path, requestId);
+
+    case 'targets':
+      astUnsupported('Операнд «Цели» (отбор хроники)', `${path}.entity`, requestId);
+  }
+  // Недостижимо: все виды операндов обработаны выше.
+  throw new EtnError('VALIDATION_ERROR', 'Неизвестный операнд условия отбора.', { field: `${path}.entity` }, requestId);
+}
+
+/** Значение-лист как непустой список строк (ид/имена) для наборных операторов. */
+function astStringList(
+  value: FilterAstValue | undefined,
+  operator: string,
+  path: string,
+  requestId?: string,
+): string[] {
+  const raw = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  if (raw.some((v) => typeof v !== 'string')) {
+    throw new EtnError('VALIDATION_ERROR', `Значение оператора «${operator}» должно быть строкой или списком строк.`, {
+      field: path,
+    }, requestId);
+  }
+  return [...new Set(raw as string[])];
+}
+
+/**
+ * Лист по свойству. Прямые операторы транслируются в {@link propertyClauses}
+ * (единый словарь движка); `not_contains` — отрицание «содержит»;
+ * `between`/`not_between` — свёртка `>= нижняя И <= верхняя` (границы
+ * включительны), что переиспользует те же клаузы.
+ */
+function propertyLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  entityPath: string,
+  requestId?: string,
+): Clause {
+  const { entity, operator } = leaf;
+  if (entity.kind !== 'property') throw new Error('propertyLeafClause вызван не для свойства');
+  const propertyRef = entity.property_id ?? entity.property;
+  if (propertyRef === undefined) {
+    throw new EtnError('VALIDATION_ERROR', 'Операнд «свойство» не адресует свойство.', { field: entityPath }, requestId);
+  }
+  const base = (op: ThoughtQueryPropertyOperator, value: ThoughtQueryPropertyCondition['value']): Clause =>
+    propertyClauses(ndb, [{ property_id: propertyRef, operator: op, value }], requestId)[0] ?? AST_FALSE;
+
+  if (operator === 'not_contains') {
+    const inner = base('contains', leaf.value as string);
+    return { sql: `NOT (${inner.sql})`, params: inner.params };
+  }
+  if (operator === 'between' || operator === 'not_between') {
+    if (!Array.isArray(leaf.value) || leaf.value.length !== 2) {
+      throw new EtnError('VALIDATION_ERROR', 'Оператор «между» требует ровно два значения (границы).', {
+        field: `${entityPath}.value`,
+      }, requestId);
+    }
+    const [from, to] = leaf.value as [string | number | boolean, string | number | boolean];
+    const low = base('gte', from);
+    const high = base('lte', to);
+    const between: Clause = { sql: `(${low.sql} AND ${high.sql})`, params: [...low.params, ...high.params] };
+    return operator === 'between' ? between : { sql: `NOT (${between.sql})`, params: between.params };
+  }
+  const canonical = AST_TO_CANONICAL_PROPERTY_OP[operator];
+  if (canonical === undefined) {
+    astUnsupported(`Оператор «${operator}» для свойства`, `${entityPath}`, requestId);
+  }
+  return base(canonical, leaf.value as ThoughtQueryPropertyCondition['value']);
+}
+
+/** Лист по структурным «Родители»/«Потомки»: наличие/отсутствие и «в списке». */
+function structuralLeafClause(
+  kind: 'parents' | 'children',
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  const ownCol = kind === 'parents' ? 'target_id' : 'source_id';
+  const otherCol = kind === 'parents' ? 'source_id' : 'target_id';
+  const { operator } = leaf;
+  const presence: Clause = {
+    sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.${ownCol} = t.id AND l.active = 1)`,
+    params: [],
+  };
+  if (operator === 'is_empty') return { sql: `NOT (${presence.sql})`, params: presence.params };
+  if (operator === 'not_empty') return presence;
+  if (operator === 'in' || operator === 'not_in' || operator === 'eq' || operator === 'ne') {
+    const ids = astStringList(leaf.value, operator, path, requestId);
+    const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
+    if (list.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
+    const match: Clause = {
+      sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.${ownCol} = t.id AND l.active = 1
+        AND l.${otherCol} IN (${list.map(() => '?').join(',')}))`,
+      params: [...list],
+    };
+    return operator === 'in' || operator === 'eq' ? match : { sql: `NOT (${match.sql})`, params: match.params };
+  }
+  astUnsupported(`Оператор «${operator}» для структурного операнда`, path, requestId);
+}
+
+/** Булев предикат по колонке-флагу (`active`/`marked_for_deletion`). */
+function boolColumnClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  if (leaf.operator !== 'eq' && leaf.operator !== 'ne') {
+    astUnsupported(`Оператор «${leaf.operator}» для булева предиката`, path, requestId);
+  }
+  if (typeof leaf.value !== 'boolean') {
+    throw new EtnError('VALIDATION_ERROR', 'Булев предикат требует значения boolean.', { field: path }, requestId);
+  }
+  const want = leaf.operator === 'eq' ? leaf.value : !leaf.value;
+  return { sql: `${column} = ${want ? 1 : 0}`, params: [] };
+}
+
+/** Наличие/отсутствие коллекции (вложения, дневниковые записи, комментарий). */
+function boolPresenceClause(existsSql: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  let want: boolean;
+  if (leaf.operator === 'not_empty') want = true;
+  else if (leaf.operator === 'is_empty') want = false;
+  else if ((leaf.operator === 'eq' || leaf.operator === 'ne') && typeof leaf.value === 'boolean') {
+    want = leaf.operator === 'eq' ? leaf.value : !leaf.value;
+  } else {
+    astUnsupported(`Оператор «${leaf.operator}» для предиката наличия`, path, requestId);
+  }
+  return want ? { sql: existsSql, params: [] } : { sql: `NOT (${existsSql})`, params: [] };
+}
+
+/** «Есть слова»: LIKE-фильтр по выбранным областям (мини-синтаксис §6.10). */
+function keywordsLeafClause(
+  entity: { kind: 'keywords'; scope?: StructureKeywordScope[] },
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  if (leaf.operator !== 'matches') {
+    astUnsupported(`Оператор «${leaf.operator}» для операнда «Есть слова»`, path, requestId);
+  }
+  const scope = resolveKeywordScope(entity.scope);
+  if (scope.size === 0) return AST_TRUE; // ни одной области — условие отключено
+  const text = typeof leaf.value === 'string' ? leaf.value : '';
+  const { include, exclude } = parseFilterKeywords(text);
+  if (include.length === 0 && exclude.length === 0) return AST_TRUE;
+  const clause = buildKeywordClause(scope);
+  const parts: string[] = [];
+  const params: unknown[] = [];
+  for (const word of include) {
+    parts.push(clause.sql);
+    for (let i = 0; i < clause.paramCount; i += 1) params.push(buildLikePattern(word.toLowerCase()));
+  }
+  for (const word of exclude) {
+    parts.push(`NOT ${clause.sql}`);
+    for (let i = 0; i < clause.paramCount; i += 1) params.push(buildLikePattern(word.toLowerCase()));
+  }
+  return { sql: `(${parts.join(' AND ')})`, params };
+}
+
+/** Лист авторства/редактора — та же семантика, что у авторских фильтров. */
+function authorLeafClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  const map: Record<string, StructureAuthorOp> = {
+    eq: 'eq',
+    ne: 'ne',
+    in: 'in',
+    not_in: 'not_in',
+    is_empty: 'empty',
+    not_empty: 'not_empty',
+  };
+  const op = map[leaf.operator];
+  if (op === undefined) astUnsupported(`Оператор «${leaf.operator}» для авторского операнда`, path, requestId);
+  const value: string | string[] | undefined =
+    leaf.value === undefined ? undefined : Array.isArray(leaf.value) ? (leaf.value as string[]) : (leaf.value as string);
+  const where: string[] = [];
+  const params: unknown[] = [];
+  appendAuthorCondition(where, params, column, value, op);
+  return { sql: where.length > 0 ? `(${where.join(' AND ')})` : AST_TRUE.sql, params };
+}
+
+/** Лист по дате создания/изменения: сравнения и «между» (границы включительны). */
+function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  const one = (op: string, value: unknown): Clause => {
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new EtnError('VALIDATION_ERROR', 'Граница даты должна быть непустой строкой ISO-8601.', { field: path }, requestId);
+    }
+    const sql = op === 'gt' ? '>' : op === 'gte' ? '>=' : op === 'lt' ? '<' : '<=';
+    return { sql: `${column} ${sql} ?`, params: [value.trim()] };
+  };
+  if (leaf.operator === 'gt' || leaf.operator === 'gte' || leaf.operator === 'lt' || leaf.operator === 'lte') {
+    return one(leaf.operator, leaf.value);
+  }
+  if (leaf.operator === 'between' || leaf.operator === 'not_between') {
+    if (!Array.isArray(leaf.value) || leaf.value.length !== 2) {
+      throw new EtnError('VALIDATION_ERROR', 'Оператор «между» требует ровно две границы.', { field: path }, requestId);
+    }
+    const low = one('gte', leaf.value[0]);
+    const high = one('lte', leaf.value[1]);
+    const between: Clause = { sql: `(${low.sql} AND ${high.sql})`, params: [...low.params, ...high.params] };
+    return leaf.operator === 'between' ? between : { sql: `NOT (${between.sql})`, params: between.params };
+  }
+  astUnsupported(`Оператор «${leaf.operator}» для даты`, path, requestId);
+}
+
+/** «Имеет свойство»/«не имеет свойство»: набор адресуемых свойств из `value`. */
+function hasPropertiesLeafClause(leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  if (leaf.operator !== 'has' && leaf.operator !== 'not_has') {
+    astUnsupported(`Оператор «${leaf.operator}» для операнда «свойства»`, path, requestId);
+  }
+  const ids = astStringList(leaf.value, leaf.operator, path, requestId);
+  if (ids.length === 0) return leaf.operator === 'has' ? AST_FALSE : AST_TRUE;
+  const exists: Clause = {
+    sql: `EXISTS (SELECT 1 FROM property_values_v pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id
+      AND pv.property_id IN (${ids.map(() => '?').join(',')}))`,
+    params: [...ids],
+  };
+  return leaf.operator === 'has' ? exists : { sql: `NOT (${exists.sql})`, params: exists.params };
+}
+
 /** Минимальная строка реестра свойств для батч-чтения условий. */
 interface RegistryPropertyRow {
   id: string;
@@ -1295,6 +1703,7 @@ function propertyClauses(
  */
 function isFilterEmpty(req: ThoughtQueryRequest): boolean {
   return (
+    req.ast === undefined &&
     (req.keywords ?? '').trim() === '' &&
     !isLinkTypeFilterActive(req.link_filter) &&
     (req.type_ids ?? []).length === 0 &&
@@ -1499,6 +1908,21 @@ function buildFilterQuerySql(
       ? decodeCursor(req.cursor.trim(), req, homeFirst, requestId)
       : null;
   const keyset = cursor === null ? null : keysetClause(keys, idDir, cursor.k, cursor.id);
+
+  // Дерево AST — единственный источник критериев (плоские поля не применяются,
+  // неявные дефолты active/trashed не навязываются; требование 76e30d9a).
+  if (req.ast !== undefined) {
+    const clause = filterAstClause(ndb, req.ast, requestId);
+    return {
+      baseSql: `FROM thoughts_v t ${joinSql} WHERE ${clause.sql === '' ? '1=1' : clause.sql}`,
+      joinParams,
+      params: clause.params,
+      keys,
+      idDir,
+      keyset,
+      homeFirst: false,
+    };
+  }
 
   if (homeFirst) {
     const showInactive = req.active === 'any' ? 1 : 0;
