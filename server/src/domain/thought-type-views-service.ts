@@ -707,14 +707,33 @@ function collectThoughtPropertyValues(
     // токены `$thought.<key>` не применимы к кросс-сетевому адресу.
     if (v.value_type === 'cross_network_ref') continue;
     const m = meta.get(v.property_name);
-    out.push({
-      key: v.property_name,
-      value_type: m?.value_type ?? v.value_type,
-      multiple: m?.multiple === true,
-      value: v.value as string | number | boolean | string[],
-    });
+    const multiple = m?.multiple === true;
+    const valueType = m?.value_type ?? v.value_type;
+    // Множественное `text` хранится comma-joined строкой (02-data-model
+    // §3.4–3.5); токен `$thought.[…]` обязан подставляться СПИСКОМ элементов
+    // (требование 12fccde9) — иначе он уходит одной склеенной строкой и
+    // условие-список по ней не матчит (ошибка 7489e4d9, тот же класс).
+    let value = v.value as string | number | boolean | string[];
+    if (multiple && valueType === 'text' && typeof value === 'string') {
+      value = splitMultipleText(value);
+      if (value.length === 0) continue; // пустой список — неразрешимый токен (12fccde9)
+    }
+    out.push({ key: v.property_name, value_type: valueType, multiple, value });
   }
   return out;
+}
+
+/**
+ * Разделить хранимую comma-joined строку множественного `text`-свойства на
+ * элементы (разделитель записи — `", "`). Пустые элементы отбрасываются, так
+ * что пустое значение даёт пустой список — случай неразрешимого токена
+ * (требование 12fccde9).
+ */
+function splitMultipleText(raw: string): string[] {
+  return raw
+    .split(/,\s*/)
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
 }
 
 /**

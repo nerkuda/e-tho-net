@@ -36,6 +36,8 @@ export interface NormalizedApi {
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   path: string;
   expression: string | null;
+  /** Необязательное JSON-тело запроса (засев/изменение данных из сценария). */
+  body?: Record<string, unknown>;
 }
 
 /** Прямоугольник обрезки снимка в координатах вьюпорта, CSS-пиксели. */

@@ -109,6 +109,10 @@ node client/scripts/ui-probe-stand.mjs --data-from C:/zSpace/ETN_data --api-key 
 сервере/в БД: CDP страницы не видит HTTP main-процесса Electron (грабли
 `aa5cf162`).
 
+Необязательное поле `body` (объект) шлёт JSON-тело запроса — сценарий может
+не только проверять эффект, но и ЗАСЕИВАТЬ данные перед прогоном (например,
+POST дневниковой записи). Пример — `ui-probe.diary-create-thought.scenario.json`.
+
 ## Отчёт
 
 `<out>/report.txt` — человекочитаемый «шаг → проба → факт/ожидание»;

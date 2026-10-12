@@ -38,6 +38,7 @@ import { t } from '../lib/i18n.js';
 
 import { requireNetworkId } from '../app.js';
 import { invalidateQueries, queryKeys } from '../lib/live/index.js';
+import { store } from '../state.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { div, el, errText } from '../lib/dom.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
@@ -67,6 +68,7 @@ import {
   resolveDatePeriodInstants,
 } from '../lib/date-period-dialog.js';
 import { EDITOR_RECORD_TITLE_MAX, recordDisplayTitle } from '../lib/record-title.js';
+import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
 
 /** Счётчик контекстов клавиатуры поля заголовка вкладки (уникальный id). */
 let chronoTitleEditSeq = 0;
@@ -199,6 +201,11 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     table.element.hidden = false;
     table.setRows(chrono);
     if (selectedId !== null) table.setCurrent(selectedId);
+    // Производный заголовок строки может нести сырую ID-форму wiki-ссылки
+    // (`[[#<id>]]`, ошибка 8b647f6c): синхронную подстановку из кеша уже сделал
+    // `recordTitle` (`derivedTitleLabel`), здесь дорезолвиваем имена батчем и
+    // перерисовываем таблицу (id не мелькает на экране).
+    void resolveRowTitles(chrono);
     // При открытии вкладки текущей становится САМАЯ ВЕРХНЯЯ строка (порядок —
     // обратный хронологический, `defaultSort: period desc`), чтобы сразу
     // показался текст её комментария (0.10.2, задача 41ed99ab). Авто-выбор — при
@@ -215,6 +222,20 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
         }
       }
     }
+  }
+
+  /**
+   * Дорезолвить ID-формы wiki-ссылок в производных заголовках строк и обновить
+   * надписи таблицы (ошибка 8b647f6c). Best-effort: без сети или без ID-форм в
+   * телах записей ничего не делает; ошибка резолва показ не ломает. Разбор и
+   * кеш — ОБЩИЙ резолвер сниппетов (`editor/wiki-link-resolver.ts`), второй не
+   * заводится.
+   */
+  async function resolveRowTitles(rows: Comment[]): Promise<void> {
+    const pending = rows.filter((c) => (c.title ?? '') === '' && c.body_md.includes('[['));
+    if (pending.length === 0) return;
+    await Promise.all(pending.map((c) => resolveWikiIdsInSnippet(c.body_md, networkId)));
+    table.refresh();
   }
 
   /** Opens the diary screen on this record (calendar date + current record). */
@@ -336,11 +357,24 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
 
     /** Надпись заголовка в просмотре; пустая — «Пустая запись». */
     const titleLabel = (): string =>
-      recordDisplayTitle(
-        titleValue === '' ? null : titleValue,
-        bodyDraft,
-        EDITOR_RECORD_TITLE_MAX,
-      ) || t('diary.emptyTitle');
+      derivedTitleLabel(titleValue === '' ? null : titleValue, bodyDraft) ||
+      t('diary.emptyTitle');
+
+    /**
+     * Дорезолвить ID-формы wiki-ссылок в заголовке открытой записи и обновить
+     * надпись (ошибка 8b647f6c): синхронную подстановку из кеша уже сделал
+     * `titleLabel`, здесь тянем имена мыслей батчем. Best-effort: без сети или
+     * ID-форм ничего не делает; если запись уже в правке (поле вместо текста)
+     * или узел заменён — надпись не трогаем.
+     */
+    function refreshTitleView(): void {
+      const activeNetwork = store.state.networkId;
+      if (activeNetwork === null || !bodyDraft.includes('[[')) return;
+      void resolveWikiIdsInSnippet(bodyDraft, activeNetwork).then(() => {
+        if (!titleView.isConnected || titleBox.contains(titleInput)) return;
+        titleView.textContent = titleLabel();
+      });
+    }
 
     /** Показать заголовок в просмотре (текст) и снять контекст клавиатуры. */
     function showTitleView(): void {
@@ -348,6 +382,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       releaseTitleKeys = null;
       titleView.textContent = titleLabel();
       titleBox.replaceChildren(titleView);
+      refreshTitleView();
     }
 
     /** Показать заголовок полем ввода; клавиши — через диспетчер контекстов. */
@@ -407,7 +442,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
         commentContext: {
           ownerType: ctx.ownerType,
           ownerId: ctx.ownerId,
-          commentKind: 'chronological',
           getCommentId: () => commentId,
           // Родители новой мысли (ТЗ5): все цели-мысли записи; чипсы-связи
           // синхронно не резолвятся — при их отсутствии берётся владелец-мысль.
@@ -415,7 +449,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
             existing.targets
               .filter((target) => target.owner_type === 'thought')
               .map((target) => target.owner_id),
-          onLinksReplaced: () => void reload(),
         },
         onInput: (md) => {
           bodyDraft = md;
@@ -548,10 +581,32 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
  * (first non-empty line with leading markdown markers stripped and HTML entities
  * decoded), truncated to {@link EDITOR_RECORD_TITLE_MAX}. Parsing is shared with
  * the diary feed (`lib/record-title.ts`, задача 8e4a965f): no cross-screen
- * dependency `editor/` ← `screens/`, no second implementation.
+ * dependency `editor/` ← `screens/`, no second implementation. ID-form
+ * wiki-links are resolved to thought names by {@link derivedTitleLabel}
+ * (ошибка 8b647f6c — тот же класс, что заголовок ленты 6b4e402a).
  */
 function recordTitle(comment: Comment): string {
-  return recordDisplayTitle(comment.title, comment.body_md, EDITOR_RECORD_TITLE_MAX);
+  return derivedTitleLabel(comment.title, comment.body_md);
+}
+
+/**
+ * Производный заголовок записи с резолвом ID-форм wiki-ссылок (ошибка
+ * 8b647f6c, тот же класс и корень, что 6b4e402a у ленты «Дневника»): поле
+ * `title` либо, при пустом, первая строка тела. ID-формы (`[[#<id>]]` /
+ * `[[n:<net>#<id>]]`) подменяются именами мыслей ОБЩИМ резолвером сниппетов
+ * (`editor/wiki-link-resolver.ts`) — синхронно из кеша слоя, поэтому сырой id
+ * не мелькает на экране; пропущенное дорезолвят батчи (`refreshTitleView` для
+ * открытой записи, `resolveRowTitles` для таблицы) и перерисуют надпись.
+ * Снятие ведущих markdown-маркеров, разэкранирование HTML и обрезка —
+ * `recordDisplayTitle` (потребитель тот же, путь — тот же).
+ */
+function derivedTitleLabel(title: string | null | undefined, source: string): string {
+  const networkId = store.state.networkId;
+  const painted =
+    networkId === null || !source.includes('[[')
+      ? source
+      : paintWikiIdsInSnippet(source, networkId);
+  return recordDisplayTitle(title, painted, EDITOR_RECORD_TITLE_MAX);
 }
 
 /** Author name for the «Редактор» cell (falls back to the raw id in brackets). */

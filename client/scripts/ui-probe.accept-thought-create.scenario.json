@@ -1,0 +1,628 @@
+{
+  "name": "accept-thought-create",
+  "description": "Приёмочный прогон задачи 1d21608e (T4 тех.проекта ac212c41, 0.12.2) — НЕЗАВИСИМЫЕ сценарии по карточкам S1-S9 (свои данные с префиксом «АК», свои пробы). S1 (805f0596) короткое выделение → диалог, мысль без тела, ссылка. S2 (007a81ea) длинное → заголовок=первая строка, тело=остаток, трансклюзия. S4 (b2e3ca0b, уточнение e883199c) ДЛИННОЕ выделение + существующая: частичная замена литерального вхождения; нет совпадения → ссылка в начало (S4a/S4b). КОРОТКОЕ выделение + существующая: выделение целиком заменяется ссылкой с ПОДПИСЬЮ [[#id|текст]] (S4d); при совпадении с названием цели → [[#id]] без подписи (S4e). Отказ → текст не меняется (S4c). S3 (b80cf4f6) список: пакетно, вложенные — текст тела, под-мыслей нет. S5 (3390570c) wildcard-синоним дедуп; первая строка >250; комбинированный >250+вложенный; нет совпадения → создание; ровно 250 → короткое (диалог). S7 (7e7c9b85) несколько совпадений → поповер у элемента → ссылка. S8 (d7869742) дедуп «Создать мысль из раздела». S9 (2912df82) смешанное «абзац+список»; одиночный элемент списка. Контроль — по телам/детям/привязкам в БД стенда (window.etn). Без скриншотов. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.accept-thought-create.scenario.json.",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+
+    {
+      "name": "define-helpers",
+      "eval": "(() => { const nid='{{networkId}}', seed='{{thoughtId}}'; const commentOf=async (id)=>{ const cs=await window.etn.comments.list(nid,'thought',id); const p=cs.find((c)=>c.kind==='permanent'); return p?p.body_md:null; }; const kids=async ()=>{ const r=await window.etn.thoughts.neighbors(nid,seed,'children',300,0); const list=Array.isArray(r)?r:((r&&(r.items||r.data))||[]); return list.map((x)=>({ id: x.id||x.thought_id||(x.thought&&x.thought.id), title: x.title||(x.thought&&x.thought.title)||'' })); }; window.__a={ setBody: async (md)=>{ const cs=await window.etn.comments.list(nid,'thought',seed); const p=cs.find((c)=>c.kind==='permanent'); if (p) { await window.etn.comments.update(nid,p.id,{body_md:md},p.version); } else { await window.etn.comments.create(nid,'thought',seed,{kind:'permanent',body_md:md}); } return true; }, body: async ()=>commentOf(seed), kids, titles: async ()=>(await kids()).map((x)=>x.title), count: async (t)=>(await kids()).filter((x)=>x.title===t).length, childBody: async (t)=>{ const k=(await kids()).find((x)=>x.title===t); return k?await commentOf(k.id):null; }, create: async (title,synonyms)=>{ const t=await window.etn.thoughts.create(nid,{ title, synonyms: synonyms||[] }); return t.id; }, find: async (title)=>{ const r=await window.etn.thoughts.search(nid,{ q: title, scope:'names', limit: 20 }); const h=(r.by_names||[]).find((x)=>x.title===title); return h?h.thought_id:null; }, focus: (id)=>{ const el=document.querySelector('[data-id=\"'+id+'\"] .cloud')||document.querySelector('[data-id=\"'+id+'\"]'); if (!el) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); return true; }, openMenu: ()=>{ const c=document.querySelector('.md-field--editing .cm-content'); if (!c) throw new Error('нет поля в правке'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:r.left+10,clientY:r.top+10})); return true; }, menu: (label)=>{ const rows=Array.from(document.querySelectorAll('.menu-item')); const row=rows.find((e)=>(e.textContent||'').includes(label)); if (!row) throw new Error('нет пункта: '+label); row.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true})); row.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); return true; }, clearInput: ()=>{ const t=document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]'); if (!t) throw new Error('нет поля диалога'); t.focus(); return true; }, pickCand: (title)=>{ const row=Array.from(document.querySelectorAll('.add-candidates .type-combo-item')).find((e)=>(e.textContent||'').includes(title)); if (!row) throw new Error('нет кандидата: '+title); row.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true})); row.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); return true; }, popGroups: ()=>document.querySelectorAll('.ui-popover .legacy-candidates .legacy-candidate-group').length, pickPop: ()=>{ const g=document.querySelector('.ui-popover .legacy-candidates .legacy-candidate-group .cloud')||document.querySelector('.ui-popover .legacy-candidates .legacy-candidate-group'); if (!g) throw new Error('нет облачка кандидата'); g.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); return true; }, settle: async (ms)=>{ await new Promise((r)=>setTimeout(r, ms||800)); return true; } }; return true; })()"
+    },
+
+    {
+      "name": "seed-existing-thoughts",
+      "eval": "(async () => { window.__a.knownId = await window.__a.create('Известная мысль АК', []); window.__a.wildId = await window.__a.create('Исправления АК', ['исправ* ошиб*']); await window.__a.create('Дубль АК', []); await window.__a.create('Дубль АК', []); window.__a.sectionId = await window.__a.create('Раздел АК', []); return true; })()"
+    },
+
+    {
+      "name": "S1-seed",
+      "eval": "window.__a.setBody('Однострочная заметка АК')"
+    },
+    { "name": "S1-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S1-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S1-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S1-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Однострочная заметка АК') === true"
+    },
+    { "name": "S1-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S1-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S1-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S1-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S1-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S1-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S1-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    {
+      "name": "S1-prefill",
+      "probe": "document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value ?? null",
+      "expect": "Однострочная заметка АК"
+    },
+    { "name": "S1-apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "S1-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S1-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S1-save", "click": "[data-action=\"save\"]" },
+    { "name": "S1-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S1-body-is-link",
+      "probe": "(async () => { const b = await window.__a.body(); return { link: /^\\[\\[#[0-9a-f-]+\\]\\]$/.test(b||''), noText: !(b||'').includes('Однострочная заметка АК') }; })()",
+      "expect": { "link": true, "noText": true }
+    },
+    {
+      "name": "S1-child-no-body",
+      "probe": "(async () => ({ count: await window.__a.count('Однострочная заметка АК'), body: await window.__a.childBody('Однострочная заметка АК') }))()",
+      "expect": { "count": 1, "body": null }
+    },
+
+    {
+      "name": "S2-seed",
+      "eval": "window.__a.setBody('Первая строка АК\\nвторая строка тела АК')"
+    },
+    { "name": "S2-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S2-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S2-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S2-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Первая строка АК') === true"
+    },
+    { "name": "S2-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S2-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S2-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S2-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S2-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S2-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S2-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    {
+      "name": "S2-prefill",
+      "probe": "document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value ?? null",
+      "expect": "Первая строка АК"
+    },
+    { "name": "S2-apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "S2-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S2-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S2-save", "click": "[data-action=\"save\"]" },
+    { "name": "S2-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S2-body-transclusion",
+      "probe": "(async () => { const b = await window.__a.body(); return /^!\\[\\[#[0-9a-f-]+\\]\\]$/.test(b||''); })()",
+      "expect": true
+    },
+    {
+      "name": "S2-child-body",
+      "probe": "(async () => ({ count: await window.__a.count('Первая строка АК'), body: await window.__a.childBody('Первая строка АК') }))()",
+      "expect": { "count": 1, "body": "вторая строка тела АК" }
+    },
+
+    {
+      "name": "S4a-seed",
+      "eval": "window.__a.setBody('Текст про Известная мысль АК и хвост\\nвторая строка АК')"
+    },
+    { "name": "S4a-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S4a-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4a-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S4a-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Текст про Известная мысль АК') === true"
+    },
+    { "name": "S4a-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4a-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4a-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4a-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S4a-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4a-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S4a-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4a-clear", "eval": "window.__a.clearInput()" },
+    { "name": "S4a-sel-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4a-type", "text": "Известная мысль АК" },
+    {
+      "name": "S4a-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4a-pick-cand", "eval": "window.__a.pickCand('Известная мысль АК')" },
+    { "name": "S4a-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4a-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S4a-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4a-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4a-partial-replace",
+      "probe": "(async () => { const b = (await window.__a.body())||''; const id = window.__a.knownId; return { replaced: b.includes('[[#'+id+']]'), noTitle: !b.includes('Известная мысль АК'), head: b.includes('Текст про'), tail: b.includes('и хвост') }; })()",
+      "expect": { "replaced": true, "noTitle": true, "head": true, "tail": true }
+    },
+
+    {
+      "name": "S4b-seed",
+      "eval": "window.__a.setBody('Совсем другой текст АК\\nвторая строка АК')"
+    },
+    { "name": "S4b-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S4b-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4b-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S4b-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Совсем другой текст АК') === true"
+    },
+    { "name": "S4b-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4b-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4b-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4b-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S4b-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4b-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S4b-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4b-clear", "eval": "window.__a.clearInput()" },
+    { "name": "S4b-sel-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4b-type", "text": "Известная мысль АК" },
+    {
+      "name": "S4b-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4b-pick-cand", "eval": "window.__a.pickCand('Известная мысль АК')" },
+    { "name": "S4b-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4b-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S4b-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4b-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4b-link-at-start",
+      "probe": "(async () => (await window.__a.body()) === '[[#' + window.__a.knownId + ']]Совсем другой текст АК\\nвторая строка АК')()",
+      "expect": true
+    },
+
+    {
+      "name": "S4c-seed",
+      "eval": "window.__a.setBody('Отказ АК не меняет текст')"
+    },
+    { "name": "S4c-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S4c-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4c-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S4c-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Отказ АК не меняет текст') === true"
+    },
+    { "name": "S4c-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4c-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4c-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4c-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S4c-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4c-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S4c-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4c-esc", "key": "Escape" },
+    { "name": "S4c-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4c-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4c-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4c-unchanged",
+      "probe": "(async () => (await window.__a.body()) === 'Отказ АК не меняет текст')()",
+      "expect": true
+    },
+
+    {
+      "name": "S4d-seed",
+      "eval": "window.__a.setBody('Короткая фраза АК')"
+    },
+    { "name": "S4d-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S4d-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4d-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S4d-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Короткая фраза АК') === true"
+    },
+    { "name": "S4d-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4d-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4d-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4d-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S4d-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4d-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S4d-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4d-clear", "eval": "window.__a.clearInput()" },
+    { "name": "S4d-sel-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4d-type", "text": "Известная мысль АК" },
+    {
+      "name": "S4d-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4d-pick-cand", "eval": "window.__a.pickCand('Известная мысль АК')" },
+    { "name": "S4d-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4d-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S4d-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4d-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4d-short-signature",
+      "probe": "(async () => (await window.__a.body()) === '[[#' + window.__a.knownId + '|Короткая фраза АК]]')()",
+      "expect": true
+    },
+
+    {
+      "name": "S4e-seed",
+      "eval": "window.__a.setBody('Известная мысль АК')"
+    },
+    { "name": "S4e-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S4e-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4e-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S4e-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Известная мысль АК') === true"
+    },
+    { "name": "S4e-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4e-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4e-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4e-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S4e-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4e-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S4e-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4e-clear", "eval": "window.__a.clearInput()" },
+    { "name": "S4e-sel-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4e-type", "text": "Известная мысль АК" },
+    {
+      "name": "S4e-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4e-pick-cand", "eval": "window.__a.pickCand('Известная мысль АК')" },
+    { "name": "S4e-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4e-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S4e-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4e-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4e-short-no-signature",
+      "probe": "(async () => (await window.__a.body()) === '[[#' + window.__a.knownId + ']]')()",
+      "expect": true
+    },
+
+    {
+      "name": "S3-seed",
+      "eval": "window.__a.setBody('- один АК\\n- два АК\\n  - вложенный АК')"
+    },
+    { "name": "S3-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S3-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S3-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S3-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('один АК') === true"
+    },
+    { "name": "S3-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S3-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S3-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S3-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S3-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S3-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S3-settle", "eval": "window.__a.settle(1300)" },
+    {
+      "name": "S3-no-dialog",
+      "probe": "document.querySelector('.dialog-backdrop') === null",
+      "expect": true
+    },
+    { "name": "S3-save", "click": "[data-action=\"save\"]" },
+    { "name": "S3-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S3-children",
+      "probe": "(async () => { const t = await window.__a.titles(); return { one: t.filter((x)=>x==='один АК').length, two: t.filter((x)=>x==='два АК').length, nested: t.filter((x)=>x==='вложенный АК').length }; })()",
+      "expect": { "one": 1, "two": 1, "nested": 0 }
+    },
+    {
+      "name": "S3-nested-in-body",
+      "probe": "(async () => { const b = await window.__a.childBody('два АК'); return { body: b, hasNested: (b||'').includes('  - вложенный АК') }; })()",
+      "expect": { "body": "  - вложенный АК", "hasNested": true }
+    },
+    {
+      "name": "S3-insertion",
+      "probe": "(async () => { const b = (await window.__a.body())||''; const first = (b.split('\\n')[0]||''); return { linkWithMarker: /^- \\[\\[#[0-9a-f-]+\\]\\]$/.test(first), hasTransclusion: /\\n!\\[\\[#[0-9a-f-]+\\]\\]$/.test(b), listPreserved: first.startsWith('- ') }; })()",
+      "expect": { "linkWithMarker": true, "hasTransclusion": true, "listPreserved": true }
+    },
+
+    {
+      "name": "S5a-seed",
+      "eval": "window.__a.setBody('- исправленные ошибки')"
+    },
+    { "name": "S5a-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S5a-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S5a-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S5a-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('исправленные ошибки') === true"
+    },
+    { "name": "S5a-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S5a-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S5a-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S5a-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S5a-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S5a-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S5a-settle", "eval": "window.__a.settle(1300)" },
+    { "name": "S5a-save", "click": "[data-action=\"save\"]" },
+    { "name": "S5a-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S5a-wildcard-dedup",
+      "probe": "(async () => { const b = (await window.__a.body())||''; return { noDup: (await window.__a.count('исправленные ошибки')) === 0, linkExisting: b.includes('[[#' + window.__a.wildId + ']]') }; })()",
+      "expect": { "noDup": true, "linkExisting": true }
+    },
+
+    {
+      "name": "S5b-seed",
+      "eval": "window.__a.setBody('z'.repeat(300))"
+    },
+    { "name": "S5b-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S5b-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S5b-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S5b-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('zzzz') === true"
+    },
+    { "name": "S5b-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S5b-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S5b-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S5b-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S5b-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S5b-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S5b-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    {
+      "name": "S5b-prefill-truncated",
+      "probe": "document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value.length ?? -1",
+      "expect": 250
+    },
+    { "name": "S5b-apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "S5b-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S5b-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S5b-save", "click": "[data-action=\"save\"]" },
+    { "name": "S5b-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S5b-first-line-body",
+      "probe": "(async () => { const t='z'.repeat(250); const k=(await window.__a.kids()).find((x)=>x.title===t); if (!k) return { found: false }; const b=await window.__a.childBody(t); const body=await window.__a.body(); return { found: true, titleLen: k.title.length, bodyLen: (b||'').length, transclusion: /^!\\[\\[#/.test(body||'') }; })()",
+      "expect": { "found": true, "titleLen": 250, "bodyLen": 300, "transclusion": true }
+    },
+
+    {
+      "name": "S5c-seed",
+      "eval": "window.__a.setBody('- ' + 'x'.repeat(300) + '\\n  - вложенный комбо АК')"
+    },
+    { "name": "S5c-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S5c-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S5c-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S5c-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('xxxx') === true"
+    },
+    { "name": "S5c-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S5c-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S5c-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S5c-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S5c-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S5c-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S5c-settle", "eval": "window.__a.settle(1300)" },
+    { "name": "S5c-save", "click": "[data-action=\"save\"]" },
+    { "name": "S5c-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S5c-combined-body",
+      "probe": "(async () => { const k=(await window.__a.kids()).find((x)=>x.title.startsWith('xxxx')); if (!k) return { created: false }; const b=(await window.__a.childBody(k.title))||''; return { created: true, titleLen: k.title.length, hasWhole: b.includes('x'.repeat(300)), hasNested: b.includes('  - вложенный комбо АК'), noSubThought: (await window.__a.count('вложенный комбо АК')) === 0 }; })()",
+      "expect": { "created": true, "titleLen": 250, "hasWhole": true, "hasNested": true, "noSubThought": true }
+    },
+
+    {
+      "name": "S5d-seed",
+      "eval": "window.__a.setBody('- уникальная строка АК без совпадений')"
+    },
+    { "name": "S5d-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S5d-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S5d-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S5d-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('уникальная строка АК') === true"
+    },
+    { "name": "S5d-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S5d-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S5d-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S5d-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S5d-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S5d-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S5d-settle", "eval": "window.__a.settle(1300)" },
+    { "name": "S5d-save", "click": "[data-action=\"save\"]" },
+    { "name": "S5d-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S5d-created",
+      "probe": "(async () => (await window.__a.count('уникальная строка АК без совпадений')) === 1)()",
+      "expect": true
+    },
+
+    {
+      "name": "S5e-seed",
+      "eval": "window.__a.setBody('y'.repeat(250))"
+    },
+    { "name": "S5e-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S5e-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S5e-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S5e-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('yyyy') === true"
+    },
+    { "name": "S5e-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S5e-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S5e-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S5e-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S5e-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S5e-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S5e-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S5e-apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "S5e-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S5e-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S5e-save", "click": "[data-action=\"save\"]" },
+    { "name": "S5e-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S5e-exactly-250-short",
+      "probe": "(async () => { const t='y'.repeat(250); const b=await window.__a.childBody(t); const body=await window.__a.body(); return { count: await window.__a.count(t), body: b, link: /^\\[\\[#[0-9a-f-]+\\]\\]$/.test(body||'') }; })()",
+      "expect": { "count": 1, "body": null, "link": true }
+    },
+
+    {
+      "name": "S7-seed",
+      "eval": "window.__a.setBody('- Дубль АК')"
+    },
+    { "name": "S7-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S7-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S7-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S7-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Дубль АК') === true"
+    },
+    { "name": "S7-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S7-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S7-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S7-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S7-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S7-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    {
+      "name": "S7-popover",
+      "waitFor": "document.querySelector('.ui-popover .legacy-candidates') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "S7-popover-groups",
+      "probe": "window.__a.popGroups()",
+      "expect": 2
+    },
+    { "name": "S7-choose", "eval": "window.__a.pickPop()" },
+    { "name": "S7-popover-closed", "waitFor": "document.querySelector('.ui-popover .legacy-candidates') === null" },
+    { "name": "S7-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S7-save", "click": "[data-action=\"save\"]" },
+    { "name": "S7-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S7-existing-used",
+      "probe": "(async () => { const b=(await window.__a.body())||''; return { noNewChild: (await window.__a.count('Дубль АК')) === 0, link: /\\[\\[#[0-9a-f-]+\\]\\]/.test(b) }; })()",
+      "expect": { "noNewChild": true, "link": true }
+    },
+
+    {
+      "name": "S8-seed",
+      "eval": "window.__a.setBody('# Раздел АК\\n\\nтело раздела АК')"
+    },
+    { "name": "S8-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S8-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S8-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S8-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('тело раздела АК') === true"
+    },
+    { "name": "S8-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S8-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S8-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S8-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S8-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S8-pick", "eval": "window.__a.menu('Создать мысль из раздела')" },
+    { "name": "S8-settle", "eval": "window.__a.settle(1300)" },
+    { "name": "S8-save", "click": "[data-action=\"save\"]" },
+    { "name": "S8-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S8-dedup",
+      "probe": "(async () => { const b=(await window.__a.body())||''; return { noNewChild: (await window.__a.count('Раздел АК')) === 0, linkExisting: b.includes('[[#' + window.__a.sectionId + ']]'), keptBody: b.includes('тело раздела АК') }; })()",
+      "expect": { "noNewChild": true, "linkExisting": true, "keptBody": true }
+    },
+
+    {
+      "name": "S9-seed",
+      "eval": "window.__a.setBody('Абзац АК\\n\\n- пункт АК')"
+    },
+    { "name": "S9-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S9-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S9-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S9-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('пункт АК') === true"
+    },
+    { "name": "S9-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S9-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S9-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S9-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S9-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S9-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S9-settle", "eval": "window.__a.settle(1300)" },
+    { "name": "S9-save", "click": "[data-action=\"save\"]" },
+    { "name": "S9-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S9-units",
+      "probe": "(async () => { const t=await window.__a.titles(); return { paragraph: t.filter((x)=>x==='Абзац АК').length, list: t.filter((x)=>x==='пункт АК').length }; })()",
+      "expect": { "paragraph": 1, "list": 1 }
+    },
+    {
+      "name": "S9-insertion-preserves-gap",
+      "probe": "(async () => /^\\[\\[#[0-9a-f-]+\\]\\]\\n\\n- \\[\\[#[0-9a-f-]+\\]\\]$/.test((await window.__a.body())||''))()",
+      "expect": true
+    },
+
+    {
+      "name": "S9b-seed",
+      "eval": "window.__a.setBody('- одиночный элемент АК')"
+    },
+    { "name": "S9b-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S9b-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S9b-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S9b-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('одиночный элемент АК') === true"
+    },
+    { "name": "S9b-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S9b-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S9b-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S9b-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S9b-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S9b-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S9b-settle", "eval": "window.__a.settle(1300)" },
+    {
+      "name": "S9b-no-dialog",
+      "probe": "document.querySelector('.dialog-backdrop') === null",
+      "expect": true
+    },
+    { "name": "S9b-save", "click": "[data-action=\"save\"]" },
+    { "name": "S9b-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S9b-single-item-as-list",
+      "probe": "(async () => ({ count: await window.__a.count('одиночный элемент АК'), link: /^- \\[\\[#[0-9a-f-]+\\]\\]$/.test((await window.__a.body())||'') }))()",
+      "expect": { "count": 1, "link": true }
+    },
+
+    {
+      "name": "SPLIT-seed",
+      "eval": "window.__a.setBody('Первый абзац АК\\n\\n- элемент раздела АК')"
+    },
+    { "name": "SPLIT-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "SPLIT-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "SPLIT-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "SPLIT-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('элемент раздела АК') === true"
+    },
+    { "name": "SPLIT-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "SPLIT-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "SPLIT-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "SPLIT-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "SPLIT-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "SPLIT-pick", "eval": "window.__a.menu('Разделить выделение на мысли')" },
+    { "name": "SPLIT-settle", "eval": "window.__a.settle(1300)" },
+    {
+      "name": "SPLIT-no-dialog",
+      "probe": "document.querySelector('.dialog-backdrop') === null",
+      "expect": true
+    },
+    { "name": "SPLIT-save", "click": "[data-action=\"save\"]" },
+    { "name": "SPLIT-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "SPLIT-units",
+      "probe": "(async () => ({ paragraph: await window.__a.count('Первый абзац АК'), list: await window.__a.count('элемент раздела АК'), links: /^\\[\\[#[0-9a-f-]+\\]\\]\\n\\n- \\[\\[#[0-9a-f-]+\\]\\]$/.test((await window.__a.body())||'') }))()",
+      "expect": { "paragraph": 1, "list": 1, "links": true }
+    }
+  ]
+}

@@ -1,0 +1,189 @@
+{
+  "name": "diary-create-from-record",
+  "description": "Пограничный сценарий S6 (f4e0e6bb) задачи e36d23a3 (T3 тех.проекта ac212c41, требование d6361b9c): мысль, созданная командой «Создать мысль из выделенного» над текстом ДНЕВНИКОВОЙ записи, привязывается к самой записи (слот мыслей записи). Итерация визуальной проверки: к записи привязываются ВСЕ добавленные мысли — и созданные, и ПОДОБРАННЫЕ существующие (S6b), привязка идемпотентна (S6c — повторная привязка той же мысли не добавляет цель). Дополнительно: команда над ПОСТОЯННЫМ комментарием мысли привязок не создаёт (вне дневника хука нет). Запись засеивается шагом api (POST /comments). Доказательства — пробы DOM и чтение БД стенда через window.etn. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.diary-create-from-record.scenario.json. Без скриншотов.",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+
+    {
+      "name": "seed-record",
+      "api": {
+        "name": "seed-record",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
+        "body": {
+          "kind": "chronological",
+          "title": "Запись S6",
+          "body_md": "Заметка из записи стенда"
+        },
+        "expression": "data.id ?? null"
+      }
+    },
+
+    {
+      "name": "define-helpers",
+      "eval": "(() => { const nid = '{{networkId}}', seed = '{{thoughtId}}'; window.__s6 = { dblBody: () => { const el = document.querySelector('.diary-record .ui-comment'); if (!el) throw new Error('нет записи Дневника'); el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); const opts = { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 20 }; for (const type of ['mousedown', 'mouseup', 'click', 'mousedown', 'mouseup', 'click', 'dblclick']) { el.dispatchEvent(new MouseEvent(type, opts)); } return true; }, openMenu: () => { const c = document.querySelector('.diary-record .md-field--editing .cm-content'); if (!c) throw new Error('нет поля записи в правке'); const r = c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 10 })); return true; }, menu: (label) => { const rows = Array.from(document.querySelectorAll('.menu-item')); const row = rows.find((e) => (e.textContent || '').includes(label)); if (!row) throw new Error('нет пункта: ' + label); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; }, createdTitle: 'Заметка из записи стенда', created: async () => { const sr = await window.etn.thoughts.search(nid, { q: window.__s6.createdTitle, scope: 'names', limit: 20 }); return (sr.by_names || []).find((x) => x.title === window.__s6.createdTitle) || null; }, recordTargets: async () => { const list = await window.etn.comments.list(nid, 'thought', seed); const rec = list.find((c) => c.kind === 'chronological'); if (!rec) return { attached: 0, match: false, err: 'no-record' }; const fresh = await window.etn.comments.get(nid, rec.id); const tgts = ((fresh && fresh.targets) || []).filter((t) => t.owner_type === 'thought'); const hit = await window.__s6.created(); return { attached: tgts.length, match: !!(hit && tgts.some((t) => t.owner_id === hit.thought_id)) }; }, permanentHasCreated: async () => { const hit = await window.__s6.created(); if (!hit) return false; const list = await window.etn.comments.list(nid, 'thought', seed); const perm = list.find((c) => c.kind === 'permanent'); if (!perm) return false; const fresh = await window.etn.comments.get(nid, perm.id); return (((fresh && fresh.targets) || []).some((t) => t.owner_type === 'thought' && t.owner_id === hit.thought_id)); }, clearInput: () => { const t = document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]'); if (!t) throw new Error('нет поля диалога'); t.focus(); return true; }, pickCand: (title) => { const row = Array.from(document.querySelectorAll('.add-candidates .type-combo-item')).find((e) => (e.textContent || '').includes(title)); if (!row) throw new Error('нет кандидата: ' + title); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; }, thoughtTargetIds: async () => { const list = await window.etn.comments.list(nid, 'thought', seed); const rec = list.find((c) => c.kind === 'chronological'); const fresh = await window.etn.comments.get(nid, rec.id); return ((fresh && fresh.targets) || []).filter((t) => t.owner_type === 'thought').map((t) => t.owner_id); } }; return true; })()"
+    },
+
+    {
+      "name": "S6-attach-before",
+      "probe": "(async () => await window.__s6.recordTargets())()",
+      "expect": { "attached": 1, "match": false }
+    },
+
+    { "name": "open-diary", "click": ".view-tab[title=\"Дневник\"]" },
+    {
+      "name": "wait-record",
+      "waitFor": "document.querySelectorAll('.diary-record').length > 0"
+    },
+    {
+      "name": "record-body-visible",
+      "waitFor": "document.querySelector('.diary-record .ui-comment')?.textContent?.includes('Заметка из записи стенда') === true"
+    },
+    { "name": "enter-body-edit", "eval": "window.__s6.dblBody()" },
+    {
+      "name": "body-edit-mode",
+      "waitFor": "document.querySelector('.diary-record .ui-comment[data-mode=\"edit\"]') !== null"
+    },
+    {
+      "name": "field-in-edit",
+      "waitFor": "document.querySelector('.diary-record .md-field--editing .cm-content') !== null"
+    },
+    { "name": "focus-field", "click": ".diary-record .md-field--editing .cm-content" },
+    { "name": "select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "open-menu", "eval": "window.__s6.openMenu()" },
+    { "name": "menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "pick-command", "eval": "window.__s6.menu('Создать мысль из выделенного')" },
+    {
+      "name": "dialog-open",
+      "waitFor": "document.querySelector('.dialog-backdrop') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "dialog-prefill",
+      "probe": "document.querySelector('.dialog-body textarea[placeholder^=\"Введите название\"]')?.value ?? null",
+      "expect": "Заметка из записи стенда"
+    },
+    { "name": "apply", "click": ".dialog-footer .ui-btn--primary" },
+    { "name": "dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "save", "click": ".diary-record [data-action=\"save\"]" },
+    {
+      "name": "view-back",
+      "waitFor": "document.querySelector('.diary-record .ui-comment[data-mode=\"view\"]') !== null"
+    },
+
+    {
+      "name": "S6-record-attached",
+      "probe": "(async () => await window.__s6.recordTargets())()",
+      "expect": { "attached": 2, "match": true }
+    },
+    {
+      "name": "S6-permanent-comment-untouched",
+      "probe": "(async () => await window.__s6.permanentHasCreated())()",
+      "expect": false
+    },
+
+    {
+      "name": "S6b-seed-external",
+      "eval": "(async () => { const t = await window.etn.thoughts.create('{{networkId}}', { title: 'Внешняя мысль записи' }); window.__s6.externalId = t.id; return t.id; })()"
+    },
+    { "name": "S6b-enter-edit", "click": ".diary-record [data-action=\"edit\"]" },
+    {
+      "name": "S6b-edit-mode",
+      "waitFor": "document.querySelector('.diary-record .ui-comment[data-mode=\"edit\"]') !== null"
+    },
+    {
+      "name": "S6b-field",
+      "waitFor": "document.querySelector('.diary-record .md-field--editing .cm-content') !== null"
+    },
+    { "name": "S6b-focus", "click": ".diary-record .md-field--editing .cm-content" },
+    { "name": "S6b-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S6b-type", "text": "Внешняя мысль записи" },
+    { "name": "S6b-select-typed", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S6b-open-menu", "eval": "window.__s6.openMenu()" },
+    { "name": "S6b-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S6b-pick-command", "eval": "window.__s6.menu('Создать мысль из выделенного')" },
+    {
+      "name": "S6b-dialog-open",
+      "waitFor": "document.querySelector('.dialog-backdrop') !== null",
+      "timeout": 15000
+    },
+    { "name": "S6b-clear", "eval": "window.__s6.clearInput()" },
+    { "name": "S6b-select-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S6b-type-title", "text": "Внешняя мысль записи" },
+    {
+      "name": "S6b-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S6b-pick", "eval": "window.__s6.pickCand('Внешняя мысль записи')" },
+    { "name": "S6b-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S6b-save", "click": ".diary-record [data-action=\"save\"]" },
+    {
+      "name": "S6b-view-back",
+      "waitFor": "document.querySelector('.diary-record .ui-comment[data-mode=\"view\"]') !== null"
+    },
+    {
+      "name": "S6b-existing-attached",
+      "probe": "(async () => { const ids = await window.__s6.thoughtTargetIds(); return { count: ids.length, hasExternal: ids.includes(window.__s6.externalId) }; })()",
+      "expect": { "count": 3, "hasExternal": true }
+    },
+
+    { "name": "S6c-enter-edit", "click": ".diary-record [data-action=\"edit\"]" },
+    {
+      "name": "S6c-edit-mode",
+      "waitFor": "document.querySelector('.diary-record .ui-comment[data-mode=\"edit\"]') !== null"
+    },
+    {
+      "name": "S6c-field",
+      "waitFor": "document.querySelector('.diary-record .md-field--editing .cm-content') !== null"
+    },
+    { "name": "S6c-focus", "click": ".diary-record .md-field--editing .cm-content" },
+    { "name": "S6c-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S6c-open-menu", "eval": "window.__s6.openMenu()" },
+    { "name": "S6c-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S6c-pick-command", "eval": "window.__s6.menu('Создать мысль из выделенного')" },
+    {
+      "name": "S6c-dialog-open",
+      "waitFor": "document.querySelector('.dialog-backdrop') !== null",
+      "timeout": 15000
+    },
+    { "name": "S6c-clear", "eval": "window.__s6.clearInput()" },
+    { "name": "S6c-select-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S6c-type-title", "text": "Внешняя мысль записи" },
+    {
+      "name": "S6c-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S6c-pick", "eval": "window.__s6.pickCand('Внешняя мысль записи')" },
+    { "name": "S6c-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S6c-save", "click": ".diary-record [data-action=\"save\"]" },
+    {
+      "name": "S6c-view-back",
+      "waitFor": "document.querySelector('.diary-record .ui-comment[data-mode=\"view\"]') !== null"
+    },
+    {
+      "name": "S6c-idempotent",
+      "probe": "(async () => (await window.__s6.thoughtTargetIds()).length)()",
+      "expect": 3
+    }
+  ]
+}

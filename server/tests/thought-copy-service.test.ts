@@ -321,7 +321,7 @@ describe(
 
         // Копия читается сервером как вложение целевой сети (не 404).
         const raw = getAttachmentRawByPath(target, fileAtt.file_path!);
-        assert.equal(raw.body.toString(), 'hello attachment');
+        assert.equal(readFileSync(raw.filePath).toString(), 'hello attachment');
         assert.equal(raw.mime_type, 'text/plain');
 
         // URL-вложение переносится без файла.

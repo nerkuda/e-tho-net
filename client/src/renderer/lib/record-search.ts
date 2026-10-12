@@ -30,6 +30,11 @@
 import type { ChronicleRow } from '@etn/shared';
 
 import { div, el, fmtDate, renderHtml, span } from './dom.js';
+import { requireNetworkId } from '../app.js';
+import {
+  paintWikiIdsInSnippet,
+  resolveWikiIdsInSnippet,
+} from '../editor/wiki-link-resolver.js';
 import { t } from './i18n.js';
 import { svgIcon } from './ui/icon.js';
 import { iconButton } from './ui/button.js';
@@ -456,7 +461,14 @@ export function mountRecordSearch(
     const label = row.title !== null && row.title.trim() !== '' ? row.title : t('recordSearch.untitled');
     info.append(el('div', 'hit-title', `${fmtDate(row.valid_from)} — ${label}`));
     const snippet = el('div', 'hit-snippet');
-    renderHtml(snippet, row.snippet);
+    // Сниппет несёт сырой `[[#<id>]]` — подставляем имена мыслей: синхронно
+    // из кеша (id не мелькает на экране), затем дорезолвиваем батчем
+    // (ошибка 2a8181f4).
+    const networkId = requireNetworkId();
+    renderHtml(snippet, paintWikiIdsInSnippet(row.snippet, networkId));
+    void resolveWikiIdsInSnippet(row.snippet, networkId).then((resolved) => {
+      if (snippet.isConnected) renderHtml(snippet, resolved);
+    });
     info.append(snippet);
     element.append(span('📅', 'search-hit-lead'), info);
     element.addEventListener('click', () => pick(row, element));

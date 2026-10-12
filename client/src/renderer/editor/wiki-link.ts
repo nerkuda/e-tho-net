@@ -12,24 +12,37 @@
 
 import { autocompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
 import type { Extension } from '@codemirror/state';
+import type { EditorView } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import type { MarkdownExtension } from '@lezer/markdown';
 
 import { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR, WIKI_LINK_ID_ATTR, WIKI_LINK_NETWORK_ATTR } from '@etn/markdown';
 import type { Thought } from '@etn/shared';
 
+import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { openNetwork, requireNetworkId, setFocus } from '../app.js';
 import { showDialog } from '../lib/dialog.js';
-import { el, errText } from '../lib/dom.js';
+import { div, el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { otherHolder } from '../lib/lock-cache.js';
 import { notice } from '../lib/notice.js';
+import { replaceLegacyWikiLinks } from '../lib/pure.js';
+import { createThoughtCloud } from '../lib/thought-cloud.js';
+import { openPopover, type PopoverAnchor } from '../lib/ui/popover.js';
 import { isThoughtInResults, openStructuresThought } from '../screens/structures/structures.js';
 import { focusThoughtOnMap, openPublicationInWorkspace, setActiveView } from '../screens/active-view.js';
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
 import { markdownInlineExt } from './markdown-inline-ext.js';
-import { searchLegacyWikiTarget, WIKI_LINK_PUB_ATTR } from './wiki-link-resolver.js';
+import { MD_WIDGET_CLASS, setLegacyWikiLinkClickHandler } from './md-live.js';
+import {
+  legacyCandidateWindow,
+  LEGACY_CANDIDATE_LIMIT,
+  planLegacyFork,
+  resolveLegacyWikiCandidates,
+  WIKI_LINK_PUB_ATTR,
+} from './wiki-link-resolver.js';
 import { tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
 import { transclusionSectionCompletions } from './transclusion.js';
 
@@ -232,32 +245,55 @@ export async function openThoughtByRef(thought: Thought): Promise<void> {
   await setFocus(thought.id);
 }
 
-/**
- * Разрешает wiki-цель в мысль и открывает её по правилам режима (M11) через
- * {@link openThoughtByRef}. Когда цель не находится и `linkEl` (кликнутый
- * span) лежит в поле комментария с контекстом (карточка ETN 34ffbd75),
- * запускается флоу создания отсутствующей мысли — диалог добавления с
- * предзаполненным именем и последующей заменой ссылок; иначе — прежний
- * notice «не найдена».
- */
-export async function openWikiTarget(name: string, linkEl?: HTMLElement): Promise<void> {
-  const networkId = requireNetworkId();
-  let thoughtId: string | null = null;
-  try {
-    const hit = await searchLegacyWikiTarget(networkId, name);
-    thoughtId = hit?.thoughtId ?? null;
-  } catch (err) {
-    notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
-    return;
-  }
-  if (thoughtId === null) {
-    // Мысли нет: в комментарии (md-field с контекстом) — предложить создать
-    // её прямо отсюда; вне такого контекста — прежнее поведение.
-    if (linkEl !== undefined && (await tryCreateThoughtFromLegacyLink(linkEl, name))) return;
-    notice(`Мысль «${name}» не найдена.`, 'error');
-    return;
-  }
+// ---------------------------------------------------------------------------
+// Развилка клика по легаси-ссылке `[[Имя]]` (0.12.2, задача 8e4e3dc5)
+//
+// Поведение согласовано пользователем (уточнение 2026-10-11, вечер):
+//   ПРОСМОТР — конвертации НЕТ НИКОГДА: ссылка остаётся `[[Имя]]`; работает
+//     только ПЕРЕХОД по развилке — одна мысль → открыть её; несколько →
+//     поповер → открыть выбранную; ни одной → диалог создания → открыть
+//     созданную. Захваченность в просмотре роли не играет (менять текст
+//     нечем).
+//   ПРАВКА — конвертация пишется ТОЛЬКО в буфер редактора (без перехода),
+//     КРОМЕ единственной ЗАХВАЧЕННОЙ цели: её открываем без конвертации.
+//   Отказ (поповер/диалог закрыт) — ничего не менять.
+// Клик внутри блока трансклюзии (вложенный редактор «сплошным текстом»)
+// идёт той же развилкой: в правке конвертация ложится в буфер ВЛОЖЕННОГО
+// редактора (единая запись поля сохранит её в ИСТОЧНИК трансклюзии), в
+// просмотре — только переход. Вложенный редактор несёт тот же `md-live`, а
+// обработчик легаси-виджета зарегистрирован глобально (`initWikiLinkNavigation`).
+// ---------------------------------------------------------------------------
 
+/** Куда развилка клика пишет замену легаси-ссылки. */
+export interface LegacyForkTarget {
+  /** Имя цели легаси-ссылки (пробелы обрезаны, без алиаса). */
+  name: string;
+  /** Кликнутый элемент — якорь поповера кандидатов. */
+  anchorEl: HTMLElement;
+  /** Режим ПРАВКИ: вид редактора и диапазон исходника виджета — замена в буфер. */
+  edit?: { view: EditorView; from: number; to: number };
+}
+
+/**
+ * Замена легаси-ссылки ID-формой в БУФЕРЕ редактора (режим правки, в т.ч.
+ * вложенный редактор трансклюзии). Диапазон мог устареть — заменяем только
+ * если там всё ещё легаси-ссылка.
+ */
+function convertLegacyLinkInBuffer(
+  edit: { view: EditorView; from: number; to: number },
+  name: string,
+  thoughtId: string,
+): void {
+  const { view, from, to } = edit;
+  const current = view.state.sliceDoc(from, to);
+  if (!current.startsWith('[[') || !current.endsWith(']]')) return;
+  const { md } = replaceLegacyWikiLinks(current, name, thoughtId);
+  const insert = md === current ? `[[#${thoughtId}]]` : md;
+  view.dispatch({ changes: { from, to, insert } });
+}
+
+/** Открыть уже разрешённую мысль по правилам текущего вида. */
+async function openResolvedThought(networkId: string, thoughtId: string, name: string): Promise<void> {
   let thought: Thought;
   try {
     thought = await etn.thoughts.get(networkId, thoughtId);
@@ -265,8 +301,151 @@ export async function openWikiTarget(name: string, linkEl?: HTMLElement): Promis
     notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
     return;
   }
-
   await openThoughtByRef(thought);
+}
+
+/**
+ * Развилка клика по легаси-ссылке. Возвращает `Promise`, завершающийся после
+ * того, как показан поповер (выбор обрабатывается асинхронно) или выполнена
+ * конвертация/создание. Отказ ничего не меняет.
+ */
+export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<void> {
+  const networkId = safeCurrentNetworkId();
+  if (networkId === null) {
+    notice('Сначала откройте сеть.', 'error');
+    return;
+  }
+
+  let candidates: DuplicateHit[];
+  try {
+    candidates = await resolveLegacyWikiCandidates(networkId, target.name);
+  } catch (err) {
+    notice(`Не удалось открыть «${target.name}»: ${errText(err)}`, 'error');
+    return;
+  }
+
+  const edit = target.edit;
+  const viewMode = edit === undefined;
+  const singleLocked =
+    candidates.length === 1 && otherHolder('thought', candidates[0]!.id) !== null;
+  const plan = planLegacyFork(candidates.length, singleLocked, viewMode);
+
+  /** Конвертация в буфер (только правка; в просмотре не вызывается). */
+  const doConvert = (thoughtId: string): void => {
+    if (edit !== undefined) convertLegacyLinkInBuffer(edit, target.name, thoughtId);
+  };
+
+  switch (plan.action) {
+    case 'create': {
+      // Ветка 3: диалог создания/подбора открывается ВСЕГДА (в просмотре — на
+      // любой поверхности, включая статичные без поля markdown; дефект
+      // визуальной проверки). Отдельного уведомления «не найдена» больше нет:
+      // прежний отказ возникал только из-за отсутствия контекста владельца и
+      // был неотличим для пользователя от поломки перехода. После создания: в
+      // просмотре — открыть созданную (формат ссылки НЕ меняется), в правке —
+      // заменить ссылку в буфере.
+      await tryCreateThoughtFromLegacyLink(target.anchorEl, target.name, {
+        onCreated: (thoughtId) =>
+          plan.navigate
+            ? openResolvedThought(networkId, thoughtId, target.name)
+            : doConvert(thoughtId),
+      });
+      return;
+    }
+    case 'open-only': {
+      // Единственная ЗАХВАЧЕННАЯ цель: открыть БЕЗ конвертации в обоих
+      // режимах (решение пользователя 2026-10-11, вечер).
+      await openResolvedThought(networkId, candidates[0]!.id, target.name);
+      return;
+    }
+    case 'convert-open': {
+      const only = candidates[0]!;
+      if (plan.navigate) {
+        // Просмотр: конвертации нет — только переход.
+        await openResolvedThought(networkId, only.id, target.name);
+      } else {
+        // Правка: конвертация в буфере без перехода.
+        doConvert(only.id);
+      }
+      return;
+    }
+    default:
+      // Ветка 2: поповер у места клика → выбор → открыть (просмотр) или
+      // конвертировать в буфере (правка).
+      showLegacyCandidatesPopover(target, candidates, (thoughtId) => {
+        if (plan.navigate) void openResolvedThought(networkId, thoughtId, target.name);
+        else doConvert(thoughtId);
+      });
+  }
+}
+
+/** Поповер кандидатов: группы «подпись родителя → облачко мысли», ≤10 + пометка. */
+function showLegacyCandidatesPopover(
+  target: LegacyForkTarget,
+  candidates: readonly DuplicateHit[],
+  pick: (thoughtId: string) => void,
+): void {
+  openCandidatePopover({ element: target.anchorEl }, target.name, candidates, pick);
+}
+
+/**
+ * Поповер выбора среди НЕСКОЛЬКИХ кандидатов (требование `14539728`, задача
+ * `026241f2`): группы «подпись родителя → облачко мысли», ≤10 + пометка.
+ * ВЫНЕСЕН и экспортирован для ПАКЕТНЫХ путей создания мыслей: принимает
+ * произвольный АНКЕР — координату диапазона элемента (`{x, y}`, режим точки)
+ * либо DOM-элемент места клика (легаси-развилка). `onCancel` вызывается, если
+ * панель закрыта без выбора (отказ) — пакетный путь оставляет элемент без
+ * изменений. Второй механики поповера не создаётся: панель — `lib/ui/popover`.
+ */
+export function openCandidatePopover(
+  anchor: PopoverAnchor,
+  displayName: string,
+  candidates: readonly DuplicateHit[],
+  pick: (thoughtId: string) => void,
+  onCancel?: () => void,
+): void {
+  const { shown, truncated } = legacyCandidateWindow(candidates);
+  const body = div('legacy-candidates');
+  let handle: { close(): void } | null = null;
+  let picked = false;
+  for (const candidate of shown) {
+    // Группа «родитель → облачко»: подпись родительской мысли СВЕРХУ, под ней
+    // — своё облачко. Внутригрупповой зазор (2px) меньше межгруппового
+    // (`--space-4`), поэтому облачко не «прилипает» к подписи следующей мысли
+    // (дефект визуальной проверки, задача 8e4e3dc5).
+    const group = div('legacy-candidate-group');
+    if (candidate.parent_title !== null && candidate.parent_title !== '') {
+      group.append(el('span', 'legacy-candidate-parent', candidate.parent_title));
+    }
+    group.append(
+      createThoughtCloud(
+        { ...candidate },
+        {
+          profile: 'tree',
+          width: 'container',
+          actions: {
+            onClick: (thoughtId) => {
+              picked = true;
+              handle?.close();
+              pick(thoughtId);
+            },
+          },
+        },
+      ),
+    );
+    body.append(group);
+  }
+  if (truncated) {
+    body.append(el('p', 'muted', `Показаны первые ${LEGACY_CANDIDATE_LIMIT}, уточните имя.`));
+  }
+  handle = openPopover({
+    anchor,
+    content: { title: `Найдено несколько мыслей: «${displayName}»`, body },
+    extraClass: 'legacy-candidates-popover',
+    onClose: () => {
+      if (!picked) onCancel?.();
+    },
+  });
 }
 
 /**
@@ -329,17 +508,58 @@ function safeCurrentNetworkId(): string | null {
 
 let navigationWired = false;
 
+/**
+ * Минимальный контракт узла-ссылки для {@link shouldNavigateWikiLink}: нужны
+ * только связность, класс и ближайший редактор. Структурный тип позволяет
+ * юнит-тесту подставить простой объект вместо DOM-элемента.
+ */
+export interface WikiLinkClickTarget {
+  isConnected: boolean;
+  classList: { contains(cls: string): boolean };
+  closest(selector: string): unknown;
+}
+
+/**
+ * Должен ли клик по спану wiki-ссылки выполнить переход к цели (ошибка
+ * ab8b6da8). Внутри редактора live-preview виджет (класс `md-widget`) при клике
+ * раскрывает исходник блока (M6), поэтому переход для него пропускаем; снятый
+ * со страницы виджет (клик уже раскрыл блок) тоже не переходит. ID-форма в
+ * редакторе показывается виджетом имени БЕЗ `md-widget` (`wiki-id-plugin`) и
+ * переходит по клику так же, как спан просмотра — требование d574d116 и элемент
+ * интерфейса «Редактор постоянного комментария»: «Клик по ссылке открывает
+ * мысль». Экспортируется ради юнит-тестов.
+ */
+export function shouldNavigateWikiLink(link: WikiLinkClickTarget): boolean {
+  if (!link.isConnected) return false;
+  return !(link.closest('.cm-editor') !== null && link.classList.contains(MD_WIDGET_CLASS));
+}
+
 /** Installs the delegated view-mode click handler (call once from main.ts). */
 export function initWikiLinkNavigation(): void {
   if (navigationWired) return;
   navigationWired = true;
+
+  // Легаси-виджет в редакторе перехватывается на `mousedown` (виджет снят к
+  // моменту `click`): клик уходит в развилку, а не раскрывает исходник.
+  setLegacyWikiLinkClickHandler((widget, view) => {
+    const name = widget.dataset.wikiTarget ?? '';
+    if (name === '') return;
+    const from = Number(widget.dataset.mdFrom);
+    const to = Number(widget.dataset.mdTo);
+    const edit =
+      Number.isFinite(from) && Number.isFinite(to) && to > from ? { view, from, to } : undefined;
+    void runLegacyWikiLinkFork({
+      name,
+      anchorEl: widget,
+      ...(edit !== undefined ? { edit } : {}),
+    });
+  });
+
   document.addEventListener('click', (event) => {
     const target = event.target as Element | null;
     const link = target?.closest?.(`.${WIKI_LINK_CLASS}`);
     if (!(link instanceof HTMLElement)) return;
-    // Внутри редактора клик раскрывает исходник блока (M6), а не переходит;
-    // снятые со страницы виджеты (клик уже раскрыл блок) тоже пропускаются.
-    if (!link.isConnected || link.closest('.cm-editor') !== null) return;
+    if (!shouldNavigateWikiLink(link)) return;
 
     // Pub-ссылка (0.11.1, задача 3275fd8d, требование 7f583ef9): резолвер
     // пометил серверную legacy-форму атрибутом `data-wiki-pub` — открываем
@@ -363,10 +583,11 @@ export function initWikiLinkNavigation(): void {
       return;
     }
 
-    // Legacy name-based form (M3): резолюция через FTS-поиск по имени; не
-    // найдено в комментарии — флоу создания мысли (карточка ETN 34ffbd75).
+    // Legacy name-based form (M3, обновлено задачей 8e4e3dc5): резолв имени →
+    // конвертация в id-формат → открытие (развилка 4 веток). Не найдено —
+    // флоу создания мысли в этой же развилке.
     const name = link.getAttribute(WIKI_LINK_TARGET_ATTR);
     if (name === null || name === '') return;
-    void openWikiTarget(name, link);
+    void runLegacyWikiLinkFork({ name, anchorEl: link });
   });
 }

@@ -1,0 +1,195 @@
+{
+  "name": "snippet-wiki-links",
+  "description": "Ключевой сценарий ошибки 2a8181f4: серверные сниппеты показывают ИМЯ мысли, а не сырой [[#<uuid>]]. Проверяются все три поверхности класса: строка поиска «Карта мыслей» (search/search.ts), строка поиска записей «Дневника» (lib/record-search.ts), группа «Упоминания в текстах» (editor/links-tab.ts). Данные засеиваются шагами api: мысль-ссылочник с комментарием «zzqmark52 Проба стенда [[#<seedThoughtId>]]» и дневниковая запись с тем же сырым кодом. Запускается стендом: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.snippet-wiki-links.scenario.json. Без скриншотов: доказательства — пробы innerHTML сниппетов (нет [[#, нет uuid) и контроль по БД. До фикса сниппеты содержали сырой [[#<uuid>]].",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+
+    {
+      "name": "seed-referrer",
+      "api": {
+        "name": "seed-referrer",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Ссылочная мысль 2a8181f4",
+          "comment": { "body_md": "zzqmark52 Проба стенда [[#{{thoughtId}}]]" }
+        },
+        "expression": "data.id ?? null"
+      }
+    },
+    {
+      "name": "seed-diary-record",
+      "api": {
+        "name": "seed-diary-record",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
+        "body": {
+          "kind": "chronological",
+          "title": "Запись 2a8181f4",
+          "body_md": "zzqmarkdiary Проба стенда [[#{{thoughtId}}]]"
+        },
+        "expression": "data.id ?? null"
+      }
+    },
+
+    {
+      "name": "search-panel-цикл",
+      "eval": {
+        "name": "open-search",
+        "expression": "document.querySelector('.search-input')?.focus(), true"
+      }
+    },
+    { "name": "type-marker", "text": "zzqmark52" },
+    {
+      "name": "wait-search-hit",
+      "waitFor": {
+        "expression": "document.querySelector('.search-results .hit-snippet')?.innerHTML?.includes('zzqmark52') === true"
+      }
+    },
+    {
+      "name": "search-snippet-no-raw",
+      "probe": {
+        "name": "searchSnippetHasRaw",
+        "expression": "[...document.querySelectorAll('.search-results .hit-snippet')].some(e => e.innerHTML.includes('[[#'))"
+      },
+      "expect": false
+    },
+    {
+      "name": "search-snippet-no-uuid",
+      "probe": {
+        "name": "searchSnippetHasUuid",
+        "expression": "[...document.querySelectorAll('.search-results .hit-snippet')].some(e => /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(e.innerHTML))"
+      },
+      "expect": false
+    },
+    {
+      "name": "search-snippet-shows-name",
+      "probe": {
+        "name": "searchSnippetShowsName",
+        "expression": "[...document.querySelectorAll('.search-results .hit-snippet')].some(e => e.textContent.includes('{{seedTitle}}'))"
+      },
+      "expect": true
+    },
+
+    {
+      "name": "clear-search",
+      "eval": {
+        "name": "clear-search-value",
+        "expression": "(() => { const i=document.querySelector('.search-input'); if(i){ i.value=''; i.dispatchEvent(new Event('input',{bubbles:true})); } return true; })()"
+      }
+    },
+    { "name": "open-seeded-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    {
+      "name": "editor-visible",
+      "waitFor": "document.querySelectorAll('.editor-tab').length > 0"
+    },
+    {
+      "name": "switch-to-links-tab",
+      "eval": {
+        "name": "click-links-tab",
+        "expression": "(() => { const t=[...document.querySelectorAll('.editor-tab')].find(b => b.textContent.trim().startsWith('Упоминания')); t?.click(); return !!t; })()"
+      }
+    },
+    {
+      "name": "links-tab-visible",
+      "waitFor": "document.querySelector('.links-tab') !== null"
+    },
+    {
+      "name": "expand-text-mentions",
+      "eval": {
+        "name": "click-mentions-group",
+        "expression": "(() => { const g=[...document.querySelectorAll('.links-tab .group')].find(x => x.textContent.includes('Упоминания в текстах')); const h=g?.querySelector('.group-header'); h?.click(); return !!h; })()"
+      }
+    },
+    {
+      "name": "wait-mention-snippet",
+      "waitFor": "document.querySelector('.mention-snippet')?.textContent?.includes('zzqmark52') === true"
+    },
+    {
+      "name": "mention-snippet-no-raw",
+      "probe": {
+        "name": "mentionSnippetHasRaw",
+        "expression": "[...document.querySelectorAll('.mention-snippet')].some(e => e.innerHTML.includes('[[#'))"
+      },
+      "expect": false
+    },
+    {
+      "name": "mention-snippet-no-uuid",
+      "probe": {
+        "name": "mentionSnippetHasUuid",
+        "expression": "[...document.querySelectorAll('.mention-snippet')].some(e => /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(e.innerHTML))"
+      },
+      "expect": false
+    },
+    {
+      "name": "mention-snippet-shows-name",
+      "probe": {
+        "name": "mentionSnippetShowsName",
+        "expression": "[...document.querySelectorAll('.mention-snippet')].some(e => e.textContent.includes('{{seedTitle}}'))"
+      },
+      "expect": true
+    },
+
+    { "name": "open-diary", "click": ".view-tab[title=\"Дневник\"]" },
+    {
+      "name": "wait-diary-search",
+      "waitFor": "document.querySelector('input[placeholder^=\"Поиск по записям\"]') !== null"
+    },
+    {
+      "name": "focus-diary-search",
+      "eval": {
+        "name": "focus-record-search",
+        "expression": "document.querySelector('input[placeholder^=\"Поиск по записям\"]')?.focus(), true"
+      }
+    },
+    { "name": "type-diary-marker", "text": "zzqmarkdiary" },
+    {
+      "name": "wait-diary-hit",
+      "waitFor": {
+        "expression": "document.querySelector('.record-search .hit-snippet')?.innerHTML?.includes('zzqmarkdiary') === true"
+      }
+    },
+    {
+      "name": "diary-snippet-no-raw",
+      "probe": {
+        "name": "diarySnippetHasRaw",
+        "expression": "[...document.querySelectorAll('.record-search .hit-snippet')].some(e => e.innerHTML.includes('[[#'))"
+      },
+      "expect": false
+    },
+    {
+      "name": "diary-snippet-no-uuid",
+      "probe": {
+        "name": "diarySnippetHasUuid",
+        "expression": "[...document.querySelectorAll('.record-search .hit-snippet')].some(e => /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(e.innerHTML))"
+      },
+      "expect": false
+    },
+    {
+      "name": "diary-snippet-shows-name",
+      "probe": {
+        "name": "diarySnippetShowsName",
+        "expression": "[...document.querySelectorAll('.record-search .hit-snippet')].some(e => e.textContent.includes('{{seedTitle}}'))"
+      },
+      "expect": true
+    }
+  ]
+}

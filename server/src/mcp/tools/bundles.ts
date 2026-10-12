@@ -216,15 +216,16 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Батч-запись мыслей',
       description:
-        'Пишет от 1 до ' +
+        'Пишет 1–' +
         MCP_MAX_THOUGHTS_PER_WRITE +
         ' связанных единиц знания одной транзакцией: мысли + постоянные/хронологические комментарии ' +
         '+ свойства + связи + вложения. `thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR ' +
-        '`target_ref` — для любого элемента; свойства-связи в `properties` тоже принимают `ref`; ' +
+        '`target_ref`; свойства-связи в `properties` тоже принимают `ref`; ' +
         '`on_duplicate`: `fail`/`reuse`/`update`. Правка существующей — item-level ' +
-        '`title`/`synonyms`/`type`/`type_id`/`active`; `synonyms` ЗАМЕНЯЮТ набор. Циклы ' +
-        '`ref`/`target_ref` разрешены. Один write-бюджет + одна строка `audit_log` на вызов; ' +
-        '`warnings` агрегированы по батчу. Неизвестные ключи отвергаются `VALIDATION_ERROR` ' +
+        '`title`/`synonyms`/`type`/`type_id`/`active`; `synonyms` ЗАМЕНЯЮТ набор. ' +
+        'ВНИМАНИЕ: item-level `title` ПЕРЕИМЕНОВЫВАЕТ мысль; заголовок записи — `chronicle[].title`. ' +
+        'Один write-бюджет и одна строка `audit_log` на вызов; ' +
+        '`warnings` — по батчу. Неизвестные ключи отвергаются `VALIDATION_ERROR` ' +
         '(`details.fields`). Пошагово — `etn.how_to_write_batch`.',
       inputSchema: defineContract('etn.thoughts.write', WriteSchema, {}).schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],

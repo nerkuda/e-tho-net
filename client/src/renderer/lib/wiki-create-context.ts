@@ -1,65 +1,75 @@
 /**
- * Comment-context registry for the «создать отсутствующую мысль по
- * legacy-ссылке» flow (task «Создание отсутствующих мыслей по legacy-ссылкам
- * на них», карточка ETN 34ffbd75).
+ * Comment-context registry for a markdown field (карточка ETN 34ffbd75;
+ * уточнено задачей 8e4e3dc5, 0.12.2).
  *
- * A click on an unresolvable legacy wiki-link `[[имя|текст]]` inside a
- * comment's view mode must know WHICH comment it lives in (owner thought/link,
- * permanent vs chronological, the comment id) and how to repaint that field
- * after the links are rewritten to the `[[#<id>]]` form. The click is handled
- * by the delegated document listener in `editor/wiki-link.ts`, so the context
- * has to be discoverable from the clicked element: every markdown field built
- * by `editor/markdown-field.ts` with a `commentContext` option binds its root
- * (`.md-field`) here, and the flow (`editor/wiki-link-create.ts`) walks up
- * from the clicked span with {@link findWikiCreateContext}.
+ * Клик по элементу внутри поля комментария иногда должен знать ВЛАДЕЛЬЦА поля
+ * (мысль или связь): флоу «создать отсутствующую мысль по legacy-ссылке»
+ * (`editor/wiki-link-create.ts`) берёт владельца родителем новой мысли, а
+ * открытие `etnimg://`-вложения (`lib/etnimg-link.ts`) — владельцем вложения.
+ * Оба идут от кликнутого элемента вверх к ближайшему корню, который при
+ * создании привязал себя здесь (`bindWikiCreateContext`).
  *
- * Deliberately dependency-free (no imports): `editor/markdown-field.ts` and
- * `editor/wiki-link-create.ts` both import this module, while importing each
- * other's neighbours would close module cycles (markdown-field →
- * mentions-annotate → wiki-link → wiki-link-create → add-dialog → canvas →
- * editor → comments → markdown-field). Keep it that way.
+ * Корень — НЕ обязательно `.md-field`: привязка указывает сам свой корень, а
+ * поиск поднимается по предкам до первого привязанного узла. Так статичные
+ * поверхности просмотра без поля markdown (лента «Дневника» — `recordView`)
+ * тоже несут контекст, иначе клик по легаси-ссылке в просмотре записи не знал
+ * бы владельца и открывал уведомление «мысль не найдена» вместо диалога
+ * создания (дефект визуальной проверки, задача 8e4e3dc5).
+ *
+ * Владелец может прийти ленивым источником (функцией): у статичной поверхности
+ * HOME-мысль к моменту сборки карточки ещё не разрешена, а к моменту клика —
+ * уже да. Функция вызывается в момент чтения контекста и может вернуть `null`
+ * (владельца нет) — тогда потребитель обходится без родителя.
+ *
+ * Deliberately dependency-free (no imports): `editor/markdown-field.ts`,
+ * `editor/wiki-link-create.ts` и `lib/etnimg-link.ts` импортируют этот модуль,
+ * а импорт чужих соседей закрыл бы цикли зависимостей. Keep it that way.
  */
 
 /** Owner of a comment: the thought or the link the comment is attached to. */
 export type WikiCommentOwnerType = 'thought' | 'link';
 
 /**
- * Everything the create-missing-thought flow needs about the comment whose
- * view was clicked. Bound per `.md-field` root; the getters read live state
- * (a chronological tab rebuilds the field per selected entry, a permanent
- * comment may be created by a later save).
+ * Владелец поля комментария, привязанный к его корню. Потребители
+ * ({@link findWikiCreateContext}) читают только владельца.
  */
 export interface WikiCreateCommentContext {
   ownerType: WikiCommentOwnerType;
   ownerId: string;
-  /** Which comment kind this field renders. */
-  commentKind: 'permanent' | 'chronological';
-  /**
-   * Id of the comment shown right now, or `null` when it is not known (a
-   * brand-new chronological entry that has not been saved yet).
-   */
-  getCommentId(): string | null;
-  /** Repaints the field after `[[имя]]` links were rewritten to `[[#<id>]]`. */
-  refresh(md: string, html: string): void;
-  /** Optional hook after a successful rewrite (e.g. the chrono table's short
-   * text preview). */
-  afterLinksReplaced?(): void;
 }
 
-const contexts = new WeakMap<HTMLElement, WikiCreateCommentContext>();
+/**
+ * Источник контекста: готовый владелец либо ленивая функция (читается в момент
+ * клика; `null` — владельца определить не удалось).
+ */
+export type WikiCreateContextSource =
+  | WikiCreateCommentContext
+  | (() => WikiCreateCommentContext | null);
 
-/** Binds a field root (`.md-field`) to its comment context. */
-export function bindWikiCreateContext(root: HTMLElement, ctx: WikiCreateCommentContext): void {
+const contexts = new WeakMap<HTMLElement, WikiCreateContextSource>();
+
+/** Binds a field/surface root to its comment context (value or lazy getter). */
+export function bindWikiCreateContext(root: HTMLElement, ctx: WikiCreateContextSource): void {
   contexts.set(root, ctx);
 }
 
 /**
- * The comment context of the markdown field containing `el` (walks up to the
- * closest `.md-field` root), or `null` when the element is not inside a
- * comment field that opted into the flow.
+ * The comment context governing the surface containing `el`: walks up the
+ * ancestors to the closest root bound via {@link bindWikiCreateContext} and
+ * resolves it (lazy sources are called here). Returns `null` when no ancestor
+ * is bound or the bound owner is currently unknown.
  */
 export function findWikiCreateContext(el: Element | null): WikiCreateCommentContext | null {
-  const root = el?.closest('.md-field');
-  if (!(root instanceof HTMLElement)) return null;
-  return contexts.get(root) ?? null;
+  let node: Element | null = el;
+  while (node !== null) {
+    const source = contexts.get(node as HTMLElement);
+    if (source !== undefined) {
+      const resolved = typeof source === 'function' ? source() : source;
+      if (resolved !== null) return resolved;
+    }
+    // `parentElement` есть у настоящего DOM; `?? null` защищает от
+    // не-DOM-объектов (тестовые заглушки), у которых его нет.
+    node = node.parentElement ?? null;
+  }
+  return null;
 }

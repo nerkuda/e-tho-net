@@ -40,7 +40,12 @@ import {
   StateField,
 } from '@codemirror/state';
 
-import { WIKI_LINK_CLASS } from '@etn/markdown';
+import {
+  WIKI_LINK_CLASS,
+  WIKI_LINK_ID_ATTR,
+  WIKI_LINK_NETWORK_ATTR,
+  WIKI_LINK_TARGET_ATTR,
+} from '@etn/markdown';
 import type { ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
@@ -202,23 +207,47 @@ function parseIdLinks(source: string): ParsedWikiLink[] {
  * Widget for the `[[<title>]]` label that replaces the whole span in
  * normal-mode. Hidden from the user — textContent carries the resolved
  * title; CSS handles the underline/styling.
+ *
+ * Виджет несёт те же data-атрибуты навигации, что и спан `@etn/markdown` в
+ * просмотре (`data-wiki-id`/`data-wiki-target`, для кросс-сети
+ * `data-wiki-network`): по ним общий обработчик `initWikiLinkNavigation`
+ * открывает мысль по клику (ошибка `ab8b6da8` — в правке клик по ссылке на
+ * мысль не давал реакции, потому что у виджета не было данных цели).
  */
 class WikiLinkLabelWidget extends WidgetType {
   constructor(
     readonly label: string,
     readonly deleted: boolean,
+    /** Id цели навигации; `null` — переход по клику не поддерживается (публикация). */
+    readonly navId: string | null,
+    /** Сеть цели для кросс-сетевой ссылки; `null` — текущая сеть. */
+    readonly navNetworkId: string | null,
   ) {
     super();
   }
 
   override eq(other: WikiLinkLabelWidget): boolean {
-    return other.label === this.label && other.deleted === this.deleted;
+    return (
+      other.label === this.label &&
+      other.deleted === this.deleted &&
+      other.navId === this.navId &&
+      other.navNetworkId === this.navNetworkId
+    );
   }
 
   override toDOM(): HTMLElement {
     const span = document.createElement('span');
     span.className = this.deleted ? `${WIKI_LINK_CLASS} ${CSS_WIKI_LINK_DELETED}` : WIKI_LINK_CLASS;
     span.textContent = this.label;
+    // Атрибуты цели — только для мыслей: у публикаций другое пространство id,
+    // их открытие ведёт отдельная ветка обработчика (по `data-wiki-pub`).
+    if (this.navId !== null) {
+      span.setAttribute(WIKI_LINK_ID_ATTR, this.navId);
+      span.setAttribute(WIKI_LINK_TARGET_ATTR, this.navId);
+      if (this.navNetworkId !== null) {
+        span.setAttribute(WIKI_LINK_NETWORK_ATTR, this.navNetworkId);
+      }
+    }
     return span;
   }
 
@@ -389,12 +418,20 @@ function computeWikiIdDecos(
         }),
       });
     } else {
-      // Normal-mode: replace the WHOLE span with one label widget.
+      // Normal-mode: replace the WHOLE span with one label widget. Данные цели
+      // (id + сеть) нужны обработчику клика — по ним ссылка открывает мысль,
+      // как в просмотре. У публикаций id своего пространства (`pub:`), поэтому
+      // навигационные атрибуты им не ставим.
       parts.push({
         from: link.from,
         to: link.to,
         value: Decoration.replace({
-          widget: new WikiLinkLabelWidget(link.alias ?? titleText, deleted),
+          widget: new WikiLinkLabelWidget(
+            link.alias ?? titleText,
+            deleted,
+            link.kind === 'pub' ? null : link.thoughtId,
+            link.networkId,
+          ),
           inclusive: false,
         }),
       });

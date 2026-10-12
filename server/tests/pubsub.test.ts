@@ -94,4 +94,15 @@ describe('PubSub', () => {
     }
     assert.equal(secondCalled, true);
   });
+
+  it('subscribeAll receives every network and stops after unsubscribing', () => {
+    const bus = new PubSub();
+    const got: string[] = [];
+    const unsub = bus.subscribeAll((e: AnyRealtimeEvent) => got.push(`${e.network_id}:${e.seq}`));
+    bus.publish('net-A', makeEvent('net-A', 1));
+    bus.publish('net-B', makeEvent('net-B', 2));
+    unsub();
+    bus.publish('net-A', makeEvent('net-A', 3));
+    assert.deepEqual(got, ['net-A:1', 'net-B:2']);
+  });
 });

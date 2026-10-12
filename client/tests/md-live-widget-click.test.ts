@@ -20,10 +20,14 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { ShimElement } from './dom-shim.js';
-import { MD_WIDGET_CLASS, mdWidgetMouseDown } from '../src/renderer/editor/md-live.js';
+import {
+  MD_WIDGET_CLASS,
+  mdWidgetMouseDown,
+  setLegacyWikiLinkClickHandler,
+} from '../src/renderer/editor/md-live.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -134,5 +138,63 @@ describe('правый/средний клик по виджету live-preview 
       false,
       'меню принадлежит полю — md-live его не подменяет',
     );
+  });
+});
+
+describe('легаси-виджет wiki-ссылки: клик уходит в развилку, исходник не раскрывается', () => {
+  afterEach(() => {
+    // Обработчик развилки регистрирует `initWikiLinkNavigation`; между
+    // тестами снимаем, чтобы не влиять на соседние проверки.
+    setLegacyWikiLinkClickHandler(null);
+  });
+
+  /** Легаси-виджет: `md-widget wiki-link` с данными цели. */
+  function legacyWidget(): ShimElement {
+    const el = new ShimElement('span');
+    el.className = `${MD_WIDGET_CLASS} wiki-link`;
+    el.dataset.mdFrom = '0';
+    el.dataset.mdTo = '11';
+    el.dataset.wikiTarget = 'Иванов';
+    (el as any).closest = (selector: string): ShimElement | null =>
+      selector === `.${MD_WIDGET_CLASS}` ? el : null;
+    return el;
+  }
+
+  it('левый клик вызывает обработчик развилки и НЕ двигает каретку (M6 не для легаси-ссылки)', () => {
+    const view = fakeView();
+    const widget = legacyWidget();
+    const calls: Array<{ widget: unknown; view: unknown }> = [];
+    setLegacyWikiLinkClickHandler((w, v) => {
+      calls.push({ widget: w, view: v });
+    });
+
+    const event = mouse(0, widget);
+    const handled = mdWidgetMouseDown(event, view as any);
+
+    assert.equal(handled, true, 'клик перехвачен развилкой');
+    assert.equal(calls.length, 1, 'обработчик развилки вызван ровно раз');
+    assert.equal(calls[0]!.widget, widget, 'обработчик получил виджет (цель известна)');
+    assert.equal(view.events.length, 0, 'исходник не раскрывается — выделение не диспатчится');
+    assert.equal(event.defaultPrevented, true, 'событие погашено');
+  });
+
+  it('снятый обработчик развилки — легаси-виджет ведёт себя как прочий md-widget', () => {
+    setLegacyWikiLinkClickHandler(null);
+    const view = fakeView();
+    const event = mouse(0, legacyWidget());
+    const handled = mdWidgetMouseDown(event, view as any);
+    assert.equal(handled, true);
+    assert.equal(view.events.length, 1, 'без обработчика — прежнее поведение M6');
+  });
+
+  it('правый клик по легаси-виджету развилку не вызывает', () => {
+    const view = fakeView();
+    let called = false;
+    setLegacyWikiLinkClickHandler(() => {
+      called = true;
+    });
+    const handled = mdWidgetMouseDown(mouse(2, legacyWidget()), view as any);
+    assert.equal(handled, false);
+    assert.equal(called, false);
   });
 });

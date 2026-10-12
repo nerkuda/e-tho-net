@@ -362,9 +362,13 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
             )
           : span('🔗');
       const snippet = el('div', 'muted mention-snippet');
-      // The snippet carries server-side <mark> highlights around matches —
-      // like the search panel, render it as (escaped, trusted) HTML.
-      renderHtml(snippet, hit.snippet);
+      // Сниппет несёт сырой `[[#<id>]]` — подставляем имена мыслей: синхронно
+      // из кеша (id не мелькает на экране), затем дорезолвиваем батчем — тем
+      // же механизмом, что группа «Ссылки на мысль» выше (ошибка 2a8181f4).
+      renderHtml(snippet, paintWikiIdsInSnippet(hit.snippet, networkId));
+      void resolveWikiIdsInSnippet(hit.snippet, networkId).then((resolved) => {
+        if (snippet.isConnected) renderHtml(snippet, resolved);
+      });
       item.append(lead, snippet);
       // Stage 3: no per-indicator icons on an endpoint row — Ctrl+hover shows
       // the owner's (thought or link) permanent comment.

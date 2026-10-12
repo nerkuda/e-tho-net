@@ -51,9 +51,12 @@ describe('сторож: единый разбор производного за�
       /import \{[^}]*recordDisplayTitle[^}]*\} from '\.\.\/lib\/record-title\.js'/,
       'импорт общего разбора',
     );
+    // Источник заголовка проходит через резолвер ID-форм (ошибка 8b647f6c),
+    // поэтому общий разбор вызывается на подставленном источнике — сам разбор
+    // по-прежнему один, из `lib/record-title.ts` с лимитом вкладки.
     assert.match(
       CHRONO_TAB,
-      /recordDisplayTitle\(comment\.title, comment\.body_md, EDITOR_RECORD_TITLE_MAX\)/,
+      /recordDisplayTitle\([^)]*EDITOR_RECORD_TITLE_MAX\)/,
       'ячейка «Заголовок» — общий помощник с лимитом вкладки',
     );
     assert.ok(

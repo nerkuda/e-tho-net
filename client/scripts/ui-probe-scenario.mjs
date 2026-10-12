@@ -393,7 +393,7 @@ function normalizeAssert(value, where, index) {
 function normalizeApi(value, where, index) {
   if (!isPlainObject(value)) fail(`${where}.api: ожидается объект`);
   for (const extra of Object.keys(value)) {
-    if (!['name', 'method', 'path', 'expression'].includes(extra)) {
+    if (!['name', 'method', 'path', 'expression', 'body'].includes(extra)) {
       fail(`${where}.api: неизвестное поле «${extra}» (ожидание задаётся мета-полем «expect»)`);
     }
   }
@@ -406,7 +406,15 @@ function normalizeApi(value, where, index) {
   if (!path.startsWith('/')) fail(`${where}.api.path: путь должен начинаться с «/»`);
   const expression =
     value.expression === undefined ? null : asString(value.expression, `${where}.api.expression`);
-  return { name, method, path, expression };
+  // Необязательное JSON-тело запроса: позволяет и ПРОВЕРЯТЬ эффект, и засеивать
+  // данные (например, дневниковую запись перед прогоном сценария). Поле
+  // добавляется только при наличии — форма без тела остаётся прежней.
+  if (value.body !== undefined && value.body !== null && !isPlainObject(value.body)) {
+    fail(`${where}.api.body: ожидается объект`);
+  }
+  const api = { name, method, path, expression };
+  if (value.body !== undefined && value.body !== null) api.body = value.body;
+  return api;
 }
 
 function normalizeWaitFor(value, where) {

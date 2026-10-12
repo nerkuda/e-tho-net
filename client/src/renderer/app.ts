@@ -60,7 +60,7 @@ import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
-import { initLockCache } from './lib/lock-cache.js';
+import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
@@ -190,6 +190,12 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   });
   // Срез слоя `pins` (G5): порядок закреплённых для панели — из ответа сети.
   setQueryData(queryKeys.pins(), (pinsRaw ?? []).map((p) => p.thought_id));
+
+  // Холодная синхронизация захватов (0.12.2, задача 8e4e3dc5): клик по
+  // легаси-ссылке проверяет, не захвачена ли цель другим пользователем, а
+  // `refresh()` до этого не вызывал никто — захват, взятый до подключения,
+  // оставался невидимым. Best-effort, ошибку глотает сам `refresh`.
+  void refreshLockCache();
 
   // Q3: refresh tab list and activate the right entry. When the caller
   // supplies `tabId` (the picker / tab activation), that exact tab wins —

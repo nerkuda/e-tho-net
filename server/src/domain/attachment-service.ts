@@ -15,10 +15,14 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  closeSync,
   copyFileSync,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -1600,6 +1604,39 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
 const CONTENT_TEXT_MAX_CHARS = 200_000;
 
 /**
+ * Byte budget for the bounded read behind {@link getAttachmentContent}: a UTF-8
+ * code point is at most 4 bytes and a JS string counts a surrogate pair as 2
+ * code units (≤ 2 bytes each), so {@link CONTENT_TEXT_MAX_CHARS} characters
+ * always fit within 4× that many bytes. Reading this prefix is enough to know
+ * both the returned text and whether the file is longer (ошибка 0dbe5d72).
+ */
+const CONTENT_TEXT_MAX_BYTES = CONTENT_TEXT_MAX_CHARS * 4;
+
+/**
+ * Read at most `maxBytes` bytes from the start of `filePath` and decode them as
+ * UTF-8 — a bounded read that never loads more than `maxBytes` into memory
+ * (ошибка 0dbe5d72). A multi-byte sequence split at the byte cap decodes to
+ * U+FFFD at the very tail, always beyond the caller's character cap, so the
+ * returned prefix has no replacement characters. Throws on I/O failure.
+ */
+function readUtf8Prefix(filePath: string, maxBytes: number): string {
+  const fd = openSync(filePath, 'r');
+  try {
+    const toRead = Math.min(fstatSync(fd).size, maxBytes);
+    const buf = Buffer.allocUnsafe(toRead);
+    let read = 0;
+    while (read < toRead) {
+      const n = readSync(fd, buf, read, toRead - read, read);
+      if (n === 0) break;
+      read += n;
+    }
+    return buf.toString('utf8', 0, read);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * True when the attachment is a `kind='file'` whose content is text-like:
  * `text/*` mime or a `.txt`/`.md`/`.markdown` path. Mirrors the client-side
  * `isViewableText` check (attachments.ts).
@@ -1622,6 +1659,12 @@ function isMarkdownFile(a: Attachment): boolean {
  * the text (truncated at {@link CONTENT_TEXT_MAX_CHARS}) and, for markdown
  * files, the server-rendered html. Non-text attachments return `text: null`.
  *
+ * The backing file is read as a bounded UTF-8 prefix
+ * ({@link CONTENT_TEXT_MAX_BYTES} bytes, ≤ {@link CONTENT_TEXT_MAX_CHARS}
+ * characters) rather than whole — a multi-hundred-MB `.log`/`.txt` no longer
+ * spikes memory just to be truncated (ошибка 0dbe5d72). Response contract
+ * (`text`/`html`/`truncated`) is unchanged.
+ *
  * Throws `NOT_FOUND` (404) for a missing attachment and `VALIDATION_ERROR`
  * (422) when the backing file cannot be read.
  */
@@ -1632,7 +1675,7 @@ export function getAttachmentContent(ndb: NetworkDb, id: string): AttachmentCont
   }
   let raw: string;
   try {
-    raw = readFileSync(a.file_path!, 'utf8');
+    raw = readUtf8Prefix(a.file_path!, CONTENT_TEXT_MAX_BYTES);
   } catch {
     throw new EtnError('VALIDATION_ERROR', 'файл вложения недоступен для чтения', {
       field: 'file_path',
@@ -1645,19 +1688,25 @@ export function getAttachmentContent(ndb: NetworkDb, id: string): AttachmentCont
 }
 
 /**
- * A server-stored attachment file served as raw bytes (remote clients).
+ * A server-stored attachment file resolved for streaming (remote clients).
  * `filename` is the base name of the stored copy; `mime_type` falls back to
- * `application/octet-stream` when the row carries no hint.
+ * `application/octet-stream` when the row carries no hint. The bytes are
+ * **not** read here — the route pipes {@link filePath} with `createReadStream`
+ * (ошибка 24d75c96: больше нет чтения файла целиком в память), and
+ * {@link size} feeds `content-length`.
  */
 export interface AttachmentRawFile {
   mime_type: string;
   filename: string;
-  body: Buffer;
+  /** Absolute path of the stored file — streamed by the route. */
+  filePath: string;
+  /** Size in bytes from `stat` — used for `content-length`. */
+  size: number;
 }
 
 /**
- * Read the raw bytes of a server-stored attachment file by its absolute
- * `file_path` (the path the `etnimg:` scheme of a remote client resolves to).
+ * Resolve a server-stored attachment file by its absolute `file_path` (the
+ * path the `etnimg:` scheme of a remote client resolves to) for streaming.
  *
  * Only files stored **inside the network's `attachments/` directory** (uploads
  * of `POST …/attachments/file`, the same rule as {@link removeStoredFile}) are
@@ -1666,7 +1715,7 @@ export interface AttachmentRawFile {
  *
  * Throws `NOT_FOUND` (404) when no `kind='file'` attachment resolves to the
  * path, the path is outside the stored-files directory or the backing file is
- * missing; `VALIDATION_ERROR` (422) when it cannot be read.
+ * missing; `VALIDATION_ERROR` (422) when its size cannot be read.
  */
 export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): AttachmentRawFile {
   const resolved = path.resolve(filePath);
@@ -1681,9 +1730,9 @@ export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): Attach
   if (row === undefined) {
     throw new EtnError('NOT_FOUND', 'файл вложения не найден', { field: 'path' });
   }
-  let body: Buffer;
+  let size: number;
   try {
-    body = readFileSync(resolved);
+    size = statSync(resolved).size;
   } catch {
     throw new EtnError('VALIDATION_ERROR', 'файл вложения недоступен для чтения', {
       field: 'path',
@@ -1692,7 +1741,8 @@ export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): Attach
   return {
     mime_type: row.mime_type ?? 'application/octet-stream',
     filename: path.basename(resolved),
-    body,
+    filePath: resolved,
+    size,
   };
 }
 

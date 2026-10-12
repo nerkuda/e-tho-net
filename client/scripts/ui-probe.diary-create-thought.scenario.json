@@ -1,0 +1,95 @@
+{
+  "name": "diary-record-create-thought",
+  "description": "Ключевой сценарий ошибки 0c3a8b69: в слоте дневниковой записи по «+ мысль» диалог открывается с включённым созданием — новая мысль создаётся и привязывается к записи. Запись засеивается шагом api (POST /comments, тело запроса — поле body). Запускается стендом: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.diary-create-thought.scenario.json. Без скриншотов: доказательства — пробы DOM и контроль в БД через шаг api.",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+
+    {
+      "name": "seed-record",
+      "api": {
+        "name": "seed-record",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
+        "body": {
+          "kind": "chronological",
+          "title": "Запись стенда",
+          "body_md": "запись для проверки «+ мысль»"
+        },
+        "expression": "data.id ?? null"
+      }
+    },
+
+    { "name": "open-diary", "click": ".view-tab[title=\"Дневник\"]" },
+    {
+      "name": "wait-record",
+      "waitFor": "document.querySelectorAll('.diary-record').length > 0"
+    },
+    {
+      "name": "chips-before",
+      "probe": {
+        "name": "chipsBefore",
+        "expression": "document.querySelector('.diary-record .diary-record-chips')?.textContent ?? ''"
+      }
+    },
+    { "name": "click-add-thought", "click": ".diary-record .diary-chip-add" },
+    {
+      "name": "wait-add-dialog",
+      "waitFor": "document.querySelector('.add-mode-row') !== null"
+    },
+    {
+      "name": "dialog-allows-create",
+      "probe": {
+        "name": "typeFieldVisible",
+        "expression": "document.querySelector('.add-types-row')?.textContent?.includes('Тип мысли') ?? false"
+      },
+      "expect": true
+    },
+    { "name": "focus-title", "click": ".add-search-row textarea" },
+    { "name": "type-title", "text": "Мысль из стенда 0c3a8b69" },
+    { "name": "submit-new-thought", "key": "Enter" },
+    {
+      "name": "wait-dialog-closed",
+      "waitFor": "document.querySelector('.add-mode-row') === null"
+    },
+    {
+      "name": "wait-chip",
+      "waitFor": "document.querySelector('.diary-record .diary-record-chips')?.textContent?.includes('Мысль из стенда 0c3a8b69') === true"
+    },
+    {
+      "name": "chip-attached",
+      "probe": {
+        "name": "newThoughtInChips",
+        "expression": "document.querySelector('.diary-record .diary-record-chips')?.textContent?.includes('Мысль из стенда 0c3a8b69') ?? false"
+      },
+      "expect": true
+    },
+    {
+      "name": "record-targets",
+      "api": {
+        "name": "record-targets",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
+        "expression": "((Array.isArray(data) ? data : (data.items ?? [])).find((c) => c.kind === 'chronological')?.targets ?? []).filter((t) => t.owner_type === 'thought').length"
+      },
+      "expect": 2
+    }
+  ]
+}

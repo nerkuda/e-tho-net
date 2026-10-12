@@ -287,6 +287,26 @@ describe(
       }
     });
 
+    it('thought_ref-значение принимает короткий id цели (68802297)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const person = createThoughtType(ndb, { name: 'PersonShort' }, USER);
+        const book = createThoughtType(ndb, { name: 'BookShort' }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', book.id, 'author', {}, USER);
+        const target = seedTypedThought(ndb, person.id);
+        const b = seedTypedThought(ndb, book.id);
+
+        setPropertyValue(ndb, 'thought', b, 'author', target.slice(0, 8), USER);
+
+        // Значение сохранено как ПОЛНЫЙ id цели — usage его находит.
+        const usage = findThoughtUsage(ndb, target);
+        assert.equal(usage.total, 1);
+        assert.equal(usage.groups[0]!.thoughts[0]!.id, b);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findThoughtUsage groups referencing thoughts by property (L7)', () => {
       const ndb = createInMemoryNetworkDb();
       try {

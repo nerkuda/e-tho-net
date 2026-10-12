@@ -718,6 +718,11 @@ function buildConditionValueEditor(
       commitOn: 'change',
       boolTriState: valueType === 'bool',
       extraSuggest,
+      // Список значений у условия «в списке»/«не в списке» — самостоятельный
+      // аргумент операции, а не хранимая comma-joined форма text-свойства:
+      // просим редактор вернуть массив, иначе два и более значения склеивались
+      // в одну строку и отбор пустел (ошибка b610729c-2fdf-4f18-b526-7e7aeddb860f).
+      ...(isList ? { textListAsArray: true } : {}),
       ...(valueType === 'date' ? { placeholder: 'YYYY-MM-DD или токен ($today+7d)…' } : {}),
       save: (next) => {
         if (Array.isArray(next)) setValues(next.map((v) => String(v)));

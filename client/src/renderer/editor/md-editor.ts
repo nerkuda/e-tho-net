@@ -141,6 +141,13 @@ export interface MdEditor {
   snapshot(): MdEditorSnapshot;
   /** Применяет правку (текст и/или выделение) одной транзакцией. */
   applyEdit(edit: MdEditorEdit): void;
+  /**
+   * Координата позиции документа в системе окна — анкер поповера, привязанного
+   * к диапазону (команды создания мыслей из выделения, требование `14539728`).
+   * `null` — позиция вне видимой области/вида. Необязательна: фейки редактора
+   * в юнит-тестах её не реализуют (поповер подменяется портом).
+   */
+  pointAt?(position: number): { x: number; y: number } | null;
   /** Подписка на изменения текста/выделения (для состояния кнопок тулбара). */
   subscribe(listener: () => void): () => void;
   /**
@@ -561,6 +568,16 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         selection: edit.selection,
         scrollIntoView: edit.scrollIntoView,
       });
+    },
+    pointAt: (position) => {
+      const pos = Math.max(0, Math.min(view.state.doc.length, Math.trunc(position)));
+      try {
+        const coords = view.coordsAtPos(pos);
+        if (coords === null) return null;
+        return { x: coords.left, y: coords.bottom };
+      } catch {
+        return null;
+      }
     },
     subscribe: (listener) => {
       listeners.add(listener);

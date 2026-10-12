@@ -154,6 +154,16 @@ export interface ValueEditorOptions {
    * токен не влезает в `<input type="date">`).
    */
   placeholder?: string;
+  /**
+   * Для `text` + `config.multiple`: отдать в `save` МАССИВ значений, а не
+   * хранимую comma-joined строку (`02-data-model.md` §3.4–3.5). По умолчанию
+   * (`false`) редактор отдаёт хранимую форму свойства — так его читает таблица
+   * значений. Конструктор условий отбора передаёт `true`: там список — это
+   * самостоятельный аргумент операции «в списке»/«не в списке»
+   * (`in`/`not_in`), и склейка значений в одну строку обнуляла отбор (ошибка
+   * b610729c-2fdf-4f18-b526-7e7aeddb860f).
+   */
+  textListAsArray?: boolean;
 }
 
 /**
@@ -965,6 +975,8 @@ function buildMultiTextChipsEditor(opts: {
   save: (next: unknown | null) => Promise<boolean> | boolean;
   historyPropertyId?: string;
   extraSuggest?: readonly SuggestSource[];
+  /** `true` — в `save` идёт массив значений, а не comma-joined строка (text). */
+  listAsArray?: boolean;
 }): HTMLElement {
   const { kind, definition } = opts;
   let items = [...opts.items];
@@ -979,7 +991,9 @@ function buildMultiTextChipsEditor(opts: {
   const commit = (next: string[]): void => {
     items = next;
     render();
-    const payload = kind === 'text' ? next.join(', ') : next;
+    // text хранит набор comma-joined строкой; `listAsArray` сохраняет список
+    // дискретным (конструктор условий: значения — аргумент операции «в списке»).
+    const payload = kind === 'text' && opts.listAsArray !== true ? next.join(', ') : next;
     void Promise.resolve()
       .then(() => opts.save(next.length > 0 ? payload : null))
       .then((ok) => {
@@ -1246,6 +1260,7 @@ function buildTextEditor(opts: ValueEditorOptions): HTMLElement {
       historyPropertyId: opts.historyPropertyId,
       networkId: opts.networkId,
       extraSuggest: opts.extraSuggest,
+      ...(opts.textListAsArray === true ? { listAsArray: true } : {}),
     });
   }
   return buildScalarTextEditor(opts, 'text');

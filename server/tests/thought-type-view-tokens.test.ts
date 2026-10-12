@@ -28,10 +28,12 @@ import { EtnError } from '@etn/shared';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
-import { createTypeProperty } from '../src/domain/property-service.js';
+import { createThought } from '../src/domain/thought-service.js';
+import { createTypeProperty, listEffectiveTypeProperties, setPropertyValue } from '../src/domain/property-service.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import {
   createThoughtTypeView,
+  runViewForThought,
   updateThoughtTypeView,
 } from '../src/domain/thought-type-views-service.js';
 import {
@@ -677,6 +679,52 @@ describe(
         );
         assert.equal(result.unresolved.length, 1);
         assert.equal(result.unresolved[0]!.reason, 'unknown_property');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    /**
+     * Регресс ошибки 7489e4d9: множественное `text`-значение мысли хранится
+     * comma-joined строкой, и токен `$thought.[Теги]` подставлялся в отбор
+     * этой склеенной строкой одним элементом — условие «в списке» по нему не
+     * матчило. Резолвер обязан отдать СПИСОК элементов (требование 12fccde9).
+     */
+    it('run-time: множественное text-значение подставляется списком элементов', async () => {
+      const { ndb, typeId } = setup();
+      try {
+        const tagsPropId = listEffectiveTypeProperties(ndb, 'thought_type', typeId)
+          .find((p) => p.key === 'Теги')!.property_id;
+
+        const context = createThought(ndb, { title: 'Контекст', type_id: typeId }, USER);
+        const hit = createThought(ndb, { title: 'Совпадение', type_id: typeId }, USER);
+        const miss = createThought(ndb, { title: 'Мимо', type_id: typeId }, USER);
+        setPropertyValue(ndb, 'thought', context.id, 'Теги', 'tag-a, tag-b', USER);
+        setPropertyValue(ndb, 'thought', hit.id, 'Теги', 'tag-a', USER);
+        setPropertyValue(ndb, 'thought', miss.id, 'Теги', 'tag-c', USER);
+
+        const view = createThoughtTypeView(
+          ndb,
+          typeId,
+          {
+            name: 'По тегам',
+            definition: JSON.stringify({
+              properties: [{ property_id: tagsPropId, op: 'in', value: ['$thought.[Теги]'] }],
+              sort: 'alpha',
+              order: 'asc',
+            }),
+          },
+          USER,
+        );
+
+        const res = await runViewForThought(ndb, view, context.id, USER);
+        assert.deepEqual(res.unresolved, []);
+        assert.deepEqual(
+          res.items.map((i) => i.id),
+          [hit.id],
+          'элемент tag-a из значения "tag-a, tag-b" матчится поэлементно',
+        );
+        assert.ok(!res.items.some((i) => i.id === miss.id));
       } finally {
         ndb.close();
       }

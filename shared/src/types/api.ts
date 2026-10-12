@@ -138,7 +138,7 @@ export interface ExportEtnxOptions {
   /** Include the descendants of every root thought in `thought_ids` (BFS by
    *  outgoing parent→child links). Default: false. */
   include_subtree?: boolean;
-  /** Maximum descendant depth when `include_subtree` is true. 1..5. Default: 1. */
+  /** Maximum descendant depth when `include_subtree` is true. 1..20. Default: 1. */
   subtree_depth?: number;
 }
 

@@ -19,6 +19,7 @@
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { createReadStream } from 'node:fs';
 
 import {
   EtnError,
@@ -35,7 +36,7 @@ import {
 import { sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
 import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
-import { getExportJob, getExportJobContent, startExportJob } from '../domain/export-service.js';
+import { getExportJob, getExportJobContent, getExportJobFile, startExportJob } from '../domain/export-service.js';
 import { findMentionsInTexts } from '../domain/search-service.js';
 import { searchAsync } from '../domain/heavy-read.js';
 import {
@@ -279,6 +280,22 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler] },
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestJobById, req);
+
+        // Файловые результаты (.etnx, zip публикаций) отдаём потоком — без
+        // чтения архива целиком в память, с `content-length`, и повторяемо
+        // до истечения TTL задания (задача 99c16033).
+        const file = getExportJobFile(input.job_id);
+        if (file !== null) {
+          // Экспорт публикаций несёт собственное имя `<slug>.zip` (операция
+          // 1f161c74); классический .etnx — `etn-<network>.etnx`.
+          const filename = file.filename ?? `etn-export.${extensionFor(file.contentType)}`;
+          reply
+            .header('content-type', file.contentType)
+            .header('content-length', String(file.size))
+            .header('content-disposition', `attachment; filename="${filename}"`);
+          return reply.send(createReadStream(file.filePath));
+        }
+
         const content = getExportJobContent(input.job_id);
         if (content === null) {
           throw new EtnError(

@@ -20,6 +20,7 @@ import type { ThoughtRef } from '@etn/shared';
 
 import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_TARGET_ATTR } from '@etn/markdown';
 
+import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { etn } from '../lib/etn.js';
 import { commitEntity, getEntity } from '../lib/live/index.js';
 import { t } from '../lib/i18n.js';
@@ -405,7 +406,7 @@ export async function resolveWikiLinksInDom(root: HTMLElement, networkId: string
 }
 
 // ---------------------------------------------------------------------------
-// Legacy name-target lookup (shared by navigation and hover preview)
+// Legacy name-target lookup (hover preview)
 // ---------------------------------------------------------------------------
 
 /** A legacy `[[имя|текст]]` link resolved by name to a thought. */
@@ -415,15 +416,15 @@ export interface LegacyWikiTargetHit {
 }
 
 /**
- * Resolves a legacy name-only wiki-link target with the ONE lookup both the
- * click navigation (`openWikiTarget` in `editor/wiki-link.ts`) and the
- * Ctrl-hover preview (`resolveWikiLegacyNameContent` in
- * `lib/hover-preview.ts`) use: FTS `scope=names`, exact title match first,
- * else the first hit — so what the preview shows is exactly what a click
- * would open. Lives here (not in either consumer) because hover-preview must
- * not import `editor/wiki-link.ts` (module cycle, see its doc comment), while
- * both already import this module. Returns `null` when nothing matches;
- * API errors propagate to the caller (each consumer has its own error UX).
+ * Resolves a legacy name-only wiki-link target for the Ctrl-hover preview
+ * (`resolveWikiLegacyNameContent` in `lib/hover-preview.ts`): FTS `scope=names`,
+ * exact title match first, else the first hit. Click navigation по легаси-ссылке
+ * этой функцией больше НЕ пользуется — она идёт развилкой
+ * {@link resolveLegacyWikiCandidates} (точное совпадение названия/синонима,
+ * поповер, создание; задача 8e4e3dc5). Живёт здесь, потому что hover-preview
+ * не имеет права импортировать `editor/wiki-link.ts` (цикл модулей, см. его
+ * doc-комментарий). Returns `null` when nothing matches; API errors propagate to
+ * the caller (each consumer has its own error UX).
  */
 export async function searchLegacyWikiTarget(
   networkId: string,
@@ -433,6 +434,143 @@ export async function searchLegacyWikiTarget(
   const hit = res.by_names.find((h) => h.title === name) ?? res.by_names[0];
   if (hit === undefined) return null;
   return { thoughtId: hit.thought_id, title: hit.title };
+}
+
+// ---------------------------------------------------------------------------
+// Legacy wiki-link click fork (задача 8e4e3dc5, 0.12.2)
+//
+// Клик по легаси-ссылке `[[Имя]]` больше не просто открывает мысль: имя
+// проверяется среди АКТУАЛЬНЫХ мыслей по ТОЧНОМУ совпадению названия ИЛИ
+// синонима (`findDuplicates` различает title/synonym/partial), и результат
+// уходит в развилку из 4 веток (см. `editor/wiki-link.ts`). Здесь — источник
+// кандидатов и чистые решатели, чтобы развилка и лимит выдачи (≤10 + пометка)
+// были покрыты юнит-тестами без DOM.
+// ---------------------------------------------------------------------------
+
+/** Предел числа показанных кандидатов в поповере (уточнение DoD 3). */
+export const LEGACY_CANDIDATE_LIMIT = 10;
+
+/** Нормализация имени как у серверного `find_duplicates` (NFC+trim+lower). */
+export function legacyNameKey(value: string): string {
+  return value.normalize('NFC').trim().toLowerCase();
+}
+
+/**
+ * ТОЧНЫЕ кандидаты по названию ИЛИ синониму, в порядке выдачи
+ * `findDuplicates`. Классификацию точности делает СЕРВЕР и отдаёт в
+ * `matched_on`:
+ *
+ * - `title` — точное название (`title_norm = norm(имя)`);
+ * - `synonym` — точный синоним ИЛИ совпавший `*`-паттерн синонима (общий
+ *   матчер `synonymPatternToRegex` из `@etn/shared` — тот же, что у
+ *   авто-упоминаний; паттерн синонима анкорится на ВСЁ имя);
+ * - `partial` — слабый кандидат по вхождению фрагмента.
+ *
+ * Берём `title`/`synonym` и отбрасываем `partial`. `*`-синонимы (`исправ*
+ * ошиб*`) поэтому совпадают с именем-целью как полноценные кандидаты:
+ * литеральное сравнение их ранее ошибочно отсеивало (дефект визуальной
+ * проверки, задача 8e4e3dc5). Второго матчера здесь нет — переиспользуется
+ * классификация сервера. Чистая.
+ */
+export function exactLegacyCandidates(
+  hits: readonly DuplicateHit[],
+  name: string,
+): DuplicateHit[] {
+  if (legacyNameKey(name) === '') return [];
+  return hits.filter((hit) => hit.matched_on !== 'partial');
+}
+
+/** Ветка развилки по числу точных актуальных кандидатов. */
+export type LegacyBranch = 'single' | 'many' | 'none';
+
+/** Классификация развилки: 0 → создать, 1 → открыть, ≥2 → поповер. Чистая. */
+export function classifyLegacyCandidates(count: number): LegacyBranch {
+  if (count <= 0) return 'none';
+  return count === 1 ? 'single' : 'many';
+}
+
+/** Действие развилки клика (уточнения DoD 1–4). */
+export type LegacyForkAction = 'create' | 'open-only' | 'convert-open' | 'popover';
+
+/**
+ * Решение развилки: 0 кандидатов → создать; единственный ЗАХВАЧЕННЫЙ →
+ * открыть без конвертации (`open-only`); единственный свободный → конвертировать
+ * (правка) / открыть (просмотр); несколько → поповер. Чистая — ветки
+ * покрываются юнит-тестами.
+ */
+export function decideLegacyFork(candidateCount: number, singleLocked: boolean): LegacyForkAction {
+  switch (classifyLegacyCandidates(candidateCount)) {
+    case 'none':
+      return 'create';
+    case 'many':
+      return 'popover';
+    default:
+      return singleLocked ? 'open-only' : 'convert-open';
+  }
+}
+
+/** План выполнения развилки: что делать с мыслью и с текстом ссылки. */
+export interface LegacyForkPlan {
+  /** Ветка развилки. */
+  action: LegacyForkAction;
+  /** Заменять текст ссылки ID-формой (только правка; в просмотре — никогда). */
+  convert: boolean;
+  /** Переходить к мысли (просмотр и захваченная цель — да). */
+  navigate: boolean;
+}
+
+/**
+ * Плана развилки по режиму (уточнения пользователя 2026-10-11, вечер). Чистая.
+ *
+ * - **Просмотр** (`viewMode`): конвертации НЕТ НИКОГДА — только переход
+ *   (ветка 1/2 после выбора, ветка 3 после создания).
+ * - **Правка**: конвертация в буфере без перехода; ИСКЛЮЧЕНИЕ — единственная
+ *   ЗАХВАЧЕННАЯ цель: открыть без конвертации.
+ */
+export function planLegacyFork(
+  candidateCount: number,
+  singleLocked: boolean,
+  viewMode: boolean,
+): LegacyForkPlan {
+  const action = decideLegacyFork(candidateCount, singleLocked);
+  if (action === 'open-only') {
+    // Захваченная единственная цель: переход без конвертации в обоих режимах.
+    return { action, convert: false, navigate: true };
+  }
+  return { action, convert: !viewMode, navigate: viewMode };
+}
+
+/** Окно выдачи поповера: первые ≤10 + признак обрезки. Чистая. */
+export function legacyCandidateWindow<T>(items: readonly T[]): {
+  shown: T[];
+  truncated: boolean;
+} {
+  if (items.length > LEGACY_CANDIDATE_LIMIT) {
+    return { shown: items.slice(0, LEGACY_CANDIDATE_LIMIT), truncated: true };
+  }
+  return { shown: [...items], truncated: false };
+}
+
+/**
+ * Точные АКТУАЛЬНЫЕ кандидаты легаси-ссылки. Неактуальные исключаются из
+ * резолва (уточнение DoD 2): `findDuplicates` их не различает, поэтому
+ * актуальность читается батчем `etn.thoughts.resolve` — best-effort (сбой
+ * резолва оставляет кандидатов: клик всё равно должен открыть мысль).
+ */
+export async function resolveLegacyWikiCandidates(
+  networkId: string,
+  name: string,
+): Promise<DuplicateHit[]> {
+  const hits = await etn.thoughts.findDuplicates(networkId, name);
+  const exact = exactLegacyCandidates(hits, name);
+  if (exact.length === 0) return [];
+  try {
+    const refs = await etn.thoughts.resolve(networkId, exact.map((hit) => hit.id));
+    const activeById = new Map(refs.map((ref) => [ref.id, ref.active]));
+    return exact.filter((hit) => activeById.get(hit.id) !== false);
+  } catch {
+    return exact;
+  }
 }
 
 /** Test-only hook. */

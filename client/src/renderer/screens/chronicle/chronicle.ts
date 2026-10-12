@@ -47,7 +47,7 @@ import {
 } from '@etn/shared';
 
 import { findRootThought, requireNetworkId } from '../../app.js';
-import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
+import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { registerDropActions } from '../../canvas/drag-cloud.js';
 import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
@@ -60,6 +60,11 @@ import {
   insertMentionLinkIntoField,
 } from '../../editor/markdown-field.js';
 import { annotateMentions } from '../../editor/mentions-annotate.js';
+import {
+  paintWikiIdsInSnippet,
+  resolveWikiIdsInSnippet,
+  resolveWikiLinksInDom,
+} from '../../editor/wiki-link-resolver.js';
 import { createCommentCollapseState, decorateCommentView } from '../../editor/comment-collapse.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { div, el, errText, span } from '../../lib/dom.js';
@@ -90,6 +95,7 @@ import {
 } from '../../lib/record-search.js';
 import { iconButton, uiButton } from '../../lib/ui/button.js';
 import { commentShell } from '../../lib/ui/comment.js';
+import { bindWikiCreateContext } from '../../lib/wiki-create-context.js';
 import { operationError } from '../../lib/ui/messages.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
@@ -1236,6 +1242,15 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // свёрнутость. Это забота ЭКРАНА: `record-body.ts` остаётся чистым.
   const collapseNetworkId = store.state.networkId;
   if (collapseNetworkId !== null && row.body_html.trim() !== '') {
+    // Резолв ID-форм wiki-ссылок (`[[#<id>]]` / `[[n:<net>#<id>]]`) в просмотре
+    // записи (ошибка ab8b6da8): серверный `body_html` отдаёт такие ссылки пустым
+    // спаном `<span class="wiki-link" data-wiki-id>` — имя мысли подставляет
+    // клиент. Просмотр комментария несёт одни и те же декорации в любом месте
+    // (требование d574d116, «Подключается в полях просмотра комментария,
+    // дневника и в сниппетах»): поле markdown резолвит ссылки в своём
+    // `paintView`, лента «Дневника» обязана делать то же — иначе в режиме
+    // ПРОСМОТРА ссылки на мысли невидимы (в правке имя подтягивает wikiIdPlugin).
+    void resolveWikiLinksInDom(recordView, collapseNetworkId);
     decorateCommentView(
       recordView,
       createCommentCollapseState(collapseNetworkId, row.id),
@@ -1249,6 +1264,15 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
    */
   const currentOwner = (): { ownerType: 'thought'; ownerId: string } | null =>
     attachmentOwnerForRow(row.targets, homeId);
+
+  // Просмотр записи — статичный `body_html` БЕЗ поля markdown (`.md-field`),
+  // поэтому клик по легаси-ссылке `[[Имя]]` в ленте не находил контекста
+  // владельца и показывал «Мысль «…» не найдена.» вместо диалога создания
+  // (дефект визуальной проверки, задача 8e4e3dc5). Привязываем владельца
+  // записи к корню оболочки ленивым источником: `homeId` разрешается позже
+  // сборки карточки, а к моменту клика — уже да (`attachmentOwnerForRow`
+  // отдаёт HOME, когда у записи нет привязанных мыслей).
+  bindWikiCreateContext(shell.root, () => currentOwner());
 
   /**
    * Создать поле markdown тела при первом входе в правку (ленивое создание).
@@ -1296,9 +1320,12 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
             commentContext: {
               ownerType: 'thought' as const,
               ownerId: owner.ownerId,
-              commentKind: 'chronological' as const,
               getCommentId: () => row.id,
               getParentThoughtIds: () => parentThoughtIds(row.targets),
+              // Мысль, созданная командой из текста тела записи, привязывается к
+              // самой записи (0.12.2, задача e36d23a3, требование d6361b9c) —
+              // тем же механизмом, что «+ мысль» (attachToRecord).
+              attachCreatedThought: (thoughtId) => attachToRecord(row.id, [thoughtId]),
             },
           }
         : {}),
@@ -1405,8 +1432,9 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     if (title !== null) {
       title.setContent(
         updated.title ?? '',
-        recordDisplayTitle(updated.title, updated.body_md) || t('diary.emptyTitle'),
+        derivedTitleLabel(updated.title, updated.body_md),
       );
+      refreshDerivedTitle(title, updated.title, updated.body_md);
     }
   };
 
@@ -1466,6 +1494,11 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     },
   });
   title = head.title;
+  // Производный заголовок записи может нести сырую ID-форму wiki-ссылки
+  // (`[[#<id>]]`, ошибка 6b4e402a): синхронную подстановку из кеша уже сделал
+  // `recordTitleLabel` (`derivedTitleLabel`), здесь дорезолвиваем имена мыслей
+  // батчем и обновляем надпись (id не мелькает на экране).
+  refreshDerivedTitle(title, row.title, row.snippet);
   cardEditors.set(card, editor);
 
   // Двойной клик по СТАТИЧНОМУ просмотру (поле ещё не создано) входит в правку
@@ -1488,7 +1521,45 @@ function recordDateLabel(row: ChronicleRow): string {
 
 /** Отображаемый заголовок записи; пустой — «Пустая запись» из словаря. */
 function recordTitleLabel(row: ChronicleRow): string {
-  return recordDisplayTitle(row.title, row.snippet) || t('diary.emptyTitle');
+  return derivedTitleLabel(row.title, row.snippet);
+}
+
+/**
+ * Надпись производного заголовка записи с резолвом ID-форм wiki-ссылок (ошибка
+ * 6b4e402a): поле `title` либо, при пустом, первая строка тела/сниппета.
+ * ID-формы (`[[#<id>]]` / `[[n:<net>#<id>]]`) подменяются именами мыслей ОБЩИМ
+ * резолвером сниппетов (`editor/wiki-link-resolver.ts`) — синхронно из кеша
+ * слоя, поэтому id не мелькает на экране; пропущенное дорезолвит
+ * {@link refreshDerivedTitle}. Снятие ведущих markdown-маркеров, разэкранирование
+ * HTML и обрезка — {@link recordDisplayTitle} (потребитель тот же, путь — тот же).
+ */
+function derivedTitleLabel(title: string | null | undefined, source: string): string {
+  const networkId = store.state.networkId;
+  const painted =
+    networkId === null || !source.includes('[[')
+      ? source
+      : paintWikiIdsInSnippet(source, networkId);
+  return recordDisplayTitle(title, painted) || t('diary.emptyTitle');
+}
+
+/**
+ * Дорезолвить ID-формы wiki-ссылок в производном заголовке и обновить надпись
+ * компонента (ошибка 6b4e402a). Best-effort: без сети/ID-форм ничего не делает,
+ * ошибка резолва не ломает показ (надпись остаётся как после синхронной
+ * подстановки). Карточка могла быть перерисована — обновляем только связанный
+ * узел (`isConnected`).
+ */
+function refreshDerivedTitle(
+  handle: RecordTitleHandle | null,
+  title: string | null | undefined,
+  source: string,
+): void {
+  const networkId = store.state.networkId;
+  if (handle === null || networkId === null || !source.includes('[[')) return;
+  void resolveWikiIdsInSnippet(source, networkId).then((resolved) => {
+    if (!handle.node().isConnected) return;
+    handle.setContent(title ?? '', recordDisplayTitle(title, resolved) || t('diary.emptyTitle'));
+  });
 }
 
 function recordMenuItems(row: ChronicleRow): MenuItem[] {
@@ -1723,14 +1794,82 @@ async function detachChip(rowId: string, target: ChronicleTarget): Promise<void>
   }
 }
 
+/**
+ * «+ мысль» на карточке записи: диалог открывается с ВКЛЮЧЁННЫМ созданием —
+ * в слоте комментария можно не только найти, но и создать новую мысль (ошибка
+ * 0c3a8b69). Созданные мысли привязываются к записи тем же путём, что найденные
+ * (`attachToRecord`); их родителями становятся мысли-владельцы записи.
+ */
 async function pickAndAttach(rowId: string): Promise<void> {
+  const networkId = requireNetworkId();
   const result = await pickThoughtsDialog({
-    networkId: requireNetworkId(),
-    allowCreate: false,
+    networkId,
+    allowCreate: true,
     allowLinkType: false,
   });
   if (result === null) return;
-  await attachToRecord(rowId, pickedThoughtIds(result));
+  // Родители НОВЫХ мыслей — мысли-владельцы записи (ТЗ5 «Дневник без
+  // псевдослота»): тот же контракт, что у команд вставки мысли в комментарий.
+  const parentIds = await recordParentThoughtIds(networkId, rowId);
+  const thoughtIds: string[] = [];
+  let failed = 0;
+  for (const item of result.items) {
+    if (item.kind === 'existing') {
+      thoughtIds.push(item.id);
+      continue;
+    }
+    try {
+      const created = await etn.thoughts.create(networkId, {
+        title: item.title,
+        synonyms: [...item.synonyms],
+        type_id: result.thoughtTypeId,
+      });
+      // Структурные рёбра родителям ставит отдельная операция: `create_link`
+      // знает только тип связи, не родителя, а владельцев у записи может быть
+      // несколько (паритет с `linkParents` команд вставки мысли).
+      if (parentIds.length > 0) {
+        await etn.thoughts.batch(networkId, {
+          ids: [created.id],
+          op: 'link_parents',
+          args: { parent_ids: [...parentIds], link_type_id: null },
+        });
+      }
+      thoughtIds.push(created.id);
+    } catch {
+      failed++;
+    }
+  }
+  if (failed > 0) notice(`${t('comment.create.error')}: ${failed}`, 'error');
+  await attachToRecord(rowId, thoughtIds);
+}
+
+/**
+ * Мысли-владельцы записи по её привязкам — родители новой мысли. Мысль-привязка
+ * даёт свой id, привязка-связь — источник связи (паритет с `parentThoughtIds`
+ * из `./diary.js`), дубли схлопываются. Ошибка чтения записи или связи —
+ * пустой список (родителей не ставим, но мысль всё равно создаётся).
+ */
+async function recordParentThoughtIds(networkId: string, rowId: string): Promise<string[]> {
+  try {
+    const fresh = await etn.comments.get(networkId, rowId);
+    const ids: string[] = [];
+    for (const target of fresh.targets) {
+      let id: string | null = null;
+      if (target.owner_type === 'thought') {
+        id = target.owner_id;
+      } else {
+        try {
+          id = (await etn.links.get(networkId, target.owner_id)).source_id;
+        } catch {
+          id = null;
+        }
+      }
+      if (id !== null && id !== '' && !ids.includes(id)) ids.push(id);
+    }
+    return ids;
+  } catch {
+    return [];
+  }
 }
 
 async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void> {

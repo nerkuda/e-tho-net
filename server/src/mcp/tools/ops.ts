@@ -115,7 +115,7 @@ import { deleteComment, getComment } from '../../domain/comment-service.js';
 import { copySubtree as copySubtreeFn } from '../../domain/thought-subtree-copy-service.js';
 import { importFromBuffer, planImportFromBuffer, readImportSource } from '../../domain/import-service-mcp.js';
 import { listTrash, purgeTrash } from '../../domain/trash-service.js';
-import { exportToMarkdown, getExportJobContent, startExportJob } from '../../domain/export-service.js';
+import { exportToEtnxFile, exportToMarkdown, getExportJobContent, startExportJob } from '../../domain/export-service.js';
 import { clampReadMetricsParams, getColdReads, getTopReads } from '../../domain/read-metrics-service.js';
 import { clearThoughtRefUsages, crossResolvePropertyValue, getNetworkProperty, removeLinkPropertyValue } from '../../domain/property-service.js';
 import { deleteOntologyEntity } from '../../domain/ontology-delete-service.js';
@@ -1250,17 +1250,39 @@ const HANDLERS: Record<string, OpHandler> = {
       const sourceNetworkName =
         rt.deps.systemDb.getNetworkById(a.network_id)?.display_name ?? a.network_id;
       const result = await subgraphAsync(ndb, a.seed_ids, a.radius, { maxNodes: rt.limits.maxNodesPerSubgraph });
+      // `destination` — только для файлового `.etnx` (задача 99c16033).
+      if (a.destination !== undefined && format !== 'etnx') {
+        throw new EtnError('VALIDATION_ERROR', 'destination применим только к format: "etnx".', {
+          field: 'destination',
+        });
+      }
       if (format === 'markdown') {
         return { format, truncated: result.truncated, content: exportToMarkdown(ndb, result.nodes) };
       }
       if (format === 'etnx') {
+        const source = {
+          network_id: a.network_id,
+          network_name: sourceNetworkName,
+          user_id: rt.deps.auth.userId,
+        };
+        // Файловый вывод: сервер пишет архив по пути и отдаёт путь + счётчики,
+        // без base64 в ответе (задача 99c16033). Job store не задействован.
+        if (a.destination !== undefined) {
+          const written = await exportToEtnxFile(ndb, result.nodes, a.etnx_options ?? {}, source, {
+            path: a.destination.path,
+            ...(a.destination.overwrite === undefined ? {} : { overwrite: a.destination.overwrite }),
+          });
+          return {
+            format,
+            truncated: result.truncated,
+            path: written.path,
+            size: written.size,
+            counts: written.counts,
+          };
+        }
         const job = await startExportJob(ndb, result.nodes, format, {
           etnx: a.etnx_options ?? {},
-          source: {
-            network_id: a.network_id,
-            network_name: sourceNetworkName,
-            user_id: rt.deps.auth.userId,
-          },
+          source,
         });
         const downloaded = getExportJobContent(job.job_id, format);
         if (downloaded === null) throw new Error('ETN error [INTERNAL]: export content unavailable');

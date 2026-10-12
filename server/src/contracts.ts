@@ -1825,6 +1825,17 @@ export const ExportSubgraph = defineContract(
         subtree_depth: z.number().int().min(1).max(20).optional(),
       })
       .optional(),
+    // Файловый вывод `.etnx` (задача 99c16033, 0.12.2) — симметрично
+    // `import.subgraph.source`. При наличии `destination` сервер пишет архив
+    // по абсолютному пути (FS сервера) и возвращает `{ path, size, counts }`
+    // вместо base64. Применим только к `format: "etnx"`.
+    destination: z
+      .object({
+        kind: z.literal('etnx_file'),
+        path: z.string().min(1),
+        overwrite: z.boolean().optional(),
+      })
+      .optional(),
   }),
   {},
 );
