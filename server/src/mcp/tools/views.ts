@@ -43,7 +43,9 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
         'из двух. Read-only: бюджет записи не тратит, `audit_log` не пишет. ' +
         'Возвращает страницу мыслей + `meta.view` (отбор, который был исполнен; при `ast` — ' +
         '`meta.ast: true`) и `meta.unresolved` (не пусто, если встретился неразрешимый на ' +
-        'момент исполнения токен — тогда `data` пустая).',
+        'момент исполнения токен — тогда `data` пустая). Жёлтая диагностика (свойство отвязано ' +
+        'от типа отбора) — `meta.warnings`, исполнение при этом не блокируется; красная ' +
+        '(условие на удалённую сущность) — ошибка `VALIDATION_ERROR` с `details.diagnostics`.',
       inputSchema: ViewsRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.views.run'],
     },
