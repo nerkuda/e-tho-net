@@ -214,10 +214,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`author_id`/`editor_id`, `link_filter`. Принимает и `ast` — дерево условий ' +
         '(грамматика — `etn.guide { topic: "thoughts.query" }`), несовместимое со старыми ' +
         'критериями. Ответ несёт справочник `thought_types` и эхо ' +
-        '`resolved_types`/`resolved_properties` для входов по имени; неразрешимый токен даёт ' +
-        'пустую страницу и `unresolved`, а AST-условие на удалённую сущность (свойство/тип/' +
-        'значение-мысль) не исполняется — `VALIDATION_ERROR` с `details.diagnostics` и ' +
-        'снапшотом имени из `labels`.',
+        '`resolved_types`/`resolved_properties` для входов по имени; неразрешимый токен — пустая ' +
+        'страница и `unresolved`, удалённая сущность условия — `VALIDATION_ERROR` ' +
+        '(`details.diagnostics`).',
       inputSchema: ThoughtsQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
     },

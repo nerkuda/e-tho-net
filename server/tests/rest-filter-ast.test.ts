@@ -331,4 +331,62 @@ describe('POST /thoughts/query: AST-тело через REST (задача c1376
       await closeRestContext(ctx);
     }
   });
+
+  it('одиночная выборка: неразрешимый токен AST попадает в meta.unresolved (30db3cea)', async () => {
+    const ctx = await buildRestContext();
+    try {
+      seedThought(ctx.ndb, 'REST-мысль');
+      const res = await post(ctx, {
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            entity: { kind: 'created_at' as const },
+            operator: 'gte' as const,
+            value: { token: '$thought.id' },
+          },
+        },
+        sort: 'alpha',
+        order: 'asc',
+        limit: 10,
+      });
+      assert.equal(res.statusCode, 200, JSON.stringify(res.json));
+      assert.deepEqual(res.json['data'], [], 'неразрешимый токен — пустая страница');
+      const meta = res.json['meta'] as { unresolved?: Array<{ token: string; reason: string }> };
+      assert.equal(meta.unresolved?.length, 1, JSON.stringify(res.json));
+      assert.match(meta.unresolved?.[0]?.token ?? '', /\$thought/);
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('ids_only: неразрешимый токен AST попадает в unresolved (паритет с основным путём)', async () => {
+    const ctx = await buildRestContext();
+    try {
+      seedThought(ctx.ndb, 'REST-мысль');
+      const res = await post(ctx, {
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            entity: { kind: 'created_at' as const },
+            operator: 'gte' as const,
+            value: { token: '$thought.id' },
+          },
+        },
+        ids_only: true,
+        sort: 'alpha',
+        order: 'asc',
+        limit: 10,
+      });
+      assert.equal(res.statusCode, 200, JSON.stringify(res.json));
+      const data = res.json['data'] as {
+        ids: string[];
+        unresolved?: Array<{ path: string; token: string; reason: string; message: string }>;
+      };
+      assert.deepEqual(data.ids, [], 'неразрешимый токен — пустой набор id');
+      assert.equal(data.unresolved?.length, 1, JSON.stringify(res.json));
+      assert.match(data.unresolved?.[0]?.token ?? '', /\$thought/);
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
 });

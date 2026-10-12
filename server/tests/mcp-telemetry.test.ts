@@ -620,9 +620,16 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // режется) и краткое упоминание тела/диагностики в описаниях. Замер с
         // новым состоянием — 38 221 Б; планка поднята ровно под прирост с малым
         // запасом: 37 550 → 38 400.
+        // 0.13.1 (задача e1676e91, «Диагностика отбора»): описания
+        // `etn.thoughts.query`/`etn.views.run` упоминают исходы диагностики
+        // (удалённая сущность → `VALIDATION_ERROR` с `details.diagnostics`;
+        // неразрешимый токен → `unresolved`; отвязанное свойство →
+        // `meta.warnings`). Прирост — только проза, сжатая до конспекта
+        // (детали — `etn.guide { topic: "thoughts.query" }`): `tools/list`
+        // 42 986 → 43 238 Б (под планкой 43 400); D+I 38 221 → 38 473 Б.
         assert.ok(
-          descriptionsPlusInputSchema <= 38_400,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 38400`,
+          descriptionsPlusInputSchema <= 38_500,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 38500`,
         );
       } finally {
         await handle.close();

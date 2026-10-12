@@ -280,6 +280,12 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             total: result.total,
             has_more: result.has_more,
             next_cursor: result.next_cursor,
+            // Неразрешимые токены AST (требование b7fdab20, уточнение 30db3cea):
+            // непусто — `ids` пуст с пояснением, а не молчаливая потеря условия.
+            // Паритет с основным путём `POST /thoughts/query`.
+            ...(result.unresolved !== undefined && result.unresolved.length > 0
+              ? { unresolved: result.unresolved }
+              : {}),
           } satisfies StructureIdsQueryResponse);
           return;
         }

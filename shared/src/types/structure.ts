@@ -207,6 +207,12 @@ export interface StructureIdsQueryResponse {
   has_more?: boolean;
   /** Keyset-курсор следующей страницы (`null` — страниц больше нет). */
   next_cursor?: string | null;
+  /**
+   * Неразрешимые токены AST (требование b7fdab20, уточнение 30db3cea): непусто —
+   * `ids` пуст, пояснения здесь (паритет с основным путём `POST /thoughts/query`).
+   * Отсутствует/пусто — всё разрешилось.
+   */
+  unresolved?: Array<{ path: string; token: string; reason: string; message: string }>;
 }
 
 /**
