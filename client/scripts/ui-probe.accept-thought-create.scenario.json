@@ -1,6 +1,6 @@
 {
   "name": "accept-thought-create",
-  "description": "Приёмочный прогон задачи 1d21608e (T4 тех.проекта ac212c41, 0.12.2) — НЕЗАВИСИМЫЕ сценарии по карточкам S1-S9 (свои данные с префиксом «АК», свои пробы). S1 (805f0596) короткое выделение → диалог, мысль без тела, ссылка. S2 (007a81ea) длинное → заголовок=первая строка, тело=остаток, трансклюзия. S4 (b2e3ca0b) выбор существующей: частичная замена литерального вхождения; нет совпадения → ссылка в начало; отказ → текст не меняется. S3 (b80cf4f6) список: пакетно, вложенные — текст тела, под-мыслей нет. S5 (3390570c) wildcard-синоним дедуп; первая строка >250; комбинированный >250+вложенный; нет совпадения → создание; ровно 250 → короткое (диалог). S7 (7e7c9b85) несколько совпадений → поповер у элемента → ссылка. S8 (d7869742) дедуп «Создать мысль из раздела». S9 (2912df82) смешанное «абзац+список»; одиночный элемент списка. Контроль — по телам/детям/привязкам в БД стенда (window.etn). Без скриншотов. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.accept-thought-create.scenario.json.",
+  "description": "Приёмочный прогон задачи 1d21608e (T4 тех.проекта ac212c41, 0.12.2) — НЕЗАВИСИМЫЕ сценарии по карточкам S1-S9 (свои данные с префиксом «АК», свои пробы). S1 (805f0596) короткое выделение → диалог, мысль без тела, ссылка. S2 (007a81ea) длинное → заголовок=первая строка, тело=остаток, трансклюзия. S4 (b2e3ca0b, уточнение e883199c) ДЛИННОЕ выделение + существующая: частичная замена литерального вхождения; нет совпадения → ссылка в начало (S4a/S4b). КОРОТКОЕ выделение + существующая: выделение целиком заменяется ссылкой с ПОДПИСЬЮ [[#id|текст]] (S4d); при совпадении с названием цели → [[#id]] без подписи (S4e). Отказ → текст не меняется (S4c). S3 (b80cf4f6) список: пакетно, вложенные — текст тела, под-мыслей нет. S5 (3390570c) wildcard-синоним дедуп; первая строка >250; комбинированный >250+вложенный; нет совпадения → создание; ровно 250 → короткое (диалог). S7 (7e7c9b85) несколько совпадений → поповер у элемента → ссылка. S8 (d7869742) дедуп «Создать мысль из раздела». S9 (2912df82) смешанное «абзац+список»; одиночный элемент списка. Контроль — по телам/детям/привязкам в БД стенда (window.etn). Без скриншотов. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.accept-thought-create.scenario.json.",
   "timeout": 180000,
   "steps": [
     {
@@ -112,7 +112,7 @@
 
     {
       "name": "S4a-seed",
-      "eval": "window.__a.setBody('Текст про Известная мысль АК и хвост')"
+      "eval": "window.__a.setBody('Текст про Известная мысль АК и хвост\\nвторая строка АК')"
     },
     { "name": "S4a-home", "eval": "window.__a.focus('{{homeId}}')" },
     { "name": "S4a-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
@@ -149,7 +149,7 @@
 
     {
       "name": "S4b-seed",
-      "eval": "window.__a.setBody('Совсем другой текст АК')"
+      "eval": "window.__a.setBody('Совсем другой текст АК\\nвторая строка АК')"
     },
     { "name": "S4b-home", "eval": "window.__a.focus('{{homeId}}')" },
     { "name": "S4b-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
@@ -180,7 +180,7 @@
     { "name": "S4b-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
     {
       "name": "S4b-link-at-start",
-      "probe": "(async () => (await window.__a.body()) === '[[#' + window.__a.knownId + ']]Совсем другой текст АК')()",
+      "probe": "(async () => (await window.__a.body()) === '[[#' + window.__a.knownId + ']]Совсем другой текст АК\\nвторая строка АК')()",
       "expect": true
     },
 
@@ -209,6 +209,80 @@
     {
       "name": "S4c-unchanged",
       "probe": "(async () => (await window.__a.body()) === 'Отказ АК не меняет текст')()",
+      "expect": true
+    },
+
+    {
+      "name": "S4d-seed",
+      "eval": "window.__a.setBody('Короткая фраза АК')"
+    },
+    { "name": "S4d-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S4d-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4d-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S4d-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Короткая фраза АК') === true"
+    },
+    { "name": "S4d-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4d-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4d-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4d-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S4d-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4d-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S4d-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4d-clear", "eval": "window.__a.clearInput()" },
+    { "name": "S4d-sel-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4d-type", "text": "Известная мысль АК" },
+    {
+      "name": "S4d-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4d-pick-cand", "eval": "window.__a.pickCand('Известная мысль АК')" },
+    { "name": "S4d-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4d-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S4d-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4d-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4d-short-signature",
+      "probe": "(async () => (await window.__a.body()) === '[[#' + window.__a.knownId + '|Короткая фраза АК]]')()",
+      "expect": true
+    },
+
+    {
+      "name": "S4e-seed",
+      "eval": "window.__a.setBody('Известная мысль АК')"
+    },
+    { "name": "S4e-home", "eval": "window.__a.focus('{{homeId}}')" },
+    { "name": "S4e-home-ok", "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'" },
+    { "name": "S4e-seed-focus", "eval": "window.__a.focus('{{thoughtId}}')" },
+    {
+      "name": "S4e-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Известная мысль АК') === true"
+    },
+    { "name": "S4e-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "S4e-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "S4e-select-all", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4e-open-menu", "eval": "window.__a.openMenu()" },
+    { "name": "S4e-menu", "waitFor": "document.querySelector('.menu-item') !== null" },
+    { "name": "S4e-pick", "eval": "window.__a.menu('Создать мысль из выделенного')" },
+    { "name": "S4e-dialog", "waitFor": "document.querySelector('.dialog-backdrop') !== null", "timeout": 15000 },
+    { "name": "S4e-clear", "eval": "window.__a.clearInput()" },
+    { "name": "S4e-sel-input", "key": "a", "modifiers": ["ctrl"] },
+    { "name": "S4e-type", "text": "Известная мысль АК" },
+    {
+      "name": "S4e-candidate",
+      "waitFor": "document.querySelector('.add-candidates .type-combo-item') !== null",
+      "timeout": 15000
+    },
+    { "name": "S4e-pick-cand", "eval": "window.__a.pickCand('Известная мысль АК')" },
+    { "name": "S4e-dialog-closed", "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "S4e-settle", "eval": "window.__a.settle(900)" },
+    { "name": "S4e-save", "click": "[data-action=\"save\"]" },
+    { "name": "S4e-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
+    {
+      "name": "S4e-short-no-signature",
+      "probe": "(async () => (await window.__a.body()) === '[[#' + window.__a.knownId + ']]')()",
       "expect": true
     },
 
@@ -249,8 +323,8 @@
     },
     {
       "name": "S3-insertion",
-      "probe": "(async () => { const b = (await window.__a.body())||''; return { linkThenTransclusion: /^\\[\\[#[0-9a-f-]+\\]\\]\\n!\\[\\[#[0-9a-f-]+\\]\\]$/.test(b), noMarker: !b.includes('- ') }; })()",
-      "expect": { "linkThenTransclusion": true, "noMarker": true }
+      "probe": "(async () => { const b = (await window.__a.body())||''; const first = (b.split('\\n')[0]||''); return { linkWithMarker: /^- \\[\\[#[0-9a-f-]+\\]\\]$/.test(first), hasTransclusion: /\\n!\\[\\[#[0-9a-f-]+\\]\\]$/.test(b), listPreserved: first.startsWith('- ') }; })()",
+      "expect": { "linkWithMarker": true, "hasTransclusion": true, "listPreserved": true }
     },
 
     {
@@ -485,7 +559,7 @@
     },
     {
       "name": "S9-insertion-preserves-gap",
-      "probe": "(async () => /^\\[\\[#[0-9a-f-]+\\]\\]\\n\\n\\[\\[#[0-9a-f-]+\\]\\]$/.test((await window.__a.body())||''))()",
+      "probe": "(async () => /^\\[\\[#[0-9a-f-]+\\]\\]\\n\\n- \\[\\[#[0-9a-f-]+\\]\\]$/.test((await window.__a.body())||''))()",
       "expect": true
     },
 
@@ -516,7 +590,7 @@
     { "name": "S9b-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
     {
       "name": "S9b-single-item-as-list",
-      "probe": "(async () => ({ count: await window.__a.count('одиночный элемент АК'), link: /^\\[\\[#[0-9a-f-]+\\]\\]$/.test((await window.__a.body())||'') }))()",
+      "probe": "(async () => ({ count: await window.__a.count('одиночный элемент АК'), link: /^- \\[\\[#[0-9a-f-]+\\]\\]$/.test((await window.__a.body())||'') }))()",
       "expect": { "count": 1, "link": true }
     },
 
@@ -547,7 +621,7 @@
     { "name": "SPLIT-view-back", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null" },
     {
       "name": "SPLIT-units",
-      "probe": "(async () => ({ paragraph: await window.__a.count('Первый абзац АК'), list: await window.__a.count('элемент раздела АК'), links: /^\\[\\[#[0-9a-f-]+\\]\\]\\n\\n\\[\\[#[0-9a-f-]+\\]\\]$/.test((await window.__a.body())||'') }))()",
+      "probe": "(async () => ({ paragraph: await window.__a.count('Первый абзац АК'), list: await window.__a.count('элемент раздела АК'), links: /^\\[\\[#[0-9a-f-]+\\]\\]\\n\\n- \\[\\[#[0-9a-f-]+\\]\\]$/.test((await window.__a.body())||'') }))()",
       "expect": { "paragraph": 1, "list": 1, "links": true }
     }
   ]
