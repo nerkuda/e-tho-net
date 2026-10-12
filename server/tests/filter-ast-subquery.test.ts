@@ -370,6 +370,24 @@ describe('под-выборки как значения — квантифика
     );
   });
 
+  it('ресурс: суммарный бюджет ширины по двум под-выборкам — явная ошибка', () => {
+    const ndb = createInMemoryNetworkDb();
+    const per = Math.floor(AST_SUBQUERY_MAX_NODES * 0.75); // 1500 — ниже одиночного лимита
+    for (let i = 0; i < per; i += 1) seedThought(ndb, `m${i}`);
+    const wide = leaf({ kind: 'active' }, 'eq', true);
+    const two = {
+      op: 'and',
+      children: [
+        leaf({ kind: 'parents' }, 'in', sub(wide, 'in')),
+        leaf({ kind: 'children' }, 'in', sub(wide, 'in')),
+      ],
+    } as FilterAstNode;
+    assert.ok(
+      expectEtnError(() => runAst(ndb, ast(two)), 'subquery_budget'),
+      `каждая под-выборка ~${per}, суммарно > ${AST_SUBQUERY_MAX_NODES} → ошибка бюджета`,
+    );
+  });
+
   it('ресурс: ширина набора сверх бюджета — явная ошибка, не молчаливое усечение', () => {
     const ndb = createInMemoryNetworkDb();
     for (let i = 0; i <= AST_SUBQUERY_MAX_NODES; i += 1) seedThought(ndb, `w${i}`);
@@ -388,7 +406,7 @@ describe('валидация формы значения-под-выборки (
       version: FILTER_AST_VERSION,
       filter: {
         entity: { kind: 'type' },
-        operator: 'in',
+        operator: 'all_of',
         value: { query: { entity: { kind: 'type' }, operator: 'in', value: ['t'] }, operator: 'all_in' },
       },
     });
@@ -407,6 +425,34 @@ describe('валидация формы значения-под-выборки (
         ),
         `некорректная под-выборка отвергнута: ${JSON.stringify(bad)}`,
       );
+    }
+  });
+
+  it('рассогласование leaf.operator и value.operator отвергается', () => {
+    const mk = (leafOp: string, valueOp: string): Record<string, unknown> => ({
+      version: FILTER_AST_VERSION,
+      filter: {
+        entity: { kind: 'type' },
+        operator: leafOp,
+        value: { query: { entity: { kind: 'type' }, operator: 'in', value: ['t'] }, operator: valueOp },
+      },
+    });
+    // Согласованные пары принимаются.
+    for (const [leafOp, valueOp] of [
+      ['in', 'in'],
+      ['not_in', 'not_in'],
+      ['all_of', 'all_in'],
+    ] as const) {
+      assert.ok(parseFilterAst(mk(leafOp, valueOp)).filter, `согласованная пара ${leafOp}+${valueOp}`);
+    }
+    // Рассогласование — VALIDATION_ERROR (in+all_in, not_in+in и обратные).
+    for (const [leafOp, valueOp] of [
+      ['in', 'all_in'],
+      ['not_in', 'in'],
+      ['all_of', 'in'],
+      ['in', 'not_in'],
+    ] as const) {
+      assert.ok(expectEtnError(() => parseFilterAst(mk(leafOp, valueOp))), `рассогласование ${leafOp}+${valueOp}`);
     }
   });
 });

@@ -54,6 +54,18 @@ const SUBQUERY_KEYS = ['query', 'operator'] as const;
 /** Операторы под-выборки как значения. */
 const SUBQUERY_OPERATORS = ['in', 'not_in', 'all_in'] as const;
 
+/**
+ * Согласованные операторы листа для квантификатора под-выборки (`value.operator`):
+ * семантику задаёт только `value.operator`, поэтому внешний `leaf.operator`
+ * обязан ему соответствовать (иначе молча игнорировался бы). `all_in` (наборный
+ * квантификатор «каждое») соответствует листовому `all_of`.
+ */
+const SUBQUERY_LEAF_OPERATOR: Record<(typeof SUBQUERY_OPERATORS)[number], readonly FilterAstOperator[]> = {
+  in: ['in'],
+  not_in: ['not_in'],
+  all_in: ['all_of'],
+};
+
 /** Виды операндов и допустимые ключи их объектов (дискриминант — `kind`). */
 const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   type: ['kind'],
@@ -192,6 +204,20 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
   const leaf: FilterAstLeaf = { entity, operator: operator as FilterAstOperator };
   if (input['value'] !== undefined) {
     leaf.value = parseValue(input['value'], `${path}.value`, requestId);
+    // Значение-под-выборка: внешний оператор листа обязан быть согласован с
+    // квантификатором `value.operator` — семантику задаёт он, внешний молча
+    // игнорироваться не должен (задача 8914ac36, замечание верификатора).
+    const value = leaf.value;
+    if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'query' in value) {
+      const allowed = SUBQUERY_LEAF_OPERATOR[value.operator];
+      if (!allowed.includes(leaf.operator)) {
+        fail(
+          `${path}: оператор условия «${leaf.operator}» не согласован с оператором под-выборки «${value.operator}»; допустимо: ${allowed.join(', ')}.`,
+          { field: `${path}.operator`, operator: leaf.operator, subquery_operator: value.operator },
+          requestId,
+        );
+      }
+    }
   }
   if (input['labels'] !== undefined) {
     leaf.labels = parseLabels(input['labels'], `${path}.labels`, requestId);
