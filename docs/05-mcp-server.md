@@ -140,9 +140,15 @@ Read-only. Полный текст одного комментария, когд
 
 **Актуализация 0.8.4 (задача 09f19952).** `etn.export.subgraph` снят с постоянного набора MCP — это действие `export.subgraph` исполнителя `etn.ops` (read-only). Контракт и состав `params` — `etn.guide { topic: "export.subgraph" }`.
 
-Read-only. Радиус-ограниченный подграф вокруг seed-мыслей, отрендеренный как документ: `format` — `markdown` (дефолт) или `html`; `pdf` и `.etnx` (полный слайс графа) — не поддержаны на MVP, запрос вернёт ошибку «unsupported».
+Read-only. Радиус-ограниченный подграф вокруг seed-мыслей, отрендеренный как документ: `format` — `markdown` (дефолт), `html` или `etnx`; `pdf` не поддержан на MVP (запрос вернёт ошибку «unsupported»).
 
-Параметры: `network_id`, `seed_ids[]`, `radius`, `format?`. Синхронный ответ — в отличие от асинхронного REST-экспорта в файл через `POST /export` + `GET /jobs/{id}`.
+Параметры: `network_id`, `seed_ids[]`, `radius`, `format?`, `etnx_options?`, `destination?`.
+
+**Актуализация 0.12.2 (задача 99c16033).** `format: "etnx"` отдаёт переносимый архив. Без `destination` — base64-строка в `content_b64`; с `destination: { kind: "etnx_file", path, overwrite? }` (симметрично `import.subgraph.source`) сервер пишет архив по АБСОЛЮТНОМУ пути на своей ФС и возвращает `{ path, size, counts }` — счётчики из манифеста (мысли/связи/вложения/типы), БЕЗ `content_b64`. Существующий файл перезаписывается только при `overwrite: true`, иначе `VALIDATION_ERROR`; непригодный путь/отсутствующий каталог — `VALIDATION_ERROR`.
+
+Экспортируется подграф от семян: «вся сеть» эмулируется семенем HOME с `include_subtree: true` и `subtree_depth` (до 20) — `radius` при этом вторичен.
+
+Синхронный ответ — в отличие от асинхронного REST-экспорта в файл через `POST /export` + `GET /jobs/{id}`.
 
 **Дополнительные материалы**
 - относится к подсистемам: MCP-сервер
