@@ -275,6 +275,10 @@ export async function fanOutQuery(
   let total = 0;
   let truncated = false;
   let reason: 'max_nodes' | 'cross_network_max_hits' | null = null;
+  // Неразрешимые токены AST, агрегированные по сетям (требование b7fdab20):
+  // у каждой сети свой контекст разрешения (первый день недели, реестр) — в
+  // веерном ответе носитель «какая сеть» обязателен.
+  const unresolved: import('@etn/shared').CrossNetworkTokenIssue[] = [];
   for (const net of accessible) {
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
     const result = await queryThoughtsAsync(
@@ -304,6 +308,11 @@ export async function fanOutQuery(
       });
     }
     total += result.total ?? 0;
+    if (result.unresolved !== undefined) {
+      for (const issue of result.unresolved) {
+        unresolved.push({ network_id: net.id, token: issue.token, reason: issue.reason });
+      }
+    }
     if (result.truncated) {
       truncated = true;
       reason = result.reason;
@@ -336,6 +345,9 @@ export async function fanOutQuery(
       next_cursor: null,
       truncated,
       reason,
+      // Отдаём только при непустом наборе — как у одиночной выборки,
+      // чтобы «всё разрешилось» не шумело в ответе.
+      ...(unresolved.length > 0 ? { unresolved } : {}),
     },
     networks: accessible.map((n) => ({ id: n.id, display_name: n.display_name })),
   };

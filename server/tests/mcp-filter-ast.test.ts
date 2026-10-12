@@ -33,15 +33,20 @@ import {
 const skip = !nativeAvailable();
 
 /** Вызвать `etn.thoughts.query` сырыми аргументами (для негативных кейсов). */
+interface RawQueryJson {
+  hits?: Array<{ title: string }>;
+  unresolved?: Array<{ network_id?: string; token: string; reason: string }>;
+}
+
 async function rawQuery(
   client: Client,
   args: Record<string, unknown>,
-): Promise<{ isError: boolean; text: string; json: { hits?: Array<{ title: string }> } | null }> {
+): Promise<{ isError: boolean; text: string; json: RawQueryJson | null }> {
   const res = await client.callTool({ name: 'etn.thoughts.query', arguments: args });
   const text = toolText(res);
-  let json: { hits?: Array<{ title: string }> } | null = null;
+  let json: RawQueryJson | null = null;
   try {
-    json = JSON.parse(text) as { hits?: Array<{ title: string }> };
+    json = JSON.parse(text) as RawQueryJson;
   } catch {
     json = null;
   }
@@ -321,6 +326,51 @@ describe('MCP etn.thoughts.query: AST-тело (cb78315b)', { skip }, () => {
     }
   });
 
+  it('веер: tokenContextFor разрешает токены по каждой сети, unresolved агрегируется по сетям', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        await seedFixture(handle.client, ctx.networkId);
+        // `$user` разрешается контекстом КАЖДОЙ сети (первый день недели у сети
+        // свой): без `tokenContextFor` токен неразрешим и хитов не будет.
+        const okRes = await rawQuery(handle.client, {
+          network_ids: [ctx.networkId],
+          ast: {
+            version: 1,
+            filter: { entity: { kind: 'author' }, operator: 'eq', value: { token: '$user' } },
+          },
+        });
+        assert.equal(okRes.isError, false, okRes.text);
+        assert.ok(
+          (okRes.json?.hits ?? []).length >= 3,
+          `веер обязан разрешить $user по сети: ${JSON.stringify(okRes.json)}`,
+        );
+        assert.equal(okRes.json?.unresolved, undefined);
+
+        // Неразрешимый в сетевом контексте токен — агрегируется по сетям
+        // (та же семантика, что у одиночного `unresolved`, плюс `network_id`).
+        const badRes = await rawQuery(handle.client, {
+          network_ids: [ctx.networkId],
+          ast: {
+            version: 1,
+            filter: { entity: { kind: 'created_at' }, operator: 'gte', value: { token: '$thought.id' } },
+          },
+        });
+        assert.equal(badRes.isError, false, badRes.text);
+        assert.deepEqual(badRes.json?.hits, []);
+        const aggregated = badRes.json?.unresolved ?? [];
+        assert.equal(aggregated.length, 1, JSON.stringify(badRes.json));
+        assert.equal(aggregated[0]?.network_id, ctx.networkId);
+        assert.match(aggregated[0]?.token ?? '', /\$thought/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('старые (плоские) вызовы продолжают работать', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -361,10 +411,35 @@ describe('MCP etn.views.run: AST-тело (cb78315b)', { skip }, () => {
         });
         const parsed = JSON.parse(toolText(res)) as {
           data: Array<{ title: string }>;
-          meta: { ast?: boolean };
+          meta: { ast?: boolean; limit?: number };
         };
         assert.deepEqual(parsed.data.map((d) => d.title), ['AST-Solo']);
         assert.equal(parsed.meta.ast, true);
+        // Дефолт лимита унифицирован с путём сохранённого отбора (100).
+        assert.equal(parsed.meta.limit, 100);
+
+        // Токены AST-пути разрешает tokenContext (как у сохранённого отбора):
+        // без него `$user` неразрешим и data пуста.
+        const tokenRes = await handle.client.callTool({
+          name: 'etn.views.run',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_id: fx.parentId,
+            ast: {
+              version: 1,
+              filter: { entity: { kind: 'author' }, operator: 'eq', value: { token: '$user' } },
+            },
+          },
+        });
+        const tokenParsed = JSON.parse(toolText(tokenRes)) as {
+          data: Array<{ title: string }>;
+          meta: { unresolved?: unknown[] };
+        };
+        assert.ok(
+          tokenParsed.data.length >= 3,
+          `$user в ast-параметре обязан разрешиться tokenContext: ${toolText(tokenRes)}`,
+        );
+        assert.equal(tokenParsed.meta.unresolved, undefined);
 
         const both = await handle.client.callTool({
           name: 'etn.views.run',

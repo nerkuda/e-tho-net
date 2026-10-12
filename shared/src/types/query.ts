@@ -155,6 +155,18 @@ export interface ThoughtQueryRequest {
   cursor?: string;
 }
 
+/**
+ * Неразрешимый токен веерной (кросс-сетевой) выборки: тот же смысл, что у
+ * одиночного `unresolved` ({@link ThoughtQueryResult.unresolved}), но с
+ * указанием сети — у каждой сети свой контекст (первый день недели, реестр).
+ */
+export interface CrossNetworkTokenIssue {
+  /** Сеть, в контексте которой токен не разрешился. */
+  network_id: string;
+  token: string;
+  reason: string;
+}
+
 /** Одна мысль в результате выборки. */
 export interface ThoughtQueryHit {
   id: string;
@@ -193,4 +205,10 @@ export interface ThoughtQueryResponse {
    * Присутствует только в веерном режиме; для одиночной сети — `undefined`.
    */
   networks?: NetworksCatalog;
+  /**
+   * Неразрешимые токены веерной выборки, агрегированные по сетям (требование
+   * b7fdab20): пусто/отсутствует — всё разрешилось. Та же семантика, что у
+   * `unresolved` одиночной выборки, но с `network_id`.
+   */
+  unresolved?: CrossNetworkTokenIssue[];
 }

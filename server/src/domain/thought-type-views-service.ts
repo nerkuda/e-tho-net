@@ -802,44 +802,55 @@ export async function runViewForThought(
   const limit = options?.limit ?? 100;
   const offset = options?.offset ?? 0;
 
-  const properties = collectThoughtPropertyValues(ndb, thoughtId, thought.type_id);
-  const ctx: ResolveContext = buildResolveContext(
-    {
-      id: thought.id,
-      title: thought.title,
-      synonyms: thought.synonyms,
-      type_id: thought.type_id,
-      active: thought.active,
-      // `created_by`/`updated_by` опциональны в DTO Thought; в контекст
-      // токенов пустую строку не отдаём — `$thought.author` уйдёт в
-      // «не разрешён», отбор вернёт пустой результат с пояснением.
-      created_by: thought.created_by ?? '',
-      updated_by: thought.updated_by ?? '',
-      created_at: thought.created_at,
-      updated_at: thought.updated_at,
-    },
-    properties,
-    userId,
-  );
-  const resolved = resolveTokensInDefinitionProxy(parsed, ctx);
+  // Определение отбора хранится либо в форме AST (0.13.1, сущность 489c394f —
+  // распознаётся по полю `version`), либо в старой плоской `definition v1`.
+  const isAstDefinition = parsed['version'] !== undefined;
 
-  if (resolved.unresolved.length > 0) {
-    return {
-      items: [],
-      total: 0,
-      directions: {},
-      unresolved: resolved.unresolved,
-      sort,
-      order,
-    };
+  let resolvedDefinition: Record<string, unknown>;
+  if (isAstDefinition) {
+    // AST-форма: токены раскрывает САМ движок по `tokenContext` (единый
+    // исполнитель, задача 0f1b9892). Плоский резолвер к AST неприменим — он
+    // подставляет значение ВНУТРЬ строки `{token:"$user"}` и превращает
+    // валидный токен в мусорный (неразрешимый) — поэтому здесь он пропущен.
+    resolvedDefinition = parsed;
+  } else {
+    const properties = collectThoughtPropertyValues(ndb, thoughtId, thought.type_id);
+    const ctx: ResolveContext = buildResolveContext(
+      {
+        id: thought.id,
+        title: thought.title,
+        synonyms: thought.synonyms,
+        type_id: thought.type_id,
+        active: thought.active,
+        // `created_by`/`updated_by` опциональны в DTO Thought; в контекст
+        // токенов пустую строку не отдаём — `$thought.author` уйдёт в
+        // «не разрешён», отбор вернёт пустой результат с пояснением.
+        created_by: thought.created_by ?? '',
+        updated_by: thought.updated_by ?? '',
+        created_at: thought.created_at,
+        updated_at: thought.updated_at,
+      },
+      properties,
+      userId,
+    );
+    const resolved = resolveTokensInDefinitionProxy(parsed, ctx);
+
+    if (resolved.unresolved.length > 0) {
+      return {
+        items: [],
+        total: 0,
+        directions: {},
+        unresolved: resolved.unresolved,
+        sort,
+        order,
+      };
+    }
+    resolvedDefinition = resolved.definition as Record<string, unknown>;
   }
 
-  // Определение отбора хранится либо в форме AST (0.13.1, сущность 489c394f),
-  // либо в старой плоской `definition v1`. Старая форма компилируется в AST тем
-  // же движком отбора (единый вход, требование 91983c20); одноразовая миграция
-  // БД v1 → AST — отдельная задача 4be62d42.
-  const resolvedDefinition = resolved.definition as Record<string, unknown>;
-  const isAstDefinition = resolvedDefinition['version'] !== undefined;
+  // Старая плоская форма компилируется в AST тем же движком отбора (единый
+  // вход, требование 91983c20); одноразовая миграция БД v1 → AST — отдельная
+  // задача 4be62d42.
   const query: ThoughtQueryRequest = isAstDefinition
     ? {
         // Форму дерева валидирует доменный parseFilterAst (строгая проверка).
@@ -875,7 +886,10 @@ export async function runViewForThought(
     items,
     total,
     directions: result.directions,
-    unresolved: [],
+    // Неразрешимые токены AST (задача 0f1b9892, требование b7fdab20) —
+    // приходят из исполнения; пустой массив — всё разрешилось. Прежде здесь
+    // жёстко стоял `[]`, и неразрешимый токен молча давал пустую выдачу.
+    unresolved: result.unresolved ?? [],
     sort,
     order,
   };

@@ -1017,3 +1017,95 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Отбор с определением в форме AST (0.13.1, задача cb78315b)
+// ---------------------------------------------------------------------------
+
+/**
+ * Отбор типа хранит `definition` в форме AST (wire `{version, filter, sort?}`,
+ * сущность 489c394f). Токены AST раскрывает движок по `tokenContext`
+ * (первый день недели сети, `$user`, часы) — плоский резолвер к AST не
+ * применяется. Путь `runViewForThought` обязан: (а) разрешить токен при
+ * переданном `tokenContext`; (б) вернуть неразрешимый токен в `meta.unresolved`,
+ * а не молча пустую выдачу (требование b7fdab20).
+ */
+describe('etn.views.run: определение отбора в форме AST (cb78315b)', { skip: !nativeAvailable() }, () => {
+  async function createAstView(
+    handle: { client: import('@modelcontextprotocol/sdk/client/index.js').Client },
+    networkId: string,
+    name: string,
+    definition: Record<string, unknown>,
+  ): Promise<void> {
+    const res = await handle.client.callTool({
+      name: 'etn.ontology.write',
+      arguments: {
+        network_id: networkId,
+        type_views: [
+          {
+            action: 'create',
+            thought_type: 'версия',
+            name,
+            definition: JSON.stringify(definition),
+            position: 0,
+          },
+        ],
+      },
+    });
+    assert.equal(res.isError, undefined, toolText(res));
+  }
+
+  it('$user в AST-определении разрешается (tokenContext), неразрешимый токен — в meta.unresolved', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const versionTypeId = makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
+      const versionId = makeThought(ndb, '0.13.1', { typeId: versionTypeId }, ctx.adminId);
+      // Потенциальные совпадения отбора (created_by = вызывающий).
+      makeThought(ndb, 'Работа A', { typeId: versionTypeId }, ctx.adminId);
+      makeThought(ndb, 'Работа B', { typeId: versionTypeId }, ctx.adminId);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        await createAstView(handle, ctx.networkId, 'AST по автору', {
+          version: 1,
+          filter: { entity: { kind: 'author' }, operator: 'eq', value: { token: '$user' } },
+        });
+
+        const okRes = await handle.client.callTool({
+          name: 'etn.views.run',
+          arguments: { network_id: ctx.networkId, thought_id: versionId, view_name: 'AST по автору' },
+        });
+        assert.equal(okRes.isError, undefined, toolText(okRes));
+        const ok = toolJson<ViewsRunResponse>(okRes);
+        // Без `tokenContext` (мутация views.ts) `$user` неразрешим и data пуста.
+        assert.ok(
+          ok.data.length >= 2,
+          `$user в AST-определении обязан разрешиться токен-контекстом: ${toolText(okRes)}`,
+        );
+        assert.deepEqual(ok.meta.unresolved, undefined);
+
+        // Неразрешимый в сетевом контексте `$thought.*` — диагностика, не тишина.
+        await createAstView(handle, ctx.networkId, 'AST с мыслью', {
+          version: 1,
+          filter: { entity: { kind: 'created_at' }, operator: 'gte', value: { token: '$thought.id' } },
+        });
+        const badRes = await handle.client.callTool({
+          name: 'etn.views.run',
+          arguments: { network_id: ctx.networkId, thought_id: versionId, view_name: 'AST с мыслью' },
+        });
+        assert.equal(badRes.isError, undefined, toolText(badRes));
+        const bad = toolJson<ViewsRunResponse>(badRes);
+        assert.deepEqual(bad.data, []);
+        assert.ok(
+          (bad.meta.unresolved ?? []).some((u) => u.token.includes('$thought')),
+          `неразрешимый токен обязан попасть в meta.unresolved: ${toolText(badRes)}`,
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});

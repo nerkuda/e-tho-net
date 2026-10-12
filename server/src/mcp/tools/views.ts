@@ -60,7 +60,9 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
             {
               ast,
               ...(args.order !== undefined ? { order: args.order } : {}),
-              ...(args.limit !== undefined ? { limit: args.limit } : {}),
+              // Тот же дефолт лимита, что у пути сохранённого отбора (100) —
+              // иначе два пути etn.views.run отвечали бы разными страницами.
+              limit: args.limit ?? 100,
               ...(args.offset !== undefined ? { offset: args.offset } : {}),
             },
             { maxNodes: rt.limits.maxNodesPerSubgraph },

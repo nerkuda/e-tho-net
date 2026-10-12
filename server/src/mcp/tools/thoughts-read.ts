@@ -329,6 +329,11 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             networks: result.networks,
             ...(resolvedTypes !== undefined ? { resolved_types: resolvedTypes } : {}),
             ...(resolvedProperties !== undefined ? { resolved_properties: resolvedProperties } : {}),
+            // Неразрешимые токены AST по сетям (требование b7fdab20) — та же
+            // семантика, что у одиночного `unresolved`, плюс `network_id`.
+            ...(result.response.unresolved !== undefined && result.response.unresolved.length > 0
+              ? { unresolved: result.response.unresolved }
+              : {}),
           };
         }
         const ndb = openMemberNetwork(rt, args.network_id as string);
