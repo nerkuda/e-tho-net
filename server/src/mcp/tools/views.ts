@@ -147,6 +147,9 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
             ...(args.order !== undefined ? { order: args.order } : {}),
             ...(args.limit !== undefined ? { limit: args.limit } : {}),
             ...(args.offset !== undefined ? { offset: args.offset } : {}),
+            // Обязательный пункт задачи cb78315b: контекст разрешения токенов
+            // (нужен для отборов, хранящих определение в форме AST).
+            tokenContext: mcpTokenContext(rt, args.network_id),
           },
         );
         // Страница уже отсортирована и спагинирована SQL-движком — никакой

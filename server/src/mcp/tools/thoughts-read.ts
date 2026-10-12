@@ -300,9 +300,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             query: mcpRequestToQuery(
               {
                 ...args,
-                // Веер и AST несовместимы (контракт: ast только для одиночной
-                // сети) — здесь ast всегда отсутствует.
-                ast: undefined,
+                // Разобранное AST-тело (сырое `...args.ast` перекрыто
+                // типизированным) — веер тоже принимает `ast`, паритет с REST.
+                ast,
                 type_id: args.type_id ?? resolvedTypeIds,
                 type: undefined,
                 properties: domainProperties,
@@ -311,6 +311,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             ),
             limit: args.limit ?? 50,
             offset: args.offset ?? 0,
+            // Токены AST разрешаются в контексте КАЖДОЙ сети (первый день
+            // недели у сети свой) — паритет с REST (`tokenContextFor`).
+            tokenContextFor: (nid) => mcpTokenContext(rt, nid),
           });
           // O10: count reads per network.
           for (const net of access.networks) {

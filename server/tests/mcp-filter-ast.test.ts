@@ -36,9 +36,16 @@ const skip = !nativeAvailable();
 async function rawQuery(
   client: Client,
   args: Record<string, unknown>,
-): Promise<{ isError: boolean; text: string }> {
+): Promise<{ isError: boolean; text: string; json: { hits?: Array<{ title: string }> } | null }> {
   const res = await client.callTool({ name: 'etn.thoughts.query', arguments: args });
-  return { isError: res.isError === true, text: toolText(res) };
+  const text = toolText(res);
+  let json: { hits?: Array<{ title: string }> } | null = null;
+  try {
+    json = JSON.parse(text) as { hits?: Array<{ title: string }> };
+  } catch {
+    json = null;
+  }
+  return { isError: res.isError === true, text, json };
 }
 
 /** Заголовки hits структурной выборки. */
@@ -264,14 +271,15 @@ describe('MCP etn.thoughts.query: AST-тело (cb78315b)', { skip }, () => {
     }
   });
 
-  it('ast XOR старые критерии; ast только для одной сети; неизвестные поля AST отвергаются', async () => {
+  it('ast XOR старые критерии; неизвестные поля AST отвергаются; веер принимает ast', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
+        await seedFixture(handle.client, ctx.networkId);
         const flatAst = {
           version: 1,
-          filter: { entity: { kind: 'active' }, operator: 'eq', value: true },
+          filter: { entity: { kind: 'keywords', scope: ['title'] }, operator: 'matches', value: 'AST-' },
         };
         const mixed = await rawQuery(handle.client, {
           network_id: ctx.networkId,
@@ -281,12 +289,11 @@ describe('MCP etn.thoughts.query: AST-тело (cb78315b)', { skip }, () => {
         assert.equal(mixed.isError, true);
         assert.match(mixed.text, /VALIDATION_ERROR/);
 
-        const fanOut = await rawQuery(handle.client, {
-          network_ids: [ctx.networkId],
-          ast: flatAst,
-        });
-        assert.equal(fanOut.isError, true);
-        assert.match(fanOut.text, /VALIDATION_ERROR/);
+        // Веер тоже принимает ast (паритет с REST) — отбор исполняется по сети.
+        const fanOut = await rawQuery(handle.client, { network_ids: [ctx.networkId], ast: flatAst });
+        assert.equal(fanOut.isError, false, fanOut.text);
+        const fanTitles = (fanOut.json?.hits ?? []).map((h) => h.title);
+        assert.ok(fanTitles.includes('AST-Solo'), `веер обязан вернуть совпадения: ${fanTitles.join(', ')}`);
 
         const bogus = await rawQuery(handle.client, {
           network_id: ctx.networkId,

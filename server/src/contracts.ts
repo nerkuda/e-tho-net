@@ -1053,11 +1053,6 @@ const QueryFields = z
         'передайте либо ast, либо плоские критерии.',
     },
   )
-  // AST адресует реестр ОДНОЙ сети (property_id/type_id) — веер по сетям с
-  // одним телом не определён: одиночная сеть обязательна (задача cb78315b).
-  .refine((v) => v.ast === undefined || (v.network_ids?.length ?? 0) === 0, {
-    message: 'Тело ast применимо только к одной сети: используйте network_id без network_ids.',
-  })
   // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
   // Парсер repeatable создаёт `network_ids: []` при отсутствии параметра в
   // query — пустой массив трактуется как «не указан».
