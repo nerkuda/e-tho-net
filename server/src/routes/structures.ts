@@ -117,6 +117,18 @@ function parseQueryBody(
         requestId,
       );
     }
+    // Сортировка AST (`ast.sort`, требование 3e47f52a) и поля `sort`/`order` —
+    // два источника одного порядка (конвенция задачи cb78315b «оставьте один
+    // источник»). Многоуровневый `ast.sort` перекрывает `req.sort`/`req.order`;
+    // явная передача обоих — конфликт, а не молчаливый приоритет.
+    if (ast.sort !== undefined && ast.sort.length > 0 && (out.sort !== undefined || out.order !== undefined)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'Сортировка задана дважды: в теле ast (sort) и в полях sort/order — оставьте один источник.',
+        { field: 'sort' },
+        requestId,
+      );
+    }
   }
   const sort = (out.sort ?? 'created') as StructureSort;
   const order = (out.order ?? 'asc') as SortOrder;

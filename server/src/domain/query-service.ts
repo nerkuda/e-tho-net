@@ -56,6 +56,7 @@ import {
   type FilterAstNode,
   type FilterAstOperator,
   type FilterAstScalar,
+  type FilterAstSortKey,
   type FilterAstSubqueryValue,
   type FilterAstValue,
   type LinkPropertyDirection,
@@ -81,6 +82,7 @@ import { collectHierarchySubtree } from './graph-traversal.js';
 import { getLinkDirections } from './link-service.js';
 import {
   getNetworkProperty,
+  getNetworkPropertyByName,
   isStructuralLinkProperty,
   linkPropertyDirection,
   linkPropertyLinkTypeId,
@@ -428,7 +430,7 @@ export function mcpRequestToQuery(
     Math.max(req.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH, 1),
     TRAVERSAL_DEFAULTS.MAX_DEPTH,
   );
-  const astSort = astSortFromRequest(req);
+  assertAstSortNotConflicting(req);
   return {
     type_ids: req.type_id,
     ast: req.ast,
@@ -469,8 +471,8 @@ export function mcpRequestToQuery(
             link_filter: req.link_filter,
           }
         : undefined,
-    sort: astSort?.sort ?? MCP_SORT_TO_CANONICAL[req.sort ?? 'title'],
-    order: astSort?.order ?? req.order ?? 'asc',
+    sort: MCP_SORT_TO_CANONICAL[req.sort ?? 'title'],
+    order: req.order ?? 'asc',
     limit: Math.min(Math.max(req.limit ?? 50, 1), 200),
     offset: Math.max(req.offset ?? 0, 0),
     count: req.count,
@@ -479,19 +481,18 @@ export function mcpRequestToQuery(
 }
 
 /**
- * Сортировка для MCP-запроса с AST-телом (задача cb78315b). Wire-формат AST
- * несёт многоуровневый `sort: [{ key, order }]`, но MCP-контракт
- * `etn.thoughts.query` одноуровневый (`sort`/`order`). Принимаем РОВНО один
- * ключ из `title`/`created_at`/`updated_at`; многоуровневый набор или
- * неизвестный ключ — явная `VALIDATION_ERROR` (не молчаливый игнор).
- * Одновременная передача `sort`/`order` инструмента и `ast.sort` — конфликт
- * двух источников (тоже `VALIDATION_ERROR`).
+ * Проверка сортировки MCP-запроса с AST-телом (задача cb78315b, расширено
+ * задачей 3a157e66). Wire-формат AST несёт многоуровневый `sort: [{ key, order }]`
+ * — он принимается целиком и исполняется единым движком (требование 3e47f52a);
+ * ограничение «ровно один ключ» снято. Внешние `sort`/`order` инструмента и
+ * `ast.sort` — два источника одного порядка: одновременная передача —
+ * `VALIDATION_ERROR` (конвенция cb78315b «оставьте один источник»).
  */
-function astSortFromRequest(
+function assertAstSortNotConflicting(
   req: McpThoughtQueryRequest & { readonly ast?: FilterAst },
-): { sort: StructureSort; order: SortOrder } | undefined {
+): void {
   const keys = req.ast?.sort;
-  if (keys === undefined || keys.length === 0) return undefined;
+  if (keys === undefined || keys.length === 0) return;
   if (req.sort !== undefined || req.order !== undefined) {
     throw new EtnError(
       'VALIDATION_ERROR',
@@ -499,31 +500,7 @@ function astSortFromRequest(
       { field: 'sort' },
     );
   }
-  if (keys.length > 1) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Многоуровневая сортировка AST в MCP не поддержана: контракт etn.thoughts.query одноуровневый (sort/order).',
-      { field: 'ast.sort', count: keys.length },
-    );
-  }
-  const key = keys[0]!;
-  const mcpSort = AST_SORT_KEY_TO_MCP[key.key];
-  if (mcpSort === undefined) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `Ключ сортировки AST «${key.key}» не поддержан: допустимы ${Object.keys(AST_SORT_KEY_TO_MCP).join(', ')}.`,
-      { field: 'ast.sort', key: key.key, allowed: Object.keys(AST_SORT_KEY_TO_MCP) },
-    );
-  }
-  return { sort: MCP_SORT_TO_CANONICAL[mcpSort], order: key.order };
 }
-
-/** Соответствие ключей сортировки AST кодам MCP-контракта (`etn.thoughts.query`). */
-const AST_SORT_KEY_TO_MCP: Record<string, ThoughtQuerySort> = {
-  title: 'title',
-  created_at: 'created_at',
-  updated_at: 'updated_at',
-};
 
 // ---------------------------------------------------------------------------
 // SQL-движок
@@ -769,21 +746,102 @@ interface SortKey {
 }
 
 /**
+ * Ключи AST-сортировки (`FilterAstSortKey[]`) в ключи SQL-движка.
+ *
+ * Многоуровневая (порядок ключей = порядок объявления), направление на каждый
+ * ключ (требование 3e47f52a). Фиксированные ключи — `title`/`created_at`/
+ * `updated_at`; прочие — свойства реестра (по id или имени). По булевым ложь
+ * раньше истины при возрастании (SQLite хранит `bool` как 0/1). Пустые
+ * значения свойства — в конце списка при любом направлении (ведущий ключ
+ * `(expr IS NULL)`), чтобы заполненные строки шли первыми. Уникальный добор
+ * `t.id` добавляется в {@link orderClause} — стабильная пагинация.
+ */
+function astSortClause(
+  ndb: NetworkDb,
+  sortKeys: readonly FilterAstSortKey[],
+  requestId?: string,
+): { keys: SortKey[]; joinSql: string; joinParams: unknown[] } {
+  const keys: SortKey[] = [];
+  const joins: string[] = [];
+  const joinParams: unknown[] = [];
+  sortKeys.forEach((key, i) => {
+    const dir: 'ASC' | 'DESC' = key.order === 'desc' ? 'DESC' : 'ASC';
+    switch (key.key) {
+      case 'title':
+      case 'alpha':
+        keys.push({ expr: 't.title COLLATE NOCASE', dir });
+        return;
+      case 'created_at':
+      case 'created':
+        keys.push({ expr: 't.created_at', dir });
+        return;
+      case 'updated_at':
+      case 'updated':
+        keys.push({ expr: 't.updated_at', dir });
+        return;
+      default:
+        break;
+    }
+    // Ключ-свойство: адресация registry `property_id` либо именем свойства.
+    const def = getNetworkProperty(ndb, key.key) ?? getNetworkPropertyByName(ndb, key.key);
+    if (def === null) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Ключ сортировки «${key.key}» не найден: это не фиксированный ключ (title/created_at/updated_at) и не свойство сети.`,
+        { field: 'ast.sort', key: key.key },
+        requestId,
+      );
+    }
+    if (def.value_type === 'link') {
+      // Свойство-связь хранится в `links_v`, а не в `property_values` —
+      // сортировать его значения нечем (честная ошибка вместо пустого ключа).
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Сортировка по свойству-связи «${key.key}» не поддержана.`,
+        { field: 'ast.sort', key: key.key },
+        requestId,
+      );
+    }
+    const alias = `psv${i}`;
+    joins.push(
+      `LEFT JOIN property_values_v ${alias} ON ${alias}.owner_type = 'thought'` +
+        ` AND ${alias}.owner_id = t.id AND ${alias}.property_id = ?`,
+    );
+    joinParams.push(def.id);
+    const expr = `${alias}.${VALUE_COLUMN[def.value_type]}`;
+    keys.push({ expr: `(${expr} IS NULL)`, dir: 'ASC' });
+    keys.push({ expr, dir });
+  });
+  return { keys, joinSql: joins.join(' '), joinParams };
+}
+
+/**
  * Ключи сортировки запроса плюс `thought_views`-джойн для `viewed`.
  *
- * `homeFirst` (пустой REST-фильтр) добавляет ведущий ключ «HOME — первой»;
- * `viewed` — два ключа: флаг NULL-метки (NULL последними при `asc`, как в
- * §6.10) и сама метка. Значения ключей совпадают с прежним `ORDER BY`, но
- * теперь дополняются `t.id` в {@link orderClause} — порядок детерминирован.
+ * `homeFirst` (пустой REST-фильтр) добавляет ведущий ключ «HOME — первой».
+ * Непустой `req.ast.sort` (требование 3e47f52a) задаёт многоуровневый порядок
+ * целиком и перекрывает `req.sort`/`req.order` (конфликт двух источников
+ * отвергается фасадами до вызова движка). `viewed` — два ключа: флаг
+ * NULL-метки (NULL последними при `asc`, как в §6.10) и сама метка. Значения
+ * ключей совпадают с прежним `ORDER BY`, но теперь дополняются `t.id` в
+ * {@link orderClause} — порядок детерминирован.
  */
 function sortKeysFor(
+  ndb: NetworkDb,
   userId: string,
   req: ThoughtQueryRequest,
   homeFirst: boolean,
 ): { keys: SortKey[]; joinSql: string; joinParams: unknown[] } {
-  const dir: 'ASC' | 'DESC' = req.order === 'desc' ? 'DESC' : 'ASC';
   const keys: SortKey[] = [];
   if (homeFirst) keys.push({ expr: '(t.is_root = 1)', dir: 'DESC' });
+
+  const astSort = req.ast?.sort;
+  if (astSort !== undefined && astSort.length > 0) {
+    const ast = astSortClause(ndb, astSort);
+    return { keys: [...keys, ...ast.keys], joinSql: ast.joinSql, joinParams: ast.joinParams };
+  }
+
+  const dir: 'ASC' | 'DESC' = req.order === 'desc' ? 'DESC' : 'ASC';
   switch (req.sort) {
     case 'alpha':
       keys.push({ expr: 't.title COLLATE NOCASE', dir });
@@ -3121,7 +3179,7 @@ function buildFilterQuerySql(
   astOpts?: AstExecOptions,
 ): FilterQuerySql {
   const homeFirst = emptyFilterMode === 'home_orphans' && isFilterEmpty(req);
-  const { keys, joinSql, joinParams } = sortKeysFor(userId, req, homeFirst);
+  const { keys, joinSql, joinParams } = sortKeysFor(ndb, userId, req, homeFirst);
   const idDir: 'ASC' | 'DESC' = req.order === 'desc' ? 'DESC' : 'ASC';
   const cursor =
     typeof req.cursor === 'string' && req.cursor.trim() !== ''

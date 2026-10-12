@@ -176,6 +176,50 @@ describe('MCP etn.thoughts.query: AST-тело (cb78315b)', { skip }, () => {
     }
   });
 
+  it('многоуровневый ast.sort принимается целиком; конфликт с sort/order — ошибка (задача 3a157e66)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const fx = await seedFixture(handle.client, ctx.networkId);
+        // Два ключа: title ↑ (Child1, Child2); ограничение «один ключ» снято.
+        const multi = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: {
+            network_id: ctx.networkId,
+            ast: {
+              version: 1,
+              filter: { entity: { kind: 'parents' }, operator: 'in', value: [fx.parentId] },
+              sort: [
+                { key: 'title', order: 'asc' },
+                { key: 'created_at', order: 'desc' },
+              ],
+            },
+          },
+        });
+        assert.equal(multi.isError, undefined, toolText(multi));
+        assert.deepEqual(hitTitles(multi), ['AST-Child1', 'AST-Child2']);
+
+        // Два источника порядка (ast.sort и поля sort/order) → VALIDATION_ERROR.
+        const conflict = await rawQuery(handle.client, {
+          network_id: ctx.networkId,
+          ast: {
+            version: 1,
+            filter: { entity: { kind: 'parents' }, operator: 'in', value: [fx.parentId] },
+            sort: [{ key: 'title', order: 'asc' }],
+          },
+          sort: 'created_at',
+        });
+        assert.equal(conflict.isError, true);
+        assert.match(conflict.text, /VALIDATION_ERROR/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('значение-токен `$user` разрешается (tokenContext прокинут)', async () => {
     const ctx = await buildMcpContext();
     try {
