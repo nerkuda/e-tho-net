@@ -26,6 +26,7 @@ import type { NetworkDb } from '../src/db/network-db.js';
 import { mcpRequestToQuery, queryThoughts } from '../src/domain/query-service.js';
 import { createTypeProperty, getNetworkPropertyByName } from '../src/domain/property-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
 import { createThoughtTypeView, getThoughtTypeView, runViewForThought } from '../src/domain/thought-type-views-service.js';
 import { FILTER_AST_VERSION, type FilterAst, type FilterAstSortKey } from '@etn/shared';
 import { authHeaders, buildRestContext, closeRestContext } from './rest-helpers.js';
@@ -187,11 +188,38 @@ describe(
       }
     });
 
-    it('неизвестный ключ и свойство-связь — VALIDATION_ERROR (не молчаливый игнор)', () => {
+    it('удалённый ключ-свойство → красная диагностика с именем; свойство-связь — VALIDATION_ERROR', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        createThoughtType(ndb, { name: 'Задача' }, 'u');
-        assert.throws(() => runTitles(ndb, [{ key: 'нет-такого-ключа', order: 'asc' }]), /Ключ сортировки/);
+        const type = createThoughtType(ndb, { name: 'Задача' }, 'u').id;
+        createTypeProperty(ndb, 'thought_type', type, { key: 'Срок', value_type: 'date' }, 'u');
+        // Ключ-свойство удалён из реестра: красная диагностика (requirement 3e47f52a),
+        // а не generic VALIDATION_ERROR движка. Причина и имя — в details/message.
+        const prop = getNetworkPropertyByName(ndb, 'Срок')!;
+        ndb.prepare('DELETE FROM type_properties WHERE property_id = ?').run(prop.id);
+        ndb.prepare('DELETE FROM properties WHERE id = ?').run(prop.id);
+        let reason: string | undefined;
+        let label: string | undefined;
+        try {
+          runTitles(ndb, [{ key: 'Срок', order: 'asc' }]);
+        } catch (e) {
+          const err = e as { details?: { reason?: string }; message?: string };
+          reason = err.details?.reason;
+          label = err.message;
+        }
+        assert.equal(reason, 'filter_entity_deleted', 'красная диагностика, не generic-ошибка');
+        assert.match(String(label), /Срок/, 'имя удалённого правила — в сообщении');
+
+        // Существующее свойство-связь сортировать нечем — честная ошибка движка.
+        const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'нужен для' }, 'u').id;
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          type,
+          { key: 'Связь', value_type: 'link', config: { link_type_id: lt, direction: 'out' } },
+          'u',
+        );
+        assert.throws(() => runTitles(ndb, [{ key: 'зависит от', order: 'asc' }]), /связ/);
       } finally {
         ndb.close();
       }
@@ -214,6 +242,86 @@ describe(
         const view = createThoughtTypeView(ndb, type, { name: 'Работы', definition, is_default: true }, 'u');
         const run = await runViewForThought(ndb, getThoughtTypeView(ndb, view.id)!, ctxThought, 'u');
         assert.deepEqual(run.items.map((i) => i.title), ['A', 'C', 'B'], 'ast.sort применён (created_at desc)');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('keyset-курсор сверяется с фактическим ast.sort: чужой порядок отвергнут, страница 2 без дублей', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        for (const [t, at] of [
+          ['A', '2024-01-01T00:00:00.000Z'],
+          ['B', '2024-02-01T00:00:00.000Z'],
+          ['C', '2024-03-01T00:00:00.000Z'],
+        ] as const) {
+          seedThought(ndb, t, { created_at: at });
+        }
+        const ast = (sort: FilterAstSortKey[]): FilterAst => ({
+          version: FILTER_AST_VERSION,
+          filter: { op: 'and', children: [] },
+          sort,
+        });
+        const q = (sort: FilterAstSortKey[], cursor?: string) =>
+          queryThoughts(
+            ndb,
+            'u',
+            {
+              sort: 'alpha',
+              order: 'asc',
+              limit: 2,
+              offset: 0,
+              count: true,
+              ast: ast(sort),
+              ...(cursor !== undefined ? { cursor } : {}),
+            },
+            { emptyFilterMode: 'all', maxLimit: 100 },
+          );
+
+        const asc = [{ key: 'created_at', order: 'asc' }] as FilterAstSortKey[];
+        const page1 = q(asc);
+        assert.deepEqual(page1.items.map((i) => i.title), ['A', 'B']);
+        assert.ok(page1.next_cursor, 'есть курсор продолжения');
+
+        // Курсор от asc под desc-сортировкой → ошибка (чужой порядок).
+        assert.throws(
+          () => q([{ key: 'created_at', order: 'desc' }] as FilterAstSortKey[], page1.next_cursor!),
+          /курсор/i,
+        );
+
+        // Тот же порядок → страница 2 продолжает без дублей/пропусков.
+        const page2 = q(asc, page1.next_cursor!);
+        assert.deepEqual(page2.items.map((i) => i.title), ['C']);
+        const seen = [...page1.items, ...page2.items].map((i) => i.title);
+        assert.deepEqual([...new Set(seen)], ['A', 'B', 'C']);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('views run: явный body order переопределяет ast.sort определения (контракт 95273103)', async () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const type = createThoughtType(ndb, { name: 'Задача' }, 'u').id;
+        const ctxThought = seedThought(ndb, 'Контекст', { type_id: type, created_at: '2023-01-01T00:00:00.000Z' });
+        seedThought(ndb, 'A', { type_id: type, created_at: '2024-03-01T00:00:00.000Z' });
+        seedThought(ndb, 'B', { type_id: type, created_at: '2024-01-10T00:00:00.000Z' });
+        seedThought(ndb, 'C', { type_id: type, created_at: '2024-02-01T00:00:00.000Z' });
+
+        const definition = JSON.stringify({
+          version: FILTER_AST_VERSION,
+          filter: { op: 'and', children: [{ entity: { kind: 'type' }, operator: 'in', value: [type] }] },
+          sort: [{ key: 'created_at', order: 'desc' }],
+        } satisfies FilterAst);
+        const view = createThoughtTypeView(ndb, type, { name: 'Работы', definition, is_default: true }, 'u');
+        const saved = getThoughtTypeView(ndb, view.id)!;
+
+        // Без тела — определение (desc).
+        const byDef = await runViewForThought(ndb, saved, ctxThought, 'u');
+        assert.deepEqual(byDef.items.map((i) => i.title), ['A', 'C', 'B']);
+        // Тело order=asc переопределяет направление сохранённого ключа.
+        const byBody = await runViewForThought(ndb, saved, ctxThought, 'u', undefined, { order: 'asc' });
+        assert.deepEqual(byBody.items.map((i) => i.title), ['B', 'C', 'A'], 'тело переопределяет определение');
       } finally {
         ndb.close();
       }

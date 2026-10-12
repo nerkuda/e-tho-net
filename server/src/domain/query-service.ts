@@ -2868,14 +2868,28 @@ const CURSOR_VERSION = 1;
 /** Разобранный keyset-курсор: ключ сортировки последней строки страницы. */
 interface QueryCursor {
   v: number;
-  s: StructureSort;
-  o: SortOrder;
+  /**
+   * Подпись фактического порядка (см. {@link sortSignature}): и ключи `ast.sort`,
+   * и режим «пустой фильтр», и направление добора `id`. Заменяет прежние
+   * `sort`/`order` — при `ast.sort` они дефолтные и не отличали бы один
+   * многоуровневый порядок от другого.
+   */
+  sig: string;
   /** `1` — режим «пустой фильтр» (HOME первой); иначе `0`. */
   h: 0 | 1;
   /** Значения ключей сортировки последней строки (в порядке {@link SortKey}). */
   k: Array<string | number | null>;
   /** id последней строки (уникальный добор ключа, ADR 5f6cb775). */
   id: string;
+}
+
+/**
+ * Подпись фактического порядка страницы: список `(expr, dir)` ключей плюс
+ * направление завершающего `t.id`. По ней курсор сверяется с текущим запросом —
+ * продолжение читается только по тому же порядку (в т.ч. при `ast.sort`).
+ */
+function sortSignature(keys: SortKey[], idDir: 'ASC' | 'DESC'): string {
+  return JSON.stringify({ idDir, keys: keys.map((k) => [k.expr, k.dir]) });
 }
 
 /** Кодировать курсор в непрозрачную строку (base64url JSON). */
@@ -2885,12 +2899,13 @@ function encodeCursor(cursor: QueryCursor): string {
 
 /**
  * Разобрать и провалидировать курсор. Курсор обязан соответствовать
- * `sort`/`order`/режиму пустого фильтра текущего запроса — иначе продолжение
- * страницы читалось бы по чужому порядку (потеря/дубли строк).
+ * фактическому порядку текущего запроса (`sig` — ключи `ast.sort` либо плоские
+ * `sort`/`order`) и режиму пустого фильтра — иначе продолжение страницы
+ * читалось бы по чужому порядку (потеря/дубли строк).
  */
 function decodeCursor(
   raw: string,
-  req: ThoughtQueryRequest,
+  sig: string,
   homeFirst: boolean,
   requestId?: string,
 ): QueryCursor {
@@ -2911,7 +2926,7 @@ function decodeCursor(
   if (typeof parsed !== 'object' || parsed === null) return invalid();
   const c = parsed as Partial<QueryCursor>;
   if (c.v !== CURSOR_VERSION) return invalid({ reason: 'version' });
-  if (c.s !== req.sort || c.o !== req.order) return invalid({ reason: 'sort' });
+  if (c.sig !== sig) return invalid({ reason: 'sort' });
   if (c.h !== (homeFirst ? 1 : 0)) return invalid({ reason: 'mode' });
   if (!Array.isArray(c.k) || typeof c.id !== 'string' || c.id === '') return invalid({ reason: 'shape' });
   if (c.k.some((v) => v !== null && typeof v !== 'string' && typeof v !== 'number')) {
@@ -3183,7 +3198,7 @@ function buildFilterQuerySql(
   const idDir: 'ASC' | 'DESC' = req.order === 'desc' ? 'DESC' : 'ASC';
   const cursor =
     typeof req.cursor === 'string' && req.cursor.trim() !== ''
-      ? decodeCursor(req.cursor.trim(), req, homeFirst, requestId)
+      ? decodeCursor(req.cursor.trim(), sortSignature(keys, idDir), homeFirst, requestId)
       : null;
   const keyset = cursor === null ? null : keysetClause(keys, idDir, cursor.k, cursor.id);
 
@@ -3390,7 +3405,7 @@ export function queryThoughts(
   const items = pageRows.map(rowToThoughtRef);
   // Курсор отдаётся только когда за страницей есть строки: иначе клиент ходил
   // бы за пустым хвостом (требование 3f2fdc41).
-  const nextCursor = hasMore ? buildNextCursor(sql, req, pageRows) : null;
+  const nextCursor = hasMore ? buildNextCursor(sql, pageRows) : null;
   const directions = opts.includeDirections === true ? directionsOf(ndb, items.map((i) => i.id), req.link_filter, opts.showTrash !== false) : {};
   return {
     items,
@@ -3440,7 +3455,6 @@ function finalizeStats(
  */
 function buildNextCursor<T extends Record<string, unknown>>(
   sql: FilterQuerySql,
-  req: ThoughtQueryRequest,
   pageRows: T[],
 ): string | null {
   const last = pageRows[pageRows.length - 1];
@@ -3451,8 +3465,7 @@ function buildNextCursor<T extends Record<string, unknown>>(
   });
   return encodeCursor({
     v: CURSOR_VERSION,
-    s: req.sort,
-    o: req.order,
+    sig: sortSignature(sql.keys, sql.idDir),
     h: sql.homeFirst ? 1 : 0,
     k: keys,
     id: String(last['id']),
@@ -3508,7 +3521,7 @@ export function queryThoughtIds(
     ids: pageRows.map((r) => r.id),
     total: req.count === true ? countFilterMatches(ndb, sql) : null,
     has_more: hasMore,
-    next_cursor: hasMore ? buildNextCursor(sql, req, pageRows) : null,
+    next_cursor: hasMore ? buildNextCursor(sql, pageRows) : null,
     ...(built.stats !== undefined
       ? { stats: finalizeStats(built.stats, startedAt, built, req, maxLimit) }
       : {}),

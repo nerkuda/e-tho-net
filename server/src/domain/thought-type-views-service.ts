@@ -809,6 +809,18 @@ function splitMultipleText(raw: string): string[] {
  * Этап 5 упакует результат в REST-ответ `POST /thoughts/{id}/views/{view}/run`;
  * здесь только чистый pipeline без HTTP-обвязки.
  */
+/**
+ * Коды плоской сортировки `StructureSort` → фиксированные ключи `ast.sort`.
+ * Нужны, когда тело запроса переопределяет сортировку AST-определения
+ * (контракт 95273103): `viewed`/`manual` ключа AST не имеют — там отбор
+ * уходит на плоскую сортировку движка.
+ */
+const STRUCTURE_SORT_TO_AST_KEY: Partial<Record<StructureSort, string>> = {
+  alpha: 'title',
+  created: 'created_at',
+  updated: 'updated_at',
+};
+
 export async function runViewForThought(
   ndb: NetworkDb,
   view: ThoughtTypeView,
@@ -905,7 +917,29 @@ export async function runViewForThought(
         const diag = diagnoseFilterAst(ndb, ast, { thoughtTypeId: view.thought_type_id, requestId });
         if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
         warnings = diag.warnings;
-        return { ast, sort, order, limit, offset, count: true } satisfies ThoughtQueryRequest;
+        // Контракт 95273103: явные `sort`/`order` ТЕЛА переопределяют
+        // сохранённую в определении сортировку. Для AST-определения это значит
+        // переопределить и `ast.sort` (иначе движок предпочёл бы определение):
+        //   * задан `sort` → одна карта «код → ключ AST» с телом-направлением
+        //     (некодируемые коды вроде `viewed` — плоская сортировка движка);
+        //   * задан только `order` → направление КАЖДОГО сохранённого ключа
+        //     берётся из тела.
+        const bodySort = options?.sort;
+        const bodyOrder = options?.order;
+        let astForQuery = ast;
+        if (bodySort !== undefined || bodyOrder !== undefined) {
+          const mapped = bodySort === undefined ? undefined : STRUCTURE_SORT_TO_AST_KEY[bodySort];
+          if (bodySort !== undefined && mapped !== undefined) {
+            astForQuery = { version: ast.version, filter: ast.filter, sort: [{ key: mapped, order }] };
+          } else if (bodySort === undefined && ast.sort !== undefined) {
+            astForQuery = { version: ast.version, filter: ast.filter, sort: ast.sort.map((k) => ({ ...k, order })) };
+          } else {
+            // `viewed`/`manual` или определение без `sort`: отдаём плоской
+            // сортировке движка (`req.sort`/`req.order` уже несут тело).
+            astForQuery = { version: ast.version, filter: ast.filter };
+          }
+        }
+        return { ast: astForQuery, sort, order, limit, offset, count: true } satisfies ThoughtQueryRequest;
       })()
     : structureRequestToQuery({
         ...parseStructureFilter(resolvedDefinition, requestId),

@@ -37,6 +37,19 @@ function isUuid(value: string): boolean {
   return UUID_RE.test(value);
 }
 
+/**
+ * Фиксированные ключи `ast.sort`, не адресующие реестр (движковые коды).
+ * Всё прочее в качестве ключа — ссылка на свойство сети (требование 3e47f52a).
+ */
+const FIXED_SORT_KEYS: ReadonlySet<string> = new Set([
+  'title',
+  'alpha',
+  'created_at',
+  'created',
+  'updated_at',
+  'updated',
+]);
+
 /** Опции прохода диагностики. */
 export interface DiagnoseFilterOptions {
   /**
@@ -71,6 +84,34 @@ export function diagnoseFilterAst(
       ? null
       : new Set(listEffectiveTypeProperties(ndb, 'thought_type', opts.thoughtTypeId).map((p) => p.property_id));
   walk(ndb, ast.filter, 'filter', effective, opts.requestId, errors, warnings);
+  // Ключи сортировки-свойства (требование 3e47f52a): удалённое/несуществующее
+  // свойство-ключ — красная диагностика (тем же кодом entity_deleted), чтобы
+  // применение отбора было запрещено с точной причиной и именем, а не падало
+  // generic VALIDATION_ERROR движка.
+  (ast.sort ?? []).forEach((key, i) => {
+    if (FIXED_SORT_KEYS.has(key.key)) return;
+    const resolved = resolveConditionPropertyRef(ndb, key.key, opts.requestId);
+    if (resolved === null) {
+      errors.push({
+        severity: 'error',
+        code: 'entity_deleted',
+        path: `sort[${i}]`,
+        label: key.key,
+        message: `Свойство «${key.key}» сортировки удалено из реестра сети — отбор нельзя применить.`,
+      });
+      return;
+    }
+    const def = getNetworkProperty(ndb, resolved.propertyId);
+    if (def !== null && effective !== null && !effective.has(resolved.propertyId)) {
+      warnings.push({
+        severity: 'warning',
+        code: 'property_detached',
+        path: `sort[${i}]`,
+        label: def.name,
+        message: `Свойство «${def.name}» сортировки больше не входит в набор свойств этого типа — порядок считается по фактическим значениям вне типа.`,
+      });
+    }
+  });
   return { errors, warnings };
 }
 
