@@ -1209,8 +1209,13 @@ function structuralLeafClause(
   const ownCol = kind === 'parents' ? 'target_id' : 'source_id';
   const otherCol = kind === 'parents' ? 'source_id' : 'target_id';
   const { operator } = leaf;
+  // Структурное ребро — живое НЕТИПИЗИРОВАННОЕ ребро (эталон: property-service
+  // `structuralEdgeCounts`; ADR/требование «структурные связи»). Типизированные
+  // рёбра относятся к режиму «по всем типам связей» (задача e62aa4db) и здесь
+  // НЕ учитываются — иначе смешивались бы два режима (сущность 489c394f).
+  const edge = `l.${ownCol} = t.id AND l.active = 1 AND l.marked_for_deletion = 0 AND l.type_id IS NULL`;
   const presence: Clause = {
-    sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.${ownCol} = t.id AND l.active = 1)`,
+    sql: `EXISTS (SELECT 1 FROM links_v l WHERE ${edge})`,
     params: [],
   };
   if (operator === 'is_empty') return { sql: `NOT (${presence.sql})`, params: presence.params };
@@ -1220,7 +1225,7 @@ function structuralLeafClause(
     const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
     if (list.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
     const match: Clause = {
-      sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.${ownCol} = t.id AND l.active = 1
+      sql: `EXISTS (SELECT 1 FROM links_v l WHERE ${edge}
         AND l.${otherCol} IN (${list.map(() => '?').join(',')}))`,
       params: [...list],
     };

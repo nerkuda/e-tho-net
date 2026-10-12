@@ -52,14 +52,26 @@ function seedThought(
   return id;
 }
 
-function seedLink(ndb: NetworkDb, sourceId: string, targetId: string): void {
+function seedLink(ndb: NetworkDb, sourceId: string, targetId: string, typeId: string | null = null): void {
   ndb
     .prepare(
       `INSERT INTO links (id, source_id, target_id, type_id, active, version,
                           created_at, updated_at, created_by, updated_by)
-       VALUES (?, ?, ?, NULL, 1, 1, '2024', '2024', 'u', 'u')`,
+       VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', 'u', 'u')`,
     )
-    .run(randomUUID(), sourceId, targetId);
+    .run(randomUUID(), sourceId, targetId, typeId);
+}
+
+function seedLinkType(ndb: NetworkDb, nameForward: string, nameReverse: string): string {
+  const id = randomUUID();
+  ndb
+    .prepare(
+      `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+                               version, created_at, updated_at, created_by)
+       VALUES (?, ?, lower(?), ?, lower(?), 1, '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z', 'u')`,
+    )
+    .run(id, nameForward, nameForward, nameReverse, nameReverse);
+  return id;
 }
 
 function seedThoughtType(ndb: NetworkDb, name: string): string {
@@ -261,6 +273,31 @@ describe('AST executor (9c156b8c)', { skip: !nativeAvailable() }, () => {
     // «Потомки не пусты».
     const hasChildren = ast({ entity: { kind: 'children' }, operator: 'not_empty' });
     assert.deepEqual(runAst(ndb, hasChildren).titles, ['Версия X', 'Версия Y']);
+  });
+
+  it('structural parents/children count only untyped live edges (blocker 9c156b8c)', () => {
+    const ndb = createInMemoryNetworkDb();
+    const linkType = seedLinkType(ndb, 'зависит от', 'нужен для');
+    const parent = seedThought(ndb, 'Родитель');
+    const typedChild = seedThought(ndb, 'Типизированный потомок');
+    const untypedChild = seedThought(ndb, 'Структурный потомок');
+    // Типизированное ребро НЕ является структурной связью (режим «все типы связей» —
+    // отдельная задача e62aa4db).
+    seedLink(ndb, parent, typedChild, linkType);
+    seedLink(ndb, parent, untypedChild, null);
+
+    const hasChildren = ast({ entity: { kind: 'children' }, operator: 'not_empty' });
+    assert.deepEqual(runAst(ndb, hasChildren).titles, ['Родитель']);
+
+    // «Потомки в списке [типизированный потомок]» — не структурная связь → нет.
+    const childrenInList = ast({ entity: { kind: 'children' }, operator: 'in', value: [typedChild] });
+    assert.deepEqual(runAst(ndb, childrenInList).titles, []);
+    // «Потомки в списке [структурный потомок]» — совпадение.
+    const childrenInUntyped = ast({ entity: { kind: 'children' }, operator: 'in', value: [untypedChild] });
+    assert.deepEqual(runAst(ndb, childrenInUntyped).titles, ['Родитель']);
+    // «Родители не пусты» — только у структурного потомка, не у типизированного.
+    const hasParents = ast({ entity: { kind: 'parents' }, operator: 'not_empty' });
+    assert.deepEqual(runAst(ndb, hasParents).titles, ['Структурный потомок']);
   });
 
   it('does not impose implicit active/trashed defaults — the tree defines the filter', () => {
