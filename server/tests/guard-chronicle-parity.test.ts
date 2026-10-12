@@ -359,6 +359,41 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
     }
   });
 
+  it('REST: ast-тело хроники — 200; XOR с плоскими критериями и link_scope!=both → 422 (задача 4752b065)', async () => {
+    const rest = await buildRestContext();
+    try {
+      const inject = (payload: Record<string, unknown>) =>
+        rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+          headers: authHeaders(rest),
+          payload,
+        });
+
+      const ast = {
+        version: 1,
+        filter: { entity: { kind: 'targets' }, operator: 'not_empty' },
+      };
+      // Валидное AST-тело профиля «хроника» принимается.
+      const ok = await inject({ ast });
+      assert.equal(ok.statusCode, 200, JSON.stringify(ok.json()));
+
+      // XOR: `ast` несовместимо с плоскими критериями (keywords/date/targets/...).
+      const conflict = await inject({ ast, keywords: 'x' });
+      assert.equal(conflict.statusCode, 422, 'ast + плоские критерии → 422 (XOR)');
+
+      // Плоское `link_scope != both` не выражается в AST — явный отказ, не подмена.
+      const scope = await inject({ ast, link_scope: 'sources' });
+      assert.equal(scope.statusCode, 422, 'ast + link_scope=sources → 422');
+
+      // Плоский `link_scope != both` без ast тоже отвергается компилятором.
+      const flatScope = await inject({ link_scope: 'sources' });
+      assert.equal(flatScope.statusCode, 422, 'плоский link_scope=sources → 422 (компилятор)');
+    } finally {
+      await closeRestContext(rest);
+    }
+  });
+
   it('REST: первый день недели сети доходит в POST /chronicle/query (задача 7a798b17)', async () => {
     const rest = await buildRestContext();
     try {

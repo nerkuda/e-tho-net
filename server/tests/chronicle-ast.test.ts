@@ -264,6 +264,45 @@ describe('хроника: отбор на общий AST (задача 4752b065)
     }
   });
 
+  it('включающие границы «Времени записи»: ровно на $monthStart проходит between/gte; $monthStart+1d не проходит lte $monthStart', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const thought = seedThought(ndb, 'Границы');
+      // Запись ровно на границе начала месяца (valid_from == valid_to == $monthStart).
+      const onStart = createComment(
+        ndb, 'thought', thought,
+        { kind: 'chronological', title: 'граница', body_md: 'x', valid_from: '2024-03-01T00:00:00.000Z' }, USER,
+      ).id;
+      // Запись на $monthStart+1d.
+      const dayAfter = createComment(
+        ndb, 'thought', thought,
+        { kind: 'chronological', title: 'день+1', body_md: 'x', valid_from: '2024-03-02T00:00:00.000Z' }, USER,
+      ).id;
+
+      const between: FilterAst['filter'] = {
+        entity: { kind: 'record_time' },
+        operator: 'between',
+        value: [{ token: '$monthStart' }, { token: '$monthEnd' }],
+      };
+      // Границы ВКЛЮЧИТЕЛЬНЫ: запись ровно на $monthStart входит. Мутация
+      // «эксклюзивный between» (`>`/`<` вместо `>=`/`<=`) роняет это утверждение.
+      assert.deepEqual(runAst(ndb, between).ids, [onStart, dayAfter], 'between включает обе границы');
+
+      const gte: FilterAst['filter'] = {
+        entity: { kind: 'record_time' }, operator: 'gte', value: { token: '$monthStart' },
+      };
+      assert.deepEqual(runAst(ndb, gte).ids, [onStart, dayAfter], 'gte включает запись ровно на границе');
+
+      const lte: FilterAst['filter'] = {
+        entity: { kind: 'record_time' }, operator: 'lte', value: { token: '$monthStart' },
+      };
+      assert.deepEqual(runAst(ndb, lte).ids, [onStart], 'lte включает границу и отсекает $monthStart+1d');
+      assert.ok(!runAst(ndb, lte).ids.includes(dayAfter), '$monthStart+1d не проходит lte $monthStart');
+    } finally {
+      ndb.close();
+    }
+  });
+
   it('XOR: `ast` несовместим с плоскими критериями — VALIDATION_ERROR', () => {
     assert.throws(
       () => parseChronicleQueryBody(
