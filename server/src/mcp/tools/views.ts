@@ -13,7 +13,11 @@ import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
 import { projectThoughtRows } from '../../domain/response-projection.js';
 import { getEffectiveViewsForThought, runViewForThought } from '../../domain/thought-type-views-service.js';
+import { queryThoughtsAsync } from '../../domain/heavy-read.js';
+import { mcpRequestToQuery } from '../../domain/query-service.js';
+import { parseFilterAst } from '../../domain/filter-ast.js';
 import { openMemberNetwork, runTool } from '../context.js';
+import { mcpTokenContext } from './token-context.js';
 
 export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
@@ -34,11 +38,12 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
       title: 'Исполнить отбор типа относительно мысли',
       description:
         'Run a thought-type view for one thought. `view_name` — имя отбора из `meta.views` ' +
-        'карточки мысли (нормализованное сравнение, регистр не важен) или его `id`. ' +
-        'Read-only: бюджет записи не тратит, `audit_log` не пишет. ' +
-        'Возвращает страницу мыслей + `meta.view` (отбор, который был исполнен) и ' +
-        '`meta.unresolved` (не пусто, если в `definition` встретился токен, ' +
-        'неразрешимый на момент исполнения — тогда `data` пустая).',
+        'карточки мысли (нормализованное сравнение, регистр не важен) или его `id`; либо ' +
+        'готовое `ast`-тело (грамматика — `etn.guide { topic: "thoughts.query" }`) — ровно одно ' +
+        'из двух. Read-only: бюджет записи не тратит, `audit_log` не пишет. ' +
+        'Возвращает страницу мыслей + `meta.view` (отбор, который был исполнен; при `ast` — ' +
+        '`meta.ast: true`) и `meta.unresolved` (не пусто, если встретился неразрешимый на ' +
+        'момент исполнения токен — тогда `data` пустая).',
       inputSchema: ViewsRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.views.run'],
     },
@@ -46,13 +51,61 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         const thought = getThoughtOrThrow(ndb, args.thought_id);
-        // Резолв отбора по эффективному набору мысли.
+        // AST-тело (задача cb78315b, требование a50c7872): готовая форма вместо
+        // сохранённого отбора. Разбор формы — доменный (неизвестные поля →
+        // VALIDATION_ERROR); исполняет тот же движок, что `etn.thoughts.query`.
+        if (args.ast !== undefined) {
+          const ast = parseFilterAst(args.ast);
+          const req = mcpRequestToQuery(
+            {
+              ast,
+              ...(args.order !== undefined ? { order: args.order } : {}),
+              ...(args.limit !== undefined ? { limit: args.limit } : {}),
+              ...(args.offset !== undefined ? { offset: args.offset } : {}),
+            },
+            { maxNodes: rt.limits.maxNodesPerSubgraph },
+          );
+          const result = await queryThoughtsAsync(ndb, rt.deps.auth.userId, req, {
+            maxLimit: 200,
+            emptyFilterMode: 'all',
+            // Обязательный пункт задачи cb78315b: контекст разрешения токенов.
+            tokenContext: mcpTokenContext(rt, args.network_id),
+          });
+          recordReads(ndb, result.items.map((i) => i.id), { now: new Date().toISOString() });
+          const pageItems = projectThoughtRows(result.items);
+          return {
+            thought: { id: thought.id, title: thought.title },
+            data: pageItems,
+            thought_types: thoughtTypeCatalog(ndb, pageItems.map((it) => it.type_id)),
+            meta: {
+              total: result.total,
+              limit: req.limit,
+              offset: req.offset,
+              sort: req.sort,
+              order: req.order,
+              ast: true,
+              has_more: result.has_more,
+              next_cursor: result.next_cursor,
+              ...(result.unresolved !== undefined && result.unresolved.length > 0
+                ? {
+                    unresolved: result.unresolved.map((u) => ({
+                      token: u.token,
+                      reason: u.reason,
+                    })),
+                  }
+                : {}),
+            },
+          };
+        }
+        // Резолв отбора по эффективному набору мысли. Схема гарантирует ровно
+        // одно из `view_name`/`ast`, поэтому здесь `view_name` задан.
+        const viewName = args.view_name as string;
         const effective = getEffectiveViewsForThought(ndb, thought);
         // Сравнение по `name_key` (trim+lowercase) — соответствует правилу
         // сравнения дублей в `findThoughtTypeViewByTypeAndNameKey`. Если
         // в `view_name` пришёл uuid отбора (id), тоже сматчим — иначе
         // агенту пришлось бы всегда передавать имя.
-        const trimmed = args.view_name.trim();
+        const trimmed = viewName.trim();
         const lower = trimmed.toLowerCase();
         const matched =
           effective.find((v) => v.name_key === lower) ??
@@ -65,10 +118,10 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
           // эффективного набора. Не молча пустой массив.
           throw new EtnError(
             'NOT_FOUND',
-            `Отбор «${args.view_name}» не найден в эффективном наборе мысли ${args.thought_id}.`,
+            `Отбор «${viewName}» не найден в эффективном наборе мысли ${args.thought_id}.`,
             {
               entity: 'thought_type_view',
-              view_name: args.view_name,
+              view_name: viewName,
               thought_id: args.thought_id,
               available_views: effective.map((v) => ({
                 id: v.id,

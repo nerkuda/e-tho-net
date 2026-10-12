@@ -391,15 +391,17 @@ const MCP_SORT_TO_CANONICAL: Record<ThoughtQuerySort, StructureSort> = {
  * (= `alpha`) `asc`.
  */
 export function mcpRequestToQuery(
-  req: McpThoughtQueryRequest,
+  req: McpThoughtQueryRequest & { readonly ast?: FilterAst },
   bounds: { maxNodes: number },
 ): ThoughtQueryRequest {
   const maxDepth = Math.min(
     Math.max(req.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH, 1),
     TRAVERSAL_DEFAULTS.MAX_DEPTH,
   );
+  const astSort = astSortFromRequest(req);
   return {
     type_ids: req.type_id,
+    ast: req.ast,
     properties: (req.properties ?? []).map((c) => {
       if (typeof c.property_id !== 'string' || c.property_id === '') {
         throw new EtnError(
@@ -437,14 +439,61 @@ export function mcpRequestToQuery(
             link_filter: req.link_filter,
           }
         : undefined,
-    sort: MCP_SORT_TO_CANONICAL[req.sort ?? 'title'],
-    order: req.order ?? 'asc',
+    sort: astSort?.sort ?? MCP_SORT_TO_CANONICAL[req.sort ?? 'title'],
+    order: astSort?.order ?? req.order ?? 'asc',
     limit: Math.min(Math.max(req.limit ?? 50, 1), 200),
     offset: Math.max(req.offset ?? 0, 0),
     count: req.count,
     cursor: req.cursor,
   };
 }
+
+/**
+ * Сортировка для MCP-запроса с AST-телом (задача cb78315b). Wire-формат AST
+ * несёт многоуровневый `sort: [{ key, order }]`, но MCP-контракт
+ * `etn.thoughts.query` одноуровневый (`sort`/`order`). Принимаем РОВНО один
+ * ключ из `title`/`created_at`/`updated_at`; многоуровневый набор или
+ * неизвестный ключ — явная `VALIDATION_ERROR` (не молчаливый игнор).
+ * Одновременная передача `sort`/`order` инструмента и `ast.sort` — конфликт
+ * двух источников (тоже `VALIDATION_ERROR`).
+ */
+function astSortFromRequest(
+  req: McpThoughtQueryRequest & { readonly ast?: FilterAst },
+): { sort: StructureSort; order: SortOrder } | undefined {
+  const keys = req.ast?.sort;
+  if (keys === undefined || keys.length === 0) return undefined;
+  if (req.sort !== undefined || req.order !== undefined) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Сортировка задана дважды: в теле ast (sort) и в полях sort/order инструмента — оставьте один источник.',
+      { field: 'sort' },
+    );
+  }
+  if (keys.length > 1) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Многоуровневая сортировка AST в MCP не поддержана: контракт etn.thoughts.query одноуровневый (sort/order).',
+      { field: 'ast.sort', count: keys.length },
+    );
+  }
+  const key = keys[0]!;
+  const mcpSort = AST_SORT_KEY_TO_MCP[key.key];
+  if (mcpSort === undefined) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Ключ сортировки AST «${key.key}» не поддержан: допустимы ${Object.keys(AST_SORT_KEY_TO_MCP).join(', ')}.`,
+      { field: 'ast.sort', key: key.key, allowed: Object.keys(AST_SORT_KEY_TO_MCP) },
+    );
+  }
+  return { sort: MCP_SORT_TO_CANONICAL[mcpSort], order: key.order };
+}
+
+/** Соответствие ключей сортировки AST кодам MCP-контракта (`etn.thoughts.query`). */
+const AST_SORT_KEY_TO_MCP: Record<string, ThoughtQuerySort> = {
+  title: 'title',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+};
 
 // ---------------------------------------------------------------------------
 // SQL-движок

@@ -966,6 +966,44 @@ const QueryPropertyFields = z
   .refine((v) => v.property_id !== undefined || v.property !== undefined, {
     message: 'Укажите property_id или property в условии свойства.',
   });
+/**
+ * Старые критерии выборки, с которыми `ast` несовместим (требование 91983c20,
+ * задача cb78315b): отбор выражается ЛИБО деревом `ast`, ЛИБО плоскими полями,
+ * но не обоими сразу — одновременная передача молча теряла бы часть намерения.
+ * `sort`/`order`/`limit`/`offset`/`count`/`cursor` сюда НЕ входят: это страница
+ * (пагинация и сортировка), а не критерии.
+ */
+const LEGACY_QUERY_CRITERIA = [
+  'in_subtree_of',
+  'max_depth',
+  'type_id',
+  'type',
+  'active',
+  'trashed',
+  'keywords',
+  'properties',
+  'created_after',
+  'created_before',
+  'updated_after',
+  'updated_before',
+  'author_id',
+  'editor_id',
+  'link_filter',
+] as const;
+
+/**
+ * AST-тело отбора (0.13.1, задача cb78315b; сущность «Модель отбора (AST) и её
+ * wire-формат» 489c394f). Wire-формат `{ version, filter, sort? }` исполняется
+ * единым движком (требование 76e30d9a). Строгую проверку формы (неизвестные
+ * поля на любом уровне, версия, согласованность оператора листа и под-выборки)
+ * делает доменный `parseFilterAst` — здесь схема лишь фиксирует «объект» и
+ * рекламирует форму в `tools/list`, чтобы не дублировать разбор и держать одну
+ * каноническую диагностику `VALIDATION_ERROR` для REST и MCP.
+ */
+const FilterAstBody = z
+  .record(z.string(), z.unknown())
+  .describe('AST-тело отбора; грамматика — etn.guide { topic: "thoughts.query" }.');
+
 const QueryFields = z
   .object({
     // XOR сети — как в `SearchFields`: обязательность несёт описание полей
@@ -976,6 +1014,7 @@ const QueryFields = z
     network_ids: z.array(NetworkId).optional().describe(
       'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
     ),
+    ast: FilterAstBody.optional(),
     in_subtree_of: ThoughtId.optional(),
     max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
     type_id: z.array(z.string().min(1)).optional(),
@@ -1003,6 +1042,22 @@ const QueryFields = z
   // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
   .strict()
   .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  // Задача cb78315b (требование 91983c20): `ast` XOR старые критерии —
+  // смешение молча теряло бы часть намерения. Страница (sort/order/limit/
+  // offset/count/cursor) допустима и с `ast`.
+  .refine(
+    (v) => v.ast === undefined || LEGACY_QUERY_CRITERIA.every((k) => v[k] === undefined),
+    {
+      message:
+        `Тело ast несовместимо со старыми критериями (${LEGACY_QUERY_CRITERIA.join(', ')}): ` +
+        'передайте либо ast, либо плоские критерии.',
+    },
+  )
+  // AST адресует реестр ОДНОЙ сети (property_id/type_id) — веер по сетям с
+  // одним телом не определён: одиночная сеть обязательна (задача cb78315b).
+  .refine((v) => v.ast === undefined || (v.network_ids?.length ?? 0) === 0, {
+    message: 'Тело ast применимо только к одной сети: используйте network_id без network_ids.',
+  })
   // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
   // Парсер repeatable создаёт `network_ids: []` при отсутствии параметра в
   // query — пустой массив трактуется как «не указан».
@@ -1697,14 +1752,23 @@ export const TypesList = defineContract(
 
 export const ViewsRun = defineContract(
   'etn.views.run',
-  z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-    view_name: z.string().min(1),
-    limit: z.number().int().min(1).optional(),
-    offset: z.number().int().min(0).optional(),
-    order: z.enum(['asc', 'desc']).optional(),
-  }),
+  z
+    .object({
+      network_id: NetworkId,
+      thought_id: ThoughtId,
+      // Задача cb78315b (требование a50c7872): инструмент принимает ЛИБО
+      // сохранённый отбор по имени/id, ЛИБО готовое AST-тело — ровно одно.
+      view_name: z.string().min(1).optional(),
+      ast: FilterAstBody.optional(),
+      limit: z.number().int().min(1).optional(),
+      offset: z.number().int().min(0).optional(),
+      order: z.enum(['asc', 'desc']).optional(),
+    })
+    // `.strict()` до `.refine()` (сторож guard-mcp-contracts-strict).
+    .strict()
+    .refine((v) => (v.view_name === undefined) !== (v.ast === undefined), {
+      message: 'Укажите ровно одно: view_name (сохранённый отбор) или ast (тело-отбор).',
+    }),
   {},
 );
 

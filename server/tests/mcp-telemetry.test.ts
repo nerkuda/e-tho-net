@@ -555,8 +555,15 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // `tools/list` — защита от ползучего раздувания (методика —
         // стандарт «Расширение MCP-интерфейса — единая методика»; ориентир
         // техпроекта 22e34ba5 — 30–35 инструментов на сервер).
+        // 0.13.1 (задача cb78315b, «Развитие отборов»): `etn.thoughts.query` и
+        // `etn.views.run` принимают `ast`-тело отбора — параметр контракта
+        // (`inputSchema` не режется) плюс упоминание тела и диагностики в
+        // описаниях (тела не перечислены в прозе — детали в
+        // `etn.guide { topic: "thoughts.query" }`, принцип прогрессивного
+        // раскрытия). Замер с новым состоянием — 42 986 Б; планка поднята
+        // ровно под этот прирост с малым запасом (42 500 → 43 400).
         assert.ok(
-          bytes <= 42_500,
+          bytes <= 43_400,
           `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 42500`,
         );
         // Потолок числа инструментов: фактическое 25 + запас 5 = 30 (нижняя
@@ -608,9 +615,14 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // (+26 Б, только `inputSchema` — контракт вызова, проза не менялась).
         // Было 37 498 / планка 37 500 (запас 2 Б) → 37 524. Планка поднята ровно
         // под контрактный прирост с малым запасом: 37 500 → 37 550.
+        // 0.13.1 (задача cb78315b): `ast`-тело в `etn.thoughts.query`/
+        // `etn.views.run` — прирост даёт `inputSchema` (контракт вызова, не
+        // режется) и краткое упоминание тела/диагностики в описаниях. Замер с
+        // новым состоянием — 38 221 Б; планка поднята ровно под прирост с малым
+        // запасом: 37 550 → 38 400.
         assert.ok(
-          descriptionsPlusInputSchema <= 37_550,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 37550`,
+          descriptionsPlusInputSchema <= 38_400,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 38400`,
         );
       } finally {
         await handle.close();
