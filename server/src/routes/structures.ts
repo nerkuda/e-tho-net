@@ -95,17 +95,23 @@ function parseQueryBody(
   const out = parseBody(RestStructureQueryBody, body, requestId);
   const filter = parseStructureFilter(body, requestId);
   // Тело-отбор AST (требование 91983c20, тех.проект «Ядро AST и операторы»):
-  // либо готовое дерево AST, либо плоские критерии — одновременно нельзя
-  // (неоднозначно, какой источник истины). Форму дерева валидирует доменный
-  // parseFilterAst; неизвестные корневые поля уже отклонены контрактом.
+  // критерии отбора выражаются ЛИБО деревом AST, ЛИБО плоскими полями — не
+  // оба сразу (неоднозначно, какой источник истины). ФАСАДНЫЕ пред-сужения
+  // `parent_ids` и `link_filter` в этот конфликт НЕ входят: они применяются
+  // ПОВЕРХ критериев AST (требование 3482a399 — корни входят; `link_filter`
+  // вынесен из AST сущностью 489c394f), движок связку поддерживает. Форму
+  // дерева валидирует доменный parseFilterAst; неизвестные корневые поля уже
+  // отклонены контрактом.
   const astRaw = body['ast'];
   let ast: FilterAst | undefined;
   if (astRaw !== undefined) {
     ast = parseFilterAst(astRaw, requestId);
-    if (!isFilterEmpty(filter)) {
+    // «Плоские критерии» без фасадных полей: если после их исключения критериев
+    // не осталось — конфликта нет.
+    if (!isFilterEmpty({ ...filter, parent_ids: undefined, link_filter: undefined })) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'Тело-AST (`ast`) и плоские критерии переданы одновременно — выберите один источник отбора.',
+        'Тело-AST (`ast`) и плоские критерии переданы одновременно — выберите один источник отбора (фасадные `parent_ids`/`link_filter` совместимы с `ast`).',
         { field: 'ast' },
         requestId,
       );

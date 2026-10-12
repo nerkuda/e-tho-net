@@ -211,9 +211,19 @@ describe('POST /thoughts/query: AST-тело через REST (задача c1376
     return { statusCode: res.statusCode, json: res.json() as Record<string, unknown> };
   }
 
-  it('принимает ast-тело, отвергает ast вместе с плоскими критериями и неизвестное поле', async () => {
+  it('ast: фасадные parent_ids/link_filter совместимы, конфликт — только с критериями', async () => {
     const ctx = await buildRestContext();
     try {
+      const root = seedThought(ctx.ndb, 'AST-корень');
+      const child = seedThought(ctx.ndb, 'AST-потомок');
+      const outside = seedThought(ctx.ndb, 'AST-вне-поддерева');
+      ctx.ndb
+        .prepare(
+          `INSERT INTO links (id, source_id, target_id, type_id, active, version, created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, NULL, 1, 1, '2024', '2024', 'u', 'u')`,
+        )
+        .run(randomUUID(), root, child);
+
       const ast = {
         version: FILTER_AST_VERSION,
         filter: { entity: { kind: 'trashed' as const }, operator: 'eq' as const, value: false },
@@ -221,7 +231,36 @@ describe('POST /thoughts/query: AST-тело через REST (задача c1376
       const ok = await post(ctx, { ast, sort: 'alpha', order: 'asc', limit: 10, count: true });
       assert.equal(ok.statusCode, 200, JSON.stringify(ok.json));
 
-      const conflict = await post(ctx, { ast, keywords: 'x', sort: 'alpha', order: 'asc' });
+      // ast + parent_ids: поддерево применяется поверх дерева, корни входят (3482a399).
+      const withSubtree = await post(ctx, {
+        ast,
+        parent_ids: [root],
+        sort: 'alpha',
+        order: 'asc',
+        limit: 20,
+      });
+      assert.equal(withSubtree.statusCode, 200, JSON.stringify(withSubtree.json));
+      const ids = (withSubtree.json['data'] as Array<{ id: string }>).map((i) => i.id);
+      assert.ok(ids.includes(root) && ids.includes(child), 'корень и потомок обязаны войти');
+      assert.ok(!ids.includes(outside), 'мысль вне поддерева не входит');
+
+      // ast + link_filter (без parent_ids) — совместимо, 200.
+      const withLinkFilter = await post(ctx, {
+        ast,
+        link_filter: { include_structural: true },
+        sort: 'alpha',
+        order: 'asc',
+      });
+      assert.equal(withLinkFilter.statusCode, 200, JSON.stringify(withLinkFilter.json));
+
+      // ast + parent_ids + плоский критерий — конфликт.
+      const conflict = await post(ctx, {
+        ast,
+        parent_ids: [root],
+        keywords: 'x',
+        sort: 'alpha',
+        order: 'asc',
+      });
       assert.equal(conflict.statusCode, 422);
       assert.equal((conflict.json['error'] as { code: string }).code, 'VALIDATION_ERROR');
 
