@@ -294,6 +294,18 @@ describe(
         assert.deepEqual(page2.items.map((i) => i.title), ['C']);
         const seen = [...page1.items, ...page2.items].map((i) => i.title);
         assert.deepEqual([...new Set(seen)], ['A', 'B', 'C']);
+
+        // Ключи-свойства одного вида на одном индексе: подпись обязана различать
+        // ИДЕНТИЧНОСТЬ свойства — курсор от «Срок» не принимается под «Дедлайн».
+        const type = createThoughtType(ndb, { name: 'Задача' }, 'u').id;
+        createTypeProperty(ndb, 'thought_type', type, { key: 'Срок', value_type: 'date' }, 'u');
+        createTypeProperty(ndb, 'thought_type', type, { key: 'Дедлайн', value_type: 'date' }, 'u');
+        const bySrok = q([{ key: 'Срок', order: 'asc' }] as FilterAstSortKey[]);
+        assert.ok(bySrok.next_cursor, 'курсор по свойству-ключу есть');
+        assert.throws(
+          () => q([{ key: 'Дедлайн', order: 'asc' }] as FilterAstSortKey[], bySrok.next_cursor!),
+          /курсор/i,
+        );
       } finally {
         ndb.close();
       }

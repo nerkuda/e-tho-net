@@ -739,10 +739,17 @@ export function directionsOf(
  * Одна ключевая часть детерминированного порядка: SQL-выражение и направление.
  * Порядок строится из них + уникального `id` (ADR 5f6cb775: сортировка обязана
  * иметь уникальный добор ключа, иначе keyset теряет и дублирует строки).
+ *
+ * `tag` — идентичность ключа для подписи курсора ({@link sortSignature}). Для
+ * ключей-свойств `expr` ссылается на псевдоним (`psv<индекс>`), который НЕ
+ * различает свойства одного вида на одном индексе («Срок» и «Дедлайн» дали бы
+ * одинаковый `psv0.value_date`) — поэтому в подпись входит `property_id`.
  */
 interface SortKey {
   expr: string;
   dir: 'ASC' | 'DESC';
+  /** Тег идентичности ключа (у ключей-свойств — `property:<id>`). */
+  tag?: string;
 }
 
 /**
@@ -809,8 +816,9 @@ function astSortClause(
     );
     joinParams.push(def.id);
     const expr = `${alias}.${VALUE_COLUMN[def.value_type]}`;
-    keys.push({ expr: `(${expr} IS NULL)`, dir: 'ASC' });
-    keys.push({ expr, dir });
+    const tag = `property:${def.id}`;
+    keys.push({ expr: `(${expr} IS NULL)`, dir: 'ASC', tag });
+    keys.push({ expr, dir, tag });
   });
   return { keys, joinSql: joins.join(' '), joinParams };
 }
@@ -2889,7 +2897,7 @@ interface QueryCursor {
  * продолжение читается только по тому же порядку (в т.ч. при `ast.sort`).
  */
 function sortSignature(keys: SortKey[], idDir: 'ASC' | 'DESC'): string {
-  return JSON.stringify({ idDir, keys: keys.map((k) => [k.expr, k.dir]) });
+  return JSON.stringify({ idDir, keys: keys.map((k) => [k.tag ?? k.expr, k.expr, k.dir]) });
 }
 
 /** Кодировать курсор в непрозрачную строку (base64url JSON). */
