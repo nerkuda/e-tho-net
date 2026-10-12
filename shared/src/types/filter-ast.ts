@@ -94,6 +94,13 @@ export interface FilterAstTokenValue {
 }
 
 /**
+ * Элемент списка значений: литерал или токен. Список с токенами нужен
+ * оператору «между» — каждая граница может быть токеном (требование 84b52caa:
+ * `[ { "token": "$weekStart-1d" }, { "token": "$today" } ]`).
+ */
+export type FilterAstListItem = FilterAstScalar | FilterAstTokenValue;
+
+/**
  * Под-выборка как значение: `{ "query": <узел>, "operator": "in" | "not_in" | "all_in" }`.
  * `query` — полноценное под-дерево AST (глубина вложенности не ограничена).
  */
@@ -102,10 +109,14 @@ export interface FilterAstSubqueryValue {
   operator: 'in' | 'not_in' | 'all_in';
 }
 
-/** Значение условия-листа: литерал | список литералов | токен | под-выборка. */
+/**
+ * Значение условия-листа: литерал | список (литералы и/или токены) | токен |
+ * под-выборка. Список с токенами — для «между», где каждая граница может быть
+ * токеном (требование 84b52caa).
+ */
 export type FilterAstValue =
   | FilterAstScalar
-  | FilterAstScalar[]
+  | FilterAstListItem[]
   | FilterAstTokenValue
   | FilterAstSubqueryValue;
 

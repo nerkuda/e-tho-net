@@ -52,6 +52,7 @@ import {
   type FilterAstEntity,
   type FilterAstHierarchyMode,
   type FilterAstLeaf,
+  type FilterAstListItem,
   type FilterAstNode,
   type FilterAstOperator,
   type FilterAstScalar,
@@ -1471,9 +1472,30 @@ function astResolveOptions(ctx: AstTokenContext | undefined): {
 }
 
 /**
- * Разрешить токен-значение листа (`{ token: "$today+7d" }`) в скаляр. Возврат
- * `{ ok: false }` — токен неразрешим (`unresolved` уже собран в `sink`), лист
- * даёт `false`. Литералы и списки возвращаются как есть.
+ * Разрешить одно значение-токен (`{ token: "$today+7d" }`) в скаляр. Возврат
+ * `{ ok: false }` — токен неразрешим (`unresolved` уже собран в `sink`).
+ */
+function astResolveToken(
+  token: string,
+  ctx: AstTokenContext | undefined,
+  sink: TokenIssue[] | undefined,
+  path: string,
+): { ok: boolean; value?: FilterAstScalar } {
+  const res = resolveGlobalDateTokens(token, astResolveOptions(ctx));
+  if (res.unresolved.length > 0) {
+    if (sink !== undefined) {
+      for (const issue of res.unresolved) sink.push({ ...issue, path });
+    }
+    return { ok: false };
+  }
+  return { ok: true, value: res.value };
+}
+
+/**
+ * Разрешить токены в значении листа. Скаляр/список литералов — как есть;
+ * одиночный токен и токены-элементы СПИСКА (границы «между») — раскрываются.
+ * Возврат `{ ok: false }` — хоть один токен неразрешим (`unresolved` собран в
+ * `sink`), лист даёт `false`. Требование 84b52caa (каждая граница — токен).
  */
 function astResolveLeafValue(
   value: FilterAstValue | undefined,
@@ -1481,20 +1503,24 @@ function astResolveLeafValue(
   sink: TokenIssue[] | undefined,
   path: string,
 ): { ok: boolean; value?: FilterAstValue } {
-  if (
-    typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value) &&
-    'token' in value
-  ) {
-    const res = resolveGlobalDateTokens(value.token, astResolveOptions(ctx));
-    if (res.unresolved.length > 0) {
-      if (sink !== undefined) {
-        for (const issue of res.unresolved) sink.push({ ...issue, path: `${path}.value` });
+  if (Array.isArray(value)) {
+    const out: FilterAstListItem[] = [];
+    for (let i = 0; i < value.length; i += 1) {
+      const el = value[i]!;
+      if (typeof el === 'object' && el !== null && 'token' in el) {
+        const r = astResolveToken(el.token, ctx, sink, `${path}.value[${i}]`);
+        if (!r.ok) return { ok: false };
+        out.push(r.value!);
+      } else {
+        out.push(el);
       }
-      return { ok: false };
     }
-    return { ok: true, value: res.value };
+    return { ok: true, value: out };
+  }
+  if (typeof value === 'object' && value !== null && 'token' in value) {
+    const r = astResolveToken(value.token, ctx, sink, `${path}.value`);
+    if (!r.ok) return { ok: false };
+    return { ok: true, value: r.value };
   }
   return { ok: true, value };
 }

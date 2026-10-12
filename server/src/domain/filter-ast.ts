@@ -28,10 +28,12 @@ import {
   type FilterAstHierarchyMode,
   type FilterAstLabels,
   type FilterAstLeaf,
+  type FilterAstListItem,
   type FilterAstNode,
   type FilterAstOperator,
   type FilterAstScalar,
   type FilterAstSortKey,
+  type FilterAstTokenValue,
   type FilterAstValue,
   type StructureKeywordScope,
 } from '@etn/shared';
@@ -218,6 +220,19 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
         );
       }
     }
+    // «Между»/«не между»: список-значение — ровно две границы (каждая —
+    // литерал или токен, требование 84b52caa). Одиночный скаляр/токен
+    // допустим — трактуется как обе совпавшие границы (эквивалент равенства).
+    if (
+      (leaf.operator === 'between' || leaf.operator === 'not_between') &&
+      Array.isArray(value) &&
+      value.length !== 2
+    ) {
+      fail(`${path}.value: оператор «между» требует ровно две границы.`, {
+        field: `${path}.value`,
+        count: value.length,
+      }, requestId);
+    }
   }
   if (input['labels'] !== undefined) {
     leaf.labels = parseLabels(input['labels'], `${path}.labels`, requestId);
@@ -298,24 +313,42 @@ function parseEntity(input: unknown, path: string, requestId?: string): FilterAs
   }
 }
 
+/** Разобрать и провалидировать значение-токен `{ token: "…" }`. */
+function parseTokenValue(input: Record<string, unknown>, path: string, requestId?: string): FilterAstTokenValue {
+  assertExactKeys(input, TOKEN_KEYS, path, requestId);
+  const token = input['token'];
+  if (typeof token !== 'string' || token.trim() === '') {
+    fail(`${path}.token: ожидается непустая строка токена.`, { field: `${path}.token` }, requestId);
+  }
+  return { token };
+}
+
 function parseValue(input: unknown, path: string, requestId?: string): FilterAstValue {
   if (Array.isArray(input)) {
-    if (!input.every((v) => isScalar(v))) {
-      fail(`${path}: список значений должен состоять из скаляров (строка/число/логическое).`, {
-        field: path,
+    // Список значений: каждый элемент — литерал ИЛИ токен. Токены в списке
+    // нужны оператору «между», где каждая граница может быть токеном
+    // (требование 84b52caa: `[{token:"$weekStart-1d"},{token:"$today"}]`).
+    const out: FilterAstListItem[] = [];
+    for (let i = 0; i < input.length; i += 1) {
+      const el = input[i];
+      if (isScalar(el)) {
+        out.push(el);
+        continue;
+      }
+      if (isPlainObject(el) && 'token' in el) {
+        out.push(parseTokenValue(el, `${path}[${i}]`, requestId));
+        continue;
+      }
+      fail(`${path}[${i}]: элемент списка должен быть скаляром или токеном.`, {
+        field: `${path}[${i}]`,
       }, requestId);
     }
-    return input as FilterAstScalar[];
+    return out;
   }
   if (isScalar(input)) return input;
   if (isPlainObject(input)) {
     if ('token' in input) {
-      assertExactKeys(input, TOKEN_KEYS, path, requestId);
-      const token = input['token'];
-      if (typeof token !== 'string' || token.trim() === '') {
-        fail(`${path}.token: ожидается непустая строка токена.`, { field: `${path}.token` }, requestId);
-      }
-      return { token };
+      return parseTokenValue(input, path, requestId);
     }
     if ('query' in input) {
       assertExactKeys(input, SUBQUERY_KEYS, path, requestId);

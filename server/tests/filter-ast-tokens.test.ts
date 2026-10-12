@@ -30,7 +30,8 @@ import {
   type ThoughtQueryRequest as CanonicalQueryRequest,
   type ThoughtQueryOptions,
 } from '../src/domain/query-service.js';
-import { FILTER_AST_VERSION, type FilterAst, type FilterAstNode } from '@etn/shared';
+import { parseFilterAst } from '../src/domain/filter-ast.js';
+import { EtnError, FILTER_AST_VERSION, type FilterAst, type FilterAstNode } from '@etn/shared';
 
 const BASE_LAYER = '00000000-0000-4000-8000-0000000000ba5e';
 
@@ -250,3 +251,146 @@ describe(
     });
   },
 );
+
+// ============================================================================
+// 2. Токены-границы в «между» (ошибка c89c2fa8): форма + исполнение обеих границ
+// ============================================================================
+
+describe('AST «между» с токенами-границами (c89c2fa8, требование 84b52caa)', () => {
+  const nowMs = Date.parse('2026-09-09T13:37:45.123Z'); // среда
+
+  const betweenTree = (value: unknown): unknown => ({
+    version: FILTER_AST_VERSION,
+    filter: { entity: { kind: 'created_at' }, operator: 'between', value },
+  });
+
+  it('форма принимает список из двух токенов', () => {
+    const ast = parseFilterAst(
+      betweenTree([{ token: '$monthStart' }, { token: '$monthEnd' }]),
+    );
+    assert.deepEqual((ast.filter as { value: unknown }).value, [
+      { token: '$monthStart' },
+      { token: '$monthEnd' },
+    ]);
+  });
+
+  it('форма принимает токен + литерал (смешанные границы)', () => {
+    const ast = parseFilterAst(
+      betweenTree([{ token: '$weekStart-1d' }, '2026-09-30']),
+    );
+    assert.deepEqual((ast.filter as { value: unknown }).value, [
+      { token: '$weekStart-1d' },
+      '2026-09-30',
+    ]);
+  });
+
+  it('форма отвергает список из одного и из трёх элементов', () => {
+    for (const bad of [[{ token: '$today' }], [{ token: '$today' }, '2026-09-10', '2026-09-11']]) {
+      assert.throws(
+        () => parseFilterAst(betweenTree(bad)),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        JSON.stringify(bad),
+      );
+    }
+  });
+
+  it('форма отвергает мусорный элемент списка (не скаляр и не токен)', () => {
+    assert.throws(
+      () => parseFilterAst(betweenTree([{ token: '$today' }, { foo: 'bar' }])),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
+  });
+
+  it('исполнитель раскрывает ОБЕ границы-токена и сравнивает включительно', () => {
+    const ndb = createInMemoryNetworkDb();
+    const prop = seedProperty(ndb, 'срок', 'date');
+    const inRange = seedThought(ndb, 'В диапазоне');
+    seedDate(ndb, inRange, prop, '2026-09-10');
+    const lowEdge = seedThought(ndb, 'Нижняя граница');
+    seedDate(ndb, lowEdge, prop, '2026-09-09');
+    const out = seedThought(ndb, 'Вне диапазона');
+    seedDate(ndb, out, prop, '2026-09-12');
+
+    const res = runAst(
+      ndb,
+      ast(leaf({ kind: 'property', property_id: prop }, 'between', [
+        { token: '$today' },
+        { token: '$today+2d' },
+      ])),
+      { nowMs },
+    );
+    // $today = 09-09, $today+2d = 09-11 → [09-09, 09-11] включительно.
+    assert.deepEqual(res.titles, ['В диапазоне', 'Нижняя граница']);
+    assert.equal(res.unresolved, 0);
+  });
+
+  it('исполнитель раскрывает токен + литерал как разные границы', () => {
+    const ndb = createInMemoryNetworkDb();
+    const prop = seedProperty(ndb, 'срок', 'date');
+    const t = seedThought(ndb, 'Между');
+    seedDate(ndb, t, prop, '2026-09-10');
+    const after = seedThought(ndb, 'Позже');
+    seedDate(ndb, after, prop, '2026-09-30');
+
+    const res = runAst(
+      ndb,
+      ast(leaf({ kind: 'property', property_id: prop }, 'between', [
+        { token: '$today' },
+        '2026-09-20',
+      ])),
+      { nowMs },
+    );
+    assert.deepEqual(res.titles, ['Между']);
+  });
+
+  it('неразрешимая граница-токен → пустой результат с пояснением (обе границы видны)', () => {
+    const ndb = createInMemoryNetworkDb();
+    const prop = seedProperty(ndb, 'срок', 'date');
+    const t = seedThought(ndb, 'Мысль');
+    seedDate(ndb, t, prop, '2026-09-10');
+
+    const res = runAst(
+      ndb,
+      ast(leaf({ kind: 'property', property_id: prop }, 'between', [
+        { token: '$today' },
+        { token: '$nonexistent' },
+      ])),
+      { nowMs },
+    );
+    assert.deepEqual(res.titles, []);
+    assert.deepEqual(res.reasons, ['unknown_token']);
+  });
+});
+
+describe('«между»-токены: полный путь форма → единый исполнитель (c89c2fa8)', () => {
+  it('parseFilterAst → queryThoughts раскрывает обе границы', () => {
+    const ndb = createInMemoryNetworkDb();
+    const prop = seedProperty(ndb, 'срок', 'date');
+    const a = seedThought(ndb, 'Девятое');
+    seedDate(ndb, a, prop, '2026-09-09');
+    const b = seedThought(ndb, 'Одиннадцатое');
+    seedDate(ndb, b, prop, '2026-09-11');
+    const c = seedThought(ndb, 'Двенадцатое');
+    seedDate(ndb, c, prop, '2026-09-12');
+
+    // Форма проходит валидатор и исполняется тем же движком (путь T7 — единый).
+    const parsed = parseFilterAst({
+      version: FILTER_AST_VERSION,
+      filter: {
+        entity: { kind: 'property', property_id: prop },
+        operator: 'between',
+        value: [{ token: '$today' }, { token: '$today+2d' }],
+      },
+    });
+    const req: CanonicalQueryRequest = {
+      sort: 'alpha', order: 'asc', limit: 200, offset: 0, count: true, ast: parsed,
+    };
+    const res = queryThoughts(ndb, 'u', req, {
+      emptyFilterMode: 'all',
+      maxLimit: 200,
+      tokenContext: { nowMs: Date.parse('2026-09-09T12:00:00.000Z') },
+    });
+    assert.deepEqual(res.items.map((i) => i.title).sort(), ['Девятое', 'Одиннадцатое']);
+    assert.equal(res.unresolved?.length ?? 0, 0);
+  });
+});
