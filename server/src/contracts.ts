@@ -1935,6 +1935,10 @@ export const ChronicleQuery = defineContract(
     // Компактная форма — свободный объект: tools/list держит бюджет размера
     // (сторож mcp-telemetry), а состав полей валидируется в домене.
     targets: z.record(z.string(), z.unknown()).optional(),
+    // AST-тело отбора профиля «хроника» (задача 4752b065, требование 0c83819c):
+    // операнды записи (`record_*`) и «Цели» (`targets`). XOR с плоскими
+    // критериями — разбирает доменный `parseChronicleQueryBody`.
+    ast: FilterAstBody.optional(),
     order: z.enum(['asc', 'desc']).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     offset: z.number().int().min(0).optional(),

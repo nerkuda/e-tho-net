@@ -31,29 +31,44 @@ interface ProfileViolation {
   value: string;
 }
 
+/** Свёртка правил видимости одного профиля (для рекурсии в под-выборку). */
+interface ProfileScope {
+  allowed: ReadonlySet<FilterAstEntityKind>;
+  operators: ReadonlySet<string>;
+  perOperand: Readonly<Record<string, readonly string[]>> | undefined;
+}
+
 function collectViolations(
   node: FilterAstNode,
   path: string,
-  allowed: ReadonlySet<FilterAstEntityKind>,
-  operators: ReadonlySet<string>,
+  scope: ProfileScope,
+  thoughtsScope: ProfileScope,
   out: ProfileViolation[],
 ): void {
   if ('op' in node) {
     node.children.forEach((child, i) =>
-      collectViolations(child, `${path}.children[${i}]`, allowed, operators, out),
+      collectViolations(child, `${path}.children[${i}]`, scope, thoughtsScope, out),
     );
     return;
   }
-  if (!allowed.has(node.entity.kind)) {
-    out.push({ path: `${path}.entity`, kind: 'operand', value: node.entity.kind });
+  const kind = node.entity.kind;
+  if (!scope.allowed.has(kind)) {
+    out.push({ path: `${path}.entity`, kind: 'operand', value: kind });
   }
-  if (!operators.has(node.operator)) {
+  // Оператор: у профилей с наборами по операнду — набор СВОЕГО операнда
+  // (требование 62475a6e), иначе — объединённый словарь профиля.
+  const allowedOps = scope.perOperand?.[kind];
+  const opOk = allowedOps !== undefined ? allowedOps.includes(node.operator) : scope.operators.has(node.operator);
+  if (!opOk) {
     out.push({ path: `${path}.operator`, kind: 'operator', value: node.operator });
   }
   // Значение-подвыборка несёт собственное под-дерево — проверяем и его.
+  // «Цели» хроники адресуют МЫСЛИ: подзапрос проверяется профилем «мысли»,
+  // а не профилем записи (иначе операнды мысли в нём были бы невидимы).
   const value = node.value;
   if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'query' in value) {
-    collectViolations(value.query, `${path}.value.query`, allowed, operators, out);
+    const nested = kind === 'targets' ? thoughtsScope : scope;
+    collectViolations(value.query, `${path}.value.query`, nested, thoughtsScope, out);
   }
 }
 
@@ -70,9 +85,20 @@ export function assertFilterAstInProfile(
   const allowed = filterProfileAstOperands(profileId);
   if (allowed === null) return;
   const profile = getFilterProfile(profileId);
-  const operators = new Set<string>(profile.operators);
+  const scope: ProfileScope = {
+    allowed,
+    operators: new Set<string>(profile.operators),
+    perOperand: profile.operand_operators as Readonly<Record<string, readonly string[]>> | undefined,
+  };
+  // Профиль мыслей для подзапросов «Цели» (адресуют мысли).
+  const thoughtsProfile = getFilterProfile('thoughts');
+  const thoughtsScope: ProfileScope = {
+    allowed: filterProfileAstOperands('thoughts') ?? allowed,
+    operators: new Set<string>(thoughtsProfile.operators),
+    perOperand: undefined,
+  };
   const violations: ProfileViolation[] = [];
-  collectViolations(ast.filter, 'filter', allowed, operators, violations);
+  collectViolations(ast.filter, 'filter', scope, thoughtsScope, violations);
   if (violations.length === 0) return;
   const first = violations[0]!;
   const reason =
@@ -87,7 +113,7 @@ export function assertFilterAstInProfile(
       profile: profileId,
       violations,
       allowed_operands: [...allowed],
-      allowed_operators: [...operators],
+      allowed_operators: [...scope.operators],
     },
     requestId,
   );

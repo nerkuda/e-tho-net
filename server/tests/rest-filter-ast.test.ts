@@ -28,7 +28,7 @@ import {
   type AstTokenContext,
   type ThoughtQueryRequest as CanonicalQueryRequest,
 } from '../src/domain/query-service.js';
-import { FILTER_AST_VERSION, typeNameKey } from '@etn/shared';
+import { FILTER_AST_VERSION, typeNameKey, type FilterAstNode } from '@etn/shared';
 
 import { authHeaders, buildRestContext, closeRestContext, type RestTestContext } from './rest-helpers.js';
 
@@ -131,6 +131,33 @@ describe('filter AST: компиляция плоской формы (задач
       };
       const res = queryThoughts(ndb, 'u', canon({ ast }), { emptyFilterMode: 'all' });
       assert.deepEqual(res.items.map((i) => i.title).sort(), ['Задача', 'Ошибка']);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('операнд «Тождественность» (id): eq/ne/in/not_in (задача 4752b065, ревизия aed27eb8)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const a = seedThought(ndb, 'A');
+      const b = seedThought(ndb, 'B');
+      const c = seedThought(ndb, 'C');
+      const run = (filter: FilterAstNode) =>
+        queryThoughts(ndb, 'u', canon({ ast: { version: FILTER_AST_VERSION, filter } }), {
+          emptyFilterMode: 'all',
+        })
+          .items.map((i) => i.title)
+          .sort();
+
+      // in — явный список id.
+      const inAst = { entity: { kind: 'id' as const }, operator: 'in' as const, value: [a, c] };
+      assert.deepEqual(run(inAst), ['A', 'C']);
+      // not_in — дополнение списка.
+      const notInAst = { entity: { kind: 'id' as const }, operator: 'not_in' as const, value: [a] };
+      assert.deepEqual(run(notInAst), ['B', 'C']);
+      // eq/ne — один id.
+      assert.deepEqual(run({ entity: { kind: 'id' as const }, operator: 'eq' as const, value: b }), ['B']);
+      assert.deepEqual(run({ entity: { kind: 'id' as const }, operator: 'ne' as const, value: b }), ['A', 'C']);
     } finally {
       ndb.close();
     }

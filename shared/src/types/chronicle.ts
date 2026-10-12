@@ -10,11 +10,20 @@
  */
 
 import type { ChronicleLinkScope, SavedFilterView, SortOrder, StructureKeywordScope } from '../enums.js';
+import type { FilterAst } from './filter-ast.js';
 import type { StructureAuthorOp, StructureFilter } from './structure.js';
 import type { ThoughtRef } from './thought.js';
 
 /** Filter criteria of the chronicle query (03-server-api.md §20). */
 export interface ChronicleFilter {
+  /**
+   * Тело отбора в общем AST (профиль `chronicle`, задача 4752b065): операнды
+   * записи (`record_time`/`record_title`/`record_body`/`record_author`/
+   * `record_editor`) и «Цели» (`targets` — под-выборка мыслей). Задаётся ЛИБО
+   * телом AST, ЛИБО плоскими полями — не оба (XOR, `VALIDATION_ERROR`). Пустое
+   * поле — плоская форма компилируется в AST единым компилятором.
+   */
+  ast?: FilterAst;
   /** Keywords mini-syntax (`*`/`-`, AND). Отбирает записи двумя путями:
    *  (А) по мыслям — слова ищутся в названии, синонимах, постоянном комментарии
    *  мысли и комментариях её связей, затем возвращаются записи этих мыслей;

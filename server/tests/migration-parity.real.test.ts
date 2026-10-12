@@ -31,6 +31,7 @@ import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { parseChronicleQueryBody, queryChronicle } from '../src/domain/chronicle-service.js';
 import { queryThoughts, structureRequestToQuery } from '../src/domain/query-service.js';
+import { CHRONICLE_QUERY_MAX_LIMIT, TRAVERSAL_DEFAULTS } from '@etn/shared';
 
 function nativeAvailable(): boolean {
   try {
@@ -59,16 +60,16 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-migration-parity-'));
 const opened: Array<{ dataDir: string; id: string }> = [];
 
 /** Скопировать `db+wal+shm` сети в изолированный каталог и открыть копию. */
-function openCopy(id: string): NetworkDb {
-  const dstDir = path.join(tmpRoot, 'networks', id);
+function openCopy(id: string, root: string = tmpRoot): NetworkDb {
+  const dstDir = path.join(root, 'networks', id);
   fs.mkdirSync(path.join(dstDir, 'attachments'), { recursive: true });
   fs.mkdirSync(path.join(dstDir, 'snapshots'), { recursive: true });
   const srcDir = path.join(DATA_DIR, 'networks', id);
   for (const f of ['data.db', 'data.db-wal', 'data.db-shm']) {
     if (fs.existsSync(path.join(srcDir, f))) fs.copyFileSync(path.join(srcDir, f), path.join(dstDir, f));
   }
-  const ndb = openNetworkDb(tmpRoot, id);
-  opened.push({ dataDir: tmpRoot, id });
+  const ndb = openNetworkDb(root, id);
+  opened.push({ dataDir: root, id });
   return ndb;
 }
 
@@ -80,10 +81,12 @@ after(() => {
       /* уже закрыта */
     }
   }
-  try {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-  } catch {
-    /* Windows может держать файл — не критично */
+  for (const dir of new Set([tmpRoot, ...opened.map((o) => o.dataDir)])) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* Windows может держать файл — не критично */
+    }
   }
 });
 
@@ -129,6 +132,87 @@ function mkReq(def: Record<string, unknown>, ctxId: string | null, ctxTypeId: st
     offset: 0,
     count: true,
   });
+}
+
+/**
+ * Независимая (сырой SQL, не движок) реализация ПРЕЖНЕЙ плоской семантики
+ * отбора записей дневника — «эталон» для проверки идентичности после перехода
+ * на общий AST (задача 4752b065). Поддержаны формы реальных chronicle
+ * saved_filters (быстрая: thought_ids + include_subtree + link_scope='both' +
+ * период + автор-eq); для непокрытой формы возвращает `null` — тест тогда лишь
+ * проверяет исполнимость нового пути.
+ */
+function legacyChronicleIds(
+  ndb: NetworkDb,
+  def: Record<string, unknown>,
+): string[] | null {
+  if (def['version'] !== undefined) return null;
+  if (def['keywords'] !== undefined && def['keywords'] !== '') return null;
+  if (def['targets'] !== undefined) return null;
+  if (Array.isArray(def['link_type_ids']) && def['link_type_ids'].length > 0) return null;
+  if (Array.isArray(def['type_ids']) && def['type_ids'].length > 0) return null;
+  const scope = def['link_scope'] === undefined ? 'both' : def['link_scope'];
+  if (scope !== 'both') return null;
+  const op = (def['created_by_op'] ?? 'eq') as string;
+  if (def['created_by'] !== undefined && op !== 'eq') return null;
+  if (def['updated_by'] !== undefined) return null;
+
+  const roots = Array.isArray(def['thought_ids']) ? (def['thought_ids'] as string[]) : [];
+  const conds: string[] = ["c.kind = 'chronological'"];
+  const args: unknown[] = [];
+  let baseIds: string[] | null = null;
+  if (roots.length > 0) {
+    const rootRows = ndb
+      .prepare(`SELECT id FROM thoughts_v WHERE id IN (${roots.map(() => '?').join(',')})`)
+      .all(...roots) as Array<{ id: string }>;
+    const ids = new Set(rootRows.map((r) => r.id));
+    if (def['include_subtree'] === true && ids.size > 0) {
+      const rows = ndb
+        .prepare(
+          `WITH RECURSIVE descend(id, depth) AS (
+             SELECT t.id, 0 FROM thoughts_v t WHERE t.id IN (${[...ids].map(() => '?').join(',')})
+             UNION
+             SELECT l.target_id, d.depth + 1 FROM descend d
+             JOIN links_v l ON l.source_id = d.id AND l.active = 1
+             WHERE d.depth < ?
+           ) SELECT DISTINCT id FROM descend`,
+        )
+        .all(...ids, TRAVERSAL_DEFAULTS.MAX_DEPTH) as Array<{ id: string }>;
+      for (const r of rows) ids.add(r.id);
+    }
+    baseIds = [...ids];
+    if (baseIds.length === 0) return [];
+    const inList = baseIds.map(() => '?').join(',');
+    conds.push(`EXISTS (SELECT 1 FROM comment_targets_v ct
+       LEFT JOIN links_v l ON ct.owner_type = 'link' AND l.id = ct.owner_id
+       WHERE ct.comment_id = c.id AND (
+         (ct.owner_type = 'thought' AND ct.owner_id IN (${inList}))
+         OR (ct.owner_type = 'link' AND (l.source_id IN (${inList}) OR l.target_id IN (${inList})))
+       ))`);
+    args.push(...baseIds, ...baseIds, ...baseIds);
+  } else {
+    conds.push('EXISTS (SELECT 1 FROM comment_targets_v cta WHERE cta.comment_id = c.id)');
+  }
+  if (typeof def['date_from'] === 'string' && def['date_from'] !== '') {
+    conds.push('(c.valid_to IS NULL OR c.valid_to >= ?)');
+    args.push(def['date_from']);
+  }
+  if (typeof def['date_to'] === 'string' && def['date_to'] !== '') {
+    conds.push('c.valid_from <= ?');
+    args.push(def['date_to']);
+  }
+  if (typeof def['created_by'] === 'string' && def['created_by'] !== '') {
+    conds.push('c.created_by = ?');
+    args.push(def['created_by']);
+  }
+  const dir = def['order'] === 'desc' ? 'DESC' : 'ASC';
+  const rows = ndb
+    .prepare(
+      `SELECT c.id FROM comments_v c WHERE ${conds.join(' AND ')}
+       ORDER BY c.valid_from ${dir}, c.valid_to ${dir}, c.created_at ${dir}, c.id ${dir}`,
+    )
+    .all(...args) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
 }
 
 describe(
@@ -207,6 +291,55 @@ describe(
       assert.ok(subtreeChecked > 0, 'должна быть проверена хотя бы одна выборка по типу');
       // Диагностика объёма — в вывод теста.
       console.log(`[migration-parity.real] сетей=${NETS.length} отборов=${checked} выборок-по-типу=${subtreeChecked} расхождений=0`);
+    });
+
+    it('все chronicle saved_filters: новый AST-путь идентичен прежней плоской семантике (сырой SQL)', () => {
+      let chronicle = 0;
+      let identity = 0;
+      const divergences: string[] = [];
+      // Отдельный каталог копий: файлы первой проверки ещё открыты до `after`.
+      const chronRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-migration-chron-'));
+
+      for (const id of NETS) {
+        const ndb = openCopy(id, chronRoot);
+        const chron = ndb
+          .prepare("SELECT name, definition FROM saved_filters WHERE view = 'chronicle'")
+          .all() as Array<{ name: string; definition: string }>;
+        for (const s of chron) {
+          chronicle += 1;
+          const def = JSON.parse(s.definition) as Record<string, unknown>;
+          // Новый путь исполняет то же определение (плоское → компиляция в AST).
+          // Постранично (лимит хроники ≤ 100), пока не заберём весь `total`.
+          let actual: string[];
+          try {
+            const page = CHRONICLE_QUERY_MAX_LIMIT;
+            const req0 = parseChronicleQueryBody({ ...def, limit: page, offset: 0 }, 'parity');
+            const first = queryChronicle(ndb, req0);
+            actual = first.rows.map((r) => r.id);
+            for (let offset = page; actual.length < first.total; offset += page) {
+              const reqN = parseChronicleQueryBody({ ...def, limit: page, offset }, 'parity');
+              actual.push(...queryChronicle(ndb, reqN).rows.map((r) => r.id));
+            }
+          } catch (e) {
+            divergences.push(`${id}/chronicle/${s.name}: исполнение упало — ${String(e)}`);
+            continue;
+          }
+          const expected = legacyChronicleIds(ndb, def);
+          if (expected === null) continue; // форма вне эталона — доказана обычными тестами
+          identity += 1;
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            divergences.push(
+              `${id}/chronicle/${s.name}: новый путь ≠ прежняя семантика (${actual.length} vs ${expected.length})`,
+            );
+          }
+        }
+      }
+
+      assert.deepEqual(divergences, [], `расхождения хроники:\n${divergences.join('\n')}`);
+      assert.ok(chronicle > 0, 'должен быть проверен хотя бы один chronicle saved_filter');
+      console.log(
+        `[migration-parity.real] chronicle saved_filters=${chronicle} идентичность-доказана=${identity} расхождений=0`,
+      );
     });
   },
 );

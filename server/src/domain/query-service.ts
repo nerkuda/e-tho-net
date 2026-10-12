@@ -1975,6 +1975,21 @@ function filterAstLeafClause(
   const opPath = `${path}.operator`;
 
   switch (entity.kind) {
+    case 'id': {
+      // Тождественность мысли: явный список id (операторы eq/ne/in/not_in).
+      const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
+      if (operator !== 'in' && operator !== 'not_in' && operator !== 'eq' && operator !== 'ne') {
+        astUnsupported(`Оператор «${operator}» для операнда «Тождественность»`, opPath, requestId);
+      }
+      const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
+      if (list.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
+      const match: Clause = {
+        sql: `t.id IN (${list.map(() => '?').join(',')})`,
+        params: [...list],
+      };
+      return operator === 'in' || operator === 'eq' ? match : astNegate(match);
+    }
+
     case 'property':
       return propertyLeafClause(ndb, leaf, `${path}.entity`, requestId, astOpts);
 

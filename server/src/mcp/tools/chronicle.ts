@@ -22,7 +22,8 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
       title: 'Запрос хроники',
       description:
         'Запрос хроники (паритет `POST /chronicle/query`): хроно-комментарии по ' +
-        'фильтру мыслей; `targets` — критерии целей.',
+        'фильтру мыслей; `targets` — критерии целей; `ast` — тело профиля «хроника» ' +
+        '(грамматика — etn.guide { topic: "thoughts.query" }), XOR с плоскими критериями.',
       inputSchema: ChronicleQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
     },
@@ -53,6 +54,7 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         if (args.date_from !== undefined) body.date_from = args.date_from;
         if (args.date_to !== undefined) body.date_to = args.date_to;
         if (args.targets !== undefined) body.targets = args.targets;
+        if (args.ast !== undefined) body.ast = args.ast;
         if (args.order !== undefined) body.order = args.order;
         if (args.limit !== undefined) body.limit = args.limit;
         if (args.offset !== undefined) body.offset = args.offset;

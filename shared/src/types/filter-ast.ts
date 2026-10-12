@@ -139,6 +139,7 @@ export interface FilterAstLabels {
  * объединением {@link FilterAstEntity} (проверяется тестом-сторожем).
  */
 export const FILTER_AST_ENTITY_KINDS = [
+  'id',
   'type',
   'property',
   'link_type',
@@ -156,6 +157,11 @@ export const FILTER_AST_ENTITY_KINDS = [
   'created_at',
   'updated_at',
   'properties',
+  'record_time',
+  'record_title',
+  'record_body',
+  'record_author',
+  'record_editor',
 ] as const;
 /** Вид операнда AST (элемент {@link FILTER_AST_ENTITY_KINDS}). */
 export type FilterAstEntityKind = (typeof FILTER_AST_ENTITY_KINDS)[number];
@@ -166,6 +172,8 @@ export type FilterAstEntityKind = (typeof FILTER_AST_ENTITY_KINDS)[number];
  * здесь — общий словарь операндов отбора мыслей.
  */
 export type FilterAstEntity =
+  /** Тождественность мысли: явный список id (операторы `eq`/`ne`/`in`/`not_in`). */
+  | { kind: 'id' }
   /** Тип мысли. */
   | { kind: 'type' }
   /**
@@ -204,7 +212,18 @@ export type FilterAstEntity =
   /** Дата изменения мысли. */
   | { kind: 'updated_at' }
   /** «Имеет свойство»: набор адресуемых свойств (значения — в `value`). */
-  | { kind: 'properties' };
+  | { kind: 'properties' }
+  // --- Профиль «Хроника»: характеристики ЗАПИСИ дневника (требование 62475a6e) ---
+  /** «Время записи» (`valid_from`/`valid_to`) — пересечение интервала записи. */
+  | { kind: 'record_time' }
+  /** «Заголовок записи» (`title`). */
+  | { kind: 'record_title' }
+  /** «Тело записи» (`body_md`) — «Есть слова». */
+  | { kind: 'record_body' }
+  /** Автор записи (`created_by`). */
+  | { kind: 'record_author' }
+  /** Редактор записи (`updated_by`). */
+  | { kind: 'record_editor' };
 
 /** Условие-лист: `[операнд][оператор][значение]` (+ снапшоты подписей). */
 export interface FilterAstLeaf {

@@ -70,6 +70,7 @@ const SUBQUERY_LEAF_OPERATOR: Record<(typeof SUBQUERY_OPERATORS)[number], readon
 
 /** Виды операндов и допустимые ключи их объектов (дискриминант — `kind`). */
 const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
+  id: ['kind'],
   type: ['kind'],
   property: ['kind', 'property_id', 'property', 'direction'],
   link_type: ['kind'],
@@ -87,6 +88,12 @@ const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   created_at: ['kind'],
   updated_at: ['kind'],
   properties: ['kind'],
+  // Профиль «хроника» (задача 4752b065): характеристики записи дневника.
+  record_time: ['kind'],
+  record_title: ['kind'],
+  record_body: ['kind'],
+  record_author: ['kind'],
+  record_editor: ['kind'],
 };
 
 function fail(message: string, details: Record<string, unknown>, requestId?: string): never {

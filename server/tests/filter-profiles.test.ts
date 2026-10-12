@@ -86,6 +86,7 @@ describe('реестр профилей контекста (задача 7a798b1
     // Объект обязан перечислить КАЖДЫЙ вид операнда (иначе — ошибка компиляции):
     // добавление вида в объединение без строки здесь не соберётся.
     const allKinds: Record<FilterAstEntity['kind'], true> = {
+      id: true,
       type: true,
       property: true,
       link_type: true,
@@ -103,6 +104,11 @@ describe('реестр профилей контекста (задача 7a798b1
       created_at: true,
       updated_at: true,
       properties: true,
+      record_time: true,
+      record_title: true,
+      record_body: true,
+      record_author: true,
+      record_editor: true,
     };
     assert.deepEqual(
       [...FILTER_AST_ENTITY_KINDS].sort(),
@@ -116,16 +122,19 @@ describe('реестр профилей контекста (задача 7a798b1
     }
   });
 
-  it('AST-операнды профиля: множества для мыслей; null для иных сущностей', () => {
-    for (const id of ['thoughts', 'map', 'publications'] as const) {
+  it('AST-операнды профиля: множества для мыслей и хроники; null для иных сущностей', () => {
+    for (const id of ['thoughts', 'map', 'publications', 'chronicle'] as const) {
       assert.ok(filterProfileAstOperands(id) !== null, `${id}: операнды — виды AST`);
     }
-    for (const id of ['chronicle', 'events', 'attachments'] as const) {
+    for (const id of ['events', 'attachments'] as const) {
       assert.equal(filterProfileAstOperands(id), null, `${id}: семантические операнды`);
     }
-    // Операнды профиля мыслей ⊆ словаря видов AST.
+    // Операнды профилей мыслей и хроники ⊆ словаря видов AST.
     const kinds = new Set<string>(FILTER_AST_ENTITY_KINDS);
     for (const op of FILTER_PROFILES.thoughts.operands) assert.ok(kinds.has(op));
+    for (const op of FILTER_PROFILES.chronicle.operands) assert.ok(kinds.has(op));
+    // «Тождественность» (id) — новый операнд профиля мыслей (задача 4752b065).
+    assert.ok(FILTER_PROFILES.thoughts.operands.includes('id'));
   });
 
   it('профиль вложений: состав по требованию f67c85c1', () => {
@@ -181,8 +190,18 @@ describe('реестр профилей контекста (задача 7a798b1
     assert.throws(() => assertFilterAstInProfile(withLinkType, 'thoughts'));
     // Видимый операнд в своём профиле — без ошибки.
     assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'active' }, 'eq', true), 'thoughts'));
-    // Семантический профиль (хроника) — AST-проверка не применяется.
+    // «Цели» видны в профиле хроники (задача 4752b065) — проверка проходит.
     assert.doesNotThrow(() => assertFilterAstInProfile(withTargets, 'chronicle'));
+    // Операнд записи виден хронике, но не мыслям.
+    assert.throws(
+      () => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'matches', 'x'), 'thoughts'),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
+    // Оператор не из набора своего операнда хроники — тоже отказ.
+    assert.throws(
+      () => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'eq', 'x'), 'chronicle'),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
   });
 
   it('под-выборка проверяется тем же профилем', () => {

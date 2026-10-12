@@ -331,7 +331,7 @@ describe(
       }
     });
 
-    it('applies the link scope (sources / targets / both)', () => {
+    it('link_scope: «both» работает; иные значения отвергаются (AST 0.13.1 не выражает)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const src = seedThought(ndb, 'Src');
@@ -339,17 +339,23 @@ describe(
         const link = seedLink(ndb, src, dst);
         createComment(ndb, 'link', link, { kind: 'chronological', body_md: 'note', valid_from: '2024-01-01' }, USER);
 
+        // AST 0.13.1 выражает только link_scope = 'both' (решение оркестратора
+        // 2026-10-12, задача 4752b065): плоское тело с иным значением — явный
+        // отказ вместо молчаливой подмены на 'both'. Реальные chronicle
+        // saved_filters иных значений не содержат (сканирование сетей).
         const both = query(ndb, { link_scope: 'both' });
-        assert.equal(both.total, 1);
+        assert.equal(both.total, 1, 'both — целевая мысль с любого конца связи');
 
-        const sources = query(ndb, { thought_ids: [dst], link_scope: 'sources' });
-        assert.equal(sources.total, 0, 'dst is not the source of the link');
-
-        const targets = query(ndb, { thought_ids: [dst], link_scope: 'targets' });
-        assert.equal(targets.total, 1, 'dst is the target of the link');
-
-        const sourcesSrc = query(ndb, { thought_ids: [src], link_scope: 'sources' });
-        assert.equal(sourcesSrc.total, 1);
+        for (const scope of ['sources', 'targets'] as const) {
+          assert.throws(
+            () => query(ndb, { thought_ids: [dst], link_scope: scope }),
+            (e: unknown) =>
+              e instanceof EtnError &&
+              e.code === 'VALIDATION_ERROR' &&
+              /link_scope/.test(e.message),
+            `${scope}: должен быть явный отказ`,
+          );
+        }
       } finally {
         ndb.close();
       }

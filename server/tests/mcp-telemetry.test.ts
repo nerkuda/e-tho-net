@@ -562,8 +562,15 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // `etn.guide { topic: "thoughts.query" }`, принцип прогрессивного
         // раскрытия). Замер с новым состоянием — 42 986 Б; планка поднята
         // ровно под этот прирост с малым запасом (42 500 → 43 400).
+        // 0.13.1 (задача 4752b065, «Отбор хроники на общий AST»):
+        // `etn.chronicle.query` принимает `ast`-тело профиля «хроника» —
+        // параметр контракта (`inputSchema` не режется, паритет REST/MCP) плюс
+        // краткое упоминание тела/грамматики в описании (детали — `etn.guide
+        // { topic: "thoughts.query" }`). Замер: 43 238 → 43 598 Б (+360:
+        // `inputSchema` +193, проза +167). Планка поднята ровно под прирост:
+        // 43 400 → 43 700.
         assert.ok(
-          bytes <= 43_400,
+          bytes <= 43_700,
           `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 42500`,
         );
         // Потолок числа инструментов: фактическое 25 + запас 5 = 30 (нижняя
@@ -627,8 +634,11 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // `meta.warnings`). Прирост — только проза, сжатая до конспекта
         // (детали — `etn.guide { topic: "thoughts.query" }`): `tools/list`
         // 42 986 → 43 238 Б (под планкой 43 400); D+I 38 221 → 38 473 Б.
+        // 0.13.1 (задача 4752b065): см. блок выше — `ast` + описание
+        // `etn.chronicle.query` дали +360 Б; D+I 38 473 → 38 833 Б.
+        // Планка: 38 500 → 38 900.
         assert.ok(
-          descriptionsPlusInputSchema <= 38_500,
+          descriptionsPlusInputSchema <= 38_900,
           `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 38500`,
         );
       } finally {
