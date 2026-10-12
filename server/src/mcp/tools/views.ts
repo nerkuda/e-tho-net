@@ -73,6 +73,8 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
             emptyFilterMode: 'all',
             // Обязательный пункт задачи cb78315b: контекст разрешения токенов.
             tokenContext: mcpTokenContext(rt, args.network_id),
+            // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
+            profile: 'thoughts',
           });
           recordReads(ndb, result.items.map((i) => i.id), { now: new Date().toISOString() });
           const pageItems = projectThoughtRows(result.items);

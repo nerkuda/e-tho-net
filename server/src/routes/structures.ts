@@ -285,6 +285,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             emptyFilterMode: 'home_orphans',
             tokenContext,
             collectStats: app.fileLog.enabled,
+            profile: 'thoughts',
           });
           logFilterStats(app.fileLog, networkId, 'rest.ids_only', result.stats);
           sendSuccess(reply, {
@@ -310,6 +311,9 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             emptyFilterMode: 'home_orphans',
             includeDirections: true,
             tokenContext,
+            // Профиль точки применения (требование 0095daad, ADR 0c02ab4f):
+            // операнд, невидимый в «мыслях», отвергается VALIDATION_ERROR.
+            profile: 'thoughts',
             // Статистика собирается ТОЛЬКО при включённом журналировании —
             // при выключенном накладных расходов нет (требование 0f34a5ff).
             collectStats: app.fileLog.enabled,

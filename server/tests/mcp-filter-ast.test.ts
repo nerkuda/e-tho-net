@@ -522,7 +522,11 @@ describe('mcpTokenContext: обязательный пункт tokenContext (cb7
     assert.equal(ctx.firstDayOfWeek, 7);
     assert.equal(ctx.userId, 'caller-1');
     assert.equal(typeof ctx.nowMs, 'number');
-    assert.equal(ctx.withTime, true);
+    // Профиль по умолчанию — «мысли»: календарные токены без времени
+    // (требование 0095daad, ADR 0c02ab4f).
+    assert.equal(ctx.withTime, false);
+    // Профиль со временем (хроника/события) — withTime true.
+    assert.equal(mcpTokenContext(rt, 'net-1', 'chronicle').withTime, true);
   });
 
   it('без сети в настройках не выдумывает первый день недели', () => {

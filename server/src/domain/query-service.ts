@@ -59,6 +59,7 @@ import {
   type FilterAstSortKey,
   type FilterAstSubqueryValue,
   type FilterAstValue,
+  type FilterProfileId,
   type LinkPropertyDirection,
   type LinkTypeFilterInput,
   type PropertyConfig,
@@ -78,6 +79,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { assertFilterAstInProfile } from './filter-profile-validation.js';
 import { collectHierarchySubtree } from './graph-traversal.js';
 import { getLinkDirections } from './link-service.js';
 import {
@@ -244,6 +246,14 @@ export interface ThoughtQueryOptions {
    * логировании счётчики не собираются — накладных расходов нет.
    */
   collectStats?: boolean;
+  /**
+   * Профиль контекста точки применения отбора (требование 0095daad, ADR
+   * 0c02ab4f; задача 7a798b17). Задан — явное AST-тело проверяется на видимость
+   * операндов/операторов в этом профиле (невидимый операнд →
+   * `VALIDATION_ERROR`). Не задан — проверки по профилю нет (обратная
+   * совместимость внутренних вызовов движка).
+   */
+  profile?: FilterProfileId;
 }
 
 /**
@@ -3306,6 +3316,7 @@ function buildQuery(
   requestId?: string,
   tokenContext?: AstTokenContext,
   collectStats?: boolean,
+  profile?: FilterProfileId,
 ): BuiltQuery {
   // Красная диагностика (требование 44d61c8a): явное AST-тело, ссылающееся на
   // удалённую сущность, исполнять запрещено — заведомо неисполнимый отбор не
@@ -3314,6 +3325,9 @@ function buildQuery(
   // внутри движка и проверяются при входе в REST/MCP отдельно (их ссылки —
   // не AST-сущности пользователя).
   if (req.ast !== undefined) {
+    // Профиль точки применения (требование 0095daad, ADR 0c02ab4f): операнд,
+    // невидимый в этой точке, отвергается — до исполнения.
+    if (profile !== undefined) assertFilterAstInProfile(req.ast, profile, requestId);
     const diag = diagnoseFilterAst(ndb, req.ast, { requestId });
     if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
   }
@@ -3370,7 +3384,7 @@ export function queryThoughts(
 ): ThoughtQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
   const startedAt = opts.collectStats === true ? performance.now() : 0;
-  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true);
+  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true, opts.profile);
   // Неразрешимый токен AST — пустой результат с пояснением, а не молчаливая
   // потеря условия (требование b7fdab20).
   if (built.unresolved.length > 0) {
@@ -3492,7 +3506,7 @@ export function queryThoughtIds(
 ): ThoughtIdsQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
   const startedAt = opts.collectStats === true ? performance.now() : 0;
-  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true);
+  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true, opts.profile);
   if (built.unresolved.length > 0) {
     return {
       ids: [],

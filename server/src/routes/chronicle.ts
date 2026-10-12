@@ -16,6 +16,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import { sendList } from '../http/responses.js';
+import { filterProfileHasTime } from '@etn/shared';
 import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
 import { parseChronicleQueryBody, queryChronicle } from '../domain/chronicle-service.js';
 
@@ -36,7 +37,17 @@ export function createChronicleRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const query = parseChronicleQueryBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const result = queryChronicle(ndb, query, { userId: req.auth!.user.id });
+        // Контекст профиля хроники (требование 0095daad, ADR 0c02ab4f): первый
+        // день недели сети для `$weekStart`/`$weekEnd` и `withTime` (хроника —
+        // профиль со временем). Настроек сети у домена нет — берём здесь.
+        const network = app.systemDb.getNetworkById(networkId);
+        const result = queryChronicle(ndb, query, {
+          userId: req.auth!.user.id,
+          ...(network !== null && network.first_day_of_week !== undefined
+            ? { firstDayOfWeek: network.first_day_of_week }
+            : {}),
+          withTime: filterProfileHasTime('chronicle'),
+        });
         sendList(reply, result.rows, result.total, query.offset, query.limit);
       },
     );

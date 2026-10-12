@@ -32,7 +32,7 @@ import { findDuplicates, search } from './search-service.js';
 import { queryThoughtsAsync } from './heavy-read.js';
 import type { AstTokenContext, ThoughtQueryRequest } from './query-service.js';
 import { BASE_LAYER_ID } from '@etn/shared';
-import type { DuplicateHit, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
+import type { DuplicateHit, FilterProfileId, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
 
 /** Максимум сетей в одном веерном вызове. Запросы сверх лимита — ошибка
  *  (агенту нужен явный сигнал, а не молчаливая обрезка). */
@@ -260,6 +260,9 @@ export interface CrossNetworkQueryArgs {
    *  c13762b1): первый день недели у каждой сети свой, поэтому фабрика берёт
    *  networkId. Отсутствие — исполнение без разрешения календарных токенов. */
   tokenContextFor?: (networkId: string) => AstTokenContext;
+  /** Профиль точки применения отбора (требование 0095daad, ADR 0c02ab4f).
+   *  По умолчанию `thoughts`; задаётся фасадом точки. */
+  profile?: FilterProfileId;
 }
 
 /** Запустить веером {@link queryThoughtsAsync} по всем сетям. */
@@ -295,7 +298,7 @@ export async function fanOutQuery(
         limit: args.limit * Math.max(accessible.length, 1),
         offset: 0,
       },
-      { maxLimit: 200, emptyFilterMode: 'all', ...(args.tokenContextFor !== undefined ? { tokenContext: args.tokenContextFor(net.id) } : {}) },
+      { maxLimit: 200, emptyFilterMode: 'all', profile: args.profile ?? 'thoughts', ...(args.tokenContextFor !== undefined ? { tokenContext: args.tokenContextFor(net.id) } : {}) },
     );
     for (const item of acceptWithBudget(budget, result.items)) {
       hits.push({

@@ -31,6 +31,7 @@ import { SystemDb } from '../db/system-db.js';
 import { resolveSessionLayer } from '../domain/layer-service.js';
 import type { AstTokenContext } from '../domain/query-service.js';
 import { parseLinkTypeFilterValue } from '@etn/shared';
+import { filterProfileHasTime, type FilterProfileId } from '@etn/shared';
 import type { Logger } from '../logger.js';
 import type { WriteFx } from '../domain/write-wrapper.js';
 export { actionOfChanges, runWrite } from '../domain/write-wrapper.js';
@@ -287,14 +288,17 @@ export async function getAccessibleNetworkIdsForUser(
  * `POST /thoughts/{id}/views/{view}/run` не расходились: часы исполнения,
  * вызывающий пользователь (`$user`), первый день недели сети (настройка
  * `first_day_of_week` из системной БД — влияет на `$weekStart`/`$weekEnd`) и
- * профиль времени. `withTime: true` — историческая совместимость резолвера
- * (сетевые отборы исторически исполняются в профиле со временем; тот же выбор
- * у MCP-аналога `mcpTokenContext`).
+ * профиль времени.
+ *
+ * Гранулярность времени берётся из профиля точки применения (требование
+ * 0095daad, ADR 0c02ab4f): `withTime` = {@link filterProfileHasTime}. Профиль по
+ * умолчанию — `thoughts` (отбор мыслей: календарные токены, без `$now`/`$hour*`).
  */
 export function restTokenContext(
   app: FastifyInstance,
   userId: string,
   networkId: string,
+  profile: FilterProfileId = 'thoughts',
 ): AstTokenContext {
   const network = app.systemDb.getNetworkById(networkId);
   return {
@@ -303,6 +307,6 @@ export function restTokenContext(
     ...(network !== null && network.first_day_of_week !== undefined
       ? { firstDayOfWeek: network.first_day_of_week }
       : {}),
-    withTime: true,
+    withTime: filterProfileHasTime(profile),
   };
 }

@@ -133,6 +133,34 @@ export interface FilterAstLabels {
 }
 
 /**
+ * Полный словарь видов операндов AST (`FilterAstEntity['kind']`). Отдельный
+ * const-набор нужен реестру профилей контекста и сторожу паритета: состав
+ * операндов профиля задаётся подмножеством этого набора. Держи в синхроне с
+ * объединением {@link FilterAstEntity} (проверяется тестом-сторожем).
+ */
+export const FILTER_AST_ENTITY_KINDS = [
+  'type',
+  'property',
+  'link_type',
+  'parents',
+  'children',
+  'attachments',
+  'chronology',
+  'comment',
+  'targets',
+  'active',
+  'trashed',
+  'keywords',
+  'author',
+  'editor',
+  'created_at',
+  'updated_at',
+  'properties',
+] as const;
+/** Вид операнда AST (элемент {@link FILTER_AST_ENTITY_KINDS}). */
+export type FilterAstEntityKind = (typeof FILTER_AST_ENTITY_KINDS)[number];
+
+/**
  * Левый операнд условия. Дискриминант — `kind`. Состав операндов зависит от
  * профиля контекста точки применения (проектируется профилями контекста);
  * здесь — общий словарь операндов отбора мыслей.

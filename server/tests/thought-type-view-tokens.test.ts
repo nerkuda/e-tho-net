@@ -729,6 +729,44 @@ describe(
         ndb.close();
       }
     });
+
+    it('run-time: первый день недели сети доезжает в плоскую форму (задача 7a798b17)', async () => {
+      const { ndb, typeId } = setup();
+      try {
+        const context = createThought(ndb, { title: 'Контекст', type_id: typeId }, USER);
+        const sunday = createThought(ndb, { title: 'Вс', type_id: typeId }, USER);
+        const wednesday = createThought(ndb, { title: 'Ср', type_id: typeId }, USER);
+        const setCreated = (id: string, iso: string): void => {
+          ndb.prepare('UPDATE thoughts SET created_at = ? WHERE id = ?').run(iso, id);
+        };
+        setCreated(sunday.id, '2024-06-09T12:00:00.000Z'); // воскресенье
+        setCreated(wednesday.id, '2024-06-12T12:00:00.000Z');
+
+        const view = createThoughtTypeView(
+          ndb,
+          typeId,
+          {
+            name: 'С начала недели',
+            definition: JSON.stringify({ created_after: '$weekStart', sort: 'alpha', order: 'asc' }),
+          },
+          USER,
+        );
+
+        const nowMs = new Date('2024-06-15T10:00:00.000Z').getTime(); // суббота
+        // Без firstDayOfWeek неделя считается с понедельника — воскресенье не входит.
+        const monday = await runViewForThought(ndb, view, context.id, USER, undefined, {
+          tokenContext: { nowMs },
+        });
+        assert.deepEqual(monday.items.map((i) => i.title), ['Ср']);
+        // firstDayOfWeek = 7 (воскресенье) — неделя начинается 09.06, входит и «Вс».
+        const sundayStart = await runViewForThought(ndb, view, context.id, USER, undefined, {
+          tokenContext: { nowMs, firstDayOfWeek: 7 },
+        });
+        assert.deepEqual([...sundayStart.items.map((i) => i.title)].sort(), ['Вс', 'Ср']);
+      } finally {
+        ndb.close();
+      }
+    });
   },
 );
 

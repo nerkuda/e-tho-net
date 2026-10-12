@@ -7,7 +7,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 
-import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
+import { MCP_TOOL_ANNOTATIONS, filterProfileHasTime } from '@etn/shared';
 import { parseChronicleQueryBody, queryChronicle } from '../../domain/chronicle-service.js';
 import { createBodyPresenter, createSnippetExpander } from '../../domain/transclusion-service.js';
 import { ChronicleQuery } from '../../contracts.js';
@@ -68,6 +68,17 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         const expandSnippet = createSnippetExpander(ndb);
         const result = queryChronicle(ndb, request, {
           userId: rt.deps.auth.userId,
+          // Контекст профиля хроники (требование 0095daad, ADR 0c02ab4f): первый
+          // день недели сети и withTime (хроника — профиль со временем).
+          ...(() => {
+            const network = rt.deps.systemDb.getNetworkById(args.network_id as string);
+            return {
+              ...(network !== null && network.first_day_of_week !== undefined
+                ? { firstDayOfWeek: network.first_day_of_week }
+                : {}),
+              withTime: filterProfileHasTime('chronicle'),
+            };
+          })(),
           bodyHtmlTransform: (body_md) => present(body_md).body_html,
           snippetTransform: (body_md) => expandSnippet(body_md),
         });

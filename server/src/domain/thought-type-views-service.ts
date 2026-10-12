@@ -43,6 +43,7 @@ import {
   THOUGHT_TYPE_VIEW_NAME_MAX,
   type EffectiveThoughtTypeView,
   type FilterDiagnostic,
+  type FilterProfileId,
   type SortOrder,
   type StructureSort,
   type ThoughtTypeView,
@@ -56,6 +57,7 @@ import { getPropertyValues } from './property-service.js';
 import { parseStructureFilter } from './structure-service.js';
 import { parseFilterAst } from './filter-ast.js';
 import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { assertFilterDefinitionInProfile } from './filter-profile-validation.js';
 import {
   structureRequestToQuery,
   type AstTokenContext,
@@ -374,6 +376,9 @@ export function createThoughtTypeView(
   );
   // Красная диагностика: AST, ссылающийся на удалённую сущность, не сохраняется.
   assertAstDefinitionEntitiesResolvable(ndb, parsedDefinition, thoughtTypeId, requestId);
+  // Профиль точки применения: операнд, невидимый в отборе мыслей, не сохраняется
+  // (требование 0095daad, ADR 0c02ab4f).
+  assertFilterDefinitionInProfile(parsedDefinition, 'thoughts', requestId);
 
   // Проверка типа — корневой тип нельзя «заселять отборами с холста».
   const root = getRootThoughtType(ndb);
@@ -500,6 +505,8 @@ export function updateThoughtTypeView(
         current.thought_type_id,
         requestId,
       );
+      // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
+      assertFilterDefinitionInProfile(parsedDefinition, 'thoughts', requestId);
     }
 
     if (validated.name !== undefined) {
@@ -724,6 +731,10 @@ export interface RunViewQueryOptions {
   /** Собирать статистику исполнения (требование 0f34a5ff) — только при
    *  включённом серверном журналировании. */
   collectStats?: boolean;
+  /** Профиль точки применения (требование 0095daad, ADR 0c02ab4f). Отбор типа —
+   *  точка «мысли»; по умолчанию `thoughts`. Определяет видимость операндов и
+   *  гранулярность времени. */
+  profile?: FilterProfileId;
 }
 
 /**
@@ -870,6 +881,14 @@ export async function runViewForThought(
     resolvedDefinition = parsed;
   } else {
     const properties = collectThoughtPropertyValues(ndb, thoughtId, thought.type_id);
+    // Плоская форма (`definition v1`): резолвер строит контекст сам, поэтому
+    // часы, первый день недели сети и гранулярность времени берутся из
+    // tokenContext (обязательный пункт задачи 7a798b17, замечание верификатора
+    // задачи 0f1b9892; требование 0095daad) — иначе календарные токены
+    // (`$today`/`$weekStart`) раскрывались бы по реальным часам и от понедельника,
+    // а `$now` — по историческому умолчанию.
+    const extra = options?.tokenContext;
+    const now = extra?.nowMs !== undefined ? (): Date => new Date(extra.nowMs!) : undefined;
     const ctx: ResolveContext = buildResolveContext(
       {
         id: thought.id,
@@ -887,6 +906,11 @@ export async function runViewForThought(
       },
       properties,
       userId,
+      now,
+      {
+        ...(extra?.firstDayOfWeek !== undefined ? { firstDayOfWeek: extra.firstDayOfWeek } : {}),
+        ...(extra?.withTime !== undefined ? { withTime: extra.withTime } : {}),
+      },
     );
     const resolved = resolveTokensInDefinitionProxy(parsed, ctx);
 
@@ -952,6 +976,7 @@ export async function runViewForThought(
   const result = await queryThoughtsAsync(ndb, userId, query, {
     emptyFilterMode: 'home_orphans',
     includeDirections: true,
+    profile: options?.profile ?? 'thoughts',
     ...(options?.tokenContext !== undefined ? { tokenContext: options.tokenContext } : {}),
     ...(options?.collectStats === true ? { collectStats: true } : {}),
   });

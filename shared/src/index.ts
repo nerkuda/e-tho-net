@@ -18,4 +18,5 @@ export * from './icon-catalog.js';
 export * from './keywords.js';
 export * from './mentions.js';
 export * from './deep-link.js';
+export * from './filter-profiles.js';
 export * from './types/index.js';

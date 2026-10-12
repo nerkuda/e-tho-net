@@ -145,6 +145,8 @@ export function selectRecipeIds(
     const page = queryThoughtIds(ndb, userId, query, {
       emptyFilterMode: 'all',
       maxLimit: RECIPE_PAGE_SIZE,
+      // Профиль точки применения «публикации» (требование 0095daad, ADR 0c02ab4f).
+      profile: 'publications',
     });
     ids.push(...page.ids);
     if (!page.has_more || page.next_cursor === null) break;

@@ -110,19 +110,24 @@ function parseDateField(
  * Раскрыть токены периода (`$today`/`$now`, арифметика) в момент применения
  * отбора и привести результат к полному UTC-инстансу (требование 91f8d8dd).
  * Значение без токенов уже нормализовано на разборе — возвращается как есть.
+ * `extra` несёт контекст профиля хроники (требование 0095daad, ADR 0c02ab4f):
+ * первый день недели сети (иначе `$weekStart` считается от понедельника) и
+ * гранулярность времени (`withTime: true` — хроника несёт время).
  */
 function resolvePeriodField(
   value: string | null | undefined,
   field: 'date_from' | 'date_to',
   now?: () => Date,
+  extra?: { firstDayOfWeek?: number; withTime?: boolean },
 ): string | undefined {
   if (value === undefined || value === null) return undefined;
   const { known, unknown } = scanStringForTokens(value);
   if (known.length === 0 && unknown.length === 0) return value;
-  const { value: resolved, unresolved } = resolveGlobalDateTokens(
-    value,
-    now === undefined ? {} : { now },
-  );
+  const { value: resolved, unresolved } = resolveGlobalDateTokens(value, {
+    ...(now === undefined ? {} : { now }),
+    ...(extra?.firstDayOfWeek !== undefined ? { firstDayOfWeek: extra.firstDayOfWeek } : {}),
+    ...(extra?.withTime !== undefined ? { withTime: extra.withTime } : {}),
+  });
   if (unresolved.length > 0) {
     throw new EtnError('VALIDATION_ERROR', `${field}: ${unresolved[0]!.message}`, {
       field,
@@ -888,6 +893,13 @@ export function queryChronicle(
     userId?: string;
     now?: () => Date;
     /**
+     * Контекст профиля хроники (требование 0095daad, ADR 0c02ab4f): первый день
+     * недели сети для `$weekStart`/`$weekEnd` и `withTime` (хроника — профиль со
+     * временем). Прокидывается фасадом (REST/MCP) из настроек сети.
+     */
+    firstDayOfWeek?: number;
+    withTime?: boolean;
+    /**
      * Транспорт-агностичный transform `body_md` → `body_html` (MCP-фасад
      * передаёт пересборку из развёрнутого текста — ошибка a6da3d37; REST не
      * передаёт ничего и получает кешированный `body_html`).
@@ -904,8 +916,14 @@ export function queryChronicle(
   const userId = opts.userId ?? '';
   // Токены периода раскрываются в момент применения отбора (требование
   // 91f8d8dd), затем значения сравниваются как полные UTC-инстансы.
-  const dateFrom = resolvePeriodField(request.date_from, 'date_from', opts.now);
-  const dateTo = resolvePeriodField(request.date_to, 'date_to', opts.now);
+  const dateFrom = resolvePeriodField(request.date_from, 'date_from', opts.now, {
+    ...(opts.firstDayOfWeek !== undefined ? { firstDayOfWeek: opts.firstDayOfWeek } : {}),
+    ...(opts.withTime !== undefined ? { withTime: opts.withTime } : {}),
+  });
+  const dateTo = resolvePeriodField(request.date_to, 'date_to', opts.now, {
+    ...(opts.firstDayOfWeek !== undefined ? { firstDayOfWeek: opts.firstDayOfWeek } : {}),
+    ...(opts.withTime !== undefined ? { withTime: opts.withTime } : {}),
+  });
   const resolved: ChronicleQueryRequest = { ...request };
   if (dateFrom !== undefined) resolved.date_from = dateFrom;
   if (dateTo !== undefined) resolved.date_to = dateTo;

@@ -9,15 +9,21 @@
  */
 
 import type { AstTokenContext } from '../../domain/query-service.js';
+import { filterProfileHasTime, type FilterProfileId } from '@etn/shared';
 import type { McpRuntime } from '../context.js';
 
 /**
  * Контекст для сетевого AST-отбора: `firstDayOfWeek` берётся из настроек сети
- * (системная БД). `withTime: true` — сетевая выборка исполняется в профиле со
- * временем: `$now`/`$hourStart`/`$hourEnd` и единицы `h`/`mi` разрешены
- * (историческая совместимость резолвера — профиль со временем по умолчанию).
+ * (системная БД), `withTime` — из профиля точки применения (требование 0095daad,
+ * ADR 0c02ab4f): `$now`/`$hourStart`/`$hourEnd` и единицы `h`/`mi` — только в
+ * профилях со временем. По умолчанию профиль `thoughts` (отбор мыслей) — без
+ * времени.
  */
-export function mcpTokenContext(rt: McpRuntime, networkId: string): AstTokenContext {
+export function mcpTokenContext(
+  rt: McpRuntime,
+  networkId: string,
+  profile: FilterProfileId = 'thoughts',
+): AstTokenContext {
   const network = rt.deps.systemDb.getNetworkById(networkId);
   return {
     nowMs: Date.now(),
@@ -25,6 +31,6 @@ export function mcpTokenContext(rt: McpRuntime, networkId: string): AstTokenCont
     ...(network !== null && network.first_day_of_week !== undefined
       ? { firstDayOfWeek: network.first_day_of_week }
       : {}),
-    withTime: true,
+    withTime: filterProfileHasTime(profile),
   };
 }

@@ -421,6 +421,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             emptyFilterMode: 'all',
             // Обязательный пункт задачи cb78315b: контекст разрешения токенов AST.
             tokenContext: mcpTokenContext(rt, args.network_id as string),
+            // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
+            profile: 'thoughts',
           },
         );
         // O10: count every hit in the structured query.

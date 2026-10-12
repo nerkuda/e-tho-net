@@ -584,6 +584,30 @@ describe(
       }
     });
 
+    it('firstDayOfWeek сети влияет на $weekStart/$weekEnd (задача 7a798b17)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'T');
+        // Воскресенье 2024-06-09 — в неделю с началом в понедельник не входит.
+        createComment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'chronological', body_md: 'вс', valid_from: '2024-06-09T12:00:00.000Z' },
+          USER,
+        );
+        const now = (): Date => new Date('2024-06-15T10:00:00.000Z'); // суббота
+        const body = parseChronicleQueryBody({ date_from: '$weekStart', date_to: '$weekStart' }, '');
+
+        // Без настройки неделя считается с понедельника (2024-06-10) — записи нет.
+        assert.equal(queryChronicle(ndb, body, { now }).total, 0);
+        // Первый день недели = воскресенье (7) → неделя с 2024-06-09 — запись входит.
+        assert.equal(queryChronicle(ndb, body, { now, firstDayOfWeek: 7 }).total, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('режим периода (date_mode) сохраняется и валидируется (приёмка №2)', () => {
       // Режим полей периода — часть определения сохранённого отбора.
       const presets = parseChronicleFilterDefinition(
