@@ -30,7 +30,7 @@ import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer } from './layer-service.js';
 import { findDuplicates, search } from './search-service.js';
 import { queryThoughtsAsync } from './heavy-read.js';
-import type { ThoughtQueryRequest } from './query-service.js';
+import type { AstTokenContext, ThoughtQueryRequest } from './query-service.js';
 import { BASE_LAYER_ID } from '@etn/shared';
 import type { DuplicateHit, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
 
@@ -256,6 +256,10 @@ export interface CrossNetworkQueryArgs {
   offset: number;
   /** Потолок суммарной выдачи; по умолчанию {@link CROSS_NETWORK_MAX_HITS}. */
   maxHits?: number;
+  /** Контекст разрешения токенов AST по сети (обязательный пункт задачи
+   *  c13762b1): первый день недели у каждой сети свой, поэтому фабрика берёт
+   *  networkId. Отсутствие — исполнение без разрешения календарных токенов. */
+  tokenContextFor?: (networkId: string) => AstTokenContext;
 }
 
 /** Запустить веером {@link queryThoughtsAsync} по всем сетям. */
@@ -287,7 +291,7 @@ export async function fanOutQuery(
         limit: args.limit * Math.max(accessible.length, 1),
         offset: 0,
       },
-      { maxLimit: 200, emptyFilterMode: 'all' },
+      { maxLimit: 200, emptyFilterMode: 'all', ...(args.tokenContextFor !== undefined ? { tokenContext: args.tokenContextFor(net.id) } : {}) },
     );
     for (const item of acceptWithBudget(budget, result.items)) {
       hits.push({

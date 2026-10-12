@@ -3904,6 +3904,12 @@ export const RestStructureQueryBody = defineContract(
       created_before: z.unknown().optional(),
       updated_after: z.unknown().optional(),
       updated_before: z.unknown().optional(),
+      // Требование 91983c20 (тех.проект «Ядро AST и операторы»): тело-отбор AST
+      // (сущность 489c394f) — дерево условий вместо плоских критериев. Форму
+      // разбирает доменный parseFilterAst (роут); при `ast` плоские критерии
+      // запрещены (валидируется в роуте). Неизвестные поля по-прежнему
+      // отклоняются (`.strict()`).
+      ast: z.unknown().optional(),
       sort: z.enum(STRUCTURE_SORTS).optional(),
       order: z.enum(SORT_ORDERS).optional(),
       ids_only: z.boolean().optional(),

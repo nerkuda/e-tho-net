@@ -53,7 +53,13 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { getPropertyValues } from './property-service.js';
 import { parseStructureFilter } from './structure-service.js';
-import { structureRequestToQuery, type ThoughtQueryRequest, type ThoughtQueryResult } from './query-service.js';
+import { parseFilterAst } from './filter-ast.js';
+import {
+  structureRequestToQuery,
+  type AstTokenContext,
+  type ThoughtQueryRequest,
+  type ThoughtQueryResult,
+} from './query-service.js';
 import { queryThoughtsAsync } from './heavy-read.js';
 import {
   buildResolveContext,
@@ -670,6 +676,11 @@ export interface RunViewQueryOptions {
   limit?: number;
   /** Смещение пагинации (дефолт 0). */
   offset?: number;
+  /** Контекст разрешения токенов AST (обязательный пункт задачи c13762b1):
+   *  часы, пользователь, первый день недели сети, профиль времени. Прокидывается
+   *  в движок отбора (`queryThoughts`) — без него календарные токены AST не
+   *  разрешатся. */
+  tokenContext?: AstTokenContext;
 }
 
 /**
@@ -823,23 +834,36 @@ export async function runViewForThought(
     };
   }
 
-  // Парсер ожидает именно `Record<string, unknown>` (это `body` в REST).
-  // Резолвер оставляет на выходе объект, потому что на входе был объект
-  // (валидация отвергла бы не-объект), — cast для согласования типов.
-  const filter = parseStructureFilter(resolved.definition as Record<string, unknown>, requestId);
-  const query: ThoughtQueryRequest = structureRequestToQuery({
-    ...filter,
-    sort,
-    order,
-    limit,
-    offset,
-    // Отбор типа отвечает полным числом совпадений — COUNT запрашивается
-    // явно (требование 5adebf61: по умолчанию подсчёта нет).
-    count: true,
-  });
+  // Определение отбора хранится либо в форме AST (0.13.1, сущность 489c394f),
+  // либо в старой плоской `definition v1`. Старая форма компилируется в AST тем
+  // же движком отбора (единый вход, требование 91983c20); одноразовая миграция
+  // БД v1 → AST — отдельная задача 4be62d42.
+  const resolvedDefinition = resolved.definition as Record<string, unknown>;
+  const isAstDefinition = resolvedDefinition['version'] !== undefined;
+  const query: ThoughtQueryRequest = isAstDefinition
+    ? {
+        // Форму дерева валидирует доменный parseFilterAst (строгая проверка).
+        ast: parseFilterAst(resolvedDefinition, requestId),
+        sort,
+        order,
+        limit,
+        offset,
+        // Отбор типа отвечает полным числом совпадений — COUNT запрашивается
+        // явно (требование 5adebf61: по умолчанию подсчёта нет).
+        count: true,
+      }
+    : structureRequestToQuery({
+        ...parseStructureFilter(resolvedDefinition, requestId),
+        sort,
+        order,
+        limit,
+        offset,
+        count: true,
+      });
   const result = await queryThoughtsAsync(ndb, userId, query, {
     emptyFilterMode: 'home_orphans',
     includeDirections: true,
+    ...(options?.tokenContext !== undefined ? { tokenContext: options.tokenContext } : {}),
   });
   // Исключаем саму контекстную мысль из результата: «отбор относительно
   // мысли» показывает СОСЕДЕЙ, удовлетворяющих критериям, а не саму мысль.

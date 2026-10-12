@@ -29,6 +29,7 @@ import { openNetworkDb } from '../db/network-db.js';
 export { openNetworkDb };
 import { SystemDb } from '../db/system-db.js';
 import { resolveSessionLayer } from '../domain/layer-service.js';
+import type { AstTokenContext } from '../domain/query-service.js';
 import { parseLinkTypeFilterValue } from '@etn/shared';
 import type { Logger } from '../logger.js';
 import type { WriteFx } from '../domain/write-wrapper.js';
@@ -277,4 +278,31 @@ export async function getAccessibleNetworkIdsForUser(
   } finally {
     sysDb.close();
   }
+}
+
+/**
+ * Контекст разрешения токенов AST для REST-точки отбора (обязательный пункт
+ * задачи c13762b1, замечание верификатора задачи 0f1b9892; требования
+ * 1b77decd/91983c20). Собирается в одном месте, чтобы `POST /thoughts/query` и
+ * `POST /thoughts/{id}/views/{view}/run` не расходились: часы исполнения,
+ * вызывающий пользователь (`$user`), первый день недели сети (настройка
+ * `first_day_of_week` из системной БД — влияет на `$weekStart`/`$weekEnd`) и
+ * профиль времени. `withTime: true` — историческая совместимость резолвера
+ * (сетевые отборы исторически исполняются в профиле со временем; тот же выбор
+ * у MCP-аналога `mcpTokenContext`).
+ */
+export function restTokenContext(
+  app: FastifyInstance,
+  userId: string,
+  networkId: string,
+): AstTokenContext {
+  const network = app.systemDb.getNetworkById(networkId);
+  return {
+    nowMs: Date.now(),
+    userId,
+    ...(network !== null && network.first_day_of_week !== undefined
+      ? { firstDayOfWeek: network.first_day_of_week }
+      : {}),
+    withTime: true,
+  };
 }

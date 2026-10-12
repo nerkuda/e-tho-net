@@ -40,6 +40,7 @@
 
 import {
   EtnError,
+  FILTER_AST_VERSION,
   HIERARCHY_SUBTREE_MAX_NODES,
   STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
   STRUCTURES_QUERY_MAX_LIMIT,
@@ -761,24 +762,6 @@ function appendAuthorCondition(
   // `eq` (default) — exact match.
   where.push(`${column} = ?`);
   params.push(value);
-}
-
-/** Appends inclusive date-bound WHERE clauses (`>=`/`<=`) for one column. */
-function appendDateBound(
-  where: string[],
-  params: unknown[],
-  column: string,
-  after: string | undefined,
-  before: string | undefined,
-): void {
-  if (typeof after === 'string' && after.trim() !== '') {
-    where.push(`${column} >= ?`);
-    params.push(after.trim());
-  }
-  if (typeof before === 'string' && before.trim() !== '') {
-    where.push(`${column} <= ?`);
-    params.push(before.trim());
-  }
 }
 
 /** Convert a condition scalar to the SQL parameter of its value column. */
@@ -2182,6 +2165,16 @@ function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, reque
  * из списка в наборе.
  */
 function hasPropertiesLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  // «Заполнено/не заполнено» без списка свойств — «мысль имеет хотя бы одно
+  // значение свойства»/«ни одного». Это точный AST-эквивалент плоского
+  // трёхсостоянного `has_properties` (компилятор, требования 91983c20/76e30d9a);
+  // `has`/`not_has` с набором id отвечает на другой вопрос («имеет конкретные
+  // свойства», с учётом наследования по типу) и потому для него не годится.
+  if (leaf.operator === 'is_empty' || leaf.operator === 'not_empty') {
+    const exists =
+      "EXISTS (SELECT 1 FROM property_values_v pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id)";
+    return leaf.operator === 'not_empty' ? { sql: exists, params: [] } : { sql: `NOT (${exists})`, params: [] };
+  }
   if (leaf.operator !== 'has' && leaf.operator !== 'not_has') {
     astUnsupported(`Оператор «${leaf.operator}» для операнда «свойства»`, path, requestId);
   }
@@ -2655,7 +2648,7 @@ function isFilterEmpty(req: ThoughtQueryRequest): boolean {
 }
 
 /** True when a date bound carries a non-empty value worth applying. */
-function dateBoundIsSet(value: string | undefined): boolean {
+function dateBoundIsSet(value: string | undefined): value is string {
   return typeof value === 'string' && value.trim() !== '';
 }
 
@@ -2822,6 +2815,175 @@ function cursorKeyColumns(keys: SortKey[]): string {
   return keys.map((k, i) => `, ${k.expr} AS __k${i}`).join('');
 }
 
+// ---------------------------------------------------------------------------
+// Компилятор плоской формы отбора в AST (требования 91983c20 «Старые тела
+// REST/MCP компилируются в AST» и 76e30d9a «Один исполнитель AST…», ADR
+// 34f6f9d6; сущность спецификации 489c394f).
+//
+// Единый вход: критерии плоского тела (`ThoughtQueryRequest`) превращаются в
+// дерево AST и исполняются единственным AST-путём — второго пути исполнения
+// критериев нет. Компилятор живёт в движке, поэтому компиляция прозрачна для
+// обоих фасадов (REST `POST /thoughts/query` и MCP `etn.thoughts.query`).
+//
+// Листья переиспользуют тот же исполнитель, что и явное AST-тело, поэтому
+// паритет результата с прежней плоской формой достигается по построению
+// (требование 91983c20). НЕ компилируются (остаются фасадными пред-сужениями,
+// применяются поверх критериев): `subtree` из `parent_ids`/`in_subtree_of`
+// (требование 3482a399 — корни входят в результат) и `link_filter` (вынесен из
+// AST по сущности 489c394f). Сортировка/пагинация живут вне дерева (3e47f52a).
+// ---------------------------------------------------------------------------
+
+/** Оператор авторского фильтра → код оператора AST-листа («Пусто» — is_empty). */
+const AUTHOR_OP_TO_AST: Record<StructureAuthorOp, FilterAstOperator> = {
+  eq: 'eq',
+  ne: 'ne',
+  in: 'in',
+  not_in: 'not_in',
+  empty: 'is_empty',
+  not_empty: 'not_empty',
+};
+
+/** Условие-лист AST с необязательным значением. */
+function astLeaf(entity: FilterAstEntity, operator: FilterAstOperator, value?: FilterAstValue): FilterAstLeaf {
+  return value === undefined ? { entity, operator } : { entity, operator, value };
+}
+
+/**
+ * Лист авторского операнда (автор/редактор) с той же семантикой, что у плоского
+ * {@link appendAuthorCondition}: `empty`/`not_empty` дают условие даже без
+ * значения; отсутствующий оператор трактуется как `eq`.
+ */
+function compileAuthorLeaf(
+  kind: 'author' | 'editor',
+  value: string | string[] | undefined,
+  op: StructureAuthorOp | undefined,
+): FilterAstLeaf | null {
+  if (op === 'empty') return astLeaf({ kind }, 'is_empty');
+  if (op === 'not_empty') return astLeaf({ kind }, 'not_empty');
+  if (value === undefined) return null;
+  return astLeaf({ kind }, AUTHOR_OP_TO_AST[op ?? 'eq'], value);
+}
+
+/**
+ * Скомпилировать критерии плоской формы в AST. `undefined` — плоское тело не
+ * несёт ни одного критерия (тогда движок отдаёт режим пустого фильтра как
+ * раньше). Все листья объединяются по AND — плоская семантика «критерии по AND».
+ */
+export function compileThoughtQueryToAst(
+  ndb: NetworkDb,
+  req: ThoughtQueryRequest,
+  requestId?: string,
+): FilterAst | undefined {
+  const children: FilterAstNode[] = [];
+
+  // Актуальность: явное значение переопределяет настройку; дефолт — только
+  // активные; `'any'` — без условия (плоская семантика).
+  if (req.active === 'true' || req.active === undefined) children.push(astLeaf({ kind: 'active' }, 'eq', true));
+  else if (req.active === 'false') children.push(astLeaf({ kind: 'active' }, 'eq', false));
+
+  // Пометка на удаление: дефолт — только непомеченные; `'any'` — без условия.
+  if (req.trashed === 'true') children.push(astLeaf({ kind: 'trashed' }, 'eq', true));
+  else if (req.trashed === 'false' || req.trashed === undefined) children.push(astLeaf({ kind: 'trashed' }, 'eq', false));
+
+  const author = compileAuthorLeaf('author', req.created_by, req.created_by_op);
+  if (author !== null) children.push(author);
+  const editor = compileAuthorLeaf('editor', req.updated_by, req.updated_by_op);
+  if (editor !== null) children.push(editor);
+
+  // Даты: границы включительны (плоский `appendDateBound` — `>=`/`<=`).
+  if (dateBoundIsSet(req.created_after)) children.push(astLeaf({ kind: 'created_at' }, 'gte', req.created_after.trim()));
+  if (dateBoundIsSet(req.created_before)) children.push(astLeaf({ kind: 'created_at' }, 'lte', req.created_before.trim()));
+  if (dateBoundIsSet(req.updated_after)) children.push(astLeaf({ kind: 'updated_at' }, 'gte', req.updated_after.trim()));
+  if (dateBoundIsSet(req.updated_before)) children.push(astLeaf({ kind: 'updated_at' }, 'lte', req.updated_before.trim()));
+
+  // Трёхсостоянные признаки наличия: true — только с наличием, false — только
+  // без, поле не задано — критерий не участвует.
+  if (req.has_properties !== undefined) children.push(astLeaf({ kind: 'properties' }, req.has_properties ? 'not_empty' : 'is_empty'));
+  if (req.has_comment !== undefined) children.push(astLeaf({ kind: 'comment' }, req.has_comment ? 'not_empty' : 'is_empty'));
+  if (req.has_attachments !== undefined) children.push(astLeaf({ kind: 'attachments' }, req.has_attachments ? 'not_empty' : 'is_empty'));
+  if (req.has_chronology !== undefined) children.push(astLeaf({ kind: 'chronology' }, req.has_chronology ? 'not_empty' : 'is_empty'));
+
+  // «Есть слова»: области берутся ровно как у плоского движка (отсутствие/
+  // пустой набор → дефолт title+synonyms), мини-синтаксис разбирает лист.
+  const keywords = req.keywords ?? '';
+  if (keywords.trim() !== '') {
+    children.push(astLeaf({ kind: 'keywords', scope: [...resolveKeywordScope(req.keyword_scope)] }, 'matches', keywords));
+  }
+
+  // Типы мыслей/связей: раскрытие по поддереву (L21) делается той же функцией,
+  // что у плоской ветки; пустое раскрытие — условие не накладывается (прежнее
+  // поведение плоского движка: `expanded.length === 0` → клауза не добавлялась).
+  if ((req.type_ids ?? []).length > 0) {
+    const expanded = expandTypeIdsToSubtree(ndb, 'thought_types', req.type_ids as string[]);
+    if (expanded.length > 0) children.push(astLeaf({ kind: 'type' }, 'in', expanded));
+  }
+  if ((req.link_type_ids ?? []).length > 0) {
+    const expanded = expandTypeIdsToSubtree(ndb, 'link_types', req.link_type_ids as string[]);
+    if (expanded.length > 0) children.push(astLeaf({ kind: 'link_type' }, 'in', expanded));
+  }
+
+  // Условия значений свойств: тот же словарь операторов, что у плоской формы.
+  // Прежде — валидация теми же правилами плоского движка ({@link propertyClauses}):
+  // AST-лист свойства шире плоского (числовые операторы на связи/коллекции —
+  // «количество»), поэтому недопустимое для плоской формы значение (напр.
+  // числовое `eq` по свойству-связи) должно быть отвергнуто ровно как раньше,
+  // а не молча получить иную семантику. Результат проверки не нужен: исполняет
+  // всё равно AST-лист, но для допустимых значений он даёт тот же ответ.
+  if ((req.properties ?? []).length > 0) {
+    propertyClauses(ndb, req.properties as ThoughtQueryPropertyCondition[], requestId);
+  }
+  for (const cond of req.properties ?? []) {
+    children.push(
+      astLeaf({ kind: 'property', property_id: cond.property_id }, cond.operator as FilterAstOperator, cond.value),
+    );
+  }
+
+  if (children.length === 0) return undefined;
+  return {
+    version: FILTER_AST_VERSION,
+    filter: children.length === 1 ? (children[0] as FilterAstNode) : { op: 'and', children },
+  };
+}
+
+/**
+ * Листья «Есть слова» в строго конъюнктивном контексте (корень и все предки —
+ * только `and`; ни `or`, ни `not`). Только для них безопасно FTS-сужение
+ * (`fts_thought_names MATCH`, требование 314cbb8d): под `or`/`not` сужатель
+ * отсекал бы строки, удовлетворяющие другим ветвям.
+ */
+function conjunctiveKeywordLeaves(node: FilterAstNode, out: FilterAstLeaf[]): FilterAstLeaf[] {
+  if ('op' in node) {
+    if (node.op === 'and') for (const child of node.children) conjunctiveKeywordLeaves(child, out);
+    return out;
+  }
+  if (node.entity.kind === 'keywords') out.push(node);
+  return out;
+}
+
+/**
+ * FTS-сужатели для конъюнктивных листьев «Есть слова» (перенесены в AST-путь,
+ * чтобы сторож производительности полнотекста 314cbb8d оставался зелёным).
+ * Алиасы уникальны (`__kw`, `__kw1`, …) — джойнов может быть несколько.
+ */
+function astKeywordFtsJoins(ast: FilterAst): Clause[] {
+  const joins: Clause[] = [];
+  let idx = 0;
+  for (const leaf of conjunctiveKeywordLeaves(ast.filter, [])) {
+    if (leaf.entity.kind !== 'keywords') continue;
+    const scope = new Set<StructureKeywordScope>(leaf.entity.scope ?? []);
+    // Пустая область — условие «Есть слова» отключено (лист вернёт AST_TRUE),
+    // FTS-сужатель не ставим, иначе он отсекал бы строки вопреки листу.
+    if (scope.size === 0) continue;
+    const { include } = parseFilterKeywords(typeof leaf.value === 'string' ? leaf.value : '');
+    const join = buildKeywordFtsJoin(include, scope);
+    if (join === null) continue;
+    const alias = idx === 0 ? '__kw' : `__kw${idx}`;
+    joins.push({ sql: idx === 0 ? join.sql : join.sql.replace(/__kw\b/g, alias), params: join.params });
+    idx += 1;
+  }
+  return joins;
+}
+
 function buildFilterQuerySql(
   ndb: NetworkDb,
   userId: string,
@@ -2840,21 +3002,8 @@ function buildFilterQuerySql(
       : null;
   const keyset = cursor === null ? null : keysetClause(keys, idDir, cursor.k, cursor.id);
 
-  // Дерево AST — единственный источник критериев (плоские поля не применяются,
-  // неявные дефолты active/trashed не навязываются; требование 76e30d9a).
-  if (req.ast !== undefined) {
-    const clause = filterAstClause(ndb, req.ast, requestId, astOpts);
-    return {
-      baseSql: `FROM thoughts_v t ${joinSql} WHERE ${clause.sql === '' ? '1=1' : clause.sql}`,
-      joinParams,
-      params: clause.params,
-      keys,
-      idDir,
-      keyset,
-      homeFirst: false,
-    };
-  }
-
+  // Режим пустого фильтра (REST-контракт): пустой плоский фильтр → HOME
+  // первой + сироты. Проверяется ДО компиляции (плоское тело без критериев).
   if (homeFirst) {
     const showInactive = req.active === 'any' ? 1 : 0;
     return {
@@ -2871,110 +3020,50 @@ function buildFilterQuerySql(
     };
   }
 
-  const where: string[] = [];
-  const params: unknown[] = [];
-
-  // Актуальность: явное значение или дефолт «только активные».
-  if (req.active === 'true' || req.active === undefined) {
-    where.push('t.active = 1');
-  } else if (req.active === 'false') {
-    where.push('t.active = 0');
-  }
-
-  // Пометка на удаление (S13): дефолт — только непомеченные.
-  if (req.trashed === 'true') {
-    where.push('t.marked_for_deletion = 1');
-  } else if (req.trashed === 'false' || req.trashed === undefined) {
-    where.push('t.marked_for_deletion = 0');
-  }
-
-  appendAuthorCondition(where, params, 't.created_by', req.created_by, req.created_by_op);
-  appendAuthorCondition(where, params, 't.updated_by', req.updated_by, req.updated_by_op);
-
-  appendDateBound(where, params, 't.created_at', req.created_after, req.created_before);
-  appendDateBound(where, params, 't.updated_at', req.updated_after, req.updated_before);
-
-  if (req.subtree !== undefined && walk !== null) {
-    if (walk.depths.size === 0) {
-      // Поддерево пустое — кандидатов нет (REST-семантика прежнего движка).
-      where.push('0');
-    } else {
-      const ids = [...walk.depths.keys()];
-      where.push(`t.id IN (${ids.map(() => '?').join(',')})`);
-      params.push(...ids);
+  // Единый вход (ADR 34f6f9d6, требования 91983c20/76e30d9a): критерии отбора —
+  // только из AST; плоское тело компилируется в AST тем же компилятором, отдельной
+  // ветки исполнения критериев нет. Явное AST-тело (`req.ast`) — как передано.
+  const effectiveAst = req.ast ?? compileThoughtQueryToAst(ndb, req, requestId);
+  if (effectiveAst !== undefined) {
+    const clause = filterAstClause(ndb, effectiveAst, requestId, astOpts);
+    const parts: string[] = [`(${clause.sql === '' ? '1=1' : clause.sql})`];
+    const params: unknown[] = [...clause.params];
+    // Фасадное пред-сужение поддерева (REST `parent_ids` / MCP `in_subtree_of`):
+    // применяется ПОВЕРХ критериев, в AST не компилируется (требование 3482a399 —
+    // перечисленные мысли входят в результат; ошибка ad1551ea). `link_filter`
+    // учтён обходом `walkSubtree` через `subtree.link_filter`.
+    if (req.subtree !== undefined) {
+      if (walk === null || walk.depths.size === 0) {
+        // Поддерево пустое — кандидатов нет (REST-семантика прежнего движка).
+        parts.push('0');
+      } else {
+        const ids = [...walk.depths.keys()];
+        parts.push(`t.id IN (${ids.map(() => '?').join(',')})`);
+        params.push(...ids);
+      }
     }
+    // FTS-сужатель полнотекста (требование 314cbb8d) — для конъюнктивных
+    // листьев «Есть слова»; LIKE-семантику мини-языка хранит AST-лист.
+    const fts = astKeywordFtsJoins(effectiveAst);
+    const fromJoinSql = fts.length === 0 ? joinSql : `${joinSql} ${fts.map((j) => j.sql).join(' ')}`;
+    const fromJoinParams = fts.length === 0 ? joinParams : [...joinParams, ...fts.flatMap((j) => j.params)];
+    return {
+      baseSql: `FROM thoughts_v t ${fromJoinSql} WHERE ${parts.join(' AND ')}`,
+      joinParams: fromJoinParams,
+      params,
+      keys,
+      idDir,
+      keyset,
+      homeFirst: false,
+    };
   }
 
-  if (req.has_properties !== undefined) {
-    const sql = "EXISTS (SELECT 1 FROM property_values_v pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id)";
-    where.push(req.has_properties ? sql : `NOT ${sql}`);
-  }
-  if (req.has_comment !== undefined) {
-    const sql =
-      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'permanent')";
-    where.push(req.has_comment ? sql : `NOT ${sql}`);
-  }
-  if (req.has_attachments !== undefined) {
-    const sql = "EXISTS (SELECT 1 FROM attachments_v a WHERE a.owner_type = 'thought' AND a.owner_id = t.id)";
-    where.push(req.has_attachments ? sql : `NOT ${sql}`);
-  }
-  if (req.has_chronology !== undefined) {
-    const sql =
-      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'chronological')";
-    where.push(req.has_chronology ? sql : `NOT ${sql}`);
-  }
-
-  const keywords = parseFilterKeywords(req.keywords ?? '');
-  const keywordScope = resolveKeywordScope(req.keyword_scope);
-  const keywordClause = buildKeywordClause(keywordScope);
-  // FTS-сужатель (требование 314cbb8d): `fts_thought_names` джойнится по rowid
-  // победившей версии из представления (`t.rowid`), LIKE остаётся остаточным
-  // фильтром и хранит семантику мини-языка §6.10.
-  const keywordFts = buildKeywordFtsJoin(keywords.include, keywordScope);
-  const fromJoinSql = keywordFts === null ? joinSql : `${joinSql} ${keywordFts.sql}`;
-  const fromJoinParams = keywordFts === null ? joinParams : [...joinParams, ...keywordFts.params];
-  for (const word of keywords.include) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    where.push(keywordClause.sql);
-    for (let i = 0; i < keywordClause.paramCount; i += 1) params.push(pattern);
-  }
-  for (const word of keywords.exclude) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    where.push(`NOT ${keywordClause.sql}`);
-    for (let i = 0; i < keywordClause.paramCount; i += 1) params.push(pattern);
-  }
-
-  if (req.type_ids !== undefined && req.type_ids.length > 0) {
-    // L21: a selected parent type matches its whole subtree (OR semantics).
-    const expanded = expandTypeIdsToSubtree(ndb, 'thought_types', req.type_ids);
-    if (expanded.length > 0) {
-      where.push(`t.type_id IN (${expanded.map(() => '?').join(',')})`);
-      params.push(...expanded);
-    }
-  }
-
-  for (const clause of propertyClauses(ndb, req.properties ?? [], requestId)) {
-    where.push(clause.sql);
-    params.push(...clause.params);
-  }
-
-  if (req.link_type_ids !== undefined && req.link_type_ids.length > 0) {
-    // L21: subtree expansion, same as the thought-type filter above.
-    const expandedLinks = expandTypeIdsToSubtree(ndb, 'link_types', req.link_type_ids);
-    if (expandedLinks.length > 0) {
-      where.push(
-        `EXISTS (SELECT 1 FROM links_v l WHERE l.active = 1
-           AND l.type_id IN (${expandedLinks.map(() => '?').join(',')})
-           AND (l.source_id = t.id OR l.target_id = t.id))`,
-      );
-      params.push(...expandedLinks);
-    }
-  }
-
+  // Плоское тело без критериев вне режима HOME (`emptyFilterMode: 'all'`,
+  // например встраивание критериев в чужой SQL): все мысли.
   return {
-    baseSql: `FROM thoughts_v t ${fromJoinSql} WHERE ${where.length > 0 ? where.join(' AND ') : '1=1'}`,
-    joinParams: fromJoinParams,
-    params,
+    baseSql: `FROM thoughts_v t ${joinSql} WHERE 1=1`,
+    joinParams,
+    params: [],
     keys,
     idDir,
     keyset,

@@ -39,6 +39,7 @@ import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import {
   openRouteNetworkDb,
   requestBody,
+  restTokenContext,
   restWriteFx,
   runWrite,
   type RouteDeps,
@@ -396,6 +397,9 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           ...(order !== undefined ? { order } : {}),
           ...(limit !== undefined ? { limit } : {}),
           ...(offset !== undefined ? { offset } : {}),
+          // Контекст разрешения токенов AST (обязательный пункт задачи c13762b1):
+          // часы/пользователь/первый день недели сети/профиль времени.
+          tokenContext: restTokenContext(app, req.auth!.user.id, networkId),
         });
 
         // 5. Если `unresolved` непустой — отдаём пустой результат с пояснением

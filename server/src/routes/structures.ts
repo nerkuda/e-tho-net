@@ -22,6 +22,7 @@ import {
   STRUCTURES_QUERY_IDS_MAX_LIMIT,
   STRUCTURES_QUERY_MAX_LIMIT,
   type CrossNetworkStructureQueryResponse,
+  type FilterAst,
   type FocusEdge,
   type SavedFilterView,
   type StructureIdsQueryResponse,
@@ -35,6 +36,7 @@ import {
   openRouteNetworkDb,
   requestBody,
   resolveShowTrash,
+  restTokenContext,
   restWriteFx,
   runWrite,
   type RouteDeps,
@@ -54,11 +56,13 @@ import {
   createSavedFilter,
   deleteSavedFilter,
   getHierarchy,
+  isFilterEmpty,
   listSavedFilters,
   parseSavedFilterDefinition,
   parseStructureFilter,
   updateSavedFilter,
 } from '../domain/structure-service.js';
+import { parseFilterAst } from '../domain/filter-ast.js';
 import { assertPropertyConditionsResolvable, structureRequestToQuery } from '../domain/query-service.js';
 import { queryThoughtIdsAsync, queryThoughtsAsync } from '../domain/heavy-read.js';
 import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
@@ -87,9 +91,26 @@ interface SavedFilterIdParams {
 function parseQueryBody(
   body: Record<string, unknown>,
   requestId: string,
-): StructureQueryRequest & { show_trash?: boolean } {
+): StructureQueryRequest & { show_trash?: boolean; ast?: FilterAst } {
   const out = parseBody(RestStructureQueryBody, body, requestId);
   const filter = parseStructureFilter(body, requestId);
+  // Тело-отбор AST (требование 91983c20, тех.проект «Ядро AST и операторы»):
+  // либо готовое дерево AST, либо плоские критерии — одновременно нельзя
+  // (неоднозначно, какой источник истины). Форму дерева валидирует доменный
+  // parseFilterAst; неизвестные корневые поля уже отклонены контрактом.
+  const astRaw = body['ast'];
+  let ast: FilterAst | undefined;
+  if (astRaw !== undefined) {
+    ast = parseFilterAst(astRaw, requestId);
+    if (!isFilterEmpty(filter)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'Тело-AST (`ast`) и плоские критерии переданы одновременно — выберите один источник отбора.',
+        { field: 'ast' },
+        requestId,
+      );
+    }
+  }
   const sort = (out.sort ?? 'created') as StructureSort;
   const order = (out.order ?? 'asc') as SortOrder;
   const idsOnly = out.ids_only === true;
@@ -122,6 +143,7 @@ function parseQueryBody(
     ...(out.count === true ? { count: true } : {}),
     ...(typeof out.cursor === 'string' && out.cursor !== '' ? { cursor: out.cursor } : {}),
     ...(typeof out.show_trash === 'boolean' ? { show_trash: out.show_trash } : {}),
+    ...(ast !== undefined ? { ast } : {}),
   };
 }
 
@@ -184,9 +206,12 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
           const canon = structureRequestToQuery(query);
           const result = await fanOutQuery(access, {
             networkIds: accessibleIds,
-            query: canon,
+            query: query.ast === undefined ? canon : { ...canon, ast: query.ast },
             limit: canon.limit ?? 50,
             offset: canon.offset ?? 0,
+            // Токены AST в веерном режиме разрешаются по реестру КАЖДОЙ сети
+            // (свой первый день недели) — фабрика берёт networkId.
+            tokenContextFor: (nid) => restTokenContext(app, req.auth!.user.id, nid),
           });
           // Fan-out возвращает упрощённые хиты (id/title/type_id/active/depth).
           // Этого хватает для веерного режима — карточка читается через
@@ -217,14 +242,23 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         // выборки. Движок на такую ссылку даёт «нет совпадений»; роут как
         // пользовательский вход отвергает её с указанием поля.
         assertPropertyConditionsResolvable(ndb, query.properties, req.id);
-        // Единый движок выборки (задача c5265deb): REST-фильтр переводится в
-        // канонический запрос и исполняется общей доменной функцией.
+        // Контекст разрешения токенов AST (обязательный пункт задачи c13762b1):
+        // `$today`/`$weekStart`/`$user` и профиль времени. Собирается в роуте —
+        // движок ждёт `AstTokenContext` в опциях.
+        const tokenContext = restTokenContext(app, req.auth!.user.id, networkId);
+        // Канонический запрос: готовое AST-тело (если передано) или плоские
+        // критерии (компилируются в AST внутри движка — единый вход).
+        const canonical = (() => {
+          const c = structureRequestToQuery(query);
+          return query.ast === undefined ? c : { ...c, ast: query.ast };
+        })();
         // ids_only (L22): bare ids for the bulk filter commands — the same
         // candidate set and ordering, a higher limit ceiling, no meta flags.
         if (query.ids_only === true) {
-          const result = await queryThoughtIdsAsync(ndb, req.auth!.user.id, structureRequestToQuery(query), {
+          const result = await queryThoughtIdsAsync(ndb, req.auth!.user.id, canonical, {
             maxLimit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
             emptyFilterMode: 'home_orphans',
+            tokenContext,
           });
           sendSuccess(reply, {
             ids: result.ids,
@@ -237,11 +271,12 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const result = await queryThoughtsAsync(
           ndb,
           req.auth!.user.id,
-          structureRequestToQuery(query),
+          canonical,
           {
             maxLimit: STRUCTURES_QUERY_MAX_LIMIT,
             emptyFilterMode: 'home_orphans',
             includeDirections: true,
+            tokenContext,
             // Эллипс раскрываемости считает те же рёбра, что и раскрытие
             // (ошибка 331ffb94): directionsOf обязан смотреть на корзину тем
             // же флагом, что getHierarchy, иначе заполненный эллипс
