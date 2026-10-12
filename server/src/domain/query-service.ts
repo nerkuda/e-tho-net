@@ -3031,13 +3031,19 @@ export function compileThoughtQueryToAst(
     children.push(astLeaf({ kind: 'keywords', scope: [...resolveKeywordScope(req.keyword_scope)] }, 'matches', keywords));
   }
 
-  // Типы мыслей/связей: раскрытие по поддереву (L21) делается той же функцией,
-  // что у плоской ветки; пустое раскрытие — условие не накладывается (прежнее
-  // поведение плоского движка: `expanded.length === 0` → клауза не добавлялась).
+  // Тип мысли: плоский `type_ids` компилируется в лист «Тип в иерархии»
+  // (`entity.type` + `in_hierarchy`, режим structural по умолчанию) — требование
+  // f7f93c32, ADR 9a356460. Раскрытие подтипов/потомков делает исполнитель на
+  // момент запроса (`hierarchyTypeLeafClause` → `expandTypeIdsToSubtree`), а НЕ
+  // компилятор: замороженный список подтипов дал бы неверный результат, если
+  // после сохранения отбора в онтологии появится новый подтип (операнд «Тип»
+  // в иерархии реализован задачей e62aa4db).
   if ((req.type_ids ?? []).length > 0) {
-    const expanded = expandTypeIdsToSubtree(ndb, 'thought_types', req.type_ids as string[]);
-    if (expanded.length > 0) children.push(astLeaf({ kind: 'type' }, 'in', expanded));
+    children.push(astLeaf({ kind: 'type' }, 'in_hierarchy', [...(req.type_ids as string[])]));
   }
+  // Тип связи: раскрытие по поддереву (L21) делается той же функцией, что у
+  // плоской ветки; пустое раскрытие — условие не накладывается (прежнее
+  // поведение плоского движка: `expanded.length === 0` → клауза не добавлялась).
   if ((req.link_type_ids ?? []).length > 0) {
     const expanded = expandTypeIdsToSubtree(ndb, 'link_types', req.link_type_ids as string[]);
     if (expanded.length > 0) children.push(astLeaf({ kind: 'link_type' }, 'in', expanded));

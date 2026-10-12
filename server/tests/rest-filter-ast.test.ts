@@ -124,8 +124,8 @@ describe('filter AST: компиляция плоской формы (задач
         filter: {
           op: 'or' as const,
           children: [
-            { entity: { kind: 'type' as const }, operator: 'in' as const, value: [taskType] },
-            { entity: { kind: 'type' as const }, operator: 'in' as const, value: [errorType] },
+            { entity: { kind: 'type' as const }, operator: 'in_hierarchy' as const, value: [taskType] },
+            { entity: { kind: 'type' as const }, operator: 'in_hierarchy' as const, value: [errorType] },
           ],
         },
       };
