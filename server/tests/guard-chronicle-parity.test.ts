@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createComment, createCommentWithTargets } from '../src/domain/comment-service.js';
+import { resolveGlobalDateTokens } from '../src/domain/thought-type-view-tokens.js';
 import {
   buildMcpContext,
   closeMcpContext,
@@ -354,6 +355,67 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
         networkId: rest.networkId,
         systemDb: rest.sys,
       });
+      await closeRestContext(rest);
+    }
+  });
+
+  it('REST: первый день недели сети доходит в POST /chronicle/query (задача 7a798b17)', async () => {
+    const rest = await buildRestContext();
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const thought = seedThought(ndb, 'Хроника недели');
+      // Границы недели для текущего момента при разных настройках сети.
+      const now = new Date();
+      const sundayStart = resolveGlobalDateTokens('$weekStart', {
+        now: () => now,
+        firstDayOfWeek: 7,
+      }).value as string;
+      const mondayStart = resolveGlobalDateTokens('$weekStart', {
+        now: () => now,
+        firstDayOfWeek: 1,
+      }).value as string;
+      assert.notEqual(sundayStart, mondayStart, 'воскресная и понедельничная недели различаются');
+      // Запись на границе недели с началом в воскресенье.
+      createComment(
+        ndb,
+        'thought',
+        thought,
+        { kind: 'chronological', body_md: 'Вс', valid_from: `${sundayStart}T12:00:00.000Z` },
+        USER,
+      );
+
+      const payload = { date_from: '$weekStart', date_to: '$weekStart' };
+      const record = rest.sys.getNetworkById(rest.networkId);
+      assert.ok(record !== null, 'сеть должна читаться из системной БД');
+      const setFirstDay = (firstDayOfWeek: number): void => {
+        rest.sys.updateNetwork(rest.networkId, {
+          displayName: record!.display_name,
+          description: record!.description,
+          when_to_use: record!.when_to_use,
+          conventions: record!.conventions,
+          examples: record!.examples,
+          type_roles: record!.type_roles,
+          first_day_of_week: firstDayOfWeek,
+        });
+      };
+      const total = async (): Promise<number> => {
+        const res = await rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+          headers: authHeaders(rest),
+          payload,
+        });
+        assert.equal(res.statusCode, 200, JSON.stringify(res.json()));
+        return (res.json().meta as { total: number }).total;
+      };
+
+      // Неделя с воскресенья → запись воскресенья входит.
+      setFirstDay(7);
+      assert.equal(await total(), 1, 'firstDayOfWeek=7 обязан учесть воскресную границу');
+      // Неделя с понедельника → та же запись вне периода.
+      setFirstDay(1);
+      assert.equal(await total(), 0, 'firstDayOfWeek=1 обязан считать неделю с понедельника');
+    } finally {
       await closeRestContext(rest);
     }
   });

@@ -19,6 +19,12 @@
  * сервер по нему валидирует AST в точке применения, клиентский конструктор — по
  * нему строит доступный набор операндов (задача e5dd10ab). Рассинхрон ловит
  * `tsc` и сторож паритета.
+ *
+ * **Подключение к точкам.** Профили `thoughts`/`publications` подключены к своим
+ * точкам и участвуют в валидации AST (задача 7a798b17); профиль `map` описан
+ * заранее. Профили `events` и `attachments` описаны, но к точкам ПОКА не
+ * подключены — их AST-точки появляются задачами 2b230e8e и 5a007bed (осознанно;
+ * до тех пор AST-валидация по операндам к семантическим профилям неприменима).
  */
 
 import {
@@ -76,9 +82,25 @@ export interface FilterProfile {
   /**
    * Допустимые операнды: виды AST (для точек на мысли) либо семантические
    * идентификаторы характеристик целевой сущности.
+   *
+   * **Конвенция семантических id** (решение оркестратора 2026-10-12): id операнда
+   * НЕ обязан совпадать с SQL-колонкой (`name` — это `title`, `user` — `user_id`).
+   * Id — стабильное имя характеристики для реестра и клиентского конструктора;
+   * привязка к колонке — забота будущего исполнителя AST соответствующей точки.
    */
   operands: readonly string[];
-  /** Допустимые операторы-листья (семантику по операнду задаёт движок). */
+  /**
+   * Операторы, допустимые для КАЖДОГО операнда семантического профиля (точки,
+   * отбирающие не-мысли). Для AST-профилей отсутствует: набор операторов по
+   * операнду задаёт доменный исполнитель (`query-service.ts`).
+   */
+  operand_operators?: Readonly<Record<string, readonly FilterAstOperator[]>>;
+  /**
+   * Объединение допустимых операторов профиля (для AST-профилей — словарь
+   * {@link FILTER_AST_OPERATORS}). Для семантических профилей обязан совпадать с
+   * объединением значений {@link FilterProfile.operand_operators} (паритет
+   * стережётся тестом).
+   */
   operators: readonly FilterAstOperator[];
   /** Семейства токенов профиля (состав надмножества полного словаря токенов). */
   tokens: readonly FilterTokenFamily[];
@@ -90,6 +112,51 @@ export interface FilterProfile {
    */
   withTime: boolean;
 }
+
+/** Уникальное объединение наборов операторов (порядок — появления). */
+function unionOperators(
+  map: Readonly<Record<string, readonly FilterAstOperator[]>>,
+): FilterAstOperator[] {
+  const out: FilterAstOperator[] = [];
+  for (const list of Object.values(map)) {
+    for (const op of list) if (!out.includes(op)) out.push(op);
+  }
+  return out;
+}
+
+/** Операторы по операнду профиля «вложения» (требование f67c85c1). */
+const ATTACHMENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
+  // «Имя/заголовок»: равно/не равно/содержит/не содержит/в списке/Есть слова.
+  name: ['eq', 'ne', 'contains', 'not_contains', 'in', 'not_in', 'matches'],
+  // «Вид вложения» (file/url): равно/в списке.
+  kind: ['eq', 'ne', 'in', 'not_in'],
+  // «MIME-подтип»: равно/содержит/в списке.
+  mime_type: ['eq', 'ne', 'contains', 'not_contains', 'in', 'not_in'],
+  // «Владельцы»: в списке/в иерархии/в выборке (значение-подзапрос с in/not_in/
+  // all_of)/количество (сравнения) + заполнено.
+  owner: ['in', 'not_in', 'all_of', 'in_hierarchy', 'not_in_hierarchy', 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'not_empty'],
+  // «Размер»: сравнения/между/заполнено.
+  size: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between', 'is_empty', 'not_empty'],
+};
+
+/** Операторы по операнду профиля «хроника» (требование 62475a6e). */
+const CHRONICLE_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
+  record_time: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  targets: ['in', 'not_in', 'all_of', 'is_empty', 'not_empty'],
+  record_title: ['eq', 'ne', 'contains', 'not_contains', 'matches'],
+  record_body: ['matches'],
+  record_author: ['eq', 'ne', 'in', 'not_in'],
+  record_editor: ['eq', 'ne', 'in', 'not_in'],
+};
+
+/** Операторы по операнду профиля «события» (требование 1765e659). */
+const EVENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
+  occurred_at: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  action: ['eq', 'ne', 'contains', 'not_contains', 'in', 'not_in'],
+  entity_type: ['in', 'not_in'],
+  entity_id: ['eq', 'ne'],
+  user: ['eq', 'ne', 'in', 'not_in'],
+};
 
 /** Операнды профиля «мысли»: полный словарь AST без операндов чужих точек. */
 const THOUGHT_OPERANDS: readonly FilterAstEntityKind[] = [
@@ -158,7 +225,8 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
       'record_author',
       'record_editor',
     ],
-    operators: ['eq', 'ne', 'contains', 'not_contains', 'in', 'not_in', 'between', 'not_between', 'matches'],
+    operand_operators: CHRONICLE_OPERATOR_SETS,
+    operators: unionOperators(CHRONICLE_OPERATOR_SETS),
     tokens: ['calendar', 'time'],
     withTime: true,
   },
@@ -167,7 +235,8 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
     title: 'События (журнал активности)',
     target: 'activity',
     operands: ['occurred_at', 'action', 'entity_type', 'entity_id', 'user'],
-    operators: ['eq', 'ne', 'contains', 'in', 'not_in', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+    operand_operators: EVENT_OPERATOR_SETS,
+    operators: unionOperators(EVENT_OPERATOR_SETS),
     tokens: ['calendar', 'time'],
     withTime: true,
   },
@@ -175,8 +244,9 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
     id: 'attachments',
     title: 'Вложения',
     target: 'attachment',
-    operands: ['name', 'mime_type', 'owner', 'size', 'created_at', 'updated_at'],
-    operators: ['eq', 'ne', 'contains', 'not_contains', 'in', 'not_in', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between', 'is_empty', 'not_empty'],
+    operands: ['name', 'kind', 'mime_type', 'owner', 'size'],
+    operand_operators: ATTACHMENT_OPERATOR_SETS,
+    operators: unionOperators(ATTACHMENT_OPERATOR_SETS),
     tokens: ['calendar'],
     withTime: false,
   },

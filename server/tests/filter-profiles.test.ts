@@ -128,6 +128,46 @@ describe('реестр профилей контекста (задача 7a798b1
     for (const op of FILTER_PROFILES.thoughts.operands) assert.ok(kinds.has(op));
   });
 
+  it('профиль вложений: состав по требованию f67c85c1', () => {
+    const p = getFilterProfile('attachments');
+    // Операнды — видимые характеристики вложения: имя, вид (file/url), MIME,
+    // владельцы, размер. Дат в карточке нет — created_at/updated_at не входят.
+    assert.deepEqual([...p.operands].sort(), ['kind', 'mime_type', 'name', 'owner', 'size']);
+    assert.ok(!p.operands.includes('created_at') && !p.operands.includes('updated_at'));
+    const sets = p.operand_operators!;
+    assert.deepEqual(Object.keys(sets).sort(), [...p.operands].sort(), 'наборы заданы на каждый операнд');
+    // Имя: равно/содержит/в списке/Есть слова.
+    for (const op of ['eq', 'contains', 'in', 'matches'] as const) {
+      assert.ok(sets['name']!.includes(op), `name: ${op}`);
+    }
+    // Вид (file/url): равно/в списке.
+    assert.ok(sets['kind']!.includes('eq') && sets['kind']!.includes('in'));
+    // MIME: равно/содержит/в списке.
+    for (const op of ['eq', 'contains', 'in'] as const) assert.ok(sets['mime_type']!.includes(op));
+    // Владельцы: в списке/в иерархии/в выборке (all_of над под-выборкой)/количество.
+    for (const op of ['in', 'in_hierarchy', 'all_of'] as const) assert.ok(sets['owner']!.includes(op));
+    assert.ok(sets['owner']!.includes('gt') || sets['owner']!.includes('eq'), 'владельцы: количество');
+    // Размер: сравнения/между/заполнено.
+    for (const op of ['gt', 'between', 'is_empty'] as const) assert.ok(sets['size']!.includes(op));
+  });
+
+  it('семантические профили: operators — ровно объединение наборов по операндам', () => {
+    for (const id of ['chronicle', 'events', 'attachments'] as const) {
+      const p = getFilterProfile(id);
+      const sets = p.operand_operators;
+      assert.ok(sets !== undefined, `${id}: наборы по операндам заданы`);
+      const union: string[] = [];
+      for (const list of Object.values(sets!)) {
+        for (const op of list) if (!union.includes(op)) union.push(op);
+      }
+      assert.deepEqual([...p.operators].sort(), [...union].sort(), `${id}: operators = union`);
+    }
+    // AST-профили несут словарь AST без наборов по операнду.
+    for (const id of ['thoughts', 'map', 'publications'] as const) {
+      assert.equal(getFilterProfile(id).operand_operators, undefined);
+    }
+  });
+
   it('валидация видимости: операнд вне профиля отвергается', () => {
     // «Цели» доступны только хронике — в отборе мыслей операнд невидим.
     const withTargets = astLeaf({ kind: 'targets' }, 'in', []);
