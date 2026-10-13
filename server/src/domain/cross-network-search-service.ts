@@ -28,21 +28,11 @@ import type { NetworkDb } from '../db/network-db.js';
 import type { Logger } from 'pino';
 import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer } from './layer-service.js';
-import { findDuplicates, search, type SearchResult } from './search-service.js';
+import { findDuplicates, search } from './search-service.js';
 import { queryThoughtsAsync } from './heavy-read.js';
 import type { AstTokenContext, ThoughtQueryRequest } from './query-service.js';
 import { BASE_LAYER_ID } from '@etn/shared';
-import type { CrossNetworkTokenIssue, DuplicateHit, FilterProfileId, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
-
-/**
- * Ответ веерного поиска: обычный {@link SearchResponse} плюс диагностика
- * неразрешимых токенов AST с указанием сети (задача 56a143ff, требование
- * b7fdab20) — у каждой сети свой контекст (первый день недели). Паритет с
- * веерной выборкой мыслей (`fanOutQuery`).
- */
-export interface CrossNetworkSearchResponse extends SearchResponse {
-  unresolved?: CrossNetworkTokenIssue[];
-}
+import type { CrossNetworkSearchResponse, CrossNetworkTokenIssue, DuplicateHit, FilterProfileId, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
 
 /** Максимум сетей в одном веерном вызове. Запросы сверх лимита — ошибка
  *  (агенту нужен явный сигнал, а не молчаливая обрезка). */
@@ -140,9 +130,14 @@ function normalizeNetworkIds(ids: string[]): string[] {
 /** Слить N SearchResponse в один с проставленным `network_id` на каждом хите.
  *  Суммарный бюджет `cap` расходуется в порядке сетей и групп; при обрезке
  *  возвращается `truncated: true`. Неразрешимые токены AST агрегируются по
- *  сетям (у каждой сети свой контекст — первый день недели). */
+ *  сетям (у каждой сети свой контекст — первый день недели).
+ *
+ *  Записи `unresolved` здесь НЕ схлопываются: одна и та же проблема из разных
+ *  сетей — разные диагностики (у сети свой контекст), их различает `network_id`.
+ *  Дедупликация нужна только внутри одной сети (legacy `scope=thoughts` — два
+ *  прогона одного AST, `routes/search.ts`, задача 1169ae37). */
 function mergeSearchResponses(
-  responses: Array<{ networkId: string; response: SearchResult }>,
+  responses: Array<{ networkId: string; response: SearchResponse }>,
   cap: number,
 ): { response: CrossNetworkSearchResponse; truncated: boolean } {
   const budget = makeBudget(cap);
@@ -233,7 +228,7 @@ export function fanOutSearch(
   const ids = normalizeNetworkIds(args.networkIds);
   const accessible = access.networks.filter((n) => ids.includes(n.id));
   const cap = args.maxHits ?? CROSS_NETWORK_MAX_HITS;
-  const responses: Array<{ networkId: string; response: SearchResult }> = [];
+  const responses: Array<{ networkId: string; response: SearchResponse }> = [];
   for (const net of accessible) {
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
     const response = search(ndb, {

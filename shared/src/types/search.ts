@@ -8,6 +8,7 @@
 import type { IconKind, SearchGroup, SearchScope } from '../enums.js';
 import type { FilterAst } from './filter-ast.js';
 import type { NetworksCatalog } from './network.js';
+import type { CrossNetworkTokenIssue, TokenIssue } from './query.js';
 
 /** Query parameters of `GET /search` (03-server-api.md §12). */
 export interface SearchRequest {
@@ -178,7 +179,28 @@ export interface SearchResponse {
   truncated?: boolean;
   /** Причина обрезки веерной выдачи; `null` — не обрезано. */
   reason?: CrossNetworkTruncationReason | null;
+  /**
+   * Неразрешимые токены AST-условия поиска (требование b7fdab20): непусто —
+   * мыслевые условия не раскрылись, `by_names`/`by_texts` пусты с пояснением, а
+   * не бесшумно; адрес `path` подсвечивает строку редактора отбора. Отсутствует
+   * — всё разрешилось. Одиночная форма — {@link TokenIssue} (паритет с выборкой
+   * мыслей); веерный ответ несёт сокращённый вид с сетью —
+   * {@link CrossNetworkSearchResponse}.
+   */
+  unresolved?: TokenIssue[];
 }
+
+/**
+ * Ответ веерного поиска (параметр `network_ids` в MCP/REST): обычный
+ * {@link SearchResponse} плюс диагностика неразрешимых токенов, агрегированная
+ * ПО СЕТЯМ — у каждой сети свой контекст токенов (первый день недели, реестр),
+ * поэтому веер несёт сокращённый вид {@link CrossNetworkTokenIssue}. Форма —
+ * паритет с веерной выборкой мыслей (`CrossNetworkStructureQueryResponse`).
+ */
+export type CrossNetworkSearchResponse = Omit<SearchResponse, 'unresolved'> & {
+  /** Диагностика по сетям: `{ network_id, token, reason }`. */
+  unresolved?: CrossNetworkTokenIssue[];
+};
 
 /**
  * Причина обрезки суммарной веерной выдачи (задача 29bc5673): число

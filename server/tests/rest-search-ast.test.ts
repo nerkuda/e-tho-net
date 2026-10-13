@@ -158,4 +158,43 @@ describe('REST /search + ast (задача d5e8ddc1)', { skip: !nativeAvailable(
       await closeRestContext(ctx);
     }
   });
+
+  it('legacy scope=thoughts: неразрешимый токен не дублируется в unresolved (задача 1169ae37)', async () => {
+    const ctx = await buildRestContext();
+    try {
+      seedThought(ctx, 'Legacy scope secret');
+
+      // Legacy `scope=thoughts` — ДВА прогона одного AST (`names` + `texts`):
+      // без схлопывания диагностика приходила из обоих ответов и дублировалась
+      // (живой прогон давал `length: 2`).
+      const res = await search(ctx, {
+        q: 'secret',
+        scope: 'thoughts',
+        ast: JSON.stringify({
+          version: FILTER_AST_VERSION,
+          filter: {
+            entity: { kind: 'active' },
+            operator: 'eq',
+            value: { token: '$nonexistent' },
+          },
+        }),
+      });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      const data = (
+        res.body as {
+          data: {
+            by_names: unknown[];
+            by_texts: unknown[];
+            unresolved?: Array<{ token: string; reason: string }>;
+          };
+        }
+      ).data;
+      assert.equal(data.by_names.length, 0, 'неразрешимый токен — пустая выдача');
+      assert.equal(data.by_texts.length, 0);
+      assert.equal(data.unresolved?.length, 1, 'одна проблема — одна запись диагностики');
+      assert.equal(data.unresolved?.[0]?.token, '$nonexistent');
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
 });

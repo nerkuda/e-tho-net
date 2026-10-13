@@ -24,6 +24,7 @@ import { createReadStream } from 'node:fs';
 import {
   EtnError,
   PREF_KEY,
+  type CrossNetworkSearchResponse,
   type ExportEtnxOptions,
   type ExportFormat,
   type ExportJobStartResult,
@@ -31,6 +32,7 @@ import {
   type MentionsScanResponse,
   type SearchResponse,
   type SearchScope,
+  type TokenIssue,
 } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
@@ -38,13 +40,9 @@ import { openRouteNetworkDb, restTokenContext, type RouteDeps } from './helpers.
 import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
 import { getExportJob, getExportJobContent, getExportJobFile, startExportJob } from '../domain/export-service.js';
 import { parseFilterAst } from '../domain/filter-ast.js';
-import { findMentionsInTexts, type SearchResult } from '../domain/search-service.js';
+import { findMentionsInTexts } from '../domain/search-service.js';
 import { searchAsync } from '../domain/heavy-read.js';
-import {
-  fanOutSearch,
-  type CrossNetworkAccess,
-  type CrossNetworkSearchResponse,
-} from '../domain/cross-network-search-service.js';
+import { fanOutSearch, type CrossNetworkAccess } from '../domain/cross-network-search-service.js';
 
 /** Map a stored export MIME type to the recommended download filename extension. */
 function extensionFor(contentType: string): string {
@@ -61,9 +59,17 @@ const LEGACY_SCOPE_MAP: Record<string, SearchScope[]> = {
   chronology: ['chronology'],
 };
 
-/** Merge two search responses (used for the legacy `thoughts` scope). */
-function mergeSearchResponses(a: SearchResult, b: SearchResult): SearchResult {
-  const unresolved = [...(a.unresolved ?? []), ...(b.unresolved ?? [])];
+/**
+ * Merge two search responses (used for the legacy `thoughts` scope).
+ *
+ * Диагностика `unresolved` схлопывается по (`path`, `token`, `reason`): legacy
+ * `scope=thoughts` — это ДВА прогона одного и того же AST (`names` + `texts`),
+ * поэтому один и тот же неразрешимый токен приезжал из обоих ответов и
+ * дублировался в выдаче (живой прогон давал `length: 2`, задача 1169ae37).
+ * Порядок диагностик — по первому появлению.
+ */
+export function mergeSearchResponses(a: SearchResponse, b: SearchResponse): SearchResponse {
+  const unresolved = dedupeUnresolved([...(a.unresolved ?? []), ...(b.unresolved ?? [])]);
   return {
     by_names: [...a.by_names, ...b.by_names],
     by_texts: [...a.by_texts, ...b.by_texts],
@@ -79,6 +85,23 @@ function mergeSearchResponses(a: SearchResult, b: SearchResult): SearchResult {
     },
     ...(unresolved.length > 0 ? { unresolved } : {}),
   };
+}
+
+/**
+ * Одна проблема с токеном — одна запись диагностики. Ключ — (`path`, `token`,
+ * `reason`); `message` в ключ не входит: у одной и той же проблемы он одинаков —
+ * пояснение домен строит по токену и причине.
+ */
+function dedupeUnresolved(issues: readonly TokenIssue[]): TokenIssue[] {
+  const seen = new Set<string>();
+  const out: TokenIssue[] = [];
+  for (const issue of issues) {
+    const key = `${issue.path}\u0000${issue.token}\u0000${issue.reason}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(issue);
+  }
+  return out;
 }
 
 /** `/api/v1/*` search/export/job routes plugin factory. */
@@ -209,7 +232,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           offset,
         };
 
-        let response: SearchResult = await searchAsync(
+        let response: SearchResponse = await searchAsync(
           ndb,
           { ...requestBase, scope: granularScopes[0] },
           showInactiveDefault,

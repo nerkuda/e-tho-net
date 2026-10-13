@@ -1071,23 +1071,11 @@ export function assertSearchAstExclusive(request: SearchRequest): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Ответ точки поиска вместе с диагностикой AST (задача 56a143ff, требование
- * b7fdab20): `unresolved` непусто — календарный токен не разрешился, группы с
- * мыслевым условием пусты с пояснением, а не бесшумно. Форма — паритет с
- * одиночной выборкой мыслей (`ThoughtQueryResult.unresolved`,
- * `TokenIssue[]`), чтобы точка поиска не теряла диагностику.
- *
- * Поле — серверное расширение контракта {@link SearchResponse}: сам общий
- * контракт `shared/` в этой задаче не трогаем (границы задачи 56a143ff), поле
- * прокидывается в ответ REST/MCP как есть. При выносе в `shared/` достаточно
- * добавить необязательное `unresolved?: TokenIssue[]` в `SearchResponse`.
- */
-export interface SearchResult extends SearchResponse {
-  unresolved?: TokenIssue[];
-}
-
-/**
  * Run a full-text search (docs/03-server-api.md §12).
+ *
+ * Диагностика AST (`unresolved` — задача 56a143ff, требование b7fdab20) объявлена
+ * в общем контракте: `SearchResponse.unresolved` (`TokenIssue[]`, задача
+ * 1169ae37), поэтому своего расширения ответ точки поиска не заводит.
  *
  * @param ndb - open network database.
  * @param request - query parameters; `scope` selects which groups to populate.
@@ -1103,7 +1091,7 @@ export function search(
   request: SearchRequest,
   showInactiveDefault = false,
   tokenContext?: AstTokenContext,
-): SearchResult {
+): SearchResponse {
   if (typeof request.q !== 'string' || request.q.trim() === '') {
     throw new EtnError('VALIDATION_ERROR', 'q must be a non-empty string', { field: 'q' });
   }

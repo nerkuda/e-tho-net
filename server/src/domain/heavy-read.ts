@@ -44,10 +44,10 @@ import {
   type ThoughtQueryRequest,
   type ThoughtQueryResult,
 } from './query-service.js';
-import { search, type SearchResult } from './search-service.js';
+import { search } from './search-service.js';
 import { subgraph, type TraversalBounds } from './graph-traversal.js';
 import type { TokenIssue } from './thought-type-view-tokens.js';
-import type { SubgraphEdge } from '@etn/shared';
+import type { SearchResponse, SubgraphEdge } from '@etn/shared';
 
 /**
  * Контекст воркера из соединения главного потока, либо `null`, если операцию
@@ -138,7 +138,7 @@ export async function searchAsync(
   request: SearchRequest,
   showInactiveDefault = false,
   tokenContext?: AstTokenContext,
-): Promise<SearchResult> {
+): Promise<SearchResponse> {
   const pool = getReaderPool();
   const context = contextFor(ndb, pool);
   if (pool === null || context === null) {
@@ -152,7 +152,7 @@ export async function searchAsync(
     // токенов одинаково в обоих режимах (задача 56a143ff).
     payload: { request, showInactiveDefault, ...(tokenContext !== undefined ? { tokenContext } : {}) },
   };
-  return (await pool.run(task)) as SearchResult;
+  return (await pool.run(task)) as SearchResponse;
 }
 
 /**
