@@ -303,6 +303,53 @@ describe('фабрика редактора: колбэки хоста', () => {
     one(root, 'ft-add-condition')!.emit('click');
     assert.ok(calls.includes('touch'), 'правка вида уведомляет хост');
   });
+
+  it('стандартный набор кнопок без save/reset — дефект контракта (тип и runtime)', () => {
+    const state = builder.defaultFilterCriteriaState();
+    state.tree = builder.defaultFilterTreeGroup('and');
+    const base = { profile: 'thoughts' as const, networkId: 'net-1', data: DATA, getState: () => state };
+
+    // Тип-ошибка: при стандартном наборе хост обязан дать save и reset.
+    // (Вызов внутри невызываемой функции — проверяется компилятором, не выполняется.)
+    const contractViolation = (): void => {
+      // @ts-expect-error — контракт кнопок: без host.save стандартный набор не собирается
+      mod.buildFilterEditor({ ...base, host: { apply: () => undefined } });
+    };
+    void contractViolation;
+
+    // Страховка для JS-вызовов и `any`: та же сборка падает с понятной причиной.
+    assert.throws(
+      () => mod.buildFilterEditor({ ...base, host: { apply: () => undefined } } as any),
+      /host\.save/,
+      'без save — ошибка, а не молча неработающая кнопка',
+    );
+    assert.throws(
+      () =>
+        mod.buildFilterEditor({
+          ...base,
+          host: { apply: () => undefined, save: () => undefined },
+        } as any),
+      /host\.reset/,
+      '«Очистить» в стандартном наборе — тоже без обработчика не собирается',
+    );
+  });
+
+  it('места со своими кнопками не обязаны давать save/reset', () => {
+    const state = builder.defaultFilterCriteriaState();
+    state.tree = builder.defaultFilterTreeGroup('and');
+    const handle = mod.buildFilterEditor({
+      profile: 'chronicle',
+      networkId: 'net-1',
+      data: DATA,
+      getState: () => state,
+      buttons: { standard: false, extra: [{ id: 'done', label: 'Готово', role: 'primary', onClick: () => undefined }] },
+      host: { apply: () => undefined },
+    });
+    const root = handle.root as unknown as ShimElement;
+    assert.equal(handle.profile, 'chronicle');
+    assert.equal(buttonByText(root, 'Применить'), null, 'стандартного набора нет');
+    assert.ok(buttonByText(root, 'Готово') !== null, 'своя кнопка места на месте');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -76,15 +76,32 @@ export interface FilterEditorButtons {
   extra?: readonly FilterFooterButtonSpec[];
 }
 
+/** Кнопки места со СТАНДАРТНЫМ набором (по умолчанию): хост обязан дать save/reset. */
+export interface FilterEditorButtonsStandard extends FilterEditorButtons {
+  standard?: true;
+}
+
+/** Кнопки места со СВОИМИ кнопками (модальные слои): стандартный набор погашен. */
+export interface FilterEditorButtonsOwn extends FilterEditorButtons {
+  standard: false;
+}
+
+/** Запись отбора: имя и признак копии (кнопка «Сохранить» стандартного набора). */
+export type FilterEditorSave = (request: { name: string; asCopy: boolean }) => void | Promise<void>;
+
 /**
  * Колбэки хоста: редактор ничего не применяет и не сохраняет сам. Хост —
  * владелец места применения (запрос, сохранённые отборы, состояние экрана).
+ *
+ * Это МИНИМАЛЬНЫЙ набор для мест со своими кнопками (`buttons.standard: false`);
+ * для стандартного набора см. {@link FilterEditorHostStandard} — там `save` и
+ * `reset` обязательны: кнопка без обработчика — дефект контракта.
  */
 export interface FilterEditorHost {
   /** Применить отбор (запуск запроса). Обязателен — ради него редактор и нужен. */
   apply: () => void;
   /** Записать отбор (кнопка «Сохранить» стандартного набора). */
-  save?: (request: { name: string; asCopy: boolean }) => void | Promise<void>;
+  save?: FilterEditorSave;
   /** Очистить условия отбора (кнопка «Очистить» стандартного набора). */
   reset?: () => void;
   /** Текущее имя отбора в поле футера (по умолчанию — пустая строка). */
@@ -106,8 +123,17 @@ export interface FilterEditorHost {
   onFixPath?: (path: string) => void;
 }
 
-/** Параметры единой фабрики: профиль места + данные сети + модель + хост. */
-export interface FilterEditorOptions {
+/**
+ * Хост места со СТАНДАРТНЫМ набором кнопок: `save` и `reset` обязательны —
+ * «Сохранить» и «Очистить» рисуются всегда, когда набор показан.
+ */
+export interface FilterEditorHostStandard extends FilterEditorHost {
+  save: FilterEditorSave;
+  reset: () => void;
+}
+
+/** Общие параметры фабрики (без пары «кнопки × хост» — её различают варианты). */
+export interface FilterEditorOptionsBase {
   /** Профиль контекста места применения — данные, а не ветка кода (84b33a43). */
   profile: FilterProfileId;
   /** Сеть: живой поиск значений, пикер, облачка. */
@@ -141,11 +167,28 @@ export interface FilterEditorOptions {
   sort?: boolean;
   /** Показывать футер (по умолчанию да). */
   footer?: boolean;
-  /** Кнопки места применения. */
-  buttons?: FilterEditorButtons;
-  /** Колбэки хоста. */
-  host: FilterEditorHost;
 }
+
+/**
+ * Параметры единой фабрики (профиль места + данные сети + модель + хост).
+ *
+ * Два варианта, и различает их поле `buttons.standard`:
+ *   • СТАНДАРТНЫЙ набор кнопок (по умолчанию) — хост обязан дать `save` и
+ *     `reset`: «Сохранить» и «Очистить» рисуются всегда, когда набор показан,
+ *     а кнопка без обработчика — дефект контракта ({@link FilterEditorHostStandard});
+ *   • СВОИ кнопки места (`buttons: { standard: false }` — модальные слои с
+ *     «Готово»/«Отмена») — `save`/`reset` не нужны: этих кнопок в разметке нет
+ *     ({@link FilterEditorHost}).
+ */
+export type FilterEditorOptions =
+  | (FilterEditorOptionsBase & {
+      buttons?: FilterEditorButtonsStandard;
+      host: FilterEditorHostStandard;
+    })
+  | (FilterEditorOptionsBase & {
+      buttons: FilterEditorButtonsOwn;
+      host: FilterEditorHost;
+    });
 
 /** Рукоятка собранного редактора. */
 export interface FilterEditorHandle {
@@ -158,6 +201,27 @@ export interface FilterEditorHandle {
 }
 
 /**
+ * Проверка контракта кнопок на входе (страховка для JS-вызовов и `any`:
+ * типы такой вызов уже ловят): стандартный набор без `save`/`reset` — ошибка,
+ * а не молчаливо неработающая кнопка.
+ */
+function assertButtonsContract(opts: FilterEditorOptions): void {
+  if (opts.buttons?.standard === false) return;
+  if (opts.host.save === undefined) {
+    throw new Error(
+      'buildFilterEditor: стандартный набор кнопок требует host.save (запись отбора); ' +
+        'для мест со своими кнопками передайте buttons: { standard: false }',
+    );
+  }
+  if (opts.host.reset === undefined) {
+    throw new Error(
+      'buildFilterEditor: стандартный набор кнопок требует host.reset (очистка условий); ' +
+        'для мест со своими кнопками передайте buttons: { standard: false }',
+    );
+  }
+}
+
+/**
  * Собрать редактор места применения: дерево + секция сортировки + футер, поверх
  * виджетов значений, модала под-выборки, композера фразы и диагностики.
  *
@@ -166,6 +230,10 @@ export interface FilterEditorHandle {
  * местах не появляется (ADR 4154811f, ADR 30ff83bb).
  */
 export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle {
+  // Контракт кнопок проверяем до сборки: место со стандартным набором обязано
+  // дать обработчики «Сохранить»/«Очистить» (типы ловят это на компиляции, эта
+  // проверка — для JS-вызовов и `any`).
+  assertButtonsContract(opts);
   const { profile, data, getState, host } = opts;
   const touch = opts.touch ?? ((): void => undefined);
 
