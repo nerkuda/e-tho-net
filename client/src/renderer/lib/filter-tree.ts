@@ -748,10 +748,15 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
       onChange: (id) => {
         if (id !== 'and' && id !== 'or') return;
         // Коннекцию меняет СЕЛЕКТОР ГРУППЫ; связаторы перед строками — только
-        // индикаторы (элемент интерфейса fc65b647).
-        filterTreeUpdateAt(model(), group.opPath, (current) =>
+        // индикаторы (элемент интерфейса fc65b647). У корневой группы путь пуст
+        // — замена идёт не в `children` родителя, а в само поле дерева модели
+        // (иначе клик по коннектору корня был бы no-op).
+        const next = filterTreeUpdateAt(model(), group.opPath, (current) =>
           current.kind === 'group' ? { ...current, op: id } : current,
         );
+        if (next !== null && next.kind === 'group' && group.opPath.length === 0) {
+          ctx.getState().tree = next;
+        }
         touch();
       },
     });

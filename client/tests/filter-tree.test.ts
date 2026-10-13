@@ -182,6 +182,14 @@ describe('дерево условий: группы, тона, связатор�
     }
   });
 
+  it('CSS тонов: все четыре правила .ft-tone-N красят фон своим токеном', async () => {
+    const css = fs.readFileSync(path.join(RENDERER, 'styles', 'filter-tree.css'), 'utf8');
+    for (let n = 1; n <= 4; n += 1) {
+      const rule = new RegExp(`\\.ft-tone-${n}\\s*\\{[^}]*background:\\s*var\\(--ft-tone-${n}\\)`, 's');
+      assert.match(css, rule, `правило .ft-tone-${n} красит фон токеном --ft-tone-${n}`);
+    }
+  });
+
   it('корневая группа не удаляется, НЕ на корне не предлагается, вложенная — с крестиком и НЕ', async () => {
     const mod = await import('../src/renderer/lib/filter-tree.js');
     const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
@@ -266,6 +274,29 @@ describe('дерево условий: группы, тона, связатор�
       'or',
       'AST (единый конвертер) видит правку',
     );
+  });
+
+  it('коннекцию КОРНЕВОЙ группы меняет селектор — state.tree.op меняется на месте', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    // Новый отбор: корень — единственная группа (поле дерева пусто).
+    const state = defaultFilterCriteriaState();
+    state.tree = null;
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    let root = tree.root as unknown as ShimElement;
+
+    const rootGroup = exact(root, 'ft-group')[0]!;
+    buttonByText(rootGroup, 'ui-btn', 'ИЛИ')!.emit('click');
+    assert.equal((state.tree as any).op, 'or', 'клик ИЛИ у корня меняет КОРНЕВУЮ группу модели');
+    root = tree.root as unknown as ShimElement;
+    assert.equal(
+      exactOne(exact(root, 'ft-group')[0]!, 'ft-group__connector-label')!.flatText(),
+      'любое условие',
+    );
+
+    buttonByText(exact(root, 'ft-group')[0]!, 'ui-btn', 'И')!.emit('click');
+    assert.equal((state.tree as any).op, 'and', 'обратная смена И у корня тоже меняет модель');
   });
 
   it('НЕ оборачивает группу, сохраняет коннектор и снимается повторно', async () => {
