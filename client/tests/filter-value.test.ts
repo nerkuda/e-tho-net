@@ -342,6 +342,44 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(hierLeaf.mode, 'all_links', 'режим записан в модель листа');
   });
 
+  it('ссылочные ОПЕРАНДЫ рендерятся без исключения: имя dataset допустимо для DOMStringMap', () => {
+    // Регресс 0.13.1: `wrap.dataset['entity-kind'] = kind` бросал
+    // `SyntaxError: Failed to set a named property 'entity-kind' on 'DOMStringMap'`
+    // (DOMStringMap принимает только имена-идентификаторы) и ронял рендер дерева
+    // «Дневника» при вводе слова в поиске — лист «Цели в выборке». Проверяем
+    // каждый ссылочный операнд в обеих формах (одиночной и кратной) и валидность
+    // имён, записанных модулем в dataset обёртки.
+    for (const kind of ['targets', 'parents', 'children', 'type', 'link_type'] as const) {
+      for (const op of ['eq', 'in'] as const) {
+        const box = render(leaf({ kind }, op), slot().api);
+        const wrap = one(box, 'fv-entity');
+        assert.ok(wrap !== null, `${kind}/${op}: обёртка ссылочного операнда построена`);
+        for (const key of Object.keys(wrap!.dataset)) {
+          assert.ok(
+            /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key),
+            `${kind}/${op}: dataset['${key}'] недопустим для DOMStringMap (бросает SyntaxError)`,
+          );
+        }
+      }
+    }
+  });
+
+  it('«Цели в выборке» с под-выборкой (слово в поиске «Дневника») рендерится без падения', () => {
+    // Двухпутевая группа ключевых слов «Дневника»: мыслевый путь — лист
+    // `targets` (оператор `in`) со значением-под-выборкой, внутри — «Есть слова».
+    const inner = leaf({ kind: 'keywords', scope: ['comment'] }, 'matches', { kind: 'scalar', value: 'кофе' });
+    const targets = leaf(
+      { kind: 'targets' },
+      'in',
+      { kind: 'subquery', operator: 'and', node: inner },
+    );
+    const box = render(targets, slot().api, ctx({ profile: 'chronicle' }));
+    const wrap = one(box, 'fv-entity');
+    assert.ok(wrap !== null, 'строка «Цели в выборке» построена, значение — редактор ссылочного операнда');
+    assert.equal(wrap!.dataset['multiple'], 'yes');
+    assert.equal(Object.prototype.hasOwnProperty.call(wrap!.dataset, 'entityKind'), true);
+  });
+
   it('автор: одиночно — выбор пользователя, кратно — мультивыбор', () => {
     const single = render(leaf({ kind: 'author' }, 'eq'), slot().api);
     assert.ok(one(single, 'user-select-row') !== null);

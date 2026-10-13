@@ -907,7 +907,7 @@ function entityOperandControl(
   const kind = entityKindOf(leaf);
   const multiple = filterValueIsMultiple(leaf.operator);
   const wrap = div('fv-entity');
-  wrap.dataset['entity-kind'] = kind;
+  wrap.dataset['entityKind'] = kind;
   wrap.dataset['multiple'] = multiple ? 'yes' : 'no';
 
   if (!multiple) {
