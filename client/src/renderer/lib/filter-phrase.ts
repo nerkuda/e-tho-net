@@ -61,8 +61,8 @@ export const FILTER_PHRASE_KEYWORD_SCOPES: readonly {
   value: 'title' | 'synonyms' | 'comment';
   label: string;
 }[] = [
-  { value: 'title', label: 'в имени' },
-  { value: 'synonyms', label: 'в синонимах' },
+  { value: 'title', label: 'в именах' },
+  { value: 'synonyms', label: 'в именах' },
   { value: 'comment', label: 'в комментарии' },
 ];
 
@@ -133,7 +133,9 @@ export function filterPhraseUnit(unit: string): string {
 export function filterPhraseKeywordScopes(scope: readonly string[] | undefined): string {
   const active = FILTER_PHRASE_KEYWORD_SCOPES.filter((s) => (scope ?? []).includes(s.value));
   if (active.length === 0) return 'области не выбраны';
-  return active.map((s) => s.label).join(', ');
+  // «В именах» — имена И синонимы вместе: во фразе не дублируется.
+  const labels = [...new Set(active.map((s) => s.label))];
+  return labels.join(', ');
 }
 
 /** Число условий в узле под-выборки (листья дерева, глубоко). */

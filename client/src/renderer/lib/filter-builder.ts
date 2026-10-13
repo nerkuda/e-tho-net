@@ -670,7 +670,7 @@ export function withReverseLinkPropertySides(
 /** Подписи операндов, у которых имени в реестре нет (служебные виды условий). */
 export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   id: 'Ссылка на мысль по id',
-  type: 'Тип',
+  type: 'Тип мысли',
   link_type: 'Тип связи',
   parents: 'Родители',
   children: 'Потомки',
@@ -679,7 +679,7 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   comment: 'Есть комментарий',
   active: 'Актуальность',
   trashed: 'Помечено на удаление',
-  keywords: 'Есть слова',
+  keywords: 'Найти слова',
   author: 'Автор',
   editor: 'Редактор',
   created_at: 'Дата создания',

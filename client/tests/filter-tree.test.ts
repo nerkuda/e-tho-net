@@ -93,6 +93,18 @@ function buttonByText(root: ShimElement, cls: string, text: string): ShimElement
   return nodes.find((node) => node.flatText().trim() === text) ?? null;
 }
 
+/** Пункт списка коннекции из открытой панели (в `document.body`). */
+function pickConnectorOption(label: string): ShimElement | null {
+  const body = (globalThis as any).document.body as ShimElement;
+  const menu = body.findAll((node: ShimElement) => node.classList.contains('ft-choice'))[0];
+  if (menu === undefined) return null;
+  return (
+    menu
+      .findAll((node: ShimElement) => node.classList.contains('ft-choice__item'))
+      .find((node) => node.flatText().trim() === label) ?? null
+  );
+}
+
 /** Дерево из `levels` вложенных групп с условием в глубине. */
 function nestedTree(builder: any, levels: number): any {
   let node: any = builder.defaultFilterTreeLeaf({ kind: 'property', property_id: CITY.id });
@@ -216,7 +228,7 @@ describe('дерево условий: группы, тона, связатор�
     assert.match(nested!.className, /ft-tone-2/, 'вложенность тонируется по глубине');
   });
 
-  it('пустая группа помечена, а связаторы-индикаторы стоят только между строками', async () => {
+  it('пустая группа помечена, а связаторы-индикаторы стоят ПЕРЕД каждым условием', async () => {
     const mod = await import('../src/renderer/lib/filter-tree.js');
     const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
 
@@ -227,7 +239,7 @@ describe('дерево условий: группы, тона, связатор�
     assert.match(exactOne(root, 'ft-group__empty')!.flatText(), /группа пуста/);
     assert.equal(exact(root, 'ft-connector').length, 0, 'в пустой группе связаторов нет');
 
-    // Две строки → ровно ОДИН связатор (перед второй), текст — коннектор группы.
+    // Две строки → ДВА связатора (перед каждой строкой), текст — коннектор группы.
     state.tree.children = [
       leafOf({ kind: 'property', property_id: CITY.id }),
       leafOf({ kind: 'property', property_id: DATE.id }),
@@ -235,7 +247,7 @@ describe('дерево условий: группы, тона, связатор�
     tree.rerender();
     root = tree.root as unknown as ShimElement;
     const connectors = exact(root, 'ft-connector');
-    assert.equal(connectors.length, 1, 'связатор только между строками');
+    assert.equal(connectors.length, 2, 'связатор-индикатор перед КАЖДЫМ условием');
     assert.equal(connectors[0]!.flatText(), 'ИЛИ', 'индикатор показывает коннектор группы');
     assert.equal(connectors[0]!.getAttribute('aria-hidden'), 'true', 'связатор — индикатор');
     assert.equal(exact(root, 'ft-row').length, 2);
@@ -258,16 +270,15 @@ describe('дерево условий: группы, тона, связатор�
     let root = tree.root as unknown as ShimElement;
 
     const nested = exact(root, 'ft-group')[1]!;
-    assert.equal(exactOne(nested, 'ft-group__connector-label')!.flatText(), 'все условия');
-    const orSegment = buttonByText(nested, 'ui-btn', 'ИЛИ')!;
-    assert.ok(orSegment, 'сегмент ИЛИ есть в заголовке группы');
-    orSegment.emit('click');
+    assert.equal(exactOne(nested, 'ft-group__connector-label')!.flatText(), 'все условия (И)');
+    exactOne(nested, 'ft-group__connector')!.emit('click', {});
+    pickConnectorOption('любое из условий (ИЛИ)')!.emit('click', {});
 
     assert.equal(((state.tree as any).children[0] as any).op, 'or', 'коннекция изменена в МОДЕЛИ');
     root = tree.root as unknown as ShimElement;
     assert.equal(
       exactOne(exact(root, 'ft-group')[1]!, 'ft-group__connector-label')!.flatText(),
-      'любое условие',
+      'любое из условий (ИЛИ)',
     );
     assert.equal(
       (buildFilterAst(state).filter as any).children[0].op,
@@ -287,15 +298,17 @@ describe('дерево условий: группы, тона, связатор�
     let root = tree.root as unknown as ShimElement;
 
     const rootGroup = exact(root, 'ft-group')[0]!;
-    buttonByText(rootGroup, 'ui-btn', 'ИЛИ')!.emit('click');
-    assert.equal((state.tree as any).op, 'or', 'клик ИЛИ у корня меняет КОРНЕВУЮ группу модели');
+    exactOne(rootGroup, 'ft-group__connector')!.emit('click', {});
+    pickConnectorOption('любое из условий (ИЛИ)')!.emit('click', {});
+    assert.equal((state.tree as any).op, 'or', 'выбор ИЛИ у корня меняет КОРНЕВУЮ группу модели');
     root = tree.root as unknown as ShimElement;
     assert.equal(
       exactOne(exact(root, 'ft-group')[0]!, 'ft-group__connector-label')!.flatText(),
-      'любое условие',
+      'любое из условий (ИЛИ)',
     );
 
-    buttonByText(exact(root, 'ft-group')[0]!, 'ui-btn', 'И')!.emit('click');
+    exactOne(exact(root, 'ft-group')[0]!, 'ft-group__connector')!.emit('click', {});
+    pickConnectorOption('все условия (И)')!.emit('click', {});
     assert.equal((state.tree as any).op, 'and', 'обратная смена И у корня тоже меняет модель');
   });
 
@@ -330,7 +343,7 @@ describe('дерево условий: группы, тона, связатор�
     assert.match(nested.className, /ft-tone-2/, 'обёртка не добавляет уровень тона');
     assert.equal(
       exactOne(nested, 'ft-group__connector-label')!.flatText(),
-      'любое условие',
+      'любое из условий (ИЛИ)',
       'селектор коннекции остался у видимой группы',
     );
 
@@ -647,7 +660,11 @@ describe('дерево условий: список «Что» (элемент f
     });
     const menu = body.root as unknown as ShimElement;
     assert.ok(menu.querySelector('.ft-choice__search'), 'у списка «Что» есть поиск');
-    assert.equal(exact(menu, 'ft-choice__group')[0]!.flatText(), 'В этом месте');
+    assert.equal(
+      exact(menu, 'ft-choice__group').some((g) => g.flatText() === 'В этом месте'),
+      false,
+      'заголовок «В этом месте» убран — первая группа без заголовка',
+    );
 
     // Поиск фильтрует строки.
     body.setQuery('город');

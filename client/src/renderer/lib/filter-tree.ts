@@ -80,7 +80,7 @@ import {
   filterIssueReason,
   type FilterIssue,
 } from './filter-diagnostics.js';
-import { VALUE_TYPE_LABELS } from './property-list.js';
+import { VALUE_TYPE_LABELS, valueTypeIconName } from './property-list.js';
 // Подтверждение сброса собранной под-выборки при смене свойства строки: правило
 // живёт в модуле модального слоя (`lib/filter-subquery.ts`, элемент f5005daa).
 import { confirmFilterSubqueryReset } from './filter-subquery.js';
@@ -89,10 +89,9 @@ import { confirmFilterSubqueryReset } from './filter-subquery.js';
 // и не грузится в юнит-тестах и на клиентском DOM-шиме. Правила `lib/ui`
 // (без голого вендора, единый вид) соблюдены — используются только фасады.
 import { uiButton, iconButton } from './ui/button.js';
-import { fieldInput } from './ui/field.js';
-import { svgIcon } from './ui/icon.js';
+import { fieldInput, wrapClearable } from './ui/field.js';
+import { svgIcon, type IconName } from './ui/icon.js';
 import { openPopover, type PopoverHandle } from './ui/popover.js';
-import { segmentedControl } from './ui/segmented.js';
 import { toggleButton } from './ui/toggle.js';
 
 // ---------------------------------------------------------------------------
@@ -621,13 +620,57 @@ export interface FilterTreeOperandEntry {
   detail?: string;
   /** Природа свойства — для списка операторов строки. */
   valueType?: PropertyValueType;
+  /** Значок строки: вид значения (свойства) либо смысловой (реквизиты/сущности). */
+  icon?: IconName;
 }
 
-/** Раздел списка «Что» — человекочитаемая подпись. */
+/** Раздел списка «Что» — человекочитаемая подпись (пусто — без заголовка). */
 export const FILTER_TREE_OPERAND_GROUPS: Readonly<Record<FilterTreeOperandEntry['group'], string>> = {
-  context: 'В этом месте',
+  // Первая группа (контекстные операнды места) идёт БЕЗ заголовка — заголовок
+  // «В этом месте» убран по требованию заказчика (2026-10-13).
+  context: '',
   operands: 'Характеристики',
   properties: 'Свойства',
+};
+
+/**
+ * Смысловые значки реквизитов и сущностей верхней группы (требование заказчика
+ * 2026-10-13): у свойства — значок вида значения (как в списке «Свойства мыслей»),
+ * у служебных операндов — смысловой (дата, строка, мысль, связь…).
+ */
+const OPERAND_ICONS: Readonly<Record<string, IconName>> = {
+  id: 'hash',
+  type: 'layers',
+  link_type: 'link-edit',
+  parents: 'arrow-up',
+  children: 'arrow-down',
+  attachments: 'copy-text',
+  chronology: 'quote',
+  comment: 'html-comment',
+  active: 'check-check',
+  trashed: 'trash',
+  keywords: 'search',
+  author: 'user',
+  editor: 'user',
+  created_at: 'value-date',
+  updated_at: 'value-date',
+  properties: 'list-ordered',
+  targets: 'focus',
+  record_time: 'calendar-month',
+  record_title: 'value-text',
+  record_body: 'value-text',
+  record_author: 'user',
+  record_editor: 'user',
+  occurred_at: 'calendar-month',
+  action: 'activity',
+  entity_type: 'layers',
+  entity_id: 'hash',
+  user: 'user',
+  name: 'value-text',
+  kind: 'filter',
+  mime_type: 'value-text',
+  owner: 'user',
+  size: 'value-number',
 };
 
 /** Данные сети для списка «Что» и подписей строк. */
@@ -665,6 +708,7 @@ export function filterTreeOperandCatalogue(
       label,
       group: contextual.has(kind) ? 'context' : 'operands',
       entity,
+      ...(OPERAND_ICONS[kind] !== undefined ? { icon: OPERAND_ICONS[kind] } : {}),
     });
   }
 
@@ -690,6 +734,9 @@ export function filterTreeOperandCatalogue(
         entity,
         valueType: entry.value_type,
         detail,
+        ...(valueTypeIconName(entry.value_type) !== null
+          ? { icon: valueTypeIconName(entry.value_type)! }
+          : {}),
       });
     }
   }
@@ -745,15 +792,25 @@ export function filterTreeLeafValueType(leaf: FilterTreeLeaf, data: FilterTreeDa
 // Подписи служебных элементов
 // ---------------------------------------------------------------------------
 
-/** Подпись коннектора группы: «все условия (И)» / «любое условие (ИЛИ)». */
+/** Подпись коннектора группы: «все условия (И)» / «любое из условий (ИЛИ)». */
 export function filterTreeConnectorLabel(op: 'and' | 'or'): string {
-  return op === 'and' ? 'все условия' : 'любое условие';
+  return op === 'and' ? 'все условия (И)' : 'любое из условий (ИЛИ)';
 }
 
 /** Подпись связатора-индикатора перед строкой (менять коннекцию нельзя — это индикатор). */
 export function filterTreeConnectorIndicator(op: 'and' | 'or'): string {
   return op === 'and' ? 'И' : 'ИЛИ';
 }
+
+/**
+ * Пункты списка коннекции группы (требование заказчика 2026-10-13): заголовок
+ * группы — ВЫПАДАЮЩИЙ СПИСОК «все условия (И)» / «любое из условий (ИЛИ)», а не
+ * сегмент-переключатель. Ключ пункта — код коннектора модели (`and`/`or`).
+ */
+export const FILTER_TREE_CONNECTOR_CHOICES: ReadonlyArray<{ key: 'and' | 'or'; label: string }> = [
+  { key: 'and', label: filterTreeConnectorLabel('and') },
+  { key: 'or', label: filterTreeConnectorLabel('or') },
+];
 
 /** Тип целевой сущности профиля — для заголовка «Показать <сущность> по условиям:». */
 const PROFILE_TARGET_LABELS: Readonly<Record<string, string>> = {
@@ -855,12 +912,24 @@ export interface FilterTreeHandle {
 }
 
 /** Классы вида — единственная точка их имён (адресуются тестами и CSS). */
-export const FILTER_TREE_CLASS = 'ft';
-export const FILTER_TREE_GROUP_CLASS = 'ft-group';
+export const FILTER_TREE_CLASS = 'ft';export const FILTER_TREE_GROUP_CLASS = 'ft-group';
 export const FILTER_TREE_ROW_CLASS = 'ft-row';
 export const FILTER_TREE_CONNECTOR_CLASS = 'ft-connector';
 /** Строка диагностики узла: причина + кнопка «исправить» (элемент 4e634c9a). */
 export const FILTER_TREE_ISSUE_CLASS = 'ft-issue';
+
+/**
+ * Операнды, у которых ячейка ОПЕРАТОРА в редакторе скрыта (требование заказчика
+ * 2026-10-13): «Найти слова» и наличие коллекций/свойств — вид значения сам
+ * задаёт семантику, а оператор AST перезаписывается из ячейки значения.
+ */
+export const FILTER_TREE_OPERATOR_HIDDEN_KINDS: ReadonlySet<string> = new Set([
+  'keywords',
+  'attachments',
+  'chronology',
+  'comment',
+  'properties',
+]);
 
 /**
  * Собрать дерево условий над единой моделью. Возвращает корневой узел и
@@ -969,48 +1038,56 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
 
     // --- Заголовок-рамка: свёртка, коннектор, НЕ, удаление ----------------
     const head = div('ft-group__head');
-    const caret = uiButton({
-      label: isCollapsed ? '▸' : '▾',
-      role: 'ghost',
-      size: 's',
-      title: isCollapsed ? 'Развернуть группу' : 'Свернуть группу',
-      class: 'ft-group__caret',
-      onClick: () => {
-        if (isCollapsed) collapsed.delete(key);
-        else collapsed.add(key);
-        render();
-      },
-    });
-    caret.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-    head.append(caret);
+    // Корневая группа НЕ сворачивается (требование заказчика 2026-10-13):
+    // стрелка-каретка есть только у вложенных групп.
+    if (!isRoot) {
+      const caret = uiButton({
+        label: isCollapsed ? '▸' : '▾',
+        role: 'ghost',
+        size: 's',
+        title: isCollapsed ? 'Развернуть группу' : 'Свернуть группу',
+        class: 'ft-group__caret',
+        onClick: () => {
+          if (isCollapsed) collapsed.delete(key);
+          else collapsed.add(key);
+          render();
+        },
+      });
+      caret.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+      head.append(caret);
+    }
 
-    head.append(span(filterTreeConnectorLabel(group.op), 'ft-group__connector-label'));
-    const segments = segmentedControl({
-      items: [
-        { id: 'and', label: 'И', title: 'Все условия группы' },
-        { id: 'or', label: 'ИЛИ', title: 'Любое условие группы' },
-      ],
-      activeId: group.op,
-      ariaLabel: 'Коннекция группы',
-      extraClass: 'ft-group__connector',
+    // Коннектор группы — ВЫПАДАЮЩИЙ СПИСОК «все условия (И)» / «любое из
+    // условий (ИЛИ)» (требование заказчика 2026-10-13), а не сегмент-тогглер.
+    const connector = uiButton({
+      prefix: span(filterTreeConnectorLabel(group.op), 'ft-group__connector-label'),
       role: 'ghost',
       size: 's',
-      onChange: (id) => {
-        if (id !== 'and' && id !== 'or') return;
-        // Коннекцию меняет СЕЛЕКТОР ГРУППЫ; связаторы перед строками — только
-        // индикаторы (элемент интерфейса fc65b647). У корневой группы путь пуст
-        // — замена идёт не в `children` родителя, а в само поле дерева модели
-        // (иначе клик по коннектору корня был бы no-op).
-        const next = filterTreeUpdateAt(model(), group.opPath, (current) =>
-          current.kind === 'group' ? { ...current, op: id } : current,
-        );
-        if (next !== null && next.kind === 'group' && group.opPath.length === 0) {
-          ctx.getState().tree = next;
-        }
-        touch();
-      },
+      title: 'Коннекция группы',
+      class: 'ft-group__connector',
     });
-    head.append(segments.root);
+    connector.append(span('▾', 'ft-picker__caret'));
+    connector.addEventListener('click', () => {
+      openChoiceMenu(connector, {
+        title: 'Коннекция группы',
+        groups: [{ label: '', items: FILTER_TREE_CONNECTOR_CHOICES.map((c) => ({ ...c })) }],
+        activeKey: group.op,
+        onPick: (id) => {
+          if (id !== 'and' && id !== 'or') return;
+          // Коннекцию меняет СЕЛЕКТОР ГРУППЫ; связаторы перед строками — только
+          // индикаторы. У корневой группы путь пуст — замена идёт в само поле
+          // дерева модели (иначе клик по коннектору корня был бы no-op).
+          const next = filterTreeUpdateAt(model(), group.opPath, (current) =>
+            current.kind === 'group' ? { ...current, op: id } : current,
+          );
+          if (next !== null && next.kind === 'group' && group.opPath.length === 0) {
+            ctx.getState().tree = next;
+          }
+          touch();
+        },
+      });
+    });
+    head.append(connector);
 
     if (!isRoot) {
       const not = toggleButton({
@@ -1072,22 +1149,24 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     }
     if (isCollapsed) return section;
 
-    // --- Тело: связаторы-индикаторы, дети, пустое состояние, кнопки --------
+    // --- Тело: связаторы-индикаторы слева ПЕРЕД каждым условием, дети, кнопки --
     const body = div('ft-group__body');
     if (group.children.length === 0) {
       body.append(el('div', 'ft-group__empty', 'группа пуста — добавьте условие или группу'));
     } else {
       group.children.forEach((child, index) => {
-        if (index > 0) {
-          const indicator = span(filterTreeConnectorIndicator(group.op), FILTER_TREE_CONNECTOR_CLASS);
-          indicator.setAttribute('aria-hidden', 'true');
-          setTooltip(indicator, 'Коннекция задаётся селектором группы');
-          body.append(indicator);
-        }
         const childPath = [...group.bodyPath, index];
-        body.append(
+        // Индикатор И/ИЛИ — левый столбец ПЕРЕД строкой (требование заказчика
+        // 2026-10-13), а не между строками: связатор меняет селектор группы.
+        const item = div('ft-item');
+        const indicator = span(filterTreeConnectorIndicator(group.op), FILTER_TREE_CONNECTOR_CLASS);
+        indicator.setAttribute('aria-hidden', 'true');
+        setTooltip(indicator, 'Коннекция задаётся селектором группы');
+        item.append(indicator);
+        item.append(
           child.kind === 'group' ? renderGroup(childPath, depth + 1) : renderRow(child, childPath),
         );
+        body.append(item);
       });
     }
     const actions = div('ft-group__actions');
@@ -1105,12 +1184,21 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         },
       }),
       uiButton({
-        label: '+ группа',
+        label: '+ группу',
         role: 'ghost',
         size: 's',
         class: 'ft-add-group',
         onClick: () => {
-          filterTreeAppendChildAt(model(), group.bodyPath, defaultFilterTreeGroup('and'));
+          // Группу добавляют ради условия: сразу кладём внутрь слот пустого
+          // условия (требование заказчика 2026-10-13).
+          const first = filterTreeOperandCatalogue(ctx.profile, ctx.data)[0];
+          const children =
+            first === undefined ? [] : [defaultFilterTreeLeaf(first.entity)];
+          filterTreeAppendChildAt(model(), group.bodyPath, {
+            kind: 'group',
+            op: 'and',
+            children,
+          });
           touch();
         },
       }),
@@ -1127,20 +1215,22 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     const rowIssue = applyIssue(row, path);
 
     const valueType = filterTreeLeafValueType(leaf, ctx.data);
+    const entries = filterTreeOperandCatalogue(ctx.profile, ctx.data);
+    const activeEntryKey = entryKeyOf(leaf);
+    const activeEntry = entries.find((entry) => entry.key === activeEntryKey);
     row.append(
       buildPickerButton({
         cls: 'ft-row__what',
-        label: 'Что',
         value: filterTreeOperandLabel(leaf, ctx.data),
         title: 'Что отбираем',
+        ...(activeEntry?.icon !== undefined ? { icon: activeEntry.icon } : {}),
         onOpen: (anchor) => {
-          const entries = filterTreeOperandCatalogue(ctx.profile, ctx.data);
           openChoiceMenu(anchor, {
             title: 'Что',
             search: true,
             placeholder: 'Поиск свойства…',
             groups: groupEntries(entries),
-            activeKey: entryKeyOf(leaf),
+            activeKey: activeEntryKey,
             onPick: (key) => {
               const entry = entries.find((item) => item.key === key);
               if (entry === undefined) return;
@@ -1167,51 +1257,57 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
       }),
     );
 
-    row.append(
-      buildPickerButton({
-        cls: 'ft-row__op',
-        label: 'Оператор',
-        value: filterTreeOperatorLabel(leaf.operator),
-        title: 'Оператор условия',
-        onOpen: (anchor) => {
-          const sections = filterTreeOperatorMenu(ctx.profile, leaf.entity.kind, valueType);
-          openChoiceMenu(anchor, {
-            title: 'Оператор',
-            grid: true,
-            groups: sections.map((section) => ({
-              label: section.title,
-              items: section.rows.flatMap((menuRow) =>
-                menuRow.cells.map((cell) => ({
-                  key: cell.op,
-                  label: cell.label,
-                  side: cell.side,
-                })),
-              ),
-            })),
-            activeKey: leaf.operator,
-            onPick: (key, close) => {
-              // «Между» у датового операнда раскрывается в подменю быстрых
-              // периодов (элемент 69ac9ff8): матрица [текущий/прошлый/следующий] ×
-              // [день/неделя/месяц/год] + «Задать вручную…». Выбор периода
-              // создаёт обычное условие с ВИДИМЫМИ границами-токенами.
-              const opened = filterTreeOperatorChoice(leaf, key, valueType, (menu) => {
-                close();
-                openChoiceMenu(anchor, {
-                  title: menu.title,
-                  groups: menu.groups,
-                  activeKey: filterTreePeriodKeyOf(leaf) ?? undefined,
-                  onPick: (periodKey) => {
-                    filterTreeApplyPeriod(leaf, periodKey);
-                    touch();
-                  },
+    // Оператор в редакторе НЕ показывается у операндов со «связанным» видом
+    // значения (требование заказчика 2026-10-13): «Найти слова» (в AST остаётся
+    // `matches`) и наличие коллекций/свойств («Есть вложения», «Есть дневниковые
+    // записи», «Есть комментарий», «Есть свойства») — вид «(да)(нет)» либо чип-поле
+    // сами перезаписывают оператор AST (`not_empty`/`is_empty`/`has`).
+    if (!FILTER_TREE_OPERATOR_HIDDEN_KINDS.has(leaf.entity.kind)) {
+      row.append(
+        buildPickerButton({
+          cls: 'ft-row__op',
+          value: filterTreeOperatorLabel(leaf.operator),
+          title: 'Оператор условия',
+          onOpen: (anchor) => {
+            const sections = filterTreeOperatorMenu(ctx.profile, leaf.entity.kind, valueType);
+            openChoiceMenu(anchor, {
+              title: 'Оператор',
+              grid: true,
+              groups: sections.map((section) => ({
+                label: section.title,
+                items: section.rows.flatMap((menuRow) =>
+                  menuRow.cells.map((cell) => ({
+                    key: cell.op,
+                    label: cell.label,
+                    side: cell.side,
+                  })),
+                ),
+              })),
+              activeKey: leaf.operator,
+              onPick: (key, close) => {
+                // «Между» у датового операнда раскрывается в подменю быстрых
+                // периодов (элемент 69ac9ff8): матрица [текущий/прошлый/следующий] ×
+                // [день/неделя/месяц/год] + «Задать вручную…». Выбор периода
+                // создаёт обычное условие с ВИДИМЫМИ границами-токенами.
+                const opened = filterTreeOperatorChoice(leaf, key, valueType, (menu) => {
+                  close();
+                  openChoiceMenu(anchor, {
+                    title: menu.title,
+                    groups: menu.groups,
+                    activeKey: filterTreePeriodKeyOf(leaf) ?? undefined,
+                    onPick: (periodKey) => {
+                      filterTreeApplyPeriod(leaf, periodKey);
+                      touch();
+                    },
+                  });
                 });
-              });
-              if (!opened) touch();
-            },
-          });
-        },
-      }),
-    );
+                if (!opened) touch();
+              },
+            });
+          },
+        }),
+      );
+    }
 
     const valueBox = div('ft-row__value');
     const api: FilterTreeValueSlotApi = {
@@ -1269,31 +1365,43 @@ function entryKeyOf(leaf: FilterTreeLeaf): string {
   return entity.kind;
 }
 
-/** Разложить строки «Что» по разделам списка (контекстные — первыми). */
+/** Разложить строки «Что» по разделам списка (контекстные — первыми, без заголовка). */
 function groupEntries(
   entries: readonly FilterTreeOperandEntry[],
-): Array<{ label: string; items: Array<{ key: string; label: string; side?: 'yes' | 'no' }> }> {
+): Array<{ label: string; items: Array<FilterTreeChoiceItem>; columns?: number }> {
   const order: FilterTreeOperandEntry['group'][] = ['context', 'operands', 'properties'];
-  const out: Array<{ label: string; items: Array<{ key: string; label: string }> }> = [];
+  const out: Array<{ label: string; items: FilterTreeChoiceItem[]; columns?: number }> = [];
   for (const group of order) {
     const items = entries
       .filter((entry) => entry.group === group)
-      .map((entry) => ({ key: entry.key, label: entry.detail === undefined ? entry.label : `${entry.label} — ${entry.detail}` }));
-    if (items.length > 0) out.push({ label: FILTER_TREE_OPERAND_GROUPS[group], items });
+      .map((entry) => ({
+        key: entry.key,
+        label: truncateOperandLabel(entry.detail === undefined ? entry.label : `${entry.label} — ${entry.detail}`),
+        ...(entry.icon !== undefined ? { icon: entry.icon } : {}),
+      }));
+    if (items.length > 0) out.push({ label: FILTER_TREE_OPERAND_GROUPS[group], items, columns: 2 });
   }
   return out;
 }
 
-/** Кнопка-ячейка «Что»/«Оператор»: подпись + текущее значение + выпадающий список. */
+/** Предел длины пункта списка операндов: длиннее — обрезается многоточием. */
+export const FILTER_TREE_OPERAND_LABEL_MAX = 60;
+
+/** Обрезка длинной подписи пункта списка (требование заказчика 2026-10-13). */
+export function truncateOperandLabel(label: string, max = FILTER_TREE_OPERAND_LABEL_MAX): string {
+  return label.length > max ? `${label.slice(0, max - 1)}…` : label;
+}
+
+/** Кнопка-ячейка «Что»/«Оператор»: значок (необязательно) + значение + список. */
 function buildPickerButton(opts: {
   cls: string;
-  label: string;
   value: string;
   title: string;
+  icon?: IconName;
   onOpen: (anchor: HTMLElement) => void;
 }): HTMLElement {
   const button = uiButton({
-    prefix: span(opts.label, 'ft-picker__label'),
+    ...(opts.icon !== undefined ? { prefix: operandIconNode(opts.icon) } : {}),
     label: opts.value,
     role: 'secondary',
     size: 's',
@@ -1303,6 +1411,13 @@ function buildPickerButton(opts: {
   button.append(span('▾', 'ft-picker__caret'));
   button.addEventListener('click', () => opts.onOpen(button));
   return button;
+}
+
+/** Значок строки списка (svg-иконка малого размера, класс роли списка). */
+function operandIconNode(name: IconName): SVGSVGElement {
+  const icon = svgIcon(name, 14);
+  icon.classList.add('ft-picker__icon');
+  return icon;
 }
 
 /** Заглушка значения: виджет значения — следующая задача (`lib/filter-value.ts`). */
@@ -1328,6 +1443,8 @@ export interface FilterTreeChoiceItem {
   key: string;
   label: string;
   side?: 'yes' | 'no';
+  /** Значок строки (иконка свойства либо смысловая иконка операнда). */
+  icon?: IconName;
 }
 
 /** Раздел выпадающего списка. */
@@ -1372,8 +1489,26 @@ export function buildChoiceMenuBody(
   let query = '';
 
   const list = div('ft-choice__list');
+  /** Выделенная клавиатурой строка (индекс среди отрисованных кнопок). */
+  let cursor = -1;
+  /** Кнопки текущей отрисовки — порядок совпадает с видимым списком. */
+  let renderedButtons: HTMLElement[] = [];
+
+  const setCursor = (index: number): void => {
+    const buttons = renderedButtons;
+    if (buttons.length === 0) {
+      cursor = -1;
+      return;
+    }
+    cursor = (index + buttons.length) % buttons.length;
+    buttons.forEach((button, i) => button.classList.toggle('ft-choice__item--cursor', i === cursor));
+    buttons[cursor]?.scrollIntoView?.({ block: 'nearest' });
+  };
+
   const paint = (): void => {
     clear(list);
+    cursor = -1;
+    renderedButtons = [];
     const needle = query.trim().toLowerCase();
     let rendered = 0;
     for (const group of opts.groups) {
@@ -1382,12 +1517,13 @@ export function buildChoiceMenuBody(
           ? group.items
           : group.items.filter((item) => item.label.toLowerCase().includes(needle));
       if (items.length === 0) continue;
-      list.append(el('div', 'ft-choice__group', group.label));
+      // Первый раздел без подписи идёт без заголовка (заголовок «В этом месте» убран).
+      if (group.label !== '') list.append(el('div', 'ft-choice__group', group.label));
       const rows = div('ft-choice__rows');
       if (group.columns !== undefined) {
         // Раздел-матрица (быстрые периоды «между», элемент 69ac9ff8): число
         // колонок — параметр раздела, раскладка задаётся в разметке. Ширина не
-        // меньше 320px, чтобы четыре колонки не сжимались в переносы строк.
+        // меньше 320px, чтобы колонки не сжимались в переносы строк.
         rows.dataset['columns'] = String(group.columns);
         rows.style.setProperty('display', 'grid');
         rows.style.setProperty('grid-template-columns', `repeat(${group.columns}, minmax(0, 1fr))`);
@@ -1396,6 +1532,7 @@ export function buildChoiceMenuBody(
       }
       for (const item of items) {
         const button = uiButton({
+          ...(item.icon !== undefined ? { prefix: operandIconNode(item.icon) } : {}),
           label: item.label,
           role: item.key === opts.activeKey ? 'secondary' : 'ghost',
           size: 's',
@@ -1405,6 +1542,7 @@ export function buildChoiceMenuBody(
         button.dataset['key'] = item.key;
         if (item.side !== undefined) button.dataset['side'] = item.side;
         rows.append(button);
+        renderedButtons.push(button);
         rendered += 1;
       }
       list.append(rows);
@@ -1412,6 +1550,10 @@ export function buildChoiceMenuBody(
     if (rendered === 0) list.append(el('div', 'ft-choice__empty', 'ничего не найдено'));
   };
 
+  // Живой поиск: поле закреплено СВЕРХУ (sticky, CSS) и не прокручивается со
+  // списком, есть крестик быстрой очистки и автофокус при открытии (требование
+  // заказчика 2026-10-13); навигация ←/→ ↑/↓ и Enter — по списку.
+  let searchInput: HTMLInputElement | null = null;
   if (opts.search === true) {
     const field = fieldInput({
       type: 'search',
@@ -1423,10 +1565,41 @@ export function buildChoiceMenuBody(
         paint();
       },
     });
-    root.append(field);
+    searchInput = field;
+    const clearSearch = (): void => {
+      query = '';
+      field.value = '';
+      paint();
+      field.focus();
+    };
+    const wrap = div('ft-choice__search-wrap');
+    wrap.append(wrapClearable(field, clearSearch));
+    root.append(wrap);
   }
+
+  // Клавиатура списка: ↑/↓ перебор (в т.ч. из поля поиска), Enter — выбор.
+  const onKeydown = (event: KeyboardEvent): void => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault?.();
+      setCursor(cursor + (event.key === 'ArrowDown' ? 1 : -1));
+      return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.metaKey) {
+      const index = cursor >= 0 ? cursor : 0;
+      const target = renderedButtons[index];
+      if (target !== undefined) {
+        event.preventDefault?.();
+        target.click?.();
+      }
+    }
+  };
+  root.addEventListener('keydown', onKeydown as EventListener);
+
   paint();
   root.append(list);
+  // Автофокус: курсор сразу в поле живого поиска при открытии списка.
+  searchInput?.focus?.();
+
   return {
     root,
     setQuery: (value) => {

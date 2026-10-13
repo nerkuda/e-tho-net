@@ -58,6 +58,21 @@
   background: var(--surface-2);
 }
 
+/* Коннектор группы — выпадающий список (требование заказчика 2026-10-13):
+   безрамная кнопка-текст с кареткой, а не сегмент-тогглер. */
+.ft-group__connector {
+  border: none;
+  background: none;
+  padding: 0 var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  white-space: nowrap;
+}
+
+.ft-group__connector:hover {
+  color: var(--accent);
+}
+
 .ft-group__caret {
   border: none;
   background: none;
@@ -90,7 +105,9 @@
 .ft-group__body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  /* Расстояние МЕЖДУ условиями чуть больше, чем между операндами одного
+     условия (требование заказчика 2026-10-13): внутри строки — `--space-2`. */
+  gap: var(--space-3);
   padding: var(--space-2);
   min-width: 0;
 }
@@ -104,9 +121,24 @@
   border-bottom: none;
 }
 
-/* --- Связатор-индикатор между строками --------------------------------- */
+/* --- Связатор-индикатор: левый столбец ПЕРЕД строкой ------------------- */
+/*
+ * Индикаторы И/ИЛИ стоят отдельным левым столбцом перед КАЖДЫМ условием
+ * (требование заказчика 2026-10-13), а не между строками; связатор не кликается
+ * — коннекцию меняет селектор группы.
+ */
+.ft-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
 
 .ft-connector {
+  flex: 0 0 auto;
+  width: 2.5em;
+  padding-top: var(--space-1);
+  text-align: right;
   color: var(--text-faint);
   font-size: var(--font-size-3xs);
   font-weight: var(--font-weight-semibold);
@@ -115,6 +147,12 @@
   /* Индикатор не кликается: коннекция меняется селектором группы. */
   pointer-events: none;
   user-select: none;
+}
+
+.ft-item > .ft-group,
+.ft-item > .ft-row {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* --- Строка-условие ---------------------------------------------------- */
@@ -127,8 +165,8 @@
   /* Строка диагностики ложится второй полосой под условием (элемент 4e634c9a). */
   flex-wrap: wrap;
   padding: var(--space-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-s);
+  /* Рамка строки НЕ рисуется (требование заказчика 2026-10-13): рамки только у
+     групп и поля ввода значения. */
   background: var(--surface);
 }
 
@@ -138,7 +176,8 @@
   gap: var(--space-1);
   max-width: 100%;
   padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--border);
+  /* Безрамная ячейка операнда/оператора (требование заказчика 2026-10-13). */
+  border: 1px solid transparent;
   border-radius: var(--radius-s);
   background: var(--surface-2);
   color: var(--text);
@@ -147,11 +186,13 @@
   text-align: left;
 }
 
-.ft-picker__label {
+.ft-picker:hover {
+  border-color: var(--border);
+}
+
+.ft-picker__icon {
+  flex: 0 0 auto;
   color: var(--text-dim);
-  font-size: var(--font-size-3xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .ft-picker__value {
@@ -167,6 +208,24 @@
 .ft-row__value {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Области «Найти слова» — чекбоксы В ОДНУ СТРОКУ (требование заказчика
+   2026-10-13). */
+.fv-scopes {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+/* Поля ввода множественных значений не растут беспредельно: видимая высота не
+   больше ~10 строк (эталон — таблица свойств редактора мысли). */
+.ft-row__value .st-f-chipfield {
+  max-height: calc(var(--field-h) * 10);
+  overflow-y: auto;
 }
 
 .ft-value {
@@ -206,6 +265,16 @@
   min-width: 0;
 }
 
+/* Поле живого поиска закреплено СВЕРХУ выпадающего списка и не прокручивается
+   вместе с ним (требование заказчика 2026-10-13). */
+.ft-choice__search-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding-bottom: var(--space-1);
+}
+
 .ft-choice__list {
   display: flex;
   flex-direction: column;
@@ -224,6 +293,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+
+/* Выделенная клавиатурой строка списка (навигация ↑/↓, выбор Enter). */
+.ft-choice__item--cursor {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 /* Список операторов — сетка «утверждение | отрицание» (требование 502f1922). */

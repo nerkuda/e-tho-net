@@ -131,18 +131,19 @@ describe('композер фразы: лист условия', () => {
     );
   });
 
-  it('«Есть слова»: оператор не дублируется, области видны', () => {
+  it('«Найти слова»: оператор не дублируется, области видны', () => {
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'keywords', scope: ['title'] }, 'matches', { kind: 'scalar', value: 'расход' }), ctx()),
-      'Есть слова расход (в имени)',
+      'Найти слова расход (в именах)',
     );
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'keywords', scope: ['title', 'synonyms'] }, 'matches', { kind: 'scalar', value: 'счёт' }), ctx()),
-      'Есть слова счёт (в имени, в синонимах)',
+      'Найти слова счёт (в именах)',
+      '«в именах» = имена и синонимы вместе, во фразе не дублируется',
     );
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'keywords', scope: [] }, 'matches', { kind: 'scalar', value: 'счёт' }), ctx()),
-      'Есть слова счёт (области не выбраны)',
+      'Найти слова счёт (области не выбраны)',
       'ни одной области — условие отключено, это видно во фразе',
     );
   });
