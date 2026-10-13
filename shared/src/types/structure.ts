@@ -60,9 +60,11 @@ export interface StructureFilter {
   /** Keywords mini-syntax: whitespace-separated words, `*` wildcard, `-` exclusion. */
   keywords?: string;
   /**
-   * Where `keywords` searches (bug fix 0.5.5): any subset of `title` (thought
-   * title) / `synonyms` / `comment` (permanent comment). Absent or an empty
-   * array defaults to `['title', 'synonyms']` — the original behaviour.
+   * Where `keywords` searches (bug fix 0.5.5; 0.13.1, ошибка 2bc251de): any
+   * subset of `title` (thought title) / `synonyms` / `comment` (permanent
+   * comment) / `diary` (the thought's chronological records — body or title).
+   * Absent or an empty array defaults to `['title', 'synonyms']` — the original
+   * behaviour.
    */
   keyword_scope?: StructureKeywordScope[];
   /**

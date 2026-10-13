@@ -33,6 +33,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createComment, createCommentWithTargets } from '../src/domain/comment-service.js';
+import { createLink } from '../src/domain/link-service.js';
 import { parseChronicleQueryBody, queryChronicle } from '../src/domain/chronicle-service.js';
 
 function nativeAvailable(): boolean {
@@ -318,6 +319,119 @@ describe(
           [f.bodyRec, f.titleRec],
           'пустой набор ищет в комментарии цели',
         );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    /**
+     * Фикстура КОММЕНТАРИЕВ СВЯЗЕЙ (ошибка fc97548d, требование ce111b0d):
+     *   * `Гамма`/`Дельта` — концы одной активной связи;
+     *   * `linkPerm` — ПОСТОЯННЫЙ комментарий связи со словом `связьпост`
+     *     (ни одно тело/заголовок записи его не содержит — путь Б бессилен);
+     *   * `linkChrono` — хроно-запись связи со словом `связьхроно` в теле;
+     *   * `linkRec` — вторая запись той же связи, ключевых слов не содержит:
+     *     попадает в выдачу ТОЛЬКО через фазу 1 (обе стороны связи отобраны).
+     */
+    function buildLinkFixture(ndb: NetworkDb): {
+      gamma: string;
+      delta: string;
+      link: string;
+      linkRec: string;
+      linkChrono: string;
+    } {
+      const gamma = seedThought(ndb, 'Гамма');
+      const delta = seedThought(ndb, 'Дельта');
+      const link = createLink(ndb, { source_id: gamma, target_id: delta }, USER).id;
+      createComment(ndb, 'link', link, { kind: 'permanent', body_md: 'связьпост' }, USER);
+      const onLink = (body: string, valid_from: string): string =>
+        createCommentWithTargets(
+          ndb,
+          [{ owner_type: 'link', owner_id: link }],
+          { kind: 'chronological', title: null, body_md: body, valid_from },
+          USER,
+        ).id;
+      return {
+        gamma,
+        delta,
+        link,
+        linkChrono: onLink('связьхроно', '2024-02-01'),
+        linkRec: onLink('нейтральная запись связи', '2024-02-02'),
+      };
+    }
+
+    it('ошибка fc97548d: слово только в постоянном комментарии СВЯЗИ — паритет плоского и AST-путей', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const f = buildLinkFixture(ndb);
+        // Плоский путь видит комментарии связей с обеих сторон (ce111b0d): обе
+        // стороны связи отобраны, а значит отобраны и записи, привязанные к связи.
+        assert.deepEqual(
+          runFlat(ndb, 'связьпост', ['comment']),
+          [f.linkChrono, f.linkRec],
+          'плоский путь: фаза 1 по комментарию связи',
+        );
+        // AST-тело конструктора панели обязано дать ТОТ ЖЕ набор записей —
+        // без правки оно теряло комментарий связи и возвращало пусто.
+        assert.deepEqual(
+          runGroup(ndb, 'связьпост', ['comment']),
+          [f.linkChrono, f.linkRec],
+          'AST-путь панели: паритет с плоским телом',
+        );
+        // Прочие области комментарии связей не ищут (паритет и там).
+        for (const scope of [['title', 'synonyms'], ['diary']] as StructureKeywordScope[][]) {
+          assert.deepEqual(
+            runGroup(ndb, 'связьпост', scope),
+            runFlat(ndb, 'связьпост', scope),
+            `области ${JSON.stringify(scope)} — паритет`,
+          );
+          assert.deepEqual(runGroup(ndb, 'связьпост', scope), [], `области ${JSON.stringify(scope)} — пусто`);
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('ошибка fc97548d: хроно-запись связи — паритет плоского и AST-путей', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const f = buildLinkFixture(ndb);
+        // Путь Б находит саму запись связи (её тело содержит слово); вторая
+        // запись связи приходит только из фазы 1 — по концам связи.
+        assert.deepEqual(runFlat(ndb, 'связьхроно', ['comment']), [f.linkChrono, f.linkRec]);
+        assert.deepEqual(runGroup(ndb, 'связьхроно', ['comment']), [f.linkChrono, f.linkRec]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('ошибка 2bc251de: область diary находит мысль по её дневниковой записи (паритет путей)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const gamma = seedThought(ndb, 'Гамма');
+        const recMatch = record(ndb, [gamma], { body: 'дневникслово в записи', valid_from: '2024-03-01' });
+        const recPlain = record(ndb, [gamma], { body: 'без ключевого слова', valid_from: '2024-03-02' });
+
+        // Фаза 1 отбирает мысль по её хроно-записи, фаза 2 приводит обе записи
+        // мысли; путь Б (текст записи) областью diary НЕ включается.
+        assert.deepEqual(runFlat(ndb, 'дневникслово', ['diary']), [recMatch, recPlain]);
+        assert.deepEqual(runGroup(ndb, 'дневникслово', ['diary']), [recMatch, recPlain]);
+
+        // Полный набор областей и пустой тоже дают паритет (diary входит в «все»).
+        for (const scope of [[], ['title', 'synonyms', 'comment', 'diary']] as StructureKeywordScope[][]) {
+          assert.deepEqual(
+            runGroup(ndb, 'дневникслово', scope),
+            runFlat(ndb, 'дневникслово', scope),
+            `области ${JSON.stringify(scope)} — паритет`,
+          );
+        }
+
+        // Область diary НЕ подменяет собой области имён: слово названия по ней не
+        // отбирает мысль (запись такой цели не приводится).
+        assert.deepEqual(runFlat(ndb, 'гамма', ['diary']), []);
+        assert.deepEqual(runGroup(ndb, 'гамма', ['diary']), []);
+        assert.deepEqual(runFlat(ndb, 'дневникслово', ['title']), []);
+        assert.deepEqual(runGroup(ndb, 'дневникслово', ['title']), []);
       } finally {
         ndb.close();
       }

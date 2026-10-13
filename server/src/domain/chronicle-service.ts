@@ -23,10 +23,12 @@ import {
   CHRONICLE_PAGE_SIZE,
   CHRONICLE_QUERY_MAX_LIMIT,
   CHRONICLE_THOUGHT_IDS_MAX,
+  CHRONICLE_LEGACY_KEYWORD_SCOPES,
   EtnError,
   FILTER_AST_VERSION,
   SORT_ORDERS,
   STRUCTURE_AUTHOR_OPS,
+  STRUCTURE_KEYWORD_SCOPES,
   TRAVERSAL_DEFAULTS,
   buildLikePattern,
   commentScopeEnabled,
@@ -53,7 +55,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { makeSnippet } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
-import { buildThoughtIdSelect, compileThoughtQueryToAst, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
+import { buildThoughtIdSelect, compileThoughtQueryToAst, diaryKeywordClause, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 import { normaliseInstant } from './dates.js';
 import { isFilterEmpty, parseStructureFilter } from './structure-service.js';
@@ -185,17 +187,22 @@ export function parseChronicleFilter(
   }
 
   // Область поиска ключевых слов (0.10.1, элемент 2f14de06/91f8d8dd): чекбоксы
-  // «наименование/синонимы/комментарий». Пустой набор/отсутствие — поиск по
-  // всем областям (поведение до 0.10.1).
+  // «наименование/синонимы/комментарий» + «дневники» (0.13.1, ошибка 2bc251de).
+  // Пустой набор/отсутствие — ИСТОРИЧЕСКОЕ множество областей (title, synonyms,
+  // comment), поведение до 0.10.1; новые области включаются только явно.
+  // Словарь — ОДИН: shared-константа (требование 9e9d14dc — словарь закрытый),
+  // локальная копия списка разъехалась бы с ней по составу областей.
   const keywordScope = body['keyword_scope'];
   if (keywordScope !== undefined) {
     if (
       !Array.isArray(keywordScope) ||
-      keywordScope.some((v) => v !== 'title' && v !== 'synonyms' && v !== 'comment')
+      keywordScope.some(
+        (v) => typeof v !== 'string' || !(STRUCTURE_KEYWORD_SCOPES as readonly string[]).includes(v),
+      )
     ) {
       throw new EtnError('VALIDATION_ERROR', 'Недопустимый keyword_scope.', {
         field: 'keyword_scope',
-        allowed: ['title', 'synonyms', 'comment'],
+        allowed: STRUCTURE_KEYWORD_SCOPES,
       }, requestId);
     }
     if (keywordScope.length > 0) {
@@ -546,22 +553,34 @@ function collectRootAndSubtreeIds(
  * через операнды `record_body`/`record_title`.
  *
  * Область (`keyword_scope`) сужает набор сравнений (0.10.1): `comment` —
- * постоянный комментарий мысли и комментарии её связей. Отсутствие области —
- * все сравнения (поведение до 0.10.1).
+ * постоянный комментарий мысли и комментарии её связей; `diary` — дневниковые
+ * записи самой мысли (тело/заголовок её хроно-записи, 0.13.1, ошибка 2bc251de).
+ * Отсутствие области — ИСТОРИЧЕСКОЕ множество областей
+ * ({@link CHRONICLE_LEGACY_KEYWORD_SCOPES} — title/synonyms/comment, поведение
+ * до 0.10.1): новые области включаются только явным набором, иначе старый отбор
+ * молча расширил бы выборку.
  */
 function thoughtKeywordCond(scope: StructureKeywordScope[] | undefined): {
   sql: string;
   argCount: number;
 } {
+  const legacyAll = scope === undefined || scope.length === 0;
   const enabled = (name: StructureKeywordScope): boolean =>
-    scope === undefined || scope.length === 0 || scope.includes(name);
+    legacyAll
+      ? (CHRONICLE_LEGACY_KEYWORD_SCOPES as readonly string[]).includes(name)
+      : scope.includes(name);
   const parts: string[] = [];
-  if (enabled('title')) parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+  let argCount = 0;
+  if (enabled('title')) {
+    parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+    argCount += 1;
+  }
   if (enabled('synonyms')) {
     parts.push(`EXISTS (
   SELECT 1 FROM thought_synonyms_v ts
   WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'
 )`);
+    argCount += 1;
   }
   if (enabled('comment')) {
     parts.push(`EXISTS (
@@ -575,9 +594,21 @@ function thoughtKeywordCond(scope: StructureKeywordScope[] | undefined): {
   JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)
   WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\'
 )`);
+    argCount += 2;
   }
-  if (parts.length === 0) parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
-  return { sql: `(${parts.join(' OR ')})`, argCount: parts.length };
+  if (enabled('diary')) {
+    // Дневниковые записи мысли (ошибка 2bc251de, требование 0882f8d5): предикат —
+    // ОБЩИЙ с листом AST «Есть слова» (`diaryKeywordClause`), иначе области
+    // разъехались бы между плоским телом и AST-путём.
+    const diary = diaryKeywordClause('t');
+    parts.push(diary.sql);
+    argCount += diary.paramCount;
+  }
+  if (parts.length === 0) {
+    parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+    argCount += 1;
+  }
+  return { sql: `(${parts.join(' OR ')})`, argCount };
 }
 
 /**
@@ -925,6 +956,12 @@ function recordAuthorLeafClause(leaf: FilterAstLeaf, column: 'c.created_by' | 'c
  * решение оркестратора 2026-10-12). Семантику задаёт оператор ЛИСТА профиля
  * (`in`/`not_in`/`all_of`/`is_empty`/`not_empty`); значение — под-выборка мыслей
  * либо её отсутствие для быстрых форм.
+ *
+ * Под-выборка исполняется с контекстом ФАЗЫ 1 ХРОНИКИ
+ * (`keywordCommentIncludesLinkComments`): область `comment` листа «Есть слова»
+ * ищет и комментарии инцидентных связей мысли (требование ce111b0d; ошибка
+ * fc97548d — паритет с плоским `keyword_scope`, который эти комментарии видел).
+ * Иначе панельное AST-тело и прежнее плоское тело давали разные наборы целей.
  */
 function targetsLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, opts: ChronicleAstOpts): ChronicleClause {
   const op = leaf.operator;
@@ -937,10 +974,16 @@ function targetsLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, opts: ChronicleA
     return astUnsupported('«Цели» требуют значения-подвыборки мыслей.', opts.requestId);
   }
   const { query } = value as { query: FilterAstNode };
-  const sel = buildThoughtIdSelect(ndb, opts.userId, {
-    sort: 'alpha', order: 'asc', limit: 1, offset: 0,
-    ast: { version: FILTER_AST_VERSION, filter: query },
-  });
+  const sel = buildThoughtIdSelect(
+    ndb,
+    opts.userId,
+    {
+      sort: 'alpha', order: 'asc', limit: 1, offset: 0,
+      ast: { version: FILTER_AST_VERSION, filter: query },
+    },
+    opts.requestId,
+    { keywordCommentIncludesLinkComments: true },
+  );
   const ids = (ndb.prepare(sel.sql).all(...sel.params) as Array<{ id: string }>).map((r) => r.id);
   const attachArgs = ids.length === 0 ? [] : [...ids, ...ids, ...ids];
   switch (op) {

@@ -88,7 +88,9 @@ export function parseStructureFilter(
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'keyword_scope должен быть массивом из "title"/"synonyms"/"comment".',
+        // Список областей — из словаря сети, чтобы текст не отставал от словаря
+        // (0.13.1: добавлена область `diary`, ошибка 2bc251de).
+        `keyword_scope должен быть массивом из ${STRUCTURE_KEYWORD_SCOPES.map((v) => `"${v}"`).join('/')}.`,
         { field: 'keyword_scope', allowed: STRUCTURE_KEYWORD_SCOPES },
         requestId,
       );

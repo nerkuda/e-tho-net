@@ -115,6 +115,46 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
     );
   });
 
+  it('словарь областей keyword_scope — один (shared-константа), без локальной копии', () => {
+    // Требование 9e9d14dc: словарь областей закрытый. Локальный литерал в домене
+    // отставал бы от shared-словаря: новая область (`diary`, ошибка 2bc251de)
+    // молча отвергалась бы на входе хроники.
+    assert.match(
+      DOMAIN,
+      /STRUCTURE_KEYWORD_SCOPES/,
+      'хроника обязана валидировать области по shared-словарю',
+    );
+    assert.ok(
+      !/'synonyms'\s*&&/.test(DOMAIN),
+      'области не перечисляются литералами в домене',
+    );
+    assert.ok(
+      !/allowed:\s*\[\s*'title'/.test(DOMAIN),
+      'список допустимых областей не дублируется литералом',
+    );
+  });
+
+  it('фаза 1 отбора хроники ставит контекст «comment + комментарии связей» (ошибка fc97548d)', () => {
+    // Паритет с плоским `keyword_scope`: плоский компилятор эти комментарии
+    // видит (требование ce111b0d), поэтому исполнитель целей обязан передать
+    // контекст в движок мыслей — иначе AST-тело панели молча теряло бы мысли.
+    assert.match(
+      DOMAIN,
+      /keywordCommentIncludesLinkComments:\s*true/,
+      'targetsLeafClause обязан ставить keywordCommentIncludesLinkComments',
+    );
+    assert.match(
+      DOMAIN,
+      /buildThoughtIdSelect\(/,
+      'подвыборка целей исполняется общим движком мыслей',
+    );
+    assert.match(
+      DOMAIN,
+      /comment_targets_v/,
+      'плоский компилятор ищет комментарии связей через comment_targets_v',
+    );
+  });
+
   it('REST и MCP: snippet хроники MCP согласован с развёрнутым телом, REST — без трансформа (ошибка a3fb62b6)', async () => {
     const rest = await buildRestContext();
     const mcp = await buildMcpContext({
@@ -239,6 +279,70 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
         await run({ keywords: 'берёзу', keyword_scope: ['title', 'synonyms', 'comment'] }),
         [rec.id],
         'с comment находит по тексту записи',
+      );
+    } finally {
+      await handle.close();
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      await closeRestContext(rest);
+    }
+  });
+
+  it('REST и MCP: область diary отбирает мысль по её дневниковой записи (ошибка 2bc251de)', async () => {
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    const handle = await connectMcpClient(mcp, rest.adminKey);
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const target = seedThought(ndb, 'Alpha');
+      const rec = createComment(
+        ndb,
+        'thought',
+        target,
+        { kind: 'chronological', body_md: 'дневникслово в записи', valid_from: '2024-01-01' },
+        USER,
+      );
+
+      const run = async (filter: Record<string, unknown>): Promise<string[]> => {
+        const restRes = await rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+          headers: authHeaders(rest),
+          payload: filter,
+        });
+        assert.equal(restRes.statusCode, 200, JSON.stringify(restRes.json()));
+        const restRows = restRes.json().data as Array<{ id: string }>;
+        const mcpRes = await handle.client.callTool({
+          name: 'etn.chronicle.query',
+          arguments: { network_id: rest.networkId, ...filter },
+        });
+        const mcpRows = toolJson<{ rows: Array<{ id: string }> }>(mcpRes).rows;
+        assert.deepEqual(
+          mcpRows.map((r) => r.id),
+          restRows.map((r) => r.id),
+          'состав обязан совпасть у REST и MCP',
+        );
+        return restRows.map((r) => r.id);
+      };
+
+      // `comment` выключен → путь «текст записи» отключён, запись находится
+      // ТОЛЬКО областью `diary` (мысль отобрана по своей хроно-записи).
+      assert.deepEqual(
+        await run({ keywords: 'дневникслово', keyword_scope: ['title', 'synonyms', 'diary'] }),
+        [rec.id],
+        'область diary отбирает мысль по её дневниковой записи',
+      );
+      assert.deepEqual(
+        await run({ keywords: 'дневникслово', keyword_scope: ['title', 'synonyms'] }),
+        [],
+        'без diary и comment запись не находится',
       );
     } finally {
       await handle.close();

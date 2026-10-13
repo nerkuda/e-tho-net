@@ -629,28 +629,88 @@ function resolveKeywordScope(scope: StructureKeywordScope[] | undefined): Set<St
   return new Set(scope !== undefined && scope.length > 0 ? scope : DEFAULT_KEYWORD_SCOPE);
 }
 
+/** Клауза совпадения «Есть слова»: SQL-предикат и число LIKE-параметров в нём. */
+interface KeywordMatchClause {
+  sql: string;
+  paramCount: number;
+}
+
 /**
- * One keyword match clause built for the effective scope: title and/or
- * synonyms and/or the permanent comment (OR between the selected sources).
- * The LIKE pattern is built by {@link buildLikePattern} (escaping `%`/`_`/`\`,
- * `*` → `%`), so the match is infix and case-insensitive.
+ * Условие области «в дневниках» (`diary`, ошибка 2bc251de, требование 0882f8d5)
+ * для мысли-кандидата: её хронологическая запись содержит слово. Текст записи —
+ * тело И заголовок — ровно так, как путь «текст самой записи» компилирует
+ * хроника (`record_body`/`record_title`, задача 608ecb79).
+ *
+ * Одна точка правды: этот же предикат использует плоский компилятор хроники
+ * (`chronicle-service.thoughtKeywordCond`), иначе AST-лист и `keyword_scope`
+ * разъехались бы (тот же класс дефекта, что fc97548d).
+ *
+ * @param alias алиас `thoughts_v` в объемлющем SQL (у обоих вызывающих — `t`).
  */
-function buildKeywordClause(scope: Set<StructureKeywordScope>): { sql: string; paramCount: number } {
-  const parts: string[] = [];
-  if (scope.has('title')) parts.push("t.title_norm LIKE ? ESCAPE '\\'");
+export function diaryKeywordClause(alias = 't'): KeywordMatchClause {
+  return {
+    sql:
+      `EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = ${alias}.id` +
+      " AND c.kind = 'chronological'" +
+      " AND (unicode_lower(c.body_md) LIKE ? ESCAPE '\\'" +
+      " OR unicode_lower(IFNULL(c.title, '')) LIKE ? ESCAPE '\\'))",
+    paramCount: 2,
+  };
+}
+
+/**
+ * Одна клауза совпадения по словам для эффективного набора областей: `title`,
+ * `synonyms`, `comment` (постоянный комментарий мысли) и/или `diary`
+ * (хронологические записи мысли) — OR между выбранными источниками. LIKE-образец
+ * строит {@link buildLikePattern} (экранирование `%`/`_`/`\`, `*` → `%`),
+ * поэтому совпадение инфиксное и регистронезависимое.
+ *
+ * `opts.commentIncludesLinkComments` (требование ce111b0d, ошибка fc97548d) —
+ * контекст ФАЗЫ 1 ОТБОРА ХРОНИКИ: область `comment` ищет и комментарии
+ * инцидентных связей мысли с обеих сторон. Опцию ставит только исполнитель
+ * хроники (`chronicle-service.targetsLeafClause`); семантика отбора мыслей
+ * (требование b363cad1 — только постоянный комментарий самой мысли) не меняется.
+ */
+function buildKeywordClause(
+  scope: Set<StructureKeywordScope>,
+  opts?: { commentIncludesLinkComments?: boolean },
+): KeywordMatchClause {
+  const parts: KeywordMatchClause[] = [];
+  if (scope.has('title')) parts.push({ sql: "t.title_norm LIKE ? ESCAPE '\\'", paramCount: 1 });
   if (scope.has('synonyms')) {
-    parts.push(
-      'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+    parts.push({
+      sql:
+        'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
         " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\')",
-    );
+      paramCount: 1,
+    });
   }
   if (scope.has('comment')) {
-    parts.push(
-      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
+    parts.push({
+      sql:
+        "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
         " AND c.kind = 'permanent' AND unicode_lower(c.body_md) LIKE ? ESCAPE '\\')",
-    );
+      paramCount: 1,
+    });
+    if (opts?.commentIncludesLinkComments === true) {
+      // Комментарии инцидентных связей с обеих сторон — как в плоском
+      // `thoughtKeywordCond` (тип комментария не сужается: и постоянные, и
+      // записи дневника связи), требование ce111b0d.
+      parts.push({
+        sql:
+          'EXISTS (SELECT 1 FROM comments_v c2' +
+          " JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'" +
+          ' JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)' +
+          " WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\')",
+        paramCount: 1,
+      });
+    }
   }
-  return { sql: `(${parts.join(' OR ')})`, paramCount: parts.length };
+  if (scope.has('diary')) parts.push(diaryKeywordClause('t'));
+  return {
+    sql: `(${parts.map((p) => p.sql).join(' OR ')})`,
+    paramCount: parts.reduce((sum, p) => sum + p.paramCount, 0),
+  };
 }
 
 /**
@@ -671,13 +731,13 @@ function buildKeywordClause(scope: Set<StructureKeywordScope>): { sql: string; p
  * версий в выборку не попадают.
  *
  * @returns `null`, когда сужатель неприменим (нет include-слов с индексным
- *   представлением или в области есть комментарий).
+ *   представлением или в области есть комментарий либо дневниковые записи).
  */
 function buildKeywordFtsJoin(
   include: string[],
   scope: Set<StructureKeywordScope>,
 ): Clause | null {
-  if (include.length === 0 || scope.has('comment')) return null;
+  if (include.length === 0 || scope.has('comment') || scope.has('diary')) return null;
   const match = nameTrigramMatch(include);
   if (match === null) return null;
   return {
@@ -1893,8 +1953,24 @@ function lookupPropertyRow(ndb: NetworkDb, propertyId: string): RegistryProperty
   return { id: raw.id, value_type: raw.value_type as PropertyValueType, config: raw.config };
 }
 
+/**
+ * Опции исполнения AST, задаваемые ВСТРАИВАЮЩИМ вызовом (не критерий выборки).
+ * Живут отдельно от {@link AstExecOptions}, чтобы передаваться в
+ * {@link buildThoughtIdSelect} от чужого исполнителя (хроника).
+ */
+export interface AstExecContextOptions {
+  /**
+   * Область `comment` листа «Есть слова» ищет и комментарии инцидентных связей
+   * мысли с обеих сторон — семантика ФАЗЫ 1 отбора хроники (требование
+   * ce111b0d «Двухфазный отбор хроники…»; ошибка fc97548d — паритет AST-листа с
+   * плоским `keyword_scope`). Ставит исполнитель хроники; отбор мыслей
+   * (`POST /thoughts/query`, требование b363cad1) опцию не ставит.
+   */
+  keywordCommentIncludesLinkComments?: boolean;
+}
+
 /** Опции исполнения AST-листьев: контекст токенов и коллектор неразрешимых. */
-interface AstExecOptions {
+interface AstExecOptions extends AstExecContextOptions {
   ctx?: AstTokenContext;
   unresolved?: TokenIssue[];
   /**
@@ -2115,7 +2191,7 @@ function filterAstLeafClause(
       return boolColumnClause('t.marked_for_deletion', leaf, path, requestId);
 
     case 'keywords':
-      return keywordsLeafClause(entity, leaf, path, requestId);
+      return keywordsLeafClause(entity, leaf, path, requestId, astOpts);
 
     case 'author':
       return authorLeafClause('t.created_by', leaf, path, requestId);
@@ -2325,12 +2401,19 @@ function boolPresenceClause(existsSql: string, leaf: FilterAstLeaf, path: string
   return want ? { sql: existsSql, params: [] } : { sql: `NOT (${existsSql})`, params: [] };
 }
 
-/** «Есть слова»: LIKE-фильтр по выбранным областям (мини-синтаксис §6.10). */
+/**
+ * «Есть слова»: LIKE-фильтр по выбранным областям (мини-синтаксис §6.10).
+ *
+ * `astOpts.keywordCommentIncludesLinkComments` — контекст фазы 1 отбора хроники:
+ * область `comment` ищет и комментарии инцидентных связей (см.
+ * {@link buildKeywordClause}); ставит только исполнитель хроники.
+ */
 function keywordsLeafClause(
   entity: { kind: 'keywords'; scope?: StructureKeywordScope[] },
   leaf: FilterAstLeaf,
   path: string,
   requestId?: string,
+  astOpts?: AstExecOptions,
 ): Clause {
   if (leaf.operator !== 'matches') {
     astUnsupported(`Оператор «${leaf.operator}» для операнда «Есть слова»`, path, requestId);
@@ -2343,7 +2426,11 @@ function keywordsLeafClause(
   const text = typeof leaf.value === 'string' ? leaf.value : '';
   const { include, exclude } = parseFilterKeywords(text);
   if (include.length === 0 && exclude.length === 0) return AST_TRUE;
-  const clause = buildKeywordClause(scope);
+  const clause = buildKeywordClause(scope, {
+    ...(astOpts?.keywordCommentIncludesLinkComments === true
+      ? { commentIncludesLinkComments: true }
+      : {}),
+  });
   const parts: string[] = [];
   const params: unknown[] = [];
   for (const word of include) {
@@ -3363,6 +3450,12 @@ function buildQuery(
   tokenContext?: AstTokenContext,
   collectStats?: boolean,
   profile?: FilterProfileId,
+  /**
+   * Опции исполнения AST от встраивающего вызова (хроника ставит
+   * `keywordCommentIncludesLinkComments` — фаза 1 ищет и комментарии связей,
+   * требование ce111b0d). Не критерий выборки: на прочих фасадах не заполняется.
+   */
+  astContext?: AstExecContextOptions,
 ): BuiltQuery {
   // Красная диагностика (требование 44d61c8a): явное AST-тело, ссылающееся на
   // удалённую сущность, исполнять запрещено — заведомо неисполнимый отбор не
@@ -3382,6 +3475,9 @@ function buildQuery(
   // Кэш поддеревьев «в иерархии» живёт в пределах одного исполнения запроса.
   const astOpts: AstExecOptions = { unresolved, hierarchyCache: new Map(), subqueryBudget: { ids: 0 } };
   if (tokenContext !== undefined) astOpts.ctx = tokenContext;
+  if (astContext?.keywordCommentIncludesLinkComments === true) {
+    astOpts.keywordCommentIncludesLinkComments = true;
+  }
   if (collectStats === true) {
     astOpts.stats = { conditions: 0, nodes_walked: 0, hierarchy_calls: 0, limits_hit: new Set() };
   }
@@ -3399,14 +3495,19 @@ function buildQuery(
  *
  * `emptyFilterMode: 'all'`: пустой фильтр — все мысли (для встраивания в
  * `IN` это корректно); `home_orphans` здесь не имеет смысла.
+ *
+ * `astContext` — контекст исполнения AST от встраивающего вызова: хроника ставит
+ * `keywordCommentIncludesLinkComments`, иначе её фаза 1 (требование ce111b0d)
+ * теряла бы мысли, отобранные по комментариям связей (ошибка fc97548d).
  */
 export function buildThoughtIdSelect(
   ndb: NetworkDb,
   userId: string,
   req: ThoughtQueryRequest,
   requestId?: string,
+  astContext?: AstExecContextOptions,
 ): { sql: string; params: unknown[] } {
-  const built = buildQuery(ndb, userId, req, 'all', requestId);
+  const built = buildQuery(ndb, userId, req, 'all', requestId, undefined, undefined, undefined, astContext);
   return {
     sql: `SELECT t.id ${built.sql.baseSql}`,
     params: [...built.sql.joinParams, ...built.sql.params],

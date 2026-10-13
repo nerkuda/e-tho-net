@@ -25,9 +25,10 @@ import type { FilterAstLeaf, FilterAstNode } from './types/filter-ast.js';
 
 /**
  * Включена ли область `comment`. Пустой/отсутствующий набор — прежнее поведение
- * «все области»; иначе область должна быть названа явно (требование 9e9d14dc).
- * Одна точка правды для пути Б — тот же предикат использует серверный
- * компилятор плоского тела (`chronicle-service`).
+ * «все области» (историческое множество {@link CHRONICLE_LEGACY_KEYWORD_SCOPES});
+ * иначе область должна быть названа явно (требование 9e9d14dc). Одна точка
+ * правды для пути Б — тот же предикат использует серверный компилятор плоского
+ * тела (`chronicle-service`).
  */
 export function commentScopeEnabled(scope: readonly StructureKeywordScope[] | undefined): boolean {
   return scope === undefined || scope.length === 0 || scope.includes('comment');
@@ -36,22 +37,31 @@ export function commentScopeEnabled(scope: readonly StructureKeywordScope[] | un
 /**
  * Лист «Есть слова» профиля мыслей с ЯВНЫМ непустым списком областей. В AST
  * пустой `scope` означает ОТКЛЮЧЁННОЕ условие (требование 0882f8d5), поэтому
- * «все области» выписывается тремя значениями, а не опускается.
+ * «все области» выписывается явно (историческим множеством хроники), а не
+ * опускается.
  */
 function keywordsLeaf(text: string, scope: readonly StructureKeywordScope[]): FilterAstLeaf {
   return { entity: { kind: 'keywords', scope: [...scope] }, operator: 'matches', value: text };
 }
 
 /**
- * Области мыслевого пути: пустой/неизвестный набор — все три (`title`,
- * `synonyms`, `comment`), порядок словаря сети. Пустой набор в панели означает
- * «все области» (поведение до 0.10.1), а не отключённое условие.
+ * Области «все области» ПРЕЖНЕГО плоского тела хроники (поведение до 0.10.1):
+ * отсутствие или пустой `keyword_scope` — это историческое множество, а НЕ «весь
+ * словарь областей». Новые области (`diary`, 0.13.1, ошибка 2bc251de) в него не
+ * входят: их включает только явный набор — иначе старый сохранённый отбор молча
+ * расширил бы выборку при обновлении версии.
+ */
+export const CHRONICLE_LEGACY_KEYWORD_SCOPES = ['title', 'synonyms', 'comment'] as const;
+
+/**
+ * Области мыслевого пути хроники: явно переданные (порядок словаря сети) или
+ * историческое множество, когда набор пуст/отсутствует.
  */
 function thoughtScope(
   scope: readonly StructureKeywordScope[] | undefined,
 ): StructureKeywordScope[] {
   const known = STRUCTURE_KEYWORD_SCOPES.filter((name) => scope?.includes(name) === true);
-  return known.length > 0 ? [...known] : [...STRUCTURE_KEYWORD_SCOPES];
+  return known.length > 0 ? [...known] : [...CHRONICLE_LEGACY_KEYWORD_SCOPES];
 }
 
 /**

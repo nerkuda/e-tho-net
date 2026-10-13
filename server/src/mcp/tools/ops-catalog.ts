@@ -1629,7 +1629,7 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '| `attachments` / `chronology` | — | `is_empty`/`not_empty`; `eq`/`ne` (boolean); числа — количество |',
       '| `comment` | — | `is_empty`/`not_empty`; `eq`/`ne` (boolean) |',
       '| `active` / `trashed` | — | `eq`/`ne` (boolean) |',
-      '| `keywords` | `scope?: [title|synonyms|comment|chrono]` | `matches` (значение — строка мини-синтаксиса; пустой `scope` = условие отключено) |',
+      '| `keywords` | `scope?: [title|synonyms|comment|diary]` | `matches` (значение — строка мини-синтаксиса; пустой `scope` = условие отключено; `diary` — дневниковые записи мысли, 0.13.1) |',
       '| `author` / `editor` | — | `eq`/`ne`/`in`/`not_in`/`is_empty`/`not_empty` |',
       '| `created_at` / `updated_at` | — | `gt`/`gte`/`lt`/`lte`/`between`/`not_between` (границы — ISO-8601-строки/токены) |',
       '| `properties` | — | `has`/`not_has` (значение — id/имена свойств; фактический набор мысли = эффективные по цепочке типов + заданные индивидуально) |',
