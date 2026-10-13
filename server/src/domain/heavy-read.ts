@@ -24,7 +24,7 @@
  * соединение воркера, если схема успела измениться.
  */
 
-import { type SearchRequest, type SearchResponse } from '@etn/shared';
+import { type SearchRequest } from '@etn/shared';
 
 import type {
   ReaderSubgraphResult,
@@ -38,12 +38,13 @@ import { getReaderPool, type ReaderPool } from '../db/reader-pool.js';
 import {
   queryThoughts,
   queryThoughtIds,
+  type AstTokenContext,
   type ThoughtIdsQueryResult,
   type ThoughtQueryOptions,
   type ThoughtQueryRequest,
   type ThoughtQueryResult,
 } from './query-service.js';
-import { search } from './search-service.js';
+import { search, type SearchResult } from './search-service.js';
 import { subgraph, type TraversalBounds } from './graph-traversal.js';
 import type { TokenIssue } from './thought-type-view-tokens.js';
 import type { SubgraphEdge } from '@etn/shared';
@@ -136,18 +137,22 @@ export async function searchAsync(
   ndb: NetworkDb,
   request: SearchRequest,
   showInactiveDefault = false,
-): Promise<SearchResponse> {
+  tokenContext?: AstTokenContext,
+): Promise<SearchResult> {
   const pool = getReaderPool();
   const context = contextFor(ndb, pool);
   if (pool === null || context === null) {
-    return search(ndb, request, showInactiveDefault);
+    return search(ndb, request, showInactiveDefault, tokenContext);
   }
   const task: ReaderTask = {
     context,
     op: 'search.query',
-    payload: { request, showInactiveDefault },
+    // `AstTokenContext` сериализуем (плоские числа/строки) — переживает
+    // structured clone до reader-воркера, поэтому разрешение календарных
+    // токенов одинаково в обоих режимах (задача 56a143ff).
+    payload: { request, showInactiveDefault, ...(tokenContext !== undefined ? { tokenContext } : {}) },
   };
-  return (await pool.run(task)) as SearchResponse;
+  return (await pool.run(task)) as SearchResult;
 }
 
 /**

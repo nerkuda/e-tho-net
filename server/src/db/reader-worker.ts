@@ -143,7 +143,12 @@ function execute(task: ReaderTask): ReaderTaskResponse {
     case 'search.query':
       return {
         ok: true,
-        result: search(ndb, task.payload.request, task.payload.showInactiveDefault),
+        result: search(
+          ndb,
+          task.payload.request,
+          task.payload.showInactiveDefault,
+          task.payload.tokenContext,
+        ),
       };
     case 'graph.subgraph':
       return {

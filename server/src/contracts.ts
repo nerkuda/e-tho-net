@@ -88,6 +88,7 @@ import {
 import { validateLayerColors } from './domain/layer-service.js';
 import type { TraversalBounds } from './domain/graph-traversal.js';
 import type {
+  AstTokenContext,
   QueryStats,
   ThoughtQueryOptions,
   ThoughtQueryRequest,
@@ -4240,6 +4241,11 @@ export interface ReaderThoughtsQueryPayload {
 export interface ReaderSearchPayload {
   request: SearchRequest;
   showInactiveDefault: boolean;
+  /**
+   * Контекст разрешения календарных токенов `request.ast` (задача 56a143ff):
+   * плоский сериализуемый объект, переживает structured clone до воркера.
+   */
+  tokenContext?: AstTokenContext;
 }
 
 /** Payload `graph.subgraph` — радиус-ограниченный подграф вокруг семян. */

@@ -28,11 +28,21 @@ import type { NetworkDb } from '../db/network-db.js';
 import type { Logger } from 'pino';
 import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer } from './layer-service.js';
-import { findDuplicates, search } from './search-service.js';
+import { findDuplicates, search, type SearchResult } from './search-service.js';
 import { queryThoughtsAsync } from './heavy-read.js';
 import type { AstTokenContext, ThoughtQueryRequest } from './query-service.js';
 import { BASE_LAYER_ID } from '@etn/shared';
-import type { DuplicateHit, FilterProfileId, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
+import type { CrossNetworkTokenIssue, DuplicateHit, FilterProfileId, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
+
+/**
+ * Ответ веерного поиска: обычный {@link SearchResponse} плюс диагностика
+ * неразрешимых токенов AST с указанием сети (задача 56a143ff, требование
+ * b7fdab20) — у каждой сети свой контекст (первый день недели). Паритет с
+ * веерной выборкой мыслей (`fanOutQuery`).
+ */
+export interface CrossNetworkSearchResponse extends SearchResponse {
+  unresolved?: CrossNetworkTokenIssue[];
+}
 
 /** Максимум сетей в одном веерном вызове. Запросы сверх лимита — ошибка
  *  (агенту нужен явный сигнал, а не молчаливая обрезка). */
@@ -129,17 +139,19 @@ function normalizeNetworkIds(ids: string[]): string[] {
 
 /** Слить N SearchResponse в один с проставленным `network_id` на каждом хите.
  *  Суммарный бюджет `cap` расходуется в порядке сетей и групп; при обрезке
- *  возвращается `truncated: true`. */
+ *  возвращается `truncated: true`. Неразрешимые токены AST агрегируются по
+ *  сетям (у каждой сети свой контекст — первый день недели). */
 function mergeSearchResponses(
-  responses: Array<{ networkId: string; response: SearchResponse }>,
+  responses: Array<{ networkId: string; response: SearchResult }>,
   cap: number,
-): { response: SearchResponse; truncated: boolean } {
+): { response: CrossNetworkSearchResponse; truncated: boolean } {
   const budget = makeBudget(cap);
   const by_names: SearchResponse['by_names'] = [];
   const by_texts: SearchResponse['by_texts'] = [];
   const by_links: SearchResponse['by_links'] = [];
   const by_chrono: SearchResponse['by_chrono'] = [];
   const total = { names: 0, texts: 0, links: 0, chronology: 0 };
+  const unresolved: CrossNetworkTokenIssue[] = [];
   for (const { networkId, response } of responses) {
     for (const hit of acceptWithBudget(budget, response.by_names)) {
       by_names.push({ ...hit, network_id: networkId });
@@ -157,6 +169,11 @@ function mergeSearchResponses(
     total.texts += response.meta.total_in_group.texts;
     total.links += response.meta.total_in_group.links;
     total.chronology += response.meta.total_in_group.chronology;
+    if (response.unresolved !== undefined) {
+      for (const issue of response.unresolved) {
+        unresolved.push({ network_id: networkId, token: issue.token, reason: issue.reason });
+      }
+    }
   }
   return {
     response: {
@@ -165,6 +182,7 @@ function mergeSearchResponses(
       by_links,
       by_chrono,
       meta: { total_in_group: total },
+      ...(unresolved.length > 0 ? { unresolved } : {}),
     },
     truncated: budget.truncated,
   };
@@ -197,6 +215,12 @@ export interface CrossNetworkSearchArgs {
   offset: number;
   /** Значение `show_inactive` по умолчанию (из пользовательских настроек). */
   showInactiveDefault: boolean;
+  /**
+   * Контекст разрешения токенов AST по сети (задача 56a143ff): первый день
+   * недели у каждой сети свой, поэтому фабрика берёт `networkId`. Отсутствие —
+   * исполнение без разрешения календарных токенов.
+   */
+  tokenContextFor?: (networkId: string) => AstTokenContext;
   /** Потолок суммарной выдачи; по умолчанию {@link CROSS_NETWORK_MAX_HITS}. */
   maxHits?: number;
 }
@@ -205,11 +229,11 @@ export interface CrossNetworkSearchArgs {
 export function fanOutSearch(
   access: CrossNetworkAccess,
   args: CrossNetworkSearchArgs,
-): { response: SearchResponse; networks: NetworksCatalog } {
+): { response: CrossNetworkSearchResponse; networks: NetworksCatalog } {
   const ids = normalizeNetworkIds(args.networkIds);
   const accessible = access.networks.filter((n) => ids.includes(n.id));
   const cap = args.maxHits ?? CROSS_NETWORK_MAX_HITS;
-  const responses: Array<{ networkId: string; response: SearchResponse }> = [];
+  const responses: Array<{ networkId: string; response: SearchResult }> = [];
   for (const net of accessible) {
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
     const response = search(ndb, {
@@ -231,13 +255,13 @@ export function fanOutSearch(
       // иначе обрезка становится неотличима от «ровно в потолок».
       limit: args.limit * Math.max(accessible.length, 1),
       offset: 0,
-    }, args.showInactiveDefault);
+    }, args.showInactiveDefault, args.tokenContextFor?.(net.id));
     responses.push({ networkId: net.id, response });
   }
   // Сначала сливаем (по сетям уже урезанные по per-сеть-лимиту выборки) с
   // общим бюджетом, затем применяем limit/offset к объединённой выдаче.
   const { response: merged, truncated } = mergeSearchResponses(responses, cap);
-  const paginated: SearchResponse = {
+  const paginated: CrossNetworkSearchResponse = {
     by_names: merged.by_names.slice(args.offset, args.offset + args.limit),
     by_texts: merged.by_texts.slice(args.offset, args.offset + args.limit),
     by_links: merged.by_links.slice(args.offset, args.offset + args.limit),
@@ -245,6 +269,8 @@ export function fanOutSearch(
     meta: merged.meta,
     truncated,
     reason: truncated ? 'cross_network_max_hits' : null,
+    // Диагностика неразрешимых токенов агрегирована по сетям — отдаём как есть.
+    ...(merged.unresolved !== undefined ? { unresolved: merged.unresolved } : {}),
   };
   return {
     response: paginated,

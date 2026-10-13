@@ -139,6 +139,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             limit: args.limit ?? 50,
             offset: args.offset ?? 0,
             showInactiveDefault: false,
+            // Токены AST в веере разрешаются по реестру КАЖДОЙ сети (свой
+            // первый день недели) — фабрика берёт networkId (задача 56a143ff).
+            tokenContextFor: (nid) => mcpTokenContext(rt, nid),
           });
           // O10: count reads for the «head» network — the per-network reads
           // counter is per-network, so we count hits from each network in its
@@ -175,18 +178,25 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         } else if (args.type_id !== undefined && args.type_id !== null) {
           typeIdForDomain = [args.type_id];
         }
-        const result = await searchAsync(ndb, {
-          q: args.query,
-          ast,
-          scope: args.scope,
-          in: args.in_subtree_of === undefined ? undefined : 'subtree',
-          from_thought_id: args.in_subtree_of,
-          type_id: typeIdForDomain,
-          author_id: args.author_id,
-          editor_id: args.editor_id,
-          limit: args.limit,
-          offset: args.offset,
-        });
+        const result = await searchAsync(
+          ndb,
+          {
+            q: args.query,
+            ast,
+            scope: args.scope,
+            in: args.in_subtree_of === undefined ? undefined : 'subtree',
+            from_thought_id: args.in_subtree_of,
+            type_id: typeIdForDomain,
+            author_id: args.author_id,
+            editor_id: args.editor_id,
+            limit: args.limit,
+            offset: args.offset,
+          },
+          false,
+          // Контекст календарных токенов AST (задача 56a143ff): часы сервера,
+          // `userId` ключа, «первый день недели» сети, профиль «мысли».
+          mcpTokenContext(rt, args.network_id as string),
+        );
         // O10: count the thoughts referenced by name/text/chrono hits. Link hits
         // (`by_links`) carry only `link_id`, so they don't move a thought counter.
         const thoughtIds = [

@@ -104,7 +104,8 @@ import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 import { assertFilterAstInProfile } from './filter-profile-validation.js';
 import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
-import { filterAstClause } from './query-service.js';
+import { filterAstClause, type AstTokenContext } from './query-service.js';
+import type { TokenIssue } from './thought-type-view-tokens.js';
 
 // Re-export so route/MCP callers have a single import surface for read helpers
 // (docs/03-server-api.md §6.9 resolve is conceptually part of search/lookup).
@@ -1070,18 +1071,39 @@ export function assertSearchAstExclusive(request: SearchRequest): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Ответ точки поиска вместе с диагностикой AST (задача 56a143ff, требование
+ * b7fdab20): `unresolved` непусто — календарный токен не разрешился, группы с
+ * мыслевым условием пусты с пояснением, а не бесшумно. Форма — паритет с
+ * одиночной выборкой мыслей (`ThoughtQueryResult.unresolved`,
+ * `TokenIssue[]`), чтобы точка поиска не теряла диагностику.
+ *
+ * Поле — серверное расширение контракта {@link SearchResponse}: сам общий
+ * контракт `shared/` в этой задаче не трогаем (границы задачи 56a143ff), поле
+ * прокидывается в ответ REST/MCP как есть. При выносе в `shared/` достаточно
+ * добавить необязательное `unresolved?: TokenIssue[]` в `SearchResponse`.
+ */
+export interface SearchResult extends SearchResponse {
+  unresolved?: TokenIssue[];
+}
+
+/**
  * Run a full-text search (docs/03-server-api.md §12).
  *
  * @param ndb - open network database.
  * @param request - query parameters; `scope` selects which groups to populate.
  * @param showInactiveDefault - caller's `preferences.show_inactive` value, used
  *   when `request.show_inactive` is omitted.
+ * @param tokenContext - контекст разрешения календарных токенов `request.ast`
+ *   (задача 56a143ff): часы сервера, `userId` ключа, первый день недели сети,
+ *   профиль времени. Без него лист с токеном неразрешим (`AST_FALSE`,
+ *   `unresolved` с пояснением вместо бесшумного пустого).
  */
 export function search(
   ndb: NetworkDb,
   request: SearchRequest,
   showInactiveDefault = false,
-): SearchResponse {
+  tokenContext?: AstTokenContext,
+): SearchResult {
   if (typeof request.q !== 'string' || request.q.trim() === '') {
     throw new EtnError('VALIDATION_ERROR', 'q must be a non-empty string', { field: 'q' });
   }
@@ -1114,8 +1136,18 @@ export function search(
   }
   const effectiveAst: FilterAst | undefined =
     explicitAst ?? compileSearchThoughtAst(ndb, request, showInactiveDefault);
+  // Неразрешимые токены AST (задача 56a143ff, требование b7fdab20): лист с
+  // токеном собирает диагностику в этот коллектор; пусто — всё разрешилось.
+  const unresolved: TokenIssue[] = [];
   const thoughtClause: Clause | null =
-    effectiveAst === undefined ? null : toSearchClause(filterAstClause(ndb, effectiveAst));
+    effectiveAst === undefined
+      ? null
+      : toSearchClause(
+          filterAstClause(ndb, effectiveAst, undefined, {
+            ...(tokenContext !== undefined ? { ctx: tokenContext } : {}),
+            unresolved,
+          }),
+        );
 
   const filters: SearchFilters = {
     // show_inactive/trashed остаются параметрами полнотекстового поиска —
@@ -1153,7 +1185,9 @@ export function search(
   // word at all (empty query already rejected above, or a pure exclusion —
   // FTS5 has no unary NOT, "matches nothing" is the deliberate rule here).
   if (trigram.match === '' && trigram.nameShortInclude.length === 0) {
-    return empty;
+    // Диагностика токенов сохраняется и на раннем выходе: причина пустого
+    // ответа не должна теряться (задача 56a143ff).
+    return unresolved.length > 0 ? { ...empty, unresolved } : empty;
   }
 
   const wants = (group: SearchScope): boolean => scope === 'all' || scope === group;
@@ -1184,6 +1218,9 @@ export function search(
     by_links: links.hits,
     by_chrono: chrono.hits,
     meta,
+    // Неразрешимые токены AST — только при непустом наборе (паритет с
+    // `queryThoughts`: «всё разрешилось» не шумит в ответе).
+    ...(unresolved.length > 0 ? { unresolved } : {}),
   };
 }
 

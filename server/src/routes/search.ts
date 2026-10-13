@@ -34,15 +34,16 @@ import {
 } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, restTokenContext, type RouteDeps } from './helpers.js';
 import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
 import { getExportJob, getExportJobContent, getExportJobFile, startExportJob } from '../domain/export-service.js';
 import { parseFilterAst } from '../domain/filter-ast.js';
-import { findMentionsInTexts } from '../domain/search-service.js';
+import { findMentionsInTexts, type SearchResult } from '../domain/search-service.js';
 import { searchAsync } from '../domain/heavy-read.js';
 import {
   fanOutSearch,
   type CrossNetworkAccess,
+  type CrossNetworkSearchResponse,
 } from '../domain/cross-network-search-service.js';
 
 /** Map a stored export MIME type to the recommended download filename extension. */
@@ -61,7 +62,8 @@ const LEGACY_SCOPE_MAP: Record<string, SearchScope[]> = {
 };
 
 /** Merge two search responses (used for the legacy `thoughts` scope). */
-function mergeSearchResponses(a: SearchResponse, b: SearchResponse): SearchResponse {
+function mergeSearchResponses(a: SearchResult, b: SearchResult): SearchResult {
+  const unresolved = [...(a.unresolved ?? []), ...(b.unresolved ?? [])];
   return {
     by_names: [...a.by_names, ...b.by_names],
     by_texts: [...a.by_texts, ...b.by_texts],
@@ -75,6 +77,7 @@ function mergeSearchResponses(a: SearchResponse, b: SearchResponse): SearchRespo
         chronology: a.meta.total_in_group.chronology + b.meta.total_in_group.chronology,
       },
     },
+    ...(unresolved.length > 0 ? { unresolved } : {}),
   };
 }
 
@@ -174,8 +177,15 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
             limit,
             offset,
             showInactiveDefault,
+            // Токены AST в веерном режиме разрешаются по реестру КАЖДОЙ сети
+            // (свой первый день недели) — фабрика берёт networkId (задача
+            // 56a143ff, паритет с «Структурами»).
+            tokenContextFor: (nid) => restTokenContext(app, req.auth!.user.id, nid),
           });
-          sendSuccess(reply, { ...result.response, networks: result.networks } satisfies SearchResponse);
+          sendSuccess(
+            reply,
+            { ...result.response, networks: result.networks } satisfies CrossNetworkSearchResponse,
+          );
           return;
         }
 
@@ -199,15 +209,23 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           offset,
         };
 
-        let response: SearchResponse = await searchAsync(
+        let response: SearchResult = await searchAsync(
           ndb,
           { ...requestBase, scope: granularScopes[0] },
           showInactiveDefault,
+          // Контекст календарных токенов AST (задача 56a143ff): часы сервера,
+          // `userId` ключа, «первый день недели» сети, профиль «мысли».
+          restTokenContext(app, req.auth!.user.id, networkId),
         );
         for (let i = 1; i < granularScopes.length; i += 1) {
           response = mergeSearchResponses(
             response,
-            await searchAsync(ndb, { ...requestBase, scope: granularScopes[i] }, showInactiveDefault),
+            await searchAsync(
+              ndb,
+              { ...requestBase, scope: granularScopes[i] },
+              showInactiveDefault,
+              restTokenContext(app, req.auth!.user.id, networkId),
+            ),
           );
         }
         sendSuccess(reply, response);
