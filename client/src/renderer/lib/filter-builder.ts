@@ -30,12 +30,32 @@
  */
 
 import {
+  FILTER_AST_ENTITY_KINDS,
+  FILTER_AST_GROUP_OPS,
+  FILTER_AST_OPERATORS,
+  FILTER_AST_VERSION,
   SORT_ORDERS,
   STRUCTURE_AUTHOR_OPS,
   STRUCTURE_SORTS,
+  getFilterProfile,
   typeNameKey,
   type ActivityEntityType,
   type ChronicleFilterDefinition,
+  type FilterAst,
+  type FilterAstEntity,
+  type FilterAstEntityKind,
+  type FilterAstGroupOp,
+  type FilterAstHierarchyMode,
+  type FilterAstLabels,
+  type FilterAstLeaf,
+  type FilterAstNode,
+  type FilterAstOperator,
+  type FilterAstScalar,
+  type FilterAstSortKey,
+  type FilterAstSubqueryValue,
+  type FilterAstValue,
+  type FilterProfileId,
+  type FilterTokenFamily,
   type LinkType,
   type NetworkProperty,
   type PropertyValueType,
@@ -280,6 +300,23 @@ export interface FilterCriteriaState {
   /** Сортировка — из единого набора {@link FILTER_SORTS}. */
   sort: StructureSort;
   order: SortOrder;
+  /**
+   * Дерево условий редактора (группы И/ИЛИ/НЕ + листья) — модель задачи
+   * 6ae062a9, ADR «дерево — развитие одного конструктора». `null`/`undefined` —
+   * отбор выражается плоскими полями выше (панели до редактора дерева); задано
+   * — проводником служит {@link buildFilterAst}, а не плоский `buildWireFilter`.
+   *
+   * Поле необязательно на время перехода: `defaultFilterCriteriaState`/
+   * `parseFilterDefinition` всегда возвращают его заданным, но плоские панели и
+   * их сохранённые отборы дерева не ведут.
+   */
+  tree?: FilterTreeNode | null;
+  /**
+   * Многоуровневая сортировка редактора (требование 5ce18fcf: «сортировка —
+   * многоуровневая с направлением на ключ»). Пусто/отсутствует — действует пара
+   * `sort`/`order` выше.
+   */
+  sortKeys?: FilterAstSortKey[];
 }
 
 /** Default filter state: empty filter → HOME only (§15.3). */
@@ -311,18 +348,28 @@ export function defaultFilterCriteriaState(): FilterCriteriaState {
     updatedBefore: '',
     sort: 'created',
     order: 'asc',
+    tree: null,
+    sortKeys: [],
   };
 }
 
 /**
  * Восстанавливает состояние отбора из wire-определения (сохранённый отбор
- * панели или `definition` отбора типа мысли). Незнакомые поля игнорируются;
- * сортировка/направление вне единых наборов заменяются значениями по
- * умолчанию — конструктор не сохраняет то, что исполнитель не исполнит.
+ * панели или `definition` отбора типа мысли). Понимает обе формы:
+ *
+ *   * AST (`{ version, filter, sort? }`) — читается единственным конвертером
+ *     {@link parseFilterAstState}: условия ложатся в `tree`/`sortKeys`;
+ *   * плоское `definition v1` (историческая форма панелей) — разбирается ниже
+ *     по полям; так читаются отборы, записанные до редактора дерева.
+ *
+ * Незнакомые поля игнорируются; сортировка/направление вне единых наборов
+ * заменяются значениями по умолчанию — конструктор не сохраняет то, что
+ * исполнитель не исполнит.
  */
 export function parseFilterDefinition(def: unknown): FilterCriteriaState {
   const next = defaultFilterCriteriaState();
   if (def === null || typeof def !== 'object' || Array.isArray(def)) return next;
+  if (isFilterAstWire(def)) return parseFilterAstState(def);
   const parsed = def as Record<string, unknown>;
   if (typeof parsed['keywords'] === 'string') next.keywords = parsed['keywords'];
   if (Array.isArray(parsed['keyword_scope'])) {
@@ -656,6 +703,7 @@ export function datesActive(s: FilterCriteriaState): boolean {
  */
 export function hasAnyFilterCriteria(state: FilterCriteriaState): boolean {
   return (
+    filterTreeHasAnyCriteria(state.tree ?? null) ||
     state.keywords.trim() !== '' ||
     state.parentIds.length > 0 ||
     state.typeIds.length > 0 ||
@@ -1266,4 +1314,448 @@ export function searchCriteriaToStored(state: SearchCriteriaState): Record<strin
     authorId: state.authorId,
     editorId: state.editorId,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Модель дерева отбора и её конвертер в wire-AST
+// (требование 5ce18fcf «Редактор выражает всё ядро AST одной моделью
+// состояния», ADR 30ff83bb «дерево — развитие одного конструктора»;
+// задача 6ae062a9, версия 0.13.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Операнд листа дерева — левый операнд «Что» в объёме wire-модели
+ * (`FilterAstEntity`: вид + адрес свойства/область ключевых слов/направление).
+ * Модель хранит его как есть, чтобы любой узел ядра AST выражался без потерь.
+ */
+export type FilterTreeOperand = FilterAstEntity;
+
+/** Значение-токен редактора: `$today`, `$weekStart-1d`, `$thought.[Свойство]`. */
+export interface FilterTreeTokenValue {
+  token: string;
+}
+
+/** Элемент списка значений: скаляр или токен (границы «между», наборы id). */
+export type FilterTreeListItem = FilterAstScalar | FilterTreeTokenValue;
+
+/** Оператор значения-подвыборки (совпадает с wire `FilterAstSubqueryValue`). */
+export type FilterTreeSubqueryOperator = FilterAstSubqueryValue['operator'];
+
+/**
+ * Значение условия-листа. Вид задан дискриминантом: в wire одиночный литерал и
+ * список из одного элемента неотличимы (`"a"` против `["a"]`), а «нет значения»
+ * выражается отсутствием поля — модель хранит выбор пользователя явно, поэтому
+ * `модель → AST → модель` не теряет ни список, ни пустое значение.
+ */
+export type FilterTreeValue =
+  /** Значение не требуется (`is_empty`/`not_empty` и т.п.). */
+  | { kind: 'none' }
+  /** Одиночный литерал (строка/число/дата/bool). */
+  | { kind: 'scalar'; value: FilterAstScalar }
+  /** Список литералов и/или токенов. */
+  | { kind: 'list'; items: FilterTreeListItem[] }
+  /** Единственный токен. */
+  | { kind: 'token'; token: string }
+  /** Под-выборка: полноценное под-дерево AST + её оператор. */
+  | { kind: 'subquery'; operator: FilterTreeSubqueryOperator; node: FilterTreeNode };
+
+/** Условие-лист дерева: `[Что][Оператор][Значение]` + снапшоты подписей. */
+export interface FilterTreeLeaf {
+  kind: 'leaf';
+  entity: FilterTreeOperand;
+  operator: FilterAstOperator;
+  value: FilterTreeValue;
+  /** Снапшоты подписей на момент сохранения (диагностика удалённой сущности). */
+  labels?: FilterAstLabels;
+  /** Режим обхода «в иерархии» (`structural` по умолчанию). */
+  mode?: FilterAstHierarchyMode;
+}
+
+/** Группа дерева: `И`/`ИЛИ` (один и более детей) / `НЕ` (ровно один ребёнок). */
+export interface FilterTreeGroup {
+  kind: 'group';
+  op: FilterAstGroupOp;
+  children: FilterTreeNode[];
+}
+
+/** Узел дерева отбора: группа или условие-лист. Глубина не ограничена. */
+export type FilterTreeNode = FilterTreeGroup | FilterTreeLeaf;
+
+/** Замечание редактора к узлу дерева (проверка по профилю контекста). */
+export interface FilterTreeIssue {
+  /** Путь узла от корня: `filter.children[0].children[1]`. */
+  path: string;
+  message: string;
+}
+
+/** Опции сборки/чтения AST: профиль контекста точки применения. */
+export interface FilterAstProfileOptions {
+  /**
+   * Профиль контекста (реестр `@etn/shared`): по нему проверяется состав
+   * операндов и операторов дерева. Не задан — проверок нет (чистая сборка).
+   */
+  profile?: FilterProfileId;
+  /** Бросить `Error` при нарушении профиля (иначе вернуть/собрать как есть). */
+  strict?: boolean;
+}
+
+/**
+ * Соответствие кодов ключей AST сортировкам панели (`FILTER_SORTS`). Обратное
+ * соответствие нужно, чтобы сохранённый AST-отбор открывался плоскими панелями
+ * с осмысленной сортировкой. У `viewed` ключа в AST нет (движок знает
+ * `title`/`alpha`, `created_at`/`created` и `updated_at`/`updated`) — плоская
+ * сортировка «по просмотру» в AST не выражается.
+ */
+const FILTER_SORT_TO_AST_KEY: Partial<Record<StructureSort, string>> = {
+  alpha: 'title',
+  created: 'created_at',
+  updated: 'updated_at',
+};
+
+const AST_KEY_TO_FILTER_SORT: Readonly<Record<string, StructureSort>> = {
+  title: 'alpha',
+  alpha: 'alpha',
+  created_at: 'created',
+  created: 'created',
+  updated_at: 'updated',
+  updated: 'updated',
+};
+
+/** Пустая группа дерева (по умолчанию `И`) — корень нового отбора. */
+export function defaultFilterTreeGroup(op: FilterAstGroupOp = 'and'): FilterTreeGroup {
+  return { kind: 'group', op, children: [] };
+}
+
+/**
+ * Пустой лист дерева по операнду — заготовка строки `[Что][Оператор][Значение]`.
+ * Оператор по умолчанию — `eq`; редактор подменяет его первым допустимым в
+ * профиле ({@link filterProfileOperators}).
+ */
+export function defaultFilterTreeLeaf(entity: FilterTreeOperand): FilterTreeLeaf {
+  return { kind: 'leaf', entity, operator: 'eq', value: { kind: 'none' } };
+}
+
+/** True — у дерева есть хотя бы одно условие (пустые группы не считаются). */
+export function filterTreeHasAnyCriteria(node: FilterTreeNode | null): boolean {
+  if (node === null) return false;
+  if (node.kind === 'group') return node.children.some(filterTreeHasAnyCriteria);
+  return true;
+}
+
+/** Операнды, доступные в профиле контекста (виды AST точки применения). */
+export function filterProfileOperands(profile: FilterProfileId): readonly FilterAstEntityKind[] {
+  return getFilterProfile(profile).operands;
+}
+
+/**
+ * Операторы, доступные для операнда в профиле контекста: у точек, отбирающих
+ * не-мысли (хроника, события, вложения), набор задан по операнду; у отбора
+ * мыслей действует полный словарь ядра (`FILTER_AST_OPERATORS`).
+ */
+export function filterProfileOperators(
+  profile: FilterProfileId,
+  kind: FilterAstEntityKind,
+): readonly FilterAstOperator[] {
+  const sets = getFilterProfile(profile).operand_operators;
+  if (sets === undefined) return FILTER_AST_OPERATORS;
+  return sets[kind] ?? [];
+}
+
+/**
+ * Семейства токенов профиля (`calendar` — везде, `time` — только у профилей со
+ * временем). Состав самих токенов и их арифметику знает серверный резолвер —
+ * клиентская модель хранит токен строкой и предлагает редактору те семейства,
+ * что вернул профиль.
+ */
+export function filterProfileTokenFamilies(profile: FilterProfileId): readonly FilterTokenFamily[] {
+  return getFilterProfile(profile).tokens;
+}
+
+/** Подпись ключа сортировки: известный ключ — из единого набора, иначе как есть. */
+export function filterAstSortKeyLabel(key: string): string {
+  const sort = AST_KEY_TO_FILTER_SORT[key];
+  return sort !== undefined ? filterSortLabel(sort) : key;
+}
+
+/** True — значение является wire-AST отбора (`{ version, filter }`). */
+export function isFilterAstWire(def: unknown): def is FilterAst {
+  if (def === null || typeof def !== 'object' || Array.isArray(def)) return false;
+  const rec = def as Record<string, unknown>;
+  return typeof rec['version'] === 'number' && rec['filter'] !== undefined && rec['filter'] !== null;
+}
+
+/** True — код оператора входит в словарь ядра. */
+export function isFilterAstOperator(value: unknown): value is FilterAstOperator {
+  return (
+    typeof value === 'string' && (FILTER_AST_OPERATORS as readonly string[]).includes(value)
+  );
+}
+
+/** True — код группы дерева (`and`/`or`/`not`). */
+export function isFilterAstGroupOp(value: unknown): value is FilterAstGroupOp {
+  return typeof value === 'string' && (FILTER_AST_GROUP_OPS as readonly string[]).includes(value);
+}
+
+/** True — режим обхода «в иерархии». */
+function isFilterAstHierarchyMode(value: unknown): value is FilterAstHierarchyMode {
+  return value === 'structural' || value === 'all_links';
+}
+
+/** True — ключ AST-сортировки (`{ key, order }`). */
+function isFilterAstSortKey(value: unknown): value is FilterAstSortKey {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const rec = value as Record<string, unknown>;
+  return typeof rec['key'] === 'string' && isSortOrder(rec['order']);
+}
+
+/** Операнд wire-листа, очищенный до известного вида AST (иначе `null`). */
+function parseFilterAstEntity(raw: unknown): FilterAstEntity | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  const kind = rec['kind'];
+  if (typeof kind !== 'string' || !(FILTER_AST_ENTITY_KINDS as readonly string[]).includes(kind)) {
+    return null;
+  }
+  // Операнд хранится как есть (вид + адрес свойства/область/направление) —
+  // незнакомые поля не выдумываем и не теряем: модель обязана быть без потерь.
+  return { ...rec, kind } as FilterAstEntity;
+}
+
+/** Снапшоты подписей wire-листа (пустые — `undefined`). */
+function parseFilterAstLabels(raw: unknown): FilterAstLabels | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const rec = raw as Record<string, unknown>;
+  const labels: FilterAstLabels = {};
+  if (typeof rec['entity'] === 'string') labels.entity = rec['entity'];
+  if (typeof rec['value'] === 'string') labels.value = rec['value'];
+  return labels.entity === undefined && labels.value === undefined ? undefined : labels;
+}
+
+/** Значение wire-листа → значение модели (незнакомое — «нет значения»). */
+function filterAstValueToTree(raw: unknown): FilterTreeValue {
+  if (raw === undefined || raw === null) return { kind: 'none' };
+  if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') {
+    return { kind: 'scalar', value: raw };
+  }
+  if (Array.isArray(raw)) {
+    const items: FilterTreeListItem[] = [];
+    for (const item of raw) {
+      if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+        items.push(item);
+      } else if (
+        item !== null &&
+        typeof item === 'object' &&
+        typeof (item as Record<string, unknown>)['token'] === 'string'
+      ) {
+        items.push({ token: (item as Record<string, unknown>)['token'] as string });
+      }
+    }
+    return { kind: 'list', items };
+  }
+  const rec = raw as Record<string, unknown>;
+  if (typeof rec['token'] === 'string') return { kind: 'token', token: rec['token'] };
+  if (rec['query'] !== undefined) {
+    const node = filterAstToTree(rec['query']);
+    const operator = rec['operator'];
+    if (
+      node !== null &&
+      (operator === 'in' || operator === 'not_in' || operator === 'all_in')
+    ) {
+      return { kind: 'subquery', operator, node };
+    }
+  }
+  return { kind: 'none' };
+}
+
+/** Значение модели → значение wire-листа (`none` — поле не выставляется). */
+function filterTreeValueToAst(value: FilterTreeValue): FilterAstValue | undefined {
+  switch (value.kind) {
+    case 'none':
+      return undefined;
+    case 'scalar':
+      return value.value;
+    case 'token':
+      return { token: value.token };
+    case 'list':
+      return value.items.map((item) =>
+        typeof item === 'object' ? { token: item.token } : item,
+      );
+    case 'subquery':
+      return { query: filterTreeToAst(value.node), operator: value.operator };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Узел дерева модели → узел wire-AST. Единственная реализация сериализации
+ * дерева: редактор обязан собирать состояние в этом виде, второго конвертера
+ * нет (ADR 30ff83bb).
+ */
+export function filterTreeToAst(node: FilterTreeNode): FilterAstNode {
+  if (node.kind === 'group') {
+    return { op: node.op, children: node.children.map(filterTreeToAst) };
+  }
+  const leaf: FilterAstLeaf = { entity: node.entity, operator: node.operator };
+  const value = filterTreeValueToAst(node.value);
+  if (value !== undefined) leaf.value = value;
+  if (node.labels !== undefined) leaf.labels = node.labels;
+  if (node.mode !== undefined) leaf.mode = node.mode;
+  return leaf;
+}
+
+/**
+ * Узел wire-AST → узел дерева модели. `null` — узел не распознан (нет вида
+ * операнда или код оператора вне словаря ядра): читаем строго, выдумывать
+ * условие нельзя — молча искажённый отбор хуже пустого.
+ */
+export function filterAstToTree(node: unknown): FilterTreeNode | null {
+  if (node === null || typeof node !== 'object' || Array.isArray(node)) return null;
+  const rec = node as Record<string, unknown>;
+  if (rec['op'] !== undefined) {
+    if (!isFilterAstGroupOp(rec['op'])) return null;
+    const children = Array.isArray(rec['children'])
+      ? rec['children'].map(filterAstToTree).filter((child): child is FilterTreeNode => child !== null)
+      : [];
+    return { kind: 'group', op: rec['op'], children };
+  }
+  const entity = parseFilterAstEntity(rec['entity']);
+  if (entity === null || !isFilterAstOperator(rec['operator'])) return null;
+  const leaf: FilterTreeLeaf = {
+    kind: 'leaf',
+    entity,
+    operator: rec['operator'],
+    value: filterAstValueToTree(rec['value']),
+  };
+  const labels = parseFilterAstLabels(rec['labels']);
+  if (labels !== undefined) leaf.labels = labels;
+  if (isFilterAstHierarchyMode(rec['mode'])) leaf.mode = rec['mode'];
+  return leaf;
+}
+
+/**
+ * Проверка дерева по профилю контекста (требование aed27eb8: состав операндов
+ * по видимым характеристикам; реестр — `@etn/shared`). Возвращает замечания
+ * редактора: недоступный операнд, недоступный оператор, у `НЕ` не один ребёнок.
+ *
+ * Семантику оператора и его сосуществование со значением (под-выборка, токены,
+ * `is_empty`) проверяет серверный `diagnoseFilterAst` — здесь второго словаря
+ * семантики не заводим.
+ */
+export function validateFilterTree(
+  node: FilterTreeNode,
+  profile: FilterProfileId,
+): FilterTreeIssue[] {
+  const operands = new Set<string>(filterProfileOperands(profile));
+  const sets = getFilterProfile(profile).operand_operators;
+  const issues: FilterTreeIssue[] = [];
+  const walk = (current: FilterTreeNode, path: string): void => {
+    if (current.kind === 'group') {
+      if (current.op === 'not' && current.children.length !== 1) {
+        issues.push({
+          path,
+          message: `группа «не» обязана иметь ровно одного ребёнка (сейчас ${current.children.length})`,
+        });
+      }
+      current.children.forEach((child, index) => {
+        walk(child, `${path}.children[${index}]`);
+      });
+      return;
+    }
+    const kind = current.entity.kind;
+    if (!operands.has(kind)) {
+      issues.push({
+        path,
+        message: `операнд «${kind}» недоступен в профиле «${profile}»`,
+      });
+    } else if (sets !== undefined && !(sets[kind] ?? []).includes(current.operator)) {
+      issues.push({
+        path,
+        message: `оператор «${current.operator}» недоступен для операнда «${kind}» в профиле «${profile}»`,
+      });
+    }
+    if (current.value.kind === 'subquery') {
+      walk(current.value.node, `${path}.value.query`);
+    }
+  };
+  walk(node, 'filter');
+  return issues;
+}
+
+/** Многоуровневая сортировка состояния: явные `sortKeys` либо пара `sort`/`order`. */
+function buildFilterAstSort(state: FilterCriteriaState): FilterAstSortKey[] {
+  const sortKeys = state.sortKeys ?? [];
+  if (sortKeys.length > 0) {
+    return sortKeys.map((key) => ({ key: key.key, order: key.order }));
+  }
+  const key = FILTER_SORT_TO_AST_KEY[state.sort];
+  return key === undefined ? [] : [{ key, order: state.order }];
+}
+
+/** Пути замечаний профиля — для сообщения об отказе сборки. */
+function profileIssuesMessage(issues: FilterTreeIssue[], profile: FilterProfileId): string {
+  return `Отбор не соответствует профилю «${profile}»: ${issues
+    .map((issue) => `${issue.path}: ${issue.message}`)
+    .join('; ')}`;
+}
+
+/**
+ * Единственный конвертер состояния в wire-AST (задачи 6ae062a9, ADR 30ff83bb):
+ * дерево модели → `FilterAst` и многоуровневая сортировка. Корень пустого
+ * дерева — пустая группа `И` (валидный «отбор без условий»).
+ *
+ * `opts.profile` включает проверку по профилю контекста; `opts.strict` —
+ * бросает `Error` при нарушении (сборка отбора для сохранения обязана быть
+ * принята исполнителем того же профиля).
+ */
+export function buildFilterAst(
+  state: FilterCriteriaState,
+  opts: FilterAstProfileOptions = {},
+): FilterAst {
+  const root: FilterTreeNode = state.tree ?? defaultFilterTreeGroup('and');
+  if (opts.profile !== undefined && opts.strict === true) {
+    const issues = validateFilterTree(root, opts.profile);
+    if (issues.length > 0) throw new Error(profileIssuesMessage(issues, opts.profile));
+  }
+  const ast: FilterAst = { version: FILTER_AST_VERSION, filter: filterTreeToAst(root) };
+  const sort = buildFilterAstSort(state);
+  if (sort.length > 0) ast.sort = sort;
+  return ast;
+}
+
+/**
+ * Десериализация сохранённого AST в единую модель: условия ложатся в `tree`,
+ * многоуровневая сортировка — в `sortKeys` (первый ключ дополнительно даёт
+ * плоскую пару `sort`/`order` для панелей). Плоские поля критериев не
+ * заполняются: их выражает дерево, и подменять одно другим нельзя — иначе
+ * сохранённый отбор открывался бы в панели искажённо.
+ *
+ * `opts.profile`/`opts.strict` — те же, что у {@link buildFilterAst}.
+ */
+export function parseFilterAstState(
+  def: unknown,
+  opts: FilterAstProfileOptions = {},
+): FilterCriteriaState {
+  const next = defaultFilterCriteriaState();
+  if (!isFilterAstWire(def)) return next;
+  const node = filterAstToTree(def.filter);
+  if (node === null) return next;
+  next.tree = node;
+  if (Array.isArray(def.sort)) {
+    next.sortKeys = def.sort.filter(isFilterAstSortKey).map((key) => ({
+      key: key.key,
+      order: key.order,
+    }));
+    const first = next.sortKeys[0];
+    const sort = first === undefined ? undefined : AST_KEY_TO_FILTER_SORT[first.key];
+    if (first !== undefined && sort !== undefined) {
+      next.sort = sort;
+      next.order = first.order;
+    }
+  }
+  if (opts.profile !== undefined && opts.strict === true) {
+    const issues = validateFilterTree(node, opts.profile);
+    if (issues.length > 0) throw new Error(profileIssuesMessage(issues, opts.profile));
+  }
+  return next;
 }

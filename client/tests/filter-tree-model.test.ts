@@ -1,0 +1,434 @@
+/**
+ * Тесты модели состояния дерева отбора и её конвертера в wire-AST (задача
+ * 6ae062a9, требование 5ce18fcf, ADR 30ff83bb, версия 0.13.1).
+ *
+ * Проверяется то, ради чего дерево сведено к единой модели `FilterCriteriaState`
+ * и единственному конвертеру `lib/filter-builder.ts`:
+ *
+ *  1. дерево любой глубины (группы И/ИЛИ/НЕ + листья) собирается в wire-AST без
+ *     потерь и читается обратно той же моделью;
+ *  2. ВСЕ операторы ядра и ВСЕ виды операндов и значения (скаляр/список/токен/
+ *     под-выборка/пусто) переживают round-trip `модель → AST → модель → AST`;
+ *  3. многоуровневая сортировка едет ключами `{ key, order }` и читается обратно;
+ *  4. профиль контекста — параметр конвертера: состав операндов/операторов берётся
+ *     из общего реестра `@etn/shared`, проверка дерева не заводит второго словаря.
+ *
+ * Чистые функции без DOM — обычный Node-прогон.
+ */
+
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import {
+  FILTER_AST_ENTITY_KINDS,
+  FILTER_AST_OPERATORS,
+  type FilterAst,
+  type FilterAstEntity,
+  type FilterAstEntityKind,
+  type FilterAstGroupOp,
+  type FilterAstOperator,
+} from '@etn/shared';
+
+import {
+  buildFilterAst,
+  defaultFilterCriteriaState,
+  defaultFilterTreeGroup,
+  defaultFilterTreeLeaf,
+  filterAstSortKeyLabel,
+  filterProfileOperands,
+  filterProfileOperators,
+  filterProfileTokenFamilies,
+  filterTreeHasAnyCriteria,
+  isFilterAstWire,
+  parseFilterAstState,
+  parseFilterDefinition,
+  validateFilterTree,
+  type FilterCriteriaState,
+  type FilterTreeGroup,
+  type FilterTreeLeaf,
+  type FilterTreeNode,
+} from '../src/renderer/lib/filter-builder.js';
+
+/** Лист дерева по операнду — краткая запись условий в тестах. */
+function leaf(
+  entity: FilterAstEntity,
+  operator: FilterAstOperator,
+  value: FilterTreeLeaf['value'],
+  extra: Partial<FilterTreeLeaf> = {},
+): FilterTreeLeaf {
+  return { kind: 'leaf', entity, operator, value, ...extra };
+}
+
+/** Группа дерева с детьми — краткая запись условий в тестах. */
+function group(op: FilterAstGroupOp, children: FilterTreeNode[]): FilterTreeGroup {
+  return { kind: 'group', op, children };
+}
+
+/** Состояние с деревом и явной сортировкой. */
+function treeState(root: FilterTreeNode, sortKeys: FilterCriteriaState['sortKeys'] = []): FilterCriteriaState {
+  return { ...defaultFilterCriteriaState(), tree: root, sortKeys };
+}
+
+// ---------------------------------------------------------------------------
+// 1. Дерево любой глубины: сборка в AST и обратно
+// ---------------------------------------------------------------------------
+
+describe('дерево условий: сборка в wire-AST и чтение обратно', () => {
+  const tree: FilterTreeGroup = {
+    kind: 'group',
+    op: 'and',
+    children: [
+      {
+        kind: 'group',
+        op: 'or',
+        children: [
+          leaf({ kind: 'type' }, 'in', { kind: 'list', items: ['t1', 't2'] }),
+          {
+            kind: 'group',
+            op: 'not',
+            children: [leaf({ kind: 'property', property_id: 'p1' }, 'is_empty', { kind: 'none' })],
+          },
+        ],
+      },
+      leaf(
+        { kind: 'created_at' },
+        'between',
+        { kind: 'list', items: [{ token: '$monthStart' }, { token: '$monthEnd' }] },
+      ),
+      leaf(
+        { kind: 'property', property_id: 'p2', direction: 'in' },
+        'eq',
+        { kind: 'scalar', value: 42 },
+        { labels: { entity: 'Размер', value: '42' }, mode: 'all_links' },
+      ),
+      leaf(
+        { kind: 'parents' },
+        'in',
+        {
+          kind: 'subquery',
+          operator: 'all_in',
+          node: {
+            kind: 'group',
+            op: 'and',
+            children: [
+              leaf({ kind: 'keywords', scope: ['title'] }, 'matches', { kind: 'scalar', value: 'счет*' }),
+            ],
+          },
+        },
+      ),
+    ],
+  };
+
+  const expected: FilterAst = {
+    version: 1,
+    filter: {
+      op: 'and',
+      children: [
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'type' }, operator: 'in', value: ['t1', 't2'] },
+            {
+              op: 'not',
+              children: [{ entity: { kind: 'property', property_id: 'p1' }, operator: 'is_empty' }],
+            },
+          ],
+        },
+        {
+          entity: { kind: 'created_at' },
+          operator: 'between',
+          value: [{ token: '$monthStart' }, { token: '$monthEnd' }],
+        },
+        {
+          entity: { kind: 'property', property_id: 'p2', direction: 'in' },
+          operator: 'eq',
+          value: 42,
+          labels: { entity: 'Размер', value: '42' },
+          mode: 'all_links',
+        },
+        {
+          entity: { kind: 'parents' },
+          operator: 'in',
+          value: {
+            query: {
+              op: 'and',
+              children: [
+                { entity: { kind: 'keywords', scope: ['title'] }, operator: 'matches', value: 'счет*' },
+              ],
+            },
+            operator: 'all_in',
+          },
+        },
+      ],
+    },
+    sort: [
+      { key: 'title', order: 'asc' },
+      { key: 'created_at', order: 'desc' },
+    ],
+  };
+
+  it('трёхуровневое дерево даёт эталонный AST (операнд/оператор/значение/labels/mode + сортировка)', () => {
+    const ast = buildFilterAst(
+      treeState(tree, [
+        { key: 'title', order: 'asc' },
+        { key: 'created_at', order: 'desc' },
+      ]),
+    );
+    assert.deepEqual(ast, expected);
+  });
+
+  it('AST → модель → AST не теряет ни одного узла (round-trip)', () => {
+    const back = parseFilterAstState(expected);
+    assert.notEqual(back.tree, null);
+    assert.deepEqual(buildFilterAst(back), expected, 'дерево любой глубины читается без потерь');
+    assert.deepEqual(back.sortKeys, expected.sort);
+  });
+
+  it('пустое состояние даёт валидный AST без условий (пустая группа И)', () => {
+    assert.deepEqual(buildFilterAst(defaultFilterCriteriaState()), {
+      version: 1,
+      filter: { op: 'and', children: [] },
+      sort: [{ key: 'created_at', order: 'asc' }],
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2. Весь словарь ядра: операторы, операнды, значения
+// ---------------------------------------------------------------------------
+
+describe('весь словарь ядра выражается моделью без потерь', () => {
+  it('каждый оператор ядра сериализуется и читается обратно', () => {
+    for (const operator of FILTER_AST_OPERATORS) {
+      const value = operator === 'is_empty' || operator === 'not_empty' || operator === 'has' || operator === 'not_has'
+        ? ({ kind: 'none' } as const)
+        : ({ kind: 'scalar', value: 'x' } as const);
+      const ast = buildFilterAst(treeState(group('and', [leaf({ kind: 'active' }, operator, value)])));
+      const root = ast.filter;
+      assert.ok('children' in root, `оператор ${operator}: корень — группа`);
+      const child = root.children[0];
+      assert.ok(child !== undefined && !('op' in child), `оператор ${operator}: узел — лист`);
+      assert.equal(child.operator, operator);
+      assert.deepEqual(buildFilterAst(parseFilterAstState(ast)), ast, `оператор ${operator} без потерь`);
+    }
+  });
+
+  it('каждый вид операнда (вид + адрес свойства + область) читается обратно', () => {
+    for (const kind of FILTER_AST_ENTITY_KINDS) {
+      const entity = entityForKind(kind);
+      const ast = buildFilterAst(treeState(group('and', [leaf(entity, 'eq', { kind: 'none' })])));
+      const back = parseFilterAstState(ast);
+      assert.deepEqual(buildFilterAst(back), ast, `операнд ${kind} без потерь`);
+    }
+  });
+
+  it('значения: пусто/скаляр/список (в т.ч. из одного)/токен/под-выборка различаются', () => {
+    const cases: Array<{ value: FilterTreeLeaf['value']; expected: unknown }> = [
+      { value: { kind: 'none' }, expected: undefined },
+      { value: { kind: 'scalar', value: 'a' }, expected: 'a' },
+      { value: { kind: 'scalar', value: false }, expected: false },
+      { value: { kind: 'list', items: ['a'] }, expected: ['a'] },
+      { value: { kind: 'list', items: [{ token: '$weekStart' }, '$today'] }, expected: [{ token: '$weekStart' }, '$today'] },
+      { value: { kind: 'token', token: '$today' }, expected: { token: '$today' } },
+      {
+        value: {
+          kind: 'subquery',
+          operator: 'not_in',
+          node: group('and', [leaf({ kind: 'active' }, 'eq', { kind: 'scalar', value: true })]),
+        },
+        expected: {
+          query: { op: 'and', children: [{ entity: { kind: 'active' }, operator: 'eq', value: true }] },
+          operator: 'not_in',
+        },
+      },
+    ];
+    for (const { value, expected } of cases) {
+      const ast = buildFilterAst(treeState(group('and', [leaf({ kind: 'type' }, 'in', value)])));
+      const root = ast.filter;
+      assert.ok('children' in root);
+      const child = root.children[0];
+      assert.ok(child !== undefined && !('op' in child));
+      assert.deepEqual(child.value, expected, `значение ${value.kind} в wire`);
+      assert.deepEqual(buildFilterAst(parseFilterAstState(ast)), ast, `значение ${value.kind} без потерь`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. Сортировка
+// ---------------------------------------------------------------------------
+
+describe('многоуровневая сортировка и плоская пара', () => {
+  it('пустые sortKeys дают ключ из плоской пары sort/order', () => {
+    const ast = buildFilterAst({ ...defaultFilterCriteriaState(), sort: 'alpha', order: 'desc' });
+    assert.deepEqual(ast.sort, [{ key: 'title', order: 'desc' }]);
+  });
+
+  it('сортировка «по просмотру» ключа в AST не имеет — sort не выставляется', () => {
+    const ast = buildFilterAst({ ...defaultFilterCriteriaState(), sort: 'viewed' });
+    assert.equal(ast.sort, undefined);
+  });
+
+  it('сохранённый AST отдаёт плоской панели известный ключ, а свойство — оставляет в sortKeys', () => {
+    const state = parseFilterAstState({
+      version: 1,
+      filter: { entity: { kind: 'active' }, operator: 'eq', value: true },
+      sort: [{ key: 'updated_at', order: 'desc' }],
+    });
+    assert.equal(state.sort, 'updated');
+    assert.equal(state.order, 'desc');
+
+    const propKey = parseFilterAstState({
+      version: 1,
+      filter: { entity: { kind: 'active' }, operator: 'eq', value: true },
+      sort: [{ key: 'p-size', order: 'asc' }],
+    });
+    assert.deepEqual(propKey.sortKeys, [{ key: 'p-size', order: 'asc' }]);
+    assert.equal(propKey.sort, 'created', 'неизвестный ключ не подменяет плоскую сортировку');
+  });
+
+  it('подпись ключа сортировки: известный — из единого набора, иначе как есть', () => {
+    assert.equal(filterAstSortKeyLabel('title'), 'по названию');
+    assert.equal(filterAstSortKeyLabel('updated_at'), 'по дате изменения');
+    assert.equal(filterAstSortKeyLabel('p-size'), 'p-size');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. Единый парсер читает AST
+// ---------------------------------------------------------------------------
+
+describe('parseFilterDefinition понимает обе формы отбора', () => {
+  const ast: FilterAst = {
+    version: 1,
+    filter: { op: 'and', children: [{ entity: { kind: 'active' }, operator: 'eq', value: true }] },
+    sort: [{ key: 'created_at', order: 'asc' }],
+  };
+
+  it('AST-форма ложится в tree/sortKeys и считается непустым отбором', () => {
+    const state = parseFilterDefinition(ast);
+    assert.deepEqual(state.tree, {
+      kind: 'group',
+      op: 'and',
+      children: [{ kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } }],
+    });
+    assert.deepEqual(state.sortKeys, [{ key: 'created_at', order: 'asc' }]);
+    assert.equal(filterTreeHasAnyCriteria(state.tree ?? null), true);
+  });
+
+  it('плоское definition v1 читается прежним путём и не считается AST', () => {
+    assert.equal(isFilterAstWire({ sort: 'alpha', type_ids: ['t1'] }), false);
+    const state = parseFilterDefinition({ sort: 'alpha', type_ids: ['t1'] });
+    assert.deepEqual(state.typeIds, ['t1']);
+    assert.equal(state.tree, null);
+  });
+
+  it('битая форма AST не выдумывает условие', () => {
+    const state = parseFilterAstState({ version: 1, filter: { op: 'xor', children: [] } });
+    assert.equal(state.tree, null);
+    assert.equal(filterTreeHasAnyCriteria(state.tree ?? null), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. Профиль контекста как параметр конвертера
+// ---------------------------------------------------------------------------
+
+describe('профиль контекста задаёт словарь операндов и операторов', () => {
+  it('состав берётся из общего реестра @etn/shared', () => {
+    assert.deepEqual(filterProfileOperands('thoughts').includes('type'), true);
+    assert.equal(filterProfileOperands('chronicle').includes('type'), false);
+    assert.equal(filterProfileOperands('events').includes('entity_id'), true);
+    assert.deepEqual(filterProfileOperators('thoughts', 'type').includes('in_hierarchy'), true);
+    assert.deepEqual(filterProfileOperators('events', 'entity_id'), ['eq', 'ne', 'in', 'not_in', 'all_of']);
+    assert.deepEqual(filterProfileOperators('chronicle', 'record_time').includes('between'), true);
+    assert.deepEqual(filterProfileTokenFamilies('chronicle').includes('time'), true);
+    assert.deepEqual(filterProfileTokenFamilies('thoughts'), ['calendar']);
+  });
+
+  it('проверка дерева по профилю: недоступный операнд, оператор, арность НЕ', () => {
+    const node: FilterTreeGroup = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        leaf({ kind: 'type' }, 'eq', { kind: 'none' }),
+        leaf({ kind: 'entity_id' }, 'gt', { kind: 'none' }),
+        { kind: 'group', op: 'not', children: [leaf({ kind: 'action' }, 'eq', { kind: 'none' }), leaf({ kind: 'user' }, 'eq', { kind: 'none' })] },
+      ],
+    };
+    const events = validateFilterTree(node, 'events');
+    const messages = events.map((issue) => issue.message).join(' | ');
+    assert.match(messages, /операнд «type» недоступен/, 'опечатка: операнд чужого профиля');
+    assert.match(messages, /оператор «gt» недоступен для операнда «entity_id»/);
+    assert.match(messages, /группа «не» обязана иметь ровно одного ребёнка/);
+    assert.equal(validateFilterTree(node, 'thoughts').some((i) => i.message.includes('«гt»')), false);
+  });
+
+  it('strict-сборка отклоняет отбор вне профиля, свободная — собирает', () => {
+    const state = treeState(group('and', [leaf({ kind: 'type' }, 'eq', { kind: 'none' })]));
+    assert.deepEqual(buildFilterAst(state, { profile: 'thoughts' }).filter, {
+      op: 'and',
+      children: [{ entity: { kind: 'type' }, operator: 'eq' }],
+    });
+    assert.throws(
+      () => buildFilterAst(state, { profile: 'chronicle', strict: true }),
+      /профилю «chronicle»/,
+    );
+    assert.throws(
+      () =>
+        parseFilterAstState(
+          { version: 1, filter: { entity: { kind: 'type' }, operator: 'eq' } },
+          { profile: 'chronicle', strict: true },
+        ),
+      /профилю «chronicle»/,
+    );
+  });
+
+  it('под-выборка проверяется по тому же профилю', () => {
+    const node = leaf(
+      { kind: 'targets' },
+      'in',
+      {
+        kind: 'subquery',
+        operator: 'in',
+        node: group('and', [leaf({ kind: 'record_body' }, 'matches', { kind: 'scalar', value: 'x' })]),
+      },
+    );
+    assert.equal(validateFilterTree(node, 'chronicle').length, 0, 'запись дневника видна в под-выборке');
+    assert.match(
+      validateFilterTree(node, 'thoughts').map((i) => i.message).join(' | '),
+      /операнд «targets» недоступен/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Хелперы модели
+// ---------------------------------------------------------------------------
+
+describe('хелперы модели дерева', () => {
+  it('конструкторы заготовок и признак непустого дерева', () => {
+    assert.deepEqual(defaultFilterTreeGroup('or'), { kind: 'group', op: 'or', children: [] });
+    assert.deepEqual(defaultFilterTreeLeaf({ kind: 'active' }), {
+      kind: 'leaf',
+      entity: { kind: 'active' },
+      operator: 'eq',
+      value: { kind: 'none' },
+    });
+    assert.equal(filterTreeHasAnyCriteria(group('and', [group('or', [])])), false);
+    assert.equal(filterTreeHasAnyCriteria(group('and', [defaultFilterTreeLeaf({ kind: 'active' })])), true);
+    assert.equal(filterTreeHasAnyCriteria(null), false);
+  });
+});
+
+/** Операнд каждого вида для round-trip-теста операндов. */
+function entityForKind(kind: FilterAstEntityKind): FilterAstEntity {
+  switch (kind) {
+    case 'property':
+      return { kind: 'property', property_id: 'p-size', property: 'Размер', direction: 'out' };
+    case 'keywords':
+      return { kind: 'keywords', scope: ['title', 'comment'] };
+    default:
+      return { kind } as FilterAstEntity;
+  }
+}
