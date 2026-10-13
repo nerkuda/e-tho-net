@@ -195,6 +195,44 @@ describe('единая модель состояния переживает со
     });
     assert.equal(back.onlyLinks, true, 'корпусные ключи читаются как прежде');
   });
+
+  it('строка поиска карты: `subtree` с ПУСТЫМ набором корней сохраняет строку подкорня (фолбэк на фокус)', () => {
+    const back = parseSearchCriteria({ subtree: true, subrootIds: [] });
+    // Строка подкорня ОБЯЗАНА остаться: ограничение включено, мысль не выбрана —
+    // значение `none`, фокус подставит buildSearchAst/expandSearchSubtreeRoots.
+    assert.deepEqual(back.tree, {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+        { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+        {
+          kind: 'leaf',
+          entity: { kind: 'parents' },
+          operator: 'in_hierarchy',
+          mode: 'all_links',
+          value: { kind: 'none' },
+        },
+      ],
+    });
+    // И при сборке AST корнем становится ТЕКУЩИЙ ФОКУС (прежнее поведение
+    // `searchSubtreeRoots` → `[focusId]` → `in=subtree`+`from_thought_id=focusId`).
+    const ast = buildSearchAst(back, 'focus-1');
+    assert.deepEqual(ast?.filter, {
+      op: 'and',
+      children: [
+        { entity: { kind: 'active' }, operator: 'eq', value: true },
+        { entity: { kind: 'trashed' }, operator: 'eq', value: false },
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'id' }, operator: 'in', value: ['focus-1'] },
+            { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: ['focus-1'] },
+          ],
+        },
+      ],
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

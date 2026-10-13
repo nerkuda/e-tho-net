@@ -1368,6 +1368,12 @@ function hasLegacySearchThoughtKeys(o: Record<string, unknown>): boolean {
  * `typeIds` → строка «Тип в иерархии», `subtree`+`subrootIds` → строка
  * «Родители в иерархии» (подкорень; корень добавит {@link buildSearchAst}).
  * Одиночный `subrootId` прошлых версий читается набором из одной мысли.
+ *
+ * Строка подкорня ставится при `subtree === true` и ПУСТОМ наборе корней — со
+ * значением `none`: ограничение подкорня включено, мысль не выбрана. Так
+ * сохраняется прежнее поведение «текущий фокус по умолчанию»
+ * ({@link expandSearchSubtreeRoots} подставит `focusId`). Пропуск строки молча
+ * РАСШИРИЛ бы выдачу до всего дерева — ошибка, найденная при проверке.
  */
 function legacySearchThoughtTree(o: Record<string, unknown>): FilterTreeNode {
   const children: FilterTreeNode[] = [];
@@ -1393,13 +1399,13 @@ function legacySearchThoughtTree(o: Record<string, unknown>): FilterTreeNode {
     : typeof o['subrootId'] === 'string' && o['subrootId'] !== ''
       ? [o['subrootId']]
       : [];
-  if (o['subtree'] === true && subroots.length > 0) {
+  if (o['subtree'] === true) {
     children.push({
       kind: 'leaf',
       entity: { kind: 'parents' },
       operator: 'in_hierarchy',
       mode: 'all_links',
-      value: { kind: 'list', items: [...subroots] },
+      value: subroots.length > 0 ? { kind: 'list', items: [...subroots] } : { kind: 'none' },
     });
   }
   return { kind: 'group', op: 'and', children };
