@@ -546,6 +546,11 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     shell.setState({ kind: 'ready' });
     bottom.replaceChildren(shell.root);
     showTitleView();
+    // Тело записи строим СРАЗУ, в режиме просмотра: иначе одинарный выбор
+    // строки показывал «Комментарий пуст.», а текст появлялся лишь после входа
+    // в правку двойным кликом (ошибка 66f66c21). Комментарий остаётся
+    // редактируемым — двойной клик по телу/заголовку входит в единую правку.
+    ensureWidget();
     activeRowId = commentId;
     activeOpen = () => enterBodyEdit('body');
     if (startEdit) enterBodyEdit('title');
