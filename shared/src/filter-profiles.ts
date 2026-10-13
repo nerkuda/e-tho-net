@@ -168,10 +168,19 @@ const EVENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
   user: ['eq', 'ne', 'in', 'not_in'],
 };
 
-/** Операнды профиля «мысли»: полный словарь AST без операндов чужих точек. */
+/**
+ * Операнды профиля «мысли»: полный словарь AST без операндов чужих точек.
+ *
+ * `link_type` входит и в профиль «мысли» (задача f7da04d6): канонический
+ * AST-лист фильтра типов связей (`linkFilterToAst`) допустим в теле отбора
+ * мыслей наравне с плоским фасадным `link_filter`. Семантика в контексте мысли —
+ * «у мысли есть инцидентная связь указанного типа»; `is_empty`/`not_empty` —
+ * «нет/есть типизированных инцидентных связей» (executor `query-service`).
+ */
 const THOUGHT_OPERANDS: readonly FilterAstEntityKind[] = [
   'id',
   'type',
+  'link_type',
   'property',
   'parents',
   'children',
@@ -188,8 +197,12 @@ const THOUGHT_OPERANDS: readonly FilterAstEntityKind[] = [
   'properties',
 ];
 
-/** Операнды профиля «карта»: мысли + формально тип связи (задача f7da04d6). */
-const MAP_OPERANDS: readonly FilterAstEntityKind[] = [...THOUGHT_OPERANDS, 'link_type'];
+/**
+ * Операнды профиля «карта»: тот же набор, что у «мыслей» (оператор `link_type`
+ * доступен обоим профилям, задача f7da04d6). Отдельный профиль сохранён как
+ * точка расширения карты.
+ */
+const MAP_OPERANDS: readonly FilterAstEntityKind[] = [...THOUGHT_OPERANDS];
 
 /**
  * Реестр профилей контекста. Ключ — {@link FilterProfileId}. Полный AST-словарь

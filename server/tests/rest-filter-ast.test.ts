@@ -301,6 +301,62 @@ describe('POST /thoughts/query: AST-тело через REST (задача c1376
     }
   });
 
+  it('ast: канонический лист «Тип связи» принимается профилем thoughts и равен плоскому link_type_ids', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const a = seedThought(ctx.ndb, 'Узел A');
+      const b = seedThought(ctx.ndb, 'Узел B');
+      const lonely = seedThought(ctx.ndb, 'Одинокая');
+      const parentType = randomUUID();
+      const childType = randomUUID();
+      const insertType = (id: string, f: string, parent: string | null): void => {
+        ctx.ndb
+          .prepare(
+            `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+                                     parent_id, version, created_at, updated_at, created_by)
+             VALUES (?, ?, lower(?), ?, lower(?), ?, 1, '2024', '2024', 'u')`,
+          )
+          .run(id, f, f, f, f, parent);
+      };
+      insertType(parentType, 'связь родитель', null);
+      insertType(childType, 'связь потомок', parentType);
+      ctx.ndb
+        .prepare(
+          `INSERT INTO links (id, source_id, target_id, type_id, active, version, created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', 'u', 'u')`,
+        )
+        .run(randomUUID(), a, b, childType);
+
+      const idsOf = (json: Record<string, unknown>): string[] =>
+        (json['data'] as Array<{ id: string }>).map((i) => i.id).sort();
+
+      // Плоское поле: мысли с инцидентной связью типа-РОДИТЕЛЯ (раскрытие L21).
+      const flat = await post(ctx, {
+        link_type_ids: [parentType],
+        sort: 'alpha',
+        order: 'asc',
+        limit: 50,
+        count: true,
+      });
+      assert.equal(flat.statusCode, 200, JSON.stringify(flat.json));
+
+      // Тот же отбор каноническим AST-листом «Тип связи» (до фикса профиль
+      // thoughts отвергал операнд link_type).
+      const ast = {
+        version: FILTER_AST_VERSION,
+        filter: { entity: { kind: 'link_type' as const }, operator: 'in_hierarchy' as const, value: [parentType] },
+      };
+      const viaAst = await post(ctx, { ast, sort: 'alpha', order: 'asc', limit: 50, count: true });
+      assert.equal(viaAst.statusCode, 200, JSON.stringify(viaAst.json));
+
+      assert.deepEqual(idsOf(viaAst.json), idsOf(flat.json), 'AST-лист = плоский link_type_ids');
+      assert.deepEqual(idsOf(flat.json), [a, b].sort(), 'рёбра дочернего типа попадают по родителю (L21)');
+      assert.ok(!idsOf(flat.json).includes(lonely));
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
   it('веер: tokenContextFor разрешает токены по сети, unresolved агрегируется в ответе', async () => {
     const ctx = await buildRestContext();
     try {

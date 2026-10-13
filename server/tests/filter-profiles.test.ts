@@ -203,10 +203,11 @@ describe('реестр профилей контекста (задача 7a798b1
       () => assertFilterAstInProfile(withTargets, 'thoughts'),
       (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
     );
-    // Тип связи виден на карте, но не в отборе мыслей.
+    // Тип связи виден и карте, и отбору мыслей (задача f7da04d6: канонический
+    // AST-лист link_filter допустим в теле отбора мыслей).
     const withLinkType = astLeaf({ kind: 'link_type' }, 'in', [randomUUID()]);
     assert.doesNotThrow(() => assertFilterAstInProfile(withLinkType, 'map'));
-    assert.throws(() => assertFilterAstInProfile(withLinkType, 'thoughts'));
+    assert.doesNotThrow(() => assertFilterAstInProfile(withLinkType, 'thoughts'));
     // Видимый операнд в своём профиле — без ошибки.
     assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'active' }, 'eq', true), 'thoughts'));
     // «Цели» видны в профиле хроники (задача 4752b065) — проверка проходит.
@@ -253,8 +254,8 @@ describe('реестр профилей контекста (задача 7a798b1
     it('queryThoughts проверяет профиль у явного AST; без профиля — не проверяет', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        // Живой тип связи: «Тип связи» исполним движком, но невидим в профиле
-        // мыслей (виден на карте).
+        // Живой тип связи: «Тип связи» исполним движком и виден профилю мыслей
+        // (задача f7da04d6 — операнд добавлен в профиль thoughts).
         const ltId = randomUUID();
         ndb
           .prepare(
@@ -264,12 +265,14 @@ describe('реестр профилей контекста (задача 7a798b1
           )
           .run(ltId);
         const tree = astLeaf({ kind: 'link_type' }, 'in', [ltId]);
-        assert.throws(
-          () => run(ndb, tree, 'thoughts'),
-          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
-        );
+        assert.doesNotThrow(() => run(ndb, tree, 'thoughts'));
         // Без профиля движок профиль не применяет (обратная совместимость).
         assert.doesNotThrow(() => run(ndb, tree));
+        // Невидимый операнд (хроника) с профилем мыслей — отказ.
+        assert.throws(
+          () => run(ndb, astLeaf({ kind: 'record_body' }, 'matches', 'x'), 'thoughts'),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
       } finally {
         ndb.close();
       }

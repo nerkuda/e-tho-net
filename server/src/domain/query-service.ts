@@ -2030,7 +2030,8 @@ function filterAstLeafClause(
       // контексте МЫСЛИ: «у мысли есть инцидентная связь указанного типа».
       // `in`/`in_hierarchy` (и `eq`) раскрывают тип вместе с потомками
       // `link_types` (L21) — общий AST-лист фильтра типов связей; `is_empty`/
-      // `not_empty` — «нет/есть типизированных инцидентных связей».
+      // `not_empty` — «нет/есть ТИПИЗИРОВАННЫХ инцидентных связей» (семантика
+      // подтверждена оркестратором для контекста мысли, задача f7da04d6).
       const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
       if (operator === 'is_empty' || operator === 'not_empty') {
         const typed: Clause = {
