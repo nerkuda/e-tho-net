@@ -26,7 +26,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { before, describe, it } from 'node:test';
 
-import type { NetworkProperty } from '@etn/shared';
+import { FILTER_AST_ENTITY_KINDS, type NetworkProperty } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
 
@@ -216,6 +216,31 @@ describe('под-выборка: релевантность операнда —
     assert.equal(sub.filterSubqueryValueOperator('in'), 'in');
     assert.equal(sub.filterSubqueryValueOperator('not_in'), 'not_in');
     assert.equal(sub.filterSubqueryValueOperator('all_of'), 'all_in');
+  });
+
+  it('точный состав видов: поддержаны property/parents/children/type, отложены четыре', () => {
+    // Перебор по ЕДИНОМУ реестру видов операндов (`FILTER_AST_ENTITY_KINDS`):
+    // мутация «добавить или убрать вид» в наборах модуля краснеет здесь, а не
+    // только внешней пробой на конкретном операнде.
+    const supported = FILTER_AST_ENTITY_KINDS.filter((kind) => sub.filterSubquerySupported(kind));
+    const deferred = FILTER_AST_ENTITY_KINDS.filter((kind) => sub.filterSubqueryDeferred(kind));
+    assert.deepEqual([...supported].sort(), ['children', 'parents', 'property', 'type']);
+    assert.deepEqual(
+      [...deferred].sort(),
+      ['attachments', 'chronology', 'link_type', 'targets'],
+      'релевантные, но не исполняемые операнды (сервер отвечает `unsupported`)',
+    );
+    assert.deepEqual(
+      supported.filter((kind) => sub.filterSubqueryDeferred(kind)),
+      [],
+      'вид не может быть одновременно поддержан и отложен',
+    );
+
+    // «Тип» — одиночный операнд: вид поддержан, но «все в (выборке)» ему недоступно.
+    assert.equal(sub.filterSubquerySupported('type'), true);
+    assert.equal(sub.filterSubquerySupported('attachments'), false, '«Вложения» ждут под-проекта сущностей');
+    assert.equal(sub.filterSubqueryRelevantLeaf(leafOf({ kind: 'type' }, 'all_of'), DATA), false);
+    assert.equal(sub.filterSubqueryRelevantLeaf(leafOf({ kind: 'type' }, 'in'), DATA), true);
   });
 
   it('подпись условий: коннекторы, скобки вложенности, «без условий»', () => {
