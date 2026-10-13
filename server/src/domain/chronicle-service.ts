@@ -29,6 +29,7 @@ import {
   STRUCTURE_AUTHOR_OPS,
   TRAVERSAL_DEFAULTS,
   buildLikePattern,
+  commentScopeEnabled,
   parseFilterKeywords,
   type ChronicleFilter,
   type ChronicleFilterDefinition,
@@ -645,13 +646,12 @@ function validToLowerCond(dateFrom: string): [string, string[]] {
 }
 
 /**
- * Включена ли область `comment` в `keyword_scope`. Отсутствие области (или
- * пустой массив) — прежнее поведение «все области»; иначе область должна быть
- * названа явно. Одна точка правды для пути Б (текст/заголовок записи).
+ * Одна точка правды для гейта пути Б (текст/заголовок записи) — предикат живёт
+ * в `@etn/shared` (chronicle-keywords.ts) вместе с конструктором группы панели
+ * «Дневника»; ре-экспорт сохранён ради прежней поверхности домена.
  */
-export function commentScopeEnabled(scope: StructureKeywordScope[] | undefined): boolean {
-  return scope === undefined || scope.length === 0 || scope.includes('comment');
-}
+export { commentScopeEnabled };
+
 /** Resolve one comment row with all its targets into a {@link ChronicleRow}. */
 function buildRows(
   ndb: NetworkDb,

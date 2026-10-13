@@ -30,10 +30,12 @@
  */
 
 import {
+  buildChronicleKeywordGroup,
   type ChronicleFilterDefinition,
   type ChronicleRow,
   type FilterAstNode,
   type NetworkProperty,
+  type StructureKeywordScope,
 } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
@@ -51,6 +53,7 @@ import {
   compileFlatCriteriaToAst,
   defaultFilterCriteriaState,
   defaultFilterTreeGroup,
+  filterAstToTree,
   parseFilterAstState,
   parseFilterDefinition,
   withReverseLinkPropertySides,
@@ -277,20 +280,25 @@ interface KeywordSlice {
 /** Срез состояния для общего поля ключевых слов (живая строка поиска). */
 let keywordSlice: KeywordSlice = { keywords: '', keywordInTitle: true, keywordInSynonyms: true, keywordInComment: true };
 
-/** Группа ключевых слов дерева (маркер структуры: ИЛИ текста записи и целей). */
+/**
+ * Группа ключевых слов дерева (маркер структуры: ИЛИ пути А и пути Б). Обход
+ * РЕКУРСИВНЫЙ: путь Б — это пословные группы `ИЛИ(тело, заголовок)`, вложенные
+ * в `И` вместе с `цели не пусты`.
+ */
 function isKeywordGroup(node: FilterTreeNode): boolean {
   if (node.kind !== 'group' || node.op !== 'or') return false;
-  let textPath = false;
-  let thoughtPath = false;
-  for (const child of node.children) {
-    if (child.kind !== 'group') continue;
-    for (const inner of child.children) {
-      if (inner.kind !== 'leaf') continue;
-      if (inner.entity.kind === OP_BODY || inner.entity.kind === OP_TITLE) textPath = true;
-      if (inner.entity.kind === OP_TARGETS) thoughtPath = true;
-    }
-  }
-  return textPath || thoughtPath;
+  return allLeaves(node).some(isKeywordGroupLeaf);
+}
+
+/** Лист-признак группы ключевых слов (слово пути Б либо путь А / «цели не пусты»). */
+function isKeywordGroupLeaf(leaf: FilterTreeLeaf): boolean {
+  if (leaf.entity.kind === OP_BODY || leaf.entity.kind === OP_TITLE) return true;
+  if (leaf.entity.kind !== OP_TARGETS) return false;
+  if (leaf.operator === 'not_empty') return true;
+  return (
+    leaf.value.kind === 'subquery' &&
+    allLeaves(leaf.value.node).some((inner) => inner.entity.kind === 'keywords')
+  );
 }
 
 /** Области поиска мыслевого пути → плоский список (пусто — все три). */
@@ -302,38 +310,20 @@ function scopeIds(slice: KeywordSlice): Array<'title' | 'synonyms' | 'comment'> 
   return out;
 }
 
-/** Лист «Есть слова» с областями поиска (пусто — серверный дефолт «все три»). */
-function matchesLeaf(kind: string, text: string, scope: readonly string[]): FilterTreeLeaf {
-  const full = scope.length === 3;
-  const entity: FilterTreeLeaf['entity'] =
-    kind === 'keywords' && !full
-      ? ({ kind: 'keywords', scope: [...scope] } as FilterTreeLeaf['entity'])
-      : ({ kind } as FilterTreeLeaf['entity']);
-  return { kind: 'leaf', entity, operator: 'matches', value: { kind: 'scalar', value: text } };
-}
-
 /**
- * Группа ключевых слов «оба пути ИЛИ»: текст записи ИЛИ мыслевый путь через
- * под-выборку целей. Именно эта форма повторяет серверный компилятор плоского
- * тела хроники (`chronicle-service.compileChronicleToAst`): путь (Б) — текст
- * записи, путь (А) — мысли-цели, удовлетворяющие «Есть слова» с областями.
+ * Группа ключевых слов «оба пути ИЛИ». Критерий собирает ОБЩИЙ конструктор
+ * `@etn/shared` (`buildChronicleKeywordGroup`) — ровно тот же, что проверяет
+ * серверный тест паритета. Путь Б гейтится областью `comment` (пустой набор —
+ * все области) и на каждое слово строит `ИЛИ(тело, заголовок)`; путь А —
+ * под-выборка целей с «Есть слова» в отмеченных областях.
  */
 function keywordGroup(text: string, scope: readonly string[]): FilterTreeGroup {
-  const textPath: FilterTreeGroup = {
-    kind: 'group',
-    op: 'and',
-    children: [matchesLeaf(OP_BODY, text, []), matchesLeaf(OP_TITLE, text, [])],
-  };
-  const thoughtPath: FilterTreeLeaf = leaf(OP_TARGETS, 'in', {
-    kind: 'subquery',
-    operator: 'in',
-    node: {
-      kind: 'group',
-      op: 'and',
-      children: [matchesLeaf('keywords', text, scope)],
-    },
-  });
-  return { kind: 'group', op: 'or', children: [textPath, thoughtPath] };
+  const group = filterAstToTree(
+    buildChronicleKeywordGroup(text, scope as readonly StructureKeywordScope[]),
+  );
+  return group !== null && group.kind === 'group'
+    ? group
+    : { kind: 'group', op: 'or', children: [] };
 }
 
 /** Записать срез ключевых слов в дерево (управляемая группа в корне). */
@@ -352,35 +342,57 @@ function syncKeywordsFromTree(): void {
     root !== undefined && root !== null && root.kind === 'group'
       ? root.children.find(isKeywordGroup)
       : undefined;
-  if (group === undefined || group.kind !== 'group') return;
-  for (const child of group.children) {
-    if (child.kind !== 'group' && child.kind !== 'leaf') continue;
-    const nodes = child.kind === 'leaf' ? [child] : child.children;
-    for (const node of nodes) {
-      if (node.kind !== 'leaf' || node.operator !== 'matches') continue;
-      const text = valueText(node.value);
-      if (node.entity.kind === OP_BODY && text !== '') keywordSlice.keywords = text;
-      if (node.entity.kind === OP_TARGETS && text === '') {
-        const sub = node.value;
-        if (sub.kind === 'subquery') {
-          const inner = allLeaves(sub.node).find((l) => l.entity.kind === 'keywords');
-          if (inner !== undefined && inner.value.kind === 'scalar') {
-            keywordSlice.keywords = String(inner.value.value);
-          }
-          const scope = inner?.entity.kind === 'keywords' ? inner.entity.scope : undefined;
-          if (Array.isArray(scope)) {
-            keywordSlice.keywordInTitle = scope.includes('title');
-            keywordSlice.keywordInSynonyms = scope.includes('synonyms');
-            keywordSlice.keywordInComment = scope.includes('comment');
-          }
-        }
-      }
+  if (group === undefined) return;
+  const parsed = readKeywordSlice(group);
+  if (parsed === null) return;
+  // Пустой набор областей — «все области» (поведение до 0.10.1): галочки все.
+  const scope =
+    parsed.scope.length > 0 ? parsed.scope : (['title', 'synonyms', 'comment'] as const);
+  keywordSlice = {
+    keywords: parsed.keywords,
+    keywordInTitle: scope.includes('title'),
+    keywordInSynonyms: scope.includes('synonyms'),
+    keywordInComment: scope.includes('comment'),
+  };
+}
+
+/**
+ * Текст и области ключевых слов из группы дерева. Источник — лист «Есть слова»
+ * пути А (несёт и текст мини-синтаксиса, и области); без пути А (одни
+ * исключающие слова) слова восстанавливаются из пути Б. `null` — слов нет.
+ */
+function readKeywordSlice(
+  group: FilterTreeNode,
+): { keywords: string; scope: string[] } | null {
+  let keywords: string | null = null;
+  let scope: StructureKeywordScope[] | null = null;
+  const include: string[] = [];
+  const exclude: string[] = [];
+  const walk = (node: FilterTreeNode, negated: boolean): void => {
+    if (node.kind === 'group') {
+      const nextNegated = node.op === 'not' ? !negated : negated;
+      for (const child of node.children) walk(child, nextNegated);
+      return;
     }
-  }
-  if (keywordSlice.keywords !== '') {
-    keywordSlice.keywordInTitle = true;
-    keywordSlice.keywordInSynonyms = true;
-  }
+    if (node.operator !== 'matches') return;
+    const text = valueText(node.value);
+    if (text === '') return;
+    if (node.entity.kind === 'keywords') {
+      keywords = text;
+      if (Array.isArray(node.entity.scope)) scope = [...node.entity.scope];
+      return;
+    }
+    if (node.entity.kind === OP_BODY || node.entity.kind === OP_TITLE) {
+      if (negated) exclude.push(text);
+      else include.push(text);
+    }
+  };
+  walk(group, false);
+  if (keywords === null && include.length === 0 && exclude.length === 0) return null;
+  return {
+    keywords: keywords ?? [...include, ...exclude.map((word) => `-${word}`)].join(' '),
+    scope: scope ?? [],
+  };
 }
 
 // ---------------------------------------------------------------------------

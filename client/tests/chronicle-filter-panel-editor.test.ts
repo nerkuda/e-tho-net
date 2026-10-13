@@ -19,6 +19,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { buildChronicleKeywordGroup, type StructureKeywordScope } from '@etn/shared';
+
+import { filterTreeToAst, type FilterTreeNode } from '../src/renderer/lib/filter-builder.js';
+
 const RENDERER = 'src/renderer';
 
 type Leaf = {
@@ -40,6 +44,22 @@ function leaves(node: TreeNode | null | undefined, out: Leaf[] = []): Leaf[] {
 
 async function panelModule(): Promise<typeof import('../src/renderer/screens/chronicle/filter-panel.js')> {
   return import('../src/renderer/screens/chronicle/filter-panel.js');
+}
+
+/** Группа ключевых слов (ИЛИ) в корне дерева отбора. */
+function keywordGroupOf(tree: unknown): Group {
+  const root = tree as Group | null | undefined;
+  assert.equal(root?.kind, 'group', 'корень — группа');
+  const group = root!.children.find(
+    (child): child is Group => child.kind === 'group' && child.op === 'or',
+  );
+  assert.notEqual(group, undefined, 'группа ИЛИ ключевых слов собрана');
+  return group!;
+}
+
+/** Тело панели (сериализованное дерево) → узел AST для сверки с конструктором. */
+function astOf(node: unknown): ReturnType<typeof filterTreeToAst> {
+  return filterTreeToAst(node as FilterTreeNode);
 }
 
 describe('панель «Дневника» — единый редактор отбора (задача 608ecb79)', () => {
@@ -127,23 +147,72 @@ describe('панель «Дневника» — единый редактор о
     );
     assert.ok(goalRows.some((leaf) => leaf.entity.kind === 'type'), 'типы мыслей целей на месте');
 
-    // Ключевые слова — двухпутевая группа ИЛИ.
-    const orGroup = (restored.tree as Group).children.find(
-      (child): child is Group => child.kind === 'group' && child.op === 'or',
-    );
-    assert.notEqual(orGroup, undefined, 'группа ИЛИ ключевых слов собрана');
-    const textPath = leaves(orGroup!).filter(
+    // Ключевые слова — двухпутевая группа ИЛИ. Области ['title','synonyms'] в
+    // комментарий не входят, поэтому ТЕКСТОВЫЙ путь Б (тело/заголовок записи)
+    // выключен — остаётся только мыслевый путь А (БЛОКЕР 1, задача 608ecb79).
+    const orGroup = keywordGroupOf(restored.tree);
+    const textPath = leaves(orGroup).filter(
       (leaf) => leaf.entity.kind === 'record_body' || leaf.entity.kind === 'record_title',
     );
-    assert.equal(textPath.length, 2, 'путь Б: тело и заголовок записи');
-    assert.equal(textPath[0]!.value.value, 'кофе* -чай');
-    const thoughtPath = leaves(orGroup!).find((leaf) => leaf.entity.kind === 'targets');
+    assert.equal(textPath.length, 0, 'без области comment пути Б (текст записи) нет');
+    const thoughtPath = leaves(orGroup).find((leaf) => leaf.entity.kind === 'targets');
     const innerKeywords = leaves(thoughtPath?.value.node ?? null).find(
       (leaf) => leaf.entity.kind === 'keywords',
     );
     assert.equal(innerKeywords?.value.value, 'кофе* -чай', 'путь А: слова по мыслям-целям');
     assert.deepEqual(innerKeywords?.entity.scope, ['title', 'synonyms'], 'области поиска перенесены');
+    // Тело конструктора панели для этих слов/областей — РОВНО общий конструктор
+    // ключевых слов, который исполняет серверный тест паритета
+    // (chronicle-panel-parity): панель и плоское тело дают один набор.
+    assert.deepEqual(
+      astOf(orGroup),
+      buildChronicleKeywordGroup('кофе* -чай', ['title', 'synonyms']),
+      'тело конструктора панели = общий конструктор ключевых слов',
+    );
     assert.equal(restored.order, 'desc', 'направление ленты прочитано');
+  });
+
+  it('БЛОКЕР 1: текстовый путь включается областью comment (пустой набор — все)', async () => {
+    const panel = await panelModule();
+    const cases: Array<[string, StructureKeywordScope[]]> = [
+      ['продукты', ['comment']],
+      ['продукты', []],
+      ['продукты', ['title', 'synonyms']],
+    ];
+    const bodyOf = (scope: StructureKeywordScope[]): number =>
+      leaves(keywordGroupOf(panel.readFilterDefinition({ keywords: 'продукты', keyword_scope: scope }).tree)).filter(
+        (leaf) => leaf.entity.kind === 'record_body',
+      ).length;
+    assert.ok(bodyOf(['comment']) > 0, 'область comment — путь Б есть');
+    assert.ok(bodyOf([]) > 0, 'пустой набор = все области — путь Б есть');
+    assert.equal(bodyOf(['title', 'synonyms']), 0, 'набор без comment путь Б выключает');
+    // Во всех трёх случаях панель строит РОВНО общий конструктор.
+    for (const [keywords, scope] of cases) {
+      const group = keywordGroupOf(panel.readFilterDefinition({ keywords, keyword_scope: scope }).tree);
+      assert.deepEqual(astOf(group), buildChronicleKeywordGroup(keywords, scope), `области ${JSON.stringify(scope)}`);
+    }
+  });
+
+  it('БЛОКЕР 2: пословная группировка — на каждое слово ИЛИ(тело, заголовок), исключение НЕ(...)', async () => {
+    const panel = await panelModule();
+    const group = keywordGroupOf(
+      panel.readFilterDefinition({ keywords: 'кофе* -чай', keyword_scope: ['comment'] }).tree,
+    );
+    assert.deepEqual(astOf(group), buildChronicleKeywordGroup('кофе* -чай', ['comment']));
+    const bodyLeaves = leaves(group).filter((leaf) => leaf.entity.kind === 'record_body');
+    assert.deepEqual(
+      bodyLeaves.map((leaf) => leaf.value.value),
+      ['кофе*', 'чай'],
+      'на каждое слово — свой лист (а не одно общее значение на оба пути)',
+    );
+    assert.ok(
+      bodyLeaves.every((leaf) => leaf.operator === 'matches' && leaf.entity.scope === undefined),
+      'слово пути Б — «есть слова» без областей',
+    );
+    assert.ok(
+      leaves(group).some((leaf) => leaf.entity.kind === 'targets' && leaf.operator === 'not_empty'),
+      'путь Б привязан к «цели не пусты»',
+    );
   });
 
   it('AST-форма определения читается единым конвертером (повторное открытие)', async () => {
