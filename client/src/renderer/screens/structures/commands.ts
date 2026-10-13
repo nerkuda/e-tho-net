@@ -91,10 +91,13 @@ async function collectAllIds(ctx: FilterCommandsContext): Promise<string[]> {
   const ids: string[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < COLLECT_MAX_PAGES; page++) {
+    // Порядок — один источник: у дерева (`ast.sort`) плоские `sort`/`order` не
+    // передаются (иначе сервер отвергает два источника, задача 213bd2d2).
+    const orderFields =
+      ctx.filter.ast === undefined ? { sort: ctx.sort, order: ctx.order } : {};
     const result = await etn.structures.queryIds(networkId, {
       ...ctx.filter,
-      sort: ctx.sort,
-      order: ctx.order,
+      ...orderFields,
       limit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
       offset: 0,
       ...(cursor !== null ? { cursor } : {}),

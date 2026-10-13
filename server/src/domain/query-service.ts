@@ -375,8 +375,11 @@ export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQuer
             link_filter: req.link_filter,
           }
         : undefined,
-    sort: req.sort,
-    order: req.order,
+    // `sort`/`order` необязательны у запроса-фасада: тело-дерево (`ast`) несёт
+    // порядок в `ast.sort`, и плоская пара тогда не передаётся (задача
+    // 213bd2d2). Дефолты — те же, что у роута (`parseQueryBody`).
+    sort: req.sort ?? 'created',
+    order: req.order ?? 'asc',
     limit: req.limit,
     offset: req.offset,
     count: req.count,

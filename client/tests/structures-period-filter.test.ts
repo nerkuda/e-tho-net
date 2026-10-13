@@ -92,11 +92,16 @@ describe('панели отбора — период через period-editor (1
     assert.equal(shim.querySelector('.pe-dialog-value')!.textContent, 'с 2024-02-01 10:30');
   });
 
-  it('панель «Структур»: режим `period`, без нативных datetime-local', () => {
+  it('панель «Структур»: своих полей дат нет — строку ведёт единый редактор', () => {
     const src = readRenderer('screens/structures/filter-panel.ts');
-    assert.match(src, /mode: 'period'/, 'группа дат панели переведена на period-editor');
+    // Пересборка на единый редактор (задача 213bd2d2, ADR fc23f9c1): группа
+    // «Создано / Изменено» — обычная строка дерева, а её значение (дата/период)
+    // рисует общий редактор значения `lib/filter-value.ts`. Собственных полей
+    // дат и нативного `datetime-local` у панели больше нет вовсе.
+    assert.match(src, /buildFilterEditor\(\{/, 'панель собирается общей фабрикой редактора');
     assert.ok(!src.includes('datetime-local'), 'нативных datetime-local в панели нет');
-    assert.ok(!src.includes("mode: 'datetime'"), 'исторический режим datetime не используется');
+    assert.ok(!src.includes('st-f-date-field'), 'собственных полей дат в панели нет');
+    assert.ok(!src.includes("mode: 'period'"), 'своего режима дат панель больше не задаёт');
   });
 
   it('каркас формы: строки дат знают режим `period` и не знают `datetime`', () => {

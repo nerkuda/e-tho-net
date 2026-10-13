@@ -169,7 +169,10 @@ describe('приёмник панелей отбора (d144ef71)', () => {
     const structures = readText('screens/structures/filter-panel.ts');
     assert.match(structures, /registerThoughtDropField\(panelHost, \{/);
     assert.match(structures, /kind: 'filter',/);
-    assert.match(structures, /state\.parentIds = \[\.\.\.state\.parentIds, id\]/);
+    // Задача 213bd2d2 (ADR fc23f9c1): фасад «Родительские мысли» у панели убран —
+    // брошенная мысль добавляется в строку «Родители в иерархии (по всем связям)».
+    assert.match(structures, /addDropRoot\(id\)/);
+    assert.match(structures, /hierarchyLeafFor\(/);
     assert.match(structures, /callbacks\?\.onStatePersist\(\)/);
   });
 });

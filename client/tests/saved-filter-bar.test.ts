@@ -226,14 +226,18 @@ describe('диалог выбора сохранённого отбора (за�
 });
 
 describe('однообразие: «Хроника» работает с отборами как «Структуры» (задача 2ebe4206)', () => {
-  it('обе панели строят строку общим модулем, каждая со своим видом хранилища', () => {
+  it('обе панели работают с отборами общими модулями, каждая со своим видом хранилища', () => {
     const structures = readText(STRUCTURES_PANEL);
     const chronicle = readText(CHRONICLE_PANEL);
-    assert.match(structures, /buildSavedFilterBar\(\{/, '«Структуры» используют общую строку');
-    assert.match(chronicle, /buildSavedFilterBar\(\{/, '«Хроника» использует ту же строку');
+    // «Структуры» (задача 213bd2d2): имя и запись отбора перешли в общий футер
+    // единого редактора (`lib/filter-editor.ts` → `lib/filter-footer.ts`), а выбор
+    // сохранённого отбора — общий диалог-список того же модуля сохранённых
+    // отборов. Своего списка у панели по-прежнему нет (см. следующий тест).
+    assert.match(structures, /openSavedFilterDialog\(\{/, '«Структуры» используют общий диалог отборов');
+    assert.match(chronicle, /buildSavedFilterBar\(\{/, '«Хроника» использует общую строку');
     assert.match(structures, /etn\.savedFilters\./, 'хранилище «Структур» — view=structures');
     assert.match(chronicle, /etn\.chronicleFilters\./, 'хранилище «Хроники» — view=chronicle');
-    assert.match(structures, /savedBar\.root/, 'строка кладётся в футер панели «Структур»');
+    assert.match(structures, /buildFilterEditor\(\{/, 'редактор «Структур» — общая фабрика с футером');
     assert.match(chronicle, /savedBar\.root/, 'строка кладётся в футер панели «Хроники»');
   });
 

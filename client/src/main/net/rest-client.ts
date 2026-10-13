@@ -2638,6 +2638,7 @@ export class RestClient {
           total?: number | null;
           directions?: import('@etn/shared').StructureDirectionFlags;
           next_cursor?: string | null;
+          unresolved?: Array<{ path: string; token: string; reason: string; message: string }>;
         }
       | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : items.length;
@@ -2649,6 +2650,11 @@ export class RestClient {
       next_cursor: this.legacyStructureQuery
         ? legacyNextCursor(startOffset, items.length, limit, typeof meta?.total === 'number' ? meta.total : null)
         : meta?.next_cursor ?? null,
+      // Неразрешимые токены AST (требование b7fdab20): редактор отбора
+      // подсвечивает их адреса — поле едет из того же конверта `meta`.
+      ...(Array.isArray(meta?.unresolved) && meta.unresolved.length > 0
+        ? { unresolved: meta.unresolved }
+        : {}),
     };
   }
 

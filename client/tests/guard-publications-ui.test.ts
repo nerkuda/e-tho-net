@@ -339,14 +339,14 @@ describe('guard: UI публикаций (a3cfc018)', () => {
    */
   it('роль «Родительские мысли» — одна реализация на всех потребителей', () => {
     const consumers = [
-      'screens/structures/filter-panel.ts',
       'screens/chronicle/filter-panel.ts',
       'screens/publications/recipe.ts',
     ] as const;
-    // Диалог отбора типа мысли (задача cfbe8c74, ADR fc23f9c1) больше не
-    // собирает секцию «Родительские мысли» сам: ограничение по родителям —
-    // строка дерева на операнде «Родители» единого редактора, а её чип-поле
-    // строит общий виджет значения (`lib/filter-value.ts` → `buildEntityChipField`).
+    // Панель «Структур» (задача 213bd2d2, ADR fc23f9c1) и диалог отбора типа
+    // мысли (задача cfbe8c74) больше не собирают секцию «Родительские мысли»
+    // сами: ограничение по родителям — строка дерева на операнде «Родители»
+    // единого редактора, а её чип-поле строит общий виджет значения
+    // (`lib/filter-value.ts` → `buildEntityChipField`).
     for (const rel of consumers) {
       const source = fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
       assert.ok(

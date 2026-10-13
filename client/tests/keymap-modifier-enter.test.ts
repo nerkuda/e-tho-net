@@ -106,55 +106,30 @@ describe('modifierChordVariants — модификаторные Enter', () => {
   });
 });
 
-describe('панель «Структур»: модификаторные Enter применяют отбор', () => {
-  async function mountKeywordsInput(): Promise<{ input: ShimElement; applied: () => number }> {
+describe('панель «Структур»: своего Enter-обработчика у поля не осталось', () => {
+  // Пересборка панели на единый редактор (задача 213bd2d2, ADR fc23f9c1): поля
+  // «Ключевые слова» с собственным контекстом клавиатуры у панели больше нет —
+  // слова стали строкой дерева, значение которой ведёт общий редактор значения.
+  // Применение отбора по Ctrl+Enter с корня вида проверяет первый набор тестов.
+  it('панель монтирует общий редактор и не ведёт собственного контекста поля', async () => {
     const { store } = await import('../src/renderer/state.js');
     store.state.networkId = '00000000-0000-4000-8000-0000000000aa';
     const panel = await import('../src/renderer/screens/structures/filter-panel.js');
-    let count = 0;
     const host = new ShimElement('div');
     panel.mountFilterPanel(host as unknown as HTMLElement, {
-      onApply: () => {
-        count += 1;
-      },
+      onApply: () => undefined,
       onStatePersist: () => undefined,
       onCommands: () => undefined,
     });
     await new Promise((resolve) => setImmediate(resolve));
-    const input = host.querySelector('.st-f-keywords');
-    assert.ok(input !== undefined, 'поле «Ключевые слова» обязано быть в панели');
-    return { input: input!, applied: () => count };
-  }
-
-  it('чистый Enter и Ctrl+Enter применяют отбор; фокус держит контекст поля', async () => {
-    const { input, applied } = await mountKeywordsInput();
-    input.value = 'счет*';
-    input.emit('focusin', {});
-
-    assert.equal(keymap.dispatchKeyEvent(keyEvent({ key: 'Enter' })), true, 'чистый Enter обработан');
-    assert.equal(applied(), 1, 'чистый Enter применил отбор');
-
-    assert.equal(
-      keymap.dispatchKeyEvent(keyEvent({ key: 'Enter', ctrlKey: true })),
-      true,
-      'Ctrl+Enter обработан',
+    const editor = host.querySelector('.fe');
+    assert.ok(editor !== undefined && editor !== null, 'панель — общий редактор отбора');
+    const keywords = host.querySelector('.st-f-keywords');
+    assert.ok(keywords === undefined || keywords === null, 'спец-поля «Ключевые слова» в панели не осталось');
+    const src = await import('node:fs').then((f) =>
+      f.readFileSync('src/renderer/screens/structures/filter-panel.ts', 'utf8'),
     );
-    assert.equal(applied(), 2, 'Ctrl+Enter применил отбор (блокер приёмки)');
-
-    assert.equal(
-      keymap.dispatchKeyEvent(keyEvent({ key: 'Enter', shiftKey: true })),
-      true,
-      'Shift+Enter обработан',
-    );
-    assert.equal(applied(), 3, 'Shift+Enter применил отбор, как раньше');
-
-    input.emit('focusout', {});
-    assert.equal(
-      keymap.dispatchKeyEvent(keyEvent({ key: 'Enter', ctrlKey: true })),
-      false,
-      'после потери фокуса контекст поля снят — событие не обработано',
-    );
-    assert.equal(applied(), 3, 'без фокуса отбор не применяется');
+    assert.ok(!src.includes('keymap'), 'свой контекст клавиатуры панель не заводит');
   });
 });
 

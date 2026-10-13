@@ -20,7 +20,6 @@ import {
   type FocusEdge,
   type HierarchyResponse,
   type StructureFilter,
-  type StructurePropertyCondition,
   type ThoughtRef,
 } from '@etn/shared';
 
@@ -79,14 +78,16 @@ import { patchCloudVisualStates, ST_CLOUD_CLASS, type CloudVisualState } from '.
 import { openFilterCommandsMenu } from './commands.js';
 import { StructuresPager } from './pagination.js';
 import {
-  buildConditions,
-  buildExtraFilter,
-  buildKeywordScope,
-  buildTraversalFilter,
+  buildQueryFilter,
   FILTER_W_MAX,
   FILTER_W_MIN,
+  filterIssuesFromQueryError,
+  filterIssuesFromQueryResult,
   getFilterState,
   mountFilterPanel,
+  parseFilterState,
+  preloadFilterRegistry,
+  setFilterServerIssues,
   setFilterState,
   type FilterState,
 } from './filter-panel.js';
@@ -171,7 +172,11 @@ let appliedQuery: {
 /** Ключ запроса-снимка по текущему отбору. */
 function structuresFilterKey(): string {
   const state = getFilterState();
-  return `${state.sort}:${state.order}:${state.keywords.length}:${state.typeIds.length}:${appliedQuery === null ? 'draft' : 'applied'}`;
+  // Отбор выражается деревом и ключами сортировки (плоских полей панель не
+  // ведёт) — подпись считается по ним.
+  const tree = JSON.stringify(state.tree ?? null);
+  const sortKeys = JSON.stringify(state.sortKeys ?? []);
+  return `${tree.length}:${tree}:${sortKeys}:${appliedQuery === null ? 'draft' : 'applied'}`;
 }
 
 let structuresQueryKey: string | null = null;
@@ -255,7 +260,12 @@ export async function ensureStructuresInitialised(): Promise<void> {
     if (raw === null) {
       raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
     }
-    if (raw !== null && raw !== '') setFilterState(parseFilterState(raw));
+    if (raw !== null && raw !== '') {
+      // Реестр свойств сети нужен конвертеру определения: прежний плоский
+      // снимок несёт условия по свойствам, и без реестра они бы выпали.
+      await preloadFilterRegistry();
+      setFilterState(parseFilterState(raw));
+    }
     // Миграционное значение прежней ширины панели (`structures_state`) —
     // каркас читает его геттером, поэтому переприменяем состояние после
     // восстановления снимка (если в `ui_state` своего размера ещё нет).
@@ -264,89 +274,6 @@ export async function ensureStructuresInitialised(): Promise<void> {
     // Fall back to the empty filter (HOME).
   }
   await applyQuery(true);
-}
-
-/** A tri-state field of the persisted JSON: `true`/`false`, anything else → null. */
-function parseTriState(value: unknown): boolean | null {
-  return value === true || value === false ? value : null;
-}
-
-/** Coerces an unknown op value into the author-op union (default `eq`). */
-function parseAuthorOp(value: unknown): 'eq' | 'ne' | 'in' | 'not_in' | 'empty' | 'not_empty' {
-  if (
-    value === 'eq' ||
-    value === 'ne' ||
-    value === 'in' ||
-    value === 'not_in' ||
-    value === 'empty' ||
-    value === 'not_empty'
-  ) {
-    return value;
-  }
-  return 'eq';
-}
-
-/** Parses the persisted L4 `structures_state` JSON (unknown input, safe defaults). */
-function parseFilterState(raw: string): FilterState {
-  try {
-    const parsed = JSON.parse(raw) as Partial<FilterState>;
-    return {
-      keywords: typeof parsed.keywords === 'string' ? parsed.keywords : '',
-      keywordInTitle: parsed.keywordInTitle !== false,
-      keywordInSynonyms: parsed.keywordInSynonyms !== false,
-      keywordInComment: parsed.keywordInComment === true,
-      parentIds: Array.isArray(parsed.parentIds) ? parsed.parentIds.filter((v): v is string => typeof v === 'string') : [],
-      typeIds: Array.isArray(parsed.typeIds) ? parsed.typeIds.filter((v): v is string => typeof v === 'string') : [],
-      linkTypeIds: Array.isArray(parsed.linkTypeIds)
-        ? parsed.linkTypeIds.filter((v): v is string => typeof v === 'string')
-        : [],
-      linkFilterTypeIds: Array.isArray(parsed.linkFilterTypeIds)
-        ? parsed.linkFilterTypeIds.filter((v): v is string => typeof v === 'string')
-        : [],
-      linkFilterStructural: parsed.linkFilterStructural === true,
-      properties: Array.isArray(parsed.properties)
-        ? parsed.properties.filter(
-            (c): c is FilterState['properties'][number] =>
-              typeof c === 'object' && c !== null && typeof c.propertyId === 'string',
-          )
-        : [],
-      hasProperties: parseTriState(parsed.hasProperties),
-      hasComment: parseTriState(parsed.hasComment),
-      hasAttachments: parseTriState(parsed.hasAttachments),
-      hasChronology: parseTriState(parsed.hasChronology),
-      active: parseTriState(parsed.active),
-      trashed: parsed.trashed === true,
-      // Задача 59119797 «Фильтры Автор/Редактор», эволюция операторов: op +
-      // значение (одиночный id или массив для in/not_in).
-      authorOp: parseAuthorOp(parsed.authorOp),
-      authorId: typeof parsed.authorId === 'string' ? parsed.authorId : '',
-      authorIds: Array.isArray(parsed.authorIds)
-        ? parsed.authorIds.filter((v): v is string => typeof v === 'string')
-        : [],
-      editorOp: parseAuthorOp(parsed.editorOp),
-      editorId: typeof parsed.editorId === 'string' ? parsed.editorId : '',
-      editorIds: Array.isArray(parsed.editorIds)
-        ? parsed.editorIds.filter((v): v is string => typeof v === 'string')
-        : [],
-      // Задача 7032e55a «Фильтры по датам»: ISO-8601 строка (или пустая).
-      // В L4 `structures_state` сохраняется всегда (через `getFilterState()`);
-      // старые JSON без этих полей получат дефолт `''` — граница не выставляется.
-      createdAfter: typeof parsed.createdAfter === 'string' ? parsed.createdAfter : '',
-      createdBefore: typeof parsed.createdBefore === 'string' ? parsed.createdBefore : '',
-      updatedAfter: typeof parsed.updatedAfter === 'string' ? parsed.updatedAfter : '',
-      updatedBefore: typeof parsed.updatedBefore === 'string' ? parsed.updatedBefore : '',
-      sort: parsed.sort === 'alpha' || parsed.sort === 'created' || parsed.sort === 'viewed' ? parsed.sort : 'created',
-      order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : 'asc',
-      savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,
-      panelWidth:
-        typeof parsed.panelWidth === 'number' &&
-        Number.isFinite(parsed.panelWidth)
-          ? parsed.panelWidth
-          : null,
-    };
-  } catch {
-    return getFilterState();
-  }
 }
 
 /** Persists the current filter state to the L4 `structures_state` key. */
@@ -362,23 +289,14 @@ function persistFilterState(): void {
 // Query
 // ---------------------------------------------------------------------------
 
-/** Builds the wire filter from the panel state (empty arrays dropped). */
+/**
+ * Отбор панели в wire-форме запроса: критерии — дерево AST единого редактора
+ * (`buildQueryFilter`), пустое дерево — плоский пустой отбор (HOME + сироты,
+ * §15.3). Прежние плоские критерии панели и фасадные `parent_ids`/`link_filter`
+ * из запроса ушли: их выражают строки-условия (задача 213bd2d2, ADR fc23f9c1).
+ */
 function buildFilter(): StructureFilter {
-  const state = getFilterState();
-  const filter: StructureFilter = { ...buildExtraFilter() };
-  if (state.keywords.trim() !== '') {
-    filter.keywords = state.keywords.trim();
-    const scope = buildKeywordScope();
-    if (scope !== undefined) filter.keyword_scope = scope;
-  }
-  if (state.typeIds.length > 0) filter.type_ids = state.typeIds;
-  if (state.linkTypeIds.length > 0) filter.link_type_ids = state.linkTypeIds;
-  const linkFilter = buildTraversalFilter();
-  if (linkFilter !== undefined) filter.link_filter = linkFilter;
-  const conditions = buildConditionsFromPanel();
-  if (conditions.length > 0) filter.properties = conditions;
-  if (store.state.showInactive) filter.show_inactive = true;
-  return filter;
+  return buildQueryFilter(getFilterState());
 }
 
 /** Runs the filter query; `reset` starts a fresh page, otherwise appends.
@@ -396,18 +314,23 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
   inflightQuery = controller;
   // A fresh application re-anchors the bulk commands to the new result (L22)
   // and drops the keyset cursor — next page starts from scratch.
+  const filter = buildFilter();
   if (reset) {
-    appliedQuery = { filter: buildFilter(), sort: state.sort, order: state.order };
+    appliedQuery = { filter, sort: state.sort, order: state.order };
     resultPager.reset();
   }
   const page = resultPager.address(reset);
+  // Порядок — ОДИН источник (конвенция задачи cb78315b): у дерева его несёт
+  // `ast.sort`, и плоские `sort`/`order` тогда НЕ передаются — сервер отвергает
+  // одновременную передачу двух источников (VALIDATION_ERROR).
+  const orderFields =
+    filter.ast === undefined ? { sort: state.sort, order: state.order } : {};
   try {
     const result = await etn.structures.query(
       networkId,
       {
-        ...buildFilter(),
-        sort: state.sort,
-        order: state.order,
+        ...filter,
+        ...orderFields,
         limit: STRUCTURES_PAGE_SIZE,
         offset: page.offset,
         ...(page.cursor !== undefined ? { cursor: page.cursor } : {}),
@@ -415,6 +338,9 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
       { signal: controller.signal },
     );
     if (seq !== querySeq) return; // a newer query won the race
+    // Серверная диагностика отбора (неразрешимые токены — требование b7fdab20):
+    // строки редактора подсвечиваются, красное запрещает применение (44d61c8a).
+    setFilterServerIssues(filterIssuesFromQueryResult(result));
     // Continuation rides the cursor of THIS page (requirement 3f2fdc41).
     resultPager.accept(result.next_cursor);
     if (reset) {
@@ -440,6 +366,8 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
     // Отменённый запрос — не ошибка: его сменил более новый (требование
     // ebed4980). Ничего не показываем.
     if (controller.signal.aborted) return;
+    // Красная диагностика ядра (`details.diagnostics`) — в строки редактора.
+    setFilterServerIssues(filterIssuesFromQueryError(err));
     notice(`Ошибка отбора: ${errText(err)}`, 'error');
   } finally {
     if (inflightQuery === controller) inflightQuery = null;
@@ -1777,9 +1705,5 @@ export function invalidateStructuresThought(id: string): void {
 // Panel bridge (typed value conversion lives in the panel module)
 // ---------------------------------------------------------------------------
 
-/** Panel-typed property conditions for the wire filter. */
-function buildConditionsFromPanel(): StructurePropertyCondition[] {
-  return buildConditions();
-}
 // Re-export for the history bar / workspace wiring.
 export type { FilterState };
