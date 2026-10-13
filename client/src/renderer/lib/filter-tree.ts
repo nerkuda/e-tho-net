@@ -79,6 +79,9 @@ import {
   type FilterIssue,
 } from './filter-diagnostics.js';
 import { VALUE_TYPE_LABELS } from './property-list.js';
+// Подтверждение сброса собранной под-выборки при смене свойства строки: правило
+// живёт в модуле модального слоя (`lib/filter-subquery.ts`, элемент f5005daa).
+import { confirmFilterSubqueryReset } from './filter-subquery.js';
 // Фасады дизайн-системы — из файлов каталога, как в соседнем `lib/filter-form.ts`:
 // barrel `lib/ui/index.ts` тянет за собой регистрацию вендора (webawesome/vaadin)
 // и не грузится в юнит-тестах и на клиентском DOM-шиме. Правила `lib/ui`
@@ -867,6 +870,13 @@ export interface FilterTreeContext {
   issues?: () => readonly FilterIssue[];
   /** Хост узнаёт, что пользователь нажал «исправить» у узла с этим адресом. */
   onFixPath?: (path: string) => void;
+  /**
+   * Подтверждение сброса СОБРАННОЙ под-выборки при смене свойства строки
+   * (элемент интерфейса f5005daa): получает действие «сменить операнд и
+   * сбросить значение» и решает, выполнять ли его. Не задан — спрашивает
+   * `confirmFilterSubqueryReset` (`lib/filter-subquery.ts`).
+   */
+  confirmSubqueryReset?: (apply: () => void) => void;
 }
 
 /** Дескриптор построенного дерева. */
@@ -1156,13 +1166,23 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
             onPick: (key) => {
               const entry = entries.find((item) => item.key === key);
               if (entry === undefined) return;
-              leaf.entity = entry.entity;
-              // Смена операнда сбрасывает значение: прежнее к новому операнду
-              // не относится (то же правило, что у плоской панели).
-              leaf.value = { kind: 'none' };
-              const ops = filterProfileOperators(ctx.profile, entry.entity.kind, entry.valueType);
-              if (ops.length > 0 && !ops.includes(leaf.operator)) leaf.operator = ops[0]!;
-              touch();
+              const apply = (): void => {
+                leaf.entity = entry.entity;
+                // Смена операнда сбрасывает значение: прежнее к новому операнду
+                // не относится (то же правило, что у плоской панели).
+                leaf.value = { kind: 'none' };
+                const ops = filterProfileOperators(ctx.profile, entry.entity.kind, entry.valueType);
+                if (ops.length > 0 && !ops.includes(leaf.operator)) leaf.operator = ops[0]!;
+                touch();
+              };
+              // Собранную под-выборку молча терять нельзя: сброс подтверждаем
+              // (элемент f5005daa, ADR 4396ca00). Хост может подменить
+              // подтверждение (`ctx.confirmSubqueryReset`) — тесты и экраны.
+              if (leaf.value.kind === 'subquery') {
+                (ctx.confirmSubqueryReset ?? ((run) => confirmFilterSubqueryReset(run)))(apply);
+                return;
+              }
+              apply();
             },
           });
         },

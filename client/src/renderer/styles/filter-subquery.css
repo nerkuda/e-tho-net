@@ -1,0 +1,64 @@
+/*
+ * Вид ячейки под-выборки и её модального слоя (0.13.1, задача 3644342c ТП
+ * 11b2509a; элемент интерфейса f5005daa; ADR 4396ca00).
+ *
+ * Модуль несёт ТОЛЬКО роли, которых нет в дизайн-системе: раскладку ячейки
+ * значения с переключателем режима, чип собранной выборки и тело модала.
+ * Переключатель, кнопки и каркас диалога — фасады `lib/ui`/`lib/dialog.ts`,
+ * своих классов под них не заводим.
+ *
+ * Подпись чипа — не более двух строк (требование af7859c9): число клампинга
+ * сверяется тестом с `FILTER_SUBQUERY_CHIP_LINES` модуля `lib/filter-subquery.ts`.
+ * Полный текст подписи живёт в тултипе (нативный `title` кнопки чипа).
+ */
+
+.fq-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.fq-mode {
+  align-self: flex-start;
+}
+
+.fq-cell__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.fq-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.fq-chip__open {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 100%;
+  min-width: 0;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.fq-chip__clear {
+  flex: 0 0 auto;
+}
+
+.fq-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 100%;
+  min-width: 0;
+  overflow: auto;
+}
