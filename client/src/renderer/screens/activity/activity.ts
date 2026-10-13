@@ -28,6 +28,7 @@ import { requireNetworkId } from '../../app.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
 import { confirmDialog, errorDialog, showDialog } from '../../lib/dialog.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
+import type { FilterIssue } from '../../lib/filter-diagnostics.js';
 import { ACTIVITY_ACTION_FILTERS, buildFilterAst } from '../../lib/filter-builder.js';
 import type { FilterTreeData } from '../../lib/filter-tree.js';
 import type { FilterValueEnumOption } from '../../lib/filter-value.js';
@@ -128,6 +129,12 @@ let currentEntityRowId: string | null = null;
 let panelWidth: number | null = null;
 /** Рукоятка общего каркаса панели отбора (скрытость/положение/размер). */
 let activityFrame: FilterPanelFrameHandle | null = null;
+/**
+ * Условия прежнего плоского пресета, отброшенные профилем «события» при
+ * миграции (`parseActivityState` → `dropped`). Показываются жёлтой диагностикой
+ * футера, пока пользователь не тронул отбор: потеря видна, а не молчит.
+ */
+let migrationDropped: readonly string[] = [];
 /** Границы ширины панели (px), как в Структурах мыслей. */
 const PANEL_W_MIN = 260;
 const PANEL_W_MAX = 480;
@@ -170,6 +177,7 @@ export async function ensureActivityInitialised(): Promise<void> {
   total = 0;
   offset = 0;
   filter = createDefaultActivityFilter();
+  migrationDropped = [];
   panelWidth = null;
 
   try {
@@ -189,6 +197,9 @@ export async function ensureActivityInitialised(): Promise<void> {
       filter = parsed.filter;
       offset = parsed.offset;
       panelWidth = parsed.panelWidth;
+      // Потеря миграции (например, автор «не заполнено») видна жёлтой
+      // диагностикой футера — до первого касания отбора пользователем.
+      migrationDropped = parsed.dropped;
       // Восстановленный отбор редактор рисует сам из состояния (`refresh`);
       // футер пересчитывает фразу-превью и диагностику.
       filterEditor?.refresh();
@@ -359,7 +370,12 @@ function mountFilterPanel(area: HTMLElement): void {
     networkId: requireNetworkId(),
     data,
     getState: () => filter,
-    touch: () => editor.refresh(),
+    touch: () => {
+      // Первое касание отбора пользователем — прежний пресет пересобран:
+      // диагностика потери миграции своё отработала.
+      migrationDropped = [];
+      editor.refresh();
+    },
     sort: false,
     enumOptions: (leaf) => {
       if (leaf.entity.kind === 'action') return ACTION_ENUM_OPTIONS;
@@ -393,6 +409,16 @@ function mountFilterPanel(area: HTMLElement): void {
     },
     host: {
       apply: () => void applyQuery(),
+      // Потеря миграции прежнего пресета — жёлтой диагностикой без адреса
+      // (уходит в тултип фразы-превью): условие отброшено, отбор исполняется.
+      issues: (): readonly FilterIssue[] =>
+        migrationDropped.map((condition) => ({
+          severity: 'warning',
+          source: 'constructor',
+          code: 'build_warning',
+          path: '',
+          message: `Условие прежнего отбора не выражается профилем «События» и отброшено: ${condition}.`,
+        })),
     },
   });
   filterEditor = editor;

@@ -97,6 +97,7 @@ function runFilter(
  */
 interface ClientFilterBuilder {
   parseFilterAstState(raw: unknown): Record<string, unknown>;
+  parseActivityCriteriaTree(raw: unknown): Record<string, unknown>;
   buildFilterAst(
     state: Record<string, unknown>,
     opts: { profile?: string; sort?: boolean },
@@ -172,6 +173,28 @@ describe('события: отбор на общий AST (задача 2b230e8e)
       assert.deepEqual(rebuilt, scenario, 'клиентский round-trip сохраняет токены времени и список действий');
       const ids = runFilter(ndb, rebuilt.filter);
       assert.deepEqual(ids, [recentUpdated, recentCreated], 'клиентский AST даёт тот же набор и порядок, что серверный эталон');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('прежний пресет с автором empty/not_empty: клиентское тело сервер исполняет без VALIDATION_ERROR', async () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const t = seedThought(ndb, 'Мысль');
+      const ev = seedEvent(ndb, { action: 'created', entityType: 'thought', entityId: t, atMs: NOW_MS - 1000 });
+      const client = await loadClientFilterBuilder();
+      for (const snapshot of [{ userOp: 'empty' }, { userOp: 'not_empty' }]) {
+        // Прежний пресет компилируется клиентским конструктором; невыразимое
+        // профилем условие автора отбрасывается — листа `user is_empty` нет.
+        const ast = client.buildFilterAst(client.parseActivityCriteriaTree(snapshot), {
+          profile: 'events',
+          sort: false,
+        });
+        assert.deepEqual(ast.filter, { op: 'and', children: [] }, 'условий вне профиля нет');
+        // Тело принимается (`assertFilterAstInProfile`) и исполняется — вся лента.
+        assert.deepEqual(runFilter(ndb, ast.filter), [ev]);
+      }
     } finally {
       ndb.close();
     }

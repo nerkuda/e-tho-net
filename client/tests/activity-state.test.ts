@@ -82,13 +82,19 @@ describe('parseActivityState', () => {
     assert.equal(parsed.offset, 50);
     // Плоские критерии пресета переведены в строки дерева (действие и вид
     // сущности — листья `in`, период — границы `occurred_at`, автор — `user eq`).
+    // Оператор сверяется ЯВНО: инверсия `in`→`not_in` в компиляторе меняет смысл
+    // отбора, но при сверке одного значения листа осталась бы незамеченной.
     const leaves = leavesOf(parsed.filter);
     assert.deepEqual(findLeaf(leaves, 'occurred_at', 'gte')?.value, '2024-06-01');
     assert.deepEqual(findLeaf(leaves, 'occurred_at', 'lte')?.value, '2024-06-30');
     assert.equal(findLeaf(leaves, 'user')?.operator, 'eq');
     assert.deepEqual(findLeaf(leaves, 'user')?.value, 'user-123');
-    assert.deepEqual(findLeaf(leaves, 'action')?.value, ['created', 'updated']);
-    assert.deepEqual(findLeaf(leaves, 'entity_type')?.value, ['thought', 'link']);
+    assert.equal(findLeaf(leaves, 'action')?.operator, 'in');
+    assert.deepEqual(findLeaf(leaves, 'action', 'in')?.value, ['created', 'updated']);
+    assert.equal(findLeaf(leaves, 'entity_type')?.operator, 'in');
+    assert.deepEqual(findLeaf(leaves, 'entity_type', 'in')?.value, ['thought', 'link']);
+    assert.equal(findLeaf(leaves, 'action', 'not_in'), undefined, 'действие — не «не в списке»');
+    assert.equal(findLeaf(leaves, 'entity_type', 'not_in'), undefined, 'вид сущности — не «не в списке»');
   });
 
   it('drops unknown entity types and unknown actions', () => {
@@ -100,8 +106,52 @@ describe('parseActivityState', () => {
     });
     const parsed = parseActivityState(json);
     const leaves = leavesOf(parsed.filter);
-    assert.deepEqual(findLeaf(leaves, 'entity_type')?.value, ['thought']);
-    assert.deepEqual(findLeaf(leaves, 'action')?.value, ['created']);
+    assert.deepEqual(findLeaf(leaves, 'entity_type', 'in')?.value, ['thought']);
+    assert.deepEqual(findLeaf(leaves, 'action', 'in')?.value, ['created']);
+  });
+
+  it('прежний пресет с автором empty/not_empty не порождает листа вне профиля «события»', () => {
+    // Требование 1765e659: автор события — «равно»/«в списке»/под-выборка;
+    // профиль «события» НЕ допускает `user is_empty`/`not_empty`. Прежний UI
+    // предлагал `empty`/`not_empty`, поэтому пресет с таким автором при миграции
+    // обязан отбросить невыразимое условие, а не отправить тело, которое сервер
+    // отвергнет с VALIDATION_ERROR (блокер задачи 16899243).
+    for (const userOp of ['empty', 'not_empty']) {
+      const parsed = parseActivityState(JSON.stringify({ filter: { userOp } }));
+      assert.deepEqual(leavesOf(parsed.filter), [], `${userOp}: условие отброшено — лента без ограничения автора`);
+      // Строгая сборка по профилю «события» не бросает — на сервере
+      // `assertFilterAstInProfile` тоже примет тело.
+      assert.doesNotThrow(() =>
+        buildFilterAst(parsed.filter, { profile: 'events', strict: true }),
+      );
+    }
+  });
+
+  it('помечает отброшенные профилем условия прежнего пресета (диагностика футера)', () => {
+    const legacy = parseActivityState(JSON.stringify({ filter: { userOp: 'empty' } }));
+    assert.deepEqual(legacy.dropped, ['Автор события — не заполнено']);
+    // Условие автора сохранено вместе с выразимыми — потеря перечисляется.
+    const mixed = parseActivityState(
+      JSON.stringify({ filter: { userOp: 'not_empty', actions: ['created'] } }),
+    );
+    assert.deepEqual(mixed.dropped, ['Автор события — заполнено']);
+    // AST-снимок миграции не проходит — потерь нет.
+    const wire = parseActivityState(
+      JSON.stringify({ filter: { version: 1, filter: { op: 'and', children: [] } } }),
+    );
+    assert.deepEqual(wire.dropped, []);
+  });
+
+  it('прежний пресет: автор empty вместе с выразимыми условиями — теряется только автор', () => {
+    const parsed = parseActivityState(
+      JSON.stringify({ filter: { userOp: 'empty', actions: ['created'] } }),
+    );
+    const leaves = leavesOf(parsed.filter);
+    assert.equal(findLeaf(leaves, 'user'), undefined, 'невыразимый автор отброшен');
+    assert.deepEqual(findLeaf(leaves, 'action', 'in')?.value, ['created'], 'выразимое условие сохранено');
+    assert.doesNotThrow(() =>
+      buildFilterAst(parsed.filter, { profile: 'events', strict: true }),
+    );
   });
 
   it('clamps negative offset to zero', () => {

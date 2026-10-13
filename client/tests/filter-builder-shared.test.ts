@@ -31,6 +31,7 @@ import {
   buildSearchCriteriaWire,
   buildWireFilter,
   compileActivityCriteriaToAst,
+  compileActivityCriteriaToAstDetailed,
   defaultActivityCriteriaState,
   defaultChronicleCriteriaState,
   defaultFilterCriteriaState,
@@ -231,16 +232,23 @@ describe('выравненные возможности отбора', () => {
     assert.equal(authorFilterActive('not_empty', '', []), true);
   });
 
-  it('«События» умеют empty/not_empty и ne/not_in — теперь через AST, а не клиентскую дофильтровку', () => {
+  it('«События»: автор — только eq/ne/in/not_in; empty/not_empty отбрасываются профилем', () => {
     assert.deepEqual(
       [...ACTIVITY_ACTION_FILTERS],
       ['created', 'updated', 'deleted', 'trashed', 'restored'],
     );
-    const emptyAst = compileActivityCriteriaToAst({ ...defaultActivityCriteriaState(), authorOp: 'empty' });
-    assert.deepEqual(emptyAst?.filter, {
-      entity: { kind: 'user' },
-      operator: 'is_empty',
+    // Требование 1765e659: автор события — «равно», «в списке», под-выборка.
+    // Прежние пресеты с `empty`/`not_empty` профиль «события» не выражает —
+    // условие отбрасывается общим правилом миграции, а НЕ порождает лист
+    // `user is_empty` (который сервер отверг бы с VALIDATION_ERROR).
+    const empty = compileActivityCriteriaToAstDetailed({
+      ...defaultActivityCriteriaState(),
+      authorOp: 'empty',
     });
+    assert.equal(empty.ast, undefined, 'единственное условие отброшено — критериев не осталось');
+    assert.deepEqual(empty.dropped, [{ entity: { kind: 'user' }, operator: 'is_empty' }]);
+    assert.equal(compileActivityCriteriaToAst({ ...defaultActivityCriteriaState(), authorOp: 'empty' }), undefined);
+    // `not_in` и `ne` — выразимы, остаются.
     const notInAst = compileActivityCriteriaToAst({
       ...defaultActivityCriteriaState(),
       authorOp: 'not_in',
@@ -251,6 +259,12 @@ describe('выравненные возможности отбора', () => {
       operator: 'not_in',
       value: ['u1', 'u2'],
     });
+    const neAst = compileActivityCriteriaToAst({
+      ...defaultActivityCriteriaState(),
+      authorOp: 'ne',
+      authorId: 'u3',
+    });
+    assert.deepEqual(neAst?.filter, { entity: { kind: 'user' }, operator: 'ne', value: 'u3' });
   });
 
   it('строка поиска хранит типы массивом (а не одним id)', () => {

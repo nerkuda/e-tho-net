@@ -15,14 +15,22 @@
  * молча выпадет из ленты).
  */
 
-import type { ActivityEntityType } from '@etn/shared';
+import type { ActivityEntityType, FilterAstLeaf } from '@etn/shared';
 
 import {
   ACTIVITY_ACTION_FILTERS,
-  parseActivityCriteriaTree,
+  OPERAND_KIND_LABELS,
+  astOperatorLabel,
+  parseActivityCriteriaTreeDetailed,
   type ActivityActionFilter,
   type FilterCriteriaState,
 } from '../../lib/filter-builder.js';
+
+/** Подпись отброшенного миграцией условия: «Автор события — не заполнено». */
+function describeDroppedActivityCondition(leaf: FilterAstLeaf): string {
+  const operand = OPERAND_KIND_LABELS[leaf.entity.kind] ?? leaf.entity.kind;
+  return `${operand} — ${astOperatorLabel(leaf.operator)}`;
+}
 
 /** Action values shown in the UI filter — the server log carries the same
  *  vocabulary (`created`/`updated`/`deleted`/`trashed`/`restored`). */
@@ -49,7 +57,7 @@ export type ActivityFilterState = FilterCriteriaState;
 
 /** Свежий пустой отбор — «вся лента» (дерево — пустая группа И). */
 export function createDefaultActivityFilter(): ActivityFilterState {
-  return parseActivityCriteriaTree({});
+  return parseActivityCriteriaTreeDetailed({}).state;
 }
 
 /** Empty filter — show every row of the log. Только для сравнения в тестах;
@@ -59,6 +67,12 @@ export const DEFAULT_FILTER: ActivityFilterState = createDefaultActivityFilter()
 /** Parsed persisted L4 `activity_state`. */
 export interface PersistedActivityState {
   filter: ActivityFilterState;
+  /**
+   * Условия прежнего плоского пресета, отброшенные профилем «события» при
+   * миграции (потеря, которую лента показывает жёлтой диагностикой футера):
+   * например «Автор события — не заполнено».
+   */
+  dropped: readonly string[];
   offset: number;
   /** Ширина панели отборов (px), заданная сплиттером. */
   panelWidth: number | null;
@@ -104,11 +118,12 @@ export function parseActivityState(raw: string): PersistedActivityState {
   try {
     parsed = JSON.parse(raw) as typeof parsed;
   } catch {
-    return { filter: createDefaultActivityFilter(), offset: 0, panelWidth: null };
+    return { filter: createDefaultActivityFilter(), dropped: [], offset: 0, panelWidth: null };
   }
-  const filter = parseActivityCriteriaTree(cleanLegacyDictionaries(parsed.filter ?? {}));
+  const detailed = parseActivityCriteriaTreeDetailed(cleanLegacyDictionaries(parsed.filter ?? {}));
   return {
-    filter,
+    filter: detailed.state,
+    dropped: detailed.dropped.map(describeDroppedActivityCondition),
     offset:
       typeof parsed.offset === 'number' && Number.isFinite(parsed.offset) && parsed.offset >= 0
         ? Math.floor(parsed.offset)

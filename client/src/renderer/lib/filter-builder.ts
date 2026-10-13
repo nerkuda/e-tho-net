@@ -1159,6 +1159,45 @@ export function parseActivityCriteria(raw: unknown): ActivityCriteriaState {
 }
 
 /**
+ * Общее правило миграции плоского пресета в дерево профиля (задача 16899243,
+ * доработка по вердикту верификатора): в дерево проходит ЛИШЬ лист-кандидат,
+ * чей операнд видим в профиле точки применения И чей оператор этому операнду
+ * в профиле разрешён. Невыразимые условия отбрасываются — ровно тем же
+ * способом, каким уже отброшено условие прежнего пресета по снимку
+ * `entity_title` (у профиля «события» нет текстового операнда). Общее правило,
+ * а не точечная заплатка: любой будущий операнд/оператор вне профиля так же
+ * не дойдёт до сервера, а значит прежний сохранённый отбор не породит
+ * `VALIDATION_ERROR` (сервер проверяет видимость ДО исполнения —
+ * `assertFilterAstInProfile`).
+ *
+ * Возвращает разбиение кандидатов: `kept` — листья дерева, `dropped` —
+ * отброшенные (для диагностики и отчёта о потерях миграции, порядок сохранён).
+ */
+function splitLeavesByProfile(
+  candidates: readonly FilterAstLeaf[],
+  profile: FilterProfileId,
+): { kept: FilterAstLeaf[]; dropped: FilterAstLeaf[] } {
+  const operands = new Set<string>(filterProfileOperands(profile));
+  const kept: FilterAstLeaf[] = [];
+  const dropped: FilterAstLeaf[] = [];
+  for (const leaf of candidates) {
+    const kind = leaf.entity.kind;
+    const allowed =
+      operands.has(kind) && filterProfileOperators(profile, kind).includes(leaf.operator);
+    (allowed ? kept : dropped).push(leaf);
+  }
+  return { kept, dropped };
+}
+
+/** Результат сборки AST прежнего пресета «Событий»: тело + отброшенные условия. */
+export interface ActivityCriteriaAst {
+  /** Тело отбора; `undefined` — критериев не осталось («вся лента»). */
+  ast: FilterAst | undefined;
+  /** Листья-кандидаты, не выразимые профилем «события» (потеря миграции). */
+  dropped: readonly FilterAstLeaf[];
+}
+
+/**
  * Компилятор ПЛОСКИХ критериев «Событий» в AST профиля «события» — перевод
  * прежних пресетов ленты (L4-снимок `activity_state`: плоские `fromMs`/`toMs`/
  * `userOp`/`userId`/`userIds`/`entityTypes`/`actions`) в единое дерево редактора
@@ -1170,35 +1209,67 @@ export function parseActivityCriteria(raw: unknown): ActivityCriteriaState {
  * Соответствие:
  *   * `createdAfter`/`createdBefore` → `occurred_at gte`/`lte` (период ленты
  *     хранился в общих границах дат);
- *   * `authorOp`/`authorId`/`authorIds` → `user eq|in|ne|not_in|is_empty|not_empty`;
+ *   * `authorOp`/`authorId`/`authorIds` → `user eq|in|ne|not_in`; прежние
+ *     `empty`/`not_empty` («не заполнено»/«заполнено») профиль «события» автору
+ *     НЕ разрешает (требование 1765e659: автор — «равно», «в списке»,
+ *     под-выборка), поэтому такое условие отбрасывается общим правилом
+ *     {@link splitLeavesByProfile} — как ключевые слова, без `VALIDATION_ERROR`;
  *   * `actions` → `action in [...]`;
  *   * `entityTypes` → `entity_type in [...]`;
  *   * ключевые слова по снимку `entity_title` профилем «события» НЕ выражаются
- *     (у него нет текстового операнда) — условие прежнего пресета отбрасывается
- *     осознанно (зафиксировано в отчёте задачи).
- * `undefined` — критериев нет.
+ *     (у него нет текстового операнда) — лист-кандидат `keywords matches` тоже
+ *     отбрасывается тем же правилом (зафиксировано в отчёте задачи).
+ * `undefined` — критериев не осталось.
  */
-export function compileActivityCriteriaToAst(state: ActivityCriteriaState): FilterAst | undefined {
-  const children: FilterAstNode[] = [];
+function compileActivityCriteria(state: ActivityCriteriaState): ActivityCriteriaAst {
+  const candidates: FilterAstLeaf[] = [];
   if (state.createdAfter.trim() !== '') {
-    children.push({ entity: { kind: 'occurred_at' }, operator: 'gte', value: state.createdAfter.trim() });
+    candidates.push(flatAstLeaf({ kind: 'occurred_at' }, 'gte', state.createdAfter.trim()));
   }
   if (state.createdBefore.trim() !== '') {
-    children.push({ entity: { kind: 'occurred_at' }, operator: 'lte', value: state.createdBefore.trim() });
+    candidates.push(flatAstLeaf({ kind: 'occurred_at' }, 'lte', state.createdBefore.trim()));
   }
   const user = flatAuthorLeaf('user', state.authorOp, state.authorId, state.authorIds);
-  if (user !== null) children.push(user);
+  if (user !== null) candidates.push(user);
   if (state.actions.length > 0) {
-    children.push({ entity: { kind: 'action' }, operator: 'in', value: [...state.actions] });
+    candidates.push(flatAstLeaf({ kind: 'action' }, 'in', [...state.actions]));
   }
   if (state.entityTypes.length > 0) {
-    children.push({ entity: { kind: 'entity_type' }, operator: 'in', value: [...state.entityTypes] });
+    candidates.push(flatAstLeaf({ kind: 'entity_type' }, 'in', [...state.entityTypes]));
   }
-  if (children.length === 0) return undefined;
+  const keywords = flatKeywordLeaf(state);
+  if (keywords !== null) candidates.push(keywords);
+
+  const { kept, dropped } = splitLeavesByProfile(candidates, 'events');
+  if (kept.length === 0) return { ast: undefined, dropped };
   return {
-    version: FILTER_AST_VERSION,
-    filter: children.length === 1 ? (children[0] as FilterAstNode) : { op: 'and', children },
+    ast: {
+      version: FILTER_AST_VERSION,
+      filter: kept.length === 1 ? kept[0]! : ({ op: 'and', children: kept } as FilterAstGroup),
+    },
+    dropped,
   };
+}
+
+/**
+ * Перевести прежний плоский пресет «Событий» в тело AST профиля «события»
+ * (задача 16899243). Невыразимые профилем условия отбрасываются (см.
+ * {@link splitLeavesByProfile}); подробности потерь — у
+ * {@link compileActivityCriteriaToAstDetailed}. `undefined` — критериев нет.
+ */
+export function compileActivityCriteriaToAst(state: ActivityCriteriaState): FilterAst | undefined {
+  return compileActivityCriteria(state).ast;
+}
+
+/**
+ * Как {@link compileActivityCriteriaToAst}, но отдаёт ещё и перечень
+ * отброшенных профилем условий — для диагностики и отчёта о потерях миграции
+ * (лента «События» показывает потерю мягко: отбор исполняется без нарушений).
+ */
+export function compileActivityCriteriaToAstDetailed(
+  state: ActivityCriteriaState,
+): ActivityCriteriaAst {
+  return compileActivityCriteria(state);
 }
 
 /**
@@ -1208,12 +1279,25 @@ export function compileActivityCriteriaToAst(state: ActivityCriteriaState): Filt
  * дерево ({@link compileActivityCriteriaToAst}). Второй точки чтения нет.
  */
 export function parseActivityCriteriaTree(raw: unknown): FilterCriteriaState {
-  if (isFilterAstWire(raw)) return parseFilterDefinitionTree(raw);
+  return parseActivityCriteriaTreeDetailed(raw).state;
+}
+
+/**
+ * Как {@link parseActivityCriteriaTree}, но отдаёт ещё и условия прежнего
+ * плоского пресета, отброшенные при миграции профилем «события» (см.
+ * {@link splitLeavesByProfile}) — экран показывает их жёлтой диагностикой, чтобы
+ * потеря была видна пользователю, а не молчала. У AST-снимка потерь нет.
+ */
+export function parseActivityCriteriaTreeDetailed(raw: unknown): {
+  state: FilterCriteriaState;
+  dropped: readonly FilterAstLeaf[];
+} {
+  if (isFilterAstWire(raw)) return { state: parseFilterDefinitionTree(raw), dropped: [] };
   const state = parseActivityCriteria(raw);
-  const ast = compileActivityCriteriaToAst(state);
+  const { ast, dropped } = compileActivityCriteria(state);
   const tree = ast === undefined ? null : filterAstToTree(ast.filter);
   state.tree = tree ?? defaultFilterTreeGroup('and');
-  return state;
+  return { state, dropped };
 }
 
 // ---------------------------------------------------------------------------
@@ -1869,6 +1953,23 @@ function flatAstList(values: readonly FilterAstScalar[]): FilterAstListItem[] {
   return values.map((value) => flatAstValue(value) as FilterAstListItem);
 }
 
+/**
+ * Лист «Есть слова» из состояния (область поиска + мини-язык ключевых слов) —
+ * общий для плоских компиляторов (мыслей и «Событий»). `null` — ключевых слов
+ * нет. Мини-язык «Есть слова» — строка; одиночный токен (`$thought.title`)
+ * адресуем формой AST-токена, составную строку отдаём листу как есть. Области:
+ * плоская форма опускает дефолт title+synonyms — в AST пустой набор означал бы
+ * ОТКЛЮЧЁННОЕ условие, поэтому дефолт выписываем явно.
+ */
+function flatKeywordLeaf(state: FilterCriteriaState): FilterAstLeaf | null {
+  const keywords = state.keywords.trim();
+  if (keywords === '') return null;
+  const scope = buildKeywordScope(state) ?? ['title', 'synonyms'];
+  const value: FilterAstValue =
+    keywords.startsWith('$') && !/\s/.test(keywords) ? { token: keywords } : keywords;
+  return flatAstLeaf({ kind: 'keywords', scope }, 'matches', value);
+}
+
 /** Лист авторства/редактора/автора события из плоского оператора и значения. */
 function flatAuthorLeaf(
   kind: 'author' | 'editor' | 'user',
@@ -1953,17 +2054,8 @@ export function compileFlatCriteriaToAst(
   if (state.hasAttachments !== null) children.push(flatAstLeaf({ kind: 'attachments' }, state.hasAttachments ? 'not_empty' : 'is_empty'));
   if (state.hasChronology !== null) children.push(flatAstLeaf({ kind: 'chronology' }, state.hasChronology ? 'not_empty' : 'is_empty'));
 
-  const keywords = state.keywords.trim();
-  if (keywords !== '') {
-    // Области: плоская форма опускает дефолт title+synonyms — в AST пустой
-    // набор означал бы ОТКЛЮЧЁННОЕ условие, поэтому дефолт выписываем явно.
-    const scope = buildKeywordScope(state) ?? ['title', 'synonyms'];
-    // Мини-язык «Есть слова» — строка; одиночный токен (`$thought.title`)
-    // адресуем формой AST-токена, составную строку отдаём листу как есть.
-    const value: FilterAstValue =
-      keywords.startsWith('$') && !/\s/.test(keywords) ? { token: keywords } : keywords;
-    children.push(flatAstLeaf({ kind: 'keywords', scope }, 'matches', value));
-  }
+  const keywords = flatKeywordLeaf(state);
+  if (keywords !== null) children.push(keywords);
 
   if (state.typeIds.length > 0) children.push(flatAstLeaf({ kind: 'type' }, 'in_hierarchy', flatAstList(state.typeIds)));
   // Тип связи: серверный компилятор плоской формы раскрывает `link_type_ids` в
