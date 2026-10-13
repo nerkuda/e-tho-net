@@ -105,6 +105,11 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<bo
   return predicate();
 }
 
+/** Результат записи из исхода батч-задачи: воркер отдаёт `{ result, events }`. */
+function resultOf(outcome: unknown): ThoughtWriteResult {
+  return (outcome as { result: ThoughtWriteResult }).result;
+}
+
 /** Результат записи в сопоставимом виде: id и версии новые у каждой сети. */
 function normalize(result: ThoughtWriteResult): unknown {
   return {
@@ -165,7 +170,7 @@ describe(
           ticks += 1;
         }, 5);
         const runs = [1, 2, 3].map((n) => pool.run(batchTask(context, titles(`batch-${n}`, BATCH))));
-        const results = (await Promise.all(runs)) as ThoughtWriteResult[];
+        const results = (await Promise.all(runs)).map(resultOf);
         clearInterval(ticker);
 
         assert.equal(results.length, 3);
@@ -284,7 +289,7 @@ describe(
       // Сеть остаётся рабочей: обычный пул доводит запись до конца.
       const patient = new WritePool({ size: 1, taskTimeoutMs: 30_000 });
       try {
-        const healed = (await patient.run(batchTask(context, ['after-timeout']))) as ThoughtWriteResult;
+        const healed = resultOf(await patient.run(batchTask(context, ['after-timeout'])));
         assert.equal(healed.thought_count, 1);
         assert.equal(countByPrefix(ndb, 'after-timeout'), 1, 'сеть пишется после снятия слота');
       } finally {
@@ -308,7 +313,7 @@ describe(
         assert.equal(pool.stats().spawns, 1, 'воркер не перезапускался');
 
         ndb.exec('ROLLBACK');
-        const after = (await pool.run(batchTask(context, ['after-lock']))) as ThoughtWriteResult;
+        const after = resultOf(await pool.run(batchTask(context, ['after-lock'])));
         assert.equal(after.thought_count, 1);
         assert.equal(countByPrefix(ndb, 'after-lock'), 1, 'тот же воркер дописал после снятия блокировки');
       } finally {
@@ -327,7 +332,7 @@ describe(
         assert.ok(bumped !== null);
         assert.notEqual(bumped.schemaVersion, context.schemaVersion, 'schema_version вырос');
 
-        const after = (await pool.run(batchTask(bumped, ['after-schema']))) as ThoughtWriteResult;
+        const after = resultOf(await pool.run(batchTask(bumped, ['after-schema'])));
         assert.equal(after.thought_count, 1);
         assert.equal(countByPrefix(ndb, 'after-schema'), 1);
         assert.equal(pool.stats().spawns, 1, 'воркер тот же — соединение переоткрыто внутри');
@@ -351,6 +356,134 @@ describe(
         await pool.run(batchTask(context, ['layer-base-2']));
         assert.equal(pool.stats().spawns, 1, 'привязка переиспользована');
         assert.deepEqual(titlesInOrder(ndb), ['layer-base-1', 'layer-base-2']);
+      } finally {
+        await pool.close();
+      }
+    });
+
+    it('поздний коммит после тайм-аута: результат помечается неизвестным', async () => {
+      // Задача воркера ЗАСТРЕВАЕТ ПОСРЕДИ ТРАНЗАКЦИИ: соединение главного потока
+      // держит разделяемую блокировку чтения, а `COMMIT` воркера не может взять
+      // исключительную и ждёт в busy-обработчике. `terminate()` не прерывает
+      // нативный вызов better-sqlite3, поэтому воркер, снятый по тайм-ауту,
+      // доводит батч до конца, как только блокировка снимается, — уже после
+      // ответа клиенту. Путь обязан назвать это `resultUnknown`, а не молчать.
+      //
+      // Почему откатный журнал, а не WAL: в WAL попытка записи под чужой
+      // блокировкой отдаёт `SQLITE_BUSY` сразу (busy-обработчик на переход
+      // «чтение → запись» не вызывается), и «зависнуть в транзакции» там нельзя —
+      // а именно этот случай и надо воспроизвести. В откатном журнале `COMMIT`
+      // ждёт освобождения разделяемой блокировки, что и даёт зависание.
+      ndb.exec('PRAGMA journal_mode = DELETE');
+      let readTxn = false;
+      ndb.exec('BEGIN');
+      readTxn = true;
+      ndb.prepare('SELECT COUNT(*) AS n FROM thoughts').get(); // взять разделяемую блокировку
+
+      const titles0 = titles('late', BATCH);
+      // Тайм-аут заведомо больше подъёма воркера (иначе он не успеет начать
+      // запись) и заведомо меньше busy_timeout (5 с) — коммит ещё впереди.
+      const pool = new WritePool({ size: 1, taskTimeoutMs: 1_500 });
+      try {
+        let rejected: EtnError | null = null;
+        await pool.run(batchTask(context, titles0)).then(
+          () => {
+            throw new Error('задача обязана быть снята по тайм-ауту');
+          },
+          (err: unknown) => {
+            assert.ok(err instanceof EtnError, 'ошибка домена');
+            rejected = err;
+          },
+        );
+        assert.match(rejected!.message, /timed out/);
+        assert.equal(
+          (rejected!.details as { resultUnknown?: boolean }).resultUnknown,
+          true,
+          'результат помечен неизвестным: коммит мог состояться',
+        );
+        assert.equal(pool.stats().timedOut, 1);
+        assert.equal(
+          countByPrefix(ndb, 'late-'),
+          0,
+          'на момент ответа записи ещё нет: коммит воркера ждёт блокировку',
+        );
+
+        // Блокировка снята — снятый воркер доводит транзакцию до конца.
+        ndb.exec('ROLLBACK');
+        readTxn = false;
+        const landed = await waitFor(() => countByPrefix(ndb, 'late-') === BATCH);
+        assert.ok(landed, 'поздний коммит состоялся: запись есть, хотя клиент получил ошибку');
+      } finally {
+        if (readTxn) {
+          try {
+            ndb.exec('ROLLBACK');
+          } catch {
+            /* транзакции уже нет */
+          }
+        }
+        await pool.close();
+      }
+
+      // Повтор того же батча дублей не создаёт: гейт дубликатов отвергает его
+      // (у батча `on_duplicate` по умолчанию `fail`) — запись уже на месте, и
+      // клиент видит это явной ошибкой DUPLICATE, а не тихим дублем.
+      const retryPool = new WritePool({ size: 1, taskTimeoutMs: 30_000 });
+      try {
+        await assert.rejects(
+          retryPool.run(batchTask(context, titles0)),
+          (err: unknown) => err instanceof EtnError && err.code === 'DUPLICATE',
+        );
+        assert.equal(countByPrefix(ndb, 'late-'), BATCH, 'повтор не создал дублей');
+      } finally {
+        await retryPool.close();
+      }
+    });
+
+    it('замена слота не открывает второе соединение к той же базе', async () => {
+      const other = secondNetwork();
+      const records: Array<{ msg: string; networkId: string }> = [];
+      const logger = {
+        debug: (fields: unknown, msg?: string): void => {
+          records.push({
+            msg: msg ?? '',
+            networkId: String((fields as { networkId?: string })?.networkId ?? ''),
+          });
+        },
+        info: (): void => {},
+        warn: (): void => {},
+      } as unknown as NonNullable<NonNullable<ConstructorParameters<typeof WritePool>[0]>['logger']>;
+
+      const pool = new WritePool({ size: 1, taskTimeoutMs: 30_000, idleEvictionMs: 0, logger });
+      try {
+        await pool.run(batchTask(context, ['slot-1']));
+        // Вытеснение привязки сети A ради сети B: воркер A завершается.
+        await pool.run(batchTask(other.context, ['slot-other']));
+        // Задача обратно в сеть A: новый воркер не должен подняться, пока
+        // прежний не отпустил базу.
+        const back = resultOf(await pool.run(batchTask(context, ['slot-2'])));
+        assert.equal(back.thought_count, 1);
+        assert.equal(countByPrefix(ndb, 'slot-'), 2, 'обе записи сети A на месте');
+        assert.ok(
+          !pool.stats().closingNetworks.includes(networkId),
+          'к моменту записи прежний воркер сети A уже отпустил базу',
+        );
+        assert.ok(
+          await waitFor(() => pool.stats().closingNetworks.length === 0),
+          'все заменённые воркеры завершились',
+        );
+
+        // Порядок событий воркера сети A: остановлен прежний → поднят новый.
+        const aRecords = records
+          .filter((r) => r.networkId === networkId)
+          .map((r) => r.msg);
+        const stopped = aRecords.indexOf('write pool: воркер сети остановлен, база освобождена');
+        const spawnedAgain = aRecords.indexOf('write pool: воркер сети поднят', 1);
+        assert.ok(stopped >= 0, 'завершение прежнего воркера зафиксировано');
+        assert.ok(spawnedAgain >= 0, 'новый воркер сети A поднят');
+        assert.ok(
+          stopped < spawnedAgain,
+          `новый воркер поднят только после завершения прежнего (${aRecords.join(' | ')})`,
+        );
       } finally {
         await pool.close();
       }
@@ -441,15 +574,17 @@ describe(
       assert.ok(pool !== null && getWritePool() !== null, 'процессный пул настроен');
 
       let syncCalls = 0;
-      const viaPool = (await runWriteTask(
-        { context: other.context, op: 'write.thoughts', payload: { input, actorUserId: ACTOR } },
-        {
-          sync: () => {
-            syncCalls += 1;
-            return writeThoughts(ndb, input, ACTOR);
+      const viaPool = resultOf(
+        await runWriteTask(
+          { context: other.context, op: 'write.thoughts', payload: { input, actorUserId: ACTOR } },
+          {
+            sync: () => {
+              syncCalls += 1;
+              return writeThoughts(ndb, input, ACTOR);
+            },
           },
-        },
-      )) as ThoughtWriteResult;
+        ),
+      );
       assert.equal(syncCalls, 0, 'с настроенным пулом синхронный путь не зовётся');
 
       // Тот же батч синхронно в другой сети: результаты обязаны совпасть

@@ -133,6 +133,8 @@ export interface WritePoolStats {
   workers: number;
   /** Сети, за которыми закреплены воркеры. */
   pinnedNetworks: string[];
+  /** Сети, чей воркер завершается: новой привязки к их базам пока нет. */
+  closingNetworks: string[];
   /** Сколько воркеров занято исполнением. */
   busyWorkers: number;
   /** Сколько задач ждёт в очередях закреплённых сетей. */
@@ -201,6 +203,12 @@ export class WritePool {
    * повиснет до следующего завершения чужой задачи.
    */
   private admissionTimer: NodeJS.Timeout | null = null;
+  /**
+   * Сети, чей воркер сейчас завершается (вытеснение, тайм-аут, падение): пока
+   * запись не снята, новый воркер к той же базе не поднимается — у одного
+   * `data.db` не должно быть двух соединений записи даже на мгновение.
+   */
+  private readonly closing = new Map<string, Promise<void>>();
   private closed = false;
 
   private completed = 0;
@@ -249,6 +257,7 @@ export class WritePool {
       size: this.size,
       workers: this.pins.length,
       pinnedNetworks: this.pins.map((p) => p.networkId),
+      closingNetworks: [...this.closing.keys()],
       busyWorkers: this.busyCount(),
       queued: this.queuedCount(),
       waitingAdmission: this.admission.length,
@@ -327,7 +336,9 @@ export class WritePool {
       for (const job of pin.queue.splice(0, pin.queue.length)) this.rejectJob(job, closedError);
       exits.push(this.terminate(pin.worker));
     }
-    await Promise.all(exits);
+    // Дожидаемся и тех воркеров, что уже завершались (вытеснение/тайм-аут): их
+    // продолжения зовут `admit`, а он при закрытом пуле — no-op.
+    await Promise.all([...exits, ...this.closing.values()]);
   }
 
   // -------------------------------------------------------------------------
@@ -359,9 +370,14 @@ export class WritePool {
 
   /**
    * Воркер для сети: свободный слот пула, иначе — освобождение простаивающей
-   * привязки по LRU. `null` — вытеснять нечего, задача ждёт допуска.
+   * привязки по LRU. `null` — воркера нет и вытеснять нечего: задача ждёт допуска.
+   *
+   * Сеть, чей прежний воркер ещё завершается ({@link closing}), не получает
+   * нового: две записи к одной базе недопустимы даже на мгновение. Задача такой
+   * сети встаёт в очередь допуска, а `admit` будится по завершении выхода.
    */
   private pinFor(networkId: string): Pin | null {
+    if (this.closing.has(networkId)) return null;
     if (this.pins.length < this.size) return this.createPin(networkId);
     const candidate = this.evictionCandidate();
     if (candidate === null) return null;
@@ -381,23 +397,26 @@ export class WritePool {
     return best;
   }
 
-  /** Освободить привязку: воркер не нужен, его очередь пуста — соединение закрываем. */
+  /**
+   * Освободить привязку: воркер не нужен, его очередь пуста — соединение
+   * закрываем. Сеть попадает в {@link closing} до фактического `exit` воркера:
+   * если к ней тут же придёт новая запись, она подождёт допуска и получит
+   * соединение только после того, как прежнее закрыто.
+   */
   private evict(pin: Pin): void {
-    pin.dead = true;
-    const index = this.pins.indexOf(pin);
-    if (index >= 0) this.pins.splice(index, 1);
     this.evictedCount += 1;
     this.logger?.info(
       { networkId: pin.networkId, idleMs: Date.now() - pin.lastUsedMs },
       'write pool: привязка сети вытеснена по простою',
     );
-    void this.terminate(pin.worker);
+    this.closePin(pin, 'вытеснение по простою');
   }
 
   /** Открыть воркер под сеть и повесить обработчики жизненного цикла. */
   private createPin(networkId: string): Pin {
     const worker = spawnWorker();
     this.spawns += 1;
+    this.logger?.debug({ networkId, spawns: this.spawns }, 'write pool: воркер сети поднят');
     const pin: Pin = { networkId, worker, job: null, queue: [], lastUsedMs: Date.now(), dead: false };
     worker.on('message', (message: WriteTaskResponse) => this.onMessage(pin, message));
     worker.on('error', (err: Error) => this.onWorkerFailure(pin, err));
@@ -525,7 +544,21 @@ export class WritePool {
     this.admit();
   }
 
-  /** Тайм-аут задачи: воркер завис — отклонить задачу, заменить слот. */
+  /**
+   * Тайм-аут задачи: воркер завис — слот заменяется, задача отклоняется.
+   *
+   * **Поздний коммит.** `terminate()` не прерывает нативный вызов
+   * `better-sqlite3`: поток, застрявший в транзакции (ждал блокировку), после
+   * снятия причины блокировки может ЗАКОММИТИТЬ батч уже после тайм-аута.
+   * Поэтому ответ вызывающему отдаётся с признаком «результат неизвестен»
+   * (`details.resultUnknown`), а не как «запись не сделана»: повтор безопасен
+   * (find-or-match семантика батча), но гарантия at-most-once на этом пути не
+   * абсолютна (ADR ca3a9218, раздел «Вопросы реализации» ТП 0df7ccd6).
+   *
+   * Отклоняем ПОСЛЕ попытки дождаться `exit`: пока поток жив, состояние БД не
+   * финально, и клиент, получив ошибку, мог бы повторить запись на границе с
+   * поздним коммитом.
+   */
   private onTimeout(pin: Pin, job: Job): void {
     if (pin.dead || pin.job !== job) return;
     this.timedOut += 1;
@@ -533,10 +566,15 @@ export class WritePool {
       { networkId: pin.networkId, op: job.task.op, timeoutMs: this.taskTimeoutMs },
       'write pool: задача записи не уложилась в тайм-аут — воркер заменяется',
     );
-    job.reject(
-      new EtnError('INTERNAL', `write task timed out after ${this.taskTimeoutMs} ms`),
-    );
-    this.dropPin(pin, 'тайм-аут задачи');
+    pin.job = null;
+    this.clearTimer(job);
+    this.closePin(pin, 'тайм-аут задачи', {
+      job,
+      error: new EtnError('INTERNAL', `write task timed out after ${this.taskTimeoutMs} ms`, {
+        timedOutMs: this.taskTimeoutMs,
+        resultUnknown: true,
+      }),
+    });
   }
 
   /** Падение/выход воркера: отклонить его задачу и заменить слот. */
@@ -548,11 +586,15 @@ export class WritePool {
     if (job !== null) {
       this.clearTimer(job);
       this.failed += 1;
+      // Коммит мог состояться до падения, а ответ — потеряться: результат
+      // считается неизвестным так же, как при тайм-ауте (см. комментарий выше).
       job.reject(
-        err instanceof EtnError ? err : new EtnError('INTERNAL', `write worker failed: ${err.message}`),
+        err instanceof EtnError
+          ? err
+          : new EtnError('INTERNAL', `write worker failed: ${err.message}`, { resultUnknown: true }),
       );
     }
-    this.dropPin(pin, 'падение воркера');
+    this.closePin(pin, 'падение воркера');
   }
 
   /**
@@ -560,19 +602,41 @@ export class WritePool {
    * очередь допуска В НАЧАЛО (порядок внутри сети и старшинство перед новыми
    * задачами других сетей сохраняются). Незакоммиченная транзакция откатывается
    * SQLite вместе с завершением потока — полузаписи не остаётся.
+   *
+   * Пока старый воркер сети не вышел, сеть числится в {@link closing}: новый
+   * воркер к ТОЙ ЖЕ базе не поднимается (см. {@link pinFor}) — иначе у одного
+   * `data.db` на мгновение оказывалось бы два соединения записи.
+   *
+   * `pendingJob` — задача, которую нужно отклонить: ждём `exit` (чтобы состояние
+   * БД стало финальным), потом отдаём ошибку (поздний коммит, см. {@link onTimeout}).
    */
-  private dropPin(pin: Pin, reason: string): void {
+  private closePin(
+    pin: Pin,
+    reason: string,
+    pending?: { job: Job; error: EtnError },
+  ): void {
     pin.dead = true;
     const index = this.pins.indexOf(pin);
     if (index >= 0) this.pins.splice(index, 1);
-    const pending = pin.queue.splice(0, pin.queue.length);
-    if (pending.length > 0) this.admission.unshift(...pending);
+    const pendingQueue = pin.queue.splice(0, pin.queue.length);
+    if (pendingQueue.length > 0) this.admission.unshift(...pendingQueue);
     this.logger?.debug(
-      { networkId: pin.networkId, reason, requeued: pending.length },
+      { networkId: pin.networkId, reason, requeued: pendingQueue.length },
       'write pool: привязка снята, невыполненные задачи сети возвращены в очередь допуска',
     );
-    void this.terminate(pin.worker);
-    this.admit();
+    const networkId = pin.networkId;
+    const exiting = this.terminate(pin.worker).then(() => {
+      this.closing.delete(networkId);
+      this.logger?.debug(
+        { networkId, reason },
+        'write pool: воркер сети остановлен, база освобождена',
+      );
+      if (pending !== undefined) pending.job.reject(pending.error);
+      this.admit();
+    });
+    this.closing.set(networkId, exiting);
+    // Не ждём `exit` на этом шаге: вызывающий (таймер/событие воркера) не должен
+    // держать цикл событий — продолжение в `then` выше.
   }
 
   /** Завершить воркер и дождаться `exit` (с потолком ожидания). */
