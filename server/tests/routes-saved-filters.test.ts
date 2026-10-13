@@ -15,7 +15,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { SavedFilter, SavedFilterDefinition } from '@etn/shared';
+import type { FilterAst, SavedFilter, SavedFilterDefinition } from '@etn/shared';
+import { FILTER_AST_VERSION } from '@etn/shared';
 
 import {
   authHeaders,
@@ -29,6 +30,16 @@ const STRUCTURE_DEFINITION = { sort: 'alpha', order: 'asc' } satisfies SavedFilt
 
 /** Минимальное валидное определение отбора «Хроники» (order обязателен). */
 const CHRONICLE_DEFINITION = { order: 'desc' };
+
+/** Определение «Структур» в форме AST (её пишет единый редактор, задача 46eba874). */
+const AST_DEFINITION: FilterAst = {
+  version: FILTER_AST_VERSION,
+  filter: {
+    op: 'and',
+    children: [{ entity: { kind: 'type' }, operator: 'in', value: ['t-1'] }],
+  },
+  sort: [{ key: 'created_at', order: 'desc' }],
+};
 
 /** POST /saved-filters с произвольным телом. */
 async function postFilter(
@@ -81,6 +92,32 @@ describe('POST /networks/:networkId/saved-filters', () => {
     });
     assert.equal(structures.statusCode, 201, JSON.stringify(structures.error));
     assert.equal(structures.data?.view, 'structures');
+  });
+
+  it('структурный отбор в форме AST принимается и возвращается как есть (задача 46eba874)', async (t) => {
+    // Панель «Структур» пишет определение в форме AST (единый редактор дерева,
+    // `buildFilterAst`); прежде форма принимала только плоское `definition v1` и
+    // отвергала AST (`VALIDATION_ERROR «Недопустимый sort»`) — «Сохранить» в
+    // панели не срабатывало. Теперь обе формы допустимы.
+    const ctx = await buildRestContext();
+    t.after(async () => closeRestContext(ctx));
+
+    const created = await postFilter(ctx, { name: 'AST-отбор', definition: AST_DEFINITION });
+    assert.equal(created.statusCode, 201, JSON.stringify(created.error));
+    assert.deepEqual(
+      created.data?.definition,
+      AST_DEFINITION,
+      'AST сохранён без потерь (version/filter/sort)',
+    );
+
+    const list = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters?view=structures`,
+      headers: authHeaders(ctx),
+    });
+    assert.equal(list.statusCode, 200);
+    const rows = list.json().data as Array<{ name: string; definition: unknown }>;
+    assert.deepEqual(rows.find((r) => r.name === 'AST-отбор')?.definition, AST_DEFINITION);
   });
 
   it('недопустимый view — 422 VALIDATION_ERROR, без записи', async (t) => {

@@ -82,7 +82,7 @@ import type {
   PropertyDefinitionUpdateInput,
   PropertyValue,
   SavedFilter,
-  SavedFilterDefinition,
+  SavedFilterCriteria,
   PinnedThoughtEntry,
   Publication,
   PublicationActiveFilter,
@@ -595,12 +595,12 @@ export interface EtnApi {
     list(networkId: string): Promise<SavedFilter[]>;
     create(
       networkId: string,
-      input: { name: string; definition: SavedFilterDefinition },
+      input: { name: string; definition: SavedFilterCriteria },
     ): Promise<SavedFilter>;
     update(
       networkId: string,
       filterId: string,
-      input: { name?: string; definition?: SavedFilterDefinition },
+      input: { name?: string; definition?: SavedFilterCriteria },
     ): Promise<SavedFilter>;
     remove(networkId: string, filterId: string): Promise<void>;
   };

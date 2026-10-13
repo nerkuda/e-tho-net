@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import { EtnError, STRUCTURES_QUERY_IDS_MAX_LIMIT, typeNameKey } from '@etn/shared';
-import type { StructureQueryRequest } from '@etn/shared';
+import type { SavedFilterDefinition, StructureQueryRequest } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
@@ -1681,7 +1681,10 @@ describe(
           const redefined = updateSavedFilter(ndb, USER, created.id, {
             definition: parseSavedFilterDefinition({ keywords: 'вода', sort: 'alpha', order: 'asc' }),
           });
-          assert.equal(redefined.definition.keywords, 'вода');
+          assert.equal(
+            (redefined.definition as SavedFilterDefinition).keywords,
+            'вода',
+          );
 
           deleteSavedFilter(ndb, USER, created.id);
           assert.deepEqual(listSavedFilters(ndb, USER), []);

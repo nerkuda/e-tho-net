@@ -22,6 +22,11 @@
  *    `fromDefinition`, `buildChronicleWire`, `parseChronicleCriteria`,
  *    `buildActivityQueryPlan`, `parseSearchCriteria`, …): и чтение
  *    сохранённого, и запись в wire живут в `lib/filter-builder.ts`.
+ * 6. Исполнитель отбора (`canvas/focus-filter-strip.ts`) не ведёт своего мнения
+ *    о сортировках: гейт `isFilterSort`/`STRUCTURE_SORTS`/`readSavedSort` и
+ *    собственный разбор `sort`/`order` в нём запрещены — сохранённую
+ *    сортировку читает сервер из определения отбора (ADR 23fab347, задача
+ *    46eba874; ошибки 33a3e285/119b314f).
  *
  * Сторож вводится зелёным — в том же изменении, которое сводит все пять
  * мест применения к одному модулю (мета-стандарт «Правило без теста-сторожа
@@ -46,6 +51,9 @@ const RENDERER_ROOT = path.resolve(
 
 /** Файл единого конструктора — единственное разрешённое место словарей. */
 const BUILDER = 'lib/filter-builder.ts';
+
+/** Исполнитель отбора — полоса отборов под мыслью в фокусе. */
+const STRIP = 'canvas/focus-filter-strip.ts';
 
 /** Экраны и строка поиска — места применения конструктора, а не его копии. */
 const APPLY_SITES = (rel: string): boolean => rel.startsWith('screens/') || rel.startsWith('search/');
@@ -129,6 +137,30 @@ describe('guard: условия отбора строятся только об�
     ]);
   });
 
+  it('исполнитель отбора не ведёт своего мнения о сортировках (ADR 23fab347)', () => {
+    // Полоса отборов — ИСПОЛНИТЕЛЬ, а не второй конструктор: она не фильтрует
+    // состав сортировок и не подменяет сохранённую (ADR «условия отбора строит
+    // один конструктор…», запрет «фильтровать состав сортировок на стороне
+    // исполнителя»). Сохранённую сортировку (плоскую пару или `ast.sort`, в т.ч.
+    // по свойству реестра) читает сервер из определения отбора — полоса не
+    // разбирает её и не передаёт в тело `run`. Прежний свой гейт `isFilterSort`
+    // с деградацией к `alpha` и сообщением «неподдерживаемое значение» молча
+    // терял сортировки (ошибки 33a3e285/119b314f, задача 46eba874).
+    assertGuardClean(RENDERER_ROOT, [
+      {
+        name: 'no-strip-sort-gate',
+        description:
+          'Полоса отборов (canvas/focus-filter-strip.ts) не сверяет и не ' +
+          'подменяет сортировку: словарь/гейт сортировок (' +
+          '`isFilterSort`/`STRUCTURE_SORTS`/`unsupportedSort`/`readSavedSort`) ' +
+          'в исполнителе запрещён — сохранённую сортировку читает сервер из ' +
+          'определения (ADR 23fab347, задача 46eba874).',
+        pattern: /isFilterSort|STRUCTURE_SORTS|unsupportedSort|ViewSortOrder/,
+        include: (rel) => rel === STRIP,
+      },
+    ]);
+  });
+
   it('вторая модель состояния отбора в экранах запрещена', () => {
     assertGuardClean(RENDERER_ROOT, [
       {
@@ -185,10 +217,11 @@ describe('guard: условия отбора строятся только об�
     );
   });
 
-  it('оба новых правила краснеют на умышленном нарушении', () => {
+  it('правила краснеют на умышленном нарушении', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-filter-'));
     try {
       fs.mkdirSync(path.join(dir, 'screens', 'fake'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'canvas'), { recursive: true });
       const rules = [
         {
           name: 'no-second-criteria-model',
@@ -206,6 +239,12 @@ describe('guard: условия отбора строятся только об�
           allow: (rel: string) => DELEGATING_WRAPPERS.has(rel),
         },
         NO_LOCAL_PILLS,
+        {
+          name: 'no-strip-sort-gate',
+          description: '',
+          pattern: /isFilterSort|STRUCTURE_SORTS|unsupportedSort|ViewSortOrder/,
+          include: (rel: string) => rel === STRIP,
+        },
       ];
       fs.writeFileSync(
         path.join(dir, 'screens', 'fake', 'panel.ts'),
@@ -223,10 +262,16 @@ describe('guard: условия отбора строятся только об�
         ].join('\n'),
         'utf8',
       );
+      fs.writeFileSync(
+        path.join(dir, 'canvas', 'focus-filter-strip.ts'),
+        'if (!isFilterSort(sort)) return null; // свой гейт сортировок у исполнителя\n',
+        'utf8',
+      );
       const names = new Set(collectViolations(dir, rules).map((v) => v.rule));
       assert.ok(names.has('no-second-criteria-model'), 'своя модель обязана попадать в нарушение');
       assert.ok(names.has('no-second-wire-converter'), 'свой конвертер обязана попадать в нарушение');
       assert.ok(names.has('no-local-pill-element'), 'своя сборка пилюль обязана попадать в нарушение');
+      assert.ok(names.has('no-strip-sort-gate'), 'гейт сортировок у исполнителя обязана попадать в нарушение');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

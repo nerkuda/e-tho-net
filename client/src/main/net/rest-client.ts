@@ -2775,7 +2775,7 @@ export class RestClient {
   /** `POST /networks/{nid}/saved-filters` — create (idempotent). */
   public async createSavedFilter(
     networkId: string,
-    input: { name: string; definition: import('@etn/shared').SavedFilterDefinition },
+    input: { name: string; definition: import('@etn/shared').SavedFilterCriteria },
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').SavedFilter> {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
@@ -2790,7 +2790,7 @@ export class RestClient {
     filterId: string,
     input: {
       name?: string;
-      definition?: import('@etn/shared').SavedFilterDefinition;
+      definition?: import('@etn/shared').SavedFilterCriteria;
     },
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').SavedFilter> {

@@ -1,0 +1,180 @@
+{
+  "name": "filter-footer",
+  "description": "Футер и личное сохранение отборов в «Структурах» и «Дневнике» (задача 46eba874, требование b202326e, сценарий 2b0bb289): онбординг → открыть «Структуры» → в футере есть строка имени и маркер ● → «Отборы…» открывает диалог, выбор сохранённого отбора заполняет имя → правка определения показывает ● → смена имени + «Сохранить» создаёт КОПИЮ (старое имя остаётся) → то же имя+копия во «Дневнике». Сохранённые отборы засеиваются шагом api (сервер принимает AST-определение, 0.13.1). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-footer.scenario.json --out .tmp/etn-46eba874/out",
+  "timeout": 120000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    {
+      "name": "seed-structures-filter",
+      "api": {
+        "name": "seed-structures-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "Мой отбор",
+          "definition": {
+            "version": 1,
+            "filter": { "op": "and", "children": [{ "entity": { "kind": "comment" }, "operator": "not_empty" }] },
+            "sort": [{ "key": "title", "order": "asc" }]
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+    {
+      "name": "seed-chronicle-filter",
+      "api": {
+        "name": "seed-chronicle-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "chronicle",
+          "name": "Мой дневник",
+          "definition": { "order": "desc", "ast": { "version": 1, "filter": { "op": "and", "children": [] } } }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+    {
+      "name": "structures-footer-has-name-and-save",
+      "probe": "document.querySelector('.st-filter .ff-name__input') !== null && document.querySelector('.st-filter .ff-save') !== null && document.querySelector('.st-filter .ff-changed') !== null",
+      "expect": true
+    },
+    {
+      "name": "structures-marker-hidden-empty",
+      "probe": "document.querySelector('.st-filter .ff-changed').hidden",
+      "expect": true
+    },
+    { "name": "structures-open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "structures-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    {
+      "name": "structures-saved-row-present",
+      "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()"
+    },
+    { "name": "structures-focus-search", "click": ".sfd-search" },
+    { "name": "structures-select-row", "key": "ArrowDown" },
+    { "name": "structures-confirm-row", "key": "Enter" },
+    { "name": "structures-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    {
+      "name": "structures-name-filled-from-saved",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ff-name__input')?.value === 'Мой отбор'"
+    },
+    {
+      "name": "structures-marker-after-open",
+      "probe": "document.querySelector('.st-filter .ff-changed').hidden"
+    },
+    { "name": "structures-add-sort-key", "click": ".st-filter .fs-add" },
+    { "name": "structures-sort-choice-open", "waitFor": "document.querySelector('.ft-choice__item') !== null" },
+    {
+      "name": "structures-pick-sort-key",
+      "eval": "(() => { const i = [...document.querySelectorAll('.ft-choice__item')].find((n) => n.dataset.key === 'created_at') ?? document.querySelector('.ft-choice__item'); i.dispatchEvent(new MouseEvent('click', { bubbles: true })); return i?.dataset?.key ?? 'none'; })()"
+    },
+    {
+      "name": "structures-marker-visible-after-edit",
+      "waitFor": "document.querySelector('.st-filter .ff-changed').hidden === false"
+    },
+    {
+      "name": "structures-rename-copy",
+      "eval": "(() => { const i = document.querySelector('.st-filter .ff-name__input'); i.value = 'Мой отбор (копия)'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    { "name": "structures-save-copy", "click": ".st-filter .ff-save" },
+    {
+      "name": "structures-both-filters-on-server",
+      "timeout": 10000,
+      "api": {
+        "name": "structures-both-filters-on-server",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=structures",
+        "expression": "data.map((f) => f.name).sort().join('|')"
+      },
+      "expect": "Мой отбор|Мой отбор (копия)"
+    },
+    {
+      "name": "structures-copy-keeps-ast",
+      "api": {
+        "name": "structures-copy-keeps-ast",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=structures",
+        "expression": "data.find((f) => f.name === 'Мой отбор (копия)')?.definition?.version"
+      },
+      "expect": 1
+    },
+
+    { "name": "open-chronicle", "click": "button.view-tab[title=\"Дневник\"]" },
+    { "name": "chronicle-editor", "timeout": 15000, "waitFor": "document.querySelector('.chron-filter .fe .ff-name__input') !== null" },
+    {
+      "name": "chronicle-footer-has-name-and-save",
+      "probe": "document.querySelector('.chron-filter .ff-name__input') !== null && document.querySelector('.chron-filter .ff-save') !== null && document.querySelector('.chron-filter .ff-changed') !== null",
+      "expect": true
+    },
+    { "name": "chronicle-open-saved", "click": ".chron-filter .ff-extra--saved" },
+    { "name": "chronicle-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "chronicle-saved-row-present", "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    { "name": "chronicle-focus-search", "click": ".sfd-search" },
+    { "name": "chronicle-select-row", "key": "ArrowDown" },
+    { "name": "chronicle-confirm-row", "key": "Enter" },
+    { "name": "chronicle-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    {
+      "name": "chronicle-name-filled-from-saved",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.chron-filter .ff-name__input')?.value === 'Мой дневник'"
+    },
+    {
+      "name": "chronicle-edit-keywords",
+      "eval": "(() => { const i = document.querySelector('.chron-filter .st-f-keywords'); if (!i) return 'no-keywords-field'; i.value = 'стенд'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "chronicle-marker-visible-after-edit",
+      "waitFor": "document.querySelector('.chron-filter .ff-changed').hidden === false"
+    },
+    {
+      "name": "chronicle-rename-copy",
+      "eval": "(() => { const i = document.querySelector('.chron-filter .ff-name__input'); i.value = 'Мой дневник (копия)'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "chronicle-name-value",
+      "probe": "document.querySelector('.chron-filter .ff-name__input')?.value ?? null"
+    },
+    {
+      "name": "chronicle-marker-before-save",
+      "probe": "document.querySelector('.chron-filter .ff-changed')?.hidden ?? 'no-marker'"
+    },
+    {
+      "name": "chronicle-save-copy",
+      "eval": "(() => { const b = document.querySelector('.chron-filter .ff-save'); if (!b) return 'no-save-button'; b.click(); return 'saved'; })()"
+    },
+    {
+      "name": "chronicle-save-result",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.notice-text')?.textContent?.includes('Мой дневник (копия)') === true"
+    },
+    {
+      "name": "chronicle-both-filters-on-server",
+      "timeout": 10000,
+      "api": {
+        "name": "chronicle-both-filters-on-server",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=chronicle",
+        "expression": "data.map((f) => f.name).sort().join('|')"
+      },
+      "expect": "Мой дневник|Мой дневник (копия)"
+    }
+  ]
+}

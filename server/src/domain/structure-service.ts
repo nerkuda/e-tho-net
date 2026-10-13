@@ -34,7 +34,7 @@ import {
   type ChronicleFilterDefinition,
   type ChronicleSavedFilter,
   type SavedFilter,
-  type SavedFilterDefinition,
+  type SavedFilterCriteria,
   type SavedFilterView,
   type SortOrder,
   type StructureAuthorOp,
@@ -52,6 +52,7 @@ import { getEdgesAmong, toFocusEdge } from './link-service.js';
 import { directionsOf, REF_COLUMNS } from './query-service.js';
 import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
+import { parseFilterAst } from './filter-ast.js';
 
 // ---------------------------------------------------------------------------
 // Filter parsing / validation
@@ -351,11 +352,29 @@ function parsePropertyCondition(raw: unknown, requestId?: string): StructureProp
   return { property_id: propertyId, op: op as StructurePropertyOp, value };
 }
 
-/** Read a full saved-filter definition (filter + sort/order) from an untrusted object. */
+/**
+ * Read a full saved-filter definition from an untrusted object. Понимает обе
+ * формы, как и отбор типа мысли (0.13.1):
+ *
+ *   * **AST** (`{ version, filter, sort? }`, сущность 489c394f) — её пишет
+ *     единый редактор «Структур» (`buildFilterAst`); сортировка многоуровневая
+ *     внутри AST, плоской пары нет. Проверяется доменным `parseFilterAst`.
+ *   * **легаси-плоская** `definition v1` (`{ …, sort, order }`) — `sort`/`order`
+ *     обязательны; разбор — {@link parseStructureFilter}.
+ *
+ * Формы различает наличие поля `version` — так же, как клиентский
+ * `isAstDefinition` и путь отбора типа мысли. Прежде структурная форма принимала
+ * только плоское определение и отвергала AST (`VALIDATION_ERROR «Недопустимый
+ * sort»`), из-за чего «Сохранить» в панели «Структур» (она пишет AST) не
+ * срабатывало — задача 46eba874.
+ */
 export function parseSavedFilterDefinition(
   body: Record<string, unknown>,
   requestId?: string,
-): SavedFilterDefinition {
+): SavedFilterCriteria {
+  if (body['version'] !== undefined) {
+    return parseFilterAst(body, requestId);
+  }
   const filter = parseStructureFilter(body, requestId);
   const sortRaw = body['sort'];
   if (typeof sortRaw !== 'string' || !(STRUCTURE_SORTS as readonly string[]).includes(sortRaw)) {
@@ -556,7 +575,7 @@ const SAVED_FILTER_COLUMNS =
 /** Convert a raw row into a saved filter of its view (definition JSON is trusted). */
 function rowToSavedFilterView(row: SavedFilterRow): SavedFilter | ChronicleSavedFilter {
   const definition = JSON.parse(row.definition) as
-    | SavedFilterDefinition
+    | SavedFilterCriteria
     | ChronicleFilterDefinition;
   const base = {
     id: row.id,
@@ -567,7 +586,7 @@ function rowToSavedFilterView(row: SavedFilterRow): SavedFilter | ChronicleSaved
   if (row.view === 'chronicle') {
     return { ...base, view: 'chronicle', definition: definition as ChronicleFilterDefinition };
   }
-  return { ...base, view: 'structures', definition: definition as SavedFilterDefinition };
+  return { ...base, view: 'structures', definition: definition as SavedFilterCriteria };
 }
 
 /** List the user's saved filters of one view, alphabetically by name (§18). */
@@ -628,7 +647,7 @@ export function createSavedFilter(
   userId: string,
   view: SavedFilterView,
   name: string,
-  definition: SavedFilterDefinition | ChronicleFilterDefinition,
+  definition: SavedFilterCriteria | ChronicleFilterDefinition,
 ): SavedFilter | ChronicleSavedFilter {
   const trimmed = validateFilterName(name);
   assertNameAvailable(ndb, userId, view, trimmed);
@@ -646,7 +665,7 @@ export function updateSavedFilter(
   ndb: NetworkDb,
   userId: string,
   filterId: string,
-  patch: { name?: string; definition?: SavedFilterDefinition | ChronicleFilterDefinition },
+  patch: { name?: string; definition?: SavedFilterCriteria | ChronicleFilterDefinition },
 ): SavedFilter | ChronicleSavedFilter {
   const existing = getSavedFilterOrThrow(ndb, userId, filterId);
   const name = patch.name !== undefined ? validateFilterName(patch.name) : existing.name;

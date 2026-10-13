@@ -272,13 +272,22 @@ export interface SavedFilterDefinition extends StructureFilter {
   order: SortOrder;
 }
 
+/**
+ * Определение сохранённого отбора «Структур»: легаси-плоская форма
+ * {@link SavedFilterDefinition} (`definition v1`) либо форма AST ({@link FilterAst},
+ * `{ version, filter, sort? }`) — как у отборов типа мысли и у рецепта заголовка
+ * публикации. Панель «Структур» пишет и читает форму AST (единый редактор дерева),
+ * поэтому обе формы допустимы; различает их наличие поля `version`.
+ */
+export type SavedFilterCriteria = SavedFilterDefinition | FilterAst;
+
 /** A named saved filter of the structures view (L3, per-user). */
 export interface SavedFilter {
   id: string;
   /** Which view the filter belongs to; legacy rows default to 'structures'. */
   view: SavedFilterView;
   name: string;
-  definition: SavedFilterDefinition;
+  definition: SavedFilterCriteria;
   /** ISO-8601 UTC. */
   created_at: string;
   /** ISO-8601 UTC. */

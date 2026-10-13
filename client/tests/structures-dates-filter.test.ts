@@ -124,9 +124,12 @@ describe('structures filter panel — «Даты» wire contract (задача 7
       updated_at: '2024-04-01T00:00:00Z',
     };
     const restored = JSON.parse(JSON.stringify(saved)) as typeof saved;
-    assert.equal(restored.definition.created_after, '2024-02-01');
-    assert.equal(restored.definition.created_before, '2024-02-28');
-    assert.equal(restored.definition.updated_after, '2024-03-01');
-    assert.equal(restored.definition.updated_before, '2024-03-31');
+    // Определение «Структур» — плоское (`definition v1`) в этом кейсе; сужаем
+    // объединение `SavedFilterCriteria` до плоской формы для чтения полей дат.
+    const definition = restored.definition as import('@etn/shared').SavedFilterDefinition;
+    assert.equal(definition.created_after, '2024-02-01');
+    assert.equal(definition.created_before, '2024-02-28');
+    assert.equal(definition.updated_after, '2024-03-01');
+    assert.equal(definition.updated_before, '2024-03-31');
   });
 });

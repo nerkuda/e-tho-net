@@ -33,7 +33,7 @@ import {
   type FilterAstEntityKind,
   type FilterAstNode,
   type NetworkProperty,
-  type SavedFilterDefinition,
+  type SavedFilterCriteria,
   type SortOrder,
   type StructureFilter,
   type StructureSort,
@@ -414,8 +414,8 @@ export function buildQueryFilter(s: FilterState = state): PanelQueryFilter {
  * (`{ version, filter, sort? }`); прежние плоские определения читает тот же
  * конвертер — второй формы записи не появляется.
  */
-function buildSavedDefinition(): SavedFilterDefinition {
-  return buildFilterAst(state, { profile: FILTER_PROFILE }) as unknown as SavedFilterDefinition;
+function buildSavedDefinition(): FilterAst {
+  return buildFilterAst(state, { profile: FILTER_PROFILE });
 }
 
 // ---------------------------------------------------------------------------
@@ -679,13 +679,13 @@ async function saveFilter(request: { name: string; asCopy: boolean }): Promise<v
     if (target !== undefined) {
       await etn.savedFilters.update(requireNetworkId(), target.id, {
         name,
-        definition: definition as SavedFilterDefinition,
+        definition,
       });
       state.savedFilterId = target.id;
     } else {
       const created = await etn.savedFilters.create(requireNetworkId(), {
         name,
-        definition: definition as SavedFilterDefinition,
+        definition,
       });
       state.savedFilterId = created.id;
     }
@@ -734,7 +734,7 @@ async function openSavedPicker(): Promise<void> {
       try {
         const created = await etn.savedFilters.create(requireNetworkId(), {
           name: copyName,
-          definition: entry.definition as SavedFilterDefinition,
+          definition: entry.definition as SavedFilterCriteria,
         });
         await reload();
         return created.id;

@@ -26,14 +26,12 @@
 
 import { UI_STATE_KEY } from '@etn/shared';
 import type { FocusResponse, ThoughtRef } from '@etn/shared';
-import type { StructureSort, SortOrder } from '@etn/shared';
 
 import { openViewEditorDialog } from '../screens/thought-type/filter-dialog.js';
 import { openCanvasLinkFilterDialog } from './link-filter-dialog.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { div } from '../lib/dom.js';
-import { isFilterSort, isSortOrder, sortValueLabel } from '../lib/filter-builder.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
@@ -324,12 +322,10 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
   // realtime refresh of the same focus), not just on a focus switch: dropping
   // the cached run result there let a superseded run hand `null` to the canvas
   // and paint the lower zone empty until the user toggled the mode by hand
-  // (ошибка 90811979). The sort cache is dropped with it and re-read lazily.
+  // (ошибка 90811979). The definition cache is dropped with it and re-read lazily.
   if (focusChanged) {
     lastResult = null;
-    invalidateViewSortCache();
-    // Сообщение о неподдерживаемой сортировке — тоже заново на новый фокус.
-    unsupportedSortNotified = null;
+    invalidateViewDefinitionCache();
   }
   // Resolve the effective chain. The focus endpoint doesn't ship
   // `meta.views` yet, so the strip reads the focus via `thoughts.get` and
@@ -742,9 +738,10 @@ async function openViewEditorForExisting(
             // Отбор могли переименовать — обновляем кэшированное имя перед
             // перезапуском, чтобы run выполнился по актуальному определению.
             currentMode.viewName = savedView.name_key;
-            // Определение могло поменяться (sort/order/limit и т.п.) —
-            // сбрасываем кеш, чтобы новый run прочитал свежую `definition`.
-            invalidateViewSortCache();
+            // Определение могло поменяться (условия/sort/limit и т.п.) —
+            // сбрасываем кеш признака `keywords`, чтобы новый run прочитал
+            // свежую `definition`.
+            invalidateViewDefinitionCache();
             const focus = store.state.focus;
             if (focus !== null) {
               await runActiveViewIfNeeded(focus.focused.id);
@@ -872,23 +869,19 @@ function notifyModeChange(): void {
  */
 let runSeq = 0;
 
-/** Ключ последнего показанного сообщения о неподдерживаемой сортировке —
- *  сообщение выводится один раз на фокус/отбор, а не на каждый ре-рендер. */
-let unsupportedSortNotified: string | null = null;
-
 /**
- * Cache of `sort`/`order` parsed from each view's definition, keyed by
- * `viewId`. `null` — определение уже пытались прочитать и распарсить не
- * удалось (битый JSON / отсутствуют поля). Сбрасывается при смене фокуса
- * (renderStrip) и realtime-событиях по отборам — см. `invalidateViewSortCache`.
- */
-const viewSortOrderCache = new Map<string, ViewSortOrder | null>();
-
-/**
- * Использует ли определение отбора критерий `keywords` (блокер G3). Кеш по
- * `viewId`: заполняется при чтении определения ({@link loadViewSortOrder}).
- * Нужен холсту, чтобы решать, переисполнять ли отбор на правку заголовка/
- * синонимов мысли: без `keywords` такие поля состав отбора не меняют.
+ * Кеш признака «определение отбора использует критерий `keywords`», ключ —
+ * `viewId`. Читается из определения ({@link prefetchViewDefinition}) при запуске
+ * отбора. Нужен холсту, чтобы решать, переисполнять ли отбор на правку заголовка/
+ * синонимов мысли (блокер G3): без `keywords` такие поля состав отбора не меняют.
+ *
+ * Полоса НЕ ведёт собственного мнения о сортировке: сохранённую сортировку
+ * (плоскую пару `sort`/`order` либо многоуровневый `ast.sort`, в т.ч. по
+ * свойству реестра) читает ИСПОЛНИТЕЛЬ из определения отбора
+ * (`server/.../thought-type-views-service.ts`: `readSavedSort`/`ast.sort`) —
+ * полоса лишь просит исполнить отбор. Фильтровать или подменять сохранённую
+ * сортировку на стороне исполнителя запрещено (ADR 23fab347, ошибки
+ * 33a3e285/119b314f).
  */
 const viewKeywordsCache = new Map<string, boolean>();
 
@@ -908,44 +901,22 @@ export function activeViewUsesKeywords(): boolean {
   return viewKeywordsCache.get(currentMode.viewId) ?? false;
 }
 
-/**
- * Сортировка/направление отбора, прочитанные из `definition`.
- * `unsupported` — сохранённые значения ВНЕ единого набора конструктора
- * (`lib/filter-builder.ts`, требование «Сортировки отбора: единый набор…»):
- * исполнение идёт со значениями по умолчанию, но о расхождении сообщается
- * явно — молча отбрасывать сохранённую сортировку запрещено (ошибка 33a3e285).
- */
-interface ViewSortOrder {
-  sort: StructureSort;
-  order: SortOrder;
-  unsupported: { sort?: string; order?: string } | null;
-}
-
-/** Drops every cached view `sort`/`order` (вызывается при rebuild полосы). */
-function invalidateViewSortCache(): void {
-  viewSortOrderCache.clear();
+/** Drops the cached view keyword usage (вызывается при rebuild полосы). */
+function invalidateViewDefinitionCache(): void {
   viewKeywordsCache.clear();
 }
 
-/** Загружает `sort`/`order` из определения отбора и кеширует по `viewId`.
- *  Серверная операция `etn.thoughtTypeViews.run` сама по себе сортирует
- *  результат `alpha asc` (домен `thought-type-views-service.ts`), и без
- *  явных `sort`/`order` opts порядок отбора игнорируется — клиент должен
- *  передавать `sort`/`order`, прочитанные из `definition`. Кеш по `viewId`
- *  избавляет от повторного `list` на каждый ре-рендер.
- *
- *  Полоса НЕ имеет собственного мнения о допустимых сортировках: множество
- *  определяет конструктор (`isFilterSort`), а исполнитель принимает всё,
- *  что конструктор позволил сохранить. Значения вне набора (легаси
- *  `updated` из старого диалога) возвращаются с `unsupported` — исполнение
- *  продолжается, но сообщается явно. */
-async function loadViewSortOrder(
+/**
+ * Прочитать определение отбора один раз на `viewId` и закешировать признак
+ * использования `keywords`. Сортировку полоса здесь НЕ разбирает и НЕ
+ * кеширует: её исполняет сервер по определению отбора (ADR 23fab347).
+ */
+async function prefetchViewDefinition(
   networkId: string,
   viewTypeId: string,
   viewId: string,
-): Promise<ViewSortOrder | null> {
-  const cached = viewSortOrderCache.get(viewId);
-  if (cached !== undefined) return cached;
+): Promise<void> {
+  if (viewKeywordsCache.has(viewId)) return;
   try {
     const resp = await etn.thoughtTypeViews.list(networkId, viewTypeId, {
       includeEffective: false,
@@ -953,62 +924,19 @@ async function loadViewSortOrder(
     const full = resp.data.find((v) => v.id === viewId);
     if (full === undefined) {
       viewKeywordsCache.set(viewId, false);
-      viewSortOrderCache.set(viewId, null);
-      return null;
+      return;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(full.definition) as unknown;
     } catch {
       viewKeywordsCache.set(viewId, false);
-      viewSortOrderCache.set(viewId, null);
-      return null;
+      return;
     }
-    // Использует ли отбор `keywords` — нужно холсту для признака «состав мог
-    // измениться» на правку заголовка/синонимов (блокер G3).
     viewKeywordsCache.set(viewId, definitionUsesKeywords(parsed));
-    const obj = parsed as { sort?: unknown; order?: unknown };
-    const sort = obj?.sort;
-    const order = obj?.order;
-    if (typeof sort !== 'string' || typeof order !== 'string') {
-      viewSortOrderCache.set(viewId, null);
-      return null;
-    }
-    if (!isFilterSort(sort) || !isSortOrder(order)) {
-      // Сохранённое значение вне единого набора (ошибка 33a3e285): дефолт
-      // исполнения, но значение запоминаем, чтобы сообщить явно.
-      const value: ViewSortOrder = {
-        sort: 'alpha',
-        order: 'asc',
-        unsupported: {
-          ...(!isFilterSort(sort) ? { sort } : {}),
-          ...(!isSortOrder(order) ? { order } : {}),
-        },
-      };
-      viewSortOrderCache.set(viewId, value);
-      return value;
-    }
-    const value: ViewSortOrder = { sort, order, unsupported: null };
-    viewSortOrderCache.set(viewId, value);
-    return value;
   } catch {
-    viewSortOrderCache.set(viewId, null);
-    return null;
+    viewKeywordsCache.set(viewId, false);
   }
-}
-
-/**
- * Явное сообщение о неподдерживаемом сохранённом значении сортировки —
- * молчание запрещено (требование «Сортировки отбора: единый набор…»).
- */
-function formatUnsupportedSortNotice(unsupported: { sort?: string; order?: string }): string {
-  const parts: string[] = [];
-  if (unsupported.sort !== undefined) parts.push(`сортировка ${sortValueLabel(unsupported.sort)}`);
-  if (unsupported.order !== undefined) parts.push(`направление «${unsupported.order}»`);
-  return (
-    `Сохранённый отбор содержит неподдерживаемое значение (${parts.join(', ')}) — ` +
-    'результат отсортирован по названию.'
-  );
 }
 
 export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult | null> {
@@ -1017,33 +945,16 @@ export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult
   if (networkId === null) return null;
   const seq = ++runSeq;
   try {
-    // Передаём `sort`/`order` из определения отбора — иначе сервер возвращает
-    // фиксированный `alpha asc` и порядок отбора (например, «по дате
-    // создания») теряется (ошибка 119b314f). REST `run` уже принимает эти
-    // opts и применяет через `sortItems` (server/routes/thought-type-views.ts).
-    const sortOrder = await loadViewSortOrder(
-      networkId,
-      currentMode.viewTypeId,
-      currentMode.viewId,
-    );
-    // Сохранённое значение сортировки вне единого набора конструктора —
-    // исполняем со значением по умолчанию, но сообщаем явно, один раз на
-    // фокус/отбор (ошибка 33a3e285: молча терять сохранённую сортировку
-    // запрещено).
-    if (sortOrder !== null && sortOrder.unsupported !== null) {
-      const key = `${currentMode.viewId}|${JSON.stringify(sortOrder.unsupported)}`;
-      if (unsupportedSortNotified !== key) {
-        unsupportedSortNotified = key;
-        notice(formatUnsupportedSortNotice(sortOrder.unsupported), 'info');
-      }
-    }
+    // Прочитать определение — только ради кеша признака `keywords` (G3).
+    // Сортировку не передаём: исполнитель читает её из определения отбора сам
+    // (`readSavedSort` для плоской пары, `ast.sort` для многоуровневой), поэтому
+    // ни отбраковать, ни подменить её полоса не может (ADR 23fab347).
+    await prefetchViewDefinition(networkId, currentMode.viewTypeId, currentMode.viewId);
     const resp = await etn.thoughtTypeViews.run(
       networkId,
       focusId,
       currentMode.viewName,
-      sortOrder === null || sortOrder.unsupported !== null
-        ? undefined
-        : { sort: sortOrder.sort, order: sortOrder.order },
+      undefined,
     );
     // Stale response (the focus changed or the user re-clicked) — drop it.
     // Hand back only a cached result that belongs to THIS focus: a result for
@@ -1117,15 +1028,10 @@ export async function loadMoreViewResult(focusId: string): Promise<ViewResult | 
   // `runSeq` уже сдвинут, а `lastResult` заменён/сброшен — порцию не применяем.
   const seq = runSeq;
   try {
-    const sortOrder = await loadViewSortOrder(
-      networkId,
-      currentMode.viewTypeId,
-      currentMode.viewId,
-    );
+    // Сортировку не передаём — ту же сохранённую сортировку определения
+    // читает исполнитель, поэтому страница догружается в том же порядке
+    // (ADR 23fab347). `limit`/`offset` — только пагинация.
     const resp = await etn.thoughtTypeViews.run(networkId, focusId, currentMode.viewName, {
-      ...(sortOrder === null || sortOrder.unsupported !== null
-        ? {}
-        : { sort: sortOrder.sort, order: sortOrder.order }),
       limit: VIEW_PAGE_SIZE,
       offset: result.nextOffset,
     });
@@ -1174,10 +1080,10 @@ async function refreshStripFromRealtime(
   const focus = store.state.focus;
   if (focus === null) return;
   const seq = ++realtimeRebuildSeq;
-  // The event carries a view definition change: the cached `sort`/`order` of
-  // the views may be stale, while the focus itself did not change (so
-  // `renderStrip` no longer drops the cache on its own).
-  invalidateViewSortCache();
+  // The event carries a view definition change: the cached `keywords` flag may
+  // be stale, while the focus itself did not change (so `renderStrip` no longer
+  // drops the cache on its own).
+  invalidateViewDefinitionCache();
   await renderStrip(focus);
   if (seq !== realtimeRebuildSeq) return;
   // The mode may have shifted to a default view after the rebuild; the

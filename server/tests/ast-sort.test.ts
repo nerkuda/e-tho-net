@@ -311,6 +311,36 @@ describe(
       }
     });
 
+    it('views run: плоское определение v1 исполняется без opts — сохранённую сортировку читает сервер (запрет фильтрации у исполнителя, ADR 23fab347)', async () => {
+      // Полоса отборов больше НЕ передаёт `sort`/`order` (клиент — исполнитель,
+      // а не второй конструктор): сохранённую сортировку сервер читает из
+      // определения сам (`readSavedSort` для плоской формы, `ast.sort` — для
+      // AST). Этот тест фиксирует, что плоская форма v1 без opts исполняется в
+      // сохранённом порядке — иначе снятие клиентских opts потеряло бы
+      // сортировку легаси-отборов (ошибка 119b314f).
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const type = createThoughtType(ndb, { name: 'Задача' }, 'u').id;
+        const ctxThought = seedThought(ndb, 'Контекст', { type_id: type, created_at: '2023-01-01T00:00:00.000Z' });
+        seedThought(ndb, 'A', { type_id: type, created_at: '2024-03-01T00:00:00.000Z' });
+        seedThought(ndb, 'B', { type_id: type, created_at: '2024-01-10T00:00:00.000Z' });
+        seedThought(ndb, 'C', { type_id: type, created_at: '2024-02-01T00:00:00.000Z' });
+
+        // Плоская `definition v1` (без поля `version`): сортировка — плоские
+        // строки `sort`/`order`, как их писали панели до AST.
+        const definition = JSON.stringify({ type_ids: [type], sort: 'created', order: 'desc' });
+        const view = createThoughtTypeView(ndb, type, { name: 'Работы v1', definition, is_default: true }, 'u');
+        const run = await runViewForThought(ndb, getThoughtTypeView(ndb, view.id)!, ctxThought, 'u');
+        assert.deepEqual(
+          run.items.map((i) => i.title),
+          ['A', 'C', 'B'],
+          'плоская сортировка created desc исполнена без opts тела',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('views run: явный body order переопределяет ast.sort определения (контракт 95273103)', async () => {
       const ndb = createInMemoryNetworkDb();
       try {
