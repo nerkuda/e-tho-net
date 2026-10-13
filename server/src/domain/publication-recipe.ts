@@ -23,7 +23,9 @@ import {
   EtnError,
   PUBLICATION_EMPTY_RECIPE_WARNING,
   isPublicationTitleRecipeAst,
+  parseFilterKeywords,
   type FilterAst,
+  type FilterAstLeaf,
   type FilterAstNode,
   type PublicationTitleRecipe,
   type SortOrder,
@@ -137,26 +139,40 @@ export function compileRecipeToAst(
 }
 
 /**
- * «Пустой» AST-рецепт: ни одного условия СОСТАВА. Пустая группа `and` либо
- * только листья-модификаторы (`active`/`trashed`) — состояние, а не критерий
- * состава (обоснование — {@link isStructureFilterEmpty}). Такой рецепт дал бы
- * всю сеть: не исполняем его, а отдаём тот же пустой результат с тем же
- * предупреждением, что и у плоского формата.
+ * «Пустой» AST-рецепт: ни одного условия СОСТАВА — рецепт дал бы всю сеть,
+ * поэтому не исполняется (пустой результат + то же предупреждение, что у
+ * плоского формата; обоснование — {@link isStructureFilterEmpty}).
+ *
+ * Проверка рекурсивна и НЕ зависит от вида группы (итерация 2, блокер
+ * верификатора): лист-модификатор (`active`/`trashed` с любым оператором) —
+ * не критерий; группа (`and`/`or`/`not`, любой вложенности) не несёт условий,
+ * если таковы ВСЕ её дети. Так же трактуется `not`: отрицание пустого набора
+ * модификаторов — по-прежнему пустой рецепт. Отключённое исполнителем «Есть
+ * слова» (пустая/отсутствующая область поиска ЛИБО ни включаемых, ни
+ * исключаемых слов — `keywordsLeafClause` → `AST_TRUE`) тоже не критерий: без
+ * этой ветки такое тело молча собирало бы всю сеть (та же ошибка b9db6c0a).
  */
 export function isAstRecipeEmpty(ast: FilterAst): boolean {
-  const modifierKinds = new Set(['active', 'trashed']);
-  const onlyModifiers = (node: FilterAstNode): boolean => {
-    if ('op' in node) {
-      if (node.op !== 'and' || node.children.length === 0) return false;
-      return node.children.every(onlyModifiers);
-    }
-    return modifierKinds.has(node.entity.kind);
-  };
-  if ('op' in ast.filter) {
-    if (ast.filter.op === 'and' && ast.filter.children.length === 0) return true;
-    return onlyModifiers(ast.filter) && ast.filter.children.length > 0;
-  }
-  return modifierKinds.has(ast.filter.entity.kind);
+  return isNonCriterionNode(ast.filter);
+}
+
+/** Операнды-модификаторы: состояние мысли, а не критерий состава рецепта. */
+const RECIPE_MODIFIER_KINDS: ReadonlySet<string> = new Set(['active', 'trashed']);
+
+/** Узел не несёт условий состава (рекурсивно: ЛЮБАЯ группа, любая вложенность). */
+function isNonCriterionNode(node: FilterAstNode): boolean {
+  if ('op' in node) return node.children.every(isNonCriterionNode);
+  return isNonCriterionLeaf(node);
+}
+
+/** Лист не является критерием состава (модификатор либо отключённое «Есть слова»). */
+function isNonCriterionLeaf(leaf: FilterAstLeaf): boolean {
+  if (RECIPE_MODIFIER_KINDS.has(leaf.entity.kind)) return true;
+  if (leaf.entity.kind !== 'keywords') return false;
+  if ((leaf.entity.scope ?? []).length === 0) return true;
+  const value = typeof leaf.value === 'string' ? leaf.value : '';
+  const { include, exclude } = parseFilterKeywords(value);
+  return include.length === 0 && exclude.length === 0;
 }
 
 /**

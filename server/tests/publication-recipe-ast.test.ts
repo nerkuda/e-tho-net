@@ -235,8 +235,8 @@ describe('рецепт заголовков публикаций на общий
     const ndb = createInMemoryNetworkDb();
     try {
       const doc = createThoughtType(ndb, { name: 'Doc' }, USER);
-      seedThought(ndb, 'A', doc.id);
-      seedThought(ndb, 'B', doc.id);
+      const a = seedThought(ndb, 'A', doc.id);
+      const b = seedThought(ndb, 'B', doc.id);
 
       const empty = recipeAst({ op: 'and', children: [] });
       assert.ok(isAstRecipeEmpty(empty), 'пустая группа — пустой рецепт');
@@ -257,6 +257,76 @@ describe('рецепт заголовков публикаций на общий
       const assembled = assemblePublication(ndb, pub.id, USER);
       assert.deepEqual(assembled.sections, [], 'пустая сборка, а не вся сеть');
       assert.ok(assembled.warnings.includes(PUBLICATION_EMPTY_RECIPE_WARNING));
+
+      // Итерация 2 (блокер верификатора): модификаторы под ЛЮБОЙ группой и на
+      // любой вложенности — тоже пустой рецепт (иначе такое тело молча собирает
+      // всю сеть — возврат ошибки b9db6c0a).
+      const modifierOnlyForms: Array<[string, FilterAst]> = [
+        ['or[active]', recipeAst({ op: 'or', children: [leaf({ entity: { kind: 'active' } }, 'eq', true)] })],
+        [
+          'or[active,trashed]',
+          recipeAst({
+            op: 'or',
+            children: [
+              leaf({ entity: { kind: 'active' } }, 'eq', true),
+              leaf({ entity: { kind: 'trashed' } }, 'eq', false),
+            ],
+          }),
+        ],
+        ['not[trashed]', recipeAst({ op: 'not', children: [leaf({ entity: { kind: 'trashed' } }, 'eq', false)] })],
+        [
+          'and[or[active]]',
+          recipeAst({
+            op: 'and',
+            children: [{ op: 'or', children: [leaf({ entity: { kind: 'active' } }, 'eq', true)] } as FilterAstNode],
+          }),
+        ],
+        ['leaf active', recipeAst(leaf({ entity: { kind: 'active' } }, 'eq', true))],
+      ];
+      for (const [name, ast] of modifierOnlyForms) {
+        assert.ok(isAstRecipeEmpty(ast), `${name}: только модификаторы — пустой рецепт`);
+        const w: string[] = [];
+        assert.deepEqual(selectRecipeIds(ndb, USER, ast, w), [], `${name}: пустая выборка`);
+        assert.deepEqual(w, [PUBLICATION_EMPTY_RECIPE_WARNING], `${name}: предупреждение`);
+        const p = createPublication(ndb, { title: `Док-${name}`, title_recipe: ast }, USER);
+        const doc2 = assemblePublication(ndb, p.id, USER);
+        assert.deepEqual(doc2.sections, [], `${name}: сборка пуста, а не вся сеть`);
+        assert.ok(doc2.warnings.includes(PUBLICATION_EMPTY_RECIPE_WARNING), `${name}: warning сборки`);
+      }
+
+      // Условие-модификатор рядом с СОДЕРЖАТЕЛЬНЫМ листом рецепт пустым не делает.
+      const withContent = recipeAst({
+        op: 'and',
+        children: [
+          leaf({ entity: { kind: 'active' } }, 'eq', true),
+          leaf({ entity: { kind: 'type' } }, 'in_hierarchy', [doc.id]),
+        ],
+      });
+      assert.equal(isAstRecipeEmpty(withContent), false, 'модификатор + тип — не пустой рецепт');
+      const contentPub = createPublication(ndb, { title: 'Док-контент', title_recipe: withContent }, USER);
+      assert.deepEqual(
+        sectionIds(assemblePublication(ndb, contentPub.id, USER).sections).sort(),
+        [a, b].sort(),
+        'содержательный рецепт отбирает мысли',
+      );
+
+      // Отключённое исполнителем «Есть слова» (пустая область ИЛИ нет слов) —
+      // тоже не критерий состава: лист даёт AST_TRUE, т.е. «вся сеть».
+      const disabledKeywords: Array<[string, FilterAst]> = [
+        [
+          'keywords без области',
+          recipeAst(leaf({ entity: { kind: 'keywords' } }, 'matches', 'Дом')),
+        ],
+        [
+          'keywords с пустым значением',
+          recipeAst(leaf({ entity: { kind: 'keywords', scope: ['title'] } }, 'matches', '')),
+        ],
+      ];
+      for (const [name, ast] of disabledKeywords) {
+        assert.ok(isAstRecipeEmpty(ast), `${name}: условие отключено — пустой рецепт`);
+        const w: string[] = [];
+        assert.deepEqual(selectRecipeIds(ndb, USER, ast, w), [], `${name}: пустая выборка`);
+      }
     } finally {
       ndb.close();
     }
@@ -369,6 +439,54 @@ describe('рецепт заголовков публикаций: wire (REST)', 
         },
       });
       assert.equal(bad.statusCode, 422, 'невидимый операнд → 422');
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('REST: пустой рецепт (плоский и AST or[active]) — симметрично: принят, сборка пуста', async () => {
+    ctx = await buildRestContext();
+    try {
+      // Плоский «пустой» рецепт — эталон поведения: запись принимается, пустоту
+      // ловит сборка предупреждением (задача 7cfaba7c) — не 422.
+      const flat = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/publications`,
+        headers: { authorization: `Bearer ${ctx.adminKey}` },
+        payload: { title: 'Плоский пустой', title_recipe: flatRecipe({}) },
+      });
+      assert.equal(flat.statusCode, 201, flat.body);
+      const flatId = (flat.json().data as { id: string }).id;
+
+      // AST-рецепт из одних модификаторов под OR: поведение обязано быть тем же —
+      // принят (201), а не молча собирает всю сеть.
+      const orActive = recipeAst({ op: 'or', children: [leaf({ entity: { kind: 'active' } }, 'eq', true)] });
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/publications`,
+        headers: { authorization: `Bearer ${ctx.adminKey}` },
+        payload: { title: 'AST or[active]', title_recipe: orActive },
+      });
+      assert.equal(created.statusCode, 201, created.body);
+      const astId = (created.json().data as { id: string }).id;
+
+      for (const [name, id] of [
+        ['плоский', flatId],
+        ['AST or[active]', astId],
+      ] as const) {
+        const assembly = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/publications/${id}/assembly`,
+          headers: { authorization: `Bearer ${ctx.adminKey}` },
+        });
+        assert.equal(assembly.statusCode, 200, assembly.body);
+        const doc = assembly.json().data as { sections: unknown[]; warnings: string[] };
+        assert.deepEqual(doc.sections, [], `${name}: пустая сборка, а не вся сеть`);
+        assert.ok(
+          doc.warnings.includes(PUBLICATION_EMPTY_RECIPE_WARNING),
+          `${name}: предупреждение о пустом рецепте`,
+        );
+      }
     } finally {
       await closeRestContext(ctx);
     }
