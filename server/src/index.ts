@@ -45,8 +45,9 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
 
   // Пул reader-воркеров тяжёлых чтений (ADR bec191e6): процессный ресурс,
   // настраивается на старте. Тяжёлые выборки уходят в воркеры, чтобы
-  // синхронный better-sqlite3 не блокировал цикл событий; писатель остаётся
-  // единственным — в главном потоке. Воркеры поднимаются лениво.
+  // синхронный better-sqlite3 не блокировал цикл событий. Запись сети — в своём
+  // пуле воркеров (ниже, ADR ca3a9218): писатель у каждой сети единственный.
+  // Воркеры обоих пулов поднимаются лениво.
   configureReaderPool({
     size: config.readerPool.size,
     taskTimeoutMs: config.readerPool.taskTimeoutMs,
