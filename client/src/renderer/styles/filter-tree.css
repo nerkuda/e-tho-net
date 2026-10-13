@@ -124,6 +124,8 @@
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  /* Строка диагностики ложится второй полосой под условием (элемент 4e634c9a). */
+  flex-wrap: wrap;
   padding: var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-s);
@@ -244,3 +246,51 @@
   color: var(--text-faint);
   font-size: var(--font-size-s);
 }
+
+/* --- Диагностика строк (элемент интерфейса 4e634c9a) -------------------- */
+/*
+ * Красное (сущность условия удалена) — строка подсвечена и применение отбора
+ * запрещено; жёлтое (свойство отвязано от типа) — исполняется по фактическим
+ * значениям. Строка диагностики несёт точную причину и кнопку «исправить»;
+ * у строки условия она ложится второй полосой (`flex-basis: 100%`).
+ */
+
+.ft-node--error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ft-node--warning {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.ft-issue {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-basis: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs);
+}
+
+.ft-issue[data-severity='error'] .ft-issue__text {
+  color: var(--danger);
+}
+
+.ft-issue[data-severity='warning'] .ft-issue__text {
+  color: var(--warn-strong);
+}
+
+.ft-issue__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ft-issue__fix {
+  margin-left: auto;
+  white-space: nowrap;
+}
+

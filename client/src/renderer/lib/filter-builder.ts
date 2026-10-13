@@ -1479,6 +1479,22 @@ export function filterAstSortKeyLabel(key: string): string {
   return sort !== undefined ? filterSortLabel(sort) : key;
 }
 
+/**
+ * Движковые ключи AST единого набора сортировок — с подписями конструктора.
+ * Секция сортировки редактора строит свой словарь полей из ЭТОГО списка плюс
+ * свойства реестра сети: второго набора сортировок нет (сторож
+ * `guard-filter-builder`). «По просмотру» (`viewed`) ключа AST не имеет —
+ * плоская сортировка в AST не выражается и в список не входит.
+ */
+export function filterSortAstKeys(): ReadonlyArray<{ key: string; label: string }> {
+  const out: Array<{ key: string; label: string }> = [];
+  for (const option of FILTER_SORTS) {
+    const key = FILTER_SORT_TO_AST_KEY[option.v];
+    if (key !== undefined) out.push({ key, label: option.label });
+  }
+  return out;
+}
+
 /** True — значение является wire-AST отбора (`{ version, filter }`). */
 export function isFilterAstWire(def: unknown): def is FilterAst {
   if (def === null || typeof def !== 'object' || Array.isArray(def)) return false;

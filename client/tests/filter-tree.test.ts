@@ -735,3 +735,141 @@ describe('дерево условий: адресация и правки мод
     assert.equal((root.children[0] as any).op, 'or', 'снятие отрицания вернуло группу с коннектором');
   });
 });
+
+describe('дерево условий: диагностика строк (элемент 4e634c9a)', () => {
+  before(() => {
+    installShim();
+  });
+
+  it('красная запись помечает строку, несёт причину и «исправить» переводит фокус', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = defaultFilterCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [leafOf({ kind: 'property', property_id: CITY.id })],
+    };
+    const fixed: string[] = [];
+    const tree = mod.buildFilterTree({
+      profile: 'thoughts',
+      getState: () => state,
+      data: DATA,
+      issues: () => [
+        {
+          severity: 'error',
+          source: 'server',
+          code: 'entity_deleted',
+          path: 'filter.children[0].entity',
+          message: 'Свойство «Город» удалено из сети — отбор нельзя применить.',
+          label: 'Город',
+          deletedAt: '2026-10-01T00:00:00.000Z',
+        },
+      ],
+      onFixPath: (path: string) => fixed.push(path),
+    });
+    const root = tree.root as unknown as ShimElement;
+    const row = exact(root, 'ft-row')[0]!;
+    assert.equal(row.dataset['severity'], 'error', 'красная запись помечает строку');
+    assert.ok(row.classList.contains('ft-node--error'));
+    assert.equal(row.tabIndex, -1, 'строка принимает программный фокус по «исправить»');
+
+    const line = exactOne(row, 'ft-issue')!;
+    assert.equal(line.dataset['severity'], 'error');
+    assert.equal(line.dataset['path'], 'filter.children[0].entity');
+    assert.match(line.flatText(), /удалено 2026-10-01T00:00:00\.000Z/, 'причина с датой удаления');
+
+    exactOne(line, 'ft-issue__fix')!.emit('click', {});
+    assert.equal(row.focused, true, '«исправить» фокусирует строку');
+    assert.deepEqual(fixed, ['filter.children[0].entity'], 'хост узнаёт адрес правки');
+  });
+
+  it('жёлтая запись красит строку иначе; чужие адреса строк не помечаются', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = defaultFilterCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        leafOf({ kind: 'property', property_id: CITY.id }),
+        leafOf({ kind: 'property', property_id: DATE.id }),
+      ],
+    };
+    const tree = mod.buildFilterTree({
+      profile: 'thoughts',
+      getState: () => state,
+      data: DATA,
+      issues: () => [
+        {
+          severity: 'warning',
+          source: 'server',
+          code: 'property_detached',
+          path: 'filter.children[1]',
+          message: 'свойство отвязано от типа — считается по фактическим значениям',
+          label: null,
+        },
+        {
+          severity: 'error',
+          source: 'server',
+          code: 'build_warning',
+          path: '',
+          message: 'ошибку нельзя локализовать в строку',
+        },
+      ],
+    });
+    const root = tree.root as unknown as ShimElement;
+    const rows = exact(root, 'ft-row');
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]!.dataset['severity'], undefined, 'чужая строка чиста');
+    assert.equal(rows[1]!.dataset['severity'], 'warning');
+    assert.ok(rows[1]!.classList.contains('ft-node--warning'));
+    assert.equal(exact(root, 'ft-issue').length, 1, 'запись без адреса дерево не показывает');
+    assert.match(exactOne(rows[1]!, 'ft-issue')!.flatText(), /свойство отвязано у типа|свойство отвязано/);
+  });
+
+  it('проверки конструктора показываются строками дерева, а не запретом', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const diag = await import('../src/renderer/lib/filter-diagnostics.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = defaultFilterCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        leafOf({ kind: 'property', property_id: CITY.id }),
+        { kind: 'group', op: 'and', children: [] },
+      ],
+    };
+    const tree = mod.buildFilterTree({
+      profile: 'thoughts',
+      getState: () => state,
+      data: DATA,
+      issues: () => diag.constructorFilterIssues(state.tree as never),
+    });
+    const root = tree.root as unknown as ShimElement;
+    const groups = exact(root, 'ft-group');
+    assert.equal(groups[0]!.dataset['severity'], undefined, 'корень чист');
+    const nested = groups[1]!;
+    assert.equal(nested.dataset['severity'], 'error', 'пустая группа — красное');
+    assert.match(exactOne(nested, 'ft-issue')!.flatText(), /группа пуста/);
+
+    // Условие без значения — тоже строка: причина видна сразу.
+    state.tree.children = [leafOf({ kind: 'property', property_id: CITY.id })];
+    (state.tree.children[0] as any).value = { kind: 'none' };
+    tree.rerender();
+    const row = exact(root, 'ft-row')[0]!;
+    assert.equal(row.dataset['severity'], 'error');
+    assert.match(exactOne(row, 'ft-issue')!.flatText(), /условие без значения/);
+  });
+
+  it('CSS: краски диагностики строк — токены тревоги и предупреждения', () => {
+    const css = fs.readFileSync(path.join(RENDERER, 'styles', 'filter-tree.css'), 'utf8');
+    assert.match(css, /\.ft-node--error\s*\{[^}]*var\(--danger\)/s);
+    assert.match(css, /\.ft-node--warning\s*\{[^}]*var\(--warn\)/s);
+    assert.match(css, /\.ft-row\s*\{[^}]*flex-wrap:\s*wrap/s, 'строка диагностики ложится второй полосой');
+  });
+});

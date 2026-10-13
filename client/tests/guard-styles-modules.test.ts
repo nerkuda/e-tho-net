@@ -48,6 +48,7 @@ const EXPECTED_MODULES = [
   'styles/condition-combo.css',
   'styles/filter-panel.css',
   'styles/filter-tree.css',
+  'styles/filter-editor.css',
   'styles/menus.css',
   'styles/dialogs.css',
   'styles/notifications.css',

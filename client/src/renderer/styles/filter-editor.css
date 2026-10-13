@@ -1,0 +1,138 @@
+/*
+ * Вид футера редактора отбора и секции сортировки (0.13.1, задача c74f17a0 ТП
+ * 11b2509a; элементы интерфейса ca905fbc «Футер редактора отбора» и 3f0bf221
+ * «Секция сортировки отбора»).
+ *
+ * Модуль несёт ТОЛЬКО роли, которых в дизайн-системе нет: полосу футера
+ * (имя + маркер изменённости + фраза-превью + кнопки) и чип ключа сортировки.
+ * Поле, кнопки, крестик очистки и выпадающий список — фасады `lib/ui`
+ * (`fieldInput`, `wrapClearable`, `uiButton`, `iconButton`, общий список
+ * `ft-choice` дерева), своих классов под них нет.
+ *
+ * Фраза-превью показывается ≤3 строк: полный текст и список ошибок — в тултипе
+ * (элемент ca905fbc). Число строк клампинга сверяется тестом с
+ * `FILTER_FOOTER_PREVIEW_LINES` модуля `lib/filter-footer.ts`.
+ */
+
+.ff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* --- Имя отбора, маркер изменённости и фраза-превью --------------------- */
+
+.ff-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ff-name__input {
+  flex: 1 1 auto;
+}
+
+.ff-changed {
+  color: var(--warn);
+  font-size: var(--font-size-l);
+  line-height: 1;
+}
+
+.ff-preview {
+  min-width: 0;
+}
+
+.ff-preview__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs);
+  line-height: var(--font-size-s);
+  overflow-wrap: anywhere;
+}
+
+.ff-preview[data-severity='error'] .ff-preview__text {
+  color: var(--danger);
+}
+
+.ff-preview[data-severity='warning'] .ff-preview__text {
+  color: var(--warn-strong);
+}
+
+/* --- Кнопки футера ------------------------------------------------------ */
+
+.ff-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ff-save,
+.ff-clear {
+  white-space: nowrap;
+}
+
+.ff-apply {
+  margin-left: auto;
+}
+
+/* --- Секция сортировки: чипы [поле ↑/↓] и «+» --------------------------- */
+
+.fs-sort {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.fs-sort__head {
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  font-weight: var(--font-weight-medium);
+}
+
+.fs-sort__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.fs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+
+.fs-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-s);
+}
+
+/* Диагностика ключа: красное — свойство сортировки удалено из реестра. */
+.fs-chip--error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.fs-chip--warning {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.fs-add {
+  white-space: nowrap;
+}

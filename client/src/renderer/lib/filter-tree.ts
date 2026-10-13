@@ -23,11 +23,20 @@
  * (`lib/filter-value.ts`); до него слот рисует заглушку с видом значения.
  * Точка расширения — `ctx.renderValue`.
  *
- * **Вид** — из дизайн-системы (barrel `lib/ui/index.ts`): кнопки `uiButton`/
- * `iconButton`, сегменты `segmentedControl`, тумблер `toggleButton`, поле
- * `fieldInput`, всплывающая панель `openPopover`. Свой CSS-модуль
- * (`styles/filter-tree.css`) несёт только роли, которых в дизайн-системе нет:
- * рамка группы, связатор, тон вложенности.
+ * **Диагностика строк** (элемент интерфейса 4e634c9a) приходит готовым списком
+ * (`ctx.issues` из `lib/filter-diagnostics.ts`): красная запись подсвечивает
+ * строку и запрещает применение, жёлтая — только подсвечивает; у каждой строки
+ * видна точная причина и кнопка «исправить», переводящая фокус в строку. Записи
+ * без адреса строки дерево не показывает — их место в тултипе превью футера.
+ *
+ * **Вид** — из дизайн-системы (фасады `lib/ui` — файловыми импортами, как в
+ * `lib/filter-form.ts`: barrel тянет регистрацию вендора и не грузится в
+ * DOM-шиме юнит-тестов): кнопки `uiButton`/`iconButton`, сегменты
+ * `segmentedControl`, тумблер `toggleButton`, поле `fieldInput`, всплывающая
+ * панель `openPopover`. Свой CSS-модуль (`styles/filter-tree.css`) несёт только
+ * роли, которых в дизайн-системе нет: рамка группы, связатор, тон вложенности,
+ * строка диагностики. Класс строки диагностики — `FILTER_TREE_ISSUE_CLASS`
+ * (`ft-issue`).
  *
  * **Профиль контекста — параметр** (`ctx.profile`): он задаёт состав операндов
  * списка «Что», набор операторов и подпись целевой сущности в заголовке. Сам
@@ -61,6 +70,14 @@ import {
   type FilterTreeNode,
   type FilterTreeValue,
 } from './filter-builder.js';
+// Диагностика строк (элемент 4e634c9a): записи ядра и проверки конструктора
+// сведены одним модулем — дерево только раскладывает их по адресам строк.
+import {
+  filterIssueForNode,
+  filterIssueNodePath,
+  filterIssueReason,
+  type FilterIssue,
+} from './filter-diagnostics.js';
 import { VALUE_TYPE_LABELS } from './property-list.js';
 // Фасады дизайн-системы — из файлов каталога, как в соседнем `lib/filter-form.ts`:
 // barrel `lib/ui/index.ts` тянет за собой регистрацию вендора (webawesome/vaadin)
@@ -646,6 +663,18 @@ export interface FilterTreeContext {
   title?: string;
   /** Слот значения (виджет следующей задачи); по умолчанию — заглушка. */
   renderValue?: (leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi) => HTMLElement;
+  /**
+   * Диагностика строк (элемент интерфейса 4e634c9a): записи приходят из
+   * `lib/filter-diagnostics.ts` — красные (сущность удалена, применение
+   * запрещено) и жёлтые (свойство отвязано, отбор исполняется) плюс проверки
+   * конструктора. Адрес записи — `filter.children[0]…` ({@link filterIssueNodePath});
+   * записи без адреса дерево не показывает (их место — тултип превью футера).
+   * Список перечитывается при каждой отрисовке: получив диагностику, хост зовёт
+   * `rerender()`.
+   */
+  issues?: () => readonly FilterIssue[];
+  /** Хост узнаёт, что пользователь нажал «исправить» у узла с этим адресом. */
+  onFixPath?: (path: string) => void;
 }
 
 /** Дескриптор построенного дерева. */
@@ -660,6 +689,8 @@ export const FILTER_TREE_CLASS = 'ft';
 export const FILTER_TREE_GROUP_CLASS = 'ft-group';
 export const FILTER_TREE_ROW_CLASS = 'ft-row';
 export const FILTER_TREE_CONNECTOR_CLASS = 'ft-connector';
+/** Строка диагностики узла: причина + кнопка «исправить» (элемент 4e634c9a). */
+export const FILTER_TREE_ISSUE_CLASS = 'ft-issue';
 
 /**
  * Собрать дерево условий над единой моделью. Возвращает корневой узел и
@@ -686,8 +717,47 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
 
   const model = (): FilterTreeGroup => ensureTree();
 
+  /** Записи диагностики — перечитываются на каждой отрисовке дерева. */
+  let issueMap: FilterIssue[] = [];
+
+  /**
+   * Строка диагностики узла (элемент 4e634c9a): точная причина (снапшот имени и
+   * дата — из записи ядра) и кнопка «исправить», переводящая фокус в строку.
+   */
+  const buildIssueLine = (issue: FilterIssue, focus: () => void): HTMLElement => {
+    const line = div(FILTER_TREE_ISSUE_CLASS);
+    line.dataset['severity'] = issue.severity;
+    line.dataset['code'] = issue.code;
+    line.dataset['path'] = issue.path;
+    line.append(span(filterIssueReason(issue), 'ft-issue__text'));
+    line.append(
+      uiButton({
+        label: 'исправить',
+        role: 'ghost',
+        size: 's',
+        class: 'ft-issue__fix',
+        title: 'Перевести фокус в строку с ошибкой',
+        onClick: () => {
+          focus();
+          ctx.onFixPath?.(issue.path);
+        },
+      }),
+    );
+    return line;
+  };
+
+  /** Пометить узел по диагностике (класс + `data-severity`); `null` — чисто. */
+  const applyIssue = (node: HTMLElement, path: FilterTreePath): FilterIssue | null => {
+    const issue = filterIssueForNode(issueMap, filterIssueNodePath(path));
+    if (issue === null) return null;
+    node.classList.add(`ft-node--${issue.severity}`);
+    node.dataset['severity'] = issue.severity;
+    return issue;
+  };
+
   const render = (): void => {
     clear(root);
+    issueMap = [...(ctx.issues?.() ?? [])];
     const title = ctx.title ?? filterTreeTitle(ctx.profile);
     root.append(el('div', 'ft-title', title));
     root.append(renderGroup([], 0));
@@ -808,6 +878,18 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     }
 
     section.append(head);
+    // Диагностика группы (пустая группа) видна и в свёрнутом виде — строка идёт
+    // сразу под заголовком-рамкой.
+    const groupIssue = applyIssue(section, path);
+    if (groupIssue !== null) {
+      section.tabIndex = -1;
+      section.append(
+        buildIssueLine(groupIssue, () => {
+          section.scrollIntoView();
+          section.focus();
+        }),
+      );
+    }
     if (isCollapsed) return section;
 
     // --- Тело: связаторы-индикаторы, дети, пустое состояние, кнопки --------
@@ -858,10 +940,11 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     return section;
   };
 
-  /** Строка-условие: [Что][Оператор][Значение][×]. */
+  /** Строка-условие: [Что][Оператор][Значение][×] (+ строка диагностики снизу). */
   const renderRow = (leaf: FilterTreeLeaf, path: FilterTreePath): HTMLElement => {
     const row = div(FILTER_TREE_ROW_CLASS);
     row.dataset['path'] = filterTreePathKey(path);
+    const rowIssue = applyIssue(row, path);
 
     const valueType = filterTreeLeafValueType(leaf, ctx.data);
     row.append(
@@ -951,6 +1034,15 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         },
       }),
     );
+    if (rowIssue !== null) {
+      row.tabIndex = -1;
+      row.append(
+        buildIssueLine(rowIssue, () => {
+          row.scrollIntoView();
+          row.focus();
+        }),
+      );
+    }
     return row;
   };
 
@@ -1123,8 +1215,10 @@ export function buildChoiceMenuBody(
 /**
  * Открыть выпадающий список у якоря. Панель — общий фасад `lib/ui/popover`;
  * содержимое — {@link buildChoiceMenuBody}. Выбор строки закрывает панель.
+ * Экспортируется: тем же списком набирает ключ сортировки секция сортировки
+ * (`lib/filter-sort.ts`) — второй реализации выпадающего списка нет.
  */
-function openChoiceMenu(anchor: HTMLElement, opts: FilterTreeChoiceOptions): void {
+export function openChoiceMenu(anchor: HTMLElement, opts: FilterTreeChoiceOptions): void {
   let popover: PopoverHandle | null = null;
   const built = buildChoiceMenuBody({
     ...opts,
