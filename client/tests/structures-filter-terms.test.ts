@@ -123,8 +123,11 @@ describe('панель «Структур» — единый редактор о
     });
     const filter = panel.buildQueryFilter();
     assert.equal(filter.ast, undefined, 'пустое дерево уходит без ast');
-    assert.equal(filter.sort, 'created');
-    assert.equal(filter.order, 'asc');
+    // Ключа в паре нет: сортировку панели несёт секция чипов, а пустые чипы не
+    // воскрешают легаси-поле `state.sort` (ошибка 32fd6125) — порядок по
+    // умолчанию сервера (для плоского отбора это `created`).
+    assert.equal(filter.sort, undefined);
+    assert.equal(filter.order, undefined);
   });
 
   it('прежний плоский отбор читается конвертером и переводится в «в иерархии по всем связям»', () => {

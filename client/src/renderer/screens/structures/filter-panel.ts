@@ -455,28 +455,35 @@ export type PanelQueryFilter = StructureFilter & { sort?: StructureSort; order?:
  * Отбор панели в wire-форме запроса `POST /thoughts/query`.
  *
  * Пустое дерево (нет ни одного условия) БЕЗ ключей сортировки отдаётся ПЛОСКИМ
- * пустым отбором без `ast`: контракт «нет критериев → HOME + сироты» (§15.3)
- * сервер определяет именно по отсутствию `ast` (`isFilterEmpty`), и этот режим
- * сохраняется. Единственный ключ, выразимый плоской парой
- * (`title`/`created_at`/`updated_at`), остаётся плоской парой — теперь с ключом
- * и направлением из чипа, а не из легаси-полей модели; ключ-свойство, имя
- * стороны свойства-связи и многоуровневая сортировка идут `ast.sort` —
- * единственной формой, которая их выражает (ошибка ca864656: раньше при одном
- * ключе пара `sort`/`order` бралась из легаси-полей, и ключ пользователя молча
- * терялся).
+ * пустым отбором без `ast` и без пары `sort`/`order`: контракт «нет критериев →
+ * HOME + сироты» (§15.3) сервер определяет именно по отсутствию `ast`
+ * (`isFilterEmpty`), порядок — по умолчанию сервера. Единственный ключ,
+ * выразимый плоской парой (`title`/`created_at`/`updated_at`), остаётся плоской
+ * парой — с ключом и направлением из ЧИПА, а не из легаси-полей модели;
+ * ключ-свойство, имя стороны свойства-связи и многоуровневая сортировка идут
+ * `ast.sort` — единственной формой, которая их выражает.
+ *
+ * Сортировку панели несёт секция чипов: снятые чипы не оставляют «невидимого»
+ * ключа ни в одной из форм (ошибки ca864656 и 32fd6125 — плоская пара бралась из
+ * легаси-поля `state.sort`, которого пользователь в интерфейсе не видит).
  */
 export function buildQueryFilter(s: FilterState = state): PanelQueryFilter {
   const tree = s.tree ?? null;
   const sortKeys = s.sortKeys ?? [];
   if (!treeHasConditions(tree)) {
-    if (sortKeys.length === 0) return { sort: s.sort, order: s.order };
+    if (sortKeys.length === 0) return {};
     const only = sortKeys.length === 1 ? sortKeys[0] : undefined;
     const legacy = only === undefined ? null : filterSortFromAstKey(only.key);
     if (only !== undefined && legacy !== null) {
       return { sort: legacy, order: only.order };
     }
   }
-  const ast: FilterAst = buildFilterAst(s, { profile: FILTER_PROFILE });
+  const ast: FilterAst = buildFilterAst(s, {
+    profile: FILTER_PROFILE,
+    // Секция чипов — единственный источник сортировки панели: пустые чипы не
+    // воскрешают легаси-пару `state.sort` в `ast.sort` (ошибка 32fd6125).
+    sort: sortKeys.length > 0,
+  });
   ast.filter = withVisibilityDefaults(ast.filter, tree, {
     showInactive: store.state.showInactive,
   });
@@ -488,9 +495,16 @@ export function buildQueryFilter(s: FilterState = state): PanelQueryFilter {
  * видимости (видимость — настройка сети, а не семантика отбора). Форма — AST
  * (`{ version, filter, sort? }`); прежние плоские определения читает тот же
  * конвертер — второй формы записи не появляется.
+ *
+ * Сортировку несёт секция чипов: пустые чипы не оставляют в определении
+ * «невидимый» ключ из легаси-поля `state.sort` (ошибка 32fd6125) — определение и
+ * пара `sort`/`order` согласованы с чипами в обе стороны записи.
  */
-function buildSavedDefinition(): FilterAst {
-  return buildFilterAst(state, { profile: FILTER_PROFILE });
+export function buildSavedDefinition(s: FilterState = state): FilterAst {
+  return buildFilterAst(s, {
+    profile: FILTER_PROFILE,
+    sort: (s.sortKeys ?? []).length > 0,
+  });
 }
 
 // ---------------------------------------------------------------------------

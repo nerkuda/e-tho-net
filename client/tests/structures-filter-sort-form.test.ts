@@ -103,12 +103,12 @@ before(async () => {
 });
 
 describe('ca864656: форма запроса панели по сортировке', () => {
-  it('пустое дерево без ключей → плоский пустой отбор без AST (HOME + сироты, §15.3)', () => {
+  it('пустое дерево без ключей → плоский пустой отбор без AST и без ключа (HOME + сироты, §15.3)', () => {
     setSort([]);
     const filter = panel.buildQueryFilter() as any;
     assert.equal(filter.ast, undefined, 'пустое дерево без ключей уходит без ast');
-    assert.equal(filter.sort, 'created');
-    assert.equal(filter.order, 'asc');
+    assert.equal(filter.sort, undefined, 'ключа в плоской паре нет — порядок по умолчанию сервера');
+    assert.equal(filter.order, undefined);
   });
 
   it('единственный ключ-свойство не теряется: сортировку несёт ast.sort', () => {
@@ -157,6 +157,41 @@ describe('ca864656: форма запроса панели по сортиров
       JSON.stringify(filter.ast.filter).includes('"keywords"'),
       'условие дерева на месте',
     );
+  });
+});
+
+describe('32fd6125: пустые чипы не оставляют невидимого ключа', () => {
+  it('снятие единственного чипа: ни запрос, ни определение не несут ключа', () => {
+    // Воспроизведение карточки: легаси-ключ «по дате создания» в чипе…
+    setSort([{ key: 'created_at', order: 'desc' }]);
+    assert.deepEqual(panel.buildQueryFilter() as any, { sort: 'created', order: 'desc' });
+    assert.deepEqual(panel.buildSavedDefinition().sort, [{ key: 'created_at', order: 'desc' }]);
+    // …и снятый чип при неизменном легаси-поле `state.sort` ('created').
+    setSort([]);
+    const filter = panel.buildQueryFilter() as any;
+    assert.equal(filter.sort, undefined, 'плоская пара ключа не несёт');
+    assert.equal(filter.order, undefined);
+    assert.equal(
+      panel.buildSavedDefinition().sort,
+      undefined,
+      'определение не несёт невидимого ключа',
+    );
+  });
+
+  it('условие дерева без чипов: ast.sort в определение и запрос не попадает', () => {
+    setSort([], { kind: 'group', op: 'and', children: [KEYWORDS_LEAF] });
+    const filter = panel.buildQueryFilter() as any;
+    assert.equal(filter.ast?.sort, undefined, 'в запросе сортировки нет');
+    assert.equal(panel.buildSavedDefinition().sort, undefined, 'в определении сортировки нет');
+    assert.ok(JSON.stringify(filter.ast.filter).includes('"keywords"'), 'условие сохранено');
+  });
+
+  it('чипы и определение согласованы: непустые чипы → ключ есть у обоих', () => {
+    setSort([{ key: PROPERTY_KEY, order: 'desc' }]);
+    assert.deepEqual(panel.buildSavedDefinition().sort, [{ key: PROPERTY_KEY, order: 'desc' }]);
+    setSort([]);
+    assert.equal(panel.buildSavedDefinition().sort, undefined);
+    assert.equal((panel.buildQueryFilter() as any).sort, undefined);
   });
 });
 

@@ -152,11 +152,13 @@ let inflightQuery: AbortController | null = null;
  * The last APPLIED filter (criteria + sort/order) — what the results tree
  * shows. The bulk «Команды» menu (L22, §15.3) runs against this, not against
  * the panel draft: a command must touch exactly what the user applied.
+ *
+ * Сортировку несёт сам отбор (`filter.sort`/`filter.order` — плоская форма,
+ * `filter.ast.sort` — дерево): второго источника порядка в экране нет, иначе
+ * чип панели перебивался бы легаси-полем модели (ошибка 32fd6125).
  */
 let appliedQuery: {
   filter: StructureFilter;
-  sort: FilterState['sort'];
-  order: FilterState['order'];
 } | null = null;
 
 // ---------------------------------------------------------------------------
@@ -306,7 +308,6 @@ function buildFilter(): StructureFilter {
 async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const state = getFilterState();
   const seq = ++querySeq;
   // Быстрая смена фильтра: гасим предыдущий запрос (требование ebed4980) —
   // его fetch в main прерывается, ответа нет вовсе.
@@ -317,21 +318,19 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
   // and drops the keyset cursor — next page starts from scratch.
   const filter = buildFilter();
   if (reset) {
-    appliedQuery = { filter, sort: state.sort, order: state.order };
+    appliedQuery = { filter };
     resultPager.reset();
   }
   const page = resultPager.address(reset);
-  // Порядок — ОДИН источник (конвенция задачи cb78315b): у дерева его несёт
-  // `ast.sort`, и плоские `sort`/`order` тогда НЕ передаются — сервер отвергает
-  // одновременную передачу двух источников (VALIDATION_ERROR).
-  const orderFields =
-    filter.ast === undefined ? { sort: state.sort, order: state.order } : {};
+  // Порядок — ОДИН источник (конвенция задачи cb78315b): его несёт сам отбор —
+  // плоская пара `sort`/`order` из чипов панели либо `ast.sort` у дерева.
+  // Плоские поля модели рядом с `ast` не передаются (сервер отвергает два
+  // источника) и не подменяют чипы (ошибка 32fd6125).
   try {
     const result = await etn.structures.query(
       networkId,
       {
         ...filter,
-        ...orderFields,
         limit: STRUCTURES_PAGE_SIZE,
         offset: page.offset,
         ...(page.cursor !== undefined ? { cursor: page.cursor } : {}),
@@ -670,8 +669,6 @@ export function mountStructures(hostEl: HTMLElement): () => void {
       if (appliedQuery === null) return;
       openFilterCommandsMenu(anchor, {
         filter: appliedQuery.filter,
-        sort: appliedQuery.sort,
-        order: appliedQuery.order,
         refresh: () => scheduleStructuresRefresh(),
       });
     },
