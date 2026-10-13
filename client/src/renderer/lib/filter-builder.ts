@@ -1610,15 +1610,26 @@ export function filterTreeToAst(node: FilterTreeNode): FilterAstNode {
  * Узел wire-AST → узел дерева модели. `null` — узел не распознан (нет вида
  * операнда или код оператора вне словаря ядра): читаем строго, выдумывать
  * условие нельзя — молча искажённый отбор хуже пустого.
+ *
+ * Строгость симметрична на любой глубине: нераспознанный РЕБЁНОК отклоняет всю
+ * группу (обязательство f07cf978, замечание приёмки 6ae062a9). Отфильтровать
+ * неизвестного ребёнка и сохранить группу нельзя — `and[неизвестный, keywords]`
+ * стал бы `and[keywords]`, то есть отбор молча РАСШИРИЛСЯ бы при пересохранении
+ * (достижимо при рассинхроне словаря клиент↔сервер). Так же читается и корень:
+ * весь отбор — пустой.
  */
 export function filterAstToTree(node: unknown): FilterTreeNode | null {
   if (node === null || typeof node !== 'object' || Array.isArray(node)) return null;
   const rec = node as Record<string, unknown>;
   if (rec['op'] !== undefined) {
     if (!isFilterAstGroupOp(rec['op'])) return null;
-    const children = Array.isArray(rec['children'])
-      ? rec['children'].map(filterAstToTree).filter((child): child is FilterTreeNode => child !== null)
-      : [];
+    const rawChildren = Array.isArray(rec['children']) ? rec['children'] : [];
+    const children: FilterTreeNode[] = [];
+    for (const rawChild of rawChildren) {
+      const child = filterAstToTree(rawChild);
+      if (child === null) return null; // нераспознанный ребёнок — отклоняем всю группу
+      children.push(child);
+    }
     return { kind: 'group', op: rec['op'], children };
   }
   const entity = parseFilterAstEntity(rec['entity']);

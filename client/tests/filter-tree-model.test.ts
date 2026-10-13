@@ -328,6 +328,55 @@ describe('parseFilterDefinition понимает обе формы отбора'
     assert.equal(state.tree, null);
     assert.equal(filterTreeHasAnyCriteria(state.tree ?? null), false);
   });
+
+  it('неизвестный ребёнок группы отклоняет ВСЮ группу, а не выпадает из неё (обязательство f07cf978)', () => {
+    // Иначе `and[BOGUS, keywords]` при пересохранении стал бы `and[keywords]` —
+    // отбор расширился бы молча (верхний уровень уже читается пустым: строгость
+    // чтения обязана быть симметричной на любой глубине).
+    const broken = parseFilterAstState({
+      version: 1,
+      filter: {
+        op: 'and',
+        children: [
+          { entity: { kind: 'active' }, operator: 'BOGUS', value: true },
+          { entity: { kind: 'keywords', scope: ['title'] }, operator: 'matches', value: 'счёт*' },
+        ],
+      },
+    });
+    assert.equal(broken.tree, null, 'нераспознанный ребёнок — весь отбор пуст');
+    assert.equal(filterTreeHasAnyCriteria(broken.tree ?? null), false);
+
+    // Глубже: неизвестный лист в под-дереве тоже отклоняет корень.
+    const deep = parseFilterAstState({
+      version: 1,
+      filter: {
+        op: 'and',
+        children: [
+          {
+            op: 'or',
+            children: [
+              { entity: { kind: 'active' }, operator: 'eq', value: true },
+              { entity: { kind: 'active' }, operator: 'BOGUS', value: true },
+            ],
+          },
+        ],
+      },
+    });
+    assert.equal(deep.tree, null, 'строгость держится на любой глубине');
+
+    // Здоровая форма рядом с тем же словом читается как прежде.
+    const healthy = parseFilterAstState({
+      version: 1,
+      filter: {
+        op: 'and',
+        children: [
+          { entity: { kind: 'active' }, operator: 'eq', value: true },
+          { entity: { kind: 'keywords', scope: ['title'] }, operator: 'matches', value: 'счёт*' },
+        ],
+      },
+    });
+    assert.equal(filterTreeHasAnyCriteria(healthy.tree ?? null), true);
+  });
 });
 
 // ---------------------------------------------------------------------------
