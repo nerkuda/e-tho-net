@@ -12,7 +12,10 @@
  *   * детерминистичный добор `id` при равных ключах (стабильная пагинация);
  *   * конфликт `ast.sort` и внешних `sort`/`order` — `VALIDATION_ERROR`
  *     (конвенция задачи cb78315b «оставьте один источник»);
- *   * неизвестный ключ / свойство-связь — `VALIDATION_ERROR`.
+ *   * неизвестный ключ — `VALIDATION_ERROR`; свойство-связь и его ОБРАТНАЯ
+ *     сторона принимаются и сортируют по названию связанной мысли (требование
+ *     8334b54a «исполнитель принимает всё сохранённое», ADR 23fab347, ошибка
+ *     335b23cb), keyset по такому ключу не теряет и не дублирует строки.
  */
 
 import assert from 'node:assert/strict';
@@ -67,6 +70,17 @@ function seedProperty(ndb: NetworkDb, thoughtId: string, propertyId: string, col
     .run(randomUUID(), thoughtId, propertyId, value);
 }
 
+/** Ребро «источник → цель» заданного типа связи (`links`, живое). */
+function seedLink(ndb: NetworkDb, sourceId: string, targetId: string, typeId: string): void {
+  ndb
+    .prepare(
+      `INSERT INTO links (id, source_id, target_id, type_id, active, version,
+                          created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', 'u', 'u')`,
+    )
+    .run(randomUUID(), sourceId, targetId, typeId);
+}
+
 /** Прогнать AST-отбор через движок, вернуть заголовки страницы. */
 function runTitles(
   ndb: NetworkDb,
@@ -81,6 +95,38 @@ function runTitles(
     { emptyFilterMode: 'all', maxLimit: 2000 },
   );
   return res.items.map((i) => i.title);
+}
+
+/**
+ * Страница отбора ОДНОГО типа мысли (цели сортировки по связи живут вне типа):
+ * заголовки в порядке выдачи плюс курсор продолжения.
+ */
+function runTypedPage(
+  ndb: NetworkDb,
+  typeId: string,
+  sort: FilterAstSortKey[],
+  opts: { limit?: number; cursor?: string } = {},
+): { titles: string[]; cursor: string | null } {
+  const ast: FilterAst = {
+    version: FILTER_AST_VERSION,
+    filter: { op: 'and', children: [{ entity: { kind: 'type' }, operator: 'in', value: [typeId] }] },
+    sort,
+  };
+  const res = queryThoughts(
+    ndb,
+    'u',
+    {
+      sort: 'alpha',
+      order: 'asc',
+      limit: opts.limit ?? 100,
+      offset: 0,
+      count: false,
+      ast,
+      ...(opts.cursor === undefined ? {} : { cursor: opts.cursor }),
+    },
+    { emptyFilterMode: 'all', maxLimit: 2000 },
+  );
+  return { titles: res.items.map((i) => i.title), cursor: res.next_cursor };
 }
 
 describe(
@@ -188,7 +234,7 @@ describe(
       }
     });
 
-    it('удалённый ключ-свойство → красная диагностика с именем; свойство-связь — VALIDATION_ERROR', () => {
+    it('удалённый ключ-свойство → красная диагностика с именем; ключ стороны свойства-связи принимается', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const type = createThoughtType(ndb, { name: 'Задача' }, 'u').id;
@@ -210,7 +256,8 @@ describe(
         assert.equal(reason, 'filter_entity_deleted', 'красная диагностика, не generic-ошибка');
         assert.match(String(label), /Срок/, 'имя удалённого правила — в сообщении');
 
-        // Существующее свойство-связь сортировать нечем — честная ошибка движка.
+        // Ключ по имени стороны свойства-связи принимается (ошибка 335b23cb):
+        // конструктор такие ключи предлагает, исполнитель обязан их исполнить.
         const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'нужен для' }, 'u').id;
         createTypeProperty(
           ndb,
@@ -219,7 +266,146 @@ describe(
           { key: 'Связь', value_type: 'link', config: { link_type_id: lt, direction: 'out' } },
           'u',
         );
-        assert.throws(() => runTitles(ndb, [{ key: 'зависит от', order: 'asc' }]), /связ/);
+        seedThought(ndb, 'Единственная', { type_id: type });
+        assert.doesNotThrow(
+          () => runTitles(ndb, [{ key: 'зависит от', order: 'asc' }]),
+          'прямая сторона свойства-связи сортируется',
+        );
+        assert.doesNotThrow(
+          () => runTitles(ndb, [{ key: 'нужен для', order: 'asc' }]),
+          'обратная сторона свойства-связи сортируется',
+        );
+        assert.throws(
+          () => runTitles(ndb, [{ key: 'НетТакого', order: 'asc' }]),
+          /удалено из реестра|не найден/,
+          'неизвестный ключ по-прежнему отвергается (диагностика с именем ключа)',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('свойство-связь: порядок по названию связанной мысли; несколько связей — минимальное; пусто — в конце', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const type = createThoughtType(ndb, { name: 'Задача' }, 'u').id;
+        const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'нужен для' }, 'u').id;
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          type,
+          { key: 'Зависимость', value_type: 'link', config: { link_type_id: lt, direction: 'out' } },
+          'u',
+        );
+        const propId = getNetworkPropertyByName(ndb, 'зависит от')!.id;
+
+        // Цели — вне типа: страница отбора типа содержит только сортируемые мысли.
+        const beta = seedThought(ndb, 'Beta');
+        const alpha = seedThought(ndb, 'alpha');
+        const zulu = seedThought(ndb, 'Zulu');
+        const gamma = seedThought(ndb, 'gamma');
+        const one = seedThought(ndb, 'Один', { type_id: type });
+        const two = seedThought(ndb, 'Два', { type_id: type });
+        const three = seedThought(ndb, 'Три', { type_id: type });
+        seedThought(ndb, 'Четыре', { type_id: type });
+        seedLink(ndb, one, beta, lt);
+        seedLink(ndb, two, alpha, lt);
+        seedLink(ndb, three, zulu, lt);
+        seedLink(ndb, three, gamma, lt);
+
+        // asc: 'alpha' < 'Beta' < 'gamma' (COLLATE NOCASE: 'Beta' сворачивается
+        // в 'beta', поэтому идёт раньше 'gamma'; BINARY дал бы Beta первым);
+        // у «Три» две связи — ключ берёт МИНИМАЛЬНОЕ название ('gamma', не 'Zulu');
+        // мысль без связей — в конце.
+        assert.deepEqual(runTypedPage(ndb, type, [{ key: 'зависит от', order: 'asc' }]).titles, [
+          'Два',
+          'Один',
+          'Три',
+          'Четыре',
+        ]);
+        // Адресация по property_id даёт тот же порядок (направление — из config).
+        assert.deepEqual(runTypedPage(ndb, type, [{ key: propId, order: 'asc' }]).titles, [
+          'Два',
+          'Один',
+          'Три',
+          'Четыре',
+        ]);
+        // Убывание: пустая сторона по-прежнему в конце.
+        assert.deepEqual(runTypedPage(ndb, type, [{ key: 'зависит от', order: 'desc' }]).titles, [
+          'Три',
+          'Один',
+          'Два',
+          'Четыре',
+        ]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('обратная сторона свойства-связи: порядок по связывающим мыслям', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const type = createThoughtType(ndb, { name: 'Задача' }, 'u').id;
+        const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'нужен для' }, 'u').id;
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          type,
+          { key: 'Зависимость', value_type: 'link', config: { link_type_id: lt, direction: 'out' } },
+          'u',
+        );
+        const linkA = seedThought(ndb, 'linker a');
+        const linkB = seedThought(ndb, 'linker b');
+        const first = seedThought(ndb, 'Цель первая', { type_id: type });
+        const second = seedThought(ndb, 'Цель вторая', { type_id: type });
+        seedLink(ndb, linkA, second, lt);
+        seedLink(ndb, linkB, first, lt);
+
+        // Обратная сторона ('нужен для') — значение мысли-ЦЕЛИ это названия её
+        // источников: «Цель вторая» ← linker a, «Цель первая» ← linker b.
+        assert.deepEqual(
+          runTypedPage(ndb, type, [{ key: 'нужен для', order: 'asc' }]).titles,
+          ['Цель вторая', 'Цель первая'],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('keyset по свойству-связи: страницы без пропусков и дублей', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const type = createThoughtType(ndb, { name: 'Задача' }, 'u').id;
+        const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'нужен для' }, 'u').id;
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          type,
+          { key: 'Зависимость', value_type: 'link', config: { link_type_id: lt, direction: 'out' } },
+          'u',
+        );
+        const targets = ['t1', 't2', 't3'].map((title) => seedThought(ndb, title));
+        ['A', 'B', 'C', 'D', 'E'].forEach((title, i) => {
+          const id = seedThought(ndb, title, { type_id: type });
+          seedLink(ndb, id, targets[i % targets.length]!, lt);
+        });
+
+        const sort: FilterAstSortKey[] = [{ key: 'зависит от', order: 'asc' }];
+        const full = runTypedPage(ndb, type, sort).titles;
+        const paged: string[] = [];
+        let cursor: string | null = null;
+        for (let guard = 0; guard < 10; guard += 1) {
+          const page = runTypedPage(ndb, type, sort, {
+            limit: 2,
+            ...(cursor === null ? {} : { cursor }),
+          });
+          paged.push(...page.titles);
+          cursor = page.cursor;
+          if (cursor === null) break;
+        }
+        assert.deepEqual(paged, full, 'склейка страниц равна сплошной выдаче');
+        assert.equal(new Set(paged).size, paged.length, 'дублей нет');
+        assert.equal(paged.length, 5, 'потерь нет');
       } finally {
         ndb.close();
       }

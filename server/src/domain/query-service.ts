@@ -84,7 +84,6 @@ import { collectHierarchySubtree } from './graph-traversal.js';
 import { getLinkDirections } from './link-service.js';
 import {
   getNetworkProperty,
-  getNetworkPropertyByName,
   isStructuralLinkProperty,
   linkPropertyDirection,
   linkPropertyLinkTypeId,
@@ -834,11 +833,23 @@ interface SortKey {
  *
  * Многоуровневая (порядок ключей = порядок объявления), направление на каждый
  * ключ (требование 3e47f52a). Фиксированные ключи — `title`/`created_at`/
- * `updated_at`; прочие — свойства реестра (по id или имени). По булевым ложь
- * раньше истины при возрастании (SQLite хранит `bool` как 0/1). Пустые
- * значения свойства — в конце списка при любом направлении (ведущий ключ
- * `(expr IS NULL)`), чтобы заполненные строки шли первыми. Уникальный добор
- * `t.id` добавляется в {@link orderClause} — стабильная пагинация.
+ * `updated_at`; прочие — свойства реестра (по id, каноническому имени либо
+ * ИМЕНИ СТОРОНЫ свойства-связи). По булевым ложь раньше истины при возрастании
+ * (SQLite хранит `bool` как 0/1). Пустые значения свойства — в конце списка при
+ * любом направлении (ведущий ключ `(expr IS NULL)`), чтобы заполненные строки
+ * шли первыми. Уникальный добор `t.id` добавляется в {@link orderClause} —
+ * стабильная пагинация.
+ *
+ * Свойства-связи поддержаны (требование 8334b54a, ADR 23fab347: исполнитель
+ * принимает всё, что позволил сохранить конструктор; ошибка 335b23cb). Значение
+ * свойства-связи — мысль (цель ребра своего типа связи), поэтому ключ сортирует
+ * по НАЗВАНИЮ связанной мысли: коррелированный агрегат `MIN(название)` по живым
+ * рёбрам нужной стороны. Агрегат берётся один раз на мысль (подзапрос в JOIN с
+ * `GROUP BY`), а не размножает строки страницы, как джойн значений; при
+ * нескольких связях ключ детерминирован (минимальное название), пустая сторона —
+ * в конце, как у скалярных свойств. Сторона адресуется тем же резолвером, что и
+ * условия ({@link resolveConditionPropertyRef}): обратное имя свойства-связи
+ * сортирует по связывающим мыслям, а не по целям.
  */
 function astSortClause(
   ndb: NetworkDb,
@@ -866,9 +877,13 @@ function astSortClause(
       default:
         break;
     }
-    // Ключ-свойство: адресация registry `property_id` либо именем свойства.
-    const def = getNetworkProperty(ndb, key.key) ?? getNetworkPropertyByName(ndb, key.key);
-    if (def === null) {
+    // Ключ-свойство: адресация registry `property_id`, каноническим именем
+    // свойства либо именем стороны свойства-связи — тем же резолвером, что у
+    // условий (`resolveConditionPropertyRef`), иначе конструктор и исполнитель
+    // разошлись бы в толковании одного ключа.
+    const ref = resolveConditionPropertyRef(ndb, key.key, requestId);
+    const def = ref === null ? null : lookupPropertyRow(ndb, ref.propertyId);
+    if (ref === null || def === null) {
       throw new EtnError(
         'VALIDATION_ERROR',
         `Ключ сортировки «${key.key}» не найден: это не фиксированный ключ (title/created_at/updated_at) и не свойство сети.`,
@@ -877,14 +892,37 @@ function astSortClause(
       );
     }
     if (def.value_type === 'link') {
-      // Свойство-связь хранится в `links_v`, а не в `property_values` —
-      // сортировать его значения нечем (честная ошибка вместо пустого ключа).
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `Сортировка по свойству-связи «${key.key}» не поддержана.`,
-        { field: 'ast.sort', key: key.key },
-        requestId,
+      const edges = linkPropertyEdges(def, ref.direction);
+      if (edges === null) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `Сортировка по свойству-связи «${key.key}» не поддержана: у свойства нет типа связи.`,
+          { field: 'ast.sort', key: key.key },
+          requestId,
+        );
+      }
+      // Один агрегат на мысль: страница не размножается по числу связей, а
+      // keyset сравнивает то же выражение `lsv<i>.val` (подзапросы — свои
+      // области видимости, поэтому внутренние алиасы `l`/`t2` у каждого ключа
+      // свои и не конфликтуют).
+      const alias = `lsv${i}`;
+      joins.push(
+        `LEFT JOIN (
+           SELECT l.${edges.ownerCol} AS owner_id, MIN(t2.title COLLATE NOCASE) AS val
+             FROM links_v l
+             JOIN thoughts_v t2 ON t2.id = l.${edges.targetCol}
+            WHERE ${edges.typeSql} AND l.active = 1 AND l.marked_for_deletion = 0
+            GROUP BY l.${edges.ownerCol}
+         ) ${alias} ON ${alias}.owner_id = t.id`,
       );
+      joinParams.push(...edges.typeParams);
+      const expr = `${alias}.val`;
+      // Тег отличает прямую сторону от обратной и от скалярного свойства с тем
+      // же id: курсор, снятый по чужому порядку, не должен продолжать страницу.
+      const tag = `link:${def.id}|${edges.direction}`;
+      keys.push({ expr: `(${expr} IS NULL)`, dir: 'ASC', tag });
+      keys.push({ expr, dir, tag });
+      return;
     }
     const alias = `psv${i}`;
     joins.push(
@@ -2546,6 +2584,8 @@ interface LinkPropertyEdges {
   targetCol: 'source_id' | 'target_id';
   typeSql: string;
   typeParams: unknown[];
+  /** Разрешённое направление стороны (`out` — источник, `in` — цель). */
+  direction: LinkPropertyDirection;
 }
 
 /**
@@ -2573,6 +2613,7 @@ function linkPropertyEdges(
     targetCol: direction === 'out' ? 'target_id' : 'source_id',
     typeSql: linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?',
     typeParams: linkTypeId === null ? [] : [linkTypeId],
+    direction,
   };
 }
 
