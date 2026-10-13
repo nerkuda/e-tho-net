@@ -70,6 +70,18 @@ export interface ServerConfig {
    * `ETN_READER_TASK_TIMEOUT_MS`; ADR bec191e6).
    */
   readerPool: ReaderPoolConfig;
+  /**
+   * Фоновый чекпойнт WAL сетей (`ETN_WAL_CHECKPOINT_INTERVAL_MS`; ошибка
+   * dac92886): журнал сетей усекается автоматически, а не растёт до ручного
+   * `wal_checkpoint(TRUNCATE)`.
+   */
+  walCheckpoint: WalCheckpointConfig;
+}
+
+/** Настройки фонового чекпойнта WAL (ошибка dac92886). */
+export interface WalCheckpointConfig {
+  /** Интервал прохода, мс; `0` — только чекпойнт при остановке сервера. */
+  intervalMs: number;
 }
 
 /** Настройки пула reader-воркеров (ADR bec191e6, тех.проект e29c0f00 этап 2). */
@@ -135,6 +147,19 @@ const READER_POOL_SIZE_MIN = 1;
 const READER_POOL_SIZE_MAX = 16;
 const READER_TASK_TIMEOUT_MIN_MS = 1_000;
 const READER_TASK_TIMEOUT_MAX_MS = 600_000;
+
+/**
+ * Интервал фонового чекпойнта WAL сетей (ошибка dac92886), мс. Минута —
+ * компромисс: журнал успевает «сливаться» в основной файл в промежутке между
+ * запросами, но проход не крутится вхолостую (соединения разных слоёв одной
+ * сети схлопываются в один файл). `0` — фон выключен (чекпойнт остаётся при
+ * остановке сервера).
+ */
+const DEFAULT_WAL_CHECKPOINT_INTERVAL_MS = 60_000;
+/** Нижняя граница интервала — чаще раза в секунду чекпойнт бессмысленен. */
+const WAL_CHECKPOINT_INTERVAL_MIN_MS = 1_000;
+/** Верхняя граница — сутки. */
+const WAL_CHECKPOINT_INTERVAL_MAX_MS = 24 * 60 * 60 * 1000;
 
 /** Type guard: is `value` one of the accepted pino levels? */
 function isLogLevel(value: string): value is LogLevel {
@@ -259,6 +284,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     readerTaskTimeoutMs = parsed;
   }
 
+  // --- ETN_WAL_CHECKPOINT_INTERVAL_MS (ошибка dac92886) --------------------
+  let walCheckpointIntervalMs = DEFAULT_WAL_CHECKPOINT_INTERVAL_MS;
+  const walIntervalRaw = env.ETN_WAL_CHECKPOINT_INTERVAL_MS?.trim();
+  if (walIntervalRaw !== undefined && walIntervalRaw !== '') {
+    const parsed = Number.parseInt(walIntervalRaw, 10);
+    const allowed =
+      Number.isInteger(parsed) &&
+      (parsed === 0 ||
+        (parsed >= WAL_CHECKPOINT_INTERVAL_MIN_MS && parsed <= WAL_CHECKPOINT_INTERVAL_MAX_MS));
+    if (!allowed) {
+      throw new ConfigError(
+        `ETN_WAL_CHECKPOINT_INTERVAL_MS must be 0 (disabled) or an integer number of milliseconds in ` +
+          `[${WAL_CHECKPOINT_INTERVAL_MIN_MS}, ${WAL_CHECKPOINT_INTERVAL_MAX_MS}], ` +
+          `got: ${JSON.stringify(walIntervalRaw)}`,
+      );
+    }
+    walCheckpointIntervalMs = parsed;
+  }
+
   return {
     dataDir,
     host,
@@ -267,5 +311,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     logLevel,
     mcp: { enabled: mcpEnabled, port: mcpPort, sessionIdleTtlMs: mcpSessionIdleTtlMs },
     readerPool: { size: readerPoolSize, taskTimeoutMs: readerTaskTimeoutMs },
+    walCheckpoint: { intervalMs: walCheckpointIntervalMs },
   };
 }

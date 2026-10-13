@@ -580,6 +580,17 @@ export function closeNetworkDb(networkId: string, layerId?: string): boolean {
 }
 
 /**
+ * Все открытые соединения сетей (по одному на пару «сеть + слой»), в порядке
+ * регистрации. Нужны обслуживающим проходам, которые работают по ФАЙЛАМ
+ * (`data.db`): чекпойнт WAL (`db/wal-checkpoint.ts`, ошибка dac92886) и любые
+ * будущие операции «по всем открытым сетям». Соединения НЕ копируются и НЕ
+ * закрываются здесь — вызывающий сам решает, что с ними делать.
+ */
+export function listOpenNetworkDbs(): NetworkDb[] {
+  return [...registry.values()];
+}
+
+/**
  * Close every open network database. Intended for orderly server shutdown and
  * tests that need a clean slate.
  */

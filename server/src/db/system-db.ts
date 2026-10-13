@@ -38,6 +38,7 @@ import type { Logger } from '../logger.js';
 import { systemDbPath, systemMigrationsDir } from '../paths.js';
 import { runMigrations } from './migrator.js';
 import { openNetworkDb } from './network-db.js';
+import { walCheckpoint, type WalCheckpointStats } from './wal-checkpoint.js';
 
 /** Raw `users` row shape (INTEGER booleans). */
 interface UserRow {
@@ -1412,6 +1413,16 @@ export class SystemDb {
   transaction<T>(fn: () => T): T {
     const wrapped = this.db.transaction(fn);
     return wrapped();
+  }
+
+  /**
+   * Чекпойнт WAL системной БД (ошибка dac92886): при остановке сервера журнал
+   * обеих баз — системной и сетевых — усекается, чтобы `-wal` не оставался
+   * «высокой водой» на диске. Логика одна на все БД —
+   * {@link walCheckpoint} (`db/wal-checkpoint.ts`).
+   */
+  checkpointWal(): WalCheckpointStats {
+    return walCheckpoint(this.db);
   }
 
   /** Close the underlying connection. */

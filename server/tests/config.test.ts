@@ -121,6 +121,31 @@ describe('loadConfig', () => {
     );
   });
 
+  it('WAL checkpoint: дефолт раз в минуту, разбор ETN_WAL_CHECKPOINT_INTERVAL_MS', () => {
+    const defaults = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data' });
+    assert.equal(defaults.walCheckpoint.intervalMs, 60_000);
+
+    const cfg = loadConfig({
+      ETN_DATA_DIR: '/tmp/etn-data',
+      ETN_WAL_CHECKPOINT_INTERVAL_MS: '5000',
+    });
+    assert.equal(cfg.walCheckpoint.intervalMs, 5000);
+
+    // 0 — фоновый чекпойнт выключен (чекпойнт при остановке остаётся).
+    const off = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_WAL_CHECKPOINT_INTERVAL_MS: '0' });
+    assert.equal(off.walCheckpoint.intervalMs, 0);
+  });
+
+  it('WAL checkpoint: отвергает недопустимый интервал', () => {
+    for (const value of ['-1', '999', 'abc', '1.5', String(24 * 60 * 60 * 1000 + 1)]) {
+      assert.throws(
+        () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_WAL_CHECKPOINT_INTERVAL_MS: value }),
+        (err: unknown) =>
+          err instanceof ConfigError && /ETN_WAL_CHECKPOINT_INTERVAL_MS/.test(err.message),
+      );
+    }
+  });
+
   it('accepts ETN_MCP_ENABLED and ETN_MCP_PORT', () => {
     const cfg = loadConfig({
       ETN_DATA_DIR: '/tmp/etn-data',

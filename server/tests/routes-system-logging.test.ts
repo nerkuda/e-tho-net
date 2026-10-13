@@ -78,6 +78,8 @@ async function buildApp(): Promise<Ctx> {
     logLevel: 'silent',
     mcp: { enabled: false, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
     readerPool: { size: 1, taskTimeoutMs: 30000 },
+  // Фоновый чекпойнт WAL в тестах выключен: сеть чекпойнтит сам тест.
+  walCheckpoint: { intervalMs: 0 },
   };
   const app = await createServer({ config, systemDb: sys, logger: createLogger('silent') });
   ctx = { app, sys, dataDir, adminKey: gen.key, logsDir: path.join(dataDir, 'logs') };

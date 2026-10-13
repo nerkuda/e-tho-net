@@ -94,6 +94,8 @@ async function buildHttpContext(): Promise<{
     logLevel: 'silent',
     mcp: { enabled: true, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
     readerPool: { size: 1, taskTimeoutMs: 30000 },
+  // Фоновый чекпойнт WAL в тестах выключен: сеть чекпойнтит сам тест.
+  walCheckpoint: { intervalMs: 0 },
   };
   const app = await createServer({ config, systemDb: sys, logger: createLogger('silent') });
 
@@ -316,6 +318,8 @@ describe('MCP HTTP endpoint (F1/F2)', { skip: !nativeAvailable() }, () => {
           logLevel: 'silent',
           mcp: { enabled: false, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
           readerPool: { size: 1, taskTimeoutMs: 30000 },
+  // Фоновый чекпойнт WAL в тестах выключен: сеть чекпойнтит сам тест.
+  walCheckpoint: { intervalMs: 0 },
         },
         systemDb: sys,
         logger: createLogger('silent'),

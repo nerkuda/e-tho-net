@@ -13,6 +13,11 @@ import http from 'node:http';
 import { ConfigError, loadConfig } from './config.js';
 import { SystemDb } from './db/system-db.js';
 import { closeReaderPool, configureReaderPool } from './db/reader-pool.js';
+import {
+  checkpointAndCloseAllNetworkDbs,
+  startWalCheckpointScheduler,
+  type WalCheckpointScheduler,
+} from './db/wal-checkpoint.js';
 import { sweepCommentHtml } from './domain/markdown-sweep.js';
 import { createServer } from './http/server.js';
 import { logger } from './logger.js';
@@ -105,14 +110,33 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     });
   }
 
+  // Фоновый чекпойнт WAL сетей (ошибка dac92886): авто-чекпойнт SQLite —
+  // PASSIVE и не продвигается, пока читатель держит снапшот, а `-wal` не
+  // усекается вовсе. Таймер `unref()`-нут и работает между запросами
+  // (better-sqlite3 синхронный), интервал — `ETN_WAL_CHECKPOINT_INTERVAL_MS`.
+  const walCheckpoint: WalCheckpointScheduler | null =
+    config.walCheckpoint.intervalMs > 0
+      ? startWalCheckpointScheduler({ intervalMs: config.walCheckpoint.intervalMs, logger })
+      : null;
+  if (walCheckpoint === null) {
+    logger.info('WAL background checkpoint disabled (ETN_WAL_CHECKPOINT_INTERVAL_MS=0)');
+  }
+
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Shutting down ETN server');
     fileLog.info('server', 'ETN server shutting down', { signal });
+    walCheckpoint?.stop();
     if (mcpListener !== null) {
       await new Promise<void>((resolve) => mcpListener.close(() => resolve()));
     }
     await app.close();
+    // Читатели закрываются ДО чекпойнта: их снапшоты мешали бы усечь журнал.
     await closeReaderPool();
+    // Чекпойнт всех БД и закрытие соединений сетей (ошибка dac92886): иначе
+    // `-wal` остаётся «высокой водой», а `process.exit` не даёт SQLite
+    // выполнить собственный чекпойнт при закрытии последнего соединения.
+    checkpointAndCloseAllNetworkDbs({ logger });
+    systemDb.checkpointWal();
     systemDb.close();
     logger.info('ETN server stopped');
     fileLog.info('server', 'ETN server stopped');
