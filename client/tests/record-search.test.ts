@@ -198,9 +198,18 @@ describe('строка поиска записей: встраивание в «
     assert.match(src, /serializeRecordSearchSettings\(settings\)/, 'настройки пишутся общим сериализатором');
   });
 
-  it('строка поиска всегда ищет по тексту записи — scope с comment (задача 46057359)', () => {
-    assert.match(src, /keyword_scope: \[\.\.\.STRUCTURE_KEYWORD_SCOPES\]/, 'передаются все области, включая comment');
-    assert.match(src, /STRUCTURE_KEYWORD_SCOPES/, 'области — из shared-словаря, не литералы');
+  it('строка поиска ищет по тексту записи — три прежние области, без новых (задачи 46057359, 2bc251de)', () => {
+    assert.match(src, /keyword_scope: \[\.\.\.RECORD_SEARCH_KEYWORD_SCOPES\]/, 'передаются все три прежние области, включая comment');
+    assert.match(
+      src,
+      /RECORD_SEARCH_KEYWORD_SCOPES: readonly StructureKeywordScope\[\] = \[\s*'title',\s*'synonyms',\s*'comment',\s*\]/,
+      'области — явный прежний список, не разворот словаря',
+    );
+    assert.doesNotMatch(
+      src,
+      /keyword_scope: \[\.\.\.STRUCTURE_KEYWORD_SCOPES\]/,
+      'словарь областей не разворачивается: новая область `diary` не включается молча',
+    );
   });
 });
 

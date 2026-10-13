@@ -36,7 +36,7 @@ import {
   type FilterTreeGroup,
   type FilterTreeLeaf,
 } from './filter-builder.js';
-import type { FilterAstSortKey } from '@etn/shared';
+import { STRUCTURE_KEYWORD_SCOPES, type FilterAstSortKey, type StructureKeywordScope } from '@etn/shared';
 import { canonicalGlobalToken, isGlobalDateToken, panelAnchorLabel, PERIOD_TOKEN_PRESETS } from './period-editor.js';
 
 /** Предел длины фразы по умолчанию; полный текст в тултипе не обрезается. */
@@ -56,15 +56,30 @@ export interface FilterPhraseContext extends FilterLabelData {
   limit?: number;
 }
 
-/** Области поиска «Есть слова»: код словаря → подпись во фразе. */
+/** Подписи областей поиска «Есть слова» — по КОДУ shared-словаря
+ *  (`STRUCTURE_KEYWORD_SCOPES`, §6.10 keywords). Запись
+ *  `Record<StructureKeywordScope, string>` требует подпись для КАЖДОГО кода:
+ *  новый код области, добавленный в shared, ломает сборку, пока подпись не
+ *  заведена (ошибка 2bc251de). Словарь ОДИН на клиент — он же рисует чекбоксы
+ *  ячейки (`lib/filter-value.ts`), поэтому фраза-превью и ячейка не расходятся. */
+const KEYWORD_SCOPE_LABELS: Readonly<Record<StructureKeywordScope, string>> = {
+  title: 'в именах',
+  synonyms: 'в именах',
+  comment: 'в комментарии',
+  diary: 'в дневниках',
+};
+
+/** Области поиска «Есть слова» в порядке словаря: код → подпись во фразе. */
 export const FILTER_PHRASE_KEYWORD_SCOPES: readonly {
-  value: 'title' | 'synonyms' | 'comment';
+  value: StructureKeywordScope;
   label: string;
-}[] = [
-  { value: 'title', label: 'в именах' },
-  { value: 'synonyms', label: 'в именах' },
-  { value: 'comment', label: 'в комментарии' },
-];
+}[] = STRUCTURE_KEYWORD_SCOPES.map((value) => ({ value, label: KEYWORD_SCOPE_LABELS[value] }));
+
+/** Подпись области из словаря: ячейка значения и фраза берут её отсюда —
+ *  подписи в одном месте (элемент интерфейса 9ecf405b). */
+export function filterKeywordScopeLabel(value: StructureKeywordScope): string {
+  return KEYWORD_SCOPE_LABELS[value];
+}
 
 /** Подписи оператора под-выборки (wire `FilterAstSubqueryValue['operator']`). */
 const SUBQUERY_OPERATOR_LABELS: Readonly<Record<string, string>> = {

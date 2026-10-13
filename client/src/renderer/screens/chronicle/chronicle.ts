@@ -35,7 +35,6 @@
 import {
   CHRONICLE_PAGE_SIZE,
   CHRONICLE_QUERY_MAX_LIMIT,
-  STRUCTURE_KEYWORD_SCOPES,
   UI_STATE_KEY,
   type ChronicleRow,
   type ChronicleTarget,
@@ -43,6 +42,7 @@ import {
   type Comment,
   type CommentTarget,
   type Link,
+  type StructureKeywordScope,
   type ThoughtRef,
 } from '@etn/shared';
 
@@ -2025,6 +2025,21 @@ function pad2(n: number): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * Области поиска строки поиска записей — прежние три, ЯВНЫМ списком.
+ *
+ * Новые области словаря (`diary`, 0.13.1) сюда НЕ подставляются автоматически:
+ * строка ищет записи по их собственному тексту/заголовку и по мысли-владельцу,
+ * а область `diary` потянула бы лишние строки — записи мыслей, совпавших по
+ * своим записям (ошибка 2bc251de, решение оркестратора: прежнее поведение
+ * строки сохраняется). Поэтому словарь областей здесь не разворачивается.
+ */
+const RECORD_SEARCH_KEYWORD_SCOPES: readonly StructureKeywordScope[] = [
+  'title',
+  'synonyms',
+  'comment',
+];
+
+/**
  * Живой поиск записей строкой (задача 46057359): только хроно-записи, критерий
  * — мини-синтаксис keywords (как у строки поиска карты). Период и прочие
  * критерии панели не применяются: строка ищет по всей сети, иначе запись вне
@@ -2036,10 +2051,10 @@ async function searchRecords(query: string): Promise<ChronicleRow[]> {
   if (networkId === null) return [];
   const result = await etn.chronicle.query(networkId, {
     keywords: query,
-    // Область поиска — все три явно: строка ищет записи и по их собственному
+    // Области поиска — все три явно: строка ищет записи и по их собственному
     // тексту/заголовку (область `comment`), независимо от флагов панели отбора
     // (0.10.1, задача 46057359). Без `comment` сервер не ищет по тексту записи.
-    keyword_scope: [...STRUCTURE_KEYWORD_SCOPES],
+    keyword_scope: [...RECORD_SEARCH_KEYWORD_SCOPES],
     order: 'desc',
     limit: RECORD_SEARCH_MAX_RESULTS,
     offset: 0,

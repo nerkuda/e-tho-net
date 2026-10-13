@@ -311,7 +311,7 @@ describe('ячейка значения: сборка виджета и прав
     assert.deepEqual(writes[1], { kind: 'scalar', value: true });
   });
 
-  it('«Найти слова»: области инлайн («в именах» = имена+синонимы), ни одной — условие приглушено', () => {
+  it('«Найти слова»: три области инлайн, ни одной — условие приглушено', () => {
     const { api } = slot();
     const leafNode = leaf({ kind: 'keywords', scope: [] }, 'matches', { kind: 'scalar', value: 'счёт' });
     const touched: number[] = [];
@@ -319,12 +319,50 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(box.dataset['editor'], 'keywords');
     assert.ok(box.classList.contains(mod.FILTER_VALUE_OFF_CLASS), 'ни одной области — условие отключено');
     const scopes = all(box, 'ui-choice-row');
-    assert.equal(scopes.length, 2, 'две области: «в именах» и «в комментарии»');
+    assert.deepEqual(
+      scopes.map((row) => one(row, 'ui-choice-row-label')?.textContent),
+      ['в именах', 'в комментарии', 'в дневниках'],
+      'три области в порядке словаря: имена, комментарий, дневники (элемент 9ecf405b)',
+    );
     const checkbox = scopes[0]!.findAll((n) => n.tagName.toUpperCase() === 'INPUT')[0]!;
     checkbox.checked = true;
     checkbox.fire('change');
     assert.equal(touched.length, 1, 'правка вне значения уведомляет хост');
     assert.deepEqual(leafNode.entity.scope, ['title', 'synonyms'], '«в именах» = имена и синонимы вместе');
+  });
+
+  it('«в дневниках» пишет `diary` в область листа, и она уезжает в AST (ошибка 2bc251de)', async () => {
+    const { filterTreeToAst } = await import('../src/renderer/lib/filter-builder.js');
+    const { api } = slot();
+    const leafNode = leaf({ kind: 'keywords', scope: ['title'] }, 'matches', { kind: 'scalar', value: 'счёт' });
+    const box = render(leafNode, api);
+    const rows = all(box, 'ui-choice-row');
+    const diary = rows[2]!.findAll((n) => n.tagName.toUpperCase() === 'INPUT')[0]!;
+    diary.checked = true;
+    diary.fire('change');
+    assert.deepEqual(leafNode.entity.scope, ['title', 'diary'], 'чекбокс «в дневниках» даёт код diary');
+    assert.equal(mod.filterValueIsOff(leafNode), false, 'отмеченная область — условие включено');
+
+    const ast = filterTreeToAst(leafNode) as unknown as { entity: { scope?: string[] } };
+    assert.deepEqual(ast.entity.scope, ['title', 'diary'], 'область листа доходит до AST как есть');
+  });
+
+  it('снятие всех областей «Найти слова» отключает условие', () => {
+    const { api } = slot();
+    const leafNode = leaf(
+      { kind: 'keywords', scope: ['comment', 'diary'] },
+      'matches',
+      { kind: 'scalar', value: 'счёт' },
+    );
+    const box = render(leafNode, api);
+    for (const row of all(box, 'ui-choice-row')) {
+      const input = row.findAll((n) => n.tagName.toUpperCase() === 'INPUT')[0]!;
+      input.checked = false;
+      input.fire('change');
+    }
+    assert.deepEqual(leafNode.entity.scope, [], 'все области сняты');
+    assert.equal(mod.filterValueIsOff(leafNode), true, 'ни одной области — условие отключено');
+    assert.ok(box.classList.contains(mod.FILTER_VALUE_OFF_CLASS), 'строка приглушена');
   });
 
   it('«количество»: числовой инпут и подпись единицы', () => {

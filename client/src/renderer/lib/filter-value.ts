@@ -62,6 +62,7 @@ import {
 import type { FilterTreeData, FilterTreeValueSlotApi } from './filter-tree.js';
 import {
   FILTER_PHRASE_KEYWORD_SCOPES,
+  filterKeywordScopeLabel,
   filterPhraseToken,
 } from './filter-phrase.js';
 import { dateField } from './date-field.js';
@@ -658,11 +659,15 @@ function currentList(value: FilterTreeValue): string[] {
 }
 
 /**
- * «Найти слова»: инпут + инлайн-чекбоксы областей (элемент 9ecf405b). Ни одной
- * области — условие отключено: строка приглушается, значение не применяется
- * (требование 0882f8d5, сервер трактует пустой `scope` как «условие выключено»).
- * «В именах» — имена И синонимы ВМЕСТЕ (требование заказчика 2026-10-13);
- * раздельно они не предлагаются. Оператор условия не показывается.
+ * «Найти слова»: инпут + инлайн-чекбоксы областей (элемент 9ecf405b). Три
+ * области В ОДНУ СТРОКУ: «в именах», «в комментарии», «в дневниках» (порядок и
+ * подписи — из общего словаря `lib/filter-phrase.ts`, он же композер фразы).
+ * Ни одной области — условие отключено: строка приглушается, значение не
+ * применяется (требование 0882f8d5, сервер трактует пустой `scope` как «условие
+ * выключено»). «В именах» — имена И синонимы ВМЕСТЕ (требование заказчика
+ * 2026-10-13); раздельно они не предлагаются. «В дневниках» — слова ищутся в
+ * хронологических записях мысли (тело или заголовок записи), ищет сервер.
+ * Оператор условия не показывается.
  */
 function keywordsControl(
   leaf: FilterTreeLeaf,
@@ -687,10 +692,12 @@ function keywordsControl(
     leaf.entity.kind === 'keywords' ? (leaf.entity.scope ?? []) : [],
   );
   // Область «в именах» охватывает и имена, и синонимы (сверено с серверным
-  // `keyword_scope`: словарь title/synonyms/comment, раздельно не предлагаем).
+  // `keyword_scope`: словарь title/synonyms/comment/diary, раздельно не
+  // предлагаем). Подписи берутся из общего словаря — ячейка и фраза-превью не
+  // расходятся (элемент 9ecf405b); новый код словаря обязан появиться здесь.
   const areas: ReadonlyArray<{ label: string; on: boolean; toggle: (checked: boolean) => void }> = [
     {
-      label: 'в именах',
+      label: filterKeywordScopeLabel('title'),
       on: scope.has('title') || scope.has('synonyms'),
       toggle: (checked) => {
         for (const name of ['title', 'synonyms'] as const) {
@@ -700,11 +707,19 @@ function keywordsControl(
       },
     },
     {
-      label: 'в комментарии',
+      label: filterKeywordScopeLabel('comment'),
       on: scope.has('comment'),
       toggle: (checked) => {
         if (checked) scope.add('comment');
         else scope.delete('comment');
+      },
+    },
+    {
+      label: filterKeywordScopeLabel('diary'),
+      on: scope.has('diary'),
+      toggle: (checked) => {
+        if (checked) scope.add('diary');
+        else scope.delete('diary');
       },
     },
   ];
