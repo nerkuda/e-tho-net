@@ -10,7 +10,7 @@
  */
 
 import type { ChronicleLinkScope, SavedFilterView, SortOrder, StructureKeywordScope } from '../enums.js';
-import type { FilterAst } from './filter-ast.js';
+import type { FilterAst, FilterDiagnostic } from './filter-ast.js';
 import type { StructureAuthorOp, StructureFilter } from './structure.js';
 import type { ThoughtRef } from './thought.js';
 
@@ -161,6 +161,14 @@ export interface ChronicleRow {
 export interface ChronicleQueryResponse {
   rows: ChronicleRow[];
   total: number;
+  /**
+   * Диагностика ядра выборки (`meta.warnings`, как у прочих запросов отбора):
+   * `FilterDiagnostic` адресует строку редактора (`path`), редактор «Дневника»
+   * подсвечивает её и запрещает применение при красном (требования
+   * 44d61c8a/325efc13). Жёлтое ядро хроника не строит (нет контекста типа —
+   * ревизия требования 0fd1dc5d), поле — единый контракт с «Структурами».
+   */
+  warnings?: FilterDiagnostic[];
 }
 
 /** Persisted criteria of a chronicle saved filter (03-server-api.md §18). */

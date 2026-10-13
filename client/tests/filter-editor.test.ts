@@ -375,6 +375,52 @@ describe('фабрика редактора: диагностика запира
     assert.equal(buttonByText(root, 'Применить')!.disabled, true, 'применение запрещено');
   });
 
+  it('переход «исправить» из запрета применения ведёт в проблемную строку (0fd1dc5d)', () => {
+    const state = builder.defaultFilterCriteriaState();
+    state.tree = builder.defaultFilterTreeGroup('and');
+    state.tree.children.push({
+      kind: 'leaf',
+      entity: { kind: 'active' },
+      operator: 'eq',
+      value: { kind: 'scalar', value: true },
+    });
+    // Механизм перехода живёт в каркасе: футер знает адрес запрета, дерево —
+    // как перевести в него фокус. Экран не рисует ни строки, ни перехода.
+    const editor = mod.buildFilterEditor({
+      profile: 'thoughts',
+      networkId: 'net-1',
+      data: DATA,
+      getState: () => state,
+      host: {
+        apply: () => undefined,
+        save: () => undefined,
+        reset: () => undefined,
+        issues: () => [
+          {
+            severity: 'error' as const,
+            source: 'server' as const,
+            code: 'entity_deleted' as const,
+            path: 'filter.children[0].entity',
+            message: 'Свойство удалено из сети — отбор нельзя применить.',
+          },
+        ],
+      },
+    });
+    const root = editor.root as unknown as ShimElement;
+    const row = one(root, 'ft-row')!;
+    const fix = one(root, 'ff-fix')!;
+    assert.notEqual(fix, null, 'переход «исправить» предлагает общий футер каркаса');
+    assert.equal(fix.hidden, false, 'запрет применения с адресом открывает переход');
+
+    fix.emit('click', {});
+    assert.equal(row.focused, true, 'переход из сообщения о запрете фокусирует строку');
+
+    // Тот же переход у кнопки в самой строке — один механизм каркаса.
+    row.focused = false;
+    one(row, 'ft-issue__fix')!.emit('click', {});
+    assert.equal(row.focused, true, 'кнопка «исправить» строки ведёт туда же');
+  });
+
   it('проверки конструктора попадают в диагностику без хоста', () => {
     // Условие без значения — проверка конструктора (не запирает применение,
     // но видна во фразе и в тултипе: причина в диагностике, а не в вёрстке).

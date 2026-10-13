@@ -429,6 +429,19 @@ export function hasBlockingIssues(issues: readonly FilterIssue[]): boolean {
   return issues.some((issue) => issue.severity === 'error');
 }
 
+/**
+ * Первая красная запись С адресом строки — цель перехода «исправить» из
+ * сообщения о запрете применения (требования 0fd1dc5d, 44d61c8a). Записи без
+ * адреса (`path: ''`, например конструкторское предупреждение миграции) для
+ * перехода не годятся: локализовать строку нельзя. `null` — переходить некуда.
+ */
+export function firstLocalizedErrorIssue(issues: readonly FilterIssue[]): FilterIssue | null {
+  for (const issue of issues) {
+    if (issue.severity === 'error' && issue.path !== '') return issue;
+  }
+  return null;
+}
+
 /** Худшая серьёзность списка (`null` — записей нет) — для окраски футера. */
 export function worstFilterIssueSeverity(
   issues: readonly FilterIssue[],

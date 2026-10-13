@@ -44,6 +44,7 @@ import {
   type FilterAstListItem,
   type FilterAstNode,
   type FilterAstValue,
+  type FilterDiagnostic,
   type SortOrder,
   type StructureAuthorOp,
   type StructureKeywordScope,
@@ -1197,10 +1198,15 @@ export function queryChronicle(
   // (с проверкой профиля и красной диагностикой); плоское — компилируется тем
   // же модулем. Второго исполнения критериев нет.
   let ast: FilterAst;
+  // Жёлтая диагностика ядра явного AST (требование 325efc13): у хроники
+  // контекста типа нет, поэтому записей обычно не бывает, но контракт несёт
+  // `warnings` — единый путь со «Структурами» (требование 0fd1dc5d).
+  let warnings: FilterDiagnostic[] = [];
   if (request.ast !== undefined) {
     assertFilterAstInProfile(request.ast, 'chronicle');
     const diag = diagnoseFilterAst(ndb, request.ast);
     if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
+    warnings = diag.warnings;
     ast = request.ast;
   } else {
     ast = compileChronicleToAst(ndb, request, astOpts);
@@ -1304,5 +1310,9 @@ export function queryChronicle(
         opts.bodyHtmlTransform === undefined ? row.body_html : opts.bodyHtmlTransform(row.body_md),
     };
   });
-  return { rows: buildRows(ndb, withSnippets, refs, linkTargets), total };
+  return {
+    rows: buildRows(ndb, withSnippets, refs, linkTargets),
+    total,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }

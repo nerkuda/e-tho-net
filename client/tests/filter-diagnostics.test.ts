@@ -282,4 +282,32 @@ describe('диагностика строк отбора: данные ядра 
     assert.equal(mod.filterEntityKey({ kind: 'property', property: 'Покупки здесь', direction: 'in' } as any), 'property:Покупки здесь:in');
     assert.equal(mod.filterEntityKey({ kind: 'keywords' } as any), 'keywords');
   });
+
+  it('firstLocalizedErrorIssue: цель перехода «исправить» — красное с адресом строки', () => {
+    const issue = (severity: 'error' | 'warning', path: string): any => ({
+      severity,
+      source: 'server',
+      code: severity === 'error' ? 'entity_deleted' : 'property_detached',
+      path,
+      message: 'причина',
+    });
+    assert.equal(mod.firstLocalizedErrorIssue([]), null, 'пусто — переходить некуда');
+    assert.equal(
+      mod.firstLocalizedErrorIssue([issue('warning', 'filter.children[0]')]),
+      null,
+      'жёлтое применение не запрещает — перехода нет',
+    );
+    assert.equal(
+      mod.firstLocalizedErrorIssue([issue('error', '')]),
+      null,
+      'красное без адреса строки локализовать нельзя',
+    );
+    const target = mod.firstLocalizedErrorIssue([
+      issue('warning', 'sort[0]'),
+      issue('error', ''),
+      issue('error', 'filter.children[1].entity'),
+      issue('error', 'filter.children[2].entity'),
+    ]);
+    assert.equal(target?.path, 'filter.children[1].entity', 'берётся первая локализованная красная');
+  });
 });

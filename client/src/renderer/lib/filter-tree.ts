@@ -845,6 +845,13 @@ export interface FilterTreeHandle {
   root: HTMLElement;
   /** Перерисовать дерево из модели (после правок хоста). */
   rerender: () => void;
+  /**
+   * Перевести фокус в строку с диагностикой по её адресу (тот же переход, что у
+   * кнопки «исправить» в строке) — общая точка для сообщения о запрете в футере
+   * (требования 0fd1dc5d, 44d61c8a). Адрес не отрисован (нет записи/строка
+   * внутри свёрнутой группы) — ничего не делается.
+   */
+  focusIssue: (path: string) => void;
 }
 
 /** Классы вида — единственная точка их имён (адресуются тестами и CSS). */
@@ -882,12 +889,21 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
 
   /** Записи диагностики — перечитываются на каждой отрисовке дерева. */
   let issueMap: FilterIssue[] = [];
+  /**
+   * Адрес записи → переход к её строке. Собирается при отрисовке вместе со
+   * строками диагностики; кнопка «исправить» в футере зовёт тот же переход
+   * (`focusIssue`), поэтому логика перехода живёт в ОДНОМ месте — каркасе
+   * дерева, а не в экране (требования 0fd1dc5d, 44d61c8a).
+   */
+  const fixers = new Map<string, () => void>();
 
   /**
    * Строка диагностики узла (элемент 4e634c9a): точная причина (снапшот имени и
    * дата — из записи ядра) и кнопка «исправить», переводящая фокус в строку.
    */
   const buildIssueLine = (issue: FilterIssue, focus: () => void): HTMLElement => {
+    // Тот же переход доступен футеру по адресу записи (сообщение о запрете).
+    fixers.set(issue.path, focus);
     const line = div(FILTER_TREE_ISSUE_CLASS);
     line.dataset['severity'] = issue.severity;
     line.dataset['code'] = issue.code;
@@ -920,6 +936,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
 
   const render = (): void => {
     clear(root);
+    fixers.clear();
     issueMap = [...(ctx.issues?.() ?? [])];
     const title = ctx.title ?? filterTreeTitle(ctx.profile);
     root.append(el('div', 'ft-title', title));
@@ -1235,7 +1252,11 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
   };
 
   render();
-  return { root, rerender: render };
+  return {
+    root,
+    rerender: render,
+    focusIssue: (path: string): void => fixers.get(path)?.(),
+  };
 }
 
 /** Ключ строки «Что», соответствующей листу (для подсветки текущего операнда). */

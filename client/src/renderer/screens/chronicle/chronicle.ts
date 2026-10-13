@@ -142,6 +142,7 @@ import {
   chronicleQueryDefinition,
   clearFilter,
   filterIssuesFromQueryError,
+  filterIssuesFromQueryResult,
   getFilterState,
   getSavedFilterId,
   mountChronicleFilterPanel,
@@ -695,15 +696,25 @@ async function reload(preserveDepth = false): Promise<void> {
   renderStatus('loading');
   try {
     const def = chronicleQueryDefinition();
+    // Диагностика ядра едет в каждой странице конверта `meta`; редактору нужна
+    // диагностика ПЕРВОЙ страницы — адреса строк (требование 44d61c8a).
+    let pageWarnings: unknown = undefined;
     const result = await collectRowsToDepth(
       preserveDepth ? rows.length : CHRONICLE_PAGE_SIZE,
       CHRONICLE_PAGE_SIZE,
-      (offset, limit) => etn.chronicle.query(networkId, { ...def, limit, offset }),
+      (offset, limit) =>
+        etn.chronicle.query(networkId, { ...def, limit, offset }).then((page) => {
+          if (offset === 0) pageWarnings = (page as { warnings?: unknown }).warnings;
+          return page;
+        }),
     );
     if (seq !== querySeq) return;
     rows = result.rows;
     total = result.total;
     pendingReconcile = false;
+    // Успешный запрос: строки редактора получают актуальную диагностику ядра
+    // (жёлтое — не блокирует; красное пришло бы ошибкой выше).
+    setFilterServerIssues(filterIssuesFromQueryResult({ warnings: pageWarnings }));
     renderFeed();
     publishChronicleSnapshot();
   } catch (err) {

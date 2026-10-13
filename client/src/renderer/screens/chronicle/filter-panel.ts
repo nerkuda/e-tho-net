@@ -65,6 +65,7 @@ import {
 } from '../../lib/filter-builder.js';
 import {
   filterIssuesFromError,
+  filterIssuesFromPayload,
   type FilterIssue,
 } from '../../lib/filter-diagnostics.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
@@ -412,9 +413,22 @@ export function readFilterDefinition(def: unknown): FilterState {
   const next = defaultState();
   if (def === null || typeof def !== 'object' || Array.isArray(def)) return next;
   const rec = def as Record<string, unknown>;
-  if (typeof rec['version'] === 'number') {
-    const parsed = parseFilterAstState(rec, {});
-    return { ...next, ...parsed, tree: parsed.tree ?? defaultFilterTreeGroup('and') };
+  // Форма СОБСТВЕННОЙ записи панели — `{ ast, order }` (см. {@link chronicleDefinition}):
+  // AST-тело вложено в поле `ast`, а не лежит на верхнем уровне. Читаем ОБЕ
+  // формы одним ридером AST; иначе сохранённый/восстановленный из L4 отбор
+  // «Дневника» открывался пустым — условие терялось на чтении (дефект, найден
+  // при задаче a6609741: метод диагностики панели не получал строк).
+  const nestedAst = rec['ast'];
+  const astBody =
+    typeof rec['version'] === 'number'
+      ? rec
+      : typeof nestedAst === 'object' && nestedAst !== null && !Array.isArray(nestedAst)
+        ? (nestedAst as Record<string, unknown>)
+        : null;
+  if (astBody !== null && typeof astBody['version'] === 'number') {
+    const parsed = parseFilterAstState(astBody, {});
+    const order = rec['order'] === 'desc' ? 'desc' : 'asc';
+    return { ...next, ...parsed, tree: parsed.tree ?? defaultFilterTreeGroup('and'), order };
   }
   const children: FilterTreeNode[] = [];
   const from = str(rec['date_from']);
@@ -535,6 +549,17 @@ export function setFilterServerIssues(issues: readonly FilterIssue[]): void {
 /** Записи диагностики из ошибки запроса (красное ядро). */
 export function filterIssuesFromQueryError(err: unknown): readonly FilterIssue[] {
   return filterIssuesFromError(err);
+}
+
+/**
+ * Записи диагностики из УСПЕШНОЙ выборки: `warnings` конверта `meta`
+ * (требование 325efc13). Единый путь со «Структурами» — редактор подсвечивает
+ * адресованные строки, жёлтое применение не запрещает.
+ */
+export function filterIssuesFromQueryResult(payload: {
+  warnings?: unknown;
+}): readonly FilterIssue[] {
+  return filterIssuesFromPayload(payload as Parameters<typeof filterIssuesFromPayload>[0]);
 }
 
 /** Adds a parent thought to the goals criteria (external drop / picker). */

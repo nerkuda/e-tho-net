@@ -295,8 +295,68 @@ describe('футер отбора: фраза-превью и запрет пр�
     assert.equal(apply.disabled, false);
   });
 
-  it('чистые помощники футера: изменённость, запрос записи, запрет применения', () => {
-    assert.equal(mod.filterChangedAgainst(null, { a: 1 }), false);
+  it('«исправить» в футере: переход к строке из сообщения о запрете (0fd1dc5d)', () => {
+    const fixed: string[] = [];
+    const { handle, state } = buildFooter({ onFixIssue: (path) => fixed.push(path) });
+    const root = handle.root as unknown as ShimElement;
+    const fix = exactOne(root, 'ff-fix')!;
+    assert.notEqual(fix, null, 'кнопка «исправить» живёт в футере — общий каркас, не экран');
+    assert.equal(fix.hidden, true, 'пока ошибок нет — перехода нет');
+
+    // Красное С адресом строки: переход доступен и ведёт в эту строку.
+    state.preview = {
+      text: 'битый отбор',
+      issues: [
+        {
+          severity: 'error',
+          source: 'server',
+          code: 'entity_deleted',
+          path: 'filter.children[0].entity',
+          message: 'Свойство удалено из сети — отбор нельзя применить.',
+        },
+      ],
+    };
+    handle.refresh();
+    assert.equal(fix.hidden, false, 'красное с адресом открывает переход');
+    fix.emit('click', {});
+    assert.deepEqual(fixed, ['filter.children[0].entity'], 'переход ведёт в строку ошибки');
+
+    // Красное БЕЗ адреса (сообщение о запрете, которое нельзя локализовать) —
+    // перехода нет: вести пользователя некуда.
+    state.preview = {
+      text: 'битый отбор',
+      issues: [
+        {
+          severity: 'error',
+          source: 'server',
+          code: 'build_warning',
+          path: '',
+          message: 'ошибку нельзя локализовать в строку',
+        },
+      ],
+    };
+    handle.refresh();
+    assert.equal(fix.hidden, true, 'без адреса строки перехода нет');
+
+    // Жёлтое не запрещает применение — перехода тоже нет.
+    state.preview = {
+      text: 'жёлтый отбор',
+      issues: [
+        {
+          severity: 'warning',
+          source: 'server',
+          code: 'property_detached',
+          path: 'filter.children[0].entity',
+          message: 'свойство отвязано',
+        },
+      ],
+    };
+    handle.refresh();
+    assert.equal(fix.hidden, true, 'жёлтое перехода не предлагает');
+    assert.deepEqual(fixed, ['filter.children[0].entity'], 'лишних вызовов нет');
+  });
+
+  it('чистые помощники футера: изменённость, запрос записи, запрет применения', () => {    assert.equal(mod.filterChangedAgainst(null, { a: 1 }), false);
     assert.equal(mod.filterChangedAgainst({ a: 1 }, { a: 1 }), false);
     assert.equal(mod.filterChangedAgainst({ a: 1 }, { a: 2 }), true);
     assert.deepEqual(mod.filterSaveRequest('Имя', null), { name: 'Имя', asCopy: false });

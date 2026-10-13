@@ -242,4 +242,88 @@ describe('панель «Дневника» — единый редактор о
     assert.deepEqual(panel.chroniclePeriod(state).to, '');
     assert.equal(state.tree?.kind, 'group');
   });
+
+  it('собственная форма записи {ast, order} читается деревом (дефект a6609741)', async () => {
+    const panel = await panelModule();
+    // Панель ПИШЕТ определение как `{ast, order}` (chronicleDefinition). До фикса
+    // чтение отдавало пустое дерево: условие терялось, и сохранённый/L4-отбор
+    // «Дневника» открывался без условий — красная диагностика не находила строку.
+    const written = {
+      order: 'desc',
+      ast: {
+        version: 1,
+        filter: {
+          op: 'and',
+          children: [
+            {
+              entity: { kind: 'targets' },
+              operator: 'in',
+              value: {
+                query: {
+                  op: 'and',
+                  children: [
+                    {
+                      entity: { kind: 'property', property: 'Несуществующее свойство' },
+                      operator: 'eq',
+                      value: 'x',
+                      labels: { entity: 'Несуществующее свойство' },
+                    },
+                  ],
+                },
+                operator: 'in',
+              },
+            },
+          ],
+        },
+      },
+    };
+    const restored = panel.readFilterDefinition(written);
+    assert.equal(
+      leaves(restored.tree).length,
+      1,
+      'условие «Цели в выборке» восстановлено из формы {ast, order}',
+    );
+    assert.equal(leaves(restored.tree)[0]!.entity.kind, 'targets');
+    assert.equal(restored.order, 'desc', 'направление ленты прочитано');
+    // Прямая AST-форма (`{version, filter}`) читается тем же путём.
+    assert.equal(leaves(panel.readFilterDefinition(written.ast).tree).length, 1);
+  });
+
+  it('диагностика ядра доходит до строк редактора: warnings выборки и красное ошибки', async () => {    const panel = await panelModule();
+    // Жёлтая/красная диагностика из УСПЕШНОЙ выборки (`meta.warnings`) —
+    // тот же путь, что у «Структур»: контракт хроники её несёт (требование 44d61c8a).
+    const fromResult = panel.filterIssuesFromQueryResult({
+      warnings: [
+        {
+          severity: 'warning',
+          code: 'property_detached',
+          path: 'filter.children[0].entity',
+          label: 'Город',
+          message: 'свойство отвязано от типа',
+        },
+      ],
+    });
+    assert.equal(fromResult.length, 1);
+    assert.equal(fromResult[0]!.severity, 'warning');
+    assert.equal(fromResult[0]!.path, 'filter.children[0].entity');
+    // Ошибка запроса (`VALIDATION_ERROR details.diagnostics`) — красная строка.
+    const { EtnError } = await import('@etn/shared');
+    const fromError = panel.filterIssuesFromQueryError(
+      new EtnError('VALIDATION_ERROR', 'отбор нельзя применить', {
+        reason: 'filter_entity_deleted',
+        diagnostics: [
+          {
+            severity: 'error',
+            code: 'entity_deleted',
+            path: 'filter.children[0].entity',
+            label: 'Город',
+            message: 'Свойство «Город» удалено из сети — отбор нельзя применить.',
+          },
+        ],
+      }),
+    );
+    assert.equal(fromError.length, 1);
+    assert.equal(fromError[0]!.severity, 'error');
+    assert.equal(fromError[0]!.label, 'Город');
+  });
 });

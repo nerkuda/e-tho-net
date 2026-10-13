@@ -2826,9 +2826,20 @@ export class RestClient {
     const { data: rows, meta: envelope } = await this.requestEnvelope<
       import('@etn/shared').ChronicleRow[]
     >('POST', `/networks/${encodeURIComponent(networkId)}/chronicle/query`, { body: request });
-    const meta = envelope as { total?: number } | undefined;
+    const meta = envelope as
+      | { total?: number; warnings?: import('@etn/shared').FilterDiagnostic[] }
+      | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : rows.length;
-    return { rows, total };
+    return {
+      rows,
+      total,
+      // Диагностика ядра отбора едет из того же конверта `meta` (требование
+      // 44d61c8a): редактор «Дневника» подсвечивает адресованные строки —
+      // единый путь со «Структурами».
+      ...(Array.isArray(meta?.warnings) && meta.warnings.length > 0
+        ? { warnings: meta.warnings }
+        : {}),
+    };
   }
 
   /** `GET /networks/{nid}/saved-filters?view=chronicle` — the user's chronicle filters. */

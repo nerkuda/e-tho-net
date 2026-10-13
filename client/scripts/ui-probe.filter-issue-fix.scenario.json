@@ -1,0 +1,145 @@
+{
+  "name": "filter-issue-fix",
+  "description": "Сценарий e3989b89 «битый отбор — красная строка с причиной и переход «исправить»» (задача a6609741): онбординг → в «Структурах», «Дневнике» и «Событиях» загружается отбор с условием на удалённое (несуществующее) свойство → «Применить» запрещено, строка красная с причиной и снапшотом имени, кнопка «исправить» (в строке и в футере) переводит фокус в проблемную строку. Красное приходит VALIDATION_ERROR details.diagnostics (сервер), редактор рисует его общим каркасом. Запуск: node client/scripts/ui-probe-stand.mjs --scenario <этот файл> --out .tmp/etn-a6609741/out",
+  "timeout": 150000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-activity-state",
+      "eval": "window.etn.ui.setState('{{networkId}}', 'activity_state', JSON.stringify({ filter: { version: 1, filter: { op: 'and', children: [ { entity: { kind: 'entity_id' }, operator: 'in', value: { query: { op: 'and', children: [ { entity: { kind: 'property', property: 'Несуществующее свойство' }, operator: 'eq', value: 'x', labels: { entity: 'Несуществующее свойство' } } ] }, operator: 'in' } } ] } }, offset: 0 }))"
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    {
+      "name": "seed-structures-filter",
+      "api": {
+        "name": "seed-structures-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "Битый отбор",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                {
+                  "entity": { "kind": "property", "property": "Несуществующее свойство" },
+                  "operator": "eq",
+                  "value": "x",
+                  "labels": { "entity": "Несуществующее свойство" }
+                }
+              ]
+            }
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+    {
+      "name": "seed-chronicle-filter",
+      "api": {
+        "name": "seed-chronicle-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "chronicle",
+          "name": "Битый дневник",
+          "definition": {
+            "order": "desc",
+            "ast": {
+              "version": 1,
+              "filter": {
+                "op": "and",
+                "children": [
+                  {
+                    "entity": { "kind": "targets" },
+                    "operator": "in",
+                    "value": {
+                      "query": {
+                        "op": "and",
+                        "children": [
+                          {
+                            "entity": { "kind": "property", "property": "Несуществующее свойство" },
+                            "operator": "eq",
+                            "value": "x",
+                            "labels": { "entity": "Несуществующее свойство" }
+                          }
+                        ]
+                      },
+                      "operator": "in"
+                    },
+                    "labels": { "entity": "Цели в выборке" }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+    { "name": "structures-open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "structures-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "structures-saved-row", "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    { "name": "structures-focus-search", "click": ".sfd-search" },
+    { "name": "structures-select-row", "key": "ArrowDown" },
+    { "name": "structures-confirm-row", "key": "Enter" },
+    { "name": "structures-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    { "name": "structures-red-row", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .ft-row[data-severity=\"error\"]') !== null" },
+    { "name": "structures-row-severity", "probe": "document.querySelector('.st-filter .ft-row[data-severity=\"error\"]')?.dataset.severity ?? null", "expect": "error" },
+    { "name": "structures-reason", "probe": "document.querySelector('.st-filter .ft-issue')?.textContent?.includes('Несуществующее свойство') ?? false", "expect": true },
+    { "name": "structures-apply-disabled", "probe": "document.querySelector('.st-filter .ff-apply')?.disabled ?? 'no-apply'", "expect": true },
+    { "name": "structures-fix-visible", "probe": "(() => { const f = document.querySelector('.st-filter .ff-fix'); return f !== null && f.hidden === false; })()", "expect": true },
+    { "name": "structures-fix-from-footer", "eval": "(() => { document.querySelector('.st-filter .ff-fix').click(); return 'clicked'; })()" },
+    { "name": "structures-focus-on-row", "probe": "document.activeElement?.closest?.('.ft-row')?.dataset?.path ?? null", "expect": "0" },
+    { "name": "structures-fix-from-row", "eval": "(() => { document.querySelector('.st-filter .ft-row .ft-issue__fix').click(); return 'clicked'; })()" },
+    { "name": "structures-focus-on-row-2", "probe": "document.activeElement?.closest?.('.ft-row')?.dataset?.path ?? null", "expect": "0" },
+
+    { "name": "open-chronicle", "click": "button.view-tab[title=\"Дневник\"]" },
+    { "name": "chronicle-editor", "timeout": 15000, "waitFor": "document.querySelector('.chron-filter .fe .ff-name__input') !== null" },
+    { "name": "chronicle-open-saved", "click": ".chron-filter .ff-extra--saved" },
+    { "name": "chronicle-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "chronicle-saved-row", "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    { "name": "chronicle-focus-search", "click": ".sfd-search" },
+    { "name": "chronicle-select-row", "key": "ArrowDown" },
+    { "name": "chronicle-confirm-row", "key": "Enter" },
+    { "name": "chronicle-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    { "name": "chronicle-red-row", "timeout": 15000, "waitFor": "document.querySelector('.chron-filter .ft-row[data-severity=\"error\"]') !== null" },
+    { "name": "chronicle-row-severity", "probe": "document.querySelector('.chron-filter .ft-row[data-severity=\"error\"]')?.dataset.severity ?? null", "expect": "error" },
+    { "name": "chronicle-reason", "probe": "document.querySelector('.chron-filter .ft-issue')?.textContent?.includes('Несуществующее свойство') ?? false", "expect": true },
+    { "name": "chronicle-apply-disabled", "probe": "document.querySelector('.chron-filter .ff-apply')?.disabled ?? 'no-apply'", "expect": true },
+    { "name": "chronicle-fix-visible", "probe": "(() => { const f = document.querySelector('.chron-filter .ff-fix'); return f !== null && f.hidden === false; })()", "expect": true },
+    { "name": "chronicle-fix-from-footer", "eval": "(() => { document.querySelector('.chron-filter .ff-fix').click(); return 'clicked'; })()" },
+    { "name": "chronicle-focus-on-row", "probe": "document.activeElement?.closest?.('.ft-row')?.dataset?.path ?? null", "expect": "0" },
+    { "name": "chronicle-fix-from-row", "eval": "(() => { document.querySelector('.chron-filter .ft-row .ft-issue__fix').click(); return 'clicked'; })()" },
+    { "name": "chronicle-focus-on-row-2", "probe": "document.activeElement?.closest?.('.ft-row')?.dataset?.path ?? null", "expect": "0" },
+
+    { "name": "open-activity", "click": "button.view-tab[title=\"События\"]" },
+    { "name": "activity-editor", "timeout": 15000, "waitFor": "document.querySelector('.activity-filter .fe .ft-group') !== null" },
+    { "name": "activity-red-row", "timeout": 20000, "waitFor": "document.querySelector('.activity-filter .ft-row[data-severity=\"error\"]') !== null" },
+    { "name": "activity-row-severity", "probe": "document.querySelector('.activity-filter .ft-row[data-severity=\"error\"]')?.dataset.severity ?? null", "expect": "error" },
+    { "name": "activity-reason", "probe": "document.querySelector('.activity-filter .ft-issue')?.textContent?.includes('Несуществующее свойство') ?? false", "expect": true },
+    { "name": "activity-fix-visible", "probe": "(() => { const f = document.querySelector('.activity-filter .ff-fix'); return f !== null && f.hidden === false; })()", "expect": true },
+    { "name": "activity-fix-from-footer", "eval": "(() => { document.querySelector('.activity-filter .ff-fix').click(); return 'clicked'; })()" },
+    { "name": "activity-focus-on-row", "probe": "document.activeElement?.closest?.('.ft-row')?.dataset?.path ?? null", "expect": "0" },
+    { "name": "activity-fix-from-row", "eval": "(() => { document.querySelector('.activity-filter .ft-row .ft-issue__fix').click(); return 'clicked'; })()" },
+    { "name": "activity-focus-on-row-2", "probe": "document.activeElement?.closest?.('.ft-row')?.dataset?.path ?? null", "expect": "0" }
+  ]
+}

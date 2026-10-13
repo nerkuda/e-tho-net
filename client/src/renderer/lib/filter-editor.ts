@@ -326,6 +326,12 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
       onSave: (request) => host.save?.(request),
       onApply: host.apply,
       onClear: host.reset ?? ((): void => undefined),
+      // Переход «исправить» из сообщения о запрете ведёт в ту же строку, что и
+      // кнопка строки: каркас дерева знает адрес → фокус (0fd1dc5d, 44d61c8a).
+      onFixIssue: (path) => {
+        tree.focusIssue(path);
+        host.onFixPath?.(path);
+      },
       ...(opts.buttons?.extra !== undefined ? { extraButtons: opts.buttons.extra } : {}),
       ...(opts.buttons?.standard !== undefined ? { standardButtons: opts.buttons.standard } : {}),
     });

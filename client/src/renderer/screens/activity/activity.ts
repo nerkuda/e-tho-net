@@ -28,7 +28,11 @@ import { requireNetworkId } from '../../app.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
 import { confirmDialog, errorDialog, showDialog } from '../../lib/dialog.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
-import type { FilterIssue } from '../../lib/filter-diagnostics.js';
+import {
+  filterIssuesFromError,
+  mergeFilterIssues,
+  type FilterIssue,
+} from '../../lib/filter-diagnostics.js';
 import { ACTIVITY_ACTION_FILTERS, buildFilterAst } from '../../lib/filter-builder.js';
 import type { FilterTreeData } from '../../lib/filter-tree.js';
 import type { FilterValueEnumOption } from '../../lib/filter-value.js';
@@ -135,6 +139,14 @@ let activityFrame: FilterPanelFrameHandle | null = null;
  * футера, пока пользователь не тронул отбор: потеря видна, а не молчит.
  */
 let migrationDropped: readonly string[] = [];
+/**
+ * Красная диагностика ядра последнего запроса ленты (`VALIDATION_ERROR` →
+ * `details.diagnostics`): битая сущность условия — строка подсвечена,
+ * применение запрещено (требования 44d61c8a, 0fd1dc5d). Тот же путь, что у
+ * «Структур»/«Дневника»: лента отдаёт отбор одним деревом `GET /activity?ast=`,
+ * сервер отвечает структурированной диагностикой.
+ */
+let serverIssues: readonly FilterIssue[] = [];
 /** Границы ширины панели (px), как в Структурах мыслей. */
 const PANEL_W_MIN = 260;
 const PANEL_W_MAX = 480;
@@ -178,6 +190,7 @@ export async function ensureActivityInitialised(): Promise<void> {
   offset = 0;
   filter = createDefaultActivityFilter();
   migrationDropped = [];
+  serverIssues = [];
   panelWidth = null;
 
   try {
@@ -372,8 +385,10 @@ function mountFilterPanel(area: HTMLElement): void {
     getState: () => filter,
     touch: () => {
       // Первое касание отбора пользователем — прежний пресет пересобран:
-      // диагностика потери миграции своё отработала.
+      // диагностика потери миграции своё отработала; серверная диагностика
+      // прежнего запроса тоже относится к прежнему отбору.
       migrationDropped = [];
+      serverIssues = [];
       editor.refresh();
     },
     sort: false,
@@ -401,6 +416,8 @@ function mountFilterPanel(area: HTMLElement): void {
           title: 'Очистить условия отбора',
           onClick: () => {
             filter = createDefaultActivityFilter();
+            migrationDropped = [];
+            serverIssues = [];
             editor.refresh();
             void applyQuery();
           },
@@ -409,16 +426,21 @@ function mountFilterPanel(area: HTMLElement): void {
     },
     host: {
       apply: () => void applyQuery(),
-      // Потеря миграции прежнего пресета — жёлтой диагностикой без адреса
-      // (уходит в тултип фразы-превью): условие отброшено, отбор исполняется.
+      // Диагностика строк (требования 44d61c8a, 0fd1dc5d): красное ядро
+      // (битая сущность условия — применение запрещено) плюс конструкторское
+      // жёлтое без адреса (потеря миграции прежнего пресета — в тултипе
+      // фразы-превью): условие отброшено, отбор исполняется.
       issues: (): readonly FilterIssue[] =>
-        migrationDropped.map((condition) => ({
-          severity: 'warning',
-          source: 'constructor',
-          code: 'build_warning',
-          path: '',
-          message: `Условие прежнего отбора не выражается профилем «События» и отброшено: ${condition}.`,
-        })),
+        mergeFilterIssues(
+          serverIssues,
+          migrationDropped.map((condition) => ({
+            severity: 'warning' as const,
+            source: 'constructor' as const,
+            code: 'build_warning' as const,
+            path: '',
+            message: `Условие прежнего отбора не выражается профилем «События» и отброшено: ${condition}.`,
+          })),
+        ),
     },
   });
   filterEditor = editor;
@@ -455,6 +477,12 @@ async function applyQuery(): Promise<void> {
     const ast = buildFilterAst(filter, { profile: 'events', sort: false });
     const result = await etn.activity.list(networkId, { ast, limit: PAGE_SIZE, offset });
     if (seq !== querySeq) return;
+    // Успешный запрос снимает красную диагностику прежнего (битого) отбора
+    // (требование 44d61c8a): строки редактора очищаются вместе с ошибкой.
+    if (serverIssues.length > 0) {
+      serverIssues = [];
+      filterEditor?.refresh();
+    }
     const page = result.rows;
     rows = page;
     total = result.total;
@@ -470,6 +498,11 @@ async function applyQuery(): Promise<void> {
     renderTable();
   } catch (err) {
     if (seq !== querySeq) return;
+    // Красная диагностика ядра (`VALIDATION_ERROR` → `details.diagnostics`) —
+    // в строки редактора: битая строка подсвечена, применение запрещено
+    // (требования 44d61c8a, 0fd1dc5d). Таблицу заменяет сообщение об ошибке.
+    serverIssues = filterIssuesFromError(err);
+    filterEditor?.refresh();
     renderError(err);
   }
 }

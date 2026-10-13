@@ -48,7 +48,14 @@ export function createChronicleRoutes(deps: RouteDeps): FastifyPluginAsync {
             : {}),
           withTime: filterProfileHasTime('chronicle'),
         });
-        sendList(reply, result.rows, result.total, query.offset, query.limit);
+        sendList(reply, result.rows, result.total, query.offset, query.limit, {
+          // Диагностика ядра отбора (требование 44d61c8a): `warnings`
+          // адресуют строку редактора — тот же конверт `meta`, что у
+          // «Структур». Пусто — поле не добавляется.
+          ...(result.warnings !== undefined && result.warnings.length > 0
+            ? { warnings: result.warnings }
+            : {}),
+        });
       },
     );
   };

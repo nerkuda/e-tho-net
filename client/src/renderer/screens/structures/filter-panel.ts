@@ -564,9 +564,6 @@ function renderPanel(): void {
       baseline: () => savedDefinition,
       current: () => buildSavedDefinition(),
       issues: () => serverIssues,
-      onFixPath: () => {
-        /* Строку подсвечивает дерево; отдельного перехода у панели нет. */
-      },
     },
     buttons: { extra: footerExtraButtons() },
   });
