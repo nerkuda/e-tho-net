@@ -39,6 +39,7 @@ import { currentThoughtId } from '../../history.js';
 import { ELLIPSE_INSIDE } from '../../lib/pure.js';
 import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
+import { setScreenThoughtSource } from '../../lib/screen-thought-source.js';
 import { setActiveView } from '../active-view.js';
 import { div, el, setTooltip, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
@@ -602,6 +603,18 @@ function onConnectorClick(event: MouseEvent, links: FocusEdge[]): void {
 
 /** Mounts the view: filter panel (left) + results tree (right). Returns a
  *  teardown handle that releases the store subscription (ошибка 37b713de). */
+/**
+ * Мысль, выделенная на экране «Структуры» (для Ctrl+C/V, ошибка 00275531):
+ * первым делом общее выделение (Ctrl+клик по облачку), затем открытая в
+ * редакторе мысль, затем последняя посещённая. Экспортируется ради юнит-теста
+ * без монтирования DOM.
+ */
+export function structuresThoughtSource(): string | null {
+  const selection = store.state.selection;
+  if (selection.length > 0 && selection[0] !== undefined) return selection[0];
+  return store.state.structuresActiveThoughtId ?? currentThoughtId();
+}
+
 export function mountStructures(hostEl: HTMLElement): () => void {
   host = hostEl;
   host.replaceChildren();
@@ -628,6 +641,11 @@ export function mountStructures(hostEl: HTMLElement): () => void {
     openThought: (id) => void openStructuresThought(id),
     toggleExpand: toggleExpandFor,
   });
+
+  // Источник мысли для Ctrl+C/V на ЭТОМ экране (ошибка 00275531): копируем
+  // ВЫДЕЛЕННУЮ здесь мысль (общее выделение → открытая мысль → история визитов),
+  // а не мысль в фокусе карты.
+  setScreenThoughtSource('structures', structuresThoughtSource);
 
   results.addEventListener('click', (event) => {
     // A click on the empty area drops the sticky link selection and returns
@@ -689,6 +707,7 @@ export function mountStructures(hostEl: HTMLElement): () => void {
   bindStructuresQuery();
 
   return () => {
+    setScreenThoughtSource('structures', null);
     unsubscribe();
     structuresInvalidationUnsub?.();
     structuresInvalidationUnsub = null;

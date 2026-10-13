@@ -40,6 +40,7 @@ import { logUiEvent } from './lib/ui-log.js';
 import { UI_STATE_KEY, PREF_KEY, parseStoredCanvasLinkFilter } from '@etn/shared';
 import { applyCanvasZoom } from './canvas/canvas-zoom.js';
 import { getCanvasCursor, resetCanvasCursor } from './canvas/kbd-nav.js';
+import { resolveThoughtCopyTarget, screenThoughtSource } from './lib/screen-thought-source.js';
 import {
   defaultEventAreaW,
   parseCanvasLayout,
@@ -743,25 +744,23 @@ function globalKeyBindings(): KeyBindingDef[] {
     // A visible DOM text selection (e.g. inside the comment view mode,
     // b6690109) outranks the thought copy: no preventDefault, the native copy
     // puts the selected text on the system clipboard.
-    if (
-      store.state.screen === 'workspace' &&
-      store.state.networkId !== null &&
-      !hasTextSelection(document.getSelection())
-    ) {
-      void globalCopy();
-      return true;
-    }
-    return false;
+    if (hasTextSelection(document.getSelection())) return false;
+    if (store.state.screen !== 'workspace' || store.state.networkId === null) return false;
+    // Экраны без мыслей (Дневник, События, Публикации) не перехватывают Ctrl+C:
+    // копирование мысли там не поддерживается — работает нативное копирование
+    // текста (ошибка 00275531).
+    if (!supportsThoughtCopy()) return false;
+    void globalCopy(currentThoughtCopyTarget());
+    return true;
   });
 
   bind('app.pasteThought', ['Ctrl+V', 'Meta+V'], (event) => {
     if (isEditableTarget(event.target)) return false;
     if (event.shiftKey || event.altKey) return false;
-    if (store.state.screen === 'workspace' && store.state.networkId !== null) {
-      void globalPaste();
-      return true;
-    }
-    return false;
+    if (store.state.screen !== 'workspace' || store.state.networkId === null) return false;
+    if (!supportsThoughtCopy()) return false;
+    void globalPaste(currentThoughtPasteTarget());
+    return true;
   });
 
   // Глобальный поиск клиента перенесён на Ctrl+Shift+F (0.12.1, задача
@@ -813,6 +812,37 @@ function globalKeyBindings(): KeyBindingDef[] {
   return bindings;
 }
 
+/** Виды, где вообще поддерживается копирование/вставка МЫСЛИ (ошибка
+ *  00275531): карта и структуры. На Дневнике, Событиях и Публикациях мысль не
+ *  копируется — Ctrl+C/V отдаются нативному копированию текста. */
+function supportsThoughtCopy(): boolean {
+  const view = store.state.activeView;
+  return view === 'map' || view === 'structures';
+}
+
+/** Цель Ctrl+C: на карте — курсор/фокус холста, в структурах — выделенная на
+ *  экране мысль (источник вида {@link screenThoughtSource}), иначе `null`. */
+function currentThoughtCopyTarget(): string | null {
+  const view = store.state.activeView;
+  return resolveThoughtCopyTarget({
+    view,
+    screenId: screenThoughtSource(view)?.() ?? null,
+    cursorId: getCanvasCursor(),
+    focusId: store.state.focus?.focused.id ?? null,
+  });
+}
+
+/** Цель Ctrl+V: на карте — прежнее правило (одноэлементное выделение → курсор →
+ *  фокус), в структурах — выделенная на экране мысль, иначе `null`. */
+function currentThoughtPasteTarget(): string | null {
+  const view = store.state.activeView;
+  if (view !== 'map') return screenThoughtSource(view)?.() ?? null;
+  const selection = store.state.selection;
+  if (selection.length === 1 && selection[0] !== undefined) return selection[0];
+  if (selection.length === 0) return getCanvasCursor() ?? store.state.focus?.focused.id ?? null;
+  return store.state.focus?.focused.id ?? null;
+}
+
 /** Ctrl+C: copy the thought under the dashed cursor frame on the canvas, or —
  *  when no cursor is active — the focused thought. The cursor is updated
  *  synchronously by the cloud click handler, while `store.state.focus.focused`
@@ -830,15 +860,12 @@ function globalKeyBindings(): KeyBindingDef[] {
  *  returns a visible notice — silent failures (no focus, fetch error) were
  *  reported as "Ctrl+C does nothing at all" and the user had no way to tell
  *  whether the handler even fired. */
-async function globalCopy(): Promise<void> {
+async function globalCopy(targetId: string | null): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const cursorId = getCanvasCursor();
-  const focusId = store.state.focus?.focused.id ?? null;
-  const targetId = cursorId ?? focusId;
   if (targetId === null) {
     notice(
-      'Не выбрана мысль для копирования. Кликните на мысль на карте, чтобы сфокусировать её.',
+      'Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.',
       'error',
     );
     return;
@@ -860,16 +887,7 @@ async function globalCopy(): Promise<void> {
  *  cursor is the click-synchronous "where does the new content go" signal,
  *  while the editor focus may still point at a previously focused thought.
  *  With multiple thoughts selected we fall back to the canvas focus. */
-async function globalPaste(): Promise<void> {
-  const selection = store.state.selection;
-  let targetId: string | null = null;
-  if (selection.length === 1 && selection[0] !== undefined) {
-    targetId = selection[0];
-  } else if (selection.length === 0) {
-    targetId = getCanvasCursor() ?? store.state.focus?.focused.id ?? null;
-  } else {
-    targetId = store.state.focus?.focused.id ?? null;
-  }
+async function globalPaste(targetId: string | null): Promise<void> {
   if (targetId === null) {
     notice(
       'Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.',
@@ -908,7 +926,8 @@ async function globalPaste(): Promise<void> {
   }
 }
 
-/** Test seam: the global Ctrl+C handler. Guards the regression of bug
- *  627a0822 — Ctrl+C must copy the cursor/focus thought even while the
- *  selection panel holds thoughts, never the panel's contents. */
-export const appInternals = { globalCopy };
+/** Test seam: the global Ctrl+C handler and its target resolver. Guards the
+ *  regression of bug 627a0822 — Ctrl+C must copy the cursor/focus thought even
+ *  while the selection panel holds thoughts, never the panel's contents — and
+ *  of bug 00275531 — on the structures screen it copies the screen selection. */
+export const appInternals = { globalCopy, currentThoughtCopyTarget };
