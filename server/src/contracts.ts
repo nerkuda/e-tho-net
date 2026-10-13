@@ -3373,10 +3373,12 @@ export const RestThoughtCreateBody = defineContract(
         }
         const c = raw as Record<string, unknown>;
         const bodyMd = c['body_md'];
-        if (typeof bodyMd !== 'string' || bodyMd.trim() === '') {
+        // Пустое тело допустимо (ошибка 00f1d0e6: пустой комментарий — не
+        // ошибка); поле обязано быть строкой — иначе непонятна природа значения.
+        if (typeof bodyMd !== 'string') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'comment.body_md обязателен и не может быть пустым.',
+            'comment.body_md обязателен и должен быть строкой.',
             { field: 'comment.body_md' },
             requestId,
           );

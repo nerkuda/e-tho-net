@@ -54,7 +54,9 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
   const BundleCommentSchema = z
     .object({
       title: z.string().nullable().optional(),
-      body_md: z.string().min(1),
+      // Пустое тело допустимо (ошибка 00f1d0e6, ожидание заказчика 2026-10-13:
+      // пустой комментарий — не ошибка); поле обязано быть строкой.
+      body_md: z.string(),
       valid_from: z.string().min(1).optional(),
       valid_to: z.string().nullable().optional(),
     })
@@ -92,7 +94,8 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       comment: z
         .object({
           title: z.string().nullable().optional(),
-          body_md: z.string().min(1),
+          // Пустое тело допустимо — как у комментария мысли (ошибка 00f1d0e6).
+          body_md: z.string(),
         })
         .strict()
         .optional(),
