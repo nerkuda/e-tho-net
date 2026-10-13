@@ -23,8 +23,6 @@ import {
 } from './rest-helpers.js';
 import { buildMcpContext, closeMcpContext, connectMcpClient, toolJson } from './mcp-helpers.js';
 
-const USER = 'empty-body-user';
-
 /** Thought via the API, id out. */
 async function createThought(ctx: RestTestContext, title: string): Promise<string> {
   const res = await ctx.app.inject({

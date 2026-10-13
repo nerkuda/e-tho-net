@@ -106,22 +106,27 @@ describe(
       }
     });
 
-    it('create with comment: пустое тело комментария отвергается (422), мысль не создаётся', async () => {
+    it('create with comment: пустое тело принимается (201), мысль создаётся с пустым комментарием', async () => {
       const ctx = await buildRestContext();
       try {
+        // Пустое тело — не ошибка (00f1d0e6): комментарий создаётся пустым.
         const res = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${ctx.networkId}/thoughts`,
           headers: authHeaders(ctx),
-          payload: { title: 'Пустой комментарий', comment: { body_md: '   ' } },
+          payload: { title: 'Пустой комментарий', comment: { body_md: '' } },
         });
-        assert.equal(res.statusCode, 422);
-        assert.equal(res.json().error.code, 'VALIDATION_ERROR');
-        // Ни мысли, ни комментария не осталось.
-        const thoughts = ctx.ndb
-          .prepare('SELECT COUNT(*) AS n FROM thoughts_v WHERE title = ?')
-          .get('Пустой комментарий') as { n: number };
-        assert.equal(thoughts.n, 0);
+        assert.equal(res.statusCode, 201, res.body);
+        const thoughtId = (res.json().data as { id: string }).id;
+        const comments = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/comments`,
+          headers: authHeaders(ctx),
+        });
+        const list = comments.json().data as Array<{ kind: string; body_md: string }>;
+        const permanent = list.filter((c) => c.kind === 'permanent');
+        assert.equal(permanent.length, 1, 'у мысли ровно один постоянный комментарий');
+        assert.equal(permanent[0]!.body_md, '');
       } finally {
         await closeRestContext(ctx);
       }
