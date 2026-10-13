@@ -28,6 +28,7 @@ import {
 } from '@etn/shared';
 
 import {
+  addOwners,
   createAttachmentResult,
   parseAttachmentSearchQuery,
   searchAttachments,
@@ -74,6 +75,14 @@ async function setChildren(
     payload: { value: childIds },
   });
   assert.equal(res.statusCode, 200, res.body);
+}
+
+/** Лист «Владельцы» со значением-подвыборкой мыслей (`in`/`not_in`/`all_of`). */
+function ownerSub(thoughtIds: string[], operator: 'in' | 'not_in' | 'all_in'): FilterAstNode {
+  return leaf({ entity: { kind: 'owner' } }, operator === 'all_in' ? 'all_of' : operator, {
+    query: leaf({ entity: { kind: 'id' } }, 'in', thoughtIds),
+    operator,
+  });
 }
 
 const MPI = 1024 * 1024;
@@ -137,6 +146,17 @@ describe('отбор вложений на общий AST (задача 5a007bed
       mime_type: 'image/png',
       file_size: 5 * MPI,
     });
+    // Вложение с ДВУМЯ владельцами (задача 5a007bed, довесок): владелец А —
+    // В подвыборке, Б — ВНЕ. Входит в `in([А])`, но НЕ в `all_of([А])`; ловит
+    // мутацию `all_of → in` (иначе `all_of` неотличим от `in`).
+    ids['multi'] = mk(thoughtA, {
+      kind: 'url',
+      url: 'https://example.test/multi.zip',
+      title: 'Двойное владение',
+      mime_type: 'application/zip',
+      file_size: 1024,
+    });
+    addOwners(ctx.ndb, ids['multi']!, 'thought', [thoughtB], ctx.adminId);
     // «Вложение без владельцев»: снимаем живые владения НАПРЯМУЮ — owner-cleanup
     // через API удалил бы саму строку, и случай был бы недостижим.
     ctx.ndb
@@ -197,9 +217,9 @@ describe('отбор вложений на общий AST (задача 5a007bed
       sorted(ids['imgB']!, ids['orphan']!),
     );
     assert.deepEqual(idsOf(ast(leaf({ entity: { kind: 'name' } }, 'matches', 'сирота'))), [ids['orphan']!]);
-    // Тип: file/url (все пять — url).
+    // Тип: file/url (все шесть — url).
     assert.deepEqual(idsOf(ast(leaf({ entity: { kind: 'kind' } }, 'in', ['file']))), []);
-    assert.equal(idsOf(ast(leaf({ entity: { kind: 'kind' } }, 'in', ['url']))).length, 5);
+    assert.equal(idsOf(ast(leaf({ entity: { kind: 'kind' } }, 'in', ['url']))).length, 6);
     // MIME: содержит / в списке.
     assert.deepEqual(
       idsOf(ast(leaf({ entity: { kind: 'mime_type' } }, 'in', ['image/png']))),
@@ -211,7 +231,7 @@ describe('отбор вложений на общий AST (задача 5a007bed
       [ids['imgA']!],
     );
     assert.deepEqual(idsOf(ast(leaf({ entity: { kind: 'size' } }, 'lt', 1000))), [ids['txtA']!]);
-    assert.equal(idsOf(ast(leaf({ entity: { kind: 'size' } }, 'not_empty'))).length, 5);
+    assert.equal(idsOf(ast(leaf({ entity: { kind: 'size' } }, 'not_empty'))).length, 6);
   });
 
   it('пограничный: «вложение без владельцев» (owner.is_empty)', () => {
@@ -219,59 +239,69 @@ describe('отбор вложений на общий AST (задача 5a007bed
     assert.deepEqual(idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'is_empty'))), [ids['orphan']!]);
     assert.deepEqual(
       idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'not_empty'))),
-      sorted(ids['imgA']!, ids['txtA']!, ids['imgB']!, ids['pdfC']!),
+      sorted(ids['imgA']!, ids['txtA']!, ids['imgB']!, ids['pdfC']!, ids['multi']!),
     );
   });
 
   it('владельцы: список типов, подвыборка мыслей, количество, иерархия', () => {
-    const sub = (thoughtIds: string[], operator: 'in' | 'not_in' | 'all_in') =>
-      leaf(
-        { entity: { kind: 'owner' } },
-        operator === 'all_in' ? 'all_of' : operator,
-        {
-          query: leaf({ entity: { kind: 'id' } }, 'in', thoughtIds),
-          operator,
-        },
-      );
     // «В списке» по ТИПУ владельца.
-    assert.equal(idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'in', ['thought']))).length, 4);
+    assert.equal(idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'in', ['thought']))).length, 5);
     assert.deepEqual(idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'in', ['publication']))), []);
-    // Подвыборка мыслей-владельцев: вложение без владельцев НЕ удовлетворяет.
+    // Подвыборка мыслей-владельцев: достаточно ОДНОГО владельца в подвыборке
+    // (мульти-владение multi входит по владельцу А); вложение без владельцев НЕ
+    // удовлетворяет.
     assert.deepEqual(
-      idsOf(ast(sub([thoughtA], 'in'))),
-      sorted(ids['imgA']!, ids['txtA']!),
+      idsOf(ast(ownerSub([thoughtA], 'in'))),
+      sorted(ids['imgA']!, ids['txtA']!, ids['multi']!),
     );
     // «Не в выборке» — тоже требует хотя бы одного владельца.
     assert.deepEqual(
-      idsOf(ast(sub([thoughtA], 'not_in'))),
+      idsOf(ast(ownerSub([thoughtA], 'not_in'))),
       sorted(ids['imgB']!, ids['pdfC']!),
     );
-    // «Все владельцы ∈ подвыборке»: только у А (её потомок В — уже вне выборки).
+    // «Все владельцы ∈ подвыборке»: вложения, чьи владельцы только А (imgA,
+    // txtA); у multi владелец Б вне, потомок В и документ — не А.
     assert.deepEqual(
-      idsOf(ast(sub([thoughtA], 'all_in'))),
+      idsOf(ast(ownerSub([thoughtA], 'all_in'))),
       sorted(ids['imgA']!, ids['txtA']!),
     );
-    // …и оба владельца А/Б: документ В не входит.
+    // …и оба владельца А/Б: документ В не входит, multi входит (оба владельца внутри).
     assert.deepEqual(
-      idsOf(ast(sub([thoughtA, thoughtB], 'all_in'))),
-      sorted(ids['imgA']!, ids['txtA']!, ids['imgB']!),
+      idsOf(ast(ownerSub([thoughtA, thoughtB], 'all_in'))),
+      sorted(ids['imgA']!, ids['txtA']!, ids['imgB']!, ids['multi']!),
     );
     // Пустая подвыборка — «нет совпадений».
     assert.deepEqual(
-      idsOf(ast(sub(['00000000-0000-4000-8000-000000000000'], 'all_in'))),
+      idsOf(ast(ownerSub(['00000000-0000-4000-8000-000000000000'], 'all_in'))),
       [],
     );
-    // Количество владельцев.
+    // Количество владельцев: у multi их два.
     assert.equal(idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'eq', 1))).length, 4);
-    assert.deepEqual(idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'gt', 1))), []);
+    assert.deepEqual(idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'gt', 1))), [ids['multi']!]);
     // «В иерархии» от мысли-корня: поддерево А включает её потомка В.
     assert.deepEqual(
       idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'in_hierarchy', [thoughtA]))),
-      sorted(ids['imgA']!, ids['txtA']!, ids['pdfC']!),
+      sorted(ids['imgA']!, ids['txtA']!, ids['pdfC']!, ids['multi']!),
     );
     assert.deepEqual(
       idsOf(ast(leaf({ entity: { kind: 'owner' } }, 'not_in_hierarchy', [thoughtA]))),
       [ids['imgB']!],
+    );
+  });
+
+  it('мульти-владение: all_of отличается от in (мутация all_of→in краснеет)', () => {
+    // multi: владелец А ∈ подвыборке, Б — вне. `in([А])` берёт его по одному
+    // владельцу, `all_of([А])` — НЕ берёт (Б вне). Мутация `all_of → in` рушит
+    // это различие.
+    const byIn = idsOf(ast(ownerSub([thoughtA], 'in')));
+    const byAll = idsOf(ast(ownerSub([thoughtA], 'all_in')));
+    assert.ok(byIn.includes(ids['multi']!), 'in: достаточно владельца А');
+    assert.ok(!byAll.includes(ids['multi']!), 'all_of: владелец Б вне подвыборки');
+    assert.notDeepEqual(byAll, byIn, 'all_of и in обязаны различаться');
+    // Оба владельца внутри — multi проходит all_of.
+    assert.ok(
+      idsOf(ast(ownerSub([thoughtA, thoughtB], 'all_in'))).includes(ids['multi']!),
+      'all_of([А,Б]): оба владельца внутри',
     );
   });
 
