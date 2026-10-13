@@ -59,10 +59,14 @@ import {
   type FilterTreeValue,
 } from './filter-builder.js';
 import type { FilterTreeData, FilterTreeValueSlotApi } from './filter-tree.js';
+import {
+  FILTER_PHRASE_KEYWORD_SCOPES,
+  filterPhraseToken,
+} from './filter-phrase.js';
 import { dateField } from './date-field.js';
 import {
+  canonicalGlobalToken,
   isGlobalDateToken,
-  panelAnchorLabel,
   PERIOD_TOKEN_PRESETS,
   parseBound,
 } from './period-editor.js';
@@ -314,11 +318,12 @@ export function filterValueIsOff(leaf: FilterTreeLeaf): boolean {
 }
 
 /** Области поиска «Есть слова» — словарь спецификации (§6.10 keywords). */
-export const FILTER_VALUE_KEYWORD_SCOPES: readonly { value: 'title' | 'synonyms' | 'comment'; label: string }[] = [
-  { value: 'title', label: 'в имени' },
-  { value: 'synonyms', label: 'в синонимах' },
-  { value: 'comment', label: 'в комментарии' },
-];
+/**
+ * Области поиска «Есть слова» (элемент 9ecf405b). Словарь один на клиент — в
+ * композере фразы (`lib/filter-phrase.ts`): он же строит подпись областей во
+ * фразе-превью, поэтому ячейка и фраза не расходятся.
+ */
+export const FILTER_VALUE_KEYWORD_SCOPES = FILTER_PHRASE_KEYWORD_SCOPES;
 
 /**
  * Подпись единицы «количества» — что именно считается (элемент af7bdee2).
@@ -368,9 +373,9 @@ export function filterValueTokenSource(ctx: FilterValueContext): SuggestSource {
 
 /** Человекочитаемая подпись значения (композиция опоры и сдвига, элемент 27b2a011). */
 export function filterValueHumanLabel(value: FilterTreeValue): string {
-  if (value.kind === 'token') return humanBoundLabel(value.token);
+  if (value.kind === 'token') return filterPhraseToken(value.token);
   if (value.kind === 'scalar') {
-    return typeof value.value === 'string' ? humanBoundLabel(value.value) : String(value.value);
+    return typeof value.value === 'string' ? filterPhraseToken(value.value) : String(value.value);
   }
   if (value.kind === 'list') return value.items.map((item) => humanListItem(item)).join(' — ');
   if (value.kind === 'subquery') return `под-выборка (${value.operator})`;
@@ -379,53 +384,7 @@ export function filterValueHumanLabel(value: FilterTreeValue): string {
 
 /** Подпись элемента списка (границы «между», списки значений). */
 function humanListItem(item: FilterTreeListItem): string {
-  return typeof item === 'object' ? humanBoundLabel(item.token) : String(item);
-}
-
-/**
- * Человекочитаемая композиция границы: опора словарём (`panelAnchorLabel`) плюс
- * сдвиг («начало недели − 1 нед»). Точная дата — как есть.
- */
-function humanBoundLabel(text: string): string {
-  const bound = parseBound(text);
-  if (bound.kind === 'token') {
-    const preset = PERIOD_TOKEN_PRESETS.find((p) => p.text === bound.value);
-    if (preset !== undefined) {
-      const parts = preset.label.split('—');
-      return (parts[1] ?? preset.label).trim();
-    }
-    const m = /^(\$[^(+-]+)([+-]\d+)(d|w|mo|y|h|mi)$/.exec(bound.value.trim());
-    if (m !== null) return `${panelAnchorLabel(m[1]!)} ${shiftLabel(m[2]!, m[3]!)}`;
-    return panelAnchorLabel(bound.value);
-  }
-  return text;
-}
-
-/** Подпись сдвига «+30» единица → «+ 30 дн.» (− — минус). */
-function shiftLabel(signed: string, unit: string): string {
-  const sign = signed.startsWith('-') ? '−' : '+';
-  const amount = Number(signed.replace(/^[+-]/, ''));
-  return `${sign} ${amount} ${unitLabelLong(unit)}`;
-}
-
-/** Длинное имя единицы сдвига. */
-function unitLabelLong(unit: string): string {
-  switch (unit) {
-    case 'd':
-      return 'дн.';
-    case 'w':
-      return 'нед.';
-    case 'mo':
-      return 'мес.';
-    case 'y':
-      return 'г.';
-    case 'h':
-      return 'ч.';
-    case 'mi':
-      return 'мин.';
-    default:
-      return unit;
-  }
+  return typeof item === 'object' ? filterPhraseToken(item.token) : String(item);
 }
 
 /** Текущее скалярное значение листа строкой ('' — пусто). */
@@ -729,7 +688,9 @@ function dateBoundControl(
   const wrap = div(FILTER_VALUE_DATE_CLASS);
   const exact = current !== '' && !isGlobalDateToken(current) && parseBound(current).kind === 'date';
   const parts = filterValueShiftParts(current);
-  let anchor = parts?.anchor ?? '$today';
+  // Опора приводится к КАНОНУ: список опор канонический, поэтому легаси-ввод
+  // (`$week.start`) не должен оставлять селект без выбранного варианта.
+  let anchor = canonicalGlobalToken(parts?.anchor ?? '$today');
   let amount = parts?.amount ?? 0;
   let unit = parts?.unit ?? 'd';
   const anchors = filterValueDateAnchors(ctx);

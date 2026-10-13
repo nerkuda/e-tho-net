@@ -173,7 +173,7 @@ describe('приёмка №3, п.3: период «список + сдвиг ±
     weekRow!.click();
     await settle();
 
-    assert.equal(editor.getValue().from, '$week.start', 'наружу уходит канонический токен');
+    assert.equal(editor.getValue().from, '$weekStart', 'наружу уходит канонический токен (camelCase, ревизия 91f8d8dd)');
     assert.equal(input.value, 'начало недели', 'поле показывает человекочитаемую подпись');
   });
 
@@ -190,11 +190,11 @@ describe('приёмка №3, п.3: период «список + сдвиг ±
 
     num.value = '-1';
     num.emit('change');
-    assert.equal(editor.getValue().from, '$week.start-1d', 'сдвиг в днях');
+    assert.equal(editor.getValue().from, '$weekStart-1d', 'сдвиг в днях (вход — легаси-написание, выход — канон)');
 
     unit.value = 'w';
     unit.emit('change');
-    assert.equal(editor.getValue().from, '$week.start-1w', 'сдвиг в неделях');
+    assert.equal(editor.getValue().from, '$weekStart-1w', 'сдвиг в неделях');
     assert.equal(input.value, 'начало недели − 1 нед', 'композиция опоры и сдвига');
     assert.ok(!input.value.includes('$'), 'токен-строки в поле нет');
   });

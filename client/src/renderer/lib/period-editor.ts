@@ -178,15 +178,18 @@ export interface PeriodEditorHandle {
 // ---------------------------------------------------------------------------
 
 /**
- * Глобальный токен даты периода: `$today`/`$now`, границы недели/месяца/года
- * (`$week.start`/`$week.end`/`$month.start`/`$month.end`/`$year.start`/`$year.end`),
- * необязательная арифметика `±N<unit>` — `d` (дни), `w` (недели), `mo`
- * (календарные месяцы), `y` (календарные годы).
+ * Глобальный токен даты периода. КАНОН имени границ — camelCase
+ * (`$weekStart`/`$weekEnd`/`$monthStart`/`$monthEnd`/`$yearStart`/`$yearEnd`,
+ * ревизия 0.13.1 требования 91f8d8dd); точечные формы (`$week.start` и др.) —
+ * ЛЕГАСИ-СИНОНИМЫ выпущенного клиента и сохранённых отборов, они продолжают
+ * ЧИТАТЬСЯ. Генерируем канон ({@link PERIOD_TOKEN_PRESETS},
+ * {@link canonicalGlobalToken}). Необязательная арифметика `±N<unit>` — `d`
+ * (дни), `w` (недели), `mo` (календарные месяцы), `y` (календарные годы).
  * Только эта форма допустима в периоде: контекстных токенов `$thought.*` у
  * периода нет (требование 91f8d8dd).
  */
 export const GLOBAL_DATE_TOKEN_RE =
-  /^\$(?:today|now|week\.(?:start|end)|month\.(?:start|end)|year\.(?:start|end))(?:(?:[+-])\d+(?:d|w|mo|y))?$/;
+  /^\$(?:today|now|week(?:Start|End)|month(?:Start|End)|year(?:Start|End)|week\.(?:start|end)|month\.(?:start|end)|year\.(?:start|end))(?:(?:[+-])\d+(?:d|w|mo|y))?$/;
 
 /** Является ли строка допустимым глобальным токеном даты периода. */
 export function isGlobalDateToken(text: string): boolean {
@@ -194,26 +197,56 @@ export function isGlobalDateToken(text: string): boolean {
 }
 
 /**
+ * Легаси-синонимы ГРАНИЦ (точка) → канон camelCase. Паритет со словарём
+ * сервера (`GLOBAL_HEAD_ALIASES`, `server/src/domain/thought-type-view-tokens.ts`):
+ * одна таблица синонимов на обе стороны — клиент генерирует канон, но читает
+ * и прежние сохранённые значения.
+ */
+const GLOBAL_HEAD_SYNONYMS: Readonly<Record<string, string>> = {
+  'week.start': 'weekStart',
+  'week.end': 'weekEnd',
+  'month.start': 'monthStart',
+  'month.end': 'monthEnd',
+  'year.start': 'yearStart',
+  'year.end': 'yearEnd',
+};
+
+/**
+ * Каноническое написание токена: голова-синоним с точкой заменяется на
+ * camelCase, арифметика сохраняется (`$month.start-1mo` → `$monthStart-1mo`).
+ * Строки, не начинающиеся с `$`, и неизвестные головы возвращаются как есть.
+ */
+export function canonicalGlobalToken(text: string): string {
+  const value = text.trim();
+  const m = /^\$(.+?)((?:[+-]\d+(?:d|w|mo|y|h|mi))?)$/.exec(value);
+  if (m === null) return value;
+  const head = m[1]!;
+  return `$${GLOBAL_HEAD_SYNONYMS[head] ?? head}${m[2] ?? ''}`;
+}
+
+/**
  * Токены-кандидаты для подсказок контрола: глобальные токены и типовые
- * смещения. Значения — ровно то, что уйдёт строкой на сервер.
+ * смещения. Значения — ровно то, что уйдёт строкой на сервер: КАНОН camelCase
+ * (ревизия 0.13.1 требования 91f8d8dd). Легаси-написания с точкой контрол
+ * по-прежнему принимает вводом, но не предлагает.
  */
 export const PERIOD_TOKEN_PRESETS: readonly { text: string; label: string }[] = [
   { text: '$today', label: '$today — сегодня' },
   { text: '$now', label: '$now — текущий момент' },
   { text: '$today+1d', label: '$today+1d — завтра' },
   { text: '$today-1d', label: '$today-1d — вчера' },
-  { text: '$week.start', label: '$week.start — начало недели (пн)' },
-  { text: '$week.end', label: '$week.end — конец недели (вс)' },
-  { text: '$week.start-1w', label: '$week.start-1w — начало прошлой недели' },
-  { text: '$week.start+1w', label: '$week.start+1w — начало будущей недели' },
-  { text: '$month.start', label: '$month.start — начало месяца' },
-  { text: '$month.end', label: '$month.end — конец месяца' },
-  { text: '$month.start-1mo', label: '$month.start-1mo — начало прошлого месяца' },
-  { text: '$month.end+1mo', label: '$month.end+1mo — конец будущего месяца' },
-  { text: '$year.start', label: '$year.start — начало года' },
-  { text: '$year.end', label: '$year.end — конец года' },
-  { text: '$year.start-1y', label: '$year.start-1y — начало прошлого года' },
-  { text: '$year.end+1y', label: '$year.end+1y — конец будущего года' },
+  { text: '$weekStart', label: '$weekStart — начало недели (пн)' },
+  { text: '$weekEnd', label: '$weekEnd — конец недели (вс)' },
+  { text: '$weekStart-1w', label: '$weekStart-1w — начало прошлой недели' },
+  { text: '$weekStart+1w', label: '$weekStart+1w — начало будущей недели' },
+  { text: '$monthStart', label: '$monthStart — начало месяца' },
+  { text: '$monthEnd', label: '$monthEnd — конец месяца' },
+  { text: '$monthStart-1mo', label: '$monthStart-1mo — начало прошлого месяца' },
+  { text: '$monthEnd+1mo', label: '$monthEnd+1mo — конец будущего месяца' },
+  { text: '$yearStart', label: '$yearStart — начало года' },
+  { text: '$yearEnd', label: '$yearEnd — конец года' },
+  { text: '$yearStart-1y', label: '$yearStart-1y — начало прошлого года' },
+  { text: '$yearEnd+1y', label: '$yearEnd+1y — конец будущего года' },
   { text: '$today+7d', label: '$today+7d — через неделю' },
   { text: '$today-7d', label: '$today-7d — неделю назад' },
   { text: '$today+30d', label: '$today+30d — через месяц' },
@@ -280,9 +313,9 @@ export function validatePeriodToken(text: string): string | null {
   if (!value.includes('$')) return null;
   if (isGlobalDateToken(value)) return null;
   return (
-    `«${value}» — не токен периода: доступны $today/$now, $week.start/$week.end, ` +
-    '$month.start/$month.end, $year.start/$year.end и арифметика ±Nd/±Nw/±Nmo/±Ny ' +
-    '(токены $thought.* требуют контекста мысли).'
+    `«${value}» — не токен периода: доступны $today/$now, $weekStart/$weekEnd, ` +
+    '$monthStart/$monthEnd, $yearStart/$yearEnd и арифметика ±Nd/±Nw/±Nmo/±Ny ' +
+    '(легаси-написания с точкой принимаются; токены $thought.* требуют контекста мысли).'
   );
 }
 
@@ -589,12 +622,12 @@ const PANEL_MODE_ITEMS = [
 const PANEL_ANCHORS: readonly { id: string; label: string }[] = [
   { id: '$today', label: 'сегодня' },
   { id: '$now', label: 'сейчас' },
-  { id: '$week.start', label: 'начало недели' },
-  { id: '$week.end', label: 'конец недели' },
-  { id: '$month.start', label: 'начало месяца' },
-  { id: '$month.end', label: 'конец месяца' },
-  { id: '$year.start', label: 'начало года' },
-  { id: '$year.end', label: 'конец года' },
+  { id: '$weekStart', label: 'начало недели' },
+  { id: '$weekEnd', label: 'конец недели' },
+  { id: '$monthStart', label: 'начало месяца' },
+  { id: '$monthEnd', label: 'конец месяца' },
+  { id: '$yearStart', label: 'начало года' },
+  { id: '$yearEnd', label: 'конец года' },
 ];
 
 /** Единицы арифметики пресет-границы (код тока → краткая подпись). */
@@ -614,10 +647,10 @@ interface PanelTokenParts {
 
 /** Разобрать панельный токен; `null` — строка не токен (дата/мусор). */
 function parsePanelToken(text: string): PanelTokenParts | null {
-  const value = text.trim();
-  const head = /^\$(today|now|week\.start|week\.end|month\.start|month\.end|year\.start|year\.end)/.exec(
-    value,
-  );
+  // Голова токена приводится к канону: точечные легаси-написания читаются, но
+  // наружу из контрола уходит канон (пересборка идёт через composePanelToken).
+  const value = canonicalGlobalToken(text);
+  const head = /^\$(today|now|weekStart|weekEnd|monthStart|monthEnd|yearStart|yearEnd)/.exec(value);
   if (head === null) return null;
   const rest = value.slice(head[0].length);
   if (rest === '') return { anchor: head[0], n: 0, unit: 'd' };
@@ -636,7 +669,8 @@ function composePanelToken(parts: PanelTokenParts): string {
 
 /** Человекочитаемая подпись базового пресета-опоры (неизвестная — как есть). */
 export function panelAnchorLabel(anchor: string): string {
-  return PANEL_ANCHORS.find((a) => a.id === anchor)?.label ?? anchor;
+  const canon = canonicalGlobalToken(anchor);
+  return PANEL_ANCHORS.find((a) => a.id === canon)?.label ?? anchor;
 }
 
 /**

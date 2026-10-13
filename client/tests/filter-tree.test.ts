@@ -796,11 +796,11 @@ describe('дерево условий: подменю «между» — мат�
 
     const month = dateLeaf();
     const applied = mod.filterTreeApplyPeriod(month, 'period:previous:month');
-    assert.equal(applied?.from, '$month.start-1mo');
+    assert.equal(applied?.from, '$monthStart-1mo', 'границы — КАНОН camelCase (ревизия 91f8d8dd)');
     assert.equal(month.operator, 'between', 'выбор периода — обычное условие «между»');
     assert.deepEqual(
       month.value,
-      { kind: 'list', items: [{ token: '$month.start-1mo' }, { token: '$month.end-1mo' }] },
+      { kind: 'list', items: [{ token: '$monthStart-1mo' }, { token: '$monthEnd-1mo' }] },
       'границы периода — реальные токены модели',
     );
     assert.equal(
@@ -811,11 +811,11 @@ describe('дерево условий: подменю «между» — мат�
 
     const week = dateLeaf();
     mod.filterTreeApplyPeriod(week, 'period:current:week');
-    assert.deepEqual(week.value, { kind: 'list', items: [{ token: '$week.start' }, { token: '$week.end' }] });
+    assert.deepEqual(week.value, { kind: 'list', items: [{ token: '$weekStart' }, { token: '$weekEnd' }] });
 
     const year = dateLeaf();
     mod.filterTreeApplyPeriod(year, 'period:next:year');
-    assert.deepEqual(year.value, { kind: 'list', items: [{ token: '$year.start+1y' }, { token: '$year.end+1y' }] });
+    assert.deepEqual(year.value, { kind: 'list', items: [{ token: '$yearStart+1y' }, { token: '$yearEnd+1y' }] });
 
     // «Задать вручную…» — оператор «между» без подстановки границ.
     const manual = dateLeaf();

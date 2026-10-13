@@ -418,12 +418,15 @@ describe('period-editor: панельный вариант «Пресеты»/«
     const unit = allFields(editor.root, 'pe-preset-unit')[0]!;
     assert.equal(num.value, '-1');
     assert.equal(unit.value, 'mo');
+    // Вход — легаси-написание с точкой: показывается человекочитаемо и остаётся
+    // как есть (сохранённое значение молча не переписывается); наружу КАНОН
+    // camelCase уходит при правке (ревизия 0.13.1 требования 91f8d8dd).
     assert.equal(editor.getValue().from, '$month.end-1mo');
     // Смена единицы сдвига пересобирает токен и обновляет композицию поля.
     type(unit, 'w');
-    assert.equal(editor.getValue().from, '$month.end-1w');
+    assert.equal(editor.getValue().from, '$monthEnd-1w');
     assert.equal(anchor.value, 'конец месяца − 1 нед');
-    assert.deepEqual(seen, ['$month.end-1w']);
+    assert.deepEqual(seen, ['$monthEnd-1w']);
   });
 
   it('диапазон «Даты» редактируется датами и отдаёт точные даты', () => {

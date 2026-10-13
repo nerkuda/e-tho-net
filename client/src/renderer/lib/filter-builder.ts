@@ -661,6 +661,71 @@ export function withReverseLinkPropertySides(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Подписи строк: операнд листа (единый словарь для дерева и композера фразы)
+// ---------------------------------------------------------------------------
+
+/** Подписи операндов, у которых имени в реестре нет (служебные виды условий). */
+export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
+  id: 'Ссылка на мысль по id',
+  type: 'Тип',
+  link_type: 'Тип связи',
+  parents: 'Родители',
+  children: 'Потомки',
+  attachments: 'Есть вложения',
+  chronology: 'Есть дневниковые записи',
+  comment: 'Есть комментарий',
+  active: 'Актуальность',
+  trashed: 'Помечено на удаление',
+  keywords: 'Есть слова',
+  author: 'Автор',
+  editor: 'Редактор',
+  created_at: 'Дата создания',
+  updated_at: 'Дата изменения',
+  properties: 'Есть любое свойство',
+  targets: 'Цели записи',
+  record_time: 'Время записи',
+  record_title: 'Заголовок записи',
+  record_body: 'Тело записи',
+  record_author: 'Автор записи',
+  record_editor: 'Редактор записи',
+  occurred_at: 'Время события',
+  action: 'Тип действия',
+  entity_type: 'Вид сущности',
+  entity_id: 'Сущность',
+  user: 'Автор события',
+  name: 'Имя вложения',
+  kind: 'Вид вложения',
+  mime_type: 'MIME-подтип',
+  owner: 'Владельцы',
+  size: 'Размер',
+};
+
+/** Данные сети, нужные для подписей строк (дерево отдаёт ту же структуру). */
+export interface FilterLabelData {
+  /** Реестр свойств сети: id или имя обратной стороны → строка реестра. */
+  registry: ReadonlyMap<string, NetworkProperty>;
+  /** Типы связей сети — для обратных сторон свойств-связей. */
+  linkTypes?: readonly LinkType[];
+}
+
+/**
+ * Подпись операнда листа: свойство — имя из реестра (или снапшот `labels.entity`),
+ * служебный вид условия — словарь {@link OPERAND_KIND_LABELS}. Единый источник
+ * подписей для строки дерева (`lib/filter-tree.ts`) и фразы-превью
+ * (`lib/filter-phrase.ts`) — словарь не дублируется.
+ */
+export function filterOperandLabel(leaf: FilterTreeLeaf, data: FilterLabelData): string {
+  const entity = leaf.entity;
+  if (entity.kind === 'property') {
+    const ref = entity.property_id ?? entity.property ?? '';
+    const entry = data.registry.get(ref);
+    if (entry !== undefined) return entry.name;
+    return leaf.labels?.entity ?? ref;
+  }
+  return OPERAND_KIND_LABELS[entity.kind] ?? leaf.labels?.entity ?? entity.kind;
+}
+
 /**
  * Builds the wire value+op for one author filter (задача 59119797).
  * `empty`/`not_empty` carry no value; `in`/`not_in` use the list; the

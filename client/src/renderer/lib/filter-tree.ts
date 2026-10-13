@@ -61,8 +61,10 @@ import {
   astOperatorLabel,
   defaultFilterTreeGroup,
   defaultFilterTreeLeaf,
+  filterOperandLabel,
   filterProfileOperands,
   filterProfileOperators,
+  OPERAND_KIND_LABELS,
   withReverseLinkPropertySides,
   type FilterCriteriaState,
   type FilterTreeGroup,
@@ -418,22 +420,22 @@ const QUICK_PERIOD_UNITS: readonly QuickPeriodUnit[] = [
   {
     key: 'week',
     forms: ['текущая неделя', 'прошлая неделя', 'следующая неделя'],
-    from: '$week.start',
-    to: '$week.end',
+    from: '$weekStart',
+    to: '$weekEnd',
     shiftUnit: 'w',
   },
   {
     key: 'month',
     forms: ['текущий месяц', 'прошлый месяц', 'следующий месяц'],
-    from: '$month.start',
-    to: '$month.end',
+    from: '$monthStart',
+    to: '$monthEnd',
     shiftUnit: 'mo',
   },
   {
     key: 'year',
     forms: ['текущий год', 'прошлый год', 'следующий год'],
-    from: '$year.start',
-    to: '$year.end',
+    from: '$yearStart',
+    to: '$yearEnd',
     shiftUnit: 'y',
   },
 ];
@@ -628,42 +630,6 @@ export const FILTER_TREE_OPERAND_GROUPS: Readonly<Record<FilterTreeOperandEntry[
   properties: 'Свойства',
 };
 
-/** Человекочитаемые имена видов операндов (требование fc65b647). */
-const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
-  id: 'Ссылка на мысль по id',
-  type: 'Тип',
-  link_type: 'Тип связи',
-  parents: 'Родители',
-  children: 'Потомки',
-  attachments: 'Есть вложения',
-  chronology: 'Есть дневниковые записи',
-  comment: 'Есть комментарий',
-  active: 'Актуальность',
-  trashed: 'Помечено на удаление',
-  keywords: 'Есть слова',
-  author: 'Автор',
-  editor: 'Редактор',
-  created_at: 'Дата создания',
-  updated_at: 'Дата изменения',
-  properties: 'Есть любое свойство',
-  targets: 'Цели записи',
-  record_time: 'Время записи',
-  record_title: 'Заголовок записи',
-  record_body: 'Тело записи',
-  record_author: 'Автор записи',
-  record_editor: 'Редактор записи',
-  occurred_at: 'Время события',
-  action: 'Тип действия',
-  entity_type: 'Вид сущности',
-  entity_id: 'Сущность',
-  user: 'Автор события',
-  name: 'Имя вложения',
-  kind: 'Вид вложения',
-  mime_type: 'MIME-подтип',
-  owner: 'Владельцы',
-  size: 'Размер',
-};
-
 /** Данные сети для списка «Что» и подписей строк. */
 export interface FilterTreeData {
   /** Реестр свойств сети: id → строка реестра (как у каркаса формы отбора). */
@@ -759,14 +725,9 @@ export function filterTreeFilterOperands(
 
 /** Подпись операнда листа (что показывать в ячейке «Что»). */
 export function filterTreeOperandLabel(leaf: FilterTreeLeaf, data: FilterTreeData): string {
-  const entity = leaf.entity;
-  if (entity.kind === 'property') {
-    const ref = entity.property_id ?? entity.property ?? '';
-    const entry = data.registry.get(ref);
-    if (entry !== undefined) return entry.name;
-    return leaf.labels?.entity ?? ref;
-  }
-  return OPERAND_KIND_LABELS[entity.kind] ?? leaf.labels?.entity ?? entity.kind;
+  // Словарь подписей — в едином конструкторе (`filter-builder.filterOperandLabel`):
+  // его же использует композер фразы-превью (`lib/filter-phrase.ts`).
+  return filterOperandLabel(leaf, data);
 }
 
 /** Природа свойства листа (для списка операторов строки). */

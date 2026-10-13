@@ -33,6 +33,11 @@ import {
   worstFilterIssueSeverity,
   type FilterIssue,
 } from './filter-diagnostics.js';
+import {
+  composeFilterPhrase,
+  type FilterPhraseContext,
+  type FilterPhraseState,
+} from './filter-phrase.js';
 import { fieldInput, wrapClearable } from './ui/field.js';
 import { uiButton, type ButtonRole } from './ui/button.js';
 import { deepEqual } from './ui/state.js';
@@ -75,6 +80,18 @@ export interface FilterFooterButtonSpec {
   onClick: () => void;
 }
 
+/**
+ * Источник фразы-превью по умолчанию: состояние отбора из единой модели и
+ * контекст композера (`lib/filter-phrase.ts`, задача 3cb50258). Задан — футер
+ * строит фразу сам; явный `preview` хоста сильнее (хосту виднее диагностика).
+ */
+export interface FilterFooterPhraseSource {
+  /** Текущее состояние отбора (дерево + ключи сортировки). */
+  state: () => FilterPhraseState;
+  /** Данные подписей и предел длины фразы. */
+  phrase: FilterPhraseContext;
+}
+
 /** Параметры футера редактора отбора. */
 export interface FilterFooterOptions {
   /** Текущее имя отбора (поле ввода). */
@@ -89,6 +106,11 @@ export interface FilterFooterOptions {
   current: () => unknown;
   /** Фраза-превью и диагностика; отсутствует — превью не рисуется. */
   preview?: () => FilterFooterPreview | undefined;
+  /**
+   * Источник фразы-превью из композера: используется, когда `preview` не задан
+   * (элемент ca905fbc; пустая фраза — превью не рисуется).
+   */
+  phrase?: FilterFooterPhraseSource;
   /** Записать отбор: `asCopy` — имя изменено, сохраняем копией. */
   onSave: (request: { name: string; asCopy: boolean }) => void | Promise<void>;
   /** Применить отбор (запуск запроса). */
@@ -152,6 +174,16 @@ export function filterFooterTooltip(preview: FilterFooterPreview): string {
   return lines.join('\n');
 }
 
+/**
+ * Стандартный источник превью из композера: фраза дерева с хвостом сортировки
+ * (задача 3cb50258, элемент ca905fbc). Пустая фраза — «превью нет»: отбор без
+ * условий и сортировки футер не подписывает.
+ */
+export function filterFooterPhrasePreview(source: FilterFooterPhraseSource): FilterFooterPreview | undefined {
+  const text = composeFilterPhrase(source.state(), source.phrase);
+  return text === '' ? undefined : { text };
+}
+
 // ---------------------------------------------------------------------------
 // Сборка
 // ---------------------------------------------------------------------------
@@ -188,10 +220,16 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   root.append(nameRow);
 
   // --- Фраза-превью: ≤3 строк, полный текст и ошибки — в тултипе ----------
+  // Фраза — из композера, если хост не дал свою (`preview` сильнее: хосту виднее
+  // диагностика). Ни того, ни другого — превью не рисуется.
+  const phraseSource = opts.phrase;
+  const previewFn =
+    opts.preview ??
+    (phraseSource === undefined ? undefined : () => filterFooterPhrasePreview(phraseSource));
   const previewBox = div(FILTER_FOOTER_PREVIEW_CLASS);
   const previewText = span('', 'ff-preview__text');
   previewBox.append(previewText);
-  if (opts.preview !== undefined) root.append(previewBox);
+  if (previewFn !== undefined) root.append(previewBox);
 
   // --- Кнопки: стандартный набор + кнопки профиля места применения --------
   const save = (): void => {
@@ -244,9 +282,14 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     if (nameInput.value !== name) nameInput.value = name;
     changed.hidden = !filterChangedAgainst(opts.baseline(), opts.current());
 
-    if (opts.preview !== undefined) {
-      const preview = opts.preview();
-      if (preview !== undefined) {
+    if (previewFn !== undefined) {
+      const preview = previewFn();
+      if (preview === undefined) {
+        // Фразы нет (пустой отбор) — подпись снимается, запрет применения тоже.
+        previewText.textContent = '';
+        delete previewBox.dataset['severity'];
+        if (applyButton !== null) applyButton.disabled = false;
+      } else {
         const issues = preview.issues ?? [];
         previewText.textContent = preview.text;
         setTooltip(previewBox, filterFooterTooltip(preview));

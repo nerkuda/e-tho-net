@@ -350,16 +350,20 @@ describe('ячейка значения: сборка виджета и прав
   });
 
   it('датовый операнд: ячейка из опоры, сдвига и единицы с человекочитаемой подписью', () => {
-    const box = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$week.start' }), slot().api);
+    const box = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$weekStart' }), slot().api);
     assert.equal(box.dataset['editor'], 'date');
     const anchor = box.findAll((n) => n.dataset['part'] === 'anchor')[0];
-    assert.equal(anchor?.value, '$week.start', 'опора — канонический токен (элемент 27b2a011)');
+    assert.equal(anchor?.value, '$weekStart', 'опора — канонический токен (элемент 27b2a011)');
     assert.equal(box.findAll((n) => n.dataset['part'] === 'shift')[0]?.value, '', 'нулевой сдвиг — пустое поле');
     assert.equal(box.findAll((n) => n.dataset['part'] === 'unit')[0]?.value, 'd');
     assert.equal(one(box, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent, 'начало недели (пн)', 'показ — человекочитаемый');
     const options = all(box, mod.FILTER_VALUE_ANCHOR_CLASS)[0]?.findAll((n) => n.tagName.toUpperCase() === 'OPTION') ?? [];
     assert.ok(options.length > 0, 'список опор заполнен');
     assert.ok(one(box, 'date-field') !== null, 'точная дата — общее поле даты');
+    // Легаси-ввод остаётся читаемым и приводится к канону (селект находит опору).
+    const legacy = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$week.start' }), slot().api);
+    assert.equal(legacy.findAll((n) => n.dataset['part'] === 'anchor')[0]?.value, '$weekStart');
+    assert.equal(one(legacy, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent, 'начало недели (пн)');
   });
 
   it('сдвиг: одно поле со знаком и единица собирают канонический токен опоры', () => {
@@ -377,18 +381,18 @@ describe('ячейка значения: сборка виджета и прав
     assert.deepEqual(writes[1], { kind: 'token', token: '$today-30mo' });
     // Смена опоры сохраняет сдвиг.
     const anchor = box.findAll((n) => n.dataset['part'] === 'anchor')[0]!;
-    anchor.value = '$month.start';
+    anchor.value = '$monthStart';
     anchor.fire('change');
-    assert.deepEqual(writes[2], { kind: 'token', token: '$month.start-30mo' });
+    assert.deepEqual(writes[2], { kind: 'token', token: '$monthStart-30mo' });
     // Ноль/пусто возвращают голую опору.
     shift.value = '0';
     shift.fire('change');
-    assert.deepEqual(writes[3], { kind: 'token', token: '$month.start' });
+    assert.deepEqual(writes[3], { kind: 'token', token: '$monthStart' });
   });
 
   it('сдвиг: разбор и сборка канонических токенов (чистые функции)', () => {
     assert.deepEqual(mod.filterValueShiftParts('$today+3d'), { anchor: '$today', amount: 3, unit: 'd' });
-    assert.deepEqual(mod.filterValueShiftParts('$month.start-1mo'), { anchor: '$month.start', amount: -1, unit: 'mo' });
+    assert.deepEqual(mod.filterValueShiftParts('$monthStart-1mo'), { anchor: '$monthStart', amount: -1, unit: 'mo' });
     assert.deepEqual(mod.filterValueShiftParts('$today'), { anchor: '$today', amount: 0, unit: 'd' });
     assert.equal(mod.filterValueShiftParts('2026-01-31'), null, 'точная дата — не опора со сдвигом');
     assert.equal(mod.filterValueComposeShift('$today', 3, 'd'), '$today+3d');
@@ -398,8 +402,9 @@ describe('ячейка значения: сборка виджета и прав
 
   it('опоры и единицы: время доступно только профилю со временем', () => {
     const anchors = mod.filterValueDateAnchors({ profile: 'thoughts' }).map((a: any) => a.text);
-    assert.ok(anchors.includes('$today') && anchors.includes('$month.start'));
+    assert.ok(anchors.includes('$today') && anchors.includes('$monthStart'));
     assert.ok(!anchors.includes('$now'), 'календарный профиль без $now');
+    assert.ok(!anchors.includes('$month.start'), 'легаси-точка не предлагается к генерации');
     assert.deepEqual(
       mod.filterValueShiftUnits({ profile: 'thoughts' }).map((u: any) => u.key),
       ['d', 'w', 'mo', 'y'],
@@ -409,6 +414,29 @@ describe('ячейка значения: сборка виджета и прав
       ['d', 'w', 'mo', 'y', 'h', 'mi'],
       'хроника несёт часы и минуты',
     );
+  });
+
+  it('канон и легаси: генерация camelCase, точечные написания читаются', () => {
+    // Генерация — канон (ревизия 0.13.1 требования 91f8d8dd).
+    assert.equal(mod.filterValueComposeShift('$monthStart', -1, 'mo'), '$monthStart-1mo');
+    assert.equal(mod.filterValueShiftParts('$yearStart+1y')?.anchor, '$yearStart');
+    // Легаси-синонимы продолжают читаться: разбор, подпись, поиск пресета.
+    assert.deepEqual(mod.filterValueShiftParts('$month.start-1mo'), {
+      anchor: '$month.start',
+      amount: -1,
+      unit: 'mo',
+    });
+    assert.equal(
+      mod.filterValueHumanLabel({ kind: 'token', token: '$month.start-1mo' }),
+      'начало прошлого месяца',
+      'легаси-токен получает ту же человекочитаемую подпись',
+    );
+    assert.equal(
+      mod.filterValueHumanLabel({ kind: 'token', token: '$weekStart-1w' }),
+      'начало прошлой недели',
+    );
+    assert.equal(mod.filterValueHumanLabel({ kind: 'token', token: '$yearStart+1y' }), 'начало года + 1 г.');
+    assert.equal(mod.filterValueHumanLabel({ kind: 'token', token: '$now+2h' }), 'сейчас + 2 ч.', 'часы в контексте со временем');
   });
 
   it('«✕» сбрасывает границу даты к «сегодня, 0»', () => {
