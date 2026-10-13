@@ -4362,8 +4362,10 @@ export interface WriteTaskContext {
    * Плоские факты кросс-сетевого доступа (`CrossNetworkAccessContext` содержит
    * `Logger` и `Set` — через границу потока не проходят). Пока не используется:
    * кросс-сетевой резолв в воркере — этап переноса соответствующих операций
-   * (ADR ca3a9218, «Кросс-сетевой резолв»); такие задачи остаются в главном
-   * потоке через `poolable: false` (см. `runWriteTask`).
+   * (ADR ca3a9218, «Кросс-сетевой резолв»). Фасад опознаёт такие батчи по форме
+   * адреса в значениях свойств (`thoughtsBatchNeedsMainThread`) и оставляет их в
+   * главном потоке через `poolable: false` (см. `runWriteTask`); воркер такую
+   * задачу отвергает — защита от тихой поломки.
    */
   crossNetworkAccess?: WriteCrossNetworkFacts;
 }
@@ -4398,7 +4400,12 @@ export type WriteTask = { context: WriteTaskContext } & {
   payload: WriteThoughtsPayload;
 };
 
-/** Успешный ответ write-воркера: `result` конкретизируется по `op`. */
+/**
+ * Успешный ответ write-воркера: `result` конкретизируется по `op`. Для
+ * `write.thoughts` это исход задачи (`ThoughtsWriteOutcome` из
+ * `domain/write-ops.ts`): `{ result, events }` — события собраны внутри
+ * транзакции и публикуются главным потоком после коммита (ADR ca3a9218).
+ */
 export interface WriteTaskOk {
   ok: true;
   result: unknown;

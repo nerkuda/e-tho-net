@@ -105,6 +105,35 @@ describe('guard: write-пул — контекст задачи, writer-соед
     ]);
   });
 
+  it('переведённый op идёт в пул: главный поток не исполняет батч сам', () => {
+    /** Строка — комментарий (упоминание вызова в пояснении не является вызовом). */
+    const inComment = (line: string): boolean => /^\s*(?:\/\/|\*|\/\*)/.test(line);
+    assertGuardClean(SERVER_SRC_ROOT, [
+      {
+        name: 'no-direct-write-thoughts-outside-pool',
+        description:
+          'Батч-запись мыслей (`etn.thoughts.write`) идёт через write-пул: доменная ' +
+          'функция вызывается только из композиции op, а её исполняет воркер или ' +
+          'синхронный путь фасада (задача c8920d04, ADR ca3a9218). Прямой вызов из ' +
+          'фасада (MCP/REST) вернул бы запись в главный поток в обход пула.',
+        pattern: /writeThoughts\(/,
+        allow: (rel, line) =>
+          inComment(line) ||
+          rel === 'domain/thought-write-service.ts' ||
+          rel === 'domain/write-ops.ts',
+      },
+      {
+        name: 'no-direct-run-write-task-outside-facade',
+        description:
+          'Выбор «пул или главный поток» — единственная точка фасада ' +
+          '(`domain/heavy-write.ts`): фасады транспортов не диспетчеризуют задачи сами.',
+        pattern: /runWriteTask\(/,
+        allow: (rel, line) =>
+          inComment(line) || rel === 'db/write-pool.ts' || rel === 'domain/heavy-write.ts',
+      },
+    ]);
+  });
+
   it('воркер переиспользует точку соединения: прагмы и SQL-функции на месте', () => {
     const source = readSource(WORKER_FILE);
     for (const needle of [

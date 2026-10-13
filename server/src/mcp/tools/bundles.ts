@@ -6,7 +6,6 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
 import { PropertyValueSchema } from './properties.js';
 import { z } from 'zod';
 import { ATTACHMENT_KINDS, MCP_MAX_THOUGHTS_PER_WRITE, MCP_TOOL_ANNOTATIONS } from '@etn/shared';
@@ -15,12 +14,8 @@ import type {
   McpThoughtWriteParams,
   McpThoughtWriteResult,
 } from '@etn/shared';
-import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { defineContract } from '../../contracts.js';
-import { getLink } from '../../domain/link-service.js';
-import { getComment } from '../../domain/comment-service.js';
-import { getAttachment } from '../../domain/attachment-service.js';
-import { writeThoughts } from '../../domain/thought-write-service.js';
+import { runThoughtsWrite } from '../../domain/heavy-write.js';
 import {
   mcpCrossNetworkAccess,
   mcpWriteFx,
@@ -28,7 +23,6 @@ import {
   requireWritable,
   requireWriteBudget,
   resolveRuntimeLayer,
-  runWrite,
   runWriteTool,
 } from '../context.js';
 import { NetworkId, TYPE_ID_TYPE_CONFLICT, LinkDirection } from './shared.js';
@@ -234,7 +228,7 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -259,144 +253,24 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
             ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
           })),
         };
-        const result = runWrite(ndb, fx, () => {
-          // Кросс-сетевой контекст (задача 7849008a, спека п.6): `properties`
-          // элемента может нести адрес вида `cross_network_ref` — его запись
-          // делает живой резолв цели в чужой сети, как в REST-роуте.
-          const written = writeThoughts(
-            ndb,
-            writeInput,
-            rt.deps.auth.userId,
-            mcpCrossNetworkAccess(rt, args.network_id),
-          );
+        // Батч исполняет write-пул (события — после коммита, журнал — воркером);
+        // батч с кросс-сетевыми адресами значений свойств остаётся в главном
+        // потоке (живой резолв чужой сети — задача 7849008a, спека п.6).
+        const result = await runThoughtsWrite(ndb, fx, writeInput, {
+          crossNetworkAccess: mcpCrossNetworkAccess(rt, args.network_id),
+        });
 
-          // Real-time events — one per actually-affected entity (per task
-          // spec); журнал — из результата записи. Собираем исход здесь,
-          // исполняет обёртка после коммита.
-          const events: AnyWriteEvent[] = [];
-          const activity: WriteActivityEntry[] = [];
-          for (const item of written.items) {
-            if (item.thought_action === 'reused') continue;
-            if (item.thought_action === 'created') {
-              const thought = getThoughtOrThrow(ndb, item.id);
-              events.push({ type: 'thought.created', data: { thought } });
-              activity.push({ kind: 'thought', action: 'created', thought });
-            } else {
-              // 'updated' — also covers the 'set_active' scenario: a batch item
-              // that only sets `active: false` (HOME is rejected, see domain
-              // service) lands here as a normal `thought.updated`. Empty
-              // `changes` is the contract for batched updates: the granular
-              // changes live across `comment`/`chronicle`/`properties`/`links`/
-              // `attachments` blocks of the same item, and the audit_log row
-              // carries the full story.
-              events.push({
-                type: 'thought.updated',
-                data: { id: item.id, version: item.version, changes: {} },
-              });
-              const thought = getThoughtOrThrow(ndb, item.id);
-              activity.push({ kind: 'thought', action: 'updated', thought });
-            }
-            if (item.comment !== undefined) {
-              if (item.comment.action === 'created') {
-                const c = getComment(ndb, item.comment.id);
-                if (c !== null) {
-                  events.push({ type: 'comment.created', data: { comment: c } });
-                  activity.push({ kind: 'comment', action: 'created', comment: c });
-                }
-              } else {
-                // Строка комментария после записи батча существует; событие и
-                // активность эмитим только по ней (иначе `kind`/`owner_id`
-                // неизвестны). `kind` нужен подписчикам документа публикации.
-                const c = getComment(ndb, item.comment.id);
-                if (c !== null) {
-                  events.push({
-                    type: 'comment.updated',
-                    data: {
-                      id: c.id,
-                      owner_id: c.owner_id,
-                      kind: c.kind,
-                      version: item.comment.version,
-                      changes: { body_md: '' },
-                    },
-                  });
-                  activity.push({ kind: 'comment', action: 'updated', comment: c });
-                }
-              }
-            }
-            if (item.chronicle !== undefined) {
-              for (const entry of item.chronicle) {
-                const c = getComment(ndb, entry.id);
-                if (c !== null) {
-                  events.push({ type: 'comment.created', data: { comment: c } });
-                  activity.push({ kind: 'comment', action: 'created', comment: c });
-                }
-              }
-            }
-            if (item.links !== undefined) {
-              for (const link of item.links) {
-                const l = getLink(ndb, link.id);
-                if (l !== null) {
-                  events.push({ type: 'link.created', data: { link: l } });
-                  activity.push({ kind: 'link', action: 'created', link: l });
-                }
-              }
-            }
-            // Рёбра, созданные set-записью свойства-связи в `properties`, —
-            // публикуем `link.created` так же, как для `links[]` и
-            // `etn.properties.add` (ошибка 1b719d76): без этого подписчики и
-            // журнал `changes.list` не видели новых рёбер.
-            if (item.properties !== undefined) {
-              for (const pv of Object.values(item.properties)) {
-                if (pv.link_ids === undefined) continue;
-                for (const linkId of pv.link_ids) {
-                  const l = getLink(ndb, linkId);
-                  if (l !== null) {
-                    events.push({ type: 'link.created', data: { link: l } });
-                    activity.push({ kind: 'link', action: 'created', link: l });
-                  }
-                }
-              }
-            }
-            if (item.attachments !== undefined) {
-              for (const att of item.attachments) {
-                const a = getAttachment(ndb, att.id);
-                if (a !== null) {
-                  events.push({ type: 'attachment.created', data: { attachment: a } });
-                  activity.push({ kind: 'attachment', action: 'created', attachment: a });
-                }
-              }
-            }
-            // Рёбра, материализованные link-дефолтами типа при создании мысли,
-            // — публикуем `link.created` так же, как для `links[]` и set-записи
-            // свойств (ошибка 8655842b): без этого подписчики и журнал
-            // `changes.list` не видели новых рёбер.
-            if (item.default_link_ids !== undefined) {
-              for (const linkId of item.default_link_ids) {
-                const l = getLink(ndb, linkId);
-                if (l !== null) {
-                  events.push({ type: 'link.created', data: { link: l } });
-                  activity.push({ kind: 'link', action: 'created', link: l });
-                }
-              }
-            }
-          }
-
-          return {
-            result: written,
-            events,
-            activity,
-            // ONE audit row for the whole batch (per task spec).
-            audit: {
-              action: 'etn.thoughts.write',
-              targetType: 'network',
-              targetId: args.network_id,
-              details: {
-                thought_count: written.thought_count,
-                link_count: written.link_count,
-                item_count: written.items.length,
-              },
-            },
-          };
+        // ONE audit row for the whole batch (per task spec) — половина WriteFx
+        // главного потока: пишет фасад по факту коммита.
+        fx.audit?.({
+          action: 'etn.thoughts.write',
+          targetType: 'network',
+          targetId: args.network_id,
+          details: {
+            thought_count: result.thought_count,
+            link_count: result.link_count,
+            item_count: result.items.length,
+          },
         });
 
         const layer = resolveRuntimeLayer(rt, args.network_id);

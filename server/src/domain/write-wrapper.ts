@@ -159,6 +159,14 @@ export interface WriteFx {
 }
 
 /**
+ * Контекст записи без транспорта: то, что нужно журналу активности — сеть,
+ * актор и слой. Транспорт (публикация событий, аудит) остаётся фасаду главного
+ * потока (ADR ca3a9218: события уходят строго после коммита и только на главном
+ * потоке), поэтому ядру обёртки {@link runWriteCore} хватает этих трёх полей.
+ */
+export type WriteJournalContext = Pick<WriteFx, 'networkId' | 'userId' | 'layerId'>;
+
+/**
  * Действие журнала для update-события: только пометка на удаление имеет
  * выделенные действия `trashed`/`restored`, прочие правки — `updated`
  * (требование b0c7a57c — так же писали REST-роуты и MCP-диспетчер).
@@ -174,7 +182,7 @@ export function actionOfChanges(
 /** Применить одну запись журнала — диспетчеризация по варианту. */
 function applyActivityEntry(
   ndb: NetworkDb,
-  fx: WriteFx,
+  fx: WriteJournalContext,
   entry: WriteActivityEntry,
   occurredAtMs: number,
 ): void {
@@ -238,30 +246,34 @@ function applyActivityEntry(
 }
 
 /**
- * Единая обёртка записи домена: «транзакция → событие → журнал → аудит».
+ * Ядро обёртки БЕЗ транспорта: «транзакция → журнал», события — наружу.
  *
  * 1. `fn` исполняется внутри `ndb.transaction` — вложенные транзакции
  *    доменных функций складываются в savepoints; исключение откатывает
- *    изменение целиком, и никакое событие/журнал/аудит не исполняется.
- * 2. После коммита публикуются события `outcome.events` (в порядке списка),
- *    затем пишутся строки `outcome.activity` и (при наличии) `outcome.audit`.
- * 3. Возвращается `outcome.result`.
+ *    изменение целиком, и никакое событие/журнал не исполняется.
+ * 2. После коммита пишутся строки `outcome.activity` (журнал `data.db` сети).
+ * 3. Возвращается исход целиком (`result` + `events` + `audit`): вызывающий
+ *    сам решает, куда отправить события и аудит.
  *
- * Сбой записи журнала/аудита не отменяет бизнес-операцию — `recordActivity`
- * и `recordAudit` поглощают ошибки сами (требование b0c7a57c, 05 §6.1).
+ * Зачем выделено (задача c8920d04, ADR ca3a9218). Батч-запись уходит в
+ * write-воркер: там нужна ровно эта половина — транзакция и журнал в СВОЁМ
+ * соединении, а публикация событий и аудит остаются главному потоку (событие
+ * уходит строго после коммита). Воркер возвращает события плоским списком, фасад
+ * публикует их по факту ответа. Событие о невыполненной записи уйти не может и
+ * здесь: список собирается внутри транзакции, а отдаётся только после коммита.
+ *
+ * Сбой записи журнала не отменяет бизнес-операцию — `record*Activity`
+ * поглощают ошибки сами (требование b0c7a57c, 05 §6.1).
  */
-export function runWrite<T>(ndb: NetworkDb, fx: WriteFx, fn: () => WriteOutcome<T>): T {
+export function runWriteCore<T>(
+  ndb: NetworkDb,
+  ctx: WriteJournalContext,
+  fn: () => WriteOutcome<T>,
+): WriteOutcome<T> {
   let outcome!: WriteOutcome<T>;
   ndb.transaction(() => {
     outcome = fn();
   });
-  for (const ev of outcome.events ?? []) {
-    // `ev` — объединение пар (type, data); в цикле корреляция пары
-    // теряется. `RealtimeEventMap[RealtimeEventType]` — объединение всех
-    // payload-типов, поэтому приведение безопасно: фасад получает ровно
-    // ту же пару, которую вернула запись.
-    fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);
-  }
   const activityEntries = outcome.activity ?? [];
   if (activityEntries.length > 0) {
     // Строки журнала получают монотонно возрастающие метки времени от одной
@@ -270,8 +282,33 @@ export function runWrite<T>(ndb: NetworkDb, fx: WriteFx, fn: () => WriteOutcome<
     // id` в listActivity).
     const baseMs = Date.now();
     for (let i = 0; i < activityEntries.length; i += 1) {
-      applyActivityEntry(ndb, fx, activityEntries[i]!, baseMs + i);
+      applyActivityEntry(ndb, ctx, activityEntries[i]!, baseMs + i);
     }
+  }
+  return outcome;
+}
+
+/**
+ * Единая обёртка записи домена: «транзакция → журнал → событие → аудит».
+ *
+ * 1. {@link runWriteCore} исполняет изменение и пишет журнал после коммита.
+ * 2. Публикуются события `outcome.events` (в порядке списка).
+ * 3. Пишется `outcome.audit` (при наличии транспорта).
+ * 4. Возвращается `outcome.result`.
+ *
+ * Журнал пишется ДО публикации событий: подписчик, отреагировавший на событие
+ * и сразу запросивший `changes.list`, обязан увидеть уже записанную строку.
+ * Ранее (до расщепления WriteFx, задача c8920d04) порядок был обратным — это
+ * была не гарантия, а следствие того, что обёртка ходила в БД после фан-аута.
+ */
+export function runWrite<T>(ndb: NetworkDb, fx: WriteFx, fn: () => WriteOutcome<T>): T {
+  const outcome = runWriteCore(ndb, fx, fn);
+  for (const ev of outcome.events ?? []) {
+    // `ev` — объединение пар (type, data); в цикле корреляция пары
+    // теряется. `RealtimeEventMap[RealtimeEventType]` — объединение всех
+    // payload-типов, поэтому приведение безопасно: фасад получает ровно
+    // ту же пару, которую вернула запись.
+    fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);
   }
   if (outcome.audit !== undefined && fx.audit !== undefined) {
     fx.audit(outcome.audit);

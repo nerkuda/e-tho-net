@@ -15,9 +15,11 @@
  *     сторож `guard-write-pool.test.ts`);
  *   * не публикует real-time события и не пишет аудит: событие уходит строго
  *     ПОСЛЕ коммита и только на главном потоке (ADR 162d8e7a, требование
- *     ba987ab2); воркер возвращает плоский результат записи, из которого фасад
- *     соберёт события и журнал — разделение WriteFx (ADR ca3a9218) делается при
- *     переносе путей записи (задача c8920d04), в этой задаче — инфраструктура;
+ *     ba987ab2); воркер собирает события внутри транзакции и отдаёт их плоским
+ *     списком вместе с результатом — фан-аут и `audit_log` делает фасад главного
+ *     потока (ADR ca3a9218, `domain/heavy-write.ts`). Журнал активности
+ *     (`data.db` сети) воркер пишет сам, после коммита: это запись в ту же сеть,
+ *     ради которой он и поднят;
  *   * не читает тяжёлые выборки: пул записи не подменяет reader-пул.
  *
  * **Соединение и контекст.** Соединение кэшируется на воркер и переоткрывается
@@ -26,11 +28,12 @@
  * переустанавливается на каждой задаче (`useLayer`), поэтому запись видит
  * ровно ту видимость слоя, которая пришла с задачей (сценарий 83bf13f1).
  *
- * **Операции (этап 1).** Пока единственная операция — батч-запись мыслей
- * `write.thoughts`: она исполняет доменный {@link writeThoughts} целиком
- * (валидация конверта, три фазы, ОДНА транзакция) и возвращает
- * `ThoughtWriteResult`. Остальные пути `runWrite` переезжают сюда поэтапно
- * (ADR «Этапность»): непереведённые op исполняются синхронно в главном потоке.
+ * **Операции.** Пока единственная операция — батч-запись мыслей
+ * `write.thoughts`: она исполняет доменную композицию
+ * (`composeThoughtsWrite` — валидация конверта, три фазы, ОДНА транзакция) и
+ * возвращает `{ result: ThoughtWriteResult, events }`. Остальные пути `runWrite`
+ * переезжают сюда поэтапно (ADR «Этапность»): непереведённые op исполняются
+ * синхронно в главном потоке.
  */
 
 import { parentPort } from 'node:worker_threads';
@@ -41,7 +44,8 @@ import DatabaseConstructor from 'better-sqlite3';
 import { EtnError, type EtnErrorCode } from '@etn/shared';
 
 import type { WriteTask, WriteTaskContext, WriteTaskResponse } from '../contracts.js';
-import { writeThoughts } from '../domain/thought-write-service.js';
+import { composeThoughtsWrite, type ThoughtsWriteOutcome } from '../domain/write-ops.js';
+import { runWriteCore } from '../domain/write-wrapper.js';
 import { NetworkDb, registerQueryFunctions } from './network-db.js';
 import { applyConnectionPragmas } from './pragmas.js';
 
@@ -119,10 +123,15 @@ function toFailure(err: unknown): WriteTaskResponse {
 /**
  * Исполнить задачу на соединении воркера.
  *
- * Транзакцию открывает сам домен (`writeThoughts` → `ndb.transaction`): на
- * границе потока нет места замыканию `fn` из `runWrite`, а частичная запись
- * батча недопустима (Сценарий S3: рестарт посреди батча оставляет БД
- * консистентной — откат делает SQLite, включая случай падения воркера).
+ * Транзакцию и журнал даёт ядро обёртки домена (`runWriteCore`): на границе
+ * потока нет места замыканию `fn` из `runWrite`, поэтому op назван строкой и
+ * собирается в `domain/write-ops.ts`, а частичная запись батча недопустима
+ * (Сценарий S3: рестарт посреди батча оставляет БД консистентной — откат делает
+ * SQLite, включая случай падения воркера).
+ *
+ * События воркер НЕ публикует и аудит НЕ пишет: он возвращает плоский список
+ * событий, собранный внутри транзакции, а фан-аут и `audit_log` делает главный
+ * поток по факту ответа (ADR 162d8e7a, ADR ca3a9218, требование ba987ab2).
  */
 function execute(task: WriteTask): WriteTaskResponse {
   const ndb = connectionFor(task.context);
@@ -137,10 +146,20 @@ function execute(task: WriteTask): WriteTaskResponse {
           'write.thoughts с кросс-сетевым контекстом исполняется в главном потоке',
         );
       }
-      return {
-        ok: true,
-        result: writeThoughts(ndb, task.payload.input, task.payload.actorUserId),
-      };
+      // Ядро обёртки исполняет транзакцию и пишет журнал активности в этом же
+      // соединении; события оно возвращает в исходе — отдаём их плоским списком,
+      // их публикует главный поток после коммита.
+      const outcome = runWriteCore(
+        ndb,
+        {
+          networkId: task.context.networkId,
+          userId: task.payload.actorUserId,
+          layerId: task.context.layerId,
+        },
+        () => composeThoughtsWrite(ndb, task.payload),
+      );
+      const result: ThoughtsWriteOutcome = { result: outcome.result, events: outcome.events ?? [] };
+      return { ok: true, result };
     }
   }
   // Новый op обязан появиться и в ветке выше, и в контракте: сюда попадаем
