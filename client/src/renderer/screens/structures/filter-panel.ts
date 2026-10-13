@@ -29,9 +29,11 @@
  */
 
 import {
+  FILTER_AST_VERSION,
   type FilterAst,
   type FilterAstEntityKind,
   type FilterAstNode,
+  type FilterAstSortKey,
   type NetworkProperty,
   type SavedFilterCriteria,
   type SortOrder,
@@ -48,6 +50,8 @@ import {
   compileFlatCriteriaToAst,
   defaultFilterCriteriaState,
   defaultFilterTreeGroup,
+  filterSortFromAstKey,
+  filterTreeToAst,
   parseFilterAstState,
   parseFilterDefinitionTree,
   withReverseLinkPropertySides,
@@ -189,11 +193,23 @@ export function filterIssuesFromQueryResult(payload: {
 
 /**
  * Разбор состояния панели из L4-снимка `structures_state` (неизвестный вход,
- * безопасные значения). Прежний снимок — плоская модель панели (camelCase):
- * её критерии компилируются в дерево ТЕМ ЖЕ конвертером плоских критериев
- * (`compileFlatCriteriaToAst`, ADR «запрещает вторую точку чтения»), а результат
- * читается обратно единым `parseFilterAstState`. Своей формы отбора панель не
- * заводит.
+ * безопасные значения).
+ *
+ * Снимок пишет сама модель панели (`FilterState`: дерево + ключи сортировки +
+ * плоские поля), поэтому читается он в два приёма:
+ *
+ *   * снимок ТЕКУЩЕЙ модели (есть `tree`) — дерево и `sortKeys` берутся как
+ *     есть, через единый конвертер ({@link filterTreeToAst} +
+ *     `parseFilterAstState`); пустые ключи не перебивают сохранённую плоскую
+ *     пару `sort`/`order`;
+ *   * прежний плоский снимок (camelCase, без `tree`) — критерии компилируются
+ *     в дерево ТЕМ ЖЕ конвертером плоских критериев (`compileFlatCriteriaToAst`,
+ *     ADR «запрещает вторую точку чтения»), результат читается обратно единым
+ *     `parseFilterAstState`.
+ *
+ * Второй формы отбора панель не заводит. Ошибка ca864656: раньше снимок всегда
+ * прогонялся через плоские поля, и дерево условий вместе с ключом-свойством
+ * терялись молча.
  */
 export function parseFilterState(raw: string): FilterState {
   let parsed: unknown;
@@ -202,14 +218,64 @@ export function parseFilterState(raw: string): FilterState {
   } catch {
     return getFilterState();
   }
-  const rec = (parsed ?? {}) as Record<string, unknown>;
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return getFilterState();
+  }
+  const rec = parsed as Record<string, unknown>;
   const flat = coerceSnapshotState(rec);
-  const criteria = fillTreeFromFlat(flat);
+  const model = snapshotModelCriteria(rec, flat);
+  const criteria = model ?? fillTreeFromFlat(flat);
   return {
     ...defaultState(),
     ...criteria,
     ...definitionExtras(rec),
   };
+}
+
+/**
+ * Дерево и ключи сортировки из снимка ТЕКУЩЕЙ модели; `null` — снимок записан
+ * прежней плоской панелью (дерева нет) либо дерево нечитаемо. Читает строго тем
+ * же конвертером, что и wire-AST: нераспознанный узел отклоняет снимок целиком,
+ * а не подменяется пустым отбором.
+ */
+function snapshotModelCriteria(
+  rec: Record<string, unknown>,
+  flat: FilterCriteriaState,
+): FilterCriteriaState | null {
+  const tree = rec['tree'];
+  if (tree === null || typeof tree !== 'object' || Array.isArray(tree)) return null;
+  let ast: FilterAst;
+  try {
+    ast = { version: FILTER_AST_VERSION, filter: filterTreeToAst(tree as FilterTreeNode) };
+  } catch {
+    return null;
+  }
+  const sortKeys = coerceSnapshotSortKeys(rec['sortKeys']);
+  if (sortKeys.length > 0) ast.sort = sortKeys;
+  const model = parseFilterAstState(ast);
+  if (sortKeys.length === 0) {
+    // Ключей сортировки в снимке нет — пару `sort`/`order` несёт плоская модель
+    // прежнего контракта (§15.3), а не дефолт конвертера.
+    model.sort = flat.sort;
+    model.order = flat.order;
+  }
+  return { ...model, tree: model.tree ?? defaultFilterTreeGroup('and') };
+}
+
+/** Ключи сортировки из снимка модели: только пары «непустой ключ + направление». */
+function coerceSnapshotSortKeys(value: unknown): FilterAstSortKey[] {
+  if (!Array.isArray(value)) return [];
+  const out: FilterAstSortKey[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const rec = entry as Record<string, unknown>;
+    const key = rec['key'];
+    const order = rec['order'];
+    if (typeof key !== 'string' || key === '') continue;
+    if (order !== 'asc' && order !== 'desc') continue;
+    out.push({ key, order });
+  }
+  return out;
 }
 
 /**
@@ -388,18 +454,27 @@ export type PanelQueryFilter = StructureFilter & { sort?: StructureSort; order?:
 /**
  * Отбор панели в wire-форме запроса `POST /thoughts/query`.
  *
- * Пустое дерево (нет ни одного условия) отдаётся ПЛОСКИМ пустым отбором без
- * `ast`: контракт «нет критериев → HOME + сироты» (§15.3) сервер определяет
- * именно по отсутствию `ast` (`isFilterEmpty`). Если условий нет, а сортировка
- * многоуровневая, отбор уходит деревом (`ast.sort` — единственный источник
- * порядка в одной форме) — режим HOME тогда не включается, и это осознанно:
- * пользователь задал порядок всего списка.
+ * Пустое дерево (нет ни одного условия) БЕЗ ключей сортировки отдаётся ПЛОСКИМ
+ * пустым отбором без `ast`: контракт «нет критериев → HOME + сироты» (§15.3)
+ * сервер определяет именно по отсутствию `ast` (`isFilterEmpty`), и этот режим
+ * сохраняется. Единственный ключ, выразимый плоской парой
+ * (`title`/`created_at`/`updated_at`), остаётся плоской парой — теперь с ключом
+ * и направлением из чипа, а не из легаси-полей модели; ключ-свойство, имя
+ * стороны свойства-связи и многоуровневая сортировка идут `ast.sort` —
+ * единственной формой, которая их выражает (ошибка ca864656: раньше при одном
+ * ключе пара `sort`/`order` бралась из легаси-полей, и ключ пользователя молча
+ * терялся).
  */
 export function buildQueryFilter(s: FilterState = state): PanelQueryFilter {
   const tree = s.tree ?? null;
   const sortKeys = s.sortKeys ?? [];
-  if (!treeHasConditions(tree) && sortKeys.length <= 1) {
-    return { sort: s.sort, order: s.order };
+  if (!treeHasConditions(tree)) {
+    if (sortKeys.length === 0) return { sort: s.sort, order: s.order };
+    const only = sortKeys.length === 1 ? sortKeys[0] : undefined;
+    const legacy = only === undefined ? null : filterSortFromAstKey(only.key);
+    if (only !== undefined && legacy !== null) {
+      return { sort: legacy, order: only.order };
+    }
   }
   const ast: FilterAst = buildFilterAst(s, { profile: FILTER_PROFILE });
   ast.filter = withVisibilityDefaults(ast.filter, tree, {

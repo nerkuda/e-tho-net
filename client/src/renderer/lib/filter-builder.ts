@@ -1665,6 +1665,20 @@ const AST_KEY_TO_FILTER_SORT: Readonly<Record<string, StructureSort>> = {
   updated: 'updated',
 };
 
+/**
+ * Плоская сортировка панели по коду ключа AST; `null` — ключ плоской парой
+ * `sort`/`order` НЕ выражается (ключ-свойство, имя стороны свойства-связи,
+ * «по просмотру»). Единственная точка этого соответствия
+ * ({@link AST_KEY_TO_FILTER_SORT}) для мест применения: по ней панель решает,
+ * несёт ли отбор сортировку плоской парой или её обязан нести `ast.sort` —
+ * иначе ключ пользователя молча терялся бы при единственном ключе (ошибка
+ * ca864656).
+ */
+export function filterSortFromAstKey(key: string): StructureSort | null {
+  if (!Object.prototype.hasOwnProperty.call(AST_KEY_TO_FILTER_SORT, key)) return null;
+  return AST_KEY_TO_FILTER_SORT[key] ?? null;
+}
+
 /** Пустая группа дерева (по умолчанию `И`) — корень нового отбора. */
 export function defaultFilterTreeGroup(op: FilterAstGroupOp = 'and'): FilterTreeGroup {
   return { kind: 'group', op, children: [] };
