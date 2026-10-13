@@ -1,0 +1,706 @@
+/**
+ * Рендер-слой дерева условий отбора (задача ТП 11b2509a, элемент интерфейса
+ * fc65b647; требования 5ef1bce1 «тонированная вложенность и маркер НЕ»,
+ * 502f1922 «сгруппированные списки операторов»; ADR 30ff83bb, ADR 4154811f).
+ *
+ * Проверяется то, за что отвечает модуль `lib/filter-tree.ts`:
+ *   • группы-блоки, тонированная вложенность циклом палитры и токены тонов;
+ *   • связаторы-индикаторы перед строками и смена коннекции селектором группы;
+ *   • НЕ-переключатель (нет на корне, обёртка `not` вокруг группы);
+ *   • сворачивание группы, крестики строки/группы, «+ условие»/«+ группа»;
+ *   • список «Что» (профиль — параметр, группировка, поиск, обратные стороны);
+ *   • сгруппированный список операторов «способ × утверждение/отрицание»;
+ *   • правки идут в ЕДИНУЮ модель (`FilterCriteriaState.tree`) — состояние
+ *     дерева не дублируется, и сборка в AST видит правки.
+ *
+ * jsdom в проекте нет — общий DOM-шим (`./dom-shim.js`), как в
+ * `filter-condition-list-values.test.ts`.
+ */
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { before, describe, it } from 'node:test';
+
+import type { LinkType, NetworkProperty } from '@etn/shared';
+
+import { ShimElement } from './dom-shim.js';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+const RENDERER = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
+
+/** Минимальный DOM/window-шим, которого требуют фасады и модуль. */
+function installShim(): void {
+  (globalThis as any).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: new ShimElement('html'),
+    body: new ShimElement('body'),
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    activeElement: null,
+    querySelector: () => null,
+  };
+  const win = ((globalThis as any).window ??= {}) as Record<string, unknown>;
+  win['innerWidth'] = 1200;
+  win['innerHeight'] = 800;
+  win['setTimeout'] = (fn: () => void) => {
+    fn();
+    return 1;
+  };
+  win['clearTimeout'] = () => undefined;
+  win['addEventListener'] = () => undefined;
+  win['removeEventListener'] = () => undefined;
+  win['matchMedia'] = () => ({
+    matches: false,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  });
+}
+
+/** Все потомки с ТОЧНЫМ классом (подстрока ловит и `ft-group__*`). */
+function exact(root: ShimElement, cls: string): ShimElement[] {
+  return root.findAll((node) => node.classList.contains(cls));
+}
+
+/** Первый потомок с точным классом. */
+function exactOne(root: ShimElement, cls: string): ShimElement | null {
+  return exact(root, cls)[0] ?? null;
+}
+
+/** Свой заголовок-рамка группы (не вложенных). */
+function headOf(group: ShimElement): ShimElement {
+  return group.children.find((c) => c.classList.contains("ft-group__head"))!;
+}
+
+/** Своё тело группы (не вложенных). */
+function bodyOf(group: ShimElement): ShimElement {
+  return group.children.find((c) => c.classList.contains("ft-group__body"))!;
+}
+
+/** Свои кнопки «+ условие»/«+ группа» группы (не вложенных). */
+function ownActions(group: ShimElement): ShimElement {
+  const body = bodyOf(group);
+  return body.children.find((c) => c.classList.contains("ft-group__actions"))!;
+}
+
+/** Кнопка-потомок с точным текстом; класс — точный для `ft-*`, иначе подстрокой. */
+function buttonByText(root: ShimElement, cls: string, text: string): ShimElement | null {
+  const nodes = cls.startsWith('ft-')
+    ? root.findAll((node) => node.classList.contains(cls))
+    : root.findAll(cls);
+  return nodes.find((node) => node.flatText().trim() === text) ?? null;
+}
+
+/** Дерево из `levels` вложенных групп с условием в глубине. */
+function nestedTree(builder: any, levels: number): any {
+  let node: any = builder.defaultFilterTreeLeaf({ kind: 'property', property_id: CITY.id });
+  for (let i = 0; i < levels; i += 1) node = { kind: 'group', op: 'and', children: [node] };
+  return node;
+}
+
+// ---------------------------------------------------------------------------
+// Данные сети для тестов (свойства + тип связи с обратной стороной)
+// ---------------------------------------------------------------------------
+
+const CITY = {
+  id: 'p-city',
+  name: 'Город',
+  value_type: 'text',
+  config: { options: ['Москва'], multiple: false },
+  description: null,
+  created_at: '',
+  updated_at: '',
+} as unknown as NetworkProperty;
+
+const PLACE = {
+  id: 'p-place',
+  name: 'Место покупки',
+  value_type: 'link',
+  config: { link_type_id: 'lt-1', multiple: true },
+  description: null,
+  created_at: '',
+  updated_at: '',
+} as unknown as NetworkProperty;
+
+const DATE = {
+  id: 'p-date',
+  name: 'Дата',
+  value_type: 'date',
+  config: null,
+  description: null,
+  created_at: '',
+  updated_at: '',
+} as unknown as NetworkProperty;
+
+const LINK_TYPE = {
+  id: 'lt-1',
+  name_forward: 'Место покупки',
+  name_reverse: 'Покупки здесь',
+} as unknown as LinkType;
+
+const REGISTRY: ReadonlyMap<string, NetworkProperty> = new Map([
+  [CITY.id, CITY],
+  [PLACE.id, PLACE],
+  [DATE.id, DATE],
+]);
+
+const DATA = { registry: REGISTRY, linkTypes: [LINK_TYPE] };
+
+/** Лист дерева из единой модели конструктора (импорт — в тесте). */
+let leafOf: (entity: Record<string, unknown>) => any = () => null;
+
+// ---------------------------------------------------------------------------
+
+describe('дерево условий: группы, тона, связаторы (элемент fc65b647)', () => {
+  before(async () => {
+    installShim();
+    const builder = await import('../src/renderer/lib/filter-builder.js');
+    leafOf = (entity) => builder.defaultFilterTreeLeaf(entity as any);
+  });
+
+  it('тона: цикл из четырёх, соседние уровни различаются, значения — токены тем', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    assert.equal(mod.FILTER_TREE_TONE_COUNT, 4, 'минимум требования 5ef1bce1');
+    const classes = [0, 1, 2, 3, 4, 5].map((d) => mod.filterTreeToneClass(d));
+    assert.deepEqual(classes.slice(0, 4), ['ft-tone-1', 'ft-tone-2', 'ft-tone-3', 'ft-tone-4']);
+    assert.equal(classes[4], 'ft-tone-1', 'пятый уровень — снова первый тон');
+    for (let d = 1; d < classes.length; d += 1) {
+      assert.notEqual(classes[d], classes[d - 1], `уровень ${d} не повторяет тон предыдущего`);
+    }
+
+    // Тона объявлены токенами обеих тем, в модуле и его CSS нет hex.
+    const tokens = fs.readFileSync(path.join(RENDERER, 'styles', 'tokens.css'), 'utf8');
+    for (let n = 1; n <= 4; n += 1) {
+      const declarations = tokens.match(new RegExp(`--ft-tone-${n}:`, 'g')) ?? [];
+      assert.equal(declarations.length, 2, `тон ${n} объявлен в обеих темах`);
+    }
+    for (const file of ['lib/filter-tree.ts', 'styles/filter-tree.css']) {
+      const source = fs.readFileSync(path.join(RENDERER, file), 'utf8');
+      assert.doesNotMatch(source, /#[0-9a-fA-F]{3,8}\b/, `нет hex в ${file}`);
+    }
+  });
+
+  it('корневая группа не удаляется, НЕ на корне не предлагается, вложенная — с крестиком и НЕ', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = defaultFilterCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [{ kind: 'group', op: 'and', children: [] }],
+    };
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    const root = tree.root as unknown as ShimElement;
+
+    const groups = exact(root, 'ft-group');
+    assert.equal(groups.length, 2, 'корень + вложенная группа');
+    const [rootGroup, nested] = groups;
+    assert.equal(exact(headOf(rootGroup!), 'ft-group__remove').length, 0, 'корень не удаляется');
+    assert.equal(exact(headOf(rootGroup!), 'ft-group__not').length, 0, 'НЕ на корне не предлагается');
+    assert.equal(exact(headOf(nested!), 'ft-group__remove').length, 1, 'вложенная группа удаляется крестиком');
+    assert.equal(exact(headOf(nested!), 'ft-group__not').length, 1, 'у вложенной группы есть НЕ');
+    assert.equal(rootGroup!.dataset['path'], '', 'корень адресуется пустым путём');
+    assert.equal(nested!.dataset['path'], '0');
+    assert.match(rootGroup!.className, /ft-tone-1/);
+    assert.match(nested!.className, /ft-tone-2/, 'вложенность тонируется по глубине');
+  });
+
+  it('пустая группа помечена, а связаторы-индикаторы стоят только между строками', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = defaultFilterCriteriaState();
+    state.tree = { kind: 'group', op: 'or', children: [] };
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    let root = tree.root as unknown as ShimElement;
+    assert.match(exactOne(root, 'ft-group__empty')!.flatText(), /группа пуста/);
+    assert.equal(exact(root, 'ft-connector').length, 0, 'в пустой группе связаторов нет');
+
+    // Две строки → ровно ОДИН связатор (перед второй), текст — коннектор группы.
+    state.tree.children = [
+      leafOf({ kind: 'property', property_id: CITY.id }),
+      leafOf({ kind: 'property', property_id: DATE.id }),
+    ];
+    tree.rerender();
+    root = tree.root as unknown as ShimElement;
+    const connectors = exact(root, 'ft-connector');
+    assert.equal(connectors.length, 1, 'связатор только между строками');
+    assert.equal(connectors[0]!.flatText(), 'ИЛИ', 'индикатор показывает коннектор группы');
+    assert.equal(connectors[0]!.getAttribute('aria-hidden'), 'true', 'связатор — индикатор');
+    assert.equal(exact(root, 'ft-row').length, 2);
+  });
+
+  it('коннекцию меняет селектор группы, а не связатор', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState, buildFilterAst } = await import(
+      '../src/renderer/lib/filter-builder.js'
+    );
+
+    const state = defaultFilterCriteriaState();
+    const inner = {
+      kind: 'group',
+      op: 'and',
+      children: [leafOf({ kind: 'property', property_id: CITY.id })],
+    };
+    state.tree = { kind: 'group', op: 'and', children: [inner] } as any;
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    let root = tree.root as unknown as ShimElement;
+
+    const nested = exact(root, 'ft-group')[1]!;
+    assert.equal(exactOne(nested, 'ft-group__connector-label')!.flatText(), 'все условия');
+    const orSegment = buttonByText(nested, 'ui-btn', 'ИЛИ')!;
+    assert.ok(orSegment, 'сегмент ИЛИ есть в заголовке группы');
+    orSegment.emit('click');
+
+    assert.equal(((state.tree as any).children[0] as any).op, 'or', 'коннекция изменена в МОДЕЛИ');
+    root = tree.root as unknown as ShimElement;
+    assert.equal(
+      exactOne(exact(root, 'ft-group')[1]!, 'ft-group__connector-label')!.flatText(),
+      'любое условие',
+    );
+    assert.equal(
+      (buildFilterAst(state).filter as any).children[0].op,
+      'or',
+      'AST (единый конвертер) видит правку',
+    );
+  });
+
+  it('НЕ оборачивает группу, сохраняет коннектор и снимается повторно', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = defaultFilterCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        {
+          kind: 'group',
+          op: 'or',
+          children: [leafOf({ kind: 'property', property_id: CITY.id })],
+        },
+      ],
+    };
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    let root = tree.root as unknown as ShimElement;
+
+    exactOne(headOf(exact(root, 'ft-group')[1]!), 'ft-group__not')!.emit('click');
+
+    const wrapped: any = state.tree.children[0];
+    assert.equal(wrapped.op, 'not', 'отрицание — узел `not` модели');
+    assert.equal(wrapped.children[0].op, 'or', 'коннектор сохранён внутри обёртки');
+
+    root = tree.root as unknown as ShimElement;
+    const nested = exact(root, 'ft-group')[1]!;
+    assert.equal(nested.dataset['negated'], '1', 'вид помечает отрицание');
+    assert.match(nested.className, /ft-tone-2/, 'обёртка не добавляет уровень тона');
+    assert.equal(
+      exactOne(nested, 'ft-group__connector-label')!.flatText(),
+      'любое условие',
+      'селектор коннекции остался у видимой группы',
+    );
+
+    exactOne(headOf(nested), 'ft-group__not')!.emit('click');
+    assert.equal((state.tree.children[0] as any).op, 'or', 'повторное нажатие снимает отрицание');
+  });
+
+  it('сворачивание скрывает тело группы, крестики и кнопки правят модель', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = defaultFilterCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        {
+          kind: 'group',
+          op: 'and',
+          children: [leafOf({ kind: 'property', property_id: CITY.id })],
+        },
+      ],
+    };
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    let root = tree.root as unknown as ShimElement;
+    assert.equal(exact(root, 'ft-row').length, 1, 'условие вложенной группы видно');
+
+    exactOne(exact(root, 'ft-group')[1]!, 'ft-group__caret')!.emit('click');
+    root = tree.root as unknown as ShimElement;
+    const collapsed = exact(root, 'ft-group')[1]!;
+    assert.equal(collapsed.dataset['collapsed'], '1');
+    assert.equal(exact(collapsed, 'ft-row').length, 0, 'тело свёрнутой группы скрыто');
+    assert.equal(exactOne(collapsed, 'ft-group__caret')!.getAttribute('aria-expanded'), 'false');
+
+    exactOne(collapsed, 'ft-group__caret')!.emit('click');
+    root = tree.root as unknown as ShimElement;
+    assert.equal(exact(root, 'ft-row').length, 1, 'разворот возвращает тело');
+
+    // «+ условие» пишет лист в модель, «+ группа» — вложенную группу.
+    exactOne(ownActions(exact(root, 'ft-group')[0]!), 'ft-add-condition')!.emit('click');
+    assert.equal(state.tree.children.length, 2, 'условие дописано в корень');
+    assert.equal(state.tree.children[1]!.kind, 'leaf');
+
+    root = tree.root as unknown as ShimElement;
+    const innerGroup = exact(root, 'ft-group')[1]!;
+    const before = (state.tree.children[0] as any).children.length;
+    exactOne(ownActions(innerGroup), 'ft-add-group')!.emit('click');
+    assert.equal(
+      (state.tree.children[0] as any).children.length,
+      before + 1,
+      'группа дописана в первую группу',
+    );
+
+    root = tree.root as unknown as ShimElement;
+    const deepest = exact(root, 'ft-group').at(-1)!;
+    exactOne(headOf(deepest), 'ft-group__remove')!.emit('click');
+    assert.equal(
+      (state.tree.children[0] as any).children.filter((c: any) => c.kind === 'group').length,
+      0,
+      'крестик удаляет группу из модели',
+    );
+
+    root = tree.root as unknown as ShimElement;
+    exactOne(root, 'ft-row__remove')!.emit('click');
+    assert.equal(
+      (state.tree.children[0] as any).children.filter((c: any) => c.kind === 'leaf').length,
+      0,
+      'крестик строки удаляет условие из модели',
+    );
+  });
+
+  it('вложенность 4+ тонируется циклом, а глубина не ограничена', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const builder = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = builder.defaultFilterCriteriaState();
+    state.tree = nestedTree(builder, 5);
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    const root = tree.root as unknown as ShimElement;
+    const groups = exact(root, 'ft-group');
+    assert.equal(groups.length, 5, 'пять уровней групп (вложенность 4+ требования 5ef1bce1)');
+    const tones = groups.map((g) => g.className.match(/ft-tone-(\d)/)?.[1]);
+    assert.deepEqual(tones, ['1', '2', '3', '4', '1'], 'цикл палитры по глубине');
+  });
+
+  it('заголовок — «Показать <сущность> по условиям:», слот значения — заглушка или виджет хоста', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    assert.equal(mod.filterTreeTitle('thoughts'), 'Показать мысли по условиям:');
+    assert.equal(mod.filterTreeTitle('chronicle'), 'Показать записи дневника по условиям:');
+
+    const state = defaultFilterCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        leafOf({ kind: 'property', property_id: CITY.id }),
+        {
+          kind: 'leaf',
+          entity: { kind: 'property', property_id: CITY.id },
+          operator: 'is_empty',
+          value: { kind: 'none' },
+        },
+      ],
+    };
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    let root = tree.root as unknown as ShimElement;
+    assert.equal(exactOne(root, 'ft-title')!.flatText(), 'Показать мысли по условиям:');
+    const values = exact(root, 'ft-value');
+    assert.equal(values.length, 2, 'слот значения у каждой строки');
+    assert.equal(values[0]!.flatText(), 'задайте значение', 'оператору нужно значение');
+    assert.equal(values[1]!.flatText(), 'значение не требуется', 'у «не заполнено» значения нет');
+
+    // Виджет значения следующей задачи подменяет заглушку через `renderValue`.
+    state.tree.children = [
+      {
+        kind: 'leaf',
+        entity: { kind: 'property', property_id: DATE.id },
+        operator: 'gt',
+        value: { kind: 'none' },
+      },
+    ];
+    const host = new ShimElement('div', 'host-value');
+    const withWidget = mod.buildFilterTree({
+      profile: 'thoughts',
+      getState: () => state,
+      data: DATA,
+      renderValue: () => host as unknown as HTMLElement,
+    });
+    root = withWidget.root as unknown as ShimElement;
+    assert.equal(exact(root, 'ft-value').length, 0, 'заглушки нет, когда хост дал виджет');
+    assert.equal(exact(root, 'host-value').length, 1, 'виджет хоста отрисован в строке');
+  });
+});
+
+describe('дерево условий: сгруппированные списки операторов (502f1922)', () => {
+  before(() => {
+    installShim();
+  });
+
+  it('секции «способ × утверждение/отрицание» и состав — от реестра профиля', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { filterProfileOperators } = await import('../src/renderer/lib/filter-builder.js');
+
+    const link = mod.filterTreeOperatorMenu('thoughts', 'property', 'link');
+    const titles = link.map((s: any) => s.title);
+    assert.deepEqual(titles, ['Значение', 'Несколько', 'Иерархия', 'Выборка', 'Состояние']);
+    const byKey = new Map(link.map((s: any) => [s.key, s]));
+    assert.deepEqual(
+      (byKey.get('value') as any).rows[0].cells.map((c: any) => [c.op, c.side, c.label]),
+      [
+        ['eq', 'yes', 'равно'],
+        ['ne', 'no', 'не равно'],
+      ],
+      'двухколоночная пара «утверждение | отрицание»',
+    );
+    assert.deepEqual(
+      (byKey.get('multiple') as any).rows[0].cells.map((c: any) => c.op),
+      ['in', 'not_in'],
+    );
+    assert.deepEqual(
+      (byKey.get('sets') as any).rows[0].cells.map((c: any) => c.op),
+      ['any_of', 'none_of'],
+    );
+    assert.deepEqual((byKey.get('sets') as any).rows[1].cells.map((c: any) => c.op), ['all_of']);
+    assert.deepEqual(
+      (byKey.get('state') as any).rows[0].cells.map((c: any) => c.op),
+      ['not_empty', 'is_empty'],
+    );
+
+    // Паритет с реестром: редактор не предлагает ничего сверх допустимого набора.
+    const allowed = new Set(filterProfileOperators('thoughts', 'property', 'link'));
+    for (const section of link) {
+      for (const row of section.rows) {
+        for (const cell of row.cells) assert.ok(allowed.has(cell.op), `${cell.op} допустим профилем`);
+      }
+    }
+
+    // Датовый операнд: секция называется «Сравнение», равенства у даты нет.
+    const date = mod.filterTreeOperatorMenu('thoughts', 'created_at', 'date');
+    assert.equal(date[0]!.title, 'Сравнение');
+    const dateOps = date.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
+    for (const op of ['gt', 'lte', 'gte', 'lt', 'between', 'not_between']) {
+      assert.ok(dateOps.includes(op), `${op} предложен для датового операнда`);
+    }
+    assert.ok(!dateOps.includes('contains'), 'подстрока датовому операнду не предлагается');
+    assert.ok(!dateOps.includes('eq'), 'равенство датовому операнду не предлагается (набор ядра)');
+
+    // Свойство-дата — набор из реестра по природе свойства.
+    const propDate = mod.filterTreeOperatorMenu('thoughts', 'property', 'date');
+    assert.equal(propDate[0]!.title, 'Сравнение');
+    assert.deepEqual(
+      (propDate[0] as any).rows[0].cells.map((c: any) => c.op),
+      ['eq', 'ne'],
+      'у свойства-даты равенство есть (набор PROPERTY_OPERATOR_SETS)',
+    );
+
+    // «Есть слова» — своя секция и единственный оператор (операнд `keywords`).
+    const words = mod.filterTreeOperatorMenu('thoughts', 'keywords');
+    assert.deepEqual(words.map((s: any) => s.title), ['Слова']);
+    assert.deepEqual(words[0]!.rows[0]!.cells.map((c: any) => c.op), ['matches']);
+
+    // Операнд «Тип» — «в иерархии» и «имеет свойство» в своих секциях.
+    const type = mod.filterTreeOperatorMenu('thoughts', 'type');
+    const typeOps = type.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
+    assert.ok(typeOps.includes('in_hierarchy') && typeOps.includes('has'));
+    assert.ok(!typeOps.includes('all_of'), '«все в выборке» типу не предлагается (набор ядра)');
+
+    // Профиль хроники — свои операнды и свой набор.
+    const record = mod.filterTreeOperatorMenu('chronicle', 'record_title');
+    assert.deepEqual(record.map((s: any) => s.title), ['Значение', 'Слова']);
+    assert.deepEqual(
+      record[0]!.rows[0]!.cells.map((c: any) => c.op),
+      ['eq', 'ne'],
+    );
+    assert.ok(
+      record
+        .flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)))
+        .includes('matches'),
+      '«Есть слова» у заголовка записи',
+    );
+  });
+
+  it('тело выпадающего списка: сетка двух колонок, подсветка текущего, выбор', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const sections = mod.filterTreeOperatorMenu('thoughts', 'property', 'text');
+    const picked: string[] = [];
+    const body = mod.buildChoiceMenuBody({
+      title: 'Оператор',
+      grid: true,
+      activeKey: 'eq',
+      groups: sections.map((s: any) => ({
+        label: s.title,
+        items: s.rows.flatMap((r: any) =>
+          r.cells.map((c: any) => ({ key: c.op, label: c.label, side: c.side })),
+        ),
+      })),
+      onPick: (key: string) => picked.push(key),
+    });
+    const root = body.root as unknown as ShimElement;
+    assert.match(root.className, /ft-choice--grid/, 'список операторов — сетка двух колонок');
+    assert.ok(exact(root, 'ft-choice__group').length >= 2, 'секции показаны');
+    const items = exact(root, 'ft-choice__item');
+    assert.ok(
+      items.some((i) => i.dataset['key'] === 'ne' && i.dataset['side'] === 'no'),
+      'отрицание помечено колонкой',
+    );
+    buttonByText(root, 'ft-choice__item', 'не в списке')!.emit('click');
+    assert.deepEqual(picked, ['not_in'], 'выбор строки отдаёт код оператора');
+  });
+});
+
+describe('дерево условий: список «Что» (элемент fc65b647)', () => {
+  before(() => {
+    installShim();
+  });
+
+  it('все свойства сети, обратные стороны, контекстные первыми, поиск', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+
+    const entries = mod.filterTreeOperandCatalogue('thoughts', DATA);
+    const byKey = new Map(entries.map((e: any) => [e.key, e]));
+    assert.ok(byKey.has('type') && byKey.has('keywords'), 'характеристики мыслей в списке');
+    assert.ok(byKey.has('property:p-city') && byKey.has('property:p-date'), 'свойства реестра в списке');
+    const reverse: any = byKey.get('property:Покупки здесь');
+    assert.ok(reverse, 'обратная сторона свойства-связи в общем списке');
+    assert.deepEqual(reverse.entity, { kind: 'property', property: 'Покупки здесь', direction: 'in' });
+    assert.match(String(reverse.detail), /обратная сторона/);
+    assert.deepEqual((byKey.get('property:p-place') as any).entity, {
+      kind: 'property',
+      property_id: 'p-place',
+    });
+    assert.equal(
+      (byKey.get('property:p-city') as any).detail,
+      'строка',
+      'подпись типа значения — из общего словаря',
+    );
+    assert.equal(
+      (byKey.get('property:p-date') as any).valueType,
+      'date',
+      'природа свойства — для списка операторов',
+    );
+
+    // Контекстные — первыми (профиль-параметр).
+    const withContext = mod.filterTreeOperandCatalogue('thoughts', {
+      ...DATA,
+      contextual: ['property:p-place', 'type'],
+    });
+    assert.deepEqual(
+      withContext.filter((e: any) => e.group === 'context').map((e: any) => e.key),
+      ['type', 'property:p-place'],
+    );
+
+    const body = mod.buildChoiceMenuBody({
+      title: 'Что',
+      search: true,
+      activeKey: 'property:p-city',
+      groups: [
+        {
+          label: mod.FILTER_TREE_OPERAND_GROUPS.context,
+          items: withContext
+            .filter((e: any) => e.group === 'context')
+            .map((e: any) => ({ key: e.key, label: e.label })),
+        },
+        {
+          label: mod.FILTER_TREE_OPERAND_GROUPS.properties,
+          items: withContext
+            .filter((e: any) => e.group === 'properties')
+            .map((e: any) => ({ key: e.key, label: e.label })),
+        },
+      ],
+      onPick: () => undefined,
+    });
+    const menu = body.root as unknown as ShimElement;
+    assert.ok(menu.querySelector('.ft-choice__search'), 'у списка «Что» есть поиск');
+    assert.equal(exact(menu, 'ft-choice__group')[0]!.flatText(), 'В этом месте');
+
+    // Поиск фильтрует строки.
+    body.setQuery('город');
+    const visible = exact(menu, 'ft-choice__item');
+    assert.equal(visible.length, 1, 'поиск оставил одно свойство');
+    assert.equal(visible[0]!.dataset['key'], 'property:p-city');
+    body.setQuery('нет такого');
+    assert.equal(exact(menu, 'ft-choice__empty').length, 1, 'пустой результат поиска объяснён');
+
+    // Чистый поиск по каталогу — та же логика без DOM.
+    assert.deepEqual(
+      mod.filterTreeFilterOperands(entries, 'покуп').map((e: any) => e.key),
+      ['property:p-place', 'property:Покупки здесь'],
+    );
+    assert.equal(mod.filterTreeFilterOperands(entries, '').length, entries.length);
+  });
+
+  it('профиль — параметр: чужие операнды в список не попадают', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const chronicle = mod.filterTreeOperandCatalogue('chronicle', DATA);
+    const keys = chronicle.map((e: any) => e.key);
+    assert.ok(keys.includes('record_title') && keys.includes('record_time'), 'операнды записи дневника');
+    assert.ok(!keys.includes('type'), 'типов мыслей в профиле хроники нет');
+    assert.equal(
+      chronicle.filter((e: any) => e.group === 'properties').length,
+      0,
+      'свойств мысли хроника не предлагает',
+    );
+  });
+});
+
+describe('дерево условий: адресация и правки модели', () => {
+  before(() => {
+    installShim();
+  });
+
+  it('путь узла — индексы детей; корень не удаляется, узел по пути читается/меняется', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const leaf = { kind: 'leaf', entity: { kind: 'keywords' }, operator: 'matches', value: { kind: 'none' } };
+    const root = {
+      kind: 'group',
+      op: 'and',
+      children: [{ kind: 'group', op: 'or', children: [{ ...leaf }] }],
+    } as any;
+
+    assert.equal(mod.filterTreePathKey([0, 1]), '0.1');
+    assert.equal(mod.filterTreeNodeAt(root, [])!.kind, 'group');
+    assert.equal((mod.filterTreeNodeAt(root, [0, 0]) as any).operator, 'matches');
+    assert.equal(mod.filterTreeNodeAt(root, [5]), null);
+    assert.equal(mod.filterTreeRemoveAt(root, []), false, 'корневая группа не удаляется');
+    assert.equal(mod.filterTreeRemoveAt(root, [0, 0]), true);
+    assert.equal((root.children[0] as any).children.length, 0);
+    assert.equal(
+      mod.filterTreeAppendChildAt(root, [0], { kind: 'group', op: 'and', children: [] }),
+      true,
+    );
+    assert.equal((root.children[0] as any).children.length, 1);
+    assert.equal(
+      mod.filterTreeAppendChildAt(root, [0, 0], { kind: 'group', op: 'and', children: [] }),
+      true,
+      'вложенная группа принимает детей',
+    );
+    root.children[0].children[0] = { ...leaf };
+    assert.equal(
+      mod.filterTreeAppendChildAt(root, [0, 0], { kind: 'group', op: 'and', children: [] }),
+      false,
+      'лист детей не принимает',
+    );
+  });
+
+  it('вид группы: `not` вокруг группы показывается одной рамкой, обёртка снимается', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const inner = { kind: 'group', op: 'or', children: [] } as any;
+    const root = {
+      kind: 'group',
+      op: 'and',
+      children: [{ kind: 'group', op: 'not', children: [inner] }],
+    } as any;
+    const view = mod.filterTreeGroupView(root, [0])!;
+    assert.equal(view.negated, true);
+    assert.equal(view.op, 'or');
+    assert.deepEqual([...view.modelPath], [0]);
+    assert.deepEqual([...view.opPath], [0, 0]);
+    assert.equal(mod.filterTreeToggleNotAt(root, [0]), root, 'замена узла идёт по месту в модели');
+    assert.equal((root.children[0] as any).op, 'or', 'снятие отрицания вернуло группу с коннектором');
+  });
+});
