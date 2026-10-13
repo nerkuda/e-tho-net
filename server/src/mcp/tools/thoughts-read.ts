@@ -85,6 +85,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'result groups (`names`/`texts`/`links`/`chronology`/`all`); `in_subtree_of`, `type_id` (or its ' +
         'name-form `type`, resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, ' +
         '`VALIDATION_ERROR` with `details.candidates` on ambiguity), `author_id`/`editor_id` narrow it. ' +
+        'Принимает и `ast` — мыслевые настройки отбора (профиль `thoughts`: подкорень, типы мыслей, ' +
+        '«показывать неактуальные», «корзина»); валидируется профилем, `VALIDATION_ERROR` вне профиля; ' +
+        '`ast` XOR плоские мыслевые параметры. ' +
         '`limit` (1–200, default 50) + `offset` walk the tail; `meta.total_in_group` gives unfiltered totals ' +
         'per group.',
       inputSchema: ThoughtsSearch.schema,
@@ -92,6 +95,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     },
     (args) =>
       runTool(async () => {
+        // AST-условие мыслевых настроек (профиль `thoughts`, задача d5e8ddc1):
+        // строгий разбор формы доменом; XOR с плоскими мыслевыми параметрами
+        // проверен схемой ThoughtsSearch.
+        const ast = args.ast === undefined ? undefined : parseFilterAst(args.ast);
         // Задача eb1a3f43, требование c98d5d19: веерный режим.
         if (args.network_ids !== undefined) {
           const access = buildCrossNetworkAccess(rt, args.network_ids);
@@ -120,6 +127,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           const result = fanOutSearch(access, {
             networkIds: access.accessibleIds,
             q: args.query,
+            ast,
             scope: args.scope,
             in: args.in_subtree_of === undefined ? undefined : 'subtree',
             from_thought_id: args.in_subtree_of,
@@ -169,6 +177,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         }
         const result = await searchAsync(ndb, {
           q: args.query,
+          ast,
           scope: args.scope,
           in: args.in_subtree_of === undefined ? undefined : 'subtree',
           from_thought_id: args.in_subtree_of,

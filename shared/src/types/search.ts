@@ -6,12 +6,34 @@
  */
 
 import type { IconKind, SearchGroup, SearchScope } from '../enums.js';
+import type { FilterAst } from './filter-ast.js';
 import type { NetworksCatalog } from './network.js';
 
 /** Query parameters of `GET /search` (03-server-api.md §12). */
 export interface SearchRequest {
   /** Search text. */
   q: string;
+  /**
+   * AST-условие МЫСЛЕВЫХ настроек отбора (профиль `thoughts`) — подкорень,
+   * типы мыслей, «показывать неактуальные», «корзина» (требование b91336e7,
+   * ADR 7581ac14, задача d5e8ddc1).
+   *
+   * Валидируется профилем `thoughts` (`assertFilterAstInProfile`) и
+   * исполняется ЕДИНЫМ движком отбора как КОНЪЮНКЦИЯ к WHERE мыслевых
+   * FTS-групп (`by_names`, `by_texts`, thought-половина `by_chrono`) —
+   * ранжирование `ORDER BY rank` и сниппеты сохраняются, множество id не
+   * материализуется. Корпусные разделы (`by_links`, link-половина
+   * `by_chrono`) AST не затрагивает.
+   *
+   * Корпусные параметры (`q`, `scope`, `link_type_id`, `author_id`,
+   * `editor_id`) совместимы с `ast` всегда. `ast` XOR плоские МЫСЛЕВЫЕ
+   * параметры (`type_id`/`type`, `show_inactive`, `trashed`,
+   * `in`/`from_thought_id`): одновременная передача — `VALIDATION_ERROR`.
+   * При наличии `ast` мыслевые настройки берутся ТОЛЬКО из него (плоские
+   * мыслевые параметры не компилируются); без `ast` плоские мыслевые
+   * параметры компилируются в тот же AST (обратная совместимость).
+   */
+  ast?: FilterAst;
   /** Set to `'subtree'` to restrict the search to a subtree. */
   in?: 'subtree';
   /** Required when `in = 'subtree'`. */

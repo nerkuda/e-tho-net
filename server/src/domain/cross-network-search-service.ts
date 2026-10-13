@@ -176,6 +176,12 @@ export interface CrossNetworkSearchArgs {
   networkIds: string[];
   /** Те же аргументы, что и для {@link search} одиночной сети. */
   q: string;
+  /**
+   * AST-условие мыслевых настроек отбора (профиль `thoughts`, задача
+   * d5e8ddc1, требование b91336e7): веерный режим обязан передавать `ast`,
+   * иначе настройки отбора терялись бы на каждой сети.
+   */
+  ast?: import('@etn/shared').FilterAst;
   scope?: SearchResponse['by_names'][number] extends never ? never
     : import('@etn/shared').SearchScope;
   in?: 'subtree';
@@ -208,6 +214,7 @@ export function fanOutSearch(
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
     const response = search(ndb, {
       q: args.q,
+      ast: args.ast,
       scope: args.scope,
       in: args.in,
       from_thought_id: args.from_thought_id,

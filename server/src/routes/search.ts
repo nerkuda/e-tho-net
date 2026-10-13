@@ -37,6 +37,7 @@ import { sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
 import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
 import { getExportJob, getExportJobContent, getExportJobFile, startExportJob } from '../domain/export-service.js';
+import { parseFilterAst } from '../domain/filter-ast.js';
 import { findMentionsInTexts } from '../domain/search-service.js';
 import { searchAsync } from '../domain/heavy-read.js';
 import {
@@ -91,6 +92,11 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestSearchQuery, req);
         const networkId = input.network_id as string;
         const q = input.q as string;
+        // AST-условие мыслевых настроек (профиль `thoughts`, задача d5e8ddc1):
+        // строгий разбор формы доменом; XOR с плоскими мыслевыми параметрами
+        // уже проверен схемой RestSearchQuery.
+        const astRaw = input.ast as unknown;
+        const ast = astRaw === undefined ? undefined : parseFilterAst(astRaw, req.id);
 
         const scopeRaw = input.scope as string | undefined;
         // Legacy `thoughts` → two granular queries merged (names + texts).
@@ -155,6 +161,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           const result = fanOutSearch(access, {
             networkIds: accessibleIds,
             q,
+            ast,
             scope: granularScopes[0],
             in: inParam,
             from_thought_id: fromThoughtId,
@@ -175,6 +182,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const requestBase = {
           q,
+          ast,
           in: inParam as 'subtree' | undefined,
           from_thought_id: fromThoughtId,
           type_id: (input.type_id ?? []) as string[],

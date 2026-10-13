@@ -864,6 +864,36 @@ export const LayersResetOverride = defineContract(
 // Область: мысли — чтение (tools/thoughts-read.ts; REST-аналоги ниже по файлу)
 // ===========================================================================
 
+/**
+ * AST-тело отбора (0.13.1, задача cb78315b; сущность «Модель отбора (AST) и её
+ * wire-формат» 489c394f). Wire-формат `{ version, filter, sort? }` исполняется
+ * единым движком (требование 76e30d9a). Строгую проверку формы (неизвестные
+ * поля на любом уровне, версия, согласованность оператора листа и под-выборки)
+ * делает доменный `parseFilterAst` — здесь схема лишь фиксирует «объект» и
+ * рекламирует форму в `tools/list`, чтобы не дублировать разбор и держать одну
+ * каноническую диагностику `VALIDATION_ERROR` для REST и MCP.
+ */
+const FilterAstBody = z
+  .record(z.string(), z.unknown())
+  .describe('AST-тело отбора; грамматика — etn.guide { topic: "thoughts.query" }.');
+
+/**
+ * Плоские МЫСЛЕВЫЕ параметры точки поиска, несовместимые с `ast`
+ * (требование b91336e7, ADR 7581ac14, задача d5e8ddc1): мыслевые настройки
+ * идут ЛИБО деревом `ast`, ЛИБО плоскими полями. Корпусные (`q`, `scope`,
+ * `link_type_id`, `author_id`, `editor_id`) с `ast` совместимы всегда и сюда
+ * не входят.
+ */
+const SEARCH_AST_EXCLUSIVE_PARAMS = [
+  'type_id',
+  'type',
+  'show_inactive',
+  'trashed',
+  'in_subtree_of',
+  'in',
+  'from_thought_id',
+] as const;
+
 const SearchFields = z
   .object({
     // Сеть обязательна, но в форме XOR: либо одна (`network_id`), либо веер
@@ -876,6 +906,13 @@ const SearchFields = z
     network_ids: z.array(NetworkId).optional().describe(
       'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
     ),
+    /**
+     * AST-условие мыслевых настроек отбора (профиль `thoughts`): подкорень,
+     * типы мыслей, «показывать неактуальные», «корзина» (требование b91336e7,
+     * ADR 7581ac14, задача d5e8ddc1). Валидируется профилем `thoughts` и
+     * исполняется единым движком отбора; корпусные параметры совместимы всегда.
+     */
+    ast: FilterAstBody.optional(),
     query: z.string().min(1),
     scope: z.enum(SEARCH_SCOPES).optional(),
     in_subtree_of: ThoughtId.optional(),
@@ -891,6 +928,23 @@ const SearchFields = z
   // уровня → VALIDATION_ERROR. До `.refine()` — порядок обязателен в zod 4.
   .strict()
   .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  // Задача d5e8ddc1, требование b91336e7: `ast` XOR плоские МЫСЛЕВЫЕ параметры.
+  // Корпусные (`query`, `scope`, `author_id`, `editor_id`) с `ast` допустимы.
+  // `type_id === null` трактуется как «не указан» (nullable-форма MCP).
+  .refine(
+    (v) =>
+      v.ast === undefined ||
+      ((v.type_id === undefined || v.type_id === null) &&
+        v.type === undefined &&
+        v.show_inactive === undefined &&
+        v.in_subtree_of === undefined),
+    {
+      message:
+        `Поле ast несовместимо с плоскими мыслевыми параметрами (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
+          ', ',
+        )}): передайте либо ast, либо плоские параметры.`,
+    },
+  )
   // Задача eb1a3f43, требование c98d5d19: веерный режим — `network_ids`
   // рядом с `network_id`, но XOR: либо одна сеть, либо список. Парсер
   // repeatable создаёт `network_ids: []` при отсутствии параметра в query —
@@ -991,19 +1045,6 @@ const LEGACY_QUERY_CRITERIA = [
   'editor_id',
   'link_filter',
 ] as const;
-
-/**
- * AST-тело отбора (0.13.1, задача cb78315b; сущность «Модель отбора (AST) и её
- * wire-формат» 489c394f). Wire-формат `{ version, filter, sort? }` исполняется
- * единым движком (требование 76e30d9a). Строгую проверку формы (неизвестные
- * поля на любом уровне, версия, согласованность оператора листа и под-выборки)
- * делает доменный `parseFilterAst` — здесь схема лишь фиксирует «объект» и
- * рекламирует форму в `tools/list`, чтобы не дублировать разбор и держать одну
- * каноническую диагностику `VALIDATION_ERROR` для REST и MCP.
- */
-const FilterAstBody = z
-  .record(z.string(), z.unknown())
-  .describe('AST-тело отбора; грамматика — etn.guide { topic: "thoughts.query" }.');
 
 const QueryFields = z
   .object({
@@ -3006,6 +3047,9 @@ export const RestSearchQuery = defineContract(
       // дополняет ею веер.
       // Задача eb1a3f43: веерный режим — `network_ids` опционален.
       network_ids: z.array(NetworkId).optional(),
+      // AST-условие мыслевых настроек (профиль `thoughts`) в query-параметре
+      // (JSON-объект, задача d5e8ddc1): XOR с плоскими мыслевыми параметрами.
+      ast: z.record(z.string(), z.unknown()).optional(),
       q: z.string().min(1),
       scope: z.string().optional(),
       in: z.string().optional(),
@@ -3018,13 +3062,37 @@ export const RestSearchQuery = defineContract(
       editor_id: z.string().optional(),
       limit: z.number().int().min(1).optional(),
       offset: z.number().int().min(0).optional(),
-    }),
+    })
+    // Задача d5e8ddc1, требование b91336e7: `ast` XOR плоские МЫСЛЕВЫЕ
+    // параметры. В REST `type_id` — repeatable: при отсутствии параметра
+    // парсер кладёт `[]`, поэтому проверяем длину, а не наличие ключа.
+    // Корпусные (`q`, `scope`, `link_type_id`, `author_id`, `editor_id`) с
+    // `ast` совместимы всегда.
+    .refine(
+      (v) =>
+        v.ast === undefined ||
+        ((v.type_id?.length ?? 0) === 0 &&
+          v.show_inactive === undefined &&
+          v.trashed === undefined &&
+          v.in === undefined &&
+          v.from_thought_id === undefined),
+      {
+        message:
+          `Поле ast несовместимо с плоскими мыслевыми параметрами (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
+            ', ',
+          )}): передайте либо ast, либо плоские параметры.`,
+      },
+    ),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     // `repeatable: true` парсера: при отсутствии параметра в строке запроса
     // парсер кладёт `[]`; `.min(1)` здесь ломает одиночную сеть. Длину
     // проверяет роут (`input.network_ids.length > 0`).
     network_ids: { from: { kind: 'query', repeatable: true }, t: z.array(NetworkId).optional() },
+    // AST-тело в query-параметре — та же форма, что у одноимённого поля тела
+    // `etn.thoughts.query` (задача d5e8ddc1); строгую форму проверяет доменный
+    // `parseFilterAst` позднее (в роуте), здесь — только JSON-декодирование.
+    ast: { from: { kind: 'query' }, parse: parseRestAstQueryParam },
     q: {
       from: { kind: 'query' },
       parse: (raw: unknown) => {

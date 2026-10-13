@@ -574,8 +574,14 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // не режется, паритет REST/MCP) плюс краткое упоминание в описании (детали —
         // `etn.guide { topic: "activity.list" }`). Замер: 43 598 → 43 908 Б (+310).
         // Планка поднята ровно под прирост: 43 700 → 44 000.
+        // 0.13.1 (задача d5e8ddc1, «AST мыслевых настроек в точке поиска»):
+        // `etn.thoughts.search` принимает `ast`-тело профиля «мысли» — поле
+        // контракта (`inputSchema` не режется) плюс упоминание в описании
+        // (XOR с плоскими мыслевыми параметрами, `VALIDATION_ERROR` вне профиля).
+        // Замер: 43 908 → 44 472 Б (+564). Планка поднята ровно под прирост с
+        // малым запасом: 44 000 → 44 500.
         assert.ok(
-          bytes <= 44_000,
+          bytes <= 44_500,
           `tools/list JSON is ${bytes} bytes — over the 0.11.1 budget of 42500`,
         );
         // Потолок числа инструментов: фактическое 25 + запас 5 = 30 (нижняя
@@ -644,8 +650,10 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // Планка: 38 500 → 38 900.
         // 0.13.1 (задача 2b230e8e): см. блок выше — `ast` в `etn.activity.list`
         // дал +310 Б; D+I 38 833 → 39 143 Б. Планка: 38 900 → 39 250.
+        // 0.13.1 (задача d5e8ddc1): см. блок выше — `ast` в `etn.thoughts.search`
+        // дал +564 Б; D+I 39 143 → 39 707 Б. Планка: 39 250 → 39 750.
         assert.ok(
-          descriptionsPlusInputSchema <= 39_250,
+          descriptionsPlusInputSchema <= 39_750,
           `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 38500`,
         );
       } finally {

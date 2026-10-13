@@ -57,6 +57,7 @@
 import {
   buildLikePattern,
   EtnError,
+  FILTER_AST_VERSION,
   foldCase,
   mentionPrefilterMarkers,
   mentionPrefilterPass,
@@ -70,6 +71,8 @@ import {
   TRAVERSAL_DEFAULTS,
   type DuplicateHit,
   type DuplicateMatchKind,
+  type FilterAst,
+  type FilterAstNode,
   type IconKind,
   type MentionHit,
   type MentionPrefilterMarkers,
@@ -99,6 +102,9 @@ import {
 } from './font-style.js';
 import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+import { assertFilterAstInProfile } from './filter-profile-validation.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { filterAstClause } from './query-service.js';
 
 // Re-export so route/MCP callers have a single import surface for read helpers
 // (docs/03-server-api.md §6.9 resolve is conceptually part of search/lookup).
@@ -477,12 +483,26 @@ export function collectSubtreeTypes(
 
 /** Resolved filters shared by all four search groups. */
 interface SearchFilters {
+  /**
+   * Актуальность/корзина КОРПУСНЫХ сущностей (связи и link-половина хроники):
+   * `show_inactive`/`trashed` остаются параметрами полнотекстового поиска и
+   * фильтруют хиты-связи и хроно-хиты (требование b91336e7, ADR 7581ac14).
+   * Мыслевые настройки (актуальность/корзина/тип/подкорень) сюда НЕ входят —
+   * они исполняются единым AST-движком ({@link thoughtClause}).
+   */
   showInactive: boolean;
   /** S13: when false (default) marked-for-deletion rows are hidden. */
   trashed: boolean;
-  typeIds: string[] | null;
+  /** Фильтр по типу связи (поддерево) — корпусный, фильтрует хиты-связи. */
   linkTypeIds: string[] | null;
-  subtreeIds: Set<string> | null;
+  /**
+   * Конъюнктивная WHERE-клауза МЫСЛЕВЫХ условий отбора (профиль `thoughts`),
+   * скомпилированная единым AST-движком ({@link filterAstClause}). Добавляется
+   * к WHERE мыслевых FTS-групп (`by_names`, `by_texts`, thought-половина
+   * `by_chrono`); корпусные группы её не получают. `null` — мыслевых
+   * настроек нет.
+   */
+  thoughtClause: Clause | null;
   limit: number;
   offset: number;
   /** Highlight terms derived from the query (for JS snippet highlighting). */
@@ -522,14 +542,6 @@ function clampPaging(
 function inListClause(column: string, ids: string[] | null): Clause | null {
   if (!ids || ids.length === 0) return null;
   const placeholders = ids.map(() => '?').join(',');
-  return { sql: `${column} IN (${placeholders})`, params: [...ids] };
-}
-
-/** Build a subtree-restriction clause, or `null` when the set is not limiting. */
-function subtreeClause(column: string, ids: Set<string> | null): Clause | null {
-  if (ids === null) return null;
-  if (ids.size === 0) return { sql: '0', params: [] }; // guaranteed-false
-  const placeholders = [...ids].map(() => '?').join(',');
   return { sql: `${column} IN (${placeholders})`, params: [...ids] };
 }
 
@@ -583,16 +595,16 @@ function searchNames(
   trigram: TrigramQuery,
   f: SearchFilters,
 ): { hits: SearchNameHit[]; total: number } {
-  if (f.subtreeIds !== null && f.subtreeIds.size === 0) return { hits: [], total: 0 };
   const useFts = trigram.match !== '';
   const join = useFts ? 'JOIN fts_thought_names fnames ON fnames.rowid = t.rowid' : '';
   const orderBy = useFts ? 'ORDER BY rank' : 'ORDER BY t.title_norm';
   const { where, params } = joinClauses([
     useFts ? { sql: 'fts_thought_names MATCH ?', params: [trigram.match] } : null,
-    { sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
-    { sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
-    inListClause('t.type_id', f.typeIds),
-    subtreeClause('t.id', f.subtreeIds),
+    // Мыслевые настройки (актуальность/корзина/тип/подкорень) — единой
+    // конъюнкцией из AST-движка (требование b91336e7, ADR 7581ac14).
+    // `ORDER BY rank` и сниппеты сохраняются: AST-клауза — обычный предикат
+    // поверх ранжированной FTS-выборки, множество id не материализуется.
+    f.thoughtClause,
     f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
     f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
     ...trigram.nameShortInclude.map((w) => buildShortWordNameClause(w, false)),
@@ -685,14 +697,12 @@ function searchTexts(
   match: string,
   f: SearchFilters,
 ): { hits: SearchTextHit[]; total: number } {
-  if (f.subtreeIds !== null && f.subtreeIds.size === 0) return { hits: [], total: 0 };
   const { where, params } = joinClauses([
     { sql: 'fts_thought_texts MATCH ?', params: [match] },
     { sql: "c.owner_type = 'thought'", params: [] },
-    { sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
-    { sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
-    inListClause('t.type_id', f.typeIds),
-    subtreeClause('f.thought_id', f.subtreeIds),
+    // Мыслевые настройки — единой AST-конъюнкцией (см. `searchNames`).
+    // Автор/редактор остаются корпусными параметрами (авторство МЫСЛИ).
+    f.thoughtClause,
     f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
     f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
   ]);
@@ -882,10 +892,10 @@ function buildChronoHalf(
   // fts_link_texts.link_id for links).
   let joins = '';
   if (side === 'thought') {
-    clauses.push({ sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] });
-    clauses.push({ sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] });
-    clauses.push(inListClause('t.type_id', f.typeIds));
-    clauses.push(subtreeClause('f.thought_id', f.subtreeIds));
+    // Мыслевые настройки thought-половины хроники — единой AST-конъюнкцией
+    // (требование b91336e7). Автор/редактор остаются корпусными: для раздела
+    // «хронология» это авторство КОММЕНТАРИЯ (`c.created_by`/`c.updated_by`).
+    clauses.push(f.thoughtClause);
     joins = 'JOIN thoughts_v t ON t.id = c.owner_id';
   } else {
     clauses.push({ sql: '(l.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] });
@@ -954,6 +964,108 @@ function searchChrono(
 }
 
 // ---------------------------------------------------------------------------
+// Мыслевые настройки отбора → общий AST (требование b91336e7, ADR 7581ac14)
+// ---------------------------------------------------------------------------
+
+/** Обернуть результат {@link filterAstClause} в локальную форму WHERE-клаузы. */
+function toSearchClause(clause: { sql: string; params: unknown[] }): Clause {
+  return { sql: clause.sql, params: clause.params };
+}
+
+/**
+ * Скомпилировать МЫСЛЕВЫЕ настройки плоского контракта поиска в общий AST
+ * (профиль `thoughts`) — обратная совместимость: те же настройки, что раньше
+ * исполнялись отдельным плоским путём, теперь идут через единый движок.
+ *
+ *   * «показывать неактуальные» (`show_inactive`, дефолт — настройка
+ *     пользователя): `true` → условия нет; иначе лист «Актуальность» = true.
+ *   * «корзина» (`trashed`): `true` → условия нет; иначе лист «Пометка на
+ *     удаление» = false (marked_for_deletion скрыты).
+ *   * типы мыслей (`type` — имя, резолвится; `type_id`) → лист «Тип в
+ *     иерархии» (L21: тип и его подтипы).
+ *   * подкорень (`in=subtree` + `from_thought_id`) → «ИЛИ(id в [корень],
+ *     parents in_hierarchy [корень] режим `all_links`)» — ровно корень и его
+ *     потомки по всем ЖИВЫМ не-корзинным связям (прецедент —
+ *     `applyLegacyHierarchyTraversal`, `client/src/renderer/lib/filter-builder.ts`).
+ *     Лист `parents` + `in_hierarchy` матчит ПОТОМКОВ корня (родитель входит в
+ *     поддерево), сами корни добавляет лист `id` в списке; `children` дал бы
+ *     предков и для подкорня не годится.
+ *
+ * `undefined` — мыслевых настроек в запросе нет (без фильтра).
+ */
+export function compileSearchThoughtAst(
+  ndb: NetworkDb,
+  request: SearchRequest,
+  showInactiveDefault: boolean,
+): FilterAst | undefined {
+  const children: FilterAstNode[] = [];
+
+  // «Показывать неактуальные»: true → условия нет; иначе — только активные.
+  const showInactive = request.show_inactive ?? showInactiveDefault;
+  if (!showInactive) {
+    children.push({ entity: { kind: 'active' }, operator: 'eq', value: true });
+  }
+  if (request.trashed !== true) {
+    children.push({ entity: { kind: 'trashed' }, operator: 'eq', value: false });
+  }
+
+  // Резолв имени типа в id (задача d5ab1630 «Типы адресуются именами»).
+  const resolvedTypeId =
+    request.type !== undefined ? resolveThoughtTypeIdByName(ndb, request.type) : undefined;
+  const typeIds = resolvedTypeId !== undefined ? [resolvedTypeId] : request.type_id;
+  if (typeIds !== undefined && typeIds.length > 0) {
+    children.push({ entity: { kind: 'type' }, operator: 'in_hierarchy', value: [...typeIds] });
+  }
+
+  if (
+    request.in === 'subtree' &&
+    typeof request.from_thought_id === 'string' &&
+    request.from_thought_id !== ''
+  ) {
+    const root = request.from_thought_id;
+    children.push({
+      op: 'or',
+      children: [
+        { entity: { kind: 'id' }, operator: 'in', value: [root] },
+        { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: [root] },
+      ],
+    });
+  }
+
+  if (children.length === 0) return undefined;
+  return {
+    version: FILTER_AST_VERSION,
+    filter: children.length === 1 ? (children[0] as FilterAstNode) : { op: 'and', children },
+  };
+}
+
+/**
+ * Правило сосуществования: `ast` XOR плоские МЫСЛЕВЫЕ параметры
+ * (требование b91336e7, ADR 7581ac14). Одновременная передача — ошибка
+ * валидации: мыслевые настройки шли бы двумя противоречивыми путями.
+ * Корпусные параметры (`q`, `scope`, `link_type_id`, `author_id`,
+ * `editor_id`) с `ast` совместимы всегда и здесь не проверяются.
+ */
+export function assertSearchAstExclusive(request: SearchRequest): void {
+  if (request.ast === undefined) return;
+  const conflicting: string[] = [];
+  if (request.type_id !== undefined && request.type_id.length > 0) conflicting.push('type_id');
+  if (request.type !== undefined) conflicting.push('type');
+  if (request.show_inactive !== undefined) conflicting.push('show_inactive');
+  if (request.trashed !== undefined) conflicting.push('trashed');
+  if (request.in !== undefined) conflicting.push('in');
+  if (request.from_thought_id !== undefined) conflicting.push('from_thought_id');
+  if (conflicting.length === 0) return;
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    `Поле ast несовместимо с плоскими мыслевыми параметрами (${conflicting.join(
+      ', ',
+    )}): передайте либо ast, либо плоские параметры.`,
+    { field: 'ast', conflicting },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Public: search
 // ---------------------------------------------------------------------------
 
@@ -986,23 +1098,35 @@ export function search(
     tokenize(w.replace(/\*/g, ' ')),
   );
 
-  // Резолв имени типа в id (задача d5ab1630 «Типы и свойства адресуются
-  // именами во всех фильтрах MCP»). MCP-фасад тоже резолвит; здесь — для
-  // прямых вызовов из REST. Идемпотентно: если `type` не задан — никакой
-  // работы, и `type_id` используется как есть.
-  const resolvedTypeId: string | undefined =
-    request.type !== undefined ? resolveThoughtTypeIdByName(ndb, request.type) : undefined;
-  const typeIds = resolvedTypeId !== undefined ? [resolvedTypeId] : request.type_id;
+  // Мыслевые настройки отбора — ЕДИНЫМ путём: явное `ast` (профиль `thoughts`)
+  // либо компиляция плоских мыслевых параметров в тот же AST (требование
+  // b91336e7, ADR 7581ac14, задача d5e8ddc1). Отдельного плоского пути
+  // исполнения мыслевых настроек нет — второй движок не вводится.
+  const explicitAst = request.ast;
+  if (explicitAst !== undefined) {
+    assertSearchAstExclusive(request);
+    // Видимость операндов профиля `thoughts` (требование 0095daad): условие
+    // вне профиля — `VALIDATION_ERROR` до исполнения (сценарий 55f31eee).
+    assertFilterAstInProfile(explicitAst, 'thoughts');
+    // Красная диагностика: AST со ссылкой на удалённую сущность не исполняем.
+    const diag = diagnoseFilterAst(ndb, explicitAst);
+    if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
+  }
+  const effectiveAst: FilterAst | undefined =
+    explicitAst ?? compileSearchThoughtAst(ndb, request, showInactiveDefault);
+  const thoughtClause: Clause | null =
+    effectiveAst === undefined ? null : toSearchClause(filterAstClause(ndb, effectiveAst));
 
   const filters: SearchFilters = {
+    // show_inactive/trashed остаются параметрами полнотекстового поиска —
+    // фильтруют ХИТЫ-связи и хроно-хиты по связям (мыслевые настройки идут в
+    // `thoughtClause` через AST).
     showInactive: request.show_inactive ?? showInactiveDefault,
     trashed: request.trashed === true,
-    // L21: a selected parent type matches its whole subtree (OR semantics).
-    typeIds: typeIds ? expandTypeIdsToSubtree(ndb, 'thought_types', typeIds) : null,
     linkTypeIds: request.link_type_id
       ? expandTypeIdsToSubtree(ndb, 'link_types', request.link_type_id)
       : null,
-    subtreeIds: request.in === 'subtree' ? collectSubtreeIds(ndb, request.from_thought_id) : null,
+    thoughtClause,
     limit: paging.limit,
     offset: paging.offset,
     terms: highlightTerms,

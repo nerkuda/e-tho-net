@@ -2137,6 +2137,10 @@ export class RestClient {
     request: import('@etn/shared').SearchRequest,
   ): Promise<import('@etn/shared').SearchResponse> {
     const q: QueryRecord = { q: request.q };
+    // Мыслевые настройки отбора — AST-телем в query-параметре `ast`
+    // (задача d5e8ddc1, требование b91336e7): сервер валидирует профилем
+    // `thoughts` и исполняет единым движком. Корпусные параметры — рядом.
+    if (request.ast !== undefined) q['ast'] = JSON.stringify(request.ast);
     if (request.in !== undefined) q['in'] = request.in;
     if (request.from_thought_id !== undefined) q['from_thought_id'] = request.from_thought_id;
     if (request.scope !== undefined) q['scope'] = request.scope;
@@ -2502,6 +2506,9 @@ export class RestClient {
   ): Promise<import('@etn/shared').SearchResponse> {
     const q: QueryRecord = { q: request.q };
     if (networkIds.length > 0) q['network_ids'] = networkIds;
+    // Мыслевые настройки отбора — AST-телем (см. `searchThoughts`); веерный
+    // режим обязан передавать `ast`, иначе настройки терялись бы (задача d5e8ddc1).
+    if (request.ast !== undefined) q['ast'] = JSON.stringify(request.ast);
     if (request.in !== undefined) q['in'] = request.in;
     if (request.from_thought_id !== undefined) q['from_thought_id'] = request.from_thought_id;
     if (request.scope !== undefined) q['scope'] = request.scope;
