@@ -779,8 +779,10 @@ function globalKeyBindings(): KeyBindingDef[] {
   });
 
   // Canvas zoom (L9): '+'/'=' (both main-row layouts), numpad 'Add';
-  // '-'/'Subtract'; '0' resets. Workspace screen only.
-  const workspaceOnly = (): boolean => store.state.screen === 'workspace';
+  // '-'/'Subtract'; '0' resets. Только при РЕАЛЬНО ВИДИМОМ холсте (ошибка
+  // 63967c21): вид «Карта» без перекрытий. Раскладка (позиция редактора,
+  // доли зон холста) холст не скрывает — скрывают его смена вида и
+  // непрозрачные панели поверх (см. `canvasVisible`).
   bind(
     'canvas.zoomIn',
     ['Ctrl+=', 'Ctrl++', 'Ctrl+Shift+=', 'Ctrl+Add', 'Meta+=', 'Meta++', 'Meta+Add'],
@@ -788,7 +790,7 @@ function globalKeyBindings(): KeyBindingDef[] {
       applyCanvasZoom('in');
       return true;
     },
-    workspaceOnly,
+    canvasVisible,
   );
   bind(
     'canvas.zoomOut',
@@ -797,7 +799,7 @@ function globalKeyBindings(): KeyBindingDef[] {
       applyCanvasZoom('out');
       return true;
     },
-    workspaceOnly,
+    canvasVisible,
   );
   bind(
     'canvas.zoomReset',
@@ -806,7 +808,7 @@ function globalKeyBindings(): KeyBindingDef[] {
       applyCanvasZoom('reset');
       return true;
     },
-    workspaceOnly,
+    canvasVisible,
   );
 
   return bindings;
@@ -818,6 +820,23 @@ function globalKeyBindings(): KeyBindingDef[] {
 function supportsThoughtCopy(): boolean {
   const view = store.state.activeView;
   return view === 'map' || view === 'structures';
+}
+
+/** Холст карты реально виден пользователю (ошибка 63967c21): рабочий стол, вид
+ *  «Карта» и ни одного непрозрачного перекрытия поверх холста. Перекрытия —
+ *  ровно те, что накрывают холст в `screens/workspace.ts`: сеть без доступа
+ *  (`.workspace-placeholder`, `inaccessibleTabIds`) и панель выбора сети
+ *  (`.workspace-picker`, `pickerOpen`); оба — `position: absolute; inset: 0`
+ *  с непрозрачным фоном, то есть холст под ними не виден. Раскладка холст не
+ *  скрывает: позиция редактора его только сужает, доли зон (`canvas_layout`) —
+ *  внутренние границы. Команды масштаба не должны срабатывать «невидимо» —
+ *  тот же класс, что ошибка 00275531 (команда по состоянию чужого вида). */
+function canvasVisible(): boolean {
+  const st = store.state;
+  if (st.screen !== 'workspace' || st.activeView !== 'map') return false;
+  if (st.pickerOpen) return false;
+  const tabId = st.activeTabId;
+  return !(tabId !== null && st.inaccessibleTabIds.has(tabId));
 }
 
 /** Цель Ctrl+C: на карте — курсор/фокус холста, в структурах — выделенная на
@@ -929,5 +948,13 @@ async function globalPaste(targetId: string | null): Promise<void> {
 /** Test seam: the global Ctrl+C handler and its target resolver. Guards the
  *  regression of bug 627a0822 — Ctrl+C must copy the cursor/focus thought even
  *  while the selection panel holds thoughts, never the panel's contents — and
- *  of bug 00275531 — on the structures screen it copies the screen selection. */
-export const appInternals = { globalCopy, currentThoughtCopyTarget };
+ *  of bug 00275531 — on the structures screen it copies the screen selection.
+ *  `globalKeyBindings` + `canvasVisible` guard bug 63967c21 — the canvas zoom
+ *  commands must not fire while the canvas is hidden (another view or an
+ *  opaque overlay). */
+export const appInternals = {
+  globalCopy,
+  currentThoughtCopyTarget,
+  canvasVisible,
+  globalKeyBindings,
+};
