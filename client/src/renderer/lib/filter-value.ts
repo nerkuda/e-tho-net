@@ -39,6 +39,7 @@ import {
   type FilterAstOperator,
   type PropertyValueType,
   type FilterProfileId,
+  type StructureKeywordScope,
 } from '@etn/shared';
 
 import { div, el, span } from './dom.js';
@@ -130,10 +131,14 @@ export type FilterValueEditorKind =
   | 'bounds'
   /** Число значений-«количество» с подписью единицы. */
   | 'count'
-  /** «Есть слова»: инпут + области поиска. */
+  /** «Найти слова»: инпут + области поиска. */
   | 'keywords'
-  /** Булев предикат: да / нет / не важно. */
+  /** Булев предикат: да / нет (без «не важно»). */
   | 'triad'
+  /** Наличие коллекции: (да)/(нет) — оператор в ячейке не показывается. */
+  | 'predicate'
+  /** «Есть свойства»: чип-поле выбора свойств (ссылочные значения). */
+  | 'properties'
   /** Перечисление (чекбоксы из каталога). */
   | 'enum';
 
@@ -276,14 +281,18 @@ export function filterValueEditor(leaf: FilterTreeLeaf, ctx: FilterValueContext)
   const kind = leaf.entity.kind;
   const countShaped = filterValueIsCountShaped(operator);
   if (kind === 'keywords') return 'keywords';
-  if (kind === 'active' || kind === 'trashed' || kind === 'comment') return 'triad';
-  // Коллекции: числовой оператор — «количество», иначе наличие (триада).
-  if (kind === 'attachments' || kind === 'chronology') return countShaped ? 'count' : 'triad';
+  // Булевы предикаты — да/нет (без «не важно»): активность/помеченность — `eq`
+  // true/false; наличие коллекции — (да)/(нет) без ячейки оператора.
+  if (kind === 'active' || kind === 'trashed') return 'triad';
+  if (kind === 'comment' || kind === 'attachments' || kind === 'chronology') return 'predicate';
+  // «Есть свойства»: значение — чип-поле выбора свойств, а не список всех с
+  // чекбоксами (требование заказчика 2026-10-13).
+  if (kind === 'properties') return 'properties';
   // Структурные «Родители»/«Потомки»: числовой оператор — «количество»,
   // иначе выбор мыслей (ссылочный операнд).
   if (kind === 'parents' || kind === 'children') return countShaped ? 'count' : 'entity';
   if (DATE_OPERANDS.has(kind)) return filterValueIsBounds(operator) ? 'bounds' : 'date';
-  if (kind === 'properties' || operator === 'has' || operator === 'not_has') return 'enum';
+  if (operator === 'has' || operator === 'not_has') return 'enum';
   if (USER_OPERANDS.has(kind)) return 'user';
   if (kind === 'property') {
     const def = filterValueRegistryEntry(leaf, ctx.data);
@@ -304,11 +313,6 @@ function enumCatalogue(leaf: FilterTreeLeaf, ctx: FilterValueContext): readonly 
   const fromHost = ctx.enumOptions?.(leaf);
   if (fromHost !== undefined) return fromHost;
   if (leaf.entity.kind === 'kind') return ATTACHMENT_KIND_OPTIONS;
-  if (leaf.entity.kind === 'properties') {
-    const out: FilterValueEnumOption[] = [];
-    for (const [id, entry] of ctx.data.registry) out.push({ value: id, label: entry.name });
-    return out;
-  }
   return [];
 }
 
@@ -469,6 +473,12 @@ export function renderFilterValue(
     case 'triad':
       box.append(triadControl(leaf, api));
       return box;
+    case 'predicate':
+      box.append(predicateControl(leaf, api));
+      return box;
+    case 'properties':
+      box.append(propertiesControl(leaf, api, ctx));
+      return box;
     case 'enum':
       box.append(enumControl(leaf, api, ctx));
       return box;
@@ -507,14 +517,24 @@ function valueEditorControl(
   api: FilterTreeValueSlotApi,
   ctx: FilterValueContext,
 ): HTMLElement {
-  const def = filterValueRegistryEntry(leaf, ctx.data) ?? registryDefinition({ value_type: 'text', config: null });
+  const base =
+    filterValueRegistryEntry(leaf, ctx.data) ?? registryDefinition({ value_type: 'text', config: null });
+  // Множественность значения задаёт ОПЕРАТОР («в списке»), а не `config.multiple`
+  // свойства: у одиночного «Статуса» с оператором «в списке» поле обязано принимать
+  // НЕСКОЛЬКО значений (ошибка: разрешено было только одно — требование заказчика
+  // 2026-10-13). Для text/url это включает чип-редактор множества.
+  const multiple = filterValueIsMultiple(leaf.operator);
+  const def: EffectiveTypeProperty =
+    multiple && (base.value_type === 'text' || base.value_type === 'url')
+      ? { ...base, config: { ...((base.config as Record<string, unknown> | null) ?? {}), multiple: true } }
+      : base;
   const extraSuggest: SuggestSource[] = [filterValueTokenSource(ctx), ...(ctx.extraSuggest ?? [])];
   return buildValueEditor({
     networkId: ctx.networkId,
     definition: def,
     value: filterValueToEditor(leaf.value),
     commitOn: 'change',
-    textListAsArray: filterValueIsMultiple(leaf.operator),
+    textListAsArray: multiple,
     boolTriState: true,
     extraSuggest,
     save: (next) => {
@@ -524,28 +544,80 @@ function valueEditorControl(
   });
 }
 
-/** Триада булева предиката: да / нет / не важно. */
+/** Триада булева предиката: да / нет (без «не важно» — требование заказчика). */
 function triadControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HTMLElement {
   const current =
     leaf.value.kind === 'scalar' && typeof leaf.value.value === 'boolean'
       ? leaf.value.value
         ? 'yes'
         : 'no'
-      : 'any';
+      : 'yes';
   return segmentedControl({
     items: [
       { id: 'yes', label: 'да' },
       { id: 'no', label: 'нет' },
-      { id: 'any', label: 'не важно' },
     ],
     activeId: current,
     ariaLabel: 'Значение предиката',
     extraClass: 'fv-triad',
     onChange: (id) => {
-      if (id === 'any') api.setValue({ kind: 'none' });
-      else api.setValue({ kind: 'scalar', value: id === 'yes' });
+      api.setValue({ kind: 'scalar', value: id === 'yes' });
     },
   }).root;
+}
+
+/**
+ * Наличие коллекции («Есть вложения», «Есть дневниковые записи», «Есть
+ * комментарий»): вид «(да) (нет)», оператор в ячейке НЕ показывается — переключение
+ * перезаписывает оператор AST (`not_empty`/`is_empty`, требование заказчика
+ * 2026-10-13). Коды операторов — из словаря ядра, своих не заводим.
+ */
+function predicateControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HTMLElement {
+  const current: 'yes' | 'no' = leaf.operator === 'is_empty' ? 'no' : 'yes';
+  return segmentedControl({
+    items: [
+      { id: 'yes', label: 'да' },
+      { id: 'no', label: 'нет' },
+    ],
+    activeId: current,
+    ariaLabel: 'Значение условия',
+    extraClass: 'fv-predicate',
+    onChange: (id) => {
+      leaf.operator = id === 'yes' ? 'not_empty' : 'is_empty';
+      leaf.value = { kind: 'none' };
+      api.setValue({ kind: 'none' });
+    },
+  }).root;
+}
+
+/**
+ * «Есть свойства»: чип-поле выбора свойств (ссылочные значения) — выбранные
+ * свойства облачками с крестиками, ввод с живым поиском (требование заказчика
+ * 2026-10-13; «список всех свойств с чекбоксами» убран). Значение — список id
+ * свойств, оператор `has` (истина — мысль имеет любое из выбранных).
+ */
+function propertiesControl(
+  leaf: FilterTreeLeaf,
+  api: FilterTreeValueSlotApi,
+  ctx: FilterValueContext,
+): HTMLElement {
+  const wrap = div('fv-properties');
+  const options: EntityOption[] = [];
+  for (const [id, entry] of ctx.data.registry) options.push({ id, title: entry.name });
+  const field = buildEntityChipField({
+    getValues: () => currentList(leaf.value),
+    onChange: (values) => {
+      leaf.operator = 'has';
+      api.setValue(values.length === 0 ? { kind: 'none' } : { kind: 'list', items: [...values] });
+    },
+    initialOptions: options,
+    loadOptions: (query) => filterEntityOptions(options, query),
+    optionsWhen: 'always',
+    optionsHeader: 'Свойства',
+    placeholder: 'Добавить свойство…',
+  });
+  wrap.append(field.root);
+  return wrap;
 }
 
 /** Перечисление: чекбоксы каталога, значение — список кодов. */
@@ -586,9 +658,11 @@ function currentList(value: FilterTreeValue): string[] {
 }
 
 /**
- * «Есть слова»: инпут + инлайн-чекбоксы областей (элемент 9ecf405b). Ни одной
+ * «Найти слова»: инпут + инлайн-чекбоксы областей (элемент 9ecf405b). Ни одной
  * области — условие отключено: строка приглушается, значение не применяется
  * (требование 0882f8d5, сервер трактует пустой `scope` как «условие выключено»).
+ * «В именах» — имена И синонимы ВМЕСТЕ (требование заказчика 2026-10-13);
+ * раздельно они не предлагаются. Оператор условия не показывается.
  */
 function keywordsControl(
   leaf: FilterTreeLeaf,
@@ -609,18 +683,41 @@ function keywordsControl(
   input.dataset['input'] = 'keywords';
   wrap.append(input);
   const scopes = div(FILTER_VALUE_SCOPES_CLASS);
-  const active = new Set(leaf.entity.kind === 'keywords' ? (leaf.entity.scope ?? []) : []);
-  for (const scope of FILTER_VALUE_KEYWORD_SCOPES) {
+  const scope = new Set<StructureKeywordScope>(
+    leaf.entity.kind === 'keywords' ? (leaf.entity.scope ?? []) : [],
+  );
+  // Область «в именах» охватывает и имена, и синонимы (сверено с серверным
+  // `keyword_scope`: словарь title/synonyms/comment, раздельно не предлагаем).
+  const areas: ReadonlyArray<{ label: string; on: boolean; toggle: (checked: boolean) => void }> = [
+    {
+      label: 'в именах',
+      on: scope.has('title') || scope.has('synonyms'),
+      toggle: (checked) => {
+        for (const name of ['title', 'synonyms'] as const) {
+          if (checked) scope.add(name);
+          else scope.delete(name);
+        }
+      },
+    },
+    {
+      label: 'в комментарии',
+      on: scope.has('comment'),
+      toggle: (checked) => {
+        if (checked) scope.add('comment');
+        else scope.delete('comment');
+      },
+    },
+  ];
+  for (const area of areas) {
     const row = choiceRow({
       kind: 'checkbox',
-      label: scope.label,
-      checked: active.has(scope.value),
-      value: scope.value,
+      label: area.label,
+      checked: area.on,
+      value: area.label,
       onChange: (checked) => {
-        if (checked) active.add(scope.value);
-        else active.delete(scope.value);
-        if (leaf.entity.kind === 'keywords') leaf.entity.scope = [...active];
-        box.classList.toggle(FILTER_VALUE_OFF_CLASS, active.size === 0);
+        area.toggle(checked);
+        if (leaf.entity.kind === 'keywords') leaf.entity.scope = [...scope];
+        box.classList.toggle(FILTER_VALUE_OFF_CLASS, scope.size === 0);
         ctx.touch?.();
       },
     });
@@ -909,6 +1006,9 @@ function entityOperandControl(
   const wrap = div('fv-entity');
   wrap.dataset['entityKind'] = kind;
   wrap.dataset['multiple'] = multiple ? 'yes' : 'no';
+  // Кнопка «…» — СТАНДАРТНЫЙ диалог поиска/создания мыслей (pickThoughtsDialog,
+  // требование заказчика 2026-10-13), а не самодельный диалог entity-picker.
+  const picker = ctx.picker ?? defaultEntityPicker(ctx.networkId, kind);
 
   if (!multiple) {
     const combo = buildEntityCombo({
@@ -916,7 +1016,7 @@ function entityOperandControl(
       kind,
       value: filterValueScalarText(leaf.value) === '' ? null : filterValueScalarText(leaf.value),
       placeholder: 'выбрать…',
-      ...(ctx.picker !== undefined ? { picker: ctx.picker } : {}),
+      ...(picker !== undefined ? { picker } : {}),
       onChange: (id) => {
         api.setValue(id === null || id === '' ? { kind: 'none' } : { kind: 'scalar', value: id });
       },
@@ -934,7 +1034,7 @@ function entityOperandControl(
       optionsHeader: 'Значения',
       placeholder: 'Добавить значение…',
       ...(ctx.cloudOf !== undefined ? { cloudOf: ctx.cloudOf } : {}),
-      ...(ctx.picker !== undefined ? { picker: ctx.picker } : {}),
+      ...(picker !== undefined ? { picker } : {}),
     });
     wrap.append(field.root);
   }
@@ -943,6 +1043,52 @@ function entityOperandControl(
     wrap.append(hierarchyModeControl(leaf, ctx));
   }
   return wrap;
+}
+
+/**
+ * Пикер по умолчанию для ссылочного значения — СТАНДАРТНЫЙ диалог
+ * `pickThoughtsDialog` (`canvas/add-dialog.ts`, как в `editor/value-editor.ts`):
+ * поиск/создание мыслей, выбранное — id-набор. Импорт динамический, чтобы не
+ * заводить статический цикл `canvas → lib` (диалог тяжелее остальных модулей).
+ */
+function defaultEntityPicker(
+  networkId: string,
+  kind: EntityKind,
+): EntityChipFieldOptions['picker'] | undefined {
+  if (kind !== 'thoughts' || networkId === '') return undefined;
+  return {
+    label: 'Выбрать или создать мысли',
+    open: async (managed: readonly string[]): Promise<string[] | null> => {
+      const { pickThoughtsDialog } = await import('../canvas/add-dialog.js');
+      const result = await pickThoughtsDialog({
+        networkId,
+        allowCreate: true,
+        allowLinkType: false,
+        selectedIds: [...managed],
+        title: 'Выбрать или создать мысли',
+        applyLabel: 'Выбрать',
+      });
+      if (result === null) return null;
+      const ids: string[] = [];
+      for (const item of result.items) {
+        if (item.kind === 'existing') {
+          ids.push(item.id);
+          continue;
+        }
+        try {
+          const created = await etn.thoughts.create(networkId, {
+            title: item.title,
+            synonyms: item.synonyms,
+            type_id: result.thoughtTypeId ?? null,
+          });
+          ids.push(created.id);
+        } catch {
+          // Ошибку создания не глушим в модель: пользователь повторит выбор.
+        }
+      }
+      return ids;
+    },
+  };
 }
 
 /** Режим обхода «в иерархии» — переключатель В ЯЧЕЙКЕ, не пункт списка (21955e84). */

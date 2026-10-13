@@ -155,13 +155,16 @@ describe('вид редактора значения: оператор × опе
     assert.equal(mod.filterValueEditor(leaf({ kind: 'keywords' }, 'not_empty'), ctx()), 'none');
   });
 
-  it('булевы предикаты и коллекции — триада, числовые сравнения коллекций — количество', () => {
+  it('булевы предикаты — триада, наличие коллекций/комментария — предикат, «Есть свойства» — чип-поле', () => {
     assert.equal(mod.filterValueEditor(leaf({ kind: 'active' }, 'eq'), ctx()), 'triad');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'trashed' }, 'ne'), ctx()), 'triad');
-    assert.equal(mod.filterValueEditor(leaf({ kind: 'comment' }, 'eq'), ctx()), 'triad');
-    assert.equal(mod.filterValueEditor(leaf({ kind: 'attachments' }, 'eq'), ctx()), 'triad');
-    assert.equal(mod.filterValueEditor(leaf({ kind: 'chronology' }, 'between'), ctx()), 'count');
-    assert.equal(mod.filterValueEditor(leaf({ kind: 'attachments' }, 'gt'), ctx()), 'count');
+    // Наличие коллекций/комментария — вид «(да)(нет)», оператор в ячейке скрыт.
+    assert.equal(mod.filterValueEditor(leaf({ kind: 'comment' }, 'eq'), ctx()), 'predicate');
+    assert.equal(mod.filterValueEditor(leaf({ kind: 'attachments' }, 'eq'), ctx()), 'predicate');
+    assert.equal(mod.filterValueEditor(leaf({ kind: 'chronology' }, 'between'), ctx()), 'predicate');
+    assert.equal(mod.filterValueEditor(leaf({ kind: 'attachments' }, 'gt'), ctx()), 'predicate');
+    // «Есть свойства» — чип-поле выбора свойств (не список с чекбоксами).
+    assert.equal(mod.filterValueEditor(leaf({ kind: 'properties' }, 'has'), ctx()), 'properties');
   });
 
   it('ссылочные операнды — живой поиск, пользователи — свой виджет, даты — ячейка опор', () => {
@@ -193,9 +196,13 @@ describe('вид редактора значения: оператор × опе
     assert.equal(mod.filterValueEditor(p('p-link', 'between'), ctx()), 'count', '«количество между» — две числовые границы');
   });
 
-  it('«Есть слова» и перечисления: каталог хоста важнее словаря модуля', () => {
+  it('«Найти слова» и перечисления: каталог хоста важнее словаря модуля', () => {
     assert.equal(mod.filterValueEditor(leaf({ kind: 'keywords' }, 'matches'), ctx()), 'keywords');
-    assert.equal(mod.filterValueEditor(leaf({ kind: 'properties' }, 'has'), ctx()), 'enum');
+    assert.equal(
+      mod.filterValueEditor(leaf({ kind: 'properties' }, 'has'), ctx()),
+      'properties',
+      '«Есть свойства» — чип-поле выбора свойств',
+    );
     assert.equal(mod.filterValueEditor(leaf({ kind: 'kind' }, 'in'), ctx()), 'enum');
     assert.equal(
       mod.filterValueEditor(leaf({ kind: 'action' }, 'eq'), ctx()),
@@ -293,18 +300,18 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(box.findAll((n) => n.tagName.toUpperCase() === 'INPUT').length, 0);
   });
 
-  it('триада: активный сегмент по значению, «нет» и «не важно» пишут модель', () => {
+  it('триада: активный сегмент по значению, «нет» пишет модель (без «не важно»)', () => {
     const { api, writes } = slot();
     const box = render(leaf({ kind: 'active' }, 'eq', { kind: 'scalar', value: true }), api);
     const segs = buttons(box);
-    assert.equal(segs.length, 3, 'три сегмента: да/нет/не важно');
+    assert.equal(segs.length, 2, 'два сегмента: да/нет');
     segs[1]!.fire('click');
-    segs[2]!.fire('click');
     assert.deepEqual(writes[0], { kind: 'scalar', value: false });
-    assert.deepEqual(writes[1], { kind: 'none' });
+    segs[0]!.fire('click');
+    assert.deepEqual(writes[1], { kind: 'scalar', value: true });
   });
 
-  it('«Есть слова»: области инлайн, ни одной — условие приглушено', () => {
+  it('«Найти слова»: области инлайн («в именах» = имена+синонимы), ни одной — условие приглушено', () => {
     const { api } = slot();
     const leafNode = leaf({ kind: 'keywords', scope: [] }, 'matches', { kind: 'scalar', value: 'счёт' });
     const touched: number[] = [];
@@ -312,12 +319,12 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(box.dataset['editor'], 'keywords');
     assert.ok(box.classList.contains(mod.FILTER_VALUE_OFF_CLASS), 'ни одной области — условие отключено');
     const scopes = all(box, 'ui-choice-row');
-    assert.equal(scopes.length, 3, 'три области поиска');
+    assert.equal(scopes.length, 2, 'две области: «в именах» и «в комментарии»');
     const checkbox = scopes[0]!.findAll((n) => n.tagName.toUpperCase() === 'INPUT')[0]!;
     checkbox.checked = true;
     checkbox.fire('change');
     assert.equal(touched.length, 1, 'правка вне значения уведомляет хост');
-    assert.deepEqual(leafNode.entity.scope, ['title'], 'область записана в модель операнда');
+    assert.deepEqual(leafNode.entity.scope, ['title', 'synonyms'], '«в именах» = имена и синонимы вместе');
   });
 
   it('«количество»: числовой инпут и подпись единицы', () => {
