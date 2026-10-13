@@ -68,6 +68,7 @@ import {
   TYPE_OWNER_TYPES,
   type EtnErrorCode,
   type LinkTypeFilterInput,
+  type McpThoughtWriteParams,
   type SearchRequest,
   type StructureDirectionFlags,
   type SubgraphEdge,
@@ -4327,6 +4328,90 @@ export interface ReaderTaskFail {
 
 /** Ответ reader-воркера. */
 export type ReaderTaskResponse = ReaderTaskOk | ReaderTaskFail;
+
+// ---------------------------------------------------------------------------
+// Контракт write-пула (ADR ca3a9218, тех.проект 0df7ccd6, задача 57068081)
+// ---------------------------------------------------------------------------
+
+/**
+ * Контекст задачи write-пула: всё, что нужно воркеру, чтобы открыть СВОЁ
+ * writer-соединение и исполнить запись без знаний о сессии.
+ *
+ * Отличия от {@link ReaderTaskContext} принципиальные и по существу:
+ *
+ *   * соединение воркера — ПИШУЩЕЕ (не `readonly`), открывается тем же профилем
+ *     прагм и тем же набором SQL-функций, что и главное соединение, но БЕЗ
+ *     миграций и без чистки `object_locks` (`openNetworkDb` в воркере запрещён —
+ *     сторож `guard-write-pool.test.ts`);
+ *   * `schemaVersion` — маркер инвалидации: сменилась (миграция главного
+ *     потока) — соединение воркера переоткрывается, следующая задача едет по
+ *     новой схеме (сценарий 75627b29);
+ *   * `layerId` переустанавливается на соединении каждой задачей (`useLayer`):
+ *     видимость `*_v` в записи — слоя задачи, а не прошлой (сценарий 83bf13f1).
+ */
+export interface WriteTaskContext {
+  /** Абсолютный путь к `data.db` сети (воркер открывает своё writer-соединение). */
+  dbPath: string;
+  /** Логический id сети — ключ sticky-привязки в диспетчере пула. */
+  networkId: string;
+  /** Контекст слоя: `*_v` резолвятся по цепочке предков этого слоя. */
+  layerId: string;
+  /** `PRAGMA schema_version` — инвалидация соединений воркера при смене схемы. */
+  schemaVersion: number;
+  /**
+   * Плоские факты кросс-сетевого доступа (`CrossNetworkAccessContext` содержит
+   * `Logger` и `Set` — через границу потока не проходят). Пока не используется:
+   * кросс-сетевой резолв в воркере — этап переноса соответствующих операций
+   * (ADR ca3a9218, «Кросс-сетевой резолв»); такие задачи остаются в главном
+   * потоке через `poolable: false` (см. `runWriteTask`).
+   */
+  crossNetworkAccess?: WriteCrossNetworkFacts;
+}
+
+/** Сериализуемая часть контекста кросс-сетевого доступа. */
+export interface WriteCrossNetworkFacts {
+  dataDir: string;
+  userId: string;
+  clientId: string;
+  currentNetworkId: string;
+  accessibleNetworkIds: string[];
+}
+
+/** Имена операций, исполняемых write-воркером (этап 1 — батч-запись мыслей). */
+export type WriteOp = 'write.thoughts';
+
+/** Payload `write.thoughts` — тот же вход, что у `writeThoughts` в домене. */
+export interface WriteThoughtsPayload {
+  /** Батч `etn.thoughts.write` (мысли + комментарии + свойства + связи). */
+  input: McpThoughtWriteParams;
+  /** Актор записи: авторство строк и журнала. */
+  actorUserId: string;
+}
+
+/**
+ * Одна задача write-пула: контекст + op + payload. Замыкания через границу
+ * потока не передаются (ADR ca3a9218), поэтому op назван строкой, а данные —
+ * плоский structured-clone DTO.
+ */
+export type WriteTask = { context: WriteTaskContext } & {
+  op: 'write.thoughts';
+  payload: WriteThoughtsPayload;
+};
+
+/** Успешный ответ write-воркера: `result` конкретизируется по `op`. */
+export interface WriteTaskOk {
+  ok: true;
+  result: unknown;
+}
+
+/** Ответ воркера с ошибкой: доменная ошибка сериализуется в плоский вид. */
+export interface WriteTaskFail {
+  ok: false;
+  error: { code: EtnErrorCode; message: string; details?: unknown };
+}
+
+/** Ответ write-воркера. */
+export type WriteTaskResponse = WriteTaskOk | WriteTaskFail;
 
 // ---------------------------------------------------------------------------
 // Публикации (0.11.1, задача 8178e007; карточка CRUD 5af247e4)

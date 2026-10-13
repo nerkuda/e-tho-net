@@ -96,6 +96,8 @@ async function buildHttpContext(): Promise<{
     readerPool: { size: 1, taskTimeoutMs: 30000 },
   // Фоновый чекпойнт WAL в тестах выключен: сеть чекпойнтит сам тест.
   walCheckpoint: { intervalMs: 0 },
+  // Пул записи в тестах выключен: пути записи переводит отдельная задача (c8920d04).
+  writePool: { size: 0, taskTimeoutMs: 120000, idleEvictionMs: 30000 },
   };
   const app = await createServer({ config, systemDb: sys, logger: createLogger('silent') });
 
@@ -318,8 +320,11 @@ describe('MCP HTTP endpoint (F1/F2)', { skip: !nativeAvailable() }, () => {
           logLevel: 'silent',
           mcp: { enabled: false, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
           readerPool: { size: 1, taskTimeoutMs: 30000 },
-  // Фоновый чекпойнт WAL в тестах выключен: сеть чекпойнтит сам тест.
-  walCheckpoint: { intervalMs: 0 },
+          // Пул записи в тестах выключен: пути записи переводит отдельная
+          // задача (c8920d04).
+          writePool: { size: 0, taskTimeoutMs: 120000, idleEvictionMs: 30000 },
+          // Фоновый чекпойнт WAL в тестах выключен: сеть чекпойнтит сам тест.
+          walCheckpoint: { intervalMs: 0 },
         },
         systemDb: sys,
         logger: createLogger('silent'),

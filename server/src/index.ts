@@ -13,6 +13,7 @@ import http from 'node:http';
 import { ConfigError, loadConfig } from './config.js';
 import { SystemDb } from './db/system-db.js';
 import { closeReaderPool, configureReaderPool } from './db/reader-pool.js';
+import { closeWritePool, configureWritePool, drainWritePool } from './db/write-pool.js';
 import {
   checkpointAndCloseAllNetworkDbs,
   startWalCheckpointScheduler,
@@ -51,6 +52,30 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     taskTimeoutMs: config.readerPool.taskTimeoutMs,
     logger,
   });
+
+  // Пул записи (ADR ca3a9218, тех.проект 0df7ccd6): тоже процессный ресурс и
+  // тоже поднимает воркеры лениво. Пока он только настроен — пути записи
+  // переводит на пул отдельная задача (c8920d04), до неё записи идут прежним
+  // путём в главном потоке, а пул покрыт тестами. `ETN_WRITE_POOL_SIZE=0`
+  // выключает пул: задача записи исполняется синхронно.
+  const writePool = configureWritePool({
+    size: config.writePool.size,
+    taskTimeoutMs: config.writePool.taskTimeoutMs,
+    idleEvictionMs: config.writePool.idleEvictionMs,
+    logger,
+  });
+  if (writePool === null) {
+    logger.info('Write pool disabled (ETN_WRITE_POOL_SIZE=0): записи идут в главном потоке');
+  } else {
+    logger.info(
+      {
+        size: writePool.size,
+        taskTimeoutMs: writePool.taskTimeoutMs,
+        idleEvictionMs: writePool.idleEvictionMs,
+      },
+      'Write pool configured',
+    );
+  }
 
   if (!systemDb.hasFirstUser()) {
     systemDb.close();
@@ -130,6 +155,15 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
       await new Promise<void>((resolve) => mcpListener.close(() => resolve()));
     }
     await app.close();
+    // Записи — раньше всего остального: сначала дожидаемся слива очередей пула
+    // (подтверждённые задачи не теряем), затем закрываем воркеры — их
+    // writer-соединения не должны пережить остановку, иначе чекпойнт WAL
+    // ниже не сможет усечь журнал.
+    const drained = await drainWritePool();
+    if (!drained.drained) {
+      logger.warn({ ...drained }, 'write pool: очередь не слилась в отведённое время');
+    }
+    await closeWritePool();
     // Читатели закрываются ДО чекпойнта: их снапшоты мешали бы усечь журнал.
     await closeReaderPool();
     // Чекпойнт всех БД и закрытие соединений сетей (ошибка dac92886): иначе

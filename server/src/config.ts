@@ -71,6 +71,13 @@ export interface ServerConfig {
    */
   readerPool: ReaderPoolConfig;
   /**
+   * Пул записи на `worker_threads` (`ETN_WRITE_POOL_SIZE`,
+   * `ETN_WRITE_TASK_TIMEOUT_MS`, `ETN_WRITE_EVICT_IDLE_MS`; ADR ca3a9218,
+   * тех.проект 0df7ccd6). `size: 0` — пул выключен: запись исполняется
+   * синхронно в главном потоке.
+   */
+  writePool: WritePoolConfig;
+  /**
    * Фоновый чекпойнт WAL сетей (`ETN_WAL_CHECKPOINT_INTERVAL_MS`; ошибка
    * dac92886): журнал сетей усекается автоматически, а не растёт до ручного
    * `wal_checkpoint(TRUNCATE)`.
@@ -90,6 +97,16 @@ export interface ReaderPoolConfig {
   size: number;
   /** Тайм-аут одной задачи пула, мс. */
   taskTimeoutMs: number;
+}
+
+/** Настройки пула записи (ADR ca3a9218, тех.проект 0df7ccd6). */
+export interface WritePoolConfig {
+  /** Число воркеров пула (0..16); `0` — пул выключен. */
+  size: number;
+  /** Тайм-аут одной задачи записи от начала исполнения, мс. */
+  taskTimeoutMs: number;
+  /** Простой sticky-привязки до её вытеснения для новой сети, мс. */
+  idleEvictionMs: number;
 }
 
 /**
@@ -147,6 +164,30 @@ const READER_POOL_SIZE_MIN = 1;
 const READER_POOL_SIZE_MAX = 16;
 const READER_TASK_TIMEOUT_MIN_MS = 1_000;
 const READER_TASK_TIMEOUT_MAX_MS = 600_000;
+
+/**
+ * Дефолтный размер пула записи (ADR ca3a9218: «по умолчанию 2, конфигурируется
+ * переменной окружения»). Два воркера — это два писателя параллельно (обычно
+ * разные сети) плюс запас главному потоку: пул уводит из цикла событий долгие
+ * батчи, а не заменяет планировщик, и множит соединения и кэш страниц.
+ */
+const DEFAULT_WRITE_POOL_SIZE = 2;
+/**
+ * Дефолтный тайм-аут задачи записи (2 минуты) — согласован с
+ * `db/write-pool.ts` (`DEFAULT_WRITE_TASK_TIMEOUT_MS`): замер ошибки 646347ab —
+ * батч держал поток до 36 с, поэтому потолок заведомо выше.
+ */
+const DEFAULT_WRITE_TASK_TIMEOUT_MS = 120_000;
+/** Дефолтный простой привязки до вытеснения (ADR ca3a9218: «не мгновенно»), мс. */
+const DEFAULT_WRITE_EVICT_IDLE_MS = 30_000;
+/** Границы настроек пула записи. `0` у размера — выключенный пул. */
+const WRITE_POOL_SIZE_MIN = 0;
+const WRITE_POOL_SIZE_MAX = 16;
+const WRITE_TASK_TIMEOUT_MIN_MS = 1_000;
+const WRITE_TASK_TIMEOUT_MAX_MS = 600_000;
+const WRITE_EVICT_IDLE_MIN_MS = 0;
+const WRITE_EVICT_IDLE_MAX_MS = 600_000;
+
 
 /**
  * Интервал фонового чекпойнта WAL сетей (ошибка dac92886), мс. Минута —
@@ -284,6 +325,60 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     readerTaskTimeoutMs = parsed;
   }
 
+  // --- ETN_WRITE_POOL_* (ADR ca3a9218, тех.проект 0df7ccd6) -----------------
+  let writePoolSize = DEFAULT_WRITE_POOL_SIZE;
+  const writePoolSizeRaw = env.ETN_WRITE_POOL_SIZE?.trim();
+  if (writePoolSizeRaw !== undefined && writePoolSizeRaw !== '') {
+    const parsed = Number.parseInt(writePoolSizeRaw, 10);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < WRITE_POOL_SIZE_MIN ||
+      parsed > WRITE_POOL_SIZE_MAX
+    ) {
+      throw new ConfigError(
+        `ETN_WRITE_POOL_SIZE must be 0 (disabled) or an integer in ` +
+          `[${WRITE_POOL_SIZE_MIN}, ${WRITE_POOL_SIZE_MAX}], got: ${JSON.stringify(writePoolSizeRaw)}`,
+      );
+    }
+    writePoolSize = parsed;
+  }
+
+  let writeTaskTimeoutMs = DEFAULT_WRITE_TASK_TIMEOUT_MS;
+  const writeTimeoutRaw = env.ETN_WRITE_TASK_TIMEOUT_MS?.trim();
+  if (writeTimeoutRaw !== undefined && writeTimeoutRaw !== '') {
+    const parsed = Number.parseInt(writeTimeoutRaw, 10);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < WRITE_TASK_TIMEOUT_MIN_MS ||
+      parsed > WRITE_TASK_TIMEOUT_MAX_MS
+    ) {
+      throw new ConfigError(
+        `ETN_WRITE_TASK_TIMEOUT_MS must be an integer number of milliseconds in ` +
+          `[${WRITE_TASK_TIMEOUT_MIN_MS}, ${WRITE_TASK_TIMEOUT_MAX_MS}], ` +
+          `got: ${JSON.stringify(writeTimeoutRaw)}`,
+      );
+    }
+    writeTaskTimeoutMs = parsed;
+  }
+
+  let writeEvictIdleMs = DEFAULT_WRITE_EVICT_IDLE_MS;
+  const writeEvictRaw = env.ETN_WRITE_EVICT_IDLE_MS?.trim();
+  if (writeEvictRaw !== undefined && writeEvictRaw !== '') {
+    const parsed = Number.parseInt(writeEvictRaw, 10);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < WRITE_EVICT_IDLE_MIN_MS ||
+      parsed > WRITE_EVICT_IDLE_MAX_MS
+    ) {
+      throw new ConfigError(
+        `ETN_WRITE_EVICT_IDLE_MS must be an integer number of milliseconds in ` +
+          `[${WRITE_EVICT_IDLE_MIN_MS}, ${WRITE_EVICT_IDLE_MAX_MS}], ` +
+          `got: ${JSON.stringify(writeEvictRaw)}`,
+      );
+    }
+    writeEvictIdleMs = parsed;
+  }
+
   // --- ETN_WAL_CHECKPOINT_INTERVAL_MS (ошибка dac92886) --------------------
   let walCheckpointIntervalMs = DEFAULT_WAL_CHECKPOINT_INTERVAL_MS;
   const walIntervalRaw = env.ETN_WAL_CHECKPOINT_INTERVAL_MS?.trim();
@@ -311,6 +406,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     logLevel,
     mcp: { enabled: mcpEnabled, port: mcpPort, sessionIdleTtlMs: mcpSessionIdleTtlMs },
     readerPool: { size: readerPoolSize, taskTimeoutMs: readerTaskTimeoutMs },
+    writePool: {
+      size: writePoolSize,
+      taskTimeoutMs: writeTaskTimeoutMs,
+      idleEvictionMs: writeEvictIdleMs,
+    },
     walCheckpoint: { intervalMs: walCheckpointIntervalMs },
   };
 }
