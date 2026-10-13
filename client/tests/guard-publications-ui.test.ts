@@ -341,9 +341,12 @@ describe('guard: UI публикаций (a3cfc018)', () => {
     const consumers = [
       'screens/structures/filter-panel.ts',
       'screens/chronicle/filter-panel.ts',
-      'screens/thought-type/filter-dialog.ts',
       'screens/publications/recipe.ts',
     ] as const;
+    // Диалог отбора типа мысли (задача cfbe8c74, ADR fc23f9c1) больше не
+    // собирает секцию «Родительские мысли» сам: ограничение по родителям —
+    // строка дерева на операнде «Родители» единого редактора, а её чип-поле
+    // строит общий виджет значения (`lib/filter-value.ts` → `buildEntityChipField`).
     for (const rel of consumers) {
       const source = fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
       assert.ok(

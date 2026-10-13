@@ -15,12 +15,12 @@
 
 import type {
   EffectiveTypeProperty,
+  FilterAst,
   NetworkProperty,
   PropertyValueType,
   StructurePropertyOp,
   ThoughtType,
   ThoughtTypeView,
-  ThoughtTypeViewDefinition,
 } from '@etn/shared';
 
 import {
@@ -29,16 +29,19 @@ import {
 } from '@etn/shared';
 
 import {
-  buildWireFilter,
+  buildFilterAst,
   defaultFilterCriteriaState,
+  defaultFilterTreeGroup,
   hasAnyFilterCriteria,
-  parseFilterDefinition,
+  parseFilterDefinitionTree,
   type FilterCriteriaState,
+  type FilterTreeLeaf,
+  type FilterTreeNode,
   type PropertyConditionState,
 } from '../../lib/filter-builder.js';
 
 // ---------------------------------------------------------------------------
-// Состояние отбора и wire — единый конструктор `lib/filter-builder.ts`
+// Состояние отбора и определение — единый конструктор `lib/filter-builder.ts`
 // ---------------------------------------------------------------------------
 
 /** Псевдонимы единой модели (публичный интерфейс модуля для тестов). */
@@ -48,29 +51,115 @@ export type DialogPropertyCondition = PropertyConditionState;
 export const defaultDialogCriteriaState = defaultFilterCriteriaState;
 
 /**
- * Parses an existing view's JSON `definition` into the dialog state.
- * Returns the default state when the JSON is malformed.
+ * Служебный дефолт места «отбор типа мысли», унаследованный от плоской формы:
+ * помеченные на удаление скрыты, пока пользователь не включил их сам. В плоском
+ * `definition v1` он выражался ОТСУТСТВИЕМ поля `trashed` и разворачивался
+ * сервером при чтении; в AST-определении неявных дефолтов нет — поэтому лист
+ * `Корзина равно нет` впекается в определение ЯВНО при сохранении (иначе отбор
+ * типа начал бы показывать помеченные на удаление). См. {@link stripViewDefaults}
+ * и {@link withViewDefaults}.
  */
-export function parseViewDefinition(view: ThoughtTypeView | null): FilterCriteriaState {
-  if (view === null) return defaultFilterCriteriaState();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(view.definition) as unknown;
-  } catch {
-    return defaultFilterCriteriaState();
-  }
-  return parseFilterDefinition(parsed);
+function trashedDefaultLeaf(): FilterTreeLeaf {
+  return { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } };
+}
+
+/** Лист ровно служебного дефолта «Корзина равно нет» ({@link trashedDefaultLeaf}). */
+function isTrashedDefaultLeaf(node: FilterTreeNode): boolean {
+  return (
+    node.kind === 'leaf' &&
+    node.entity.kind === 'trashed' &&
+    node.operator === 'eq' &&
+    node.value.kind === 'scalar' &&
+    node.value.value === false &&
+    node.mode === undefined
+  );
+}
+
+/** Есть ли в дереве ЛЮБОЙ лист «Корзина» (пользователь сам решил про удалённые). */
+function treeHasTrashedLeaf(node: FilterTreeNode): boolean {
+  if (node.kind === 'group') return node.children.some(treeHasTrashedLeaf);
+  return node.entity.kind === 'trashed';
 }
 
 /**
- * Materialises the wire `ThoughtTypeViewDefinition` единым конвертером
- * конструктора в режиме отбора типа мысли («не важно» → `show_inactive`).
+ * Снять с КОРНЕВОГО уровня служебный дефолт «Корзина равно нет»: в редакторе он
+ * не показывается строкой-условием (это дефолт МЕСТА, а не условие пользователя).
+ * Лист, вложенный в группу, не трогаем — он осмысленно собран пользователем.
  */
-export function buildWireDefinition(
+export function stripViewDefaults(tree: FilterTreeNode): FilterTreeNode {
+  if (tree.kind !== 'group') return tree;
+  return { ...tree, children: tree.children.filter((child) => !isTrashedDefaultLeaf(child)) };
+}
+
+/**
+ * Обеспечить служебный дефолт места в дереве перед материализацией AST: если
+ * листа «Корзина» в дереве нет вовсе — добавить `Корзина равно нет` на корневой
+ * уровень. Пользовательский лист «Корзина» (любой) дефолт отменяет.
+ */
+export function withViewDefaults(tree: FilterTreeNode): FilterTreeNode {
+  if (treeHasTrashedLeaf(tree)) return tree;
+  const leaf = trashedDefaultLeaf();
+  if (tree.kind === 'group') return { ...tree, children: [...tree.children, leaf] };
+  return { kind: 'group', op: 'and', children: [tree, leaf] };
+}
+
+/**
+ * Parses an existing view's JSON `definition` into the dialog state and
+ * GUARANTEES a filled `tree`: AST-определение уже несёт дерево, старую плоскую
+ * `definition v1` единый конструктор компилирует в дерево на входе
+ * (`parseFilterDefinitionTree` → `compileFlatCriteriaToAst`, задача cfbe8c74;
+ * ADR fc23f9c1 запрещает вторую точку чтения сохранённого отбора). Служебный
+ * дефолт места («Корзина равно нет») с корневого уровня снимается
+ * ({@link stripViewDefaults}) — он не показывается условием пользователя.
+ * Returns the default state when the JSON is malformed.
+ */
+export function parseViewDefinition(
+  view: ThoughtTypeView | null,
+  registry?: ReadonlyMap<string, NetworkProperty>,
+): FilterCriteriaState {
+  const state =
+    view === null
+      ? defaultFilterCriteriaState()
+      : parseViewDefinitionJson(view.definition, registry);
+  state.tree = stripViewDefaults(state.tree ?? defaultFilterTreeGroup('and'));
+  return state;
+}
+
+function parseViewDefinitionJson(
+  definition: string,
+  registry?: ReadonlyMap<string, NetworkProperty>,
+): FilterCriteriaState {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(definition) as unknown;
+  } catch {
+    return defaultFilterCriteriaState();
+  }
+  return parseFilterDefinitionTree(parsed, {
+    activeMode: 'view',
+    ...(registry !== undefined ? { registry } : {}),
+  });
+}
+
+/**
+ * AST отбора типа мысли из единой модели (форма 0.13.1, сущность 489c394f):
+ * дерево + многоуровневая сортировка, плюс служебный дефолт места
+ * ({@link withViewDefaults}). `strict` — отбор обязан быть принят исполнителем
+ * профиля «мысли» (бросает `Error`); конвертер ОДИН — `buildFilterAst` единого
+ * конструктора, второго нет (ADR 30ff83bb).
+ */
+export function buildViewAst(
   state: FilterCriteriaState,
-  registryById: Map<string, NetworkProperty>,
-): ThoughtTypeViewDefinition {
-  return buildWireFilter(state, registryById, { activeMode: 'view' });
+  opts: { strict?: boolean } = {},
+): FilterAst {
+  const tree = withViewDefaults(state.tree ?? defaultFilterTreeGroup('and'));
+  const model: FilterCriteriaState = { ...state, tree };
+  return buildFilterAst(model, opts.strict === true ? { profile: 'thoughts', strict: true } : {});
+}
+
+/** AST для ЗАПИСИ отбора (проверенный профилем) — то, что уходит на сервер. */
+export function buildViewAstDefinition(state: FilterCriteriaState): FilterAst {
+  return buildViewAst(state, { strict: true });
 }
 
 /** Единый признак «задан хотя бы один критерий» (запрет пустого отбора). */
@@ -190,145 +279,24 @@ export function buildTokensForField(
 }
 
 /**
- * Поля отбора, у которых нет «типа значения» свойства, но которым нужен
- * токен-пикер (баг 2): ключевые слова, тип мысли/связи, автор, редактор.
- */
-export type SpecialTokenField =
-  | 'keywords'
-  | 'thought_type'
-  | 'link_type'
-  | 'author'
-  | 'editor';
-
-/**
- * Токены для полей, не привязанных к типу значения свойства
- * (баг 2, таблица токенов из решения №7 тех.проекта 918833e3, расширено в
- * задаче 68ec0b5b для текстовых свойств с id онтологии):
- *
- *   * `keywords` — `$thought.title`, `$thought.synonyms` + свойства типа/предков
- *     с типом значения text/url (поиск по тексту);
- *   * `thought_type` — `$thought.type` (id типа мысли-контекста) плюс
- *     текстовые/url-свойства цепочки типов: текстовое свойство может
- *     хранить id нужного типа, резолвер подставит его «как есть» без
- *     проверки соответствия типов;
- *   * `link_type` — то же, что `thought_type`, только без `$thought.type`
- *     (у мысли нет поля «id типа связи»): только текстовые/url-свойства
- *     цепочки типов;
- *   * `author`/`editor` — `$thought.author`/`$thought.editor` + `$user`.
- *
- * Скалярные операции (`eq`) несовместимы с множественными свойствами
- * (валидируется сервером по `validateDefinitionForTokens`) — такие
- * токены из кандидатов исключаются.
- */
-export function buildTokensForSpecialField(
-  chainProps: ChainProperties[],
-  field: SpecialTokenField,
-): ViewToken[] {
-  if (field === 'thought_type' || field === 'link_type') {
-    const out: ViewToken[] = [];
-    if (field === 'thought_type') {
-      out.push({
-        text: '$thought.type',
-        label: '$thought.type — тип мысли в фокусе',
-        section: 'Поля мысли',
-      });
-    }
-    for (const level of chainProps) {
-      if (level.props.length === 0) continue;
-      const sectionName = `Свойства «${level.type.name}»`;
-      for (const def of level.props) {
-        if (def.value_type !== 'text' && def.value_type !== 'url') continue;
-        // Скалярные операции `eq` несовместимы с множественными свойствами
-        // (валидация сервера: `validateDefinitionForTokens`).
-        if (def.config?.multiple === true) continue;
-        out.push({
-          text: `$thought.[${def.key}]`,
-          label: `$thought.[${def.key}] — ${def.value_type}`,
-          section: sectionName,
-        });
-      }
-    }
-    return out;
-  }
-  if (field === 'author' || field === 'editor') {
-    // Для ОБОИХ полей (автор и редактор) доступны и `$thought.author`, и
-    // `$thought.editor`, и `$user` — отбор наследуется, поэтому «автор» и
-    // «редактор» должны адресоваться независимо от поля (ошибка e8365d29).
-    return [
-      { text: '$thought.author', label: '$thought.author', section: 'Поля мысли' },
-      { text: '$thought.editor', label: '$thought.editor' },
-      { text: '$user', label: '$user — текущий пользователь', section: 'Глобальные' },
-    ];
-  }
-  // keywords
-  const out: ViewToken[] = [
-    { text: '$thought.title', label: '$thought.title', section: 'Поля мысли' },
-    { text: '$thought.synonyms', label: '$thought.synonyms' },
-  ];
-  for (const level of chainProps) {
-    if (level.props.length === 0) continue;
-    const sectionName = `Свойства «${level.type.name}»`;
-    for (const def of level.props) {
-      if (def.value_type !== 'text' && def.value_type !== 'url') continue;
-      out.push({
-        text: `$thought.[${def.key}]`,
-        label: `$thought.[${def.key}] — ${def.value_type}`,
-        section: sectionName,
-      });
-    }
-  }
-  return out;
-}
-
-function isListOp(op: StructurePropertyOp | null): boolean {
-  return op === 'in' || op === 'not_in';
-}
-
-// ---------------------------------------------------------------------------
-// Value combo — live-search candidate list (задача 27472616)
-// ---------------------------------------------------------------------------
-
-/** One candidate row of a token/value combo (общий редактор значения и
- *  общий чип-лист сущностей; см. `filter-dialog.ts`). */
-export interface ComboOption {
-  /** Text stored in the field when the row is picked (token or literal id). */
-  value: string;
-  /** Human-readable label shown in the dropdown. */
-  label: string;
-  /** Optional section header shown above the row (grouping, mirrors {@link ViewToken.section}). */
-  section?: string;
-  /** `true` — the row cannot be picked in the current operator (e.g. a
-   *  list-only token offered for a scalar `eq` condition). */
-  disabled?: boolean;
-}
-
-/** Converts a token list into combo options, baking in the existing
- *  `listOnly` vs `op` disable rule (mirrors the old `openTokenPicker` menu). */
-export function tokensToComboOptions(
-  tokens: ViewToken[],
-  op: StructurePropertyOp | null,
-): ComboOption[] {
-  return tokens.map((t) => ({
-    value: t.text,
-    label: t.label,
-    section: t.section,
-    disabled: t.listOnly === true && !isListOp(op),
-  }));
-}
-
-/**
  * Live-search filter: case-insensitive substring match against the label OR
  * the stored value (so typing part of `$today` or part of «сегодня» both
- * work). An empty/whitespace query returns every option unfiltered — the
- * dropdown then shows the full candidate list, grouped by section, exactly
- * like the old static menu did on open.
+ * work). An empty/whitespace query returns every option unfiltered.
  */
-export function filterComboOptions(options: ComboOption[], query: string): ComboOption[] {
+export function filterTokenOptions<T extends { label: string; text: string }>(
+  options: T[],
+  query: string,
+): T[] {
   const needle = query.trim().toLowerCase();
   if (needle === '') return options;
   return options.filter(
-    (o) => o.label.toLowerCase().includes(needle) || o.value.toLowerCase().includes(needle),
+    (o) => o.label.toLowerCase().includes(needle) || o.text.toLowerCase().includes(needle),
   );
+}
+
+/** Оператор со списком значений («в списке»/«не в списке»). */
+function isListOp(op: StructurePropertyOp | null): boolean {
+  return op === 'in' || op === 'not_in';
 }
 
 function propertyMatches(

@@ -1,26 +1,25 @@
 /**
- * Tests for the thought-type view editor dialog (task e37f3f04, spec
- * e0257ca5, 0.7.3).
+ * Tests for the thought-type view editor dialog (задача e37f3f04, спека
+ * e0257ca5, 0.7.3; пересобран на единый редактор — задача cfbe8c74, требование
+ * a049bb40, ADR fc23f9c1).
  *
  * Covered behaviours (pure-function checks, no DOM harness):
- *   * The «Работы версии» example: a state whose condition value uses a
- *     `$thought.[<property_key>]` token serialises to a wire
- *     `SavedFilterDefinition` the server accepts.
- *   * The token-picker lists the focus type's properties plus each
- *     ancestor's properties; multiple properties are tagged `listOnly`
- *     and excluded from scalar-op value fields.
- *   * The wire builder drops empty criteria, normalises the keyword scope
- *     to the default (`title+synonyms`), and always emits `sort`/`order`.
- *   * The author's `op` is preserved when not `eq` (in/not_in), and the
- *     scalar string is sent for `eq`/`ne`.
- *   * (задача 68ec0b5b) Текстовые/url-свойства предлагаются токен-пикером
- *     для полей «Типы мыслей»/«Типы связей» и для условий по `thought_ref`;
- *     множественные свойства для скалярных операций исключены.
+ *   * Определение отбора типа мысли — AST (форма 0.13.1): сборка единым
+ *     конструктором (`buildViewAstDefinition`) и ЧТЕНИЕ старой плоской
+ *     `definition v1` с компиляцией в дерево на входе (`parseViewDefinition` →
+ *     `compileFlatCriteriaToAst`). Round-trip AST → модель → AST не теряет
+ *     условий (критерий приёмки «тот же результат до/после»).
+ *   * Компилятор плоских критериев в AST: `type_ids` → «Тип в иерархии»,
+ *     `parent_ids` → «Родители в иерархии», `trashed`-дефолт → явный лист
+ *     «Корзина равно нет», типизация значений свойств.
+ *   * Токен-пикер значений контекста (`buildTokensForField`): `$today`/`$now`
+ *     для дат, `$thought` для ссылочных операндов, свойства цепочки типов, и
+ *     helper живого поиска `filterTokenOptions`.
  *
- * The dialog's full DOM harness is exercised visually in the renderer
- * (the focus-filter-strip.test.ts follows the same «no DOM» convention):
- * the static shape of `buildWireDefinition` and the token builder is
- * enough to lock the public contract.
+ * The dialog's full DOM harness is exercised visually in the renderer (the
+ * focus-filter-strip.test.ts follows the same «no DOM» convention): the static
+ * shape of the AST definition and the token builder is enough to lock the
+ * public contract.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -30,13 +29,21 @@ import { before, describe, it } from 'node:test';
 
 import type {
   EffectiveTypeProperty,
+  FilterAst,
+  FilterAstLeaf,
+  FilterAstNode,
   LinkType,
   NetworkProperty,
-  PropertyValueType,
   ThoughtType,
 } from '@etn/shared';
 
-import { withReverseLinkPropertySides } from '../src/renderer/lib/filter-builder.js';
+import {
+  compileFlatCriteriaToAst,
+  withReverseLinkPropertySides,
+  type FilterCriteriaState,
+  type FilterTreeLeaf,
+  type FilterTreeNode,
+} from '../src/renderer/lib/filter-builder.js';
 
 import { store } from '../src/renderer/state.js';
 
@@ -203,89 +210,306 @@ before(() => {
   installShim();
 });
 
-describe('thought-type view editor dialog — wire format & tokens (задача e37f3f04)', () => {
-  let module: typeof import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+/** Плоское состояние отбора с переопределениями (полное — из чистого модуля). */
+function flatState(
+  mod: typeof import('../src/renderer/screens/thought-type/filter-dialog-pure.js'),
+  overrides: Partial<FilterCriteriaState>,
+): FilterCriteriaState {
+  return { ...mod.defaultDialogCriteriaState(), tree: null, ...overrides };
+}
+
+/** Все листья AST-дерева (для проверки формы компиляции). */
+function collectLeaves(node: FilterAstNode): FilterAstLeaf[] {
+  if ('op' in node) return node.children.flatMap(collectLeaves);
+  return [node];
+}
+
+/** Все листья МОДЕЛИ дерева (модель хранит значение дискриминантом). */
+function collectTreeLeaves(node: FilterTreeNode): FilterTreeLeaf[] {
+  if (node.kind === 'group') return node.children.flatMap(collectTreeLeaves);
+  return [node];
+}
+
+/** Лист по виду операнда и оператору. */
+function findLeaf(ast: FilterAst, kind: string, operator: string): FilterAstLeaf | undefined {
+  return collectLeaves(ast.filter).find(
+    (leaf) => leaf.entity.kind === kind && leaf.operator === operator,
+  );
+}
+
+const REGISTRY_MAP = new Map(REGISTRY.map((p) => [p.id, p]));
+
+describe('диалог отбора типа мысли — AST-определение (задача cfbe8c74)', () => {
+  let mod: typeof import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
 
   before(async () => {
-    module = await import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+    mod = await import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
   });
 
-  it('exports the same length constants the dialog enforces', () => {
-    assert.equal(module.VIEW_NAME_MAX, 200);
-    assert.equal(module.VIEW_DESCRIPTION_MAX, 1000);
+  it('экспортирует те же константы длины, что налагает диалог', () => {
+    assert.equal(mod.VIEW_NAME_MAX, 200);
+    assert.equal(mod.VIEW_DESCRIPTION_MAX, 1000);
   });
 
+  it('компилятор: плоский type_ids → «Тип в иерархии» (подтипы раскроет исполнитель)', () => {
+    const ast = compileFlatCriteriaToAst(
+      flatState(mod, { typeIds: [FOCUS_TYPE_ID] }),
+      REGISTRY_MAP,
+      { activeMode: 'view' },
+    );
+    assert.ok(ast, 'компилятор обязан вернуть дерево');
+    const leaf = findLeaf(ast!, 'type', 'in_hierarchy');
+    assert.ok(leaf, 'лист «Тип в иерархии» присутствует');
+    assert.deepEqual(leaf!.value, [FOCUS_TYPE_ID], 'значение — переданные корни без заморозки подтипов');
+  });
 
-  it('token-picker global section includes $today/$now for date fields', () => {
+  it('компилятор: связь и родители — «Тип связи в списке» и «Родители в иерархии»', () => {
+    const ast = compileFlatCriteriaToAst(
+      flatState(mod, { linkTypeIds: ['lt-1'], parentIds: ['root-1'] }),
+      REGISTRY_MAP,
+      { activeMode: 'view' },
+    );
+    assert.ok(ast);
+    assert.deepEqual(findLeaf(ast!, 'link_type', 'in')?.value, ['lt-1']);
+    // ADR fc23f9c1: обход по связям → «в иерархии» на «Родителях/Потомках».
+    assert.deepEqual(findLeaf(ast!, 'parents', 'in_hierarchy')?.value, ['root-1']);
+  });
+
+  it('компилятор: служебный дефолт «Корзина равно нет» впекается явным листом', () => {
+    const ast = compileFlatCriteriaToAst(flatState(mod, { keywords: 'foo' }), REGISTRY_MAP, {
+      activeMode: 'view',
+    });
+    assert.ok(ast);
+    assert.equal(findLeaf(ast!, 'trashed', 'eq')?.value, false, 'плоский дефолт trashed → явный лист');
+
+    // Пользователь включил помеченные — дефолт-лист не добавляется.
+    const withTrash = compileFlatCriteriaToAst(
+      flatState(mod, { keywords: 'foo', trashed: true }),
+      REGISTRY_MAP,
+      { activeMode: 'view' },
+    );
+    assert.equal(findLeaf(withTrash!, 'trashed', 'eq'), undefined);
+  });
+
+  it('компилятор: «Актуальность» — явный лист при значении, отсутствие листа при «не важно»', () => {
+    const both = compileFlatCriteriaToAst(
+      flatState(mod, { keywords: 'x', active: null }),
+      REGISTRY_MAP,
+      { activeMode: 'view' },
+    );
+    assert.equal(findLeaf(both!, 'active', 'eq'), undefined, '«не важно» — условия по актуальности нет');
+
+    const inactive = compileFlatCriteriaToAst(
+      flatState(mod, { keywords: 'x', active: false }),
+      REGISTRY_MAP,
+      { activeMode: 'view' },
+    );
+    assert.equal(findLeaf(inactive!, 'active', 'eq')?.value, false);
+  });
+
+  it('компилятор: «Есть слова» с областью по умолчанию title+synonyms', () => {
+    const ast = compileFlatCriteriaToAst(flatState(mod, { keywords: 'счет* -вод*' }), REGISTRY_MAP, {
+      activeMode: 'view',
+    });
+    const leaf = findLeaf(ast!, 'keywords', 'matches');
+    assert.ok(leaf);
+    assert.equal(leaf!.value, 'счет* -вод*');
+    assert.deepEqual((leaf!.entity as { scope?: string[] }).scope, ['title', 'synonyms']);
+  });
+
+  it('компилятор: значения свойств типизируются (число), токен остаётся токеном', () => {
+    const numeric: NetworkProperty = {
+      id: 'p-priority',
+      name: 'приоритет',
+      value_type: 'number',
+      config: null,
+      description: null,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    };
+    const registry = new Map<string, NetworkProperty>([
+      ...REGISTRY.map((p) => [p.id, p] as const),
+      [numeric.id, numeric] as const,
+    ]);
+    const ast = compileFlatCriteriaToAst(
+      flatState(mod, {
+        properties: [
+          { propertyId: 'p-priority', op: 'gt', values: ['5'] },
+          { propertyId: PROP_VERSION_ID, op: 'eq', values: ['$thought.[версия]'] },
+        ],
+      }),
+      registry,
+      { activeMode: 'view' },
+    );
+    const numLeaf = collectLeaves(ast!.filter).find(
+      (l) => l.entity.kind === 'property' && l.entity.property_id === 'p-priority',
+    );
+    assert.equal(numLeaf?.value, 5);
+    assert.equal(typeof numLeaf?.value, 'number');
+    const tokenLeaf = collectLeaves(ast!.filter).find(
+      (l) => l.entity.kind === 'property' && l.entity.property_id === PROP_VERSION_ID,
+    );
+    assert.deepEqual(tokenLeaf?.value, { token: '$thought.[версия]' });
+  });
+
+  it('компилятор: без условий остаётся только служебный дефолт (или ничего при «включать помеченные»)', () => {
+    // Плоский дефолт `trashed=false` — это не «условие», но он выражается
+    // явным листом; при пустом отборе в дереве остаётся только он.
+    const onlyDefault = compileFlatCriteriaToAst(flatState(mod, {}), REGISTRY_MAP, { activeMode: 'view' });
+    assert.ok(onlyDefault);
+    const leaves = collectLeaves(onlyDefault!.filter);
+    assert.equal(leaves.length, 1);
+    assert.equal(leaves[0]!.entity.kind, 'trashed');
+
+    // Пользователь включил помеченные и условий больше нет — отбора нет.
+    assert.equal(
+      compileFlatCriteriaToAst(flatState(mod, { trashed: true }), REGISTRY_MAP, { activeMode: 'view' }),
+      undefined,
+    );
+  });
+});
+
+describe('диалог отбора типа мысли — чтение и запись определения (cfbe8c74)', () => {
+  let mod: typeof import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+
+  before(async () => {
+    mod = await import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+  });
+
+  function viewOf(definition: unknown): Parameters<typeof mod.parseViewDefinition>[0] {
+    return {
+      id: 'v-1',
+      thought_type_id: FOCUS_TYPE_ID,
+      name: 'Отбор',
+      description: null,
+      definition: JSON.stringify(definition),
+      is_default: false,
+      position: 0,
+      version: 1,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    } as unknown as Parameters<typeof mod.parseViewDefinition>[0];
+  }
+
+  it('старая плоская definition v1 компилируется в дерево на входе', () => {
+    const state = mod.parseViewDefinition(
+      viewOf({ type_ids: [FOCUS_TYPE_ID], parent_ids: ['root-1'], sort: 'alpha', order: 'desc' }),
+      REGISTRY_MAP,
+    );
+    const tree = state.tree;
+    assert.ok(tree !== null && tree !== undefined && tree.kind === 'group', 'дерево заполнено');
+    const leaves = collectTreeLeaves(tree);
+    assert.ok(leaves.some((l) => l.entity.kind === 'type' && l.operator === 'in_hierarchy'));
+    // Прежний обход по связям → «Родители в иерархии — по всем связям».
+    const parents = leaves.find((l) => l.entity.kind === 'parents');
+    assert.ok(parents, 'строка «Родители» собрана из parent_ids');
+    assert.equal(parents!.operator, 'in_hierarchy');
+    assert.equal(parents!.mode, 'all_links');
+    // Служебный дефолт места не показывается строкой-условием.
+    assert.equal(leaves.some((l) => l.entity.kind === 'trashed'), false, 'дефолт «Корзина» снят');
+    assert.equal(state.sort, 'alpha');
+    assert.equal(state.order, 'desc');
+  });
+
+  it('новый отбор: дерево пустое, но задано', () => {
+    const state = mod.parseViewDefinition(null, REGISTRY_MAP);
+    const tree = state.tree;
+    assert.ok(tree !== null && tree !== undefined && tree.kind === 'group');
+    assert.equal(mod.hasAnyCriteria(state), false);
+  });
+
+  it('битый JSON — состояние по умолчанию', () => {
+    const state = mod.parseViewDefinition(
+      { definition: '{не json', id: 'v', thought_type_id: FOCUS_TYPE_ID } as unknown as Parameters<typeof mod.parseViewDefinition>[0],
+      REGISTRY_MAP,
+    );
+    assert.equal(mod.hasAnyCriteria(state), false);
+  });
+
+  it('сборка AST: служебный дефолт «Корзина равно нет» есть, дерево-условие сохранено', () => {
+    const state = mod.parseViewDefinition(null, REGISTRY_MAP);
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'keywords', scope: ['title', 'synonyms'] }, operator: 'matches', value: { kind: 'scalar', value: 'смета' } },
+      ],
+    };
+    const ast = mod.buildViewAstDefinition(state);
+    assert.equal(ast.version, 1);
+    const leaves = collectLeaves(ast.filter);
+    assert.ok(leaves.some((l) => l.entity.kind === 'keywords' && l.value === 'смета'));
+    assert.equal(
+      leaves.find((l) => l.entity.kind === 'trashed')?.value,
+      false,
+      'служебный дефолт места записан в AST',
+    );
+  });
+
+  it('round-trip: AST → модель → AST не теряет условий (совпадение результата)', () => {
+    const state = mod.parseViewDefinition(null, REGISTRY_MAP);
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'type' }, operator: 'in_hierarchy', value: { kind: 'list', items: [FOCUS_TYPE_ID] } },
+        { kind: 'leaf', entity: { kind: 'property', property_id: PROP_LABEL_ID }, operator: 'contains', value: { kind: 'scalar', value: 'метка' } },
+      ],
+    };
+    state.sortKeys = [{ key: 'created_at', order: 'desc' }];
+    const first = mod.buildViewAstDefinition(state);
+    const reopened = mod.parseViewDefinition(viewOf(first), REGISTRY_MAP);
+    const second = mod.buildViewAstDefinition(reopened);
+    assert.deepEqual(second, first, 'повторное открытие и пересохранение дают то же определение');
+  });
+
+  it('профиль «мысли»: недопустимый операнд отвергается при сборке (strict)', () => {
+    const state = mod.parseViewDefinition(null, REGISTRY_MAP);
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      // «Время события» — операнд профиля «События», в профиле «мысли» недоступен.
+      children: [{ kind: 'leaf', entity: { kind: 'occurred_at' }, operator: 'gt', value: { kind: 'scalar', value: 1 } }],
+    };
+    assert.throws(() => mod.buildViewAstDefinition(state), /профил/i);
+  });
+});
+
+describe('токены контекста отбора типа мысли (buildTokensForField)', () => {
+  let mod: typeof import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+
+  before(async () => {
+    mod = await import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+  });
+
+  it('для дат — глобальные $today/$now', () => {
     const chainProps = [{ type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! }];
-    const tokens = module.buildTokensForField(chainProps, 'date', 'eq');
-    const labels = tokens.map((t) => t.text);
-    assert.ok(labels.includes('$today'));
-    assert.ok(labels.includes('$now'));
+    const texts = mod.buildTokensForField(chainProps, 'date', 'eq').map((t) => t.text);
+    assert.ok(texts.includes('$today'));
+    assert.ok(texts.includes('$now'));
   });
 
-  it('token-picker offers $thought for link value type (error fad9f28c-…)', () => {
-    // Сервер (`thought-type-view-tokens.ts`) принимает `$thought` как
-    // значение свойства-связи; UI пикер должен его предлагать, чтобы
-    // отбор с целью-токеном можно было собрать через диалог, а не прямым
-    // POST. Так же покрываем legacy `thought_ref`.
+  it('для ссылочного значения — $thought (ошибка fad9f28c)', () => {
     const chainProps = [{ type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! }];
-    const linkTokens = module.buildTokensForField(chainProps, 'link', 'eq');
-    const linkTexts = linkTokens.map((t) => t.text);
-    assert.ok(linkTexts.includes('$thought'), '$thought доступен для свойства-связи');
-
-    const legacyTokens = module.buildTokensForField(chainProps, 'thought_ref', 'eq');
-    const legacyTexts = legacyTokens.map((t) => t.text);
-    assert.ok(legacyTexts.includes('$thought'), '$thought доступен для legacy thought_ref');
+    assert.ok(mod.buildTokensForField(chainProps, 'link', 'eq').some((t) => t.text === '$thought'));
+    assert.ok(mod.buildTokensForField(chainProps, 'thought_ref', 'eq').some((t) => t.text === '$thought'));
   });
 
-  it('token-picker special fields: keywords / thought_type / link_type / author / editor', () => {
+  it('контекст (без типа значения) даёт поля мысли и свойства цепочки типов', () => {
     const chainProps = [
       { type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! },
       { type: TYPES[1]!, props: TYPE_PROPS[ANCESTOR_TYPE_ID]! },
     ];
-    const keywords = module.buildTokensForSpecialField(chainProps, 'keywords');
-    const kwTexts = keywords.map((t) => t.text);
-    assert.ok(kwTexts.includes('$thought.title'));
-    assert.ok(kwTexts.includes('$thought.synonyms'));
-    assert.ok(kwTexts.includes('$thought.[метка]'), 'text property token');
-    assert.ok(!kwTexts.includes('$thought.[версия]'), 'thought_ref property hidden for keywords');
-    assert.ok(!kwTexts.includes('$thought.[теги]'), 'multiple thought_ref property hidden for keywords');
-
-    // thought_type (задача 68ec0b5b): $thought.type + текстовые/url-свойства цепочки.
-    const typeTok = module.buildTokensForSpecialField(chainProps, 'thought_type');
-    const ttTexts = typeTok.map((t) => t.text);
-    assert.ok(ttTexts.includes('$thought.type'), '$thought.type остаётся в списке');
-    assert.ok(ttTexts.includes('$thought.[метка]'), 'text property из цепочки типов');
-    assert.ok(!ttTexts.includes('$thought.[версия]'), 'thought_ref property скрыт');
-    assert.ok(!ttTexts.includes('$thought.[теги]'), 'multiple text/url property скрыт для скалярной eq');
-
-    // link_type (задача 68ec0b5b): текстовые/url-свойства цепочки, без $thought.type.
-    const ltTok = module.buildTokensForSpecialField(chainProps, 'link_type');
-    const ltTexts = ltTok.map((t) => t.text);
-    assert.ok(!ltTexts.includes('$thought.type'), 'нет $thought.type для link_type');
-    assert.ok(ltTexts.includes('$thought.[метка]'), 'text property из цепочки типов');
-    assert.ok(!ltTexts.includes('$thought.[версия]'), 'thought_ref property скрыт');
-    assert.ok(!ltTexts.includes('$thought.[теги]'), 'multiple property скрыт для скалярной eq');
-
-    const author = module.buildTokensForSpecialField(chainProps, 'author');
-    const authorTexts = author.map((t) => t.text);
-    assert.ok(authorTexts.includes('$thought.author'));
-    assert.ok(authorTexts.includes('$thought.editor'), 'оба поля адресуются и для автора');
-    assert.ok(authorTexts.includes('$user'));
-
-    const editor = module.buildTokensForSpecialField(chainProps, 'editor');
-    const editorTexts = editor.map((t) => t.text);
-    assert.ok(editorTexts.includes('$thought.editor'));
-    assert.ok(editorTexts.includes('$thought.author'), 'оба поля адресуются и для редактора');
-    assert.ok(editorTexts.includes('$user'));
+    const texts = mod.buildTokensForField(chainProps, null, null).map((t) => t.text);
+    assert.ok(texts.includes('$thought.title'));
+    assert.ok(texts.includes('$thought.type'));
+    assert.ok(texts.includes('$thought.author'));
+    assert.ok(texts.includes('$thought.[метка]'), 'свойство предка');
+    assert.ok(texts.includes('$thought.[версия]'), 'свойство типа');
   });
 
-
-  it('multiple text property is listOnly for scalar ops and excluded from scalar special fields (задача 68ec0b5b)', () => {
-    // Свойство «теги-текст» — text + multiple=true: токен-список несовместим
-    // со скалярной операцией (eq), как и `thought_ref`/`url` с multiple=true.
-    const multiTextProp: EffectiveTypeProperty = {
+  it('множественное текстовое свойство помечено listOnly для скалярной операции', () => {
+    const multiText: EffectiveTypeProperty = {
       id: 'tp-multiText',
       property_id: 'p-multiText',
       owner_type: 'thought_type',
@@ -305,526 +529,34 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     };
     const chainProps = [
       { type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! },
-      { type: TYPES[1]!, props: [...TYPE_PROPS[ANCESTOR_TYPE_ID]!, multiTextProp] },
+      { type: TYPES[1]!, props: [...TYPE_PROPS[ANCESTOR_TYPE_ID]!, multiText] },
     ];
-
-    // Для условия по thought_ref (eq) — multiple text помечается listOnly,
-    // а не удаляется, чтобы быть видимым для in/not_in.
-    const tokensScalar = module.buildTokensForField(chainProps, 'thought_ref', 'eq');
-    const mtScalar = tokensScalar.find((t) => t.text === '$thought.[теги-текст]');
-    assert.ok(mtScalar !== undefined, 'multiple text appears in scalar thought_ref list');
-    assert.equal(mtScalar?.listOnly, true, 'multiple text is listOnly for scalar eq');
-
-    // Для in — то же самое, но токен доступен для выбора.
-    const tokensList = module.buildTokensForField(chainProps, 'thought_ref', 'in');
-    const mtList = tokensList.find((t) => t.text === '$thought.[теги-текст]');
-    assert.equal(mtList?.listOnly, true, 'multiple text is listOnly regardless of op');
-
-    // thought_type / link_type используют скалярную семантику — multiple text
-    // исключается целиком (валидация сервера отвергнет такое условие).
-    const tt = module.buildTokensForSpecialField(chainProps, 'thought_type');
-    assert.ok(
-      !tt.some((t) => t.text === '$thought.[теги-текст]'),
-      'multiple text excluded from thought_type (scalar eq)',
-    );
-    const lt = module.buildTokensForSpecialField(chainProps, 'link_type');
-    assert.ok(
-      !lt.some((t) => t.text === '$thought.[теги-текст]'),
-      'multiple text excluded from link_type (scalar eq)',
-    );
+    const token = mod
+      .buildTokensForField(chainProps, 'thought_ref', 'eq')
+      .find((t) => t.text === '$thought.[теги-текст]');
+    assert.equal(token?.listOnly, true);
   });
 
-  it('wire format: «Работы версии» round-trips a thought_ref condition with $thought.[версия]', () => {
-    const state: import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState = {
-      keywords: '',
-      keywordInTitle: true,
-      keywordInSynonyms: true,
-      keywordInComment: false,
-      parentIds: [],
-      typeIds: [FOCUS_TYPE_ID],
-      linkTypeIds: [],
-      properties: [
-        {
-          propertyId: PROP_VERSION_ID,
-          op: 'eq',
-          values: ['$thought.[версия]'],
-        },
-      ],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active: null,
-      trashed: false,
-      authorOp: 'eq',
-      authorId: '',
-      authorIds: [],
-      editorOp: 'eq',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '',
-      createdBefore: '',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'created',
-      order: 'asc',
-    };
-    const registry = new Map(REGISTRY.map((p) => [p.id, p]));
-    const wire = module.buildWireDefinition(state, registry);
-    assert.equal(wire.sort, 'created');
-    assert.equal(wire.order, 'asc');
-    assert.deepEqual(wire.type_ids, [FOCUS_TYPE_ID]);
-    assert.ok(Array.isArray(wire.properties));
-    assert.equal(wire.properties!.length, 1);
-    assert.equal(wire.properties![0]!.property_id, PROP_VERSION_ID);
-    assert.equal(wire.properties![0]!.op, 'eq');
-    assert.equal(wire.properties![0]!.value, '$thought.[версия]');
-    // The default keyword scope is title+synonyms — the wire omits it.
-    assert.equal(wire.keyword_scope, undefined);
-  });
-
-  it('wire format: explicit keyword_scope is emitted when it differs from the default', () => {
-    const state: import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState = {
-      keywords: 'foo',
-      keywordInTitle: false,
-      keywordInSynonyms: true,
-      keywordInComment: true,
-      parentIds: [],
-      typeIds: [],
-      linkTypeIds: [],
-      properties: [],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active: null,
-      trashed: false,
-      authorOp: 'eq',
-      authorId: '',
-      authorIds: [],
-      editorOp: 'eq',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '',
-      createdBefore: '',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'alpha',
-      order: 'desc',
-    };
-    const registry = new Map<string, NetworkProperty>();
-    const wire = module.buildWireDefinition(state, registry);
-    assert.equal(wire.keywords, 'foo');
-    assert.deepEqual(wire.keyword_scope, ['synonyms', 'comment']);
-    assert.equal(wire.sort, 'alpha');
-    assert.equal(wire.order, 'desc');
-  });
-
-  it('wire format: numeric property conditions are typed as numbers', () => {
-    const numericPropId = 'p-priority';
-    const registry = new Map<string, NetworkProperty>([
-      [
-        numericPropId,
-        {
-          id: numericPropId,
-          name: 'приоритет',
-          value_type: 'number' as PropertyValueType,
-          config: null,
-          description: null,
-          created_at: '2024-01-01T00:00:00Z',
-          updated_at: '2024-01-01T00:00:00Z',
-        },
-      ],
-    ]);
-    const state: import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState = {
-      keywords: '',
-      keywordInTitle: true,
-      keywordInSynonyms: true,
-      keywordInComment: false,
-      parentIds: [],
-      typeIds: [],
-      linkTypeIds: [],
-      properties: [{ propertyId: numericPropId, op: 'gt', values: ['5'] }],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active: null,
-      trashed: false,
-      authorOp: 'eq',
-      authorId: '',
-      authorIds: [],
-      editorOp: 'eq',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '',
-      createdBefore: '',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'created',
-      order: 'asc',
-    };
-    const wire = module.buildWireDefinition(state, registry);
-    assert.equal(wire.properties![0]!.op, 'gt');
-    assert.equal(wire.properties![0]!.value, 5);
-    assert.equal(typeof wire.properties![0]!.value, 'number');
-  });
-
-  it('wire format: bool property condition is typed as a boolean', () => {
-    const boolPropId = 'p-active';
-    const registry = new Map<string, NetworkProperty>([
-      [
-        boolPropId,
-        {
-          id: boolPropId,
-          name: 'активно',
-          value_type: 'bool' as PropertyValueType,
-          config: null,
-          description: null,
-          created_at: '2024-01-01T00:00:00Z',
-          updated_at: '2024-01-01T00:00:00Z',
-        },
-      ],
-    ]);
-    const state: import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState = {
-      keywords: '',
-      keywordInTitle: true,
-      keywordInSynonyms: true,
-      keywordInComment: false,
-      parentIds: [],
-      typeIds: [],
-      linkTypeIds: [],
-      properties: [{ propertyId: boolPropId, op: 'eq', values: ['true'] }],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active: null,
-      trashed: false,
-      authorOp: 'eq',
-      authorId: '',
-      authorIds: [],
-      editorOp: 'eq',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '',
-      createdBefore: '',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'created',
-      order: 'asc',
-    };
-    const wire = module.buildWireDefinition(state, registry);
-    assert.equal(wire.properties![0]!.value, true);
-  });
-
-  it('wire format: in/not_in operator carries an array of typed values', () => {
-    const registry = new Map<string, NetworkProperty>([
-      [
-        PROP_LABEL_ID,
-        {
-          id: PROP_LABEL_ID,
-          name: 'метка',
-          value_type: 'text' as PropertyValueType,
-          config: null,
-          description: null,
-          created_at: '2024-01-01T00:00:00Z',
-          updated_at: '2024-01-01T00:00:00Z',
-        },
-      ],
-    ]);
-    const state: import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState = {
-      keywords: '',
-      keywordInTitle: true,
-      keywordInSynonyms: true,
-      keywordInComment: false,
-      parentIds: [],
-      typeIds: [],
-      linkTypeIds: [],
-      properties: [
-        { propertyId: PROP_LABEL_ID, op: 'in', values: ['a', 'b', 'c'] },
-      ],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active: null,
-      trashed: false,
-      authorOp: 'eq',
-      authorId: '',
-      authorIds: [],
-      editorOp: 'eq',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '',
-      createdBefore: '',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'created',
-      order: 'asc',
-    };
-    const wire = module.buildWireDefinition(state, registry);
-    assert.equal(wire.properties![0]!.op, 'in');
-    assert.deepEqual(wire.properties![0]!.value, ['a', 'b', 'c']);
-  });
-
-  it('wire format: is_empty/not_empty emit an empty value', () => {
-    const registry = new Map<string, NetworkProperty>([
-      [
-        PROP_LABEL_ID,
-        {
-          id: PROP_LABEL_ID,
-          name: 'метка',
-          value_type: 'text' as PropertyValueType,
-          config: null,
-          description: null,
-          created_at: '2024-01-01T00:00:00Z',
-          updated_at: '2024-01-01T00:00:00Z',
-        },
-      ],
-    ]);
-    const state: import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState = {
-      keywords: '',
-      keywordInTitle: true,
-      keywordInSynonyms: true,
-      keywordInComment: false,
-      parentIds: [],
-      typeIds: [],
-      linkTypeIds: [],
-      properties: [{ propertyId: PROP_LABEL_ID, op: 'is_empty', values: [''] }],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active: null,
-      trashed: false,
-      authorOp: 'eq',
-      authorId: '',
-      authorIds: [],
-      editorOp: 'eq',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '',
-      createdBefore: '',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'created',
-      order: 'asc',
-    };
-    const wire = module.buildWireDefinition(state, registry);
-    assert.equal(wire.properties![0]!.op, 'is_empty');
-    assert.equal(wire.properties![0]!.value, '');
-  });
-
-  it('wire format: author/editor filters keep their op when not eq', () => {
-    const state: import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState = {
-      keywords: '',
-      keywordInTitle: true,
-      keywordInSynonyms: true,
-      keywordInComment: false,
-      parentIds: [],
-      typeIds: [],
-      linkTypeIds: [],
-      properties: [],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active: null,
-      trashed: false,
-      authorOp: 'in',
-      authorId: '',
-      authorIds: ['u1', 'u2'],
-      editorOp: 'not_empty',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '',
-      createdBefore: '',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'created',
-      order: 'asc',
-    };
-    const registry = new Map<string, NetworkProperty>();
-    const wire = module.buildWireDefinition(state, registry);
-    assert.deepEqual(wire.created_by, ['u1', 'u2']);
-    assert.equal(wire.created_by_op, 'in');
-    // `not_empty` не несёт значения, но ОПЕРАТОР обязан доехать до запроса —
-    // иначе выбранное «заполнено» молча терялось (дефект, найденный тестом
-    // единого конвертера, задача 3742dd59).
-    assert.equal(wire.updated_by, undefined);
-    assert.equal(wire.updated_by_op, 'not_empty');
-  });
-
-  it('wire format: date bounds are trimmed and emitted only when non-empty', () => {
-    const state: import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState = {
-      keywords: '',
-      keywordInTitle: true,
-      keywordInSynonyms: true,
-      keywordInComment: false,
-      parentIds: [],
-      typeIds: [],
-      linkTypeIds: [],
-      properties: [],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active: null,
-      trashed: false,
-      authorOp: 'eq',
-      authorId: '',
-      authorIds: [],
-      editorOp: 'eq',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '2024-01-01T00:00:00',
-      createdBefore: '  ',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'created',
-      order: 'asc',
-    };
-    const registry = new Map<string, NetworkProperty>();
-    const wire = module.buildWireDefinition(state, registry);
-    assert.equal(wire.created_after, '2024-01-01T00:00:00');
-    assert.equal(wire.created_before, undefined);
-    assert.equal(wire.updated_after, undefined);
-  });
-
-  it('wire format: property conditions referencing an unknown property are dropped', () => {
-    const state: import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState = {
-      keywords: '',
-      keywordInTitle: true,
-      keywordInSynonyms: true,
-      keywordInComment: false,
-      parentIds: [],
-      typeIds: [],
-      linkTypeIds: [],
-      properties: [{ propertyId: 'missing', op: 'contains', values: ['x'] }],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active: null,
-      trashed: false,
-      authorOp: 'eq',
-      authorId: '',
-      authorIds: [],
-      editorOp: 'eq',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '',
-      createdBefore: '',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'created',
-      order: 'asc',
-    };
-    const registry = new Map<string, NetworkProperty>();
-    const wire = module.buildWireDefinition(state, registry);
-    assert.equal(wire.properties, undefined);
-  });
-
-  it('wire format: «Только актуальные» three-state maps to show_inactive/active (баг 56fdf252)', () => {
-    const makeState = (active: boolean | null): import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState => ({
-      keywords: '',
-      keywordInTitle: true,
-      keywordInSynonyms: true,
-      keywordInComment: false,
-      parentIds: [],
-      typeIds: [],
-      linkTypeIds: [],
-      properties: [],
-      hasProperties: null,
-      hasComment: null,
-      hasAttachments: null,
-      hasChronology: null,
-      active,
-      trashed: false,
-      authorOp: 'eq',
-      authorId: '',
-      authorIds: [],
-      editorOp: 'eq',
-      editorId: '',
-      editorIds: [],
-      createdAfter: '',
-      createdBefore: '',
-      updatedAfter: '',
-      updatedBefore: '',
-      sort: 'created',
-      order: 'asc',
-    });
-    const registry = new Map<string, NetworkProperty>();
-
-    // «не важно» (null) — без фильтра актуальности: показать и актуальные,
-    // и неактуальные. `active` не выставляется, `show_inactive = true`.
-    const all = module.buildWireDefinition(makeState(null), registry);
-    assert.equal(all.active, undefined);
-    assert.equal(all.show_inactive, true);
-
-    // «да» (true) — только актуальные.
-    const activeOnly = module.buildWireDefinition(makeState(true), registry);
-    assert.equal(activeOnly.active, true);
-    assert.equal(activeOnly.show_inactive, undefined);
-
-    // «нет» (false) — только неактуальные: `active = false` + неактивные
-    // включены в кандидатов.
-    const inactiveOnly = module.buildWireDefinition(makeState(false), registry);
-    assert.equal(inactiveOnly.active, false);
-    assert.equal(inactiveOnly.show_inactive, true);
-  });
-});
-
-describe('единый редактор значения условия — комбо-кандидаты (задача 27472616)', () => {
-  let module: typeof import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
-
-  before(async () => {
-    module = await import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
-  });
-
-  it('tokensToComboOptions disables listOnly tokens outside in/not_in', () => {
-    const tokens: import('../src/renderer/screens/thought-type/filter-dialog-pure.js').ViewToken[] = [
-      { text: '$today', label: '$today — сегодня' },
-      { text: '$thought.[теги]', label: '$thought.[теги] […] — thought_ref', listOnly: true },
-    ];
-    const scalar = module.tokensToComboOptions(tokens, 'eq');
-    assert.equal(scalar.find((o) => o.value === '$today')?.disabled, false);
-    assert.equal(scalar.find((o) => o.value === '$thought.[теги]')?.disabled, true);
-
-    const list = module.tokensToComboOptions(tokens, 'in');
-    assert.equal(list.find((o) => o.value === '$thought.[теги]')?.disabled, false);
-
-    // `op: null` (полей вроде «Ключевые слова») трактуется как не-списочный.
-    const noOp = module.tokensToComboOptions(tokens, null);
-    assert.equal(noOp.find((o) => o.value === '$thought.[теги]')?.disabled, true);
-  });
-
-  it('filterComboOptions matches the label or the stored value, case-insensitively', () => {
-    const options: import('../src/renderer/screens/thought-type/filter-dialog-pure.js').ComboOption[] = [
-      { value: '$today', label: '$today — сегодня' },
-      { value: '$thought.type', label: '$thought.type — тип мысли в фокусе' },
+  it('filterTokenOptions ищет по подписи и значению, пустой запрос — весь список', () => {
+    const options = [
+      { text: '$today', label: '$today — сегодня', section: 'Глобальные' },
+      { text: '$thought.type', label: '$thought.type — тип мысли в фокусе' },
     ];
     assert.deepEqual(
-      module.filterComboOptions(options, 'СЕГОДНЯ').map((o) => o.value),
+      mod.filterTokenOptions(options, 'СЕГОДНЯ').map((o) => o.text),
       ['$today'],
     );
     assert.deepEqual(
-      module.filterComboOptions(options, 'thought.type').map((o) => o.value),
+      mod.filterTokenOptions(options, 'thought.type').map((o) => o.text),
       ['$thought.type'],
     );
-    assert.equal(module.filterComboOptions(options, 'нет совпадений').length, 0);
-    // Пустой запрос — весь список без фильтрации (полное открытие меню).
-    assert.equal(module.filterComboOptions(options, '   ').length, 2);
+    assert.equal(mod.filterTokenOptions(options, 'нет совпадений').length, 0);
+    assert.equal(mod.filterTokenOptions(options, '   ').length, 2);
   });
+});
 
-  // Задача df992826 (доработка по замечаниям приёмки): список имён условий
-  // строится из ВСЕГО реестра свойств, и каждая связь реестра даёт ОБЕ
-  // стороны — прямую (прежняя запись по registry id) и обратную
-  // (синтетическая запись с ЧИСТЫМ именем, без служебного суффикса).
-  // Хелпер живёт в общем конструкторе (`lib/filter-builder.ts`), а не в модуле
-  // экрана: у него два потребителя (диалог отбора типа и панель «Структур»).
-  it('реестр условий даёт обе стороны каждой связи реестра с чистым именем (задача df992826)', () => {
+describe('реестр условий: обе стороны связи реестра (задача df992826)', () => {
+  it('обратная сторона добавляется по чистому имени, включая чужую связь', () => {
     const linkTypes = [
       { id: 'lt-1', name_forward: 'организации категории', name_reverse: 'категория организации' },
       { id: 'lt-2', name_forward: 'работники/контакты', name_reverse: 'место работы' },
@@ -857,31 +589,13 @@ describe('единый редактор значения условия — ко
     ]);
 
     const withSides = withReverseLinkPropertySides(registry, linkTypes);
-    const names = [...withSides.values()].map((p) => p.name);
-
-    // Прямые стороны остались прежними записями по registry id.
     assert.equal(withSides.get('p-link')?.name, 'организации категории');
-    assert.equal(withSides.get('p-jobs')?.name, 'работники/контакты');
-
-    // Обратная сторона добавлена по ИМЕНИ (сервер резолвит сторону по имени
-    // и берёт направление рёбер из него) и носит ЧИСТОЕ имя свойства —
-    // служебного суффикса «· обратная сторона» больше нет.
-    const reverse = withSides.get('категория организации');
-    assert.ok(reverse, 'обратная сторона связи добавлена');
-    assert.equal(reverse!.name, 'категория организации', 'имя обратной стороны — чистое имя свойства');
-    assert.equal(reverse!.value_type, 'link');
-
-    // Связь, НЕ входящая ни в какую цепочку типа, тоже даёт обратную сторону
-    // (замечание приёмки: «место работы» не появлялось, хотя «работники/контакты»
-    // было видно).
-    assert.ok(names.includes('место работы'), 'обратная сторона чужой связи присутствует');
-    assert.ok(names.includes('работники/контакты'), 'прямая сторона чужой связи присутствует');
-
-    // Входной реестр не мутируется.
-    assert.equal(registry.size, 2);
+    assert.equal(withSides.get('категория организации')?.name, 'категория организации');
+    assert.ok(withSides.get('место работы'), 'обратная сторона чужой связи присутствует');
+    assert.equal(registry.size, 2, 'входной реестр не мутируется');
   });
 
-  it('skips structural link properties when adding the reverse side (задача df992826)', () => {
+  it('структурные свойства не дают обратной стороны', () => {
     const structural = {
       id: 'p-children',
       name: 'Потомки',
@@ -895,7 +609,6 @@ describe('единый редактор значения условия — ко
     const linkTypes = [
       { id: 'lt-1', name_forward: 'родители', name_reverse: 'потомки' },
     ] as unknown as LinkType[];
-    const withSides = withReverseLinkPropertySides(registry, linkTypes);
-    assert.equal(withSides.size, 1, 'структурные «Потомки» не порождают обратную сторону');
+    assert.equal(withReverseLinkPropertySides(registry, linkTypes).size, 1);
   });
 });

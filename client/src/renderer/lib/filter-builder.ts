@@ -49,6 +49,7 @@ import {
   type FilterAstHierarchyMode,
   type FilterAstLabels,
   type FilterAstLeaf,
+  type FilterAstListItem,
   type FilterAstNode,
   type FilterAstOperator,
   type FilterAstScalar,
@@ -1858,6 +1859,222 @@ export function parseFilterAstState(
     if (issues.length > 0) throw new Error(profileIssuesMessage(issues, opts.profile));
   }
   return next;
+}
+
+// ---------------------------------------------------------------------------
+// Компиляция плоских критериев `definition v1` в AST (чтение старых отборов)
+// ---------------------------------------------------------------------------
+
+/** Опции компиляции плоских критериев в AST ({@link compileFlatCriteriaToAst}). */
+export interface CompileFlatCriteriaOptions {
+  /**
+   * Трактовка трёхзначной «Актуальности» — как у {@link buildWireFilter}:
+   *
+   *   * `view` (по умолчанию) — отбор типа мысли: `null` («не важно») означает
+   *     «показать и актуальные, и неактуальные» (плоский `show_inactive`),
+   *     условия по `active` не появляется;
+   *   * `structures` — панель «Структур»: `null` — дефолт «только актуальные»
+   *     (`active eq true`).
+   */
+  activeMode?: 'view' | 'structures';
+}
+
+/** Лист AST из операнда/оператора/значения (значение не задано — поле опущено). */
+function flatAstLeaf(
+  entity: FilterAstEntity,
+  operator: FilterAstOperator,
+  value?: FilterAstValue,
+): FilterAstLeaf {
+  const leaf: FilterAstLeaf = { entity, operator };
+  if (value !== undefined) leaf.value = value;
+  return leaf;
+}
+
+/**
+ * Плоское значение (`definition v1` хранит токен СТРОКОЙ `$…`) → значение AST.
+ * В AST токен — отдельная форма `{ token }`, иначе исполнитель прочитал бы
+ * `$thought.[версия]` литералом и подстановки не произошло бы.
+ */
+function flatAstValue(value: FilterAstScalar): FilterAstValue {
+  return typeof value === 'string' && value.startsWith('$') ? { token: value } : value;
+}
+
+/** Список плоских значений со токенами → список значений AST. */
+function flatAstList(values: readonly FilterAstScalar[]): FilterAstListItem[] {
+  return values.map((value) => flatAstValue(value) as FilterAstListItem);
+}
+
+/** Лист авторства/редактора из плоского оператора и значения. */
+function flatAuthorLeaf(
+  kind: 'author' | 'editor',
+  op: StructureAuthorOp,
+  single: string,
+  list: readonly string[],
+): FilterAstLeaf | null {
+  if (op === 'empty' || op === 'not_empty') {
+    return flatAstLeaf({ kind }, op === 'empty' ? 'is_empty' : 'not_empty');
+  }
+  if (op === 'in' || op === 'not_in') {
+    const values = list.filter((id) => id.trim() !== '');
+    return values.length === 0 ? null : flatAstLeaf({ kind }, op, flatAstList(values));
+  }
+  // `eq` / `ne`: значение — одиночный id или токен; пусто — условия нет.
+  const value = single.trim();
+  return value === '' ? null : flatAstLeaf({ kind }, op, flatAstValue(value));
+}
+
+/**
+ * Компилятор ПЛОСКИХ критериев (`definition v1`) в AST — клиентское зеркало
+ * серверного `compileThoughtQueryToAst` (`server/src/domain/query-service.ts`,
+ * задача 4be62d42 «Миграция definition v1 → AST»). Нужен ровно затем, чтобы
+ * редактор открывал СТАРЫЙ плоский отбор деревом с тем же результатом: сервер
+ * исполняет `req.ast` без неявных дефолтов `active`/`trashed`, поэтому дефолты
+ * плоской формы (`trashed eq false`, «только актуальные») впекаются сюда
+ * ЯВНЫМИ листьями — иначе конвертированный отбор расширился бы.
+ *
+ * Конвертер ОДИН и живёт в едином конструкторе (ADR fc23f9c1 запрещает вторую
+ * точку чтения сохранённого отбора в экранах): место применения зовёт его, а не
+ * разбирает плоские поля само. `undefined` — критериев нет (пустой отбор).
+ *
+ * Соответствие плоских полей листьям (совпадает с серверным компилятором):
+ *   * `active` → `active eq true|false` (в `view`-режиме `null` — условия нет);
+ *   * `trashed` → `trashed eq false`, если флаг не выставлен (плоский дефолт);
+ *   * `author`/`editor` → `author`/`editor` c `eq`/`ne`/`in`/`not_in`/`is_empty`/
+ *     `not_empty`;
+ *   * границы дат → `created_at`/`updated_at` c `gte`/`lte` (включительно);
+ *   * `has_*` → `properties`/`comment`/`attachments`/`chronology` c
+ *     `not_empty`/`is_empty`;
+ *   * `keywords` → `keywords` (области в операнде) c `matches`;
+ *   * `type_ids` → `type in_hierarchy` (подтипы раскрывает исполнитель);
+ *   * `link_type_ids` → `link_type in`;
+ *   * `parent_ids` → `parents in_hierarchy` (ADR fc23f9c1: обход по связям →
+ *     «в иерархии»);
+ *   * `properties` → `property` c оператором строки (типизация значения — общая,
+ *     {@link buildConditionsWire}).
+ */
+export function compileFlatCriteriaToAst(
+  state: FilterCriteriaState,
+  registry: ReadonlyMap<string, NetworkProperty>,
+  opts: CompileFlatCriteriaOptions = {},
+): FilterAst | undefined {
+  const activeMode = opts.activeMode ?? 'view';
+  const children: FilterAstNode[] = [];
+
+  // Актуальность: явное значение — лист; `null` в `view`-режиме — обе
+  // актуальности (плоский `show_inactive`), в «Структурах» — дефолт «только
+  // актуальные».
+  if (state.active === true) children.push(flatAstLeaf({ kind: 'active' }, 'eq', true));
+  else if (state.active === false) children.push(flatAstLeaf({ kind: 'active' }, 'eq', false));
+  else if (activeMode === 'structures') children.push(flatAstLeaf({ kind: 'active' }, 'eq', true));
+
+  // Пометка на удаление: `true` — «включать помеченные» (условия нет); иначе
+  // плоский дефолт — только непомеченные.
+  if (!state.trashed) children.push(flatAstLeaf({ kind: 'trashed' }, 'eq', false));
+
+  const author = flatAuthorLeaf('author', state.authorOp, state.authorId, state.authorIds);
+  if (author !== null) children.push(author);
+  const editor = flatAuthorLeaf('editor', state.editorOp, state.editorId, state.editorIds);
+  if (editor !== null) children.push(editor);
+
+  if (state.createdAfter.trim() !== '') children.push(flatAstLeaf({ kind: 'created_at' }, 'gte', state.createdAfter.trim()));
+  if (state.createdBefore.trim() !== '') children.push(flatAstLeaf({ kind: 'created_at' }, 'lte', state.createdBefore.trim()));
+  if (state.updatedAfter.trim() !== '') children.push(flatAstLeaf({ kind: 'updated_at' }, 'gte', state.updatedAfter.trim()));
+  if (state.updatedBefore.trim() !== '') children.push(flatAstLeaf({ kind: 'updated_at' }, 'lte', state.updatedBefore.trim()));
+
+  if (state.hasProperties !== null) children.push(flatAstLeaf({ kind: 'properties' }, state.hasProperties ? 'not_empty' : 'is_empty'));
+  if (state.hasComment !== null) children.push(flatAstLeaf({ kind: 'comment' }, state.hasComment ? 'not_empty' : 'is_empty'));
+  if (state.hasAttachments !== null) children.push(flatAstLeaf({ kind: 'attachments' }, state.hasAttachments ? 'not_empty' : 'is_empty'));
+  if (state.hasChronology !== null) children.push(flatAstLeaf({ kind: 'chronology' }, state.hasChronology ? 'not_empty' : 'is_empty'));
+
+  const keywords = state.keywords.trim();
+  if (keywords !== '') {
+    // Области: плоская форма опускает дефолт title+synonyms — в AST пустой
+    // набор означал бы ОТКЛЮЧЁННОЕ условие, поэтому дефолт выписываем явно.
+    const scope = buildKeywordScope(state) ?? ['title', 'synonyms'];
+    // Мини-язык «Есть слова» — строка; одиночный токен (`$thought.title`)
+    // адресуем формой AST-токена, составную строку отдаём листу как есть.
+    const value: FilterAstValue =
+      keywords.startsWith('$') && !/\s/.test(keywords) ? { token: keywords } : keywords;
+    children.push(flatAstLeaf({ kind: 'keywords', scope }, 'matches', value));
+  }
+
+  if (state.typeIds.length > 0) children.push(flatAstLeaf({ kind: 'type' }, 'in_hierarchy', flatAstList(state.typeIds)));
+  if (state.linkTypeIds.length > 0) children.push(flatAstLeaf({ kind: 'link_type' }, 'in', flatAstList(state.linkTypeIds)));
+  if (state.parentIds.length > 0) children.push(flatAstLeaf({ kind: 'parents' }, 'in_hierarchy', flatAstList(state.parentIds)));
+
+  for (const cond of buildConditionsWire(state, registry)) {
+    const op = cond.op as FilterAstOperator;
+    // `is_empty`/`not_empty` значения не несут (плоская форма писала туда '').
+    if (op === 'is_empty' || op === 'not_empty') {
+      children.push(flatAstLeaf({ kind: 'property', property_id: cond.property_id }, op));
+    } else if (Array.isArray(cond.value)) {
+      children.push(flatAstLeaf({ kind: 'property', property_id: cond.property_id }, op, flatAstList(cond.value)));
+    } else {
+      children.push(flatAstLeaf({ kind: 'property', property_id: cond.property_id }, op, flatAstValue(cond.value)));
+    }
+  }
+
+  if (children.length === 0) return undefined;
+  const ast: FilterAst = {
+    version: FILTER_AST_VERSION,
+    filter: children.length === 1 ? (children[0] as FilterAstNode) : { op: 'and', children },
+  };
+  const sort = buildFilterAstSort(state);
+  if (sort.length > 0) ast.sort = sort;
+  return ast;
+}
+
+/**
+ * Прежний плоский «обход по связям» (`parent_ids` + `link_filter`) ограничивал
+ * рёбра списком типов, а режима обхода не нёс; в модели AST это тот же оператор
+ * «в иерархии», но по ВСЕМ связям (решение оркестратора 2026-10-12, ADR
+ * fc23f9c1: «обход по связям → „в иерархии“»). Функция доводит режим связей
+ * листьев «Родители»/«Потомки», пришедших из плоской формы, до `all_links` —
+ * значения прежней пары «корни + фильтр обхода» не сохраняются осознанно.
+ * Листья с уже заданным режимом не трогаются (AST-определения самодостаточны).
+ */
+export function applyLegacyHierarchyTraversal(tree: FilterTreeNode): void {
+  if (tree.kind === 'group') {
+    for (const child of tree.children) applyLegacyHierarchyTraversal(child);
+    return;
+  }
+  const kind = tree.entity.kind;
+  if (
+    (kind === 'parents' || kind === 'children') &&
+    (tree.operator === 'in_hierarchy' || tree.operator === 'not_in_hierarchy') &&
+    tree.mode === undefined
+  ) {
+    tree.mode = 'all_links';
+  }
+}
+
+/**
+ * Прочитать определение отбора в единую модель так, чтобы `tree` был ЗАПОЛНЕН
+ * всегда: AST-форма читается {@link parseFilterAstState} (дерево уже есть), а
+ * плоская `definition v1` компилируется в дерево на входе
+ * ({@link compileFlatCriteriaToAst} + {@link filterAstToTree}) — работа
+ * «Миграция definition v1 → AST» на стороне клиента. Плоский обход по связям
+ * доводится до режима «по всем связям» ({@link applyLegacyHierarchyTraversal}).
+ * Многоуровневая сортировка AST (или пара `sort`/`order` плоской формы) ложится
+ * в `sortKeys`.
+ *
+ * Пустой/нечитаемый отбор получает пустую корневую группу `И` — редактор
+ * открывается на чистом дереве.
+ */
+export function parseFilterDefinitionTree(
+  def: unknown,
+  opts: CompileFlatCriteriaOptions & { registry?: ReadonlyMap<string, NetworkProperty> } = {},
+): FilterCriteriaState {
+  const state = parseFilterDefinition(def);
+  if (state.tree !== null) return state;
+  const ast = compileFlatCriteriaToAst(state, opts.registry ?? new Map(), opts);
+  const tree = ast === undefined ? null : filterAstToTree(ast.filter);
+  state.tree = tree ?? defaultFilterTreeGroup('and');
+  if (tree !== null) applyLegacyHierarchyTraversal(tree);
+  if (ast?.sort !== undefined && (state.sortKeys ?? []).length === 0) {
+    state.sortKeys = ast.sort.map((key) => ({ key: key.key, order: key.order }));
+  }
+  return state;
 }
 
 // ---------------------------------------------------------------------------
