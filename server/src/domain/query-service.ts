@@ -2026,20 +2026,43 @@ function filterAstLeafClause(
     }
 
     case 'link_type': {
+      // Единый операнд «Тип связи» (задача f7da04d6, требование 8c131cff) в
+      // контексте МЫСЛИ: «у мысли есть инцидентная связь указанного типа».
+      // `in`/`in_hierarchy` (и `eq`) раскрывают тип вместе с потомками
+      // `link_types` (L21) — общий AST-лист фильтра типов связей; `is_empty`/
+      // `not_empty` — «нет/есть типизированных инцидентных связей».
       const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
-      if (operator !== 'in' && operator !== 'not_in' && operator !== 'eq' && operator !== 'ne') {
+      if (operator === 'is_empty' || operator === 'not_empty') {
+        const typed: Clause = {
+          sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.active = 1
+            AND l.type_id IS NOT NULL
+            AND (l.source_id = t.id OR l.target_id = t.id))`,
+          params: [],
+        };
+        return operator === 'not_empty' ? typed : { sql: `NOT (${typed.sql})`, params: [] };
+      }
+      if (
+        operator !== 'in' &&
+        operator !== 'not_in' &&
+        operator !== 'eq' &&
+        operator !== 'ne' &&
+        operator !== 'in_hierarchy' &&
+        operator !== 'not_in_hierarchy'
+      ) {
         astUnsupported(`Оператор «${operator}» для операнда «Тип связи»`, opPath, requestId);
       }
-      const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
+      const list =
+        operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
       const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'link_types', list);
-      if (expanded.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
+      const positive = operator === 'in' || operator === 'eq' || operator === 'in_hierarchy';
+      if (expanded.length === 0) return positive ? AST_FALSE : AST_TRUE;
       const match: Clause = {
         sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.active = 1
           AND l.type_id IN (${expanded.map(() => '?').join(',')})
           AND (l.source_id = t.id OR l.target_id = t.id))`,
         params: [...expanded],
       };
-      return operator === 'in' || operator === 'eq' ? match : { sql: `NOT (${match.sql})`, params: match.params };
+      return positive ? match : { sql: `NOT (${match.sql})`, params: match.params };
     }
 
     case 'parents':

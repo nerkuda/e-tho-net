@@ -7,6 +7,7 @@
 
 import { EtnError } from '../errors.js';
 import type { LinkStyle } from '../enums.js';
+import type { FilterAstNode } from './filter-ast.js';
 import type { ThoughtRef } from './thought.js';
 import type { NetworkProperty } from './thought-type.js';
 
@@ -40,6 +41,41 @@ export interface LinkTypeFilterInput {
 export function isLinkTypeFilterActive(filter: LinkTypeFilterInput | undefined): boolean {
   if (filter === undefined) return false;
   return (filter.type_ids?.length ?? 0) > 0 || filter.include_structural === true;
+}
+
+/** Вид операнда «Тип связи» в AST — единый для карты и `link_filter`. */
+export const LINK_TYPE_ENTITY_KIND = 'link_type' as const;
+
+/**
+ * Канонический AST-лист фильтра типов связей (задача f7da04d6, требование
+ * 8c131cff «Фильтр типов связей на карте и link_filter — один и тот же AST»).
+ *
+ * Плоский `link_filter` компилируется в ОДНУ форму условия общего AST, которой
+ * пользуются и фильтр типов связей на карте, и обход графа (neighbors/subgraph/
+ * edges/path/focus, `in_subtree_of`):
+ *
+ *   * `type_ids` → лист `{ link_type, in_hierarchy, [ids] }` — тип вместе с
+ *     потомками по иерархии `link_types` (L21), как и раньше;
+ *   * `include_structural: true` → ветка `{ link_type, is_empty }`
+ *     (нетипизированное/структурное ребро, `type_id IS NULL`), соединённая с
+ *     типами по OR;
+ *   * пустой набор (ни типов, ни структурных) → `undefined` — фильтр не
+ *     применяется («обход по всем рёбрам», прежнее поведение).
+ *
+ * Место хранения предпочтения карты (`PREF_KEY.CANVAS_LINK_FILTER`) и форма
+ * `link_filter` на входе НЕ меняются — компиляция в AST идёт на сервере.
+ */
+export function linkFilterToAst(filter: LinkTypeFilterInput | undefined): FilterAstNode | undefined {
+  if (!isLinkTypeFilterActive(filter)) return undefined;
+  const branches: FilterAstNode[] = [];
+  if ((filter?.type_ids?.length ?? 0) > 0) {
+    branches.push({ entity: { kind: 'link_type' }, operator: 'in_hierarchy', value: [...filter!.type_ids!] });
+  }
+  if (filter?.include_structural === true) {
+    branches.push({ entity: { kind: 'link_type' }, operator: 'is_empty' });
+  }
+  if (branches.length === 0) return undefined;
+  return branches.length === 1 ? branches[0]! : { op: 'or', children: branches };
 }
 
 /**

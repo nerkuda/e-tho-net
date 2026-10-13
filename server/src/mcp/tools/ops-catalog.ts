@@ -1624,7 +1624,7 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '|---|---|---|',
       '| `type` | — | `eq`/`ne`/`in`/`not_in` (тип + подтипы); `in_hierarchy`/`not_in_hierarchy` (тип + подтипы типов); `has`/`not_has` (значение — id/имена свойств: эффективные свойства типа) |',
       '| `property` | `property_id` или `property` (+`direction`: `out`/`in`) | по `value_type` (см. ниже); `in_hierarchy`/`not_in_hierarchy` только для `link` |',
-      '| `link_type` | — | `eq`/`ne`/`in`/`not_in` (тип связи + подтипы) |',
+      '| `link_type` | — | `eq`/`ne`/`in`/`not_in`/`in_hierarchy`/`not_in_hierarchy` (тип связи + подтипы `link_types`; `mode` неприменим); `is_empty`/`not_empty` — нет/есть типизированных инцидентных связей; единый операнд фильтра типов связей и `link_filter` (задача f7da04d6) |',
       '| `parents` / `children` | — | `is_empty`/`not_empty`; `eq`/`ne` (boolean — наличие; id); `in`/`not_in` (id); `in_hierarchy`/`not_in_hierarchy`; числа — количество |',
       '| `attachments` / `chronology` | — | `is_empty`/`not_empty`; `eq`/`ne` (boolean); числа — количество |',
       '| `comment` | — | `is_empty`/`not_empty`; `eq`/`ne` (boolean) |',
