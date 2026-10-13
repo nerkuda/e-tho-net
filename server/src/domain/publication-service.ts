@@ -61,6 +61,7 @@ import {
   recipeOverlap,
   summaryHasMarkdownHeadings,
 } from './publication-validation.js';
+import type { AstTokenContext } from './query-service.js';
 import { normalizeTitle } from './thought-service.js';
 
 /** Cap длины названия — по образцу мыслей (защита от мусора). */
@@ -256,6 +257,7 @@ function selectCurrentSelection(
   ndb: NetworkDb,
   id: string,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): string[] {
   const row = ndb
     .prepare('SELECT title_recipe FROM publications_v WHERE id = ? LIMIT 1')
@@ -263,7 +265,7 @@ function selectCurrentSelection(
   const recipe = parseRecipe(row?.title_recipe ?? null);
   if (recipe === null) return [];
   const warnings: string[] = [];
-  return selectRecipeIds(ndb, actorUserId, recipe, warnings);
+  return selectRecipeIds(ndb, actorUserId, recipe, warnings, tokenContext);
 }
 
 /** Порядок: узел публикации либо узел, когда-то существовавший (история). */
@@ -555,11 +557,13 @@ function resolvePublicationFields(
 // CRUD публикаций
 // ---------------------------------------------------------------------------
 
-/** Создать публикацию (POST /publications). */
+/** Создать публикацию (POST /publications). `tokenContext` — контекст токенов
+ * AST-рецепта (срез принятого состояния считается его исполнением). */
 export function createPublication(
   ndb: NetworkDb,
   input: PublicationCreateInput,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): Publication {
   return ndb.transaction(() => {
     const id = randomUUID();
@@ -569,7 +573,7 @@ export function createPublication(
     const recipe = parseRecipe(fields.title_recipe);
     const warnings: string[] = [];
     const acceptedIds =
-      recipe === null ? [] : selectRecipeIds(ndb, actorUserId, recipe, warnings);
+      recipe === null ? [] : selectRecipeIds(ndb, actorUserId, recipe, warnings, tokenContext);
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
     ndb
@@ -971,10 +975,11 @@ export function setPublicationOrder(
   publicationId: string,
   items: PublicationOrderItem[],
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): PublicationOrderItem[] {
   return ndb.transaction(() => {
     getPublicationOrThrow(ndb, publicationId);
-    const selectedIds = selectCurrentSelection(ndb, publicationId, actorUserId);
+    const selectedIds = selectCurrentSelection(ndb, publicationId, actorUserId, tokenContext);
     const members = new Set<string>([
       ...selectedIds,
       ...(getPublicationAcceptedIds(ndb, publicationId) ?? []),
@@ -1054,9 +1059,10 @@ function publicationMemberThoughtIds(
   publicationId: string,
   pub: Publication,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): Set<string> {
   const ids = new Set<string>([
-    ...selectCurrentSelection(ndb, publicationId, actorUserId),
+    ...selectCurrentSelection(ndb, publicationId, actorUserId, tokenContext),
     ...(getPublicationAcceptedIds(ndb, publicationId) ?? []),
   ]);
   const contentProps = [...pub.text_sources, ...pub.extra_properties];
@@ -1127,9 +1133,10 @@ function assertThoughtInPublication(
   pub: Publication,
   thoughtId: string,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): void {
   assertThoughtVisible(ndb, thoughtId);
-  const members = publicationMemberThoughtIds(ndb, publicationId, pub, actorUserId);
+  const members = publicationMemberThoughtIds(ndb, publicationId, pub, actorUserId, tokenContext);
   if (!members.has(thoughtId)) {
     throw new EtnError('VALIDATION_ERROR', `Мысль ${thoughtId} не входит в публикацию.`, {
       entity: 'thought',
@@ -1145,12 +1152,13 @@ export function addPublicationExclusion(
   publicationId: string,
   thoughtId: string,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): PublicationExclusion[] {
   return ndb.transaction(() => {
     const pub = getPublicationOrThrow(ndb, publicationId);
     // Мысль обязана существовать и входить в публикацию (ошибка 3882bd46):
     // посторонний id отвергается, а не молча попадает в список исключений.
-    assertThoughtInPublication(ndb, publicationId, pub, thoughtId, actorUserId);
+    assertThoughtInPublication(ndb, publicationId, pub, thoughtId, actorUserId, tokenContext);
     const id = publicationExclusionId(publicationId, thoughtId);
     const materialized = materializeShadow(ndb, 'publication_exclusions', id);
     if (materialized) {
@@ -1195,6 +1203,7 @@ export function removePublicationExclusion(
   ndb: NetworkDb,
   publicationId: string,
   thoughtId: string,
+  tokenContext?: AstTokenContext,
 ): PublicationExclusion[] {
   return ndb.transaction(() => {
     const pub = getPublicationOrThrow(ndb, publicationId);
@@ -1205,7 +1214,7 @@ export function removePublicationExclusion(
       .prepare('SELECT 1 FROM publication_exclusions WHERE id = ? LIMIT 1') // layers:physical-read
       .get(id);
     if (physical === undefined) {
-      assertThoughtInPublication(ndb, publicationId, pub, thoughtId, '');
+      assertThoughtInPublication(ndb, publicationId, pub, thoughtId, '', tokenContext);
     }
     const visible = ndb
       .prepare('SELECT 1 FROM publication_exclusions_v WHERE id = ? LIMIT 1')

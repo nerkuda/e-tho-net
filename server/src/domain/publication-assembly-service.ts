@@ -72,6 +72,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { selectRecipeIds } from './publication-recipe.js';
+import type { AstTokenContext } from './query-service.js';
 import {
   isStructuralLinkProperty,
   linkPropertyDirection,
@@ -670,6 +671,7 @@ function buildDocument(
   userId: string,
   includeExcluded: boolean,
   warnings: string[],
+  tokenContext?: AstTokenContext,
 ): BuiltDocument {
   const excluded = loadExcluded(ndb, pub.id);
   // Рецепт не задан (`null`) — тот же пустой отбор, что и пустой рецепт: сборка
@@ -681,7 +683,7 @@ function buildDocument(
     warnings.push(PUBLICATION_EMPTY_RECIPE_WARNING);
     selectedIds = [];
   } else {
-    selectedIds = selectRecipeIds(ndb, userId, pub.title_recipe, warnings);
+    selectedIds = selectRecipeIds(ndb, userId, pub.title_recipe, warnings, tokenContext);
   }
   const structSelected = includeExcluded
     ? selectedIds
@@ -1025,9 +1027,9 @@ function prepareDocument(
   userId: string,
   includeExcluded: boolean,
   warnings: string[],
-  exportSink?: ExportSink,
+  opts: { exportSink?: ExportSink; tokenContext?: AstTokenContext } = {},
 ): { doc: BuiltDocument; ctx: RenderContext } {
-  const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings);
+  const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings, opts.tokenContext);
 
   // Якоря всех блоков документа (разделы + тексты): ссылка на мысль внутри
   // публикации становится якорем даже с другой страницы ([[#888453b6]]).
@@ -1049,7 +1051,7 @@ function prepareDocument(
     textsBySection: doc.textsBySection,
     resolver,
     extraCache: new Map(),
-    ...(exportSink === undefined ? {} : { exportSink }),
+    ...(opts.exportSink === undefined ? {} : { exportSink: opts.exportSink }),
   };
   return { doc, ctx };
 }
@@ -1063,12 +1065,19 @@ export function assemblePublication(
   ndb: NetworkDb,
   publicationId: string,
   userId: string,
-  query: { page?: number; include_excluded?: boolean } = {},
+  query: { page?: number; include_excluded?: boolean; tokenContext?: AstTokenContext } = {},
 ): PublicationAssembly {
   const pub = getPublicationOrThrow(ndb, publicationId);
   const includeExcluded = query.include_excluded === true;
   const warnings: string[] = [];
-  const { doc, ctx } = prepareDocument(ndb, pub, userId, includeExcluded, warnings);
+  const { doc, ctx } = prepareDocument(
+    ndb,
+    pub,
+    userId,
+    includeExcluded,
+    warnings,
+    query.tokenContext === undefined ? {} : { tokenContext: query.tokenContext },
+  );
 
   const perPage = PUBLICATION_ASSEMBLY_PAGE_SIZE;
   const totalRoots = doc.tree.length;
@@ -1114,17 +1123,23 @@ export function assemblePublication(
  *
  * @param resolveUserName отображаемое имя пользователя (для авторства-фолбэка
  *   «пусто → создатель»); домен не знает системной БД.
+ * @param tokenContext контекст токенов AST-рецепта (часы/первый день недели
+ *   сети) — иначе календарный токен в рецепте считался бы по произвольным часам.
  */
 export function buildPublicationExportDocument(
   ndb: NetworkDb,
   publicationId: string,
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): PublicationExportDocument {
   const pub = getPublicationOrThrow(ndb, publicationId);
   const warnings: string[] = [];
   const sink: ExportSink = { sections: new Map(), headings: [] };
-  const { doc, ctx } = prepareDocument(ndb, pub, userId, false, warnings, sink);
+  const { doc, ctx } = prepareDocument(ndb, pub, userId, false, warnings, {
+    exportSink: sink,
+    ...(tokenContext === undefined ? {} : { tokenContext }),
+  });
   renderSections(ndb, doc.tree, ctx); // заполняет sink по всему дереву
 
   const byNode = new Map<PublicationContentNode, PublicationExportSection>();
@@ -1179,6 +1194,8 @@ export function listPublicationCandidates(
     include_excluded?: boolean;
     /** Кеш членства с дебаунсом (ленивый фасад); без него — прямой расчёт. */
     cache?: PublicationMembershipCache;
+    /** Контекст токенов AST-рецепта (окно дебаунса кеша — 400 мс). */
+    tokenContext?: AstTokenContext;
   } = {},
 ): PublicationCandidatesResult {
   const pub = getPublicationOrThrow(ndb, publicationId);
@@ -1190,7 +1207,7 @@ export function listPublicationCandidates(
   const offset = Math.max(Math.trunc(query.offset ?? 0), 0);
   const compute = (): PublicationCandidatesResult => {
     const warnings: string[] = [];
-    const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings);
+    const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings, query.tokenContext);
     const ids = doc.candidateIds;
     const pageIds = ids.slice(offset, offset + limit);
     const meta = loadThoughtMeta(ndb, pageIds);
@@ -1248,6 +1265,7 @@ export function acceptPublicationCandidate(
   publicationId: string,
   thoughtId: string,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): PublicationOrderItem[] {
   return ndb.transaction(() => {
     const pub = getPublicationOrThrow(ndb, publicationId);
@@ -1275,7 +1293,9 @@ export function acceptPublicationCandidate(
     // обязана быть его частью — кандидаты считаются до сравнения.
     const warnings: string[] = [];
     const selectedIds =
-      pub.title_recipe === null ? [] : selectRecipeIds(ndb, actorUserId, pub.title_recipe, warnings);
+      pub.title_recipe === null
+        ? []
+        : selectRecipeIds(ndb, actorUserId, pub.title_recipe, warnings, tokenContext);
     const excluded = new Set(
       listPublicationExclusions(ndb, publicationId).map((e) => e.thought_id),
     );
@@ -1375,6 +1395,8 @@ export function listPublicationUsage(
     publication_limit?: number;
     /** Кеш членства с дебаунсом (ленивый фасад); без него — прямой расчёт. */
     cache?: PublicationMembershipCache;
+    /** Контекст токенов AST-рецепта (окно дебаунса кеша — 400 мс). */
+    tokenContext?: AstTokenContext;
   } = {},
 ): PublicationUsageResult {
   const limit = Math.min(
@@ -1395,7 +1417,7 @@ export function listPublicationUsage(
 
     for (const pub of publications.items) {
       const warnings: string[] = [];
-      const doc = buildDocument(ndb, pub, userId, false, warnings);
+      const doc = buildDocument(ndb, pub, userId, false, warnings, query.tokenContext);
 
       const path = findSectionPath(doc.tree, thoughtId);
       if (path !== null) {

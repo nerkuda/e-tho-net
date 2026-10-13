@@ -43,6 +43,7 @@ import { assemblePublication } from '../src/domain/publication-assembly-service.
 import { queryThoughtIds, structureRequestToQuery } from '../src/domain/query-service.js';
 import { parseStructureFilter } from '../src/domain/structure-service.js';
 import {
+  apiCreateThought,
   buildRestContext,
   closeRestContext,
   nativeAvailable,
@@ -56,7 +57,12 @@ const NOW = '2024-01-01T00:00:00Z';
 const LEGACY_PAGE_SIZE = 20;
 
 /** Seed a thought directly (no type) and return its id. */
-function seedThought(ndb: NetworkDb, title: string, typeId: string | null = null): string {
+function seedThought(
+  ndb: NetworkDb,
+  title: string,
+  typeId: string | null = null,
+  createdAt: string = NOW,
+): string {
   const id = randomUUID();
   ndb
     .prepare(
@@ -64,7 +70,7 @@ function seedThought(ndb: NetworkDb, title: string, typeId: string | null = null
                              version, created_at, created_by, updated_at, updated_by)
        VALUES (?, ?, ?, ?, ?, 1, 0, 0, 1, ?, ?, ?, ?)`,
     )
-    .run(id, ndb.layerId, title, title.toLowerCase(), typeId, NOW, USER, NOW, USER);
+    .run(id, ndb.layerId, title, title.toLowerCase(), typeId, createdAt, USER, createdAt, USER);
   return id;
 }
 
@@ -187,6 +193,100 @@ describe('рецепт заголовков публикаций на общий
       const emptyCompiled = compileRecipeToAst(ndb, flatRecipe({}));
       assert.ok(emptyCompiled !== undefined);
       assert.ok(isAstRecipeEmpty(emptyCompiled), 'нет условий состава → пустой рецепт');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('токены календаря AST-рецепта раскрываются контекстом точки «публикации»', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const doc = createThoughtType(ndb, { name: 'Doc' }, USER);
+      // Даты мыслей — исторические константы: границу месяца/недели задаёт
+      // контекст, а не реальные часы прогона.
+      const jan = seedThought(ndb, 'январь', doc.id, '2024-01-05T10:00:00Z');
+      const feb = seedThought(ndb, 'февраль', doc.id, '2024-02-05T10:00:00Z');
+      const sat = seedThought(ndb, 'сб', doc.id, '2024-02-10T10:00:00Z');
+      const sun = seedThought(ndb, 'вс', doc.id, '2024-02-11T10:00:00Z');
+      const mon = seedThought(ndb, 'пн', doc.id, '2024-02-12T10:00:00Z');
+
+      const monthRecipe = recipeAst({
+        op: 'and',
+        children: [
+          leaf({ entity: { kind: 'type' } }, 'in_hierarchy', [doc.id]),
+          leaf({ entity: { kind: 'created_at' } }, 'gte', { token: '$monthStart' }),
+        ],
+      });
+      // Часы исполнения — 15 февраля 2024: граница месяца = 2024-02-01.
+      const ctx = {
+        nowMs: Date.UTC(2024, 1, 15, 12),
+        userId: USER,
+        firstDayOfWeek: 1,
+        withTime: false,
+      };
+      const warnings: string[] = [];
+      const monthIds = [...selectRecipeIds(ndb, USER, monthRecipe, warnings, ctx)].sort();
+      assert.deepEqual(monthIds, [feb, sat, sun, mon].sort(), 'граница месяца из контекста фактически применена');
+      assert.ok(!monthIds.includes(jan), 'январь вне границы февраля — не вся сеть');
+      assert.deepEqual(warnings, []);
+      assert.ok(!selectRecipeIds(ndb, USER, monthRecipe, []).includes(feb), 'мутация: без контекста граница месяца — не февраля 2024');
+
+      // «Первый день недели» сети: $weekStart от воскресенья (7) — 2024-02-11,
+      // от понедельника (1) — 2024-02-12; часы — среда 14 февраля.
+      const weekRecipe = recipeAst({
+        op: 'and',
+        children: [
+          leaf({ entity: { kind: 'type' } }, 'in_hierarchy', [doc.id]),
+          leaf({ entity: { kind: 'created_at' } }, 'gte', { token: '$weekStart' }),
+        ],
+      });
+      const wed = Date.UTC(2024, 1, 14, 9);
+      const idsSunday = selectRecipeIds(ndb, USER, weekRecipe, [], {
+        ...ctx,
+        nowMs: wed,
+        firstDayOfWeek: 7,
+      });
+      const idsMonday = selectRecipeIds(ndb, USER, weekRecipe, [], {
+        ...ctx,
+        nowMs: wed,
+        firstDayOfWeek: 1,
+      });
+      assert.deepEqual([...idsSunday].sort(), [sun, mon].sort(), 'неделя с воскресенья');
+      assert.deepEqual([...idsMonday].sort(), [mon].sort(), 'неделя с понедельника');
+      assert.notDeepEqual(idsSunday, idsMonday, 'настройка сети влияет на границу недели');
+
+      // Профиль «публикации» — без времени: единица времени ($now) неразрешима.
+      // Пустая выборка с пояснением, а не тихая потеря условия (требование b7fdab20).
+      const timeRecipe = recipeAst({
+        op: 'and',
+        children: [
+          leaf({ entity: { kind: 'type' } }, 'in_hierarchy', [doc.id]),
+          leaf({ entity: { kind: 'created_at' } }, 'gte', { token: '$now' }),
+        ],
+      });
+      const timeWarnings: string[] = [];
+      assert.deepEqual(selectRecipeIds(ndb, USER, timeRecipe, timeWarnings, ctx), []);
+      assert.equal(timeWarnings.length, 1, 'неразрешимый токен — предупреждение сборки');
+      assert.match(timeWarnings[0]!, /рецепт заголовков не исполнен/);
+
+      // Сборка документа видит тот же контекст (сценарий b0a50833): разделы —
+      // только февраль 2024, а не вся сеть и не текущий месяц.
+      const pub = createPublication(ndb, { title: 'Февраль', title_recipe: monthRecipe }, USER, ctx);
+      const assembled = assemblePublication(ndb, pub.id, USER, { tokenContext: ctx });
+      assert.deepEqual(
+        sectionIds(assembled.sections).sort(),
+        [feb, sat, sun, mon].sort(),
+        'сборка применяет границу месяца',
+      );
+
+      // Мутация «tokenContext не прокинут»: то же тело без контекста собирает
+      // ДРУГОЙ месяц (реальный) — набор расходится.
+      const pubNoCtx = createPublication(
+        ndb,
+        { title: 'Без контекста', title_recipe: monthRecipe },
+        USER,
+      );
+      assert.deepEqual(sectionIds(assemblePublication(ndb, pubNoCtx.id, USER).sections), []);
     } finally {
       ndb.close();
     }
@@ -487,6 +587,43 @@ describe('рецепт заголовков публикаций: wire (REST)', 
           `${name}: предупреждение о пустом рецепте`,
         );
       }
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('REST: единица времени ($now) в AST-рецепте — профиль «публикации» без времени', async () => {
+    ctx = await buildRestContext();
+    try {
+      // Мысль в сети: до фикса «created_at lte $now» без контекста профиля
+      // разворачивался по произвольным часам и отбирал всю сеть (класс b9db6c0a).
+      const seeded = await apiCreateThought(ctx, { title: 'Мысль' });
+      assert.equal(seeded.statusCode, 201, JSON.stringify(seeded.data));
+
+      const nowRecipe = recipeAst(
+        leaf({ entity: { kind: 'created_at' } }, 'lte', { token: '$now' }),
+      );
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/publications`,
+        headers: { authorization: `Bearer ${ctx.adminKey}` },
+        payload: { title: 'Со $now', title_recipe: nowRecipe },
+      });
+      assert.equal(created.statusCode, 201, created.body);
+      const id = (created.json().data as { id: string }).id;
+
+      const assembly = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/networks/${ctx.networkId}/publications/${id}/assembly`,
+        headers: { authorization: `Bearer ${ctx.adminKey}` },
+      });
+      assert.equal(assembly.statusCode, 200, assembly.body);
+      const doc = assembly.json().data as { sections: unknown[]; warnings: string[] };
+      assert.deepEqual(doc.sections, [], '$now неразрешим в профиле без времени — пусто, не вся сеть');
+      assert.ok(
+        doc.warnings.some((w) => w.startsWith('рецепт заголовков не исполнен')),
+        `сборка поясняет неразрешимый токен: ${JSON.stringify(doc.warnings)}`,
+      );
     } finally {
       await closeRestContext(ctx);
     }

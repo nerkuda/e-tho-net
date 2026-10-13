@@ -13,6 +13,19 @@
  *     исполняется явным AST-исполнителем с проверкой профиля точки применения
  *     (требование 0095daad) и красной диагностикой (требование 44d61c8a).
  *
+ * **Контекст токенов.** AST-форма рецепта исполняется при КАЖДОЙ сборке (ADR
+ * 2ef3ed7e, runtime-исполнение без материализации), поэтому календарные токены
+ * (`$monthStart`, `$weekStart`…) осмысленны и раскрываются контекстом точки
+ * применения «публикации» — те же `nowMs`/`firstDayOfWeek` сети/`userId`/
+ * `withTime`, что и в прочих AST-точках (требование 0095daad, ADR 0c02ab4f;
+ * замечание приёмки). Собирают контекст фасады (REST — `restTokenContext`, MCP —
+ * `mcpTokenContext`) и прокидывают через домен до {@link selectRecipeIds}.
+ * Неразрешимый токен (например, единица времени в профиле без времени) даёт
+ * пустую выборку с пояснением в предупреждениях сборки, а не молчаливую потерю
+ * условия (общее правило `unresolved`, требование b7fdab20). `compileRecipeToAst`
+ * контекста НЕ принимает: компиляция строит дерево и токены не раскрывает —
+ * раскрытие делает исполнитель в момент запроса.
+ *
  * Модуль выделен из `publication-assembly-service.ts`, чтобы им могли
  * пользоваться обе стороны домена без циклической зависимости: сборка
  * (кандидаты/использование) и CRUD публикаций (срез принятого состояния —
@@ -34,7 +47,12 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { compileThoughtQueryToAst, queryThoughtIds, structureRequestToQuery } from './query-service.js';
+import {
+  compileThoughtQueryToAst,
+  queryThoughtIds,
+  structureRequestToQuery,
+  type AstTokenContext,
+} from './query-service.js';
 import { parseFilterAst } from './filter-ast.js';
 import { parseStructureFilter } from './structure-service.js';
 
@@ -184,15 +202,20 @@ function isNonCriterionLeaf(leaf: FilterAstLeaf): boolean {
  * ядро — ADR 34f6f9d6); AST-форма передаётся явным `ast` и потому получает
  * проверку профиля «публикации» и красную диагностику ядра. Обе формы
  * исполняет один и тот же исполнитель — второго пути нет.
+ *
+ * `tokenContext` — контекст раскрытия токенов AST (часы исполнения, первый день
+ * недели сети, пользователь, профиль времени); значим только для AST-формы —
+ * плоская форма токенов не несёт, её путь не меняется.
  */
 export function selectRecipeIds(
   ndb: NetworkDb,
   userId: string,
   recipe: PublicationTitleRecipe,
   warnings: string[],
+  tokenContext?: AstTokenContext,
 ): string[] {
   if (isPublicationTitleRecipeAst(recipe)) {
-    return selectAstRecipeIds(ndb, userId, recipe, warnings);
+    return selectAstRecipeIds(ndb, userId, recipe, warnings, tokenContext);
   }
   const raw = recipe as unknown as Record<string, unknown>;
   let filter: StructureFilter;
@@ -252,12 +275,18 @@ export function selectRecipeIds(
  * неисполнимое тело (битая форма, невидимый операнд, удалённая сущность) —
  * предупреждение сборки и пустая выборка: сборка документа — читающий путь и не
  * должна падать из-за состояния рецепта (как и у плоского формата).
+ *
+ * Токены тела раскрывает `tokenContext` (как в остальных AST-точках): без него
+ * календарный токен считался бы по произвольным часам, а неразрешимый —
+ * молчаливо пропадал. Неразрешимые токены движок отдаёт в `page.unresolved`
+ * (`ids` пуст) — превращаем их в предупреждение сборки и пустую выборку.
  */
 function selectAstRecipeIds(
   ndb: NetworkDb,
   userId: string,
   recipe: PublicationTitleRecipe,
   warnings: string[],
+  tokenContext?: AstTokenContext,
 ): string[] {
   let ast: FilterAst | undefined;
   try {
@@ -291,8 +320,15 @@ function selectAstRecipeIds(
           maxLimit: RECIPE_PAGE_SIZE,
           // Профиль точки применения «публикации» (требование 0095daad, ADR 0c02ab4f).
           profile: 'publications',
+          ...(tokenContext !== undefined ? { tokenContext } : {}),
         },
       );
+      if (page.unresolved !== undefined && page.unresolved.length > 0) {
+        warnings.push(
+          `рецепт заголовков не исполнен: ${page.unresolved.map((i) => i.message).join('; ')}`,
+        );
+        return [];
+      }
       ids.push(...page.ids);
       if (!page.has_more || page.next_cursor === null) break;
       cursor = page.next_cursor;

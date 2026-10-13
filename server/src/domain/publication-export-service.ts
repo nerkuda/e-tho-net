@@ -50,6 +50,7 @@ import {
   type PublicationExportDocument,
   type PublicationExportSection,
 } from './publication-assembly-service.js';
+import type { AstTokenContext } from './query-service.js';
 import { registerFinishedFileJob } from './export-service.js';
 
 /**
@@ -592,6 +593,7 @@ export function renderPublicationPrintHtml(
   publicationId: string,
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): PublicationPrint & { warnings: string[] } {
   const pub = getPublication(ndb, publicationId);
   if (pub === null) {
@@ -600,7 +602,13 @@ export function renderPublicationPrintHtml(
       id: publicationId,
     });
   }
-  const document = buildPublicationExportDocument(ndb, publicationId, userId, resolveUserName);
+  const document = buildPublicationExportDocument(
+    ndb,
+    publicationId,
+    userId,
+    resolveUserName,
+    tokenContext,
+  );
   const sources: string[] = [document.title.summary_md];
   for (const section of flattenExportSections(document.sections)) {
     sources.push(section.preamble_md);
@@ -847,6 +855,7 @@ export async function startPublicationExportJob(
   opts: { format: PublicationExportFormat; with_assets?: boolean },
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): Promise<ExportJob> {
   const pub = getPublication(ndb, publicationId);
   if (pub === null) {
@@ -855,7 +864,13 @@ export async function startPublicationExportJob(
       id: publicationId,
     });
   }
-  const document = buildPublicationExportDocument(ndb, publicationId, userId, resolveUserName);
+  const document = buildPublicationExportDocument(
+    ndb,
+    publicationId,
+    userId,
+    resolveUserName,
+    tokenContext,
+  );
   const slug = publicationSlug(pub.title);
   const artifact = buildPublicationArtifact(
     ndb,
@@ -948,6 +963,7 @@ export function buildPublicationBatchArtifact(
   },
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): { entries: PublicationFile[]; report: PublicationExportReport } {
   const warnings: string[] = [];
   let ids: string[];
@@ -996,7 +1012,7 @@ export function buildPublicationBatchArtifact(
       continue;
     }
     try {
-      const document = buildPublicationExportDocument(ndb, id, userId, resolveUserName);
+      const document = buildPublicationExportDocument(ndb, id, userId, resolveUserName, tokenContext);
       const artifact = buildPublicationArtifact(
         ndb,
         document,
@@ -1032,8 +1048,15 @@ export async function startPublicationBatchExportJob(
   opts: { ids?: string[]; active_only?: boolean; format: PublicationExportFormat; with_assets?: boolean },
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): Promise<ExportJob> {
-  const { entries, report } = buildPublicationBatchArtifact(ndb, opts, userId, resolveUserName);
+  const { entries, report } = buildPublicationBatchArtifact(
+    ndb,
+    opts,
+    userId,
+    resolveUserName,
+    tokenContext,
+  );
   const jobId = randomUUID();
   const filePath = tempZipPath(jobId);
   await writePublicationZip(filePath, entries);

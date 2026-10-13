@@ -117,6 +117,7 @@ import {
   McpShelfUpdate,
 } from '../../contracts.js';
 import type { OpHandler, Params } from './ops.js';
+import { mcpTokenContext } from './token-context.js';
 
 /** Снимок публикации для журнала ({ id, title }) с `NOT_FOUND`, если строки нет. */
 function publicationRef(ndb: NetworkDb, id: string): Pick<Publication, 'id' | 'title'> {
@@ -254,6 +255,8 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
       const data = assemblePublication(ndb, a.publication_id, rt.deps.auth.userId, {
         ...(a.page !== undefined ? { page: a.page } : {}),
         ...(a.include_excluded !== undefined ? { include_excluded: a.include_excluded } : {}),
+        // Профиль «публикации»: контекст токенов AST-рецепта (паритет с REST).
+        tokenContext: mcpTokenContext(rt, a.network_id, 'publications'),
       });
       return { data };
     });
@@ -268,6 +271,7 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
         ...(a.offset !== undefined ? { offset: a.offset } : {}),
         ...(a.include_excluded !== undefined ? { include_excluded: a.include_excluded } : {}),
         cache: publicationMembershipCache,
+        tokenContext: mcpTokenContext(rt, a.network_id, 'publications'),
       });
       return { data };
     });
@@ -282,6 +286,7 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
         ...(a.offset !== undefined ? { offset: a.offset } : {}),
         ...(a.publication_limit !== undefined ? { publication_limit: a.publication_limit } : {}),
         cache: publicationMembershipCache,
+        tokenContext: mcpTokenContext(rt, a.network_id, 'publications'),
       });
       return { data };
     });
@@ -312,6 +317,7 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
         a.publication_id,
         rt.deps.auth.userId,
         resolveUserName(rt),
+        mcpTokenContext(rt, a.network_id, 'publications'),
       );
       const slug = publicationSlug(pub.title);
       const withAssets = a.with_assets === true;
@@ -352,6 +358,7 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
         },
         rt.deps.auth.userId,
         resolveUserName(rt),
+        mcpTokenContext(rt, a.network_id, 'publications'),
       );
       const zip = await buildPublicationZipBuffer(entries);
       return {
@@ -373,7 +380,12 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
       const create = toCreateInput(a);
       const publication = runWrite(ndb, fx, () => {
-        const created = createPublication(ndb, create, rt.deps.auth.userId);
+        const created = createPublication(
+          ndb,
+          create,
+          rt.deps.auth.userId,
+          mcpTokenContext(rt, a.network_id, 'publications'),
+        );
         return {
           result: created,
           // Отдельного `publication.created` каталог 67b8748e не объявляет:
@@ -449,7 +461,13 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
         position: item.position,
       }));
       const order = runWrite(ndb, fx, () => {
-        const ordered = setPublicationOrder(ndb, a.publication_id, items, rt.deps.auth.userId);
+        const ordered = setPublicationOrder(
+          ndb,
+          a.publication_id,
+          items,
+          rt.deps.auth.userId,
+          mcpTokenContext(rt, a.network_id, 'publications'),
+        );
         const snapshot = publicationRef(ndb, a.publication_id);
         return {
           result: ordered,
@@ -488,6 +506,7 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
           a.publication_id,
           a.thought_id,
           rt.deps.auth.userId,
+          mcpTokenContext(rt, a.network_id, 'publications'),
         );
         const snapshot = publicationRef(ndb, a.publication_id);
         return {
@@ -524,8 +543,19 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
       const exclude = a.excluded !== false;
       const exclusions = runWrite(ndb, fx, () => {
         const list = exclude
-          ? addPublicationExclusion(ndb, a.publication_id, a.thought_id, rt.deps.auth.userId)
-          : removePublicationExclusion(ndb, a.publication_id, a.thought_id);
+          ? addPublicationExclusion(
+              ndb,
+              a.publication_id,
+              a.thought_id,
+              rt.deps.auth.userId,
+              mcpTokenContext(rt, a.network_id, 'publications'),
+            )
+          : removePublicationExclusion(
+              ndb,
+              a.publication_id,
+              a.thought_id,
+              mcpTokenContext(rt, a.network_id, 'publications'),
+            );
         const snapshot = publicationRef(ndb, a.publication_id);
         return {
           result: list,
