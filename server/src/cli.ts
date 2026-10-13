@@ -33,6 +33,7 @@ import { generateApiKey } from './auth/api-key.js';
 import { createApiKeyAuthProvider } from './mcp/auth.js';
 import { runStdioMcp } from './mcp/stdio.js';
 import { closeReaderPool, configureReaderPool } from './db/reader-pool.js';
+import { closeWritePool, configureWritePool, drainWritePool } from './db/write-pool.js';
 import { listLayers } from './domain/layer-service.js';
 import { getPublication } from './domain/publication-service.js';
 import { buildPublicationExportDocument } from './domain/publication-assembly-service.js';
@@ -668,6 +669,14 @@ export async function main(opts: MainOptions = {}): Promise<number> {
         size: config.readerPool.size,
         taskTimeoutMs: config.readerPool.taskTimeoutMs,
       });
+      // Батч-запись идёт через пул записи (задача c8920d04, ADR ca3a9218): та же
+      // причина — синхронный better-sqlite3 заморозил бы stdio-процесс целиком.
+      // `ETN_WRITE_POOL_SIZE=0` выключает пул и возвращает запись в главный поток.
+      configureWritePool({
+        size: config.writePool.size,
+        taskTimeoutMs: config.writePool.taskTimeoutMs,
+        idleEvictionMs: config.writePool.idleEvictionMs,
+      });
       // Logger is built inside runStdioMcp (stderr-bound) to keep stdout clean.
       await runStdioMcp({ dataDir: config.dataDir, apiKey });
       return 0;
@@ -675,6 +684,13 @@ export async function main(opts: MainOptions = {}): Promise<number> {
       console.error(err instanceof Error ? err.message : String(err));
       return 1;
     } finally {
+      // Порядок как при остановке HTTP-сервера: сначала дождаться слива очереди
+      // записи и закрыть воркеры, потом читателей.
+      const drained = await drainWritePool();
+      if (!drained.drained) {
+        console.error('write pool: очередь не слилась в отведённое время');
+      }
+      await closeWritePool();
       await closeReaderPool();
     }
   }
