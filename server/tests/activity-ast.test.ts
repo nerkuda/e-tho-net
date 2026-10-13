@@ -183,6 +183,59 @@ describe('события: отбор на общий AST (задача 2b230e8e)
     }
   });
 
+  it('компилятор: поля плоского набора переносятся в жёстко заданные AST-эталоны', () => {
+    // Независимый эталон: ожидаемые деревья захардкожены (не выведены из самого
+    // компилятора), поэтому отключение/подмена любого поля в `compileActivityToAst`
+    // роняет тест в unit-наборе (без опоры на real-тест, который SKIP в CI).
+    const cases: Array<{ raw: Record<string, unknown>; expected: FilterAst }> = [
+      {
+        raw: { network_id: NET, from_ms: 1000, to_ms: 2000 },
+        expected: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            op: 'and',
+            children: [
+              { entity: { kind: 'occurred_at' }, operator: 'gte', value: 1000 },
+              { entity: { kind: 'occurred_at' }, operator: 'lte', value: 2000 },
+            ],
+          },
+        },
+      },
+      {
+        raw: { network_id: NET, entity_type: 'thought', entity_id: 'E1' },
+        expected: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            op: 'and',
+            children: [
+              { entity: { kind: 'entity_type' }, operator: 'in', value: ['thought'] },
+              { entity: { kind: 'entity_id' }, operator: 'eq', value: 'E1' },
+            ],
+          },
+        },
+      },
+      {
+        raw: { network_id: NET, user_id: 'U1' },
+        expected: {
+          version: FILTER_AST_VERSION,
+          filter: { entity: { kind: 'user' }, operator: 'eq', value: 'U1' },
+        },
+      },
+      {
+        raw: { network_id: NET },
+        expected: { version: FILTER_AST_VERSION, filter: { op: 'and', children: [] } },
+      },
+    ];
+    for (const { raw, expected } of cases) {
+      const params = parseActivityListQuery(raw, 't');
+      assert.deepEqual(
+        compileActivityToAst(params),
+        expected,
+        `плоский набор ${JSON.stringify(raw)} → AST-эталон`,
+      );
+    }
+  });
+
   it('компилятор: плоские параметры и эквивалентный AST дают один набор и порядок', () => {
     const ndb = createInMemoryNetworkDb();
     try {
