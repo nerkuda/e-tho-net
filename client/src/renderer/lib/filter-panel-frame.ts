@@ -36,6 +36,7 @@ import {
   type FilterPanelState,
   clampFilterPanelSize,
   filterPanelPlacement,
+  filterPanelWidthLimit,
   parseFilterPanelState,
   serializeFilterPanelState,
 } from './pure.js';
@@ -115,7 +116,18 @@ export function mountFilterPanelFrame(opts: FilterPanelFrameOptions): FilterPane
     // Размер панели не съедает результаты: верхняя граница упирается в полотно.
     const room =
       (placement === 'top' ? container.clientHeight : container.clientWidth) - resultsMinSize;
-    return { min, max: Math.max(min, Math.min(max, room)) };
+    // Ширина панели — не больше половины ширины окна минус панель редактора,
+    // когда он пришвартован слева/справа (требование заказчика 2026-10-13).
+    const editorPosition = store.state.editorPosition;
+    const editorSide = editorPosition === 'left' || editorPosition === 'right';
+    const widthCap =
+      placement === 'side'
+        ? filterPanelWidthLimit(
+            typeof window !== 'undefined' ? window.innerWidth : container.clientWidth,
+            editorSide ? store.state.editorW : 0,
+          )
+        : Number.POSITIVE_INFINITY;
+    return { min, max: Math.max(min, Math.min(max, room, widthCap)) };
   };
 
   /** Размер панели для положения: своё значение, иначе миграционное, иначе CSS. */

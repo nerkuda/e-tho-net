@@ -209,7 +209,23 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   /** Маркер ● у строки имени (нет строки — нет и маркера). */
   let nameChangedMarker: HTMLElement | null = null;
 
-  // --- Имя отбора: поле с ✕ очистки + маркер изменённости ------------------
+  // Кнопка «Сохранить» строится ЗАРАНЕЕ: по требованию заказчика 2026-10-13 она
+  // стоит на ОДНОЙ строке с полем имени (а не в отдельной полосе кнопок).
+  const save = (): void => {
+    void opts.onSave(filterSaveRequest(getName?.() ?? '', opts.savedName()));
+  };
+  const saveNode =
+    opts.standardButtons !== false
+      ? uiButton({
+          label: 'Сохранить',
+          role: 'secondary',
+          class: 'ff-save',
+          title: 'Записать настройки отбора',
+          onClick: save,
+        })
+      : null;
+
+  // --- Имя отбора: поле с ✕ очистки + маркер изменённости + «Сохранить» -----
   // Место без сохранённых отборов (getName не задан) имя не рисует: у него нет
   // ни записи, ни маркера «изменён относительно сохранённого».
   const getName = opts.getName;
@@ -236,6 +252,7 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     const changed = span('●', FILTER_FOOTER_CHANGED_CLASS);
     setTooltip(changed, 'отбор изменён с момента сохранения');
     nameRow.append(wrapClearable(nameInput, clearName), changed);
+    if (saveNode !== null) nameRow.append(saveNode);
     root.append(nameRow);
     /** Маркер ● (вне области видимости `refresh` ниже). */
     nameChangedMarker = changed;
@@ -254,9 +271,6 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   if (previewFn !== undefined) root.append(previewBox);
 
   // --- Кнопки: стандартный набор + кнопки профиля места применения --------
-  const save = (): void => {
-    void opts.onSave(filterSaveRequest(getName?.() ?? '', opts.savedName()));
-  };
   const actions = div('ff-actions');
   let applyButton: HTMLButtonElement | null = null;
   // Кнопка «исправить» — переход к проблемной строке из сообщения о запрете
@@ -280,13 +294,8 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     actions.append(fixButton);
   }
   if (opts.standardButtons !== false) {
-    const saveNode = uiButton({
-      label: 'Сохранить',
-      role: 'secondary',
-      class: 'ff-save',
-      title: 'Записать настройки отбора',
-      onClick: save,
-    });
+    // «Сохранить» уже стоит в строке имени (если строка есть); иначе — здесь.
+    if (saveNode !== null && getName === undefined) actions.append(saveNode);
     const applyNode = uiButton({
       label: 'Применить',
       role: 'primary',
@@ -302,7 +311,7 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
       onClick: () => opts.onClear(),
     });
     applyButton = applyNode;
-    actions.append(saveNode, applyNode, clearNode);
+    actions.append(applyNode, clearNode);
   }
   for (const spec of opts.extraButtons ?? []) {
     actions.append(

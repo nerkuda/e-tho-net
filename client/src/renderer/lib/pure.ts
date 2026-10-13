@@ -1187,6 +1187,18 @@ export function filterPanelPlacement(canvasWidth: number): FilterPanelPlacement 
   return canvasWidth < FILTER_PANEL_SIDE_MIN_WIDTH ? 'top' : 'side';
 }
 
+/**
+ * Предел ширины панели отбора в боковом положении (требование заказчика
+ * 2026-10-13): не больше ПОЛОВИНЫ ширины окна клиента минус ширина панели
+ * редактора, когда он пришвартован слева/справа. Редактор сверху/снизу (или
+ * скрыт) в расчёт не входит — вычитать нечего. Чистая функция.
+ */
+export function filterPanelWidthLimit(windowWidth: number, editorSideWidth: number): number {
+  const half = Math.max(0, windowWidth) * 0.5;
+  const subtract = Number.isFinite(editorSideWidth) && editorSideWidth > 0 ? editorSideWidth : 0;
+  return Math.max(0, half - subtract);
+}
+
 /** Сохранённое локально (L4 `ui_state`) состояние панели отбора. */
 export interface FilterPanelState {
   /** Панель скрыта плавающей кнопкой. */
