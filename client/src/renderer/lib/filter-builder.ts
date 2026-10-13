@@ -1533,8 +1533,15 @@ function parseFilterAstLabels(raw: unknown): FilterAstLabels | undefined {
   return labels.entity === undefined && labels.value === undefined ? undefined : labels;
 }
 
-/** Значение wire-листа → значение модели (незнакомое — «нет значения»). */
-function filterAstValueToTree(raw: unknown): FilterTreeValue {
+/**
+ * Значение wire-листа → значение модели. `null` — значение ПРИСУТСТВУЕТ, но не
+ * распознано (битая под-выборка: нечитаемое под-дерево `query` или оператор вне
+ * словаря) — такой лист отклоняется целиком вместе с содержащей группой, чтобы
+ * условие не исчезло молча при пересохранении (та же ось строгости, что у
+ * нераспознанного ребёнка группы). Отсутствующее значение (нет поля `value`) —
+ * это «нет значения» (`{kind:'none'}`), а не ошибка чтения.
+ */
+function filterAstValueToTree(raw: unknown): FilterTreeValue | null {
   if (raw === undefined || raw === null) return { kind: 'none' };
   if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') {
     return { kind: 'scalar', value: raw };
@@ -1559,12 +1566,9 @@ function filterAstValueToTree(raw: unknown): FilterTreeValue {
   if (rec['query'] !== undefined) {
     const node = filterAstToTree(rec['query']);
     const operator = rec['operator'];
-    if (
-      node !== null &&
-      (operator === 'in' || operator === 'not_in' || operator === 'all_in')
-    ) {
-      return { kind: 'subquery', operator, node };
-    }
+    if (node === null) return null; // битое под-дерево под-выборки — отклоняем лист
+    if (operator !== 'in' && operator !== 'not_in' && operator !== 'all_in') return null;
+    return { kind: 'subquery', operator, node };
   }
   return { kind: 'none' };
 }
@@ -1612,11 +1616,12 @@ export function filterTreeToAst(node: FilterTreeNode): FilterAstNode {
  * условие нельзя — молча искажённый отбор хуже пустого.
  *
  * Строгость симметрична на любой глубине: нераспознанный РЕБЁНОК отклоняет всю
- * группу (обязательство f07cf978, замечание приёмки 6ae062a9). Отфильтровать
- * неизвестного ребёнка и сохранить группу нельзя — `and[неизвестный, keywords]`
- * стал бы `and[keywords]`, то есть отбор молча РАСШИРИЛСЯ бы при пересохранении
- * (достижимо при рассинхроне словаря клиент↔сервер). Так же читается и корень:
- * весь отбор — пустой.
+ * группу, а нечитаемое значение-под-выборка — лист (обязательство f07cf978,
+ * замечание приёмки 6ae062a9). Отфильтровать неизвестного ребёнка и сохранить
+ * группу нельзя — `and[неизвестный, keywords]` стал бы `and[keywords]`, то есть
+ * отбор молча РАСШИРИЛСЯ бы при пересохранении; потерянная под-выборка молча
+ * ИСКАЗИЛА бы условие (достижимо при рассинхроне словаря клиент↔сервер). Так же
+ * читается и корень: весь отбор — пустой.
  */
 export function filterAstToTree(node: unknown): FilterTreeNode | null {
   if (node === null || typeof node !== 'object' || Array.isArray(node)) return null;
@@ -1634,11 +1639,13 @@ export function filterAstToTree(node: unknown): FilterTreeNode | null {
   }
   const entity = parseFilterAstEntity(rec['entity']);
   if (entity === null || !isFilterAstOperator(rec['operator'])) return null;
+  const value = filterAstValueToTree(rec['value']);
+  if (value === null) return null; // битая под-выборка — лист не читаем
   const leaf: FilterTreeLeaf = {
     kind: 'leaf',
     entity,
     operator: rec['operator'],
-    value: filterAstValueToTree(rec['value']),
+    value,
   };
   const labels = parseFilterAstLabels(rec['labels']);
   if (labels !== undefined) leaf.labels = labels;

@@ -323,6 +323,58 @@ describe('parseFilterDefinition понимает обе формы отбора'
     assert.equal(state.tree, null);
   });
 
+  it('битая под-выборка в значении отклоняет весь отбор, а не теряет условие (та же ось строгости)', () => {
+    // Тот же принцип, что у нераспознанного ребёнка группы: «молча искажённый
+    // отбор хуже пустого». Иначе лист получил бы `{kind:'none'}` и при
+    // пересохранении условие с под-выборкой исчезло бы молча.
+    const brokenQuery = parseFilterAstState({
+      version: 1,
+      filter: {
+        op: 'and',
+        children: [
+          {
+            entity: { kind: 'parents' },
+            operator: 'in',
+            value: { query: { op: 'xor', children: [] }, operator: 'in' },
+          },
+          { entity: { kind: 'active' }, operator: 'eq', value: true },
+        ],
+      },
+    });
+    assert.equal(brokenQuery.tree, null, 'нераспознанное под-дерево под-выборки — отбор пуст');
+
+    // Тот же лист, но нераспознан оператор самой под-выборки.
+    const brokenOperator = parseFilterAstState({
+      version: 1,
+      filter: {
+        entity: { kind: 'parents' },
+        operator: 'in',
+        value: {
+          query: { op: 'and', children: [{ entity: { kind: 'active' }, operator: 'eq', value: true }] },
+          operator: 'all_in',
+        },
+      },
+    });
+    assert.equal(
+      filterTreeHasAnyCriteria(brokenOperator.tree ?? null),
+      true,
+      'корректная под-выборка читается как прежде',
+    );
+
+    const badOperator = parseFilterAstState({
+      version: 1,
+      filter: {
+        entity: { kind: 'parents' },
+        operator: 'in',
+        value: {
+          query: { op: 'and', children: [{ entity: { kind: 'active' }, operator: 'eq', value: true }] },
+          operator: 'bogus',
+        },
+      },
+    });
+    assert.equal(badOperator.tree, null, 'нераспознанный оператор под-выборки — отбор пуст');
+  });
+
   it('битая форма AST не выдумывает условие', () => {
     const state = parseFilterAstState({ version: 1, filter: { op: 'xor', children: [] } });
     assert.equal(state.tree, null);
