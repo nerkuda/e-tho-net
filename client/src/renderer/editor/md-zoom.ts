@@ -83,3 +83,25 @@ export function currentMdZoom(): number {
   if (m === null) return 1;
   return clampMdZoom(Number(m[1]) / MD_BASE_FONT_PX);
 }
+
+/**
+ * Подключить жест Ctrl+колесо к контейнеру: масштаб markdown-текста
+ * (`--md-font-size`) — тот же жест, что у полей markdown. Единая точка для
+ * полей (`markdown-field.ts`) и статичных просмотров комментария (тело записи
+ * ленты «Дневник», ошибка 157b7c14) — без дублирования обработчика.
+ * `networkId` нужен только для сохранения значения (best-effort).
+ */
+export function wireMdZoomWheel(element: HTMLElement, networkId: string | null): void {
+  if (networkId !== null) void loadMdZoom(networkId);
+  element.addEventListener(
+    'wheel',
+    (event) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      const next = zoomByWheel(currentMdZoom(), event.deltaY);
+      applyMdZoom(next);
+      if (networkId !== null) persistMdZoom(networkId, next);
+    },
+    { passive: false },
+  );
+}

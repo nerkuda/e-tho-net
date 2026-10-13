@@ -89,13 +89,7 @@ import {
   systemClipboardMatchesText,
 } from '../canvas/clipboard.js';
 import { store } from '../state.js';
-import {
-  applyMdZoom,
-  currentMdZoom,
-  loadMdZoom,
-  persistMdZoom,
-  zoomByWheel,
-} from './md-zoom.js';
+import { wireMdZoomWheel } from './md-zoom.js';
 
 /** Owner entity for pasted-image attachments ('thought' | 'link' | 'publication'). */
 export interface AttachmentsOwner {
@@ -1058,15 +1052,9 @@ export function createMarkdownField(opts: {
 
   // Масштаб документа (M9): Ctrl+колесо над полем меняет глобальный
   // `--md-font-size` — действует на все md-поля; значение сохраняется на сеть.
+  // Жест — общий помощник (`wireMdZoomWheel`), тот же у статичных просмотров.
   const networkId = requireNetworkId();
-  void loadMdZoom(networkId);
-  root.addEventListener('wheel', (event) => {
-    if (!event.ctrlKey) return;
-    event.preventDefault();
-    const next = zoomByWheel(currentMdZoom(), event.deltaY);
-    applyMdZoom(next);
-    persistMdZoom(networkId, next);
-  }, { passive: false });
+  wireMdZoomWheel(root, networkId);
 
   const excludeThoughtId = (): string | undefined =>
     opts.getMentionsExcludeThoughtId?.() ??
