@@ -34,8 +34,8 @@ import {
   type PublicationCreateInput,
   type PublicationOrderItem,
   type PublicationSort,
+  type PublicationTitleRecipe,
   type PublicationUpdateInput,
-  type SavedFilterDefinition,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../../db/network-db.js';
@@ -159,7 +159,7 @@ function toCreateInput(args: {
     authorship: args.authorship ?? null,
     cover_attachment_id: args.cover_attachment_id ?? null,
     cover_url: args.cover_url ?? null,
-    title_recipe: (args.title_recipe ?? null) as SavedFilterDefinition | null,
+    title_recipe: (args.title_recipe ?? null) as PublicationTitleRecipe | null,
     ...(args.text_sources !== undefined ? { text_sources: args.text_sources } : {}),
     ...(args.extra_properties !== undefined ? { extra_properties: args.extra_properties } : {}),
     numbering_from: args.numbering_from ?? null,
@@ -191,7 +191,7 @@ function toUpdateInput(args: {
     changes.cover_attachment_id = args.cover_attachment_id;
   if (args.cover_url !== undefined) changes.cover_url = args.cover_url;
   if (args.title_recipe !== undefined)
-    changes.title_recipe = args.title_recipe as SavedFilterDefinition | null;
+    changes.title_recipe = args.title_recipe as PublicationTitleRecipe | null;
   if (args.text_sources !== undefined) changes.text_sources = args.text_sources;
   if (args.extra_properties !== undefined) changes.extra_properties = args.extra_properties;
   if (args.numbering_from !== undefined) changes.numbering_from = args.numbering_from;

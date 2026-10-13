@@ -14,7 +14,7 @@
  * перетаскиванием чипов (`reorderable`).
  */
 
-import type { NetworkProperty, SavedFilterDefinition } from '@etn/shared';
+import type { NetworkProperty, PublicationTitleRecipe, SavedFilterDefinition } from '@etn/shared';
 
 import {
   buildWireFilter,
@@ -151,7 +151,13 @@ export function propertyChipTitles(options: readonly EntityOption[]): Map<string
 /** Строит форму рецепта заголовков по сохранённому определению (или пустую). */
 export function buildRecipeBuilder(opts: {
   registry: Map<string, NetworkProperty>;
-  initial: SavedFilterDefinition | null;
+  /**
+   * Сохранённый рецепт: плоский формат «Структур мыслей» либо AST-тело (задача
+   * ef37b01e). Форму читает `parseFilterDefinition`; AST-рецепт в форме не
+   * разворачивается — конструктор AST-рецептов вне этой задачи (плоские поля
+   * остаются пустыми, сам рецепт не теряется: карточка сохраняет его как есть).
+   */
+  initial: PublicationTitleRecipe | null;
   /**
    * Любая правка формы рецепта (единая точка уведомления — `touch`, через неё
    * проходят изменения всех секций). Карточка публикации по этому сигналу

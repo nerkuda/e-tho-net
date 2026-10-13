@@ -48,8 +48,8 @@ import {
   type PublicationCreateInput,
   type PublicationOrderItem,
   type PublicationSort,
+  type PublicationTitleRecipe,
   type PublicationUpdateInput,
-  type SavedFilterDefinition,
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
@@ -180,7 +180,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           authorship: input.authorship ?? null,
           cover_attachment_id: input.cover_attachment_id ?? null,
           cover_url: input.cover_url ?? null,
-          title_recipe: (input.title_recipe ?? null) as SavedFilterDefinition | null,
+          title_recipe: (input.title_recipe ?? null) as PublicationTitleRecipe | null,
           ...(input.text_sources !== undefined ? { text_sources: input.text_sources } : {}),
           ...(input.extra_properties !== undefined
             ? { extra_properties: input.extra_properties }
@@ -268,7 +268,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           changes.cover_attachment_id = input.cover_attachment_id;
         if (input.cover_url !== undefined) changes.cover_url = input.cover_url;
         if (input.title_recipe !== undefined)
-          changes.title_recipe = input.title_recipe as SavedFilterDefinition | null;
+          changes.title_recipe = input.title_recipe as PublicationTitleRecipe | null;
         if (input.text_sources !== undefined) changes.text_sources = input.text_sources;
         if (input.extra_properties !== undefined)
           changes.extra_properties = input.extra_properties;

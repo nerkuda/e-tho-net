@@ -10,8 +10,37 @@
  * документа с членством (кандидаты, использование — задача 34119c67).
  */
 
+import type { FilterAst } from './filter-ast.js';
 import type { SavedFilterDefinition } from './structure.js';
 import type { HoldingLayerRef } from './trash.js';
+
+/**
+ * Рецепт заголовков публикации (задача ef37b01e, требование e090a63c, ADR
+ * 2ef3ed7e) — две формы одного места хранения (`publications.title_recipe`,
+ * JSON):
+ *   * **старый плоский формат** {@link SavedFilterDefinition} — условия в форме
+ *     конструктора «Структур мыслей» (AND-список, без групп И/ИЛИ); исполняется
+ *     как раньше — ядро компилирует его в общий AST тем же компилятором
+ *     (`compileThoughtQueryToAst`), что и панель поиска;
+ *   * **AST-форма** {@link FilterAst} (`version` + `filter`) — тело отбора
+ *     профиля «публикации» (операнды мыслей) с группами И/ИЛИ; исполняется
+ *     единым AST-исполнителем, валидируется по профилю точки применения.
+ *
+ * Различаются наличием поля `version` (у плоского формата его нет).
+ */
+export type PublicationTitleRecipe = SavedFilterDefinition | FilterAst;
+
+/**
+ * `true`, если рецепт задан AST-телом (`version` + `filter`) — а не плоским
+ * форматом «Структур мыслей». Общий дискриминатор сервера и клиента.
+ */
+export function isPublicationTitleRecipeAst(
+  recipe: PublicationTitleRecipe | null | undefined,
+): recipe is FilterAst {
+  if (recipe === null || recipe === undefined) return false;
+  const raw = recipe as unknown as Record<string, unknown>;
+  return typeof raw['version'] === 'number' && 'filter' in raw;
+}
 
 /** Источник обложки публикации (GET-карточка отдаёт вычисленный `cover_kind`). */
 export const PUBLICATION_COVER_KINDS = ['attachment', 'url', 'none'] as const;
@@ -44,8 +73,8 @@ export interface Publication {
   cover_kind: PublicationCoverKind;
   /** Хранимая ISO-дата сборки; `null` — не собрана; меняет только rebuild. */
   assembly_date: string | null;
-  /** Рецепт заголовков: условия отбора в формате «Структур мыслей». */
-  title_recipe: SavedFilterDefinition | null;
+  /** Рецепт заголовков: плоский формат «Структур мыслей» либо AST-тело. */
+  title_recipe: PublicationTitleRecipe | null;
   /** Рецепт текстов: упорядоченный список id свойств-связей; `[]` — пустой. */
   text_sources: string[];
   /** Id свойств блока «дополнительные материалы» (∩ text_sources = ∅). */
@@ -71,7 +100,7 @@ export interface PublicationCreateInput {
   authorship?: string | null;
   cover_attachment_id?: string | null;
   cover_url?: string | null;
-  title_recipe?: SavedFilterDefinition | null;
+  title_recipe?: PublicationTitleRecipe | null;
   text_sources?: string[];
   extra_properties?: string[];
   numbering_from?: number | null;
@@ -86,7 +115,7 @@ export interface PublicationUpdateInput {
   authorship?: string | null;
   cover_attachment_id?: string | null;
   cover_url?: string | null;
-  title_recipe?: SavedFilterDefinition | null;
+  title_recipe?: PublicationTitleRecipe | null;
   text_sources?: string[];
   extra_properties?: string[];
   numbering_from?: number | null;

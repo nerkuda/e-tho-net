@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import {
   buildLikePattern,
   EtnError,
+  isPublicationTitleRecipeAst,
   type HoldingLayerRef,
   type Publication,
   type PublicationActiveFilter,
@@ -31,8 +32,8 @@ import {
   type PublicationListQuery,
   type PublicationOrderItem,
   type PublicationSort,
+  type PublicationTitleRecipe,
   type PublicationUpdateInput,
-  type SavedFilterDefinition,
   type Shelf,
   type ShelfDeletionCheckResult,
   type ShelfInput,
@@ -48,6 +49,9 @@ import {
 } from '../db/publication-id.js';
 import { listPublicationHoldingLayers } from './holding-layers.js';
 import { hasOwnership } from './attachment-service.js';
+import { parseFilterAst } from './filter-ast.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { assertFilterDefinitionInProfile } from './filter-profile-validation.js';
 import { purgeOwnerAttachments } from './owner-cleanup.js';
 import { invalidatePublicationMembershipCache } from './publication-membership-cache.js';
 import { selectRecipeIds } from './publication-recipe.js';
@@ -128,14 +132,31 @@ function parseStringArray(text: string | null): string[] {
 }
 
 /** Разобрать JSON-объект рецепта; битое значение → `null`. */
-function parseRecipe(text: string | null): SavedFilterDefinition | null {
+function parseRecipe(text: string | null): PublicationTitleRecipe | null {
   if (text === null || text === '') return null;
   try {
     const value = JSON.parse(text) as unknown;
-    return value !== null && typeof value === 'object' ? (value as SavedFilterDefinition) : null;
+    return value !== null && typeof value === 'object'
+      ? (value as PublicationTitleRecipe)
+      : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Проверить рецепт заголовков на записи (задача ef37b01e, требование 0095daad).
+ * AST-форма проверяется целиком: строгая форма тела, видимость операндов/
+ * операторов в профиле точки применения «публикации» и красная диагностика
+ * (ссылки на удалённые сущности). Плоский формат НЕ проверяется здесь — его
+ * историческая семантика (неразбираемый рецепт → пустая сборка с
+ * предупреждением) сохраняется без изменений.
+ */
+function assertTitleRecipeWritable(ndb: NetworkDb, recipe: PublicationTitleRecipe): void {
+  if (!isPublicationTitleRecipeAst(recipe)) return;
+  assertFilterDefinitionInProfile(recipe as unknown as Record<string, unknown>, 'publications');
+  const diag = diagnoseFilterAst(ndb, parseFilterAst(recipe));
+  if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
 }
 
 /** Источник обложки, вычисляемый из пары полей. */
@@ -492,6 +513,7 @@ function resolvePublicationFields(
 
   let titleRecipe = current?.title_recipe ?? null;
   if (input.title_recipe !== undefined) {
+    if (input.title_recipe !== null) assertTitleRecipeWritable(ndb, input.title_recipe);
     titleRecipe =
       input.title_recipe === null ? null : JSON.stringify(input.title_recipe);
   }
