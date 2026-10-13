@@ -1,7 +1,9 @@
 /**
  * Сторож стандарта «Клиент: условия отбора — только через общий конструктор»
  * (S4, задача 48b59d00 вехи 5 версии 0.8.2; ADR «условия отбора строит один
- * конструктор с одной моделью состояния»).
+ * конструктор с одной моделью состояния»; расширен на единый редактор
+ * 0.13.1 — задача c8c384e2, требование 73a84029 «Сторож общего редактора
+ * расширен; вторая модель состояния запрещена»).
  *
  * Правила:
  * 1. Словарь операторов по виду значения объявляется ТОЛЬКО в
@@ -17,20 +19,36 @@
  *    (`ChronicleFilterState`, `ActivityFilterState`, `SearchOptions`,
  *    `DialogCriteriaState`): критерии выражаются общей моделью
  *    `FilterCriteriaState`; экранное расширение допустимо только как
- *    `interface X extends FilterCriteriaState`.
+ *    `interface X extends FilterCriteriaState`, а собственный объектный тип
+ *    (`type FakeFilterState = { … }`) — вторая модель.
  * 5. Второй конвертер/парсер отбора в экранах запрещён (`toDefinition`,
  *    `fromDefinition`, `buildChronicleWire`, `parseChronicleCriteria`,
- *    `buildActivityQueryPlan`, `parseSearchCriteria`, …): и чтение
- *    сохранённого, и запись в wire живут в `lib/filter-builder.ts`.
+ *    `buildActivityQueryPlan`, `compileActivityCriteriaToAst`,
+ *    `parseActivityCriteriaTree`, …, а также `buildFilterAst`/`filterAstToTree`
+ *    как СВОИ объявления): и чтение сохранённого, и запись в wire живут в
+ *    `lib/filter-builder.ts`. Общие функции экран лишь ВЫЗЫВАЕТ.
  * 6. Исполнитель отбора (`canvas/focus-filter-strip.ts`) не ведёт своего мнения
  *    о сортировках: гейт `isFilterSort`/`STRUCTURE_SORTS`/`readSavedSort` и
  *    собственный разбор `sort`/`order` в нём запрещены — сохранённую
  *    сортировку читает сервер из определения отбора (ADR 23fab347, задача
  *    46eba874; ошибки 33a3e285/119b314f).
+ * 7. Дублирующие словари состава отбора запрещены: матрицы операторов
+ *    (`*OPERATOR_SETS`, `OPS_BY_*`), наборы операндов/токенов вне
+ *    `lib/filter-builder.ts` — состав операндов/операторов/токенов задаёт
+ *    общий реестр `@etn/shared` (требование 0095daad, ADR 23fab347).
+ * 8. Место применения не держит отдельной спец-секции для бывшей функции
+ *    отбора: её строки-условия строит единый редактор (ADR fc23f9c1 «судьба
+ *    спец-секций»). Каркас диагност/дерево/футер и правило «лист вне профиля»
+ *    проверяются и положительно — иначе они пропадут молча.
  *
- * Сторож вводится зелёным — в том же изменении, которое сводит все пять
- * мест применения к одному модулю (мета-стандарт «Правило без теста-сторожа
+ * Сторож вводится зелёным — в том же изменении, которое сводит все места
+ * применения к одному модулю (мета-стандарт «Правило без теста-сторожа
  * не считается введённым»).
+ *
+ * Смежные сторожа (не дублируют эти правила, а дополняют): `guard-dataset-names`
+ * (имена `dataset` рендерера), `guard-filter-issue-fix` (классы строки
+ * диагностики и переход «исправить»), `guard-filter-panel-frame` (каркас панели
+ * и строка сохранённых отборов).
  */
 
 import assert from 'node:assert/strict';
@@ -40,7 +58,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { assertGuardClean, collectViolations } from './guard-helpers.js';
+import { assertGuardClean, collectViolations, listSourceFiles } from './guard-helpers.js';
 
 const RENDERER_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -58,6 +76,42 @@ const STRIP = 'canvas/focus-filter-strip.ts';
 /** Экраны и строка поиска — места применения конструктора, а не его копии. */
 const APPLY_SITES = (rel: string): boolean => rel.startsWith('screens/') || rel.startsWith('search/');
 
+/**
+ * Известные места единого редактора (версия 0.13.1): диалог отбора типа мысли,
+ * панели «Структур»/«Дневника», лента «Событий». Строка поиска карты — пятое
+ * место — в правила спец-секций НЕ включена: точка поиска — FTS, не AST-точка
+ * (решение оркестратора), покрытие добавит отдельная задача; модель и конвертер
+ * её стерегут общими правилами {@link APPLY_SITES}.
+ */
+const EDITOR_PLACE_FILES: ReadonlySet<string> = new Set([
+  'screens/thought-type/filter-dialog.ts',
+  'screens/structures/filter-panel.ts',
+  'screens/chronicle/filter-panel.ts',
+  'screens/activity/activity.ts',
+]);
+
+/**
+ * Авто-обнаружение мест: любой файл рендерера, монтирующий единый редактор
+ * (`buildFilterEditor(`), становится местом применения и попадает под правила
+ * автоматически — новое место не нужно вписывать руками (требование 73a84029).
+ */
+function discoverEditorPlaces(): Set<string> {
+  const out = new Set<string>();
+  for (const abs of listSourceFiles(RENDERER_ROOT)) {
+    const rel = path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/');
+    if (rel.startsWith('lib/') || rel.startsWith('tests/')) continue;
+    if (/buildFilterEditor\s*\(/.test(fs.readFileSync(abs, 'utf8'))) out.add(rel);
+  }
+  return out;
+}
+
+/** Места применения редактора, обнаруженные в дереве на момент прогона. */
+const DISCOVERED_PLACES: ReadonlySet<string> = discoverEditorPlaces();
+
+/** Является ли файл местом применения единого редактора. */
+const isEditorPlace = (rel: string): boolean =>
+  EDITOR_PLACE_FILES.has(rel) || DISCOVERED_PLACES.has(rel);
+
 /** Тонкие обёртки-делегаты диалога отбора типа мысли (логики в них нет). */
 const DELEGATING_WRAPPERS = new Set(['screens/thought-type/filter-dialog-pure.ts']);
 
@@ -65,12 +119,26 @@ const DELEGATING_WRAPPERS = new Set(['screens/thought-type/filter-dialog-pure.ts
 const OWN_MODEL_NAMES =
   /^(?:export\s+)?interface\s+(?:ChronicleFilterState|ActivityFilterState|SearchOptions|DialogCriteriaState|FilterCriteriaState|FilterState)\s*(?:extends\b|\{)/;
 
+/** Признак собственной модели-объекта (`type X = { … }`) в экране. */
+const OWN_MODEL_TYPE_LITERAL =
+  /^(?:export\s+)?type\s+(?:Chronicle|Activity|Search|Dialog|Filter)[A-Za-z_]*\s*=\s*\{/;
+
 /** Признак собственного конвертера/парсера отбора. */
 const OWN_CONVERTER =
-  /^(?:export\s+)?(?:function|const)\s+(?:toDefinition|fromDefinition|buildWireFilter|buildChronicleWire|parseChronicleCriteria|parseFilterDefinition|buildActivityQueryPlan|parseActivityCriteria|parseSearchCriteria|buildWireDefinition|parseViewDefinition)\b/;
+  /^(?:export\s+)?(?:function|const)\s+(?:toDefinition|fromDefinition|buildWireFilter|buildChronicleWire|parseChronicleCriteria|parseFilterDefinition|buildActivityQueryPlan|parseActivityCriteria|parseSearchCriteria|buildWireDefinition|parseViewDefinition|compileActivityCriteriaToAst|parseActivityCriteriaTree|parseActivityCriteriaTreeDetailed|parseFilterDefinitionTree|parseFilterAstState|compileFlatCriteriaToAst|buildFilterAst|filterAstToTree|compileActivityCriteria)\b/;
 
 /** Признак своей сборки флажка-пилюли словаря или её CSS-класса в экране. */
 const OWN_PILL_ELEMENT = /(?:function\s+build\w*Pill\w*\s*\(|['"][a-z][a-z-]*-pills?['"])/;
+
+/** Бывшие спец-секции отбора: их строки-условия строит единый редактор. */
+const DISSOLVED_SECTION_BUILDER =
+  /buildParentThoughtsSection|buildConditionsSection|buildExtrasSection|buildAuthorshipSection|buildAuthorConditionSection|buildDatesSection|buildSortSection|buildEntityChipSection|buildPillGroupSection|buildTriRow|buildTrashedRow|buildDateRangeRow/;
+
+/** Строка — комментарий (правило к исполняемому коду, не к пояснениям). */
+function isComment(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*');
+}
 
 /** Правило «своя сборка флажков-пилюль в экране запрещена» (ошибка 83f6028e). */
 const NO_LOCAL_PILLS = {
@@ -84,6 +152,104 @@ const NO_LOCAL_PILLS = {
   filePattern: new RegExp(OWN_PILL_ELEMENT.source, 'g'),
   include: APPLY_SITES,
 };
+
+/** Правило «исполнитель не ведёт своего мнения о сортировках» (ADR 23fab347). */
+const NO_STRIP_SORT_GATE = {
+  name: 'no-strip-sort-gate',
+  description:
+    'Полоса отборов (canvas/focus-filter-strip.ts) не сверяет и не ' +
+    'подменяет сортировку: словарь/гейт/чтение сортировок (' +
+    '`isFilterSort`/`STRUCTURE_SORTS`/`unsupportedSort`/`ViewSortOrder`/' +
+    '`readSavedSort`) в исполнителе запрещены — сохранённую сортировку читает ' +
+    'сервер из определения (ADR 23fab347, задача 46eba874).',
+  pattern: /isFilterSort|STRUCTURE_SORTS|unsupportedSort|ViewSortOrder|readSavedSort/,
+  include: (rel: string) => rel === STRIP,
+  // Упоминания в комментариях (карта модуля) — не код: имя сортировочной
+  // функции в пояснении «читает сервер» оставляем, запрет — на вызов/объявление.
+  allow: (_rel: string, line: string) => isComment(line),
+};
+
+/** Правило «вторая модель состояния отбора в экране» (задача 3742dd59). */
+const NO_SECOND_MODEL = {
+  name: 'no-second-criteria-model',
+  description:
+    'Своя модель критериев отбора в экране (`ChronicleFilterState`, ' +
+    '`ActivityFilterState`, `SearchOptions`, …) запрещена: критерии ' +
+    'выражаются общей `FilterCriteriaState`; экранное расширение — только ' +
+    '`interface X extends FilterCriteriaState` (задача 3742dd59).',
+  pattern: OWN_MODEL_NAMES,
+  include: APPLY_SITES,
+  allow: (rel: string, line: string) =>
+    DELEGATING_WRAPPERS.has(rel) || line.includes('extends FilterCriteriaState'),
+};
+
+/** Правило «вторая модель-объект в экране» (`type X = { … }`). */
+const NO_SECOND_MODEL_LITERAL = {
+  name: 'no-second-criteria-model-literal',
+  description:
+    'Объектный тип критериев отбора в экране (`type X = { … }`) — вторая ' +
+    'модель состояния: критерии выражаются общей `FilterCriteriaState` ' +
+    '(требование 73a84029; интерфейсная форма ловится правилом выше).',
+  pattern: OWN_MODEL_TYPE_LITERAL,
+  include: APPLY_SITES,
+};
+
+/** Правило «второй конвертер/парсер отбора в экране» (задача 3742dd59). */
+const NO_SECOND_CONVERTER = {
+  name: 'no-second-wire-converter',
+  description:
+    'Свой конвертер состояния отбора в wire или свой парсер сохранённого ' +
+    'определения в экране запрещён (`toDefinition`/`fromDefinition`/' +
+    '`buildChronicleWire`/`parseChronicleCriteria`/`buildActivityQueryPlan`/' +
+    '`compileActivityCriteriaToAst`/`parseActivityCriteriaTree`/…): и запись, ' +
+    'и чтение живут в lib/filter-builder.ts. Общие функции экран лишь вызывает.',
+  pattern: OWN_CONVERTER,
+  include: APPLY_SITES,
+  allow: (rel: string) => DELEGATING_WRAPPERS.has(rel),
+};
+
+/** Правило «слово-место не строит бывшую спец-секцию» (ADR fc23f9c1). */
+const NO_LOCAL_SPECIAL_SECTION = {
+  name: 'no-local-special-section',
+  description:
+    'Место применения не держит отдельной спец-секции для бывшей функции ' +
+    'отбора (`buildParentThoughtsSection`/`buildAuthorshipSection`/' +
+    '`buildConditionsSection`/`buildDatesSection`/`buildSortSection`/…): её ' +
+    'строки-условия строит единый редактор (ADR fc23f9c1 «судьба спец-секций»). ' +
+    'Живая строка поиска «Дневника» (общий `buildKeywordsSection`) — отдельное ' +
+    'решение оркестратора 2026-10-12, не бывшая спец-секция.',
+  pattern: DISSOLVED_SECTION_BUILDER,
+  include: isEditorPlace,
+};
+
+/** Правила «состав отбора — из реестра @etn/shared, а не из дублей». */
+const NO_SECOND_OPERATOR_MATRIX = {
+  name: 'no-second-operator-matrix',
+  description:
+    'Матрица операторов по операнду/виду значения (`*OPERATOR_SETS`, ' +
+    '`OPS_BY_*`) объявляется только в реестре @etn/shared и его клиентских ' +
+    'обёртках: вторая матрица разойдётся с исполнителем (требование 0095daad, ' +
+    'ADR 23fab347).',
+  pattern: /^(?:export\s+)?const\s+(?:[A-Z_]*OPERATOR_SETS[A-Z_]*|OPS_BY_[A-Z_]+)\s*[:=]/,
+  include: (rel: string) => !rel.startsWith('lib/'),
+};
+
+/** Набор операндов/токенов, объявленный вне единого конструктора. */
+const NO_SECOND_OPERAND_SET = {
+  name: 'no-second-operand-set',
+  description:
+    'Свой набор операндов/токенов отбора вне lib/filter-builder.ts запрещён: ' +
+    'состав даёт общий реестр @etn/shared (`filterProfileOperands`/' +
+    '`filterProfileOperators`; требование 0095daad).',
+  pattern:
+    /^(?:export\s+)?const\s+[A-Z_]*TOKENS?\s*(?::[^=]+)?=\s*(?:new\s+Set\s*\(\s*)?\[|^(?:export\s+)?const\s+[A-Z_]*OPERANDS?\s*(?::[^=]+)?=\s*(?:new\s+Set\s*\(\s*)?\[/,
+  include: (rel: string) => !rel.startsWith('lib/'),
+};
+
+/** Читает модуль общего каркаса редактора. */
+function readLib(file: string): string {
+  return fs.readFileSync(path.join(RENDERER_ROOT, 'lib', file), 'utf8');
+}
 
 describe('guard: условия отбора строятся только общим конструктором', () => {
   it('второй словарь операторов (OPS_BY_TYPE) вне lib/filter-builder.ts запрещён', () => {
@@ -137,6 +303,18 @@ describe('guard: условия отбора строятся только об�
     ]);
   });
 
+  it('второй словарь состава отбора из реестра (@etn/shared) запрещён', () => {
+    assertGuardClean(RENDERER_ROOT, [NO_SECOND_OPERATOR_MATRIX, NO_SECOND_OPERAND_SET]);
+  });
+
+  it('вторая модель состояния отбора в экранах запрещена', () => {
+    assertGuardClean(RENDERER_ROOT, [NO_SECOND_MODEL, NO_SECOND_MODEL_LITERAL]);
+  });
+
+  it('второй конвертер/парсер отбора в экранах запрещён', () => {
+    assertGuardClean(RENDERER_ROOT, [NO_SECOND_CONVERTER]);
+  });
+
   it('исполнитель отбора не ведёт своего мнения о сортировках (ADR 23fab347)', () => {
     // Полоса отборов — ИСПОЛНИТЕЛЬ, а не второй конструктор: она не фильтрует
     // состав сортировок и не подменяет сохранённую (ADR «условия отбора строит
@@ -146,54 +324,15 @@ describe('guard: условия отбора строятся только об�
     // разбирает её и не передаёт в тело `run`. Прежний свой гейт `isFilterSort`
     // с деградацией к `alpha` и сообщением «неподдерживаемое значение» молча
     // терял сортировки (ошибки 33a3e285/119b314f, задача 46eba874).
-    assertGuardClean(RENDERER_ROOT, [
-      {
-        name: 'no-strip-sort-gate',
-        description:
-          'Полоса отборов (canvas/focus-filter-strip.ts) не сверяет и не ' +
-          'подменяет сортировку: словарь/гейт сортировок (' +
-          '`isFilterSort`/`STRUCTURE_SORTS`/`unsupportedSort`/`readSavedSort`) ' +
-          'в исполнителе запрещён — сохранённую сортировку читает сервер из ' +
-          'определения (ADR 23fab347, задача 46eba874).',
-        pattern: /isFilterSort|STRUCTURE_SORTS|unsupportedSort|ViewSortOrder/,
-        include: (rel) => rel === STRIP,
-      },
-    ]);
+    //
+    // ВНИМАНИЕ: правило ловит и `readSavedSort` (замечание независимой проверки
+    // коммита c888c4c2: `return readSavedSort(value)` в полосе оставлял сторож
+    // зелёным). Упоминания в комментариях допущены осознанно.
+    assertGuardClean(RENDERER_ROOT, [NO_STRIP_SORT_GATE]);
   });
 
-  it('вторая модель состояния отбора в экранах запрещена', () => {
-    assertGuardClean(RENDERER_ROOT, [
-      {
-        name: 'no-second-criteria-model',
-        description:
-          'Своя модель критериев отбора в экране (`ChronicleFilterState`, ' +
-          '`ActivityFilterState`, `SearchOptions`, …) запрещена: критерии ' +
-          'выражаются общей `FilterCriteriaState`; экранное расширение — только ' +
-          '`interface X extends FilterCriteriaState` (задача 3742dd59).',
-        pattern: OWN_MODEL_NAMES,
-        include: APPLY_SITES,
-        // Экранное расширение общей модели (панель «Структур») — не вторая
-        // модель: у него нет своих критериев, только панельные дополнения.
-        allow: (rel, line) => DELEGATING_WRAPPERS.has(rel) || line.includes('extends FilterCriteriaState'),
-      },
-    ]);
-  });
-
-  it('второй конвертер/парсер отбора в экранах запрещён', () => {
-    assertGuardClean(RENDERER_ROOT, [
-      {
-        name: 'no-second-wire-converter',
-        description:
-          'Свой конвертер состояния отбора в wire или свой парсер сохранённого ' +
-          'определения в экране запрещён (`toDefinition`/`fromDefinition`/' +
-          '`buildChronicleWire`/`parseChronicleCriteria`/`buildActivityQueryPlan`/' +
-          '`parseSearchCriteria`): и запись, и чтение живут в ' +
-          'lib/filter-builder.ts (задача 3742dd59).',
-        pattern: OWN_CONVERTER,
-        include: APPLY_SITES,
-        allow: (rel) => DELEGATING_WRAPPERS.has(rel),
-      },
-    ]);
+  it('место применения не строит бывших спец-секций отбора (ADR fc23f9c1)', () => {
+    assertGuardClean(RENDERER_ROOT, [NO_LOCAL_SPECIAL_SECTION]);
   });
 
   it('своя сборка флажков-пилюль словаря в экране запрещена', () => {
@@ -204,7 +343,7 @@ describe('guard: условия отбора строятся только об�
     // Обратная сторона правила выше: сам каркас обязан строить флажок из
     // модели. Экранов «Событий» теперь много на один каркас, а поведение у
     // них одно — начальное состояние флажка читается из состояния отбора.
-    const src = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'filter-form.ts'), 'utf8');
+    const src = readLib('filter-form.ts');
     const builder =
       /export function buildPillGroupSection[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
     assert.notEqual(builder, '', 'buildPillGroupSection обязан жить в lib/filter-form.ts');
@@ -217,34 +356,79 @@ describe('guard: условия отбора строятся только об�
     );
   });
 
+  it('места применения монтируют единый редактор (авто-обнаружение новых мест)', () => {
+    // Новое место не вписывается руками: любой файл с `buildFilterEditor(`
+    // становится местом и попадает под правила. Проверяем, что механизм
+    // обнаружения находит все известные места и не «протух» (требование 73a84029).
+    const discovered = [...DISCOVERED_PLACES].sort();
+    const expected = [...EDITOR_PLACE_FILES].sort();
+    assert.deepEqual(
+      discovered,
+      expected,
+      `авто-обнаружение мест разошлось с известным набором: ` +
+        `найдено [${discovered.join(', ')}], ожидалось [${expected.join(', ')}]`,
+    );
+  });
+
+  it('каркас редактора собирает дерево, сортировку, футер и диагностику из общих модулей', () => {
+    // Положительная сторона: общий каркас обязан нести все части редактора —
+    // иначе место соберёт свою разметку или потеряет переход «исправить» молча
+    // (требования ca905fbc «Футер», 0fd1dc5d «Диагностика строк»).
+    const editor = readLib('filter-editor.ts');
+    assert.match(editor, /buildFilterTree\(\{/, 'редактор собирает дерево условий каркасом');
+    assert.match(editor, /buildFilterFooter\(\{/, 'редактор собирает футер каркасом');
+    assert.match(
+      editor,
+      /mergeFilterIssues\(|constructorFilterIssues\(/,
+      'редактор сводит общий список диагностики (ядро + проверки конструктора)',
+    );
+  });
+
+  it('состав операндов/операторов берётся из реестра @etn/shared, а не из места', () => {
+    // Положительная сторона правила «дублирующие словари запрещены»: состав
+    // редактора читается из реестра профилей, а не объявляется в местах.
+    const tree = readLib('filter-tree.ts');
+    assert.match(tree, /filterProfileOperands\(/, 'операнды — из реестра профилей');
+    assert.match(tree, /filterProfileOperators\(/, 'операторы — из реестра профилей');
+    const builder = readLib('filter-builder.ts');
+    assert.match(builder, /getFilterProfile\(/, 'реестр профилей — общий источник состава');
+  });
+
+  it('лист вне профиля отсекается общим правилом splitLeavesByProfile (16899243)', () => {
+    // Правило «лист вне профиля» (коммит 30e42f35): миграция плоского пресета
+    // пропускает лишь листья, чей операнд И оператор допустимы профилем точки
+    // применения (реестр @etn/shared). Пропажа правила вернёт `VALIDATION_ERROR`
+    // на ленте «Событий» (например, `user is_empty`).
+    const builder = readLib('filter-builder.ts');
+    assert.match(builder, /function splitLeavesByProfile\(/, 'правило обязано жить в конструкторе');
+    assert.match(
+      builder,
+      /splitLeavesByProfile\(candidates, 'events'\)/,
+      'компилятор «Событий» обязан отсекать листья вне профиля «события»',
+    );
+    const body = /function splitLeavesByProfile[\s\S]*?\n\}/.exec(builder)?.[0] ?? '';
+    assert.notEqual(body, '', 'тело splitLeavesByProfile не найдено');
+    assert.match(body, /filterProfileOperands\(/, 'профиль определяет допустимые операнды');
+    assert.match(body, /filterProfileOperators\(/, 'профиль определяет допустимые операторы');
+  });
+
   it('правила краснеют на умышленном нарушении', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-filter-'));
     try {
       fs.mkdirSync(path.join(dir, 'screens', 'fake'), { recursive: true });
       fs.mkdirSync(path.join(dir, 'canvas'), { recursive: true });
+      // Для красного прогона правила мест применяем ко ВСЕМУ дереву: реальное
+      // место вычисляется авто-обнаружением, фикстура его не монтирует.
+      const allPlaces = (): boolean => true;
       const rules = [
-        {
-          name: 'no-second-criteria-model',
-          description: '',
-          pattern: OWN_MODEL_NAMES,
-          include: APPLY_SITES,
-          allow: (rel: string, line: string) =>
-            DELEGATING_WRAPPERS.has(rel) || line.includes('extends FilterCriteriaState'),
-        },
-        {
-          name: 'no-second-wire-converter',
-          description: '',
-          pattern: OWN_CONVERTER,
-          include: APPLY_SITES,
-          allow: (rel: string) => DELEGATING_WRAPPERS.has(rel),
-        },
-        NO_LOCAL_PILLS,
-        {
-          name: 'no-strip-sort-gate',
-          description: '',
-          pattern: /isFilterSort|STRUCTURE_SORTS|unsupportedSort|ViewSortOrder/,
-          include: (rel: string) => rel === STRIP,
-        },
+        { ...NO_SECOND_MODEL, include: allPlaces },
+        { ...NO_SECOND_MODEL_LITERAL, include: allPlaces },
+        { ...NO_SECOND_CONVERTER, include: allPlaces },
+        { ...NO_SECOND_OPERATOR_MATRIX, include: allPlaces },
+        { ...NO_SECOND_OPERAND_SET, include: allPlaces },
+        { ...NO_LOCAL_SPECIAL_SECTION, include: allPlaces },
+        { ...NO_LOCAL_PILLS, include: allPlaces },
+        { ...NO_STRIP_SORT_GATE },
       ];
       fs.writeFileSync(
         path.join(dir, 'screens', 'fake', 'panel.ts'),
@@ -252,9 +436,15 @@ describe('guard: условия отбора строятся только об�
           'export interface ChronicleFilterState {',
           '  keywords: string;',
           '}',
+          'export type FilterFakeState = {',
+          '  keywords: string;',
+          '};',
           'export function toDefinition(state: ChronicleFilterState): unknown {',
           '  return state;',
           '}',
+          'const EVENT_OPERATOR_SETS = { occurred_at: ["gte"] };',
+          'const ACTIVITY_OPERANDS = ["occurred_at", "action"];',
+          'buildAuthorshipSection(ctx, {});',
           'function buildPill(value: string): HTMLElement {',
           "  const label = el('label', 'activity-pill');",
           '  return label;',
@@ -264,14 +454,43 @@ describe('guard: условия отбора строятся только об�
       );
       fs.writeFileSync(
         path.join(dir, 'canvas', 'focus-filter-strip.ts'),
-        'if (!isFilterSort(sort)) return null; // свой гейт сортировок у исполнителя\n',
+        [
+          'if (!isFilterSort(sort)) return null; // свой гейт сортировок у исполнителя',
+          'return readSavedSort(value); // чтение сортировки у исполнителя',
+        ].join('\n'),
         'utf8',
       );
       const names = new Set(collectViolations(dir, rules).map((v) => v.rule));
       assert.ok(names.has('no-second-criteria-model'), 'своя модель обязана попадать в нарушение');
+      assert.ok(
+        names.has('no-second-criteria-model-literal'),
+        'модель-объект (`type X = { … }`) обязана попадать в нарушение',
+      );
       assert.ok(names.has('no-second-wire-converter'), 'свой конвертер обязана попадать в нарушение');
+      assert.ok(
+        names.has('no-second-operator-matrix'),
+        'вторая матрица операторов обязана попадать в нарушение',
+      );
+      assert.ok(
+        names.has('no-second-operand-set'),
+        'свой набор операндов обязан попадать в нарушение',
+      );
+      assert.ok(
+        names.has('no-local-special-section'),
+        'бывшая спец-секция в месте обязана попадать в нарушение',
+      );
       assert.ok(names.has('no-local-pill-element'), 'своя сборка пилюль обязана попадать в нарушение');
-      assert.ok(names.has('no-strip-sort-gate'), 'гейт сортировок у исполнителя обязана попадать в нарушение');
+      const stripViolations = collectViolations(dir, rules).filter(
+        (v) => v.rule === 'no-strip-sort-gate',
+      );
+      assert.ok(
+        stripViolations.some((v) => /readSavedSort/.test(v.text)),
+        'чтение сортировки (`readSavedSort`) у исполнителя обязано попадать в нарушение',
+      );
+      assert.ok(
+        stripViolations.some((v) => /isFilterSort/.test(v.text)),
+        'гейт сортировок у исполнителя обязана попадать в нарушение',
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
