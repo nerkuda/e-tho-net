@@ -59,8 +59,9 @@
 }
 
 /* Коннектор группы — выпадающий список (требование заказчика 2026-10-13):
-   безрамная кнопка-текст с кареткой, а не сегмент-тогглер. */
-.ft-group__connector {
+   безрамная кнопка-текст с кареткой, а не сегмент-тогглер. Специфичность
+   повышена (`.ft .ft-group__connector`) — тот же узел несёт `.ui-btn`. */
+.ft .ft-group__connector {
   border: none;
   background: none;
   padding: 0 var(--space-1);
@@ -69,7 +70,8 @@
   white-space: nowrap;
 }
 
-.ft-group__connector:hover {
+.ft .ft-group__connector:hover:not(:disabled) {
+  background: none;
   color: var(--accent);
 }
 
@@ -170,13 +172,20 @@
   background: var(--surface);
 }
 
-.ft-picker {
+/*
+ * Ячейки операнда/оператора — БЕЗ рамки (требование заказчика 2026-10-13).
+ * Селектор с повышенной специфичностью (`.ft .ft-picker`) обязателен: тот же
+ * элемент несёт класс `.ui-btn` (база `lib/ui/button.css` задаёт рамку
+ * `--border-strong` и фон `--surface`, а CSS из TS-импорта попадает в бандл
+ * ПОСЛЕ styles.css) — специфичность гарантирует безрамность независимо от
+ * порядка подключения CSS.
+ */
+.ft .ft-picker {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   max-width: 100%;
   padding: var(--space-1) var(--space-2);
-  /* Безрамная ячейка операнда/оператора (требование заказчика 2026-10-13). */
   border: 1px solid transparent;
   border-radius: var(--radius-s);
   background: var(--surface-2);
@@ -186,8 +195,9 @@
   text-align: left;
 }
 
-.ft-picker:hover {
+.ft .ft-picker:hover:not(:disabled) {
   border-color: var(--border);
+  background: var(--surface-2);
 }
 
 .ft-picker__icon {

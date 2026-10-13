@@ -1483,6 +1483,13 @@ export interface EntityComboOptions {
    */
   pickerTitle?: string;
   /**
+   * Свой модальный пикер для кнопки «…» (как у чип-поля `picker`): получает
+   * управляемое подмножество, возвращает его замену (`null` — отмена). Задан —
+   * `…` открывает ИМЕННО его (например, стандартный `pickThoughtsDialog`), а не
+   * встроенный `pickEntitiesModal` (блокер п.19).
+   */
+  picker?: EntityChipFieldOptions['picker'];
+  /**
    * Режим `expandAll`: дерево типов раскрыто целиком (родительский пикер
    * редактора типа). По умолчанию раскрыт только верхний уровень.
    */
@@ -1728,6 +1735,16 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
    */
   function openPicker(): void {
     if (opts.disabled === true) return;
+    // Свой пикер вызывающего (например, стандартный `pickThoughtsDialog`) —
+    // сильнее встроенного `pickEntitiesModal` (блокер п.19): диалог выбора
+    // единственного значения должен совпадать с чип-полем.
+    if (opts.picker !== undefined) {
+      void opts.picker.open(current !== null ? [current] : []).then((ids) => {
+        if (ids === null) return;
+        commitValue(ids[0] ?? null);
+      });
+      return;
+    }
     const catalogue =
       opts.options !== undefined
         ? opts.options()

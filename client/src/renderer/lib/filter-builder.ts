@@ -684,7 +684,7 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   editor: 'Редактор',
   created_at: 'Дата создания',
   updated_at: 'Дата изменения',
-  properties: 'Есть любое свойство',
+  properties: 'Есть свойства',
   targets: 'Цели записи',
   record_time: 'Время записи',
   record_title: 'Заголовок записи',

@@ -75,6 +75,7 @@ import {
   LAYER_MENU_LABEL_MAX,
   layerMenuTooltip,
   truncateLayerMenuLabel,
+  filterPanelWidthLimit,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
@@ -1474,3 +1475,21 @@ describe('layerMenuTooltip — полное имя слоя в тултипе (�
   });
 });
 
+
+describe('filterPanelWidthLimit — предел ширины панели отбора (ошибка 498876c4, п.22)', () => {
+  it('половина ширины окна минус боковая панель редактора', () => {
+    assert.equal(filterPanelWidthLimit(1884, 0), 942, 'окно 1884 без редактора — предел 942');
+    assert.equal(filterPanelWidthLimit(1884, 400), 542, 'минус боковой редактор 400');
+  });
+
+  it('редактор сверху/снизу не учитывается (передаётся 0)', () => {
+    assert.equal(filterPanelWidthLimit(1200, 0), 600);
+  });
+
+  it('некорректные входы не дают отрицательного предела', () => {
+    assert.equal(filterPanelWidthLimit(0, 0), 0);
+    assert.equal(filterPanelWidthLimit(100, 200), 0, 'вычет больше половины — предел 0');
+    assert.equal(filterPanelWidthLimit(1000, -50), 500, 'отрицательный вычет игнорируется');
+    assert.equal(filterPanelWidthLimit(1000, Number.NaN), 500, 'NaN-вычет игнорируется');
+  });
+});

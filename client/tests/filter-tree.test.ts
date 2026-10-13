@@ -429,6 +429,46 @@ describe('дерево условий: группы, тона, связатор�
     assert.deepEqual(tones, ['1', '2', '3', '4', '1'], 'цикл палитры по глубине');
   });
 
+  it('ячейка оператора скрыта у «Найти слова» и наличия коллекций/свойств (требование заказчика)', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    // Правило «оператор скрыт» защищено явно: мутация набора обязана краснить тест.
+    for (const kind of ['keywords', 'attachments', 'chronology', 'comment', 'properties'] as const) {
+      assert.ok(
+        mod.FILTER_TREE_OPERATOR_HIDDEN_KINDS.has(kind),
+        `«${kind}» в наборе скрытых ячеек оператора`,
+      );
+    }
+    assert.ok(
+      !mod.FILTER_TREE_OPERATOR_HIDDEN_KINDS.has('property'),
+      'свойство ячейку оператора НЕ скрывает',
+    );
+
+    const hiddenKinds = ['keywords', 'attachments', 'chronology', 'comment', 'properties'] as const;
+    const state = defaultFilterCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        ...hiddenKinds.map((kind) => ({ kind: 'leaf', entity: { kind }, operator: 'eq', value: { kind: 'none' } })),
+        leafOf({ kind: 'property', property_id: CITY.id }),
+      ],
+    };
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    const root = tree.root as unknown as ShimElement;
+    const rows = exact(root, 'ft-row');
+    assert.equal(rows.length, hiddenKinds.length + 1);
+    for (let i = 0; i < hiddenKinds.length; i += 1) {
+      assert.equal(
+        exactOne(rows[i]!, 'ft-row__op'),
+        null,
+        `у «${hiddenKinds[i]}» ячейки оператора нет`,
+      );
+    }
+    assert.ok(exactOne(rows[hiddenKinds.length]!, 'ft-row__op') !== null, 'у свойства ячейка оператора есть');
+  });
+
   it('заголовок — «Показать <сущность> по условиям:», слот значения — заглушка или виджет хоста', async () => {
     const mod = await import('../src/renderer/lib/filter-tree.js');
     const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');

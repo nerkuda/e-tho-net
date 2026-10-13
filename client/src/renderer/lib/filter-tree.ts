@@ -912,7 +912,8 @@ export interface FilterTreeHandle {
 }
 
 /** Классы вида — единственная точка их имён (адресуются тестами и CSS). */
-export const FILTER_TREE_CLASS = 'ft';export const FILTER_TREE_GROUP_CLASS = 'ft-group';
+export const FILTER_TREE_CLASS = 'ft';
+export const FILTER_TREE_GROUP_CLASS = 'ft-group';
 export const FILTER_TREE_ROW_CLASS = 'ft-row';
 export const FILTER_TREE_CONNECTOR_CLASS = 'ft-connector';
 /** Строка диагностики узла: причина + кнопка «исправить» (элемент 4e634c9a). */
@@ -1003,13 +1004,39 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     return issue;
   };
 
+  /**
+   * Сохранить/восстановить фокус в поле ввода чип-значения при перерисовке:
+   * хост пересобирает редактор после записи чипа, и без этого фокус теряется
+   * (замечание п.6г — второй чип не набрать сразу).
+   */
+  const chipsInputPathBeforeRender = (): string | null => {
+    const active = (globalThis as { document?: { activeElement?: unknown } }).document?.activeElement as
+      | (Element & { classList?: { contains(c: string): boolean } })
+      | null
+      | undefined;
+    if (active == null || !root.contains(active as Node)) return null;
+    if (active.classList?.contains('value-chips-input') !== true) return null;
+    const row = active.closest?.('.ft-row') as HTMLElement | null;
+    return row?.dataset['path'] ?? null;
+  };
+
+  const restoreChipsInputFocus = (path: string | null): void => {
+    if (path === null) return;
+    const rows = Array.from(root.querySelectorAll(`.${FILTER_TREE_ROW_CLASS}`)) as HTMLElement[];
+    const target = rows.find((node) => node.dataset['path'] === path);
+    const input = target?.querySelector('.value-chips-input') as HTMLElement | null;
+    input?.focus();
+  };
+
   const render = (): void => {
+    const focusPath = chipsInputPathBeforeRender();
     clear(root);
     fixers.clear();
     issueMap = [...(ctx.issues?.() ?? [])];
     const title = ctx.title ?? filterTreeTitle(ctx.profile);
     root.append(el('div', 'ft-title', title));
     root.append(renderGroup([], 0));
+    restoreChipsInputFocus(focusPath);
   };
 
   /** Группа-блок с заголовком-рамкой и телом (адресация — путём в модели). */
@@ -1483,6 +1510,8 @@ export function buildChoiceMenuBody(
 ): {
   root: HTMLElement;
   setQuery: (query: string) => void;
+  /** Перевести курсор в поле живого поиска (зовётся ПОСЛЕ монтирования панели). */
+  focusSearch: () => void;
 } {
   const root = div(FILTER_TREE_CHOICE_CLASS);
   if (opts.grid === true) root.classList.add(`${FILTER_TREE_CHOICE_CLASS}--grid`);
@@ -1597,15 +1626,15 @@ export function buildChoiceMenuBody(
 
   paint();
   root.append(list);
-  // Автофокус: курсор сразу в поле живого поиска при открытии списка.
-  searchInput?.focus?.();
-
   return {
     root,
     setQuery: (value) => {
       query = value;
       paint();
     },
+    // Автофокус поля поиска делается вызывающим ПОСЛЕ монтирования панели:
+    // focus() на ещё не подключённом узле не срабатывает (блокер п.14).
+    focusSearch: () => searchInput?.focus?.(),
   };
 }
 
@@ -1630,4 +1659,7 @@ export function openChoiceMenu(anchor: HTMLElement, opts: FilterTreeChoiceOption
     extraClass: 'ft-choice-popover',
   });
   popover.element.dataset['ft'] = opts.title;
+  // Автофокус поля живого поиска — ПОСЛЕ монтирования панели (блокер п.14):
+  // на не подключённом к DOM узле focus() игнорируется браузером.
+  built.focusSearch();
 }

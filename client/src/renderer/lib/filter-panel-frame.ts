@@ -112,22 +112,24 @@ export function mountFilterPanelFrame(opts: FilterPanelFrameOptions): FilterPane
 
   const limitsOf = (placement: FilterPanelPlacement): { min: number; max: number } => {
     const min = placement === 'top' ? (opts.minSizeTop ?? opts.minSize) : opts.minSize;
-    const max = placement === 'top' ? (opts.maxSizeTop ?? opts.maxSize) : opts.maxSize;
     // Размер панели не съедает результаты: верхняя граница упирается в полотно.
     const room =
       (placement === 'top' ? container.clientHeight : container.clientWidth) - resultsMinSize;
-    // Ширина панели — не больше половины ширины окна минус панель редактора,
+    if (placement === 'top') {
+      const max = opts.maxSizeTop ?? opts.maxSize;
+      return { min, max: Math.max(min, Math.min(max, room)) };
+    }
+    // Ширина панели — не больше ПОЛОВИНЫ ширины окна минус панель редактора,
     // когда он пришвартован слева/справа (требование заказчика 2026-10-13).
+    // Этот предел ЗАМЕНЯЕТ фиксированный `maxSize` (иначе константы экранов
+    // доминировали бы над капом — блокер п.22).
     const editorPosition = store.state.editorPosition;
     const editorSide = editorPosition === 'left' || editorPosition === 'right';
-    const widthCap =
-      placement === 'side'
-        ? filterPanelWidthLimit(
-            typeof window !== 'undefined' ? window.innerWidth : container.clientWidth,
-            editorSide ? store.state.editorW : 0,
-          )
-        : Number.POSITIVE_INFINITY;
-    return { min, max: Math.max(min, Math.min(max, room, widthCap)) };
+    const widthCap = filterPanelWidthLimit(
+      typeof window !== 'undefined' ? window.innerWidth : container.clientWidth,
+      editorSide ? store.state.editorW : 0,
+    );
+    return { min, max: Math.max(min, Math.min(room, widthCap)) };
   };
 
   /** Размер панели для положения: своё значение, иначе миграционное, иначе CSS. */
