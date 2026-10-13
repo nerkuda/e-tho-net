@@ -21,29 +21,16 @@
  * удалённые сущности показываются read-only с пометкой «удалена».
  */
 
-import type { ActivityEntityType, ActivityRow, AttachmentOwnerType } from '@etn/shared';
+import type { ActivityRow, AttachmentOwnerType } from '@etn/shared';
 import { t } from '../../lib/i18n.js';
 
 import { requireNetworkId } from '../../app.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
 import { confirmDialog, errorDialog, showDialog } from '../../lib/dialog.js';
-import {
-  ACTIVITY_ACTION_FILTERS,
-  activityRowPasses,
-  buildActivityQueryPlan,
-
-  type ActivityActionFilter,
-} from '../../lib/filter-builder.js';
-import {
-  buildAuthorConditionSection,
-  buildDatesSection,
-  buildFilterFooterButtons,
-  buildFilterForm,
-  buildKeywordsSection,
-  buildPillGroupSection,
-  type FilterFormContext,
-  type FilterSection,
-} from '../../lib/filter-form.js';
+import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
+import { ACTIVITY_ACTION_FILTERS, buildFilterAst } from '../../lib/filter-builder.js';
+import type { FilterTreeData } from '../../lib/filter-tree.js';
+import type { FilterValueEnumOption } from '../../lib/filter-value.js';
 import { div, el, span, setTooltip } from '../../lib/dom.js';
 import { operationError } from '../../lib/ui/messages.js';
 import { loadingState } from '../../lib/ui/empty-state.js';
@@ -64,17 +51,14 @@ import { uiButton } from '../../lib/ui/button.js';
 import { fieldInput } from '../../lib/ui/field.js';
 import { fieldRow } from '../../lib/ui/field.js';
 import {
-  DEFAULT_FILTER,
   ENTITY_TYPE_OPTIONS,
+  createDefaultActivityFilter,
+  parseActivityState,
   type ActionFilter,
   type ActivityFilterState,
-  parseActivityState,
 } from './state.js';
 
 const PAGE_SIZE = 50;
-const ENTITY_TYPES: ReadonlyArray<ActivityEntityType> = ENTITY_TYPE_OPTIONS.map((o) => o.value);
-/** Коды действий — словарь единого конструктора отбора. */
-const ACTIONS: ReadonlyArray<ActionFilter> = ACTIVITY_ACTION_FILTERS as ReadonlyArray<ActivityActionFilter> as ReadonlyArray<ActionFilter>;
 
 /** Russian labels for action codes (the wire format is English); из словаря
  *  локализации — это строки списка (задача ae76b75e, требование 93115633). */
@@ -108,6 +92,17 @@ function entityTypeLabel(entityType: string): string {
   return ENTITY_LABELS[entityType] ?? entityType;
 }
 
+/** Варианты enum-ячейки «Тип действия» (флажки словаря, требование db5e1063). */
+const ACTION_ENUM_OPTIONS: ReadonlyArray<FilterValueEnumOption> = (
+  ACTIVITY_ACTION_FILTERS as ReadonlyArray<ActionFilter>
+).map((action) => ({ value: action, label: ACTION_LABELS[action] }));
+
+/** Варианты enum-ячейки «Вид сущности» — словарь экрана. */
+const ENTITY_TYPE_ENUM_OPTIONS: ReadonlyArray<FilterValueEnumOption> = ENTITY_TYPE_OPTIONS.map((o) => ({
+  value: o.value,
+  label: ENTITY_LABELS[o.value] ?? o.value,
+}));
+
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
@@ -116,7 +111,7 @@ let host: HTMLElement | null = null;
 /** Composite cache key `${networkId}:${tabId}` — re-init when either changes
  *  (Q4: per-tab snapshot), `null` until the first init. */
 let networkIdSeen: string | null = null;
-let filter: ActivityFilterState = { ...DEFAULT_FILTER };
+let filter: ActivityFilterState = createDefaultActivityFilter();
 let rows: ActivityRow[] = [];
 let total = 0;
 let offset = 0;
@@ -174,7 +169,7 @@ export async function ensureActivityInitialised(): Promise<void> {
   rows = [];
   total = 0;
   offset = 0;
-  filter = { ...DEFAULT_FILTER };
+  filter = createDefaultActivityFilter();
   panelWidth = null;
 
   try {
@@ -194,13 +189,9 @@ export async function ensureActivityInitialised(): Promise<void> {
       filter = parsed.filter;
       offset = parsed.offset;
       panelWidth = parsed.panelWidth;
-      // Восстановленный отбор показывает заполненные группы раскрытыми
-      // (пустые — свёрнутыми), как «Структуры» при входе в вид.
-      periodCollapsed = filter.createdAfter === '' && filter.createdBefore === '';
-      authorCollapsed = filter.authorId === '' && filter.authorIds.length === 0;
-      entitiesCollapsed = filter.entityTypes.length === 0;
-      actionsCollapsed = filter.actions.length === 0;
-      renderFilterPanel();
+      // Восстановленный отбор редактор рисует сам из состояния (`refresh`);
+      // футер пересчитывает фразу-превью и диагностику.
+      filterEditor?.refresh();
       // Миграционное значение прежнего снимка подхватывает каркас панели.
       activityFrame?.apply();
     }
@@ -213,13 +204,17 @@ export async function ensureActivityInitialised(): Promise<void> {
   await applyQuery();
 }
 
-/** Persists filter + page to L4 (per-tab snapshot, Q4). */
+/** Persists filter + page to L4 (per-tab snapshot, Q4). В снимок уходит
+ *  AST-определение единого конструктора: его читает `parseActivityCriteriaTree`. */
 function persistState(): void {
   const tabId = store.state.activeTabId;
   if (tabId === null) return;
   void etn.tabs
     .updateState(tabId, {
-      activity_state: JSON.stringify({ filter, offset }),
+      activity_state: JSON.stringify({
+        filter: buildFilterAst(filter, { profile: 'events', sort: false }),
+        offset,
+      }),
     })
     .catch(() => undefined);
 }
@@ -336,124 +331,72 @@ export function mountActivity(hostEl: HTMLElement): () => void {
 }
 
 // ---------------------------------------------------------------------------
-// Filter panel
+// Filter panel — единый редактор отбора (профиль «события», задача 16899243)
 // ---------------------------------------------------------------------------
 
-/** Хост панели отбора (нужен для перерисовки из состояния). */
-let filterPanelHost: HTMLElement | null = null;
+/** Рукоятка единого редактора отбора (дерево + футер и диагностика). */
+let filterEditor: FilterEditorHandle | null = null;
 
 /**
- * Сворачивание групп панели отбора (задача 2ebe4206): «События» повторяют
- * принцип эталона «Структур» — группы сворачиваются. Состояние временное (не
- * персистится), как у «Структур»; по умолчанию свёрнуты, пока группы пусты.
+ * Собирает панель отбора единым редактором (профиль «события»): спец-поля
+ * «Событий» — строки дерева (время события, тип действия, вид сущности,
+ * сущность с под-выборкой, автор события), словари — enum-ячейки с флажками
+ * (`enumOptions`). Футер места — фраза-превью и диагностика плюс свои кнопки
+ * «Применить»/«Очистить»; сохранённых отборов у ленты нет, поэтому строка имени
+ * не рисуется (`standard: false`, без `save`). Сортировку не показываем: порядок
+ * ленты задаёт сервер (`occurred_at_ms DESC`).
  */
-let periodCollapsed = true;
-let authorCollapsed = true;
-let entitiesCollapsed = true;
-let actionsCollapsed = true;
-
-/** Перестраивает панель отбора из состояния — секции общего каркаса. */
-function renderFilterPanel(): void {
-  const area = filterPanelHost;
-  if (area === null) return;
-  area.replaceChildren();
-
-  const sections: FilterSection[] = [];
-  const touch = (): void => {
-    for (const section of sections) section.refresh();
-  };
-  const ctx: FilterFormContext = {
-    networkId: requireNetworkId(),
-    getState: () => filter,
-    registry: new Map(),
-    touch,
-  };
-
-  sections.push(
-    buildKeywordsSection(ctx, {
-      placeholder: "название* -тест",
-      tooltip: "Поиск по снимку entity_title (через пробел, * и - как в Структурах)",
-      onEnter: () => void applyQuery(),
-    }),
-    buildDatesSection(
-      ctx,
-      { get: () => periodCollapsed, set: (v) => (periodCollapsed = v) },
-      {
-        title: "Период",
-        mode: "period",
-        ranges: [
-          {
-            label: "Период",
-            getFrom: () => filter.createdAfter,
-            getTo: () => filter.createdBefore,
-            setFrom: (v) => {
-              filter.createdAfter = v;
-            },
-            setTo: (v) => {
-              filter.createdBefore = v;
-            },
-          },
-        ],
-        isNonEmpty: () => filter.createdAfter !== "" || filter.createdBefore !== "",
-      },
-    ),
-    buildAuthorConditionSection(ctx, {
-      title: "Пользователь",
-      label: "Пользователь",
-      field: "author",
-      collapse: { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) },
-    }),
-    // Словари панели: значения и подписи — параметры общей секции
-    // флажков-пилюль; флажки строит каркас и сразу показывает ими
-    // применённый отбор (ошибка 83f6028e: своя сборка без восстановления
-    // состояния оставляла флажки снятыми при непустом отборе, и непустая
-    // лента выглядела как «события не сохраняются»).
-    buildPillGroupSection<ActivityEntityType>(ctx, {
-      title: "Тип сущности",
-      items: ENTITY_TYPE_OPTIONS.map((o) => ({
-        value: o.value,
-        label: ENTITY_LABELS[o.value] ?? o.value,
-      })),
-      get: () => filter.entityTypes,
-      set: (next) => {
-        filter.entityTypes = next;
-      },
-      collapse: { get: () => entitiesCollapsed, set: (v) => (entitiesCollapsed = v) },
-    }),
-    buildPillGroupSection<ActionFilter>(ctx, {
-      title: "Действие",
-      items: ACTIONS.map((a) => ({ value: a, label: ACTION_LABELS[a] })),
-      get: () => filter.actions,
-      set: (next) => {
-        filter.actions = next;
-      },
-      collapse: { get: () => actionsCollapsed, set: (v) => (actionsCollapsed = v) },
-    }),
-  );
-
-  buildFilterForm({
-    sections,
-    footer: [
-      buildFilterFooterButtons({
-        onApply: () => void applyQuery(),
-        onClear: () => {
-          filter = { ...DEFAULT_FILTER };
-          periodCollapsed = true;
-          authorCollapsed = true;
-          entitiesCollapsed = true;
-          actionsCollapsed = true;
-          renderFilterPanel();
-          void applyQuery();
-        },
-      }),
-    ],
-    mount: area,
-  });
-}
-
 function mountFilterPanel(area: HTMLElement): void {
-  filterPanelHost = area;
-  renderFilterPanel();
+  const data: FilterTreeData = {
+    registry: new Map(),
+    linkTypes: store.state.linkTypes,
+    thoughtTypes: store.state.thoughtTypes,
+    // Контекстные операнды первыми: время, действие, вид сущности, автор, сущность.
+    contextual: ['occurred_at', 'action', 'entity_type', 'user', 'entity_id'],
+  };
+  const editor = buildFilterEditor({
+    profile: 'events',
+    networkId: requireNetworkId(),
+    data,
+    getState: () => filter,
+    touch: () => editor.refresh(),
+    sort: false,
+    enumOptions: (leaf) => {
+      if (leaf.entity.kind === 'action') return ACTION_ENUM_OPTIONS;
+      if (leaf.entity.kind === 'entity_type') return ENTITY_TYPE_ENUM_OPTIONS;
+      // Остальные операнды профиля выбирают ячейку значения сами
+      // (дата/время, выбор сущности, текстовый ввод).
+      return [];
+    },
+    // Лента сохранённых отборов не имеет: свой набор кнопок, без строки имени.
+    buttons: {
+      standard: false,
+      extra: [
+        {
+          id: 'apply',
+          label: 'Применить',
+          role: 'primary',
+          title: 'Применить отбор событий',
+          onClick: () => void applyQuery(),
+        },
+        {
+          id: 'clear',
+          label: 'Очистить',
+          title: 'Очистить условия отбора',
+          onClick: () => {
+            filter = createDefaultActivityFilter();
+            editor.refresh();
+            void applyQuery();
+          },
+        },
+      ],
+    },
+    host: {
+      apply: () => void applyQuery(),
+    },
+  });
+  filterEditor = editor;
+  area.replaceChildren(editor.root);
 }
 
 // ---------------------------------------------------------------------------
@@ -476,60 +419,19 @@ async function applyQuery(): Promise<void> {
   const seq = ++querySeq;
   renderLoading();
   try {
-    const fromMs = dateToMs(filter.createdAfter, false);
-    const toMs = dateToMs(filter.createdBefore, true);
-    // План запроса — единый конвертер критериев конструктора. Часть отбора
-    // серверный API не выражает (действие, `empty`/`not_empty`, `ne`/`not_in`,
-    // ключевые слова) — эти условия применяются клиентом ниже, в
-    // `activityRowPasses`, и помечены в `plan.clientFilter`.
-    const plan = buildActivityQueryPlan(filter, ENTITY_TYPES);
-    const buckets: ActivityRow[] = [];
-    let bucketTotal = 0;
-    for (const et of plan.entityTypes) {
-      for (const uid of plan.userIds) {
-        const params: {
-          from_ms?: number;
-          to_ms?: number;
-          user_id?: string;
-          entity_type?: string;
-          entity_id?: string;
-          limit?: number;
-          offset?: number;
-        } = {
-          entity_type: et,
-          limit: PAGE_SIZE,
-          offset,
-        };
-        if (fromMs !== null) params.from_ms = fromMs;
-        if (toMs !== null) params.to_ms = toMs;
-        if (uid !== null) params.user_id = uid;
-        const result = await etn.activity.list(networkId, params);
-        // Клиентская дофильтровка: у сервера нет ни `action`, ни `IS NULL`
-        // по автору, ни `NOT IN`, ни полнотекстового мини-синтаксиса по
-        // `entity_title` (требование b0c7a57c). Условие не теряется, а
-        // применяется явно здесь; пагинация — по типу сущности.
-        for (const r of result.rows) {
-          if (activityRowPasses(filter, plan, r)) buckets.push(r);
-        }
-        bucketTotal += result.total;
-      }
-    }
-    // Merge by occurred_at_ms DESC and dedupe (rows are unique per `id`).
-    const seen = new Set<string>();
-    const merged: ActivityRow[] = [];
-    buckets
-      .sort((a, b) => b.occurred_at_ms - a.occurred_at_ms)
-      .forEach((r) => {
-        if (seen.has(r.id)) return;
-        seen.add(r.id);
-        merged.push(r);
-      });
-    // Ключевые слова уже отфильтрованы `activityRowPasses` (мини-синтаксис
-    // по `entity_title`); страница — от объединённого набора.
-    const page = merged.slice(0, PAGE_SIZE);
+    // Отбор ленты уходит на сервер единым деревом (профиль «события»):
+    // трансляция в WHERE и диагностика неполных/недопустимых условий —
+    // серверные (`GET /activity?ast=`, требование db5e1063), поэтому клиентской
+    // дофильтровки и размножения запросов по типам сущностей/авторам больше
+    // нет — одно обращение на страницу. Порядок ленты («occurred_at_ms DESC»)
+    // задаёт сервер. Не строгий режим: о нарушениях профиля сообщает сервер
+    // (его диагностика), а не исключение в отрисовке.
+    const ast = buildFilterAst(filter, { profile: 'events', sort: false });
+    const result = await etn.activity.list(networkId, { ast, limit: PAGE_SIZE, offset });
     if (seq !== querySeq) return;
+    const page = result.rows;
     rows = page;
-    total = bucketTotal;
+    total = result.total;
     // Подтягиваем имена типов (уже в store), слоёв (однократно) и мыслей
     // (пачками по мере появления в ленте). После получения имён таблица
     // перерисовывается — UUIDы в снимках заменяются именами.

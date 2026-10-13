@@ -94,10 +94,14 @@ export interface FilterFooterPhraseSource {
 
 /** Параметры футера редактора отбора. */
 export interface FilterFooterOptions {
-  /** Текущее имя отбора (поле ввода). */
-  getName: () => string;
+  /**
+   * Текущее имя отбора (поле ввода). Не задан — у места НЕТ сохранённых
+   * отборов (лента «События»): строка имени и маркер ● не рисуются, остаются
+   * фраза-превью и кнопки места.
+   */
+  getName?: () => string;
   /** Запись имени из поля в состояние хоста. */
-  setName: (name: string) => void;
+  setName?: (name: string) => void;
   /** Имя применённого сохранённого отбора; `null` — отбор ещё не сохранён. */
   savedName: () => string | null;
   /** Снимок определения на момент сохранения (для маркера ●); `null` — нет. */
@@ -194,30 +198,40 @@ export function filterFooterPhrasePreview(source: FilterFooterPhraseSource): Fil
  */
 export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle {
   const root = div(FILTER_FOOTER_CLASS);
+  /** Маркер ● у строки имени (нет строки — нет и маркера). */
+  let nameChangedMarker: HTMLElement | null = null;
 
   // --- Имя отбора: поле с ✕ очистки + маркер изменённости ------------------
-  const nameRow = div('ff-name');
-  const nameInput = fieldInput({
-    type: 'text',
-    placeholder: 'имя отбора',
-    maxLength: 200,
-    ariaLabel: 'Имя отбора',
-    extraClass: 'ff-name__input',
-    value: opts.getName(),
-    onInput: (value) => {
-      opts.setName(value);
+  // Место без сохранённых отборов (getName не задан) имя не рисует: у него нет
+  // ни записи, ни маркера «изменён относительно сохранённого».
+  const getName = opts.getName;
+  let nameInput: HTMLInputElement | null = null;
+  if (getName !== undefined) {
+    const nameRow = div('ff-name');
+    nameInput = fieldInput({
+      type: 'text',
+      placeholder: 'имя отбора',
+      maxLength: 200,
+      ariaLabel: 'Имя отбора',
+      extraClass: 'ff-name__input',
+      value: getName(),
+      onInput: (value) => {
+        opts.setName?.(value);
+        refresh();
+      },
+    });
+    const clearName = (): void => {
+      opts.setName?.('');
+      if (nameInput !== null) nameInput.value = '';
       refresh();
-    },
-  });
-  const clearName = (): void => {
-    opts.setName('');
-    nameInput.value = '';
-    refresh();
-  };
-  const changed = span('●', FILTER_FOOTER_CHANGED_CLASS);
-  setTooltip(changed, 'отбор изменён с момента сохранения');
-  nameRow.append(wrapClearable(nameInput, clearName), changed);
-  root.append(nameRow);
+    };
+    const changed = span('●', FILTER_FOOTER_CHANGED_CLASS);
+    setTooltip(changed, 'отбор изменён с момента сохранения');
+    nameRow.append(wrapClearable(nameInput, clearName), changed);
+    root.append(nameRow);
+    /** Маркер ● (вне области видимости `refresh` ниже). */
+    nameChangedMarker = changed;
+  }
 
   // --- Фраза-превью: ≤3 строк, полный текст и ошибки — в тултипе ----------
   // Фраза — из композера, если хост не дал свою (`preview` сильнее: хосту виднее
@@ -233,7 +247,7 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
 
   // --- Кнопки: стандартный набор + кнопки профиля места применения --------
   const save = (): void => {
-    void opts.onSave(filterSaveRequest(opts.getName(), opts.savedName()));
+    void opts.onSave(filterSaveRequest(getName?.() ?? '', opts.savedName()));
   };
   const actions = div('ff-actions');
   let applyButton: HTMLButtonElement | null = null;
@@ -278,9 +292,13 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
 
   // --- Обновление представления из модели ---------------------------------
   function refresh(): void {
-    const name = opts.getName();
-    if (nameInput.value !== name) nameInput.value = name;
-    changed.hidden = !filterChangedAgainst(opts.baseline(), opts.current());
+    if (getName !== undefined && nameInput !== null) {
+      const name = getName();
+      if (nameInput.value !== name) nameInput.value = name;
+    }
+    if (nameChangedMarker !== null) {
+      nameChangedMarker.hidden = !filterChangedAgainst(opts.baseline(), opts.current());
+    }
 
     if (previewFn !== undefined) {
       const preview = previewFn();

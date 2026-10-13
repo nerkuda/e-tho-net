@@ -1,0 +1,168 @@
+{
+  "name": "activity-ast",
+  "description": "Лента «События» на едином редакторе (задача 16899243, сценарий 1e54706c): онбординг → вид «События» → панель собрана общей фабрикой (футер без строки имени, свои кнопки применения) → строки дерева «Тип действия» и «Время события» → значения заданы через ячейки (флажки словаря; границы диапазона с токенами $now-1h/$now) → «Применить» уходит телом отбора, лента отрисована без ошибок. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.activity-ast.scenario.json",
+  "timeout": 90000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    {
+      "name": "view-tabs-present",
+      "probe": "[...document.querySelectorAll('button.view-tab')].map((b) => b.title).join('|')"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+
+    { "name": "open-activity-view", "click": "button.view-tab[title=\"События\"]" },
+    { "name": "editor-mounted", "waitFor": "document.querySelector('.activity-filter .fe .ft-group') !== null" },
+    {
+      "name": "footer-apply-button",
+      "probe": "document.querySelector('.activity-filter .fe-foot .ff-extra--apply')?.textContent ?? null",
+      "expect": "Применить"
+    },
+    {
+      "name": "footer-clear-button",
+      "probe": "document.querySelector('.activity-filter .fe-foot .ff-extra--clear') !== null",
+      "expect": true
+    },
+    {
+      "name": "footer-has-no-saved-name-row",
+      "probe": "document.querySelector('.activity-filter .fe-foot .ff-name') === null",
+      "expect": true
+    },
+    {
+      "name": "footer-has-no-save-button",
+      "probe": "document.querySelector('.activity-filter .fe-foot .ff-save') === null",
+      "expect": true
+    },
+
+    { "name": "add-action-row", "click": ".activity-filter .ft-add-condition" },
+    { "name": "row-appeared", "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 1" },
+    { "name": "open-operand-picker", "click": ".activity-filter .ft-row__what" },
+    { "name": "operand-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"action\"]') !== null" },
+    {
+      "name": "operand-list-offers-period-and-entity",
+      "probe": "document.querySelector('.ft-choice__item[data-key=\"occurred_at\"]') !== null && document.querySelector('.ft-choice__item[data-key=\"entity_id\"]') !== null && document.querySelector('.ft-choice__item[data-key=\"user\"]') !== null",
+      "expect": true
+    },
+    { "name": "pick-action-operand", "click": ".ft-choice__item[data-key=\"action\"]" },
+    {
+      "name": "operand-is-action",
+      "waitFor": "document.querySelector('.activity-filter .ft-row__what')?.textContent?.includes('Тип действия') === true"
+    },
+    { "name": "open-operator-picker", "click": ".activity-filter .ft-row__op" },
+    { "name": "operator-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in\"]') !== null" },
+    { "name": "pick-in-operator", "click": ".ft-choice__item[data-key=\"in\"]" },
+    { "name": "enum-value-ready", "waitFor": "document.querySelector('.activity-filter .fv-enum input[value=\"created\"]') !== null" },
+    { "name": "check-created", "click": ".activity-filter .fv-enum input[value=\"created\"]" },
+    { "name": "check-updated", "click": ".activity-filter .fv-enum input[value=\"updated\"]" },
+    {
+      "name": "checkboxes-reflect-filter",
+      "probe": "document.querySelector('.activity-filter .fv-enum input[value=\"created\"]').checked && document.querySelector('.activity-filter .fv-enum input[value=\"updated\"]').checked",
+      "expect": true
+    },
+    {
+      "name": "unchecked-choice-stays-off",
+      "probe": "document.querySelector('.activity-filter .fv-enum input[value=\"deleted\"]').checked",
+      "expect": false
+    },
+
+    { "name": "add-period-row", "click": ".activity-filter .ft-add-condition" },
+    { "name": "two-rows", "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 2" },
+    { "name": "row-paths", "probe": "[...document.querySelectorAll('.activity-filter .ft-row')].map((r) => r.dataset.path).join('|')" },
+    { "name": "open-second-operand-picker", "click": ".activity-filter .ft-row[data-path=\"1\"] .ft-row__what" },
+    { "name": "period-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"occurred_at\"]') !== null" },
+    { "name": "pick-period-operand", "click": ".ft-choice__item[data-key=\"occurred_at\"]" },
+    {
+      "name": "operand-is-period",
+      "waitFor": "document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .ft-row__what')?.textContent?.includes('Время события') === true"
+    },
+    { "name": "open-second-operator-picker", "click": ".activity-filter .ft-row[data-path=\"1\"] .ft-row__op" },
+    { "name": "between-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"between\"]') !== null" },
+    { "name": "pick-between-operator", "click": ".ft-choice__item[data-key=\"between\"]" },
+    {
+      "name": "period-submenu-open",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"between:manual\"]') !== null"
+    },
+    { "name": "pick-manual-period", "click": ".ft-choice__item[data-key=\"between:manual\"]" },
+    {
+      "name": "bounds-value-ready",
+      "waitFor": "document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"anchor\"]') !== null"
+    },
+    {
+      "name": "set-from-anchor-now",
+      "eval": "(() => { const s = document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"anchor\"]'); s.value = '$now'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "set-from-shift-minus-1",
+      "eval": "(() => { const i = document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] input[data-part=\"shift\"]'); i.value = '-1'; i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('change', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "set-from-unit-hour",
+      "eval": "(() => { const s = document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"unit\"]'); s.value = 'h'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "set-to-anchor-now",
+      "eval": "(() => { const s = document.querySelector('.activity-filter .fv-bounds [data-bound=\"to\"] select[data-part=\"anchor\"]'); s.value = '$now'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "from-bound-anchor-is-now",
+      "probe": "document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"anchor\"]').value",
+      "expect": "$now"
+    },
+    {
+      "name": "from-bound-unit-is-hour",
+      "probe": "document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"unit\"]').value",
+      "expect": "h"
+    },
+    {
+      "name": "phrase-mentions-between",
+      "probe": "document.querySelector('.activity-filter .ff-preview__text')?.textContent?.includes('между') === true",
+      "expect": true
+    },
+    {
+      "name": "phrase-mentions-one-hour",
+      "probe": "document.querySelector('.activity-filter .ff-preview__text')?.textContent?.includes('1 ч') === true",
+      "expect": true
+    },
+    {
+      "name": "phrase-mentions-action-set",
+      "probe": "document.querySelector('.activity-filter .ff-preview__text')?.textContent?.includes('Тип действия') === true",
+      "expect": true
+    },
+
+    { "name": "apply-filter", "click": ".activity-filter .ff-extra--apply" },
+    {
+      "name": "feed-rendered",
+      "waitFor": "document.querySelector('.activity-pager .muted')?.textContent?.trim() !== ''"
+    },
+    {
+      "name": "no-operation-error",
+      "probe": "document.querySelector('.activity-results .error-text') === null",
+      "expect": true
+    },
+    {
+      "name": "pager-range",
+      "probe": "document.querySelector('.activity-pager .muted')?.textContent ?? null"
+    },
+    {
+      "name": "events-exist-in-last-hour-on-server",
+      "api": {
+        "name": "events-exist-in-last-hour-on-server",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/activity?limit=50",
+        "expression": "data.filter((r) => (r.action === 'created' || r.action === 'updated') && r.occurred_at_ms > Date.now() - 3600000).length > 0"
+      },
+      "expect": true
+    }
+  ]
+}

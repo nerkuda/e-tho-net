@@ -305,8 +305,10 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
   let footer: FilterFooterHandle | null = null;
   if (opts.footer !== false) {
     footer = buildFilterFooter({
-      getName: host.getName ?? (() => ''),
-      setName: host.setName ?? ((): void => undefined),
+      // Место без сохранённых отборов (лента «События») не даёт getName/setName —
+      // футер тогда не рисует строку имени и маркер ● (только фраза и кнопки).
+      ...(host.getName !== undefined ? { getName: host.getName } : {}),
+      ...(host.setName !== undefined ? { setName: host.setName } : {}),
       savedName: host.savedName ?? (() => null),
       baseline: host.baseline ?? (() => null),
       current: host.current ?? (() => buildFilterAst(getState(), { profile })),

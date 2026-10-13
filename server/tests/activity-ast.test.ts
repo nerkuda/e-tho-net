@@ -89,6 +89,25 @@ function runFilter(
   return listActivity(ndb, params, { userId: USER, nowMs: NOW_MS }).data.map((r) => r.id);
 }
 
+/**
+ * Клиентский единый конструктор для in-process паритета (задача 16899243):
+ * грузим рантайм-импортом по ВЫЧИСЛЯЕМОМУ спецификатору, чтобы tsc сервера
+ * (`rootDir: "."`) не тянул клиентский проект; форму держит локальный
+ * интерфейс — только методы, нужные тесту.
+ */
+interface ClientFilterBuilder {
+  parseFilterAstState(raw: unknown): Record<string, unknown>;
+  buildFilterAst(
+    state: Record<string, unknown>,
+    opts: { profile?: string; sort?: boolean },
+  ): FilterAst;
+}
+
+async function loadClientFilterBuilder(): Promise<ClientFilterBuilder> {
+  const href = new URL('../../client/src/renderer/lib/filter-builder.js', import.meta.url).href;
+  return (await import(href)) as unknown as ClientFilterBuilder;
+}
+
 describe('события: отбор на общий AST (задача 2b230e8e)', { skip: !nativeAvailable() }, () => {
   it('сценарий 1e54706c: тип действия [created, updated] И время события между $now-1h и $now', () => {
     const ndb = createInMemoryNetworkDb();
@@ -114,6 +133,45 @@ describe('события: отбор на общий AST (задача 2b230e8e)
       };
       const ids = runFilter(ndb, filter);
       assert.deepEqual(ids, [recentUpdated, recentCreated], 'за час, по действию, свежие сверху');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('сценарий 1e54706c: AST, собранный КЛИЕНТСКИМ редактором, сервер исполняет тем же набором', async () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const t = seedThought(ndb, 'Мысль');
+      const recentCreated = seedEvent(ndb, { action: 'created', entityType: 'thought', entityId: t, atMs: NOW_MS - 30 * 60_000 });
+      const recentUpdated = seedEvent(ndb, { action: 'updated', entityType: 'thought', entityId: t, atMs: NOW_MS - 10 * 60_000 });
+      seedEvent(ndb, { action: 'created', entityType: 'thought', entityId: t, atMs: NOW_MS - 2 * 3600_000 });
+      seedEvent(ndb, { action: 'deleted', entityType: 'thought', entityId: t, atMs: NOW_MS - 5 * 60_000 });
+
+      // Эталон сценария — тот же AST, что прогоняет предыдущий тест.
+      const scenario: FilterAst = {
+        version: FILTER_AST_VERSION,
+        filter: {
+          op: 'and',
+          children: [
+            { entity: { kind: 'action' }, operator: 'in', value: ['created', 'updated'] },
+            {
+              entity: { kind: 'occurred_at' },
+              operator: 'between',
+              value: [{ token: '$now-1h' }, { token: '$now' }],
+            },
+          ],
+        },
+      };
+      // Единый редактор клиента читает определение и собирает тело заново перед
+      // отправкой — токены времени и список действий обязаны выжить без потерь.
+      const client = await loadClientFilterBuilder();
+      const rebuilt = client.buildFilterAst(client.parseFilterAstState(scenario), {
+        profile: 'events',
+        sort: false,
+      });
+      assert.deepEqual(rebuilt, scenario, 'клиентский round-trip сохраняет токены времени и список действий');
+      const ids = runFilter(ndb, rebuilt.filter);
+      assert.deepEqual(ids, [recentUpdated, recentCreated], 'клиентский AST даёт тот же набор и порядок, что серверный эталон');
     } finally {
       ndb.close();
     }

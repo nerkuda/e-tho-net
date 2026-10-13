@@ -40,6 +40,7 @@ import {
   type EtnErrorBody,
   type EtnErrorCode,
   type ExportJobStartResult,
+  type FilterAst,
   type FocusOrderResult,
   type LocksClearResult,
   type NetworkPropertyDeleteResult,
@@ -3130,10 +3131,16 @@ export class RestClient {
   // `client/src/renderer/screens/activity/`.
   // ---------------------------------------------------------------------------
 
-  /** `GET /networks/{nid}/activity` — лента с фильтрами и пагинацией. */
+  /**
+   * `GET /networks/{nid}/activity` — лента с фильтрами и пагинацией.
+   * `ast` — тело отбора профиля «события» (XOR с плоскими фильтрами,
+   * требование db5e1063): уходит JSON-строкой query-параметра, как ждёт
+   * серверный `parseRestAstQueryParam`.
+   */
   public async listActivity(
     networkId: string,
     filters?: {
+      ast?: FilterAst;
       from_ms?: number;
       to_ms?: number;
       user_id?: string;
@@ -3144,6 +3151,7 @@ export class RestClient {
     },
   ): Promise<ActivityListResult> {
     const query: QueryRecord = {};
+    if (filters?.ast !== undefined) query['ast'] = JSON.stringify(filters.ast);
     if (filters?.from_ms !== undefined) query['from_ms'] = filters.from_ms;
     if (filters?.to_ms !== undefined) query['to_ms'] = filters.to_ms;
     if (filters?.user_id !== undefined) query['user_id'] = filters.user_id;

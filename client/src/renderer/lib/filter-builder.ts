@@ -1158,104 +1158,62 @@ export function parseActivityCriteria(raw: unknown): ActivityCriteriaState {
   return next;
 }
 
-/** План запроса «Событий»: что спросить у сервера, а что дофильтровать клиентом. */
-export interface ActivityQueryPlan {
-  /** Типы сущностей: пустой выбор — все известные типы. */
-  entityTypes: ActivityEntityType[];
-  /**
-   * `user_id` для веера запросов: `null` — без фильтра по пользователю.
-   * `eq`/`ne`/`in`/`not_in` дают список; у `ne` и `not_in` фильтр сервер не
-   * умеет, он дофильтровывается клиентом (см. {@link ActivityQueryPlan.clientFilter}).
-   */
-  userIds: Array<string | null>;
-  /** Коды действий (`null` — без фильтра). Серверного `action` нет — фильтр клиентский. */
-  actions: Set<ActivityActionFilter> | null;
-  /** Мини-синтаксис ключевых слов (`null` — без фильтра). Фильтр клиентский. */
-  keywords: ParsedKeywords | null;
-  /** Какие условия применяются на клиенте (серверный API их не выражает). */
-  clientFilter: {
-    actions: boolean;
-    keywords: boolean;
-    /** `user_id` пуст/непуст (`IS NULL`) — у сервера такого отбора нет. */
-    userEmpty: boolean;
-    /** `user_id != id` (`ne`) — сервер умеет только равенство/список. */
-    userNotEqual: boolean;
-    /** `user_id NOT IN list` — сервер умеет только `IN`. */
-    userNotIn: boolean;
-  };
-}
-
 /**
- * Строит план запроса «Событий» из общей модели. Часть отбора серверный API
- * выразить не может — она помечена в `clientFilter` и применяется клиентом
- * явно (панель «Событий»), а не теряется.
+ * Компилятор ПЛОСКИХ критериев «Событий» в AST профиля «события» — перевод
+ * прежних пресетов ленты (L4-снимок `activity_state`: плоские `fromMs`/`toMs`/
+ * `userOp`/`userId`/`userIds`/`entityTypes`/`actions`) в единое дерево редактора
+ * (задача 16899243, ADR fc23f9c1). Зеркало серверного `compileActivityToAst`
+ * (`server/src/domain/activity-service.ts`) плюс выражения, которых серверный
+ * ПЛОСКИЙ API не умел (действие, списки/отрицания пользователя) — теперь они
+ * выражаются AST и исполняются общим движком.
+ *
+ * Соответствие:
+ *   * `createdAfter`/`createdBefore` → `occurred_at gte`/`lte` (период ленты
+ *     хранился в общих границах дат);
+ *   * `authorOp`/`authorId`/`authorIds` → `user eq|in|ne|not_in|is_empty|not_empty`;
+ *   * `actions` → `action in [...]`;
+ *   * `entityTypes` → `entity_type in [...]`;
+ *   * ключевые слова по снимку `entity_title` профилем «события» НЕ выражаются
+ *     (у него нет текстового операнда) — условие прежнего пресета отбрасывается
+ *     осознанно (зафиксировано в отчёте задачи).
+ * `undefined` — критериев нет.
  */
-export function buildActivityQueryPlan(
-  state: ActivityCriteriaState,
-  allEntityTypes: readonly ActivityEntityType[],
-): ActivityQueryPlan {
-  const entityTypes = state.entityTypes.length === 0 ? [...allEntityTypes] : state.entityTypes;
-  const actions =
-    state.actions.length === 0 ? null : new Set<ActivityActionFilter>(state.actions);
-  const keywords = state.keywords.trim() === '' ? null : parseKeywords(state.keywords);
-
-  const op = state.authorOp;
-  let userIds: Array<string | null>;
-  let userNotEqual = false;
-  let userNotIn = false;
-  if (op === 'empty' || op === 'not_empty') {
-    userIds = [null];
-  } else if (op === 'eq') {
-    userIds = [state.authorId === '' ? null : state.authorId];
-  } else if (op === 'ne') {
-    // Сервер равенства не исключает — веер по всем не нужен, дофильтруем клиентом.
-    userIds = [state.authorId === '' ? null : state.authorId];
-    userNotEqual = state.authorId !== '';
-  } else if (op === 'not_in') {
-    userIds = [null];
-    userNotIn = state.authorIds.length > 0;
-  } else {
-    userIds = state.authorIds.length === 0 ? [null] : state.authorIds.slice();
+export function compileActivityCriteriaToAst(state: ActivityCriteriaState): FilterAst | undefined {
+  const children: FilterAstNode[] = [];
+  if (state.createdAfter.trim() !== '') {
+    children.push({ entity: { kind: 'occurred_at' }, operator: 'gte', value: state.createdAfter.trim() });
   }
-
+  if (state.createdBefore.trim() !== '') {
+    children.push({ entity: { kind: 'occurred_at' }, operator: 'lte', value: state.createdBefore.trim() });
+  }
+  const user = flatAuthorLeaf('user', state.authorOp, state.authorId, state.authorIds);
+  if (user !== null) children.push(user);
+  if (state.actions.length > 0) {
+    children.push({ entity: { kind: 'action' }, operator: 'in', value: [...state.actions] });
+  }
+  if (state.entityTypes.length > 0) {
+    children.push({ entity: { kind: 'entity_type' }, operator: 'in', value: [...state.entityTypes] });
+  }
+  if (children.length === 0) return undefined;
   return {
-    entityTypes,
-    userIds,
-    actions,
-    keywords,
-    clientFilter: {
-      actions: actions !== null,
-      keywords: keywords !== null,
-      userEmpty: op === 'empty' || op === 'not_empty',
-      userNotEqual,
-      userNotIn,
-    },
+    version: FILTER_AST_VERSION,
+    filter: children.length === 1 ? (children[0] as FilterAstNode) : { op: 'and', children },
   };
 }
 
-/** Строка «Событий» в объёме, нужном клиентской дофильтровке. */
-export interface ActivityFilterableRow {
-  user_id: string;
-  action: string;
-  entity_title: string;
-}
-
 /**
- * Клиентская дофильтровка строки «Событий» по условиям, которые серверный API
- * не выражает (действие, пустой/непустой пользователь, `ne`/`not_in`,
- * ключевые слова). Зеркало серверной семантики, а не второй конвертер.
+ * Прочитать сохранённый отбор «Событий» в единую модель с ЗАПОЛНЕННЫМ деревом:
+ * AST-снимок читается единым читателем ({@link parseFilterDefinitionTree}), а
+ * плоский прежний снимок (`activity_state` старого формата) компилируется в
+ * дерево ({@link compileActivityCriteriaToAst}). Второй точки чтения нет.
  */
-export function activityRowPasses(state: ActivityCriteriaState, plan: ActivityQueryPlan, row: ActivityFilterableRow): boolean {
-  if (plan.actions !== null && !plan.actions.has(row.action as ActivityActionFilter)) return false;
-  if (plan.clientFilter.userEmpty) {
-    const empty = row.user_id === '';
-    if (state.authorOp === 'empty' && !empty) return false;
-    if (state.authorOp === 'not_empty' && empty) return false;
-  }
-  if (plan.clientFilter.userNotEqual && row.user_id === state.authorId) return false;
-  if (plan.clientFilter.userNotIn && state.authorIds.includes(row.user_id)) return false;
-  if (plan.keywords !== null && !matchesKeywords(row.entity_title, plan.keywords)) return false;
-  return true;
+export function parseActivityCriteriaTree(raw: unknown): FilterCriteriaState {
+  if (isFilterAstWire(raw)) return parseFilterDefinitionTree(raw);
+  const state = parseActivityCriteria(raw);
+  const ast = compileActivityCriteriaToAst(state);
+  const tree = ast === undefined ? null : filterAstToTree(ast.filter);
+  state.tree = tree ?? defaultFilterTreeGroup('and');
+  return state;
 }
 
 // ---------------------------------------------------------------------------
@@ -1465,6 +1423,12 @@ export interface FilterAstProfileOptions {
   profile?: FilterProfileId;
   /** Бросить `Error` при нарушении профиля (иначе вернуть/собрать как есть). */
   strict?: boolean;
+  /**
+   * Включать сортировку в wire (по умолчанию да). `false` — у места нет грани
+   * «сортировка»: порядок строк задаёт сервер (лента «События» — `occurred_at_ms
+   * DESC`), и дефолтная пара `sort`/`order` не должна попадать в тело отбора.
+   */
+  sort?: boolean;
 }
 
 /**
@@ -1820,7 +1784,7 @@ export function buildFilterAst(
     if (issues.length > 0) throw new Error(profileIssuesMessage(issues, opts.profile));
   }
   const ast: FilterAst = { version: FILTER_AST_VERSION, filter: filterTreeToAst(root) };
-  const sort = buildFilterAstSort(state);
+  const sort = opts.sort === false ? [] : buildFilterAstSort(state);
   if (sort.length > 0) ast.sort = sort;
   return ast;
 }
@@ -1905,9 +1869,9 @@ function flatAstList(values: readonly FilterAstScalar[]): FilterAstListItem[] {
   return values.map((value) => flatAstValue(value) as FilterAstListItem);
 }
 
-/** Лист авторства/редактора из плоского оператора и значения. */
+/** Лист авторства/редактора/автора события из плоского оператора и значения. */
 function flatAuthorLeaf(
-  kind: 'author' | 'editor',
+  kind: 'author' | 'editor' | 'user',
   op: StructureAuthorOp,
   single: string,
   list: readonly string[],

@@ -207,29 +207,16 @@ describe('свёртываемость групп как в эталоне «С�
     assert.ok(!src.includes('periodCollapsed'), 'своего состояния сворачивания периода нет');
   });
 
-  it('«События»: период, пользователь и два словаря сворачиваются', () => {
+  it('«События»: сворачиваемых групп панели нет — секции стали строками дерева', () => {
+    // Пересборка ленты на единый редактор (задача 16899243, ADR fc23f9c1):
+    // период, пользователь и оба словаря — строки дерева профиля «события»,
+    // своего состояния сворачивания у панели не осталось.
     const src = readText(ACTIVITY_TS);
-    for (const [name, varName] of [
-      ['Период', 'periodCollapsed'],
-      ['Пользователь', 'authorCollapsed'],
-      ['Тип сущности', 'entitiesCollapsed'],
-      ['Действие', 'actionsCollapsed'],
-    ] as const) {
-      assert.match(
-        src,
-        new RegExp(`get: \\(\\) => ${varName}, set: \\(v\\) => \\(${varName} = v\\)`),
-        `группа «${name}» получает своё состояние сворачивания`,
-      );
-      assert.match(src, new RegExp(`let ${varName} = true;`), `«${name}» по умолчанию свёрнута`);
+    assert.match(src, /buildFilterEditor\(\{/, 'панель собирается общей фабрикой');
+    for (const varName of ['periodCollapsed', 'authorCollapsed', 'entitiesCollapsed', 'actionsCollapsed'] as const) {
+      assert.ok(!src.includes(varName), `своего состояния сворачивания «${varName}» нет`);
     }
-    // Словари-пилюли получают состояние параметром сборки `collapse`.
-    for (const varName of ['entitiesCollapsed', 'actionsCollapsed'] as const) {
-      assert.match(
-        src,
-        new RegExp(`collapse: \\{ get: \\(\\) => ${varName}, set: \\(v\\) => \\(${varName} = v\\) \\}`),
-        `словарь сворачивается параметром collapse (${varName})`,
-      );
-    }
+    assert.ok(!src.includes('buildPillGroupSection'), 'словарей-пилюль у ленты больше нет');
   });
 
   it('каркас формы умеет сворачивать группу-словарь (параметр сборки)', () => {

@@ -26,12 +26,11 @@ import {
   AUTHOR_OP_LABELS,
   FILTER_ORDERS,
   FILTER_SORTS,
-  activityRowPasses,
   authorFilterActive,
-  buildActivityQueryPlan,
   buildChronicleWire,
   buildSearchCriteriaWire,
   buildWireFilter,
+  compileActivityCriteriaToAst,
   defaultActivityCriteriaState,
   defaultChronicleCriteriaState,
   defaultFilterCriteriaState,
@@ -197,12 +196,20 @@ describe('единый конвертер отбора', () => {
     );
   });
 
-  it('план запроса «Событий» детерминирован и полон', () => {
-    const state = { ...defaultActivityCriteriaState(), entityTypes: ['thought' as const], actions: ['created' as const] };
-    const plan = buildActivityQueryPlan(state, ['thought', 'link']);
-    assert.deepEqual(plan.entityTypes, ['thought']);
-    assert.equal(plan.actions?.has('created'), true);
-    assert.equal(plan.clientFilter.actions, true, 'действие фильтруется клиентом — сервер его не умеет');
+  it('компилятор «Событий» переводит плоский пресет в AST детерминированно', () => {
+    const state = {
+      ...defaultActivityCriteriaState(),
+      entityTypes: ['thought' as const],
+      actions: ['created' as const],
+      createdAfter: '2024-06-01',
+    };
+    const ast1 = compileActivityCriteriaToAst(state);
+    const ast2 = compileActivityCriteriaToAst(
+      parseActivityCriteria({ entityTypes: ['thought'], actions: ['created'], fromMs: '2024-06-01' }),
+    );
+    assert.deepEqual(ast2, ast1, 'плоский пресет и его повторное чтение дают то же дерево');
+    assert.notEqual(ast1, undefined);
+    assert.equal(compileActivityCriteriaToAst(defaultActivityCriteriaState()), undefined, 'пустой отбор — без AST');
   });
 });
 
@@ -224,36 +231,26 @@ describe('выравненные возможности отбора', () => {
     assert.equal(authorFilterActive('not_empty', '', []), true);
   });
 
-  it('«События» умеют empty/not_empty и ne/not_in (клиентская дофильтровка)', () => {
+  it('«События» умеют empty/not_empty и ne/not_in — теперь через AST, а не клиентскую дофильтровку', () => {
     assert.deepEqual(
       [...ACTIVITY_ACTION_FILTERS],
       ['created', 'updated', 'deleted', 'trashed', 'restored'],
     );
-    const emptyPlan = buildActivityQueryPlan({ ...defaultActivityCriteriaState(), authorOp: 'empty' }, ['thought']);
-    assert.equal(emptyPlan.clientFilter.userEmpty, true);
-    assert.equal(
-      activityRowPasses({ ...defaultActivityCriteriaState(), authorOp: 'empty' }, emptyPlan, {
-        user_id: 'u1',
-        action: 'created',
-        entity_title: 'x',
-      }),
-      false,
-      'empty отбрасывает строки с автором',
-    );
-    const notInPlan = buildActivityQueryPlan(
-      { ...defaultActivityCriteriaState(), authorOp: 'not_in', authorIds: ['u1'] },
-      ['thought'],
-    );
-    assert.equal(notInPlan.clientFilter.userNotIn, true);
-    assert.equal(
-      activityRowPasses(
-        { ...defaultActivityCriteriaState(), authorOp: 'not_in', authorIds: ['u1'] },
-        notInPlan,
-        { user_id: 'u1', action: 'created', entity_title: 'x' },
-      ),
-      false,
-      'not_in отбрасывает исключённого автора',
-    );
+    const emptyAst = compileActivityCriteriaToAst({ ...defaultActivityCriteriaState(), authorOp: 'empty' });
+    assert.deepEqual(emptyAst?.filter, {
+      entity: { kind: 'user' },
+      operator: 'is_empty',
+    });
+    const notInAst = compileActivityCriteriaToAst({
+      ...defaultActivityCriteriaState(),
+      authorOp: 'not_in',
+      authorIds: ['u1', 'u2'],
+    });
+    assert.deepEqual(notInAst?.filter, {
+      entity: { kind: 'user' },
+      operator: 'not_in',
+      value: ['u1', 'u2'],
+    });
   });
 
   it('строка поиска хранит типы массивом (а не одним id)', () => {
