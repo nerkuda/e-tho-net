@@ -224,6 +224,18 @@ function collectLeaves(node: FilterAstNode): FilterAstLeaf[] {
   return [node];
 }
 
+/** Все ГРУППЫ AST-дерева (включая корень), включая вложенные. */
+function collectGroups(node: FilterAstNode): Array<{ op: string; children: FilterAstNode[] }> {
+  if (!('op' in node)) return [];
+  const self = { op: node.op, children: node.children };
+  return [self, ...node.children.flatMap(collectGroups)];
+}
+
+/** Лист по виду операнда и оператору в пределах набора узлов. */
+function findLeafIn(nodes: readonly FilterAstNode[], kind: string, operator: string): FilterAstLeaf | undefined {
+  return nodes.flatMap(collectLeaves).find((leaf) => leaf.entity.kind === kind && leaf.operator === operator);
+}
+
 /** Все листья МОДЕЛИ дерева (модель хранит значение дискриминантом). */
 function collectTreeLeaves(node: FilterTreeNode): FilterTreeLeaf[] {
   if (node.kind === 'group') return node.children.flatMap(collectTreeLeaves);
@@ -263,7 +275,7 @@ describe('диалог отбора типа мысли — AST-определе
     assert.deepEqual(leaf!.value, [FOCUS_TYPE_ID], 'значение — переданные корни без заморозки подтипов');
   });
 
-  it('компилятор: связь и родители — «Тип связи в списке» и «Родители в иерархии»', () => {
+  it('компилятор: связь — «Тип связи в списке», родители — группа ИЛИ(id в корни, родители в иерархии)', () => {
     const ast = compileFlatCriteriaToAst(
       flatState(mod, { linkTypeIds: ['lt-1'], parentIds: ['root-1'] }),
       REGISTRY_MAP,
@@ -271,8 +283,16 @@ describe('диалог отбора типа мысли — AST-определе
     );
     assert.ok(ast);
     assert.deepEqual(findLeaf(ast!, 'link_type', 'in')?.value, ['lt-1']);
-    // ADR fc23f9c1: обход по связям → «в иерархии» на «Родителях/Потомках».
-    assert.deepEqual(findLeaf(ast!, 'parents', 'in_hierarchy')?.value, ['root-1']);
+    // Прежний фасадный обход включал КОРНИ — их добавляет лист «id в корни»,
+    // потомков даёт «Родители в иерархии» (ADR fc23f9c1; итерация 2 cfbe8c74).
+    const or = collectGroups(ast!.filter).find((g) => g.op === 'or');
+    assert.ok(or, 'родительское условие — группа ИЛИ');
+    assert.deepEqual(findLeafIn(or!.children, 'id', 'in')?.value, ['root-1'], 'корни — листом «id в [корни]»');
+    assert.deepEqual(
+      findLeafIn(or!.children, 'parents', 'in_hierarchy')?.value,
+      ['root-1'],
+      'потомки — листом «родители в иерархии»',
+    );
   });
 
   it('компилятор: служебный дефолт «Корзина равно нет» впекается явным листом', () => {
@@ -400,7 +420,17 @@ describe('диалог отбора типа мысли — чтение и за
     assert.ok(tree !== null && tree !== undefined && tree.kind === 'group', 'дерево заполнено');
     const leaves = collectTreeLeaves(tree);
     assert.ok(leaves.some((l) => l.entity.kind === 'type' && l.operator === 'in_hierarchy'));
-    // Прежний обход по связям → «Родители в иерархии — по всем связям».
+    // Прежний обход по связям → группа «ИЛИ(id в корни, родители в иерархии)»:
+    // корни входят (фасадный include_roots), потомки — листом иерархии с
+    // режимом «по всем связям».
+    const orGroup = (tree.children as FilterTreeNode[]).find(
+      (n): n is FilterTreeNode & { kind: 'group' } => n.kind === 'group' && n.op === 'or',
+    );
+    assert.ok(orGroup, 'родительское условие — группа ИЛИ');
+    assert.ok(
+      orGroup!.children.some((n) => n.kind === 'leaf' && n.entity.kind === 'id' && n.operator === 'in'),
+      'корни — листом «id в [корни]»',
+    );
     const parents = leaves.find((l) => l.entity.kind === 'parents');
     assert.ok(parents, 'строка «Родители» собрана из parent_ids');
     assert.equal(parents!.operator, 'in_hierarchy');

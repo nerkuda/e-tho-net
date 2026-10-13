@@ -46,6 +46,7 @@ import {
   type FilterAstEntity,
   type FilterAstEntityKind,
   type FilterAstGroupOp,
+  type FilterAstGroup,
   type FilterAstHierarchyMode,
   type FilterAstLabels,
   type FilterAstLeaf,
@@ -1946,9 +1947,11 @@ function flatAuthorLeaf(
  *     `not_empty`/`is_empty`;
  *   * `keywords` → `keywords` (области в операнде) c `matches`;
  *   * `type_ids` → `type in_hierarchy` (подтипы раскрывает исполнитель);
- *   * `link_type_ids` → `link_type in`;
- *   * `parent_ids` → `parents in_hierarchy` (ADR fc23f9c1: обход по связям →
- *     «в иерархии»);
+ *   * `link_type_ids` → `link_type in` (поддерево типов связей раскрывает движок
+ *     на момент запроса — как серверная плоская форма);
+ *   * `parent_ids` → ГРУППА `ИЛИ(id в [корни], parents in_hierarchy [корни])`
+ *     (ADR fc23f9c1: обход по связям → «в иерархии»; фасадный обход включал
+ *     корни — их добавляет лист `id в [корни]`);
  *   * `properties` → `property` c оператором строки (типизация значения — общая,
  *     {@link buildConditionsWire}).
  */
@@ -1999,8 +2002,30 @@ export function compileFlatCriteriaToAst(
   }
 
   if (state.typeIds.length > 0) children.push(flatAstLeaf({ kind: 'type' }, 'in_hierarchy', flatAstList(state.typeIds)));
+  // Тип связи: серверный компилятор плоской формы раскрывает `link_type_ids` в
+  // поддерево типов связей и отдаёт `link_type in [раскрытые]`; движок AST для
+  // этого операнда раскрывает поддерево САМ и для `in`, и для `in_hierarchy`
+  // (`expandTypeIdsToSubtree`, query-service) — поэтому `in` с исходными корнями
+  // даёт тот же набор, что и серверная форма (раскрытие на момент запроса).
   if (state.linkTypeIds.length > 0) children.push(flatAstLeaf({ kind: 'link_type' }, 'in', flatAstList(state.linkTypeIds)));
-  if (state.parentIds.length > 0) children.push(flatAstLeaf({ kind: 'parents' }, 'in_hierarchy', flatAstList(state.parentIds)));
+  // Прежние «родительские мысли» — фасадный обход поддерева с `include_roots`
+  // (корни ВХОДЯТ в результат). Лист «Родители в иерархии» матчит только
+  // ПОТОМКОВ, поэтому фасад переводится честно: `ИЛИ(id в [корни], родители в
+  // иерархии [корни])` — так результат совпадает с прежним (решение
+  // оркестратора, итерация 2 задачи cfbe8c74). Режим обхода ставит
+  // {@link applyLegacyHierarchyTraversal}.
+  if (state.parentIds.length > 0) {
+    const rootsForId = flatAstList(state.parentIds);
+    const rootsForHierarchy = flatAstList(state.parentIds);
+    const group: FilterAstGroup = {
+      op: 'or',
+      children: [
+        flatAstLeaf({ kind: 'id' }, 'in', rootsForId),
+        flatAstLeaf({ kind: 'parents' }, 'in_hierarchy', rootsForHierarchy),
+      ],
+    };
+    children.push(group);
+  }
 
   for (const cond of buildConditionsWire(state, registry)) {
     const op = cond.op as FilterAstOperator;

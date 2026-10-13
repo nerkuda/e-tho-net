@@ -40,7 +40,7 @@ import {
   closeRestContext,
   type RestTestContext,
 } from './rest-helpers.js';
-import type { FilterAstLeaf, FilterAstNode, SavedFilter } from '@etn/shared';
+import type { FilterAst, FilterAstLeaf, FilterAstNode, SavedFilter } from '@etn/shared';
 
 function nativeAvailable(): boolean {
   try {
@@ -81,14 +81,62 @@ function insertThoughtType(ndb: NetworkDb, name: string, parentId: string | null
   return id;
 }
 
-function insertLink(ndb: NetworkDb, sourceId: string, targetId: string): void {
+function insertLink(ndb: NetworkDb, sourceId: string, targetId: string, typeId: string | null = null): void {
   ndb
     .prepare(
       `INSERT INTO links (id, source_id, target_id, type_id, active, marked_for_deletion, version,
                           created_at, updated_at, created_by, updated_by)
-       VALUES (?, ?, ?, NULL, 1, 0, 1, '2024', '2024', 'u', 'u')`,
+       VALUES (?, ?, ?, ?, 1, 0, 1, '2024', '2024', 'u', 'u')`,
     )
-    .run(randomUUID(), sourceId, targetId);
+    .run(randomUUID(), sourceId, targetId, typeId);
+}
+
+/** Вставить тип связи прямым SQL (для проверки режима обхода «по всем связям»). */
+function insertLinkType(ndb: NetworkDb, name: string): string {
+  const id = randomUUID();
+  ndb
+    .prepare(
+      `INSERT INTO link_types (id, parent_id, name_forward, name_forward_key, name_reverse,
+                               name_reverse_key, is_root, version, created_at, updated_at, created_by)
+       VALUES (?, NULL, ?, lower(?), ?, lower(?), 0, 1, '2024-01-01T00:00:00.000Z',
+               '2024-01-01T00:00:00.000Z', 'u')`,
+    )
+    .run(id, name, name, name, name);
+  return id;
+}
+
+/**
+ * Клиентский компилятор плоского `definition v1` → AST, загруженный в ЭТОТ
+ * процесс: паритет «плоский фасад ↔ скомпилированное дерево» проверяется тем же
+ * конвертером, что открывает отбор типа мысли на клиенте (не копией эталона).
+ * Спецификатор — переменная, чтобы tsc серверного проекта (rootDir `.`) не
+ * тянул клиентский исходник в свою программу: загрузка идёт в runtime (tsx).
+ */
+interface ClientFlatCompiler {
+  parseFilterDefinitionTree: (
+    def: unknown,
+    opts: { registry: ReadonlyMap<string, unknown> },
+  ) => unknown;
+  buildFilterAst: (state: unknown) => FilterAst;
+}
+
+async function loadClientFlatCompiler(): Promise<ClientFlatCompiler> {
+  const specifier = new URL(
+    '../../client/src/renderer/lib/filter-builder.js',
+    import.meta.url,
+  ).href;
+  return (await import(specifier)) as unknown as ClientFlatCompiler;
+}
+
+/** Сменить режим обхода листьев «Родители/Потомки» на structural (для пробы). */
+function setHierarchyModeStructural(node: unknown): void {
+  if (node === null || typeof node !== 'object') return;
+  const rec = node as { kind?: string; entity?: { kind?: string }; mode?: string; children?: unknown[] };
+  if (rec.kind === 'leaf' && (rec.entity?.kind === 'parents' || rec.entity?.kind === 'children')) {
+    rec.mode = 'structural';
+    return;
+  }
+  for (const child of rec.children ?? []) setHierarchyModeStructural(child);
 }
 
 /** Плоская выборка «Структур» через единый движок (как REST → канон). */
@@ -188,6 +236,94 @@ describe(
         assert.ok(ids.has(tParent), 'мысль корневого типа в результате');
         assert.ok(ids.has(tExisting), 'мысль подтипа, существовавшего при компиляции, в результате');
         assert.ok(ids.has(tNew), 'мысль НОВОГО подтипа, появившегося после компиляции, в результате');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('плоский parent_ids (фасад include_subtree) = скомпилированное дерево: КОРНИ входят (паритет клиент↔сервер)', async () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const root = insertThought(ndb, 'Корень');
+        const child = insertThought(ndb, 'Дитя');
+        const grand = insertThought(ndb, 'Внук');
+        const outsider = insertThought(ndb, 'Чужой');
+        insertLink(ndb, root, child);
+        insertLink(ndb, child, grand);
+
+        // Плоский фасад: `parent_ids` → `subtree` с include_roots=true.
+        const flat = new Set(flatQueryIds(ndb, { parent_ids: [root] }));
+        assert.deepEqual(
+          [...flat].sort(),
+          [root, child, grand].sort(),
+          'фасадный обход включает КОРНИ и всех потомков (регресс идентичности)',
+        );
+        assert.ok(!flat.has(outsider), 'чужая ветвь не попадает');
+
+        // Клиентский компилятор строит дерево из того же плоского определения.
+        const client = await loadClientFlatCompiler();
+        const state = client.parseFilterDefinitionTree({ parent_ids: [root] }, { registry: new Map() });
+        const ast = client.buildFilterAst(state);
+
+        const base = structureRequestToQuery({ sort: 'alpha', order: 'asc', limit: 200, offset: 0, count: true });
+        const run = queryThoughts(ndb, 'u', { ...base, ast }, { emptyFilterMode: 'all', maxLimit: 200 });
+        const compiled = new Set(run.items.map((i) => i.id));
+        assert.deepEqual(
+          [...compiled].sort(),
+          [...flat].sort(),
+          'скомпилированное дерево даёт ТОТ ЖЕ набор, что плоский фасад (корни входят)',
+        );
+        assert.ok(compiled.has(root), 'корень входит и в скомпилированный отбор');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('режим обхода «Родителей в иерархии» — all_links совпадает с фасадом, structural сужает (mode учтён)', async () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const linkType = insertLinkType(ndb, 'теговая связь');
+        const root = insertThought(ndb, 'Корень');
+        const typedChild = insertThought(ndb, 'Типованный потомок');
+        const structuralChild = insertThought(ndb, 'Структурный потомок');
+        // Ребро типизированное — в structural-режиме не считается родительским.
+        insertLink(ndb, root, typedChild, linkType);
+        insertLink(ndb, root, structuralChild, null);
+
+        // Плоский фасад следует по ВСЕМ связям — как режим all_links.
+        const flat = new Set(flatQueryIds(ndb, { parent_ids: [root] }));
+        assert.deepEqual(
+          [...flat].sort(),
+          [root, typedChild, structuralChild].sort(),
+          'фасад включает потомка по типизированному ребру (все связи)',
+        );
+
+        const client = await loadClientFlatCompiler();
+        const base = structureRequestToQuery({ sort: 'alpha', order: 'asc', limit: 200, offset: 0, count: true });
+
+        const allLinks = client.buildFilterAst(
+          client.parseFilterDefinitionTree({ parent_ids: [root] }, { registry: new Map() }),
+        );
+        const allLinksRun = queryThoughts(ndb, 'u', { ...base, ast: allLinks }, { emptyFilterMode: 'all', maxLimit: 200 });
+        assert.deepEqual(
+          [...new Set(allLinksRun.items.map((i) => i.id))].sort(),
+          [...flat].sort(),
+          'скомпилированный режим all_links = фасад',
+        );
+
+        // Тот же компилятор, но режим листа «Родители» сменён на structural —
+        // набор сужается (типизированное ребро перестаёт быть родительским).
+        const structuralState = client.parseFilterDefinitionTree(
+          { parent_ids: [root] },
+          { registry: new Map() },
+        ) as { tree?: unknown };
+        setHierarchyModeStructural(structuralState.tree);
+        const structuralAst = client.buildFilterAst(structuralState);
+        const structuralRun = queryThoughts(ndb, 'u', { ...base, ast: structuralAst }, { emptyFilterMode: 'all', maxLimit: 200 });
+        const structuralIds = new Set(structuralRun.items.map((i) => i.id));
+        assert.ok(structuralIds.has(structuralChild), 'структурное ребро учтено');
+        assert.ok(structuralIds.has(root), 'корень входит (лист «id в [корни]»)');
+        assert.ok(!structuralIds.has(typedChild), 'типизированное ребро в structural-режиме не родительское');
       } finally {
         ndb.close();
       }
