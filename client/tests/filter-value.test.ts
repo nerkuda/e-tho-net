@@ -349,14 +349,80 @@ describe('ячейка значения: сборка виджета и прав
     assert.ok(one(many, 'user-chip-field') !== null);
   });
 
-  it('датовый операнд: ячейка с опорами, человекочитаемой подписью и полем точной даты', () => {
+  it('датовый операнд: ячейка из опоры, сдвига и единицы с человекочитаемой подписью', () => {
     const box = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$week.start' }), slot().api);
     assert.equal(box.dataset['editor'], 'date');
-    const anchor = box.findAll((n) => n.dataset['bound'] === 'anchor')[0];
-    assert.equal(anchor?.value, 'начало недели (пн)', 'подпись опоры, а не токен');
-    const options = all(box, 'fv-token-list')[0]?.findAll((n) => n.tagName.toUpperCase() === 'OPTION') ?? [];
+    const anchor = box.findAll((n) => n.dataset['part'] === 'anchor')[0];
+    assert.equal(anchor?.value, '$week.start', 'опора — канонический токен (элемент 27b2a011)');
+    assert.equal(box.findAll((n) => n.dataset['part'] === 'shift')[0]?.value, '', 'нулевой сдвиг — пустое поле');
+    assert.equal(box.findAll((n) => n.dataset['part'] === 'unit')[0]?.value, 'd');
+    assert.equal(one(box, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent, 'начало недели (пн)', 'показ — человекочитаемый');
+    const options = all(box, mod.FILTER_VALUE_ANCHOR_CLASS)[0]?.findAll((n) => n.tagName.toUpperCase() === 'OPTION') ?? [];
     assert.ok(options.length > 0, 'список опор заполнен');
     assert.ok(one(box, 'date-field') !== null, 'точная дата — общее поле даты');
+  });
+
+  it('сдвиг: одно поле со знаком и единица собирают канонический токен опоры', () => {
+    const { api, writes } = slot();
+    const box = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$today' }), api);
+    const shift = box.findAll((n) => n.dataset['part'] === 'shift')[0]!;
+    const unit = box.findAll((n) => n.dataset['part'] === 'unit')[0]!;
+    // «−30» (Unicode-минус, как показывает поле) + «день» → сегодняя опора со сдвигом.
+    shift.value = '−30';
+    shift.fire('change');
+    assert.deepEqual(writes[0], { kind: 'token', token: '$today-30d' }, 'знак минуса сохраняется');
+    // Смена единицы пересобирает тот же сдвиг в новой единице (количество не теряется).
+    unit.value = 'mo';
+    unit.fire('change');
+    assert.deepEqual(writes[1], { kind: 'token', token: '$today-30mo' });
+    // Смена опоры сохраняет сдвиг.
+    const anchor = box.findAll((n) => n.dataset['part'] === 'anchor')[0]!;
+    anchor.value = '$month.start';
+    anchor.fire('change');
+    assert.deepEqual(writes[2], { kind: 'token', token: '$month.start-30mo' });
+    // Ноль/пусто возвращают голую опору.
+    shift.value = '0';
+    shift.fire('change');
+    assert.deepEqual(writes[3], { kind: 'token', token: '$month.start' });
+  });
+
+  it('сдвиг: разбор и сборка канонических токенов (чистые функции)', () => {
+    assert.deepEqual(mod.filterValueShiftParts('$today+3d'), { anchor: '$today', amount: 3, unit: 'd' });
+    assert.deepEqual(mod.filterValueShiftParts('$month.start-1mo'), { anchor: '$month.start', amount: -1, unit: 'mo' });
+    assert.deepEqual(mod.filterValueShiftParts('$today'), { anchor: '$today', amount: 0, unit: 'd' });
+    assert.equal(mod.filterValueShiftParts('2026-01-31'), null, 'точная дата — не опора со сдвигом');
+    assert.equal(mod.filterValueComposeShift('$today', 3, 'd'), '$today+3d');
+    assert.equal(mod.filterValueComposeShift('$today', -30, 'd'), '$today-30d');
+    assert.equal(mod.filterValueComposeShift('$today', 0, 'd'), '$today', 'нулевой сдвиг — голая опора');
+  });
+
+  it('опоры и единицы: время доступно только профилю со временем', () => {
+    const anchors = mod.filterValueDateAnchors({ profile: 'thoughts' }).map((a: any) => a.text);
+    assert.ok(anchors.includes('$today') && anchors.includes('$month.start'));
+    assert.ok(!anchors.includes('$now'), 'календарный профиль без $now');
+    assert.deepEqual(
+      mod.filterValueShiftUnits({ profile: 'thoughts' }).map((u: any) => u.key),
+      ['d', 'w', 'mo', 'y'],
+    );
+    assert.deepEqual(
+      mod.filterValueShiftUnits({ profile: 'chronicle' }).map((u: any) => u.key),
+      ['d', 'w', 'mo', 'y', 'h', 'mi'],
+      'хроника несёт часы и минуты',
+    );
+  });
+
+  it('«✕» сбрасывает границу даты к «сегодня, 0»', () => {
+    const { api, writes } = slot();
+    const box = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$month.start-1mo' }), api);
+    assert.equal(
+      one(box, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent,
+      'начало прошлого месяца',
+      'опора со сдвигом показана человекочитаемо (пресет словаря)',
+    );
+    const reset = one(box, mod.FILTER_VALUE_DATE_RESET_CLASS);
+    assert.ok(reset !== null, 'кнопка сброса в ячейке');
+    reset!.fire('click');
+    assert.deepEqual(writes[0], { kind: 'token', token: '$today' });
   });
 
   it('границы «между» у свойства — две границы общего редактора', () => {

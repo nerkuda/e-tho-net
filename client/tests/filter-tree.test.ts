@@ -736,6 +736,174 @@ describe('дерево условий: адресация и правки мод
   });
 });
 
+describe('дерево условий: подменю «между» — матрица быстрых периодов (69ac9ff8)', () => {
+  before(() => {
+    installShim();
+  });
+
+  it('матрица 3×4: строка [текущий/прошлый/следующий] × столбец [день/неделя/месяц/год]', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const menu = mod.filterTreePeriodMenu();
+    assert.equal(menu.title, 'Период');
+    assert.equal(menu.groups.length, 1, 'одна секция — матрица');
+    const group = menu.groups[0]!;
+    assert.equal(group.columns, 4, 'раскладка в четыре колонки (строка матрицы)');
+    assert.equal(group.items[0]!.key, 'between:manual');
+    assert.equal(group.items[0]!.label, 'Задать вручную…', 'ручной выбор оператора первым пунктом');
+    const cells = group.items.slice(1);
+    assert.equal(cells.length, 12, 'три строки по четыре гранулярности');
+    assert.deepEqual(
+      cells.slice(0, 4).map((i) => i.label),
+      ['текущий день', 'текущая неделя', 'текущий месяц', 'текущий год'],
+      'первая строка матрицы — текущие периоды в порядке столбцов',
+    );
+    assert.deepEqual(
+      cells.slice(4, 8).map((i) => i.label),
+      ['прошлый день', 'прошлая неделя', 'прошлый месяц', 'прошлый год'],
+    );
+    assert.deepEqual(
+      cells.slice(8, 12).map((i) => i.label),
+      ['следующий день', 'следующая неделя', 'следующий месяц', 'следующий год'],
+    );
+    assert.deepEqual(
+      cells.map((i) => i.key),
+      [
+        'period:current:day',
+        'period:current:week',
+        'period:current:month',
+        'period:current:year',
+        'period:previous:day',
+        'period:previous:week',
+        'period:previous:month',
+        'period:previous:year',
+        'period:next:day',
+        'period:next:week',
+        'period:next:month',
+        'period:next:year',
+      ],
+      'ключи ячеек устойчивы (данные кнопок)',
+    );
+  });
+
+  it('выбор ячейки пишет ВИДИМЫЕ границы-токены, а не скрытый период', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const dateLeaf = (): any => ({
+      kind: 'leaf',
+      entity: { kind: 'created_at' },
+      operator: 'gte',
+      value: { kind: 'none' },
+    });
+
+    const month = dateLeaf();
+    const applied = mod.filterTreeApplyPeriod(month, 'period:previous:month');
+    assert.equal(applied?.from, '$month.start-1mo');
+    assert.equal(month.operator, 'between', 'выбор периода — обычное условие «между»');
+    assert.deepEqual(
+      month.value,
+      { kind: 'list', items: [{ token: '$month.start-1mo' }, { token: '$month.end-1mo' }] },
+      'границы периода — реальные токены модели',
+    );
+    assert.equal(
+      mod.filterTreePeriodKeyOf(month),
+      'period:previous:month',
+      'повторное открытие подсвечивает выбранную ячейку',
+    );
+
+    const week = dateLeaf();
+    mod.filterTreeApplyPeriod(week, 'period:current:week');
+    assert.deepEqual(week.value, { kind: 'list', items: [{ token: '$week.start' }, { token: '$week.end' }] });
+
+    const year = dateLeaf();
+    mod.filterTreeApplyPeriod(year, 'period:next:year');
+    assert.deepEqual(year.value, { kind: 'list', items: [{ token: '$year.start+1y' }, { token: '$year.end+1y' }] });
+
+    // «Задать вручную…» — оператор «между» без подстановки границ.
+    const manual = dateLeaf();
+    mod.filterTreeApplyPeriod(manual, 'between:manual');
+    assert.equal(manual.operator, 'between');
+    assert.deepEqual(manual.value, { kind: 'none' }, 'границы остаются на ручную правку');
+    assert.equal(mod.filterTreePeriodKeyOf(manual), null);
+
+    // Неизвестный ключ лист не меняет (и произвольные границы — не ячейка матрицы).
+    const foreign = dateLeaf();
+    assert.equal(mod.filterTreeApplyPeriod(foreign, 'period:no-such'), null);
+    assert.equal(foreign.operator, 'gte');
+    assert.deepEqual(foreign.value, { kind: 'none' });
+    const custom = dateLeaf();
+    custom.value = { kind: 'list', items: [{ token: '$today' }, { token: '$today+10d' }] };
+    assert.equal(mod.filterTreePeriodKeyOf(custom), null, 'произвольные границы ячейке не соответствуют');
+  });
+
+  it('«между» раскрывает подменю только у датового операнда; «не между» — обычный пункт', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const leaf = (kind: string): any => ({ kind: 'leaf', entity: { kind }, operator: 'gte', value: { kind: 'none' } });
+
+    assert.equal(mod.filterTreeIsDateLeaf(leaf('created_at'), undefined), true);
+    assert.equal(mod.filterTreeIsDateLeaf(leaf('occurred_at'), undefined), true);
+    assert.equal(mod.filterTreeIsDateLeaf(leaf('property'), 'date'), true, 'свойство-дата — тоже датовый операнд');
+    assert.equal(mod.filterTreeIsDateLeaf(leaf('keywords'), undefined), false);
+    assert.equal(mod.filterTreeIsDateLeaf(leaf('property'), 'text'), false);
+
+    // Датовый лист + «между» → открыто подменю, оператор ещё не сменён.
+    const dateLeaf = leaf('created_at');
+    const opened: Array<{ title: string; cells: number }> = [];
+    const handled = mod.filterTreeOperatorChoice(dateLeaf, 'between', undefined, (menu: any) => {
+      opened.push({ title: menu.title, cells: menu.groups[0].items.length });
+    });
+    assert.equal(handled, true, 'подменю раскрыто');
+    assert.deepEqual(opened, [{ title: 'Период', cells: 13 }]);
+    assert.equal(dateLeaf.operator, 'gte', 'до выбора ячейки оператор прежний');
+
+    // Недатовый лист + «между» → обычная установка оператора, подменю не открыто.
+    const textLeaf = leaf('property');
+    let visitorCalls = 0;
+    assert.equal(
+      mod.filterTreeOperatorChoice(textLeaf, 'between', 'text', () => {
+        visitorCalls += 1;
+      }),
+      false,
+    );
+    assert.equal(visitorCalls, 0, 'у недатового операнда подменю не раскрывается');
+    assert.equal(textLeaf.operator, 'between');
+
+    // «Не между» у датового лиса — обычный пункт (подменю только у «между»).
+    const notBetween = leaf('created_at');
+    assert.equal(
+      mod.filterTreeOperatorChoice(notBetween, 'not_between', undefined, () => {
+        visitorCalls += 1;
+      }),
+      false,
+    );
+    assert.equal(notBetween.operator, 'not_between');
+    assert.equal(visitorCalls, 0);
+
+    // «Между» у датового операнда есть в списке операторов (пункт-триггер на месте).
+    const ops = mod
+      .filterTreeOperatorMenu('thoughts', 'created_at', 'date')
+      .flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
+    assert.ok(ops.includes('between') && ops.includes('not_between'));
+  });
+
+  it('тело подменю: раскладка в четыре колонки и выбор ячейки отдаёт её ключ', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const menu = mod.filterTreePeriodMenu();
+    const picked: string[] = [];
+    const body = mod.buildChoiceMenuBody({
+      title: menu.title,
+      groups: menu.groups,
+      onPick: (key: string) => picked.push(key),
+    });
+    const root = body.root as unknown as ShimElement;
+    const rows = exact(root, 'ft-choice__rows')[0]!;
+    assert.equal(rows.dataset['columns'], '4', 'раздел-матрица помечен числом колонок');
+    assert.equal(rows.style.getPropertyValue('grid-template-columns'), 'repeat(4, minmax(0, 1fr))');
+    const items = exact(root, 'ft-choice__item');
+    assert.equal(items.length, 13, 'ручной пункт + двенадцать ячеек');
+    buttonByText(root, 'ft-choice__item', 'прошлый месяц')!.emit('click');
+    assert.deepEqual(picked, ['period:previous:month'], 'выбор ячейки отдаёт её ключ');
+  });
+});
+
 describe('дерево условий: диагностика строк (элемент 4e634c9a)', () => {
   before(() => {
     installShim();

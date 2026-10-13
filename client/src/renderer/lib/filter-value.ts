@@ -67,6 +67,7 @@ import {
   parseBound,
 } from './period-editor.js';
 import type { SuggestEntry, SuggestSource } from './suggest-dropdown.js';
+import { uiButton } from './ui/button.js';
 import { choiceRow } from './ui/choice-row.js';
 import { fieldInput } from './ui/field.js';
 import { segmentedControl } from './ui/segmented.js';
@@ -90,6 +91,16 @@ export const FILTER_VALUE_UNIT_CLASS = 'fv-unit';
 export const FILTER_VALUE_MODE_CLASS = 'fv-mode';
 /** Форма границы даты (опора/сдвиг/точная дата). */
 export const FILTER_VALUE_DATE_CLASS = 'fv-date';
+/** Опора ячейки даты — список доступных профилю опор. */
+export const FILTER_VALUE_ANCHOR_CLASS = 'fv-date__anchor';
+/** Поле сдвига опоры — ОДНО число со знаком («+30»/«−30»/«0»). */
+export const FILTER_VALUE_SHIFT_CLASS = 'fv-date__shift';
+/** Единица сдвига (день/неделя/месяц/год; время — в профилях со временем). */
+export const FILTER_VALUE_SHIFT_UNIT_CLASS = 'fv-date__unit';
+/** Человекочитаемая композиция границы. */
+export const FILTER_VALUE_HINT_LABEL_CLASS = 'fv-date__hint';
+/** Сброс границы к «сегодня, 0». */
+export const FILTER_VALUE_DATE_RESET_CLASS = 'fv-date__reset';
 /** Пара границ оператора «между». */
 export const FILTER_VALUE_BOUNDS_CLASS = 'fv-bounds';
 /** Приглушённая подпись «значение не требуется». */
@@ -704,7 +715,12 @@ function numberBound(value: FilterTreeValue, onChange: (value: FilterTreeValue) 
   return input;
 }
 
-/** Граница даты/времени: опоры списком, сдвиг, точная дата, человекочитаемо. */
+/**
+ * Граница даты/времени (элемент 27b2a011): [опора ▾] [сдвиг со знаком] [единица ▾]
+ * плюс поле точной даты. В модель уходит КАНОНИЧЕСКИЙ токен опоры со сдвигом
+ * (`$today+3d`), показ — человекочитаемой композицией; «✕» сбрасывает границу к
+ * «сегодня, 0».
+ */
 function dateBoundControl(
   current: string,
   onChange: (value: FilterTreeValue) => void,
@@ -712,43 +728,145 @@ function dateBoundControl(
 ): HTMLElement {
   const wrap = div(FILTER_VALUE_DATE_CLASS);
   const exact = current !== '' && !isGlobalDateToken(current) && parseBound(current).kind === 'date';
+  const parts = filterValueShiftParts(current);
+  let anchor = parts?.anchor ?? '$today';
+  let amount = parts?.amount ?? 0;
+  let unit = parts?.unit ?? 'd';
+  const anchors = filterValueDateAnchors(ctx);
 
-  const selector = fieldInput({
+  const commit = (): void => {
+    const token = filterValueComposeShift(anchor, amount, unit);
+    onChange({ kind: 'token', token });
+  };
+
+  // 1. Опора — список доступных профилю опор (время — только в профилях со временем).
+  const anchorSelect = el('select', `${FILTER_VALUE_ANCHOR_CLASS} select-input`) as HTMLSelectElement;
+  if (exact) {
+    const exactOption = el('option', '', 'точная дата') as HTMLOptionElement;
+    exactOption.value = 'exact';
+    anchorSelect.append(exactOption);
+  }
+  for (const option of anchors) {
+    const item = el('option', '', option.label) as HTMLOptionElement;
+    item.value = option.text;
+    anchorSelect.append(item);
+  }
+  anchorSelect.value = exact ? 'exact' : anchor;
+  anchorSelect.dataset['part'] = 'anchor';
+  anchorSelect.addEventListener('change', () => {
+    if (anchorSelect.value === 'exact') return;
+    anchor = anchorSelect.value;
+    commit();
+  });
+  wrap.append(anchorSelect);
+
+  // 2. Сдвиг — одно поле со знаком («+30», «−30», «0»/пусто = без сдвига).
+  const shiftInput = fieldInput({
     type: 'text',
-    value: humanBoundLabel(current),
-    placeholder: 'опора…',
-    title: 'Опора или токен даты',
+    value: amount === 0 ? '' : `${amount > 0 ? '+' : '−'}${Math.abs(amount)}`,
+    placeholder: '0',
+    title: 'Сдвиг опоры: +30, −30 или 0',
+    extraClass: FILTER_VALUE_SHIFT_CLASS,
     onChange: (raw: string) => {
-      const text = raw.trim();
-      if (text === '') {
-        onChange({ kind: 'none' });
-        return;
-      }
-      if (isGlobalDateToken(text)) onChange({ kind: 'token', token: text });
-      else onChange({ kind: 'scalar', value: text });
+      amount = parseShiftInput(raw);
+      commit();
     },
   });
-  selector.setAttribute('list', 'fv-token-options');
-  selector.dataset['bound'] = 'anchor';
-  wrap.append(selector);
+  shiftInput.dataset['part'] = 'shift';
+  wrap.append(shiftInput);
 
-  const tokens = el('datalist', 'fv-token-list') as HTMLDataListElement;
-  tokens.id = 'fv-token-options';
-  for (const option of filterValueTokenOptions(ctx)) {
-    const item = el('option', '') as HTMLOptionElement;
-    item.value = option.text;
-    item.label = option.label;
-    tokens.append(item);
+  // 3. Единица сдвига — дни/недели/месяцы/годы (время — в профилях со временем).
+  const unitSelect = el('select', `${FILTER_VALUE_SHIFT_UNIT_CLASS} select-input`) as HTMLSelectElement;
+  for (const option of filterValueShiftUnits(ctx)) {
+    const item = el('option', '', option.label) as HTMLOptionElement;
+    item.value = option.key;
+    unitSelect.append(item);
   }
-  wrap.append(tokens);
+  unitSelect.value = unit;
+  unitSelect.dataset['part'] = 'unit';
+  unitSelect.addEventListener('change', () => {
+    unit = unitSelect.value;
+    commit();
+  });
+  wrap.append(unitSelect);
 
+  // 4. Точная дата — общий фасад поля даты.
   const field = dateField({
     ...(exact ? { value: current } : {}),
     ariaLabel: 'Точная дата',
     onChange: (iso: string) => onChange(iso === '' ? { kind: 'none' } : { kind: 'scalar', value: iso }),
   });
   wrap.append(field.root);
+
+  // 5. Человекочитаемая композиция и сброс к «сегодня, 0».
+  const hint = span(
+    current === '' ? '' : filterValueHumanLabel({ kind: 'token', token: current }),
+    FILTER_VALUE_HINT_LABEL_CLASS,
+  );
+  wrap.append(hint);
+  wrap.append(
+    uiButton({
+      label: '✕',
+      role: 'ghost',
+      size: 's',
+      class: FILTER_VALUE_DATE_RESET_CLASS,
+      title: 'Сбросить к «сегодня, 0»',
+      onClick: () => {
+        anchor = '$today';
+        amount = 0;
+        unit = 'd';
+        onChange({ kind: 'token', token: '$today' });
+      },
+    }),
+  );
   return wrap;
+}
+
+/** Разобранная опора со сдвигом: `$today+3d` → опора, число и единица. */
+export function filterValueShiftParts(token: string): { anchor: string; amount: number; unit: string } | null {
+  const text = token.trim();
+  if (text === '') return null;
+  const m = /^(\$[A-Za-z.]+?)([+-]\d+)(d|w|mo|y|h|mi)$/.exec(text);
+  if (m !== null) return { anchor: m[1]!, amount: Number(m[2]), unit: m[3]! };
+  return isGlobalDateToken(text) ? { anchor: text, amount: 0, unit: 'd' } : null;
+}
+
+/** Канонический токен опоры со сдвигом (нулевой сдвиг — голая опора). */
+export function filterValueComposeShift(anchor: string, amount: number, unit: string): string {
+  if (amount === 0) return anchor;
+  return `${anchor}${amount > 0 ? '+' : '-'}${Math.abs(amount)}${unit}`;
+}
+
+/** Разбор поля сдвига: «+30»/«−30»/«30»/«0»/пусто → число (0 — без сдвига). */
+function parseShiftInput(raw: string): number {
+  const text = raw.trim().replace('−', '-');
+  if (text === '' || text === '0' || text === '+0' || text === '-0') return 0;
+  const m = /^([+-]?)(\d+)$/.exec(text);
+  if (m === null) return 0;
+  return (m[1] === '-' ? -1 : 1) * Number(m[2]);
+}
+
+/** Опоры ячейки даты — пресеты без сдвига (человекочитаемые подписи). */
+export function filterValueDateAnchors(
+  ctx: Pick<FilterValueContext, 'profile'>,
+): readonly { text: string; label: string }[] {
+  return filterValueTokenOptions(ctx).filter((option) => filterValueShiftParts(option.text)?.amount === 0);
+}
+
+/** Единицы сдвига: базовые плюс часы/минуты в контекстах со временем. */
+export function filterValueShiftUnits(
+  ctx: Pick<FilterValueContext, 'profile'>,
+): readonly { key: string; label: string }[] {
+  const units: { key: string; label: string }[] = [
+    { key: 'd', label: 'день' },
+    { key: 'w', label: 'неделя' },
+    { key: 'mo', label: 'месяц' },
+    { key: 'y', label: 'год' },
+  ];
+  if (filterProfileHasTime(ctx.profile)) {
+    units.push({ key: 'h', label: 'час' }, { key: 'mi', label: 'минута' });
+  }
+  return units;
 }
 
 /** Пара границ оператора «между»/«не между». */

@@ -369,6 +369,198 @@ export function filterTreeOperatorLabel(op: FilterAstOperator): string {
   return astOperatorLabel(op);
 }
 
+// ---------------------------------------------------------------------------
+// Быстрые периоды подменю «между» (элемент интерфейса 69ac9ff8, требование
+// 17dcd2fb: матрица [текущий/прошлый/следующий] × [день/неделя/месяц/год])
+// ---------------------------------------------------------------------------
+
+/** Ячейка матрицы быстрых периодов: подпись и канонические границы-токены. */
+export interface FilterTreeQuickPeriod {
+  /** Ключ ячейки меню (устойчив для тестов и данных кнопки). */
+  key: string;
+  /** Подпись ячейки («прошлый месяц»). */
+  label: string;
+  /** Раздел матрицы (строка «текущий/прошлый/следующий»). */
+  row: 'current' | 'previous' | 'next';
+  /** Токен нижней границы («С»). */
+  from: string;
+  /** Токен верхней границы («По»). */
+  to: string;
+}
+
+/** Единицы матрицы быстрых периодов (столбцы). */
+interface QuickPeriodUnit {
+  key: string;
+  /**
+   * Подписи ячейки по строкам матрицы, в порядке [текущий, прошлый, следующий]:
+   * род прилагательного у каждой гранулярности свой («текущая неделя», но
+   * «текущий месяц»), поэтому подписи заданы явно, а не склейкой.
+   */
+  forms: readonly [string, string, string];
+  /** Опора «С» и «По» без сдвига. */
+  from: string;
+  to: string;
+  /** Сдвиг строки (текущий — '', прошлый — '-1<unit>', следующий — '+1<unit>'). */
+  shiftUnit: string;
+}
+
+const QUICK_PERIOD_UNITS: readonly QuickPeriodUnit[] = [
+  {
+    key: 'day',
+    forms: ['текущий день', 'прошлый день', 'следующий день'],
+    from: '$today',
+    to: '$today',
+    shiftUnit: 'd',
+  },
+  {
+    key: 'week',
+    forms: ['текущая неделя', 'прошлая неделя', 'следующая неделя'],
+    from: '$week.start',
+    to: '$week.end',
+    shiftUnit: 'w',
+  },
+  {
+    key: 'month',
+    forms: ['текущий месяц', 'прошлый месяц', 'следующий месяц'],
+    from: '$month.start',
+    to: '$month.end',
+    shiftUnit: 'mo',
+  },
+  {
+    key: 'year',
+    forms: ['текущий год', 'прошлый год', 'следующий год'],
+    from: '$year.start',
+    to: '$year.end',
+    shiftUnit: 'y',
+  },
+];
+
+/** Строки матрицы: текущий / прошлый / следующий период (индекс — выбор подписи). */
+const QUICK_PERIOD_ROWS: readonly { key: FilterTreeQuickPeriod['row']; sign: string }[] = [
+  { key: 'current', sign: '' },
+  { key: 'previous', sign: '-' },
+  { key: 'next', sign: '+' },
+];
+
+/** Токен опоры со сдвигом на `sign` 1 единицу (пустой знак — без сдвига). */
+function shiftedToken(token: string, sign: string, unit: string): string {
+  return sign === '' ? token : `${token}${sign}1${unit}`;
+}
+
+/**
+ * Матрица быстрых периодов подменю «между» (элемент 69ac9ff8): три строки
+ * [текущий/прошлый/следующий] × четыре столбца [день/неделя/месяц/год]. Выбор
+ * ячейки создаёт обычное условие «между» с ВИДИМЫМИ границами-токенами —
+ * период не держится скрытым состоянием условия (требование 69ac9ff8).
+ */
+export function filterTreeQuickPeriods(): readonly FilterTreeQuickPeriod[] {
+  const out: FilterTreeQuickPeriod[] = [];
+  for (const [rowIndex, row] of QUICK_PERIOD_ROWS.entries()) {
+    for (const unit of QUICK_PERIOD_UNITS) {
+      out.push({
+        key: `period:${row.key}:${unit.key}`,
+        label: unit.forms[rowIndex] ?? unit.forms[0],
+        row: row.key,
+        from: shiftedToken(unit.from, row.sign, unit.shiftUnit),
+        to: shiftedToken(unit.to, row.sign, unit.shiftUnit),
+      });
+    }
+  }
+  return out;
+}
+
+/** Значение-границы выбранной ячейки быстрого периода (пара токенов). */
+export function filterTreeQuickPeriodValue(period: FilterTreeQuickPeriod): FilterTreeValue {
+  return { kind: 'list', items: [{ token: period.from }, { token: period.to }] };
+}
+
+/**
+ * Датовая ли природа листа: датовые операторы (дата создания/изменения, время
+ * записи/события) либо свойство вида «дата» — только у них «между» получает
+ * подменю быстрых периодов.
+ */
+export function filterTreeIsDateLeaf(leaf: FilterTreeLeaf, valueType?: PropertyValueType): boolean {
+  if (valueType === 'date') return true;
+  const kind = leaf.entity.kind;
+  return kind === 'created_at' || kind === 'updated_at' || kind === 'record_time' || kind === 'occurred_at';
+}
+
+/** Ключ пункта «Задать вручную…» подменю периодов (обычный выбор оператора). */
+export const FILTER_TREE_PERIOD_MANUAL_KEY = 'between:manual';
+
+/**
+ * Подменю «между» для датового операнда (элемент 69ac9ff8): пункт «Задать
+ * вручную…» плюс матрица «период × гранулярность» — 3 строки
+ * [текущий/прошлый/следующий] × 4 столбца [день/неделя/месяц/год]. Матрица
+ * задана раскладкой в четыре колонки (`columns`).
+ */
+export function filterTreePeriodMenu(): {
+  title: string;
+  groups: FilterTreeChoiceGroup[];
+} {
+  return {
+    title: 'Период',
+    groups: [
+      {
+        label: 'Период',
+        items: [
+          { key: FILTER_TREE_PERIOD_MANUAL_KEY, label: 'Задать вручную…' },
+          ...filterTreeQuickPeriods().map((period) => ({ key: period.key, label: period.label })),
+        ],
+        columns: 4,
+      },
+    ],
+  };
+}
+
+/** Ключ ячейки матрицы, которой соответствуют ТЕКУЩИЕ границы листа (или null). */
+export function filterTreePeriodKeyOf(leaf: FilterTreeLeaf): string | null {
+  if (leaf.value.kind !== 'list' || leaf.value.items.length !== 2) return null;
+  const [from, to] = leaf.value.items;
+  if (typeof from !== 'object' || typeof to !== 'object') return null;
+  const period = filterTreeQuickPeriods().find((p) => p.from === from.token && p.to === to.token);
+  return period?.key ?? null;
+}
+
+/**
+ * Применить выбор подменю периодов к листу: оператор — «между», значение —
+ * ВИДИМЫЕ границы-токены выбранной ячейки (период не хранится скрытым
+ * состоянием — 69ac9ff8). «Задать вручную…» оставляет границы как есть
+ * (пользователь правит их в ячейке значения). Неизвестный ключ не меняет лист.
+ */
+export function filterTreeApplyPeriod(leaf: FilterTreeLeaf, periodKey: string): FilterTreeQuickPeriod | null {
+  if (periodKey === FILTER_TREE_PERIOD_MANUAL_KEY) {
+    leaf.operator = 'between';
+    return null;
+  }
+  const period = filterTreeQuickPeriods().find((p) => p.key === periodKey);
+  if (period === undefined) return null;
+  leaf.operator = 'between';
+  leaf.value = filterTreeQuickPeriodValue(period);
+  return period;
+}
+
+/**
+ * Выбор в списке операторов (элемент 69ac9ff8): «между» у ДАТОВОГО операнда
+ * раскрывает подменю периодов (в него передаётся {@link filterTreePeriodMenu}),
+ * прочие выборы сразу ставят оператор листу. Возвращает `true`, если открыто
+ * подменю, — вызывающему не нужно перерисовывать строку (это закрыло бы панель).
+ * «Не между» остаётся обычным пунктом — подменю раскрывает только «между».
+ */
+export function filterTreeOperatorChoice(
+  leaf: FilterTreeLeaf,
+  key: string,
+  valueType: PropertyValueType | undefined,
+  openPeriod: (menu: ReturnType<typeof filterTreePeriodMenu>) => void,
+): boolean {
+  if (key === 'between' && filterTreeIsDateLeaf(leaf, valueType)) {
+    openPeriod(filterTreePeriodMenu());
+    return true;
+  }
+  leaf.operator = key as FilterAstOperator;
+  return false;
+}
+
 /**
  * Список операторов операнда в профиле контекста, сгруппированный по способу
  * задания множества (требование 502f1922). Состав берётся у реестра профилей
@@ -999,9 +1191,24 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
               ),
             })),
             activeKey: leaf.operator,
-            onPick: (key) => {
-              leaf.operator = key as FilterAstOperator;
-              touch();
+            onPick: (key, close) => {
+              // «Между» у датового операнда раскрывается в подменю быстрых
+              // периодов (элемент 69ac9ff8): матрица [текущий/прошлый/следующий] ×
+              // [день/неделя/месяц/год] + «Задать вручную…». Выбор периода
+              // создаёт обычное условие с ВИДИМЫМИ границами-токенами.
+              const opened = filterTreeOperatorChoice(leaf, key, valueType, (menu) => {
+                close();
+                openChoiceMenu(anchor, {
+                  title: menu.title,
+                  groups: menu.groups,
+                  activeKey: filterTreePeriodKeyOf(leaf) ?? undefined,
+                  onPick: (periodKey) => {
+                    filterTreeApplyPeriod(leaf, periodKey);
+                    touch();
+                  },
+                });
+              });
+              if (!opened) touch();
             },
           });
         },
@@ -1125,6 +1332,11 @@ export interface FilterTreeChoiceItem {
 export interface FilterTreeChoiceGroup {
   label: string;
   items: FilterTreeChoiceItem[];
+  /**
+   * Число колонок раздела: задано — раздел раскладывается матрицей по N кнопок
+   * в ряд (матрица быстрых периодов 4×3 у подменю «между», элемент 69ac9ff8).
+   */
+  columns?: number;
 }
 
 /** Опции выпадающего списка выбора (общее для «Что» и «Оператор»). */
@@ -1170,6 +1382,16 @@ export function buildChoiceMenuBody(
       if (items.length === 0) continue;
       list.append(el('div', 'ft-choice__group', group.label));
       const rows = div('ft-choice__rows');
+      if (group.columns !== undefined) {
+        // Раздел-матрица (быстрые периоды «между», элемент 69ac9ff8): число
+        // колонок — параметр раздела, раскладка задаётся в разметке. Ширина не
+        // меньше 320px, чтобы четыре колонки не сжимались в переносы строк.
+        rows.dataset['columns'] = String(group.columns);
+        rows.style.setProperty('display', 'grid');
+        rows.style.setProperty('grid-template-columns', `repeat(${group.columns}, minmax(0, 1fr))`);
+        rows.style.setProperty('gap', 'var(--space-1)');
+        rows.style.setProperty('min-width', '320px');
+      }
       for (const item of items) {
         const button = uiButton({
           label: item.label,
