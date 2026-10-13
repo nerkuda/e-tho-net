@@ -49,8 +49,10 @@ describe('приёмка №2, п.1: единые поля выбора (обе 
     // чип-поля строит общий виджет значения (`lib/filter-value.ts`).
     const FORM = read('lib/filter-form.ts');
     assert.ok(FORM.includes("'+ ещё одну мысль'"), 'приглашение мысли — в общем фасаде');
-    assert.ok(CHRONICLE_PANEL.includes("'+ ещё один тип'"), 'Дневник: приглашение типа');
-    assert.ok(CHRONICLE_PANEL.includes('buildParentThoughtsSection'), 'Дневник: поле мыслей — общий фасад');
+    // Панель «Дневника» (задача 608ecb79) тоже перешла на единый редактор: её
+    // спец-секций нет, строку поиска собирает общий каркас слова.
+    assert.match(CHRONICLE_PANEL, /buildKeywordsSection/, 'Дневник: строка поиска — общий каркас');
+    assert.match(ENTITY_PICKER, /addPlaceholder/, 'приглашения полей — общий фасад');
   });
 
   it('кнопок «выбрать…»/«список типов…» в панелях нет', () => {
@@ -132,11 +134,12 @@ describe('приёмка №2, п.6: период «Пресеты»/«Даты�
     assert.match(DIARY, /months = n \* 12/, '±Ny = 12 месяцев');
   });
 
-  it('режим периода едет в сохранённый отбор', () => {
-    assert.match(BUILDER, /dateMode/);
-    assert.match(BUILDER, /out\.date_mode = state\.dateMode/);
-    assert.match(CHRONICLE_PANEL, /panelMode: filter\.dateMode/);
-    assert.match(CHRONICLE_PANEL, /date_mode|dateMode/, 'режим восстанавливается парсером');
+  it('период едет в сохранённый отбор строкой «Время записи» дерева', () => {
+    // Задача 608ecb79: режим «Пресеты/Даты» упразднён — панель хранит период
+    // строкой дерева (токены календаря), сохранённый отбор пишется AST.
+    assert.match(CHRONICLE_PANEL, /chroniclePeriod\(/, 'период читается из дерева');
+    assert.match(CHRONICLE_PANEL, /buildFilterAst\(filter, \{ profile: FILTER_PROFILE \}\)/, 'сохранение — AST');
+    assert.match(BUILDER, /dateMode/, 'плоская v1-форма периода читается прежним конвертером');
   });
 
   it('календарь пишет значения по режиму (правило «Пресетов»)', () => {

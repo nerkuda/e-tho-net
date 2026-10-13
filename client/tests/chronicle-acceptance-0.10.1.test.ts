@@ -34,7 +34,7 @@ const PERIOD_EDITOR = read('lib/period-editor.ts');
 describe('приёмка «Дневника» 0.10.1: компоновка (пункт 1)', () => {
   it('календарь — header панели отбора (первый элемент)', () => {
     assert.match(CHRONICLE, /mountChronicleFilterPanel\([\s\S]*header: \[calWrap\]/);
-    assert.match(PANEL, /header: \[\.\.\.headerNodes\]/, 'панель кладёт header перед секциями');
+    assert.match(PANEL, /for \(const node of headerNodes\) panel\.append\(node\)/, 'панель кладёт header перед содержимым');
   });
 
   it('кнопка добавления — в верхней панели над лентой', () => {
@@ -79,8 +79,13 @@ describe('приёмка «Дневника» 0.10.1: счётчики кале�
     // Границы месяца — ЛОКАЛЬНЫЕ сутки (приёмка №4, задача fd9eef49): «голая
     // дата» на сервере = сутки UTC и запись у локальной полуночи выпадала бы
     // из счётчиков месяца.
-    assert.match(CHRONICLE, /date_from: localDayStart\(first\)/, 'начало локальных суток месяца');
-    assert.match(CHRONICLE, /date_to: localDayEnd\(last\)/, 'конец локальных суток месяца');
+    // Задача 608ecb79: границы месяца подменяются В ДЕРЕВЕ периода (тело-дерево
+    // и плоские `date_from`/`date_to` вместе сервер отвергает).
+    assert.match(
+      CHRONICLE,
+      /chronicleDefinitionForPeriod\(localDayStart\(first\), localDayEnd\(last\)\)/,
+      'начало/конец локальных суток месяца — в отборе-дереве',
+    );
     assert.ok(
       !/dayCounts\.set\(day\.day, day\.rows\.length\)/.test(CHRONICLE),
       'счётчики больше не берутся из периода-фильтрованной ленты',
@@ -97,8 +102,12 @@ describe('приёмка «Дневника» 0.10.1: счётчики кале�
 });
 
 describe('приёмка «Дневника» 0.10.1: состав панели — «Структуры» (пункт 6)', () => {
-  it('период — панельный вариант с режимами «Пресеты»/«Даты» и виджетом «список + сдвиг»', () => {
-    assert.match(PANEL, /variant: 'panel'/);
+  it('период — строка «Время записи» дерева; панельный вариант контрола цел', () => {
+    // Задача 608ecb79: панель больше не строит контрол периода сама — период
+    // живёт строкой «Время записи» единого редактора (профиль со временем), а
+    // панельный вариант общего контрола остаётся у других потребителей.
+    assert.match(PANEL, /chroniclePeriod\(/);
+    assert.match(PANEL, /OP_TIME/);
     assert.match(PERIOD_EDITOR, /variant === 'panel'/);
     assert.match(PERIOD_EDITOR, /pe-preset-bound/, 'строка пресет-границы');
     // Приёмка №3 (0.10.1): составная выпадашка пресетов убрана — её место
@@ -107,19 +116,15 @@ describe('приёмка «Дневника» 0.10.1: состав панели 
     assert.ok(!/periodPresets/.test(PERIOD_EDITOR), 'список составных пресетов удалён');
   });
 
-  it('секции идут набором «Структур», критерии целей — в targets', () => {
-    for (const title of [
-      'Ключевые слова',
-      'Типы мыслей',
-      'Типы связей',
-      'Родительские мысли',
-      'Дополнительно',
-    ]) {
-      assert.ok(PANEL.includes(`'${title}'`), `секция «${title}» на месте`);
-    }
-    assert.match(PANEL, /showScope: true/, 'чекбоксы области поиска');
-    assert.match(PANEL, /targetsCtx/, 'критерии целей — вложенной моделью targets');
-    assert.match(BUILDER, /out\.targets = buildWireFilter/, 'targets едет общим конвертером');
+  it('панель собирается единым редактором с профилем «Дневниковые записи»', () => {
+    // Задача 608ecb79 (ADR fc23f9c1): спец-секций в экране нет — условия это
+    // строки дерева, а вид строит общая фабрика с профилем `chronicle`.
+    assert.match(PANEL, /buildFilterEditor\(\{/, 'вид строит общая фабрика');
+    assert.match(PANEL, /FILTER_PROFILE = 'chronicle'/, 'профиль места — со временем');
+    assert.match(PANEL, /showScope: true/, 'чекбоксы области поиска строки поиска');
+    assert.match(PANEL, /OP_TARGETS, 'in'/, 'цели — под-выборка «в выборке»');
+    assert.match(PANEL, /kind: 'subquery'/, 'значение целей — под-выборка мыслей');
+    assert.match(BUILDER, /out\.targets = buildWireFilter/, 'плоская форма targets сохранена для v1');
   });
 
   it('убранное не вернулось: сторона связи, отдельная группа целей', () => {

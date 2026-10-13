@@ -198,19 +198,13 @@ describe('размер панели перетаскиванием границ�
 });
 
 describe('свёртываемость групп как в эталоне «Структур» (задача 2ebe4206)', () => {
-  it('«Дневник»: группа «Период» сворачивается', () => {
+  it('«Дневник»: сворачиваемых групп панели нет — период стал строкой дерева', () => {
+    // Задача 608ecb79 (ADR fc23f9c1): спец-секция «Период» растворена в строку
+    // «Время записи» единого редактора — своего состояния сворачивания у
+    // панели не осталось.
     const src = readText(resolve(RENDERER, 'screens', 'chronicle', 'filter-panel.ts'));
-    assert.match(
-      src,
-      /getCollapsed:\s*\(\)\s*=>\s*periodCollapsed,\s*setCollapsed:\s*\(v\)\s*=>\s*\(periodCollapsed\s*=\s*v\)/,
-      'период получает своё состояние сворачивания',
-    );
-    assert.match(src, /let periodCollapsed = true;/, 'по умолчанию свёрнута');
-    assert.match(
-      src,
-      /periodCollapsed = next\.dateFrom === '' && next\.dateTo === '';/,
-      'состояние пересчитывается при восстановлении отбора',
-    );
+    assert.match(src, /buildFilterEditor\(\{/, 'панель собирается общей фабрикой');
+    assert.ok(!src.includes('periodCollapsed'), 'своего состояния сворачивания периода нет');
   });
 
   it('«События»: период, пользователь и два словаря сворачиваются', () => {
