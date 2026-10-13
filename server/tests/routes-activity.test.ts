@@ -287,6 +287,78 @@ describe(
       }
     });
 
+    it('REST GET /activity и MCP etn.activity.list: ast-тело профиля «события» (задача 2b230e8e)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const created = await apiCreateThought(ctx, { title: 'Событие под AST' });
+        assert.equal(created.statusCode, 201);
+        const thoughtId = created.data.id as string;
+
+        const ast = {
+          version: 1,
+          filter: {
+            op: 'and',
+            children: [
+              { entity: { kind: 'action' }, operator: 'in', value: ['created'] },
+              { entity: { kind: 'entity_id' }, operator: 'eq', value: thoughtId },
+            ],
+          },
+        };
+        const query = `?ast=${encodeURIComponent(JSON.stringify(ast))}`;
+        const res = await apiListActivity(ctx, ctx.adminKey, query);
+        assert.equal(res.statusCode, 200, JSON.stringify(res));
+        assert.equal(res.meta.total, 1, 'одно событие создания нужной сущности');
+        assert.equal(res.data[0]!.action, 'created');
+        assert.equal(res.data[0]!.entity_id, thoughtId);
+
+        // XOR: ast вместе с плоским фильтром → 422.
+        const conflict = await apiListActivity(
+          ctx,
+          ctx.adminKey,
+          `?from_ms=0&ast=${encodeURIComponent(JSON.stringify(ast))}`,
+        );
+        assert.equal(conflict.statusCode, 422, 'ast + плоский фильтр → 422 (XOR)');
+
+        // Некорректный JSON в ast → 422.
+        const bad = await apiListActivity(ctx, ctx.adminKey, '?ast=%7Bnot-json');
+        assert.equal(bad.statusCode, 422);
+
+        // MCP: то же ast-тело даёт ту же строку (паритет транспортов).
+        const mcp = await buildMcpContext({
+          dataDir: ctx.dataDir,
+          networkId: ctx.networkId,
+          systemDb: ctx.sys,
+        });
+        const handle = await connectMcpClient(mcp, ctx.adminKey);
+        try {
+          const mcpRes = await handle.client.callTool({
+            name: 'etn.activity.list',
+            arguments: { network_id: ctx.networkId, ast },
+          });
+          assert.equal(mcpRes.isError, undefined, toolText(mcpRes));
+          const mcpPayload = toolJson(mcpRes) as {
+            data: Array<{ id: string }>;
+            meta: { total: number };
+          };
+          assert.equal(mcpPayload.meta.total, res.meta.total);
+          assert.deepEqual(
+            mcpPayload.data.map((r) => r.id),
+            res.data.map((r) => r.id),
+            'REST и MCP с одним ast дают один набор',
+          );
+        } finally {
+          await handle.close();
+          await closeMcpContext(mcp, {
+            dataDir: ctx.dataDir,
+            networkId: ctx.networkId,
+            systemDb: ctx.sys,
+          });
+        }
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('MCP etn.activity.list возвращает то же, что и REST /activity', async () => {
       // Используем единый MCP-контекст: создаём мысль через MCP и читаем ленту
       // обоими транспортами — REST и MCP должны вернуть идентичные данные.

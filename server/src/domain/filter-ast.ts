@@ -94,6 +94,12 @@ const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   record_body: ['kind'],
   record_author: ['kind'],
   record_editor: ['kind'],
+  // Профиль «события» (задача 2b230e8e): характеристики записи журнала активности.
+  occurred_at: ['kind'],
+  action: ['kind'],
+  entity_type: ['kind'],
+  entity_id: ['kind'],
+  user: ['kind'],
 };
 
 function fail(message: string, details: Record<string, unknown>, requestId?: string): never {

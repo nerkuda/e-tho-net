@@ -1772,6 +1772,10 @@ export const ActivityList = defineContract(
   'etn.activity.list',
   z.object({
     network_id: NetworkId,
+    // AST-тело профиля «события» (задача 2b230e8e, требование 3c91f418):
+    // операнды occurred_at/action/entity_type/entity_id/user; XOR с плоскими
+    // фильтрами — разбирает доменный `parseActivityListQuery`.
+    ast: FilterAstBody.optional(),
     from_ms: z.number().int().nonnegative().optional(),
     to_ms: z.number().int().nonnegative().optional(),
     user_id: z.string().min(1).optional(),
@@ -2064,6 +2068,9 @@ export const RestActivityList = defineContract(
   'rest:activity.list',
   z.object({
     network_id: NetworkId,
+    // AST-тело профиля «события» в query-параметре (JSON-объект, задача
+    // 2b230e8e): XOR с плоскими фильтрами.
+    ast: z.record(z.string(), z.unknown()).optional(),
     from_ms: z.number().int().min(0).optional(),
     to_ms: z.number().int().min(0).optional(),
     user_id: z.string().min(1).optional(),
@@ -2074,6 +2081,7 @@ export const RestActivityList = defineContract(
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
+    ast: { from: { kind: 'query' }, parse: parseRestActivityAst },
     from_ms: { from: { kind: 'query', coerce: 'int', min: 0 } },
     to_ms: { from: { kind: 'query', coerce: 'int', min: 0 } },
     user_id: { from: { kind: 'query' }, parse: singleQueryValue },
@@ -3836,6 +3844,27 @@ function parseRestLinkFilter(raw: unknown, requestId: string): LinkTypeFilterInp
     );
   }
   return parseLinkTypeFilterValue(decoded, requestId);
+}
+
+/**
+ * Разбор query-параметра `ast` у `GET /activity` (задача 2b230e8e): значение —
+ * JSON-объект тела отбора профиля «события» (та же форма, что у MCP-поля `ast`).
+ * Строгую форму проверяет доменный `parseFilterAst` позднее; здесь только
+ * JSON-декодирование строки запроса.
+ */
+function parseRestActivityAst(raw: unknown, requestId: string): unknown {
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof first !== 'string' || first === '') return undefined;
+  try {
+    return JSON.parse(first);
+  } catch {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'ast должен быть JSON-объектом тела отбора (version + filter).',
+      { field: 'ast' },
+      requestId,
+    );
+  }
 }
 
 /** GET /networks/:id/thoughts/:id/hierarchy — dir/show_inactive/show_trash/offset/link_filter. */

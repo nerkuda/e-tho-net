@@ -162,6 +162,12 @@ export const FILTER_AST_ENTITY_KINDS = [
   'record_body',
   'record_author',
   'record_editor',
+  // --- Профиль «События»: характеристики записи журнала активности (требование 1765e659) ---
+  'occurred_at',
+  'action',
+  'entity_type',
+  'entity_id',
+  'user',
 ] as const;
 /** Вид операнда AST (элемент {@link FILTER_AST_ENTITY_KINDS}). */
 export type FilterAstEntityKind = (typeof FILTER_AST_ENTITY_KINDS)[number];
@@ -223,7 +229,18 @@ export type FilterAstEntity =
   /** Автор записи (`created_by`). */
   | { kind: 'record_author' }
   /** Редактор записи (`updated_by`). */
-  | { kind: 'record_editor' };
+  | { kind: 'record_editor' }
+  // --- Профиль «События»: характеристики записи журнала активности (требование 1765e659) ---
+  /** «Время события» (`occurred_at_ms`) — сравнение, «между», токены времени. */
+  | { kind: 'occurred_at' }
+  /** «Тип действия» (`action`) — создано/изменено/удалено/… */
+  | { kind: 'action' }
+  /** «Вид сущности» (`entity_type`). */
+  | { kind: 'entity_type' }
+  /** «Сущность» (`entity_id`) — равно или под-выборка по мыслям. */
+  | { kind: 'entity_id' }
+  /** «Автор события» (`user_id`). */
+  | { kind: 'user' };
 
 /** Условие-лист: `[операнд][оператор][значение]` (+ снапшоты подписей). */
 export interface FilterAstLeaf {

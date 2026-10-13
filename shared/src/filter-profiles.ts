@@ -22,9 +22,13 @@
  *
  * **Подключение к точкам.** Профили `thoughts`/`publications` подключены к своим
  * точкам и участвуют в валидации AST (задача 7a798b17); профиль `map` описан
- * заранее. Профили `events` и `attachments` описаны, но к точкам ПОКА не
- * подключены — их AST-точки появляются задачами 2b230e8e и 5a007bed (осознанно;
- * до тех пор AST-валидация по операндам к семантическим профилям неприменима).
+ * заранее. Профиль `chronicle` подключён точкой `POST /chronicle/query`
+ * (задача 4752b065), профиль `events` — точкой `GET /activity` /
+ * `etn.activity.list` (задача 2b230e8e): их операнды — виды AST (`record_*` /
+ * `occurred_at`, `action`, `entity_type`, `entity_id`, `user`), AST исполняется
+ * единым исполнителем соответствующей точки. Профиль `attachments` описан, но к
+ * точке ПОКА не подключён — его AST-точка появляется задачей 5a007bed (осознанно;
+ * до тех пор AST-валидация по операндам к семантическому профилю неприменима).
  */
 
 import {
@@ -154,8 +158,12 @@ const CHRONICLE_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
 const EVENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
   occurred_at: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
   action: ['eq', 'ne', 'contains', 'not_contains', 'in', 'not_in'],
-  entity_type: ['in', 'not_in'],
-  entity_id: ['eq', 'ne'],
+  entity_type: ['eq', 'ne', 'in', 'not_in'],
+  // «По конкретной сущности — равно ИЛИ под-выборка по мыслям» (требование
+  // 1765e659): `eq`/`ne` — литеральный id; `in`/`not_in`/`all_of` — значение-
+  // под-выборка мыслей (операторы совместимы со значением-под-выборкой,
+  // AST_SUBQUERY_LEAF_OPS; `all_of` ↔ `value.operator = "all_in"`).
+  entity_id: ['eq', 'ne', 'in', 'not_in', 'all_of'],
   user: ['eq', 'ne', 'in', 'not_in'],
 };
 

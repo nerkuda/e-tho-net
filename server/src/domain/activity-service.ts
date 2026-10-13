@@ -24,11 +24,18 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  EtnError,
+  FILTER_AST_VERSION,
+  buildLikePattern,
   type ActivityAction,
   type ActivityEntityType,
   type ActivityListParams,
   type ActivityRow,
   type Comment,
+  type FilterAst,
+  type FilterAstLeaf,
+  type FilterAstListItem,
+  type FilterAstNode,
   type Layer,
   type Link,
   type LinkType,
@@ -41,6 +48,11 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { logger } from '../logger.js';
+import { buildThoughtIdSelect } from './query-service.js';
+import { parseFilterAst } from './filter-ast.js';
+import { assertFilterAstInProfile } from './filter-profile-validation.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { resolveGlobalDateTokens, scanStringForTokens } from './thought-type-view-tokens.js';
 import {
   snapshotAttachment,
   snapshotComment,
@@ -171,44 +183,357 @@ export interface ActivityListResult {
   offset: number;
 }
 
+// ---------------------------------------------------------------------------
+// Отбор событий на общий AST (задача 2b230e8e; требования 1765e659 «операнды
+// профиля», 3c91f418 «REST/MCP компилируются в общий AST»; ADR 06a15c16).
+//
+// Единый AST-путь: плоские параметры (from_ms/to_ms/user_id/entity_type/
+// entity_id) компилируются в AST профиля «события», он же исполняется над
+// `activity_log`. Второго исполнения фильтров нет. Свёртка/обрезка (`etn.ops`)
+// и пагинация остаются отдельными операциями.
+// ---------------------------------------------------------------------------
+
+/** Условие над `activity_log` + параметры. */
+interface ActivityClause {
+  sql: string;
+  args: unknown[];
+}
+
+/** Контекст раскрытия токенов и под-выборки «Сущность» (`entity_id`). */
+export interface ActivityListOptions {
+  /** Пользователь-контекст под-выборки мыслей (видимость `$user`/свойств). */
+  userId?: string;
+  /** Часы раскрытия токенов `$now`/`$hour*` (тесты). */
+  nowMs?: number;
+  /** Первый день недели сети (`$weekStart`/`$weekEnd`). */
+  firstDayOfWeek?: number;
+  /** Идентификатор запроса для диагностики. */
+  requestId?: string;
+}
+
+/** Плоские фильтры событий — несовместимы с AST-телом (XOR). */
+const ACTIVITY_FLAT_FIELDS = ['from_ms', 'to_ms', 'user_id', 'entity_type', 'entity_id'] as const;
+
+const activityUnsupported = (message: string, requestId?: string): never => {
+  throw new EtnError('VALIDATION_ERROR', message, { field: 'ast' }, requestId);
+};
+
+/** Раскрыть границу `occurred_at` (ms, ISO-строка или токен) в миллисекунды. */
+function resolveOccurredBound(raw: unknown, opts: ActivityListOptions): number {
+  const rawValue =
+    typeof raw === 'object' && raw !== null && !Array.isArray(raw) && 'token' in raw
+      ? (raw as { token?: unknown }).token
+      : raw;
+  if (typeof rawValue === 'number' && Number.isFinite(rawValue)) return rawValue;
+  if (typeof rawValue !== 'string' || rawValue.trim() === '') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      '«Время события»: ожидается миллисекунды, дата или токен.',
+      { field: 'occurred_at' },
+      opts.requestId,
+    );
+  }
+  const text = rawValue.trim();
+  const { known, unknown } = scanStringForTokens(text);
+  if (unknown.length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `«Время события»: неизвестный токен «${unknown[0]!.raw}».`,
+      { field: 'occurred_at', token: unknown[0]!.raw },
+      opts.requestId,
+    );
+  }
+  if (known.length === 0) {
+    const ms = Date.parse(text);
+    if (!Number.isNaN(ms)) return ms;
+  }
+  const { value, unresolved } = resolveGlobalDateTokens(text, {
+    ...(opts.nowMs !== undefined ? { now: () => new Date(opts.nowMs!) } : {}),
+    ...(opts.firstDayOfWeek !== undefined ? { firstDayOfWeek: opts.firstDayOfWeek } : {}),
+    // Профиль «события» несёт время (требование 0095daad, ADR 0c02ab4f).
+    withTime: true,
+  });
+  if (unresolved.length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `«Время события»: ${unresolved[0]!.message}`,
+      { field: 'occurred_at', token: unresolved[0]!.token },
+      opts.requestId,
+    );
+  }
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      '«Время события»: не удалось раскрыть значение времени.',
+      { field: 'occurred_at' },
+      opts.requestId,
+    );
+  }
+  return ms;
+}
+
+/** Список строк значения листа (`eq/ne` — одна, `in/not_in` — массив). */
+function activityStringList(value: unknown, operator: string, field: string, requestId?: string): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value) && value.every((v) => typeof v === 'string')) return value as string[];
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    `Операнд «${field}»: оператор «${operator}» требует строку или список строк.`,
+    { field },
+    requestId,
+  );
+}
+
+/** Условие «в списке / не в списке» по колонке. */
+function activityInClause(column: string, ids: string[], positive: boolean): ActivityClause {
+  if (ids.length === 0) return { sql: positive ? '0' : '1=1', args: [] };
+  return {
+    sql: `${column} ${positive ? 'IN' : 'NOT IN'} (${ids.map(() => '?').join(',')})`,
+    args: [...ids],
+  };
+}
+
+/** Идентификаторы мыслей из под-выборки «Сущность» (`entity_id`). */
+function activitySubqueryIds(ndb: NetworkDb, query: FilterAstNode, opts: ActivityListOptions): string[] {
+  const sel = buildThoughtIdSelect(ndb, opts.userId ?? '', {
+    sort: 'alpha',
+    order: 'asc',
+    limit: 1,
+    offset: 0,
+    ast: { version: FILTER_AST_VERSION, filter: query },
+  });
+  return (ndb.prepare(sel.sql).all(...sel.params) as Array<{ id: string }>).map((r) => r.id);
+}
+
+/** «Время события» (`occurred_at_ms`): сравнения/«между» с токенами времени. */
+function activityOccurredLeaf(node: FilterAstLeaf, opts: ActivityListOptions): ActivityClause {
+  const lower = (raw: unknown, strict: boolean): ActivityClause => ({
+    sql: `occurred_at_ms ${strict ? '>' : '>='} ?`,
+    args: [resolveOccurredBound(raw, opts)],
+  });
+  const upper = (raw: unknown, strict: boolean): ActivityClause => ({
+    sql: `occurred_at_ms ${strict ? '<' : '<='} ?`,
+    args: [resolveOccurredBound(raw, opts)],
+  });
+  const between = (value: unknown): ActivityClause => {
+    if (!Array.isArray(value) || value.length !== 2) {
+      activityUnsupported('«Время события»: оператор «между» требует две границы.', opts.requestId);
+    }
+    const bounds = value as FilterAstListItem[];
+    const a = lower(bounds[0], false);
+    const b = upper(bounds[1], false);
+    return { sql: `(${a.sql} AND ${b.sql})`, args: [...a.args, ...b.args] };
+  };
+  switch (node.operator) {
+    case 'gte':
+      return lower(node.value, false);
+    case 'gt':
+      return lower(node.value, true);
+    case 'lte':
+      return upper(node.value, false);
+    case 'lt':
+      return upper(node.value, true);
+    case 'between':
+      return between(node.value);
+    case 'not_between': {
+      const inner = between(node.value);
+      return { sql: `NOT ${inner.sql}`, args: inner.args };
+    }
+    default:
+      return activityUnsupported(`Оператор «${node.operator}» недопустим для «Времени события».`, opts.requestId);
+  }
+}
+
+/** Строковый лист (`action`/`entity_type`/`user`): равно/содержит/в списке. */
+function activityTextLeaf(node: FilterAstLeaf, column: string, opts: ActivityListOptions): ActivityClause {
+  const op = node.operator;
+  if (op === 'in' || op === 'not_in') {
+    const list = activityStringList(node.value, op, column, opts.requestId);
+    return activityInClause(column, list, op === 'in');
+  }
+  const raw = typeof node.value === 'string' ? node.value : undefined;
+  if (raw === undefined) {
+    return activityUnsupported(`Операнд «${column}»: оператор «${op}» требует строковое значение.`, opts.requestId);
+  }
+  switch (op) {
+    case 'eq':
+      return { sql: `${column} = ?`, args: [raw] };
+    case 'ne':
+      return { sql: `(${column} IS NULL OR ${column} <> ?)`, args: [raw] };
+    case 'contains':
+      return { sql: `unicode_lower(${column}) LIKE ? ESCAPE '\\'`, args: [buildLikePattern(raw.toLowerCase())] };
+    case 'not_contains':
+      return {
+        sql: `NOT (unicode_lower(${column}) LIKE ? ESCAPE '\\')`,
+        args: [buildLikePattern(raw.toLowerCase())],
+      };
+    default:
+      return activityUnsupported(`Операнд «${column}»: оператор «${op}» недопустим.`, opts.requestId);
+  }
+}
+
+/**
+ * «Сущность» (`entity_id`): `eq`/`ne` — литеральный id; `in`/`not_in` — список
+ * id или под-выборка мыслей; `all_of` — под-выборка мыслей («все цели», для
+ * скалярного `entity_id` тождественно вхождению). Требование 1765e659:
+ * «по конкретной сущности — равно ИЛИ под-выборка по мыслям».
+ */
+function activityEntityIdLeaf(ndb: NetworkDb, node: FilterAstLeaf, opts: ActivityListOptions): ActivityClause {
+  const value = node.value;
+  const isSubquery = typeof value === 'object' && value !== null && !Array.isArray(value) && 'query' in value;
+  switch (node.operator) {
+    case 'eq':
+    case 'ne': {
+      const list = activityStringList(value, node.operator, 'entity_id', opts.requestId);
+      const id = list[0];
+      if (id === undefined) return { sql: node.operator === 'eq' ? '0' : '1=1', args: [] };
+      return {
+        sql: node.operator === 'eq' ? 'entity_id = ?' : '(entity_id IS NULL OR entity_id <> ?)',
+        args: [id],
+      };
+    }
+    case 'in':
+    case 'not_in': {
+      const ids = isSubquery
+        ? activitySubqueryIds(ndb, (value as { query: FilterAstNode }).query, opts)
+        : activityStringList(value, node.operator, 'entity_id', opts.requestId);
+      return activityInClause('entity_id', ids, node.operator === 'in');
+    }
+    case 'all_of': {
+      if (!isSubquery) {
+        return activityUnsupported('«Сущность»: оператор all_of требует под-выборку мыслей.', opts.requestId);
+      }
+      const ids = activitySubqueryIds(ndb, (value as { query: FilterAstNode }).query, opts);
+      return activityInClause('entity_id', ids, true);
+    }
+    default:
+      return activityUnsupported(`Оператор «${node.operator}» недопустим для «Сущности».`, opts.requestId);
+  }
+}
+
+/** Условие узла AST событий над `activity_log`. */
+function activityAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: ActivityListOptions): ActivityClause {
+  if ('op' in node) {
+    if (node.op === 'not') {
+      const child = activityAstNodeClause(ndb, node.children[0]!, opts);
+      return { sql: `NOT (${child.sql})`, args: child.args };
+    }
+    const parts = node.children.map((c) => activityAstNodeClause(ndb, c, opts));
+    if (node.op === 'and') {
+      return parts.length === 0
+        ? { sql: '1=1', args: [] }
+        : { sql: `(${parts.map((p) => p.sql).join(' AND ')})`, args: parts.flatMap((p) => p.args) };
+    }
+    return parts.length === 0
+      ? { sql: '0', args: [] }
+      : { sql: `(${parts.map((p) => p.sql).join(' OR ')})`, args: parts.flatMap((p) => p.args) };
+  }
+  switch (node.entity.kind) {
+    case 'occurred_at':
+      return activityOccurredLeaf(node, opts);
+    case 'action':
+      return activityTextLeaf(node, 'action', opts);
+    case 'entity_type':
+      return activityTextLeaf(node, 'entity_type', opts);
+    case 'user':
+      return activityTextLeaf(node, 'user_id', opts);
+    case 'entity_id':
+      return activityEntityIdLeaf(ndb, node, opts);
+    default:
+      return activityUnsupported(`Операнд «${node.entity.kind}» не виден в профиле «события».`, opts.requestId);
+  }
+}
+
+/**
+ * Скомпилировать плоские параметры ленты в общий AST (требование 3c91f418).
+ * Воспроизводит прежнюю WHERE-семантику один-в-один: `from_ms`→`gte`, `to_ms`→
+ * `lte`, `user_id`→`eq`, `entity_type`→`in`, `entity_id`→`eq`.
+ */
+export function compileActivityToAst(params: ActivityListParams): FilterAst {
+  const parts: FilterAstNode[] = [];
+  if (params.from_ms !== undefined) {
+    parts.push({ entity: { kind: 'occurred_at' }, operator: 'gte', value: params.from_ms });
+  }
+  if (params.to_ms !== undefined) {
+    parts.push({ entity: { kind: 'occurred_at' }, operator: 'lte', value: params.to_ms });
+  }
+  if (params.user_id !== undefined && params.user_id !== null && params.user_id !== '') {
+    parts.push({ entity: { kind: 'user' }, operator: 'eq', value: params.user_id });
+  }
+  if (params.entity_type !== undefined && params.entity_type !== null && params.entity_type !== '') {
+    parts.push({ entity: { kind: 'entity_type' }, operator: 'in', value: [params.entity_type] });
+  }
+  if (params.entity_id !== undefined && params.entity_id !== null && params.entity_id !== '') {
+    parts.push({ entity: { kind: 'entity_id' }, operator: 'eq', value: params.entity_id });
+  }
+  const filter: FilterAstNode =
+    parts.length === 0 ? { op: 'and', children: [] } : parts.length === 1 ? parts[0]! : { op: 'and', children: parts };
+  return { version: FILTER_AST_VERSION, filter };
+}
+
+/**
+ * Разобрать запрос ленты (`GET /activity` / `etn.activity.list`) в параметры
+ * `listActivity`. `ast` XOR плоские фильтры (требование 3c91f418); строгая
+ * форма AST — доменный `parseFilterAst`, видимость операндов — по профилю
+ * «события» (проверяется в {@link listActivity}).
+ */
+export function parseActivityListQuery(
+  raw: Record<string, unknown>,
+  requestId: string,
+): ActivityListParams {
+  const out: ActivityListParams = { networkId: String(raw['network_id'] ?? '') };
+  const astRaw = raw['ast'];
+  if (astRaw !== undefined && astRaw !== null) {
+    const conflicts = ACTIVITY_FLAT_FIELDS.filter((f) => raw[f] !== undefined);
+    if (conflicts.length > 0) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'AST-тело (`ast`) несовместимо с плоскими фильтрами.',
+        { field: 'ast', conflicts },
+        requestId,
+      );
+    }
+    out.ast = parseFilterAst(astRaw, requestId);
+  } else {
+    if (raw['from_ms'] !== undefined) out.from_ms = raw['from_ms'] as number;
+    if (raw['to_ms'] !== undefined) out.to_ms = raw['to_ms'] as number;
+    if (raw['user_id'] !== undefined) out.user_id = raw['user_id'] as string;
+    if (raw['entity_type'] !== undefined) out.entity_type = raw['entity_type'] as string;
+    if (raw['entity_id'] !== undefined) out.entity_id = raw['entity_id'] as string;
+  }
+  if (raw['limit'] !== undefined) out.limit = raw['limit'] as number;
+  if (raw['offset'] !== undefined) out.offset = raw['offset'] as number;
+  return out;
+}
+
 /**
  * Прочитать ленту журнала активности с фильтрами и пагинацией
  * (REST `GET /activity`, MCP `etn.activity.list`).
  *
- * Фильтры комбинируются по AND; сортировка — `occurred_at_ms DESC` (как и
- * обещает операция 70dfe81d).
+ * Единый AST-путь (требование 3c91f418): явное `ast`-тело — как передано (с
+ * проверкой профиля «события» и красной диагностикой); плоские параметры —
+ * компилируются в AST. Фильтры комбинируются по AND; сортировка —
+ * `occurred_at_ms DESC` (как и обещает операция 70dfe81d).
  */
-export function listActivity(ndb: NetworkDb, params: ActivityListParams): ActivityListResult {
+export function listActivity(
+  ndb: NetworkDb,
+  params: ActivityListParams,
+  opts: ActivityListOptions = {},
+): ActivityListResult {
   const { limit, offset } = normalizeActivityPagination(params);
-  const where: string[] = ['network_id = ?'];
-  const args: unknown[] = [params.networkId];
-
-  if (params.from_ms !== undefined) {
-    where.push('occurred_at_ms >= ?');
-    args.push(params.from_ms);
+  let ast: FilterAst;
+  if (params.ast !== undefined) {
+    assertFilterAstInProfile(params.ast, 'events', opts.requestId);
+    const diag = diagnoseFilterAst(ndb, params.ast);
+    if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
+    ast = params.ast;
+  } else {
+    ast = compileActivityToAst(params);
   }
-  if (params.to_ms !== undefined) {
-    where.push('occurred_at_ms <= ?');
-    args.push(params.to_ms);
-  }
-  if (params.user_id !== undefined && params.user_id !== null && params.user_id !== '') {
-    where.push('user_id = ?');
-    args.push(params.user_id);
-  }
-  if (
-    params.entity_type !== undefined &&
-    params.entity_type !== null &&
-    params.entity_type !== ''
-  ) {
-    where.push('entity_type = ?');
-    args.push(params.entity_type);
-  }
-  if (params.entity_id !== undefined && params.entity_id !== null && params.entity_id !== '') {
-    where.push('entity_id = ?');
-    args.push(params.entity_id);
-  }
-
-  const whereClause = where.join(' AND ');
+  const clause = activityAstNodeClause(ndb, ast.filter, opts);
+  const whereClause = `network_id = ? AND (${clause.sql})`;
+  const args: unknown[] = [params.networkId, ...clause.args];
 
   const total = (
     ndb.prepare(`SELECT COUNT(*) AS c FROM activity_log WHERE ${whereClause}`).get(...args) as {

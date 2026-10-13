@@ -109,6 +109,11 @@ describe('реестр профилей контекста (задача 7a798b1
       record_body: true,
       record_author: true,
       record_editor: true,
+      occurred_at: true,
+      action: true,
+      entity_type: true,
+      entity_id: true,
+      user: true,
     };
     assert.deepEqual(
       [...FILTER_AST_ENTITY_KINDS].sort(),
@@ -122,19 +127,25 @@ describe('реестр профилей контекста (задача 7a798b1
     }
   });
 
-  it('AST-операнды профиля: множества для мыслей и хроники; null для иных сущностей', () => {
-    for (const id of ['thoughts', 'map', 'publications', 'chronicle'] as const) {
+  it('AST-операнды профиля: множества для мыслей, хроники и событий; null для иных сущностей', () => {
+    for (const id of ['thoughts', 'map', 'publications', 'chronicle', 'events'] as const) {
       assert.ok(filterProfileAstOperands(id) !== null, `${id}: операнды — виды AST`);
     }
-    for (const id of ['events', 'attachments'] as const) {
+    for (const id of ['attachments'] as const) {
       assert.equal(filterProfileAstOperands(id), null, `${id}: семантические операнды`);
     }
-    // Операнды профилей мыслей и хроники ⊆ словаря видов AST.
+    // Операнды AST-профилей ⊆ словаря видов AST.
     const kinds = new Set<string>(FILTER_AST_ENTITY_KINDS);
     for (const op of FILTER_PROFILES.thoughts.operands) assert.ok(kinds.has(op));
     for (const op of FILTER_PROFILES.chronicle.operands) assert.ok(kinds.has(op));
+    for (const op of FILTER_PROFILES.events.operands) assert.ok(kinds.has(op));
     // «Тождественность» (id) — новый операнд профиля мыслей (задача 4752b065).
     assert.ok(FILTER_PROFILES.thoughts.operands.includes('id'));
+    // «Сущность» событий несёт подвыборочные операторы (задача 2b230e8e, требование 1765e659).
+    const entityIdOps = FILTER_PROFILES.events.operand_operators!['entity_id']!;
+    for (const op of ['eq', 'ne', 'in', 'not_in', 'all_of'] as const) {
+      assert.ok(entityIdOps.includes(op), `entity_id: ${op}`);
+    }
   });
 
   it('профиль вложений: состав по требованию f67c85c1', () => {
@@ -200,6 +211,12 @@ describe('реестр профилей контекста (задача 7a798b1
     // Оператор не из набора своего операнда хроники — тоже отказ.
     assert.throws(
       () => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'eq', 'x'), 'chronicle'),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
+    // Операнд события виден событиям, но не мыслям (задача 2b230e8e).
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'occurred_at' }, 'gte', 0), 'events'));
+    assert.throws(
+      () => assertFilterAstInProfile(astLeaf({ kind: 'occurred_at' }, 'gte', 0), 'thoughts'),
       (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
     );
   });

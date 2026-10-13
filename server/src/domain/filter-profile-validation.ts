@@ -63,11 +63,13 @@ function collectViolations(
     out.push({ path: `${path}.operator`, kind: 'operator', value: node.operator });
   }
   // Значение-подвыборка несёт собственное под-дерево — проверяем и его.
-  // «Цели» хроники адресуют МЫСЛИ: подзапрос проверяется профилем «мысли»,
-  // а не профилем записи (иначе операнды мысли в нём были бы невидимы).
+  // Под-выборки, адресующие МЫСЛИ, проверяются профилем «мысли»: «Цели»
+  // хроники (`targets`) и «Сущность» событий (`entity_id` — «по конкретной
+  // сущности равно ИЛИ под-выборка по мыслям». Иначе операнды мысли в них были
+  // бы невидимы.
   const value = node.value;
   if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'query' in value) {
-    const nested = kind === 'targets' ? thoughtsScope : scope;
+    const nested = kind === 'targets' || kind === 'entity_id' ? thoughtsScope : scope;
     collectViolations(value.query, `${path}.value.query`, nested, thoughtsScope, out);
   }
 }
