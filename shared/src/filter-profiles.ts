@@ -24,11 +24,11 @@
  * точкам и участвуют в валидации AST (задача 7a798b17); профиль `map` описан
  * заранее. Профиль `chronicle` подключён точкой `POST /chronicle/query`
  * (задача 4752b065), профиль `events` — точкой `GET /activity` /
- * `etn.activity.list` (задача 2b230e8e): их операнды — виды AST (`record_*` /
- * `occurred_at`, `action`, `entity_type`, `entity_id`, `user`), AST исполняется
- * единым исполнителем соответствующей точки. Профиль `attachments` описан, но к
- * точке ПОКА не подключён — его AST-точка появляется задачей 5a007bed (осознанно;
- * до тех пор AST-валидация по операндам к семантическому профилю неприменима).
+ * `etn.activity.list` (задача 2b230e8e), профиль `attachments` — точкой
+ * `GET /networks/:id/attachments` / `etn.attachments.search` (задача 5a007bed):
+ * их операнды — виды AST (`record_*` / `occurred_at`, `action`, `entity_type`,
+ * `entity_id`, `user` / `name`, `kind`, `mime_type`, `owner`, `size`), AST
+ * исполняется единым исполнителем соответствующей точки.
  */
 
 import {
@@ -71,12 +71,12 @@ export type FilterTokenFamily = 'calendar' | 'time';
 /**
  * Профиль контекста точки применения.
  *
- * `operands` — допустимые операнды. Для точек, отбирающих МЫСЛИ, это виды
+ * `operands` — допустимые операнды точки. У всех подключённых точек это виды
  * операндов AST ({@link FilterAstEntityKind}) — тогда по профилю валидируется
- * AST. Для точки «хроника» это тоже виды AST-операндов записи дневника
- * (`record_*`, `targets`, требование 62475a6e): AST хроники исполняется единым
- * движком (задача 4752b065). Семантические идентификаторы остаются у профилей
- * «события»/«вложения» — их AST появится отдельными задачами под-проекта.
+ * AST: мысли (`thoughts`/`publications`/`map`), записи дневника (`record_*`,
+ * `targets`, требование 62475a6e), события (`occurred_at`…`user`, требование
+ * 1765e659), вложения (`name`…`size`, требование f67c85c1). Каждый такой профиль
+ * исполняется единым AST-движком своей точки.
  */
 export interface FilterProfile {
   id: FilterProfileId;
@@ -85,19 +85,20 @@ export interface FilterProfile {
   /** Целевая сущность отбора. */
   target: FilterProfileTarget;
   /**
-   * Допустимые операнды: виды AST (для точек на мысли) либо семантические
-   * идентификаторы характеристик целевой сущности.
+   * Допустимые операнды — виды AST ({@link FilterAstEntityKind}).
    *
    * **Конвенция семантических id** (решение оркестратора 2026-10-12): id операнда
    * НЕ обязан совпадать с SQL-колонкой (`name` — это `title`, `user` — `user_id`).
    * Id — стабильное имя характеристики для реестра и клиентского конструктора;
-   * привязка к колонке — забота будущего исполнителя AST соответствующей точки.
+   * привязка к колонке — забота исполнителя AST соответствующей точки.
    */
-  operands: readonly string[];
+  operands: readonly FilterAstEntityKind[];
   /**
-   * Операторы, допустимые для КАЖДОГО операнда семантического профиля (точки,
-   * отбирающие не-мысли). Для AST-профилей отсутствует: набор операторов по
-   * операнду задаёт доменный исполнитель (`query-service.ts`).
+   * Операторы, допустимые для КАЖДОГО операнда профиля. Несёт подмножество по
+   * видимым характеристикам (точки, отбирающие не-мысли: хроника, события,
+   * вложения). Отсутствует у профилей, где набор операторов по операнду задаёт
+   * доменный исполнитель (`query-service.ts`, отбор мыслей) — там действует
+   * объединённый словарь {@link FilterProfile.operators}.
    */
   operand_operators?: Readonly<Record<string, readonly FilterAstOperator[]>>;
   /**
@@ -274,9 +275,10 @@ export function filterProfileHasTime(id: FilterProfileId): boolean {
 
 /**
  * AST-операнды профиля — множество видов операндов AST, допустимых в этой точке
- * применения. `null`, когда операнды профиля — семантические идентификаторы
- * иной целевой сущности (AST в такой точке появится отдельной задачей);
- * тогда AST-валидация по операндам к профилю неприменима.
+ * применения. После подключения вложений (задача 5a007bed) все шесть профилей
+ * AST-профили, поэтому `null` практически недостижим; он сохранён контрактом
+ * (`null` — семантические операнды иной сущности, AST-валидация по операндам
+ * неприменима) на случай профиля, чьи операнды ещё не сведены к видам AST.
  */
 export function filterProfileAstOperands(
   id: FilterProfileId,
@@ -284,5 +286,5 @@ export function filterProfileAstOperands(
   const known = new Set<string>(FILTER_AST_ENTITY_KINDS);
   const operands = FILTER_PROFILES[id].operands;
   if (operands.length === 0 || !operands.every((o) => known.has(o))) return null;
-  return new Set(operands as readonly FilterAstEntityKind[]);
+  return new Set(operands);
 }

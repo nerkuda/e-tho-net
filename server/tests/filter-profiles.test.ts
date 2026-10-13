@@ -114,6 +114,11 @@ describe('реестр профилей контекста (задача 7a798b1
       entity_type: true,
       entity_id: true,
       user: true,
+      name: true,
+      kind: true,
+      mime_type: true,
+      owner: true,
+      size: true,
     };
     assert.deepEqual(
       [...FILTER_AST_ENTITY_KINDS].sort(),
@@ -127,24 +132,27 @@ describe('реестр профилей контекста (задача 7a798b1
     }
   });
 
-  it('AST-операнды профиля: множества для мыслей, хроники и событий; null для иных сущностей', () => {
-    for (const id of ['thoughts', 'map', 'publications', 'chronicle', 'events'] as const) {
+  it('AST-операнды профиля: множества для мыслей, хроники, событий и вложений', () => {
+    for (const id of ['thoughts', 'map', 'publications', 'chronicle', 'events', 'attachments'] as const) {
       assert.ok(filterProfileAstOperands(id) !== null, `${id}: операнды — виды AST`);
-    }
-    for (const id of ['attachments'] as const) {
-      assert.equal(filterProfileAstOperands(id), null, `${id}: семантические операнды`);
     }
     // Операнды AST-профилей ⊆ словаря видов AST.
     const kinds = new Set<string>(FILTER_AST_ENTITY_KINDS);
     for (const op of FILTER_PROFILES.thoughts.operands) assert.ok(kinds.has(op));
     for (const op of FILTER_PROFILES.chronicle.operands) assert.ok(kinds.has(op));
     for (const op of FILTER_PROFILES.events.operands) assert.ok(kinds.has(op));
+    for (const op of FILTER_PROFILES.attachments.operands) assert.ok(kinds.has(op));
     // «Тождественность» (id) — новый операнд профиля мыслей (задача 4752b065).
     assert.ok(FILTER_PROFILES.thoughts.operands.includes('id'));
     // «Сущность» событий несёт подвыборочные операторы (задача 2b230e8e, требование 1765e659).
     const entityIdOps = FILTER_PROFILES.events.operand_operators!['entity_id']!;
     for (const op of ['eq', 'ne', 'in', 'not_in', 'all_of'] as const) {
       assert.ok(entityIdOps.includes(op), `entity_id: ${op}`);
+    }
+    // «Владельцы» вложений — тоже подвыборочные операторы (задача 5a007bed).
+    const ownerOps = FILTER_PROFILES.attachments.operand_operators!['owner']!;
+    for (const op of ['in', 'not_in', 'all_of', 'in_hierarchy'] as const) {
+      assert.ok(ownerOps.includes(op), `owner: ${op}`);
     }
   });
 

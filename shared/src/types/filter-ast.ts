@@ -168,6 +168,12 @@ export const FILTER_AST_ENTITY_KINDS = [
   'entity_type',
   'entity_id',
   'user',
+  // --- Профиль «Вложения»: видимые характеристики вложения (требование f67c85c1) ---
+  'name',
+  'kind',
+  'mime_type',
+  'owner',
+  'size',
 ] as const;
 /** Вид операнда AST (элемент {@link FILTER_AST_ENTITY_KINDS}). */
 export type FilterAstEntityKind = (typeof FILTER_AST_ENTITY_KINDS)[number];
@@ -240,7 +246,25 @@ export type FilterAstEntity =
   /** «Сущность» (`entity_id`) — равно или под-выборка по мыслям. */
   | { kind: 'entity_id' }
   /** «Автор события» (`user_id`). */
-  | { kind: 'user' };
+  | { kind: 'user' }
+  // --- Профиль «Вложения»: видимые характеристики вложения (требование f67c85c1) ---
+  /**
+   * «Имя/заголовок» вложения (`title`) — равно/содержит/в списке/«Есть слова».
+   * Семантический id (`name`), колонка — `title` (конвенция реестра профилей).
+   */
+  | { kind: 'name' }
+  /** «Тип» вложения (`kind` = `file`/`url`) — равно/в списке. */
+  | { kind: 'kind' }
+  /** «MIME-подтип» (`mime_type`) — равно/содержит/в списке. */
+  | { kind: 'mime_type' }
+  /**
+   * «Владельцы» (`attachment_owners`): заполнено/не заполнено; в списке по ТИПУ
+   * владельца; под-выборка по мыслям-владельцам (`in`/`not_in`/`all_of`);
+   * «в иерархии» по мыслям-владельцам; количество (сравнения).
+   */
+  | { kind: 'owner' }
+  /** «Размер» (`file_size`, байты) — сравнения, «между», заполнено/не заполнено. */
+  | { kind: 'size' };
 
 /** Условие-лист: `[операнд][оператор][значение]` (+ снапшоты подписей). */
 export interface FilterAstLeaf {

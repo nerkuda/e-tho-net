@@ -1419,7 +1419,12 @@ export const AttachmentsSearch = defineContract(
   'etn.attachments.search',
   z.object({
     network_id: NetworkId,
-    q: z.string().min(1),
+    // `ast` XOR плоские фильтры (задача 5a007bed, требование f67c85c1): тело
+    // отбора профиля «вложения» (name/kind/mime_type/owner/size). При `ast`
+    // плоские `q`/`kind`/`exclude_owner_*` запрещены — разбирает доменный
+    // `parseAttachmentSearchQuery`; поэтому `q` здесь необязателен.
+    ast: FilterAstBody.optional(),
+    q: z.string().min(1).optional(),
     kind: z.enum(ATTACHMENT_KINDS).optional(),
     exclude_owner_type: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
     exclude_owner_id: z.string().min(1).optional(),
@@ -2081,7 +2086,7 @@ export const RestActivityList = defineContract(
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    ast: { from: { kind: 'query' }, parse: parseRestActivityAst },
+    ast: { from: { kind: 'query' }, parse: parseRestAstQueryParam },
     from_ms: { from: { kind: 'query', coerce: 'int', min: 0 } },
     to_ms: { from: { kind: 'query', coerce: 'int', min: 0 } },
     user_id: { from: { kind: 'query' }, parse: singleQueryValue },
@@ -2575,6 +2580,9 @@ export const RestAttachmentSearch = defineContract(
   z.object({ network_id: NetworkId }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
+    // AST-тело профиля «вложения» в query-параметре (JSON-объект, задача
+    // 5a007bed): XOR с плоскими фильтрами (`q`/`kind`/`exclude_owner_*`).
+    ast: { from: { kind: 'query' }, parse: parseRestAstQueryParam },
     q: { from: { kind: 'query' }, t: z.string().optional() },
     exclude_owner_type: {
       from: { kind: 'query' },
@@ -3847,12 +3855,13 @@ function parseRestLinkFilter(raw: unknown, requestId: string): LinkTypeFilterInp
 }
 
 /**
- * Разбор query-параметра `ast` у `GET /activity` (задача 2b230e8e): значение —
- * JSON-объект тела отбора профиля «события» (та же форма, что у MCP-поля `ast`).
- * Строгую форму проверяет доменный `parseFilterAst` позднее; здесь только
+ * Разбор query-параметра `ast` (JSON-объект тела отбора) в GET-путях —
+ * `GET /activity` (задача 2b230e8e) и `GET /attachments` (задача 5a007bed).
+ * Значение — та же форма, что у MCP-поля `ast` (`version` + `filter`). Строгую
+ * форму проверяет доменный `parseFilterAst` позднее; здесь только
  * JSON-декодирование строки запроса.
  */
-function parseRestActivityAst(raw: unknown, requestId: string): unknown {
+function parseRestAstQueryParam(raw: unknown, requestId: string): unknown {
   const first = Array.isArray(raw) ? raw[0] : raw;
   if (typeof first !== 'string' || first === '') return undefined;
   try {

@@ -282,10 +282,12 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'attachments.search',
     tool: 'etn.attachments.search',
     group: 'attachments',
-    when: 'найти вложения по ключевым словам (title/description/url/file_path)',
+    when:
+      'найти вложения по ключевым словам (title/description/url/file_path) ИЛИ отобрать их телом AST профиля «вложения» (имя/тип/MIME/владельцы/размер; XOR с плоскими фильтрами)',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
-      { name: 'q', required: true, desc: 'мини-синтаксис поиска: слова, `-слово`, `*`' },
+      { name: 'q', desc: 'мини-синтаксис поиска: слова, `-слово`, `*`; с `ast` несовместим' },
+      { name: 'ast', desc: 'тело отбора профиля «вложения» (`version`+`filter`); XOR с `q`/`kind`/`exclude_owner_*`' },
       { name: 'kind', desc: '`url` | `file`' },
       { name: 'exclude_owner_type', desc: 'скрыть владельцев этого типа' },
       { name: 'exclude_owner_id', desc: 'скрыть конкретного владельца' },
@@ -294,8 +296,10 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     ],
     destructive: false,
     readOnly: true,
-    effects: 'чтение, без записи.',
-    errors: '`VALIDATION_ERROR`.',
+    effects:
+      'чтение, без записи. Два пути (XOR): ключевые слова `q` (объединение title/description/url/file_path) ЛИБО тело `ast` — операнды `name` (заголовок: равно/содержит/в списке/«есть слова»), `kind` (file/url), `mime_type` (равно/содержит/в списке), `owner` (владельцы: заполнено/не заполнено; в списке по типу; под-выборка по мыслям-владельцам `in`/`not_in`/`all_of`; «в иерархии»; количество), `size` (байты: сравнения/«между»/заполнено). Грамматика AST — `etn.guide { topic: "thoughts.query" }`; порядок результата — `created_at DESC`.',
+    errors:
+      '`VALIDATION_ERROR` (в т.ч. XOR `ast` с плоскими фильтрами и операнд вне профиля «вложения»), красная диагностика (удалённая сущность).',
     paramsContract: AttachmentsSearch,
   },
   {

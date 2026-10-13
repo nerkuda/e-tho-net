@@ -90,6 +90,7 @@ import {
   copyAttachment,
   createAttachmentFromInputResult,
   listAttachmentUsage,
+  parseAttachmentSearchQuery,
   removeOwner,
   searchAttachments,
   updateAttachment,
@@ -147,6 +148,7 @@ import {
 } from '../context.js';
 import type { McpRuntime } from '../context.js';
 import { executeMentionsScan } from './shared.js';
+import { mcpTokenContext } from './token-context.js';
 import { PUBLICATION_OPS_HANDLERS } from './publications.js';
 import { GUIDE_TOPICS, GUIDE_TOPICS_BY_NAME, GUIDE_TOPIC_NAMES, OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, type OpEntry } from './ops-catalog.js';
 
@@ -399,14 +401,12 @@ const HANDLERS: Record<string, OpHandler> = {
     const a = p as unknown as z.infer<typeof AttachmentsSearch.schema>;
     return runTool(() => {
       const ndb = openMemberNetwork(rt, a.network_id);
-      const { items } = searchAttachments(ndb, {
-        q: a.q,
-        kind: a.kind,
-        exclude_owner_type: a.exclude_owner_type,
-        exclude_owner_id: a.exclude_owner_id,
-        limit: a.limit,
-        offset: a.offset,
-      });
+      // `ast` XOR плоские фильтры (задача 5a007bed) — разбирает домен.
+      const query = parseAttachmentSearchQuery({ ...a }, '');
+      // Контекст профиля «вложения»: время не несётся (withTime=false), нужен
+      // пользователь для под-выборки мыслей-владельцев.
+      const tokenCtx = mcpTokenContext(rt, a.network_id, 'attachments');
+      const { items } = searchAttachments(ndb, query, { userId: tokenCtx.userId });
       return items;
     });
   },

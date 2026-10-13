@@ -100,6 +100,12 @@ const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   entity_type: ['kind'],
   entity_id: ['kind'],
   user: ['kind'],
+  // Профиль «вложения» (задача 5a007bed): видимые характеристики вложения.
+  name: ['kind'],
+  kind: ['kind'],
+  mime_type: ['kind'],
+  owner: ['kind'],
+  size: ['kind'],
 };
 
 function fail(message: string, details: Record<string, unknown>, requestId?: string): never {
