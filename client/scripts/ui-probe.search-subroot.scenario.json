@@ -1,0 +1,123 @@
+{
+  "name": "search-subroot",
+  "description": "Строка поиска карты на едином редакторе (задача 8f3b2cf2, требование db84b5e1, ADR 7581ac14): онбординг → пробная сеть → базовая выдача БЕЗ подкорня (2 хита по именам: дочерняя мысль «Проба стенда» и внешняя «Проба вне стенда») → панель настроек: единый редактор профиля `thoughts` с дефолтными строками «Актуальность»/«Помечено на удаление» → строка подкорня «Родители + в иерархии» (по всем связям, значение HOME) → выдача сужается до 1 (внешняя мысль вне подкорня НЕ входит) → корпусный флажок «связи» переводит scope=links и убирает мысли-хиты. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.search-subroot.scenario.json --out .tmp/etn-8f3b2cf2/out",
+  "timeout": 150000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-search-state-baseline",
+      "eval": "(() => { window.etn.ui.setState('{{networkId}}', 'search_state', JSON.stringify({ q: 'Проба', options: { onlyThoughts: false, onlyLinks: false, onlyChrono: false, linkTypeIds: [], authorId: '', editorId: '' } })); return 'seeded'; })()"
+    },
+    {
+      "name": "create-outside-thought",
+      "api": {
+        "name": "create-outside-thought",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": { "title": "Проба вне стенда" },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    {
+      "name": "focus-search",
+      "eval": "(() => { const i = document.querySelector('.search-input'); if (i === null) return null; i.focus(); return true; })()"
+    },
+    {
+      "name": "panel-open",
+      "waitFor": "document.querySelector('.search-panel') !== null && !document.querySelector('.search-panel').classList.contains('hidden')"
+    },
+    { "name": "results-appear", "timeout": 20000, "waitFor": "document.querySelector('.search-results .search-hit') !== null" },
+    {
+      "name": "baseline-names-total",
+      "probe": "document.querySelector('.search-results .search-group .group-title')?.textContent ?? null",
+      "expect": "Найдено по именам (2)"
+    },
+
+    { "name": "open-settings", "eval": "(() => { const b = document.querySelector('.search-settings-toggle'); b.click(); return 'clicked'; })()" },
+    { "name": "editor-mounted", "timeout": 15000, "waitFor": "document.querySelector('.search-settings .fe .ft-group') !== null" },
+    {
+      "name": "default-visibility-rows",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.search-settings .ft-row')]; const what = rows.map((r) => r.querySelector('.ft-row__what')?.textContent?.trim() ?? '').join('|'); return rows.length === 2 && what.includes('Актуальность') && what.includes('Помечено на удаление'); })()",
+      "expect": true
+    },
+
+    { "name": "add-subroot-row", "eval": "(() => { document.querySelector('.search-settings .ft-add-condition').click(); return 'clicked'; })()" },
+    { "name": "subroot-row-appeared", "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"]') !== null" },
+    { "name": "open-operand-picker", "eval": "(() => { document.querySelector('.search-settings .ft-row[data-path=\"2\"] .ft-row__what').click(); return 'clicked'; })()" },
+    { "name": "parents-available", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"parents\"]') !== null" },
+    { "name": "pick-parents", "eval": "(() => { document.querySelector('.ft-choice__item[data-key=\"parents\"]').click(); return 'clicked'; })()" },
+    {
+      "name": "operand-is-parents",
+      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .ft-row__what')?.textContent?.includes('Родители') === true"
+    },
+    { "name": "open-operator-picker", "eval": "(() => { document.querySelector('.search-settings .ft-row[data-path=\"2\"] .ft-row__op').click(); return 'clicked'; })()" },
+    { "name": "in-hierarchy-available", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]') !== null" },
+    { "name": "pick-in-hierarchy", "eval": "(() => { document.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]').click(); return 'clicked'; })()" },
+    {
+      "name": "subroot-value-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .fv-entity .entity-combo-input') !== null"
+    },
+    {
+      "name": "type-home",
+      "eval": "(() => { const i = document.querySelector('.search-settings .ft-row[data-path=\"2\"] .fv-entity .entity-combo-input'); if (i === null) return null; i.focus(); i.value = 'HOME'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    { "name": "suggest-visible", "timeout": 15000, "waitFor": "document.querySelector('.type-combo-item') !== null" },
+    {
+      "name": "pick-home",
+      "eval": "(() => { const row = document.querySelector('.type-combo-item'); if (row === null) return null; row.click(); return 'picked'; })()"
+    },
+    {
+      "name": "home-chosen",
+      "timeout": 15500,
+      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .entity-combo-value')?.textContent?.includes('HOME') === true"
+    },
+    {
+      "name": "set-mode-all-links",
+      "eval": "(() => { const b = [...document.querySelectorAll('.search-settings .ft-row[data-path=\"2\"] .fv-mode button')].find((x) => x.textContent.trim() === 'по всем связям'); if (b === undefined) return null; b.click(); return 'clicked'; })()"
+    },
+    {
+      "name": "subroot-narrows-results",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.search-results .search-group .group-title')?.textContent?.trim() === 'Найдено по именам (1)'"
+    },
+    {
+      "name": "subroot-names-total",
+      "probe": "document.querySelector('.search-results .search-group .group-title')?.textContent ?? null",
+      "expect": "Найдено по именам (1)"
+    },
+
+    {
+      "name": "scope-links-on",
+      "eval": "(() => { const row = [...document.querySelectorAll('.search-settings .search-settings-row')].find((r) => r.textContent.includes('Места поиска')); if (row === undefined) return null; const inputs = row.querySelectorAll('input[type=checkbox]'); inputs[1].click(); return inputs[1].checked; })()"
+    },
+    {
+      "name": "scope-links-drops-thoughts",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.search-results .search-group .group-title')?.textContent?.trim() === 'Найдено по именам (0)'"
+    },
+    {
+      "name": "scope-links-names-total",
+      "probe": "document.querySelector('.search-results .search-group .group-title')?.textContent ?? null",
+      "expect": "Найдено по именам (0)"
+    },
+    {
+      "name": "no-operation-error",
+      "probe": "document.querySelector('.search-results .error-text') === null",
+      "expect": true
+    }
+  ]
+}

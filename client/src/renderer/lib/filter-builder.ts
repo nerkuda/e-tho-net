@@ -1306,97 +1306,202 @@ export function parseActivityCriteriaTreeDetailed(raw: unknown): {
 
 /**
  * Отбор строки поиска карты: общая модель критериев + поля этого экрана.
- * Общие `typeIds`/`linkTypeIds`/`authorId`/`editorId`/`trashed` берутся у
- * модели; группы результатов и поддерево — только у поиска.
+ *
+ * МЫСЛЕВЫЕ настройки — подкорень, типы мыслей, «показывать неактуальные»,
+ * «корзина» — выражаются ДЕРЕВОМ единого редактора (`tree`, профиль
+ * `thoughts`; требование db84b5e1/«Поиск карты: настройки отбора компилируются
+ * в общий AST…», ADR 7581ac14) и уходят на сервер телом `ast`. КОРПУСНЫЕ
+ * настройки полнотекстового поиска остаются плоскими: области поиска
+ * (`onlyThoughts`/`onlyLinks`/`onlyChrono` → `scope`), тип связи
+ * (`linkTypeIds` → `link_type_id`), автор/редактор (`authorId`/`editorId`) —
+ * они фильтруют ХИТЫ FTS, а не мысль, и в AST не компилируются.
  */
 export interface SearchCriteriaState extends FilterCriteriaState {
-  subtree: boolean;
-  /**
-   * Мысли-подкорни: поиск идёт среди потомков ЛЮБОЙ из них (объединение
-   * результатов). Пустой набор при `subtree` — прежнее поведение: подкорень =
-   * текущий фокус (задача a3247f84; до неё хранился один `subrootId`).
-   */
-  subrootIds: string[];
   onlyThoughts: boolean;
   onlyLinks: boolean;
   onlyChrono: boolean;
-  /** «Показывать неактуальные» (у поиска нет трёхзначной актуальности). */
-  showInactive: boolean;
-}
-
-/** Пустые настройки поиска. */
-export function defaultSearchCriteriaState(): SearchCriteriaState {
-  return {
-    ...defaultFilterCriteriaState(),
-    subtree: false,
-    subrootIds: [],
-    onlyThoughts: false,
-    onlyLinks: false,
-    onlyChrono: false,
-    showInactive: false,
-  };
 }
 
 /**
- * Читает сохранённые настройки поиска (`search_state`), в т.ч. записанные
- * ранее со старыми ключами (`subrootId`, `typeIds`, `linkTypeIds`,
- * `showInactive`, `authorId`, `editorId`) — одиночный `subrootId` прошлых
- * версий читается как набор из одной мысли.
+ * Дерево мыслевых настроек поиска по умолчанию: только актуальные и без
+ * корзины — прежние дефолты плоских флагов `showInactive=false`/`trashed=false`
+ * (сервер при явном `ast` дефолтов видимости НЕ добавляет — они обязаны быть в
+ * дереве; требование b91336e7).
+ */
+function defaultSearchVisibilityTree(): FilterTreeNode {
+  return {
+    kind: 'group',
+    op: 'and',
+    children: [
+      { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+      { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+    ],
+  };
+}
+
+/** Пустые настройки поиска (мыслевые настройки — дерево видимости). */
+export function defaultSearchCriteriaState(): SearchCriteriaState {
+  return {
+    ...defaultFilterCriteriaState(),
+    onlyThoughts: false,
+    onlyLinks: false,
+    onlyChrono: false,
+    tree: defaultSearchVisibilityTree(),
+  };
+}
+
+/** Признак плоского (прежнего) снимка: в нём есть хоть один мыслевой ключ. */
+function hasLegacySearchThoughtKeys(o: Record<string, unknown>): boolean {
+  return (
+    o['subtree'] === true ||
+    Array.isArray(o['subrootIds']) ||
+    typeof o['subrootId'] === 'string' ||
+    Array.isArray(o['typeIds']) ||
+    o['showInactive'] === true ||
+    o['trashed'] === true
+  );
+}
+
+/**
+ * Перенести ПРЕЖНИЙ плоский снимок мыслевых настроек поиска в дерево редактора
+ * (профиль `thoughts`): `showInactive`/`trashed` → строки видимости,
+ * `typeIds` → строка «Тип в иерархии», `subtree`+`subrootIds` → строка
+ * «Родители в иерархии» (подкорень; корень добавит {@link buildSearchAst}).
+ * Одиночный `subrootId` прошлых версий читается набором из одной мысли.
+ */
+function legacySearchThoughtTree(o: Record<string, unknown>): FilterTreeNode {
+  const children: FilterTreeNode[] = [];
+  if (o['showInactive'] !== true) {
+    children.push({ kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } });
+  }
+  if (o['trashed'] !== true) {
+    children.push({ kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } });
+  }
+  const typeIds = Array.isArray(o['typeIds'])
+    ? (o['typeIds'] as unknown[]).filter((v): v is string => typeof v === 'string' && v !== '')
+    : [];
+  if (typeIds.length > 0) {
+    children.push({
+      kind: 'leaf',
+      entity: { kind: 'type' },
+      operator: 'in_hierarchy',
+      value: { kind: 'list', items: [...typeIds] },
+    });
+  }
+  const subroots = Array.isArray(o['subrootIds'])
+    ? (o['subrootIds'] as unknown[]).filter((v): v is string => typeof v === 'string' && v !== '')
+    : typeof o['subrootId'] === 'string' && o['subrootId'] !== ''
+      ? [o['subrootId']]
+      : [];
+  if (o['subtree'] === true && subroots.length > 0) {
+    children.push({
+      kind: 'leaf',
+      entity: { kind: 'parents' },
+      operator: 'in_hierarchy',
+      mode: 'all_links',
+      value: { kind: 'list', items: [...subroots] },
+    });
+  }
+  return { kind: 'group', op: 'and', children };
+}
+
+/**
+ * Читает сохранённые настройки поиска (`search_state`): корпусные ключи —
+ * прежними плоскими (`onlyThoughts`/`onlyLinks`/`onlyChrono`, `linkTypeIds`,
+ * `authorId`, `editorId`); мыслевые — из нового AST-снимка (`ast`) либо, для
+ * записей прежних версий, миграцией плоских ключей в дерево
+ * ({@link legacySearchThoughtTree}). Сеть без своей записи получает дефолт.
  */
 export function parseSearchCriteria(raw: unknown): SearchCriteriaState {
   const next = defaultSearchCriteriaState();
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return next;
   const o = raw as Record<string, unknown>;
-  if (o['subtree'] === true) next.subtree = true;
-  if (Array.isArray(o['subrootIds'])) {
-    next.subrootIds = (o['subrootIds'] as string[]).slice();
-  } else if (typeof o['subrootId'] === 'string') {
-    // Совместимость с `search_state`, записанным до 0.8.2.
-    next.subrootIds = [o['subrootId']];
-  }
   if (o['onlyThoughts'] === true) next.onlyThoughts = true;
   if (o['onlyLinks'] === true) next.onlyLinks = true;
   if (o['onlyChrono'] === true) next.onlyChrono = true;
-  if (Array.isArray(o['typeIds'])) next.typeIds = (o['typeIds'] as string[]).slice();
   if (Array.isArray(o['linkTypeIds'])) next.linkTypeIds = (o['linkTypeIds'] as string[]).slice();
-  if (o['showInactive'] === true) next.showInactive = true;
-  if (o['trashed'] === true) next.trashed = true;
   if (typeof o['authorId'] === 'string') next.authorId = o['authorId'];
   if (typeof o['editorId'] === 'string') next.editorId = o['editorId'];
+  if (isFilterAstWire(o['ast'])) {
+    const parsed = parseFilterAstState(o['ast'], {});
+    next.tree = parsed.tree ?? defaultFilterTreeGroup('and');
+  } else if (hasLegacySearchThoughtKeys(o)) {
+    next.tree = legacySearchThoughtTree(o);
+  }
   return next;
 }
 
 /**
- * Мысли-подкорни, по которым пойдёт серверный поиск: при включённом `subtree`
- * — выбранные пользователем, а если их не выбрали — текущий фокус (прежнее
- * поведение); без ограничения — один `null` («без подкорня»). Чистая функция:
- * строку поиска с несколькими подкорнями обслуживает объединение запросов.
+ * Собрать AST МЫСЛЕВЫХ настроек строки поиска карты из дерева редактора
+ * (профиль `thoughts`). Строка «Родители в иерархии» (подкорень) расширяется
+ * до «ИЛИ(id в [корни], `parents` in_hierarchy [корни] режим `all_links`)» —
+ * так в подкорень входит САМ корень (паритет с прежним `from_thought_id`;
+ * лист `parents`+`in_hierarchy` матчит только потомков; требование b91336e7,
+ * ADR 7581ac14). Пустое значение строки подкорня при заданном `focusId` —
+ * прежнее поведение «ограничение включено, мысль не выбрана → текущий фокус».
+ *
+ * `undefined` — мыслевых условий нет (пустое дерево): вызывающий не передаёт
+ * `ast`, и сервер применяет дефолты видимости сам.
  */
-export function searchSubtreeRoots(
-  state: SearchCriteriaState,
-  focusId: string | null,
-): Array<string | null> {
-  if (!state.subtree) return [null];
-  return state.subrootIds.length > 0 ? state.subrootIds.slice() : [focusId];
+export function buildSearchAst(state: FilterCriteriaState, focusId: string | null): FilterAst | undefined {
+  const tree = state.tree ?? null;
+  if (!filterTreeHasAnyCriteria(tree)) return undefined;
+  return {
+    version: FILTER_AST_VERSION,
+    filter: filterTreeToAst(expandSearchSubtreeRoots(tree as FilterTreeNode, focusId)),
+  };
 }
 
-/** Часть параметров серверного поиска, вырастающая из критериев отбора. */
+/**
+ * Расширить строки-подкорни («Родители в иерархии») до «ИЛИ(id в [корни],
+ * parents in_hierarchy [корни] режим `all_links`)». Значение-скаляр читается
+ * как корень из одной мысли; пустой список при `focusId` берёт текущий фокус.
+ */
+function expandSearchSubtreeRoots(node: FilterTreeNode, focusId: string | null): FilterTreeNode {
+  if (node.kind === 'group') {
+    return { ...node, children: node.children.map((c) => expandSearchSubtreeRoots(c, focusId)) };
+  }
+  if (node.entity.kind !== 'parents' || node.operator !== 'in_hierarchy') return node;
+  const items =
+    node.value.kind === 'list'
+      ? node.value.items
+      : node.value.kind === 'scalar'
+        ? [node.value.value]
+        : [];
+  const ids = items.filter((it): it is string => typeof it === 'string' && it !== '');
+  const roots = ids.length > 0 ? ids : focusId !== null ? [focusId] : [];
+  if (roots.length === 0) return node;
+  return {
+    kind: 'group',
+    op: 'or',
+    children: [
+      { kind: 'leaf', entity: { kind: 'id' }, operator: 'in', value: { kind: 'list', items: [...roots] } },
+      {
+        kind: 'leaf',
+        entity: { kind: 'parents' },
+        operator: 'in_hierarchy',
+        mode: 'all_links',
+        value: { kind: 'list', items: [...roots] },
+      },
+    ],
+  };
+}
+
+/**
+ * Часть параметров серверного поиска, вырастающая из КОРПУСНЫХ настроек
+ * строки поиска: тип связи и автор/редактор (фильтруют ХИТЫ FTS, а не мысль).
+ * Мыслевые настройки уходят в `ast` ({@link buildSearchAst}), НЕ в плоские
+ * параметры (требование b91336e7: `ast` XOR плоские мыслевые параметры).
+ */
 export interface SearchCriteriaWire {
-  type_id?: string[];
   link_type_id?: string[];
-  show_inactive: boolean;
-  trashed: boolean;
   author_id?: string;
   editor_id?: string;
 }
 
-/** Конвертер критериев поиска в параметры запроса (без `q`/`scope`/подкорня). */
+/** Конвертер корпусных настроек поиска в параметры запроса (без `q`/`scope`). */
 export function buildSearchCriteriaWire(state: SearchCriteriaState): SearchCriteriaWire {
-  const out: SearchCriteriaWire = {
-    show_inactive: state.showInactive,
-    trashed: state.trashed,
-  };
-  if (state.typeIds.length > 0) out.type_id = state.typeIds.slice();
+  const out: SearchCriteriaWire = {};
   if (state.linkTypeIds.length > 0) out.link_type_id = state.linkTypeIds.slice();
   if (state.authorId.trim() !== '') out.author_id = state.authorId;
   if (state.editorId.trim() !== '') out.editor_id = state.editorId;
@@ -1404,26 +1509,25 @@ export function buildSearchCriteriaWire(state: SearchCriteriaState): SearchCrite
 }
 
 /**
- * Конвертер критериев поиска в сохраняемый L4-набор `search_state` — те же
- * ключи, что писал клиент до 0.8.2 (совместимость чтения сохранённого без
- * миграции). Подкорней теперь набор (`subrootIds`); одиночный `subrootId`
- * прошлых версий пишется первым элементом набора — старый клиент прочтёт его.
+ * Конвертер настроек поиска в сохраняемый L4-набор `search_state`: корпусные
+ * ключи — прежними плоскими именами, мыслевые — AST-снимком дерева (`ast`).
+ * Запись читается тем же {@link parseSearchCriteria} без потерь; снимок
+ * прежних версий (без `ast`) мигрирует плоские мыслевые ключи в дерево.
  */
 export function searchCriteriaToStored(state: SearchCriteriaState): Record<string, unknown> {
-  return {
-    subtree: state.subtree,
-    subrootIds: state.subrootIds.slice(),
-    subrootId: state.subrootIds[0] ?? null,
+  const out: Record<string, unknown> = {
     onlyThoughts: state.onlyThoughts,
     onlyLinks: state.onlyLinks,
     onlyChrono: state.onlyChrono,
-    typeIds: state.typeIds.slice(),
     linkTypeIds: state.linkTypeIds.slice(),
-    showInactive: state.showInactive,
-    trashed: state.trashed,
     authorId: state.authorId,
     editorId: state.editorId,
   };
+  const tree = state.tree ?? null;
+  if (filterTreeHasAnyCriteria(tree)) {
+    out['ast'] = { version: FILTER_AST_VERSION, filter: filterTreeToAst(tree as FilterTreeNode) };
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ import {
   FILTER_SORTS,
   authorFilterActive,
   buildChronicleWire,
+  buildSearchAst,
   buildSearchCriteriaWire,
   buildWireFilter,
   compileActivityCriteriaToAst,
@@ -41,7 +42,8 @@ import {
   parseFilterDefinition,
   parseSearchCriteria,
   searchCriteriaToStored,
-  searchSubtreeRoots,
+  type FilterCriteriaState,
+  type SearchCriteriaState,
 } from '../src/renderer/lib/filter-builder.js';
 
 const EMPTY_REGISTRY = new Map<string, NetworkProperty>();
@@ -132,51 +134,159 @@ describe('единая модель состояния переживает со
     assert.deepEqual(state.actions, ['created']);
   });
 
-  it('строка поиска карты: набор настроек переживает сохранение', () => {
-    const state = {
+  it('строка поиска карты: настройки переживают сохранение (мыслевые — AST, корпусные — плоские)', () => {
+    const state: SearchCriteriaState = {
       ...defaultSearchCriteriaState(),
-      subtree: true,
-      subrootIds: ['root-1', 'root-2'],
       onlyLinks: true,
-      typeIds: ['t1', 't2'],
       linkTypeIds: ['l1'],
-      trashed: true,
       authorId: 'u1',
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+          { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+          {
+            kind: 'leaf',
+            entity: { kind: 'type' },
+            operator: 'in_hierarchy',
+            value: { kind: 'list', items: ['t1', 't2'] },
+          },
+          {
+            kind: 'leaf',
+            entity: { kind: 'parents' },
+            operator: 'in_hierarchy',
+            mode: 'all_links',
+            value: { kind: 'list', items: ['root-1', 'root-2'] },
+          },
+        ],
+      },
     };
     const back = parseSearchCriteria(searchCriteriaToStored(state));
     assert.deepEqual(back, state, 'записанное читается тем же парсером');
   });
 
-  it('строка поиска карты: одиночный `subrootId` прошлых версий читается набором', () => {
-    const back = parseSearchCriteria({ subtree: true, subrootId: 'root-1' });
-    assert.equal(back.subtree, true);
-    assert.deepEqual(back.subrootIds, ['root-1'], 'старый ключ — набор из одной мысли');
+  it('строка поиска карты: прежний плоский снимок мигрирует в дерево редактора', () => {
+    const back = parseSearchCriteria({
+      subtree: true,
+      subrootId: 'root-1',
+      typeIds: ['t1'],
+      showInactive: false,
+      trashed: false,
+      onlyLinks: true,
+    });
+    // Одиночный `subrootId` — корень из одной мысли; строка подкорня хранит
+    // только «Родители в иерархии» (корень добавит buildSearchAst).
+    assert.deepEqual(back.tree, {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+        { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+        { kind: 'leaf', entity: { kind: 'type' }, operator: 'in_hierarchy', value: { kind: 'list', items: ['t1'] } },
+        {
+          kind: 'leaf',
+          entity: { kind: 'parents' },
+          operator: 'in_hierarchy',
+          mode: 'all_links',
+          value: { kind: 'list', items: ['root-1'] },
+        },
+      ],
+    });
+    assert.equal(back.onlyLinks, true, 'корпусные ключи читаются как прежде');
   });
 });
 
 // ---------------------------------------------------------------------------
-// 1b. Мысли-подкорни запроса поиска (задача a3247f84)
+// 1b. AST мыслевых настроек строки поиска (задача 8f3b2cf2)
 // ---------------------------------------------------------------------------
 
-describe('мысли-подкорни запроса поиска', () => {
-  it('выключенный флажок — поиск без подкорня', () => {
-    const state = { ...defaultSearchCriteriaState(), subrootIds: ['a', 'b'] };
-    assert.deepEqual(searchSubtreeRoots(state, 'focus-1'), [null]);
+describe('AST мыслевых настроек строки поиска', () => {
+  it('пустое дерево — AST нет (сервер применяет дефолты видимости сам)', () => {
+    const state = { ...defaultSearchCriteriaState(), tree: null };
+    assert.equal(buildSearchAst(state, 'focus-1'), undefined);
   });
 
-  it('пустой набор при включённом флажке — запасной вариант «текущий фокус»', () => {
-    const state = { ...defaultSearchCriteriaState(), subtree: true };
-    assert.deepEqual(searchSubtreeRoots(state, 'focus-1'), ['focus-1']);
-    assert.deepEqual(searchSubtreeRoots(state, null), [null]);
+  it('дефолт — только актуальные и без корзины (паритет прежних плоских флагов)', () => {
+    const ast = buildSearchAst(defaultSearchCriteriaState(), null);
+    assert.deepEqual(ast?.filter, {
+      op: 'and',
+      children: [
+        { entity: { kind: 'active' }, operator: 'eq', value: true },
+        { entity: { kind: 'trashed' }, operator: 'eq', value: false },
+      ],
+    });
   });
 
-  it('выбранные мысли — по запросу на каждую (объединение поддеревьев)', () => {
-    const state = {
+  it('подкорень расширяется до «ИЛИ(id в [корни], parents in_hierarchy [корни] all_links)»', () => {
+    const state: FilterCriteriaState = {
       ...defaultSearchCriteriaState(),
-      subtree: true,
-      subrootIds: ['a', 'b'],
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'parents' },
+            operator: 'in_hierarchy',
+            mode: 'all_links',
+            value: { kind: 'list', items: ['a', 'b'] },
+          },
+        ],
+      },
     };
-    assert.deepEqual(searchSubtreeRoots(state, 'focus-1'), ['a', 'b']);
+    const ast = buildSearchAst(state, null);
+    assert.deepEqual(ast?.filter, {
+      op: 'and',
+      children: [
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'id' }, operator: 'in', value: ['a', 'b'] },
+            { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: ['a', 'b'] },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('пустая строка подкорня берёт текущий фокус (прежнее поведение)', () => {
+    const state: FilterCriteriaState = {
+      ...defaultSearchCriteriaState(),
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'parents' },
+            operator: 'in_hierarchy',
+            mode: 'all_links',
+            value: { kind: 'none' },
+          },
+        ],
+      },
+    };
+    const withFocus = buildSearchAst(state, 'focus-1');
+    assert.deepEqual(withFocus?.filter, {
+      op: 'and',
+      children: [
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'id' }, operator: 'in', value: ['focus-1'] },
+            { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: ['focus-1'] },
+          ],
+        },
+      ],
+    });
+    const withoutFocus = buildSearchAst(state, null);
+    assert.deepEqual(withoutFocus?.filter, {
+      op: 'and',
+      children: [
+        { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links' },
+      ],
+    });
   });
 });
 
@@ -267,14 +377,17 @@ describe('выравненные возможности отбора', () => {
     assert.deepEqual(neAst?.filter, { entity: { kind: 'user' }, operator: 'ne', value: 'u3' });
   });
 
-  it('строка поиска хранит типы массивом (а не одним id)', () => {
+  it('строка поиска: корпусной wire несёт только тип связи и автор/редактор', () => {
     const wire = buildSearchCriteriaWire({
       ...defaultSearchCriteriaState(),
       typeIds: ['t1', 't2'],
       linkTypeIds: ['l1', 'l2'],
+      authorId: 'u1',
+      editorId: 'u2',
     });
-    assert.deepEqual(wire.type_id, ['t1', 't2']);
-    assert.deepEqual(wire.link_type_id, ['l1', 'l2']);
+    // Мыслевые настройки (типы мыслей, подкорень, видимость) в AST, а НЕ в
+    // плоских параметрах (требование b91336e7: `ast` XOR плоские мыслевые).
+    assert.deepEqual(wire, { link_type_id: ['l1', 'l2'], author_id: 'u1', editor_id: 'u2' });
   });
 
   // Задача 77923b49: настройка «Показывать содержимое корзины» гасит критерий

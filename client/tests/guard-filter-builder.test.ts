@@ -78,16 +78,16 @@ const APPLY_SITES = (rel: string): boolean => rel.startsWith('screens/') || rel.
 
 /**
  * Известные места единого редактора (версия 0.13.1): диалог отбора типа мысли,
- * панели «Структур»/«Дневника», лента «Событий». Строка поиска карты — пятое
- * место — в правила спец-секций НЕ включена: точка поиска — FTS, не AST-точка
- * (решение оркестратора), покрытие добавит отдельная задача; модель и конвертер
- * её стерегут общими правилами {@link APPLY_SITES}.
+ * панели «Структур»/«Дневника», лента «Событий», строка поиска карты (пятое
+ * место; задача 8f3b2cf2 — снято прежнее исключение строки поиска из правил
+ * спец-секций).
  */
 const EDITOR_PLACE_FILES: ReadonlySet<string> = new Set([
   'screens/thought-type/filter-dialog.ts',
   'screens/structures/filter-panel.ts',
   'screens/chronicle/filter-panel.ts',
   'screens/activity/activity.ts',
+  'search/search.ts',
 ]);
 
 /**
