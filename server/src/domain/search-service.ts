@@ -1196,6 +1196,43 @@ function norm(value: string): string {
   return value.normalize('NFC').trim().toLowerCase();
 }
 
+/** Whole-term matcher of one stored `*`-synonym plus its cheap prefilter markers. */
+interface AnchoredWildcardPattern {
+  regex: RegExp;
+  markers: MentionPrefilterMarkers;
+}
+
+/**
+ * Cache of anchored wildcard-synonym matchers, keyed by `synonym_norm`
+ * (ошибка 5e35eb7b).
+ *
+ * {@link findDuplicates} evaluates EVERY `*`-synonym of the network against
+ * EVERY input term; on a network with thousands of wildcard synonyms that was
+ * thousands of `new RegExp` compilations per call (the CPU-profile hot frame
+ * behind the 0.8–1.9 s standalone cost), even though the patterns are stable
+ * between edits. A pattern is compiled at most once per process per
+ * `synonym_norm`; the cache is capped and cleared wholesale when full — terms
+ * are cheap to recompile and a per-entry LRU would cost more than it saves.
+ * Shared `RegExp` objects are safe here: the anchored match uses `.test()`
+ * without the `g` flag, so there is no `lastIndex` state.
+ */
+const anchoredWildcardCache = new Map<string, AnchoredWildcardPattern>();
+const ANCHORED_WILDCARD_CACHE_MAX = 8192;
+
+/** Returns the anchored wildcard matcher for `synonymNorm`, compiling it at most once. */
+function anchoredWildcardFor(synonymNorm: string): AnchoredWildcardPattern {
+  let pat = anchoredWildcardCache.get(synonymNorm);
+  if (pat === undefined) {
+    if (anchoredWildcardCache.size >= ANCHORED_WILDCARD_CACHE_MAX) anchoredWildcardCache.clear();
+    pat = {
+      regex: new RegExp(`^(?:${synonymPatternSource(synonymNorm)})$`, 'iu'),
+      markers: mentionPrefilterMarkers(synonymNorm),
+    };
+    anchoredWildcardCache.set(synonymNorm, pat);
+  }
+  return pat;
+}
+
 /**
  * Find existing thoughts that look like duplicates of the proposed
  * `title`/`synonyms` (docs/08-ui-spec.md add-thought dialog; MCP
@@ -1426,16 +1463,20 @@ export function findDuplicates(
         // correct if that upstream normalisation ever changes and matches the
         // neighbouring `buildLikePattern(word.toLowerCase())` callers.
         const pattern = buildLikePattern(word.toLowerCase());
+        // The synonym half of the clause is an UNCORRELATED `IN (SELECT …)`.
+        // `thought_synonyms_v` is a layer-chain view: a correlated `EXISTS`
+        // makes SQLite re-evaluate the whole view once per outer thought
+        // (measured on 5 000 thoughts × 3 500 synonyms: 1 194 ms for one word),
+        // while the uncorrelated subquery is materialised once and probed by id
+        // (1.3 ms) — same result set, ~900× cheaper (ошибка 5e35eb7b).
         const clause =
-          "(title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
-          " WHERE ts.thought_id = thoughts.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
+          "(title_norm LIKE ? ESCAPE '\\' OR thoughts.id IN (SELECT ts.thought_id" +
+          " FROM thought_synonyms_v ts WHERE ts.synonym_norm LIKE ? ESCAPE '\\'))";
         conditions.push(negate ? `NOT ${clause}` : clause);
         params.push(pattern, pattern);
       };
       for (const word of keywords.include) push(word, false);
       for (const word of keywords.exclude) push(word, true);
-      // `thoughts_v thoughts` — alias keeps the correlated EXISTS reference
-      // (`thoughts.id`) valid against the view.
       // Bug a01893c7-ed1e-4c1b-a215-d4398135e049: filter trashed rows out of
       // partial-match candidates.
       let partialRows = ndb
@@ -1500,13 +1541,26 @@ export function findDuplicates(
     // the add-thought dialog would treat «Грабли» as an exact duplicate of
     // the whole phrase (08-ui-spec.md §4.4: «`*`-паттерн синонима совпал со
     // вводом»).
-    for (const r of wildSynRows) {
-      const anchored = new RegExp(`^(?:${synonymPatternToRegex(r.synonym_norm).source})$`, 'iu');
-      if (!anchored.test(n)) continue;
-      const hit = ensure(r);
-      if (hit.matched_on === 'partial') {
-        hit.matched_on = 'synonym';
-        hit.matched_synonym = r.synonym;
+    //
+    // Performance (ошибка 5e35eb7b): matchers come from a compile cache, and
+    // every pattern first passes a cheap conservative prefilter over the term —
+    // the same «string sieves before regex» trick as the §21 mentions scan
+    // ({@link mentionPrefilterPass}). A pattern whose literal chunks are absent
+    // from the term cannot match, so the regex is skipped for the vast majority
+    // of the network's wildcard synonyms. The term's folded form and word-token
+    // set are computed once per term, not per pattern.
+    if (wildSynRows.length > 0) {
+      const foldedTerm = foldCase(n);
+      const foldedWords = new Set(splitMentionWords(n).map(foldCase));
+      for (const r of wildSynRows) {
+        const pat = anchoredWildcardFor(r.synonym_norm);
+        if (!mentionPrefilterPass(pat.markers, foldedTerm, foldedWords)) continue;
+        if (!pat.regex.test(n)) continue;
+        const hit = ensure(r);
+        if (hit.matched_on === 'partial') {
+          hit.matched_on = 'synonym';
+          hit.matched_synonym = r.synonym;
+        }
       }
     }
   }
@@ -1536,6 +1590,76 @@ export function findDuplicates(
   return [...byId.values()].sort(
     (a, b) => priority[a.matched_on] - priority[b.matched_on] || a.title.localeCompare(b.title),
   );
+}
+
+/** Result of the cheap blocking gate ({@link findBlockingDuplicate}). */
+export interface BlockingDuplicateMatch {
+  id: string;
+  matched_on: 'title' | 'synonym';
+  /** The existing thought's literal synonym that matched (`matched_on: 'synonym'`). */
+  matched_synonym?: string;
+}
+
+/**
+ * Blocking duplicate of a proposed thought title — the cheap, direct counterpart
+ * of {@link findDuplicates} used by the write gate (задача bf9f46bd, ошибка
+ * 9f4c0793).
+ *
+ * A match blocks creation only when BOTH hold:
+ *   - it is an exact (normalised) match — the existing thought's `title_norm`
+ *     equals the proposed title, or one of its LITERAL (no `*`) synonyms does;
+ *   - the matched thought has the SAME type as the proposed one (`null` on both
+ *     sides counts as the same type — both untyped).
+ *
+ * Wildcard-mask matches, partial matches and exact matches at a different type
+ * do NOT block: they are reported as candidates instead (see
+ * {@link findDuplicates}). The wildcard mask is by construction a
+ * wordform/prefix match, never an exact name, so a literal requirement on the
+ * synonym side is explicit here (`NOT LIKE '%*%'`).
+ *
+ * Unlike {@link findDuplicates}, this gate NEVER builds wildcard regexes or runs
+ * LIKE scans: both lookups are exact-equality probes served by
+ * `idx_thoughts_title_norm` / `idx_synonyms_norm`, i.e. microseconds even on a
+ * network with thousands of thoughts. That is what removes the second heavy
+ * duplicate call from `upsertThoughtBundle`.
+ *
+ * Attribution trap (why this cannot be derived from `findDuplicates` hits): a
+ * `DuplicateHit`'s `matched_on`/`matched_synonym` describe the side of the
+ * EXISTING thought and do not say which proposed term matched. An exact match of
+ * a proposed SYNONYM against another thought's title would surface as
+ * `matched_on: 'title'` and wrongly block. Only the proposed TITLE is checked
+ * here, and synonyms are checked against the proposed title as well — exactly
+ * the semantics of the full gate.
+ */
+export function findBlockingDuplicate(
+  ndb: NetworkDb,
+  title: string,
+  typeId: string | null,
+): BlockingDuplicateMatch | undefined {
+  const n = norm(title);
+  if (n === '') return undefined;
+  // Strongest tier first: exact same-type title_norm (indexed point lookup).
+  const titleRow = ndb
+    .prepare(
+      'SELECT id FROM thoughts_v WHERE title_norm = ? AND marked_for_deletion = 0 AND type_id IS ? LIMIT 1',
+    )
+    .get(n, typeId) as { id: string } | undefined;
+  if (titleRow !== undefined) return { id: titleRow.id, matched_on: 'title' };
+  // Exact same-type LITERAL synonym (indexed point lookup). A stored `*`-mask
+  // synonym never blocks, matching the full gate's `includes('*')` rule.
+  const synRow = ndb
+    .prepare(
+      `SELECT t.id AS id, ts.synonym AS synonym
+       FROM thought_synonyms_v ts JOIN thoughts_v t ON t.id = ts.thought_id
+       WHERE ts.synonym_norm = ? AND ts.synonym NOT LIKE '%*%'
+         AND t.marked_for_deletion = 0 AND t.type_id IS ?
+       ORDER BY ts.synonym LIMIT 1`,
+    )
+    .get(n, typeId) as { id: string; synonym: string } | undefined;
+  if (synRow !== undefined) {
+    return { id: synRow.id, matched_on: 'synonym', matched_synonym: synRow.synonym };
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------

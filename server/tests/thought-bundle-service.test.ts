@@ -403,6 +403,38 @@ describe(
           ndb.close();
         }
       });
+
+      // Ловушка атрибуции (ошибка 9f4c0793): гейт смотрит ТОЛЬКО предложенное
+      // название. Точное совпадение предложенного СИНОНИМА с чужим названием —
+      // не блок (полный find_duplicates вернул бы такую мысль с matched_on
+      // 'title', и вывод «блокируем» из hits фильтрацией был бы ложным).
+      it('non-blocking: proposed synonym equal to another title does not block (attribution trap)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const existing = upsertThoughtBundle(ndb, { thought: { title: 'Слои' } }, USER);
+
+          const result = upsertThoughtBundle(
+            ndb,
+            {
+              thought: { title: 'Слои изменений', synonyms: ['Слои'] },
+              on_duplicate: 'reuse',
+            },
+            USER,
+          );
+
+          assert.equal(
+            result.thought_action,
+            'created',
+            'совпадение предложенного синонима с чужим title не должно блокировать',
+          );
+          assert.notEqual(result.thought.id, existing.thought.id);
+          const cand = result.duplicate_candidates?.find((c) => c.id === existing.thought.id);
+          assert.ok(cand, 'чужая мысль всё же показана кандидатом');
+          assert.equal(cand.matched_on, 'title');
+        } finally {
+          ndb.close();
+        }
+      });
     });
 
     describe('explicit thought_id (augment in place)', () => {

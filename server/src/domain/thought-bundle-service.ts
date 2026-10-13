@@ -36,7 +36,7 @@ import {
   getPropertyValues,
   setPropertyValue,
 } from './property-service.js';
-import { findDuplicates } from './search-service.js';
+import { findBlockingDuplicate, findDuplicates } from './search-service.js';
 import type { DuplicateHit } from './search-service.js';
 import { projectThoughtRows } from './response-projection.js';
 import { createThought, getThoughtOrThrow, updateThought } from './thought-service.js';
@@ -55,37 +55,6 @@ function toDuplicateCandidate(hit: DuplicateHit): ThoughtDuplicateCandidate {
     type_id: hit.type_id,
     parent_title: hit.parent_title,
   };
-}
-
-/**
- * Find the **blocking** duplicate of a proposed thought title (задача
- * bf9f46bd-afe0-41a5-8fe9-a90290f86db7).
- *
- * A match blocks creation only when BOTH hold:
- *   - it is an exact (normalised) match — `matched_on: 'title'`, or
- *     `matched_on: 'synonym'` where the matched synonym is **literal**, not a
- *     `*`-mask (`matched_synonym` without a `*`). A wildcard-mask match is a
- *     wordform/prefix match, never an exact name, so it never blocks;
- *   - the matched thought has the **same type** as the proposed one (`null`
- *     on both sides counts as the same type — both untyped).
- *
- * Partial matches and exact matches at a different type do NOT block: the
- * thought is created and the matches are reported as candidates instead.
- * Only the proposed TITLE is checked — proposed synonyms do not block (their
- * matches are still reported as candidates via `findDuplicates`).
- */
-function findBlockingDuplicate(
-  ndb: NetworkDb,
-  title: string,
-  typeId: string | null,
-): DuplicateHit | undefined {
-  const hits = findDuplicates(ndb, title);
-  for (const hit of hits) {
-    if (hit.type_id !== typeId) continue;
-    if (hit.matched_on === 'title') return hit;
-    if (hit.matched_on === 'synonym' && hit.matched_synonym?.includes('*') !== true) return hit;
-  }
-  return undefined;
 }
 
 /** Resolve the bundle's thought: explicit `thought_id`, or find-or-create-or-match. */
@@ -155,7 +124,8 @@ function resolveThought(
   // All matches (title + synonyms) — reported as candidates when creation is
   // NOT blocked; also the `details.candidates` payload for `on_duplicate: fail`.
   const hits = findDuplicates(ndb, spec.title, spec.synonyms ?? []);
-  // Only a same-type exact title/literal-synonym match blocks creation.
+  // Only a same-type exact title/literal-synonym match blocks creation — a
+  // cheap indexed lookup (ошибка 9f4c0793), NOT a second heavy `findDuplicates`.
   const blocking = findBlockingDuplicate(ndb, spec.title, typeId);
   if (blocking === undefined) {
     const thought = createThought(
