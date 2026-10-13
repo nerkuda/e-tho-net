@@ -346,6 +346,49 @@ describe('профиль контекста задаёт словарь опер
     assert.deepEqual(filterProfileTokenFamilies('thoughts'), ['calendar']);
   });
 
+  it('под-выборочные и наборные операторы — только на релевантных операндах (c088f9e1)', () => {
+    // Предикаты и скалярные характеристики: триада без наборов и «в иерархии».
+    for (const kind of ['active', 'trashed', 'comment', 'keywords', 'author', 'editor', 'created_at', 'properties'] as const) {
+      const ops = filterProfileOperators('thoughts', kind);
+      for (const op of ['any_of', 'all_of', 'none_of', 'in_hierarchy'] as const) {
+        assert.ok(!ops.includes(op), `${kind}: нерелевантный оператор ${op}`);
+      }
+    }
+    // Булев предикат — ровно «равно»/«не равно» (триада «да/нет/не важно»).
+    assert.deepEqual(filterProfileOperators('thoughts', 'active'), ['eq', 'ne']);
+    // «Есть слова» — только matches.
+    assert.deepEqual(filterProfileOperators('thoughts', 'keywords'), ['matches']);
+    // Структурные «Родители»/«Потомки» и «Тип» — релевантны под-выборке.
+    for (const kind of ['parents', 'children'] as const) {
+      for (const op of ['all_of', 'any_of', 'none_of', 'in_hierarchy'] as const) {
+        assert.ok(filterProfileOperators('thoughts', kind).includes(op), `${kind}: ${op}`);
+      }
+    }
+    assert.ok(filterProfileOperators('thoughts', 'type').includes('any_of'));
+    assert.ok(!filterProfileOperators('thoughts', 'type').includes('all_of'), '«Тип» одиночный');
+    // «Тип связи» — иерархия есть, под-выборка исполнителем отложена.
+    assert.ok(filterProfileOperators('thoughts', 'link_type').includes('in_hierarchy'));
+    assert.ok(!filterProfileOperators('thoughts', 'link_type').includes('all_of'));
+  });
+
+  it('состав свойства — по природе (9bdddad6): скаляр без «все в выборке», ссылка с ним', () => {
+    // Скаляры: даты/числа — сравнения без наборов; булево — только равно/не равно.
+    assert.ok(filterProfileOperators('thoughts', 'property', 'date').includes('between'));
+    assert.ok(!filterProfileOperators('thoughts', 'property', 'date').includes('all_of'));
+    assert.ok(!filterProfileOperators('thoughts', 'property', 'number').includes('all_of'));
+    assert.deepEqual(filterProfileOperators('thoughts', 'property', 'bool'), ['eq', 'ne']);
+    // Свойство-ссылка: наборные («все в выборке») и «в иерархии».
+    for (const op of ['in', 'not_in', 'any_of', 'all_of', 'none_of', 'in_hierarchy'] as const) {
+      assert.ok(filterProfileOperators('thoughts', 'property', 'link').includes(op), `link: ${op}`);
+    }
+    // Природа неизвестна — объединённый набор операнда (не пустой, содержит наборы).
+    const union = filterProfileOperators('thoughts', 'property');
+    assert.ok(union.includes('all_of') && union.includes('contains'));
+    // Профиль другой сущности отдаёт свой состав, а не состав свойства.
+    assert.deepEqual(filterProfileOperators('chronicle', 'record_title'), ['eq', 'ne', 'contains', 'not_contains', 'matches']);
+    assert.ok(!filterProfileOperators('chronicle', 'record_title').includes('all_of'));
+  });
+
   it('проверка дерева по профилю: недоступный операнд, оператор, арность НЕ', () => {
     const node: FilterTreeGroup = {
       kind: 'group',

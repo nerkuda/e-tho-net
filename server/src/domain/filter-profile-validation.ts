@@ -94,12 +94,16 @@ export function assertFilterAstInProfile(
     operators: new Set<string>(profile.operators),
     perOperand: profile.operand_operators as Readonly<Record<string, readonly string[]>> | undefined,
   };
-  // Профиль мыслей для подзапросов «Цели» (адресуют мысли).
+  // Профиль мыслей для подзапросов «Цели» (адресуют мысли). Составы по операндам
+  // берём у того же профиля — иначе вложенная под-выборка проверялась бы мягче
+  // внешнего отбора и расходилась бы с редактором (задача 6ae062a9).
   const thoughtsProfile = getFilterProfile('thoughts');
   const thoughtsScope: ProfileScope = {
     allowed: filterProfileAstOperands('thoughts') ?? allowed,
     operators: new Set<string>(thoughtsProfile.operators),
-    perOperand: undefined,
+    perOperand: thoughtsProfile.operand_operators as
+      | Readonly<Record<string, readonly string[]>>
+      | undefined,
   };
   const violations: ProfileViolation[] = [];
   collectViolations(ast.filter, 'filter', scope, thoughtsScope, violations);

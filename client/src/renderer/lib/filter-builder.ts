@@ -37,6 +37,7 @@ import {
   SORT_ORDERS,
   STRUCTURE_AUTHOR_OPS,
   STRUCTURE_SORTS,
+  filterProfileOperandOperators,
   getFilterProfile,
   typeNameKey,
   type ActivityEntityType,
@@ -1449,16 +1450,17 @@ export function filterProfileOperands(profile: FilterProfileId): readonly Filter
 
 /**
  * Операторы, доступные для операнда в профиле контекста: у точек, отбирающих
- * не-мысли (хроника, события, вложения), набор задан по операнду; у отбора
- * мыслей действует полный словарь ядра (`FILTER_AST_OPERATORS`).
+ * не-мысли (хроника, события, вложения), и у отбора мыслей набор задан по
+ * операнду (требование c088f9e1); у полиморфного операнда «Свойство» состав
+ * уточняется природой свойства — `propertyValueType` (требование 9bdddad6).
+ * Состав берётся из общего реестра `@etn/shared` — второго словаря нет.
  */
 export function filterProfileOperators(
   profile: FilterProfileId,
   kind: FilterAstEntityKind,
+  propertyValueType?: PropertyValueType,
 ): readonly FilterAstOperator[] {
-  const sets = getFilterProfile(profile).operand_operators;
-  if (sets === undefined) return FILTER_AST_OPERATORS;
-  return sets[kind] ?? [];
+  return filterProfileOperandOperators(profile, kind, propertyValueType);
 }
 
 /**
@@ -1647,7 +1649,6 @@ export function validateFilterTree(
   profile: FilterProfileId,
 ): FilterTreeIssue[] {
   const operands = new Set<string>(filterProfileOperands(profile));
-  const sets = getFilterProfile(profile).operand_operators;
   const issues: FilterTreeIssue[] = [];
   const walk = (current: FilterTreeNode, path: string): void => {
     if (current.kind === 'group') {
@@ -1668,7 +1669,7 @@ export function validateFilterTree(
         path,
         message: `операнд «${kind}» недоступен в профиле «${profile}»`,
       });
-    } else if (sets !== undefined && !(sets[kind] ?? []).includes(current.operator)) {
+    } else if (!filterProfileOperators(profile, kind).includes(current.operator)) {
       issues.push({
         path,
         message: `оператор «${current.operator}» недоступен для операнда «${kind}» в профиле «${profile}»`,

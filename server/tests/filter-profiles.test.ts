@@ -25,8 +25,11 @@ import {
   FILTER_AST_OPERATORS,
   FILTER_PROFILES,
   FILTER_PROFILE_IDS,
+  PROPERTY_OPERATOR_SETS,
+  PROPERTY_VALUE_TYPES,
   filterProfileAstOperands,
   filterProfileHasTime,
+  filterProfileOperandOperators,
   getFilterProfile,
   type FilterAst,
   type FilterAstEntity,
@@ -36,7 +39,11 @@ import {
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import { assertFilterAstInProfile } from '../src/domain/filter-profile-validation.js';
-import { queryThoughts, type ThoughtQueryRequest } from '../src/domain/query-service.js';
+import {
+  OPS_BY_VALUE_TYPE,
+  queryThoughts,
+  type ThoughtQueryRequest,
+} from '../src/domain/query-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createThoughtTypeView } from '../src/domain/thought-type-views-service.js';
 
@@ -179,20 +186,116 @@ describe('реестр профилей контекста (задача 7a798b1
     for (const op of ['gt', 'between', 'is_empty'] as const) assert.ok(sets['size']!.includes(op));
   });
 
-  it('семантические профили: operators — ровно объединение наборов по операндам', () => {
-    for (const id of ['chronicle', 'events', 'attachments'] as const) {
+  it('составы по операнду: operators каждого профиля — ровно объединение наборов', () => {
+    // С 0.13.1 (задача 6ae062a9, требование c088f9e1) наборы по операнду несут
+    // ВСЕ профили, включая отбор мыслей: иначе редактор предлагал бы операторы,
+    // которые исполнитель отвергает.
+    for (const id of FILTER_PROFILE_IDS) {
       const p = getFilterProfile(id);
       const sets = p.operand_operators;
       assert.ok(sets !== undefined, `${id}: наборы по операндам заданы`);
+      // Набор задан на КАЖДЫЙ операнд профиля.
+      assert.deepEqual(
+        Object.keys(sets!).sort(),
+        [...p.operands].sort(),
+        `${id}: состав задан на каждый операнд`,
+      );
       const union: string[] = [];
       for (const list of Object.values(sets!)) {
         for (const op of list) if (!union.includes(op)) union.push(op);
       }
       assert.deepEqual([...p.operators].sort(), [...union].sort(), `${id}: operators = union`);
     }
-    // AST-профили несут словарь AST без наборов по операнду.
-    for (const id of ['thoughts', 'map', 'publications'] as const) {
-      assert.equal(getFilterProfile(id).operand_operators, undefined);
+  });
+
+  it('отбор мыслей: составы по операнду по требованию c088f9e1', () => {
+    const sets = FILTER_PROFILES.thoughts.operand_operators!;
+    // Предикаты-триады: только «равно»/«не равно», без сравнений и «между».
+    assert.deepEqual(sets['active'], ['eq', 'ne']);
+    assert.deepEqual(sets['trashed'], ['eq', 'ne']);
+    // «Есть слова» — только matches.
+    assert.deepEqual(sets['keywords'], ['matches']);
+    // Наборные под-выборочные операторы — только на релевантных операндах.
+    for (const kind of ['active', 'trashed', 'keywords', 'author', 'editor', 'created_at', 'properties'] as const) {
+      const list = sets[kind]!;
+      for (const op of ['any_of', 'all_of', 'none_of'] as const) {
+        assert.ok(!list.includes(op), `${kind}: нерелевантная под-выборка (${op})`);
+      }
+    }
+    for (const kind of ['parents', 'children'] as const) {
+      for (const op of ['all_of', 'any_of', 'none_of', 'in_hierarchy'] as const) {
+        assert.ok(sets[kind]!.includes(op), `${kind}: релевантная под-выборка (${op})`);
+      }
+    }
+    // «Тип» — одиночный: «все в выборке» неприменимо (исполнитель отвергает all_in).
+    assert.ok(sets['type']!.includes('any_of') && !sets['type']!.includes('all_of'));
+    // Тип связи: иерархия есть, под-выборка исполнителем отложена.
+    assert.ok(sets['link_type']!.includes('in_hierarchy'));
+    assert.ok(!sets['link_type']!.includes('all_of'));
+  });
+
+  it('отбор мыслей: состав свойства по природе (требование 9bdddad6)', () => {
+    const byType = FILTER_PROFILES.thoughts.operand_operators_by_value_type!;
+    // Скаляры: без под-выборочных наборов «все в выборке» у дат/чисел и булевых.
+    assert.ok(byType['date']!.includes('between') && !byType['date']!.includes('all_of'));
+    assert.ok(byType['number']!.includes('gt') && !byType['number']!.includes('all_of'));
+    assert.deepEqual(byType['bool'], ['eq', 'ne'], 'булево — триада без сравнений');
+    // Ссылочные: наборные операторы и «в иерархии» (требование aa7a2aea).
+    for (const op of ['in', 'not_in', 'any_of', 'all_of', 'none_of', 'in_hierarchy'] as const) {
+      assert.ok(byType['link']!.includes(op), `link: ${op}`);
+    }
+    // Текст/url — подстрока и сравнения.
+    assert.ok(byType['text']!.includes('contains') && byType['text']!.includes('ne'));
+    // Помощник отдаёт состав по природе, а без природы — объединённый набор операнда.
+    assert.deepEqual(
+      filterProfileOperandOperators('thoughts', 'property', 'bool'),
+      byType['bool'],
+      'природа известна — точный набор',
+    );
+    const union: string[] = [];
+    for (const list of Object.values(byType)) {
+      for (const op of list) if (!union.includes(op)) union.push(op);
+    }
+    assert.deepEqual(
+      [...filterProfileOperandOperators('thoughts', 'property')].sort(),
+      [...union].sort(),
+      'природа неизвестна — объединённый набор операнда',
+    );
+    assert.deepEqual(
+      filterProfileOperandOperators('thoughts', 'property'),
+      FILTER_PROFILES.thoughts.operand_operators!['property'],
+    );
+    // Операнд другого вида состав не путает.
+    assert.deepEqual(filterProfileOperandOperators('thoughts', 'active'), ['eq', 'ne']);
+  });
+
+  it('паритет: гейт плоской формы — подмножество AST-набора природы свойства', () => {
+    // Серверный гейт `OPS_BY_VALUE_TYPE` (плоская форма §6.10) обязан входить в
+    // декларацию профилей; обратное добавление допустимо только для документированных
+    // AST-операторов (`not_contains`, сравнения/«между» скаляров, «в иерархии»).
+    const astExtras = new Set<string>([
+      'not_contains',
+      'gt',
+      'gte',
+      'lt',
+      'lte',
+      'between',
+      'not_between',
+      'in_hierarchy',
+      'not_in_hierarchy',
+    ]);
+    for (const valueType of PROPERTY_VALUE_TYPES) {
+      const gateOps = OPS_BY_VALUE_TYPE[valueType];
+      const declared = PROPERTY_OPERATOR_SETS[valueType];
+      for (const op of gateOps) {
+        assert.ok(declared.includes(op), `${valueType}: гейт ${op} отсутствует в декларации`);
+      }
+      for (const op of declared) {
+        assert.ok(
+          (gateOps as readonly string[]).includes(op) || astExtras.has(op),
+          `${valueType}: лишний оператор ${op} не из AST-дополнений`,
+        );
+      }
     }
   });
 

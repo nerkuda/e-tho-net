@@ -538,8 +538,12 @@ type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
  * значения и запрещены для `bool` — там тот же смысл несут `eq true`/
  * `eq false`. Свойство-связь (`link`) хранит значение в рёбрах (links_v),
  * а не в property_values (ADR «проекция ребра»).
+ *
+ * Экспортируется для сторожа паритета с декларацией профилей
+ * (`PROPERTY_OPERATOR_SETS` в `@etn/shared`, требование 9bdddad6): гейт плоской
+ * формы — подмножество AST-набора (тест `filter-profiles.test.ts`).
  */
-const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly ThoughtQueryPropertyOperator[]> = {
+export const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly ThoughtQueryPropertyOperator[]> = {
   // `text` с `config.multiple` — множественное скалярное свойство (02-data-model
   // §3.4–3.5); наборные операторы для него предусмотрены требованием 92b9c55b,
   // матчинг поэлементный (ошибка 7489e4d9).

@@ -20,6 +20,15 @@
  * нему строит доступный набор операндов (задача e5dd10ab). Рассинхрон ловит
  * `tsc` и сторож паритета.
  *
+ * **Состав операторов по операнду (требование c088f9e1, задача 6ae062a9).** Все
+ * шесть профилей объявляют наборы операторов по операнду
+ * ({@link FilterProfile.operand_operators}), а отбор мыслей — ещё и по природе
+ * свойства для полиморфного операнда «Свойство»
+ * ({@link FilterProfile.operand_operators_by_value_type}). Благодаря этому
+ * редактор не предлагает оператор, который исполнитель отвергнет: «в (выборке)»
+ * и наборные операторы стоят только на релевантных операндах, предикаты несут
+ * триаду, булево — «равно»/«не равно».
+ *
  * **Подключение к точкам.** Профили `thoughts`/`publications` подключены к своим
  * точкам и участвуют в валидации AST (задача 7a798b17); профиль `map` описан
  * заранее. Профиль `chronicle` подключён точкой `POST /chronicle/query`
@@ -37,6 +46,7 @@ import {
   type FilterAstEntityKind,
   type FilterAstOperator,
 } from './types/filter-ast.js';
+import { type PropertyValueType } from './enums.js';
 
 /** Идентификатор профиля контекста — точка применения отбора. */
 export const FILTER_PROFILE_IDS = [
@@ -102,10 +112,23 @@ export interface FilterProfile {
    */
   operand_operators?: Readonly<Record<string, readonly FilterAstOperator[]>>;
   /**
+   * Наборы операторов ПО ПРИРОДЕ свойства для полиморфного операнда «Свойство»
+   * (требование 9bdddad6 «правила применимости операторов по типу операнда»):
+   * `property` адресует свойства ВСЕХ видов, поэтому его состав уточняется по
+   * `value_type` свойства реестра, а не по виду операнда. Ключ — значение
+   * {@link PropertyValueType}. Читается клиентским конструктором, когда редактор
+   * знает природу свойства; серверный гейт профиля проверяет объединённый набор
+   * {@link FilterProfile.operand_operators} (семантику природы проверяет
+   * исполнитель).
+   */
+  operand_operators_by_value_type?: Readonly<Record<string, readonly FilterAstOperator[]>>;
+  /**
    * Объединение допустимых операторов профиля (для AST-профилей — словарь
    * {@link FILTER_AST_OPERATORS}). Для семантических профилей обязан совпадать с
    * объединением значений {@link FilterProfile.operand_operators} (паритет
-   * стережётся тестом).
+   * стережётся тестом). Профили с наборами по операнду (в том числе отбор
+   * мыслей) соблюдают тот же инвариант: составы по операндам покрывают словарь
+   * без остатка — иначе оператор ядра оказался бы невыразим редактором.
    */
   operators: readonly FilterAstOperator[];
   /** Семейства токенов профиля (состав надмножества полного словаря токенов). */
@@ -120,11 +143,9 @@ export interface FilterProfile {
 }
 
 /** Уникальное объединение наборов операторов (порядок — появления). */
-function unionOperators(
-  map: Readonly<Record<string, readonly FilterAstOperator[]>>,
-): FilterAstOperator[] {
+function unionOperators(lists: Iterable<readonly FilterAstOperator[]>): FilterAstOperator[] {
   const out: FilterAstOperator[] = [];
-  for (const list of Object.values(map)) {
+  for (const list of lists) {
     for (const op of list) if (!out.includes(op)) out.push(op);
   }
   return out;
@@ -198,6 +219,190 @@ const THOUGHT_OPERANDS: readonly FilterAstEntityKind[] = [
 ];
 
 /**
+ * Операторы операнда «Свойство» ПО ПРИРОДЕ свойства (требования 9bdddad6
+ * «правила применимости операторов по типу операнда», c088f9e1). Левый операнд
+ * `property` полиморфен: состав зависит от `value_type` свойства реестра, а не
+ * от вида операнда, поэтому объявляется здесь и читается конструктором, когда
+ * природа свойства известна.
+ *
+ * Наборы отражают исполнимую единым движком (`server/src/domain/query-service.ts`)
+ * семантику:
+ *   * скаляры (текст/url) — подстрока, сравнения, «между», списки и наборы;
+ *   * булево — только `eq`/`ne` (требование 9bdddad6: триада «да/нет/не важно»,
+ *     без сравнений и без «между»);
+ *   * ссылочные (связь, legacy `thought_ref`) — списки и наборы
+ *     (`any_of`/`all_of`/`none_of`), «количество» (`gt/gte/lt/lte/between`),
+ *     «в иерархии» — только у свойства-связи (требование aa7a2aea);
+ *   * кросс-сетевая ссылка и публикация — только точное совпадение и наборы
+ *     (адрес либо совпал, либо нет).
+ *
+ * Серверный гейт плоской формы `OPS_BY_VALUE_TYPE` — подмножество этих наборов:
+ * AST-эра добавила `not_contains`, сравнения/«между» скаляров и «в иерархии»
+ * свойства-связи (паритет «гейт ⊆ наборы, лишнее — только эти операторы»
+ * стережётся тестом `server/tests/filter-profiles.test.ts`).
+ */
+export const PROPERTY_OPERATOR_SETS: Readonly<
+  Record<PropertyValueType, readonly FilterAstOperator[]>
+> = {
+  text: [
+    'contains',
+    'not_contains',
+    'eq',
+    'ne',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'between',
+    'not_between',
+    'in',
+    'not_in',
+    'any_of',
+    'all_of',
+    'none_of',
+    'is_empty',
+    'not_empty',
+  ],
+  url: [
+    'contains',
+    'not_contains',
+    'eq',
+    'ne',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'between',
+    'not_between',
+    'in',
+    'not_in',
+    'any_of',
+    'all_of',
+    'none_of',
+    'is_empty',
+    'not_empty',
+  ],
+  date: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between', 'is_empty', 'not_empty'],
+  number: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between', 'is_empty', 'not_empty'],
+  // Булево свойство: только «равно»/«не равно» — триада «да/нет/не важно»
+  // выражается значением, сравнения и «заполнено» избыточны (9bdddad6).
+  bool: ['eq', 'ne'],
+  link: [
+    'eq',
+    'ne',
+    'in',
+    'not_in',
+    'any_of',
+    'all_of',
+    'none_of',
+    'in_hierarchy',
+    'not_in_hierarchy',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'between',
+    'not_between',
+    'is_empty',
+    'not_empty',
+  ],
+  thought_ref: ['eq', 'ne', 'in', 'not_in', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
+  cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
+  publication: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
+};
+
+/**
+ * Операторы ПО ОПЕРАНДУ профиля «мысли» (требование c088f9e1 «состав операторов
+ * по типу операнда», ADR 30ff83bb; задача 6ae062a9, доработка).
+ *
+ * Раньше профиль отдавал объединённый словарь ядра, и редактор предлагал
+ * «в (выборке)»/наборные операторы на предикатах и скалярах, где исполнитель их
+ * отвергает. Теперь состав объявлен: под-выборочные наборные операторы
+ * (`any_of`/`all_of`/`none_of`) стоят только на релевантных операндах
+ * (свойства-ссылки, «Родители»/«Потомки», «Тип»), предикаты-триады несут
+ * `eq`/`ne`, «Есть слова» — только `matches`, коллекции — наличие и «количество»,
+ * «Автор»/«Редактор» — списки и заполненность.
+ */
+const THOUGHT_OPERATOR_SETS: Readonly<Record<string, readonly FilterAstOperator[]>> = {
+  id: ['eq', 'ne', 'in', 'not_in'],
+  type: [
+    'eq',
+    'ne',
+    'in',
+    'not_in',
+    'in_hierarchy',
+    'not_in_hierarchy',
+    // «Имеет свойство»/«не имеет» на операнде «Тип» (требование bd0348b3).
+    'has',
+    'not_has',
+    // «Тип» — одиночный операнд: «все в выборке» неприменимо (исполнитель
+    // отвергает `all_in` на типе), «любой»/«ни один» — применимы.
+    'any_of',
+    'none_of',
+  ],
+  property: unionOperators(Object.values(PROPERTY_OPERATOR_SETS)),
+  link_type: [
+    'eq',
+    'ne',
+    'in',
+    'not_in',
+    'in_hierarchy',
+    'not_in_hierarchy',
+    'is_empty',
+    'not_empty',
+  ],
+  parents: [
+    'eq',
+    'ne',
+    'in',
+    'not_in',
+    'is_empty',
+    'not_empty',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'between',
+    'not_between',
+    'in_hierarchy',
+    'not_in_hierarchy',
+    'any_of',
+    'all_of',
+    'none_of',
+  ],
+  children: [
+    'eq',
+    'ne',
+    'in',
+    'not_in',
+    'is_empty',
+    'not_empty',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'between',
+    'not_between',
+    'in_hierarchy',
+    'not_in_hierarchy',
+    'any_of',
+    'all_of',
+    'none_of',
+  ],
+  attachments: ['eq', 'ne', 'is_empty', 'not_empty', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  chronology: ['eq', 'ne', 'is_empty', 'not_empty', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  comment: ['eq', 'ne', 'is_empty', 'not_empty'],
+  active: ['eq', 'ne'],
+  trashed: ['eq', 'ne'],
+  keywords: ['matches'],
+  author: ['eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty'],
+  editor: ['eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty'],
+  created_at: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  updated_at: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  properties: ['has', 'not_has', 'is_empty', 'not_empty'],
+};
+
+/**
  * Операнды профиля «карта»: тот же набор, что у «мыслей» (оператор `link_type`
  * доступен обоим профилям, задача f7da04d6). Отдельный профиль сохранён как
  * точка расширения карты.
@@ -205,8 +410,9 @@ const THOUGHT_OPERANDS: readonly FilterAstEntityKind[] = [
 const MAP_OPERANDS: readonly FilterAstEntityKind[] = [...THOUGHT_OPERANDS];
 
 /**
- * Реестр профилей контекста. Ключ — {@link FilterProfileId}. Полный AST-словарь
- * операторов доступен на точках, отбирающих мысли; профили иных сущностей несут
+ * Реестр профилей контекста. Ключ — {@link FilterProfileId}. Профили точек,
+ * отбирающих мысли, несут ПОЛНЫЙ словарь ядра (`operators`) и составы по
+ * операндам ({@link FilterProfile.operand_operators}); профили иных сущностей —
  * подмножество по видимым характеристикам (требования 62475a6e/1765e659/f67c85c1).
  */
 export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> = {
@@ -215,6 +421,8 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
     title: 'Мысли (панель поиска, выборки типа, сохранённые отборы)',
     target: 'thought',
     operands: THOUGHT_OPERANDS,
+    operand_operators: THOUGHT_OPERATOR_SETS,
+    operand_operators_by_value_type: PROPERTY_OPERATOR_SETS,
     operators: FILTER_AST_OPERATORS,
     tokens: ['calendar'],
     withTime: false,
@@ -224,6 +432,8 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
     title: 'Карта (фильтр мыслей и типов связей)',
     target: 'thought',
     operands: MAP_OPERANDS,
+    operand_operators: THOUGHT_OPERATOR_SETS,
+    operand_operators_by_value_type: PROPERTY_OPERATOR_SETS,
     operators: FILTER_AST_OPERATORS,
     tokens: ['calendar'],
     withTime: false,
@@ -233,6 +443,8 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
     title: 'Публикации (рецепт заголовков)',
     target: 'thought',
     operands: THOUGHT_OPERANDS,
+    operand_operators: THOUGHT_OPERATOR_SETS,
+    operand_operators_by_value_type: PROPERTY_OPERATOR_SETS,
     operators: FILTER_AST_OPERATORS,
     tokens: ['calendar'],
     withTime: false,
@@ -250,7 +462,7 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
       'record_editor',
     ],
     operand_operators: CHRONICLE_OPERATOR_SETS,
-    operators: unionOperators(CHRONICLE_OPERATOR_SETS),
+    operators: unionOperators(Object.values(CHRONICLE_OPERATOR_SETS)),
     tokens: ['calendar', 'time'],
     withTime: true,
   },
@@ -260,7 +472,7 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
     target: 'activity',
     operands: ['occurred_at', 'action', 'entity_type', 'entity_id', 'user'],
     operand_operators: EVENT_OPERATOR_SETS,
-    operators: unionOperators(EVENT_OPERATOR_SETS),
+    operators: unionOperators(Object.values(EVENT_OPERATOR_SETS)),
     tokens: ['calendar', 'time'],
     withTime: true,
   },
@@ -270,7 +482,7 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
     target: 'attachment',
     operands: ['name', 'kind', 'mime_type', 'owner', 'size'],
     operand_operators: ATTACHMENT_OPERATOR_SETS,
-    operators: unionOperators(ATTACHMENT_OPERATOR_SETS),
+    operators: unionOperators(Object.values(ATTACHMENT_OPERATOR_SETS)),
     tokens: ['calendar'],
     withTime: false,
   },
@@ -284,6 +496,33 @@ export function getFilterProfile(id: FilterProfileId): FilterProfile {
 /** Несёт ли профиль время (токены/единицы `$now`/`$hour*`/`h`/`mi`). */
 export function filterProfileHasTime(id: FilterProfileId): boolean {
   return FILTER_PROFILES[id].withTime;
+}
+
+/**
+ * Операторы одного операнда профиля — состав, доступный редактору и проверяемый
+ * сервером (требование c088f9e1 «состав операторов по типу операнда»).
+ *
+ * Для полиморфного операнда «Свойство» состав уточняется по природе свойства:
+ * `propertyValueType` — `value_type` адресуемого свойства реестра (требование
+ * 9bdddad6). Природа неизвестна — отдаётся объединённый набор операнда.
+ *
+ * Профиль без составов по операндам отдаёт объединённый словарь
+ * ({@link FilterProfile.operators}).
+ */
+export function filterProfileOperandOperators(
+  id: FilterProfileId,
+  kind: FilterAstEntityKind,
+  propertyValueType?: PropertyValueType,
+): readonly FilterAstOperator[] {
+  const profile = FILTER_PROFILES[id];
+  const byValueType = profile.operand_operators_by_value_type;
+  if (kind === 'property' && byValueType !== undefined && propertyValueType !== undefined) {
+    const scoped = byValueType[propertyValueType];
+    if (scoped !== undefined) return scoped;
+  }
+  const perOperand = profile.operand_operators;
+  if (perOperand !== undefined) return perOperand[kind] ?? [];
+  return profile.operators;
 }
 
 /**
