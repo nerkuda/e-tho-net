@@ -1452,9 +1452,15 @@ export function parseSearchCriteria(raw: unknown): SearchCriteriaState {
 export function buildSearchAst(state: FilterCriteriaState, focusId: string | null): FilterAst | undefined {
   const tree = state.tree ?? null;
   if (!filterTreeHasAnyCriteria(tree)) return undefined;
+  const expanded = expandSearchSubtreeRoots(tree as FilterTreeNode, focusId);
+  // `null` — все строки выпали (единственная строка — пустой подкорень без
+  // ограничения и без фокуса): мыслевых условий НЕ осталось, `ast` не отдаём,
+  // сервер применит дефолты видимости (ошибка 46047836). Раньше здесь был
+  // фолбэк `?? tree`, возвращавший исходное дерево и сохранявший баг.
+  if (expanded === null || !filterTreeHasAnyCriteria(expanded)) return undefined;
   return {
     version: FILTER_AST_VERSION,
-    filter: filterTreeToAst(expandSearchSubtreeRoots(tree as FilterTreeNode, focusId)),
+    filter: filterTreeToAst(expanded),
   };
 }
 
@@ -1462,10 +1468,21 @@ export function buildSearchAst(state: FilterCriteriaState, focusId: string | nul
  * Расширить строки-подкорни («Родители в иерархии») до «ИЛИ(id в [корни],
  * parents in_hierarchy [корни] режим `all_links`)». Значение-скаляр читается
  * как корень из одной мысли; пустой список при `focusId` берёт текущий фокус.
+ *
+ * Пустой набор корней И отсутствие фокуса — СТРОКА НЕ СОЗДАЁТСЯ (`null`):
+ * ограничение подкорня не задано → поиск идёт «без ограничения» (ошибка
+ * 46047836). Иначе лист `parents in_hierarchy` без значения сервер трактует как
+ * `AST_FALSE` и выдача сужается до нуля.
  */
-function expandSearchSubtreeRoots(node: FilterTreeNode, focusId: string | null): FilterTreeNode {
+function expandSearchSubtreeRoots(node: FilterTreeNode, focusId: string | null): FilterTreeNode | null {
   if (node.kind === 'group') {
-    return { ...node, children: node.children.map((c) => expandSearchSubtreeRoots(c, focusId)) };
+    const children = node.children
+      .map((c) => expandSearchSubtreeRoots(c, focusId))
+      .filter((c): c is FilterTreeNode => c !== null);
+    // Группа, чьи дети были и все выпали (строка-подкорень без ограничения), не
+    // нужна; изначально пустая группа остаётся (её диагностирует конструктор).
+    if (node.children.length > 0 && children.length === 0) return null;
+    return { ...node, children };
   }
   if (node.entity.kind !== 'parents' || node.operator !== 'in_hierarchy') return node;
   const items =
@@ -1476,7 +1493,8 @@ function expandSearchSubtreeRoots(node: FilterTreeNode, focusId: string | null):
         : [];
   const ids = items.filter((it): it is string => typeof it === 'string' && it !== '');
   const roots = ids.length > 0 ? ids : focusId !== null ? [focusId] : [];
-  if (roots.length === 0) return node;
+  // Нет корней и нет фокуса — ограничение не задано: строку не создаём.
+  if (roots.length === 0) return null;
   return {
     kind: 'group',
     op: 'or',

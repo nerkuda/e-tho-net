@@ -319,10 +319,41 @@ describe('AST мыслевых настроек строки поиска', () =
       ],
     });
     const withoutFocus = buildSearchAst(state, null);
-    assert.deepEqual(withoutFocus?.filter, {
+    // Пустой подкорень и без фокуса — ограничение не задано: строку не создаём,
+    // мыслевых условий не осталось → AST нет (поиск без ограничения, bug 46047836).
+    assert.equal(withoutFocus, undefined);
+  });
+
+  it('единственная строка — пустой подкорень без фокуса: AST нет (bug 46047836)', () => {
+    const state: FilterCriteriaState = {
+      ...defaultSearchCriteriaState(),
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'parents' },
+            operator: 'in_hierarchy',
+            mode: 'all_links',
+            value: { kind: 'list', items: [] },
+          },
+        ],
+      },
+    };
+    assert.equal(buildSearchAst(state, null), undefined);
+    // С фокусом — прежнее поведение: корень = фокус, строка остаётся.
+    const withFocus = buildSearchAst(state, 'focus-1');
+    assert.deepEqual(withFocus?.filter, {
       op: 'and',
       children: [
-        { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links' },
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'id' }, operator: 'in', value: ['focus-1'] },
+            { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: ['focus-1'] },
+          ],
+        },
       ],
     });
   });
