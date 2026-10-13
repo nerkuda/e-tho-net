@@ -215,12 +215,15 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Пишет 1–' +
         MCP_MAX_THOUGHTS_PER_WRITE +
-        ' связанных единиц знания одной транзакцией: мысли + постоянные/хронологические комментарии ' +
-        '+ свойства + связи + вложения. `thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR ' +
-        '`target_ref`; свойства-связи в `properties` тоже принимают `ref`; ' +
-        '`on_duplicate`: `fail`/`reuse`/`update`. Правка существующей — item-level ' +
-        '`title`/`synonyms`/`type`/`type_id`/`active`; `synonyms` ЗАМЕНЯЮТ набор. ' +
-        'ВНИМАНИЕ: item-level `title` ПЕРЕИМЕНОВЫВАЕТ мысль; заголовок записи — `chronicle[].title`. ' +
+        ' связанных единиц знания одной транзакцией: мысли, постоянные и хронологические ' +
+        'комментарии, свойства, связи, вложения. `thought_id` XOR `thought`: новая мысль идёт ' +
+        'блоком `thought`, он ОБЯЗАН нести локальный `ref` (иначе `VALIDATION_ERROR`); ' +
+        '`title`/`synonyms`/`type`/`type_id` — ВНУТРИ `thought`, у существующей мысли их задают ' +
+        'item-level (вместе с `thought` — `VALIDATION_ERROR`; `synonyms` ЗАМЕНЯЮТ набор, ' +
+        'item-level `active` — в обоих случаях). `links[].target_id` XOR `target_ref`; ' +
+        'свойства-связи в `properties` тоже принимают `ref`; `on_duplicate`: ' +
+        '`fail`/`reuse`/`update`. ВНИМАНИЕ: item-level `title` ПЕРЕИМЕНОВЫВАЕТ мысль; ' +
+        'заголовок записи — `chronicle[].title`. ' +
         'Один write-бюджет и одна строка `audit_log` на вызов; ' +
         '`warnings` — по батчу. Неизвестные ключи отвергаются `VALIDATION_ERROR` ' +
         '(`details.fields`). Пошагово — `etn.how_to_write_batch`.',

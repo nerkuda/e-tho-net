@@ -1909,4 +1909,49 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
       await closeMcpContext(ctx);
     }
   });
+
+  // Задача 521aa4b9: два правила, на которых спотыкались агенты, должны быть
+  // в САМОМ описании инструмента (`tools/list`), а не только в промпте — агент
+  // читает описание инструмента раньше, чем решает открыть гайд. Проверяем оба
+  // правила дословно, а также что `etn.guide` отдаёт тот же текст (общий
+  // источник — `writeBatchHowToText`, `ops-catalog.ts`).
+  it('описание инструмента документирует ref для новой мысли и synonyms только в thought (521aa4b9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const { tools } = await handle.client.listTools();
+        const tool = tools.find((t) => t.name === 'etn.thoughts.write');
+        assert.ok(tool, 'etn.thoughts.write must be registered');
+        const description = tool.description ?? '';
+        assert.ok(
+          description.includes('нести локальный `ref`'),
+          'описание обязано прямо требовать `ref` у элемента с блоком `thought` (521aa4b9)',
+        );
+        assert.ok(
+          description.includes('ВНУТРИ `thought`'),
+          'описание обязано отправлять `synonyms` внутрь блока `thought` (521aa4b9)',
+        );
+
+        const guide = toolText(
+          await handle.client.callTool({
+            name: 'etn.guide',
+            arguments: { topic: 'etn.how_to_write_batch' },
+          }),
+        );
+        assert.ok(
+          guide.includes('обязательно объяви `ref`'),
+          'etn.guide { topic: "etn.how_to_write_batch" } обязан нести правило ref (521aa4b9)',
+        );
+        assert.ok(
+          guide.includes('вместе с блоком `thought` отвергаются'),
+          'etn.guide { topic: "etn.how_to_write_batch" } обязан нести правило synonyms (521aa4b9)',
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });
