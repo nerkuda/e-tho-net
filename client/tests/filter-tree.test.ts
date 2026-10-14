@@ -522,6 +522,70 @@ describe('дерево условий: группы, тона, связатор�
     assert.equal(exact(root, 'ft-value').length, 0, 'заглушки нет, когда хост дал виджет');
     assert.equal(exact(root, 'host-value').length, 1, 'виджет хоста отрисован в строке');
   });
+
+  it('переключатель режимов «в иерархии» не рисуется у ТИПОВ мысли/связи (п.3)', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const builder = await import('../src/renderer/lib/filter-builder.js');
+
+    // Ячейка значения отдаёт «переключатель режимов» (как filter-value.ts).
+    // У типов каркас строки обязан снять его и не выставлять режим в модели.
+    const withMode = (): HTMLElement => {
+      const box = new ShimElement('div', 'fv');
+      box.append(new ShimElement('div', 'fv-mode'));
+      return box as unknown as HTMLElement;
+    };
+    const build = (entity: unknown, operator: string): { root: ShimElement; leaf: any } => {
+      const state = builder.defaultFilterCriteriaState();
+      const leaf: any = builder.defaultFilterTreeLeaf(entity as never);
+      leaf.operator = operator;
+      leaf.value = { kind: 'none' };
+      const group = builder.defaultFilterTreeGroup('and');
+      group.children = [leaf];
+      state.tree = group;
+      const tree = mod.buildFilterTree({
+        profile: 'thoughts',
+        getState: () => state,
+        data: DATA,
+        renderValue: withMode,
+      });
+      return { root: tree.root as unknown as ShimElement, leaf };
+    };
+
+    // Тип мысли и тип связи: у них единственный (структурный) режим.
+    for (const kind of ['type', 'link_type'] as const) {
+      const { root, leaf } = build({ kind }, 'in_hierarchy');
+      const value = exactOne(root, 'ft-row__value');
+      assert.equal(
+        exact(value!, 'fv-mode').length,
+        0,
+        `у ${kind} переключатель режимов «в иерархии» не рисуется (п.3)`,
+      );
+      assert.equal(leaf.mode, undefined, `у ${kind} режим в модели не выставлен (п.3)`);
+    }
+
+    // «Родители»/свойства-связи сохраняют оба режима — переключатель остаётся.
+    const parents = build({ kind: 'parents' }, 'in_hierarchy');
+    assert.equal(
+      exact(parents.root, 'fv-mode').length,
+      1,
+      'у «Родителей» переключатель режимов остаётся',
+    );
+
+    // Тип с НЕиерархическим оператором каркас не трогает.
+    const typeEq = build({ kind: 'type' }, 'in');
+    assert.equal(exact(typeEq.root, 'fv-mode').length, 1, 'тип без «в иерархии» ячейку не меняет');
+  });
+
+  it('хук класса переключателя режимов синхронен с filter-value (п.3)', () => {
+    // Каркас строки снимает переключатель по строковому классу-хуку; при
+    // переименовании `FILTER_VALUE_MODE_CLASS` правило п.3 сломалось бы молча.
+    const treeSrc = fs.readFileSync(path.join(RENDERER, 'lib', 'filter-tree.ts'), 'utf8');
+    const valueSrc = fs.readFileSync(path.join(RENDERER, 'lib', 'filter-value.ts'), 'utf8');
+    const hook = /const FILTER_VALUE_MODE_HOOK = '([^']+)'/.exec(treeSrc)?.[1];
+    const cls = /FILTER_VALUE_MODE_CLASS\s*=\s*'([^']+)'/.exec(valueSrc)?.[1];
+    assert.ok(hook !== undefined, 'хук FILTER_VALUE_MODE_HOOK объявлен в filter-tree.ts');
+    assert.equal(hook, cls, 'хук совпадает с FILTER_VALUE_MODE_CLASS (filter-value.ts)');
+  });
 });
 
 describe('дерево условий: сгруппированные списки операторов (502f1922)', () => {
@@ -1167,9 +1231,43 @@ describe('дерево условий: диагностика строк (эле
     assert.match(css, /\.ft-node--error\s*\{[^}]*var\(--danger\)/s);
     assert.match(css, /\.ft-node--warning\s*\{[^}]*var\(--warn\)/s);
     assert.match(css, /\.ft-row\s*\{[^}]*flex-wrap:\s*wrap/s, 'строка диагностики ложится второй полосой');
-    // Крестик условия прижат к ВЕРХНЕМУ краю (п.5); тексту причины — роль клика (п.10).
-    assert.match(css, /\.ft-row__remove\s*\{[^}]*align-self:\s*flex-start/s);
     assert.match(css, /\.ft-issue__text--action\s*\{[^}]*cursor:\s*pointer/s);
+  });
+
+  it('CSS: layout строки — части по верху, крестик в правом верхнем углу (п.6)', () => {
+    const css = fs.readFileSync(path.join(RENDERER, 'styles', 'filter-tree.css'), 'utf8');
+    // Все три части прижаты к ВЕРХУ строки, не центрированы.
+    assert.match(
+      css,
+      /\.ft-row\s*\{[^}]*align-items:\s*flex-start/s,
+      'части строки выровнены по верхнему краю (п.6)',
+    );
+    // Строка позиционирована — крестик привязан абсолютно.
+    assert.match(css, /\.ft-row\s*\{[^}]*position:\s*relative/s, 'строка — containing block крестика');
+    // Значение — блок-колонка (облачка, потом поиск/переключатели).
+    assert.match(
+      css,
+      /\.ft-row__value\s*\{[^}]*flex-direction:\s*column/s,
+      'значение — самодостаточная колонка (п.6)',
+    );
+    // Крестик — ВЕРХНИЙ ПРАВЫЙ УГОЛ, не смещается по высоте при переносе.
+    const removeBlock = /\.ft-row__remove\s*\{([^}]*)\}/s.exec(css)?.[1] ?? '';
+    assert.match(removeBlock, /position:\s*absolute/, 'крестик строки позиционирован абсолютно');
+    assert.match(removeBlock, /top:\s*var\(--space-1\)/, 'крестик прижат к верхнему краю');
+    assert.match(removeBlock, /right:\s*var\(--space-1\)/, 'крестик прижат к правому краю');
+    assert.doesNotMatch(removeBlock, /align-self/, 'крестик больше не выравнивается потоком');
+  });
+
+  it('CSS: переключатели строки компактны — padding вдвое, шрифт 0.84em (п.2)', () => {
+    const css = fs.readFileSync(path.join(RENDERER, 'styles', 'filter-tree.css'), 'utf8');
+    const rule = /\.ft-row \.ui-segmented \.ui-btn--ghost\s*\{([^}]*)\}/s.exec(css)?.[1] ?? '';
+    assert.notEqual(rule, '', 'единое правило компактных переключателей строки найдено');
+    assert.match(
+      rule,
+      /padding:\s*calc\(var\(--control-pad-y\)\s*\/\s*2\)\s*calc\(var\(--space-5\)\s*\/\s*2\)/,
+      'padding переключателя уменьшен вдвое (п.2)',
+    );
+    assert.match(rule, /font-size:\s*0\.84em/, 'шрифт переключателя — 0.84em (п.2)');
   });
 });
 

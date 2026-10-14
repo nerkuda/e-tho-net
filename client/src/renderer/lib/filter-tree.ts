@@ -1011,6 +1011,26 @@ export const FILTER_TREE_OPERATOR_HIDDEN_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Класс переключателя режима обхода «в иерархии» в ячейке значения
+ * (`FILTER_VALUE_MODE_CLASS` модуля `lib/filter-value.ts`, строка `fv-mode`).
+ * Каркас строки знает его для правила п.3: у ТИПОВ мысли/связи режим
+ * единственный (структурный) — переключатель не рисуется (ошибка f4e99090).
+ */
+const FILTER_VALUE_MODE_HOOK = 'fv-mode';
+
+/**
+ * Операнд-ТИП (мысли/связи) под иерархическим оператором: у него режим обхода
+ * «в иерархии» единственный — структурный (уточнение требования aa7a2aea,
+ * ошибка f4e99090, п.3). Для таких листьев переключатель режимов не рисуется и
+ * режим в модели не выставляется.
+ */
+function isStructuralOnlyHierarchyOperand(leaf: FilterTreeLeaf): boolean {
+  const kind = leaf.entity.kind;
+  if (kind !== 'type' && kind !== 'link_type') return false;
+  return leaf.operator === 'in_hierarchy' || leaf.operator === 'not_in_hierarchy';
+}
+
+/**
  * Собрать дерево условий над единой моделью. Возвращает корневой узел и
  * `rerender` — повторную отрисовку из модели (дерево перерисовывается целиком:
  * редактору нужна целостная картина ветки, а не инкрементальная лента).
@@ -1428,6 +1448,16 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         ? ctx.renderValue(leaf, api)
         : buildValuePlaceholder(leaf),
     );
+    // П.3 (ошибка f4e99090): у ТИПОВ мысли/связи режим обхода «в иерархии»
+    // единственный — структурный (уточнение требования aa7a2aea). Переключатель
+    // режимов в ячейке значения не рисуется; в модели режим у типов не
+    // выставляется. Ячейку собирает `lib/filter-value.ts` общим правилом
+    // `hierarchyOp && !idHierarchy`; правило «типы — только структурный» доводим
+    // здесь, в каркасе строки (модуль значения в параллельной работе).
+    if (isStructuralOnlyHierarchyOperand(leaf)) {
+      delete leaf.mode;
+      valueBox.querySelector(`.${FILTER_VALUE_MODE_HOOK}`)?.remove();
+    }
     row.append(valueBox);
 
     row.append(

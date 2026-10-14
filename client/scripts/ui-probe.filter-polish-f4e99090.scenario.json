@@ -1,0 +1,148 @@
+{
+  "name": "filter-polish-f4e99090",
+  "description": "Полировка редактора отбора, часть 2 (ошибка f4e99090; пункты 1, 2, 3, 6): онбординг → «Структуры» → DOM-пробы. П.1 — геометрия SVG-стрелок «Родители» (вниз) / «Потомки» (вверх). П.2 — замер padding/шрифта сегментного переключателя строки. П.3 — отсутствие переключателя режимов у ТИПА мысли под «в иерархии». П.6 — layout строки: части по верху, блок значения переносится целиком, крестик в правом верхнем углу при разной ширине; обе темы. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-polish-f4e99090.scenario.json --out .tmp/etn-f4e99090/out",
+  "timeout": 150000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe') !== null" },
+
+    { "name": "widen-window", "eval": "(() => { window.resizeTo(1900, 1000); return window.innerWidth; })()" },
+    { "name": "widen-ready", "timeout": 8000, "waitFor": "window.innerWidth >= 1400 && document.querySelector('.st-filter') !== null" },
+    { "name": "panel-to-max", "eval": "(() => { const s = document.querySelector('.st-filter + .fp-splitter') || document.querySelector('.fp-splitter'); if (!s) return 'no-splitter'; s.focus(); s.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })); return true; })()" },
+    { "name": "panel-max-ready", "timeout": 8000, "waitFor": "(document.querySelector('.st-filter')?.getBoundingClientRect().width ?? 0) >= 300" },
+
+    { "name": "add-condition", "eval": "(() => { const btn = document.querySelector('.st-filter .ft-add-condition'); if (btn) btn.click(); return document.querySelectorAll('.st-filter .ft-row').length; })()" },
+    { "name": "row-exists", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__what') !== null" },
+
+    { "name": "open-operands", "click": ".st-filter .ft-row .ft-row__what" },
+    { "name": "operands-shown", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"parents\"]') !== null" },
+
+    {
+      "name": "arrow-geometry",
+      "probe": "(() => { const pick = (k) => { const it = document.querySelector('.ft-choice__item[data-key=\"' + k + '\"]'); const svg = it ? it.querySelector('svg') : null; return svg ? [...svg.querySelectorAll('path')].map((p) => p.getAttribute('d')).join(' | ') : null; }; return JSON.stringify({ parents: pick('parents'), children: pick('children') }); })()"
+    },
+    {
+      "name": "arrows-not-swapped",
+      "probe": "(() => { const p = document.querySelector('.ft-choice__item[data-key=\"parents\"] svg'); const c = document.querySelector('.ft-choice__item[data-key=\"children\"] svg'); const d = (svg) => svg ? [...svg.querySelectorAll('path')].map((x) => x.getAttribute('d')).join(' ') : ''; const pd = d(p); const cd = d(c); const parentsDown = /v14|19 12-7 7/.test(pd); const childrenUp = /19V5|m5 12 7-7 7 7/.test(cd); return parentsDown && childrenUp; })()",
+      "expect": true
+    },
+
+    { "name": "pick-type", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"type\"]'); if (it) it.click(); return !!it; })()" },
+    { "name": "type-picked", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"type\"]') === null" },
+    { "name": "open-operators-type", "click": ".st-filter .ft-row .ft-row__op" },
+    { "name": "op-in-hierarchy-shown", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]') !== null" },
+    { "name": "pick-in-hierarchy-type", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]'); if (it) it.click(); return !!it; })()" },
+    { "name": "type-mode-absent", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .fv-mode') === null" },
+    {
+      "name": "type-mode-absent-probe",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const kind = row ? row.querySelector('.ft-row__what').textContent.trim() : null; const op = row ? row.querySelector('.ft-row__op')?.textContent?.trim() ?? null : null; return JSON.stringify({ kind, op, fvModeCount: row ? row.querySelectorAll('.fv-mode').length : -1, fvCount: row ? row.querySelectorAll('.fv').length : -1 }); })()"
+    },
+    {
+      "name": "type-mode-absent-assert",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); if (!row) return false; const kind = row.querySelector('.ft-row__what').textContent.trim(); const op = row.querySelector('.ft-row__op')?.textContent?.trim() ?? ''; return kind.includes('Тип мысли') && op.includes('иерархии') && row.querySelectorAll('.fv-mode').length === 0; })()",
+      "expect": true
+    },
+
+    { "name": "open-operands-2", "click": ".st-filter .ft-row .ft-row__what" },
+    { "name": "operands-shown-2", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"parents\"]') !== null" },
+    { "name": "pick-parents", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"parents\"]'); if (it) it.click(); return !!it; })()" },
+    { "name": "parents-picked", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"parents\"]') === null" },
+    { "name": "open-operators-parents", "click": ".st-filter .ft-row .ft-row__op" },
+    { "name": "op-in-hierarchy-shown-2", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]') !== null" },
+    { "name": "pick-in-hierarchy-parents", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]'); if (it) it.click(); return !!it; })()" },
+    { "name": "parents-mode-present", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .fv-mode') !== null" },
+
+    {
+      "name": "switch-tokens-baseline",
+      "probe": "(() => { const cs = getComputedStyle(document.documentElement); return JSON.stringify({ padY_token: cs.getPropertyValue('--control-pad-y').trim(), padX_token: cs.getPropertyValue('--space-5').trim() }); })()"
+    },
+    {
+      "name": "switch-metrics",
+      "probe": "(() => { const sw = document.querySelector('.st-filter .ft-row .fv-mode'); if (!sw) return 'no-switch'; const seg = sw.querySelector('.ui-btn') || sw; const cs = getComputedStyle(seg); const r = seg.getBoundingClientRect(); return JSON.stringify({ padTop: cs.paddingTop, padRight: cs.paddingRight, padBottom: cs.paddingBottom, padLeft: cs.paddingLeft, fontSize: cs.fontSize, w: Math.round(r.width), h: Math.round(r.height) }); })()"
+    },
+    {
+      "name": "switch-compact-assert",
+      "probe": "(() => { const sw = document.querySelector('.st-filter .ft-row .fv-mode'); if (!sw) return false; const seg = sw.querySelector('.ui-btn'); if (!seg) return false; const cs = getComputedStyle(seg); const px = (v) => Math.round(parseFloat(v) * 100) / 100; const padY = px(cs.paddingTop); const padX = px(cs.paddingRight); const fs = px(cs.fontSize); return padY <= 2.5 && padX <= 5.5 && fs <= 12; })()",
+      "expect": true
+    },
+    {
+      "name": "row-align-items",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); return row ? getComputedStyle(row).alignItems : null; })()"
+    },
+    {
+      "name": "row-align-assert",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); return row ? getComputedStyle(row).alignItems === 'flex-start' : false; })()",
+      "expect": true
+    },
+    { "name": "ensure-max", "eval": "(() => { const s = document.querySelector('.st-filter + .fp-splitter') || document.querySelector('.fp-splitter'); if (!s) return 'no-splitter'; s.focus(); s.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })); return true; })()" },
+    { "name": "ensure-max-ready", "timeout": 8000, "waitFor": "(document.querySelector('.st-filter .ft-row')?.getBoundingClientRect().width ?? 0) >= 400" },
+    {
+      "name": "layout-wide",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const q = (c) => row.querySelector(c); const top = (e) => e ? Math.round(e.getBoundingClientRect().top) : null; const what = q('.ft-row__what'); const op = q('.ft-row__op'); const val = q('.ft-row__value'); const rm = q('.ft-row__remove'); const rr = row.getBoundingClientRect(); const rmr = rm ? rm.getBoundingClientRect() : null; return JSON.stringify({ rowW: Math.round(rr.width), whatTop: top(what), opTop: top(op), valueTop: top(val), sameLine: top(what) === top(op) && top(what) === top(val), crossTopDelta: rmr ? Math.round(rmr.top - rr.top) : null, crossRightDelta: rmr ? Math.round(rr.right - rmr.right) : null }); })()"
+    },
+    {
+      "name": "layout-wide-one-line",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const t = (c) => { const e = row.querySelector(c); return e ? Math.round(e.getBoundingClientRect().top) : null; }; return t('.ft-row__what') === t('.ft-row__op') && t('.ft-row__what') === t('.ft-row__value'); })()",
+      "expect": true
+    },
+    {
+      "name": "cross-top-right-wide",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const rm = row.querySelector('.ft-row__remove'); const rr = row.getBoundingClientRect(); const rmr = rm ? rm.getBoundingClientRect() : null; if (!rmr) return false; return (rmr.top - rr.top) <= 8 && (rr.right - rmr.right) <= 8; })()",
+      "expect": true
+    },
+
+    { "name": "panel-to-min", "eval": "(() => { const s = document.querySelector('.st-filter + .fp-splitter') || document.querySelector('.fp-splitter'); if (!s) return 'no-splitter'; s.focus(); s.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })); return true; })()" },
+    { "name": "narrow-ready", "timeout": 8000, "waitFor": "(document.querySelector('.st-filter .ft-row')?.getBoundingClientRect().width ?? 9999) < 400" },
+    {
+      "name": "layout-narrow",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const q = (c) => row.querySelector(c); const top = (e) => e ? Math.round(e.getBoundingClientRect().top) : null; return JSON.stringify({ rowW: Math.round(row.getBoundingClientRect().width), whatTop: top(q('.ft-row__what')), opTop: top(q('.ft-row__op')), valueTop: top(q('.ft-row__value')) }); })()"
+    },
+    {
+      "name": "three-stacked-wide-tops",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const t = (c) => { const e = row.querySelector(c); return e ? Math.round(e.getBoundingClientRect().top) : null; }; const w = t('.ft-row__what'); const o = t('.ft-row__op'); const v = t('.ft-row__value'); return o > w && v > o; })()",
+      "expect": true
+    },
+    {
+      "name": "value-wraps-whole",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const t = (c) => { const e = row.querySelector(c); return e ? Math.round(e.getBoundingClientRect().top) : null; }; const vw = row.querySelector('.ft-row__value').getBoundingClientRect().width; return t('.ft-row__value') > t('.ft-row__what') && vw > 60; })()",
+      "expect": true
+    },
+    {
+      "name": "cross-top-right-narrow",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const rm = row.querySelector('.ft-row__remove'); const rr = row.getBoundingClientRect(); const rmr = rm ? rm.getBoundingClientRect() : null; if (!rmr) return false; return (rmr.top - rr.top) <= 8 && (rr.right - rmr.right) <= 8; })()",
+      "expect": true
+    },
+
+    {
+      "name": "case-b-search",
+      "probe": "(() => { const s = document.querySelector('.st-filter + .fp-splitter') || document.querySelector('.fp-splitter'); const row = () => document.querySelector('.st-filter .ft-row'); const top = (e) => e ? Math.round(e.getBoundingClientRect().top) : -1; const caseB = () => { const r = row(); if (!r) return false; const w = r.querySelector('.ft-row__what'); const o = r.querySelector('.ft-row__op'); const v = r.querySelector('.ft-row__value'); return top(w) === top(o) && top(v) > top(w); }; for (let i = 0; i < 40; i += 1) { if (caseB()) { const r = row(); return JSON.stringify({ found: true, step: i, rowW: Math.round(r.getBoundingClientRect().width), whatTop: top(r.querySelector('.ft-row__what')), opTop: top(r.querySelector('.ft-row__op')), valueTop: top(r.querySelector('.ft-row__value')), crossTopRight: (() => { const rm = r.querySelector('.ft-row__remove'); const rr = r.getBoundingClientRect(); const rmr = rm ? rm.getBoundingClientRect() : null; return !!rmr && (rmr.top - rr.top) <= 8 && (rr.right - rmr.right) <= 8; })() }); } s.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); } return JSON.stringify({ found: false }); })()"
+    },
+    {
+      "name": "case-b-found",
+      "probe": "(() => { const row = () => document.querySelector('.st-filter .ft-row'); const top = (e) => e ? Math.round(e.getBoundingClientRect().top) : -1; const r = row(); if (!r) return false; const w = r.querySelector('.ft-row__what'); const o = r.querySelector('.ft-row__op'); const v = r.querySelector('.ft-row__value'); return top(w) === top(o) && top(v) > top(w); })()",
+      "expect": true
+    },
+
+    { "name": "switch-to-dark", "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()" },
+    {
+      "name": "dark-arrows-and-switch",
+      "probe": "(() => { const sw = document.querySelector('.st-filter .ft-row .fv-mode'); const seg = sw ? sw.querySelector('.ui-btn') : null; const cs = seg ? getComputedStyle(seg) : null; const row = document.querySelector('.st-filter .ft-row'); return JSON.stringify({ theme: document.documentElement.dataset.theme, modeCount: row ? row.querySelectorAll('.fv-mode').length : -1, switchFont: cs ? cs.fontSize : null, switchPadTop: cs ? cs.paddingTop : null, rowBg: getComputedStyle(row).backgroundColor }); })()"
+    },
+    {
+      "name": "dark-layout-intact",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); if (!row) return false; const rm = row.querySelector('.ft-row__remove'); const rr = row.getBoundingClientRect(); const rmr = rm ? rm.getBoundingClientRect() : null; return document.documentElement.dataset.theme === 'dark' && row.querySelectorAll('.fv-mode').length === 1 && getComputedStyle(row).alignItems === 'flex-start' && !!rmr && (rmr.top - rr.top) <= 8 && (rr.right - rmr.right) <= 8; })()",
+      "expect": true
+    }
+  ]
+}
