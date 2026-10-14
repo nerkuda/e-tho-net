@@ -94,6 +94,7 @@ import {
 import {
   createBodyExpander,
   SERVER_TRANSCLUSION_LABELS,
+  withRawSourceOffsets,
   type BodyExpander,
 } from './transclusion-service.js';
 
@@ -909,24 +910,30 @@ function renderSection(
   // нужны, и превью/файл не должны расходиться по содержимому (ADR 06874c5d).
   const sourceMap = ctx.exportSink === undefined;
   const textRenders = sectionTexts.map((t) => {
-    // Превью (`sourceMap`): рендерим ИСХОДНЫЙ `body_md`, чтобы `data-md-*`
-    // совпадали с ним (ошибка 3b3035cf, замечание верификатора: при рендере
-    // развёрнутого текста офсеты после вставки «уезжали» за длину `body_md`);
-    // трансклюзии достраивает клиент общим путём просмотра — как тела ленты.
-    // Экспорт/печать (`exportSink`, без разметки): разворачивает сервер, чтобы
-    // ссылка не утекла в файл. `body_md` в DTO в обоих случаях остаётся исходным.
+    // Трансклюзии раскрываем ВСЕГДА — в превью (клиент рендерит серверный HTML
+    // как есть), в MCP-сборке и в экспорте: требование `2fb33964` «во всех
+    // markdown-полях» и польза агенту-потребителю. Для превью (`sourceMap`)
+    // офсеты `data-md-*` «сворачиваем» обратно в координаты `body_md`
+    // (`withRawSourceOffsets`): собственный текст владельца точен, внутри вставок
+    // разметки нет (клик там — фолбэк). `body_md` в DTO остаётся исходным.
     const body = ctx.comments.get(t.thoughtId) ?? '';
-    const renderSource = body.trim() === '' ? '' : sourceMap ? body : ctx.expand(body);
-    const result =
-      renderSource.trim() === ''
-        ? { html: '', headings: [] as PublicationHeading[] }
-        : renderPublicationFragment(renderSource, {
+    const expanded = body.trim() === '' ? '' : ctx.expand(body);
+    const rendered =
+      expanded.trim() === ''
+        ? null
+        : renderPublicationFragment(expanded, {
             baseLevel: headingNumber,
             headingAnchor: headingAnchorFor(t.thoughtId),
             resolveLink: ctx.resolver,
             transclusion: { labels: SERVER_TRANSCLUSION_LABELS },
             ...(sourceMap ? { sourceMap: true } : {}),
           });
+    const result =
+      rendered === null
+        ? { html: '', headings: [] as PublicationHeading[] }
+        : sourceMap
+          ? { ...rendered, html: withRawSourceOffsets(body, expanded, rendered.html) }
+          : rendered;
     return { text: t, body, result };
   });
 

@@ -116,6 +116,106 @@ export function createPlainBodyExpander(ndb: NetworkDb): BodyExpander {
 export const createSnippetExpander = createPlainBodyExpander;
 
 /**
+ * Соответствие офсетов РАЗВЁРНУТОГО текста исходному `body_md` (ошибка
+ * `3b3035cf`). Развёртка копирует собственные фрагменты текста (между
+ * ссылками-трансклюзиями) ДОСЛОВНО, поэтому нужны две вещи: понять, попал ли
+ * офсет внутрь вставки (там разметка `data-md-*` не ставится — резолв каретки
+ * идёт фолбэком), и перевести офсет собственного фрагмента обратно в координаты
+ * `body_md` (иначе клик по своим абзацам «плывёт» относительно `body_md`).
+ */
+export interface ExpandedOffsetAlign {
+  /** Офсет внутри вставки (между собственными фрагментами) — разметку не ставим. */
+  insideInsertion(offset: number): boolean;
+  /** Исходный офсет для офсета развёрнутого текста. */
+  toRaw(offset: number): number;
+}
+
+/**
+ * Строит {@link ExpandedOffsetAlign} для пары «исходный → развёрнутый текст».
+ * Собственные фрагменты находятся в развёрнутом тексте ДОСЛОВНО (`indexOf` от
+ * движущегося курсора — порядок и непересечение гарантированы развёрткой),
+ * промежутки между ними — блоки вставок. Разбор ссылок — только парсером
+ * `@etn/markdown` (`parseTransclusions`), своего разбора ссылок-трансклюзий
+ * здесь нет (сторож `own-transclusion-outside-package`).
+ *
+ * `null` — трансклюзий нет либо фрагменты не удалось сопоставить (тогда разметку
+ * оставляем как есть — лучше, чем испортить офсеты).
+ */
+export function alignExpandedOffsets(raw: string, expanded: string): ExpandedOffsetAlign | null {
+  const refs = parseTransclusions(raw);
+  if (refs.length === 0) return null;
+  const ranges: Array<{ expStart: number; expEnd: number; rawStart: number }> = [];
+  let expCursor = 0;
+  let rawCursor = 0;
+  for (const ref of refs) {
+    const own = raw.slice(rawCursor, ref.start);
+    if (own.length > 0) {
+      const idx = expanded.indexOf(own, expCursor);
+      if (idx < 0) return null;
+      ranges.push({ expStart: idx, expEnd: idx + own.length, rawStart: rawCursor });
+      expCursor = idx + own.length;
+    }
+    rawCursor = ref.end;
+  }
+  const tail = raw.slice(rawCursor);
+  if (tail.length > 0) {
+    const idx = expanded.indexOf(tail, expCursor);
+    if (idx < 0) return null;
+    ranges.push({ expStart: idx, expEnd: idx + tail.length, rawStart: rawCursor });
+  }
+  if (ranges.length === 0) return null;
+  const containing = (offset: number): (typeof ranges)[number] | undefined =>
+    ranges.find((r) => offset >= r.expStart && offset <= r.expEnd);
+  return {
+    insideInsertion: (offset: number): boolean => containing(offset) === undefined,
+    toRaw: (offset: number): number => {
+      const hit = containing(offset);
+      if (hit !== undefined) return hit.rawStart + (offset - hit.expStart);
+      const next = ranges.find((r) => r.expStart > offset);
+      if (next !== undefined) return next.rawStart;
+      const last = ranges[ranges.length - 1]!;
+      return last.rawStart + (last.expEnd - last.expStart);
+    },
+  };
+}
+
+/** Атрибут-офсет разметки позиций единого рендерера (S)
+ *  (`data-md-start`/`-end`/`-after`; `data-md-shift`/`-leaf` не трогаем). */
+const SOURCE_OFFSET_ATTR_RE = /\s(data-md-(?:start|end|after))="(\d+)"/g;
+
+/**
+ * Переписывает офсеты `data-md-*` развёрнутого текста в координаты исходного
+ * `body_md` (см. {@link alignExpandedOffsets}); атрибуты внутри вставок
+ * снимаются — клик там резолвится фолбэком по слову. Офсеты в `data-md-shift`
+ * (границы в РЕНДЕРНЫХ символах) не зависят от сдвига источника и остаются как
+ * есть.
+ */
+export function remapExpandedSourceOffsets(html: string, align: ExpandedOffsetAlign): string {
+  return html.replace(SOURCE_OFFSET_ATTR_RE, (whole, name: string, value: string) => {
+    const offset = Number(value);
+    if (align.insideInsertion(offset)) return '';
+    const mapped = align.toRaw(offset);
+    return mapped === offset ? whole : ` ${name}="${mapped}"`;
+  });
+}
+
+/**
+ * Развёрнутый текст превью-рендер с офсетами, «свёрнутыми» в координаты
+ * исходного `body_md` (ошибка `3b3035cf`): трансклюзии раскрыты, а `data-md-*`
+ * собственного текста точны относительно `body_md`. `render` — рендер `@etn/markdown`
+ * (публикационный, с `sourceMap`); развёртку и разбор даёт общий пакет.
+ */
+export function withRawSourceOffsets(
+  raw: string,
+  expanded: string,
+  html: string,
+): string {
+  const align = alignExpandedOffsets(raw, expanded);
+  return align === null ? html : remapExpandedSourceOffsets(html, align);
+}
+
+
+/**
  * Презентер тела комментария для MCP-инструментов, отдающих РЯДОМ `body_md` и
  * `body_html` (`etn.comments.get`, `etn.chronicle.query`): разворачивает
  * трансклюзии (как {@link createBodyExpander}) и пересобирает `body_html` из
