@@ -909,15 +909,18 @@ function renderSection(
   // нужны, и превью/файл не должны расходиться по содержимому (ADR 06874c5d).
   const sourceMap = ctx.exportSink === undefined;
   const textRenders = sectionTexts.map((t) => {
-    // `body_md` в DTO остаётся ИСХОДНЫМ (источник карты каретки), а рендерится
-    // развёрнутый текст: `sourceMap` считается от него, чтобы разметка не
-    // разъехалась (точность клика внутри вставок не требуется, 3b3035cf).
+    // Превью (`sourceMap`): рендерим ИСХОДНЫЙ `body_md`, чтобы `data-md-*`
+    // совпадали с ним (ошибка 3b3035cf, замечание верификатора: при рендере
+    // развёрнутого текста офсеты после вставки «уезжали» за длину `body_md`);
+    // трансклюзии достраивает клиент общим путём просмотра — как тела ленты.
+    // Экспорт/печать (`exportSink`, без разметки): разворачивает сервер, чтобы
+    // ссылка не утекла в файл. `body_md` в DTO в обоих случаях остаётся исходным.
     const body = ctx.comments.get(t.thoughtId) ?? '';
-    const bodyExpanded = body.trim() === '' ? '' : ctx.expand(body);
+    const renderSource = body.trim() === '' ? '' : sourceMap ? body : ctx.expand(body);
     const result =
-      bodyExpanded.trim() === ''
+      renderSource.trim() === ''
         ? { html: '', headings: [] as PublicationHeading[] }
-        : renderPublicationFragment(bodyExpanded, {
+        : renderPublicationFragment(renderSource, {
             baseLevel: headingNumber,
             headingAnchor: headingAnchorFor(t.thoughtId),
             resolveLink: ctx.resolver,

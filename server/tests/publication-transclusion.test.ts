@@ -135,7 +135,7 @@ describe('публикация: развёртка трансклюзий (ош�
     }
   });
 
-  it('текст раздела разворачивает ![[#id#Раздел]], а DTO отдаёт ИСХОДНЫЙ body_md', () => {
+  it('текст раздела: экспорт разворачивает ![[#id#Раздел]], превью отдаёт ИСХОДНЫЙ body_md', () => {
     const ndb = createInMemoryNetworkDb();
     try {
       const type = createThoughtType(ndb, { name: 'Doc' }, USER);
@@ -155,12 +155,71 @@ describe('публикация: развёртка трансклюзий (ош�
         USER,
       );
 
+      // Экспортный HTML (`exportSink`, без sourceMap) сервер разворачивает сам.
+      const document = buildPublicationExportDocument(ndb, pub.id, USER, () => null);
+      const exportText = document.sections.find((s) => s.thought_id === a)!.texts[0]!;
+      assert.ok(
+        exportText.body_html.includes('Содержимое раздела'),
+        `нет содержимого раздела: ${exportText.body_html}`,
+      );
+      assert.ok(
+        exportText.body_html.includes('md-transclusion'),
+        `нет блока md-transclusion: ${exportText.body_html}`,
+      );
+      assert.ok(
+        !exportText.body_html.includes('Хвост'),
+        `взято лишнее вне раздела: ${exportText.body_html}`,
+      );
+
+      // Превью (`assemblePublication`) отдаёт ИСХОДНЫЙ `body_md` и рендерит его
+      // как есть: разметку каретки клиент считает от `body_md`, а вставки
+      // достраивает общим клиентским путём просмотра.
       const doc = assemblePublication(ndb, pub.id, USER);
       const dto = doc.sections.find((s) => s.thought_id === a)!.texts[0]!;
-      assert.ok(dto.body_html.includes('Содержимое раздела'), `нет содержимого раздела: ${dto.body_html}`);
-      assert.ok(dto.body_html.includes('md-transclusion'), `нет блока md-transclusion: ${dto.body_html}`);
-      assert.ok(!dto.body_html.includes('Хвост'), `взято лишнее вне раздела: ${dto.body_html}`);
       assert.equal(dto.body_md, raw, 'body_md DTO должен остаться исходным');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('sourceMap превью считается от исходного body_md (офсеты не выходят за его длину)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+      const plain = createThoughtType(ndb, { name: 'Plain' }, USER);
+      const a = seedThought(ndb, 'A', type.id);
+      const text = seedThought(ndb, 'Текст', plain.id);
+      const source = seedThought(ndb, 'Источник', null);
+      // Вставка содержит ДЛИННЫЙ абзац: при рендере развёрнутого текста офсеты
+      // собственного абзаца после ссылки «уезжали» за длину body_md.
+      seedComment(ndb, source, 'x'.repeat(400));
+      const raw = `абзац один\n\n![[#${source}]]\n\nабзац два`;
+      seedComment(ndb, text, raw);
+
+      const prop = seedTextProperty(ndb, type.id);
+      seedLink(ndb, a, text, linkTypeOf(ndb, prop), 0);
+      const pub = createPublication(
+        ndb,
+        { title: 'Док', title_recipe: recipeForType(type.id), text_sources: [prop] },
+        USER,
+      );
+
+      const doc = assemblePublication(ndb, pub.id, USER);
+      const dto = doc.sections.find((s) => s.thought_id === a)!.texts[0]!;
+      assert.ok(
+        !dto.body_html.includes('md-transclusion'),
+        `превью не разворачивает текст (развёртку делает клиент): ${dto.body_html}`,
+      );
+      const offsets = [...dto.body_html.matchAll(/data-md-(?:start|end)="(\d+)"/g)].map((m) =>
+        Number(m[1]),
+      );
+      assert.ok(offsets.length > 0, 'нет разметки позиций в превью');
+      for (const offset of offsets) {
+        assert.ok(
+          offset <= dto.body_md.length,
+          `офсет ${offset} выходит за длину body_md (${dto.body_md.length})`,
+        );
+      }
     } finally {
       ndb.close();
     }
