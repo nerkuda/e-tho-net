@@ -115,4 +115,14 @@ describe('резюме и realtime-патч блока разворачиваю�
       'вставки живого снимка резюме достраиваются общим клиентским путём',
     );
   });
+
+  test('realtime-патч блока идёт по НОВОМУ markdown-источнику', () => {
+    assert.match(
+      WS,
+      /function patchBlockText\(thoughtId: string, md: string\)/,
+      'точечный патч блока принимает markdown-источник, а не готовый HTML',
+    );
+    assert.match(WS, /patchBlockText\(ownerId, bodyMd\)/, 'realtime передаёт новый body_md');
+    assert.match(WS, /block\.md = md/, 'модель блока синхронно обновляет md');
+  });
 });

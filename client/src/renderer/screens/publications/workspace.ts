@@ -848,8 +848,8 @@ export function mountPublicationWorkspace(
   const editorHighlightUnsub = store.subscribe(paintEditorHighlight);
 
   /**
-   * Точечно заменяет КОНТЕНТ блоков мысли по готовому HTML (без чтения сборки):
-   * у раздела — предисловие, у текста — сам блок. Используется при
+   * Точечно заменяет КОНТЕНТ блоков мысли по её markdown-источнику (без чтения
+   * сборки): у раздела — предисловие, у текста — сам блок. Используется при
    * активном `staleRebuild`, когда тянуть полную сборку нельзя (иначе
    * материализуется отложенный рецепт и порядок разделов сдвигается,
    * замечание-блокер 1 приёмки b02ef1cf).
@@ -859,28 +859,41 @@ export function mountPublicationWorkspace(
    * блок неизменным и не перерисовал его при следующем полном рендере — прямой
    * патч DOM «просачивался» бы в сборку (блокер приёмки b02ef1cf).
    *
+   * Трансклюзии достраиваются ОБЩИМ клиентским путём просмотра из НОВОГО
+   * markdown-источника (замечание 2 верификатора, ошибка 3b3035cf): прежний
+   * приём передавал готовый HTML, а `renderTextBody` достраивал вставки из
+   * СТАРОГО `block.md` — после realtime-правки вставка отображалась как до неё.
+   *
    * Компромисс: HTML собирается общим клиентским `renderMarkdown`, а не
    * серверным `renderPublicationFragment` (сервер умеет сдвиг уровней заголовков,
    * якоря и подстановку wiki-ссылок). Для предисловия/текста это несущественно;
    * расхождение снимет ближайшая пересборка.
    */
-  function patchBlockText(thoughtId: string, html: string): void {
+  function patchBlockText(thoughtId: string, md: string): void {
+    const html = renderMarkdown(md);
     for (const node of blockNodesForThought(thoughtId)) {
       const block = blockForKey(node.dataset?.['blockKey']);
       if (node.classList.contains('pub-doc-section')) {
         const target = node.querySelector<HTMLElement>('.pub-doc-preamble');
         if (target === null) continue;
         renderHtml(target, html);
+        // Предисловие с трансклюзией достраиваем из НОВОГО `md` — как текст ниже.
+        if (htmlHasTransclusionMarkup(html)) void expandTextTransclusions(target, md);
       } else {
         // Текст-блок: `renderTextBody` сам решает, что показать при пустом
-        // комментарии; `renderHtml` внутри сносит грип DnD — возвращаем его.
-        renderTextBody(node, html, block !== null && block.kind === 'text' ? block.md : '');
+        // комментарии, и достраивает вставки из НОВОГО `md`; `renderHtml` внутри
+        // сносит грип DnD — возвращаем его.
+        renderTextBody(node, html, md);
         node.prepend(makeGrip(t('publications.ws.dragHandle')));
       }
       // Синхронизируем модель (иначе сигнатура не отразит правку).
       if (block === null) continue;
-      if (block.kind === 'section') block.preambleHtml = html;
-      else if (block.kind === 'text') block.html = html;
+      if (block.kind === 'section') {
+        block.preambleHtml = html;
+      } else if (block.kind === 'text') {
+        block.html = html;
+        block.md = md;
+      }
     }
   }
 
@@ -941,7 +954,7 @@ export function mountPublicationWorkspace(
     }
     if (staleRebuild) {
       if (kind === 'permanent' && ownerId !== undefined && typeof bodyMd === 'string') {
-        patchBlockText(ownerId, renderMarkdown(bodyMd));
+        patchBlockText(ownerId, bodyMd);
       }
       return;
     }
