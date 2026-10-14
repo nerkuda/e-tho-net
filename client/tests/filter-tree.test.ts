@@ -600,15 +600,17 @@ describe('дерево условий: сгруппированные списк
     const link = mod.filterTreeOperatorMenu('thoughts', 'property', 'link');
     const titles = link.map((s: any) => s.title);
     // Группы «Значение/Несколько/Иерархия» сведены в «Сравнение» (п.7а).
-    assert.deepEqual(titles, ['Сравнение', 'Выборка', 'Состояние']);
+    // Секции «Выборка» нет (требование заказчика 2026-10-14, ошибка 696b3c3b
+    // п.7): набор задаёт переключатель «список ↔ выборка», а не операторы.
+    assert.deepEqual(titles, ['Сравнение', 'Состояние']);
     const byKey = new Map(link.map((s: any) => [s.key, s]));
     assert.deepEqual(
       (byKey.get('compare') as any).rows[0].cells.map((c: any) => [c.op, c.side, c.label]),
       [
-        ['eq', 'yes', 'равно'],
-        ['ne', 'no', 'не равно'],
+        ['eq', 'yes', '='],
+        ['ne', 'no', '≠'],
       ],
-      'двухколоночная пара «утверждение | отрицание»',
+      'двухколоночная пара «утверждение | отрицание»; подписи краткие (п.10)',
     );
     // «в списке»/«в иерархии» — в объединённой группе «Сравнение» (п.7а).
     const compareOps = (byKey.get('compare') as any).rows.flatMap((r: any) =>
@@ -617,11 +619,14 @@ describe('дерево условий: сгруппированные списк
     for (const op of ['in', 'not_in', 'in_hierarchy', 'not_in_hierarchy']) {
       assert.ok(compareOps.includes(op), `${op} — в группе «Сравнение»`);
     }
-    assert.deepEqual(
-      (byKey.get('sets') as any).rows[0].cells.map((c: any) => c.op),
-      ['any_of', 'none_of'],
-    );
-    assert.deepEqual((byKey.get('sets') as any).rows[1].cells.map((c: any) => c.op), ['all_of']);
+    // Операторы группы «Выборка» в списке UI отсутствуют (п.7).
+    assert.equal(byKey.has('sets'), false, 'секции «Выборка» в списке операторов нет');
+    for (const op of ['any_of', 'all_of', 'none_of']) {
+      assert.ok(
+        !compareOps.includes(op),
+        `под-выборочный оператор ${op} из UI убран (переключатель «список ↔ выборка» заменяет)`,
+      );
+    }
     assert.deepEqual(
       (byKey.get('state') as any).rows[0].cells.map((c: any) => c.op),
       ['not_empty', 'is_empty'],
@@ -684,7 +689,7 @@ describe('дерево условий: сгруппированные списк
     const type = mod.filterTreeOperatorMenu('thoughts', 'type');
     const typeOps = type.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
     assert.ok(typeOps.includes('in_hierarchy') && typeOps.includes('has'));
-    assert.ok(!typeOps.includes('all_of'), '«все в выборке» типу не предлагается (набор ядра)');
+    assert.ok(!typeOps.includes('all_of'), '«все в выборке» в списке UI отсутствует (п.7)');
 
     // Профиль хроники — свои операнды и свой набор.
     const record = mod.filterTreeOperatorMenu('chronicle', 'record_title');
@@ -742,7 +747,7 @@ describe('дерево условий: сгруппированные списк
       items.some((i) => i.dataset['key'] === 'ne' && i.dataset['side'] === 'no'),
       'отрицание помечено колонкой',
     );
-    buttonByText(root, 'ft-choice__item', 'не в списке')!.emit('click');
+    buttonByText(root, 'ft-choice__item', 'не в')!.emit('click');
     assert.deepEqual(picked, ['not_in'], 'выбор строки отдаёт код оператора');
   });
 });
@@ -1268,6 +1273,44 @@ describe('дерево условий: диагностика строк (эле
       'padding переключателя уменьшен вдвое (п.2)',
     );
     assert.match(rule, /font-size:\s*0\.84em/, 'шрифт переключателя — 0.84em (п.2)');
+  });
+
+  it('CSS: hover-видимость кнопок/крестика и компактный заголовок группы (пп.2,3,4)', () => {
+    const css = fs.readFileSync(path.join(RENDERER, 'styles', 'filter-tree.css'), 'utf8');
+
+    // П.2: кнопки «+ условие»/«+ группу» скрыты и показываются по наведению на
+    // СВОЮ (глубочайшую) группу — ВИДИМОСТЬ, не удаление из DOM.
+    const actions = /\.ft-group__actions\s*\{([^}]*)\}/s.exec(css)?.[1] ?? '';
+    assert.match(actions, /opacity:\s*0/, 'кнопки группы скрыты по умолчанию (п.2)');
+    assert.doesNotMatch(actions, /display:\s*none/, 'кнопки не удалены из DOM — размеры не прыгают (п.2)');
+    assert.match(
+      css,
+      /\.ft-group:hover:not\(:has\(\.ft-group:hover\)\)\s*>\s*\.ft-group__body\s*>\s*\.ft-group__actions\s*\{[^}]*opacity:\s*1/s,
+      'кнопки видны только у глубочайшей наведённой группы (п.2)',
+    );
+
+    // П.3: крестик условия виден по наведению на строку ИЛИ фокусу внутри неё.
+    const removeBlock = /\.ft-row__remove\s*\{([^}]*)\}/s.exec(css)?.[1] ?? '';
+    assert.match(removeBlock, /opacity:\s*0/, 'крестик строки скрыт по умолчанию (п.3)');
+    assert.doesNotMatch(removeBlock, /display:\s*none/, 'крестик не удалён из потока (п.3)');
+    assert.match(
+      css,
+      /\.ft-row:hover\s+\.ft-row__remove,\s*\.ft-row:focus-within\s+\.ft-row__remove\s*\{[^}]*opacity:\s*1/s,
+      'крестик виден по hover строки и по фокусу внутри (п.3)',
+    );
+
+    // П.4: заголовок без своей заливки (фон = фон группы), компактнее по padding-y,
+    // шрифт внутри заголовка — полужирный (600).
+    const head = /\.ft-group__head\s*\{([^}]*)\}/s.exec(css)?.[1] ?? '';
+    assert.match(head, /background:\s*none/, 'фон заголовка = фон группы (п.4)');
+    assert.doesNotMatch(head, /background:\s*var\(--surface-2\)/, 'прежняя заливка surface-2 убрана (п.4)');
+    assert.match(head, /padding:\s*calc\(var\(--space-1\)\s*\/\s*2\)/, 'вертикальный padding заголовка уменьшен (п.4)');
+    assert.match(head, /font-weight:\s*var\(--font-weight-semibold\)/, 'шрифт заголовка толще (п.4)');
+    assert.match(
+      css,
+      /\.ft-group__head\s+\.ft-group__connector[\s\S]{0,220}font-weight:\s*var\(--font-weight-semibold\)/,
+      'коннектор/НЕ-чип внутри заголовка — полужирные (п.4)',
+    );
   });
 });
 

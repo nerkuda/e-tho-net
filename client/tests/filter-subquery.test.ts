@@ -208,7 +208,9 @@ describe('под-выборка: релевантность операнда —
     assert.equal(relevant({ kind: 'property', property_id: PLACE.id }, 'in_hierarchy'), true);
     assert.equal(relevant({ kind: 'id' }, 'in_hierarchy'), true, '«Мысль в иерархии» — корни из выборки');
     assert.equal(relevant({ kind: 'id' }, 'not_in_hierarchy'), true);
-    assert.equal(relevant({ kind: 'id' }, 'in'), false, '«Мысль в списке» — под-выборка не предлагается (дубль подбора)');
+    assert.equal(relevant({ kind: 'id' }, 'in'), true, '«Мысль в списке» — вхождение в выборку (п.8)');
+    assert.equal(relevant({ kind: 'id' }, 'not_in'), true, '«Мысль не в списке» — выборка (п.8)');
+    assert.equal(relevant({ kind: 'id' }, 'all_of'), false, '«Мысль» одиночный — «все в (выборке)» отвергает сервер');
 
     assert.equal(relevant({ kind: 'type' }, 'all_of'), false, '«Тип» одиночный — «все в (выборке)» отвергает сервер');
     assert.equal(relevant({ kind: 'property', property_id: CITY.id }, 'in'), false, 'текстовое свойство — не ссылка');
@@ -276,7 +278,7 @@ describe('под-выборка: релевантность операнда —
     } as any;
     assert.equal(
       sub.filterSubquerySummary(tree, DATA),
-      'Город равно Москва И (Дата больше 2026-01-01 ИЛИ Место покупки не заполнено)',
+      'Город = Москва И (Дата больше 2026-01-01 ИЛИ Место покупки не заполнено)',
     );
     assert.equal(sub.filterSubquerySummary({ kind: 'group', op: 'and', children: [] } as any, DATA), 'без условий');
     assert.match(
@@ -382,9 +384,9 @@ describe('под-выборка: ячейка значения «список �
     assert.equal(cell.dataset['mode'], 'subquery', 'режим вычисляется из вида значения');
     const chip = exactOne(cell, 'fq-chip')!;
     assert.equal(exactOne(cell, 'fv'), null, 'в режиме «выборка» виджет списка не показывается');
-    assert.equal(chip.dataset['summary'], 'Город равно Москва');
-    assert.equal(exactOne(chip, 'fq-chip__open')!.flatText(), 'Город равно Москва', 'подпись чипа');
-    assert.match(exactOne(chip, 'fq-chip__open')!.title, /Город равно Москва/, 'тултип несёт полный текст');
+    assert.equal(chip.dataset['summary'], 'Город = Москва');
+    assert.equal(exactOne(chip, 'fq-chip__open')!.flatText(), 'Город = Москва', 'подпись чипа');
+    assert.match(exactOne(chip, 'fq-chip__open')!.title, /Город = Москва/, 'тултип несёт полный текст');
     assert.match(exactOne(chip, 'fq-chip__open')!.title, /модальном слое/, 'и подсказку о повторном открытии');
 
     exactOne(chip, 'fq-chip__open')!.emit('click', {});

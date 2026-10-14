@@ -2334,8 +2334,12 @@ export function parseFilterDefinitionTree(
  * состава нет.
  */
 export const AST_OPERATOR_LABELS: Record<FilterAstOperator, string> = {
-  eq: 'равно',
-  ne: 'не равно',
+  // Краткие знаки сравнения (требование заказчика 2026-10-14, ошибка 696b3c3b
+  // п.10): «равно» → «=», «не равно» → «≠», «в списке» → «в», «не в списке» →
+  // «не в» — фраза-превью собирается этими подписями и становится короче.
+  // Тултипы операторов остаются полными словами (`AST_OPERATOR_DESCRIPTIONS`).
+  eq: '=',
+  ne: '≠',
   contains: 'содержит',
   not_contains: 'не содержит',
   gt: 'больше',
@@ -2344,8 +2348,8 @@ export const AST_OPERATOR_LABELS: Record<FilterAstOperator, string> = {
   lte: 'меньше или равно',
   between: 'между',
   not_between: 'не между',
-  in: 'в списке',
-  not_in: 'не в списке',
+  in: 'в',
+  not_in: 'не в',
   // Формулировки заказчика 2026-10-14 (ошибка 4258e694, п.7б).
   any_of: 'любой из',
   all_of: 'все из',

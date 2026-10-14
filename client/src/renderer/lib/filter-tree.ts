@@ -342,6 +342,13 @@ export interface FilterTreeOperatorMenuSection {
  * ({@link OPERATOR_MENU_SECTIONS}[0].dateRows): «больше|меньше»,
  * «больше или равно|меньше или равно», «между|не между» (п.8). Состав — подмножество
  * этого словаря, отобранное реестром профиля.
+ *
+ * Секции «Выборка» (`any_of`/`all_of`/`none_of`) здесь НЕТ (требование заказчика
+ * 2026-10-14, ошибка 696b3c3b п.7): набор значений задаёт переключатель
+ * «список ↔ выборка» на `in`/`not_in`/`in_hierarchy`/`not_in_hierarchy`
+ * (`lib/filter-subquery.ts`), а эти операторы дублировали бы его. Серверная
+ * поддержка операторов сохранена (wire-совместимость старых сохранённых отборов,
+ * реестр профилей `@etn/shared` не тронут) — новые отборы их не создают.
  */
 const OPERATOR_MENU_SECTIONS: ReadonlyArray<{
   key: string;
@@ -369,14 +376,6 @@ const OPERATOR_MENU_SECTIONS: ReadonlyArray<{
       { yes: ['gt'], no: ['lt'] },
       { yes: ['gte'], no: ['lte'] },
       { yes: ['between'], no: ['not_between'] },
-    ],
-  },
-  {
-    key: 'sets',
-    title: 'Выборка',
-    rows: [
-      { yes: ['any_of'], no: ['none_of'] },
-      { yes: ['all_of'], no: [] },
     ],
   },
   { key: 'state', title: 'Состояние', rows: [{ yes: ['not_empty'], no: ['is_empty'] }] },

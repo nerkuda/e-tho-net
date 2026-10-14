@@ -94,11 +94,11 @@ const SUBQUERY_SUPPORTED_KINDS: ReadonlySet<FilterAstEntityKind> = new Set([
   'parents',
   'children',
   'type',
-  // «Мысль» (`id`, задача a577875b): под-выборка служит ИСТОЧНИКОМ КОРНЕЙ
-  // иерархического обхода — «в иерархии» от мыслей выборки (ошибка f4e99090
-  // п.4). Наборный оператор `in` на «Мысли» переключателя не получает (см.
-  // {@link filterSubqueryRelevantLeaf}): релевантность у неё только
-  // иерархическая, как у `parents`/`children`.
+  // «Мысль» (`id`, задача a577875b): под-выборка — набор мыслей и ИСТОЧНИК
+  // КОРНЕЙ иерархического обхода («в иерархии» от мыслей выборки). Переключатель
+  // доступен и наборным «в списке»/«не в списке» — вхождение мысли в выборку
+  // (ошибка 696b3c3b п.8; сервер исполняет оба вида, см.
+  // {@link filterSubqueryRelevantLeaf}).
   'id',
 ]);
 
@@ -152,11 +152,13 @@ export function filterSubqueryRelevantLeaf(leaf: FilterTreeLeaf, data: FilterTre
   if (!SUBQUERY_LEAF_OPERATORS.has(leaf.operator)) return false;
   const kind = leaf.entity.kind;
   if (!filterSubquerySupported(kind)) return false;
-  // «Мысль» (`id`): под-выборка осмысленна только как источник корней
-  // иерархического обхода («в иерархии»/«не в иерархии»); на «в списке» и
-  // «не в списке» она дублировала бы обычный подбор мыслей — переключатель не
-  // предлагается (ошибка f4e99090 п.4).
-  if (kind === 'id') return leaf.operator === 'in_hierarchy' || leaf.operator === 'not_in_hierarchy';
+  // «Мысль» (`id`): под-выборка — набор мыслей. Наборные «в списке»/«не в
+  // списке» дают вхождение мысли в выборку, иерархические «в иерархии»/«не в
+  // иерархии» — обход поддерева выборки. Сервер исполняет ОБА вида (ошибка
+  // 696b3c3b п.8; `AST_SUBQUERY_SUPPORTED`/`case 'id'` в `query-service.ts`).
+  // «Все в выборке» неприменимо — «Мысль» одиночный операнд (сервер отвергает
+  // `all_in`), поэтому `all_of` исключён, как у «Типа».
+  if (kind === 'id') return leaf.operator !== 'all_of';
   if (kind === 'type') return leaf.operator !== 'all_of';
   if (kind !== 'property') return true;
   const ref = leaf.entity.property_id ?? leaf.entity.property ?? '';

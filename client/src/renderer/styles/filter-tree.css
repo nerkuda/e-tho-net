@@ -49,13 +49,29 @@
   background: var(--ft-tone-4);
 }
 
+/*
+ * Заголовок-полоса группы. Компактнее и выразительнее (требование заказчика
+ * 2026-10-14, ошибка 696b3c3b п.4): вертикальный padding уменьшен; фон = фон
+ * группы (тон `.ft-tone-N` наследуется, своей заливки нет) — раньше заголовок
+ * красился `--surface-2` и визуально не отличался от строк условий; шрифт всех
+ * элементов ВНУТРИ заголовка (коннектор-список, НЕ-чип) толще текста условий
+ * (600 против 400).
+ */
 .ft-group__head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
+  padding: calc(var(--space-1) / 2) var(--space-2);
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: none;
+  font-weight: var(--font-weight-semibold);
+}
+
+.ft-group__head .ft-group__connector,
+.ft-group__head .ft-group__connector-label,
+.ft-group__head .ft-group__caret,
+.ft-group__head .ft-group__not {
+  font-weight: var(--font-weight-semibold);
 }
 
 /* Коннектор группы — выпадающий список (требование заказчика 2026-10-13):
@@ -297,20 +313,58 @@
 /* Крестик удаления УСЛОВИЯ закреплён в ВЕРХНЕМ ПРАВОМ УГЛУ строки
    (требование заказчика 2026-10-14, ошибка f4e99090, п.6): абсолютное
    позиционирование не даёт крестику «прыгать» по высоте при любом переносе
-   частей строки — он всегда относится ко всей строке и стоит на её верху. */
+   частей строки — он всегда относится ко всей строке и стоит на её верху.
+   Видим ТОЛЬКО при наведении на строку ИЛИ фокусе ввода в строке (требование
+   заказчика 2026-10-14, ошибка 696b3c3b п.3): место зарезервировано (крестик
+   absolute, строка держит правый отступ), поэтому `opacity`/`pointer-events`,
+   а не `display`; `visibility: hidden` убрал бы крестик из порядка обхода
+   клавиатуры, а `:focus-within` тогда не сработал бы. */
 .ft-row__remove {
   position: absolute;
   top: var(--space-1);
   right: var(--space-1);
   margin-left: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.ft-row:hover .ft-row__remove,
+.ft-row:focus-within .ft-row__remove {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* --- Кнопки группы и выпадающие списки --------------------------------- */
 
+/* Кнопки «+ условие»/«+ группу» видны ТОЛЬКО при наведении на СВОЮ группу
+   (требование заказчика 2026-10-14, ошибка 696b3c3b п.2): при наведении на
+   вложенную группу — только у неё, у родительской/дочерней не видны. Механизм —
+   ВИДИМОСТЬ (opacity/pointer-events), а не удаление из DOM: кнопки всегда в
+   разметке, размеры группы при наведении не «прыгают». `:has(.ft-group:hover)`
+   отсекает РОДИТЕЛЬСКИЕ наведённые группы (hover всплывает к предкам), оставляя
+   лишь глубочайшую наведённую — её кнопки и показываются. */
 .ft-group__actions {
   display: flex;
   gap: var(--space-2);
   padding-top: var(--space-1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.ft-group:hover:not(:has(.ft-group:hover)) > .ft-group__body > .ft-group__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Клавиатурный путь к тем же кнопкам (стандарт 1b5f6200 «функция не живёт
+   только на hover»): Tab на «+ условие»/«+ группу» внутри группы раскрывает их
+   — `:focus-within` глубочайшей сфокусированной группы (так же, как hover у
+   наведённой). Без этого правила кнопки были бы доступны только мышью. */
+.ft-group:focus-within:not(:has(.ft-group:focus-within)) > .ft-group__body > .ft-group__actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .ft-choice {
