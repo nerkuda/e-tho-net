@@ -184,7 +184,11 @@ export type FilterAstEntityKind = (typeof FILTER_AST_ENTITY_KINDS)[number];
  * здесь — общий словарь операндов отбора мыслей.
  */
 export type FilterAstEntity =
-  /** Тождественность мысли: явный список id (операторы `eq`/`ne`/`in`/`not_in`). */
+  /**
+   * Мысль: явный набор id (операторы `eq`/`ne`/`in`/`not_in`) либо она и её
+   * потомки по структурным связям (`in_hierarchy`/`not_in_hierarchy`, режим
+   * связей неприменим — только структурные потомки; задача a577875b).
+   */
   | { kind: 'id' }
   /** Тип мысли. */
   | { kind: 'type' }

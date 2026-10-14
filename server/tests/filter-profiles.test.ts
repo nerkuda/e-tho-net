@@ -215,6 +215,11 @@ describe('реестр профилей контекста (задача 7a798b1
     assert.deepEqual(sets['trashed'], ['eq', 'ne']);
     // «Есть слова» — только matches.
     assert.deepEqual(sets['keywords'], ['matches']);
+    // «Мысль» (id): тождественность набором и «в иерархии»/«не в иерархии» —
+    // выбранные мысли и их потомки (задача a577875b).
+    for (const op of ['eq', 'ne', 'in', 'not_in', 'in_hierarchy', 'not_in_hierarchy'] as const) {
+      assert.ok(sets['id']!.includes(op), `id: ${op}`);
+    }
     // Наборные под-выборочные операторы — только на релевантных операндах.
     for (const kind of ['active', 'trashed', 'keywords', 'author', 'editor', 'created_at', 'properties'] as const) {
       const list = sets[kind]!;

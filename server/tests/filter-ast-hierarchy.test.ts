@@ -272,6 +272,53 @@ describe('«в иерархии» — два режима и обход с visit
     );
   });
 
+  it('операнд «Мысль» (id): «в иерархии» — сами мысли и всё их поддерево; паритет с OR-группой', () => {
+    const ndb = createInMemoryNetworkDb();
+    const x = seedThought(ndb, 'x');
+    const y = seedThought(ndb, 'y');
+    const z = seedThought(ndb, 'z');
+    const q = seedThought(ndb, 'q');
+    const far = seedThought(ndb, 'far');
+    seedLink(ndb, x, y); // x → y (поддерево x)
+    seedLink(ndb, y, z); // y → z
+    seedLink(ndb, q, far); // q → far (второе поддерево)
+
+    // R = {x, q}: сами выбранные мысли + ВСЕ их потомки по структурным связям.
+    const inHierarchy = runAst(ndb, ast(leaf({ kind: 'id' }, 'in_hierarchy', [x, q])));
+    assert.deepEqual(inHierarchy, ['far', 'q', 'x', 'y', 'z']);
+
+    // Паритет с OR-группой из двух условий: «id в R» ИЛИ «родители в иерархии R»
+    // (второе условие — потомки корней). Тот же результат (задача a577875b, DoD).
+    const parity = {
+      op: 'or',
+      children: [
+        leaf({ kind: 'id' }, 'in', [x, q]),
+        leaf({ kind: 'parents' }, 'in_hierarchy', [x, q]),
+      ],
+    } as unknown as FilterAstNode;
+    assert.deepEqual(runAst(ndb, ast(parity)), inHierarchy, 'паритет «id в иерархии» ↔ OR(id, родители)');
+
+    // Отрицание: вне R и вне их поддеревьев — остаётся только второе поддерево {q, far} минус корни вне R.
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'id' }, 'not_in_hierarchy', [x]))), ['far', 'q']);
+
+    // Пустое значение: «в иерархии» — ничего, «не в иерархии» — всё.
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'id' }, 'in_hierarchy', []))), []);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'id' }, 'not_in_hierarchy', []))), ['far', 'q', 'x', 'y', 'z']);
+
+    // Режим связей для «Мысли» неприменим: типизированное ребро иерархию НЕ
+    // образует, `mode: all_links` игнорируется (структурный обход).
+    const lt = seedLinkType(ndb, 'зависит от', 'нужен для');
+    const t = seedThought(ndb, 't');
+    seedLink(ndb, x, t, { type_id: lt });
+    assert.ok(!runAst(ndb, ast(leaf({ kind: 'id' }, 'in_hierarchy', [x]))).includes('t'),
+      'типизированное ребро не входит в структурную иерархию «Мысли»');
+    assert.deepEqual(
+      runAst(ndb, ast(leaf({ kind: 'id' }, 'in_hierarchy', [x], 'all_links'))),
+      runAst(ndb, ast(leaf({ kind: 'id' }, 'in_hierarchy', [x]))),
+      'mode для «Мысли» игнорируется — обход только структурный',
+    );
+  });
+
   it('рёбра корзины и неактивные в иерархию не входят', () => {
     const ndb = createInMemoryNetworkDb();
     const root = seedThought(ndb, 'root');

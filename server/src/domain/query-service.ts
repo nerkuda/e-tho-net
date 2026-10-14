@@ -2097,6 +2097,17 @@ function filterAstLeafClause(
 
   switch (entity.kind) {
     case 'id': {
+      // «В иерархии» по «Мысли»: выбранные мысли (R) и ВСЕ их потомки по
+      // структурным связям — R ∪ subtree(R) (задача a577875b). Механизм обхода
+      // от корней — общий ({@link astHierarchySubtree}); режим связей неприменим
+      // (карточка задачи: только структурные потомки), `leaf.mode` игнорируется.
+      if (operator === 'in_hierarchy' || operator === 'not_in_hierarchy') {
+        const roots = astStringList(leaf.value, operator, `${path}.value`, requestId);
+        if (roots.length === 0) return operator === 'in_hierarchy' ? AST_FALSE : AST_TRUE;
+        const subtree = astHierarchySubtree(ndb, 'structural', roots, astOpts, `${path}.value`, requestId);
+        const match = astIdInClause('t.id', subtree);
+        return operator === 'in_hierarchy' ? match : astNegate(match);
+      }
       // Тождественность мысли: явный список id (операторы eq/ne/in/not_in).
       const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
       if (operator !== 'in' && operator !== 'not_in' && operator !== 'eq' && operator !== 'ne') {

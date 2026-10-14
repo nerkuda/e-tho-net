@@ -324,7 +324,10 @@ export const PROPERTY_OPERATOR_SETS: Readonly<
  * «Автор»/«Редактор» — списки и заполненность.
  */
 const THOUGHT_OPERATOR_SETS: Readonly<Record<string, readonly FilterAstOperator[]>> = {
-  id: ['eq', 'ne', 'in', 'not_in'],
+  // «Мысль» (`id`): тождественность явным набором и «в иерархии» — выбранные
+  // мысли и все их потомки по СТРУКТУРНЫМ связям (режим связей неприменим;
+  // задача a577875b).
+  id: ['eq', 'ne', 'in', 'not_in', 'in_hierarchy', 'not_in_hierarchy'],
   type: [
     'eq',
     'ne',
