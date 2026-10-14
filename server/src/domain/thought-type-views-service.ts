@@ -90,7 +90,13 @@ import {
   type ThoughtTypeViewRow,
 } from './thought-type-views-repo.js';
 import { getThought } from './thought-service.js';
-import { listEffectiveTypeProperties, oppositeLinkPropertyDisplayName } from './property-service.js';
+import {
+  getNetworkPropertyByName,
+  linkPropertySideFromConfig,
+  listEffectiveTypeProperties,
+  listNetworkProperties,
+  oppositeLinkPropertyDisplayName,
+} from './property-service.js';
 
 /**
  * Доменное представление отбора (`ThoughtTypeView`). Различается с репозиторным
@@ -127,30 +133,33 @@ function viewNameKey(name: string): string {
 }
 
 /**
- * Метаданные свойств типа отбора для валидатора токенов (`thought-type-view-tokens`):
- * имена, `multiple`, `value_type`. Цепочка типов здесь не нужна —
- * `listEffectiveTypeProperties` уже сворачивает её (предок перекрывает
- * потомка, см. 02-data-model.md §3.4.1), и до валидатора доходят ровно те
- * ключи, что реально доступны мысли этого типа.
+ * Метаданные свойств РЕЕСТРА СЕТИ для валидатора токенов
+ * (`thought-type-view-tokens`): имена, `multiple`, `value_type`.
  *
- * Свойство-связь привязывается к типу ОДНОЙ стороной, но адресуется обеими
- * (задача df992826): к метаданным добавляется имя противоположной стороны,
- * чтобы токен `$thought.[<обратное имя>]` не отвергался как `unknown_property`.
- * Единая точка интерпретации направления — `oppositeLinkPropertyDisplayName`.
+ * **Свойство резолвится по реестру сети независимо от привязки к типу отбора**
+ * (ошибка 50d9bf4e, пункт A6): токен `$thought.[Имя]` принимается, если такое
+ * свойство определено в сети, — даже если оно не подключено к типу этого отбора
+ * (при исполнении отсутствие значения у мысли даёт пустое значение по семантике
+ * отбора). Поэтому валидатору отдаётся ПОЛНЫЙ список свойств сети, а не
+ * свойства цепочки типа.
+ *
+ * Свойство-связь адресуется обеими сторонами: к метаданным добавляется имя
+ * противоположной стороны, чтобы токен `$thought.[<обратное имя>]` был принят
+ * (единая точка интерпретации направления — `oppositeLinkPropertyDisplayName`).
  */
-function getTypePropertyMeta(ndb: NetworkDb, thoughtTypeId: string): PropertyMeta[] {
+function getNetworkPropertyMeta(ndb: NetworkDb): PropertyMeta[] {
   const out: PropertyMeta[] = [];
-  for (const p of listEffectiveTypeProperties(ndb, 'thought_type', thoughtTypeId)) {
-    const meta: PropertyMeta = {
-      key: p.key,
+  for (const p of listNetworkProperties(ndb)) {
+    out.push({
+      key: p.name,
       multiple: p.config?.multiple === true,
       value_type: p.value_type,
-    };
-    out.push(meta);
+    });
     if (p.value_type !== 'link') continue;
-    const opposite = oppositeLinkPropertyDisplayName(ndb, p.config ?? null, p.side ?? null);
-    if (opposite === null || opposite === p.key) continue;
-    out.push({ key: opposite, multiple: meta.multiple, value_type: p.value_type });
+    const side = linkPropertySideFromConfig(p.value_type, p.config ?? null);
+    const opposite = oppositeLinkPropertyDisplayName(ndb, p.config ?? null, side);
+    if (opposite === null || opposite === p.name) continue;
+    out.push({ key: opposite, multiple: p.config?.multiple === true, value_type: p.value_type });
   }
   return out;
 }
@@ -363,15 +372,16 @@ export function createThoughtTypeView(
   const definition = validateDefinition(input.definition, requestId);
   const position = validatePosition(input.position, requestId);
   // Полная валидация токенов (задача 20b2fca0): запускается после синтаксиса
-  // JSON и проверки типа мысли — нужно знать `thought_type_id`, чтобы сверить
-  // имена свойств в `$thought.[…]` с цепочкой типов и распознать `multiple`.
+  // JSON. Свойства сверяются с РЕЕСТРОМ СЕТИ (A6), а не с цепочкой типа:
+  // `$thought.[Имя]` принимается для любого свойства сети, а `multiple`
+  // распознаётся по его конфигурации.
   // Повторный JSON.parse дёшев — definition это пара KB; альтернатива
   // (возвращать из `validateDefinition` ещё и parsed-объект) рвёт границу
   // ответственности функции (валидация → парсинг).
   const parsedDefinition = JSON.parse(definition) as Record<string, unknown>;
   validateDefinitionForTokens(
     parsedDefinition,
-    { thoughtType: { properties: getTypePropertyMeta(ndb, thoughtTypeId) } },
+    { properties: getNetworkPropertyMeta(ndb) },
     requestId,
   );
   // Красная диагностика: AST, ссылающийся на удалённую сущность, не сохраняется.
@@ -489,13 +499,13 @@ export function updateThoughtTypeView(
     }
 
     if (validated.definition !== undefined) {
-      // Полная валидация токенов (задача 20b2fca0): нужен `thought_type_id`,
-      // поэтому выполняется внутри транзакции после `getViewOrThrow`. До
-      // UPDATE — иначе можно было бы сохранить невалидное определение.
+      // Полная валидация токенов (задача 20b2fca0): свойства сверяются с
+      // реестром СЕТИ (A6). До UPDATE — иначе можно было бы сохранить
+      // невалидное определение.
       const parsedDefinition = JSON.parse(validated.definition) as Record<string, unknown>;
       validateDefinitionForTokens(
         parsedDefinition,
-        { thoughtType: { properties: getTypePropertyMeta(ndb, current.thought_type_id) } },
+        { properties: getNetworkPropertyMeta(ndb) },
         requestId,
       );
       // Красная диагностика: AST, ссылающийся на удалённую сущность, не сохраняется.
@@ -740,17 +750,21 @@ export interface RunViewQueryOptions {
 /**
  * Превратить «сырые» значения свойств мысли из `getPropertyValues` в
  * плоскую форму, которую ест резолвер токенов: ключ + тип + флаг
- * `multiple` (из `properties.config` через `effective`-цепочку) + скаляр
- * или массив строк (для `multiple`). Внешние значения (`outside_type`)
- * резолвер игнорирует — они не в цепочке типа, и валидация при сохранении
- * отвергла бы `$thought.[…]` на такое имя.
+ * `multiple` + скаляр или массив строк (для `multiple`).
+ *
+ * **Свойство резолвится по реестру сети независимо от привязки к типу**
+ * (ошибка 50d9bf4e, пункт A6): значение свойства вне цепочки типа отбора
+ * (`outside_type`) тоже подставляется — метаданные (`multiple`/`value_type`)
+ * для него берутся из реестра. Свойство, которого у мысли нет, в карту не
+ * попадает — резолвер отдаёт для него пустое значение (семантика отбора), а не
+ * «неразрешимый токен».
  */
 function collectThoughtPropertyValues(
   ndb: NetworkDb,
   thoughtId: string,
   typeId: string | null,
 ): ThoughtPropertyValue[] {
-  const raw = getPropertyValues(ndb, 'thought', thoughtId).filter((v) => !v.outside_type);
+  const raw = getPropertyValues(ndb, 'thought', thoughtId);
   if (raw.length === 0) return [];
   const meta = typeId === null
     ? new Map<string, { multiple: boolean; value_type: typeof raw[number]['value_type'] }>()
@@ -763,17 +777,17 @@ function collectThoughtPropertyValues(
   const out: ThoughtPropertyValue[] = [];
   for (const v of raw) {
     // `null` (и экзотика вроде пустого массива для одиночного свойства) —
-    // резолверу нечего подставлять: токен становится неразрешимым, отбор
-    // вернёт пустой результат с пояснением «у мысли не заполнено свойство
-    // …». Это требование b7fdab20.
+    // резолверу нечего подставлять: подставляется пустое значение (A6).
     if (v.value === null) continue;
     if (Array.isArray(v.value) && v.value.length === 0) continue;
     // `cross_network_ref` (задача 7849008a) — снапшот `CrossNetworkRefValue[]`,
     // токены `$thought.<key>` не применимы к кросс-сетевому адресу.
     if (v.value_type === 'cross_network_ref') continue;
-    const m = meta.get(v.property_name);
-    const multiple = m?.multiple === true;
-    const valueType = m?.value_type ?? v.value_type;
+    // Метаданные: цепочка типа, при отсутствии (свойство вне типа) — реестр сети.
+    const fromType = meta.get(v.property_name);
+    const fromRegistry = fromType === undefined ? getNetworkPropertyByName(ndb, v.property_name) : null;
+    const multiple = fromType?.multiple ?? fromRegistry?.config?.multiple === true;
+    const valueType = fromType?.value_type ?? fromRegistry?.value_type ?? v.value_type;
     // Множественное `text` хранится comma-joined строкой (02-data-model
     // §3.4–3.5); токен `$thought.[…]` обязан подставляться СПИСКОМ элементов
     // (требование 12fccde9) — иначе он уходит одной склеенной строкой и
@@ -781,7 +795,7 @@ function collectThoughtPropertyValues(
     let value = v.value as string | number | boolean | string[];
     if (multiple && valueType === 'text' && typeof value === 'string') {
       value = splitMultipleText(value);
-      if (value.length === 0) continue; // пустой список — неразрешимый токен (12fccde9)
+      if (value.length === 0) continue; // пустой список — пустое значение (12fccde9)
     }
     out.push({ key: v.property_name, value_type: valueType, multiple, value });
   }

@@ -722,17 +722,16 @@ describe(
         }
       });
 
-      it('неразрешимый токен → 200 OK с пустым data и meta.unresolved', async () => {
+      it('свойство без значения → пустое значение, без неразрешимых токенов (п. A6)', async () => {
         const ctx = await buildRestContext();
         try {
           const h = authHeaders(ctx);
           const typeId = await createThoughtType(ctx, 'task');
-          // Подключаем свойство к типу с уникальным именем — чтобы пройти
-          // валидацию токенов при сохранении. Затем при run свойство
-          // доступно в цепочке типа, но значение не заполнено — резолвер не
-          // находит значение в карте контекста и эмитит `unknown_property`.
-          // Это валидный «неразрешимый токен» по требованию b7fdab20 —
-          // страница пуста, причина названа.
+          // Свойство подключено к типу; у контекстной мысли значение НЕ
+          // заполнено. По семантике A6 (ошибка 50d9bf4e) это ПУСТОЕ значение
+          // свойства, а не неразрешимый токен: отбор исполняется, `meta.unresolved`
+          // пуст (неразрешимыми остаются только неизвестные токены и битая
+          // арифметика дат — требование b7fdab20 для них сохранено).
           const propName = `version-${randomUUID().slice(0, 8)}`;
           const { id: propId } = await attachTextProperty(ctx, typeId, propName, propName);
 
@@ -749,9 +748,6 @@ describe(
           });
           assert.equal(viewRes.statusCode, 201);
 
-          // Контекстная мысль с типом, но БЕЗ значения свойства — токен
-          // `$thought.[<propname>]` не разрешится, и run вернёт пустой результат
-          // с непустым `meta.unresolved`.
           const ctxThought = await createChild(ctx, 'Без значения');
           await ctx.app.inject({
             method: 'PATCH',
@@ -772,16 +768,8 @@ describe(
             data: unknown[];
             meta: { total: number; unresolved: Array<{ token: string; reason: string }> };
           };
-          assert.deepEqual(body.data, []);
-          assert.equal(body.meta.total, 0);
-          assert.equal(body.meta.unresolved.length, 1);
-          // `reason` — одна из причин неразрешимости (`unknown_property` для
-          // свойств без значения, `empty_value` для дат без разбора и т.п.).
-          // Главное — причина названа и страница пуста.
-          assert.match(
-            body.meta.unresolved[0]!.reason,
-            /unknown_property|empty_value|syntax_error/,
-          );
+          assert.deepEqual(body.meta.unresolved ?? [], [], 'свойство без значения — пустое значение, не неразрешимый токен');
+          assert.ok(Array.isArray(body.data));
         } finally {
           await closeRestContext(ctx);
         }

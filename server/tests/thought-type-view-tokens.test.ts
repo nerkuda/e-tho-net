@@ -183,33 +183,43 @@ describe(
       );
     });
 
-    it('отвергает $thought.[НесуществующееСвойство] когда передана цепочка типа', () => {
+    it('отвергает $thought.[Имя] которого нет в РЕЕСТРЕ СЕТИ (unknown_property)', () => {
       const def = parseOrThrow<Record<string, unknown>>(
         '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[НетТакого]"}],"sort":"alpha","order":"asc"}',
       );
-      const thoughtType = {
-        properties: [
-          { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
-        ],
-      };
+      const properties = [
+        { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
+      ];
       assert.throws(
-        () => validateDefinitionForTokens(def, { thoughtType }),
+        () => validateDefinitionForTokens(def, { properties }),
         (err: unknown) => err instanceof EtnError &&
           (err.details as { reason?: string }).reason === 'unknown_property',
       );
+    });
+
+    it('принимает $thought.[Имя] свойства ВНЕ типа отбора — по реестру сети (п. A6)', () => {
+      // Свойство определено в сети, но не привязано к типу этого отбора:
+      // раньше отвергалось `unknown_property`, теперь принимается (резолв по
+      // реестру; отсутствие значения у мысли — пустое значение, не ошибка).
+      const def = parseOrThrow<Record<string, unknown>>(
+        '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[Свойство другого типа]"}],"sort":"alpha","order":"asc"}',
+      );
+      const properties = [
+        { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
+        { key: 'Свойство другого типа', multiple: false, value_type: 'text' as const },
+      ];
+      validateDefinitionForTokens(def, { properties });
     });
 
     it('отвергает $thought.[множественное] в скалярной операции (требование 12fccde9)', () => {
       const def = parseOrThrow<Record<string, unknown>>(
         '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[Теги]"}],"sort":"alpha","order":"asc"}',
       );
-      const thoughtType = {
-        properties: [
-          { key: 'Теги', multiple: true, value_type: 'text' as const },
-        ],
-      };
+      const properties = [
+        { key: 'Теги', multiple: true, value_type: 'text' as const },
+      ];
       assert.throws(
-        () => validateDefinitionForTokens(def, { thoughtType }),
+        () => validateDefinitionForTokens(def, { properties }),
         (err: unknown) => err instanceof EtnError &&
           (err.details as { reason?: string }).reason === 'incompatible_operation',
       );
@@ -222,26 +232,22 @@ describe(
       const def2 = parseOrThrow<Record<string, unknown>>(
         '{"properties":[{"property_id":"x","op":"not_in","value":["$thought.[Теги]"]}],"sort":"alpha","order":"asc"}',
       );
-      const thoughtType = {
-        properties: [
-          { key: 'Теги', multiple: true, value_type: 'text' as const },
-        ],
-      };
-      validateDefinitionForTokens(def1, { thoughtType });
-      validateDefinitionForTokens(def2, { thoughtType });
+      const properties = [
+        { key: 'Теги', multiple: true, value_type: 'text' as const },
+      ];
+      validateDefinitionForTokens(def1, { properties });
+      validateDefinitionForTokens(def2, { properties });
     });
 
     it('собирает все проблемы при collectAll=true', () => {
       const def = parseOrThrow<Record<string, unknown>>(
         '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[НетТакого]"}],"keywords":"$foo","sort":"alpha","order":"asc"}',
       );
-      const thoughtType = {
-        properties: [
-          { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
-        ],
-      };
+      const properties = [
+        { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
+      ];
       try {
-        validateDefinitionForTokens(def, { thoughtType, collectAll: true });
+        validateDefinitionForTokens(def, { properties, collectAll: true });
         assert.fail('expected VALIDATION_ERROR');
       } catch (err) {
         assert.ok(err instanceof EtnError);
@@ -388,16 +394,20 @@ describe(
       assert.deepEqual(def.properties[0]!.value, ['tag-a', 'tag-b']);
     });
 
-    it('неразрешимое свойство → unresolved (требование b7fdab20)', () => {
+    it('свойства нет у мысли → ПУСТОЕ значение, а не неразрешимый токен (п. A6)', () => {
+      // Свойство резолвится по реестру сети: если у оцениваемой мысли значения
+      // нет (или свойство не подключено к типу) — по семантике отбора это пустое
+      // значение, отбор исполняется, а не возвращает пустой результат с
+      // пояснением (ошибка 50d9bf4e, пункт A6).
       const result = resolveTokensInDefinition(
         parseOrThrow(
           '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[ПустоеСвойство]"}],"sort":"alpha","order":"asc"}',
         ),
         ctx(),
       );
-      assert.equal(result.unresolved.length, 1);
-      assert.equal(result.unresolved[0]!.reason, 'unknown_property');
-      assert.match(result.unresolved[0]!.message, /ПустоеСвойство/);
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      assert.equal(def.properties[0]!.value, '');
     });
 
     it('нерезолвимое поле active-false остаётся строкой, не молча пустой', () => {
@@ -624,10 +634,10 @@ describe(
       }
     });
 
-    // Тихий smoke: setPropertyValue используется ниже как пример, что
-    // пустое значение для скалярного свойства остаётся null в БД и не
-    // попадает в resolve-контекст (требование b7fdab20).
-    it('run-time: пустое значение свойства даёт unresolved (без этапа 5)', () => {
+    // Smoke: пустое значение для скалярного свойства не попадает в
+    // resolve-контекст — по семантике отбора это ПУСТОЕ значение (A6), а не
+    // неразрешимый токен.
+    it('run-time: пустое значение свойства → пустое значение, без unresolved (п. A6)', () => {
       const { ndb, typeId } = setup();
       try {
         // Создаём мысль и отбор, у мысли НЕ заполняем «Версия».
@@ -652,7 +662,7 @@ describe(
           USER,
         );
 
-        // Резолвер от лица мысли без значения — должен собрать unresolved.
+        // Резолвер от лица мысли без значения — пустое значение, отбор исполним.
         // (runViewForThought здесь не вызываем, чтобы не дублировать слой
         // engine'а; достаточно проверить сборку контекста и резолвер.)
         const ctx = buildResolveContext(
@@ -677,8 +687,9 @@ describe(
           ),
           ctx,
         );
-        assert.equal(result.unresolved.length, 1);
-        assert.equal(result.unresolved[0]!.reason, 'unknown_property');
+        assert.equal(result.unresolved.length, 0);
+        const def = result.definition as { properties: Array<{ value: string }> };
+        assert.equal(def.properties[0]!.value, '');
       } finally {
         ndb.close();
       }

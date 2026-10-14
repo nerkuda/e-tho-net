@@ -444,12 +444,21 @@ export interface TokenIssue {
 
 export interface ValidationOptions {
   /**
-   * Метаданные свойств типа отбора: имена, флаг `multiple`, `value_type`.
-   * `null`/отсутствует — тип ещё не связан, валидируем только синтаксис
-   * и глобальные токены (для удобства валидации при редактировании
-   * отбора без указания типа — крайний случай, оставлено для гибкости).
+   * Метаданные свойств РЕЕСТРА СЕТИ: имена, флаг `multiple`, `value_type`.
+   *
+   * **Свойство резолвится по реестру сети, независимо от привязки к типу
+   * отбора** (ошибка 50d9bf4e, пункт A6): токен `$thought.[Имя]` принимается,
+   * если такое свойство определено в сети, даже если оно не подключено к типу
+   * этого отбора. Свойство вне типа — не ошибка токена: при исполнении, если у
+   * оцениваемой мысли значения нет, подставляется пустое значение
+   * (семантика отбора), см. {@link resolveTokensInDefinition}. Ранее здесь был
+   * список свойств ЦЕПОЧКИ ТИПА и свойство вне типа отвергалось `unknown_property`
+   * (требование 3697eb65 в прежней редакции — уточнено 0.13.1).
+   *
+   * `null`/отсутствует — валидируем только синтаксис и глобальные токены
+   * (для валидации при редактировании без доступа к реестру — крайний случай).
    */
-  thoughtType?: { properties: PropertyMeta[] } | null;
+  properties?: readonly PropertyMeta[] | null;
   /**
    * Если `false` (по умолчанию) — функция бросает `EtnError` на первой
    * же проблеме. Если `true` — собирает ВСЕ проблемы и тоже бросает
@@ -504,14 +513,15 @@ export function validateDefinitionForTokens(
       }
     }
     // Проверка совместимости операций и множественных свойств — только для
-    // условий по свойствам (`properties[i].value`).
+    // условий по свойствам (`properties[i].value`). Свойство берётся из реестра
+    // СЕТИ (A6), а не из цепочки типа.
     if (/^properties\[\d+\]\.value$/.test(path)) {
       const opPath = path.replace(/\.value$/, '.op');
       const op = readPath(definition, opPath);
       if (typeof op === 'string') {
         for (const tok of known) {
           if (tok.kind !== 'thought_property') continue;
-          const prop = findProperty(opts.thoughtType, tok.propertyName ?? '');
+          const prop = findProperty(opts.properties, tok.propertyName ?? '');
           if (prop === null) continue; // отдельная ошибка `unknown_property` ниже
           if (prop.multiple && SCALAR_OPS.has(op)) {
             issues.push({
@@ -526,19 +536,22 @@ export function validateDefinitionForTokens(
     }
   });
 
-  // Второй проход — проверка существования свойств в типе.
-  if (opts.thoughtType !== undefined && opts.thoughtType !== null) {
+  // Второй проход — существование свойства в РЕЕСТРЕ СЕТИ (A6). Свойство,
+  // определённое в сети, но не подключённое к типу отбора, — НЕ ошибка токена:
+  // оно резолвится по реестру, а при отсутствии значения у мысли даёт пустое
+  // значение (семантика отбора).
+  if (opts.properties !== undefined && opts.properties !== null) {
     walkDefinitionStrings(definition, (value, path) => {
       const { known } = scanStringForTokens(value);
       for (const tok of known) {
         if (tok.kind !== 'thought_property') continue;
-        const prop = findProperty(opts.thoughtType, tok.propertyName ?? '');
+        const prop = findProperty(opts.properties, tok.propertyName ?? '');
         if (prop === null) {
           issues.push({
             path,
             token: tok.raw,
             reason: 'unknown_property',
-            message: `Свойство «${tok.propertyName}» не подключено к типу отбора.`,
+            message: `Свойство «${tok.propertyName}» не найдено в реестре сети.`,
           });
         }
       }
@@ -564,11 +577,11 @@ export function validateDefinitionForTokens(
 }
 
 function findProperty(
-  thoughtType: { properties: PropertyMeta[] } | null | undefined,
+  properties: readonly PropertyMeta[] | null | undefined,
   key: string,
 ): PropertyMeta | null {
-  if (thoughtType === undefined || thoughtType === null) return null;
-  for (const p of thoughtType.properties) {
+  if (properties === undefined || properties === null) return null;
+  for (const p of properties) {
     if (p.key === key) return p;
   }
   return null;
@@ -840,7 +853,7 @@ function resolveOneToken(
     case 'thought_field':
       return resolveThoughtField(tok, ctx, now, unresolved, path);
     case 'thought_property':
-      return resolveThoughtProperty(tok, ctx, unresolved, path);
+      return resolveThoughtProperty(tok, ctx);
     case 'global':
       return resolveGlobal(tok, ctx, now, unresolved, path);
   }
@@ -887,23 +900,21 @@ function resolveThoughtField(
   return applyDateArithmetic(tok, raw, field, ctx, now, unresolved, path);
 }
 
+/**
+ * Подставить значение свойства мысли по имени токена. Свойства нет в контексте
+ * — это НЕ ошибка токена (ошибка 50d9bf4e, пункт A6): свойство резолвится по
+ * реестру сети независимо от привязки к типу, и если у оцениваемой мысли
+ * значения нет (или свойство не подключено к типу), по семантике отбора это
+ * ПУСТОЕ значение. Возвращаем пустую строку без записи в `unresolved`, чтобы
+ * условие сравнивалось с пустотой, а не давало «неразрешимый токен».
+ */
 function resolveThoughtProperty(
   tok: ParsedToken,
   ctx: ResolveContext,
-  unresolved: TokenIssue[],
-  path: string,
 ): string | number | boolean | string[] | null {
   const propName = tok.propertyName ?? '';
   const prop = ctx.properties.get(propName);
-  if (prop === undefined) {
-    unresolved.push({
-      path,
-      token: tok.raw,
-      reason: 'unknown_property',
-      message: `Свойство «${propName}» не подключено к типу мысли.`,
-    });
-    return null;
-  }
+  if (prop === undefined) return '';
   return prop.value;
 }
 
