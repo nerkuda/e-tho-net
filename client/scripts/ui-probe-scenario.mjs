@@ -19,11 +19,13 @@
  *   { "key": { "key": "a", "code": "KeyA" } }         — явный код/скан-код
  *   { "click": "#sel" } | { "click": { "selector": "#sel", "at": [4, 4] } }
  *     | { "click": [640, 400] } | { "click": { "x": 10, "y": 20 } }
+ *     | { "click": { "selector": "#sel", "count": 2 } } — `count` задаёт число
+ *       последовательных нажатий (2 — настоящий двойной клик, `click.detail=2`)
  *   { "hover": "#sel" } | { "hover": { "selector": "#sel", "at": [4, 4] } }
  *     | { "hover": [640, 400] } | { "hover": { "x": 10, "y": 20 } }
  *     — навести курсор на точку/элемент БЕЗ клика: синтезирует `mouseMoved`,
  *     включает CSS `:hover` (проверка hover-видимости действий; форма точки —
- *     как у `click`).
+ *     как у `click`, поля `count` нет).
  *   { "text": "строка" }                              — ввод текста
  *   { "waitFor": "expr" } | { "waitFor": { "expression": "…", "frames": 2 } }
  *     | { "waitFor": { "frames": 2 } } | { "waitFor": 2 }
@@ -230,17 +232,24 @@ export function resolveKey(spec) {
   return { key, code, keyCode, modifiers };
 }
 
-function normalizeClick(value, where, field = 'click') {
+function normalizeClick(value, where, field = 'click', withCount = true) {
+  // `count` — только у клика (у наведения его нет): число последовательных
+  // нажатий, 2 — настоящий двойной клик (браузер отдаёт `click` с `detail = 2`).
+  const countField = withCount ? { count: 1 } : {};
   if (typeof value === 'string') {
-    return { selector: asString(value, `${where}.${field}`), at: null, x: null, y: null };
+    return { selector: asString(value, `${where}.${field}`), at: null, x: null, y: null, ...countField };
   }
   if (Array.isArray(value)) {
     if (value.length !== 2) fail(`${where}.${field}: координаты задаются парой [x, y]`);
-    return { selector: null, at: null, x: asNumber(value[0], `${where}.${field}[0]`), y: asNumber(value[1], `${where}.${field}[1]`) };
+    return { selector: null, at: null, x: asNumber(value[0], `${where}.${field}[0]`), y: asNumber(value[1], `${where}.${field}[1]`), ...countField };
   }
   if (!isPlainObject(value)) fail(`${where}.${field}: ожидается селектор, [x,y] или объект`);
+  const allowed = withCount ? ['selector', 'x', 'y', 'at', 'count'] : ['selector', 'x', 'y', 'at'];
   for (const extra of Object.keys(value)) {
-    if (!['selector', 'x', 'y', 'at'].includes(extra)) fail(`${where}.${field}: неизвестное поле «${extra}»`);
+    if (!allowed.includes(extra)) fail(`${where}.${field}: неизвестное поле «${extra}»`);
+  }
+  if (withCount && value.count !== undefined) {
+    countField.count = asPositiveInt(value.count, `${where}.${field}.count`);
   }
   const hasSelector = value.selector !== undefined;
   const hasCoords = value.x !== undefined || value.y !== undefined;
@@ -253,7 +262,7 @@ function normalizeClick(value, where, field = 'click') {
       }
       at = [asNumber(value.at[0], `${where}.${field}.at[0]`), asNumber(value.at[1], `${where}.${field}.at[1]`)];
     }
-    return { selector: asString(value.selector, `${where}.${field}.selector`), at, x: null, y: null };
+    return { selector: asString(value.selector, `${where}.${field}.selector`), at, x: null, y: null, ...countField };
   }
   if (!hasCoords) fail(`${where}.${field}: нужен «selector» либо «x» и «y»`);
   return {
@@ -261,6 +270,7 @@ function normalizeClick(value, where, field = 'click') {
     at: null,
     x: asNumber(value.x, `${where}.${field}.x`),
     y: asNumber(value.y, `${where}.${field}.y`),
+    ...countField,
   };
 }
 
@@ -530,7 +540,7 @@ function validateStep(raw, index, defaultTimeout) {
       step.click = normalizeClick(raw.click, where);
       break;
     case 'hover':
-      step.hover = normalizeClick(raw.hover, where, 'hover');
+      step.hover = normalizeClick(raw.hover, where, 'hover', false);
       break;
     case 'text':
       step.text = normalizeText(raw.text, where);

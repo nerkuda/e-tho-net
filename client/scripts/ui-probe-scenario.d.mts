@@ -68,6 +68,8 @@ export interface NormalizedClick {
   at: [number, number] | null;
   x: number | null;
   y: number | null;
+  /** Число последовательных нажатий (2 — двойной клик; по умолчанию 1). */
+  count: number;
 }
 
 export interface NormalizedWaitFor {

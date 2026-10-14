@@ -99,6 +99,16 @@ export interface MonthCalendarOptions {
   counts?: (day: string) => number;
   /** Клик по дню. */
   onPickDay?: (day: string) => void;
+  /**
+   * ДВОЙНОЙ клик по дню (активация). Отделён от {@link MonthCalendarOptions.onPickDay}:
+   * одиночный клик только выбирает день, активация подтверждает выбор в
+   * диалоге (закрывает его) — та же конвенция, что у списков/таблиц
+   * (`lib/ui/tree.ts`/`table-grid.ts`, ошибка d1a009fa). Двойной клик
+   * распознаётся по счётчику нажатий (`MouseEvent.detail >= 2`), а НЕ нативным
+   * `dblclick`: после первого клика сетка пересобирается (`render()`), узел дня
+   * заменяется, и браузер `dblclick` не присылает (ошибка 609deba0 п.4).
+   */
+  onPickDayActivate?: (day: string) => void;
   /** Клик по строке недели (аргумент — понедельник недели). */
   onPickWeek?: (monday: string) => void;
   /** Перетаскивание диапазона: `from`/`to` — упорядоченные локальные даты. */
@@ -468,13 +478,17 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       size: 's',
       title: cell.day,
       class: classes.join(' '),
-      onClick: () => {
+      onClick: (event) => {
         if (dragMoved) {
           // Завершение перетаскивания: click уже обработан в mouseup.
           dragMoved = false;
           return;
         }
         opts.onPickDay?.(cell.day);
+        // Двойной клик — активация дня (подтверждение выбора), распознанная по
+        // счётчику нажатий: узел заменяется после первого клика и нативный
+        // `dblclick` не доходит (ошибка 609deba0 п.4).
+        if ((event as MouseEvent).detail >= 2) opts.onPickDayActivate?.(cell.day);
       },
     });
     // Индикатор записей — столбик 1–3 точек СЛЕВА от номера дня, по центру

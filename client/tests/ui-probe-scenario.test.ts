@@ -52,9 +52,9 @@ test('parseScenario: сценарий со всеми действиями ра�
     ['key', 'click', 'click', 'click', 'hover', 'hover', 'text', 'waitFor', 'probe', 'shot', 'eval'],
   );
   assert.equal(scenario.steps[0]?.key?.code, 'ArrowDown');
-  assert.deepEqual(scenario.steps[1]?.click, { selector: '#feed', at: null, x: null, y: null });
-  assert.deepEqual(scenario.steps[2]?.click, { selector: '.card', at: [4, 6], x: null, y: null });
-  assert.deepEqual(scenario.steps[3]?.click, { selector: null, at: null, x: 640, y: 400 });
+  assert.deepEqual(scenario.steps[1]?.click, { selector: '#feed', at: null, x: null, y: null, count: 1 });
+  assert.deepEqual(scenario.steps[2]?.click, { selector: '.card', at: [4, 6], x: null, y: null, count: 1 });
+  assert.deepEqual(scenario.steps[3]?.click, { selector: null, at: null, x: 640, y: 400, count: 1 });
   assert.deepEqual(scenario.steps[4]?.hover, { selector: '#card', at: null, x: null, y: null });
   assert.deepEqual(scenario.steps[5]?.hover, { selector: '.row', at: [2, 3], x: null, y: null });
   assert.equal(scenario.steps[6]?.text, 'привет');
@@ -206,6 +206,24 @@ test('click: селектор и координаты взаимоисключа
   assert.throws(() => validateScenario(scenarioFrom([{ click: {} }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ click: [1, 2, 3] }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ click: { selector: '#x', bogus: 1 } }])), ScenarioError);
+});
+
+test('click.count: двойной клик; ноль/дробь/нечисло отвергаются; у hover поля нет', () => {
+  const scenario = validateScenario(scenarioFrom([{ click: { selector: '.cal-day', count: 2 } }]));
+  assert.equal(scenario.steps[0]?.click?.count, 2, 'count=2 — двойной клик');
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ click: { selector: '#x', count: 0 } }])),
+    ScenarioError,
+  );
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ click: { selector: '#x', count: 1.5 } }])),
+    ScenarioError,
+  );
+  // У наведения `count` — неизвестное поле (наведение не кликает).
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ hover: { selector: '#x', count: 2 } }])),
+    ScenarioError,
+  );
 });
 
 test('hover: та же форма точки, что у click; ошибки называют поле «hover»', () => {

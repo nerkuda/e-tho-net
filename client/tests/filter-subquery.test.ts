@@ -199,25 +199,32 @@ describe('под-выборка: релевантность операнда —
     assert.equal(relevant({ kind: 'property', property: 'Покупки здесь', direction: 'in' }, 'not_in'), true, 'обратная сторона');
     assert.equal(relevant({ kind: 'parents' }, 'in'), true, 'структурные «Родители»');
     assert.equal(relevant({ kind: 'children' }, 'all_of'), true);
-    assert.equal(relevant({ kind: 'type' }, 'in'), true, '«Тип» с in/not_in');
+    // Типовые операнды — в 0.13.1 БЕЗ выборки: редактор предлагал собирать отбор
+    // по МЫСЛЯМ там, где значение — тип (ошибка 609deba0 п.1).
+    assert.equal(relevant({ kind: 'type' }, 'in'), false, '«Тип» — выборка по типам не строится');
     // Иерархические операторы (ошибка f4e99090 п.4): под-выборка — источник
-    // КОРНЕЙ обхода; у «Родителей»/«Потомков»/«Типа»/свойства-ссылки и у «Мысли».
+    // КОРНЕЙ обхода; у «Родителей»/«Потомков»/свойства-ссылки и у «Мысли».
     assert.equal(relevant({ kind: 'parents' }, 'in_hierarchy'), true);
     assert.equal(relevant({ kind: 'children' }, 'not_in_hierarchy'), true);
-    assert.equal(relevant({ kind: 'type' }, 'in_hierarchy'), true);
+    assert.equal(relevant({ kind: 'type' }, 'in_hierarchy'), false, 'у типа выборки нет (п.1)');
     assert.equal(relevant({ kind: 'property', property_id: PLACE.id }, 'in_hierarchy'), true);
     assert.equal(relevant({ kind: 'id' }, 'in_hierarchy'), true, '«Мысль в иерархии» — корни из выборки');
     assert.equal(relevant({ kind: 'id' }, 'not_in_hierarchy'), true);
     assert.equal(relevant({ kind: 'id' }, 'in'), true, '«Мысль в списке» — вхождение в выборку (п.8)');
     assert.equal(relevant({ kind: 'id' }, 'not_in'), true, '«Мысль не в списке» — выборка (п.8)');
     assert.equal(relevant({ kind: 'id' }, 'all_of'), false, '«Мысль» одиночный — «все в (выборке)» отвергает сервер');
+    // «Цели записи» (ошибка 609deba0 п.1) — зеркало «Мысли»: список/выборка и
+    // «в иерархии»/«не в иерархии» (сервер исполняет оба вида).
+    assert.equal(relevant({ kind: 'targets' }, 'in'), true, '«Цели в списке/выборке»');
+    assert.equal(relevant({ kind: 'targets' }, 'not_in'), true);
+    assert.equal(relevant({ kind: 'targets' }, 'all_of'), true, '«все цели в выборке»');
+    assert.equal(relevant({ kind: 'targets' }, 'in_hierarchy'), true, '«Цели в иерархии»');
+    assert.equal(relevant({ kind: 'targets' }, 'not_in_hierarchy'), true);
 
     assert.equal(relevant({ kind: 'type' }, 'all_of'), false, '«Тип» одиночный — «все в (выборке)» отвергает сервер');
     assert.equal(relevant({ kind: 'property', property_id: CITY.id }, 'in'), false, 'текстовое свойство — не ссылка');
     assert.equal(relevant({ kind: 'property', property_id: CITY.id }, 'in_hierarchy'), false, 'иерархия на текстовом — не ссылка');
     assert.equal(relevant({ kind: 'property', property_id: PLACE.id }, 'eq'), false, 'оператор вне набора под-выборки');
-    assert.equal(relevant({ kind: 'targets' }, 'in'), false, 'отложенный операнд (unsupported)');
-    assert.equal(relevant({ kind: 'targets' }, 'in_hierarchy'), false);
     assert.equal(relevant({ kind: 'attachments' }, 'in'), false);
     assert.equal(relevant({ kind: 'chronology' }, 'in'), false);
     assert.equal(relevant({ kind: 'link_type' }, 'in'), false);
@@ -225,7 +232,9 @@ describe('под-выборка: релевантность операнда —
     assert.equal(relevant({ kind: 'active' }, 'eq'), false, 'булев предикат — нерелевантный');
 
     assert.equal(sub.filterSubquerySupported('property'), true);
-    assert.equal(sub.filterSubqueryDeferred('targets'), true);
+    assert.equal(sub.filterSubquerySupported('targets'), true, '«Цели» исполняются');
+    assert.equal(sub.filterSubqueryDeferred('targets'), false);
+    assert.equal(sub.filterSubqueryHidden('type'), true, '«Тип» — типовой операнд без выборки');
     assert.equal(sub.filterSubqueryValueOperator('in'), 'in');
     assert.equal(sub.filterSubqueryValueOperator('not_in'), 'not_in');
     assert.equal(sub.filterSubqueryValueOperator('all_of'), 'all_in');
@@ -235,17 +244,23 @@ describe('под-выборка: релевантность операнда —
     assert.equal(sub.filterSubqueryValueOperator('not_in_hierarchy'), 'not_in');
   });
 
-  it('точный состав видов: поддержаны property/parents/children/type/id, отложены четыре', () => {
+  it('точный состав видов: поддержаны property/parents/children/type/id/targets, скрыт тип, отложены три', () => {
     // Перебор по ЕДИНОМУ реестру видов операндов (`FILTER_AST_ENTITY_KINDS`):
     // мутация «добавить или убрать вид» в наборах модуля краснеет здесь, а не
     // только внешней пробой на конкретном операнде.
     const supported = FILTER_AST_ENTITY_KINDS.filter((kind) => sub.filterSubquerySupported(kind));
     const deferred = FILTER_AST_ENTITY_KINDS.filter((kind) => sub.filterSubqueryDeferred(kind));
-    assert.deepEqual([...supported].sort(), ['children', 'id', 'parents', 'property', 'type']);
+    const hidden = FILTER_AST_ENTITY_KINDS.filter((kind) => sub.filterSubqueryHidden(kind));
+    assert.deepEqual([...supported].sort(), ['children', 'id', 'parents', 'property', 'targets', 'type']);
     assert.deepEqual(
       [...deferred].sort(),
-      ['attachments', 'chronology', 'link_type', 'targets'],
+      ['attachments', 'chronology', 'link_type'],
       'релевантные, но не исполняемые операнды (сервер отвечает `unsupported`)',
+    );
+    assert.deepEqual(
+      [...hidden].sort(),
+      ['link_type', 'type'],
+      'типовые операнды: исполнитель принимает, редактор выборку не предлагает (0.13.1)',
     );
     assert.deepEqual(
       supported.filter((kind) => sub.filterSubqueryDeferred(kind)),
@@ -253,11 +268,13 @@ describe('под-выборка: релевантность операнда —
       'вид не может быть одновременно поддержан и отложен',
     );
 
-    // «Тип» — одиночный операнд: вид поддержан, но «все в (выборке)» ему недоступно.
+    // «Тип» — одиночный операнд: вид поддержан, но выборку в этой версии не
+    // предлагаем (ошибка 609deba0 п.1); «Вложения» ждут под-проекта сущностей.
     assert.equal(sub.filterSubquerySupported('type'), true);
     assert.equal(sub.filterSubquerySupported('attachments'), false, '«Вложения» ждут под-проекта сущностей');
     assert.equal(sub.filterSubqueryRelevantLeaf(leafOf({ kind: 'type' }, 'all_of'), DATA), false);
-    assert.equal(sub.filterSubqueryRelevantLeaf(leafOf({ kind: 'type' }, 'in'), DATA), true);
+    assert.equal(sub.filterSubqueryRelevantLeaf(leafOf({ kind: 'type' }, 'in'), DATA), false);
+    assert.equal(sub.filterSubqueryRelevantLeaf(leafOf({ kind: 'targets' }, 'in'), DATA), true);
   });
 
   it('подпись условий: коннекторы, скобки вложенности, «без условий»', () => {
@@ -353,6 +370,34 @@ describe('под-выборка: ячейка значения «список �
     assert.equal(values[0].node.children.length, 1);
     assert.equal(values[0].node.children[0].entity.property_id, CITY.id, 'условие под-выборки — из модала');
     assert.equal(dialogs().length, 0, 'после «Готово» модал закрыт');
+  });
+
+  it('«Отмена» создания выборки возвращает переключатель на «Список» (ошибка 609deba0 п.2)', async () => {
+    const { cell, values } = buildCell(PLACE_LEAF());
+    const mode = exactOne(cell, 'fq-mode')!;
+    // По умолчанию активен «Список».
+    const listBtn = () => mode.findAll((n) => n.tagName === 'button' && n.flatText().trim() === 'Список')[0]!;
+    const subqBtn = () => mode.findAll((n) => n.tagName === 'button' && n.flatText().trim() === 'Выборка')[0]!;
+    assert.equal(listBtn().getAttribute('aria-pressed'), 'true', '«Список» выбран');
+    assert.equal(subqBtn().getAttribute('aria-pressed'), 'false');
+
+    // «Выборка» → модал; «Отмена» → значение не собрано, переключатель вернулся.
+    subqBtn().emit('click', {});
+    await tick();
+    assert.equal(dialogs().length, 1, 'модал создания выборки открыт');
+    assert.equal(subqBtn().getAttribute('aria-pressed'), 'true', 'пока модал открыт — визуально «Выборка»');
+    dialogButton('Отмена').emit('click', {});
+    await tick();
+    assert.deepEqual(values, [], '«Отмена» не пишет значение');
+    assert.equal(dialogs().length, 0);
+    assert.equal(
+      listBtn().getAttribute('aria-pressed'),
+      'true',
+      'переключатель вернулся на «Список» (список снова виден)',
+    );
+    assert.equal(subqBtn().getAttribute('aria-pressed'), 'false');
+    assert.ok(exactOne(cell, 'fv') !== null, 'представление списка на месте');
+    assert.equal(exactOne(cell, 'fq-chip'), null, 'чипа выборки нет');
   });
 
   it('«Отмена» не меняет значение; повторное открытие — редактирование', async () => {

@@ -100,6 +100,10 @@ const SUBQUERY_SUPPORTED_KINDS: ReadonlySet<FilterAstEntityKind> = new Set([
   // (ошибка 696b3c3b п.8; сервер исполняет оба вида, см.
   // {@link filterSubqueryRelevantLeaf}).
   'id',
+  // «Цели записи» (`targets`, ошибка 609deba0 п.1): под-выборка мыслей-целей —
+  // тот же вид значения, что у «Мысли»; сервер исполняет `in`/`not_in`/`all_of`
+  // и «в иерархии» (`chronicle-service.targetsLeafClause`).
+  'targets',
 ]);
 
 /**
@@ -109,9 +113,21 @@ const SUBQUERY_SUPPORTED_KINDS: ReadonlySet<FilterAstEntityKind> = new Set([
 const SUBQUERY_DEFERRED_KINDS: ReadonlySet<FilterAstEntityKind> = new Set([
   'attachments',
   'chronology',
-  'targets',
   'link_type',
 ]);
+
+/**
+ * ТИПОВЫЕ операнды, которым переключатель «Список ↔ Выборка» в этой версии НЕ
+ * предлагается (ошибка 609deba0 п.1): выборку по типам мыслей/связей и
+ * публикациям в 0.13.1 не строим — значение таких операндов перечисляется
+ * списком. Сервер под-выборку по «Типу» исполняет (`filterSubquerySupported`
+ * остаётся true — зеркало `AST_SUBQUERY_SUPPORTED`), ограничение — только
+ * редактор: иначе он предлагал бы собрать отбор по МЫСЛЯМ там, где значение —
+ * тип. Публикации (свойство вида `publication`) сюда не входят: у них нет
+ * ссылочного вида значения, и переключатель им не даётся вовсе
+ * ({@link filterSubqueryRelevantLeaf} пропускает только `link`).
+ */
+const SUBQUERY_HIDDEN_KINDS: ReadonlySet<FilterAstEntityKind> = new Set(['type', 'link_type']);
 
 /** Операторы-листья, совместимые со значением-под-выборкой. */
 const SUBQUERY_LEAF_OPERATORS: ReadonlySet<FilterAstOperator> = new Set([
@@ -143,6 +159,14 @@ export function filterSubqueryDeferred(kind: FilterAstEntityKind): boolean {
 }
 
 /**
+ * ТИПОВОЙ операнд: выборка в этой версии не предлагается, хотя исполнитель её
+ * принимает (ошибка 609deba0 п.1). Точка правды для проверок и тестов.
+ */
+export function filterSubqueryHidden(kind: FilterAstEntityKind): boolean {
+  return SUBQUERY_HIDDEN_KINDS.has(kind);
+}
+
+/**
  * Предлагать ли переключение «список ↔ выборка» на этом листе: оператор
  * совместим со значением-под-выборкой, операнд поддержан исполнителем, а
  * свойство-ссылка — ссылочного вида значения (под-выборка сравнивает набор
@@ -152,6 +176,10 @@ export function filterSubqueryRelevantLeaf(leaf: FilterTreeLeaf, data: FilterTre
   if (!SUBQUERY_LEAF_OPERATORS.has(leaf.operator)) return false;
   const kind = leaf.entity.kind;
   if (!filterSubquerySupported(kind)) return false;
+  // Типовые операнды («Тип мысли»/«Тип связи») — в 0.13.1 без выборки
+  // (ошибка 609deba0 п.1): редактор предлагал собрать отбор по МЫСЛЯМ там, где
+  // значение — тип. Сервер их исполняет, но UI выборку по типам не строит.
+  if (SUBQUERY_HIDDEN_KINDS.has(kind)) return false;
   // «Мысль» (`id`): под-выборка — набор мыслей. Наборные «в списке»/«не в
   // списке» дают вхождение мысли в выборку, иерархические «в иерархии»/«не в
   // иерархии» — обход поддерева выборки. Сервер исполняет ОБА вида (ошибка
@@ -406,9 +434,41 @@ export function buildSubqueryValueCell(
   const cell = div(FILTER_SUBQUERY_CELL_CLASS);
   cell.dataset['mode'] = isSubquery ? 'subquery' : 'list';
 
+  /**
+   * Переключатель «Список ↔ Выборка». Храним рукоятку: при выборе «Выборка»
+   * список СКРЫВАЕТСЯ представлением выборки (после «Готово» значение модели
+   * становится под-выборкой и строка перерисовывается), а при «Отмене» создания
+   * выборки (вложенная выборка пуста) переключатель возвращаем на «Список» —
+   * список снова виден (ошибка 609deba0 п.2).
+   */
+  const modeControl = segmentedControl({
+    items: [
+      { id: 'list', label: 'Список', title: 'Перечислить значения в строке' },
+      { id: 'subquery', label: 'Выборка', title: 'Собрать под-выборку в модальном слое' },
+    ],
+    activeId: isSubquery ? 'subquery' : 'list',
+    ariaLabel: 'Вид значения условия',
+    extraClass: FILTER_SUBQUERY_MODE_CLASS,
+    role: 'ghost',
+    size: 's',
+    onChange: (id) => {
+      if (id === 'subquery') openModal();
+      // «Список» при собранной выборке — тот же явный сброс, что у крестика чипа.
+      else if (isSubquery) api.setValue({ kind: 'none' });
+    },
+  });
+
+  /** Открыть модал под-выборки; подтверждение — значение-выборка, отмена — откат. */
   const openModal = (): void => {
     void openFilterSubqueryModal(isSubquery ? value.node : null, opts).then((edited) => {
-      if (edited === null) return;
+      if (edited === null) {
+        // «Отмена»: значение в модели не меняется. Выборки не было — выборка
+        // пуста, значит переключатель возвращаем на «Список» (список снова
+        // виден и активен, ошибка 609deba0 п.2). Собранную выборку при отмене
+        // редактирования сохраняем как есть.
+        if (!isSubquery) modeControl.setActive('list');
+        return;
+      }
       api.setValue({
         kind: 'subquery',
         operator: filterSubqueryValueOperator(leaf.operator),
@@ -417,24 +477,7 @@ export function buildSubqueryValueCell(
     });
   };
 
-  cell.append(
-    segmentedControl({
-      items: [
-        { id: 'list', label: 'Список', title: 'Перечислить значения в строке' },
-        { id: 'subquery', label: 'Выборка', title: 'Собрать под-выборку в модальном слое' },
-      ],
-      activeId: isSubquery ? 'subquery' : 'list',
-      ariaLabel: 'Вид значения условия',
-      extraClass: FILTER_SUBQUERY_MODE_CLASS,
-      role: 'ghost',
-      size: 's',
-      onChange: (id) => {
-        if (id === 'subquery') openModal();
-        // «Список» при собранной выборке — тот же явный сброс, что у крестика чипа.
-        else if (isSubquery) api.setValue({ kind: 'none' });
-      },
-    }).root,
-  );
+  cell.append(modeControl.root);
 
   const body = div('fq-cell__body');
   if (isSubquery) {

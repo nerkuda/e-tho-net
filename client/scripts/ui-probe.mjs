@@ -487,22 +487,27 @@ async function doHover(cdp, spec) {
 async function doClick(cdp, spec) {
   const { px, py } = await resolvePoint(cdp, spec);
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: px, y: py, button: 'none', buttons: 0 });
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mousePressed',
-    x: px,
-    y: py,
-    button: 'left',
-    buttons: 1,
-    clickCount: 1,
-  });
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseReleased',
-    x: px,
-    y: py,
-    button: 'left',
-    buttons: 0,
-    clickCount: 1,
-  });
+  // `count` последовательных нажатий: со второго браузер отдаёт `click` с
+  // `detail = 2` — так прогоняется настоящий двойной клик (шаг `click`).
+  const count = spec.count === undefined ? 1 : spec.count;
+  for (let i = 1; i <= count; i += 1) {
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: px,
+      y: py,
+      button: 'left',
+      buttons: 1,
+      clickCount: i,
+    });
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: px,
+      y: py,
+      button: 'left',
+      buttons: 0,
+      clickCount: i,
+    });
+  }
 }
 
 /** Печатный текст для клавиши (вставка — отдельным событием `char`). */
