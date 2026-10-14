@@ -301,6 +301,8 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
   const phraseContext: FilterPhraseContext = {
     registry: data.registry,
     linkTypes: data.linkTypes ?? [],
+    // Типы мыслей — имена значений-типов во фразе-превью (ошибка 4258e694 п.12б).
+    thoughtTypes: data.thoughtTypes ?? [],
   };
   let footer: FilterFooterHandle | null = null;
   if (opts.footer !== false) {

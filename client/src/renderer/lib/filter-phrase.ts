@@ -16,12 +16,20 @@
  * `AST_OPERATOR_LABELS`, подписи сортировки — `filterSortAstKeys`, композиция
  * токенов-дат — словарь `lib/period-editor.ts` (канон camelCase, легаси читается).
  *
- * Формат фразы:
+ * Формат фразы (правка заказчика 2026-10-14, ошибка 4258e694 п.12а/12б):
  *   • лист — `<операнд> <оператор> <значение>` («Город равно Москва»,
  *     «Время записи между начало месяца и конец месяца», «Есть вложения
  *     заполнено»); значение не требуется — только операнд и оператор;
- *   • группа `И` — «все условия: A и B», `ИЛИ` — «любое условие: A или B»,
- *     `НЕ` — «кроме A»; вложенная группа с другой коннекцией — в скобках;
+ *   • коннекция группы — операторы «И»/«ИЛИ»/«НЕ» В ВЕРХНЕМ РЕГИСТРЕ между
+ *     условиями («A И B», «A ИЛИ B», «НЕ A»); служебных префиксов «все
+ *     условия»/«любое условие» больше нет; одиночная группа (один ребёнок) —
+ *     без оператора; вложенная группа с другой коннекцией — в скобках
+ *     («A И (B ИЛИ C)»);
+ *   • значение-ссылка (мысль/тип/связь/свойство) — СОКРАЩЁННЫМ ИМЕНЕМ, а не id:
+ *     имя берётся из снапшота `labels.value` листа (или из определения для
+ *     сохранённого отбора), иначе из каталогов контекста (типы мыслей/связей,
+ *     реестр свойств); нет ни того, ни другого — как было (id);
+ *   • имя значения обрезается по {@link FILTER_PHRASE_NAME_LIMIT} с «…»;
  *   • под-выборка сворачивается: «Цели в выборке (2 условия)»;
  *   • хвост сортировки: «; сортировка: по названию (убыв.)»;
  *   • длинная фраза обрезается по пределу с «…» (полный текст — в тултипе).
@@ -36,11 +44,24 @@ import {
   type FilterTreeGroup,
   type FilterTreeLeaf,
 } from './filter-builder.js';
-import { STRUCTURE_KEYWORD_SCOPES, type FilterAstSortKey, type StructureKeywordScope } from '@etn/shared';
+import {
+  STRUCTURE_KEYWORD_SCOPES,
+  type FilterAstEntityKind,
+  type FilterAstSortKey,
+  type StructureKeywordScope,
+  type ThoughtType,
+} from '@etn/shared';
 import { canonicalGlobalToken, isGlobalDateToken, panelAnchorLabel, PERIOD_TOKEN_PRESETS } from './period-editor.js';
 
 /** Предел длины фразы по умолчанию; полный текст в тултипе не обрезается. */
 export const FILTER_PHRASE_LIMIT = 300;
+
+/**
+ * Предел длины ИМЕНИ значения во фразе (правка заказчика 2026-10-14, ошибка
+ * 4258e694 п.12б): имена длиннее — с многоточием «…». Применяется к имени
+ * ссылочного значения (мысль/тип/связь/свойство), не к свободному тексту.
+ */
+export const FILTER_PHRASE_NAME_LIMIT = 32;
 
 /** Состояние отбора, нужное композеру (часть единой модели `FilterCriteriaState`). */
 export interface FilterPhraseState {
@@ -52,6 +73,8 @@ export interface FilterPhraseState {
 
 /** Контекст композера: данные подписей и предел длины. */
 export interface FilterPhraseContext extends FilterLabelData {
+  /** Типы мыслей сети — имена значений-типов во фразе (ошибка 4258e694 п.12б). */
+  thoughtTypes?: readonly ThoughtType[];
   /** Предел длины фразы; по умолчанию {@link FILTER_PHRASE_LIMIT}. */
   limit?: number;
 }
@@ -88,11 +111,13 @@ const SUBQUERY_OPERATOR_LABELS: Readonly<Record<string, string>> = {
   all_in: 'все в выборке',
 };
 
-/** Подписи коннекции группы во фразе. */
-const GROUP_OP_LABELS: Readonly<Record<string, string>> = {
-  and: 'все условия',
-  or: 'любое условие',
-  not: 'кроме',
+/** Коннекция группы во фразе — оператор В ВЕРХНЕМ РЕГИСТРЕ между условиями
+ *  (правка заказчика 2026-10-14, ошибка 4258e694 п.12а): служебные префиксы
+ *  «все условия»/«любое условие» убраны. `НЕ` — префикс к единственному ребёнку. */
+const GROUP_SEPARATOR: Readonly<Record<string, string>> = {
+  and: ' И ',
+  or: ' ИЛИ ',
+  not: 'НЕ ',
 };
 
 /** Русское число с согласованием: `1 условие` / `2 условия` / `5 условий`. */
@@ -161,18 +186,21 @@ export function filterPhraseLeafCount(node: FilterTreeGroup | FilterTreeLeaf | n
 }
 
 /** Значение листа фразой ('' — значение не требуется/не задано). */
-export function filterPhraseValue(leaf: FilterTreeLeaf): string {
+export function filterPhraseValue(leaf: FilterTreeLeaf, ctx: FilterPhraseContext): string {
   const value = leaf.value;
   switch (value.kind) {
     case 'none':
       return '';
     case 'scalar':
-      return filterPhraseScalar(value.value);
+      return filterPhraseScalar(value.value, leaf, ctx, true);
     case 'token':
       return filterPhraseToken(value.token);
     case 'list': {
+      const single = value.items.length === 1;
       const items = value.items.map((item) =>
-        typeof item === 'object' ? filterPhraseToken(item.token) : filterPhraseScalar(item),
+        typeof item === 'object'
+          ? filterPhraseToken(item.token)
+          : filterPhraseScalar(item, leaf, ctx, single),
       );
       if (items.length === 0) return '';
       // Пара границ «между» читается через «и», набор — через запятую; длинный
@@ -193,17 +221,88 @@ export function filterPhraseValue(leaf: FilterTreeLeaf): string {
   }
 }
 
-/** Скаляр значением фразы: булево — «да»/«нет», остальное — как есть. */
-function filterPhraseScalar(value: string | number | boolean): string {
+/**
+ * Скаляр значением фразы: булево — «да»/«нет», число — как есть, строка —
+ * именем (см. {@link filterPhraseNamedValue}). `allowSnapshot` разрешает взять
+ * снапшот `labels.value` целиком — для одиночного значения, а не каждого
+ * элемента списка (иначе одна подпись повторилась бы на всех).
+ */
+function filterPhraseScalar(
+  value: string | number | boolean,
+  leaf: FilterTreeLeaf,
+  ctx: FilterPhraseContext,
+  allowSnapshot: boolean,
+): string {
   if (typeof value === 'boolean') return value ? 'да' : 'нет';
-  return String(value);
+  if (typeof value !== 'string') return String(value);
+  return filterPhraseNamedValue(leaf, value, ctx, allowSnapshot);
+}
+
+/**
+ * Строка-значение фразой (правка заказчика 2026-10-14, ошибка 4258e694 п.12б):
+ * для ссылочного операнда (мысль/тип/связь/свойство) вместо id показывается
+ * СОКРАЩЁННОЕ ИМЯ. Источники имени по старшинству:
+ *   1. снапшот `labels.value` листа (есть у прочитанного из определения отбора
+ *      значения) — при `allowSnapshot`;
+ *   2. каталог контекста (тип мысли, тип связи, реестр свойств);
+ *   3. как было — само значение (id), тоже обрезанное.
+ */
+function filterPhraseNamedValue(
+  leaf: FilterTreeLeaf,
+  raw: string,
+  ctx: FilterPhraseContext,
+  allowSnapshot: boolean,
+): string {
+  if (allowSnapshot) {
+    const snapshot = leaf.labels?.value;
+    if (snapshot !== undefined && snapshot !== '') return truncateFilterName(snapshot);
+  }
+  const resolved = filterPhraseCatalogueValue(leaf.entity.kind, raw, ctx);
+  return truncateFilterName(resolved ?? raw);
+}
+
+/** Имя значения-ссылки из каталогов контекста; `null` — вид без каталога/не нашли. */
+function filterPhraseCatalogueValue(
+  kind: FilterAstEntityKind,
+  id: string,
+  ctx: FilterPhraseContext,
+): string | null {
+  switch (kind) {
+    case 'type': {
+      const type = ctx.thoughtTypes?.find((row) => row.id === id);
+      return type?.name ?? null;
+    }
+    case 'link_type': {
+      const link = ctx.linkTypes?.find((row) => row.id === id);
+      return link?.name_forward ?? null;
+    }
+    case 'properties':
+    case 'property': {
+      return ctx.registry.get(id)?.name ?? null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Обрезка имени значения до {@link FILTER_PHRASE_NAME_LIMIT} с «…»: по границе
+ * слова, если она не отсекает больше половины предела, иначе жёстко. Итог не
+ * длиннее предела.
+ */
+export function truncateFilterName(text: string, limit: number = FILTER_PHRASE_NAME_LIMIT): string {
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, Math.max(1, limit - 1));
+  const space = cut.lastIndexOf(' ');
+  const stem = space >= Math.floor(limit / 2) ? cut.slice(0, space) : cut;
+  return `${stem.trimEnd()}…`;
 }
 
 /** Лист фразой: `<операнд> <оператор> <значение>` + режим обхода/области. */
 export function filterPhraseLeaf(leaf: FilterTreeLeaf, ctx: FilterPhraseContext): string {
   const operand = filterOperandLabel(leaf, ctx);
   const operator = astOperatorLabel(leaf.operator);
-  const value = filterPhraseValue(leaf);
+  const value = filterPhraseValue(leaf, ctx);
   // У «Есть слова» и под-выборки подпись оператора лишняя: смысл несёт сам
   // операнд («Есть слова расход») либо подпись оператора под-выборки
   // («Родители в выборке (2 условия)») — «в списке в выборке» не читается.
@@ -221,9 +320,11 @@ export function filterPhraseLeaf(leaf: FilterTreeLeaf, ctx: FilterPhraseContext)
 }
 
 /**
- * Узел дерева фразой. Вложенная группа с другой коннекцией берётся в скобки —
- * «(A или B) и C» читается однозначно; верхний уровень (parentOp === undefined)
- * скобок не получает.
+ * Узел дерева фразой. Коннекция — оператор «И»/«ИЛИ»/«НЕ» в верхнем регистре
+ * (правка заказчика 2026-10-14, ошибка 4258e694 п.12а); одиночный ребёнок
+ * оператора не получает. Вложенная группа с ДРУГОЙ коннекцией берётся в скобки —
+ * «A И (B ИЛИ C)» читается однозначно; верхний уровень (parentOp === undefined)
+ * и та же коннекция скобок не получают.
  */
 export function filterPhraseNode(
   node: FilterTreeGroup | FilterTreeLeaf,
@@ -235,12 +336,12 @@ export function filterPhraseNode(
     .map((child) => filterPhraseNode(child, ctx, node.op))
     .filter((part) => part !== '');
   if (children.length === 0) return '';
-  const separator = node.op === 'and' ? ' и ' : node.op === 'or' ? ' или ' : ', ';
-  const label = GROUP_OP_LABELS[node.op] ?? node.op;
-  const body = children.join(separator);
-  const phrase = node.op === 'not' ? `${label} ${body}` : `${label}: ${body}`;
+  const operator = GROUP_SEPARATOR[node.op] ?? `${node.op} `;
+  // «НЕ» — префикс к своему (единственному) ребёнку; «И»/«ИЛИ» — разделитель.
+  const body =
+    node.op === 'not' ? `${operator}${children.join(', ')}` : children.join(operator);
   const needParens = parentOp !== undefined && parentOp !== node.op;
-  return needParens ? `(${phrase})` : phrase;
+  return needParens ? `(${body})` : body;
 }
 
 /** Хвост сортировки: «сортировка: по названию (убыв.)» ('' — сортировки нет). */
