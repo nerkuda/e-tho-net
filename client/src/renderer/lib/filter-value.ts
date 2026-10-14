@@ -1017,7 +1017,12 @@ function entityOperandControl(
   ctx: FilterValueContext,
 ): HTMLElement {
   const kind = entityKindOf(leaf);
-  const multiple = filterValueIsMultiple(leaf.operator);
+  const hierarchyOp = leaf.operator === 'in_hierarchy' || leaf.operator === 'not_in_hierarchy';
+  // «Мысль» (`id`) в иерархии: значение — СПИСОК корней чип-полем (как «в
+  // списке»), а режим связей неприменим — обход только по структурным потомкам
+  // (задача a577875b), поэтому ячейка режима для `id` не рисуется.
+  const idHierarchy = hierarchyOp && leaf.entity.kind === 'id';
+  const multiple = filterValueIsMultiple(leaf.operator) || idHierarchy;
   const wrap = div('fv-entity');
   wrap.dataset['entityKind'] = kind;
   wrap.dataset['multiple'] = multiple ? 'yes' : 'no';
@@ -1054,7 +1059,7 @@ function entityOperandControl(
     wrap.append(field.root);
   }
 
-  if (leaf.operator === 'in_hierarchy' || leaf.operator === 'not_in_hierarchy') {
+  if (hierarchyOp && !idHierarchy) {
     wrap.append(hierarchyModeControl(leaf, ctx));
   }
   return wrap;

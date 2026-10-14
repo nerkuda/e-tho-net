@@ -668,14 +668,17 @@ describe('дерево условий: список «Что» (элемент f
       'природа свойства — для списка операторов',
     );
 
-    // Контекстные — первыми (профиль-параметр).
+    // Контекстные — первыми (профиль-параметр). «Мысль» (id) — всегда в верхней
+    // группе без заголовка (решение заказчика 2026-10-14, задача a577875b).
     const withContext = mod.filterTreeOperandCatalogue('thoughts', {
       ...DATA,
       contextual: ['property:p-place', 'type'],
     });
+    assert.equal((byKey.get('id') as any).label, 'Мысль', 'операнд id подписан «Мысль»');
+    assert.equal((byKey.get('id') as any).group, 'context', '«Мысль» — в верхней группе без заголовка');
     assert.deepEqual(
       withContext.filter((e: any) => e.group === 'context').map((e: any) => e.key),
-      ['type', 'property:p-place'],
+      ['id', 'type', 'property:p-place'],
     );
 
     const body = mod.buildChoiceMenuBody({

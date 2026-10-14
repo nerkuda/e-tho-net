@@ -639,7 +639,9 @@ export const FILTER_TREE_OPERAND_GROUPS: Readonly<Record<FilterTreeOperandEntry[
  * у служебных операндов — смысловой (дата, строка, мысль, связь…).
  */
 const OPERAND_ICONS: Readonly<Record<string, IconName>> = {
-  id: 'hash',
+  // «Мысль» — значок «ссылка на мысль» (не `hash`: ID пользователь не видит,
+  // задача a577875b).
+  id: 'value-ref',
   type: 'layers',
   link_type: 'link-edit',
   parents: 'arrow-up',
@@ -706,7 +708,10 @@ export function filterTreeOperandCatalogue(
     out.push({
       key: kind,
       label,
-      group: contextual.has(kind) ? 'context' : 'operands',
+      // «Мысль» (id) — всегда в ВЕРХНЕЙ группе без заголовка: это базовая
+      // характеристика места, а не рядовая «Характеристика» (решение заказчика
+      // 2026-10-14, задача a577875b); прочие операнды — контекстные по месту.
+      group: kind === 'id' || contextual.has(kind) ? 'context' : 'operands',
       entity,
       ...(OPERAND_ICONS[kind] !== undefined ? { icon: OPERAND_ICONS[kind] } : {}),
     });

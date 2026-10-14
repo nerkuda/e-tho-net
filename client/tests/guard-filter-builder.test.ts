@@ -40,6 +40,9 @@
  *    отбора: её строки-условия строит единый редактор (ADR fc23f9c1 «судьба
  *    спец-секций»). Каркас диагност/дерево/футер и правило «лист вне профиля»
  *    проверяются и положительно — иначе они пропадут молча.
+ * 9. Подписи операндов — из словаря единого конструктора: служебная формулировка
+ *    «Ссылка на мысль по id» в UI запрещена (операнд id подписан «Мысль»;
+ *    решение заказчика 2026-10-14, задача a577875b).
  *
  * Сторож вводится зелёным — в том же изменении, которое сводит все места
  * применения к одному модулю (мета-стандарт «Правило без теста-сторожа
@@ -246,6 +249,21 @@ const NO_SECOND_OPERAND_SET = {
   include: (rel: string) => !rel.startsWith('lib/'),
 };
 
+/** Правило «подпись операнда id — „Мысль“» (решение заказчика 2026-10-14, a577875b). */
+const NO_LEGACY_ID_OPERAND_LABEL = {
+  name: 'no-legacy-id-operand-label',
+  description:
+    'Подпись операнда id — «Мысль» (словарь OPERAND_KIND_LABELS единого ' +
+    'конструктора): служебная формулировка «Ссылка на мысль по id» ' +
+    'просачивалась в UI, хотя значение задаётся чип-полем мыслей и ID ' +
+    'пользователь не видит (решение заказчика 2026-10-14, задача a577875b).',
+  // Присвоение подписи в словаре конструктора (упоминания в пояснениях —
+  // не нарушение): ср. законные «Ссылка на мысль по id» в doc-комментариях про
+  // wiki-ссылки (`[[#<id>]]`).
+  pattern: /^\s*id:\s*['"]Ссылка на мысль по id['"]/,
+  include: (rel: string) => rel === BUILDER,
+};
+
 /** Читает модуль общего каркаса редактора. */
 function readLib(file: string): string {
   return fs.readFileSync(path.join(RENDERER_ROOT, 'lib', file), 'utf8');
@@ -412,6 +430,28 @@ describe('guard: условия отбора строятся только об�
     assert.match(body, /filterProfileOperators\(/, 'профиль определяет допустимые операторы');
   });
 
+  it('операнд id подписан «Мысль» и допускает «в иерархии»/«не в иерархии» (a577875b)', async () => {
+    // Положительная сторона решения заказчика 2026-10-14: служебная подпись
+    // «Ссылка на мысль по id» заменена на «Мысль» (ID пользователь не видит), а
+    // операнд несёт иерархические операторы — их состав даёт реестр @etn/shared.
+    const builder = await import('../src/renderer/lib/filter-builder.js');
+    assert.equal(
+      builder.OPERAND_KIND_LABELS['id'],
+      'Мысль',
+      'операнд id обязан подписываться «Мысль» — служебная подпись вида условия в UI недопустима',
+    );
+    assert.equal(builder.astOperatorLabel('in_hierarchy'), 'в иерархии');
+    assert.equal(builder.astOperatorLabel('not_in_hierarchy'), 'не в иерархии');
+    const idOps = builder.filterProfileOperators('thoughts', 'id');
+    for (const op of ['eq', 'ne', 'in', 'not_in', 'in_hierarchy', 'not_in_hierarchy'] as const) {
+      assert.ok(idOps.includes(op), `операнд «Мысль» обязан нести оператор ${op} (реестр @etn/shared)`);
+    }
+  });
+
+  it('старая подпись «Ссылка на мысль по id» в словаре подписей запрещена', () => {
+    assertGuardClean(RENDERER_ROOT, [NO_LEGACY_ID_OPERAND_LABEL]);
+  });
+
   it('правила краснеют на умышленном нарушении', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-filter-'));
     try {
@@ -429,7 +469,14 @@ describe('guard: условия отбора строятся только об�
         { ...NO_LOCAL_SPECIAL_SECTION, include: allPlaces },
         { ...NO_LOCAL_PILLS, include: allPlaces },
         { ...NO_STRIP_SORT_GATE },
+        { ...NO_LEGACY_ID_OPERAND_LABEL, include: allPlaces },
       ];
+      fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'lib', 'filter-builder.ts'),
+        ["const OPERAND_KIND_LABELS = {", "  id: 'Ссылка на мысль по id',", '};'].join('\n'),
+        'utf8',
+      );
       fs.writeFileSync(
         path.join(dir, 'screens', 'fake', 'panel.ts'),
         [
@@ -480,6 +527,10 @@ describe('guard: условия отбора строятся только об�
         'бывшая спец-секция в месте обязана попадать в нарушение',
       );
       assert.ok(names.has('no-local-pill-element'), 'своя сборка пилюль обязана попадать в нарушение');
+      assert.ok(
+        names.has('no-legacy-id-operand-label'),
+        'присвоение служебной подписи «Ссылка на мысль по id» обязано попадать в нарушение',
+      );
       const stripViolations = collectViolations(dir, rules).filter(
         (v) => v.rule === 'no-strip-sort-gate',
       );

@@ -387,6 +387,18 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(hierLeaf.mode, 'all_links', 'режим записан в модель листа');
   });
 
+  it('«Мысль» (id) в иерархии: значение — чип-поле (список корней), режима связей нет', () => {
+    const leafNode = leaf({ kind: 'id' }, 'in_hierarchy', { kind: 'list', items: ['t-1', 't-2'] });
+    const box = render(leafNode, slot().api, ctx({ touch: () => undefined }));
+    const wrap = one(box, 'fv-entity');
+    assert.equal(wrap?.dataset['multiple'], 'yes', '«в иерархии» по «Мысли» — список корней чип-полем');
+    assert.equal(
+      one(box, mod.FILTER_VALUE_MODE_CLASS),
+      null,
+      'режим связей для «Мысли» неприменим — переключателя нет (задача a577875b)',
+    );
+  });
+
   it('ссылочные ОПЕРАНДЫ рендерятся без исключения: имя dataset допустимо для DOMStringMap', () => {
     // Регресс 0.13.1: `wrap.dataset['entity-kind'] = kind` бросал
     // `SyntaxError: Failed to set a named property 'entity-kind' on 'DOMStringMap'`
