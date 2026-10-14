@@ -371,6 +371,88 @@ describe(
       assert.equal(def.properties[0]!.value, 'version-uuid-1');
     });
 
+    it('арифметика $thought.[дата]+7d смещает значение свойства (ошибка 9beab3a5)', () => {
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"gte","value":"$thought.[Плановый срок]+7d"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx({
+          properties: [
+            { key: 'Плановый срок', value_type: 'date', multiple: false, value: '2026-09-01' },
+          ],
+        }),
+      );
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      // Дата без времени остаётся YYYY-MM-DD (как у `$today+7d`).
+      assert.equal(def.properties[0]!.value, '2026-09-08');
+    });
+
+    it('арифметика $thought.[дата-время]-1d смещает и время (ошибка 9beab3a5)', () => {
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"lte","value":"$thought.[Момент]-1d"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx({
+          properties: [
+            {
+              key: 'Момент',
+              value_type: 'date',
+              multiple: false,
+              value: '2026-09-02T10:00:00.000Z',
+            },
+          ],
+        }),
+      );
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      assert.equal(def.properties[0]!.value, '2026-09-01T10:00:00.000Z');
+    });
+
+    it('без арифметики значение свойства-даты не меняется', () => {
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[Плановый срок]"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx({
+          properties: [
+            { key: 'Плановый срок', value_type: 'date', multiple: false, value: '2026-09-01' },
+          ],
+        }),
+      );
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      assert.equal(def.properties[0]!.value, '2026-09-01');
+    });
+
+    it('арифметика у пустого значения свойства — пусто без неразрешимого токена (A6, 9beab3a5)', () => {
+      // Свойства нет у оцениваемой мысли: смещать нечего, условие сравнивается
+      // с пустотой — как и без арифметики (пункт A6 ошибки 50d9bf4e).
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[ПустоеСвойство]+7d"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx(),
+      );
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      assert.equal(def.properties[0]!.value, '');
+    });
+
+    it('арифметика на не-датовом значении свойства — неразрешимый токен, как у не-дат', () => {
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[Заметка]+7d"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx({
+          properties: [{ key: 'Заметка', value_type: 'text', multiple: false, value: 'просто текст' }],
+        }),
+      );
+      assert.equal(result.unresolved.length, 1);
+      assert.equal(result.unresolved[0]!.token, '$thought.[Заметка]+7d');
+      assert.equal(result.unresolved[0]!.reason, 'empty_value');
+    });
+
     it('подставляет множественное свойство как массив (требование 12fccde9)', () => {
       const result = resolveTokensInDefinition(
         parseOrThrow(

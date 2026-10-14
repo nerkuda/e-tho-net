@@ -853,7 +853,7 @@ function resolveOneToken(
     case 'thought_field':
       return resolveThoughtField(tok, ctx, now, unresolved, path);
     case 'thought_property':
-      return resolveThoughtProperty(tok, ctx);
+      return resolveThoughtProperty(tok, ctx, now, unresolved, path);
     case 'global':
       return resolveGlobal(tok, ctx, now, unresolved, path);
   }
@@ -907,15 +907,25 @@ function resolveThoughtField(
  * значения нет (или свойство не подключено к типу), по семантике отбора это
  * ПУСТОЕ значение. Возвращаем пустую строку без записи в `unresolved`, чтобы
  * условие сравнивалось с пустотой, а не давало «неразрешимый токен».
+ *
+ * Арифметика даты в хвосте (`$thought.[Дата]+7d`) применяется к значению
+ * свойства тем же {@link applyDateArithmetic}, что и к типовым датовым токенам
+ * (`$today+7d`, `$thought.created+7d`) — ошибка 9beab3a5: раньше смещение молча
+ * терялось и условие работало как без него. Пустое значение остаётся пустым
+ * (смещать нечего) — без записи в `unresolved`, как и требует A6.
  */
 function resolveThoughtProperty(
   tok: ParsedToken,
   ctx: ResolveContext,
+  now: () => Date,
+  unresolved: TokenIssue[],
+  path: string,
 ): string | number | boolean | string[] | null {
   const propName = tok.propertyName ?? '';
   const prop = ctx.properties.get(propName);
   if (prop === undefined) return '';
-  return prop.value;
+  if (prop.value === '') return '';
+  return applyDateArithmetic(tok, prop.value, `свойство «${propName}»`, ctx, now, unresolved, path);
 }
 
 function resolveGlobal(
