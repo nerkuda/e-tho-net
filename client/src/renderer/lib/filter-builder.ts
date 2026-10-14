@@ -1749,6 +1749,54 @@ export function filterLeafImplicitValue(leaf: FilterTreeLeaf): FilterTreeValue |
   return { kind: 'scalar', value: true };
 }
 
+/**
+ * Значение листа, которое виджет показывает по умолчанию при ПУСТОМ значении
+ * модели (`value.kind === 'none'`), но сам в модель не пишет. Обобщает
+ * {@link filterLeafImplicitValue} двумя автоподстановками (ошибка 609deba0,
+ * пункт A3 в редакции части 5):
+ *
+ *   • булевы триады «Актуальность»/«Помечено на удаление» — «да» (скаляр true);
+ *   • датовые операнды (дата создания/изменения, время записи/события) и
+ *     свойства с `value_type = 'date'` — опора «$today» с нулевым сдвигом:
+ *     ячейка даты показывает «$today», и автоподстановка обязана попасть в
+ *     модель, иначе проверка «условие без значения» висит при видимой дате.
+ *
+ * `valueType` — природа свойства листа (реестр), `undefined` у датовых
+ * ОПЕРАНДОВ (их вид виден по `entity.kind`). Возвращает `null`, если виджет
+ * значения по умолчанию не подставляет (ссылочные операнды, числа, слова).
+ * Значения вне «none» не подменяются: явно выбранную дату/значение обобщение
+ * не трогает — его задача закрыть именно пустое условие.
+ *
+ * {@link buildFilterTree} зовёт помощник на любой правке условия (смена
+ * операнда/оператора) до перерисовки — признак «условие без значения»
+ * снимается/ставится по факту видимого значения.
+ */
+export function filterLeafDefaultValue(
+  leaf: FilterTreeLeaf,
+  valueType?: PropertyValueType,
+): FilterTreeValue | null {
+  if (leaf.value.kind !== 'none') return null;
+  const implicit = filterLeafImplicitValue(leaf);
+  if (implicit !== null) return implicit;
+  if (!operatorNeedsValue(leaf.operator)) return null;
+  if (valueType !== 'date' && !isDateOperandKind(leaf.entity.kind)) return null;
+  // Две границы («между»/«не между») — пара опор верхней/нижней границы.
+  if (leaf.operator === 'between' || leaf.operator === 'not_between') {
+    return { kind: 'list', items: [{ token: '$today' }, { token: '$today' }] };
+  }
+  return { kind: 'token', token: '$today' };
+}
+
+/** Операторы, которым значение не требуется (наличие/заполненность). */
+function operatorNeedsValue(operator: FilterAstOperator): boolean {
+  return operator !== 'is_empty' && operator !== 'not_empty' && operator !== 'has' && operator !== 'not_has';
+}
+
+/** Датовые ОПЕРАНДЫ листа — вид значения которых «дата» без реестра свойств. */
+function isDateOperandKind(kind: FilterAstEntityKind): boolean {
+  return kind === 'created_at' || kind === 'updated_at' || kind === 'record_time' || kind === 'occurred_at';
+}
+
 /** True — у дерева есть хотя бы одно условие (пустые группы не считаются). */
 export function filterTreeHasAnyCriteria(node: FilterTreeNode | null): boolean {
   if (node === null) return false;

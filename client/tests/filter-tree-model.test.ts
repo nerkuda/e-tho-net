@@ -35,6 +35,7 @@ import {
   defaultFilterTreeGroup,
   defaultFilterTreeLeaf,
   filterAstSortKeyLabel,
+  filterLeafDefaultValue,
   filterLeafImplicitValue,
   filterProfileOperands,
   filterProfileOperators,
@@ -580,6 +581,46 @@ describe('хелперы модели дерева', () => {
     );
     const comment = { ...defaultFilterTreeLeaf({ kind: 'comment' }), operator: 'is_empty' as const };
     assert.equal(filterLeafImplicitValue(comment), null);
+  });
+
+  it('автоподстановка значения снимает признак пустого условия (ошибка 609deba0 п. A3)', () => {
+    // Булева триада: «да» попадает в модель.
+    assert.deepEqual(filterLeafDefaultValue(defaultFilterTreeLeaf({ kind: 'active' })), {
+      kind: 'scalar',
+      value: true,
+    });
+    // Датовый ОПЕРАНД: ячейка даты показывает «$today».
+    assert.deepEqual(filterLeafDefaultValue(defaultFilterTreeLeaf({ kind: 'created_at' })), {
+      kind: 'token',
+      token: '$today',
+    });
+    // «Между» у датового операнда — пара опор-границ.
+    assert.deepEqual(
+      filterLeafDefaultValue({ ...defaultFilterTreeLeaf({ kind: 'occurred_at' }), operator: 'between' }),
+      { kind: 'list', items: [{ token: '$today' }, { token: '$today' }] },
+    );
+    // Датовое СВОЙСТВО (nature из реестра): «= $today».
+    assert.deepEqual(
+      filterLeafDefaultValue(
+        { ...defaultFilterTreeLeaf({ kind: 'property', property_id: 'p' }), operator: 'eq' },
+        'date',
+      ),
+      { kind: 'token', token: '$today' },
+    );
+    // Непустое значение не подменяется — явно выбранную дату обобщение не трогает.
+    assert.equal(
+      filterLeafDefaultValue({
+        ...defaultFilterTreeLeaf({ kind: 'created_at' }),
+        value: { kind: 'scalar', value: '2026-01-01' },
+      }),
+      null,
+    );
+    // Операторам без значения и не-датовым операндам дефолт не полагается.
+    assert.equal(
+      filterLeafDefaultValue({ ...defaultFilterTreeLeaf({ kind: 'created_at' }), operator: 'is_empty' }),
+      null,
+    );
+    assert.equal(filterLeafDefaultValue(defaultFilterTreeLeaf({ kind: 'keywords' })), null);
   });
 });
 

@@ -64,7 +64,7 @@ import {
   astOperatorLabel,
   defaultFilterTreeGroup,
   defaultFilterTreeLeaf,
-  filterLeafImplicitValue,
+  filterLeafDefaultValue,
   filterOperandLabel,
   filterProfileOperands,
   filterProfileOperators,
@@ -1074,15 +1074,18 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
   };
 
   /**
-   * Зафиксировать в модели НЕЯВНОЕ значение листа (ошибка 609deba0 п.3):
-   * булевы триады «Актуальность»/«Помечено на удаление» показывают «да», но
-   * значения в модели не держат. Зовётся на любой правке условия (смена
-   * операнда/оператора) до перерисовки, чтобы проверка «условие без значения»
-   * снималась/ставилась по факту.
+   * Зафиксировать в модели значение, которое виджет показывает ПОУМОЛЧАНИЮ при
+   * пустом условии (ошибка 609deba0 п.3, пункт A3 в редакции части 5): булевы
+   * триады «Актуальность»/«Помечено на удаление» рисуют «да», ячейка даты
+   * (датовый операнд/свойство) — опору «$today», но значения в модели не
+   * держат. Зовётся на любой правке условия (смена операнда/оператора) до
+   * перерисовки, чтобы проверка «условие без значения» снималась/ставилась по
+   * факту видимого значения. Природа листа (для датового свойства) — из реестра
+   * через {@link filterTreeOperatorValueType}.
    */
   const normalizeLeafValue = (leaf: FilterTreeLeaf): void => {
-    const implicit = filterLeafImplicitValue(leaf);
-    if (implicit !== null) leaf.value = implicit;
+    const defaultValue = filterLeafDefaultValue(leaf, filterTreeOperatorValueType(leaf, ctx.data));
+    if (defaultValue !== null) leaf.value = defaultValue;
   };
 
   const model = (): FilterTreeGroup => ensureTree();
