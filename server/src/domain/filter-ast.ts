@@ -61,10 +61,15 @@ const SUBQUERY_OPERATORS = ['in', 'not_in', 'all_in'] as const;
  * семантику задаёт только `value.operator`, поэтому внешний `leaf.operator`
  * обязан ему соответствовать (иначе молча игнорировался бы). `all_in` (наборный
  * квантификатор «каждое») соответствует листовому `all_of`.
+ *
+ * Иерархические операторы (`in_hierarchy`/`not_in_hierarchy`) — частный случай
+ * «в (выборке)»/«не в (выборке)»: под-выборка даёт НАБОР КОРНЕЙ, а исполнение
+ * обходит их поддерево и проверяет вхождение (ошибка f4e99090 п.4, требование
+ * 485ff29e — иерархический случай).
  */
 const SUBQUERY_LEAF_OPERATOR: Record<(typeof SUBQUERY_OPERATORS)[number], readonly FilterAstOperator[]> = {
-  in: ['in'],
-  not_in: ['not_in'],
+  in: ['in', 'in_hierarchy'],
+  not_in: ['not_in', 'not_in_hierarchy'],
   all_in: ['all_of'],
 };
 

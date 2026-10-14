@@ -1263,10 +1263,11 @@ const AST_COMPARE_OPS = new Set<FilterAstOperator>(['gt', 'gte', 'lt', 'lte']);
 const AST_RANGE_OPS = new Set<FilterAstOperator>(['between', 'not_between']);
 
 /**
- * Операторы-листья, совместимые со значением-под-выборкой: наборные/ссылочные.
- * Несовместимые (предикаты количества, «Есть слова», булевы, вхождение в
- * иерархию) отвергаются {@link astSubqueryLeafClause} — значение-под-выборка
- * доступно только на релевантных левых операндах (требование c088f9e1).
+ * Операторы-листья, совместимые со значением-под-выборкой: наборные/ссылочные и
+ * иерархические («под-выборка — набор корней»). Несовместимые (предикаты
+ * количества, «Есть слова», булевы) отвергаются {@link astSubqueryLeafClause} —
+ * значение-под-выборка доступно только на релевантных левых операндах
+ * (требование c088f9e1).
  */
 const AST_SUBQUERY_LEAF_OPS = new Set<FilterAstOperator>([
   'in',
@@ -1276,6 +1277,13 @@ const AST_SUBQUERY_LEAF_OPS = new Set<FilterAstOperator>([
   'none_of',
   'eq',
   'ne',
+  // «В иерархии»/«не в иерархии»: под-выборка даёт НАБОР КОРНЕЙ, обход их
+  // поддерева и проверка вхождения — как для списка корней (ошибка f4e99090
+  // п.4). Квантификатор `value.operator` согласован разбором AST
+  // (`SUBQUERY_LEAF_OPERATOR`: `in` ↔ `in_hierarchy`, `not_in` ↔
+  // `not_in_hierarchy`).
+  'in_hierarchy',
+  'not_in_hierarchy',
 ]);
 
 /**
@@ -1305,6 +1313,11 @@ const AST_SUBQUERY_SUPPORTED = new Set<FilterAstEntity['kind']>([
   'parents',
   'children',
   'type',
+  // «Мысль» (`id`, задача a577875b): под-выборка — источник КОРНЕЙ
+  // иерархического обхода; наборный оператор тоже исполним (вхождение мысли в
+  // выборку), но UI предлагает под-выборку на «Мысли» только у иерархических
+  // операторов (ошибка f4e99090 п.4).
+  'id',
 ]);
 
 /** Релевантные операнды, ждущие под-проекта сущностей (честный unsupported). */
@@ -1499,6 +1512,12 @@ function astSubqueryLeafClause(
   }
   const subquery = leaf.value as FilterAstSubqueryValue;
   const quant = subquery.operator;
+  // «В иерархии»/«не в иерархии» со значением-под-выборкой: под-выборка даёт
+  // НАБОР КОРНЕЙ, а исполнение обходит их поддерево общим механизмом и
+  // проверяет вхождение значения операнда (ошибка f4e99090 п.4, требование
+  // 485ff29e — иерархический случай). Режим обхода — только структурный
+  // (карточка a577875b: «выбери эти мысли и их потомков»).
+  const hierarchy = leaf.operator === 'in_hierarchy' || leaf.operator === 'not_in_hierarchy';
 
   switch (entity.kind) {
     case 'property': {
@@ -1515,14 +1534,51 @@ function astSubqueryLeafClause(
           requestId,
         );
       }
-      const ids = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId);
+      let ids = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId);
+      // «В иерархии»: значения свойства проверяются против поддерева корней из
+      // под-выборки — тем же обходом, что у списка корней.
+      if (hierarchy) {
+        ids = astHierarchySubtree(ndb, 'structural', ids, astOpts, `${path}.value`, requestId);
+      }
       const directionRef = entity.direction ?? ref.direction;
       return subqueryLinkPropertyClause(def, directionRef, ids, quant);
     }
     case 'parents':
     case 'children': {
       const ids = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId);
+      if (hierarchy) {
+        // Корни поддерева — результат под-выборки; обход и проверка вхождения —
+        // общим листом «в иерархии» (ровно как для списка корней).
+        return hierarchyStructuralLeafClause(
+          ndb,
+          entity.kind,
+          { ...leaf, value: ids },
+          astOpts,
+          `${path}.value`,
+          requestId,
+        );
+      }
       return subqueryStructuralClause(entity.kind, ids, quant);
+    }
+    case 'id': {
+      // «Мысль» со значением-под-выборкой: наборный оператор — вхождение мысли
+      // в выборку; иерархический — в поддерево мыслей выборки (R ∪ subtree(R)).
+      const ids = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId);
+      if (hierarchy) {
+        const subtree = astHierarchySubtree(ndb, 'structural', ids, astOpts, `${path}.value`, requestId);
+        const match = astIdInClause('t.id', subtree);
+        return leaf.operator === 'in_hierarchy' ? match : astNegate(match);
+      }
+      if (quant === 'all_in') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Оператор «все в (выборке)» применим только к множественным операндам; «Мысль» — одиночный.',
+          { field: `${path}.value.operator`, operand: 'id' },
+          requestId,
+        );
+      }
+      const match = astIdInClause('t.id', ids);
+      return quant === 'in' ? match : astNegate(match);
     }
     case 'type': {
       if (quant === 'all_in') {
@@ -1535,6 +1591,10 @@ function astSubqueryLeafClause(
       }
       // «Тип» — одиночный операнд: под-выборка по типам (типы выбранных мыслей).
       const typeIds = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId, 'types');
+      if (hierarchy) {
+        // «В иерархии» по типу — тип и его подтипы из набора типов выборки.
+        return hierarchyTypeLeafClause(ndb, { ...leaf, value: typeIds }, `${path}.value`, requestId);
+      }
       return subqueryTypeClause(typeIds, quant);
     }
     default:

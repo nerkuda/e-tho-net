@@ -459,3 +459,122 @@ describe('валидация формы значения-под-выборки (
     }
   });
 });
+
+describe('под-выборка как источник корней «в иерархии» (ошибка f4e99090 п.4)', { skip: !nativeAvailable() }, () => {
+  /** Общая структура: цепочка рёбер root→a→b→x (target-обход = поддерево) + изолят z. */
+  function hierarchy(): { ndb: NetworkDb; ids: Record<string, string>; set: FilterAstNode } {
+    const ndb = createInMemoryNetworkDb();
+    const v = seedThoughtType(ndb, 'вещь');
+    const ids = {
+      root: seedThought(ndb, 'root', { type_id: v }),
+      a: seedThought(ndb, 'a'),
+      b: seedThought(ndb, 'b'),
+      x: seedThought(ndb, 'x'),
+      z: seedThought(ndb, 'z'),
+    };
+    seedLink(ndb, ids['root']!, ids['a']!);
+    seedLink(ndb, ids['a']!, ids['b']!);
+    seedLink(ndb, ids['b']!, ids['x']!);
+    // Под-выборка: мысли типа «вещь» → единственный корень root.
+    const set = leaf({ kind: 'type' }, 'in', [v]);
+    return { ndb, ids, set };
+  }
+
+  it('«Мысль в иерархии» с под-выборкой = тот же результат, что список корней', () => {
+    const { ndb, ids, set } = hierarchy();
+    const listForm = runAst(ndb, ast(leaf({ kind: 'id' }, 'in_hierarchy', [ids['root']!])));
+    const subForm = runAst(ndb, ast(leaf({ kind: 'id' }, 'in_hierarchy', sub(set, 'in'))));
+    assert.deepEqual(subForm, listForm, 'под-выборка — источник корней: результат совпадает со списком');
+    assert.deepEqual(subForm, ['a', 'b', 'root', 'x'], 'поддерево корня root (обход target-направления)');
+  });
+
+  it('«Мысль не в иерархии» с под-выборкой = точное дополнение', () => {
+    const { ndb, ids, set } = hierarchy();
+    const negList = runAst(ndb, ast(leaf({ kind: 'id' }, 'not_in_hierarchy', [ids['root']!])));
+    const negSub = runAst(ndb, ast(leaf({ kind: 'id' }, 'not_in_hierarchy', sub(set, 'not_in'))));
+    assert.deepEqual(negSub, negList, 'отрицание совпадает со списком корней');
+    assert.deepEqual(negSub, ['z'], 'изолят вне поддерева');
+  });
+
+  it('«Родители»/«Потомки» в иерархии: корни из под-выборки', () => {
+    const { ndb, ids, set } = hierarchy();
+    for (const kind of ['parents', 'children'] as const) {
+      const listForm = runAst(ndb, ast(leaf({ kind }, 'in_hierarchy', [ids['root']!])));
+      const subForm = runAst(ndb, ast(leaf({ kind }, 'in_hierarchy', sub(set, 'in'))));
+      assert.deepEqual(subForm, listForm, `${kind}: под-выборка корней даёт тот же результат`);
+    }
+  });
+
+  it('свойство-ссылка в иерархии: значения проверяются против поддерева корней выборки', () => {
+    const ndb = createInMemoryNetworkDb();
+    const lt = seedLinkType(ndb, 'куплено тут', 'купили здесь');
+    const prop = seedLinkProperty(ndb, 'куплено тут', { link_type_id: lt, direction: 'out' });
+    const v = seedThoughtType(ndb, 'вещь');
+    const root = seedThought(ndb, 'root', { type_id: v });
+    const child = seedThought(ndb, 'child');
+    const far = seedThought(ndb, 'far');
+    const outside = seedThought(ndb, 'outside'); // изолят — вне поддерева корня
+    const s1 = seedThought(ndb, 's1'); // значение root (в поддереве)
+    const s2 = seedThought(ndb, 's2'); // значение outside (вне)
+    seedLink(ndb, root, child); // root → child → far (в поддерево)
+    seedLink(ndb, child, far);
+    seedLink(ndb, s1, root, { type_id: lt });
+    seedLink(ndb, s2, outside, { type_id: lt });
+
+    const set = leaf({ kind: 'type' }, 'in', [v]); // = {root}
+    const subForm = runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'in_hierarchy', sub(set, 'in'))));
+    const listForm = runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'in_hierarchy', [root])));
+    assert.deepEqual(subForm, listForm, 'паритет со списком корней');
+    assert.deepEqual(subForm, ['s1'], 'значение s1 (root) в поддереве корня выборки');
+  });
+
+  it('«Тип» в иерархии: подтипы типов из под-выборки', () => {
+    const ndb = createInMemoryNetworkDb();
+    const parentType = seedThoughtType(ndb, 'родительский');
+    const subType = seedThoughtType(ndb, 'дочерний', parentType);
+    const other = seedThoughtType(ndb, 'чужой');
+    seedThought(ndb, 'tp', { type_id: parentType });
+    seedThought(ndb, 'ts', { type_id: subType });
+    seedThought(ndb, 'to', { type_id: other });
+    // Под-выборка даёт тип «родительский» (тип мысли tp).
+    const set = leaf({ kind: 'id' }, 'in', [seedThought(ndb, 'anchor', { type_id: parentType })]);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'type' }, 'in_hierarchy', sub(set, 'in')))), ['anchor', 'tp', 'ts']);
+  });
+
+  it('пограничный: пустая под-выборка корней — «в иерархии» ложно, «не в иерархии» истинно', () => {
+    const ndb = createInMemoryNetworkDb();
+    const empty = seedThoughtType(ndb, 'пустой');
+    seedThought(ndb, 'm1');
+    seedThought(ndb, 'm2');
+    const set = leaf({ kind: 'type' }, 'in', [empty]);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'id' }, 'in_hierarchy', sub(set, 'in')))), []);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'id' }, 'not_in_hierarchy', sub(set, 'not_in')))), ['m1', 'm2']);
+  });
+});
+
+describe('валидация под-выборки на иерархических операторах (f4e99090 п.4)', () => {
+  it('согласованные пары принимаются, рассогласованные — VALIDATION_ERROR', () => {
+    const mk = (leafOp: string, valueOp: string): Record<string, unknown> => ({
+      version: FILTER_AST_VERSION,
+      filter: {
+        entity: { kind: 'id' },
+        operator: leafOp,
+        value: { query: { entity: { kind: 'type' }, operator: 'in', value: ['t'] }, operator: valueOp },
+      },
+    });
+    for (const [leafOp, valueOp] of [
+      ['in_hierarchy', 'in'],
+      ['not_in_hierarchy', 'not_in'],
+    ] as const) {
+      assert.ok(parseFilterAst(mk(leafOp, valueOp)).filter, `согласованная пара ${leafOp}+${valueOp}`);
+    }
+    for (const [leafOp, valueOp] of [
+      ['in_hierarchy', 'not_in'],
+      ['in_hierarchy', 'all_in'],
+      ['not_in_hierarchy', 'in'],
+      ['not_in_hierarchy', 'all_in'],
+    ] as const) {
+      assert.ok(expectEtnError(() => parseFilterAst(mk(leafOp, valueOp))), `рассогласование ${leafOp}+${valueOp}`);
+    }
+  });
+});
