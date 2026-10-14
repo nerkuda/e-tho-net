@@ -88,3 +88,31 @@ describe('лента публикации использует общую раз
     );
   });
 });
+
+describe('резюме и realtime-патч блока разворачивают вставки (ошибка 3b3035cf)', () => {
+  const WS = fs.readFileSync(
+    path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'src',
+      'renderer',
+      'screens',
+      'publications',
+      'workspace.ts',
+    ),
+    'utf8',
+  );
+
+  test('резюме титула берёт серверный summary_html и достраивает вставки клиентом', () => {
+    assert.match(
+      WS,
+      /assembly\?\.publication\.summary_html/,
+      'серверный HTML резюме (сборка с развёрткой) используется в титуле',
+    );
+    assert.match(
+      WS,
+      /expandTextTransclusions\(block, summaryRaw\)/,
+      'вставки живого снимка резюме достраиваются общим клиентским путём',
+    );
+  });
+});

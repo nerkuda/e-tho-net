@@ -258,6 +258,14 @@ export function mountPublicationWorkspace(
   let publicationId: string | null = null;
   let publication: Publication | null = null;
   let assembly: PublicationAssembly | null = null;
+  /**
+   * Исходное резюме, для которого собрана текущая `assembly` (снимок при
+   * загрузке). Пока `publication.summary_md` совпадает с ним — в титуле берём
+   * СЕРВЕРНЫЙ `summary_html` (та же сборка, что у экспорта, вставки уже
+   * развёрнуты); расхождение означает правку резюме в карточке, ещё не
+   * попавшую в сборку, — её рендерит клиент (ошибка 3b3035cf).
+   */
+  let assembledSummaryRaw = '';
   let page = 1;
   let loading = false;
   let loadError: unknown = null;
@@ -784,6 +792,7 @@ export function mountPublicationWorkspace(
       ]);
       publication = card;
       assembly = doc;
+      assembledSummaryRaw = card.summary_md ?? '';
       // Полный снимок публикации — в нормализованный кэш слоя: точечные патчи
       // роутера ложатся поверх полной записи, а не создают частичную.
       commitEntity('publication', card.id, card);
@@ -840,10 +849,10 @@ export function mountPublicationWorkspace(
 
   /**
    * Точечно заменяет КОНТЕНТ блоков мысли по готовому HTML (без чтения сборки):
-   * у раздела — предисловие, у текста — сам блок. Используется при активном
-   * `staleRebuild`, когда тянуть полную сборку нельзя (иначе материализуется
-   * отложенный рецепт и порядок разделов сдвигается, замечание-блокер 1 приёмки
-   * b02ef1cf).
+   * у раздела — предисловие, у текста — сам блок. Используется при
+   * активном `staleRebuild`, когда тянуть полную сборку нельзя (иначе
+   * материализуется отложенный рецепт и порядок разделов сдвигается,
+   * замечание-блокер 1 приёмки b02ef1cf).
    *
    * Модель блока (`navBlocks`) обновляется СИНХРОННО с DOM: `blockSignature`
    * включает `preambleHtml`/`html`, и без синхронизации `reconcileKeyed` счёл бы
@@ -2030,18 +2039,26 @@ export function mountPublicationWorkspace(
       );
     }
     node.append(titlePage);
-    // Резюме — из СВЕЖЕГО снимка публикации (а не из `assembly.publication`),
-    // чтобы правка резюме в карточке редактора отражалась в титульном блоке без
-    // перечитывания сборки (замечание А2 приёмки b02ef1cf). Рендер — тем же
-    // общим markdown-рендерером, что и у карточки/сервера.
-    const summaryHtml =
-      publication !== null
-        ? renderMarkdown(publication.summary_md ?? '')
-        : (assembly?.publication.summary_html ?? '');
+    // Резюме — markdown-поле публикации: трансклюзии разворачиваются так же, как
+    // в предисловиях/текстах (ошибка 3b3035cf). Снимок совпадает со сборкой —
+    // берём СЕРВЕРНЫЙ `summary_html` (та же сборка, что у экспорта: превью и файл
+    // не расходятся, вставки уже развёрнуты). Снимок изменён правкой резюме в
+    // карточке (замечание А2 приёмки b02ef1cf) — рендерим из свежего `summary_md`
+    // и достраиваем вставки общим клиентским путём просмотра, как тела текстов.
+    const summaryRaw = publication?.summary_md ?? '';
+    const summaryInSync = publication === null || summaryRaw === assembledSummaryRaw;
+    const summaryHtml = summaryInSync
+      ? (assembly?.publication.summary_html ?? '')
+      : summaryRaw === ''
+        ? ''
+        : renderMarkdown(summaryRaw);
     if (summaryHtml !== '') {
       const block = div('pub-doc-summary');
       renderHtml(block, summaryHtml);
       node.append(block);
+      if (!summaryInSync && htmlHasTransclusionMarkup(summaryHtml)) {
+        void expandTextTransclusions(block, summaryRaw);
+      }
     }
     return node;
   }
