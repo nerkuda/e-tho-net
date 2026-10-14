@@ -83,7 +83,8 @@ const APPLY_SITES = (rel: string): boolean => rel.startsWith('screens/') || rel.
  * Известные места единого редактора (версия 0.13.1): диалог отбора типа мысли,
  * панели «Структур»/«Дневника», лента «Событий», строка поиска карты (пятое
  * место; задача 8f3b2cf2 — снято прежнее исключение строки поиска из правил
- * спец-секций).
+ * спец-секций) и вкладка «Рецепты» редактора публикаций (шестое место; задача
+ * a0c071f8 — пересборка рецепта заголовков на дерево).
  */
 const EDITOR_PLACE_FILES: ReadonlySet<string> = new Set([
   'screens/thought-type/filter-dialog.ts',
@@ -91,6 +92,7 @@ const EDITOR_PLACE_FILES: ReadonlySet<string> = new Set([
   'screens/chronicle/filter-panel.ts',
   'screens/activity/activity.ts',
   'search/search.ts',
+  'screens/publications/recipe.ts',
 ]);
 
 /**

@@ -367,6 +367,25 @@ export function mergeFilterIssues(...lists: ReadonlyArray<readonly FilterIssue[]
   return dedupeIssues(lists.flat());
 }
 
+/**
+ * Жёлтые записи диагностики для условий, ОТБРОШЕННЫХ при чтении сохранённого
+ * определения отбора (`readFilterDefinitionDetailed.lost`): сохранённый отбор
+ * не перезаписывается молча, потеря видна пользователю. Адреса строки у таких
+ * записей нет — они показываются в тултипе фразы-превью футера, пока пользователь
+ * не тронул отбор (образец — диагностика потери миграции ленты «События»).
+ * Текст диагностики — из модуля каркаса, а не из места применения: строки
+ * интерфейса мест берутся из словаря `t()` (требование 0e5ff1c6).
+ */
+export function lostConditionIssues(lost: readonly string[]): FilterIssue[] {
+  return lost.map((condition) => ({
+    severity: 'warning' as const,
+    source: 'constructor' as const,
+    code: 'build_warning' as const,
+    path: '',
+    message: `${condition}. Правка заменит сохранённое определение.`,
+  }));
+}
+
 function dedupeIssues(issues: readonly FilterIssue[]): FilterIssue[] {
   const seen = new Set<string>();
   const out: FilterIssue[] = [];

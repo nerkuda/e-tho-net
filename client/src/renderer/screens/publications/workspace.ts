@@ -103,7 +103,10 @@ import {
 import { loadPropertyRows } from './recipe.js';
 import { buildPropertyListRows } from '../../lib/property-list.js';
 import { ensureLink, setOnlyParents, throwOnFailures } from '../../lib/link-ops.js';
-import { parseFilterDefinition } from '../../lib/filter-builder.js';
+import {
+  filterTreeIdsByKind,
+  parseFilterDefinitionTree,
+} from '../../lib/filter-builder.js';
 import {
   commitEntity,
   getEntity,
@@ -2517,16 +2520,28 @@ export function mountPublicationWorkspace(
     if (missed.length > 0) notice(t('publications.ws.createMiss'), 'error');
   }
 
-  /** Типы мыслей из рецепта заголовков публикации (для предзаполнения). */
+  /**
+   * Типы мыслей и корневые мысли отбора РАЗДЕЛОВ из рецепта заголовков: значения
+   * листьев дерева (плоскую запись компилирует тот же единый читатель, ADR
+   * fc23f9c1 — своей формы чтения определения место не заводит). Прежние плоские
+   * поля `type_ids`/`parent_ids` в AST-теле рецепта пусты, поэтому берутся
+   * листья «Тип в иерархии» и «Родители» (`filterTreeIdsByKind`).
+   */
   function publicationTypeIds(): string[] {
     if (publication?.title_recipe == null) return [];
-    return parseFilterDefinition(publication.title_recipe).typeIds;
+    return filterTreeIdsByKind(
+      parseFilterDefinitionTree(publication.title_recipe).tree ?? null,
+      'type',
+    );
   }
 
-  /** Корневые мысли отбора разделов (`parent_ids`) — «Родительская мысль». */
+  /** Корневые мысли отбора разделов — «Родительская мысль». */
   function publicationParentIds(): string[] {
     if (publication?.title_recipe == null) return [];
-    return parseFilterDefinition(publication.title_recipe).parentIds;
+    return filterTreeIdsByKind(
+      parseFilterDefinitionTree(publication.title_recipe).tree ?? null,
+      'parents',
+    );
   }
 
   /** Добавляет мысль значением свойства-связи владельца (аддитивно). */

@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import type { NetworkProperty } from '@etn/shared';
+import { FILTER_AST_VERSION } from '@etn/shared';
 
 import {
   ACTIVITY_ACTION_FILTERS,
@@ -37,9 +38,11 @@ import {
   defaultChronicleCriteriaState,
   defaultFilterCriteriaState,
   defaultSearchCriteriaState,
+  filterTreeIdsByKind,
   parseActivityCriteria,
   parseChronicleCriteria,
   parseFilterDefinition,
+  parseFilterDefinitionTree,
   parseSearchCriteria,
   searchCriteriaToStored,
   type FilterCriteriaState,
@@ -487,5 +490,58 @@ describe('выравненные возможности отбора', () => {
       buildWireFilter(state, EMPTY_REGISTRY, { activeMode: 'view' }).trashed,
       true,
     );
+  });
+});
+
+describe('идентификаторы листьев дерева отбора по виду операнда (a0c071f8)', () => {
+  const TYPE_ID = '11111111-1111-4111-8111-111111111111';
+  const PARENT_ID = '22222222-2222-4222-8222-222222222222';
+
+  it('плоское определение: `type_ids`/`parent_ids` находятся листьями дерева', () => {
+    // Прежний рецепт публикации читался плоскими полями; в новой форме те же
+    // адреса лежат листьями дерева (компилятор переводит `type_ids` в «Тип в
+    // иерархии», `parent_ids` — в ИЛИ(id, родители в иерархии)) — читатель
+    // предзаполнения берёт их оттуда, а не из плоских полей определения.
+    const tree = parseFilterDefinitionTree({
+      keywords: 'слово',
+      type_ids: [TYPE_ID],
+      parent_ids: [PARENT_ID],
+      sort: 'created',
+      order: 'asc',
+    }).tree;
+    assert.deepEqual(filterTreeIdsByKind(tree ?? null, 'type'), [TYPE_ID]);
+    assert.deepEqual(filterTreeIdsByKind(tree ?? null, 'parents'), [PARENT_ID]);
+  });
+
+  it('AST-тело: значения берутся из листьев, пустые виды дают пусто', () => {
+    const tree = parseFilterDefinitionTree({
+      version: FILTER_AST_VERSION,
+      filter: {
+        op: 'and',
+        children: [
+          { entity: { kind: 'type' }, operator: 'in_hierarchy', value: [TYPE_ID] },
+          { entity: { kind: 'keywords', scope: ['title'] }, operator: 'matches', value: 'с' },
+        ],
+      },
+    }).tree;
+    assert.deepEqual(filterTreeIdsByKind(tree ?? null, 'type'), [TYPE_ID]);
+    assert.deepEqual(filterTreeIdsByKind(tree ?? null, 'parents'), []);
+  });
+
+  it('значения-токены идентификатором не считаются', () => {
+    const tree = {
+      kind: 'group' as const,
+      op: 'and' as const,
+      children: [
+        {
+          kind: 'leaf' as const,
+          entity: { kind: 'parents' as const },
+          operator: 'in' as const,
+          value: { kind: 'list' as const, items: [PARENT_ID, { token: '$today' }] },
+        },
+      ],
+    };
+    assert.deepEqual(filterTreeIdsByKind(tree, 'parents'), [PARENT_ID]);
+    assert.deepEqual(filterTreeIdsByKind(null, 'parents'), []);
   });
 });

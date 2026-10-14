@@ -1,46 +1,46 @@
 /**
- * Конструктор рецепта заголовков публикации (0.11.1, задача a3cfc018; элемент
- * интерфейса c3e44cab, требование 1b39206e).
+ * Вкладка «Рецепты» карточки публикации — на едином редакторе отбора (0.13.1,
+ * задача a0c071f8; ТП 3e97b648 «Редактор: внедрение во все места», требование
+ * 0095daad «Профили контекста всех точек применения отбора описаны», ADR
+ * fc23f9c1 «Судьба спец-секций», ADR 2ef3ed7e «рецепт исполняет общий AST»,
+ * сценарий b0a50833).
  *
- * Переиспользует ЕДИНЫЙ конструктор условий клиента: модель состояния —
- * `FilterCriteriaState` (`lib/filter-builder.ts`), вид элементов — общий каркас
- * формы (`lib/form.ts`), конвертация в wire — `buildWireFilter`. Своих моделей
- * и элементов отбора модуль не заводит (стандарт S4). Применяется в двух
- * местах: шаг 2 мастера создания и вкладка «Рецепты» карточки публикации.
+ * Отбор рецепта строится ОБЩИМ редактором (`lib/filter-editor.ts`, профиль
+ * `publications` — операнды мыслей, `shared/src/filter-profiles.ts`): бывшие
+ * спец-секции растворены в строки дерева (ADR fc23f9c1) — «родительские мысли»
+ * и «обход по связям» стали строкой «Родители» с оператором «в иерархии»,
+ * «ключевые слова» — строкой «Есть слова» с областями, типы мыслей, условия по
+ * свойствам и «дополнительно» — обычными строками. Своих секций и второго
+ * конструктора модуль не держит; легаси-конструктор условий (`lib/filter-form.ts`)
+ * рецептом больше НЕ используется.
  *
- * Свойства-источники текстов и «дополнительных материалов» собираются общим
- * пикером сущностей (`buildEntityChipField` + `linkPropertyEntityOptions`) —
- * по образцу остальных полей выбора свойств; порядок значений меняется
- * перетаскиванием чипов (`reorderable`).
+ * Форма хранения — AST-тело профиля «публикации» (`buildFilterAst`): его
+ * исполняет общий AST-движок рецепта (`server/src/domain/publication-recipe.ts`).
+ * Прежний плоский формат читает тот же конвертер (`readFilterDefinitionDetailed`),
+ * а отброшенные при чтении условия видны жёлтой диагностикой футера — битый
+ * рецепт не перезаписывается молча.
+ *
+ * Контракт билдера (`RecipeBuilder`: `root` + `getDefinition`) сохранён — им
+ * пользуется карточка публикации (плумбинг автосохранения — `editor/publication-card.ts`).
  */
 
-import type { NetworkProperty, PublicationTitleRecipe, SavedFilterDefinition } from '@etn/shared';
+import type { NetworkProperty, PublicationTitleRecipe } from '@etn/shared';
 
 import {
-  buildWireFilter,
+  buildFilterAst,
   defaultFilterCriteriaState,
-  parseFilterDefinition,
+  defaultFilterTreeGroup,
+  readFilterDefinitionDetailed,
   withReverseLinkPropertySides,
   type FilterCriteriaState,
 } from '../../lib/filter-builder.js';
+import { lostConditionIssues, type FilterIssue } from '../../lib/filter-diagnostics.js';
+import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
+import type { FilterTreeData } from '../../lib/filter-tree.js';
 import {
-  buildConditionsSection,
-  buildEntityChipSection,
-  buildExtrasSection,
-  buildFilterForm,
-  buildKeywordsSection,
-  buildParentThoughtsSection,
-  type FilterFormContext,
-  type FilterSection,
-} from '../../lib/filter-form.js';
-import {
-  filterEntityOptions,
   linkPropertyEntityOptions,
-  pickEntitiesModal,
-  thoughtTypeEntityOptions,
   type EntityOption,
 } from '../../lib/entity-picker.js';
-import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import {
   buildPropertyListRows,
   ensurePropertyLinkTypes,
@@ -48,34 +48,14 @@ import {
   type PropertyRegistryRow,
 } from '../../lib/property-list.js';
 import { etn } from '../../lib/etn.js';
-import { t } from '../../lib/i18n.js';
 import { store } from '../../state.js';
 
 /** Построитель рецепта заголовков. */
 export interface RecipeBuilder {
-  /** Корень формы (секции + прокрутка). */
+  /** Корень формы рецепта (единый редактор отбора: дерево + футер). */
   root: HTMLElement;
-  /** Текущее wire-определение отбора (для сохранения в публикацию). */
-  getDefinition: () => SavedFilterDefinition;
-}
-
-/**
- * Состояние свёрнутости групп «Свойства»/«Дополнительно» рецепта. Карточка
- * публикации держит его МЕЖДУ пересборками билдера (ошибка 4773b34f): правка
- * отбора шлёт сохранение, серверное эхо пересобирает панель — без переноса
- * состояния группы молча вернулись бы к умолчаниям (сворачивание/разворот
- * «сами»). См. {@link buildRecipeBuilder} `collapse`.
- */
-export interface RecipeCollapseState {
-  /** Группа «Свойства» свёрнута. */
-  props: boolean;
-  /** Группа «Дополнительно» свёрнута. */
-  extras: boolean;
-}
-
-/** Умолчания свёрнутости групп рецепта: «Свойства» развёрнуты, прочее свёрнуто. */
-export function createRecipeCollapseState(): RecipeCollapseState {
-  return { props: false, extras: true };
+  /** Текущее определение отбора рецепта — AST-тело профиля «публикации». */
+  getDefinition: () => PublicationTitleRecipe;
 }
 
 /** Реестр свойств сети в виде строк общего списка (для пикера свойств). */
@@ -148,117 +128,101 @@ export function propertyChipTitles(options: readonly EntityOption[]): Map<string
   return map;
 }
 
-/** Строит форму рецепта заголовков по сохранённому определению (или пустую). */
+/**
+ * Строит форму рецепта заголовков на ЕДИНОМ редакторе отбора (профиль
+ * `publications`) по сохранённому определению (или пустую).
+ *
+ * Футер — по образцу ленты «События» (`screens/activity/activity.ts`): стандартный
+ * набор кнопок погашен (`buttons.standard=false`), строки имени и личных
+ * сохранённых отборов нет; рецепт автосохраняется в публикацию правкой
+ * (`onChange` → отложенное сохранение карточки). Секция сортировки сохранена
+ * (паритет с легаси): при непустых ключах её несёт `ast.sort`.
+ */
 export function buildRecipeBuilder(opts: {
   registry: Map<string, NetworkProperty>;
   /**
    * Сохранённый рецепт: плоский формат «Структур мыслей» либо AST-тело (задача
-   * ef37b01e). Форму читает `parseFilterDefinition`; AST-рецепт в форме не
-   * разворачивается — конструктор AST-рецептов вне этой задачи (плоские поля
-   * остаются пустыми, сам рецепт не теряется: карточка сохраняет его как есть).
+   * ef37b01e). Читает единый конвертер (`readFilterDefinitionDetailed`); условия,
+   * отброшенные при чтении, видны жёлтой диагностикой футера и не перезаписываются
+   * молча — перезапись только после осознанной правки пользователем.
    */
   initial: PublicationTitleRecipe | null;
   /**
-   * Любая правка формы рецепта (единая точка уведомления — `touch`, через неё
-   * проходят изменения всех секций). Карточка публикации по этому сигналу
-   * ставит `title_recipe` в отложенное сохранение; у мастера создания колбэк
-   * не задан — определение забирается вручную на шаге «Создать».
+   * Любая правка формы рецепта (единая точка уведомления — `touch`). Карточка
+   * публикации по этому сигналу ставит `title_recipe` в отложенное сохранение.
    */
   onChange?: () => void;
-  /**
-   * Внешний держатель свёрнутости групп (ошибка 4773b34f): карточка публикации
-   * передаёт его, чтобы состояние переживало пересборку билдера на серверном
-   * эхе. Не задан — создаётся своё ({@link createRecipeCollapseState}).
-   */
-  collapse?: RecipeCollapseState;
 }): RecipeBuilder {
-  const state: FilterCriteriaState =
-    opts.initial !== null ? parseFilterDefinition(opts.initial) : defaultFilterCriteriaState();
-  const collapse = opts.collapse ?? createRecipeCollapseState();
+  // Сохранённого рецепта нет — редактор открывается на ЧИСТОМ дереве: у
+  // отсутствующего определения нечего читать, а плоский компилятор добавил бы
+  // свои дефолты видимости (`trashed eq false`). Сохранённое определение (в т.ч.
+  // пустое `{sort,order}` прежнего конструктора) читается единым конвертером.
+  const read =
+    opts.initial === null || opts.initial === undefined
+      ? {
+          state: {
+            ...defaultFilterCriteriaState(),
+            tree: defaultFilterTreeGroup('and'),
+          } as FilterCriteriaState,
+          lost: [] as readonly string[],
+        }
+      : readFilterDefinitionDetailed(opts.initial, {
+          registry: opts.registry,
+          activeMode: 'view',
+        });
+  const state: FilterCriteriaState = read.state;
+  /** Потери при чтении — жёлтая диагностика, снимается первым касанием отбора. */
+  let lost = read.lost;
 
-  const sections: FilterSection[] = [];
-  const touch = (): void => {
-    for (const section of sections) section.refresh();
-    opts.onChange?.();
-  };
-  const ctx: FilterFormContext = {
-    networkId: store.state.networkId ?? '',
-    getState: () => state,
+  let editor: FilterEditorHandle | null = null;
+  const data: FilterTreeData = {
     registry: opts.registry,
-    touch,
+    linkTypes: store.state.linkTypes,
+    thoughtTypes: store.state.thoughtTypes,
+    // Видимые характеристики места первыми строками списка «Что»: разделы
+    // публикации задают «Родители», далее слова и типы (состав операндов — из
+    // реестра профиля).
+    contextual: ['parents', 'children', 'keywords', 'type'],
   };
 
-  sections.push(
-    // «Родительские мысли» — ПЕРВЫМ: основное средство структурирования
-    // публикации (дополнение C к задаче b02ef1cf). Их поддеревья дают разделы;
-    // остальные условия только уточняют состав. Рецепты без `parent_ids`
-    // работают как раньше — ограничения нет.
-    buildParentThoughtsSection(ctx, {
-      tooltip: t('publication.recipe.parentsTooltip'),
-      // Явный триггер выбора корней поддерева — тот же фасад, что в «Структурах
-      // мыслей» (диалог выбора мыслей с предвыбранными корнями).
-      picker: {
-        label: t('publication.recipe.pickThoughts'),
-        open: async () => {
-          const result = await pickThoughtsDialog({
-            networkId: store.state.networkId ?? '',
-            allowCreate: false,
-            allowLinkType: false,
-            selectedIds: state.parentIds,
-            title: t('publication.recipe.parentsTitle'),
-            applyLabel: t('actions.apply'),
-          });
-          return result === null ? null : pickedThoughtIds(result);
-        },
-      },
-    }),
-    buildKeywordsSection(ctx, {
-      placeholder: t('publication.recipe.keywordsPlaceholder'),
-      tooltip: t('publication.recipe.keywordsTooltip'),
-      showScope: true,
-    }),
-  );
-  sections.push(
-    buildEntityChipSection(ctx, {
-      title: t('publication.recipe.types'),
-      getValues: () => state.typeIds,
-      setValues: (values) => {
-        state.typeIds = values;
-      },
-      loadOptions: (query) =>
-        filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
-      optionsHeader: t('publication.recipe.types'),
-      placeholder: t('publication.recipe.typesPlaceholder'),
-      // Триггер выбора типов — модальный список типов, как в фильтрах «Структур».
-      picker: {
-        label: t('publication.recipe.pickTypes'),
-        open: () =>
-          pickEntitiesModal({
-            networkId: store.state.networkId ?? '',
-            kind: 'thought-types',
-            title: t('publication.recipe.types'),
-            currentIds: state.typeIds,
-          }),
-      },
-    }),
-  );
-  sections.push(
-    buildConditionsSection(
-      ctx,
-      { get: () => collapse.props, set: (v) => (collapse.props = v) },
-      { caretKind: 'chevron' },
-    ),
-  );
-  sections.push(
-    buildExtrasSection(ctx, { get: () => collapse.extras, set: (v) => (collapse.extras = v) }, {
-      caretKind: 'chevron',
-    }),
-  );
+  /** Единая точка правки формы: снять диагностику потери, сообщить карточке. */
+  const touch = (): void => {
+    // Первое касание отбора пользователем: диагностика потери при чтении своё
+    // отработала, правка заменяет сохранённое определение — сообщение снимается.
+    if (lost.length > 0) lost = [];
+    opts.onChange?.();
+    editor?.refresh();
+  };
 
-  const form = buildFilterForm({ sections, className: 'pub-recipe-form' });
+  editor = buildFilterEditor({
+    profile: 'publications',
+    networkId: store.state.networkId ?? '',
+    data,
+    getState: () => state,
+    touch,
+    // Место без сохранённых отборов: свой набор кнопок не нужен, строка имени
+    // не рисуется (образец — лента «События»); правки уходят автосохранением.
+    buttons: { standard: false },
+    host: {
+      // Стандартной «Применить» нет (рецепт не запускает запрос — правки
+      // автосохраняются); хук оставлен единой точкой сохранения.
+      apply: () => touch(),
+      // Диагностика строк: потерянные при чтении условия — жёлтым, без адреса
+      // строки (видны в тултипе фразы-превью футера; каркас редактора сведёт их
+      // с проверками конструктора сам). Записи собирает общий каркас
+      // (`lostConditionIssues`) — строки интерфейса места берутся из словаря.
+      issues: (): readonly FilterIssue[] => lostConditionIssues(lost),
+    },
+  });
+
   return {
-    root: form.root,
+    root: editor.root,
     getDefinition: () =>
-      buildWireFilter(state, opts.registry, { activeMode: 'view' }) as SavedFilterDefinition,
+      buildFilterAst(state, {
+        profile: 'publications',
+        // Сортировку несёт секция чипов: пустые чипы не воскрешают плоскую пару
+        // `sort`/`order` (класс дефектов ca864656, 32fd6125).
+        sort: (state.sortKeys ?? []).length > 0,
+      }),
   };
 }

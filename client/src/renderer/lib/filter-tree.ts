@@ -68,6 +68,7 @@ import {
   filterOperandLabel,
   filterProfileOperands,
   filterProfileOperators,
+  normalizeFilterTreeRoot,
   OPERAND_KIND_LABELS,
   withReverseLinkPropertySides,
   type FilterCriteriaState,
@@ -1054,10 +1055,17 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
 
   const ensureTree = (): FilterTreeGroup => {
     const state = ctx.getState();
-    if (state.tree === undefined || state.tree === null || state.tree.kind !== 'group') {
+    const current = state.tree;
+    if (current === undefined || current === null) {
       state.tree = defaultFilterTreeGroup('and');
+      return state.tree;
     }
-    return state.tree;
+    // Одиночный лист-корень (определение с РОВНО одним условием) НЕ выбрасываем:
+    // каркас работает с корнем-группой, поэтому оборачиваем лист в группу `И` —
+    // иначе условие молча пропадало бы (см. `normalizeFilterTreeRoot`).
+    const root = normalizeFilterTreeRoot(current);
+    if (root !== current) state.tree = root;
+    return root;
   };
 
   const touch = (): void => {

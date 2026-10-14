@@ -1688,6 +1688,41 @@ export function defaultFilterTreeGroup(op: FilterAstGroupOp = 'and'): FilterTree
 }
 
 /**
+ * Корень модели отбора — всегда ГРУППА: одиночный лист оборачивается в группу
+ * `И`. Сохранённое определение с РОВНО ОДНИМ условием даёт в AST лист-фильтр
+ * (`filter` без `op`); читатель отдаёт его как корень дерева, а каркас редактора
+ * работает только с корнем-группой — без обёртки такое условие молча пропадало
+ * (например, легаси-рецепт `{trashed: true, keywords: '…'}`: дефолтный лист
+ * «только непомеченные» не добавляется, остается один лист слов).
+ */
+export function normalizeFilterTreeRoot(node: FilterTreeNode): FilterTreeGroup {
+  return node.kind === 'group' ? node : { kind: 'group', op: 'and', children: [node] };
+}
+
+/**
+ * Лист ровно служебного дефолта места «Корзина равно нет» (`trashed eq false`):
+ * так помеченные на удаление скрыты, пока пользователь не решил про них сам.
+ * Компилятор плоской формы добавляет этот лист, когда определения его не
+ * задавало, — в модели редактирования он условием не показывается; та же проба и
+ * та же дисциплина, что у места «Отбор типа мысли» (`stripViewDefaults`,
+ * ADR 30ff83bb). Проба описывает только ФОРМУ листа: решение «это дефолт МЕСТА, а
+ * не пользователя» принимает место применения (читатель определения снимает
+ * такой лист лишь с КОРНЯ одиночным — лист рядом с настоящими условиями в группе
+ * остаётся, иначе определение расширилось бы молча: в AST неявных дефолтов нет —
+ * `query-service`, поле `ast`).
+ */
+export function isServiceTrashedDefaultLeaf(node: FilterTreeNode): boolean {
+  return (
+    node.kind === 'leaf' &&
+    node.entity.kind === 'trashed' &&
+    node.operator === 'eq' &&
+    node.value.kind === 'scalar' &&
+    node.value.value === false &&
+    node.mode === undefined
+  );
+}
+
+/**
  * Пустой лист дерева по операнду — заготовка строки `[Что][Оператор][Значение]`.
  * Оператор по умолчанию — `eq`; редактор подменяет его первым допустимым в
  * профиле ({@link filterProfileOperators}).
@@ -1719,6 +1754,41 @@ export function filterTreeHasAnyCriteria(node: FilterTreeNode | null): boolean {
   if (node === null) return false;
   if (node.kind === 'group') return node.children.some(filterTreeHasAnyCriteria);
   return true;
+}
+
+/**
+ * Идентификаторы листьев дерева указанного вида операнда: значения скаляров и
+ * списков, во всех группах любой вложенности. Значения-токены (`$today`,
+ * `$thought.[Свойство]`) идентификатором не являются — пропускаются.
+ *
+ * Читателям сохранённого определения, которым нужны не условия целиком, а адреса,
+ * второй формы чтения заводить не нужно: дерево уже даёт единый читатель
+ * ({@link readFilterDefinitionDetailed}) и для AST-тела, и для плоской записи —
+ * компилятор плоской формы переводит `type_ids` в лист «Тип в иерархии», а
+ * `parent_ids` в «`ИЛИ(id в [корни], родители в иерархии [корни])`», где корневые
+ * мысли стоят значением листа «Родители» (`screens/publications/workspace.ts` —
+ * предзаполнение типа и родителя создаваемого раздела).
+ */
+export function filterTreeIdsByKind(
+  node: FilterTreeNode | null,
+  kind: FilterAstEntityKind,
+): string[] {
+  const out: string[] = [];
+  const walk = (current: FilterTreeNode | null): void => {
+    if (current === null) return;
+    if (current.kind === 'group') {
+      for (const child of current.children) walk(child);
+      return;
+    }
+    if (current.entity.kind !== kind) return;
+    const value = current.value;
+    if (value.kind === 'scalar') out.push(String(value.value));
+    else if (value.kind === 'list') {
+      for (const item of value.items) if (typeof item !== 'object') out.push(String(item));
+    }
+  };
+  walk(node);
+  return out;
 }
 
 /** Операнды, доступные в профиле контекста (виды AST точки применения). */
@@ -2303,6 +2373,72 @@ export function applyLegacyHierarchyTraversal(tree: FilterTreeNode): void {
 }
 
 /**
+ * Сообщение о нечитаемом AST-теле определения (потеря при чтении).
+ */
+const AST_UNREADABLE_MESSAGE =
+  'сохранённое определение отбора не читается (неизвестный операнд или оператор) — условия не показаны';
+
+/**
+ * Описания условий ПЛОСКОГО определения (`definition v1`), которые модель НЕ
+ * выразила при чтении: условия-свойства с отсутствующим в реестре свойством
+ * (их отбрасывает {@link buildConditionsWire}), нераспознанные записи условий и
+ * сортировка «по просмотру», у которой нет ключа AST ({@link FILTER_SORT_TO_AST_KEY}).
+ *
+ * Функция только ОПИСЫВАЕТ потерю — место применения показывает её жёлтой
+ * диагностикой (требование «битый отбор не теряется молча»), решение о
+ * перезаписи определения остаётся за хостом. Разбор ведёт тот же модуль, что и
+ * само чтение (второй точки чтения сохранённого отбора нет — ADR fc23f9c1).
+ */
+function flatDefinitionLosses(
+  def: unknown,
+  registry: ReadonlyMap<string, NetworkProperty>,
+): string[] {
+  const lost: string[] = [];
+  if (def === null || def === undefined) return lost;
+  if (typeof def !== 'object' || Array.isArray(def)) {
+    return ['сохранённое определение отбора повреждено и не читается'];
+  }
+  const rec = def as Record<string, unknown>;
+  const conditions = rec['properties'];
+  if (Array.isArray(conditions)) {
+    for (const raw of conditions) {
+      const entry =
+        raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+          ? (raw as Record<string, unknown>)
+          : null;
+      const propertyId = entry?.['property_id'];
+      const op = entry?.['op'];
+      if (entry === null || typeof propertyId !== 'string' || typeof op !== 'string') {
+        lost.push('условие по свойству не распознано и отброшено');
+        continue;
+      }
+      if (!registry.has(propertyId)) {
+        lost.push(`условие по свойству «${propertyId}» отброшено: свойства больше нет в сети`);
+      }
+    }
+  }
+  // Сортировка «по просмотру» ключа AST не имеет (см. FILTER_SORT_TO_AST_KEY) —
+  // в редакторе не выражается. Сообщаем, чтобы ключ не терялся молча.
+  if (rec['sort'] === 'viewed') {
+    lost.push('сортировка «по просмотру» в редакторе не выражается — ключ не показан');
+  }
+  return lost;
+}
+
+/** Результат чтения сохранённого отбора в единую модель: состояние + потери. */
+export interface FilterDefinitionReadResult {
+  /** Состояние модели: `tree` заполнен всегда (пустая группа `И` — условий нет). */
+  state: FilterCriteriaState;
+  /**
+   * Человекочитаемые описания условий, которые модель НЕ выразила при чтении
+   * (отброшены или нечитаемы). Пусто — чтение без потерь. Место применения
+   * показывает их жёлтой диагностикой; перезапись определения — только после
+   * осознанной правки пользователем (требование «битый отбор не теряется молча»).
+   */
+  lost: readonly string[];
+}
+
+/**
  * Прочитать определение отбора в единую модель так, чтобы `tree` был ЗАПОЛНЕН
  * всегда: AST-форма читается {@link parseFilterAstState} (дерево уже есть), а
  * плоская `definition v1` компилируется в дерево на входе
@@ -2313,22 +2449,55 @@ export function applyLegacyHierarchyTraversal(tree: FilterTreeNode): void {
  * в `sortKeys`.
  *
  * Пустой/нечитаемый отбор получает пустую корневую группу `И` — редактор
- * открывается на чистом дереве.
+ * открывается на чистом дереве. Помимо состояния отдаёт список отброшенных при
+ * чтении условий ({@link FilterDefinitionReadResult.lost}) — единая точка чтения
+ * сохранённого отбора, второго разбора в местах применения нет (ADR fc23f9c1).
+ */
+export function readFilterDefinitionDetailed(
+  def: unknown,
+  opts: CompileFlatCriteriaOptions & { registry?: ReadonlyMap<string, NetworkProperty> } = {},
+): FilterDefinitionReadResult {
+  const state = parseFilterDefinition(def);
+  // AST-форма: читается целиком либо нечитается вовсе — строгость
+  // `filterAstToTree` (нераспознанный узел отклоняет тело). `tree === null`
+  // после `parseFilterDefinition` означает именно нечитаемое AST-тело.
+  if (isFilterAstWire(def)) {
+    const readTree = state.tree;
+    if (readTree !== null && readTree !== undefined) {
+      state.tree = normalizeFilterTreeRoot(readTree);
+      return { state, lost: [] };
+    }
+    state.tree = defaultFilterTreeGroup('and');
+    return { state, lost: [AST_UNREADABLE_MESSAGE] };
+  }
+  const registry = opts.registry ?? new Map<string, NetworkProperty>();
+  const lost = flatDefinitionLosses(def, registry);
+  const ast = compileFlatCriteriaToAst(state, registry, opts);
+  // Служебный дефолт места («Корзина равно нет»), добавленный компилятором
+  // плоской формы на КОРНЕВОЙ уровень, — не условие пользователя: снимаем его,
+  // как это делает место «Отбор типа мысли» ({@link isServiceTrashedDefaultLeaf},
+  // ADR 30ff83bb). Иначе определение без критериев (пара `sort`/`order` и
+  // видимость) читалось бы «с условием» и панель «Структур» ушла бы с контракта
+  // «нет критериев → HOME + сироты» (§15.3) на ветку `ast` (ошибка ca864656).
+  const compiled = ast === undefined ? null : filterAstToTree(ast.filter);
+  const tree = compiled !== null && isServiceTrashedDefaultLeaf(compiled) ? null : compiled;
+  state.tree = tree === null ? defaultFilterTreeGroup('and') : normalizeFilterTreeRoot(tree);
+  if (tree !== null) applyLegacyHierarchyTraversal(tree);
+  if (ast?.sort !== undefined && (state.sortKeys ?? []).length === 0) {
+    state.sortKeys = ast.sort.map((key) => ({ key: key.key, order: key.order }));
+  }
+  return { state, lost };
+}
+
+/**
+ * Прочитать определение отбора в единую модель с заполненным деревом (без
+ * перечня потерь) — см. {@link readFilterDefinitionDetailed}.
  */
 export function parseFilterDefinitionTree(
   def: unknown,
   opts: CompileFlatCriteriaOptions & { registry?: ReadonlyMap<string, NetworkProperty> } = {},
 ): FilterCriteriaState {
-  const state = parseFilterDefinition(def);
-  if (state.tree !== null) return state;
-  const ast = compileFlatCriteriaToAst(state, opts.registry ?? new Map(), opts);
-  const tree = ast === undefined ? null : filterAstToTree(ast.filter);
-  state.tree = tree ?? defaultFilterTreeGroup('and');
-  if (tree !== null) applyLegacyHierarchyTraversal(tree);
-  if (ast?.sort !== undefined && (state.sortKeys ?? []).length === 0) {
-    state.sortKeys = ast.sort.map((key) => ({ key: key.key, order: key.order }));
-  }
-  return state;
+  return readFilterDefinitionDetailed(def, opts).state;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 /**
  * Карточка публикации: сохранение отбора и устойчивость автосейва
- * (ошибка 82aada28, 0.11.1).
+ * (ошибка 82aada28, 0.11.1; вкладка «Рецепты» пересобрана на единый редактор —
+ * задача a0c071f8, 0.13.1).
  *
  * Дефект: конструктор рецепта не уведомлял карточку о правках, поэтому
  * `title_recipe` не сохранялся никогда; `rebuildPublication` не дожидался
@@ -13,6 +14,14 @@
  *  2. устаревший снимок публикации в store на любом тике откатывал поля и давал
  *     `CONFLICT` на втором сохранении (старая `version`).
  *
+ * С 0.13.1 рецепт — место единого редактора отбора (профиль `publications`):
+ * строки-условия в дереве (`.ft`), поле значения строки «Найти слова» —
+ * `.fv-keywords input`, секция сортировки — `.fs-sort`. Легаси-плоское
+ * определение читается тем же редактором; правка строки (`touch`) ставит
+ * `title_recipe` в отложенное сохранение. Свёрнутость вложенной группы
+ * (следствие легаси-условия «родители») обязана переживать правку значения
+ * (ошибка 4773b34f).
+ *
  * DOM-шим — общий (`dom-shim.ts`); фабрика markdown-редактора подменяется
  * заглушкой через тестовый шов `publicationCardInternals` (CodeMirror в шиме
  * не исполняется). Шим не имеет `parentElement`, а ветка «та же цель — apply на
@@ -23,7 +32,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import type { Publication, PublicationUpdateInput } from '@etn/shared';
+import type { Publication, PublicationTitleRecipe, PublicationUpdateInput } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
 import type { MdEditor } from '../src/renderer/editor/md-editor.js';
@@ -51,6 +60,21 @@ interface Calls {
 let calls: Calls;
 /** Серверная «база» публикаций: id → строка. */
 const db = new Map<string, Publication>();
+
+/**
+ * Легаси-плоский рецепт с условием по словам: даёт в дереве единого редактора
+ * строку «Найти слова» с полем значения (её правит тест). Пара `sort`/`order`
+ * присутствует всегда — как у прежнего конструктора «Структур мыслей».
+ */
+function flatRecipe(extra: Record<string, unknown> = {}): PublicationTitleRecipe {
+  return {
+    keywords: 'старт',
+    keyword_scope: ['title', 'synonyms'],
+    sort: 'created',
+    order: 'asc',
+    ...extra,
+  } as PublicationTitleRecipe;
+}
 
 function publication(overrides: Partial<Publication> = {}): Publication {
   return {
@@ -146,6 +170,9 @@ function installShim(seed: Publication[]): void {
     },
     propertyRegistry: { list: async () => [] },
     linkTypes: { list: async () => [] },
+    // Ссылочные строки дерева (например «Мысль» из легаси-условия «родители»)
+    // догружают облачка значений пакетным resolve — в шиме отдаём пустой список.
+    thoughts: { resolve: async () => [] },
     admin: { listUsers: async () => [] },
   };
   win.setTimeout = setTimeout;
@@ -202,12 +229,27 @@ async function openRecipeTab(scrollBox: ShimElement, pub: Publication): Promise<
   return mod;
 }
 
-/** Правка формы рецепта: ввод ключевых слов (единственная `touch`-точка здесь). */
+/**
+ * Правка формы рецепта: ввод значения строки «Найти слова» дерева единого
+ * редактора (единственная `touch`-точка здесь). Строка строится, когда у рецепта
+ * есть условие по словам (сеем легаси-определение через {@link flatRecipe}).
+ */
+function recipeKeywordsInput(scrollBox: ShimElement): ShimElement {
+  // Селектор без потомка: DOM-шим не разбирает составные селекторы с пробелом.
+  const keywords = scrollBox.querySelector('[data-input="keywords"]') as ShimElement | null;
+  assert.ok(keywords !== null, 'строка «Найти слова» рецепта построена');
+  return keywords;
+}
+
 function editRecipeKeywords(scrollBox: ShimElement, value: string): void {
-  const keywords = scrollBox.querySelector('.st-f-keywords') as ShimElement | null;
-  assert.ok(keywords !== null, 'поле «Ключевые слова» рецепта построено');
+  const keywords = recipeKeywordsInput(scrollBox);
   keywords.value = value;
-  keywords.emit('input');
+  keywords.emit('change');
+}
+
+/** Текущее значение строки «Найти слова» рецепта. */
+function recipeKeywords(scrollBox: ShimElement): string {
+  return recipeKeywordsInput(scrollBox).value;
 }
 
 /** Правка поля «Название» вкладки «Метаданные». */
@@ -219,24 +261,40 @@ function editTitle(scrollBox: ShimElement, value: string): ShimElement {
   return input;
 }
 
+/** Вложенные группы дерева рецепта (у корневой группы `data-path` пуст). */
+function nestedGroups(host: ShimElement): ShimElement[] {
+  return host.findAll(
+    (el) => el.classList.contains('ft-group') && (el.dataset['path'] ?? '') !== '',
+  );
+}
+
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('карточка публикации: сохранение рецепта (ошибка 82aada28)', () => {
   let scrollBox: ShimElement;
+  let pub: Publication;
 
   beforeEach(() => {
-    installShim([publication()]);
+    pub = publication({ title_recipe: flatRecipe() });
+    installShim([pub]);
     scrollBox = new ShimElement('div');
     store.update({ networkId: NETWORK_ID, editorTarget: null });
+    // Живой слой (`lib/live`) — модульное состояние: без сброса снимок прошлого
+    // теста (`commitEntity('publication','pub-1',…)`) «переоткрыл» бы карточку из
+    // устаревшего кэша и подменил определение рецепта чужой публикацией.
+    clearEntities();
+    resetQueryRegistry();
   });
 
   afterEach(async () => {
     const mod = await import('../src/renderer/editor/publication-card.js');
     mod.disposePublicationCard();
+    clearEntities();
+    resetQueryRegistry();
   });
 
   it('правка рецепта сохраняется PATCH-ом в title_recipe', async () => {
-    await openRecipeTab(scrollBox, publication());
+    await openRecipeTab(scrollBox, pub);
 
     editRecipeKeywords(scrollBox, 'тест');
     await wait(450);
@@ -250,7 +308,7 @@ describe('карточка публикации: сохранение рецеп
   });
 
   it('«Пересобрать» сначала досылает отложенный отбор, затем пересобирает', async () => {
-    const mod = await openRecipeTab(scrollBox, publication());
+    const mod = await openRecipeTab(scrollBox, pub);
 
     editRecipeKeywords(scrollBox, 'порядок');
     // Не ждём дебаунс — запускаем «Пересобрать» сразу (пункт меню «Действия»).
@@ -264,7 +322,7 @@ describe('карточка публикации: сохранение рецеп
   });
 
   it('переоткрытие карточки показывает сохранённый отбор (сценарий бага)', async () => {
-    const mod = await openRecipeTab(scrollBox, publication());
+    const mod = await openRecipeTab(scrollBox, pub);
 
     editRecipeKeywords(scrollBox, 'сохранённый');
     await wait(450);
@@ -283,87 +341,70 @@ describe('карточка публикации: сохранение рецеп
     recipeTab.click();
     await new Promise((resolve) => setImmediate(resolve));
 
-    const keywords = reopened.querySelector('.st-f-keywords') as ShimElement | null;
-    assert.ok(keywords !== null, 'поле рецепта построено после переоткрытия');
-    assert.equal(keywords.value, 'сохранённый', 'отбор восстановлен из сохранённой публикации');
+    assert.equal(recipeKeywords(reopened), 'сохранённый', 'отбор восстановлен из сохранённой публикации');
   });
 });
 
-/** Секция формы рецепта по подписи заголовка (`.st-f-block`). */
-function recipeSection(scrollBox: ShimElement, title: string): ShimElement {
-  const block = scrollBox.findAll((el) => el.className.includes('st-f-block')).find((el) => {
-    const head = el.querySelector('.st-f-collapsible-title') ?? el.querySelector('.st-f-title');
-    return head !== null && head.flatText().includes(title);
-  });
-  assert.ok(block !== undefined, `секция «${title}» рецепта построена`);
-  return block!;
-}
-
-/** Состояние свёрнутости секции (по классу каретки `collapsed`). */
-function sectionCollapsed(scrollBox: ShimElement, title: string): boolean {
-  const caret = recipeSection(scrollBox, title).querySelector('.st-f-caret');
-  assert.ok(caret !== null, `каретка секции «${title}» есть`);
-  return caret!.classList.contains('collapsed');
-}
-
-/** Клик по заголовку секции — свернуть/развернуть. */
-function toggleSection(scrollBox: ShimElement, title: string): void {
-  const head = recipeSection(scrollBox, title).querySelector('.st-f-title');
-  assert.ok(head !== null, `заголовок секции «${title}» есть`);
-  head!.emit('click', { target: head });
-}
-
-describe('карточка публикации: сворачивание групп рецепта переживает правку (ошибка 4773b34f)', () => {
+describe('карточка публикации: свёрнутость группы рецепта переживает правку (ошибка 4773b34f)', () => {
   let scrollBox: ShimElement;
+  let pub: Publication;
 
   beforeEach(() => {
-    installShim([publication()]);
+    // Легаси-условие «родители» даёт в дереве ВЛОЖЕННУЮ группу (`ИЛИ(id, родители
+    // в иерархии)`) — её сворачивает пользователь; слова — соседняя строка, чью
+    // правку тест выполняет.
+    pub = publication({ title_recipe: flatRecipe({ parent_ids: ['t1'] }) });
+    installShim([pub]);
     scrollBox = new ShimElement('div');
     store.update({ networkId: NETWORK_ID, editorTarget: null });
+    // См. первый describe: сброс живого слоя — иначе устаревший снимок кэша
+    // подменит определение рецепта на эхе сохранения.
+    clearEntities();
+    resetQueryRegistry();
   });
 
   afterEach(async () => {
     const mod = await import('../src/renderer/editor/publication-card.js');
     mod.disposePublicationCard();
+    clearEntities();
+    resetQueryRegistry();
   });
 
-  it('смена «Только актуальные» не сворачивает «Дополнительно» и не разворачивает «Свойства»', async () => {
-    await openRecipeTab(scrollBox, publication());
+  it('правка значения не сворачивает и не разворачивает группу дерева', async () => {
+    await openRecipeTab(scrollBox, pub);
 
-    // Заданное пользователем состояние: «Свойства» свёрнуты, «Дополнительно»
-    // развёрнуты. Раньше правка сбрасывала обе группы к исходным умолчаниям.
-    toggleSection(scrollBox, 'Свойства');
-    toggleSection(scrollBox, 'Дополнительно');
-    assert.equal(sectionCollapsed(scrollBox, 'Свойства'), true, '«Свойства» свёрнуты пользователем');
-    assert.equal(sectionCollapsed(scrollBox, 'Дополнительно'), false, '«Дополнительно» развёрнуты');
+    const group = nestedGroups(scrollBox)[0];
+    assert.ok(group !== undefined, 'вложенная группа дерева рецепта построена');
+    assert.equal(group.dataset['collapsed'], undefined, 'группа изначально развёрнута');
 
-    const row = scrollBox
-      .findAll((el) => el.className.includes('st-f-tri-row'))
-      .find((r) => (r.querySelector('.st-f-tri-label')?.textContent ?? '') === 'Только актуальные');
-    assert.ok(row !== undefined, 'строка «Только актуальные» построена');
-    const select = row!.querySelector('select');
-    assert.ok(select !== null, 'селект «Только актуальные» построен');
-    select!.value = 'true';
-    select!.emit('change');
-
-    assert.equal(sectionCollapsed(scrollBox, 'Свойства'), true, '«Свойства» остались свёрнуты');
+    // Пользователь сворачивает группу; перерисовка — состояние в редакторе.
+    const caret = group.querySelector('.ft-group__caret');
+    assert.ok(caret !== null, 'каретка группы есть');
+    caret!.click();
     assert.equal(
-      sectionCollapsed(scrollBox, 'Дополнительно'),
-      false,
-      '«Дополнительно» остались развёрнуты',
+      nestedGroups(scrollBox)[0]?.dataset['collapsed'],
+      '1',
+      'группа свёрнута пользователем',
     );
+
+    // Правка значения соседней строки: раньше пересборка формы разворачивала
+    // группы «сами» (ошибка 4773b34f). Теперь редактор перерисовывается из
+    // модели, состояние свёрнутости переживает правку.
+    editRecipeKeywords(scrollBox, 'изменено');
+    assert.equal(
+      nestedGroups(scrollBox)[0]?.dataset['collapsed'],
+      '1',
+      'группа осталась свёрнутой после правки значения',
+    );
+    assert.equal(recipeKeywords(scrollBox), 'изменено', 'правка значения применилась');
 
     await wait(450);
     assert.equal(
-      sectionCollapsed(scrollBox, 'Свойства'),
-      true,
-      'после сохранения «Свойства» остались свёрнуты',
+      nestedGroups(scrollBox)[0]?.dataset['collapsed'],
+      '1',
+      'группа осталась свёрнутой и после сохранения',
     );
-    assert.equal(
-      sectionCollapsed(scrollBox, 'Дополнительно'),
-      false,
-      'после сохранения «Дополнительно» остались развёрнуты',
-    );
+    assert.match(JSON.stringify(calls.updates[0]!.changes.title_recipe), /изменено/);
   });
 });
 
@@ -500,8 +541,9 @@ describe('карточка публикации: устойчивость к ч�
     // Инвалидация ключа карточки заставляет её применить запись из кэша.
     assert.doesNotThrow(() => invalidateQueries(queryKeys.publicationCard('pub-1')));
 
-    const keywords = scrollBox.querySelector('.st-f-keywords') as ShimElement | null;
-    assert.ok(keywords !== null, 'поле рецепта осталось построенным — апдейтер не упал');
+    // Рецепт остался построенным — апдейтер не упал (у пустого отбора дерево
+    // пустое, якорь — корень единого редактора).
+    assert.ok(scrollBox.querySelector('.fe') !== null, 'редактор рецепта остался построенным');
   });
 
   it('прямая подача объекта без text_sources в апдейтер не бросает исключение', async () => {

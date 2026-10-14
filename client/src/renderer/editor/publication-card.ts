@@ -83,7 +83,6 @@ import {
 } from '../screens/publications/model.js';
 import {
   buildRecipeBuilder,
-  createRecipeCollapseState,
   loadPropertyRegistry,
   loadPropertyRows,
   propertyChipTitles,
@@ -695,9 +694,10 @@ function buildRecipePane(): HTMLElement {
   pane.append(textsGroup.root, extrasGroup.root);
 
   let builder: RecipeBuilder | null = null;
-  /** Держатель свёрнутости групп рецепта: переживает пересборку билдера на
-   *  серверном эхе (ошибка 4773b34f) — группы не сворачиваются/разворачиваются сами. */
-  const recipeCollapse = createRecipeCollapseState();
+  /** Снимок определения, из которого билдер собран последний раз: пересборка —
+   *  только на ВНЕШНЕМ изменении рецепта, собственный эхо-ответ сервера её не
+   *  запускает (ошибка 82aada28 — иначе терялись фокус и свёрнутость групп). */
+  let recipeFromKey: string | null = null;
   /** Любая правка формы рецепта — в отложенное сохранение (ошибка 82aada28). */
   const onRecipeChange = (): void => {
     if (builder !== null) queueSave({ title_recipe: builder.getDefinition() });
@@ -784,17 +784,21 @@ function buildRecipePane(): HTMLElement {
     extrasField?.refresh();
     checkOverlap();
     const recipeKey = JSON.stringify(p.title_recipe ?? null);
-    // Пересборка билдера — только при ВНЕШНЕМ изменении определения. Если
-    // пришедшее значение совпадает с состоянием билдера, это эхо собственного
-    // сохранения: пересборка стёрла бы фокус и позицию правки (ошибка 82aada28).
+    // Пересборка билдера — только при ВНЕШНЕМ изменении определения. Совпало с
+    // состоянием билдера — это эхо собственного сохранения: пересборка стёрла бы
+    // фокус и позицию правки (ошибка 82aada28). Плюс запоминаем, из какого
+    // определения билдер уже собран (`recipeFromKey`): сервер отдаёт сохранённое
+    // определение как есть, а билдер пишет AST — при легаси-плоском рецепте эти
+    // формы не равны, и без памяти о сборке карточка пересобирала бы редактор на
+    // каждом тике store (теряя фокус и свёрнутость групп — ошибка 4773b34f).
     const builderKey = builder === null ? null : JSON.stringify(builder.getDefinition());
-    if (registry !== null && (builder === null || recipeKey !== builderKey)) {
+    if (registry !== null && (builder === null || (recipeKey !== builderKey && recipeKey !== recipeFromKey))) {
+      recipeFromKey = recipeKey;
       while (recipeHost.firstChild !== null) recipeHost.removeChild(recipeHost.firstChild);
       builder = buildRecipeBuilder({
         registry,
         initial: p.title_recipe,
         onChange: onRecipeChange,
-        collapse: recipeCollapse,
       });
       recipeHost.append(builder.root);
     }
