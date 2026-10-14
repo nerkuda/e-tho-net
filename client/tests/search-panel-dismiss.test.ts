@@ -52,14 +52,29 @@ describe('политика закрытия панели поиска (ошиб�
       false,
       'модальный диалог, открытый из панели',
     );
+    assert.equal(
+      searchPanelClosesOnTap({
+        insidePanel: false,
+        insideSuggest: false,
+        insideDialog: false,
+        insideFloating: true,
+      }),
+      false,
+      'всплывающая панель lib/ui — список выбора редактора отбора (ошибка 50d9bf4e п. B1)',
+    );
   });
 
-  it('обработчик панели кормит политику всеми тремя слоями', () => {
+  it('обработчик панели кормит политику всеми четырьмя слоями', () => {
     const src = readText(SEARCH_TS);
     assert.match(
       src,
-      /searchPanelClosesOnTap\(\{[\s\S]*?insidePanel:[\s\S]*?insideSuggest: isInsideSuggestDropdown\(target\),[\s\S]*?insideDialog: isInsideDialog\(target\),/,
-      'обработчик pointerdown обязан учитывать панель, выпадашку подсказок и диалог',
+      /searchPanelClosesOnTap\(\{[\s\S]*?insidePanel:[\s\S]*?insideSuggest: isInsideSuggestDropdown\(target\),[\s\S]*?insideDialog: isInsideDialog\(target\),[\s\S]*?insideFloating: isInsidePopover\(target\),/,
+      'обработчик pointerdown обязан учитывать панель, выпадашку подсказок, диалог и всплывающие панели',
+    );
+    assert.match(
+      src,
+      /import \{ isInsidePopover \} from '\.\.\/lib\/ui\/popover\.js';/,
+      'слой всплывающих панелей берётся у их общего модуля, а не распознаётся классом на месте',
     );
     assert.match(
       src,

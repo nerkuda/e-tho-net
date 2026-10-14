@@ -59,6 +59,7 @@ import { etn } from '../lib/etn.js';
 import { isInsideDialog } from '../lib/dialog.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { modifierChordVariants } from '../lib/keymap-chords.js';
+import { isInsidePopover } from '../lib/ui/popover.js';
 import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
@@ -349,6 +350,10 @@ export function mountSearch(next: SearchChrome): () => void {
       insidePanel: host.contains(target) || input.contains(target),
       insideSuggest: isInsideSuggestDropdown(target),
       insideDialog: isInsideDialog(target),
+      // Списки выбора редактора отбора (и прочие панели `lib/ui`) порталятся в
+      // `document.body` — клик по ним не закрывает строку поиска (ошибка
+      // 50d9bf4e п. B1).
+      insideFloating: isInsidePopover(target),
     })) {
       return;
     }

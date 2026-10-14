@@ -45,7 +45,7 @@ import { isInsideDialog } from './dialog.js';
 import { isInsideSuggestDropdown } from './suggest-dropdown.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
 import { modifierChordVariants } from './keymap-chords.js';
-import { watchOutsideTap } from './ui/popover.js';
+import { watchOutsideTap, isInsidePopover } from './ui/popover.js';
 import { searchPanelClosesOnTap, searchSettingsPlacement } from './pure.js';
 
 /** Минимальная длина запроса для запуска поиска (как у строки поиска карты). */
@@ -382,6 +382,9 @@ export function mountRecordSearch(
         insidePanel: container.contains(target),
         insideSuggest: isInsideSuggestDropdown(target),
         insideDialog: isInsideDialog(target),
+        // Списки выбора редактора отбора порталятся в `document.body` — клик по
+        // ним панель не прячет (ошибка 50d9bf4e п. B1).
+        insideFloating: isInsidePopover(target),
       }),
     () => {
       if (!panel.classList.contains('hidden')) hidePanel();
