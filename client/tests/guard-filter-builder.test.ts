@@ -448,6 +448,47 @@ describe('guard: условия отбора строятся только об�
     }
   });
 
+  it('описания операторов и датовые пары — из общего словаря (ошибка 4258e694, п.7в/8)', async () => {
+    // Словарь описаний назначения операторов живёт в реестре @etn/shared рядом с
+    // профилями (тултипы списка операторов — п.7в); второй копии нет. Датовые
+    // пары границ — «больше|меньше», «больше или равно|меньше или равно»,
+    // «между|не между» (п.8).
+    const shared = await import('@etn/shared');
+    const builder = await import('../src/renderer/lib/filter-builder.js');
+    const tree = await import('../src/renderer/lib/filter-tree.js');
+    const described = shared.AST_OPERATOR_DESCRIPTIONS as Record<string, string>;
+    const ops = [...shared.FILTER_AST_OPERATORS] as string[];
+    for (const op of ops) {
+      assert.ok(
+        typeof described[op] === 'string' && described[op]!.trim() !== '',
+        `у оператора ${op} обязано быть краткое описание назначения`,
+      );
+    }
+    assert.deepEqual(
+      Object.keys(described).sort(),
+      [...ops].sort(),
+      'словарь описаний покрывает РОВНО словарь операторов ядра',
+    );
+    assert.equal(described['eq'], 'проверяет точное соответствие заданному значению');
+    // Формулировки заказчика 2026-10-14 (п.7б).
+    assert.equal(builder.astOperatorLabel('any_of'), 'любой из');
+    assert.equal(builder.astOperatorLabel('none_of'), 'ни одного из');
+
+    const date = tree.filterTreeOperatorMenu('thoughts', 'created_at', 'date');
+    assert.deepEqual(
+      date[0]!.rows.map((row: { cells: Array<{ op: string }> }) => row.cells.map((cell) => cell.op)),
+      [
+        ['gt', 'lt'],
+        ['gte', 'lte'],
+        ['between', 'not_between'],
+      ],
+      'датовые пары читаются «мин|макс» (п.8)',
+    );
+    for (const cell of date[0]!.rows.flatMap((row) => row.cells)) {
+      assert.equal(cell.description, described[cell.op], `ячейка ${cell.op} несёт описание-тултип`);
+    }
+  });
+
   it('старая подпись «Ссылка на мысль по id» в словаре подписей запрещена', () => {
     assertGuardClean(RENDERER_ROOT, [NO_LEGACY_ID_OPERAND_LABEL]);
   });

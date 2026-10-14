@@ -496,7 +496,11 @@ describe('дерево условий: группы, тона, связатор�
     const values = exact(root, 'ft-value');
     assert.equal(values.length, 2, 'слот значения у каждой строки');
     assert.equal(values[0]!.flatText(), 'задайте значение', 'оператору нужно значение');
-    assert.equal(values[1]!.flatText(), 'значение не требуется', 'у «не заполнено» значения нет');
+    assert.equal(
+      values[1]!.flatText(),
+      '',
+      'у «не заполнено» поле правого операнда не рисуется (п.9)',
+    );
 
     // Виджет значения следующей задачи подменяет заглушку через `renderValue`.
     state.tree.children = [
@@ -531,20 +535,24 @@ describe('дерево условий: сгруппированные списк
 
     const link = mod.filterTreeOperatorMenu('thoughts', 'property', 'link');
     const titles = link.map((s: any) => s.title);
-    assert.deepEqual(titles, ['Значение', 'Несколько', 'Иерархия', 'Выборка', 'Состояние']);
+    // Группы «Значение/Несколько/Иерархия» сведены в «Сравнение» (п.7а).
+    assert.deepEqual(titles, ['Сравнение', 'Выборка', 'Состояние']);
     const byKey = new Map(link.map((s: any) => [s.key, s]));
     assert.deepEqual(
-      (byKey.get('value') as any).rows[0].cells.map((c: any) => [c.op, c.side, c.label]),
+      (byKey.get('compare') as any).rows[0].cells.map((c: any) => [c.op, c.side, c.label]),
       [
         ['eq', 'yes', 'равно'],
         ['ne', 'no', 'не равно'],
       ],
       'двухколоночная пара «утверждение | отрицание»',
     );
-    assert.deepEqual(
-      (byKey.get('multiple') as any).rows[0].cells.map((c: any) => c.op),
-      ['in', 'not_in'],
+    // «в списке»/«в иерархии» — в объединённой группе «Сравнение» (п.7а).
+    const compareOps = (byKey.get('compare') as any).rows.flatMap((r: any) =>
+      r.cells.map((c: any) => c.op),
     );
+    for (const op of ['in', 'not_in', 'in_hierarchy', 'not_in_hierarchy']) {
+      assert.ok(compareOps.includes(op), `${op} — в группе «Сравнение»`);
+    }
     assert.deepEqual(
       (byKey.get('sets') as any).rows[0].cells.map((c: any) => c.op),
       ['any_of', 'none_of'],
@@ -554,6 +562,17 @@ describe('дерево условий: сгруппированные списк
       (byKey.get('state') as any).rows[0].cells.map((c: any) => c.op),
       ['not_empty', 'is_empty'],
     );
+    // Тултип каждой ячейки — краткое описание назначения оператора (п.7в).
+    for (const section of link) {
+      for (const row of section.rows) {
+        for (const cell of row.cells) {
+          assert.ok(
+            typeof cell.description === 'string' && cell.description.trim() !== '',
+            `у оператора ${cell.op} есть описание назначения`,
+          );
+        }
+      }
+    }
 
     // Паритет с реестром: редактор не предлагает ничего сверх допустимого набора.
     const allowed = new Set(filterProfileOperators('thoughts', 'property', 'link'));
@@ -563,9 +582,19 @@ describe('дерево условий: сгруппированные списк
       }
     }
 
-    // Датовый операнд: секция называется «Сравнение», равенства у даты нет.
+    // Датовый операнд: секция «Сравнение», пары «больше|меньше»,
+    // «больше или равно|меньше или равно», «между|не между» (п.8).
     const date = mod.filterTreeOperatorMenu('thoughts', 'created_at', 'date');
     assert.equal(date[0]!.title, 'Сравнение');
+    assert.deepEqual(
+      (date[0] as any).rows.map((r: any) => r.cells.map((c: any) => c.op)),
+      [
+        ['gt', 'lt'],
+        ['gte', 'lte'],
+        ['between', 'not_between'],
+      ],
+      'датовые пары читаются «мин|макс» (п.8)',
+    );
     const dateOps = date.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
     for (const op of ['gt', 'lte', 'gte', 'lt', 'between', 'not_between']) {
       assert.ok(dateOps.includes(op), `${op} предложен для датового операнда`);
@@ -595,7 +624,7 @@ describe('дерево условий: сгруппированные списк
 
     // Профиль хроники — свои операнды и свой набор.
     const record = mod.filterTreeOperatorMenu('chronicle', 'record_title');
-    assert.deepEqual(record.map((s: any) => s.title), ['Значение', 'Слова']);
+    assert.deepEqual(record.map((s: any) => s.title), ['Сравнение', 'Слова']);
     assert.deepEqual(
       record[0]!.rows[0]!.cells.map((c: any) => c.op),
       ['eq', 'ne'],
@@ -606,6 +635,23 @@ describe('дерево условий: сгруппированные списк
         .includes('matches'),
       '«Есть слова» у заголовка записи',
     );
+  });
+
+  it('природа для меню операторов: датовый ОПЕРАНД — «date» (п.8)', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const built = await import('../src/renderer/lib/filter-builder.js');
+    const dateLeaf = built.defaultFilterTreeLeaf({ kind: 'created_at' } as never);
+    assert.equal(
+      mod.filterTreeOperatorValueType(dateLeaf, DATA),
+      'date',
+      'дата создания — датовая природа, пары границ «мин|макс»',
+    );
+    const propDate = built.defaultFilterTreeLeaf({ kind: 'property', property_id: DATE.id } as never);
+    assert.equal(mod.filterTreeOperatorValueType(propDate, DATA), 'date', 'свойство-дата — из реестра');
+    const city = built.defaultFilterTreeLeaf({ kind: 'property', property_id: CITY.id } as never);
+    assert.equal(mod.filterTreeOperatorValueType(city, DATA), 'text');
+    const parents = built.defaultFilterTreeLeaf({ kind: 'parents' } as never);
+    assert.equal(mod.filterTreeOperatorValueType(parents, DATA), undefined, 'не датовый операнд — природы нет');
   });
 
   it('тело выпадающего списка: сетка двух колонок, подсветка текущего, выбор', async () => {
@@ -667,6 +713,22 @@ describe('дерево условий: список «Что» (элемент f
       'date',
       'природа свойства — для списка операторов',
     );
+
+    // Значки (требование заказчика 2026-10-14: п.1 — Родители/Потомки, п.3 —
+    // стороны свойства-связи как в списке «Свойства мыслей»).
+    assert.equal((byKey.get('parents') as any).icon, 'arrow-down', 'Родителям — стрелка вниз (п.1)');
+    assert.equal((byKey.get('children') as any).icon, 'arrow-up', 'Потомкам — стрелка вверх (п.1)');
+    assert.equal(
+      (byKey.get('property:p-place') as any).icon,
+      'arrow-down',
+      'свойство в источнике — стрелка вниз (п.3)',
+    );
+    assert.equal(
+      (byKey.get('property:Покупки здесь') as any).icon,
+      'arrow-up',
+      'свойство в назначении — стрелка вверх (п.3)',
+    );
+    assert.equal((byKey.get('property:p-city') as any).icon, 'value-text', 'скаляр — значок вида значения');
 
     // Контекстные — первыми (профиль-параметр). «Мысль» (id) — всегда в верхней
     // группе без заголовка (решение заказчика 2026-10-14, задача a577875b).
@@ -969,7 +1031,7 @@ describe('дерево условий: диагностика строк (эле
     installShim();
   });
 
-  it('красная запись помечает строку, несёт причину и «исправить» переводит фокус', async () => {
+  it('красная запись помечает строку, несёт причину; клик по ТЕКСТУ переводит фокус', async () => {
     const mod = await import('../src/renderer/lib/filter-tree.js');
     const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
 
@@ -1001,15 +1063,21 @@ describe('дерево условий: диагностика строк (эле
     const row = exact(root, 'ft-row')[0]!;
     assert.equal(row.dataset['severity'], 'error', 'красная запись помечает строку');
     assert.ok(row.classList.contains('ft-node--error'));
-    assert.equal(row.tabIndex, -1, 'строка принимает программный фокус по «исправить»');
+    assert.equal(row.tabIndex, -1, 'строка принимает программный фокус');
 
     const line = exactOne(row, 'ft-issue')!;
     assert.equal(line.dataset['severity'], 'error');
     assert.equal(line.dataset['path'], 'filter.children[0].entity');
     assert.match(line.flatText(), /удалено 2026-10-01T00:00:00\.000Z/, 'причина с датой удаления');
+    // Отдельной кнопки «исправить» нет (п.10): переход — по клику на текст.
+    assert.equal(
+      line.findAll((n) => n.tagName.toUpperCase() === 'BUTTON').length,
+      0,
+      'кнопки «исправить» в строке диагностики нет',
+    );
 
-    exactOne(line, 'ft-issue__fix')!.emit('click', {});
-    assert.equal(row.focused, true, '«исправить» фокусирует строку');
+    exactOne(line, 'ft-issue__text')!.emit('click', {});
+    assert.equal(row.focused, true, 'клик по тексту причины фокусирует строку');
     assert.deepEqual(fixed, ['filter.children[0].entity'], 'хост узнаёт адрес правки');
   });
 
@@ -1099,5 +1167,66 @@ describe('дерево условий: диагностика строк (эле
     assert.match(css, /\.ft-node--error\s*\{[^}]*var\(--danger\)/s);
     assert.match(css, /\.ft-node--warning\s*\{[^}]*var\(--warn\)/s);
     assert.match(css, /\.ft-row\s*\{[^}]*flex-wrap:\s*wrap/s, 'строка диагностики ложится второй полосой');
+    // Крестик условия прижат к ВЕРХНЕМУ краю (п.5); тексту причины — роль клика (п.10).
+    assert.match(css, /\.ft-row__remove\s*\{[^}]*align-self:\s*flex-start/s);
+    assert.match(css, /\.ft-issue__text--action\s*\{[^}]*cursor:\s*pointer/s);
+  });
+});
+
+describe('список: клавиатурная навигация многоколоночного списка (п.4)', () => {
+  before(() => {
+    installShim();
+  });
+
+  it('↓/↑ — внутри столбца, ←/→ — между столбцами, Home/End, PgUp/PgDn — выделением', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const body = mod.buildChoiceMenuBody({
+      title: 'Что',
+      groups: [
+        {
+          label: '',
+          columns: 2,
+          items: Array.from({ length: 6 }, (_v, i) => ({ key: `k${i}`, label: `пункт ${i}` })),
+        },
+      ],
+      onPick: () => undefined,
+    });
+    const root = body.root as unknown as ShimElement;
+    const items = exact(root, 'ft-choice__item');
+    assert.equal(items.length, 6, 'шесть пунктов в двух колонках');
+    const cursorIndex = (): number =>
+      items.findIndex((item) => item.classList.contains('ft-choice__item--cursor'));
+    const press = (key: string): void => {
+      root.emit('keydown', { key, preventDefault: () => undefined });
+    };
+
+    // ↓ из пункта 0: следующая СТРОКА того же столбца (2), а не соседний столбец (1).
+    press('ArrowDown');
+    assert.equal(cursorIndex(), 0, 'первое ↓ выделяет первый пункт');
+    press('ArrowDown');
+    assert.equal(cursorIndex(), 2, '↓ внутри столбца: 0 → 2, не 1');
+    press('ArrowDown');
+    assert.equal(cursorIndex(), 4, '↓ внутри столбца: 2 → 4');
+    press('ArrowDown');
+    assert.equal(cursorIndex(), 4, '↓ в конце столбца не перескакивает в другой столбец');
+
+    // →/← — между столбцами.
+    press('ArrowRight');
+    assert.equal(cursorIndex(), 5, '→ переводит в правый столбец той же строки');
+    press('ArrowUp');
+    assert.equal(cursorIndex(), 3, '↑ внутри правого столбца: 5 → 3');
+
+    // Home/End — начало/конец списка.
+    press('Home');
+    assert.equal(cursorIndex(), 0, 'Home — первый пункт списка');
+    press('End');
+    assert.equal(cursorIndex(), 5, 'End — последний пункт списка');
+
+    // PgUp/PgDn двигают ВЫДЕЛЕНИЕ (а не только прокрутку).
+    press('Home');
+    press('PageDown');
+    assert.ok(cursorIndex() > 0, 'PgDn сдвигает выделение на страницу, а не оставляет на месте');
+    press('PageUp');
+    assert.equal(cursorIndex(), 0, 'PgUp возвращает выделение к началу');
   });
 });

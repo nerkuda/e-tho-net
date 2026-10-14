@@ -293,10 +293,15 @@ describe('даты: опоры, сдвиг и человекочитаемая �
 // ---------------------------------------------------------------------------
 
 describe('ячейка значения: сборка виджета и правки единой модели', () => {
-  it('«значение не требуется» — подсказка без полей ввода', () => {
+  it('«значение не требуется» — поле правого операнда не рисуется (п.9)', () => {
     const box = render(leaf({ kind: 'keywords' }, 'is_empty'), slot().api);
     assert.equal(box.dataset['editor'], 'none');
-    assert.ok(one(box, mod.FILTER_VALUE_HINT_CLASS) !== null);
+    assert.equal(
+      one(box, mod.FILTER_VALUE_HINT_CLASS),
+      null,
+      'подписи «значение не требуется» в ячейке нет',
+    );
+    assert.equal(box.flatText(), '', 'ячейка значения пуста');
     assert.equal(box.findAll((n) => n.tagName.toUpperCase() === 'INPUT').length, 0);
   });
 

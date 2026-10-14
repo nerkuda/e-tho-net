@@ -469,7 +469,10 @@ export function renderFilterValue(
   if (filterValueIsOff(leaf)) box.classList.add(FILTER_VALUE_OFF_CLASS);
   switch (editor) {
     case 'none':
-      box.append(span('значение не требуется', FILTER_VALUE_HINT_CLASS));
+      // Значение не требуется («заполнено»/«не заполнено», есть/нет —
+      // `filterValueNeedsValue`): поле правого операнда НЕ рисуется, строка
+      // «значение не требуется» убрана (требование заказчика 2026-10-14, п.9);
+      // ячейка остаётся пустой (data-editor="none").
       return box;
     case 'triad':
       box.append(triadControl(leaf, api));

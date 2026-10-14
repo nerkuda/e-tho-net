@@ -2336,9 +2336,10 @@ export const AST_OPERATOR_LABELS: Record<FilterAstOperator, string> = {
   not_between: 'не между',
   in: 'в списке',
   not_in: 'не в списке',
-  any_of: 'хотя бы один из',
+  // Формулировки заказчика 2026-10-14 (ошибка 4258e694, п.7б).
+  any_of: 'любой из',
   all_of: 'все из',
-  none_of: 'ни один из',
+  none_of: 'ни одного из',
   is_empty: 'не заполнено',
   not_empty: 'заполнено',
   matches: 'есть слова',

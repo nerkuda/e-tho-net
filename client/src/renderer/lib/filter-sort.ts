@@ -39,11 +39,16 @@ import {
   filterIssueReason,
   type FilterIssue,
 } from './filter-diagnostics.js';
+import {
+  filterOperandIconForProperty,
+  linkPropertySide,
+  openChoiceMenu,
+  type FilterTreeChoiceGroup,
+} from './filter-tree.js';
 import { filterSortAstKeys, isSortOrder, withReverseLinkPropertySides } from './filter-builder.js';
-import { openChoiceMenu } from './filter-tree.js';
 import { VALUE_TYPE_LABELS } from './property-list.js';
 import { iconButton, uiButton } from './ui/button.js';
-import { svgIcon } from './ui/icon.js';
+import { svgIcon, type IconName } from './ui/icon.js';
 
 export const FILTER_SORT_SECTION_CLASS = 'fs-sort';
 export const FILTER_SORT_CHIP_CLASS = 'fs-chip';
@@ -70,6 +75,8 @@ export interface FilterSortKeyOption {
   /** Природа свойства — подпись подробности в списке выбора. */
   valueType?: PropertyValueType;
   detail?: string;
+  /** Значок строки списка: вид значения либо сторона свойства-связи (п.6/п.3). */
+  icon?: IconName;
 }
 
 /** Данные сети для словаря ключей (реестр свойств + типы связей). */
@@ -108,19 +115,38 @@ export interface FilterSortSectionHandle {
 // ---------------------------------------------------------------------------
 
 /**
+ * Значки движковых ключей сортировки — те же роли, что у одноимённых операндов
+ * дерева («по названию» — текст, даты — дата). Поля-свойства значок берут из
+ * природы значения/стороны связи (см. `filterSortKeyOptions`).
+ */
+const FILTER_SORT_ENGINE_ICONS: Readonly<Record<string, IconName>> = {
+  title: 'value-text',
+  created_at: 'value-date',
+  updated_at: 'value-date',
+};
+
+/**
  * Словарь полей сортировки: движковые ключи единого набора конструктора плюс
  * свойства реестра сети и обратные стороны свойств-связей. Второго набора
- * сортировок нет (сторож `guard-filter-builder`).
+ * сортировок нет (сторож `guard-filter-builder`). Каждая строка несёт значок —
+ * как список левых операндов (требование заказчика 2026-10-14, п.6).
  */
 export function filterSortKeyOptions(data: FilterSortData): FilterSortKeyOption[] {
   const out: FilterSortKeyOption[] = filterSortAstKeys().map((entry) => ({
     key: entry.key,
     label: entry.label,
     group: 'engine' as const,
+    ...(FILTER_SORT_ENGINE_ICONS[entry.key] !== undefined
+      ? { icon: FILTER_SORT_ENGINE_ICONS[entry.key] }
+      : {}),
   }));
   const registry = withReverseLinkPropertySides(data.registry, data.linkTypes ?? []);
   for (const [id, entry] of registry) {
     const direct = data.registry.has(id);
+    const icon = filterOperandIconForProperty(
+      entry.value_type,
+      linkPropertySide(entry, data.linkTypes ?? []),
+    );
     out.push({
       key: id,
       label: entry.name,
@@ -129,6 +155,7 @@ export function filterSortKeyOptions(data: FilterSortData): FilterSortKeyOption[
       detail: direct
         ? VALUE_TYPE_LABELS[entry.value_type]
         : `${VALUE_TYPE_LABELS[entry.value_type]} · обратная сторона`,
+      ...(icon !== null ? { icon } : {}),
     });
   }
   return out;
@@ -162,10 +189,12 @@ function normalizeKeys(keys: readonly FilterAstSortKey[]): FilterAstSortKey[] {
 }
 
 /**
- * Содержимое выпадающего списка добавления ключа: уже занятые ключи из списка
- * убираются (уровни сортировки — различные поля), разделы «поля отбора» и
- * «свойства сети» сохраняют порядок единого словаря. Вынесено отдельно, чтобы
- * список проверялся DOM-пробой без открытия поповера.
+ * Содержимое выпадающего списка добавления ключа: ТОТ ЖЕ компонент, что список
+ * левых операндов (требование заказчика 2026-10-14, п.6) — живой поиск, две
+ * колонки, значки строк (sticky-поиск и навигация — из общего `openChoiceMenu`).
+ * Уже занятые ключи из списка убираются (уровни сортировки — различные поля),
+ * разделы «поля отбора» и «свойства сети» сохраняют порядок единого словаря.
+ * Вынесено отдельно, чтобы список проверялся DOM-пробой без открытия поповера.
  */
 export function filterSortAddMenu(
   keys: readonly FilterAstSortKey[],
@@ -174,21 +203,25 @@ export function filterSortAddMenu(
   title: string;
   search: boolean;
   placeholder: string;
-  groups: Array<{ label: string; items: Array<{ key: string; label: string }> }>;
+  groups: FilterTreeChoiceGroup[];
 } {
   const used = new Set(normalizeKeys(keys).map((entry) => entry.key));
   const available = options.filter((entry) => !used.has(entry.key));
-  const pick = (group: FilterSortKeyOption['group']) =>
+  const pick = (group: FilterSortKeyOption['group']): FilterTreeChoiceGroup['items'] =>
     available
       .filter((entry) => entry.group === group)
-      .map((entry) => ({ key: entry.key, label: entry.label }));
+      .map((entry) => ({
+        key: entry.key,
+        label: entry.label,
+        ...(entry.icon !== undefined ? { icon: entry.icon } : {}),
+      }));
   return {
     title: 'Ключ сортировки',
     search: true,
     placeholder: 'Поиск поля…',
     groups: [
-      { label: 'Поля отбора', items: pick('engine') },
-      { label: 'Свойства сети', items: pick('properties') },
+      { label: 'Поля отбора', items: pick('engine'), columns: 2 },
+      { label: 'Свойства сети', items: pick('properties'), columns: 2 },
     ].filter((group) => group.items.length > 0),
   };
 }

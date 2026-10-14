@@ -26,8 +26,9 @@
  * **Диагностика строк** (элемент интерфейса 4e634c9a) приходит готовым списком
  * (`ctx.issues` из `lib/filter-diagnostics.ts`): красная запись подсвечивает
  * строку и запрещает применение, жёлтая — только подсвечивает; у каждой строки
- * видна точная причина и кнопка «исправить», переводящая фокус в строку. Записи
- * без адреса строки дерево не показывает — их место в тултипе превью футера.
+ * видна точная причина, а переход/автоправка срабатывает по клику на сам текст
+ * причины (отдельной кнопки «исправить» нет — п.10). Записи без адреса строки
+ * дерево не показывает — их место в тултипе превью футера.
  *
  * **Вид** — из дизайн-системы (фасады `lib/ui` — файловыми импортами, как в
  * `lib/filter-form.ts`: barrel тянет регистрацию вендора и не грузится в
@@ -44,7 +45,9 @@
  */
 
 import {
+  AST_OPERATOR_DESCRIPTIONS,
   getFilterProfile,
+  typeNameKey,
   type FilterAstEntity,
   type FilterAstEntityKind,
   type FilterAstGroupOp,
@@ -308,11 +311,13 @@ export function filterTreeToggleNotAt(root: FilterTreeNode, path: FilterTreePath
 // Сгруппированные списки операторов (требование 502f1922)
 // ---------------------------------------------------------------------------
 
-/** Ячейка сетки операторов: код, подпись и колонка «утверждение/отрицание». */
+/** Ячейка сетки операторов: код, подпись, колонка «утверждение/отрицание» и
+ *  краткое описание назначения (тултип — требование заказчика 2026-10-14, п.7в). */
 export interface FilterTreeOperatorMenuCell {
   op: FilterAstOperator;
   label: string;
   side: 'yes' | 'no';
+  description: string;
 }
 
 /** Одна строка сетки — до двух колонок (утверждение | отрицание). */
@@ -328,33 +333,44 @@ export interface FilterTreeOperatorMenuSection {
 }
 
 /**
- * Секции списка операторов: «способ задания множества» × колонки
- * «утверждение/отрицание» (требование 502f1922). Пары подобраны так, что правая
- * колонка — ОТРИЦАНИЕ левой (`равно|не равно`, `больше|меньше или равно`…), а
- * «между»/«заполнено»/«в иерархии» стоят в своих секциях. Состав — подмножество
+ * Секции списка операторов (требование 502f1922). Группы «ЗНАЧЕНИЕ»,
+ * «НЕСКОЛЬКО» и «ИЕРАРХИЯ» сведены в ОДНУ «СРАВНЕНИЕ» (требование заказчика
+ * 2026-10-14, ошибка 4258e694, п.7а): равенство, подстрока, сравнения, «между»,
+ * списки и иерархия идут одной группой. Пары подобраны так, что правая колонка —
+ * ОТРИЦАНИЕ левой (`равно|не равно`, `в списке|не в списке`…); «между» и
+ * «заполнено» стоят в своих секциях. Для датовых операндов пары заданы отдельно
+ * ({@link OPERATOR_MENU_SECTIONS}[0].dateRows): «больше|меньше»,
+ * «больше или равно|меньше или равно», «между|не между» (п.8). Состав — подмножество
  * этого словаря, отобранное реестром профиля.
  */
 const OPERATOR_MENU_SECTIONS: ReadonlyArray<{
   key: string;
   title: string;
-  /** Заголовок для числовых и датовых операндов (там секция — «Сравнение»). */
-  numericTitle?: string;
   rows: ReadonlyArray<{ yes: readonly FilterAstOperator[]; no: readonly FilterAstOperator[] }>;
+  /** Пары датовых операндов — СВОЙ порядок границ (п.8). */
+  dateRows?: ReadonlyArray<{ yes: readonly FilterAstOperator[]; no: readonly FilterAstOperator[] }>;
 }> = [
   {
-    key: 'value',
-    title: 'Значение',
-    numericTitle: 'Сравнение',
+    key: 'compare',
+    title: 'Сравнение',
     rows: [
       { yes: ['eq'], no: ['ne'] },
       { yes: ['contains'], no: ['not_contains'] },
       { yes: ['gt'], no: ['lte'] },
       { yes: ['gte'], no: ['lt'] },
       { yes: ['between'], no: ['not_between'] },
+      { yes: ['in'], no: ['not_in'] },
+      { yes: ['in_hierarchy'], no: ['not_in_hierarchy'] },
+    ],
+    // Датовые пары — «больше|меньше», «больше или равно|меньше или равно»,
+    // «между|не между» (п.8): границы диапазона читаются парами «мин|макс».
+    dateRows: [
+      { yes: ['eq'], no: ['ne'] },
+      { yes: ['gt'], no: ['lt'] },
+      { yes: ['gte'], no: ['lte'] },
+      { yes: ['between'], no: ['not_between'] },
     ],
   },
-  { key: 'multiple', title: 'Несколько', rows: [{ yes: ['in'], no: ['not_in'] }] },
-  { key: 'hierarchy', title: 'Иерархия', rows: [{ yes: ['in_hierarchy'], no: ['not_in_hierarchy'] }] },
   {
     key: 'sets',
     title: 'Выборка',
@@ -567,12 +583,14 @@ export function filterTreeOperatorChoice(
 
 /**
  * Список операторов операнда в профиле контекста, сгруппированный по способу
- * задания множества (требование 502f1922). Состав берётся у реестра профилей
- * `@etn/shared` — редактор не имеет своего мнения о допустимых операторах
- * (ADR 23fab347: «исполнитель принимает всё, что конструктор позволил»).
+ * задания множества (требование 502f1922; группы «значение/несколько/иерархия»
+ * сведены в «Сравнение» — п.7а). Состав берётся у реестра профилей `@etn/shared`
+ * — редактор не имеет своего мнения о допустимых операторах (ADR 23fab347:
+ * «исполнитель принимает всё, что конструктор позволил»).
  *
- * `valueType` — природа свойства: у числовых/датовых операндов секция
- * называется «Сравнение» (требование 502f1922, «Масштабирование по типам»).
+ * `valueType` — природа свойства: у датовых операндов пары границ берутся из
+ * `dateRows` («больше|меньше»… — п.8). Каждая ячейка несёт краткое описание
+ * назначения оператора (тултип — п.7в, словарь `@etn/shared`).
  */
 export function filterTreeOperatorMenu(
   profile: FilterProfileId,
@@ -582,24 +600,25 @@ export function filterTreeOperatorMenu(
   const allowed = new Set<FilterAstOperator>(filterProfileOperators(profile, kind, valueType));
   const out: FilterTreeOperatorMenuSection[] = [];
   for (const section of OPERATOR_MENU_SECTIONS) {
+    const sourceRows =
+      valueType === 'date' && section.dateRows !== undefined ? section.dateRows : section.rows;
     const rows: FilterTreeOperatorMenuRow[] = [];
-    for (const row of section.rows) {
+    for (const row of sourceRows) {
       const cells: FilterTreeOperatorMenuCell[] = [];
       for (const op of row.yes) {
-        if (allowed.has(op)) cells.push({ op, label: astOperatorLabel(op), side: 'yes' });
+        if (allowed.has(op)) {
+          cells.push({ op, label: astOperatorLabel(op), side: 'yes', description: AST_OPERATOR_DESCRIPTIONS[op] });
+        }
       }
       for (const op of row.no) {
-        if (allowed.has(op)) cells.push({ op, label: astOperatorLabel(op), side: 'no' });
+        if (allowed.has(op)) {
+          cells.push({ op, label: astOperatorLabel(op), side: 'no', description: AST_OPERATOR_DESCRIPTIONS[op] });
+        }
       }
       if (cells.length > 0) rows.push({ cells });
     }
     if (rows.length === 0) continue;
-    const numeric = valueType === 'number' || valueType === 'date';
-    out.push({
-      key: section.key,
-      title: numeric && section.numericTitle !== undefined ? section.numericTitle : section.title,
-      rows,
-    });
+    out.push({ key: section.key, title: section.title, rows });
   }
   return out;
 }
@@ -644,8 +663,10 @@ const OPERAND_ICONS: Readonly<Record<string, IconName>> = {
   id: 'value-ref',
   type: 'layers',
   link_type: 'link-edit',
-  parents: 'arrow-up',
-  children: 'arrow-down',
+  // «Родители» — стрелка ВНИЗ, «Потомки» — стрелка ВВЕРХ (родители на карте
+  // выше; требование заказчика 2026-10-14, ошибка 4258e694, п.1).
+  parents: 'arrow-down',
+  children: 'arrow-up',
   attachments: 'copy-text',
   chronology: 'quote',
   comment: 'html-comment',
@@ -674,6 +695,40 @@ const OPERAND_ICONS: Readonly<Record<string, IconName>> = {
   owner: 'user',
   size: 'value-number',
 };
+
+/** Сторона свойства-связи по ИМЕНИ записи реестра: `source` — имя совпадает с
+ *  `name_forward`, `target` — с `name_reverse`; `null` — не связь/тип неизвестен.
+ *  Так же сторону видит эталонный список «Свойства мыслей» (задача 88def930). */
+export function linkPropertySide(
+  entry: NetworkProperty,
+  linkTypes: readonly LinkType[],
+): 'source' | 'target' | null {
+  if (entry.value_type !== 'link') return null;
+  const config = entry.config ?? {};
+  if (config.structural === true) return null;
+  const linkTypeId = typeof config.link_type_id === 'string' ? config.link_type_id : '';
+  if (linkTypeId === '') return null;
+  const linkType = linkTypes.find((lt) => lt.id === linkTypeId);
+  if (linkType === undefined) return null;
+  const own = typeNameKey(entry.name);
+  if (own === typeNameKey(linkType.name_forward)) return 'source';
+  if (own === typeNameKey(linkType.name_reverse)) return 'target';
+  return null;
+}
+
+/**
+ * Значок строки свойства в списках редактора отбора (требование заказчика
+ * 2026-10-14, ошибка 4258e694, п.3): у свойства-связи — сторона как в списке
+ * «Мыслесеть → Свойства мыслей» (источник — стрелка ВНИЗ, назначение — ВВЕРХ),
+ * у скаляра — значок вида значения. `null` — значка нет.
+ */
+export function filterOperandIconForProperty(
+  valueType: PropertyValueType,
+  side: 'source' | 'target' | null,
+): IconName | null {
+  if (valueType === 'link') return side === 'target' ? 'arrow-up' : 'arrow-down';
+  return valueTypeIconName(valueType);
+}
 
 /** Данные сети для списка «Что» и подписей строк. */
 export interface FilterTreeData {
@@ -739,9 +794,13 @@ export function filterTreeOperandCatalogue(
         entity,
         valueType: entry.value_type,
         detail,
-        ...(valueTypeIconName(entry.value_type) !== null
-          ? { icon: valueTypeIconName(entry.value_type)! }
-          : {}),
+        ...(() => {
+          const icon = filterOperandIconForProperty(
+            entry.value_type,
+            linkPropertySide(entry, data.linkTypes ?? []),
+          );
+          return icon !== null ? { icon } : {};
+        })(),
       });
     }
   }
@@ -791,6 +850,20 @@ export function filterTreeLeafValueType(leaf: FilterTreeLeaf, data: FilterTreeDa
   // Обратная сторона свойства-связи адресована ИМЕНЕМ — ищем её в том же
   // расширенном реестре, что и список «Что» (второго словаря сторон нет).
   return withReverseLinkPropertySides(data.registry, data.linkTypes ?? []).get(ref)?.value_type;
+}
+
+/**
+ * Природа значения для СПИСКА ОПЕРАТОРОВ строки: у свойства — из реестра, у
+ * датовых ОПЕРАНДОВ (дата создания/изменения, время записи/события) — `date`
+ * («датовые пары границ» — требование заказчика 2026-10-14, п.8).
+ */
+export function filterTreeOperatorValueType(
+  leaf: FilterTreeLeaf,
+  data: FilterTreeData,
+): PropertyValueType | undefined {
+  const valueType = filterTreeLeafValueType(leaf, data);
+  if (valueType !== undefined) return valueType;
+  return filterTreeIsDateLeaf(leaf, valueType) ? 'date' : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -974,7 +1047,10 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
 
   /**
    * Строка диагностики узла (элемент 4e634c9a): точная причина (снапшот имени и
-   * дата — из записи ядра) и кнопка «исправить», переводящая фокус в строку.
+   * дата — из записи ядра). Отдельной кнопки «исправить» нет (требование
+   * заказчика 2026-10-14, п.10): переход/автоправка срабатывает ПО КЛИКУ НА САМ
+   * ТЕКСТ ошибки, а запись без адреса строки (недоступная автоправка) остаётся
+   * просто текстом — она в строку не локализуется и здесь не рисуется.
    */
   const buildIssueLine = (issue: FilterIssue, focus: () => void): HTMLElement => {
     // Тот же переход доступен футеру по адресу записи (сообщение о запрете).
@@ -983,20 +1059,18 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     line.dataset['severity'] = issue.severity;
     line.dataset['code'] = issue.code;
     line.dataset['path'] = issue.path;
-    line.append(span(filterIssueReason(issue), 'ft-issue__text'));
-    line.append(
-      uiButton({
-        label: 'исправить',
-        role: 'ghost',
-        size: 's',
-        class: 'ft-issue__fix',
-        title: 'Перевести фокус в строку с ошибкой',
-        onClick: () => {
-          focus();
-          ctx.onFixPath?.(issue.path);
-        },
-      }),
-    );
+    const text = span(filterIssueReason(issue), 'ft-issue__text');
+    // Клик по тексту причины = переход к строке (доступная автоправка). Отдельного
+    // локального keydown-перехвата не заводим — в клиенте он един через диспетчер
+    // (сторож `guard-keymap-single-point`); клавиатурная активация — Enter в
+    // поле/списке, а не на подписи причины.
+    text.classList.add('ft-issue__text--action');
+    setTooltip(text, 'Перейти к строке с ошибкой');
+    text.addEventListener('click', () => {
+      focus();
+      ctx.onFixPath?.(issue.path);
+    });
+    line.append(text);
     return line;
   };
 
@@ -1246,7 +1320,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     row.dataset['path'] = filterTreePathKey(path);
     const rowIssue = applyIssue(row, path);
 
-    const valueType = filterTreeLeafValueType(leaf, ctx.data);
+    const valueType = filterTreeOperatorValueType(leaf, ctx.data);
     const entries = filterTreeOperandCatalogue(ctx.profile, ctx.data);
     const activeEntryKey = entryKeyOf(leaf);
     const activeEntry = entries.find((entry) => entry.key === activeEntryKey);
@@ -1312,6 +1386,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
                     key: cell.op,
                     label: cell.label,
                     side: cell.side,
+                    title: cell.description,
                   })),
                 ),
               })),
@@ -1457,16 +1532,16 @@ function buildValuePlaceholder(leaf: FilterTreeLeaf): HTMLElement {
   const box = div('ft-value');
   box.dataset['kind'] = leaf.value.kind;
   const needsValue = leaf.operator !== 'is_empty' && leaf.operator !== 'not_empty';
+  // Значение не требуется («заполнено»/«не заполнено»): поле правого операнда
+  // НЕ рисуется (требование заказчика 2026-10-14, п.9).
+  if (!needsValue) return box;
   box.append(
     span(
-      leaf.value.kind === 'none' ? (needsValue ? 'задайте значение' : filterTreeValueKindLabel(leaf.value)) : filterTreeValueKindLabel(leaf.value),
+      leaf.value.kind === 'none' ? 'задайте значение' : filterTreeValueKindLabel(leaf.value),
       'ft-value__text',
     ),
   );
-  setTooltip(
-    box,
-    needsValue ? 'Виджет значения — следующая задача редактора' : 'Значение не требуется этим оператором',
-  );
+  setTooltip(box, 'Виджет значения — следующая задача редактора');
   return box;
 }
 
@@ -1477,6 +1552,8 @@ export interface FilterTreeChoiceItem {
   side?: 'yes' | 'no';
   /** Значок строки (иконка свойства либо смысловая иконка операнда). */
   icon?: IconName;
+  /** Тултип строки (краткое описание назначения оператора — п.7в). */
+  title?: string;
 }
 
 /** Раздел выпадающего списка. */
@@ -1527,6 +1604,19 @@ export function buildChoiceMenuBody(
   let cursor = -1;
   /** Кнопки текущей отрисовки — порядок совпадает с видимым списком. */
   let renderedButtons: HTMLElement[] = [];
+  /**
+   * Раскладка строк для клавиатурной навигации многоколоночного списка
+   * (требование заказчика 2026-10-14, п.4): раздел, номер строки в разделе и
+   * число колонок раздела. Параллельно `renderedButtons`.
+   */
+  let layout: Array<{ g: number; i: number; cols: number }> = [];
+  /** Число строк и колонок каждого РАЗДЕЛА (индекс — среди видимых разделов). */
+  let groupSizes: number[] = [];
+  let groupCols: number[] = [];
+  /** Смещение раздела в плоском списке кнопок. */
+  let groupStart: number[] = [];
+  /** Строк на страницу при PgUp/PgDn, если раскладка недоступна (юнит-тесты). */
+  const PAGE_ROWS_FALLBACK = 10;
 
   const setCursor = (index: number): void => {
     const buttons = renderedButtons;
@@ -1534,15 +1624,70 @@ export function buildChoiceMenuBody(
       cursor = -1;
       return;
     }
-    cursor = (index + buttons.length) % buttons.length;
+    cursor = Math.max(0, Math.min(buttons.length - 1, index));
     buttons.forEach((button, i) => button.classList.toggle('ft-choice__item--cursor', i === cursor));
     buttons[cursor]?.scrollIntoView?.({ block: 'nearest' });
+  };
+
+  /** Плоский индекс кнопки по (раздел, номер в разделе). */
+  const flatOf = (group: number, index: number): number => groupStart[group]! + index;
+
+  /**
+   * Вертикальный шаг навигации (↓/↑): строка меняется, КОЛОНКА — та же (не
+   * перескакивать в другой столбец — п.4). За границей раздела — первый/последний
+   * ряд соседнего раздела той же колонки. `from` — плоский индекс, `dir` — 1/–1.
+   */
+  const vertical = (from: number, dir: 1 | -1): number => {
+    const pos = layout[from];
+    if (pos === undefined) return from;
+    const { g, cols } = pos;
+    const row = Math.floor(pos.i / cols);
+    const col = pos.i % cols;
+    if (dir === 1) {
+      const next = (row + 1) * cols + col;
+      if (next < groupSizes[g]!) return flatOf(g, next);
+      for (let gg = g + 1; gg < groupSizes.length; gg += 1) {
+        const size = groupSizes[gg]!;
+        if (size === 0) continue;
+        return flatOf(gg, Math.min(col, groupCols[gg]! - 1));
+      }
+      return from;
+    }
+    if (row > 0) {
+      const prev = (row - 1) * cols + col;
+      if (prev >= 0 && prev < groupSizes[g]!) return flatOf(g, prev);
+    }
+    for (let gg = g - 1; gg >= 0; gg -= 1) {
+      const size = groupSizes[gg]!;
+      if (size === 0) continue;
+      const gc = groupCols[gg]!;
+      const col2 = Math.min(col, gc - 1);
+      const lastRow = Math.floor((size - 1) / gc);
+      return flatOf(gg, Math.min(lastRow * gc + col2, size - 1));
+    }
+    return from;
+  };
+
+  /** Текущая позиция курсора либо стартовый индекс направления (курсора нет). */
+  const origin = (fallbackLast: boolean): number =>
+    cursor >= 0 ? cursor : fallbackLast ? renderedButtons.length - 1 : 0;
+
+  /** Строк на страницу: из видимой высоты списка, иначе запасное значение. */
+  const pageRows = (): number => {
+    const listHeight = Number(list.clientHeight ?? 0);
+    const rowHeight = Number(renderedButtons[0]?.getBoundingClientRect?.().height ?? 0);
+    if (listHeight > 0 && rowHeight > 0) return Math.max(1, Math.floor(listHeight / rowHeight));
+    return PAGE_ROWS_FALLBACK;
   };
 
   const paint = (): void => {
     clear(list);
     cursor = -1;
     renderedButtons = [];
+    layout = [];
+    groupSizes = [];
+    groupCols = [];
+    groupStart = [];
     const needle = query.trim().toLowerCase();
     let rendered = 0;
     for (const group of opts.groups) {
@@ -1554,6 +1699,7 @@ export function buildChoiceMenuBody(
       // Первый раздел без подписи идёт без заголовка (заголовок «В этом месте» убран).
       if (group.label !== '') list.append(el('div', 'ft-choice__group', group.label));
       const rows = div('ft-choice__rows');
+      const columns = group.columns ?? (opts.grid === true ? 2 : 1);
       if (group.columns !== undefined) {
         // Раздел-матрица (быстрые периоды «между», элемент 69ac9ff8): число
         // колонок — параметр раздела, раскладка задаётся в разметке. Ширина не
@@ -1564,9 +1710,14 @@ export function buildChoiceMenuBody(
         rows.style.setProperty('gap', 'var(--space-1)');
         rows.style.setProperty('min-width', '320px');
       }
-      for (const item of items) {
+      const g = groupSizes.length;
+      groupStart[g] = renderedButtons.length;
+      groupSizes[g] = items.length;
+      groupCols[g] = columns;
+      for (const [index, item] of items.entries()) {
         const button = uiButton({
           ...(item.icon !== undefined ? { prefix: operandIconNode(item.icon) } : {}),
+          ...(item.title !== undefined ? { title: item.title } : {}),
           label: item.label,
           role: item.key === opts.activeKey ? 'secondary' : 'ghost',
           size: 's',
@@ -1577,6 +1728,7 @@ export function buildChoiceMenuBody(
         if (item.side !== undefined) button.dataset['side'] = item.side;
         rows.append(button);
         renderedButtons.push(button);
+        layout.push({ g, i: index, cols: columns });
         rendered += 1;
       }
       list.append(rows);
@@ -1611,14 +1763,66 @@ export function buildChoiceMenuBody(
     root.append(wrap);
   }
 
-  // Клавиатура списка: ↑/↓ перебор (в т.ч. из поля поиска), Enter — выбор.
+  // Клавиатура списка (п.4): ↑/↓ — по вертикали ВНУТРИ столбца (колонка не
+  // меняется), ←/→ — между столбцами, Home/End — начало/конец, PgUp/PgDn —
+  // выделение на страницу (а не прокрутка без выделения), Enter — выбор.
   const onKeydown = (event: KeyboardEvent): void => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const key = event.key;
+    const count = renderedButtons.length;
+    if (count === 0) return;
+    // Пока в живом поиске набран текст, ←/→/Home/End/PgUp/PgDn остаются полю
+    // (каретка, прокрутка) — навигация списка включается, как только курсор
+    // списка активирован (↓/↑) либо поиск пуст; ↑/↓ — всегда по списку.
+    const typing = searchInput !== null && searchInput.value !== '';
+    const horizontal = key === 'ArrowLeft' || key === 'ArrowRight';
+    const edge = key === 'Home' || key === 'End' || key === 'PageUp' || key === 'PageDown';
+    if ((horizontal || edge) && typing && cursor < 0) return;
+    if (key === 'ArrowDown') {
       event.preventDefault?.();
-      setCursor(cursor + (event.key === 'ArrowDown' ? 1 : -1));
+      // Первое ↓ при отсутствии выделения выбирает первый пункт, дальше — вниз.
+      setCursor(cursor < 0 ? origin(false) : vertical(cursor, 1));
       return;
     }
-    if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.metaKey) {
+    if (key === 'ArrowUp') {
+      event.preventDefault?.();
+      setCursor(cursor < 0 ? origin(true) : vertical(cursor, -1));
+      return;
+    }
+    if (key === 'ArrowRight') {
+      event.preventDefault?.();
+      setCursor(cursor < 0 ? origin(false) : Math.min(count - 1, cursor + 1));
+      return;
+    }
+    if (key === 'ArrowLeft') {
+      event.preventDefault?.();
+      setCursor(cursor < 0 ? origin(false) : Math.max(0, cursor - 1));
+      return;
+    }
+    if (key === 'Home') {
+      event.preventDefault?.();
+      setCursor(0);
+      return;
+    }
+    if (key === 'End') {
+      event.preventDefault?.();
+      setCursor(count - 1);
+      return;
+    }
+    if (key === 'PageDown') {
+      event.preventDefault?.();
+      let index = cursor < 0 ? origin(false) : cursor;
+      for (let step = 0; step < pageRows(); step += 1) index = vertical(index, 1);
+      setCursor(index);
+      return;
+    }
+    if (key === 'PageUp') {
+      event.preventDefault?.();
+      let index = cursor < 0 ? origin(true) : cursor;
+      for (let step = 0; step < pageRows(); step += 1) index = vertical(index, -1);
+      setCursor(index);
+      return;
+    }
+    if (key === 'Enter' && !event.shiftKey && !event.altKey && !event.metaKey) {
       const index = cursor >= 0 ? cursor : 0;
       const target = renderedButtons[index];
       if (target !== undefined) {

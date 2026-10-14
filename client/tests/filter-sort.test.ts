@@ -154,7 +154,16 @@ describe('секция сортировки: единый словарь клю�
   it('список добавления: занятые ключи убраны, разделы сохраняют порядок словаря', () => {
     const options = mod.filterSortKeyOptions(DATA);
     const menu = mod.filterSortAddMenu([{ key: 'title', order: 'asc' }], options);
-    assert.equal(menu.search, true);
+    assert.equal(menu.search, true, 'живой поиск — общий компонент с операндами (п.6)');
+    // Тот же компонент, что список левых операндов: две колонки и значки строк (п.6).
+    assert.deepEqual(
+      menu.groups.map((group) => [group.label, group.columns]),
+      [
+        ['Поля отбора', 2],
+        ['Свойства сети', 2],
+      ],
+      'разделы сортировки — двухколоночная сетка, как у операндов',
+    );
     assert.deepEqual(
       menu.groups.map((group) => group.label),
       ['Поля отбора', 'Свойства сети'],
@@ -165,6 +174,18 @@ describe('секция сортировки: единый словарь клю�
       'уже занятый ключ в списке не предлагается',
     );
     assert.equal(menu.groups[1]!.items.length, 3);
+    // Значки: движковый ключ — значок вида, свойство-связь — сторона (п.3/п.6).
+    assert.equal(menu.groups[0]!.items.find((item) => item.key === 'created_at')!.icon, 'value-date');
+    assert.equal(
+      menu.groups[1]!.items.find((item) => item.key === 'p-place')!.icon,
+      'arrow-down',
+      'свойство в источнике — стрелка вниз',
+    );
+    assert.equal(
+      menu.groups[1]!.items.find((item) => item.key === 'Покупки здесь')!.icon,
+      'arrow-up',
+      'свойство в назначении — стрелка вверх',
+    );
 
     const empty = mod.filterSortAddMenu(
       options.filter((option) => option.group === 'engine').map((option) => ({ key: option.key, order: 'asc' as const })),
