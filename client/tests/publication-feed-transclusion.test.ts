@@ -18,6 +18,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  htmlHasTransclusionMarkup,
+  previewTextNeedsExpansion,
   renderExpandedTransclusionHtml,
   type TransclusionSourceLoader,
 } from '../src/renderer/editor/transclusion.js';
@@ -71,7 +73,11 @@ describe('лента публикации использует общую раз
   );
 
   test('текст-блок достраивается развёрнутым HTML по признаку ссылки', () => {
-    assert.match(WS, /htmlHasTransclusionMarkup\(html\)/, 'признак неразвёрнутой ссылки учтён');
+    assert.match(
+      WS,
+      /previewTextNeedsExpansion\(html, md\)/,
+      'триггер досборки текста-блока учтён',
+    );
     assert.match(
       WS,
       /renderExpandedTransclusionHtml\(md, networkId\)/,
@@ -124,5 +130,54 @@ describe('резюме и realtime-патч блока разворачиваю�
     );
     assert.match(WS, /patchBlockText\(ownerId, bodyMd\)/, 'realtime передаёт новый body_md');
     assert.match(WS, /block\.md = md/, 'модель блока синхронно обновляет md');
+  });
+});
+
+/**
+ * Поведенческий тест круга 3 (ошибка 3b3035cf): серверный превью-HTML текста,
+ * собранный С резолвером публикационных ссылок, отдаёт трансклюзию как
+ * `!Источник` — БЕЗ `!<span class="wiki-link">`. Прежний признак
+ * {@link htmlHasTransclusionMarkup} её не ловил (регресс круга 2). Досборка
+ * должна запускаться по СЫРОМУ markdown фрагмента, а итоговый HTML обязан нести
+ * блок `md-transclusion` с содержимым источника. Тест краснеет, если выключить
+ * триггер досборки или саму развёртку.
+ */
+describe('превью-текст публикации: досборка вставки (ошибка 3b3035cf, круг 3)', () => {
+  test('сырой HTML с резолвером → досборка по сырому md даёт md-transclusion с источником', async () => {
+    const md = `до ![[#${A}]] после`;
+    // Форма серверного превью-текста с резолвером (так отдаёт сборка публикации).
+    const rawWithResolver = '<p data-md-start="0" data-md-end="17">!Источник</p>';
+    assert.equal(
+      htmlHasTransclusionMarkup(rawWithResolver),
+      false,
+      'старый признак по HTML не сработал бы — это и был регресс круга 2',
+    );
+    assert.equal(
+      previewTextNeedsExpansion(rawWithResolver, md),
+      true,
+      'досборка запускается по сырому markdown',
+    );
+
+    const html = await renderExpandedTransclusionHtml(md, NET, mapLoader({ [A]: 'тело A' }));
+    assert.ok(html !== null, 'HTML развёртки получен');
+    assert.ok(html!.includes('md-transclusion'), `в HTML нет блока md-transclusion: ${html}`);
+    assert.ok(html!.includes('тело A'), 'в HTML нет содержимого источника');
+    assert.ok(!html!.includes('![[#'), 'ссылка-трансклюзия не раскрыта');
+  });
+
+  test('HTML уже развёрнут / нет трансклюзий → досборка не запускается', () => {
+    assert.equal(
+      previewTextNeedsExpansion(
+        '<div class="md-transclusion" data-transclusion-depth="1">x</div>',
+        `до ![[#${A}]] после`,
+      ),
+      false,
+      'развёрнутый HTML не пересобираем повторно',
+    );
+    assert.equal(
+      previewTextNeedsExpansion('<p>обычный текст</p>', 'обычный текст'),
+      false,
+      'без трансклюзий досборка не нужна',
+    );
   });
 });

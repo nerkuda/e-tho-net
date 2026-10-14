@@ -70,6 +70,7 @@ import {
 import { buildCover } from './cover.js';
 import {
   htmlHasTransclusionMarkup,
+  previewTextNeedsExpansion,
   renderExpandedTransclusionHtml,
 } from '../../editor/transclusion.js';
 import {
@@ -878,7 +879,7 @@ export function mountPublicationWorkspace(
         if (target === null) continue;
         renderHtml(target, html);
         // Предисловие с трансклюзией достраиваем из НОВОГО `md` — как текст ниже.
-        if (htmlHasTransclusionMarkup(html)) void expandTextTransclusions(target, md);
+        if (previewTextNeedsExpansion(html, md)) void expandTextTransclusions(target, md);
       } else {
         // Текст-блок: `renderTextBody` сам решает, что показать при пустом
         // комментарии, и достраивает вставки из НОВОГО `md`; `renderHtml` внутри
@@ -1862,11 +1863,11 @@ export function mountPublicationWorkspace(
       line.setAttribute('aria-hidden', 'true');
       node.append(line);
     }
-    // Серверный `body_html` собран из исходного `body_md` и ссылку-трансклюзию
-    // не разворачивает (ошибка 075602b4) — блок показывает только ссылку.
-    // Тексты с такой ссылкой достраиваем развёрнутым HTML общим путём просмотра
-    // (`renderExpandedTransclusionHtml`) — тем же, что и комментарий мысли.
-    if (htmlHasTransclusionMarkup(html)) void expandTextTransclusions(node, md);
+    // Серверный `body_html` публикации уже развёрнут (трансклюзии раскрыты с
+    // резолвером публикационных ссылок) — тогда досборка не нужна. Если HTML
+    // пришёл сырым (правка под stale, отставшая сборка), ссылка-трансклюзия
+    // распознаётся по СЫРОМУ `md` и блок достраивается общим путём просмотра.
+    if (previewTextNeedsExpansion(html, md)) void expandTextTransclusions(node, md);
   }
 
   /**
