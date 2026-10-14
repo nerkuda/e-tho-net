@@ -502,6 +502,22 @@ function collectAssets(ndb: NetworkDb, sources: readonly string[], withAssets: b
   return { replacements, files, warnings };
 }
 
+/**
+ * Источники для сбора ассетов — РАЗВЁРНУТЫЕ поля документа (ошибка `6ab79f3d`):
+ * трансклюзии в текстах раскрываются тем же механизмом, что и при рендере,
+ * поэтому картинка из источника вставки попадает в `assets/`/data-URI, а не
+ * остаётся битой ссылкой в файле. Маркеры ADR `85a7a01e` на набор URL не
+ * влияют, поэтому берётся чистая развёртка (`createPlainBodyExpander`).
+ */
+function collectAssetSources(document: PublicationExportDocument, expand: BodyExpander): string[] {
+  const sources: string[] = [expand(document.title.summary_md)];
+  for (const section of flattenExportSections(document.sections)) {
+    sources.push(expand(section.preamble_md));
+    for (const text of section.texts) sources.push(expand(text.body_md));
+  }
+  return sources;
+}
+
 /** Apply asset URL replacements to rendered text (markdown or HTML). */
 function applyAssetReplacements(text: string, replacements: Map<string, string>): string {
   let out = text;
@@ -635,21 +651,18 @@ export function renderPublicationPrintHtml(
     resolveUserName,
     tokenContext,
   );
-  const sources: string[] = [document.title.summary_md];
-  for (const section of flattenExportSections(document.sections)) {
-    sources.push(section.preamble_md);
-    for (const text of section.texts) sources.push(text.body_md);
-  }
-
   const warnings = [...document.warnings];
-  const assets = collectInlineAssets(ndb, sources);
+  // Развёрнутые источники: картинки из трансклюзий вклеиваются как data-URI
+  // тем же проходом, что и картинки собственных текстов (ошибка 6ab79f3d).
+  const expand = createBodyExpander(ndb);
+  const assets = collectInlineAssets(ndb, collectAssetSources(document, expand));
   warnings.push(...assets.warnings);
   const coverSrc = resolveCoverDataUri(ndb, document, warnings);
   const rendered = renderHtmlDocument(
     document,
     coverSrc,
     PUBLICATION_PRINT_WATERMARK,
-    createBodyExpander(ndb),
+    expand,
   );
   return {
     html: applyAssetReplacements(rendered, assets.replacements),
@@ -779,13 +792,11 @@ export function buildPublicationArtifact(
   prefix: string,
   slug: string,
 ): PublicationArtifact {
-  const sources: string[] = [document.title.summary_md];
-  for (const section of flattenExportSections(document.sections)) {
-    sources.push(section.preamble_md);
-    for (const text of section.texts) sources.push(text.body_md);
-  }
-
-  const assets = collectAssets(ndb, sources, withAssets);
+  // Расширители создаются ОДИН раз: тот же набор текстов идёт и в сбор
+  // ассетов (развёрнутые источники трансклюзий — ошибка 6ab79f3d), и в рендер.
+  const expandBlock = createBodyExpander(ndb);
+  const expandPlain = createPlainBodyExpander(ndb);
+  const assets = collectAssets(ndb, collectAssetSources(document, expandPlain), withAssets);
   const warnings = [...document.warnings, ...assets.warnings];
   const coverSrc = resolveCoverSource(ndb, document, assets, withAssets, warnings);
 
@@ -793,13 +804,7 @@ export function buildPublicationArtifact(
   const mainName = `${prefix}${slug}.${extension}`;
   // Markdown-экспорт расширяет трансклюзии ЧИСТО (markers: false), HTML —
   // блочными обёртками (ошибка 3b3035cf).
-  const rendered = renderDocument(
-    document,
-    format,
-    coverSrc,
-    createBodyExpander(ndb),
-    createPlainBodyExpander(ndb),
-  );
+  const rendered = renderDocument(document, format, coverSrc, expandBlock, expandPlain);
   const entries: PublicationFile[] = [
     { name: mainName, data: applyAssetReplacements(rendered, assets.replacements) },
   ];
