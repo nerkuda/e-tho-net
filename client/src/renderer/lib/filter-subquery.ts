@@ -17,11 +17,14 @@
  *
  * **Релевантность операнда — зеркало серверных правил** (`query-service.ts`
  * `astSubqueryLeafClause`): значение-под-выборка доступно на `property` со
- * ссылочным видом значения, `parents`/`children` и `type`; релевантные, но ещё
+ * ссылочным видом значения, `parents`/`children`, `type` и — как ИСТОЧНИК
+ * КОРНЕЙ иерархического обхода — на «Мысли» (`id`, только операторы
+ * «в иерархии»/«не в иерархии», ошибка f4e99090 п.4); релевантные, но ещё
  * не исполняемые операнды (`attachments`, `chronology`, `targets`, `link_type`)
  * переключения не получают — иначе UI обещал бы то, что исполнитель отвергает
- * честным `unsupported`. Оператор-лист — `in`/`not_in`/`all_of`
- * (`SUBQUERY_LEAF_OPERATOR`: `all_of` ↔ `value.operator = "all_in"`).
+ * честным `unsupported`. Оператор-лист — `in`/`not_in`/`all_of`/
+ * `in_hierarchy`/`not_in_hierarchy` (`SUBQUERY_LEAF_OPERATOR`:
+ * `all_of` ↔ `value.operator = "all_in"`).
  *
  * **Модель — одна**: значение живёт в единственном слоте листа
  * (`FilterTreeValue.subquery`), режим ячейки ВЫЧИСЛЯЕТСЯ из вида значения, а
@@ -91,6 +94,12 @@ const SUBQUERY_SUPPORTED_KINDS: ReadonlySet<FilterAstEntityKind> = new Set([
   'parents',
   'children',
   'type',
+  // «Мысль» (`id`, задача a577875b): под-выборка служит ИСТОЧНИКОМ КОРНЕЙ
+  // иерархического обхода — «в иерархии» от мыслей выборки (ошибка f4e99090
+  // п.4). Наборный оператор `in` на «Мысли» переключателя не получает (см.
+  // {@link filterSubqueryRelevantLeaf}): релевантность у неё только
+  // иерархическая, как у `parents`/`children`.
+  'id',
 ]);
 
 /**
@@ -109,11 +118,16 @@ const SUBQUERY_LEAF_OPERATORS: ReadonlySet<FilterAstOperator> = new Set([
   'in',
   'not_in',
   'all_of',
+  // «В иерархии»/«не в иерархии»: под-выборка — источник КОРНЕЙ обхода
+  // (ошибка f4e99090 п.4; серверная поддержка — `SUBQUERY_LEAF_OPERATOR`
+  // `filter-ast.ts` и `AST_SUBQUERY_LEAF_OPS` `query-service.ts`).
+  'in_hierarchy',
+  'not_in_hierarchy',
 ]);
 
 /** Квантификатор значения по оператору-листу (`all_of` ↔ `all_in`). */
 export function filterSubqueryValueOperator(operator: FilterAstOperator): 'in' | 'not_in' | 'all_in' {
-  if (operator === 'not_in') return 'not_in';
+  if (operator === 'not_in' || operator === 'not_in_hierarchy') return 'not_in';
   if (operator === 'all_of') return 'all_in';
   return 'in';
 }
@@ -138,6 +152,11 @@ export function filterSubqueryRelevantLeaf(leaf: FilterTreeLeaf, data: FilterTre
   if (!SUBQUERY_LEAF_OPERATORS.has(leaf.operator)) return false;
   const kind = leaf.entity.kind;
   if (!filterSubquerySupported(kind)) return false;
+  // «Мысль» (`id`): под-выборка осмысленна только как источник корней
+  // иерархического обхода («в иерархии»/«не в иерархии»); на «в списке» и
+  // «не в списке» она дублировала бы обычный подбор мыслей — переключатель не
+  // предлагается (ошибка f4e99090 п.4).
+  if (kind === 'id') return leaf.operator === 'in_hierarchy' || leaf.operator === 'not_in_hierarchy';
   if (kind === 'type') return leaf.operator !== 'all_of';
   if (kind !== 'property') return true;
   const ref = leaf.entity.property_id ?? leaf.entity.property ?? '';

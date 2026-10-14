@@ -66,8 +66,9 @@ import type {
 
 import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
-import { div, el, span } from './dom.js';
+import { div, el, setTooltip, span } from './dom.js';
 import { etn } from './etn.js';
+import { markThoughtCommentPreview } from './hover-preview.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
 import { modifierChordVariants } from './keymap-chords.js';
 import { svgIcon, type IconName } from './ui/icon.js';
@@ -754,21 +755,23 @@ export async function pickEntitiesModal(
         }
         for (const id of checked) {
           const cloud = pickedThoughts.get(id) ?? { id, title: id };
-          chipsBox.append(
-            createThoughtCloud(cloud, {
-              profile: 'chip',
-              // Ширина — по чип-полю выбора: имя обрезается многоточием по
-              // нему, а не раздувает диалог (принцип ширины облачка).
-              width: 'container',
-              actions: {
-                onRemove: () => {
-                  checked.delete(id);
-                  renderChips();
-                  updateButtons();
-                },
+          const chip = createThoughtCloud(cloud, {
+            profile: 'chip',
+            // Ширина — по чип-полю выбора: имя обрезается многоточием по
+            // нему, а не раздувает диалог (принцип ширины облачка).
+            width: 'container',
+            actions: {
+              onRemove: () => {
+                checked.delete(id);
+                renderChips();
+                updateButtons();
               },
-            }),
-          );
+            },
+          });
+          // Мысль (не публикация) — то же поведение чипа, что в редакторе
+          // значения свойства: подсказка полного имени и Ctrl+hover-предпросмотр.
+          if (opts.kind === 'thoughts') wireThoughtChip(chip, id, cloud.title);
+          chipsBox.append(chip);
         }
       };
       const renderSelected = (): void => {
@@ -1103,6 +1106,17 @@ export interface EntityChipFieldOptions {
   onOpen?: (value: string) => void;
   /** Начальное состояние «поле недоступно» (поле ввода и кнопка пикера). */
   disabled?: boolean;
+  /**
+   * Значения поля — МЫСЛИ (только `kind: 'thoughts'`): чип получает то же
+   * поведение, что чип значения свойства-связи в редакторе мысли
+   * (`editor/value-editor.ts`): полное имя — подсказкой на всём облачке,
+   * `role="button"` и Ctrl+hover-предпросмотр постоянного комментария
+   * ({@link markThoughtCommentPreview}). Оформление чипа и так общее
+   * (`createThoughtCloud`, профиль `chip`) — опция добавляет только ПОВЕДЕНИЕ
+   * предпросмотра, чтобы выбор мыслей выглядел и вёл себя единообразно во всех
+   * местах (требование заказчика 2026-10-14, ошибка f4e99090 п.5).
+   */
+  thoughtPreview?: boolean;
 }
 
 /** Собранный чип-лист сущностей. */
@@ -1160,6 +1174,23 @@ function restoreKeyboardFocus(
   const lost = active == null || active === document.body;
   if (!hadFocus && !(adoptLostFocus && lost)) return;
   target.focus();
+}
+
+/**
+ * Поведение чипа-МЫСЛИ — то же, что у чипа значения свойства-связи в редакторе
+ * мысли (`editor/value-editor.ts`): полное имя подсказкой на всём облачке,
+ * доступность кнопкой (`role`/`aria-label`) и Ctrl+hover-предпросмотр
+ * постоянного комментария. Оформление (классы, значок, цвета) чип получает от
+ * общей фабрики {@link createThoughtCloud} — здесь только поведение, единое
+ * для всех мест выбора мыслей (ошибка f4e99090 п.5: чип обязан показывать
+ * значок и имя, а не голый id, и вести себя как в редакторе мысли).
+ */
+function wireThoughtChip(chip: HTMLElement, id: string, title: string): void {
+  if (id === '' || id.startsWith('$')) return; // токены отбора именам мыслей не соответствуют
+  setTooltip(chip, title);
+  chip.setAttribute('role', 'button');
+  chip.setAttribute('aria-label', title);
+  markThoughtCommentPreview(chip, id, title);
 }
 
 /**
@@ -1322,6 +1353,9 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       if (opts.reorderable === true && !disabled) {
         wireChipReorder(chip, value);
       }
+      // Единый вид чипа-мысли: имя вместо голого id уже в облачке (данные —
+      // `cloudOf`/каталог источника), поведение предпросмотра — общее.
+      if (opts.thoughtPreview === true) wireThoughtChip(chip, value, cloud.title);
       chips.push(chip);
     }
     // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
@@ -1489,6 +1523,13 @@ export interface EntityComboOptions {
    * встроенный `pickEntitiesModal` (блокер п.19).
    */
   picker?: EntityChipFieldOptions['picker'];
+  /**
+   * Значение поля — МЫСЛЬ: чип получает то же поведение, что чип значения
+   * свойства-связи (`editor/value-editor.ts`) — подсказка полного имени и
+   * Ctrl+hover-предпросмотр постоянного комментария. Единый вид чипа-мысли во
+   * всех местах выбора (ошибка f4e99090 п.5). Значимо только у `thoughts`.
+   */
+  thoughtPreview?: boolean;
   /**
    * Режим `expandAll`: дерево типов раскрыто целиком (родительский пикер
    * редактора типа). По умолчанию раскрыт только верхний уровень.
@@ -1679,21 +1720,21 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         .catch(() => undefined);
     }
     const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: opt?.title ?? current };
-    valueHost.append(
-      createThoughtCloud(cloud, {
-        profile: 'chip',
-        // Ширина — по полю значения диалога.
-        width: 'container',
-        actions:
-          opts.disabled === true
-            ? undefined
-            : {
-                onRemove: () => {
-                  commitValue(null);
-                },
+    const chip = createThoughtCloud(cloud, {
+      profile: 'chip',
+      // Ширина — по полю значения диалога.
+      width: 'container',
+      actions:
+        opts.disabled === true
+          ? undefined
+          : {
+              onRemove: () => {
+                commitValue(null);
               },
-      }),
-    );
+            },
+    });
+    if (opts.thoughtPreview === true) wireThoughtChip(chip, current, cloud.title);
+    valueHost.append(chip);
   };
 
   const commitValue = (id: string | null): void => {

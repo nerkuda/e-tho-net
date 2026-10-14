@@ -200,11 +200,22 @@ describe('под-выборка: релевантность операнда —
     assert.equal(relevant({ kind: 'parents' }, 'in'), true, 'структурные «Родители»');
     assert.equal(relevant({ kind: 'children' }, 'all_of'), true);
     assert.equal(relevant({ kind: 'type' }, 'in'), true, '«Тип» с in/not_in');
+    // Иерархические операторы (ошибка f4e99090 п.4): под-выборка — источник
+    // КОРНЕЙ обхода; у «Родителей»/«Потомков»/«Типа»/свойства-ссылки и у «Мысли».
+    assert.equal(relevant({ kind: 'parents' }, 'in_hierarchy'), true);
+    assert.equal(relevant({ kind: 'children' }, 'not_in_hierarchy'), true);
+    assert.equal(relevant({ kind: 'type' }, 'in_hierarchy'), true);
+    assert.equal(relevant({ kind: 'property', property_id: PLACE.id }, 'in_hierarchy'), true);
+    assert.equal(relevant({ kind: 'id' }, 'in_hierarchy'), true, '«Мысль в иерархии» — корни из выборки');
+    assert.equal(relevant({ kind: 'id' }, 'not_in_hierarchy'), true);
+    assert.equal(relevant({ kind: 'id' }, 'in'), false, '«Мысль в списке» — под-выборка не предлагается (дубль подбора)');
 
     assert.equal(relevant({ kind: 'type' }, 'all_of'), false, '«Тип» одиночный — «все в (выборке)» отвергает сервер');
     assert.equal(relevant({ kind: 'property', property_id: CITY.id }, 'in'), false, 'текстовое свойство — не ссылка');
+    assert.equal(relevant({ kind: 'property', property_id: CITY.id }, 'in_hierarchy'), false, 'иерархия на текстовом — не ссылка');
     assert.equal(relevant({ kind: 'property', property_id: PLACE.id }, 'eq'), false, 'оператор вне набора под-выборки');
     assert.equal(relevant({ kind: 'targets' }, 'in'), false, 'отложенный операнд (unsupported)');
+    assert.equal(relevant({ kind: 'targets' }, 'in_hierarchy'), false);
     assert.equal(relevant({ kind: 'attachments' }, 'in'), false);
     assert.equal(relevant({ kind: 'chronology' }, 'in'), false);
     assert.equal(relevant({ kind: 'link_type' }, 'in'), false);
@@ -216,15 +227,19 @@ describe('под-выборка: релевантность операнда —
     assert.equal(sub.filterSubqueryValueOperator('in'), 'in');
     assert.equal(sub.filterSubqueryValueOperator('not_in'), 'not_in');
     assert.equal(sub.filterSubqueryValueOperator('all_of'), 'all_in');
+    // Квантификатор иерархических операторов — как у наборных: «в иерархии» →
+    // `in`, «не в иерархии» → `not_in` (согласовано разбором AST сервера).
+    assert.equal(sub.filterSubqueryValueOperator('in_hierarchy'), 'in');
+    assert.equal(sub.filterSubqueryValueOperator('not_in_hierarchy'), 'not_in');
   });
 
-  it('точный состав видов: поддержаны property/parents/children/type, отложены четыре', () => {
+  it('точный состав видов: поддержаны property/parents/children/type/id, отложены четыре', () => {
     // Перебор по ЕДИНОМУ реестру видов операндов (`FILTER_AST_ENTITY_KINDS`):
     // мутация «добавить или убрать вид» в наборах модуля краснеет здесь, а не
     // только внешней пробой на конкретном операнде.
     const supported = FILTER_AST_ENTITY_KINDS.filter((kind) => sub.filterSubquerySupported(kind));
     const deferred = FILTER_AST_ENTITY_KINDS.filter((kind) => sub.filterSubqueryDeferred(kind));
-    assert.deepEqual([...supported].sort(), ['children', 'parents', 'property', 'type']);
+    assert.deepEqual([...supported].sort(), ['children', 'id', 'parents', 'property', 'type']);
     assert.deepEqual(
       [...deferred].sort(),
       ['attachments', 'chronology', 'link_type', 'targets'],
@@ -279,6 +294,27 @@ describe('под-выборка: ячейка значения «список �
     installShim();
     sub = await import('../src/renderer/lib/filter-subquery.js');
     builder = await import('../src/renderer/lib/filter-builder.js');
+  });
+
+  it('«Мысль в иерархии»: переключатель есть, «выборка» даёт квантификатор in (ошибка f4e99090 п.4)', () => {
+    // Под-выборка у иерархического оператора — источник корней: ячейка обязана
+    // предлагать тот же переключатель, а значение уходить с квантификатором `in`.
+    // Значение пустое: имя/значок чипов (резолв) проверяет filter-value.test.ts.
+    const { cell } = buildCell(leafOf({ kind: 'id' }, 'in_hierarchy'));
+    assert.equal(cell.dataset['mode'], 'list', 'по умолчанию — список корней');
+    assert.ok(exactOne(cell, 'fq-mode') !== null, 'переключатель «список ↔ выборка» у иерархии');
+    assert.ok(exactOne(cell, 'fv') !== null, 'в режиме «список» — чип-поле корней');
+
+    // Собранная выборка в модели → чип с подписью; квантификатор — `in`
+    // (сервер разбором AST согласует `in_hierarchy` ↔ `in`).
+    const value = {
+      kind: 'subquery',
+      operator: 'in',
+      node: { kind: 'group', op: 'and', children: [leafOf({ kind: 'active' }, 'eq')] },
+    };
+    const built = buildCell(leafOf({ kind: 'id' }, 'not_in_hierarchy', value));
+    assert.equal(built.cell.dataset['mode'], 'subquery', 'режим вычисляется из вида значения');
+    assert.ok(exactOne(built.cell, 'fq-chip') !== null, 'чип под-выборки в ячейке иерархии');
   });
 
   it('«выборка» открывает модал с тем же деревом; «Готово» пишет значение', async () => {

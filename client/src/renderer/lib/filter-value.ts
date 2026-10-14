@@ -185,6 +185,16 @@ const MULTIPLE_OPS: ReadonlySet<FilterAstOperator> = new Set([
 /** Операторы «количество» (сравнения числа значений, требование bd0348b3). */
 const COUNT_OPS: ReadonlySet<FilterAstOperator> = new Set(['gt', 'gte', 'lt', 'lte']);
 
+/** Операторы «в иерархии»/«не в иерархии» (корни поддерева). */
+const HIERARCHY_OPS: ReadonlySet<FilterAstOperator> = new Set(['in_hierarchy', 'not_in_hierarchy']);
+
+/**
+ * Предел одного пакетного `etn.thoughts.resolve` (серверный лимит батча).
+ * Тот же предел, что у догрузки облачков значения свойства-связи
+ * (`editor/value-editor.ts`).
+ */
+const FILTER_VALUE_RESOLVE_BATCH = 100;
+
 /** Значения-перечисления вида вложения (`kind`) — словарь спецификации. */
 const ATTACHMENT_KIND_OPTIONS: readonly FilterValueEnumOption[] = [
   { value: 'file', label: 'Файл' },
@@ -1052,12 +1062,17 @@ function entityOperandControl(
   ctx: FilterValueContext,
 ): HTMLElement {
   const kind = entityKindOf(leaf);
-  const hierarchyOp = leaf.operator === 'in_hierarchy' || leaf.operator === 'not_in_hierarchy';
-  // «Мысль» (`id`) в иерархии: значение — СПИСОК корней чип-полем (как «в
-  // списке»), а режим связей неприменим — обход только по структурным потомкам
-  // (задача a577875b), поэтому ячейка режима для `id` не рисуется.
+  const hierarchyOp = HIERARCHY_OPS.has(leaf.operator);
+  // «Мысль» (`id`) в иерархии: режим связей неприменим — обход только по
+  // структурным потомкам (задача a577875b), поэтому ячейка режима для `id` не
+  // рисуется.
   const idHierarchy = hierarchyOp && leaf.entity.kind === 'id';
-  const multiple = filterValueIsMultiple(leaf.operator) || idHierarchy;
+  // «В иерархии»/«не в иерархии» — МНОЖЕСТВЕННЫЙ выбор корней, ровно как «в
+  // списке» (требование заказчика 2026-10-14, ошибка f4e99090 п.4): сервер
+  // принимает массив корней для любого иерархического операнда (задача
+  // a577875b — паритет с OR-группой). Одиночного значения у этих операторов
+  // больше нет.
+  const multiple = filterValueIsMultiple(leaf.operator) || hierarchyOp;
   const wrap = div('fv-entity');
   wrap.dataset['entityKind'] = kind;
   wrap.dataset['multiple'] = multiple ? 'yes' : 'no';
@@ -1068,16 +1083,48 @@ function entityOperandControl(
   // Имена вариантов, показанных живым поиском/пикером (id → имя): по ним фраза
   // показывает ИМЯ мысли, а не id (ошибка 4258e694 п.12б).
   const titles = new Map<string, string>();
+  // Данные облачков выбранных значений (id → мысль): чип обязан показывать
+  // ЗНАЧОК и ИМЯ, а не голый id — и при выборе в диалоге «…» (он возвращает
+  // только id), и для сохранённых значений до первого живого поиска. Догрузка —
+  // пакетным `etn.thoughts.resolve`, как у значения свойства-связи
+  // (`editor/value-editor.ts`) и у секции корней поддерева
+  // (`lib/filter-form.ts`): единый вид чипа-мысли (ошибка f4e99090 п.5).
+  const clouds = new Map<string, ThoughtCloudInput>();
+  /** Чип-поле значения — нужно для перерисовки чипов после догрузки облачков. */
+  let fieldRef: { refresh: () => void } | null = null;
+  const cloudOf = (value: string): ThoughtCloudInput | null =>
+    ctx.cloudOf?.(value) ?? clouds.get(value) ?? null;
+
   const rememberOptions = (loaded: readonly EntityOption[]): EntityOption[] => {
     for (const option of loaded) titles.set(option.id, option.title);
     return [...loaded];
   };
+
+  /**
+   * Догрузить облачка значений (значок+имя чипа) пакетным
+   * `etn.thoughts.resolve` — только те id, которых ещё нет в кеше. Нужна для
+   * НАЧАЛЬНОЙ отрисовки сохранённого значения: живого поиска ещё не было, и без
+   * догрузки чип показывал бы голый id (ошибка f4e99090 п.5).
+   */
+  const fillClouds = (values: readonly string[]): void => {
+    if (kind !== 'thoughts' || ctx.networkId === '') return;
+    const missing = values.filter((id) => id !== '' && !id.startsWith('$') && !clouds.has(id));
+    if (missing.length === 0) return;
+    void etn.thoughts
+      .resolve(ctx.networkId, missing.slice(0, FILTER_VALUE_RESOLVE_BATCH))
+      .then((refs) => {
+        for (const ref of refs) clouds.set(ref.id, { ...ref });
+        if (refs.length > 0) fieldRef?.refresh();
+      })
+      .catch(() => undefined);
+  };
+
   /**
    * Записать снапшоты имён выбранных значений по id: имена известных вариантов —
    * сразу (на КАЖДОЕ значение набора), незнакомые (выбор в диалоге «…» даёт
    * только id) — пакетным резолвом. Вызывается ДО записи значения
    * (`api.setValue`), чтобы фраза перечиталась с именами на одном `touch`;
-   * догруженный резолв зовёт `touch` сам.
+   * догруженный резолв зовёт `touch` и обновляет чипы сам.
    */
   const applyValueLabel = (values: readonly string[]): void => {
     const names = new Map<string, string>();
@@ -1099,11 +1146,13 @@ function entityOperandControl(
         const next = new Map(names);
         for (const ref of refs) {
           titles.set(ref.id, ref.title);
+          clouds.set(ref.id, { ...ref });
           if (values.includes(ref.id)) next.set(ref.id, ref.title);
         }
-        if (next.size === names.size) return; // ничего не догрузилось
-        setLeafValueLabels(leaf, next);
-        ctx.touch?.();
+        const grew = next.size !== names.size;
+        if (grew) setLeafValueLabels(leaf, next);
+        if (refs.length > 0) fieldRef?.refresh();
+        if (grew) ctx.touch?.();
       })
       .catch(() => undefined);
   };
@@ -1115,6 +1164,7 @@ function entityOperandControl(
       kind,
       value: currentValue === '' ? null : currentValue,
       placeholder: 'выбрать…',
+      ...(kind === 'thoughts' ? { thoughtPreview: true } : {}),
       ...(picker !== undefined ? { picker } : {}),
       onChange: (id) => {
         api.setValue(id === null || id === '' ? { kind: 'none' } : { kind: 'scalar', value: id });
@@ -1125,6 +1175,7 @@ function entityOperandControl(
       onChangeEntity: (option) => {
         if (option !== null) {
           titles.set(option.id, option.title);
+          if (option.cloud !== undefined) clouds.set(option.id, option.cloud);
           setLeafValueLabels(leaf, new Map([[option.id, option.title]]));
           ctx.touch?.();
           return;
@@ -1133,6 +1184,9 @@ function entityOperandControl(
       },
     });
     wrap.append(combo.root);
+    // Сохранённое значение рисуется облачком сразу, даже если каталог его не
+    // знает (мысль ищется живым поиском) — догружаем данные чипа.
+    fillClouds(currentList(leaf.value));
   } else {
     const options = staticEntityOptions(kind, ctx);
     const field = buildEntityChipField({
@@ -1148,12 +1202,17 @@ function entityOperandControl(
       ...(options.length > 0 ? { initialOptions: options, optionsWhen: 'always' as const } : {}),
       optionsHeader: 'Значения',
       placeholder: 'Добавить значение…',
-      ...(ctx.cloudOf !== undefined ? { cloudOf: ctx.cloudOf } : {}),
+      cloudOf,
+      ...(kind === 'thoughts' ? { thoughtPreview: true } : {}),
       ...(picker !== undefined ? { picker } : {}),
     });
+    fieldRef = field;
     // Каталог (типы мыслей/связей) известен заранее — запоминаем имена сразу,
     // чтобы значение, выбранное в диалоге «…», тоже получило имя без резолва.
     for (const option of options) titles.set(option.id, option.title);
+    // Сохранённые значения: значок и имя чипа догружаем (живого поиска ещё не
+    // было), иначе чип показывал бы голый id (ошибка f4e99090 п.5).
+    fillClouds(currentList(leaf.value));
     wrap.append(field.root);
   }
 

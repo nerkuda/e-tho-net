@@ -404,6 +404,63 @@ describe('ячейка значения: сборка виджета и прав
     );
   });
 
+  it('иерархические операторы — множественный выбор корней у всех ссылочных операндов (п.4)', () => {
+    // «В иерархии»/«не в иерархии» раньше давали одиночное значение; сервер
+    // принимает массив корней (a577875b) — ячейка обязана быть чип-полем.
+    for (const kind of ['id', 'parents', 'children', 'targets', 'type', 'link_type'] as const) {
+      const box = render(leaf({ kind }, 'in_hierarchy', { kind: 'list', items: ['t-1', 't-2'] }), slot().api, ctx({ touch: () => undefined }));
+      assert.equal(one(box, 'fv-entity')?.dataset['multiple'], 'yes', `${kind}: in_hierarchy — чип-поле`);
+    }
+    for (const kind of ['id', 'parents', 'children'] as const) {
+      const box = render(leaf({ kind }, 'not_in_hierarchy', { kind: 'list', items: ['t-1'] }), slot().api, ctx({ touch: () => undefined }));
+      assert.equal(one(box, 'fv-entity')?.dataset['multiple'], 'yes', `${kind}: not_in_hierarchy — чип-поле`);
+    }
+  });
+
+  it('чипы ссылочного операнда: ИМЯ, значок и предпросмотр — единый вид с редактором значения (п.5)', async () => {
+    // Ошибка f4e99090 п.5: чипы редактора отбора показывали голые id. Теперь
+    // облачко догружается пакетным resolve (имя+значок), а поведение чипа —
+    // общее с чипом значения свойства-связи (role=button + Ctrl+hover).
+    const saved = (globalThis as any).window.etn;
+    const NAMES: Record<string, string> = { 'uuid-1': 'Мысль о кофе', 'uuid-2': 'Мысль о чае' };
+    const requested: string[][] = [];
+    (globalThis as any).window.etn = {
+      thoughts: {
+        resolve: async (_n: string, ids: string[]) => {
+          requested.push([...ids]);
+          return ids.map((id) => ({ id, title: NAMES[id] ?? id, icon: '☕', icon_kind: 'emoji' }));
+        },
+      },
+    };
+    try {
+      const box = render(
+        leaf({ kind: 'parents' }, 'in_hierarchy', { kind: 'list', items: ['uuid-1', 'uuid-2'] }),
+        slot().api,
+        ctx({ touch: () => undefined }),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      const chips = all(box, 'prop-ref-cloud');
+      assert.equal(chips.length, 2, 'два чипа-корня');
+      assert.deepEqual(requested, [['uuid-1', 'uuid-2']], 'пакетный резолв — один вызов на набор');
+      assert.deepEqual(
+        chips.map((chip) => one(chip, 'prc-title')?.textContent),
+        ['Мысль о кофе', 'Мысль о чае'],
+        'чип показывает ИМЯ, а не id',
+      );
+      assert.ok(
+        chips.every((chip) => one(chip, 'mini-icon')?.textContent === '☕'),
+        'значок типа — из данных мысли (общая фабрика облачка)',
+      );
+      assert.ok(
+        chips.every((chip) => chip.dataset['hpKind'] === 'comment'),
+        'Ctrl+hover-предпросмотр — как у чипа значения свойства-связи',
+      );
+      assert.ok(chips.every((chip) => chip.getAttribute('role') === 'button'), 'чип доступен как кнопка');
+    } finally {
+      (globalThis as any).window.etn = saved;
+    }
+  });
+
   it('«Мысль»: выбор мысли записывает снапшот имени (labels.value) — фраза покажет имя, не id', async () => {
     // Ошибка 4258e694 п.12б: выбор мысли в чип-поле раньше не писал labels.value,
     // и фраза-превью показывала обрезанный id вместо имени мысли. Диалог «…»
