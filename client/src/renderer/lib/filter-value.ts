@@ -1094,8 +1094,25 @@ function entityOperandControl(
   let fieldRef: { refresh: () => void } | null = null;
   const cloudOf = (value: string): ThoughtCloudInput | null =>
     ctx.cloudOf?.(value) ?? clouds.get(value) ?? null;
+  /**
+   * СИНХРОННОЕ имя значения для чипа (ошибка f4e99090: замер верификатора —
+   * голый UUID ~37 мс до ответа `etn.thoughts.resolve` и навсегда при его
+   * сбое). Источники по старшинству: известное варианту имя (каталог/живой
+   * поиск) и снапшот самой модели `labels.values` (механизм 5bf3d291).
+   * `leaf.labels` читается ЛЕНИВО — имя есть уже при построении чипа и после
+   * правки значения, не дожидаясь резолва; сбой резолва последнее известное имя
+   * не сбрасывает, до сырого id дело доходит лишь когда имя неизвестно вовсе.
+   */
+  const titleOf = (value: string): string | null => {
+    const known = titles.get(value);
+    if (known !== undefined && known !== '') return known;
+    const fromMap = leaf.labels?.values?.[value];
+    return fromMap !== undefined && fromMap !== '' ? fromMap : null;
+  };
 
   const rememberOptions = (loaded: readonly EntityOption[]): EntityOption[] => {
+    // Имена вариантов живой подсказки — синхронный источник имени чипа: чип-поле
+    // кладёт облачко варианта в свой `byId`, а имя дублируем сюда для `titleOf`.
     for (const option of loaded) titles.set(option.id, option.title);
     return [...loaded];
   };
@@ -1120,19 +1137,22 @@ function entityOperandControl(
   };
 
   /**
-   * Записать снапшоты имён выбранных значений по id: имена известных вариантов —
-   * сразу (на КАЖДОЕ значение набора), незнакомые (выбор в диалоге «…» даёт
-   * только id) — пакетным резолвом. Вызывается ДО записи значения
-   * (`api.setValue`), чтобы фраза перечиталась с именами на одном `touch`;
-   * догруженный резолв зовёт `touch` и обновляет чипы сам.
+   * Записать снапшоты имён выбранных значений по id: имена известных вариантов и
+   * снапшотов модели — сразу (на КАЖДОЕ значение набора), незнакомые (выбор в
+   * диалоге «…» даёт только id) — пакетным резолвом. Вызывается ДО записи
+   * значения (`api.setValue`), чтобы фраза перечиталась с именами на одном
+   * `touch`; догруженный резолв зовёт `touch` и обновляет чипы сам.
    */
   const applyValueLabel = (values: readonly string[]): void => {
     const names = new Map<string, string>();
     const missing: string[] = [];
     for (const id of values) {
       if (id === '' || id.startsWith('$')) continue; // токены имён не имеют
-      const known = titles.get(id);
-      if (known !== undefined) names.set(id, known);
+      // Источник — тот же, что у чипа (`titleOf`): снапшот модели сохраняется и
+      // при правке набора, а не сбрасывается в ожидание резолва (ошибка
+      // f4e99090: при сбое резолва имя терялось).
+      const known = titleOf(id);
+      if (known !== null) names.set(id, known);
       else missing.push(id);
     }
     setLeafValueLabels(leaf, names);
@@ -1165,6 +1185,7 @@ function entityOperandControl(
       value: currentValue === '' ? null : currentValue,
       placeholder: 'выбрать…',
       ...(kind === 'thoughts' ? { thoughtPreview: true } : {}),
+      titleOf,
       ...(picker !== undefined ? { picker } : {}),
       onChange: (id) => {
         api.setValue(id === null || id === '' ? { kind: 'none' } : { kind: 'scalar', value: id });
@@ -1203,6 +1224,7 @@ function entityOperandControl(
       optionsHeader: 'Значения',
       placeholder: 'Добавить значение…',
       cloudOf,
+      titleOf,
       ...(kind === 'thoughts' ? { thoughtPreview: true } : {}),
       ...(picker !== undefined ? { picker } : {}),
     });

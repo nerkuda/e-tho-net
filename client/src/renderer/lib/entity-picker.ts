@@ -1078,6 +1078,16 @@ export interface EntityChipFieldOptions {
   extraSources?: readonly SuggestSource[];
   /** Данные облачка значения; `null` — сырой текст (нет данных). */
   cloudOf?: (value: string) => ThoughtCloudInput | null;
+  /**
+   * СИНХРОННЫЙ источник последнего известного ИМЕНИ значения — снапшот подписи
+   * из модели/кеша хоста (например, `labels.values` условия отбора), ещё ДО
+   * ответа серверного резолва облачков. Применяется как последний источник
+   * перед сырым id: чип рисует имя сразу, а не UUID, и сохраняет его, даже если
+   * резолв облачка не удался (ошибка f4e99090: ~37 мс голого id при выборе и
+   * навсегда — при сбое резолва). Данные облачка (значок типа) по-прежнему
+   * приходят `cloudOf`; `null`/отсутствие — имя неизвестно.
+   */
+  titleOf?: (value: string) => string | null;
   placeholder?: string;
   /**
    * Модальный пикер поверх нетокенных значений: получает управляемое
@@ -1322,7 +1332,11 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       // есть лишь `title`, поэтому облачко собирается из имени варианта, а не из
       // сырого id — иначе чип показывал UUID вместо имени (ошибка fb4173d9).
       const cloud: ThoughtCloudInput =
-        explicitCloud ?? known?.cloud ?? { id: value, title: known?.title ?? value };
+        explicitCloud ??
+        known?.cloud ??
+        // Синхронное имя хоста (снапшот подписи) идёт ПЕРЕД сырым id: чип
+        // рисует имя сразу, не дожидаясь резолва (ошибка f4e99090).
+        { id: value, title: known?.title ?? opts.titleOf?.(value) ?? value };
       const chip = createThoughtCloud(cloud, {
         profile: 'chip',
         width: 'container',
@@ -1549,6 +1563,13 @@ export interface EntityComboOptions {
    * пользователь отказался: поле и список возвращаются к вводу).
    */
   onCreateNew?: (query: string) => Promise<string | null>;
+  /**
+   * СИНХРОННЫЙ источник последнего известного ИМЕНИ значения (снапшот подписи из
+   * модели/кеша хоста): облачко выбранного значения получает имя сразу, не
+   * дожидаясь серверного резолва, и не деградирует до сырого id при его сбое.
+   * Единый механизм с чип-полем ({@link EntityChipFieldOptions.titleOf}).
+   */
+  titleOf?: (value: string) => string | null;
   onChange: (id: string | null) => void;
 }
 
@@ -1719,7 +1740,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         })
         .catch(() => undefined);
     }
-    const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: opt?.title ?? current };
+    const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: opt?.title ?? opts.titleOf?.(current) ?? current };
     const chip = createThoughtCloud(cloud, {
       profile: 'chip',
       // Ширина — по полю значения диалога.

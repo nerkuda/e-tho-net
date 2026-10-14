@@ -417,6 +417,55 @@ describe('ячейка значения: сборка виджета и прав
     }
   });
 
+  it('имя чипа — из СИНХРОННЫХ источников (снапшот labels), не дожидаясь резолва; сбой резолва имя не сбрасывает', async () => {
+    // Ошибка f4e99090 (замер верификатора): чип показывал голый UUID ~37 мс до
+    // ответа `etn.thoughts.resolve`, а при сбое резолва оставался им навсегда.
+    // Снапшот имён самой модели (`labels.values`, механизм 5bf3d291) обязан
+    // дать имя сразу при построении ячейки.
+    const saved = (globalThis as any).window.etn;
+    let resolveCalls = 0;
+    (globalThis as any).window.etn = {
+      thoughts: {
+        // Резолв облачков (значок) не удался — имя обязано уцелеть.
+        resolve: async () => {
+          resolveCalls += 1;
+          throw new Error('сеть недоступна');
+        },
+      },
+    };
+    try {
+      const leafNode = leaf(
+        { kind: 'parents' },
+        'in_hierarchy',
+        { kind: 'list', items: ['uuid-1', 'uuid-2'] },
+        { labels: { values: { 'uuid-1': 'Мысль о кофе', 'uuid-2': 'Мысль о чае' } } },
+      );
+      const box = render(leafNode, slot().api, ctx({ touch: () => undefined }));
+      // БЕЗ ожидания микрозадач: имя обязано быть в разметке уже при построении
+      // (резолв ещё не ответил — и вообще падает).
+      const chips = all(box, 'prop-ref-cloud');
+      assert.equal(chips.length, 2, 'два чипа-корня');
+      assert.deepEqual(
+        chips.map((chip) => one(chip, 'prc-title')?.textContent),
+        ['Мысль о кофе', 'Мысль о чае'],
+        'имя чипа — из снапшота модели, а не сырой id',
+      );
+      assert.ok(
+        chips.every((chip) => !chip.flatText().includes('uuid-')),
+        'ни одного голого id в подписи чипа',
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.ok(resolveCalls >= 1, 'значок догружается резолвом даже при известном имени');
+      assert.deepEqual(
+        all(box, 'prop-ref-cloud').map((chip) => one(chip, 'prc-title')?.textContent),
+        ['Мысль о кофе', 'Мысль о чае'],
+        'сбой резолва оставляет последнее известное имя, а не id',
+      );
+    } finally {
+      (globalThis as any).window.etn = saved;
+    }
+  });
+
   it('чипы ссылочного операнда: ИМЯ, значок и предпросмотр — единый вид с редактором значения (п.5)', async () => {
     // Ошибка f4e99090 п.5: чипы редактора отбора показывали голые id. Теперь
     // облачко догружается пакетным resolve (имя+значок), а поведение чипа —
