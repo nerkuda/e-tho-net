@@ -22,6 +22,10 @@
 
 import { div, el, span } from '../dom.js';
 import { emptyState } from './empty-state.js';
+import { choiceRow } from './choice-row.js';
+import { iconButton, uiButton } from './button.js';
+import { svgIcon } from './icon.js';
+import { openPopover } from './popover.js';
 
 /** Базовый класс корня чип-листа. */
 export const CHIP_LIST_CLASS = 'ui-chip-list';
@@ -33,6 +37,14 @@ export const CHIP_REMOVE_CLASS = 'ui-chip-remove';
 export const CHIP_LIST_ADD_CLASS = 'ui-chip-list-add';
 /** Класс подписи пустого состояния. */
 export const CHIP_LIST_EMPTY_CLASS = 'ui-chip-list-empty';
+/** Класс режима-чеклиста: тело выпадающего списка (сетка чекбоксов). */
+export const CHIP_LIST_CHECKLIST_CLASS = 'ui-chip-checklist';
+/** Класс сетки чекбоксов режима-чеклиста (2 колонки по умолчанию). */
+export const CHIP_LIST_CHECKLIST_GRID_CLASS = 'ui-chip-checklist-grid';
+/** Класс нижней строки режима-чеклиста (кнопка «Выбрать все»). */
+export const CHIP_LIST_CHECKLIST_FOOTER_CLASS = 'ui-chip-checklist-footer';
+/** Класс кнопки-крестика очистки всего поля. */
+export const CHIP_LIST_CLEAR_CLASS = 'ui-chip-list-clear';
 
 /** Кандидат на добавление в чип-лист. */
 export interface ChipListOption {
@@ -60,6 +72,21 @@ export interface ChipListOptions {
   emptyHint?: string;
   /** Подсказка кнопки снятия чипа. */
   removeTitle?: string;
+  /**
+   * Режим поля добавления (по умолчанию `select` — выпадающий `<select>`):
+   * `checklist` — кнопка, открывающая выпадающий список ЧЕКБОКСОВ в сетке
+   * (ошибка 50d9bf4e п. C3). Выбор отмечает/снимает значение, список остаётся
+   * открытым; «Выбрать все» отмечает все варианты и закрывает список.
+   */
+  addMode?: 'select' | 'checklist';
+  /** Число колонок сетки чекбоксов в режиме `checklist` (по умолчанию 2). */
+  checklistColumns?: number;
+  /** Подпись кнопки-поля и заголовка списка в режиме `checklist`. */
+  addLabel?: string;
+  /** Подпись кнопки «Выбрать все» внизу списка (режим `checklist`). */
+  selectAllLabel?: string;
+  /** Подсказка кнопки-крестика очистки ВСЕГО поля; нет — кнопка не рисуется. */
+  clearTitle?: string;
 }
 
 /** Собранный чип-лист. */
@@ -77,6 +104,7 @@ export interface ChipListHandle {
 export function chipList(opts: ChipListOptions): ChipListHandle {
   const root = div(CHIP_LIST_CLASS);
   const chipsBox = div(`${CHIP_LIST_CLASS}-chips`);
+  const checklist = opts.addMode === 'checklist';
   const addSelect = el('select', `select-input ${CHIP_LIST_ADD_CLASS}`) as HTMLSelectElement;
 
   const render = (): void => {
@@ -107,6 +135,7 @@ export function chipList(opts: ChipListOptions): ChipListHandle {
       }
     }
 
+    if (checklist) return;
     addSelect.replaceChildren();
     if (opts.addPlaceholder !== undefined) {
       const placeholder = el('option', undefined, opts.addPlaceholder);
@@ -132,6 +161,89 @@ export function chipList(opts: ChipListOptions): ChipListHandle {
   });
 
   render();
+
+  if (checklist) {
+    // Кнопка-поле открывает список чекбоксов; «Выбрать все» внизу списка.
+    const addBtn = uiButton({
+      label: opts.addLabel ?? opts.addPlaceholder ?? '',
+      role: 'secondary',
+      size: 's',
+      class: `${CHIP_LIST_ADD_CLASS} ${CHIP_LIST_ADD_CLASS}--checklist`,
+      onClick: () => openChecklist(),
+    });
+    const openChecklist = (): void => {
+      const grid = div(CHIP_LIST_CHECKLIST_GRID_CLASS);
+      grid.style.setProperty('grid-template-columns', `repeat(${opts.checklistColumns ?? 2}, minmax(0, 1fr))`);
+      let popover: { close: () => void } | null = null;
+      const rebuild = (): void => {
+        grid.replaceChildren();
+        const selected = new Set(opts.getValues());
+        for (const option of opts.getOptions()) {
+          const row = choiceRow({
+            kind: 'checkbox',
+            label: option.label,
+            checked: selected.has(option.value),
+            value: option.value,
+            onChange: (checked) => {
+              if (checked) opts.onAdd(option.value);
+              else opts.onRemove(option.value);
+              render();
+              rebuild();
+            },
+          });
+          grid.append(row.row);
+        }
+      };
+      rebuild();
+      const footer = div(CHIP_LIST_CHECKLIST_FOOTER_CLASS);
+      if (opts.selectAllLabel !== undefined) {
+        footer.append(
+          uiButton({
+            label: opts.selectAllLabel,
+            role: 'secondary',
+            size: 's',
+            class: `${CHIP_LIST_CHECKLIST_CLASS}-all`,
+            onClick: () => {
+              const selected = new Set(opts.getValues());
+              for (const option of opts.getOptions()) {
+                if (!selected.has(option.value)) opts.onAdd(option.value);
+              }
+              render();
+              popover?.close();
+            },
+          }),
+        );
+      }
+      const panel = div(CHIP_LIST_CHECKLIST_CLASS);
+      panel.append(grid, footer);
+      popover = openPopover({
+        anchor: { element: addBtn },
+        content: { title: opts.addLabel ?? opts.addPlaceholder ?? '', body: panel, maxHeightPx: 320 },
+        extraClass: 'ui-chip-checklist-popover',
+      });
+    };
+    // Кнопка-поле и (необязательный) крестик очистки — в одной строке.
+    const addRow = div(`${CHIP_LIST_CLASS}-add-row`);
+    addRow.append(addBtn);
+    if (opts.clearTitle !== undefined) {
+      addRow.append(
+        iconButton({
+          icon: svgIcon('x'),
+          title: opts.clearTitle,
+          role: 'ghost',
+          size: 's',
+          class: CHIP_LIST_CLEAR_CLASS,
+          onClick: () => {
+            for (const value of [...opts.getValues()]) opts.onRemove(value);
+            render();
+          },
+        }),
+      );
+    }
+    root.append(chipsBox, addRow);
+    return { root, refresh: render };
+  }
+
   root.append(chipsBox, addSelect);
   return { root, refresh: render };
 }

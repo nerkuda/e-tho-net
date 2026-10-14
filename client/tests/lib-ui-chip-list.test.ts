@@ -106,4 +106,35 @@ describe('lib/ui/chip-list', () => {
       'добавленный кандидат ушёл из списка добавления',
     );
   });
+
+  it('режим checklist: кнопка-список вместо <select>, крестик очистки поля (п. C2/C3)', () => {
+    installShim();
+    let values = ['a'];
+    const handle = chipList({
+      getValues: () => values,
+      labelOf: (v) => v,
+      onRemove: (v) => {
+        values = values.filter((x) => x !== v);
+      },
+      getOptions: () => [
+        { value: 'a', label: 'A' },
+        { value: 'b', label: 'B' },
+      ],
+      onAdd: (v) => {
+        values = [...values, v];
+      },
+      addMode: 'checklist',
+      addLabel: 'Выбрать значения…',
+      selectAllLabel: 'Выбрать все',
+      clearTitle: 'Очистить поле',
+    });
+    const root = handle.root as unknown as ShimElement;
+    assert.equal(root.findAll((n) => n.tagName === 'SELECT').length, 0, 'в режиме-чеклисте нет <select>');
+    assert.ok(root.querySelector('.ui-chip-list-add--checklist') !== null, 'кнопка-список');
+    const clear = root.querySelector('.ui-chip-list-clear')!;
+    assert.equal(clear.title, 'Очистить поле');
+    clear.emit('click');
+    assert.equal(chips(root).length, 0, 'крестик очищает всё поле');
+    assert.deepEqual(values, []);
+  });
 });

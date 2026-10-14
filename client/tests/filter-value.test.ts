@@ -806,16 +806,13 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(box.findAll((n) => n.dataset['bound'] === 'to').length, 1);
   });
 
-  it('перечисление: чекбоксы каталога, выбор собирает список кодов', () => {
-    const { api, writes } = slot();
+  it('перечисление: чип-поле выбранных значений, без «простыни» чекбоксов (п. C2/C3)', () => {
+    const { api } = slot();
     const box = render(leaf({ kind: 'kind' }, 'in'), api);
     assert.equal(box.dataset['editor'], 'enum');
-    const rows = all(box, 'ui-choice-row');
-    assert.equal(rows.length, 2, 'файл/ссылка');
-    const checkbox = rows[1]!.findAll((n) => n.tagName.toUpperCase() === 'INPUT')[0]!;
-    checkbox.checked = true;
-    checkbox.fire('change');
-    assert.deepEqual(writes[0], { kind: 'list', items: ['url'] });
+    assert.ok(one(box, 'ui-chip-list') !== null, 'перечисление — чип-поле множественных значений');
+    assert.equal(all(box, 'ui-choice-row').length, 0, 'чекбоксы ушли в выпадающий список, а не «простынёй»');
+    assert.ok(one(box, 'ui-chip-list-add') !== null, 'поле добавления значений');
   });
 
   it('«не имеет свойство» по «Типу мысли»: чип-поле строится, оператор не переписывается (п.5)', () => {

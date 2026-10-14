@@ -82,6 +82,7 @@ import {
 } from './period-editor.js';
 import type { SuggestEntry, SuggestSource } from './suggest-dropdown.js';
 import { uiButton } from './ui/button.js';
+import { chipList } from './ui/chip-list.js';
 import type { IconName } from './ui/icon.js';
 import { choiceRow } from './ui/choice-row.js';
 import { fieldInput } from './ui/field.js';
@@ -714,31 +715,47 @@ function propertyOptionIcon(
   return typeNameKey(entry.name) === typeNameKey(linkType.name_reverse) ? 'arrow-up' : 'arrow-down';
 }
 
-/** Перечисление: чекбоксы каталога, значение — список кодов. */
+/**
+ * Перечисление: ЧИП-ПОЛЕ множественных значений (ошибка 50d9bf4e п. C2) —
+ * выбранные варианты облачками с крестиками, очистка крестиком в поле, добавление
+ * из выпадающего списка чекбоксов в 2 колонки с кнопкой «Выбрать все» (п. C3).
+ * Раньше варианты рисовались «простынёй» чекбоксов прямо в ячейке. Компонент —
+ * общий чип-лист `lib/ui/chip-list.ts` (режим `checklist`), своей разметки поле
+ * не заводит (стандарт S2, ADR «Основа lib/ui»).
+ */
 function enumControl(
   leaf: FilterTreeLeaf,
   api: FilterTreeValueSlotApi,
   ctx: FilterValueContext,
 ): HTMLElement {
   const options = enumCatalogue(leaf, ctx);
-  const selected = new Set(currentList(leaf.value));
   const box = div('fv-enum');
-  for (const option of options) {
-    const row = choiceRow({
-      kind: 'checkbox',
-      label: option.label,
-      checked: selected.has(option.value),
-      value: option.value,
-      onChange: (checked) => {
-        if (checked) selected.add(option.value);
-        else selected.delete(option.value);
-        const items = options.filter((o) => selected.has(o.value)).map((o) => o.value);
-        api.setValue(items.length === 0 ? { kind: 'none' } : { kind: 'list', items });
-      },
-    });
-    box.append(row.row);
-  }
+  const labelOf = (value: string): string => options.find((o) => o.value === value)?.label ?? value;
+  const list = chipList({
+    getValues: () => currentList(leaf.value),
+    labelOf,
+    onRemove: (value) => {
+      api.setValue(valueFromList(currentList(leaf.value).filter((v) => v !== value)));
+    },
+    getOptions: () => options.map((o) => ({ value: o.value, label: o.label })),
+    onAdd: (value) => {
+      const current = currentList(leaf.value);
+      if (!current.includes(value)) api.setValue(valueFromList([...current, value]));
+    },
+    addMode: 'checklist',
+    checklistColumns: 2,
+    addLabel: 'Выбрать значения…',
+    selectAllLabel: 'Выбрать все',
+    clearTitle: 'Очистить поле',
+    removeTitle: 'Убрать значение',
+  });
+  box.append(list.root);
   return box;
+}
+
+/** Значение-набор из списка кодов (пустой список — значение не задано). */
+function valueFromList(values: readonly string[]): FilterTreeValue {
+  return values.length === 0 ? { kind: 'none' } : { kind: 'list', items: [...values] };
 }
 
 /** Текущий список строковых кодов значения. */
