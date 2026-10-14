@@ -27,15 +27,17 @@
 import {
   isCrossNetworkAddress,
   type McpThoughtWriteParams,
+  type Thought,
+  type ThoughtCreateInput,
 } from '@etn/shared';
 
-import type { WriteThoughtsPayload } from '../contracts.js';
+import type { WriteThoughtPayload, WriteThoughtsPayload } from '../contracts.js';
 import type { NetworkDb } from '../db/network-db.js';
 import { getAttachment } from './attachment-service.js';
-import { getComment } from './comment-service.js';
+import { getComment, listComments } from './comment-service.js';
 import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
-import { getLink } from './link-service.js';
-import { getThoughtOrThrow } from './thought-service.js';
+import { findLinksBetween, getLink } from './link-service.js';
+import { createThought, getThoughtOrThrow } from './thought-service.js';
 import { writeThoughts, type ThoughtWriteResult } from './thought-write-service.js';
 import type {
   AnyWriteEvent,
@@ -44,7 +46,12 @@ import type {
 } from './write-wrapper.js';
 
 /** Контракт задачи write-пула. */
-export type { WriteTask, WriteTaskContext, WriteThoughtsPayload } from '../contracts.js';
+export type {
+  WriteTask,
+  WriteTaskContext,
+  WriteThoughtPayload,
+  WriteThoughtsPayload,
+} from '../contracts.js';
 
 /**
  * Исход задачи `write.thoughts`, который возвращает write-воркер: результат
@@ -56,6 +63,86 @@ export type { WriteTask, WriteTaskContext, WriteThoughtsPayload } from '../contr
 export interface ThoughtsWriteOutcome {
   result: ThoughtWriteResult;
   events: readonly AnyWriteEvent[];
+}
+
+/**
+ * Исход задачи `write.thought` (единичное создание мысли REST-путём) — зеркало
+ * {@link ThoughtsWriteOutcome}: результат записи и события, собранные ВНУТРИ
+ * транзакции. Публикует их главный поток по факту ответа воркера.
+ */
+export interface ThoughtCreateOutcome {
+  result: Thought;
+  events: readonly AnyWriteEvent[];
+}
+
+/**
+ * Композиция единичного создания мысли — ровно то, что делал REST-роут
+ * `POST /thoughts` до переноса (задача c744e05c). Порядок событий и записей
+ * журнала сохранён дословно, чтобы ответ и real-time-эффекты не изменились:
+ *
+ *   1. `thought.created` на созданную мысль (+ строка журнала);
+ *   2. `comment.created`, ЕСЛИ в теле запроса был явный `comment` (шаблон типа
+ *      `comment_template_md` исторически события не порождал — поведение
+ *      сохранено);
+ *   3. `link.created` на рёбра link-дефолтов типа (ошибка 8655842b) и на связь
+ *      `create_link`.
+ *
+ * Всё исполняется в одной транзакции вызывающего (`runWriteCore`): сбой связи
+ * `create_link` откатывает и мысль, и её постоянный комментарий.
+ */
+export function composeThoughtCreate(
+  ndb: NetworkDb,
+  payload: WriteThoughtPayload,
+): WriteOutcome<Thought> {
+  const input: ThoughtCreateInput = payload.input;
+  // Рёбра link-дефолтов типа при создании мысли — в события (ошибка 8655842b):
+  // иначе они появлялись без `link.created`.
+  const defaultLinkIds: string[] = [];
+  const created = createThought(ndb, input, payload.actorUserId, defaultLinkIds);
+  const events: AnyWriteEvent[] = [{ type: 'thought.created', data: { thought: created } }];
+  const activity: WriteActivityEntry[] = [
+    { kind: 'thought', action: 'created', thought: created },
+  ];
+  // Постоянный комментарий из тела запроса (0.12.1, задача aa79c82d): создан
+  // доменом в этой же транзакции — публикуем событие и запись журнала, как это
+  // делает REST-роут комментариев. Без этого подписчики не увидели бы
+  // комментарий в реальном времени (ср. ошибка 8655842b для link-дефолтов).
+  if (input.comment !== undefined) {
+    const createdComment = listComments(ndb, 'thought', created.id).find(
+      (c) => c.kind === 'permanent',
+    );
+    if (createdComment !== undefined) {
+      events.push({ type: 'comment.created', data: { comment: createdComment } });
+      activity.push({ kind: 'comment', action: 'created', comment: createdComment });
+    }
+  }
+  for (const linkId of defaultLinkIds) {
+    const link = getLink(ndb, linkId);
+    if (link !== null) {
+      events.push({ type: 'link.created', data: { link } });
+      activity.push({ kind: 'link', action: 'created', link });
+    }
+  }
+  if (input.create_link) {
+    // Mirrors createLinkForNewThought's source/target calc (thought-service.ts):
+    // parent: target sources a link to the new thought; child: the new thought
+    // sources a link to target.
+    const link = findLinksBetween(
+      ndb,
+      input.create_link.direction === 'parent'
+        ? input.create_link.target_thought_id
+        : created.id,
+      input.create_link.direction === 'parent'
+        ? created.id
+        : input.create_link.target_thought_id,
+      input.create_link.type_id,
+    )[0];
+    if (link) {
+      events.push({ type: 'link.created', data: { link } });
+      activity.push({ kind: 'link', action: 'created', link });
+    }
+  }
+  return { result: created, events, activity };
 }
 
 /**

@@ -28,10 +28,11 @@
  * переустанавливается на каждой задаче (`useLayer`), поэтому запись видит
  * ровно ту видимость слоя, которая пришла с задачей (сценарий 83bf13f1).
  *
- * **Операции.** Пока единственная операция — батч-запись мыслей
- * `write.thoughts`: она исполняет доменную композицию
- * (`composeThoughtsWrite` — валидация конверта, три фазы, ОДНА транзакция) и
- * возвращает `{ result: ThoughtWriteResult, events }`. Остальные пути `runWrite`
+ * **Операции.** Переведены две: батч-запись мыслей `write.thoughts`
+ * (`composeThoughtsWrite` — валидация конверта, три фазы, ОДНА транзакция;
+ * возвращает `{ result: ThoughtWriteResult, events }`) и единичное создание
+ * мысли REST-путём `POST /thoughts` — `write.thought` (`composeThoughtCreate`,
+ * задача c744e05c). Остальные пути `runWrite`
  * переезжают сюда поэтапно (ADR «Этапность»): непереведённые op исполняются
  * синхронно в главном потоке.
  */
@@ -44,7 +45,12 @@ import DatabaseConstructor from 'better-sqlite3';
 import { EtnError, type EtnErrorCode } from '@etn/shared';
 
 import type { WriteTask, WriteTaskContext, WriteTaskResponse } from '../contracts.js';
-import { composeThoughtsWrite, type ThoughtsWriteOutcome } from '../domain/write-ops.js';
+import {
+  composeThoughtCreate,
+  composeThoughtsWrite,
+  type ThoughtCreateOutcome,
+  type ThoughtsWriteOutcome,
+} from '../domain/write-ops.js';
 import { runWriteCore } from '../domain/write-wrapper.js';
 import { NetworkDb, registerQueryFunctions } from './network-db.js';
 import { applyConnectionPragmas } from './pragmas.js';
@@ -160,6 +166,24 @@ function execute(task: WriteTask): WriteTaskResponse {
       );
       const result: ThoughtsWriteOutcome = { result: outcome.result, events: outcome.events ?? [] };
       return { ok: true, result };
+    }
+    case 'write.thought': {
+      // Единичное создание мысли REST-путём `POST /thoughts` (задача c744e05c):
+      // та же обёртка «транзакция → журнал», композиция — композиция роута.
+      const outcome = runWriteCore(
+        ndb,
+        {
+          networkId: task.context.networkId,
+          userId: task.payload.actorUserId,
+          layerId: task.context.layerId,
+        },
+        () => composeThoughtCreate(ndb, task.payload),
+      );
+      const response: ThoughtCreateOutcome = {
+        result: outcome.result,
+        events: outcome.events ?? [],
+      };
+      return { ok: true, result: response };
     }
   }
   // Новый op обязан появиться и в ветке выше, и в контракте: сюда попадаем

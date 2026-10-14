@@ -123,6 +123,17 @@ describe('guard: write-пул — контекст задачи, writer-соед
           rel === 'domain/write-ops.ts',
       },
       {
+        name: 'no-direct-create-thought-outside-pool',
+        description:
+          'REST-создание мысли (`POST /thoughts`) исполняется в write-пуле через фасад ' +
+          '`runThoughtCreate`: доменная функция `createThought` вызывается только из ' +
+          'композиции op (`domain/write-ops.ts`) и из домена. Прямой вызов из роута вернул ' +
+          'бы массовую запись GUI-клиента в главный поток в обход пула (задача c744e05c).',
+        pattern: /createThought\(/,
+        allow: (rel, line) =>
+          inComment(line) || rel.startsWith('domain/'),
+      },
+      {
         name: 'no-direct-run-write-task-outside-facade',
         description:
           'Выбор «пул или главный поток» — единственная точка фасада ' +

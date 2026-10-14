@@ -72,6 +72,7 @@ import {
   type SearchRequest,
   type StructureDirectionFlags,
   type SubgraphEdge,
+  type ThoughtCreateInput,
   type ThoughtRef,
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
@@ -4379,8 +4380,12 @@ export interface WriteCrossNetworkFacts {
   accessibleNetworkIds: string[];
 }
 
-/** Имена операций, исполняемых write-воркером (этап 1 — батч-запись мыслей). */
-export type WriteOp = 'write.thoughts';
+/**
+ * Имена операций, исполняемых write-воркером. Этап 1 переноса — батч-запись
+ * мыслей (`write.thoughts`); REST-путь создания мысли GUI-клиента — единичная
+ * запись `write.thought` (задача c744e05c, та же архитектура пула).
+ */
+export type WriteOp = 'write.thoughts' | 'write.thought';
 
 /** Payload `write.thoughts` — тот же вход, что у `writeThoughts` в домене. */
 export interface WriteThoughtsPayload {
@@ -4391,14 +4396,28 @@ export interface WriteThoughtsPayload {
 }
 
 /**
+ * Payload `write.thought` — единичное создание мысли REST-путём `POST /thoughts`
+ * (задача c744e05c): тот же вход, что у `createThought` в домене, плюс актор.
+ * Тело сериализуемо (плоские строки/числа/булевы и вложенные `create_link`/
+ * `comment`) — через границу потока структурное клонирование проходит без потерь.
+ */
+export interface WriteThoughtPayload {
+  /** Вход создания мысли (`ThoughtCreateInput`), уже разобранный REST-контрактом. */
+  input: ThoughtCreateInput;
+  /** Актор записи: авторство строк и журнала. */
+  actorUserId: string;
+}
+
+/**
  * Одна задача write-пула: контекст + op + payload. Замыкания через границу
  * потока не передаются (ADR ca3a9218), поэтому op назван строкой, а данные —
- * плоский structured-clone DTO.
+ * плоский structured-clone DTO. Размеченное объединение по `op`: воркер
+ * выбирает композицию по имени операции и типизирует payload сужением.
  */
-export type WriteTask = { context: WriteTaskContext } & {
-  op: 'write.thoughts';
-  payload: WriteThoughtsPayload;
-};
+export type WriteTask = { context: WriteTaskContext } & (
+  | { op: 'write.thoughts'; payload: WriteThoughtsPayload }
+  | { op: 'write.thought'; payload: WriteThoughtPayload }
+);
 
 /**
  * Успешный ответ write-воркера: `result` конкретизируется по `op`. Для

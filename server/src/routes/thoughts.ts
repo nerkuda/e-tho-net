@@ -79,10 +79,10 @@ import {
 } from '../contracts.js';
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { networkDir } from '../paths.js';
-import { listComments } from '../domain/comment-service.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
+import { runThoughtCreate } from '../domain/heavy-write.js';
 import { assertLibraryIcon } from '../domain/icon-view.js';
-import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
+import { createLink, deleteLink, findLinksBetween } from '../domain/link-service.js';
 import {
   clearThoughtRefUsages,
   findThoughtUsage,
@@ -97,7 +97,6 @@ import {
 import {
   checkThoughtDeletion,
   countNeighbors,
-  createThought,
   deleteThought,
   focus,
   getNeighbors,
@@ -385,57 +384,12 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const input = parseThoughtCreateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const thought = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
-          // Рёбра link-дефолтов типа при создании мысли — в события
-          // (ошибка 8655842b): иначе они появлялись без `link.created`.
-          const defaultLinkIds: string[] = [];
-          const created = createThought(ndb, input, req.auth!.user.id, defaultLinkIds);
-          const events: AnyWriteEvent[] = [{ type: 'thought.created', data: { thought: created } }];
-          const activity: WriteActivityEntry[] = [
-            { kind: 'thought', action: 'created', thought: created },
-          ];
-          // Постоянный комментарий из тела запроса (0.12.1, задача aa79c82d):
-          // создан доменом в этой же транзакции — публикуем событие и запись
-          // журнала, как это делает REST-роут комментариев. Без этого
-          // подписчики не увидели бы комментарий в реальном времени (ср.
-          // ошибка 8655842b для link-дефолтов).
-          if (input.comment !== undefined) {
-            const createdComment = listComments(ndb, 'thought', created.id).find(
-              (c) => c.kind === 'permanent',
-            );
-            if (createdComment !== undefined) {
-              events.push({ type: 'comment.created', data: { comment: createdComment } });
-              activity.push({ kind: 'comment', action: 'created', comment: createdComment });
-            }
-          }
-          for (const linkId of defaultLinkIds) {
-            const link = getLink(ndb, linkId);
-            if (link !== null) {
-              events.push({ type: 'link.created', data: { link } });
-              activity.push({ kind: 'link', action: 'created', link });
-            }
-          }
-          if (input.create_link) {
-            // Mirrors createLinkForNewThought's source/target calc (thought-service.ts):
-            // parent: target sources a link to the new thought; child: the new
-            // thought sources a link to target.
-            const link = findLinksBetween(
-              ndb,
-              input.create_link.direction === 'parent'
-                ? input.create_link.target_thought_id
-                : created.id,
-              input.create_link.direction === 'parent'
-                ? created.id
-                : input.create_link.target_thought_id,
-              input.create_link.type_id,
-            )[0];
-            if (link) {
-              events.push({ type: 'link.created', data: { link } });
-              activity.push({ kind: 'link', action: 'created', link });
-            }
-          }
-          return { result: created, events, activity };
-        });
+        // Создание мысли GUI-клиента исполняется в write-пуле (задача c744e05c,
+        // ADR ca3a9218): фасад `runThoughtCreate` несёт ту же композицию, что
+        // раньше жила здесь (мысль + постоянный комментарий + рёбра link-дефолтов
+        // и `create_link`), но транзакцию открывает воркер — массовая запись из
+        // клиента (вставка текста, серии созданий) больше не держит event loop.
+        const thought = await runThoughtCreate(ndb, restWriteFx(deps, req, networkId), input);
         sendCreated(reply, thought, {
           version: thought.version,
           updated_at: thought.updated_at,

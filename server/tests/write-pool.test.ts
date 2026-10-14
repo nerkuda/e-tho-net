@@ -626,6 +626,8 @@ describe(
       const result = (await runWriteTask(withCross, {
         sync: () => {
           syncCalls += 1;
+          // `WriteTask` — размеченное объединение по `op`: сужаем перед доступом к payload.
+          if (withCross.op !== 'write.thoughts') throw new Error('expected write.thoughts task');
           return writeThoughts(ndb, withCross.payload.input, ACTOR);
         },
       })) as ThoughtWriteResult;
