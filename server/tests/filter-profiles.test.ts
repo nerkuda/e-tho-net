@@ -327,9 +327,16 @@ describe('реестр профилей контекста (задача 7a798b1
     );
     // Оператор не из набора своего операнда хроники — тоже отказ.
     assert.throws(
-      () => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'eq', 'x'), 'chronicle'),
+      () => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'gt', 'x'), 'chronicle'),
       (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
     );
+    // «Текст записи» принимает строковые операторы (ошибка 609deba0 п.5);
+    // «Есть слова» остаётся для пути Б ключевых слов панели.
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'contains', 'x'), 'chronicle'));
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'matches', 'x'), 'chronicle'));
+    // «Цели записи»: список мыслей и «в иерархии» (ошибка 609deba0 п.1).
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'targets' }, 'in', [randomUUID()]), 'chronicle'));
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'targets' }, 'in_hierarchy', [randomUUID()]), 'chronicle'));
     // Операнд события виден событиям, но не мыслям (задача 2b230e8e).
     assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'occurred_at' }, 'gte', 0), 'events'));
     assert.throws(

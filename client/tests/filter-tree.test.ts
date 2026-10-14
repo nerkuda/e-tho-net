@@ -691,19 +691,31 @@ describe('дерево условий: сгруппированные списк
     assert.ok(typeOps.includes('in_hierarchy') && typeOps.includes('has'));
     assert.ok(!typeOps.includes('all_of'), '«все в выборке» в списке UI отсутствует (п.7)');
 
-    // Профиль хроники — свои операнды и свой набор.
+    // Профиль хроники — свои операнды и свой набор. У текстовых операндов
+    // записи «Есть слова» из списка убран (ошибка 609deba0 п.5): условие строит
+    // живая строка поиска, пользователю достаточно «содержит»/«не содержит».
     const record = mod.filterTreeOperatorMenu('chronicle', 'record_title');
-    assert.deepEqual(record.map((s: any) => s.title), ['Сравнение', 'Слова']);
-    assert.deepEqual(
-      record[0]!.rows[0]!.cells.map((c: any) => c.op),
-      ['eq', 'ne'],
-    );
+    assert.deepEqual(record.map((s: any) => s.title), ['Сравнение']);
+    assert.deepEqual(record[0]!.rows[0]!.cells.map((c: any) => c.op), ['eq', 'ne']);
+    const recordTitleOps = record.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
     assert.ok(
-      record
-        .flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)))
-        .includes('matches'),
-      '«Есть слова» у заголовка записи',
+      recordTitleOps.includes('contains') && recordTitleOps.includes('not_contains'),
+      'строка ищется «содержит»/«не содержит»',
     );
+    assert.ok(!recordTitleOps.includes('matches'), '«Есть слова» в списке операторов заголовка нет (п.5)');
+    // «Текст записи» — те же операторы, что у заголовка (п.5), без «Есть слова».
+    const recordBody = mod.filterTreeOperatorMenu('chronicle', 'record_body');
+    const recordBodyOps = recordBody.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
+    for (const op of ['eq', 'ne', 'contains', 'not_contains']) {
+      assert.ok(recordBodyOps.includes(op), `текст записи: ${op}`);
+    }
+    assert.ok(!recordBodyOps.includes('matches'), '«Есть слова» в списке операторов текста нет (п.5)');
+    // «Цели записи» — список/выборка и «в иерархии» (ошибка 609deba0 п.1).
+    const targets = mod.filterTreeOperatorMenu('chronicle', 'targets');
+    const targetsOps = targets.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
+    for (const op of ['in', 'not_in', 'in_hierarchy', 'not_in_hierarchy']) {
+      assert.ok(targetsOps.includes(op), `цели записи: ${op}`);
+    }
   });
 
   it('природа для меню операторов: датовый ОПЕРАНД — «date» (п.8)', async () => {

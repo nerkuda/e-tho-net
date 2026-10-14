@@ -26,6 +26,7 @@ import {
   CHRONICLE_LEGACY_KEYWORD_SCOPES,
   EtnError,
   FILTER_AST_VERSION,
+  HIERARCHY_SUBTREE_MAX_NODES,
   SORT_ORDERS,
   STRUCTURE_AUTHOR_OPS,
   STRUCTURE_KEYWORD_SCOPES,
@@ -57,6 +58,7 @@ import { makeSnippet } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import { buildThoughtIdSelect, compileThoughtQueryToAst, diaryKeywordClause, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+import { collectHierarchySubtree } from './graph-traversal.js';
 import { normaliseInstant } from './dates.js';
 import { isFilterEmpty, parseStructureFilter } from './structure-service.js';
 import { parseFilterAst } from './filter-ast.js';
@@ -970,33 +972,73 @@ function targetsLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, opts: ChronicleA
   const value = leaf.value;
   const isSubquery =
     typeof value === 'object' && value !== null && !Array.isArray(value) && 'query' in value;
-  if (!isSubquery) {
-    return astUnsupported('«Цели» требуют значения-подвыборки мыслей.', opts.requestId);
+  // Значение — под-выборка мыслей ЛИБО список id («Список», ошибка 609deba0 п.1),
+  // зеркало операнда «Мысль».
+  const ids = (): string[] => {
+    if (isSubquery) {
+      const { query } = value as { query: FilterAstNode };
+      const sel = buildThoughtIdSelect(
+        ndb,
+        opts.userId,
+        {
+          sort: 'alpha', order: 'asc', limit: 1, offset: 0,
+          ast: { version: FILTER_AST_VERSION, filter: query },
+        },
+        opts.requestId,
+        { keywordCommentIncludesLinkComments: true },
+      );
+      return (ndb.prepare(sel.sql).all(...sel.params) as Array<{ id: string }>).map((r) => r.id);
+    }
+    if (Array.isArray(value)) return (value as FilterAstListItem[]).filter((v): v is string => typeof v === 'string');
+    return [];
+  };
+  const idsArgs = (set: string[]): unknown[] => (set.length === 0 ? [] : [...set, ...set, ...set]);
+
+  // «В иерархии»/«не в иерархии»: выбранные цели и их СТРУКТУРНЫЕ потомки
+  // (зеркало «Мысли» в иерархии, задача a577875b; «Цели» — ошибка 609deba0 п.1).
+  if (op === 'in_hierarchy' || op === 'not_in_hierarchy') {
+    const roots = ids();
+    let subtree: string[] = [];
+    if (roots.length > 0) {
+      const res = collectHierarchySubtree(ndb, roots, 'structural', {
+        maxDepth: TRAVERSAL_DEFAULTS.MAX_DEPTH,
+        maxNodes: HIERARCHY_SUBTREE_MAX_NODES,
+        timeoutMs: TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS,
+      });
+      // Бюджет обхода не усекаем молча (ADR 58b501d8): превышение — явная ошибка.
+      if (res.truncated) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Обход «Целей в иерархии» прерван: превышен ресурсный бюджет; сузьте набор целей.',
+          { field: 'targets', reason: 'hierarchy_budget' },
+          opts.requestId,
+        );
+      }
+      subtree = res.ids;
+    }
+    const matchArgs = idsArgs(subtree);
+    if (op === 'in_hierarchy') return { sql: `EXISTS (${attachToIdsSql(subtree)})`, args: matchArgs };
+    // Запись без целей характеристикой не обладает — «не в иерархии» не
+    // удовлетворяет (строгость как у `not_in`).
+    return { sql: `(EXISTS (${ATTACH_ANY_SQL}) AND NOT EXISTS (${attachToIdsSql(subtree)}))`, args: matchArgs };
   }
-  const { query } = value as { query: FilterAstNode };
-  const sel = buildThoughtIdSelect(
-    ndb,
-    opts.userId,
-    {
-      sort: 'alpha', order: 'asc', limit: 1, offset: 0,
-      ast: { version: FILTER_AST_VERSION, filter: query },
-    },
-    opts.requestId,
-    { keywordCommentIncludesLinkComments: true },
-  );
-  const ids = (ndb.prepare(sel.sql).all(...sel.params) as Array<{ id: string }>).map((r) => r.id);
-  const attachArgs = ids.length === 0 ? [] : [...ids, ...ids, ...ids];
+
+  if (!isSubquery && !Array.isArray(value)) {
+    return astUnsupported('«Цели»: оператор требует значения — списка мыслей либо под-выборки.', opts.requestId);
+  }
+  const set = ids();
+  const attachArgs = idsArgs(set);
   switch (op) {
     case 'in':
-      return { sql: `EXISTS (${attachToIdsSql(ids)})`, args: attachArgs };
+      return { sql: `EXISTS (${attachToIdsSql(set)})`, args: attachArgs };
     case 'not_in':
       // Запись БЕЗ целей характеристикой не обладает и условию не удовлетворяет
       // (сценарий 31b6425b): сперва требуем хотя бы одну цель.
-      return { sql: `(EXISTS (${ATTACH_ANY_SQL}) AND NOT EXISTS (${attachToIdsSql(ids)}))`, args: attachArgs };
+      return { sql: `(EXISTS (${ATTACH_ANY_SQL}) AND NOT EXISTS (${attachToIdsSql(set)}))`, args: attachArgs };
     case 'all_of': {
       // «Все цели удовлетворяют» — цель есть и нет привязки вне подвыборки
       // (пустой набор целей не удовлетворяет, сценарий 31b6425b).
-      return { sql: `(EXISTS (${ATTACH_ANY_SQL}) AND NOT EXISTS (${attachToIdsSql(ids, true)}))`, args: attachArgs };
+      return { sql: `(EXISTS (${ATTACH_ANY_SQL}) AND NOT EXISTS (${attachToIdsSql(set, true)}))`, args: attachArgs };
     }
     default:
       return astUnsupported(`Оператор «${op}» недопустим для «Целей».`, opts.requestId);
@@ -1044,12 +1086,10 @@ function chronicleAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: Chron
       return recordTimeLeafClause(node, opts);
     case 'record_title':
       return recordTextLeafClause(node, 'c.title', RECORD_TITLE_COND, opts);
-    case 'record_body': {
-      if (node.operator !== 'matches') {
-        return astUnsupported('«Тело записи» поддерживает только «Есть слова».', opts.requestId);
-      }
-      return recordMatchesClause(RECORD_BODY_COND, node.value);
-    }
+    case 'record_body':
+      // «Текст записи» — те же операторы, что у заголовка (ошибка 609deba0 п.5):
+      // равно/не равно/содержит/не содержит + «Есть слова» (путь Б ключевых слов).
+      return recordTextLeafClause(node, 'c.body_md', RECORD_BODY_COND, opts);
     case 'record_author':
       return recordAuthorLeafClause(node, 'c.created_by');
     case 'record_editor':

@@ -64,6 +64,7 @@ import {
   astOperatorLabel,
   defaultFilterTreeGroup,
   defaultFilterTreeLeaf,
+  filterLeafImplicitValue,
   filterOperandLabel,
   filterProfileOperands,
   filterProfileOperators,
@@ -597,6 +598,11 @@ export function filterTreeOperatorMenu(
   valueType?: PropertyValueType,
 ): FilterTreeOperatorMenuSection[] {
   const allowed = new Set<FilterAstOperator>(filterProfileOperators(profile, kind, valueType));
+  // Операторы, которые исполнитель принимает, но редактор не предлагает
+  // (ошибка 609deba0 п.5): `matches` у текстовых операндов записи — «Есть слова»
+  // строит живая строка поиска панели, в списке строки оно не нужно. Список —
+  // данные профиля (`hidden_menu_operators`), профиле-специфичных веток здесь нет.
+  for (const op of getFilterProfile(profile).hidden_menu_operators?.[kind] ?? []) allowed.delete(op);
   const out: FilterTreeOperatorMenuSection[] = [];
   for (const section of OPERATOR_MENU_SECTIONS) {
     const sourceRows =
@@ -972,6 +978,12 @@ export interface FilterTreeContext {
    * `confirmFilterSubqueryReset` (`lib/filter-subquery.ts`).
    */
   confirmSubqueryReset?: (apply: () => void) => void;
+  /**
+   * Лист НЕУДАЛЯЕМ (ошибка 609deba0 п.2): крестик строки не рисуется. Хост
+   * помечает обязательные условия места — например, «Период записи» панели
+   * «Дневника», которым управляет календарь.
+   */
+  isLeafLocked?: (leaf: FilterTreeLeaf) => boolean;
 }
 
 /** Дескриптор построенного дерева. */
@@ -1018,14 +1030,15 @@ export const FILTER_TREE_OPERATOR_HIDDEN_KINDS: ReadonlySet<string> = new Set([
 const FILTER_VALUE_MODE_HOOK = 'fv-mode';
 
 /**
- * Операнд-ТИП (мысли/связи) под иерархическим оператором: у него режим обхода
- * «в иерархии» единственный — структурный (уточнение требования aa7a2aea,
- * ошибка f4e99090, п.3). Для таких листьев переключатель режимов не рисуется и
- * режим в модели не выставляется.
+ * Операнд с ЕДИНСТВЕННЫМ структурным режимом обхода под иерархическим
+ * оператором: типы мысли/связи (уточнение требования aa7a2aea, ошибка f4e99090
+ * п.3), «Мысль» и «Цели записи» (обход только по структурным потомкам, задача
+ * a577875b; «Цели» зеркалят «Мысль» — ошибка 609deba0 п.1). Для таких листьев
+ * переключатель режимов не рисуется и режим в модели не выставляется.
  */
 function isStructuralOnlyHierarchyOperand(leaf: FilterTreeLeaf): boolean {
   const kind = leaf.entity.kind;
-  if (kind !== 'type' && kind !== 'link_type') return false;
+  if (kind !== 'type' && kind !== 'link_type' && kind !== 'id' && kind !== 'targets') return false;
   return leaf.operator === 'in_hierarchy' || leaf.operator === 'not_in_hierarchy';
 }
 
@@ -1050,6 +1063,18 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
   const touch = (): void => {
     ctx.touch?.();
     render();
+  };
+
+  /**
+   * Зафиксировать в модели НЕЯВНОЕ значение листа (ошибка 609deba0 п.3):
+   * булевы триады «Актуальность»/«Помечено на удаление» показывают «да», но
+   * значения в модели не держат. Зовётся на любой правке условия (смена
+   * операнда/оператора) до перерисовки, чтобы проверка «условие без значения»
+   * снималась/ставилась по факту.
+   */
+  const normalizeLeafValue = (leaf: FilterTreeLeaf): void => {
+    const implicit = filterLeafImplicitValue(leaf);
+    if (implicit !== null) leaf.value = implicit;
   };
 
   const model = (): FilterTreeGroup => ensureTree();
@@ -1366,6 +1391,9 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
                 leaf.value = { kind: 'none' };
                 const ops = filterProfileOperators(ctx.profile, entry.entity.kind, entry.valueType);
                 if (ops.length > 0 && !ops.includes(leaf.operator)) leaf.operator = ops[0]!;
+                // Неявное значение предиката («Актуальность» «= да») — в модель,
+                // иначе подпись «условие без значения» останется висеть (п.3).
+                normalizeLeafValue(leaf);
                 touch();
               };
               // Собранную под-выборку молча терять нельзя: сброс подтверждаем
@@ -1427,7 +1455,13 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
                     },
                   });
                 });
-                if (!opened) touch();
+                if (!opened) {
+                  // Смена оператора тоже перепроверяет условие: неявное значение
+                  // предиката фиксируем в модели (п.3), подпись снимается/ставится
+                  // по факту.
+                  normalizeLeafValue(leaf);
+                  touch();
+                }
               },
             });
           },
@@ -1447,30 +1481,34 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         ? ctx.renderValue(leaf, api)
         : buildValuePlaceholder(leaf),
     );
-    // П.3 (ошибка f4e99090): у ТИПОВ мысли/связи режим обхода «в иерархии»
-    // единственный — структурный (уточнение требования aa7a2aea). Переключатель
-    // режимов в ячейке значения не рисуется; в модели режим у типов не
-    // выставляется. Ячейку собирает `lib/filter-value.ts` общим правилом
-    // `hierarchyOp && !idHierarchy`; правило «типы — только структурный» доводим
-    // здесь, в каркасе строки (модуль значения в параллельной работе).
+    // У операндов с единственным структурным режимом обхода «в иерархии» (типы
+    // мысли/связи — п.3 ошибки f4e99090; «Мысль» и «Цели записи» — задача
+    // a577875b, ошибка 609deba0 п.1) переключатель режимов в ячейке не рисуется
+    // и режим в модели не выставляется. Ячейку собирает `lib/filter-value.ts`
+    // правилом `hierarchyOp && !structuralOnlyHierarchy`; здесь — страховка от
+    // сохранённого режима у такого листа.
     if (isStructuralOnlyHierarchyOperand(leaf)) {
       delete leaf.mode;
       valueBox.querySelector(`.${FILTER_VALUE_MODE_HOOK}`)?.remove();
     }
     row.append(valueBox);
 
-    row.append(
-      iconButton({
-        icon: svgIcon('x'),
-        title: 'Удалить условие',
-        role: 'ghost',
-        size: 's',
-        class: 'ft-row__remove',
-        onClick: () => {
-          if (filterTreeRemoveAt(model(), path)) touch();
-        },
-      }),
-    );
+    // Обязательное условие места (например, «Период записи» панели «Дневника»)
+    // удалить нельзя — крестик не рисуется (ошибка 609deba0 п.2).
+    if (ctx.isLeafLocked?.(leaf) !== true) {
+      row.append(
+        iconButton({
+          icon: svgIcon('x'),
+          title: 'Удалить условие',
+          role: 'ghost',
+          size: 's',
+          class: 'ft-row__remove',
+          onClick: () => {
+            if (filterTreeRemoveAt(model(), path)) touch();
+          },
+        }),
+      );
+    }
     if (rowIssue !== null) {
       row.tabIndex = -1;
       row.append(

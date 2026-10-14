@@ -907,7 +907,7 @@ function renderStatus(kind: 'loading' | 'error', err?: unknown): void {
 // ---------------------------------------------------------------------------
 
 /** Локальный день записи HOME — границы применённого периода ленты.
- *  Период — строка «Время записи» дерева (панель отбора, задача 608ecb79). */
+ *  Период — строка «Период записи» дерева (панель отбора, задача 608ecb79). */
 function currentFromTo(): { from: string; to: string } {
   const period = chroniclePeriod();
   return { from: resolvePeriodDay(period.from), to: resolvePeriodDay(period.to) };
@@ -1932,7 +1932,7 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
  * `periodValuesForRange`).
  */
 async function pickPeriod(period: { from: string; to: string }): Promise<void> {
-  // Клик календаря пишет период строкой «Время записи» (задача 608ecb79):
+  // Клик календаря пишет период строкой «Период записи» (задача 608ecb79):
   // «Пресеты» — токены календаря, которые панель показывает и раскрывает в
   // локальные сутки при запросе (`chronicleQueryDefinition`).
   const next = periodValuesForRange(period.from, period.to, todayLocal(), 'presets');

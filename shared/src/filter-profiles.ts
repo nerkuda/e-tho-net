@@ -123,6 +123,16 @@ export interface FilterProfile {
    */
   operand_operators_by_value_type?: Readonly<Record<string, readonly FilterAstOperator[]>>;
   /**
+   * Операторы, которые исполнитель ПРИНИМАЕТ (входят в
+   * {@link FilterProfile.operand_operators}), но редактор НЕ показывает в списке
+   * операторов операнда (ошибка 609deba0 п.5). Пример: `matches` у текстовых
+   * операндов записи («Заголовок записи»/«Текст записи») — условие «Есть слова»
+   * строит живая строка поиска панели «Дневника» (`buildChronicleKeywordGroup`),
+   * а в строке условия пользователю достаточно «содержит»/«не содержит». На
+   * серверный гейт профиля не влияет (тот читает `operand_operators`).
+   */
+  hidden_menu_operators?: Readonly<Record<string, readonly FilterAstOperator[]>>;
+  /**
    * Объединение допустимых операторов профиля (для AST-профилей — словарь
    * {@link FILTER_AST_OPERATORS}). Для семантических профилей обязан совпадать с
    * объединением значений {@link FilterProfile.operand_operators} (паритет
@@ -169,9 +179,19 @@ const ATTACHMENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
 /** Операторы по операнду профиля «хроника» (требование 62475a6e). */
 const CHRONICLE_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
   record_time: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
-  targets: ['in', 'not_in', 'all_of', 'is_empty', 'not_empty'],
+  // «Цели записи» (ошибка 609deba0 п.1): значение — под-выборка мыслей ИЛИ
+  // список мыслей; «в иерархии»/«не в иерархии» — выбранные цели и их
+  // структурные потомки (зеркало операнда «Мысль» профиля мыслей).
+  targets: ['in', 'not_in', 'all_of', 'in_hierarchy', 'not_in_hierarchy', 'is_empty', 'not_empty'],
+  // «Заголовок записи»: равно/не равно/содержит/не содержит + `matches`
+  // (условие «Есть слова» строит живая строка поиска панели — путь Б
+  // `buildChronicleKeywordGroup`); в списке операторов редактора `matches` не
+  // предлагается (`hidden_menu_operators`, ошибка 609deba0 п.5).
   record_title: ['eq', 'ne', 'contains', 'not_contains', 'matches'],
-  record_body: ['matches'],
+  // «Текст записи» — те же операторы, что у заголовка (ошибка 609deba0 п.5):
+  // раньше было только `matches`, из-за чего текст записи нельзя было отобрать
+  // по подстроке. `matches` сохранён для пути Б ключевых слов (панель).
+  record_body: ['eq', 'ne', 'contains', 'not_contains', 'matches'],
   record_author: ['eq', 'ne', 'in', 'not_in'],
   record_editor: ['eq', 'ne', 'in', 'not_in'],
 };
@@ -498,6 +518,13 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
       'record_editor',
     ],
     operand_operators: CHRONICLE_OPERATOR_SETS,
+    // «Есть слова» у текстовых операндов записи — только для внутреннего
+    // условия живой строки поиска, пользователю в строке не предлагается
+    // (ошибка 609deba0 п.5).
+    hidden_menu_operators: {
+      record_title: ['matches'],
+      record_body: ['matches'],
+    },
     operators: unionOperators(Object.values(CHRONICLE_OPERATOR_SETS)),
     tokens: ['calendar', 'time'],
     withTime: true,

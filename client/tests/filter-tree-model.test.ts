@@ -35,6 +35,7 @@ import {
   defaultFilterTreeGroup,
   defaultFilterTreeLeaf,
   filterAstSortKeyLabel,
+  filterLeafImplicitValue,
   filterProfileOperands,
   filterProfileOperators,
   filterProfileTokenFamilies,
@@ -562,6 +563,23 @@ describe('хелперы модели дерева', () => {
     assert.equal(filterTreeHasAnyCriteria(group('and', [group('or', [])])), false);
     assert.equal(filterTreeHasAnyCriteria(group('and', [defaultFilterTreeLeaf({ kind: 'active' })])), true);
     assert.equal(filterTreeHasAnyCriteria(null), false);
+  });
+
+  it('неявное значение булевых триад (ошибка 609deba0 п.3)', () => {
+    // Триада «да/нет» показывает «да», и значение обязано попасть в модель —
+    // иначе проверка «условие без значения» висит при видимом «= да».
+    const active = defaultFilterTreeLeaf({ kind: 'active' });
+    assert.deepEqual(filterLeafImplicitValue(active), { kind: 'scalar', value: true });
+    active.operator = 'ne';
+    assert.deepEqual(filterLeafImplicitValue(active), { kind: 'scalar', value: true });
+    // Другие операнды/операторы неявного значения не имеют.
+    assert.equal(filterLeafImplicitValue(defaultFilterTreeLeaf({ kind: 'id' })), null);
+    assert.deepEqual(
+      filterLeafImplicitValue({ ...defaultFilterTreeLeaf({ kind: 'trashed' }), value: { kind: 'scalar', value: false } }),
+      { kind: 'scalar', value: true },
+    );
+    const comment = { ...defaultFilterTreeLeaf({ kind: 'comment' }), operator: 'is_empty' as const };
+    assert.equal(filterLeafImplicitValue(comment), null);
   });
 });
 

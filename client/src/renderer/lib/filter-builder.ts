@@ -689,9 +689,9 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   updated_at: 'Дата изменения',
   properties: 'Есть свойства',
   targets: 'Цели записи',
-  record_time: 'Время записи',
+  record_time: 'Период записи',
   record_title: 'Заголовок записи',
-  record_body: 'Тело записи',
+  record_body: 'Текст записи',
   record_author: 'Автор записи',
   record_editor: 'Редактор записи',
   occurred_at: 'Время события',
@@ -1694,6 +1694,24 @@ export function defaultFilterTreeGroup(op: FilterAstGroupOp = 'and'): FilterTree
  */
 export function defaultFilterTreeLeaf(entity: FilterTreeOperand): FilterTreeLeaf {
   return { kind: 'leaf', entity, operator: 'eq', value: { kind: 'none' } };
+}
+
+/**
+ * НЕЯВНОЕ значение листа, которое виджет показывает, но в модели не пишет
+ * (ошибка 609deba0 п.3). Булевы предикаты «Актуальность»/«Помечено на удаление»
+ * рисуются триадой «да/нет» с видимым по умолчанию «да»: значение обязано
+ * попасть в модель, иначе проверка «условие без значения» продолжала бы
+ * подсвечивать строку, хотя пользователь видит «= да» (и AST ушёл бы без
+ * значения). `null` — у листа неявного значения нет.
+ *
+ * {@link buildFilterTree} зовёт помощник на любой правке (смена операнда,
+ * оператора) перед перерисовкой строки.
+ */
+export function filterLeafImplicitValue(leaf: FilterTreeLeaf): FilterTreeValue | null {
+  const kind = leaf.entity.kind;
+  if (kind !== 'active' && kind !== 'trashed') return null;
+  if (leaf.operator !== 'eq' && leaf.operator !== 'ne') return null;
+  return { kind: 'scalar', value: true };
 }
 
 /** True — у дерева есть хотя бы одно условие (пустые группы не считаются). */

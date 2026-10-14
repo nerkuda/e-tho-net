@@ -1183,10 +1183,11 @@ function entityOperandControl(
 ): HTMLElement {
   const kind = entityKindOf(leaf);
   const hierarchyOp = HIERARCHY_OPS.has(leaf.operator);
-  // «Мысль» (`id`) в иерархии: режим связей неприменим — обход только по
-  // структурным потомкам (задача a577875b), поэтому ячейка режима для `id` не
-  // рисуется.
-  const idHierarchy = hierarchyOp && leaf.entity.kind === 'id';
+  // «Мысль» (`id`) и «Цели записи» (`targets`) в иерархии: режим связей
+  // неприменим — обход только по структурным потомкам (задача a577875b; «Цели»
+  // зеркалят «Мысль» — ошибка 609deba0 п.1), поэтому ячейка режима не рисуется.
+  const structuralOnlyHierarchy =
+    hierarchyOp && (leaf.entity.kind === 'id' || leaf.entity.kind === 'targets');
   // «В иерархии»/«не в иерархии» — МНОЖЕСТВЕННЫЙ выбор корней, ровно как «в
   // списке» (требование заказчика 2026-10-14, ошибка f4e99090 п.4): сервер
   // принимает массив корней для любого иерархического операнда (задача
@@ -1358,7 +1359,7 @@ function entityOperandControl(
     wrap.append(field.root);
   }
 
-  if (hierarchyOp && !idHierarchy) {
+  if (hierarchyOp && !structuralOnlyHierarchy) {
     wrap.append(hierarchyModeControl(leaf, ctx));
   }
   return wrap;

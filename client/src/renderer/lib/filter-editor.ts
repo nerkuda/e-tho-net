@@ -161,12 +161,25 @@ export interface FilterEditorOptionsBase {
   cloudOf?: (value: string) => ThoughtCloudInput | null;
   /** Подтверждение сброса собранной под-выборки (по умолчанию — общий диалог). */
   confirmSubquery?: FilterSubqueryConfirm;
+  /**
+   * Лист НЕУДАЛЯЕМ (ошибка 609deba0 п.2): крестик строки не рисуется. Хост
+   * помечает обязательные условия места (например, «Период записи» панели
+   * «Дневника», которым управляет календарь). Прокидывается в дерево.
+   */
+  isLeafLocked?: (leaf: FilterTreeLeaf) => boolean;
   /** Заголовок модала под-выборки; по умолчанию «Выборка». */
   subqueryTitle?: string;
   /** Показывать секцию сортировки (по умолчанию да). */
   sort?: boolean;
   /** Показывать футер (по умолчанию да). */
   footer?: boolean;
+  /**
+   * Управление места, стоящее НАД футером — непосредственно над фразой-превью
+   * (ошибка 609deba0 п.3): например, переключатель направления ленты «Дневника»
+   * («Сначала старые/Сначала новые»). Кладётся первым в непрокручиваемый низ
+   * редактора (`.fe-foot`), поэтому отбор не «уезжает» вместе с деревом.
+   */
+  aboveFooter?: HTMLElement;
 }
 
 /**
@@ -271,11 +284,15 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
       ...(opts.confirmSubquery !== undefined ? { confirm: opts.confirmSubquery } : {}),
     }),
     ...(opts.title !== undefined ? { title: opts.title } : {}),
+    ...(opts.isLeafLocked !== undefined ? { isLeafLocked: opts.isLeafLocked } : {}),
     ...(host.onFixPath !== undefined ? { onFixPath: host.onFixPath } : {}),
   });
   root.append(tree.root);
 
   const foot = div(FILTER_EDITOR_FOOT_CLASS);
+  // Управление места НАД футером (над фразой-превью) — первым в непрокручиваемом
+  // низу редактора (ошибка 609deba0 п.3).
+  if (opts.aboveFooter !== undefined) foot.append(opts.aboveFooter);
 
   // Секция сортировки — отдельное поле модели (`state.sortKeys`), не узел AST.
   let sortSection: FilterSortSectionHandle | null = null;

@@ -328,9 +328,13 @@ describe('хроника: отбор на общий AST (задача 4752b065)
         () => runAst(ndb, { entity: { kind: 'active' }, operator: 'eq', value: true } as FilterAst['filter']),
         (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
       );
-      // «Тело записи» — только «Есть слова».
+      // «Текст записи» поддерживает строковые операторы (содержит/равно — ошибка
+      // 609deba0 п.5), но не числовое сравнение.
+      assert.doesNotThrow(() =>
+        runAst(ndb, { entity: { kind: 'record_body' }, operator: 'contains', value: 'x' } as FilterAst['filter']),
+      );
       assert.throws(
-        () => runAst(ndb, { entity: { kind: 'record_body' }, operator: 'eq', value: 'x' } as FilterAst['filter']),
+        () => runAst(ndb, { entity: { kind: 'record_body' }, operator: 'gt', value: 'x' } as FilterAst['filter']),
         (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
       );
       // Видимый операнд записи — без ошибки.
@@ -413,6 +417,46 @@ describe('хроника: отбор на общий AST (задача 4752b065)
       };
       assert.deepEqual(runAst(ndb, allOf).ids, [goodRec], 'смешанная запись (r2) и запись без целей не проходят all_of');
       assert.ok(!runAst(ndb, allOf).ids.includes(mixedRec));
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('«Цели»: список мыслей и «в иерархии» (ошибка 609deba0 п.1)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const root = seedThought(ndb, 'Поездка');
+      const child = seedThought(ndb, 'Билеты');
+      seedLink(ndb, root, child); // структурная связь: root → child
+
+      const childRec = createCommentWithTargets(
+        ndb,
+        [{ owner_type: 'thought', owner_id: child }],
+        { kind: 'chronological', title: 'r1', body_md: 'x', valid_from: '2024-03-05T00:00:00.000Z' }, USER,
+      ).id;
+      const rootRec = createCommentWithTargets(
+        ndb,
+        [{ owner_type: 'thought', owner_id: root }],
+        { kind: 'chronological', title: 'r2', body_md: 'x', valid_from: '2024-03-06T00:00:00.000Z' }, USER,
+      ).id;
+
+      // «Список»: значение — явный набор id (без под-выборки).
+      const listIn: FilterAst['filter'] = { entity: { kind: 'targets' }, operator: 'in', value: [child] };
+      assert.deepEqual(runAst(ndb, listIn).ids, [childRec], 'список целей — вхождение цели');
+
+      // «В иерархии»: корень и его структурные потомки.
+      const inHierarchy: FilterAst['filter'] = { entity: { kind: 'targets' }, operator: 'in_hierarchy', value: [root] };
+      assert.deepEqual(
+        runAst(ndb, inHierarchy).ids.sort(),
+        [childRec, rootRec].sort(),
+        'цель-потомок выбранной мысли проходит «в иерархии»',
+      );
+
+      // «Не в иерархии»: запись без целей не проходит (строгость как у not_in).
+      const notInHierarchy: FilterAst['filter'] = {
+        entity: { kind: 'targets' }, operator: 'not_in_hierarchy', value: [child],
+      };
+      assert.deepEqual(runAst(ndb, notInHierarchy).ids, [rootRec], 'root вне поддерева child проходит not_in_hierarchy');
     } finally {
       ndb.close();
     }
