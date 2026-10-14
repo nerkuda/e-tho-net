@@ -114,6 +114,13 @@
   text-underline-offset: 2px;
 }
 
+/* Горизонтальная линия-разделитель между фразой-превью (редактор отбора) и
+   командами — строкой имени и кнопками (требование заказчика 2026-10-14, п.1). */
+.ff-divider {
+  height: 0;
+  border-top: 1px solid var(--border);
+}
+
 /* --- Кнопки футера: верхний ряд действий, нижний — имя и сохранённые ------ */
 
 .ff-actions {
@@ -188,4 +195,76 @@
 
 .fs-add {
   white-space: nowrap;
+}
+
+/* --- Датовый виджет ячейки значения: одна общая рамка (п.11) --------------- */
+/*
+ * Период (список опор) + количество (±N) + тип количества + крестик — В ОДНУ
+ * строку одной рамки; у каждого поля своей рамки нет (п.11а/11д). При «точной
+ * дате» вместо количества и типа — поле даты с календарём (п.11г). Пропорции
+ * базиса 63% / 20% / 15%, крестик — остаток по содержимому; поля сжимаемы, чтобы
+ * крестик всегда сохранял свой размер на узкой ячейке.
+ */
+
+.fv-date {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.fv-date__frame {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* Внутри рамки своих рамок нет — граница одна на контейнер (п.11д). */
+.fv-date__frame .select-input,
+.fv-date__frame .ui-input {
+  height: var(--field-h);
+  min-width: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.fv-date__frame .select-input:focus,
+.fv-date__frame .ui-input:focus {
+  box-shadow: none;
+}
+
+.fv-date__frame > .fv-date__anchor {
+  flex: 0 1 63%;
+  min-width: 0;
+}
+
+.fv-date__frame > .fv-date__shift {
+  flex: 0 1 20%;
+  min-width: 0;
+}
+
+.fv-date__frame > .fv-date__unit {
+  flex: 0 1 15%;
+  min-width: 0;
+}
+
+/* Крестик сброса — в конце строки, по содержимому («остаток», п.11а). */
+.fv-date__frame > .fv-date__reset {
+  flex: 0 0 auto;
+}
+
+/* Точная дата: вместо количества и типа — поле даты, занимающее остаток строки. */
+.fv-date__frame--exact > .date-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fv-date__hint {
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs);
 }

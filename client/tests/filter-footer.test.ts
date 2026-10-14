@@ -236,6 +236,27 @@ describe('футер отбора: имя, маркер ● и сохранен�
     assert.ok(exactOne(root, 'ff-extra--saved') !== null, 'кнопка сохранена, не потеряна');
     assert.ok(exactOne(root, 'ff-save') !== null, '«Сохранить» ушло в верхний ряд');
   });
+
+  it('компоновка: фраза → линия-разделитель → имя → кнопки (п.1)', () => {
+    const { handle, state } = buildFooter();
+    const root = handle.root as unknown as ShimElement;
+    state.preview = { text: 'Город = Москва', issues: [] };
+    handle.refresh();
+    const classes = root.children.map((child) => child.className);
+    const idx = (token: string): number => classes.findIndex((c) => c.includes(token));
+    const previewIdx = idx(mod.FILTER_FOOTER_PREVIEW_CLASS);
+    const dividerIdx = idx(mod.FILTER_FOOTER_DIVIDER_CLASS);
+    const nameIdx = idx('ff-name');
+    const actionsIdx = idx('ff-actions');
+    assert.ok(previewIdx >= 0 && dividerIdx >= 0 && nameIdx >= 0 && actionsIdx >= 0, 'все секции на месте');
+    assert.ok(previewIdx < dividerIdx, 'фраза над линией');
+    assert.ok(dividerIdx < nameIdx, 'линия между фразой и именем');
+    assert.ok(nameIdx < actionsIdx, 'имя над кнопками');
+    // Пустая фраза прячет линию — отделять нечего.
+    state.preview = { text: '', issues: [] };
+    handle.refresh();
+    assert.equal(exactOne(root, mod.FILTER_FOOTER_DIVIDER_CLASS)!.hidden, true, 'без фразы линии нет');
+  });
 });
 
 describe('футер отбора: фраза-превью и запрет применения (cf8fdd4d, 44d61c8a)', () => {

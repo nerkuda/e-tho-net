@@ -143,11 +143,20 @@ export interface EntityOption {
   cloud?: ThoughtCloudInput;
   /** Свотч линии для типа связи. */
   line?: { color: string | null; style: LinkStyle | null; width: number | null } | null;
+  /**
+   * Значок строки выпадашки — иконка дизайн-системы (`lib/ui/icon.ts`) слева от
+   * подписи. Нет — строка без значка (как раньше). Строки свойств «Есть
+   * свойства» несут значок вида значения либо стрелку стороны связи — как в
+   * списке «Мыслесеть → Свойства мыслей» (ошибка заказчика 2026-10-14, п.6а).
+   */
+  icon?: IconName;
   /** Значок конца связи (вариант-свойство-связь): направление и оформление
    *  линии, рисуется общим списком свойств (`buildLinkEndIcon`). */
   linkEnd?: LinkEndIconSpec | null;
   /** Уточнение строки серым (пара имён типа связи «(прямое -> обратное)»). */
   note?: string;
+  /** Подсказка строки (`title`): полное имя/описание варианта. Нет — без подсказки. */
+  tooltip?: string;
   /** Значение варианта для свойства-связи (`kind: 'link-properties'`). */
   linkProperty?: LinkPropertyPick;
 }
@@ -1074,6 +1083,13 @@ export interface EntityChipFieldOptions {
   pageSize?: number;
   /** Заголовок группы кандидатов. */
   optionsHeader?: string;
+  /**
+   * Нижняя граница (она же — потолок) ширины выпадашки списка, px. Задана —
+   * список свойств заметно шире узкого поля ввода, имена и уточнения
+   * помещаются целиком (ошибка заказчика 2026-10-14, п.6в: «список сделать
+   * шире»). Без значения — прежние 320px.
+   */
+  dropdownMinWidth?: number;
   /** Источники подсказок вызывающего (токены) — общий список выпадашки. */
   extraSources?: readonly SuggestSource[];
   /** Данные облачка значения; `null` — сырой текст (нет данных). */
@@ -1147,7 +1163,11 @@ function entityEntry(opt: EntityOption): SuggestEntry {
   // Сторона свойства-связи (задача 7cfaba7c, п.3): значок направления и пара имён
   // «(прямое -> обратное)» — как в поле «Свойство связи» диалога добавления мысли.
   if (opt.linkEnd != null) entry.linkEnd = opt.linkEnd;
+  // Иконка строки (свойства «Есть свойства»): значок вида значения/стороны связи
+  // — тот же источник, что у эталонного списка «Свойства мыслей» (п.6а).
+  if (opt.icon !== undefined) entry.icon = opt.icon;
   if (opt.note !== undefined) entry.note = opt.note;
+  if (opt.tooltip !== undefined) entry.tooltip = opt.tooltip;
   return entry;
 }
 
@@ -1283,6 +1303,8 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     // Свободный текст фиксирует клавиатурная команда контекста ниже; Enter над
     // выделенной строкой выбирает её (общая выпадашка гасит событие).
     pickFirstOnEnter: false,
+    // Ширина списка — параметр вызывающего («Есть свойства» просит шире).
+    ...(opts.dropdownMinWidth !== undefined ? { minWidth: opts.dropdownMinWidth } : {}),
     onPick: (entry) => commit(entry.value),
   });
   // Клавиатура поля — через общеклиентский диспетчер: пока фокус внутри поля,

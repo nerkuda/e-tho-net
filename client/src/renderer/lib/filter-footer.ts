@@ -70,6 +70,13 @@ export const FILTER_FOOTER_PREVIEW_CLASS = 'ff-preview';
 export const FILTER_FOOTER_PREVIEW_ACTION_CLASS = 'ff-preview__text--action';
 
 /**
+ * Класс горизонтальной линии-разделителя между фразой-превью и командами
+ * (имя отбора + кнопки) — требование заказчика 2026-10-14, п.1: фраза относится
+ * к редактору отбора, имя и кнопки — команды места применения.
+ */
+export const FILTER_FOOTER_DIVIDER_CLASS = 'ff-divider';
+
+/**
  * Число строк фразы-превью (элемент ca905fbc: «≤3 строк»). Значение объявлено
  * правилом CSS `.ff-preview__text` (`line-clamp`), тест сверяет их друг с другом —
  * хардкод числа в разметке не нужен.
@@ -275,6 +282,12 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   const nameRowButtons = (): readonly FilterFooterButtonSpec[] =>
     hasNameRow ? (opts.extraButtons ?? []).filter((spec) => spec.place === 'name') : [];
   let nameInput: HTMLInputElement | null = null;
+  /**
+   * Строка имени (`.ff-name`) собирается здесь, но кладётся в футер ПОСЛЕ
+   * фразы-превью и её разделителя (порядок «фраза → линия → имя + кнопки»,
+   * требование заказчика 2026-10-14, п.1).
+   */
+  let nameRowEl: HTMLElement | null = null;
   if (getName !== undefined) {
     const nameRow = div('ff-name');
     nameInput = fieldInput({
@@ -299,7 +312,7 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     nameRow.append(wrapClearable(nameInput, clearName), changed);
     if (saveNode !== null) nameRow.append(saveNode);
     for (const spec of nameRowButtons()) nameRow.append(footerExtraButton(spec));
-    root.append(nameRow);
+    nameRowEl = nameRow;
     /** Маркер ● (вне области видимости `refresh` ниже). */
     nameChangedMarker = changed;
   }
@@ -314,7 +327,10 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   const previewBox = div(FILTER_FOOTER_PREVIEW_CLASS);
   const previewText = span('', 'ff-preview__text');
   previewBox.append(previewText);
-  if (previewFn !== undefined) root.append(previewBox);
+  // Разделитель под фразой: отделяет «редактор отбора» (фраза) от команд —
+  // имени отбора и кнопок (требование заказчика 2026-10-14, п.1).
+  const divider = div(FILTER_FOOTER_DIVIDER_CLASS);
+  if (previewFn !== undefined) root.append(previewBox, divider);
 
   // Переход к проблемной строке из сообщения о запрете (требования 0fd1dc5d,
   // 44d61c8a) — ПО КЛИКУ НА САМ ТЕКСТ фразы, отдельной кнопки «исправить» нет
@@ -356,6 +372,10 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     if (nameRowButtons().includes(spec)) continue;
     actions.append(footerExtraButton(spec));
   }
+  // Порядок футера (сверху вниз): фраза-превью → линия-разделитель → строка
+  // имени → ряд кнопок (требование заказчика 2026-10-14, п.1). Фраза и линия уже
+  // добавлены; строка имени идёт перед кнопками.
+  if (nameRowEl !== null) root.append(nameRowEl);
   root.append(actions);
 
   // --- Обновление представления из модели ---------------------------------
@@ -398,6 +418,9 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
             : `${tooltip}\n\nНажмите на текст, чтобы перейти к строке с ошибкой`,
         );
       }
+      // Линия-разделитель есть только под непустой фразой: пустой отбор не
+      // отделяет «ничего» от команд (п.1).
+      divider.hidden = previewText.textContent === '';
     }
   }
 

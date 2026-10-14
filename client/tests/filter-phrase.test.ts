@@ -104,11 +104,11 @@ describe('композер фразы: лист условия', () => {
   it('свойство, булево и датовый диапазон читаются человекочитаемо', () => {
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'property', property_id: CITY.id }, 'eq', { kind: 'scalar', value: 'Москва' }), ctx()),
-      'Город равно Москва',
+      'Город = Москва',
     );
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'active' }, 'eq', { kind: 'scalar', value: true }), ctx()),
-      'Актуальность равно да',
+      'Актуальность = да',
     );
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'property', property_id: TERM.id }, 'between', {
@@ -128,6 +128,18 @@ describe('композер фразы: лист условия', () => {
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'active' }, 'is_empty'), ctx()),
       'Актуальность не заполнено',
+    );
+  });
+
+  it('предикат БЕЗ значения: «равно»/«не равно» не печатается (ошибка 696b3c3b п.9)', () => {
+    // «Есть вложения равно И …» читалось как ошибка — у предиката без значения
+    // оператор сравнения не выводится; операторы со смыслом в себе остаются.
+    assert.equal(mod.filterPhraseLeaf(leaf({ kind: 'attachments' }, 'eq'), ctx()), 'Есть вложения');
+    assert.equal(mod.filterPhraseLeaf(leaf({ kind: 'attachments' }, 'ne'), ctx()), 'Есть вложения');
+    assert.equal(
+      mod.filterPhraseLeaf(leaf({ kind: 'attachments' }, 'not_empty'), ctx()),
+      'Есть вложения заполнено',
+      '«заполнено» — смысл оператора, он остаётся',
     );
   });
 
@@ -198,7 +210,7 @@ describe('композер фразы: лист условия', () => {
       kind: 'list',
       items: ['Москва', 'Питер', 'Казань', 'Сочи', 'Тверь'],
     });
-    assert.equal(mod.filterPhraseLeaf(long, ctx()), 'Город в списке Москва, Питер, Казань и ещё 2');
+    assert.equal(mod.filterPhraseLeaf(long, ctx()), 'Город в Москва, Питер, Казань и ещё 2');
   });
 });
 
@@ -215,11 +227,11 @@ describe('композер фразы: значения-ссылки — име�
     const c = ctx({ thoughtTypes: [TYPE_PROJECT], linkTypes: [LINK_TYPE] });
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'type' }, 'eq', { kind: 'scalar', value: 'tt-1' }), c),
-      'Тип мысли равно Проект',
+      'Тип мысли = Проект',
     );
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'link_type' }, 'eq', { kind: 'scalar', value: 'lt-1' }), c),
-      'Тип связи равно включает',
+      'Тип связи = включает',
     );
   });
 
@@ -229,10 +241,10 @@ describe('композер фразы: значения-ссылки — име�
       leaf({ kind: 'type' }, 'eq', { kind: 'scalar', value: 'tt-2' }),
       c,
     );
-    assert.equal(phrase, 'Тип мысли равно Задача развития проекта с…');
+    assert.equal(phrase, 'Тип мысли = Задача развития проекта с…');
     assert.ok(phrase.includes('…'), 'обрезка помечена');
     // Имя во фразе не длиннее предела.
-    const name = phrase.slice('Тип мысли равно '.length);
+    const name = phrase.slice('Тип мысли = '.length);
     assert.ok(name.length <= mod.FILTER_PHRASE_NAME_LIMIT, `имя ${name.length} ≤ предела`);
 
     // Обрезка по границе слова; одиночное длинное слово — жёстко.
@@ -248,7 +260,7 @@ describe('композер фразы: значения-ссылки — име�
         leaf({ kind: 'type' }, 'eq', { kind: 'scalar', value: 'tt-1' }, { labels: { value: 'Снимок имени' } }),
         c,
       ),
-      'Тип мысли равно Снимок имени',
+      'Тип мысли = Снимок имени',
     );
   });
 
@@ -258,7 +270,7 @@ describe('композер фразы: значения-ссылки — име�
         leaf({ kind: 'id' }, 'eq', { kind: 'scalar', value: '11111111-2222-3333-4444-555555555555' }),
         ctx(),
       ),
-      'Мысль равно 11111111-2222-3333-4444-5555555…',
+      'Мысль = 11111111-2222-3333-4444-5555555…',
       'id тоже обрезается по пределу',
     );
     assert.equal(
@@ -266,7 +278,7 @@ describe('композер фразы: значения-ссылки — име�
         leaf({ kind: 'id' }, 'eq', { kind: 'scalar', value: '11111111-2222-3333-4444-555555555555' }, { labels: { value: 'Мысль про расход' } }),
         ctx(),
       ),
-      'Мысль равно Мысль про расход',
+      'Мысль = Мысль про расход',
       'снапшот даёт человекочитаемое имя',
     );
   });
@@ -278,7 +290,7 @@ describe('композер фразы: значения-ссылки — име�
         leaf({ kind: 'type' }, 'in', { kind: 'list', items: ['tt-1', 'tt-3'] }),
         c,
       ),
-      'Тип мысли в списке Проект, Задача',
+      'Тип мысли в Проект, Задача',
     );
   });
 
@@ -295,7 +307,7 @@ describe('композер фразы: значения-ссылки — име�
         ),
         ctx(),
       ),
-      'Мысль в списке Первая мысль, Вторая мысль, ccc',
+      'Мысль в Первая мысль, Вторая мысль, ccc',
     );
   });
 
@@ -311,7 +323,7 @@ describe('композер фразы: значения-ссылки — име�
     };
     assert.equal(
       mod.composeFilterPhraseFromDefinition(definition, ctx()),
-      'Мысль в списке Альфа, Браво',
+      'Мысль в Альфа, Браво',
     );
   });
 });
@@ -327,32 +339,32 @@ describe('композер фразы: группы и вложенность', 
   it('«И», «ИЛИ» и «НЕ» — операторы коннекции в верхнем регистре', () => {
     assert.equal(
       mod.filterPhraseNode(group('and', [a, b]), ctx()),
-      'Актуальность равно да И Помечено на удаление равно нет',
+      'Актуальность = да И Помечено на удаление = нет',
     );
     assert.equal(
       mod.filterPhraseNode(group('or', [a, b]), ctx()),
-      'Актуальность равно да ИЛИ Помечено на удаление равно нет',
+      'Актуальность = да ИЛИ Помечено на удаление = нет',
     );
-    assert.equal(mod.filterPhraseNode(group('not', [a]), ctx()), 'НЕ Актуальность равно да');
+    assert.equal(mod.filterPhraseNode(group('not', [a]), ctx()), 'НЕ Актуальность = да');
     // Служебных префиксов «все условия»/«любое условие» больше нет (ошибка 4258e694 п.12а).
     for (const op of ['and', 'or'] as const) {
       assert.doesNotMatch(mod.filterPhraseNode(group(op, [a, b]), ctx()), /все условия|любое условие/);
     }
     // Одиночный ребёнок оператора не получает: группа без коннектора.
-    assert.equal(mod.filterPhraseNode(group('and', [a]), ctx()), 'Актуальность равно да');
+    assert.equal(mod.filterPhraseNode(group('and', [a]), ctx()), 'Актуальность = да');
   });
 
   it('вложенная группа с другой коннекцией берётся в скобки', () => {
     const nested = group('and', [group('or', [a, b]), leaf({ kind: 'comment' }, 'not_empty')]);
     assert.equal(
       mod.filterPhraseNode(nested, ctx()),
-      '(Актуальность равно да ИЛИ Помечено на удаление равно нет) И Есть комментарий заполнено',
+      '(Актуальность = да ИЛИ Помечено на удаление = нет) И Есть комментарий заполнено',
     );
     // Та же коннекция — без лишних скобок.
     const same = group('and', [group('and', [a, b]), leaf({ kind: 'comment' }, 'not_empty')]);
     assert.equal(
       mod.filterPhraseNode(same, ctx()),
-      'Актуальность равно да И Помечено на удаление равно нет И Есть комментарий заполнено',
+      'Актуальность = да И Помечено на удаление = нет И Есть комментарий заполнено',
     );
   });
 
@@ -382,7 +394,7 @@ describe('композер фразы: хвост сортировки, обре
     const tree = group('and', [leaf({ kind: 'active' }, 'eq', { kind: 'scalar', value: true })]);
     assert.equal(
       mod.composeFilterPhrase({ tree, sortKeys: [{ key: 'created_at', order: 'desc' }] }, ctx()),
-      'Актуальность равно да; сортировка: по дате создания (убыв.)',
+      'Актуальность = да; сортировка: по дате создания (убыв.)',
     );
   });
 
@@ -414,7 +426,7 @@ describe('композер фразы: хвост сортировки, обре
     };
     assert.equal(
       mod.composeFilterPhraseFromDefinition(definition, ctx()),
-      'Актуальность равно да И Город равно Москва; сортировка: по названию',
+      'Актуальность = да И Город = Москва; сортировка: по названию',
     );
     assert.equal(mod.composeFilterPhraseFromDefinition(null, ctx()), '');
     assert.equal(mod.composeFilterPhraseFromDefinition({}, ctx()), '');
@@ -449,7 +461,7 @@ describe('композер фразы: футер берёт preview из ком
     ]);
     state.sortKeys = [{ key: 'title', order: 'asc' }];
     handle.refresh();
-    assert.equal(text().flatText(), 'Город равно Москва; сортировка: по названию');
+    assert.equal(text().flatText(), 'Город = Москва; сортировка: по названию');
 
     state.tree = null;
     state.sortKeys = [];

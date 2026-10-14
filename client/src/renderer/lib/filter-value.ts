@@ -35,8 +35,11 @@
 
 import {
   filterProfileHasTime,
+  typeNameKey,
   type EffectiveTypeProperty,
   type FilterAstOperator,
+  type LinkType,
+  type NetworkProperty,
   type PropertyValueType,
   type FilterProfileId,
   type StructureKeywordScope,
@@ -66,6 +69,8 @@ import {
   filterPhraseToken,
 } from './filter-phrase.js';
 import { dateField } from './date-field.js';
+import { todayLocal } from './dates.js';
+import { VALUE_TYPE_LABELS, valueTypeIconName } from './property-list.js';
 import {
   canonicalGlobalToken,
   isGlobalDateToken,
@@ -74,6 +79,7 @@ import {
 } from './period-editor.js';
 import type { SuggestEntry, SuggestSource } from './suggest-dropdown.js';
 import { uiButton } from './ui/button.js';
+import type { IconName } from './ui/icon.js';
 import { choiceRow } from './ui/choice-row.js';
 import { fieldInput } from './ui/field.js';
 import { segmentedControl } from './ui/segmented.js';
@@ -97,6 +103,10 @@ export const FILTER_VALUE_UNIT_CLASS = 'fv-unit';
 export const FILTER_VALUE_MODE_CLASS = 'fv-mode';
 /** Форма границы даты (опора/сдвиг/точная дата). */
 export const FILTER_VALUE_DATE_CLASS = 'fv-date';
+/** Общая рамка строки датового виджета: период + количество + тип + крестик. */
+export const FILTER_VALUE_DATE_FRAME_CLASS = 'fv-date__frame';
+/** Модификатор рамки при выбранной «точной дате» (вместо количества — поле даты). */
+export const FILTER_VALUE_DATE_FRAME_EXACT_CLASS = 'fv-date__frame--exact';
 /** Опора ячейки даты — список доступных профилю опор. */
 export const FILTER_VALUE_ANCHOR_CLASS = 'fv-date__anchor';
 /** Поле сдвига опоры — ОДНО число со знаком («+30»/«−30»/«0»). */
@@ -299,11 +309,16 @@ export function filterValueEditor(leaf: FilterTreeLeaf, ctx: FilterValueContext)
   // «Есть свойства»: значение — чип-поле выбора свойств, а не список всех с
   // чекбоксами (требование заказчика 2026-10-13).
   if (kind === 'properties') return 'properties';
+  // «Имеет свойство»/«не имеет свойство» на любом операнде — тоже набор
+  // свойств-значений: у «Типа мысли» (профиль мыслей) раньше не рисовалось
+  // поле выбора свойства вовсе (ошибка заказчика 2026-10-14, п.5) — значение
+  // «упадало» в перечисление без вариантов. Оба направления оператора дают
+  // один вид редактора — чип-поле свойств.
+  if (operator === 'has' || operator === 'not_has') return 'properties';
   // Структурные «Родители»/«Потомки»: числовой оператор — «количество»,
   // иначе выбор мыслей (ссылочный операнд).
   if (kind === 'parents' || kind === 'children') return countShaped ? 'count' : 'entity';
   if (DATE_OPERANDS.has(kind)) return filterValueIsBounds(operator) ? 'bounds' : 'date';
-  if (operator === 'has' || operator === 'not_has') return 'enum';
   if (USER_OPERANDS.has(kind)) return 'user';
   if (kind === 'property') {
     const def = filterValueRegistryEntry(leaf, ctx.data);
@@ -605,10 +620,19 @@ function predicateControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HT
 }
 
 /**
- * «Есть свойства»: чип-поле выбора свойств (ссылочные значения) — выбранные
- * свойства облачками с крестиками, ввод с живым поиском (требование заказчика
- * 2026-10-13; «список всех свойств с чекбоксами» убран). Значение — список id
- * свойств, оператор `has` (истина — мысль имеет любое из выбранных).
+ * «Есть свойства» и предикат «имеет/не имеет свойство»: чип-поле выбора свойств
+ * (ссылочные значения) — выбранные свойства облачками с крестиками, ввод с
+ * живым поиском (требование заказчика 2026-10-13; «список всех свойств с
+ * чекбоксами» убран). Значение — список id свойств.
+ *
+ * Строки списка несут ИКОНКУ и ТИП значения свойства — тем же источником, что
+ * эталонный список «Мыслесеть → Свойства мыслей» (ошибка заказчика 2026-10-14,
+ * п.6а/6б): значок вида значения (связь — сторона) и подпись типа значения
+ * рядом с именем; описание свойства — в подсказке. Список шире узкого поля
+ * (п.6в).
+ *
+ * Оператор листа («имеет»/«не имеет свойство») выбор значений НЕ переписывает:
+ * иначе «не имеет свойство» молча становился бы «имеет» (ошибка п.5).
  */
 function propertiesControl(
   leaf: FilterTreeLeaf,
@@ -616,12 +640,10 @@ function propertiesControl(
   ctx: FilterValueContext,
 ): HTMLElement {
   const wrap = div('fv-properties');
-  const options: EntityOption[] = [];
-  for (const [id, entry] of ctx.data.registry) options.push({ id, title: entry.name });
+  const options = filterPropertyOptions(ctx.data.registry, ctx.data.linkTypes ?? []);
   const field = buildEntityChipField({
     getValues: () => currentList(leaf.value),
     onChange: (values) => {
-      leaf.operator = 'has';
       api.setValue(values.length === 0 ? { kind: 'none' } : { kind: 'list', items: [...values] });
     },
     initialOptions: options,
@@ -629,9 +651,56 @@ function propertiesControl(
     optionsWhen: 'always',
     optionsHeader: 'Свойства',
     placeholder: 'Добавить свойство…',
+    dropdownMinWidth: 420,
   });
   wrap.append(field.root);
   return wrap;
+}
+
+/**
+ * Варианты чип-поля свойств «Есть свойства»/«имеет свойство» (ошибка заказчика
+ * 2026-10-14, п.6): имя свойства, значок вида значения/стороны связи и подпись
+ * типа значения рядом с именем — тем же источником, что эталонный список
+ * «Мыслесеть → Свойства мыслей»; описание свойства — в подсказке и в поиске.
+ * Чистая — юнит-тест.
+ */
+export function filterPropertyOptions(
+  registry: ReadonlyMap<string, NetworkProperty>,
+  linkTypes: readonly LinkType[],
+): EntityOption[] {
+  const out: EntityOption[] = [];
+  for (const [id, entry] of registry) {
+    const icon = propertyOptionIcon(entry, linkTypes);
+    const description = (entry.description ?? '').trim();
+    out.push({
+      id,
+      title: entry.name,
+      // Описание ищется живым поиском (как в общем списке свойств).
+      ...(description !== '' ? { searchText: description } : {}),
+      ...(icon !== null ? { icon } : {}),
+      note: VALUE_TYPE_LABELS[entry.value_type],
+      ...(description !== '' ? { tooltip: `${entry.name} — ${description}` } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * Значок строки свойства «Есть свойства» (ошибка заказчика 2026-10-14, п.6а):
+ * скаляр — значок вида значения, свойство-связь — сторона (назначение — вверх,
+ * источник — вниз) — как в списке «Мыслесеть → Свойства мыслей». Источник
+ * иконок тот же, что у эталона (`valueTypeIconName`, `lib/property-list.ts`).
+ */
+function propertyOptionIcon(
+  entry: NetworkProperty,
+  linkTypes: readonly LinkType[],
+): IconName | null {
+  if (entry.value_type !== 'link') return valueTypeIconName(entry.value_type);
+  const config = entry.config ?? {};
+  const linkTypeId = typeof config.link_type_id === 'string' ? config.link_type_id : '';
+  const linkType = linkTypes.find((row) => row.id === linkTypeId);
+  if (linkType === undefined) return 'arrow-down';
+  return typeNameKey(entry.name) === typeNameKey(linkType.name_reverse) ? 'arrow-up' : 'arrow-down';
 }
 
 /** Перечисление: чекбоксы каталога, значение — список кодов. */
@@ -800,10 +869,14 @@ function numberBound(value: FilterTreeValue, onChange: (value: FilterTreeValue) 
 }
 
 /**
- * Граница даты/времени (элемент 27b2a011): [опора ▾] [сдвиг со знаком] [единица ▾]
- * плюс поле точной даты. В модель уходит КАНОНИЧЕСКИЙ токен опоры со сдвигом
- * (`$today+3d`), показ — человекочитаемой композицией; «✕» сбрасывает границу к
- * «сегодня, 0».
+ * Граница даты/времени (элемент 27b2a011; переработка по ошибке заказчика
+ * 2026-10-14, п.11): ОДНА строка в общей рамке — список периода (первый пункт
+ * «Точная дата», далее группа «ОТНОСИТЕЛЬНЫЕ ДАТЫ» с опорами профиля),
+ * количество ±N и тип количества; крестик сброса в конце строки. При выборе
+ * «Точной даты» вместо количества и типа — поле ввода даты с кнопкой календаря.
+ * В модель уходит КАНОНИЧЕСКИЙ токен опоры со сдвигом (`$today+3d`) либо «голая
+ * дата»; показ — человекочитаемой подписью ПОД рамкой. Пропорции ширины:
+ * период 63%, количество 20%, тип 15%, крестик — остаток (п.11а).
  */
 function dateBoundControl(
   current: string,
@@ -825,72 +898,91 @@ function dateBoundControl(
     onChange({ kind: 'token', token });
   };
 
-  // 1. Опора — список доступных профилю опор (время — только в профилях со временем).
+  // ЕДИНАЯ рамка строки: все поля и крестик — внутри одного контейнера, у полей
+  // своих рамок нет (п.11д).
+  const frame = div(FILTER_VALUE_DATE_FRAME_CLASS);
+  if (exact) frame.classList.add(FILTER_VALUE_DATE_FRAME_EXACT_CLASS);
+
+  // 1. Период — первый пункт «Точная дата», далее группа «ОТНОСИТЕЛЬНЫЕ ДАТЫ»
+  //    со всеми опорами профиля (п.11в).
   const anchorSelect = el('select', `${FILTER_VALUE_ANCHOR_CLASS} select-input`) as HTMLSelectElement;
-  if (exact) {
-    const exactOption = el('option', '', 'точная дата') as HTMLOptionElement;
-    exactOption.value = 'exact';
-    anchorSelect.append(exactOption);
-  }
+  const exactOption = el('option', '', 'Точная дата') as HTMLOptionElement;
+  exactOption.value = 'exact';
+  anchorSelect.append(exactOption);
+  const group = el('optgroup', '') as HTMLOptGroupElement;
+  group.label = 'ОТНОСИТЕЛЬНЫЕ ДАТЫ';
+  const offered = new Set<string>();
   for (const option of anchors) {
     const item = el('option', '', option.label) as HTMLOptionElement;
     item.value = option.text;
-    anchorSelect.append(item);
+    offered.add(option.text);
+    group.append(item);
   }
+  // Текущая опора вне списка пресетов (легаси/составная `$today+3d`) — своим
+  // пунктом, иначе селект показывал бы первую опору списка вместо неё.
+  if (!exact && !offered.has(anchor)) {
+    const item = el('option', '', anchor) as HTMLOptionElement;
+    item.value = anchor;
+    group.append(item);
+  }
+  anchorSelect.append(group);
   anchorSelect.value = exact ? 'exact' : anchor;
   anchorSelect.dataset['part'] = 'anchor';
   anchorSelect.addEventListener('change', () => {
-    if (anchorSelect.value === 'exact') return;
+    if (anchorSelect.value === 'exact') {
+      // Переход к точной дате: значением ставим сегодняшнюю дату — ячейка
+      // перерисуется полем даты с календарём (п.11г).
+      onChange({ kind: 'scalar', value: todayLocal() });
+      return;
+    }
     anchor = anchorSelect.value;
     commit();
   });
-  wrap.append(anchorSelect);
+  frame.append(anchorSelect);
 
-  // 2. Сдвиг — одно поле со знаком («+30», «−30», «0»/пусто = без сдвига).
-  const shiftInput = fieldInput({
-    type: 'text',
-    value: amount === 0 ? '' : `${amount > 0 ? '+' : '−'}${Math.abs(amount)}`,
-    placeholder: '0',
-    title: 'Сдвиг опоры: +30, −30 или 0',
-    extraClass: FILTER_VALUE_SHIFT_CLASS,
-    onChange: (raw: string) => {
-      amount = parseShiftInput(raw);
+  if (exact) {
+    // 2. Точная дата — поле ввода даты + кнопка существующего календаря (п.11г).
+    //    Крестик поля не рисуем: очистка/сброс — одна кнопка строки.
+    const field = dateField({
+      value: current,
+      ariaLabel: 'Точная дата',
+      hideClear: true,
+      onPick: exactDatePicker(current),
+      onChange: (iso: string) => onChange(iso === '' ? { kind: 'none' } : { kind: 'scalar', value: iso }),
+    });
+    frame.append(field.root);
+  } else {
+    // 2. Количество (сдвиг) — одно поле со знаком («+30», «−30», «0»/пусто).
+    const shiftInput = fieldInput({
+      type: 'text',
+      value: amount === 0 ? '' : `${amount > 0 ? '+' : '−'}${Math.abs(amount)}`,
+      placeholder: '0',
+      title: 'Сдвиг опоры: +30, −30 или 0',
+      extraClass: FILTER_VALUE_SHIFT_CLASS,
+      onChange: (raw: string) => {
+        amount = parseShiftInput(raw);
+        commit();
+      },
+    });
+    shiftInput.dataset['part'] = 'shift';
+    // 3. Тип количества — сокращённые подписи: дн/нед/мес/год/час/мин (п.11б).
+    const unitSelect = el('select', `${FILTER_VALUE_SHIFT_UNIT_CLASS} select-input`) as HTMLSelectElement;
+    for (const option of filterValueShiftUnits(ctx)) {
+      const item = el('option', '', option.label) as HTMLOptionElement;
+      item.value = option.key;
+      unitSelect.append(item);
+    }
+    unitSelect.value = unit;
+    unitSelect.dataset['part'] = 'unit';
+    unitSelect.addEventListener('change', () => {
+      unit = unitSelect.value;
       commit();
-    },
-  });
-  shiftInput.dataset['part'] = 'shift';
-  wrap.append(shiftInput);
-
-  // 3. Единица сдвига — дни/недели/месяцы/годы (время — в профилях со временем).
-  const unitSelect = el('select', `${FILTER_VALUE_SHIFT_UNIT_CLASS} select-input`) as HTMLSelectElement;
-  for (const option of filterValueShiftUnits(ctx)) {
-    const item = el('option', '', option.label) as HTMLOptionElement;
-    item.value = option.key;
-    unitSelect.append(item);
+    });
+    frame.append(shiftInput, unitSelect);
   }
-  unitSelect.value = unit;
-  unitSelect.dataset['part'] = 'unit';
-  unitSelect.addEventListener('change', () => {
-    unit = unitSelect.value;
-    commit();
-  });
-  wrap.append(unitSelect);
 
-  // 4. Точная дата — общий фасад поля даты.
-  const field = dateField({
-    ...(exact ? { value: current } : {}),
-    ariaLabel: 'Точная дата',
-    onChange: (iso: string) => onChange(iso === '' ? { kind: 'none' } : { kind: 'scalar', value: iso }),
-  });
-  wrap.append(field.root);
-
-  // 5. Человекочитаемая композиция и сброс к «сегодня, 0».
-  const hint = span(
-    current === '' ? '' : filterValueHumanLabel({ kind: 'token', token: current }),
-    FILTER_VALUE_HINT_LABEL_CLASS,
-  );
-  wrap.append(hint);
-  wrap.append(
+  // 4. Крестик сброса — в конце строки (п.11а).
+  frame.append(
     uiButton({
       label: '✕',
       role: 'ghost',
@@ -905,7 +997,31 @@ function dateBoundControl(
       },
     }),
   );
+  wrap.append(frame);
+
+  // 5. Человекочитаемая подпись раскрытия — под рамкой (сохранена, п.11).
+  wrap.append(
+    span(
+      current === '' ? '' : filterValueHumanLabel({ kind: 'token', token: current }),
+      FILTER_VALUE_HINT_LABEL_CLASS,
+    ),
+  );
   return wrap;
+}
+
+/** Открыть существующий календарь для точной даты; `null` — отказ от выбора. */
+function exactDatePicker(current: string): () => Promise<string | null> {
+  return async (): Promise<string | null> => {
+    const fallback = /^\d{4}-\d{2}-\d{2}$/.test(current) ? current : todayLocal();
+    const { openDatePeriodDialog } = await import('./date-period-dialog.js');
+    const result = await openDatePeriodDialog({
+      allowPeriod: false,
+      allowTime: false,
+      title: 'Точная дата',
+      initial: { mode: 'date', from: fallback, to: fallback },
+    });
+    return result === null ? null : result.from;
+  };
 }
 
 /** Разобранная опора со сдвигом: `$today+3d` → опора, число и единица. */
@@ -939,18 +1055,22 @@ export function filterValueDateAnchors(
   return filterValueTokenOptions(ctx).filter((option) => filterValueShiftParts(option.text)?.amount === 0);
 }
 
-/** Единицы сдвига: базовые плюс часы/минуты в контекстах со временем. */
+/**
+ * Единицы сдвига: базовые плюс часы/минуты в контекстах со временем. Подписи
+ * СОКРАЩЁННЫЕ — дн/нед/мес/год/час/мин (ошибка заказчика 2026-10-14, п.11б):
+ * длинные подписи не помещались в узкой ячейке строки.
+ */
 export function filterValueShiftUnits(
   ctx: Pick<FilterValueContext, 'profile'>,
 ): readonly { key: string; label: string }[] {
   const units: { key: string; label: string }[] = [
-    { key: 'd', label: 'день' },
-    { key: 'w', label: 'неделя' },
-    { key: 'mo', label: 'месяц' },
+    { key: 'd', label: 'дн' },
+    { key: 'w', label: 'нед' },
+    { key: 'mo', label: 'мес' },
     { key: 'y', label: 'год' },
   ];
   if (filterProfileHasTime(ctx.profile)) {
-    units.push({ key: 'h', label: 'час' }, { key: 'mi', label: 'минута' });
+    units.push({ key: 'h', label: 'час' }, { key: 'mi', label: 'мин' });
   }
   return units;
 }

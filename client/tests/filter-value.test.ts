@@ -23,7 +23,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { NetworkProperty } from '@etn/shared';
+import type { LinkType, NetworkProperty } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
 
@@ -216,6 +216,16 @@ describe('вид редактора значения: оператор × опе
       ),
       'enum',
     );
+  });
+
+  it('«имеет/не имеет свойство» на любом операнде — чип-поле свойств (ошибка п.5)', () => {
+    // Оба направления оператора: у «Типа мысли» поле выбора свойства раньше не
+    // рисовалось вовсе (значение уходило в перечисление без вариантов).
+    for (const kind of ['type', 'properties'] as const) {
+      for (const op of ['has', 'not_has'] as const) {
+        assert.equal(mod.filterValueEditor(leaf({ kind }, op), ctx()), 'properties', `${kind}/${op}`);
+      }
+    }
   });
 
   it('единица «количества» и одиночность значения', () => {
@@ -646,21 +656,57 @@ describe('ячейка значения: сборка виджета и прав
     assert.ok(one(many, 'user-chip-field') !== null);
   });
 
-  it('датовый операнд: ячейка из опоры, сдвига и единицы с человекочитаемой подписью', () => {
+  it('датовый операнд: одна рамка — период (первым «Точная дата»), количество и тип (п.11)', () => {
     const box = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$weekStart' }), slot().api);
     assert.equal(box.dataset['editor'], 'date');
+    // Одна общая рамка строки; отдельных рамок у полей нет (п.11д).
+    assert.ok(one(box, mod.FILTER_VALUE_DATE_FRAME_CLASS) !== null, 'общая рамка полей');
     const anchor = box.findAll((n) => n.dataset['part'] === 'anchor')[0];
     assert.equal(anchor?.value, '$weekStart', 'опора — канонический токен (элемент 27b2a011)');
     assert.equal(box.findAll((n) => n.dataset['part'] === 'shift')[0]?.value, '', 'нулевой сдвиг — пустое поле');
-    assert.equal(box.findAll((n) => n.dataset['part'] === 'unit')[0]?.value, 'd');
+    assert.equal(box.findAll((n) => n.dataset['part'] === 'unit')[0]?.value, 'd', 'тип количества — дни');
     assert.equal(one(box, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent, 'начало недели (пн)', 'показ — человекочитаемый');
-    const options = all(box, mod.FILTER_VALUE_ANCHOR_CLASS)[0]?.findAll((n) => n.tagName.toUpperCase() === 'OPTION') ?? [];
-    assert.ok(options.length > 0, 'список опор заполнен');
-    assert.ok(one(box, 'date-field') !== null, 'точная дата — общее поле даты');
+    const options =
+      all(box, mod.FILTER_VALUE_ANCHOR_CLASS)[0]?.findAll((n) => n.tagName.toUpperCase() === 'OPTION') ?? [];
+    assert.equal(options[0]?.value, 'exact', 'первый пункт списка периода — «Точная дата» (п.11в)');
+    assert.equal(options[0]?.textContent, 'Точная дата');
+    assert.ok(options.some((o) => o.value === '$weekStart'), 'опоры — под «Относительные даты»');
+    assert.equal(one(box, 'date-field'), null, 'в режиме опоры поля точной даты в строке нет (п.11г)');
     // Легаси-ввод остаётся читаемым и приводится к канону (селект находит опору).
     const legacy = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$week.start' }), slot().api);
     assert.equal(legacy.findAll((n) => n.dataset['part'] === 'anchor')[0]?.value, '$weekStart');
     assert.equal(one(legacy, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent, 'начало недели (пн)');
+  });
+
+  it('точная дата: вместо количества и типа — поле даты с кнопкой календаря (п.11г)', () => {
+    const box = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'scalar', value: '2026-03-04' }), slot().api);
+    const anchor = box.findAll((n) => n.dataset['part'] === 'anchor')[0]!;
+    assert.equal(anchor.value, 'exact', 'выбрана «Точная дата»');
+    assert.equal(box.findAll((n) => n.dataset['part'] === 'shift').length, 0, 'поля количества нет');
+    assert.equal(box.findAll((n) => n.dataset['part'] === 'unit').length, 0, 'поля типа количества нет');
+    const field = one(box, 'date-field');
+    assert.ok(field !== null, 'поле даты показано');
+    assert.ok(one(field!, 'date-field-pick') !== null, 'кнопка календаря — существующий диалог');
+    assert.equal(one(field!, 'date-field-clear'), null, 'свой крестик поля убран: очистка одна (в рамке)');
+    assert.ok(
+      one(box, mod.FILTER_VALUE_DATE_FRAME_CLASS)!.classList.contains(mod.FILTER_VALUE_DATE_FRAME_EXACT_CLASS),
+      'рамка помечена режимом точной даты',
+    );
+    // Выбор «Точной даты» в списке периода переключает значение на сегодня.
+    const { api, writes } = slot();
+    const wrap = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$today' }), api);
+    const sel = wrap.findAll((n) => n.dataset['part'] === 'anchor')[0]!;
+    sel.value = 'exact';
+    sel.fire('change');
+    assert.equal(writes[0]?.kind, 'scalar');
+    assert.match(String(writes[0]?.value), /^\d{4}-\d{2}-\d{2}$/, 'точная дата — сегодняшняя дата');
+  });
+
+  it('тип количества — сокращённые подписи: дн/нед/мес/год/час/мин (п.11б)', () => {
+    assert.deepEqual(
+      mod.filterValueShiftUnits({ profile: 'chronicle' }).map((u: any) => u.label),
+      ['дн', 'нед', 'мес', 'год', 'час', 'мин'],
+    );
   });
 
   it('сдвиг: одно поле со знаком и единица собирают канонический токен опоры', () => {
@@ -770,5 +816,51 @@ describe('ячейка значения: сборка виджета и прав
     checkbox.checked = true;
     checkbox.fire('change');
     assert.deepEqual(writes[0], { kind: 'list', items: ['url'] });
+  });
+
+  it('«не имеет свойство» по «Типу мысли»: чип-поле строится, оператор не переписывается (п.5)', () => {
+    const leafNode = leaf({ kind: 'type' }, 'not_has');
+    const box = render(leafNode, slot().api);
+    assert.equal(box.dataset['editor'], 'properties');
+    assert.ok(one(box, 'entity-chip-field') !== null, 'чип-поле выбора свойства построено');
+    assert.equal(leafNode.operator, 'not_has', 'рендер не меняет направление предиката');
+    assert.equal(leafNode.value.kind, 'none', 'значение не подменяется при построении');
+  });
+
+  it('варианты свойств: значок вида значения, тип значения и описание (п.6а/6б)', () => {
+    const text = prop('p-text', 'Заметка', 'text') as unknown as { description: string | null };
+    text.description = 'Свободный текст';
+    const registry = new Map<string, NetworkProperty>([
+      ['p-text', text as unknown as NetworkProperty],
+      ['p-num', prop('p-num', 'Вес', 'number')],
+    ]);
+    const options = mod.filterPropertyOptions(registry, []);
+    const textOpt = options.find((o: any) => o.id === 'p-text')!;
+    assert.equal(textOpt.note, 'строка', 'подпись типа значения рядом с именем');
+    assert.equal(textOpt.icon, 'value-text', 'значок вида значения — из эталонного источника');
+    assert.equal(textOpt.tooltip, 'Заметка — Свободный текст', 'описание свойства — в подсказке');
+    assert.equal(textOpt.searchText, 'Свободный текст', 'описание участвует в живом поиске');
+    const numOpt = options.find((o: any) => o.id === 'p-num')!;
+    assert.equal(numOpt.icon, 'value-number');
+    assert.equal(numOpt.note, 'число');
+    assert.equal(numOpt.tooltip, undefined, 'без описания подсказки нет');
+  });
+
+  it('варианты свойств-связей: сторона связи — стрелка вниз/вверх (п.6а)', () => {
+    const direct = prop('p-fwd', 'Исходящая', 'link') as unknown as { config: unknown };
+    direct.config = { link_type_id: 'lt-1' };
+    const reverse = prop('p-rev', 'Входящая', 'link') as unknown as { config: unknown };
+    reverse.config = { link_type_id: 'lt-1' };
+    const linkTypes = [{ id: 'lt-1', name_forward: 'Исходящая', name_reverse: 'Входящая' }] as unknown as LinkType[];
+    const options = mod.filterPropertyOptions(
+      new Map<string, NetworkProperty>([
+        ['p-fwd', direct as unknown as NetworkProperty],
+        ['p-rev', reverse as unknown as NetworkProperty],
+      ]),
+      linkTypes,
+    );
+    assert.equal(options.find((o: any) => o.id === 'p-fwd')!.icon, 'arrow-down', 'источник — стрелка вниз');
+    assert.equal(options.find((o: any) => o.id === 'p-rev')!.icon, 'arrow-up', 'назначение — стрелка вверх');
+    assert.ok(options.every((o: any) => o.note === 'связь'));
   });
 });

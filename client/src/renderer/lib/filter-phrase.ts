@@ -312,9 +312,16 @@ export function filterPhraseLeaf(leaf: FilterTreeLeaf, ctx: FilterPhraseContext)
   // операнд («Есть слова расход») либо подпись оператора под-выборки
   // («Родители в выборке (2 условия)») — «в списке в выборке» не читается.
   const skipOperator = leaf.entity.kind === 'keywords' || leaf.value.kind === 'subquery';
+  // П.9 (ошибка заказчика 2026-10-14): у предиката БЕЗ значения оператор
+  // «равно»/«не равно» не печатается — сравнение без значения не читается
+  // («Есть вложения», а не «Есть вложения равно»). Операторы со смыслом в себе
+  // («заполнено», «не заполнено», «имеет свойство») остаются как есть.
+  const comparisonWithoutValue =
+    value === '' && (leaf.operator === 'eq' || leaf.operator === 'ne');
   let phrase: string;
   if (skipOperator) phrase = value === '' ? operand : `${operand} ${value}`;
-  else phrase = value === '' ? `${operand} ${operator}` : `${operand} ${operator} ${value}`;
+  else if (value === '') phrase = comparisonWithoutValue ? operand : `${operand} ${operator}`;
+  else phrase = `${operand} ${operator} ${value}`;
   // Режим обхода «по всем связям» — отличие от структурного (по умолчанию).
   if (leaf.mode === 'all_links') phrase += ' (по всем связям)';
   // «Есть слова»: чем ограничен поиск — видно во фразе (требование 0882f8d5).
