@@ -174,6 +174,18 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
    *  деревом и футером наравне с проверками конструктора. */
   let serverIssues: readonly FilterIssue[] = [];
   let editorRef: FilterEditorHandle | null = null;
+  /**
+   * Снимок определения на момент открытия — база «грязной» проверки
+   * (требование b58f6aad). Снимок — тем же конвертером, поэтому нетронутая
+   * форма не считается изменённой.
+   *
+   * Объявлен ДО сборки редактора: фабрика синхронно строит футер, его
+   * `refresh` читает `host.baseline()` — обратись к `criteriaBase` из стрелки
+   * `baseline` ниже по коду, получили бы TDZ-ошибку «Cannot access
+   * 'criteriaBase' before initialization» при открытии диалога отбора
+   * (ошибка 609deba0 п. C1).
+   */
+  const criteriaBase = buildViewAst(state);
   const editor = buildFilterEditor({
     profile: 'thoughts',
     networkId,
@@ -200,10 +212,6 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     },
   });
   editorRef = editor;
-  /** Снимок определения на момент открытия — база «грязной» проверки
-   *  (требование b58f6aad). Снимок — тем же конвертером, поэтому нетронутая
-   *  форма не считается изменённой. */
-  const criteriaBase = buildViewAst(state);
 
   body.append(descField, defaultField, editor.root);
 
