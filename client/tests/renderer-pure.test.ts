@@ -1476,10 +1476,11 @@ describe('layerMenuTooltip — полное имя слоя в тултипе (�
 });
 
 
-describe('filterPanelWidthLimit — предел ширины панели отбора (ошибка 498876c4, п.22)', () => {
-  it('половина ширины окна минус боковая панель редактора', () => {
+describe('filterPanelWidthLimit — предел ширины панели отбора (ошибка 498876c4 п.22, уточнён 4258e694 п.11)', () => {
+  it('половина ПОЛОТНА: (окно минус боковой редактор) пополам', () => {
     assert.equal(filterPanelWidthLimit(1884, 0), 942, 'окно 1884 без редактора — предел 942');
-    assert.equal(filterPanelWidthLimit(1884, 400), 542, 'минус боковой редактор 400');
+    assert.equal(filterPanelWidthLimit(1884, 400), 742, 'половина полотна 1484');
+    assert.equal(filterPanelWidthLimit(1704, 340), 682, 'живой замер: полотно 1364 → 682 (50%)');
   });
 
   it('редактор сверху/снизу не учитывается (передаётся 0)', () => {
@@ -1488,7 +1489,7 @@ describe('filterPanelWidthLimit — предел ширины панели от�
 
   it('некорректные входы не дают отрицательного предела', () => {
     assert.equal(filterPanelWidthLimit(0, 0), 0);
-    assert.equal(filterPanelWidthLimit(100, 200), 0, 'вычет больше половины — предел 0');
+    assert.equal(filterPanelWidthLimit(100, 200), 0, 'вычет больше ширины окна — предел 0');
     assert.equal(filterPanelWidthLimit(1000, -50), 500, 'отрицательный вычет игнорируется');
     assert.equal(filterPanelWidthLimit(1000, Number.NaN), 500, 'NaN-вычет игнорируется');
   });

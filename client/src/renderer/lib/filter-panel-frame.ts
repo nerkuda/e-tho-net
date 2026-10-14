@@ -119,10 +119,11 @@ export function mountFilterPanelFrame(opts: FilterPanelFrameOptions): FilterPane
       const max = opts.maxSizeTop ?? opts.maxSize;
       return { min, max: Math.max(min, Math.min(max, room)) };
     }
-    // Ширина панели — не больше ПОЛОВИНЫ ширины окна минус панель редактора,
-    // когда он пришвартован слева/справа (требование заказчика 2026-10-13).
-    // Этот предел ЗАМЕНЯЕТ фиксированный `maxSize` (иначе константы экранов
-    // доминировали бы над капом — блокер п.22).
+    // Ширина панели — не больше ПОЛОВИНЫ ПОЛОТНА вида, когда редактор
+    // пришвартован слева/справа: половина (окно минус панель редактора)
+    // (требование заказчика 2026-10-13; уточнено по живой проверке 2026-10-14,
+    // ошибка 4258e694 п.11). Этот предел ЗАМЕНЯЕТ фиксированный `maxSize` (иначе
+    // константы экранов доминировали бы над капом — блокер п.22).
     const editorPosition = store.state.editorPosition;
     const editorSide = editorPosition === 'left' || editorPosition === 'right';
     const widthCap = filterPanelWidthLimit(
