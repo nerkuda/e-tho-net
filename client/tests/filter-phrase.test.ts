@@ -391,6 +391,12 @@ describe('композер фразы: хвост сортировки, обре
     );
     assert.equal(mod.filterPhraseSort([]), '');
     assert.equal(mod.filterPhraseSort(undefined), '');
+    // A7 (ошибка 50d9bf4e): ключ сортировки-свойство — его UUID, во фразе
+    // показывается НАЗВАНИЕ свойства из реестра, а не id.
+    assert.equal(
+      mod.filterPhraseSort([{ key: CITY.id, order: 'asc' }], ctx().registry),
+      'сортировка: Город',
+    );
     const tree = group('and', [leaf({ kind: 'active' }, 'eq', { kind: 'scalar', value: true })]);
     assert.equal(
       mod.composeFilterPhrase({ tree, sortKeys: [{ key: 'created_at', order: 'desc' }] }, ctx()),

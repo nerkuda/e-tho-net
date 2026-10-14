@@ -49,6 +49,7 @@ import {
   STRUCTURE_KEYWORD_SCOPES,
   type FilterAstEntityKind,
   type FilterAstSortKey,
+  type NetworkProperty,
   type StructureKeywordScope,
   type ThoughtType,
 } from '@etn/shared';
@@ -356,12 +357,31 @@ export function filterPhraseNode(
   return needParens ? `(${body})` : body;
 }
 
+/**
+ * Подпись ключа сортировки во фразе: движковый словарь (`filterAstSortKeyLabel`),
+ * затем — имя свойства реестра по id ключа (ошибка 50d9bf4e п. A7: прямой ключ
+ * свойства-сети — его UUID, и во фразе показывался id вместо названия), иначе
+ * ключ как есть (обратная сторона связи — уже имя).
+ */
+export function filterPhraseSortKeyLabel(
+  key: string,
+  registry?: ReadonlyMap<string, NetworkProperty>,
+): string {
+  const known = filterAstSortKeyLabel(key);
+  if (known !== key) return known;
+  const name = registry?.get(key)?.name;
+  return name !== undefined && name !== '' ? name : key;
+}
+
 /** Хвост сортировки: «сортировка: по названию (убыв.)» ('' — сортировки нет). */
-export function filterPhraseSort(sortKeys: readonly FilterAstSortKey[] | undefined): string {
+export function filterPhraseSort(
+  sortKeys: readonly FilterAstSortKey[] | undefined,
+  registry?: ReadonlyMap<string, NetworkProperty>,
+): string {
   const keys = sortKeys ?? [];
   if (keys.length === 0) return '';
   const parts = keys.map((sort) => {
-    const label = filterAstSortKeyLabel(sort.key);
+    const label = filterPhraseSortKeyLabel(sort.key, registry);
     return sort.order === 'desc' ? `${label} (убыв.)` : label;
   });
   return `сортировка: ${parts.join(', ')}`;
@@ -385,7 +405,7 @@ export function composeFilterPhrase(state: FilterPhraseState, ctx: FilterPhraseC
     const phrase = filterPhraseNode(state.tree, ctx);
     if (phrase !== '') parts.push(phrase);
   }
-  const sort = filterPhraseSort(state.sortKeys);
+  const sort = filterPhraseSort(state.sortKeys, ctx.registry);
   if (sort !== '') parts.push(sort);
   return truncateFilterPhrase(parts.join('; '), ctx.limit ?? FILTER_PHRASE_LIMIT);
 }
