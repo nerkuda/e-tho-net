@@ -247,6 +247,111 @@ describe('публикация: развёртка трансклюзий (ош�
     }
   });
 
+  /**
+   * Выращивает публикацию с ОДНИМ текстом-блоком: типы Doc/Plain, раздел,
+   * текстовые источники-мысли с телами `sourceBodies`. `publish(textBody)`
+   * пишет постоянный комментарий текста и возвращает `body_html` превью.
+   */
+  function seedSingleTextDoc(
+    ndb: NetworkDb,
+    sourceBodies: readonly string[],
+  ): { textId: string; sourceIds: string[]; publish: (textBody: string) => string } {
+    const type = createThoughtType(ndb, { name: 'Doc' }, USER);
+    const plain = createThoughtType(ndb, { name: 'Plain' }, USER);
+    const section = seedThought(ndb, 'A', type.id);
+    const text = seedThought(ndb, 'Текст', plain.id);
+    const sourceIds = sourceBodies.map((body, i) => {
+      const id = seedThought(ndb, `Источник${i}`, null);
+      seedComment(ndb, id, body);
+      return id;
+    });
+    const prop = seedTextProperty(ndb, type.id);
+    seedLink(ndb, section, text, linkTypeOf(ndb, prop), 0);
+    return {
+      textId: text,
+      sourceIds,
+      publish: (textBody: string): string => {
+        seedComment(ndb, text, textBody);
+        const pub = createPublication(
+          ndb,
+          { title: 'Док', title_recipe: recipeForType(type.id), text_sources: [prop] },
+          USER,
+        );
+        const doc = assemblePublication(ndb, pub.id, USER);
+        return doc.sections.find((s) => s.thought_id === section)!.texts[0]!.body_html;
+      },
+    };
+  }
+
+  /** Начала абзацев СВОЕГО текста с разметкой (внутри вставок разметки нет). */
+  function ownParagraphStarts(html: string): number[] {
+    return [...html.matchAll(/<p data-md-start="(\d+)"/g)]
+      .map((m) => Number(m[1]))
+      .sort((a, b) => a - b);
+  }
+
+  /** Есть ли разметка source-map внутри какой-либо обёртки вставки. */
+  function insideTransclusionHasMarkup(html: string): boolean {
+    return [...html.matchAll(/<div class="md-transclusion"[^>]*>([\s\S]*?)<\/div>/g)].some((m) =>
+      m[1]!.includes('data-md-'),
+    );
+  }
+
+  it('свёртка офсетов: вставка с таким же текстом, что и свой фрагмент (блокер круга 4)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      // Свой текст «A», источник тоже «A\n\nA».
+      const t = seedSingleTextDoc(ndb, ['A\n\nA']);
+      const raw = `A\n\n![[#${t.sourceIds[0]!}]]\n\nA`;
+      const html = t.publish(raw);
+      assert.ok(
+        !insideTransclusionHasMarkup(html),
+        `разметка утекла внутрь вставки: ${html}`,
+      );
+      const tail = raw.lastIndexOf('A');
+      assert.deepEqual(
+        ownParagraphStarts(html),
+        [0, tail].sort((a, b) => a - b),
+        `офсеты своего текста неверны: ${html}`,
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('свёртка офсетов: трансклюзия в начале текста (пустой свой-до)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const t = seedSingleTextDoc(ndb, ['Z\n\nZ']);
+      const raw = `![[#${t.sourceIds[0]!}]]\n\nZ`;
+      const html = t.publish(raw);
+      assert.ok(!insideTransclusionHasMarkup(html), `разметка внутри вставки: ${html}`);
+      assert.deepEqual(
+        ownParagraphStarts(html),
+        [raw.indexOf('Z')],
+        `офсет хвоста неверен: ${html}`,
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('свёртка офсетов: несколько вставок и повторяющиеся свои абзацы', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const t = seedSingleTextDoc(ndb, ['X', 'X']);
+      const raw = `X\n\n![[#${t.sourceIds[0]!}]]\n\nX\n\n![[#${t.sourceIds[1]!}]]\n\nX`;
+      const html = t.publish(raw);
+      assert.ok(!insideTransclusionHasMarkup(html), `разметка внутри вставки: ${html}`);
+      const x1 = raw.indexOf('X');
+      const x2 = raw.indexOf('X', x1 + 1);
+      const x3 = raw.indexOf('X', x2 + 1);
+      assert.deepEqual(ownParagraphStarts(html), [x1, x2, x3], `офсеты своих абзацев: ${html}`);
+    } finally {
+      ndb.close();
+    }
+  });
+
   it('превью: обычные вики-ссылки [[…]] резолвятся наравне с трансклюзией', () => {
     const ndb = createInMemoryNetworkDb();
     try {

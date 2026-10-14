@@ -130,13 +130,52 @@ export interface ExpandedOffsetAlign {
   toRaw(offset: number): number;
 }
 
+/** Строка-маркер границы развёртки (ADR `85a7a01e`) в развёрнутом тексте. */
+const TRANSCLUSION_MARKER_LINE_RE =
+  /^<!--[ \t]*etn:transclusion[ \t]+(begin|end|skip|missing)\b[^\n]*-->[ \t]*$/gm;
+
+/** Ближайший маркер развёртки на/после `from`; `kind` — вид, `end` — за строкой. */
+function nextTransclusionMarker(
+  expanded: string,
+  from: number,
+): { kind: string; end: number } | null {
+  TRANSCLUSION_MARKER_LINE_RE.lastIndex = from;
+  const match = TRANSCLUSION_MARKER_LINE_RE.exec(expanded);
+  return match === null ? null : { kind: match[1]!, end: match.index + match[0].length };
+}
+
+/**
+ * Позиция сразу за блоком вставки, начинающимся на/после `from`: за закрывающим
+ * маркером `end` (с учётом вложенности) либо за листовым `skip`/`missing`.
+ * `-1` — маркера нет.
+ */
+function insertionBlockEnd(expanded: string, from: number): number {
+  let depth = 0;
+  let pos = from;
+  for (;;) {
+    const marker = nextTransclusionMarker(expanded, pos);
+    if (marker === null) return -1;
+    if (marker.kind === 'begin') depth += 1;
+    else if (marker.kind === 'end') {
+      depth -= 1;
+      if (depth <= 0) return marker.end;
+    } else if (depth === 0) return marker.end; // skip|missing — листовая вставка
+    pos = marker.end;
+  }
+}
+
 /**
  * Строит {@link ExpandedOffsetAlign} для пары «исходный → развёрнутый текст».
- * Собственные фрагменты находятся в развёрнутом тексте ДОСЛОВНО (`indexOf` от
- * движущегося курсора — порядок и непересечение гарантированы развёрткой),
- * промежутки между ними — блоки вставок. Разбор ссылок — только парсером
- * `@etn/markdown` (`parseTransclusions`), своего разбора ссылок-трансклюзий
- * здесь нет (сторож `own-transclusion-outside-package`).
+ *
+ * Один проход по собственным фрагментам сырого текста в порядке следования:
+ * каждый ищется в развёрнутом тексте НАЧИНАЯ С ПОЗИЦИИ ЗА ЗАКРЫВАЮЩИМ МАРКЕРОМ
+ * предыдущей вставки ({@link insertionBlockEnd}), а не от конца предыдущего
+ * своего фрагмента. Иначе текст вставки (её источника), содержащий такой же
+ * фрагмент, засчитывался бы за собственный — разметка с чужими офсетами
+ * попадала ВНУТРЬ `md-transclusion`, а истинный свой текст оставался без
+ * разметки (блокер круга 4). Разбор ссылок — только парсером `@etn/markdown`
+ * (`parseTransclusions`), своего разбора ссылок-трансклюзий здесь нет (сторож
+ * `own-transclusion-outside-package`).
  *
  * `null` — трансклюзий нет либо фрагменты не удалось сопоставить (тогда разметку
  * оставляем как есть — лучше, чем испортить офсеты).
@@ -145,23 +184,23 @@ export function alignExpandedOffsets(raw: string, expanded: string): ExpandedOff
   const refs = parseTransclusions(raw);
   if (refs.length === 0) return null;
   const ranges: Array<{ expStart: number; expEnd: number; rawStart: number }> = [];
-  let expCursor = 0;
+  let searchFrom = 0;
   let rawCursor = 0;
-  for (const ref of refs) {
-    const own = raw.slice(rawCursor, ref.start);
-    if (own.length > 0) {
-      const idx = expanded.indexOf(own, expCursor);
+  for (let i = 0; i <= refs.length; i += 1) {
+    const segEnd = i < refs.length ? refs[i]!.start : raw.length;
+    if (segEnd > rawCursor) {
+      const piece = raw.slice(rawCursor, segEnd);
+      const idx = expanded.indexOf(piece, searchFrom);
       if (idx < 0) return null;
-      ranges.push({ expStart: idx, expEnd: idx + own.length, rawStart: rawCursor });
-      expCursor = idx + own.length;
+      ranges.push({ expStart: idx, expEnd: idx + piece.length, rawStart: rawCursor });
+      searchFrom = idx + piece.length;
     }
-    rawCursor = ref.end;
-  }
-  const tail = raw.slice(rawCursor);
-  if (tail.length > 0) {
-    const idx = expanded.indexOf(tail, expCursor);
-    if (idx < 0) return null;
-    ranges.push({ expStart: idx, expEnd: idx + tail.length, rawStart: rawCursor });
+    if (i < refs.length) {
+      const after = insertionBlockEnd(expanded, searchFrom);
+      if (after < 0) return null;
+      searchFrom = after;
+      rawCursor = refs[i]!.end;
+    }
   }
   if (ranges.length === 0) return null;
   const containing = (offset: number): (typeof ranges)[number] | undefined =>
@@ -179,23 +218,41 @@ export function alignExpandedOffsets(raw: string, expanded: string): ExpandedOff
   };
 }
 
-/** Атрибут-офсет разметки позиций единого рендерера (S)
- *  (`data-md-start`/`-end`/`-after`; `data-md-shift`/`-leaf` не трогаем). */
-const SOURCE_OFFSET_ATTR_RE = /\s(data-md-(?:start|end|after))="(\d+)"/g;
+/** Офсет из атрибута `data-md-<name>="N"` тега либо `null`. */
+function tagSourceOffset(tag: string, name: 'start' | 'end' | 'after'): number | null {
+  const match = new RegExp(`\\sdata-md-${name}="(\\d+)"`).exec(tag);
+  return match === null ? null : Number(match[1]);
+}
+
+/** Любой атрибут разметки позиций `data-md-*` (со значением или без). */
+const MD_ATTR_RE = /\sdata-md-[a-z-]+(?:="[^"]*")?/g;
+/** Числовой атрибут-офсет разметки позиций. */
+const MD_NUMERIC_ATTR_RE = /\s(data-md-(?:start|end|after))="(\d+)"/g;
 
 /**
- * Переписывает офсеты `data-md-*` развёрнутого текста в координаты исходного
- * `body_md` (см. {@link alignExpandedOffsets}); атрибуты внутри вставок
- * снимаются — клик там резолвится фолбэком по слову. Офсеты в `data-md-shift`
- * (границы в РЕНДЕРНЫХ символах) не зависят от сдвига источника и остаются как
- * есть.
+ * Переписывает разметку позиций развёрнутого текста (см.
+ * {@link alignExpandedOffsets}).
+ *
+ * ВНУТРИ вставок (`md-transclusion`) разметки source-map не остаётся вовсе:
+ * снимаются `data-md-start/end/after`, а также `data-md-leaf`/`data-md-shift`
+ * (для них нет числового офсета-опоры, поэтому решение принимается по тегу
+ * целиком — если опорный офсет тега внутри вставки, атрибуты тега удаляются).
+ * В собственном тексте числовые офсеты переводятся в координаты `body_md`, а
+ * `leaf`/`shift` сохраняются (`shift` — границы в РЕНДЕРНЫХ символах, от сдвига
+ * источника не зависят).
  */
 export function remapExpandedSourceOffsets(html: string, align: ExpandedOffsetAlign): string {
-  return html.replace(SOURCE_OFFSET_ATTR_RE, (whole, name: string, value: string) => {
-    const offset = Number(value);
-    if (align.insideInsertion(offset)) return '';
-    const mapped = align.toRaw(offset);
-    return mapped === offset ? whole : ` ${name}="${mapped}"`;
+  return html.replace(/<[a-zA-Z][^>]*>/g, (tag: string) => {
+    if (!/\sdata-md-/.test(tag)) return tag;
+    const anchor =
+      tagSourceOffset(tag, 'start') ?? tagSourceOffset(tag, 'after') ?? tagSourceOffset(tag, 'end');
+    if (anchor !== null && align.insideInsertion(anchor)) {
+      return tag.replace(MD_ATTR_RE, '');
+    }
+    return tag.replace(MD_NUMERIC_ATTR_RE, (whole, name: string, value: string) => {
+      const mapped = align.toRaw(Number(value));
+      return mapped === Number(value) ? whole : ` ${name}="${mapped}"`;
+    });
   });
 }
 
