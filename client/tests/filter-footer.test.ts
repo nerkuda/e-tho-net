@@ -331,15 +331,17 @@ describe('футер отбора: фраза-превью и запрет пр�
     assert.equal(apply.disabled, false);
   });
 
-  it('«исправить» в футере: переход к строке из сообщения о запрете (0fd1dc5d)', () => {
+  it('переход к строке из запрета — по КЛИКУ НА ТЕКСТ фразы, без кнопки (0fd1dc5d, п.10)', () => {
     const fixed: string[] = [];
     const { handle, state } = buildFooter({ onFixIssue: (path) => fixed.push(path) });
     const root = handle.root as unknown as ShimElement;
-    const fix = exactOne(root, 'ff-fix')!;
-    assert.notEqual(fix, null, 'кнопка «исправить» живёт в футере — общий каркас, не экран');
-    assert.equal(fix.hidden, true, 'пока ошибок нет — перехода нет');
+    assert.equal(exactOne(root, 'ff-fix'), null, 'отдельной кнопки «исправить» нет (п.10)');
+    const box = exactOne(root, mod.FILTER_FOOTER_PREVIEW_CLASS)!;
+    const text = exactOne(root, 'ff-preview__text')!;
+    const actionClass = mod.FILTER_FOOTER_PREVIEW_ACTION_CLASS;
+    assert.equal(text.classList.contains(actionClass), false, 'пока ошибок нет — перехода нет');
 
-    // Красное С адресом строки: переход доступен и ведёт в эту строку.
+    // Красное С адресом строки: текст фразы становится точкой перехода.
     state.preview = {
       text: 'битый отбор',
       issues: [
@@ -353,9 +355,10 @@ describe('футер отбора: фраза-превью и запрет пр�
       ],
     };
     handle.refresh();
-    assert.equal(fix.hidden, false, 'красное с адресом открывает переход');
-    fix.emit('click', {});
-    assert.deepEqual(fixed, ['filter.children[0].entity'], 'переход ведёт в строку ошибки');
+    assert.equal(text.classList.contains(actionClass), true, 'красное с адресом делает текст кликабельным');
+    assert.match(box.title, /Нажмите на текст/, 'тултип подсказывает про клик');
+    text.emit('click', {});
+    assert.deepEqual(fixed, ['filter.children[0].entity'], 'клик по тексту ведёт в строку ошибки');
 
     // Красное БЕЗ адреса (сообщение о запрете, которое нельзя локализовать) —
     // перехода нет: вести пользователя некуда.
@@ -372,7 +375,8 @@ describe('футер отбора: фраза-превью и запрет пр�
       ],
     };
     handle.refresh();
-    assert.equal(fix.hidden, true, 'без адреса строки перехода нет');
+    assert.equal(text.classList.contains(actionClass), false, 'без адреса строки перехода нет');
+    assert.doesNotMatch(box.title, /Нажмите на текст/, 'подсказки о клике нет');
 
     // Жёлтое не запрещает применение — перехода тоже нет.
     state.preview = {
@@ -388,8 +392,14 @@ describe('футер отбора: фраза-превью и запрет пр�
       ],
     };
     handle.refresh();
-    assert.equal(fix.hidden, true, 'жёлтое перехода не предлагает');
+    assert.equal(text.classList.contains(actionClass), false, 'жёлтое перехода не предлагает');
+    text.emit('click', {});
     assert.deepEqual(fixed, ['filter.children[0].entity'], 'лишних вызовов нет');
+
+    // Пустое превью снимает и кликабельность.
+    state.preview = { text: '', issues: [] };
+    handle.refresh();
+    assert.equal(text.classList.contains(actionClass), false);
   });
 
   it('чистые помощники футера: изменённость, запрос записи, запрет применения', () => {    assert.equal(mod.filterChangedAgainst(null, { a: 1 }), false);

@@ -32,7 +32,10 @@
  *
  * Фраза-превью — точка расширения: её текст и список ошибок даёт хост
  * (`preview`), футер отвечает за показ ≤3 строк, окраску по серьёзности и
- * тултип с полным текстом и перечнем ошибок.
+ * тултип с полным текстом и перечнем ошибок. Когда красная запись запрещает
+ * применение и у неё есть адрес строки, текст фразы становится точкой перехода
+ * к проблемной строке (клик) — отдельной кнопки «исправить» нет (требование
+ * заказчика 2026-10-14, п.10).
  */
 
 import { div, setTooltip, span } from './dom.js';
@@ -60,6 +63,11 @@ import { deepEqual } from './ui/state.js';
 export const FILTER_FOOTER_CLASS = 'ff';
 export const FILTER_FOOTER_CHANGED_CLASS = 'ff-changed';
 export const FILTER_FOOTER_PREVIEW_CLASS = 'ff-preview';
+/**
+ * Класс текста фразы, когда клик по нему ведёт к проблемной строке
+ * (требование заказчика 2026-10-14, п.10): отдельной кнопки «исправить» нет.
+ */
+export const FILTER_FOOTER_PREVIEW_ACTION_CLASS = 'ff-preview__text--action';
 
 /**
  * Число строк фразы-превью (элемент ca905fbc: «≤3 строк»). Значение объявлено
@@ -146,9 +154,10 @@ export interface FilterFooterOptions {
   standardButtons?: boolean;
   /**
    * Переход к проблемной строке из сообщения о запрете применения (требования
-   * 0fd1dc5d, 44d61c8a). Кнопка «исправить» появляется только когда применение
-   * запрещено (красное) и у записи есть адрес строки; саму логику перехода
-   * держит каркас дерева — футер лишь передаёт адрес.
+   * 0fd1dc5d, 44d61c8a). Срабатывает ПО КЛИКУ НА ТЕКСТ фразы, когда применение
+   * запрещено (красное) и у записи есть адрес строки; отдельной кнопки
+   * «исправить» нет (требование заказчика 2026-10-14, п.10). Саму логику
+   * перехода держит каркас дерева — футер лишь передаёт адрес.
    */
   onFixIssue?: (path: string) => void;
 }
@@ -307,29 +316,20 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   previewBox.append(previewText);
   if (previewFn !== undefined) root.append(previewBox);
 
+  // Переход к проблемной строке из сообщения о запрете (требования 0fd1dc5d,
+  // 44d61c8a) — ПО КЛИКУ НА САМ ТЕКСТ фразы, отдельной кнопки «исправить» нет
+  // (требование заказчика 2026-10-14, п.10). Логику перехода держит каркас
+  // дерева; футер лишь передаёт адрес записи. Адрес есть только у ЛОКАЛИЗОВАННОЙ
+  // красной записи — тогда текст помечается классом-действием.
+  /** Адрес строки, к которой ведёт текущий клик по тексту; `null` — перехода нет. */
+  let fixPath: string | null = null;
+  previewText.addEventListener('click', () => {
+    if (fixPath !== null) opts.onFixIssue?.(fixPath);
+  });
+
   // --- Кнопки: стандартный набор + кнопки профиля места применения --------
   const actions = div('ff-actions');
   let applyButton: HTMLButtonElement | null = null;
-  // Кнопка «исправить» — переход к проблемной строке из сообщения о запрете
-  // (требования 0fd1dc5d, 44d61c8a). Живёт в футере, а логику перехода держит
-  // каркас дерева; показывается только при запрещённом применении с адресом.
-  let fixButton: HTMLButtonElement | null = null;
-  /** Адрес строки, к которой ведёт текущая кнопка «исправить». */
-  let fixPath: string | null = null;
-  if (opts.onFixIssue !== undefined) {
-    fixButton = uiButton({
-      label: 'исправить',
-      role: 'ghost',
-      size: 's',
-      class: 'ff-fix',
-      title: 'Перейти к строке с ошибкой',
-      onClick: () => {
-        if (fixPath !== null) opts.onFixIssue?.(fixPath);
-      },
-    });
-    fixButton.hidden = true;
-    actions.append(fixButton);
-  }
   if (opts.standardButtons !== false) {
     // «Сохранить» уже стоит в строке имени (если строка есть); иначе — здесь.
     if (saveNode !== null && getName === undefined) actions.append(saveNode);
@@ -373,28 +373,30 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
       if (preview === undefined) {
         // Фразы нет (пустой отбор) — подпись снимается, запрет применения тоже.
         previewText.textContent = '';
+        previewText.classList.remove(FILTER_FOOTER_PREVIEW_ACTION_CLASS);
         delete previewBox.dataset['severity'];
         if (applyButton !== null) applyButton.disabled = false;
-        if (fixButton !== null) {
-          fixButton.hidden = true;
-          fixPath = null;
-        }
+        fixPath = null;
       } else {
         const issues = preview.issues ?? [];
         previewText.textContent = preview.text;
-        setTooltip(previewBox, filterFooterTooltip(preview));
         const severity = worstFilterIssueSeverity(issues);
         if (severity === null) delete previewBox.dataset['severity'];
         else previewBox.dataset['severity'] = severity;
         const blocked = filterFooterApplyBlocked(preview);
         if (applyButton !== null) applyButton.disabled = blocked;
-        if (fixButton !== null) {
-          // Переход есть только к ЛОКАЛИЗОВАННОЙ красной записи: сообщение о
-          // запрете без адреса строки переводить некуда (требование 0fd1dc5d).
-          const target = blocked ? firstLocalizedErrorIssue(issues) : null;
-          fixPath = target === null ? null : target.path;
-          fixButton.hidden = fixPath === null;
-        }
+        // Переход есть только к ЛОКАЛИЗОВАННОЙ красной записи: сообщение о
+        // запрете без адреса строки переводить некуда (требование 0fd1dc5d).
+        const target = blocked ? firstLocalizedErrorIssue(issues) : null;
+        fixPath = target === null ? null : target.path;
+        previewText.classList.toggle(FILTER_FOOTER_PREVIEW_ACTION_CLASS, fixPath !== null);
+        const tooltip = filterFooterTooltip(preview);
+        setTooltip(
+          previewBox,
+          fixPath === null
+            ? tooltip
+            : `${tooltip}\n\nНажмите на текст, чтобы перейти к строке с ошибкой`,
+        );
       }
     }
   }

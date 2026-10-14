@@ -409,12 +409,16 @@ describe('фабрика редактора: диагностика запира
     });
     const root = editor.root as unknown as ShimElement;
     const row = one(root, 'ft-row')!;
-    const fix = one(root, 'ff-fix')!;
-    assert.notEqual(fix, null, 'переход «исправить» предлагает общий футер каркаса');
-    assert.equal(fix.hidden, false, 'запрет применения с адресом открывает переход');
+    assert.equal(one(root, 'ff-fix'), null, 'отдельной кнопки «исправить» нет (требование п.10)');
+    const previewText = one(root, 'ff-preview__text')!;
+    assert.equal(
+      previewText.classList.contains('ff-preview__text--action'),
+      true,
+      'запрет применения с адресом делает текст фразы кликабельным',
+    );
 
-    fix.emit('click', {});
-    assert.equal(row.focused, true, 'переход из сообщения о запрете фокусирует строку');
+    previewText.emit('click', {});
+    assert.equal(row.focused, true, 'клик по тексту фразы из запрета фокусирует строку');
 
     // Тот же переход у ТЕКСТА причины в самой строке — один механизм каркаса
     // (отдельной кнопки «исправить» нет — требование заказчика 2026-10-14, п.10).

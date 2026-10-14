@@ -106,6 +106,14 @@
   color: var(--warn-strong);
 }
 
+/* Текст фразы с доступным переходом к проблемной строке кликается (п.10);
+   отдельной кнопки «исправить» в футере нет. */
+.ff-preview__text--action {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
 /* --- Кнопки футера: верхний ряд действий, нижний — имя и сохранённые ------ */
 
 .ff-actions {

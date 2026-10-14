@@ -39,28 +39,34 @@ const APPLY_SITES = (rel: string): boolean =>
 const NO_LOCAL_ISSUE_TRANSITION = {
   name: 'no-local-issue-transition',
   description:
-    'Строка диагностики (`ft-issue`) и переход «исправить» (`ff-fix`) живут ' +
-    'в общем каркасе редактора (lib/filter-tree.ts, lib/filter-footer.ts, ' +
-    'lib/filter-editor.ts), а не в экране: место применения подаёт ' +
-    'диагностику через host.issues и не повторяет переход по-своему ' +
-    '(требование 0fd1dc5d).',
-  pattern: /ft-issue|ff-fix/,
+    'Строка диагностики (`ft-issue`) и переход к проблемной строке ' +
+    '(`ff-preview__text--action` — клик по тексту фразы в футере; прежде ' +
+    'кнопка `ff-fix`) живут в общем каркасе редактора (lib/filter-tree.ts, ' +
+    'lib/filter-footer.ts, lib/filter-editor.ts), а не в экране: место ' +
+    'применения подаёт диагностику через host.issues и не повторяет переход ' +
+    'по-своему (требование 0fd1dc5d).',
+  pattern: /ft-issue|ff-fix|ff-preview__text--action/,
   include: APPLY_SITES,
 };
 
-/** Каркас обязан нести кнопку перехода (обратная сторона правила). */
+/** Каркас обязан нести переход (обратная сторона правила). */
 function readLib(file: string): string {
   return fs.readFileSync(path.join(RENDERER_ROOT, 'lib', file), 'utf8');
 }
 
 describe('guard: переход «исправить» из сообщения о запрете — каркас, не экран', () => {
-  it('экран не знает классов строки диагностики и кнопки перехода', () => {
+  it('экран не знает классов строки диагностики и перехода', () => {
     assertGuardClean(RENDERER_ROOT, [NO_LOCAL_ISSUE_TRANSITION]);
   });
 
-  it('каркас несёт кнопку перехода: футер отдаёт адрес записи из сообщения о запрете', () => {
+  it('каркас несёт переход: футер отдаёт адрес записи из сообщения о запрете', () => {
     const footer = readLib('filter-footer.ts');
-    assert.match(footer, /class: 'ff-fix'/, 'кнопка «исправить» рисуется общим футером');
+    assert.match(
+      footer,
+      /FILTER_FOOTER_PREVIEW_ACTION_CLASS/,
+      'переход — по клику на текст фразы, класс-действие рисует общий футер (п.10)',
+    );
+    assert.doesNotMatch(footer, /class: 'ff-fix'/, 'отдельной кнопки «исправить» нет (п.10)');
     assert.match(
       footer,
       /firstLocalizedErrorIssue/,
