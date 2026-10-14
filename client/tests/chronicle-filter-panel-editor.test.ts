@@ -17,6 +17,8 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { buildChronicleKeywordGroup, type StructureKeywordScope } from '@etn/shared';
@@ -325,5 +327,22 @@ describe('панель «Дневника» — единый редактор о
     assert.equal(fromError.length, 1);
     assert.equal(fromError[0]!.severity, 'error');
     assert.equal(fromError[0]!.label, 'Город');
+  });
+});
+
+describe('футер «Дневника»: единообразие с «Структурами» (ошибка 4258e694 п.2)', () => {
+  const SOURCE = fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'chronicle', 'filter-panel.ts'),
+    'utf8',
+  );
+
+  it('«Отборы…» — нижний ряд футера (place: "name") рядом с полем имени', () => {
+    const body = SOURCE.slice(SOURCE.indexOf('function footerExtraButtons'));
+    const spec = body.slice(body.indexOf("id: 'saved'"), body.indexOf('onClick'));
+    assert.match(
+      spec,
+      /place:\s*'name'/,
+      'кнопка «Отборы…» обязана идти в нижний ряд (place: "name"), как в «Структурах»',
+    );
   });
 });

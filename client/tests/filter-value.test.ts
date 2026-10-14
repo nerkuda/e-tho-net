@@ -404,6 +404,44 @@ describe('ячейка значения: сборка виджета и прав
     );
   });
 
+  it('«Мысль»: выбор мысли записывает снапшот имени (labels.value) — фраза покажет имя, не id', async () => {
+    // Ошибка 4258e694 п.12б: выбор мысли в чип-поле раньше не писал labels.value,
+    // и фраза-превью показывала обрезанный id вместо имени мысли. Диалог «…»
+    // возвращает только id — имя догружается резолвом (живой поиск отдаёт имя
+    // сразу, см. `rememberOptions`).
+    const saved = (globalThis as any).window.etn;
+    (globalThis as any).window.etn = {
+      thoughts: { resolve: async () => [{ id: 't-1', title: 'Мысль о кофе' }] },
+    };
+    try {
+      const leafNode = leaf({ kind: 'id' }, 'in');
+      // API, как у каркаса дерева: правка значения пишется в модель листа
+      // (резолв имени сверяет, что лист держит то же единственное значение).
+      const writes: any[] = [];
+      const api = {
+        setValue: (value: any): void => {
+          leafNode.value = value;
+          writes.push(value);
+        },
+      };
+      const box = render(
+        leafNode,
+        api,
+        ctx({ picker: { label: 'Выбрать мысли', open: async () => ['t-1'] } }),
+      );
+      one(box, 'link-value-corner-btn')!.fire('click'); // диалог «…» чип-поля
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(writes.at(-1), { kind: 'list', items: ['t-1'] }, 'значение записано чипом');
+      assert.equal(leafNode.labels?.value, 'Мысль о кофе', 'снапшот имени записан в модель листа');
+      const { composeFilterPhrase } = await import('../src/renderer/lib/filter-phrase.js');
+      const phrase = composeFilterPhrase({ tree: leafNode }, { registry: REGISTRY });
+      assert.match(phrase, /Мысль о кофе/, 'фраза-превью показывает имя, а не id');
+      assert.doesNotMatch(phrase, /t-1/, 'id во фразе не остаётся');
+    } finally {
+      (globalThis as any).window.etn = saved;
+    }
+  });
+
   it('ссылочные ОПЕРАНДЫ рендерятся без исключения: имя dataset допустимо для DOMStringMap', () => {
     // Регресс 0.13.1: `wrap.dataset['entity-kind'] = kind` бросал
     // `SyntaxError: Failed to set a named property 'entity-kind' on 'DOMStringMap'`

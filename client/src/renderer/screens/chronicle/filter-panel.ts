@@ -897,9 +897,13 @@ function renderPanel(): void {
 function footerExtraButtons(): FilterFooterButtonSpec[] {
   return [
     {
+      // Нижний ряд футера — манипуляции с сохранёнными отборами (двухрядная
+      // компоновка, ошибка 4258e694 п.2): кнопка рядом с полем имени, как в
+      // «Структурах».
       id: 'saved',
       label: 'Отборы…',
       title: 'Выбрать сохранённый отбор',
+      place: 'name',
       onClick: () => void openSavedPicker(),
     },
   ];

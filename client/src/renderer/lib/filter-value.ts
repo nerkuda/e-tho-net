@@ -1013,6 +1013,19 @@ function boundAsItem(bound: FilterTreeValue): FilterTreeListItem {
   return '';
 }
 
+/**
+ * Снапшот подписи значения листа (`labels.value`) — имя выбранной сущности, а не
+ * её id: композер фразы показывает имя вместо id (ошибка 4258e694 п.12б).
+ * Снимок одиночный (у мысли нет каталога имён) — при наборе из нескольких
+ * значений он снимается, чтобы подпись не расходилась с содержимым.
+ */
+function setLeafValueLabel(leaf: FilterTreeLeaf, name: string | null): void {
+  const labels = { ...(leaf.labels ?? {}) };
+  if (name === null || name === '') delete labels.value;
+  else labels.value = name;
+  leaf.labels = labels.entity === undefined && labels.value === undefined ? undefined : labels;
+}
+
 /** Ссылочный ОПЕРАНД: одиночно — комбо, кратно — чип-поле (элемент 21955e84). */
 function entityOperandControl(
   leaf: FilterTreeLeaf,
@@ -1033,15 +1046,71 @@ function entityOperandControl(
   // требование заказчика 2026-10-13), а не самодельный диалог entity-picker.
   const picker = ctx.picker ?? defaultEntityPicker(ctx.networkId, kind);
 
+  // Имена вариантов, показанных живым поиском/пикером (id → имя): по ним фраза
+  // показывает ИМЯ мысли, а не id (ошибка 4258e694 п.12б).
+  const titles = new Map<string, string>();
+  const rememberOptions = (loaded: readonly EntityOption[]): EntityOption[] => {
+    for (const option of loaded) titles.set(option.id, option.title);
+    return [...loaded];
+  };
+  /**
+   * Записать снапшот имени значения (`labels.value`) по выбранным id: имя
+   * известного варианта — сразу, выбор в диалоге «…» даёт только id — имя
+   * догружаем резолвом. Снапшот — для ОДИНОЧНОГО значения; для набора он
+   * снимается (композер использует снимок только у одиночного значения).
+   * Вызывается ДО записи значения (`api.setValue`), чтобы фраза перечиталась
+   * с уже подставленным именем на одном `touch`.
+   */
+  const applyValueLabel = (values: readonly string[]): void => {
+    if (values.length !== 1) {
+      setLeafValueLabel(leaf, null);
+      return;
+    }
+    const id = values[0]!;
+    const known = titles.get(id);
+    if (known !== undefined) {
+      setLeafValueLabel(leaf, known);
+      return;
+    }
+    if (kind !== 'thoughts' || ctx.networkId === '') {
+      setLeafValueLabel(leaf, null);
+      return;
+    }
+    void etn.thoughts
+      .resolve(ctx.networkId, [id])
+      .then((refs) => {
+        const ref = refs[0];
+        if (ref === undefined) return;
+        const current = currentList(leaf.value);
+        if (current.length !== 1 || current[0] !== id) return;
+        setLeafValueLabel(leaf, ref.title);
+        ctx.touch?.();
+      })
+      .catch(() => undefined);
+  };
+
   if (!multiple) {
+    const currentValue = filterValueScalarText(leaf.value);
     const combo = buildEntityCombo({
       networkId: ctx.networkId,
       kind,
-      value: filterValueScalarText(leaf.value) === '' ? null : filterValueScalarText(leaf.value),
+      value: currentValue === '' ? null : currentValue,
       placeholder: 'выбрать…',
       ...(picker !== undefined ? { picker } : {}),
       onChange: (id) => {
         api.setValue(id === null || id === '' ? { kind: 'none' } : { kind: 'scalar', value: id });
+      },
+      // Выбранный вариант приходит целиком — имя берём оттуда же; выбор в
+      // диалоге «…» даёт только id (вариант вне каталога) — снапшот догружается
+      // резолвом в `applyValueLabel`.
+      onChangeEntity: (option) => {
+        if (option !== null) {
+          titles.set(option.id, option.title);
+          setLeafValueLabel(leaf, option.title);
+          ctx.touch?.();
+          return;
+        }
+        applyValueLabel(currentList(leaf.value));
       },
     });
     wrap.append(combo.root);
@@ -1050,15 +1119,22 @@ function entityOperandControl(
     const field = buildEntityChipField({
       getValues: () => currentList(leaf.value),
       onChange: (values) => {
+        applyValueLabel(values);
         api.setValue(values.length === 0 ? { kind: 'none' } : { kind: 'list', items: [...values] });
       },
-      loadOptions: (query) => (options.length > 0 ? filterEntityOptions(options, query) : thoughtsSearch(ctx, query)),
+      loadOptions: (query) =>
+        Promise.resolve(options.length > 0 ? filterEntityOptions(options, query) : thoughtsSearch(ctx, query)).then(
+          rememberOptions,
+        ),
       ...(options.length > 0 ? { initialOptions: options, optionsWhen: 'always' as const } : {}),
       optionsHeader: 'Значения',
       placeholder: 'Добавить значение…',
       ...(ctx.cloudOf !== undefined ? { cloudOf: ctx.cloudOf } : {}),
       ...(picker !== undefined ? { picker } : {}),
     });
+    // Каталог (типы мыслей/связей) известен заранее — запоминаем имена сразу,
+    // чтобы значение, выбранное в диалоге «…», тоже получило имя без резолва.
+    for (const option of options) titles.set(option.id, option.title);
     wrap.append(field.root);
   }
 
