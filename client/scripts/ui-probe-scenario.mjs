@@ -19,6 +19,11 @@
  *   { "key": { "key": "a", "code": "KeyA" } }         — явный код/скан-код
  *   { "click": "#sel" } | { "click": { "selector": "#sel", "at": [4, 4] } }
  *     | { "click": [640, 400] } | { "click": { "x": 10, "y": 20 } }
+ *   { "hover": "#sel" } | { "hover": { "selector": "#sel", "at": [4, 4] } }
+ *     | { "hover": [640, 400] } | { "hover": { "x": 10, "y": 20 } }
+ *     — навести курсор на точку/элемент БЕЗ клика: синтезирует `mouseMoved`,
+ *     включает CSS `:hover` (проверка hover-видимости действий; форма точки —
+ *     как у `click`).
  *   { "text": "строка" }                              — ввод текста
  *   { "waitFor": "expr" } | { "waitFor": { "expression": "…", "frames": 2 } }
  *     | { "waitFor": { "frames": 2 } } | { "waitFor": 2 }
@@ -77,6 +82,7 @@ const SPECIAL_KEYS = {
 export const STEP_ACTION_KEYS = [
   'key',
   'click',
+  'hover',
   'text',
   'waitFor',
   'probe',
@@ -224,37 +230,37 @@ export function resolveKey(spec) {
   return { key, code, keyCode, modifiers };
 }
 
-function normalizeClick(value, where) {
+function normalizeClick(value, where, field = 'click') {
   if (typeof value === 'string') {
-    return { selector: asString(value, `${where}.click`), at: null, x: null, y: null };
+    return { selector: asString(value, `${where}.${field}`), at: null, x: null, y: null };
   }
   if (Array.isArray(value)) {
-    if (value.length !== 2) fail(`${where}.click: координаты задаются парой [x, y]`);
-    return { selector: null, at: null, x: asNumber(value[0], `${where}.click[0]`), y: asNumber(value[1], `${where}.click[1]`) };
+    if (value.length !== 2) fail(`${where}.${field}: координаты задаются парой [x, y]`);
+    return { selector: null, at: null, x: asNumber(value[0], `${where}.${field}[0]`), y: asNumber(value[1], `${where}.${field}[1]`) };
   }
-  if (!isPlainObject(value)) fail(`${where}.click: ожидается селектор, [x,y] или объект`);
+  if (!isPlainObject(value)) fail(`${where}.${field}: ожидается селектор, [x,y] или объект`);
   for (const extra of Object.keys(value)) {
-    if (!['selector', 'x', 'y', 'at'].includes(extra)) fail(`${where}.click: неизвестное поле «${extra}»`);
+    if (!['selector', 'x', 'y', 'at'].includes(extra)) fail(`${where}.${field}: неизвестное поле «${extra}»`);
   }
   const hasSelector = value.selector !== undefined;
   const hasCoords = value.x !== undefined || value.y !== undefined;
-  if (hasSelector && hasCoords) fail(`${where}.click: селектор и координаты взаимоисключающи`);
+  if (hasSelector && hasCoords) fail(`${where}.${field}: селектор и координаты взаимоисключающи`);
   if (hasSelector) {
     let at = null;
     if (value.at !== undefined) {
       if (!Array.isArray(value.at) || value.at.length !== 2) {
-        fail(`${where}.click.at: ожидается пара [dx, dy] — смещение внутри элемента`);
+        fail(`${where}.${field}.at: ожидается пара [dx, dy] — смещение внутри элемента`);
       }
-      at = [asNumber(value.at[0], `${where}.click.at[0]`), asNumber(value.at[1], `${where}.click.at[1]`)];
+      at = [asNumber(value.at[0], `${where}.${field}.at[0]`), asNumber(value.at[1], `${where}.${field}.at[1]`)];
     }
-    return { selector: asString(value.selector, `${where}.click.selector`), at, x: null, y: null };
+    return { selector: asString(value.selector, `${where}.${field}.selector`), at, x: null, y: null };
   }
-  if (!hasCoords) fail(`${where}.click: нужен «selector» либо «x» и «y»`);
+  if (!hasCoords) fail(`${where}.${field}: нужен «selector» либо «x» и «y»`);
   return {
     selector: null,
     at: null,
-    x: asNumber(value.x, `${where}.click.x`),
-    y: asNumber(value.y, `${where}.click.y`),
+    x: asNumber(value.x, `${where}.${field}.x`),
+    y: asNumber(value.y, `${where}.${field}.y`),
   };
 }
 
@@ -522,6 +528,9 @@ function validateStep(raw, index, defaultTimeout) {
     }
     case 'click':
       step.click = normalizeClick(raw.click, where);
+      break;
+    case 'hover':
+      step.hover = normalizeClick(raw.hover, where, 'hover');
       break;
     case 'text':
       step.text = normalizeText(raw.text, where);

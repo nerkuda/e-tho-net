@@ -1,0 +1,158 @@
+{
+  "name": "filter-polish-696b3c3b",
+  "description": "Полировка редактора отбора, часть 3 (ошибка 696b3c3b; пункты 2,3,4,7,8,10). Онбординг → «Структуры» → DOM-пробы. П.2 — hover-видимость кнопок (+условие)/(+группа) у СВОЕЙ группы (видимость, без прыжков размеров: compareBoundingClientRect до/во время наведения). П.3 — крестик условия по hover строки и по фокусу ввода. П.4 — компактный заголовок группы: padding, шрифт 600, фон = фон группы. П.7 — в списке операторов нет группы «Выборка» (any_of/all_of/none_of), а переключатель «список↔выборка» работает. П.8 — переключатель на «в иерархии»/«в списке» у «Мысли» и у свойства-связи. П.10 — подписи операторов «=»/«≠»/«в»/«не в». Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-polish-696b3c3b.scenario.json --out .tmp/etn-696b3c3b/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-link-property",
+      "api": {
+        "name": "createLinkProperty",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "Связь стенда",
+          "value_type": "link",
+          "name_forward": "связь стенда",
+          "name_reverse": "связь стенда от"
+        },
+        "expression": "data.name"
+      }
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe') !== null" },
+
+    { "name": "widen-window", "eval": "(() => { window.resizeTo(1900, 1000); return window.innerWidth; })()" },
+    { "name": "widen-ready", "timeout": 8000, "waitFor": "window.innerWidth >= 1400 && document.querySelector('.st-filter') !== null" },
+    { "name": "panel-to-max", "eval": "(() => { const s = document.querySelector('.st-filter + .fp-splitter') || document.querySelector('.fp-splitter'); if (!s) return 'no-splitter'; s.focus(); s.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })); return true; })()" },
+    { "name": "panel-max-ready", "timeout": 8000, "waitFor": "(document.querySelector('.st-filter')?.getBoundingClientRect().width ?? 0) >= 300" },
+
+    { "name": "add-nested-group", "eval": "(() => { const g0 = document.querySelector('.st-filter .ft-group[data-path=\"\"]'); const btn = g0 ? g0.querySelector('.ft-add-group') : null; if (btn) { btn.click(); return 'clicked'; } return 'no-button'; })()" },
+    { "name": "nested-group-exists", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-group[data-path=\"0\"]') !== null && document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]') !== null" },
+
+    { "name": "pointer-away", "hover": [3, 300] },
+    { "name": "away-ready", "timeout": 4000, "waitFor": "!document.querySelector('.st-filter .ft-group:hover')" },
+
+    {
+      "name": "baseline-actions",
+      "probe": "(() => { const a0 = document.querySelector('.st-filter .ft-group[data-path=\"\"] > .ft-group__body > .ft-group__actions'); const a1 = document.querySelector('.st-filter .ft-group[data-path=\"0\"] > .ft-group__body > .ft-group__actions'); const r = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"] .ft-row__remove'); return JSON.stringify({ a0: a0 ? getComputedStyle(a0).opacity : null, a1: a1 ? getComputedStyle(a1).opacity : null, remove: r ? getComputedStyle(r).opacity : null }); })()"
+    },
+    {
+      "name": "baseline-hidden",
+      "probe": "(() => { const o = (sel) => { const e = document.querySelector(sel); return e ? parseFloat(getComputedStyle(e).opacity) : -1; }; return o('.st-filter .ft-group[data-path=\"\"] > .ft-group__body > .ft-group__actions') <= 0.01 && o('.st-filter .ft-group[data-path=\"0\"] > .ft-group__body > .ft-group__actions') <= 0.01 && o('.st-filter .ft-row[data-path=\"0.0\"] .ft-row__remove') <= 0.01; })()",
+      "expect": true
+    },
+
+    { "name": "stash-rects", "eval": "(() => { const rect = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }; window.__ftBefore = { g0: rect('.st-filter .ft-group[data-path=\"\"]'), g1: rect('.st-filter .ft-group[data-path=\"0\"]'), row: rect('.st-filter .ft-row[data-path=\"0.0\"]') }; return JSON.stringify(window.__ftBefore); })()" },
+
+    { "name": "hover-root-group", "hover": { "selector": ".st-filter .ft-group[data-path=\"\"]", "at": [4, 4] } },
+    { "name": "root-actions-shown", "timeout": 6000, "waitFor": "parseFloat(getComputedStyle(document.querySelector('.st-filter .ft-group[data-path=\"\"] > .ft-group__body > .ft-group__actions')).opacity) >= 0.99" },
+    {
+      "name": "root-hover-actions",
+      "probe": "(() => { const a0 = document.querySelector('.st-filter .ft-group[data-path=\"\"] > .ft-group__body > .ft-group__actions'); const a1 = document.querySelector('.st-filter .ft-group[data-path=\"0\"] > .ft-group__body > .ft-group__actions'); const g0 = document.querySelector('.st-filter .ft-group[data-path=\"\"]'); const g1 = document.querySelector('.st-filter .ft-group[data-path=\"0\"]'); return JSON.stringify({ a0: a0 && getComputedStyle(a0).opacity, a1: a1 && getComputedStyle(a1).opacity, hoverG0: g0 && g0.matches(':hover'), hoverG1: g1 && g1.matches(':hover') }); })()"
+    },
+    {
+      "name": "root-hover-only-root",
+      "probe": "(() => { const o = (sel) => { const e = document.querySelector(sel); return e ? parseFloat(getComputedStyle(e).opacity) : -1; }; const g0 = document.querySelector('.st-filter .ft-group[data-path=\"\"]'); const g1 = document.querySelector('.st-filter .ft-group[data-path=\"0\"]'); return o('.st-filter .ft-group[data-path=\"\"] > .ft-group__body > .ft-group__actions') >= 0.99 && o('.st-filter .ft-group[data-path=\"0\"] > .ft-group__body > .ft-group__actions') <= 0.01 && g0.matches(':hover') && !g1.matches(':hover'); })()",
+      "expect": true
+    },
+    {
+      "name": "no-jump-root-hover",
+      "probe": "(() => { const rect = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }; const now = { g0: rect('.st-filter .ft-group[data-path=\"\"]'), g1: rect('.st-filter .ft-group[data-path=\"0\"]'), row: rect('.st-filter .ft-row[data-path=\"0.0\"]') }; return JSON.stringify({ same: JSON.stringify(now) === JSON.stringify(window.__ftBefore), now }); })()"
+    },
+    {
+      "name": "no-jump-root-hover-assert",
+      "probe": "(() => { const rect = (sel) => { const e = document.querySelector(sel); const r = e.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }; const now = { g0: rect('.st-filter .ft-group[data-path=\"\"]'), g1: rect('.st-filter .ft-group[data-path=\"0\"]'), row: rect('.st-filter .ft-row[data-path=\"0.0\"]') }; const b = window.__ftBefore; return JSON.stringify(now) === JSON.stringify(b); })()",
+      "expect": true
+    },
+
+    { "name": "hover-nested-group", "hover": { "selector": ".st-filter .ft-group[data-path=\"0\"]", "at": [4, 4] } },
+    { "name": "nested-actions-shown", "timeout": 6000, "waitFor": "parseFloat(getComputedStyle(document.querySelector('.st-filter .ft-group[data-path=\"0\"] > .ft-group__body > .ft-group__actions')).opacity) >= 0.99" },
+    {
+      "name": "nested-hover-actions",
+      "probe": "(() => { const o = (sel) => { const e = document.querySelector(sel); return e ? getComputedStyle(e).opacity : null; }; const g0 = document.querySelector('.st-filter .ft-group[data-path=\"\"]'); const g1 = document.querySelector('.st-filter .ft-group[data-path=\"0\"]'); return JSON.stringify({ a0: o('.st-filter .ft-group[data-path=\"\"] > .ft-group__body > .ft-group__actions'), a1: o('.st-filter .ft-group[data-path=\"0\"] > .ft-group__body > .ft-group__actions'), hoverG0: g0.matches(':hover'), hoverG1: g1.matches(':hover') }); })()"
+    },
+    {
+      "name": "nested-hover-only-nested",
+      "probe": "(() => { const o = (sel) => { const e = document.querySelector(sel); return e ? parseFloat(getComputedStyle(e).opacity) : -1; }; const g1 = document.querySelector('.st-filter .ft-group[data-path=\"0\"]'); return o('.st-filter .ft-group[data-path=\"\"] > .ft-group__body > .ft-group__actions') <= 0.01 && o('.st-filter .ft-group[data-path=\"0\"] > .ft-group__body > .ft-group__actions') >= 0.99 && g1.matches(':hover'); })()",
+      "expect": true
+    },
+
+    { "name": "pointer-away-2", "hover": [3, 300] },
+    { "name": "away-2-ready", "timeout": 4000, "waitFor": "!document.querySelector('.st-filter .ft-group:hover')" },
+    { "name": "row-remove-hidden", "probe": "(() => { const e = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"] .ft-row__remove'); return e ? parseFloat(getComputedStyle(e).opacity) <= 0.01 : false; })()", "expect": true },
+    { "name": "hover-row", "hover": { "selector": ".st-filter .ft-row[data-path=\"0.0\"]", "at": [3, 3] } },
+    { "name": "row-remove-shown", "timeout": 6000, "waitFor": "parseFloat(getComputedStyle(document.querySelector('.st-filter .ft-row[data-path=\"0.0\"] .ft-row__remove')).opacity) >= 0.99" },
+    { "name": "row-remove-hover-visible", "probe": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); const rm = row.querySelector('.ft-row__remove'); return JSON.stringify({ hover: row.matches(':hover'), opacity: getComputedStyle(rm).opacity }); })()" },
+    { "name": "row-remove-hover-assert", "probe": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); const rm = row.querySelector('.ft-row__remove'); return row.matches(':hover') && parseFloat(getComputedStyle(rm).opacity) >= 0.99; })()", "expect": true },
+
+    { "name": "pointer-away-3", "hover": [3, 300] },
+    { "name": "away-3-ready", "timeout": 4000, "waitFor": "!document.querySelector('.st-filter .ft-row:hover')" },
+    { "name": "focus-row-input", "eval": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); const target = row.querySelector('.ft-row__what'); if (target) { target.focus(); return 'focused'; } return 'no-target'; })()" },
+    { "name": "row-remove-focus-shown", "timeout": 6000, "waitFor": "parseFloat(getComputedStyle(document.querySelector('.st-filter .ft-row[data-path=\"0.0\"] .ft-row__remove')).opacity) >= 0.99" },
+    { "name": "row-remove-focus-assert", "probe": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); const rm = row.querySelector('.ft-row__remove'); return row.matches(':focus-within') && parseFloat(getComputedStyle(rm).opacity) >= 0.99; })()", "expect": true },
+
+    {
+      "name": "group-head-metrics",
+      "probe": "(() => { const head = document.querySelector('.st-filter .ft-group[data-path=\"0\"] > .ft-group__head'); const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); const label = head.querySelector('.ft-group__connector-label'); const cs = getComputedStyle(head); return JSON.stringify({ padTop: cs.paddingTop, padBottom: cs.paddingBottom, weight: cs.fontWeight, bg: cs.backgroundColor, labelWeight: label ? getComputedStyle(label).fontWeight : null, rowWeight: row ? getComputedStyle(row).fontWeight : null }); })()"
+    },
+    {
+      "name": "group-head-assert",
+      "probe": "(() => { const head = document.querySelector('.st-filter .ft-group[data-path=\"0\"] > .ft-group__head'); const group = document.querySelector('.st-filter .ft-group[data-path=\"0\"]'); const label = head.querySelector('.ft-group__connector-label'); const cs = getComputedStyle(head); const padY = Math.round(parseFloat(cs.paddingTop)); const bgTransparent = cs.backgroundColor === 'rgba(0, 0, 0, 0)' || cs.backgroundColor === 'transparent'; const groupBg = getComputedStyle(group).backgroundColor; return padY <= 4 && Number(cs.fontWeight) >= 600 && bgTransparent && Number(getComputedStyle(label).fontWeight) >= 600 && groupBg !== 'rgba(0, 0, 0, 0)'; })()",
+      "expect": true
+    },
+    {
+      "name": "group-head-same-bg-as-group",
+      "probe": "(() => { const head = document.querySelector('.st-filter .ft-group[data-path=\"0\"] > .ft-group__head'); const body = document.querySelector('.st-filter .ft-group[data-path=\"0\"] > .ft-group__body'); const g0 = document.querySelector('.st-filter .ft-group[data-path=\"0\"]'); return JSON.stringify({ headBg: getComputedStyle(head).backgroundColor, groupBg: getComputedStyle(g0).backgroundColor, bodyBg: getComputedStyle(body).backgroundColor }); })()"
+    },
+
+    { "name": "pick-link-property", "eval": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); row.querySelector('.ft-row__what').click(); return true; })()" },
+    { "name": "operand-list-open", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item') !== null" },
+    { "name": "choose-link-property", "eval": "(() => { const items = [...document.querySelectorAll('.ft-choice__item')]; const it = items.find((e) => e.textContent.toLowerCase().includes('связь стенда')); if (it) { it.click(); return it.dataset.key; } return 'not-found'; })()" },
+    { "name": "link-property-picked", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"0.0\"] .ft-row__what').textContent.toLowerCase().includes('связь стенда')" },
+
+    { "name": "open-operator-menu-link", "eval": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); row.querySelector('.ft-row__op').click(); return true; })()" },
+    { "name": "operator-menu-open", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in\"]') !== null" },
+    {
+      "name": "operator-menu-labels",
+      "probe": "(() => { const label = (k) => { const it = document.querySelector('.ft-choice__item[data-key=\"' + k + '\"]'); return it ? it.textContent.trim() : null; }; const groups = [...document.querySelectorAll('.ft-choice__group')].map((e) => e.textContent.trim()); return JSON.stringify({ eq: label('eq'), ne: label('ne'), in: label('in'), not_in: label('not_in'), groups }); })()"
+    },
+    {
+      "name": "no-selection-group-and-labels-assert",
+      "probe": "(() => { const label = (k) => { const it = document.querySelector('.ft-choice__item[data-key=\"' + k + '\"]'); return it ? it.textContent.trim() : null; }; const groups = [...document.querySelectorAll('.ft-choice__group')].map((e) => e.textContent.trim()); const hasSets = groups.some((g) => g === 'Выборка'); const subselect = ['any_of', 'all_of', 'none_of'].some((k) => document.querySelector('.ft-choice__item[data-key=\"' + k + '\"]') !== null); return !hasSets && !subselect && label('eq') === '=' && label('ne') === '≠' && label('in') === 'в' && label('not_in') === 'не в'; })()",
+      "expect": true
+    },
+
+    { "name": "pick-in-link", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"in\"]'); if (it) it.click(); return !!it; })()" },
+    { "name": "link-in-mode-present", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"0.0\"] .fq-mode') !== null" },
+    { "name": "link-in-mode-assert", "probe": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); const op = row.querySelector('.ft-row__op').textContent.replace('▾', '').trim(); return op === 'в' && row.querySelectorAll('.fq-mode').length === 1; })()", "expect": true },
+    { "name": "switch-to-subquery-link", "eval": "(() => { const btn = [...document.querySelectorAll('.st-filter .ft-row[data-path=\"0.0\"] .fq-mode .ui-btn')].find((b) => b.textContent.trim() === 'Выборка'); if (btn) { btn.click(); return 'clicked'; } return 'no-button'; })()" },
+    { "name": "subquery-modal-open", "timeout": 8000, "waitFor": "document.querySelector('.fq-modal') !== null" },
+    { "name": "close-subquery-modal", "key": "Escape" },
+    { "name": "subquery-modal-closed", "timeout": 8000, "waitFor": "document.querySelector('.fq-modal') === null" },
+
+    { "name": "pick-id-operand", "eval": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); row.querySelector('.ft-row__what').click(); return true; })()" },
+    { "name": "operand-list-open-2", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"id\"]') !== null" },
+    { "name": "choose-id", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"id\"]'); if (it) it.click(); return !!it; })()" },
+    { "name": "id-picked", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"0.0\"] .ft-row__what').textContent.includes('Мысль')" },
+    { "name": "open-operator-menu-id", "eval": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); row.querySelector('.ft-row__op').click(); return true; })()" },
+    { "name": "operator-menu-open-id", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in\"]') !== null" },
+    { "name": "pick-in-id", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"in\"]'); if (it) it.click(); return !!it; })()" },
+    { "name": "id-in-mode-present", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"0.0\"] .fq-mode') !== null" },
+    { "name": "id-in-mode-assert", "probe": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0.0\"]'); const op = row.querySelector('.ft-row__op').textContent.replace('▾', '').trim(); return op === 'в' && row.querySelectorAll('.fq-mode').length === 1; })()", "expect": true },
+
+    { "name": "phrase-text", "probe": "(() => { const p = document.querySelector('.st-filter .ff-preview'); return p ? p.textContent.trim() : 'no-preview'; })()" }
+  ]
+}

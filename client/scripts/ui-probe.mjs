@@ -464,22 +464,28 @@ function writeShot(outDir, file, buffer) {
   return file;
 }
 
-async function doClick(cdp, spec) {
-  let x;
-  let y;
+/** Точка клика/наведения в координатах вьюпорта по спецификации шага. */
+async function resolvePoint(cdp, spec) {
   if (spec.selector !== null) {
     const rect = await elementRect(cdp, spec.selector);
     if (rect.width <= 0 || rect.height <= 0) {
       throw new Error(`элемент «${spec.selector}» имеет нулевой размер`);
     }
-    x = rect.x + (spec.at === null ? rect.width / 2 : spec.at[0]);
-    y = rect.y + (spec.at === null ? rect.height / 2 : spec.at[1]);
-  } else {
-    x = spec.x;
-    y = spec.y;
+    const x = rect.x + (spec.at === null ? rect.width / 2 : spec.at[0]);
+    const y = rect.y + (spec.at === null ? rect.height / 2 : spec.at[1]);
+    return { px: Math.round(x), py: Math.round(y) };
   }
-  const px = Math.round(x);
-  const py = Math.round(y);
+  return { px: Math.round(spec.x), py: Math.round(spec.y) };
+}
+
+/** Навести курсор (только `mouseMoved`) — включает CSS `:hover` без клика. */
+async function doHover(cdp, spec) {
+  const { px, py } = await resolvePoint(cdp, spec);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: px, y: py, button: 'none', buttons: 0 });
+}
+
+async function doClick(cdp, spec) {
+  const { px, py } = await resolvePoint(cdp, spec);
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: px, y: py, button: 'none', buttons: 0 });
   await cdp.send('Input.dispatchMouseEvent', {
     type: 'mousePressed',
@@ -535,6 +541,10 @@ async function runStep(cdp, step, outDir, entry, report, context) {
       break;
     case 'click':
       await doClick(cdp, step.click);
+      await waitFrames(cdp, 2);
+      break;
+    case 'hover':
+      await doHover(cdp, step.hover);
       await waitFrames(cdp, 2);
       break;
     case 'text':

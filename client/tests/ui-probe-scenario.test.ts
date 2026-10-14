@@ -33,6 +33,8 @@ test('parseScenario: сценарий со всеми действиями ра�
         { click: '#feed' },
         { click: { selector: '.card', at: [4, 6] } },
         { click: [640, 400] },
+        { hover: '#card' },
+        { hover: { selector: '.row', at: [2, 3] } },
         { text: 'привет' },
         { waitFor: { expression: 'document.readyState === "complete"', frames: 2 } },
         { probe: { name: 'rows', expression: 'document.querySelectorAll(".row").length' } },
@@ -44,27 +46,29 @@ test('parseScenario: сценарий со всеми действиями ра�
 
   assert.equal(scenario.name, 'probe');
   assert.equal(scenario.timeout, DEFAULT_STEP_TIMEOUT);
-  assert.equal(scenario.steps.length, 9);
+  assert.equal(scenario.steps.length, 11);
   assert.deepEqual(
     scenario.steps.map((step) => step.kind),
-    ['key', 'click', 'click', 'click', 'text', 'waitFor', 'probe', 'shot', 'eval'],
+    ['key', 'click', 'click', 'click', 'hover', 'hover', 'text', 'waitFor', 'probe', 'shot', 'eval'],
   );
   assert.equal(scenario.steps[0]?.key?.code, 'ArrowDown');
   assert.deepEqual(scenario.steps[1]?.click, { selector: '#feed', at: null, x: null, y: null });
   assert.deepEqual(scenario.steps[2]?.click, { selector: '.card', at: [4, 6], x: null, y: null });
   assert.deepEqual(scenario.steps[3]?.click, { selector: null, at: null, x: 640, y: 400 });
-  assert.equal(scenario.steps[4]?.text, 'привет');
-  assert.deepEqual(scenario.steps[5]?.waitFor, {
+  assert.deepEqual(scenario.steps[4]?.hover, { selector: '#card', at: null, x: null, y: null });
+  assert.deepEqual(scenario.steps[5]?.hover, { selector: '.row', at: [2, 3], x: null, y: null });
+  assert.equal(scenario.steps[6]?.text, 'привет');
+  assert.deepEqual(scenario.steps[7]?.waitFor, {
     expression: 'document.readyState === "complete"',
     frames: 2,
   });
-  assert.deepEqual(scenario.steps[6]?.probe, {
+  assert.deepEqual(scenario.steps[8]?.probe, {
     name: 'rows',
     expression: 'document.querySelectorAll(".row").length',
   });
-  assert.deepEqual(scenario.steps[7]?.shot, { file: '01.png', clip: { selector: '.feed' } });
-  assert.deepEqual(scenario.steps[8]?.eval, {
-    name: 'eval9',
+  assert.deepEqual(scenario.steps[9]?.shot, { file: '01.png', clip: { selector: '.feed' } });
+  assert.deepEqual(scenario.steps[10]?.eval, {
+    name: 'eval11',
     expression: 'document.querySelector("#x").focus()',
   });
 });
@@ -202,6 +206,21 @@ test('click: селектор и координаты взаимоисключа
   assert.throws(() => validateScenario(scenarioFrom([{ click: {} }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ click: [1, 2, 3] }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ click: { selector: '#x', bogus: 1 } }])), ScenarioError);
+});
+
+test('hover: та же форма точки, что у click; ошибки называют поле «hover»', () => {
+  const scenario = validateScenario(scenarioFrom([{ hover: { selector: '.row', at: [1, 2] } }]));
+  assert.deepEqual(scenario.steps[0]?.hover, { selector: '.row', at: [1, 2], x: null, y: null });
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ hover: { selector: '#x', x: 1 } }])),
+    ScenarioError,
+  );
+  assert.throws(() => validateScenario(scenarioFrom([{ hover: {} }])), ScenarioError);
+  // Ошибка обязана называть поле `hover`, а не `click` (общий нормализатор точки).
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ hover: [1, 2, 3] }])),
+    (err: unknown) => err instanceof ScenarioError && /\.hover/.test(err.message),
+  );
 });
 
 test('text и timeout: пустая строка и нечисловой лимит отвергаются', () => {

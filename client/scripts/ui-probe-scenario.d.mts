@@ -7,6 +7,7 @@
 export type StepKind =
   | 'key'
   | 'click'
+  | 'hover'
   | 'text'
   | 'waitFor'
   | 'probe'
@@ -92,6 +93,8 @@ export interface ScenarioStep {
   expect?: unknown;
   key?: NormalizedKey;
   click?: NormalizedClick;
+  /** Наведение курсора без клика (`mouseMoved`): включает CSS `:hover`. */
+  hover?: NormalizedClick;
   text?: string;
   waitFor?: NormalizedWaitFor;
   probe?: NormalizedExpression;

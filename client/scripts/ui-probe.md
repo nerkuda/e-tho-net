@@ -59,6 +59,7 @@ node client/scripts/ui-probe-stand.mjs --data-from C:/zSpace/ETN_data --api-key 
 | --- | --- | --- |
 | `key` | `{ "key": "ArrowDown", "modifiers": ["shift"] }` | клавиши/сочетания (CDP `Input.dispatchKeyEvent`) |
 | `click` | `"#sel"` \| `{ "selector": "#sel", "at": [4,4] }` \| `[640,400]` \| `{ "x":10, "y":20 }` | клик по элементу/координатам (CDP) |
+| `hover` | та же форма точки, что у `click` | навести курсор БЕЗ клика (`mouseMoved`) — включает CSS `:hover` (проверка hover-видимости действий) |
 | `text` | `"строка"` | ввод текста (CDP `Input.insertText`) |
 | `waitFor` | `"expr"` \| `{ "expression": "…", "frames": 2 }` \| `2` | ожидание по условию; кадровые ожидания — только при активном окне |
 | `probe` | `"expr"` \| `{ "name": "rows", "expression": "…" }` | прочитать значение и записать в отчёт; `expect` — сверка «факт/ожидание» |
