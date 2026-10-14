@@ -195,10 +195,46 @@ describe('футер отбора: имя, маркер ● и сохранен�
       ],
     });
     const root = handle.root as unknown as ShimElement;
-    assert.equal(buttonByText(root, 'Сохранить'), null, 'стандартный набор отключён');
+    assert.equal(exactOne(root, 'ff-save'), null, 'стандартный набор отключён');
     buttonByText(root, 'Готово')!.emit('click', {});
     assert.equal(done, 1);
     assert.ok(exactOne(root, 'ff-extra--cancel') !== null, 'кнопки профиля помечены своим id');
+  });
+
+  it('двухрядная компоновка: действия над отбором сверху, имя и сохранённые снизу', () => {
+    let savedPicked = 0;
+    const { handle } = buildFooter({
+      extraButtons: [
+        { id: 'commands', label: 'Команды ▾', onClick: () => undefined },
+        { id: 'saved', label: 'Отборы…', place: 'name', onClick: () => (savedPicked += 1) },
+      ],
+    });
+    const root = handle.root as unknown as ShimElement;
+    const actions = exactOne(root, 'ff-actions')!;
+    const nameRow = exactOne(root, 'ff-name')!;
+    // Верхний ряд — действия над текущим отбором и его результатами.
+    assert.ok(exactOne(actions, 'ff-apply') !== null, '«Применить» — в верхнем ряду');
+    assert.ok(exactOne(actions, 'ff-clear') !== null, '«Очистить» — в верхнем ряду');
+    assert.ok(exactOne(actions, 'ff-extra--commands') !== null, '«Команды ▾» — в верхнем ряду');
+    assert.equal(exactOne(actions, 'ff-extra--saved'), null, 'кнопка сохранённых — не в верхнем ряду');
+    // Нижний ряд — манипуляции с сохранёнными отборами: имя + «Сохранить» + «…».
+    assert.ok(exactOne(nameRow, 'ff-name__input') !== null, 'поле имени — в нижнем ряду');
+    assert.ok(exactOne(nameRow, 'ff-save') !== null, '«Сохранить» — в нижнем ряду');
+    assert.ok(exactOne(nameRow, 'ff-extra--saved') !== null, '«Отборы…» — в нижнем ряду');
+    exactOne(root, 'ff-extra--saved')!.emit('click', {});
+    assert.equal(savedPicked, 1, 'кнопка нижнего ряда кликабельна');
+  });
+
+  it('кнопка нижнего ряда без строки имени не теряется — уходит в верхний ряд', () => {
+    const { handle } = buildFooter({
+      getName: undefined,
+      setName: undefined,
+      extraButtons: [{ id: 'saved', label: 'Отборы…', place: 'name', onClick: () => undefined }],
+    });
+    const root = handle.root as unknown as ShimElement;
+    assert.equal(exactOne(root, 'ff-name'), null, 'строки имени нет — футер без имени');
+    assert.ok(exactOne(root, 'ff-extra--saved') !== null, 'кнопка сохранена, не потеряна');
+    assert.ok(exactOne(root, 'ff-save') !== null, '«Сохранить» ушло в верхний ряд');
   });
 });
 

@@ -279,7 +279,8 @@ describe('фабрика редактора: колбэки хоста', () => {
     const { root, calls } = buildEditor('thoughts', {
       host: { savedName: () => 'старый отбор', getName: () => 'новый отбор' },
     });
-    buttonByText(root, 'Сохранить')!.emit('click');
+    // «Сохранить» — иконочная кнопка 💾 в нижнем ряду футера (ошибка 4258e694 п.2).
+    one(root, 'ff-save')!.emit('click');
     assert.deepEqual(calls, ['save:новый отбор:true'], 'имя изменено — сохраняем копией');
   });
 

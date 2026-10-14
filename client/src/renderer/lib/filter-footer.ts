@@ -4,11 +4,20 @@
  *
  * Нижняя панель редактора: имя отбора — редактируемое поле с ✕ очистки; маркер
  * изменённости ● (появляется при отличии от сохранённого); фраза-превью отбора
- * (показывается ≤3 строк, полный текст и список ошибок — в тултипе); кнопки
- * «Сохранить» / «Применить» / «Очистить». Смена имени + «Сохранить» = сохранение
- * КОПИЕЙ. Состав кнопок — параметр профиля места применения: модальный слой
- * под-выборки передаёт свой набор («Готово»/«Отмена»), базовый футер —
- * под-проект внедрения.
+ * (показывается ≤3 строк, полный текст и список ошибок — в тултипе); кнопки.
+ * Смена имени + «Сохранить» = сохранение КОПИЕЙ. Состав кнопок — параметр
+ * профиля места применения: модальный слой под-выборки передаёт свой набор
+ * («Готово»/«Отмена»), базовый футер — под-проект внедрения.
+ *
+ * Компоновка футера — ДВУХРЯДНАЯ, как на прежней панели отборов (решение
+ * заказчика 2026-10-14, ошибка 4258e694 п.2):
+ *   • ВЕРХНИЙ ряд (`.ff-actions`) — действия над ТЕКУЩИМ отбором и его
+ *     результатами: «Применить», «Очистить», кнопки места (`place: 'actions'`);
+ *   • НИЖНИЙ ряд (`.ff-name`) — манипуляции с СОХРАНЁННЫМИ отборами: поле имени,
+ *     «Сохранить» (иконка 💾), ✕ очистки имени, кнопки места (`place: 'name'` —
+ *     «…» выбора сохранённого отбора).
+ * Оба ряда лежат в непрокручиваемом низу редактора (`.fe-foot`), с деревом
+ * условий не уезжают.
  *
  * Своей модели отбора модуль не ведёт: имя, определение и фраза-превью берутся
  * из единой модели хоста (`FilterCriteriaState` — ADR 30ff83bb), маркер ●
@@ -40,7 +49,8 @@ import {
   type FilterPhraseState,
 } from './filter-phrase.js';
 import { fieldInput, wrapClearable } from './ui/field.js';
-import { uiButton, type ButtonRole } from './ui/button.js';
+import { iconButton, uiButton, type ButtonRole } from './ui/button.js';
+import { svgIcon } from './ui/icon.js';
 import { deepEqual } from './ui/state.js';
 
 // ---------------------------------------------------------------------------
@@ -78,6 +88,14 @@ export interface FilterFooterButtonSpec {
   title?: string;
   /** Заблокирована ли кнопка (например, «Применить» при красной диагностике). */
   disabled?: boolean;
+  /**
+   * Ряд компоновки футера (решение заказчика 2026-10-14, ошибка 4258e694 п.2):
+   * `actions` (по умолчанию) — верхний ряд действий над отбором; `name` —
+   * нижний ряд манипуляций с сохранёнными отборами, рядом с полем имени
+   * (кнопка «…» выбора сохранённого). Без строки имени кнопка `name` уходит в
+   * верхний ряд — потерять её нельзя.
+   */
+  place?: 'actions' | 'name';
   onClick: () => void;
 }
 
@@ -196,6 +214,18 @@ export function filterFooterPhrasePreview(source: FilterFooterPhraseSource): Fil
   return text === '' ? undefined : { text };
 }
 
+/** Кнопка профиля места применения — общий вид для обоих рядов футера. */
+function footerExtraButton(spec: FilterFooterButtonSpec): HTMLButtonElement {
+  return uiButton({
+    label: spec.label,
+    role: spec.role ?? 'secondary',
+    class: `ff-extra ff-extra--${spec.id}`,
+    title: spec.title,
+    disabled: spec.disabled,
+    onClick: spec.onClick,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Сборка
 // ---------------------------------------------------------------------------
@@ -209,16 +239,18 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   /** Маркер ● у строки имени (нет строки — нет и маркера). */
   let nameChangedMarker: HTMLElement | null = null;
 
-  // Кнопка «Сохранить» строится ЗАРАНЕЕ: по требованию заказчика 2026-10-13 она
-  // стоит на ОДНОЙ строке с полем имени (а не в отдельной полосе кнопок).
+  // Кнопка «Сохранить» строится ЗАРАНЕЕ: она стоит в НИЖНЕМ ряду рядом с полем
+  // имени (иконка 💾, как на прежней панели отборов — решение заказчика
+  // 2026-10-14, ошибка 4258e694 п.2). Без строки имени — уходит в верхний ряд.
   const save = (): void => {
     void opts.onSave(filterSaveRequest(getName?.() ?? '', opts.savedName()));
   };
   const saveNode =
     opts.standardButtons !== false
-      ? uiButton({
-          label: 'Сохранить',
+      ? iconButton({
+          icon: svgIcon('save', 15),
           role: 'secondary',
+          size: 's',
           class: 'ff-save',
           title: 'Записать настройки отбора',
           onClick: save,
@@ -229,6 +261,10 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   // Место без сохранённых отборов (getName не задан) имя не рисует: у него нет
   // ни записи, ни маркера «изменён относительно сохранённого».
   const getName = opts.getName;
+  const hasNameRow = getName !== undefined;
+  /** Кнопки нижнего ряда (`place: 'name'`): рядом с именем; без строки — вверху. */
+  const nameRowButtons = (): readonly FilterFooterButtonSpec[] =>
+    hasNameRow ? (opts.extraButtons ?? []).filter((spec) => spec.place === 'name') : [];
   let nameInput: HTMLInputElement | null = null;
   if (getName !== undefined) {
     const nameRow = div('ff-name');
@@ -253,6 +289,7 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     setTooltip(changed, 'отбор изменён с момента сохранения');
     nameRow.append(wrapClearable(nameInput, clearName), changed);
     if (saveNode !== null) nameRow.append(saveNode);
+    for (const spec of nameRowButtons()) nameRow.append(footerExtraButton(spec));
     root.append(nameRow);
     /** Маркер ● (вне области видимости `refresh` ниже). */
     nameChangedMarker = changed;
@@ -313,17 +350,11 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     applyButton = applyNode;
     actions.append(applyNode, clearNode);
   }
+  // Кнопки места верхнего ряда: всё, что не ушло в строку имени (кнопки
+  // `place: 'name'` при наличии строки уже нарисованы там).
   for (const spec of opts.extraButtons ?? []) {
-    actions.append(
-      uiButton({
-        label: spec.label,
-        role: spec.role ?? 'secondary',
-        class: `ff-extra ff-extra--${spec.id}`,
-        title: spec.title,
-        disabled: spec.disabled,
-        onClick: spec.onClick,
-      }),
-    );
+    if (nameRowButtons().includes(spec)) continue;
+    actions.append(footerExtraButton(spec));
   }
   root.append(actions);
 

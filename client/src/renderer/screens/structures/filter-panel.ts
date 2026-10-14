@@ -672,9 +672,12 @@ function footerExtraButtons(): FilterFooterButtonSpec[] {
       },
     },
     {
+      // Нижний ряд футера — манипуляции с сохранёнными отборами (решение
+      // заказчика 2026-10-14, ошибка 4258e694 п.2): кнопка «…» рядом с именем.
       id: 'saved',
       label: 'Отборы…',
       title: 'Выбрать сохранённый отбор',
+      place: 'name',
       onClick: () => void openSavedPicker(),
     },
   ];
