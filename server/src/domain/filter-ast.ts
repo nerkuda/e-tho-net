@@ -45,7 +45,7 @@ const GROUP_KEYS = ['op', 'children'] as const;
 /** Допустимые ключи условия-листа. */
 const LEAF_KEYS = ['entity', 'operator', 'value', 'labels', 'mode'] as const;
 /** Допустимые ключи снапшотов подписей. */
-const LABELS_KEYS = ['entity', 'value'] as const;
+const LABELS_KEYS = ['entity', 'value', 'values'] as const;
 /** Допустимые ключи ключа сортировки. */
 const SORT_KEY_KEYS = ['key', 'order'] as const;
 /** Допустимые ключи токена. */
@@ -395,13 +395,34 @@ function parseLabels(input: unknown, path: string, requestId?: string): FilterAs
   }
   assertExactKeys(input, LABELS_KEYS, path, requestId);
   const out: FilterAstLabels = {};
-  for (const key of LABELS_KEYS) {
+  for (const key of ['entity', 'value'] as const) {
     const value = input[key];
     if (value === undefined) continue;
     if (typeof value !== 'string') {
       fail(`${path}.${key}: подпись должна быть строкой.`, { field: `${path}.${key}` }, requestId);
     }
     out[key] = value;
+  }
+  const values = input['values'];
+  if (values !== undefined) {
+    out.values = parseLabelMap(values, `${path}.values`, requestId);
+  }
+  return out;
+}
+
+/** Карта подписей значений по id (`labels.values`): объект непустых строк. */
+function parseLabelMap(input: unknown, path: string, requestId?: string): Record<string, string> {
+  if (!isPlainObject(input)) {
+    fail(`${path}: карта подписей значений должна быть объектом.`, { field: path }, requestId);
+  }
+  const out: Record<string, string> = {};
+  for (const [id, name] of Object.entries(input)) {
+    if (typeof name !== 'string') {
+      fail(`${path}.${id}: подпись значения должна быть строкой.`, {
+        field: `${path}.${id}`,
+      }, requestId);
+    }
+    out[id] = name;
   }
   return out;
 }

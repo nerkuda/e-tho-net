@@ -142,6 +142,31 @@ describe('AST validation (9c156b8c)', () => {
     assert.deepEqual(parsed.sort, [{ key: 'created_at', order: 'desc' }]);
   });
 
+  it('accepts labels.values (карта id → имя набора) и отвергает нестроковые подписи', () => {
+    // Ошибка 4258e694 п.12б: несколько выбранных значений-ссылок несут имена
+    // картой `labels.values`; сервер обязан её принять и проверить.
+    const tree: FilterAstNode = {
+      entity: { kind: 'id' },
+      operator: 'in',
+      value: ['aaa', 'bbb'],
+      labels: { entity: 'Мысль', values: { aaa: 'Первая', bbb: 'Вторая' } },
+    };
+    const parsed = parseFilterAst(ast(tree));
+    const leaf = parsed.filter as { labels?: { values?: Record<string, string> } };
+    assert.deepEqual(leaf.labels?.values, { aaa: 'Первая', bbb: 'Вторая' });
+
+    const bad: unknown[] = [
+      { version: FILTER_AST_VERSION, filter: { ...tree, labels: { values: { aaa: 1 } } } },
+      { version: FILTER_AST_VERSION, filter: { ...tree, labels: { values: 'не карта' } } },
+    ];
+    for (const input of bad) {
+      assert.throws(
+        () => parseFilterAst(input),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+    }
+  });
+
   it('rejects unknown fields at every level', () => {
     const cases: unknown[] = [
       { ...ast(validTree), extra: 1 },

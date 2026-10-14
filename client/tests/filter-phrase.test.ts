@@ -281,6 +281,39 @@ describe('композер фразы: значения-ссылки — име�
       'Тип мысли в списке Проект, Задача',
     );
   });
+
+  it('карта labels.values даёт имя КАЖДОМУ значению набора (ошибка 4258e694 п.12б)', () => {
+    // Множественный выбор мыслей набирается без каталога имён — имена берутся
+    // из карты снапшотов; отсутствующий в карте id — fallback на id.
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf(
+          { kind: 'id' },
+          'in',
+          { kind: 'list', items: ['aaa', 'bbb', 'ccc'] },
+          { labels: { values: { aaa: 'Первая мысль', bbb: 'Вторая мысль' } } },
+        ),
+        ctx(),
+      ),
+      'Мысль в списке Первая мысль, Вторая мысль, ccc',
+    );
+  });
+
+  it('карта labels.values читается из определения отбора (parseFilterDefinition)', () => {
+    const definition = {
+      version: 1,
+      filter: {
+        entity: { kind: 'id' },
+        operator: 'in',
+        value: ['aaa', 'bbb'],
+        labels: { values: { aaa: 'Альфа', bbb: 'Браво' } },
+      },
+    };
+    assert.equal(
+      mod.composeFilterPhraseFromDefinition(definition, ctx()),
+      'Мысль в списке Альфа, Браво',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

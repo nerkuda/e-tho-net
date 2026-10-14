@@ -437,6 +437,59 @@ describe('ячейка значения: сборка виджета и прав
       const phrase = composeFilterPhrase({ tree: leafNode }, { registry: REGISTRY });
       assert.match(phrase, /Мысль о кофе/, 'фраза-превью показывает имя, а не id');
       assert.doesNotMatch(phrase, /t-1/, 'id во фразе не остаётся');
+      assert.deepEqual(
+        leafNode.labels?.values,
+        { 't-1': 'Мысль о кофе' },
+        'карта имён labels.values ведётся и для одиночного значения',
+      );
+    } finally {
+      (globalThis as any).window.etn = saved;
+    }
+  });
+
+  it('«Мысль»: набор из ТРЁХ мыслей — карта имён, фраза показывает все имена (не id)', async () => {
+    // Ошибка 4258e694 п.12б: множественный выбор — основной кейс «Мысль в
+    // списке»/«в иерархии»; фраза обязана показывать имена КАЖДОГО значения,
+    // а не id. Имена догружаются ПАКЕТНЫМ `etn.thoughts.resolve`.
+    const saved = (globalThis as any).window.etn;
+    const resolved: string[][] = [];
+    (globalThis as any).window.etn = {
+      thoughts: {
+        resolve: async (_n: string, ids: string[]) => {
+          resolved.push([...ids]);
+          return ids.map((id) => ({ id, title: NAMES[id] ?? id }));
+        },
+      },
+    };
+    const NAMES: Record<string, string> = { aaa: 'Мысль А', bbb: 'Мысль Б', ccc: 'Мысль В' };
+    try {
+      const leafNode = leaf({ kind: 'id' }, 'in');
+      const writes: any[] = [];
+      const api = {
+        setValue: (value: any): void => {
+          leafNode.value = value;
+          writes.push(value);
+        },
+      };
+      const box = render(
+        leafNode,
+        api,
+        ctx({ picker: { label: 'Выбрать мысли', open: async () => ['aaa', 'bbb', 'ccc'] } }),
+      );
+      one(box, 'link-value-corner-btn')!.fire('click'); // диалог «…» чип-поля
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(writes.at(-1), { kind: 'list', items: ['aaa', 'bbb', 'ccc'] }, 'набор записан');
+      assert.deepEqual(
+        leafNode.labels?.values,
+        { aaa: 'Мысль А', bbb: 'Мысль Б', ccc: 'Мысль В' },
+        'карта имён ведётся для всего набора',
+      );
+      assert.equal(leafNode.labels?.value, undefined, 'одиночный снапшот не пишется для набора');
+      assert.deepEqual(resolved, [['aaa', 'bbb', 'ccc']], 'резолв — один пакетный вызов');
+      const { composeFilterPhrase } = await import('../src/renderer/lib/filter-phrase.js');
+      const phrase = composeFilterPhrase({ tree: leafNode }, { registry: REGISTRY });
+      assert.match(phrase, /Мысль А, Мысль Б, Мысль В/, 'фраза показывает все имена');
+      assert.doesNotMatch(phrase, /aaa|bbb|ccc/, 'ни одного id во фразе');
     } finally {
       (globalThis as any).window.etn = saved;
     }

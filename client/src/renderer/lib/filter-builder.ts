@@ -1806,7 +1806,17 @@ function parseFilterAstLabels(raw: unknown): FilterAstLabels | undefined {
   const labels: FilterAstLabels = {};
   if (typeof rec['entity'] === 'string') labels.entity = rec['entity'];
   if (typeof rec['value'] === 'string') labels.value = rec['value'];
-  return labels.entity === undefined && labels.value === undefined ? undefined : labels;
+  const values = rec['values'];
+  if (values !== null && typeof values === 'object' && !Array.isArray(values)) {
+    const map: Record<string, string> = {};
+    for (const [id, name] of Object.entries(values as Record<string, unknown>)) {
+      if (typeof name === 'string') map[id] = name;
+    }
+    if (Object.keys(map).length > 0) labels.values = map;
+  }
+  return labels.entity === undefined && labels.value === undefined && labels.values === undefined
+    ? undefined
+    : labels;
 }
 
 /**

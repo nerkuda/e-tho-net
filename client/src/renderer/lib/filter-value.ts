@@ -1014,16 +1014,35 @@ function boundAsItem(bound: FilterTreeValue): FilterTreeListItem {
 }
 
 /**
- * Снапшот подписи значения листа (`labels.value`) — имя выбранной сущности, а не
- * её id: композер фразы показывает имя вместо id (ошибка 4258e694 п.12б).
- * Снимок одиночный (у мысли нет каталога имён) — при наборе из нескольких
- * значений он снимается, чтобы подпись не расходилась с содержимым.
+ * Снапшоты имён выбранных значений листа: карта `labels.values` (id → имя) и, для
+ * одиночного значения, ещё `labels.value` (совместимость с сохранёнными
+ * отборами и сообщениями диагностики). Композер фразы показывает ИМЯ вместо id
+ * для КАЖДОГО значения набора (ошибка 4258e694 п.12б). Пустая карта снимает
+ * снапшоты.
  */
-function setLeafValueLabel(leaf: FilterTreeLeaf, name: string | null): void {
+function setLeafValueLabels(leaf: FilterTreeLeaf, names: ReadonlyMap<string, string>): void {
   const labels = { ...(leaf.labels ?? {}) };
-  if (name === null || name === '') delete labels.value;
-  else labels.value = name;
-  leaf.labels = labels.entity === undefined && labels.value === undefined ? undefined : labels;
+  const values: Record<string, string> = {};
+  for (const [id, name] of names) {
+    if (name !== '') values[id] = name;
+  }
+  if (Object.keys(values).length === 0) {
+    delete labels.values;
+    delete labels.value;
+  } else {
+    labels.values = values;
+    if (names.size === 1) labels.value = [...names.values()][0]!;
+    else delete labels.value;
+  }
+  leaf.labels =
+    labels.entity === undefined && labels.value === undefined && labels.values === undefined
+      ? undefined
+      : labels;
+}
+
+/** Совпадают ли наборы значений (порядок значим — он же порядок чипов). */
+function sameValues(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, i) => value === b[i]);
 }
 
 /** Ссылочный ОПЕРАНД: одиночно — комбо, кратно — чип-поле (элемент 21955e84). */
@@ -1054,36 +1073,36 @@ function entityOperandControl(
     return [...loaded];
   };
   /**
-   * Записать снапшот имени значения (`labels.value`) по выбранным id: имя
-   * известного варианта — сразу, выбор в диалоге «…» даёт только id — имя
-   * догружаем резолвом. Снапшот — для ОДИНОЧНОГО значения; для набора он
-   * снимается (композер использует снимок только у одиночного значения).
-   * Вызывается ДО записи значения (`api.setValue`), чтобы фраза перечиталась
-   * с уже подставленным именем на одном `touch`.
+   * Записать снапшоты имён выбранных значений по id: имена известных вариантов —
+   * сразу (на КАЖДОЕ значение набора), незнакомые (выбор в диалоге «…» даёт
+   * только id) — пакетным резолвом. Вызывается ДО записи значения
+   * (`api.setValue`), чтобы фраза перечиталась с именами на одном `touch`;
+   * догруженный резолв зовёт `touch` сам.
    */
   const applyValueLabel = (values: readonly string[]): void => {
-    if (values.length !== 1) {
-      setLeafValueLabel(leaf, null);
-      return;
+    const names = new Map<string, string>();
+    const missing: string[] = [];
+    for (const id of values) {
+      if (id === '' || id.startsWith('$')) continue; // токены имён не имеют
+      const known = titles.get(id);
+      if (known !== undefined) names.set(id, known);
+      else missing.push(id);
     }
-    const id = values[0]!;
-    const known = titles.get(id);
-    if (known !== undefined) {
-      setLeafValueLabel(leaf, known);
-      return;
-    }
-    if (kind !== 'thoughts' || ctx.networkId === '') {
-      setLeafValueLabel(leaf, null);
-      return;
-    }
+    setLeafValueLabels(leaf, names);
+    if (missing.length === 0 || kind !== 'thoughts' || ctx.networkId === '') return;
+    // Значение листа уже записано (setValue идёт следом синхронно) — резолв
+    // ставим только если лист всё ещё держит ТОТ ЖЕ набор значений.
     void etn.thoughts
-      .resolve(ctx.networkId, [id])
+      .resolve(ctx.networkId, missing)
       .then((refs) => {
-        const ref = refs[0];
-        if (ref === undefined) return;
-        const current = currentList(leaf.value);
-        if (current.length !== 1 || current[0] !== id) return;
-        setLeafValueLabel(leaf, ref.title);
+        if (!sameValues(currentList(leaf.value), values)) return;
+        const next = new Map(names);
+        for (const ref of refs) {
+          titles.set(ref.id, ref.title);
+          if (values.includes(ref.id)) next.set(ref.id, ref.title);
+        }
+        if (next.size === names.size) return; // ничего не догрузилось
+        setLeafValueLabels(leaf, next);
         ctx.touch?.();
       })
       .catch(() => undefined);
@@ -1106,7 +1125,7 @@ function entityOperandControl(
       onChangeEntity: (option) => {
         if (option !== null) {
           titles.set(option.id, option.title);
-          setLeafValueLabel(leaf, option.title);
+          setLeafValueLabels(leaf, new Map([[option.id, option.title]]));
           ctx.touch?.();
           return;
         }
