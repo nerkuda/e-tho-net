@@ -748,6 +748,10 @@ function enumControl(
     selectAllLabel: 'Выбрать все',
     clearTitle: 'Очистить поле',
     removeTitle: 'Убрать значение',
+    // Адрес слота дерева — ключ перепривязки панели-чеклиста: правка значения
+    // перерисовывает дерево ЦЕЛИКОМ, панель обязана переехать к новому узлу
+    // поля, а не остаться на координатах удалённого (п. C2/C3 ошибки 50d9bf4e).
+    ...(api.slotKey !== undefined ? { anchorKey: api.slotKey } : {}),
   });
   box.append(list.root);
   return box;

@@ -944,6 +944,15 @@ export function filterTreeValueKindLabel(value: FilterTreeValue): string {
 export interface FilterTreeValueSlotApi {
   /** Переписать значение листа моделью (единственный путь правки значения). */
   setValue: (value: FilterTreeValue) => void;
+  /**
+   * Стабильный адрес слота значения — `<редактор>-<путь строки>` (`5-0.1`):
+   * не меняется между перерисовками ОДНОГО дерева (редактор нумеруется один
+   * раз при сборке, путь строки — часть модели). Нужен потребителям значения,
+   * которые живут дольше разметки строки: правка значения перерисовывает дерево
+   * ЦЕЛИКОМ, а всплывающая панель (чеклист значения) остаётся в `document.body`
+   * и обязана перепривязаться к НОВОМУ узлу поля (ошибка 50d9bf4e, п. C2/C3).
+   */
+  readonly slotKey?: string;
 }
 
 /** Контекст сборки дерева: профиль — параметр, данные и модель — снаружи. */
@@ -1044,12 +1053,22 @@ function isStructuralOnlyHierarchyOperand(leaf: FilterTreeLeaf): boolean {
 }
 
 /**
+ * Счётчик сборок деревьев: `editorSerial` в адресе слота значения
+ * ({@link FilterTreeValueSlotApi.slotKey}). Сборка одна на редактор, поэтому
+ * номер различает слоты разных редакторов на странице и не меняется между
+ * перерисовками одного дерева.
+ */
+let filterTreeEditorSerial = 0;
+
+/**
  * Собрать дерево условий над единой моделью. Возвращает корневой узел и
  * `rerender` — повторную отрисовку из модели (дерево перерисовывается целиком:
  * редактору нужна целостная картина ветки, а не инкрементальная лента).
  */
 export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
   const root = div(FILTER_TREE_CLASS);
+  /** Номер сборки дерева — различает адреса слотов значений разных редакторов. */
+  const editorSerial = (filterTreeEditorSerial += 1);
   /** Свёрнутые группы — ключи путей (представление, не модель). */
   const collapsed = new Set<string>();
 
@@ -1486,6 +1505,10 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         leaf.value = value;
         touch();
       },
+      // Адрес слота — редактор (`editorSerial`) + путь строки: стабилен между
+      // перерисовками дерева, поэтому виджет значения может дать его владельцу
+      // как ключ перепривязки всплывающей панели (п. C2/C3 ошибки 50d9bf4e).
+      slotKey: `${editorSerial}-${filterTreePathKey(path)}`,
     };
     valueBox.append(
       ctx.renderValue !== undefined

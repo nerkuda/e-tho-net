@@ -25,7 +25,7 @@ import { emptyState } from './empty-state.js';
 import { choiceRow } from './choice-row.js';
 import { iconButton, uiButton } from './button.js';
 import { svgIcon } from './icon.js';
-import { openPopover } from './popover.js';
+import { openPopover, type PopoverHandle } from './popover.js';
 
 /** Базовый класс корня чип-листа. */
 export const CHIP_LIST_CLASS = 'ui-chip-list';
@@ -43,6 +43,14 @@ export const CHIP_LIST_CHECKLIST_CLASS = 'ui-chip-checklist';
 export const CHIP_LIST_CHECKLIST_GRID_CLASS = 'ui-chip-checklist-grid';
 /** Класс нижней строки режима-чеклиста (кнопка «Выбрать все»). */
 export const CHIP_LIST_CHECKLIST_FOOTER_CLASS = 'ui-chip-checklist-footer';
+/**
+ * `data`-ключ адреса поля (`anchorKey`) — на кнопке-поле режима `checklist`:
+ * открытая панель ищет по нему живой узел поля после перерисовки строки
+ * (ошибка 50d9bf4e, пункты C2/C3).
+ */
+export const CHIP_LIST_ANCHOR_KEY = 'uiChipListAnchor';
+/** Селекторный атрибут того же адреса (`data-ui-chip-list-anchor`). */
+export const CHIP_LIST_ANCHOR_ATTR = 'data-ui-chip-list-anchor';
 /** Класс кнопки-крестика очистки всего поля. */
 export const CHIP_LIST_CLEAR_CLASS = 'ui-chip-list-clear';
 
@@ -87,6 +95,16 @@ export interface ChipListOptions {
   selectAllLabel?: string;
   /** Подсказка кнопки-крестика очистки ВСЕГО поля; нет — кнопка не рисуется. */
   clearTitle?: string;
+  /**
+   * Стабильный адрес поля (режим `checklist`): выставляется атрибутом
+   * `data-ui-chip-list-anchor` на кнопке-поле и служит ключом ПЕРЕПРИВЯЗКИ
+   * открытой панели после перерисовки строки-владельца (ошибка 50d9bf4e,
+   * пункты C2/C3). Владелец значения даёт адрес слота дерева отбора
+   * (`FilterTreeValueSlotApi.slotKey`) — он не меняется между перерисовками.
+   * Не задан — панель при перерисовке только пересчитывает позицию (по старому
+   * узлу): поведение применимо, лишь пока строка не перестраивается.
+   */
+  anchorKey?: string;
 }
 
 /** Собранный чип-лист. */
@@ -106,6 +124,15 @@ export function chipList(opts: ChipListOptions): ChipListHandle {
   const chipsBox = div(`${CHIP_LIST_CLASS}-chips`);
   const checklist = opts.addMode === 'checklist';
   const addSelect = el('select', `select-input ${CHIP_LIST_ADD_CLASS}`) as HTMLSelectElement;
+  /**
+   * Открытая панель-чеклист (режим `checklist`). Разметка строки-владельца
+   * перерисовывается при каждой правке значения, поэтому панель живёт в
+   * `document.body` и перепривязывается к новому узлу поля (п. C2/C3 ошибки
+   * 50d9bf4e), а не умирает со старым.
+   */
+  let openPanel: PopoverHandle | null = null;
+  /** Перепривязка открытой панели к живому полю; назначается режимом `checklist`. */
+  let trackAnchor: (() => void) | null = null;
 
   const render = (): void => {
     chipsBox.replaceChildren();
@@ -129,6 +156,9 @@ export function chipList(opts: ChipListOptions): ChipListHandle {
         remove.addEventListener('click', () => {
           opts.onRemove(value);
           render();
+          // Снятие чипа тоже перерисовывает строку-владельца: открытая панель
+          // (если она есть) обязана переехать к живому полю.
+          trackAnchor?.();
         });
         chip.append(remove);
         chipsBox.append(chip);
@@ -171,10 +201,28 @@ export function chipList(opts: ChipListOptions): ChipListHandle {
       class: `${CHIP_LIST_ADD_CLASS} ${CHIP_LIST_ADD_CLASS}--checklist`,
       onClick: () => openChecklist(),
     });
+    // Адрес поля — на самой кнопке: строка-владелец перерисовывается при каждой
+    // правке значения, и открытая панель ищет НОВЫЙ узел поля по этому адресу
+    // (`trackAnchor`), а не держится за удалённый (ошибка 50d9bf4e, п. C2/C3).
+    if (opts.anchorKey !== undefined) addBtn.dataset[CHIP_LIST_ANCHOR_KEY] = opts.anchorKey;
+    /** Перепривязать открытую панель к живому узлу поля и пересчитать позицию. */
+    trackAnchor = (): void => {
+      if (openPanel === null) return;
+      if (opts.anchorKey === undefined) {
+        openPanel.reposition();
+        return;
+      }
+      const fresh = document.querySelector<HTMLElement>(
+        `[${CHIP_LIST_ANCHOR_ATTR}="${opts.anchorKey}"]`,
+      );
+      // Поля больше нет (строка удалена/операнд сменился) — панель закрываем:
+      // висеть привязанной к исчезнувшему полю она не должна.
+      if (fresh === null) openPanel.close();
+      else openPanel.setAnchor({ element: fresh });
+    };
     const openChecklist = (): void => {
       const grid = div(CHIP_LIST_CHECKLIST_GRID_CLASS);
       grid.style.setProperty('grid-template-columns', `repeat(${opts.checklistColumns ?? 2}, minmax(0, 1fr))`);
-      let popover: { close: () => void } | null = null;
       const rebuild = (): void => {
         grid.replaceChildren();
         const selected = new Set(opts.getValues());
@@ -189,6 +237,9 @@ export function chipList(opts: ChipListOptions): ChipListHandle {
               else opts.onRemove(option.value);
               render();
               rebuild();
+              // Правка значения перерисовала строку — панель переезжает к новому
+              // узлу поля (иначе остаётся на координатах удалённого).
+              trackAnchor?.();
             },
           });
           grid.append(row.row);
@@ -209,17 +260,21 @@ export function chipList(opts: ChipListOptions): ChipListHandle {
                 if (!selected.has(option.value)) opts.onAdd(option.value);
               }
               render();
-              popover?.close();
+              openPanel?.close();
             },
           }),
         );
       }
       const panel = div(CHIP_LIST_CHECKLIST_CLASS);
       panel.append(grid, footer);
-      popover = openPopover({
+      openPanel = openPopover({
         anchor: { element: addBtn },
         content: { title: opts.addLabel ?? opts.addPlaceholder ?? '', body: panel, maxHeightPx: 320 },
         extraClass: 'ui-chip-checklist-popover',
+        // Панель гасится по закрытию — ключ перепривязки больше не нужен.
+        onClose: () => {
+          openPanel = null;
+        },
       });
     };
     // Кнопка-поле и (необязательный) крестик очистки — в одной строке.

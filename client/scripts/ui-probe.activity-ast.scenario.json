@@ -62,19 +62,23 @@
     { "name": "open-operator-picker", "click": ".activity-filter .ft-row__op" },
     { "name": "operator-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in\"]') !== null" },
     { "name": "pick-in-operator", "click": ".ft-choice__item[data-key=\"in\"]" },
-    { "name": "enum-value-ready", "waitFor": "document.querySelector('.activity-filter .fv-enum input[value=\"created\"]') !== null" },
-    { "name": "check-created", "click": ".activity-filter .fv-enum input[value=\"created\"]" },
-    { "name": "check-updated", "click": ".activity-filter .fv-enum input[value=\"updated\"]" },
+    { "name": "enum-field-ready", "waitFor": "document.querySelector('.activity-filter .fv-enum .ui-chip-list-add--checklist') !== null" },
+    { "name": "open-enum-checklist", "eval": "(() => { const b=document.querySelector('.activity-filter .fv-enum .ui-chip-list-add--checklist'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()" },
+    { "name": "enum-checklist-open", "waitFor": "document.querySelector('.ui-popover.ui-chip-checklist-popover .ui-chip-checklist-grid') !== null" },
+    { "name": "pick-created", "eval": "(async () => { const p=document.querySelector('.ui-popover.ui-chip-checklist-popover'); const inp=[...p.querySelectorAll('input')].find((i)=>i.value==='created'); if(!inp) return 'no-created'; inp.checked=true; inp.dispatchEvent(new Event('change',{bubbles:true})); await new Promise((r)=>setTimeout(r,60)); return 'ok'; })()" },
+    { "name": "pick-updated", "eval": "(async () => { const p=document.querySelector('.ui-popover.ui-chip-checklist-popover'); const inp=[...p.querySelectorAll('input')].find((i)=>i.value==='updated'); if(!inp) return 'no-updated'; inp.checked=true; inp.dispatchEvent(new Event('change',{bubbles:true})); await new Promise((r)=>setTimeout(r,60)); return 'ok'; })()" },
     {
       "name": "checkboxes-reflect-filter",
-      "probe": "document.querySelector('.activity-filter .fv-enum input[value=\"created\"]').checked && document.querySelector('.activity-filter .fv-enum input[value=\"updated\"]').checked",
+      "probe": "(() => { const codes=[...document.querySelectorAll('.activity-filter .fv-enum .ui-chip')].map((c)=>c.textContent); return codes.length === 2; })()",
       "expect": true
     },
     {
       "name": "unchecked-choice-stays-off",
-      "probe": "document.querySelector('.activity-filter .fv-enum input[value=\"deleted\"]').checked",
+      "probe": "(() => { const p=document.querySelector('.ui-popover.ui-chip-checklist-popover'); const inp=p && [...p.querySelectorAll('input')].find((i)=>i.value==='deleted'); return inp ? inp.checked : false; })()",
       "expect": false
     },
+    { "name": "close-enum-checklist", "key": "Escape" },
+    { "name": "enum-checklist-closed", "timeout": 8000, "waitFor": "document.querySelector('.ui-popover.ui-chip-checklist-popover') === null" },
 
     { "name": "add-period-row", "click": ".activity-filter .ft-add-condition" },
     { "name": "two-rows", "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 2" },
