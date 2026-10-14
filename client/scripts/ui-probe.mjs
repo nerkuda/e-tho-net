@@ -359,6 +359,24 @@ function describeValue(value) {
   return text.length > 160 ? `${text.slice(0, 157)}…` : text;
 }
 
+/**
+ * Ожидание шага: литерал `expect` либо снимок `expectFrom` — значение, прочитанное
+ * РАНЕЕ выполненным шагом `probe`/`api` с этим именем (`context.values`). Снимок
+ * делает сценарий самопроверяемым: «после = до» вместо зашитого списка.
+ */
+function resolveExpected(step, context) {
+  if (step.expectFrom === undefined) {
+    return { has: step.expect !== undefined, value: step.expect, from: null };
+  }
+  if (!context.values.has(step.expectFrom)) {
+    throw new Error(
+      `шаг «${step.name}»: expectFrom ссылается на шаг «${step.expectFrom}» — ` +
+        'его значения нет (шаг не выполнен или не probe/api)',
+    );
+  }
+  return { has: true, value: context.values.get(step.expectFrom), from: step.expectFrom };
+}
+
 /** Совпадают ли факт и ожидание (порядок ключей объектов не важен). */
 function sameValue(actual, expected) {
   return stableStringify(actual) === stableStringify(expected);
@@ -568,9 +586,16 @@ async function runStep(cdp, step, outDir, entry, report, context) {
       const value = await evaluate(cdp, step.probe.expression);
       entry.probe = { name: step.probe.name, value, expect: step.expect };
       report.probes[step.probe.name] = value;
-      if (step.expect !== undefined && !sameValue(value, step.expect)) {
+      // Значение доступно шагам с `expectFrom` (снимок «до» для проверки «после»).
+      context.values.set(step.name, value);
+      const expected = resolveExpected(step, context);
+      if (expected.has) {
+        entry.expect = expected.value;
+        if (expected.from !== null) entry.expectFrom = expected.from;
+      }
+      if (expected.has && !sameValue(value, expected.value)) {
         throw new Error(
-          `проба «${step.probe.name}»: факт ${describeValue(value)} ≠ ожидание ${describeValue(step.expect)}`,
+          `проба «${step.probe.name}»: факт ${describeValue(value)} ≠ ожидание ${describeValue(expected.value)}`,
         );
       }
       break;
@@ -597,9 +622,16 @@ async function runStep(cdp, step, outDir, entry, report, context) {
     case 'api': {
       const value = await doApi(step, context.api);
       entry.api = { name: step.api.name, method: step.api.method, path: step.api.path, value };
-      if (step.expect !== undefined && !sameValue(value, step.expect)) {
+      // Значение доступно шагам с `expectFrom` (снимок «до» для проверки «после»).
+      context.values.set(step.name, value);
+      const expected = resolveExpected(step, context);
+      if (expected.has) {
+        entry.expect = expected.value;
+        if (expected.from !== null) entry.expectFrom = expected.from;
+      }
+      if (expected.has && !sameValue(value, expected.value)) {
         throw new Error(
-          `api «${step.api.name}»: факт ${describeValue(value)} ≠ ожидание ${describeValue(step.expect)}`,
+          `api «${step.api.name}»: факт ${describeValue(value)} ≠ ожидание ${describeValue(expected.value)}`,
         );
       }
       break;
@@ -631,8 +663,9 @@ function formatStep(entry) {
   let detail = '';
   if (entry.probe !== undefined) {
     detail = ` ${entry.probe.name} = ${describeValue(entry.probe.value)}`;
-    if (entry.probe.expect !== undefined) {
-      detail += ` (ожидание ${describeValue(entry.probe.expect)})`;
+    if (entry.expect !== undefined) {
+      detail += ` (ожидание ${describeValue(entry.expect)}`;
+      detail += entry.expectFrom === undefined ? ')' : ` — снимок шага «${entry.expectFrom}»)`;
     }
   } else if (entry.assert !== undefined) {
     const checks = entry.assert.checks
@@ -641,7 +674,10 @@ function formatStep(entry) {
     detail = ` ${entry.assert.name}: ${checks}`;
   } else if (entry.api !== undefined) {
     detail = ` ${entry.api.name} ${entry.api.method} ${entry.api.path} = ${describeValue(entry.api.value)}`;
-    if (entry.expect !== undefined) detail += ` (ожидание ${describeValue(entry.expect)})`;
+    if (entry.expect !== undefined) {
+      detail += ` (ожидание ${describeValue(entry.expect)}`;
+      detail += entry.expectFrom === undefined ? ')' : ` — снимок шага «${entry.expectFrom}»)`;
+    }
   } else if (entry.shot !== undefined) {
     detail = ` → ${entry.shot}`;
   } else if (entry.eval !== undefined) {
@@ -731,7 +767,7 @@ async function main(argv) {
   const base = opts.cdp ?? `http://${opts.host}:${opts.port}`;
   const target = await resolvePageTarget(base, opts.target);
   const cdp = await CdpClient.connect(target.webSocketDebuggerUrl);
-  const context = { api: { base: opts.api, key: opts.apiKey } };
+  const context = { api: { base: opts.api, key: opts.apiKey }, values: new Map() };
   let report;
   try {
     await cdp.send('Runtime.enable');

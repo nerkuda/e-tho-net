@@ -93,6 +93,12 @@ export interface ScenarioStep {
   name: string;
   timeout: number;
   expect?: unknown;
+  /**
+   * Ожидание-снимок: имя ранее выполненного шага `probe`/`api`, чьё значение
+   * становится ожиданием этого шага (самопроверка «до ↔ после»). Взаимоисключающе
+   * с `expect`.
+   */
+  expectFrom?: string;
   key?: NormalizedKey;
   click?: NormalizedClick;
   /** Наведение курсора без клика (`mouseMoved`): включает CSS `:hover`. */

@@ -384,3 +384,39 @@ test('expect: допустим только у probe и api', () => {
   assert.throws(() => validateScenario(scenarioFrom([{ key: 'Tab', expect: 1 }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ shot: 'a.png', expect: 1 }])), ScenarioError);
 });
+
+test('expectFrom: ожидание — снимок ранее выполненного шага (делает сценарий самопроверяемым)', () => {
+  const scenario = validateScenario(
+    scenarioFrom([
+      {
+        name: 'headings-before',
+        api: { name: 'headings-before', path: '/networks/{{networkId}}/publications/{{pubId}}/assembly', expression: 'data.sections.map((s) => s.heading)' },
+      },
+      { key: 'Tab' },
+      {
+        name: 'headings-after',
+        api: { name: 'headings-after', path: '/networks/{{networkId}}/publications/{{pubId}}/assembly', expression: 'data.sections.map((s) => s.heading)' },
+        expectFrom: 'headings-before',
+      },
+      { probe: { name: 'rows', expression: '[1]' }, expectFrom: 'headings-before' },
+    ]),
+  );
+  assert.equal(scenario.steps[0]?.expectFrom, undefined, 'снимок «до» ожидания не требует');
+  assert.equal(scenario.steps[2]?.expectFrom, 'headings-before');
+  assert.equal(scenario.steps[2]?.expect, undefined, 'литерал и снимок не смешиваются');
+  assert.equal(scenario.steps[3]?.kind, 'probe');
+  assert.equal(scenario.steps[3]?.expectFrom, 'headings-before', 'снимок работает и у probe');
+  // «expectFrom» допустим только у probe/api (как и «expect»).
+  assert.throws(() => validateScenario(scenarioFrom([{ key: 'Tab', expectFrom: 'x' }])), ScenarioError);
+  assert.throws(() => validateScenario(scenarioFrom([{ shot: 'a.png', expectFrom: 'x' }])), ScenarioError);
+  // Ожидание задаётся либо литералом, либо снимком — не обоими.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ api: { path: '/x' }, expect: 1, expectFrom: 'x' }])),
+    ScenarioError,
+  );
+  // Пустое имя шага-снимка отвергается.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ api: { path: '/x' }, expectFrom: '' }])),
+    ScenarioError,
+  );
+});

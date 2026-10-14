@@ -31,7 +31,10 @@
  *     | { "waitFor": { "frames": 2 } } | { "waitFor": 2 }
  *   { "probe": "expr" } | { "probe": { "name": "rows", "expression": "…" } }
  *     К пробе можно добавить `"expect": <значение>`: раннер сверит факт с
- *     ожиданием и покажет пару «факт/ожидание» в отчёте.
+ *     ожиданием и покажет пару «факт/ожидание» в отчёте. Вместо литерала
+ *     допустим `"expectFrom": "<имя шага>"` — ожиданием станет значение,
+ *     прочитанное ранее выполненным шагом `probe`/`api` с этим именем (снимок
+ *     «до» ↔ проверка «после»: например, паритет заголовков до и после правки).
  *   { "shot": "01.png" } | { "shot": { "file": "01.png", "clip": "#sel" } }
  *     clip: селектор | [x, y, w, h] | { x, y, width, height }
  *   { "assert": { "region": "#sel" | [x,y,w,h] | {x,y,width,height},
@@ -48,7 +51,8 @@
  *     — HTTP-запрос к серверу стенда ИЗ РАННЕРА (не из рендерера): так
  *     проверяется эффект на сервере/в БД (грабли aa5cf162 — CDP не видит
  *     трафик main-процесса). `expression` вычисляется от распарсенного тела
- *     (обёртка `data` разворачивается); `expect` — необязательное ожидание.
+ *     (обёртка `data` разворачивается); `expect` — необязательное ожидание,
+ *     `expectFrom` — ожидание из значения ранее выполненного шага (см. `probe`).
  *   { "eval": "expr" } | { "eval": { "name": "focus", "expression": "…" } }
  *     — побочное действие без записи значения в отчёт (фокус, скролл, ввод).
  *
@@ -98,7 +102,7 @@ export const STEP_ACTION_KEYS = [
 export const REGION_CHECK_KINDS = ['notBlank', 'colorAt', 'hasColor', 'distinct'];
 
 /** Метаключи шага, допустимые вместе с любым действием. */
-const STEP_META_KEYS = ['name', 'timeout', 'expect'];
+const STEP_META_KEYS = ['name', 'timeout', 'expect', 'expectFrom'];
 
 /** Дополнительные поля шага, допустимые только у конкретного действия. */
 const STEP_EXTRA_KEYS = { key: ['modifiers', 'code', 'keyCode'] };
@@ -517,10 +521,24 @@ function validateStep(raw, index, defaultTimeout) {
   if (raw.expect !== undefined && kind !== 'probe' && kind !== 'api') {
     fail(`${where}: поле «expect» допустимо только у шагов probe и api`);
   }
+  if (raw.expectFrom !== undefined) {
+    // Ожидание-снимок: значение берётся у РАНЕЕ выполненного шага probe/api с
+    // этим именем. Так сценарий самопроверяем: «заголовки после правки равны
+    // снимку до правки», а не зашитому списку (критерий «идентичен прежнему»).
+    if (kind !== 'probe' && kind !== 'api') {
+      fail(`${where}: поле «expectFrom» допустимо только у шагов probe и api`);
+    }
+    if (raw.expect !== undefined) {
+      fail(`${where}: «expect» и «expectFrom» взаимоисключающи — задайте одно`);
+    }
+  }
   const name = raw.name === undefined ? `${index + 1}:${kind}` : asString(raw.name, `${where}.name`);
   const timeout = raw.timeout === undefined ? defaultTimeout : asPositiveInt(raw.timeout, `${where}.timeout`);
   const step = { index, kind, name, timeout };
   if (raw.expect !== undefined) step.expect = raw.expect;
+  if (raw.expectFrom !== undefined) {
+    step.expectFrom = asString(raw.expectFrom, `${where}.expectFrom`);
+  }
   switch (kind) {
     case 'key': {
       // Строковая клавиша может нести модификаторы/код на уровне шага

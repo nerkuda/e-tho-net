@@ -311,3 +311,41 @@ describe('диагностика строк отбора: данные ядра 
     assert.equal(target?.path, 'filter.children[1].entity', 'берётся первая локализованная красная');
   });
 });
+
+describe('диагностика строк отбора: потерянные при чтении условия (a0c071f8)', () => {
+  before(async () => {
+    mod = await import('../src/renderer/lib/filter-diagnostics.js');
+  });
+
+  // Связка `readFilterDefinitionDetailed.lost` → запись редактора: без неё
+  // битый рецепт перезаписывался бы молча (мутация «lostConditionIssues
+  // всегда []» обязана красить этот тест).
+  it('lostConditionIssues: каждая потеря — жёлтая запись без адреса строки', () => {
+    const issues = mod.lostConditionIssues([
+      'условие по свойству «pX» не распознано — свойство отсутствует в сети',
+    ]);
+    assert.equal(issues.length, 1, 'одна потеря — ровно одна запись');
+    assert.deepEqual(
+      {
+        severity: issues[0]!.severity,
+        source: issues[0]!.source,
+        code: issues[0]!.code,
+        path: issues[0]!.path,
+      },
+      { severity: 'warning', source: 'constructor', code: 'build_warning', path: '' },
+      'жёлтая конструкторская запись без адреса строки (уходит в тултип превью футера)',
+    );
+    assert.match(issues[0]!.message, /«pX»/, 'сообщение называет потерянное условие');
+    assert.match(issues[0]!.message, /Правка заменит сохранённое определение/, 'и предупреждает о перезаписи');
+    assert.equal(mod.hasBlockingIssues(issues), false, 'потеря отбор не блокирует — рецепт исполняется');
+    assert.equal(mod.worstFilterIssueSeverity(issues), 'warning');
+    assert.equal(mod.unlocalizedFilterIssues(issues).length, 1, 'адреса строки нет — в тултип превью');
+
+    assert.deepEqual(mod.lostConditionIssues([]), [], 'потерь нет — записей нет');
+    assert.equal(
+      mod.lostConditionIssues(['a', 'b']).length,
+      2,
+      'две потери — две записи (список не схлопывается)',
+    );
+  });
+});
