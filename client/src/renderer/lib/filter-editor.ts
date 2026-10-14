@@ -209,6 +209,13 @@ export interface FilterEditorHandle {
   root: HTMLElement;
   /** Профиль, с которым собран редактор (данные места применения). */
   profile: FilterProfileId;
+  /**
+   * Строка имени отбора из футера — `null`, если место не дало getName
+   * (например, лента «События» без сохранённых отборов). Хост может ПЕРЕМЕСТИТЬ
+   * строку в своей разметке (диалог отбора типа ставит имя первым полем — ошибка
+   * 50d9bf4e п. A1); сама строка строится один раз футером.
+   */
+  nameRow: HTMLElement | null;
   /** Перечитать вид из модели: дерево, сортировку, футер. */
   refresh: () => void;
 }
@@ -365,5 +372,5 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     footer?.refresh();
   };
 
-  return { root, profile, refresh };
+  return { root, profile, nameRow: footer?.nameRow ?? null, refresh };
 }

@@ -11,8 +11,10 @@
  * секций и парсеров у диалога больше нет — прежние «ключевые слова»,
  * «родительские мысли», «типы мыслей/связей», автор/редактор, даты, свойства и
  * «Дополнительно» стали обычными строками дерева (ADR fc23f9c1). Контекстные
- * токены `$thought.*` и токены свойств цепочки типов — источник подсказок редактора
- * (`extraSuggest`); своей токен-кнопочной секции больше нет.
+ * токены `$thought.*` и `$thought.[Свойство]` — подсказки ячейки значения
+ * (единый каталог `lib/filter-tokens.ts`): набор выводится по природе операнда,
+ * а свойства берутся из ВСЕГО реестра сети (ошибка 50d9bf4e, пункты A3–A6);
+ * своей токен-кнопочной секции у диалога нет.
  *
  * Сохранение — AST-определение (`{version, filter, sort?}`, форма 0.13.1) через
  * `etn.thoughtTypeViews.create`/`.update` по IPC. Старую плоскую `definition v1`
@@ -29,9 +31,7 @@
 import {
   THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
   THOUGHT_TYPE_VIEW_NAME_MAX,
-  type EffectiveTypeProperty,
   type NetworkProperty,
-  type ThoughtType,
   type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
@@ -56,17 +56,13 @@ import { notice } from '../../lib/notice.js';
 import { formDirty } from '../../lib/pure.js';
 import { fieldRow, fieldTextarea } from '../../lib/ui/field.js';
 import { checkboxRow } from '../../lib/ui/choice-row.js';
-import { type SuggestEntry, type SuggestSource } from '../../lib/suggest-dropdown.js';
 import { store } from '../../state.js';
 
 import {
-  buildTokensForField,
   buildViewAst,
   buildViewAstDefinition,
-  filterTokenOptions,
   hasAnyCriteria,
   parseViewDefinition,
-  type ChainProperties,
 } from './filter-dialog-pure.js';
 
 // ---------------------------------------------------------------------------
@@ -114,15 +110,12 @@ function buildAndShow(opts: OpenViewEditorOptions): Promise<void> {
 }
 
 async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
-  const { networkId, thoughtTypeId, typeName } = opts;
-  // 1. Resolve the type chain (own + ancestors). The context-token source needs
-  //    every property available on this type so users can pin a condition value
-  //    to, say, `$thought.[версия]`.
-  const chain = await loadTypeChain(networkId, thoughtTypeId);
-  const chainProps = await loadTypeChainProperties(networkId, chain);
+  const { networkId, typeName } = opts;
   // Property registry (registry-level metadata, e.g. name and multiple flag for
   // each property). Обратные стороны свойств-связей добавляют сами модули
-  // редактора (дерево/сортировка) — реестр передаётся как есть.
+  // редактора (дерево/сортировка) — реестр передаётся как есть. Токены
+  // `$thought.[…]` предлагаются по ВСЕМУ реестру сети (ошибка 50d9bf4e п. A6),
+  // поэтому цепочка типов для подсказок больше не грузится.
   const registry = new Map<string, NetworkProperty>();
   try {
     const list = await etn.propertyRegistry.list(networkId);
@@ -166,9 +159,12 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     registry,
     linkTypes: store.state.linkTypes,
     thoughtTypes: store.state.thoughtTypes,
-    // Контекстные операнды первыми строками списка «Что» (прежний порядок
-    // секций старого диалога: слова, родители, типы).
-    contextual: ['keywords', 'parents', 'type', 'link_type'],
+    // Контекстные операнды первыми строками списка «Что» — тем же компонентом
+    // списка, что и в остальных местах. «Потомки» стоят ЗДЕСЬ ЖЕ (верхняя
+    // безымянная группа), а не в «Характеристиках», как было: группировка
+    // списка операндов обязана совпадать во всех местах (ошибка 50d9bf4e
+    // п. A2). Состав сверен со «Структурами», Дневником, картой и рецептом.
+    contextual: ['keywords', 'parents', 'children', 'type', 'link_type'],
   };
   /** Записи диагностики ядра (отказ сохранения сервером) — показываются
    *  деревом и футером наравне с проверками конструктора. */
@@ -192,7 +188,6 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     data,
     getState: () => state,
     touch: () => editorRef?.refresh(),
-    extraSuggest: [contextTokenSource(chainProps)],
     title: `Показать «${typeName}» по условиям:`,
     // Модальное место: кнопки — в панели диалога, стандартный набор погашен.
     buttons: { standard: false },
@@ -214,6 +209,11 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   editorRef = editor;
 
   body.append(descField, defaultField, editor.root);
+  // Имя отбора — ПЕРВЫМ полем диалога (ошибка 50d9bf4e п. A1). Строку имени
+  // строит футер редактора (одна реализация), но здесь она переносится в начало
+  // разметки диалога: у модального места имя — главный идентификатор отбора, и
+  // оно не должно прятаться под деревом условий.
+  if (editor.nameRow !== null) body.prepend(editor.nameRow);
 
   // 4. Show the dialog. The Save button keeps itself open on validation
   //    failure; we close only when the IPC call resolves.
@@ -232,7 +232,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     version: initialVersion,
     errorLine,
     nameAddress: {
-      field: () => (editor.root.querySelector('.ff-name__input') as HTMLElement | null) ?? body,
+      // Имя отбора перенесено в начало разметки диалога (п. A1), поэтому поле
+      // ищем по телу, а не по корню редактора.
+      field: () => (body.querySelector('.ff-name__input') as HTMLElement | null) ?? body,
     },
     setServerIssues: (issues) => {
       serverIssues = issues;
@@ -244,6 +246,12 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     title,
     body,
     size: 'l',
+    // Высота диалога вдвое больше роли `l`, тело — flex-колонка: прокручивается
+    // ТОЛЬКО дерево условий, а имя, описание, секция сортировки и строка полного
+    // представления (футер) остаются постоянно видимыми (ошибка 50d9bf4e
+    // п. A8). Модификатор на боксе задаёт высоту (CSS `view-editor-dialog`).
+    fixedHeight: true,
+    onMount: (_close, box) => box.classList.add('view-editor-dialog'),
     // Ошибка сохранения — строкой в панели кнопок (требование 397c5a56):
     // ошибки полей видны только на своей вкладке/месте, футер — всегда.
     footerError: errorLine,
@@ -396,56 +404,6 @@ function showNameError(ctx: SaveCtx, message: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Type chain + effective properties
-// ---------------------------------------------------------------------------
-
-/** Walks the type chain from a type up to the root, inclusive. */
-async function loadTypeChain(networkId: string, typeId: string): Promise<ThoughtType[]> {
-  // Prefer the store's catalogue (kept in sync by realtime-ui); fall back to
-  // a single fetch when the type is not in the catalogue.
-  let catalogue = store.state.thoughtTypes.slice();
-  if (catalogue.length === 0) {
-    try {
-      catalogue = await etn.types.listThoughtTypes(networkId);
-    } catch {
-      catalogue = [];
-    }
-  }
-  const byId = new Map<string, ThoughtType>();
-  for (const t of catalogue) byId.set(t.id, t);
-
-  const chain: ThoughtType[] = [];
-  let current: string | null = typeId;
-  const guard = new Set<string>();
-  while (current !== null && !guard.has(current)) {
-    guard.add(current);
-    const type = byId.get(current);
-    if (type === undefined) break;
-    chain.push(type);
-    current = type.parent_id;
-  }
-  return chain;
-}
-
-/** Loads the effective properties for each level of the chain. */
-async function loadTypeChainProperties(
-  networkId: string,
-  chain: ThoughtType[],
-): Promise<ChainProperties[]> {
-  const out: ChainProperties[] = [];
-  for (const type of chain) {
-    let props: EffectiveTypeProperty[] = [];
-    try {
-      props = await etn.types.listTypeProperties(networkId, 'thought_type', type.id);
-    } catch {
-      props = [];
-    }
-    out.push({ type, props });
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
 // Re-exports from the pure helper module (so existing callers and tests
 // can keep importing from `filter-dialog.js`).
 // ---------------------------------------------------------------------------
@@ -464,27 +422,3 @@ export {
 export const VIEW_NAME_MAX = THOUGHT_TYPE_VIEW_NAME_MAX;
 export const VIEW_DESCRIPTION_MAX = THOUGHT_TYPE_VIEW_DESCRIPTION_MAX;
 
-// ---------------------------------------------------------------------------
-// Контекстные токены (задача cfbe8c74). Формат хранимых значений — как у единого
-// редактора: `$token` для токена, литерал для значения. Прежний набор
-// «токен-кнопок» старого диалога заменён общим списком значений контекста:
-// глобальные токены (`$today`/`$now`/`$user`), поля мысли (`$thought.*`) и
-// токены свойств цепочки типов (`$thought.[<ключ>]`) — источник подсказок
-// редактора (`extraSuggest`), без собственных секций и кнопок.
-// ---------------------------------------------------------------------------
-
-/** Источник подсказок «токены контекста» — параметр общего редактора. */
-function contextTokenSource(chainProps: readonly ChainProperties[]): SuggestSource {
-  return {
-    when: 'always',
-    header: 'Токены контекста',
-    load: (query: string): SuggestEntry[] => {
-      const tokens = buildTokensForField([...chainProps], null, null);
-      return filterTokenOptions(tokens, query).map((token) => ({
-        value: token.text,
-        label: token.label,
-        ...(token.section !== undefined ? { section: token.section } : {}),
-      }));
-    },
-  };
-}

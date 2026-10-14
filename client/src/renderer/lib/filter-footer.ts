@@ -173,6 +173,13 @@ export interface FilterFooterOptions {
 export interface FilterFooterHandle {
   /** Корень футера — нижняя панель каркаса отбора. */
   root: HTMLElement;
+  /**
+   * Строка имени отбора (`.ff-name`) — `null`, если у места нет сохранённых
+   * отборов. Отдаётся хосту, чтобы он мог ПЕРЕМЕСТИТЬ её (диалог отбора типа
+   * ставит имя ПЕРВЫМ полем — ошибка 50d9bf4e п. A1): реализация строки остаётся
+   * одна, футер лишь перестаёт ею владеть в разметке.
+   */
+  nameRow: HTMLElement | null;
   /** Перечитать маркер, превью и состояния кнопок из модели хоста. */
   refresh: () => void;
 }
@@ -425,5 +432,5 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   }
 
   refresh();
-  return { root, refresh };
+  return { root, nameRow: nameRowEl, refresh };
 }
