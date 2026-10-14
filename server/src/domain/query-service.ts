@@ -2440,7 +2440,9 @@ function propertyLeafClause(
 
 /**
  * Лист по структурным «Родители»/«Потомки»: наличие/отсутствие, «в списке» и
- * «количество» (числовые операторы — требование bd0348b3).
+ * «количество» (числовые операторы — требование bd0348b3), наборные
+ * `any_of`/`all_of`/`none_of` (требование 92b9c55b; профиль
+ * `THOUGHT_OPERATOR_SETS.parents/children`).
  */
 function structuralLeafClause(
   kind: 'parents' | 'children',
@@ -2471,16 +2473,47 @@ function structuralLeafClause(
   };
   if (operator === 'is_empty') return { sql: `NOT (${presence.sql})`, params: presence.params };
   if (operator === 'not_empty') return presence;
-  if (operator === 'in' || operator === 'not_in' || operator === 'eq' || operator === 'ne') {
+  if (
+    operator === 'in' ||
+    operator === 'not_in' ||
+    operator === 'eq' ||
+    operator === 'ne' ||
+    operator === 'any_of' ||
+    operator === 'all_of' ||
+    operator === 'none_of'
+  ) {
     const ids = astStringList(leaf.value, operator, path, requestId);
     const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
-    if (list.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
+    // `all_of` у СПИСКА значений — «набор содержит ВСЕ перечисленные»
+    // (требование 92b9c55b, ярлык редактора «содержит все из»): у мысли есть
+    // КАЖДЫЙ из перечисленных родителей/потомков — точечный join по ребру на
+    // значение, ровно как у свойства-связи и множественного свойства. Это НЕ
+    // квантификатор `all_in` под-выборки («каждое значение операнда входит в
+    // выборку», требование 485ff29e) — направления квантификации разные, и
+    // путать их нельзя. Пустой список — вакуумно истинно (как «все в» без
+    // значений, сценарий c76f688b).
+    if (operator === 'all_of') {
+      const parts: string[] = [];
+      const params: unknown[] = [];
+      for (const id of list) {
+        parts.push(`EXISTS (SELECT 1 FROM links_v l WHERE ${edge} AND l.${otherCol} = ?)`);
+        params.push(id);
+      }
+      return parts.length === 0 ? AST_TRUE : { sql: parts.join(' AND '), params };
+    }
+    if (list.length === 0) {
+      return operator === 'in' || operator === 'eq' || operator === 'any_of' ? AST_FALSE : AST_TRUE;
+    }
     const match: Clause = {
       sql: `EXISTS (SELECT 1 FROM links_v l WHERE ${edge}
         AND l.${otherCol} IN (${list.map(() => '?').join(',')}))`,
       params: [...list],
     };
-    return operator === 'in' || operator === 'eq' ? match : { sql: `NOT (${match.sql})`, params: match.params };
+    // `any_of` — «хотя бы один родитель/потомок в наборе» (паритет с `in`),
+    // `none_of` — «ни одного» (паритет с `not_in`).
+    return operator === 'in' || operator === 'eq' || operator === 'any_of'
+      ? match
+      : { sql: `NOT (${match.sql})`, params: match.params };
   }
   astUnsupported(`Оператор «${operator}» для структурного операнда`, path, requestId);
 }

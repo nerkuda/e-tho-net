@@ -194,6 +194,122 @@ describe('AST operator vocabulary (aee021c8)', { skip: !nativeAvailable() }, () 
     assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'parents' }, 'not_empty'))), ['Работа 1', 'Работа 2', 'Работа 3']);
   });
 
+  /**
+   * Наборные операторы на структурных «Родители»/«Потомки» (карточка 759eedeb:
+   * старый сохранённый отбор падал 422 — профиль `THOUGHT_OPERATOR_SETS`
+   * перечислял `any_of`/`all_of`/`none_of`, а исполнитель их не знал).
+   *
+   * Семантика СПИСКА значений — по требованию 92b9c55b и ярлыку редактора
+   * «содержит все из»: `any_of` — хотя бы один родитель/потомок входит в набор
+   * (паритет с `in`), `none_of` — ни одного (`not_in`), `all_of` — КАЖДЫЙ
+   * перечисленный id присутствует среди родителей/потомков (точечный join по
+   * ребру, НЕ поддерево и НЕ квантификатор `all_in` под-выборки).
+   */
+  function seedSetOperatorFixture(ndb: NetworkDb): {
+    g1: string;
+    g2: string;
+    g3: string;
+    both: string;
+    one: string;
+    other: string;
+  } {
+    const g1 = seedThought(ndb, 'Группа 1');
+    const g2 = seedThought(ndb, 'Группа 2');
+    const g3 = seedThought(ndb, 'Группа 3');
+    const both = seedThought(ndb, 'Ребёнок обоих'); // родители g1 и g2
+    const one = seedThought(ndb, 'Ребёнок первой'); // родитель g1
+    const other = seedThought(ndb, 'Ребёнок третьей'); // родитель g3
+    seedThought(ndb, 'Сирота'); // без родителей
+    seedLink(ndb, g1, both);
+    seedLink(ndb, g2, both);
+    seedLink(ndb, g1, one);
+    seedLink(ndb, g3, other);
+    return { g1, g2, g3, both, one, other };
+  }
+
+  it('наборные по «Родителям»: any_of ≡ in, none_of ≡ not_in, all_of — «есть все перечисленные»', () => {
+    const ndb = createInMemoryNetworkDb();
+    const { g1, g2, g3 } = seedSetOperatorFixture(ndb);
+    const set = [g1, g2];
+
+    // Паритет со списком: any_of даёт ровно то же, что `in`, none_of — что `not_in`.
+    assert.deepEqual(
+      runAst(ndb, ast(leaf({ kind: 'parents' }, 'any_of', set))),
+      runAst(ndb, ast(leaf({ kind: 'parents' }, 'in', set))),
+    );
+    assert.deepEqual(
+      runAst(ndb, ast(leaf({ kind: 'parents' }, 'any_of', set))),
+      ['Ребёнок обоих', 'Ребёнок первой'],
+    );
+    assert.deepEqual(
+      runAst(ndb, ast(leaf({ kind: 'parents' }, 'none_of', set))),
+      runAst(ndb, ast(leaf({ kind: 'parents' }, 'not_in', set))),
+    );
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'parents' }, 'none_of', set))), [
+      'Группа 1',
+      'Группа 2',
+      'Группа 3',
+      'Ребёнок третьей',
+      'Сирота',
+    ]);
+
+    // all_of — КАЖДЫЙ из перечисленных обязан быть родителем.
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'parents' }, 'all_of', [g1, g2]))), ['Ребёнок обоих']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'parents' }, 'all_of', [g1]))), [
+      'Ребёнок обоих',
+      'Ребёнок первой',
+    ]);
+    // Нет мысли, у которой есть И g1, И g3.
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'parents' }, 'all_of', [g1, g3]))), []);
+    // Пустой список — вакуумно истинно (ср. «все в» без значений, сценарий c76f688b).
+    assert.equal(runAst(ndb, ast(leaf({ kind: 'parents' }, 'all_of', []))).length, 7);
+  });
+
+  it('наборные по «Потомкам»: any_of ≡ in, none_of ≡ not_in, all_of — «есть все перечисленные»', () => {
+    const ndb = createInMemoryNetworkDb();
+    const { both, one, other } = seedSetOperatorFixture(ndb);
+    const kids = [both, one];
+
+    // Паритет: потомки g1 = {both, one}, потомок g2 = {both}, потомок g3 = {other}.
+    assert.deepEqual(
+      runAst(ndb, ast(leaf({ kind: 'children' }, 'any_of', kids))),
+      runAst(ndb, ast(leaf({ kind: 'children' }, 'in', kids))),
+    );
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'children' }, 'any_of', kids))), ['Группа 1', 'Группа 2']);
+    assert.deepEqual(
+      runAst(ndb, ast(leaf({ kind: 'children' }, 'none_of', kids))),
+      runAst(ndb, ast(leaf({ kind: 'children' }, 'not_in', kids))),
+    );
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'children' }, 'none_of', kids))), [
+      'Группа 3',
+      'Ребёнок обоих',
+      'Ребёнок первой',
+      'Ребёнок третьей',
+      'Сирота',
+    ]);
+
+    // all_of — среди потомков есть КАЖДЫЙ перечисленный.
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'children' }, 'all_of', kids))), ['Группа 1']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'children' }, 'all_of', [both]))), ['Группа 1', 'Группа 2']);
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'children' }, 'all_of', [both, other]))), []);
+  });
+
+  it('старый сохранённый отбор: наборный оператор на структурном операнде применяется без 422 (759eedeb)', () => {
+    const ndb = createInMemoryNetworkDb();
+    const { g1, g2, g3, other } = seedSetOperatorFixture(ndb);
+    // Ровно та форма, что сохранил прежний конструктор: лист AST со СПИСКОМ id.
+    for (const kind of ['parents', 'children'] as const) {
+      for (const operator of ['any_of', 'all_of', 'none_of'] as const) {
+        const titles = runAst(ndb, ast(leaf({ kind }, operator, [g1, g2])));
+        assert.ok(Array.isArray(titles), `${kind} ${operator}: исполнение без ошибки`);
+      }
+      // Индивидуальный id тоже принимается (не только оба «групповых»): у
+      // «Родителей» — id родителя, у «Потомков» — id потомка.
+      const single = kind === 'parents' ? g3 : other;
+      assert.ok(runAst(ndb, ast(leaf({ kind }, 'any_of', [single]))).length >= 1, `${kind}: одиночный id в наборе`);
+    }
+  });
+
   it('count on attachments and chronology; «не между» отрицает', () => {
     const ndb = createInMemoryNetworkDb();
     const many = seedThought(ndb, 'С вложениями');
