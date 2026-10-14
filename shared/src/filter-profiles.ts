@@ -199,8 +199,12 @@ const CHRONICLE_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
 /** Операторы по операнду профиля «события» (требование 1765e659). */
 const EVENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
   occurred_at: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
-  action: ['eq', 'ne', 'contains', 'not_contains', 'in', 'not_in'],
-  entity_type: ['eq', 'ne', 'in', 'not_in'],
+  // «Тип действия» и «Вид сущности» — МНОЖЕСТВЕННЫЕ перечисления: вид значения у
+  // них всегда список кодов, поэтому допустимы ТОЛЬКО «в»/«не в» (ошибка 50d9bf4e
+  // п. C1 — прежние `eq`/`ne`/`contains` вводили в заблуждение одним и тем же
+  // видом ячейки).
+  action: ['in', 'not_in'],
+  entity_type: ['in', 'not_in'],
   // «По конкретной сущности — равно ИЛИ под-выборка по мыслям» (требование
   // 1765e659): `eq`/`ne` — литеральный id; `in`/`not_in`/`all_of` — значение-
   // под-выборка мыслей (операторы совместимы со значением-под-выборкой,

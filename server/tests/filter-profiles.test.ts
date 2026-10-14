@@ -161,6 +161,10 @@ describe('реестр профилей контекста (задача 7a798b1
     for (const op of ['in', 'not_in', 'all_of', 'in_hierarchy'] as const) {
       assert.ok(ownerOps.includes(op), `owner: ${op}`);
     }
+    // «Тип действия» и «Вид сущности» событий — множественные перечисления:
+    // ТОЛЬКО «в»/«не в» (ошибка 50d9bf4e п. C1).
+    assert.deepEqual(FILTER_PROFILES.events.operand_operators!['action'], ['in', 'not_in']);
+    assert.deepEqual(FILTER_PROFILES.events.operand_operators!['entity_type'], ['in', 'not_in']);
   });
 
   it('профиль вложений: состав по требованию f67c85c1', () => {

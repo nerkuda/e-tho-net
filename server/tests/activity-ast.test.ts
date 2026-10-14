@@ -375,8 +375,16 @@ describe('события: отбор на общий AST (задача 2b230e8e)
         () => runFilter(ndb, { entity: { kind: 'occurred_at' }, operator: 'contains', value: 'x' } as FilterAst['filter']),
         (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
       );
-      // Видимый операнд события — без ошибки.
-      assert.doesNotThrow(() => runFilter(ndb, { entity: { kind: 'action' }, operator: 'eq', value: 'created' }));
+      // Видимый операнд события — без ошибки. «Тип действия» — МНОЖЕСТВЕННОЕ
+      // перечисление: допустимы только «в»/«не в» (ошибка 50d9bf4e п. C1).
+      assert.throws(
+        () => runFilter(ndb, { entity: { kind: 'action' }, operator: 'eq', value: 'created' }),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        '«равно» по «Типу действия» больше не принимается',
+      );
+      assert.doesNotThrow(() =>
+        runFilter(ndb, { entity: { kind: 'action' }, operator: 'in', value: ['created'] }),
+      );
     } finally {
       ndb.close();
     }
