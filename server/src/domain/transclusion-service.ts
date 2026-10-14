@@ -23,11 +23,25 @@ import {
   expandTransclusions,
   parseTransclusions,
   renderMarkdown,
+  type TransclusionLabels,
   type TransclusionResolver,
 } from '@etn/markdown';
 import type { TransclusionLostWarning } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+
+/**
+ * Серверные подписи контейнеров трансклюзий для рендера публикаций
+ * (`env.transclusionLabels`): те же русские строки, что клиент берёт из `t()`
+ * (`comment.transclusion.*`, client/src/renderer/lib/locales/ru.ts). Единый
+ * рендерер строк не знает — их передаёт вызывающий, а сервер не имеет доступа
+ * к клиентским локалям, поэтому строки захардкожены (ошибка `3b3035cf`).
+ */
+export const SERVER_TRANSCLUSION_LABELS: TransclusionLabels = {
+  noSource: 'Нет источника трансклюзии',
+  noSection: 'Нет раздела в источнике трансклюзии',
+  skipped: 'Ссылка не раскрыта',
+};
 
 /**
  * Transform applied to a FULL `body_md` before it is sliced into a preview or
@@ -85,17 +99,21 @@ export function createBodyExpander(ndb: NetworkDb): BodyExpander {
 }
 
 /**
- * Build a {@link BodyExpander} for PREVIEW/snippet text (MCP chronicle `snippet`,
- * ошибка `a3fb62b6`): the same transclusion expansion, but with the boundary
- * markers disabled (`markers: false`). The preview must not show either the raw
- * transclusion link or the ADR `85a7a01e` HTML-comment markers; an
+ * Build a {@link BodyExpander} that expands transclusions WITHOUT the ADR
+ * `85a7a01e` boundary markers (`markers: false`): plain expanded text only.
+ * Used for the Markdown export of publications (the boundary HTML comments must
+ * never leak into the file) and for MCP chronicle `snippet`/preview text
+ * (ошибка `a3fb62b6`), where neither the raw link nor the markers may show. An
  * absent/skipped source simply contributes nothing.
  */
-export function createSnippetExpander(ndb: NetworkDb): BodyExpander {
+export function createPlainBodyExpander(ndb: NetworkDb): BodyExpander {
   const resolve = createTransclusionResolver(ndb);
   return (body_md: string): string =>
     expandTransclusions(body_md, resolve, { markers: false });
 }
+
+/** Историческое имя {@link createPlainBodyExpander} (превью-текст MCP). */
+export const createSnippetExpander = createPlainBodyExpander;
 
 /**
  * Презентер тела комментария для MCP-инструментов, отдающих РЯДОМ `body_md` и

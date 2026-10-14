@@ -91,6 +91,11 @@ import {
   resolvePublicationRefs,
   setPublicationAcceptedIds,
 } from './publication-service.js';
+import {
+  createBodyExpander,
+  SERVER_TRANSCLUSION_LABELS,
+  type BodyExpander,
+} from './transclusion-service.js';
 
 // ---------------------------------------------------------------------------
 // Константы и лимиты
@@ -848,6 +853,14 @@ interface RenderContext {
   titles: Map<string, { title: string }>;
   textsBySection: Map<string, SectionText[]>;
   resolver: (ref: WikiLinkRef) => WikiLinkResolution | undefined;
+  /**
+   * Развёртка ссылок-трансклюзий (весь постоянный комментарий источника или его
+   * раздел) с маркерами ADR `85a7a01e`: предисловия, тексты и резюме публикации
+   * — обычные markdown-поля, поэтому трансклюзии в них раскрываются так же, как
+   * в комментарии мысли (ошибка `3b3035cf`, требование `2fb33964`). Развёртка
+   * идёт ДО рендера; `body_md` в DTO остаётся исходным.
+   */
+  expand: BodyExpander;
   /** Кеш «доп. материалов» по мысли (раздел рендерится один раз, но защищаемся). */
   extraCache: Map<string, PublicationAssemblyExtraGroup[]>;
   /** Накопитель экспортной модели; отсутствует при обычной сборке страницы. */
@@ -873,13 +886,18 @@ function renderSection(
   const heading = number !== null ? `${number}. ${title}` : title;
 
   const preambleSource = ctx.comments.get(node.thoughtId) ?? '';
+  // Трансклюзии в предисловии разворачиваются ДО рендера (ошибка 3b3035cf);
+  // пустое предисловие не разворачиваем. Блочная обёртка `md-transclusion`
+  // включается подписями контейнеров.
+  const preambleBody = preambleSource.trim() === '' ? '' : ctx.expand(preambleSource);
   const preambleResult =
-    preambleSource.trim() === ''
+    preambleBody.trim() === ''
       ? { html: '', headings: [] as PublicationHeading[] }
-      : renderPublicationFragment(preambleSource, {
+      : renderPublicationFragment(preambleBody, {
           baseLevel: headingNumber,
           headingAnchor: headingAnchorFor(node.thoughtId),
           resolveLink: ctx.resolver,
+          transclusion: { labels: SERVER_TRANSCLUSION_LABELS },
         });
 
   const sectionTexts = node.repeatOf === null ? (ctx.textsBySection.get(node.thoughtId) ?? []) : [];
@@ -891,14 +909,19 @@ function renderSection(
   // нужны, и превью/файл не должны расходиться по содержимому (ADR 06874c5d).
   const sourceMap = ctx.exportSink === undefined;
   const textRenders = sectionTexts.map((t) => {
+    // `body_md` в DTO остаётся ИСХОДНЫМ (источник карты каретки), а рендерится
+    // развёрнутый текст: `sourceMap` считается от него, чтобы разметка не
+    // разъехалась (точность клика внутри вставок не требуется, 3b3035cf).
     const body = ctx.comments.get(t.thoughtId) ?? '';
+    const bodyExpanded = body.trim() === '' ? '' : ctx.expand(body);
     const result =
-      body.trim() === ''
+      bodyExpanded.trim() === ''
         ? { html: '', headings: [] as PublicationHeading[] }
-        : renderPublicationFragment(body, {
+        : renderPublicationFragment(bodyExpanded, {
             baseLevel: headingNumber,
             headingAnchor: headingAnchorFor(t.thoughtId),
             resolveLink: ctx.resolver,
+            transclusion: { labels: SERVER_TRANSCLUSION_LABELS },
             ...(sourceMap ? { sourceMap: true } : {}),
           });
     return { text: t, body, result };
@@ -1050,6 +1073,7 @@ function prepareDocument(
     titles: loadThoughtMeta(ndb, [...blockIds]),
     textsBySection: doc.textsBySection,
     resolver,
+    expand: createBodyExpander(ndb),
     extraCache: new Map(),
     ...(opts.exportSink === undefined ? {} : { exportSink: opts.exportSink }),
   };
@@ -1087,10 +1111,16 @@ export function assemblePublication(
   const sections = renderSections(ndb, pageRoots, ctx);
 
   const summary = pub.summary_md ?? '';
+  // Резюме — тоже markdown-поле публикации: трансклюзии разворачиваются, как в
+  // предисловиях и текстах (требование 2fb33964, ошибка 3b3035cf).
+  const summaryBody = summary.trim() === '' ? '' : ctx.expand(summary);
   const summaryHtml =
-    summary.trim() === ''
+    summaryBody.trim() === ''
       ? ''
-      : renderPublicationFragment(summary, { resolveLink: ctx.resolver }).html;
+      : renderPublicationFragment(summaryBody, {
+          resolveLink: ctx.resolver,
+          transclusion: { labels: SERVER_TRANSCLUSION_LABELS },
+        }).html;
 
   return {
     publication: {
