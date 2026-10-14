@@ -17,8 +17,6 @@ import type {
   EffectiveTypeProperty,
   FilterAst,
   NetworkProperty,
-  PropertyValueType,
-  StructurePropertyOp,
   ThoughtType,
   ThoughtTypeView,
 } from '@etn/shared';
@@ -171,146 +169,15 @@ export interface ChainProperties {
   props: EffectiveTypeProperty[];
 }
 
-/** A token the picker can insert into a value field. */
-export interface ViewToken {
-  /** The text inserted into the value (e.g. `$today`, `$thought.[версия]`). */
-  text: string;
-  /** Human-readable label for the dropdown row. */
-  label: string;
-  /** Optional section header shown above the token in the dropdown. */
-  section?: string;
-  /**
-   * `true` — this token resolves to a list of values (multiple property,
-   * `$thought.[<multi>]`). Only available in conditions with op `in`/`not_in`.
-   */
-  listOnly?: boolean;
-}
+// ---------------------------------------------------------------------------
+// Токены контекста — единый каталог `lib/filter-tokens.ts` (ошибка 50d9bf4e,
+// пункты A3–A6). Здесь только реэкспорт публичного контракта диалога: сам набор
+// (по природе операнда, со свойствами реестра сети, без дублей) живёт в общем
+// модуле, потому что тот же набор нужен ячейке значения редактора.
+// ---------------------------------------------------------------------------
 
-/**
- * Build the token list for a value field. `propertyValueType` constrains
- * which tokens are valid for the field; `op` widens the list for
- * list-operations (`in`/`not_in`).
- */
-export function buildTokensForField(
-  chainProps: ChainProperties[],
-  propertyValueType: PropertyValueType | null,
-  op: StructurePropertyOp | null,
-): ViewToken[] {
-  const out: ViewToken[] = [];
-
-  // Global tokens.
-  if (propertyValueType === null || propertyValueType === 'date') {
-    out.push({ text: '$today', label: '$today — сегодня', section: 'Глобальные' });
-    out.push({ text: '$now', label: '$now — текущий момент' });
-  }
-  if (propertyValueType === null || propertyValueType === 'text' || propertyValueType === 'url') {
-    out.push({ text: '$user', label: '$user — текущий пользователь' });
-  }
-
-  // Thought-field tokens.
-  if (propertyValueType === null) {
-    out.push(
-      { text: '$thought', label: '$thought — id мысли в фокусе', section: 'Поля мысли' },
-      { text: '$thought.title', label: '$thought.title' },
-      { text: '$thought.synonyms', label: '$thought.synonyms' },
-      { text: '$thought.type', label: '$thought.type' },
-      { text: '$thought.active', label: '$thought.active' },
-      { text: '$thought.author', label: '$thought.author' },
-      { text: '$thought.editor', label: '$thought.editor' },
-      { text: '$thought.created', label: '$thought.created' },
-      { text: '$thought.updated', label: '$thought.updated' },
-    );
-  }
-  if (propertyValueType === 'text' || propertyValueType === 'url') {
-    // Для строковых свойств токен-пикер предлагает строковые поля мысли,
-    // а не id типа/пользователя — они не совпадут по типу со значением
-    // строкового свойства (ошибка e8365d29).
-    out.push(
-      { text: '$thought.title', label: '$thought.title', section: 'Поля мысли' },
-      { text: '$thought.synonyms', label: '$thought.synonyms' },
-    );
-  }
-  if (propertyValueType === 'date') {
-    out.push(
-      { text: '$thought.created', label: '$thought.created', section: 'Поля мысли' },
-      { text: '$thought.updated', label: '$thought.updated' },
-    );
-  }
-  if (propertyValueType === 'bool') {
-    out.push({ text: '$thought.active', label: '$thought.active', section: 'Поля мысли' });
-  }
-  // Свойство-связь (0.8.1) и legacy `thought_ref`: значение — id мысли,
-  // поэтому естественный токен для сравнения — `$thought` (= id мысли в
-  // фокусе). Сервер (`thought-type-view-tokens.ts`) его принимает, а UI
-  // раньше в пикере значения не предлагал — отбор с целью-токеном можно
-  // было сохранить только прямым POST (ошибка fad9f28c-…).
-  if (propertyValueType === 'link' || propertyValueType === 'thought_ref') {
-    out.push({ text: '$thought', label: '$thought — id мысли в фокусе', section: 'Поля мысли' });
-  }
-
-  // Property tokens (one section per ancestor level).
-  for (const level of chainProps) {
-    if (level.props.length === 0) continue;
-    const sectionName = `Свойства «${level.type.name}»`;
-    for (const def of level.props) {
-      const tokenText = `$thought.[${def.key}]`;
-      const labelSuffix = isListOp(op) ? ' […]' : '';
-      const multiple = def.config?.multiple === true;
-      const token: ViewToken = {
-        text: tokenText,
-        label: `${tokenText}${labelSuffix} — ${def.value_type}`,
-        section: sectionName,
-      };
-      if ((def.value_type === 'url' || def.value_type === 'text') && multiple) {
-        token.listOnly = true;
-      }
-      if (
-        propertyValueType !== null &&
-        !propertyMatches(def.value_type, propertyValueType, multiple) &&
-        !token.listOnly
-      ) {
-        continue;
-      }
-      out.push(token);
-    }
-  }
-
-  return out;
-}
-
-/**
- * Live-search filter: case-insensitive substring match against the label OR
- * the stored value (so typing part of `$today` or part of «сегодня» both
- * work). An empty/whitespace query returns every option unfiltered.
- */
-export function filterTokenOptions<T extends { label: string; text: string }>(
-  options: T[],
-  query: string,
-): T[] {
-  const needle = query.trim().toLowerCase();
-  if (needle === '') return options;
-  return options.filter(
-    (o) => o.label.toLowerCase().includes(needle) || o.text.toLowerCase().includes(needle),
-  );
-}
-
-/** Оператор со списком значений («в списке»/«не в списке»). */
-function isListOp(op: StructurePropertyOp | null): boolean {
-  return op === 'in' || op === 'not_in';
-}
-
-function propertyMatches(
-  defType: PropertyValueType,
-  condType: PropertyValueType,
-  defMultiple: boolean,
-): boolean {
-  if (defMultiple) return true;
-  if (defType === condType) return true;
-  if ((defType === 'text' || defType === 'url') && (condType === 'text' || condType === 'url')) {
-    return true;
-  }
-  return false;
-}
+export type { ViewToken } from '../../lib/filter-tokens.js';
+export { buildTokensForField, filterTokenOptions } from '../../lib/filter-tokens.js';
 
 // ---------------------------------------------------------------------------
 // Длины имени/описания отбора

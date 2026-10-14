@@ -68,6 +68,9 @@ import {
   filterKeywordScopeLabel,
   filterPhraseToken,
 } from './filter-phrase.js';
+// Токены контекста листа — единый каталог (ошибка 50d9bf4e, пункты A3–A6):
+// набор по природе операнда/свойства, свойства — из реестра ВСЕЙ сети.
+import { filterLeafTokenSource, filterTokenNature } from './filter-tokens.js';
 import { dateField } from './date-field.js';
 import { todayLocal } from './dates.js';
 import { VALUE_TYPE_LABELS, valueTypeIconName } from './property-list.js';
@@ -557,7 +560,15 @@ function valueEditorControl(
     multiple && (base.value_type === 'text' || base.value_type === 'url')
       ? { ...base, config: { ...((base.config as Record<string, unknown> | null) ?? {}), multiple: true } }
       : base;
-  const extraSuggest: SuggestSource[] = [filterValueTokenSource(ctx), ...(ctx.extraSuggest ?? [])];
+  const extraSuggest: SuggestSource[] = [];
+  // Опоры-периоды (`$today`/`$weekStart`/…) — только датовой природе: у
+  // текстового/ссылочного свойства они нерелевантны, а раньше предлагались
+  // всем (ошибка 50d9bf4e п. A4).
+  if (filterTokenNature(leaf, ctx) === 'date') extraSuggest.push(filterValueTokenSource(ctx));
+  // Токены по природе листа: поля мысли-контекста + `$thought.[Свойство]` по
+  // всему реестру сети (пункты A3/A6), без дублей (A5).
+  extraSuggest.push(filterLeafTokenSource(leaf, ctx));
+  if (ctx.extraSuggest !== undefined) extraSuggest.push(...ctx.extraSuggest);
   return buildValueEditor({
     networkId: ctx.networkId,
     definition: def,
@@ -738,6 +749,22 @@ function currentList(value: FilterTreeValue): string[] {
   if (value.kind === 'scalar') return [String(value.value)];
   if (value.kind === 'token') return [value.token];
   return [];
+}
+
+/**
+ * Значение ОДИНОЧНОГО ссылочного операнда по выбранному id: строка `$…` —
+ * токен контекста (форма AST `{ token }`, ошибка 50d9bf4e п. A3), иначе —
+ * обычная ссылка-скаляр.
+ */
+function operandSingleValue(id: string | null): FilterTreeValue {
+  if (id === null || id === '') return { kind: 'none' };
+  return id.startsWith('$') ? { kind: 'token', token: id } : { kind: 'scalar', value: id };
+}
+
+/** Значение МНОЖЕСТВЕННОГО ссылочного операнда: `$…` — токен, прочее — литерал. */
+function operandListValue(ids: readonly string[]): FilterTreeValue {
+  if (ids.length === 0) return { kind: 'none' };
+  return { kind: 'list', items: ids.map((id) => (id.startsWith('$') ? { token: id } : id)) };
 }
 
 /**
@@ -1308,8 +1335,12 @@ function entityOperandControl(
       ...(kind === 'thoughts' ? { thoughtPreview: true } : {}),
       titleOf,
       ...(picker !== undefined ? { picker } : {}),
+      // Токены контекста (`$thought` и пр.) — наравне с вариантами поиска
+      // (ошибка 50d9bf4e п. A3): значение ссылочного операнда — id, и токен —
+      // такое же значение.
+      extraSources: [filterLeafTokenSource(leaf, ctx)],
       onChange: (id) => {
-        api.setValue(id === null || id === '' ? { kind: 'none' } : { kind: 'scalar', value: id });
+        api.setValue(operandSingleValue(id));
       },
       // Выбранный вариант приходит целиком — имя берём оттуда же; выбор в
       // диалоге «…» даёт только id (вариант вне каталога) — снапшот догружается
@@ -1335,8 +1366,10 @@ function entityOperandControl(
       getValues: () => currentList(leaf.value),
       onChange: (values) => {
         applyValueLabel(values);
-        api.setValue(values.length === 0 ? { kind: 'none' } : { kind: 'list', items: [...values] });
+        api.setValue(operandListValue(values));
       },
+      // Токены контекста — тем же списком, что и варианты поиска (п. A3).
+      extraSources: [filterLeafTokenSource(leaf, ctx)],
       loadOptions: (query) =>
         Promise.resolve(options.length > 0 ? filterEntityOptions(options, query) : thoughtsSearch(ctx, query)).then(
           rememberOptions,
