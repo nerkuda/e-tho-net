@@ -337,6 +337,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       const result = await openDatePeriodDialog({
         allowPeriod: true,
         allowTime: true,
+        firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
         initial: datePeriodValueFromInstants(fromInstant, toInstant, useTime, true),
       });
       if (result === null) return;

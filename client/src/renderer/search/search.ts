@@ -1165,6 +1165,7 @@ function buildSettingsZone(zone: HTMLElement): void {
   searchEditor = buildFilterEditor({
     profile: 'thoughts',
     networkId: requireNetworkId(),
+    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
     title: t('filterEditor.titleSearch'),
     data: {
       registry: new Map(),

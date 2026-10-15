@@ -14,7 +14,7 @@
 
 import type { ChronicleRow, ChronicleTarget, SortOrder } from '@etn/shared';
 
-import { BARE_DATE_RE, addDays, mondayIndex, pad2, todayLocal, weekStartOffset } from '../../lib/dates.js';
+import { BARE_DATE_RE, addDays, pad2, todayLocal, weekStartOffset } from '../../lib/dates.js';
 
 // Общие чистые примитивы дат живут в `lib/dates.ts` (перенос календаря в
 // библиотеку, приёмка №5). Реэкспорт сохраняет прежние точки импорта у
@@ -199,17 +199,23 @@ export function isWeekend(day: string): boolean {
  *
  *  * один день, равный сегодня → `$today`/`$today`;
  *  * одиночный день не сегодня → день-арифметика `$today±Nd` на обеих границах;
- *  * ровно эта/прошлая/будущая неделя (пн…вс) → `$week.start`/`$week.end`
- *    с оффсетом `±1w`;
- *  * ровно этот/прошлый/будущий месяц → `$month.start`/`$month.end` с `±1mo`;
- *  * ровно этот/прошлый/будущий год → `$year.start`/`$year.end` с `±1y`;
+ *  * ровно эта/прошлая/будущая неделя (от первого дня недели сети) →
+ *    `$weekStart`/`$weekEnd` с оффсетом `±1w`;
+ *  * ровно этот/прошлый/будущий месяц → `$monthStart`/`$monthEnd` с `±1mo`;
+ *  * ровно этот/прошлый/будущий год → `$yearStart`/`$yearEnd` с `±1y`;
  *  * иначе (произвольный интервал) → день-арифметика `$today±Nd` на «С» и «По»
  *    (правило режима «Пресеты», приёмка №2 0.10.1).
+ *
+ * Токены пишутся КАНОНОМ camelCase (шапка модуля, `lib/period-editor.ts`):
+ * контрол периода и предопределённые наборы используют ту же форму, легаси
+ * точечные формы остаются только для ЧТЕНИЯ старых значений. Неделя — от
+ * первого дня недели сети (требование 1b77decd).
  */
 export function periodTokensForRange(
   from: string,
   to: string,
   today: string = todayLocal(),
+  firstDayOfWeek = 1,
 ): PeriodRange {
   if (from === '' && to === '') return { from: '', to: '' };
   if (from === to) {
@@ -218,25 +224,33 @@ export function periodTokensForRange(
   }
 
   const weekAnchors: Array<{ from: string; to: string; f: string; t: string }> = [
-    { f: '$week.start', t: '$week.end', ...weekPeriod(today) },
-    { f: '$week.start-1w', t: '$week.end-1w', ...weekPeriod(addDays(today, -7)) },
-    { f: '$week.start+1w', t: '$week.end+1w', ...weekPeriod(addDays(today, 7)) },
+    { f: '$weekStart', t: '$weekEnd', ...weekPeriod(today, firstDayOfWeek) },
+    {
+      f: '$weekStart-1w',
+      t: '$weekEnd-1w',
+      ...weekPeriod(addDays(today, -7), firstDayOfWeek),
+    },
+    {
+      f: '$weekStart+1w',
+      t: '$weekEnd+1w',
+      ...weekPeriod(addDays(today, 7), firstDayOfWeek),
+    },
   ];
   for (const w of weekAnchors) {
     if (from === w.from && to === w.to) return { from: w.f, to: w.t };
   }
   const monthAnchors: Array<{ from: string; to: string; f: string; t: string }> = [
-    { f: '$month.start', t: '$month.end', ...monthPeriod(today) },
-    { f: '$month.start-1mo', t: '$month.end-1mo', ...monthPeriod(addMonths(today, -1)) },
-    { f: '$month.start+1mo', t: '$month.end+1mo', ...monthPeriod(addMonths(today, 1)) },
+    { f: '$monthStart', t: '$monthEnd', ...monthPeriod(today) },
+    { f: '$monthStart-1mo', t: '$monthEnd-1mo', ...monthPeriod(addMonths(today, -1)) },
+    { f: '$monthStart+1mo', t: '$monthEnd+1mo', ...monthPeriod(addMonths(today, 1)) },
   ];
   for (const mo of monthAnchors) {
     if (from === mo.from && to === mo.to) return { from: mo.f, to: mo.t };
   }
   const yearAnchors: Array<{ from: string; to: string; f: string; t: string }> = [
-    { f: '$year.start', t: '$year.end', ...yearPeriod(today) },
-    { f: '$year.start-1y', t: '$year.end-1y', ...yearPeriod(addMonths(today, -12)) },
-    { f: '$year.start+1y', t: '$year.end+1y', ...yearPeriod(addMonths(today, 12)) },
+    { f: '$yearStart', t: '$yearEnd', ...yearPeriod(today) },
+    { f: '$yearStart-1y', t: '$yearEnd-1y', ...yearPeriod(addMonths(today, -12)) },
+    { f: '$yearStart+1y', t: '$yearEnd+1y', ...yearPeriod(addMonths(today, 12)) },
   ];
   for (const y of yearAnchors) {
     if (from === y.from && to === y.to) return { from: y.f, to: y.t };
@@ -336,9 +350,10 @@ export function periodValuesForRange(
   to: string,
   today: string = todayLocal(),
   mode: PeriodEditMode = 'presets',
+  firstDayOfWeek = 1,
 ): PeriodRange {
   if (mode === 'dates') return { from, to };
-  return periodTokensForRange(from, to, today);
+  return periodTokensForRange(from, to, today, firstDayOfWeek);
 }
 
 /** Период месяца (первое — последнее число) для дня `day`. */
@@ -569,10 +584,14 @@ export function recordPeriod(row: {
 }
 
 
-/** Период недели (клик по номеру/строке недели): понедельник — воскресенье. */
-export function weekPeriod(day: string): PeriodRange {
-  const monday = addDays(day, -mondayIndex(day));
-  return { from: monday, to: addDays(monday, 6) };
+/**
+ * Период недели (клик по номеру/строке недели): от ПЕРВОГО дня недели сети
+ * (`firstDayOfWeek`, ISO 1 = пн … 7 = вс, требование 1b77decd) — семь суток.
+ * `day` может быть любым днём недели.
+ */
+export function weekPeriod(day: string, firstDayOfWeek = 1): PeriodRange {
+  const start = addDays(day, -weekStartOffset(day, firstDayOfWeek));
+  return { from: start, to: addDays(start, 6) };
 }
 
 /**

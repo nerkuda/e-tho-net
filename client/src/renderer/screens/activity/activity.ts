@@ -382,6 +382,7 @@ function mountFilterPanel(area: HTMLElement): void {
   const editor = buildFilterEditor({
     profile: 'events',
     networkId: requireNetworkId(),
+    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
     data,
     getState: () => filter,
     touch: () => {

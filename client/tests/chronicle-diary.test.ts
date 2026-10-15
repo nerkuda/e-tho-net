@@ -320,50 +320,72 @@ describe('diary: канонические camelCase-токены и первый
       localDayStart('2026-09-20'),
     );
   });
+
+  it('weekPeriod и обратное преобразование в токены идут от первого дня недели сети', () => {
+    // fdw=1 (понедельник): пн 09-21 … вс 09-27.
+    assert.deepEqual(weekPeriod(today, 1), { from: '2026-09-21', to: '2026-09-27' });
+    // fdw=7 (воскресенье): вс 09-20 … сб 09-26.
+    assert.deepEqual(weekPeriod(today, 7), { from: '2026-09-20', to: '2026-09-26' });
+    // Распознавание недели при fdw=7 пишет канон и границы недели сети.
+    assert.deepEqual(periodTokensForRange('2026-09-20', '2026-09-26', today, 7), {
+      from: '$weekStart',
+      to: '$weekEnd',
+    });
+    // Понедельничный диапазон при fdw=7 неделей сети не является — день-арифметика.
+    assert.deepEqual(periodTokensForRange('2026-09-21', '2026-09-27', today, 7), {
+      from: '$today-5d',
+      to: '$today+1d',
+    });
+    // При fdw=1 прежнее распознавание сохраняется.
+    assert.deepEqual(periodTokensForRange('2026-09-21', '2026-09-27', today, 1), {
+      from: '$weekStart',
+      to: '$weekEnd',
+    });
+  });
 });
 
 describe('diary: синхронизация календаря и полей периода (91f8d8dd)', () => {
   const today = '2026-09-26'; // суббота
 
-  it('день=сегодня, неделя и месяц распознаются в токены', () => {
+  it('день=сегодня, неделя и месяц распознаются в токены (канон camelCase)', () => {
     assert.deepEqual(periodTokensForRange('2026-09-26', '2026-09-26', today), {
       from: '$today',
       to: '$today',
     });
     assert.deepEqual(periodTokensForRange('2026-09-21', '2026-09-27', today), {
-      from: '$week.start',
-      to: '$week.end',
+      from: '$weekStart',
+      to: '$weekEnd',
     });
     assert.deepEqual(periodTokensForRange('2026-09-14', '2026-09-20', today), {
-      from: '$week.start-1w',
-      to: '$week.end-1w',
+      from: '$weekStart-1w',
+      to: '$weekEnd-1w',
     });
     assert.deepEqual(periodTokensForRange('2026-09-28', '2026-10-04', today), {
-      from: '$week.start+1w',
-      to: '$week.end+1w',
+      from: '$weekStart+1w',
+      to: '$weekEnd+1w',
     });
     assert.deepEqual(periodTokensForRange('2026-09-01', '2026-09-30', today), {
-      from: '$month.start',
-      to: '$month.end',
+      from: '$monthStart',
+      to: '$monthEnd',
     });
     assert.deepEqual(periodTokensForRange('2026-08-01', '2026-08-31', today), {
-      from: '$month.start-1mo',
-      to: '$month.end-1mo',
+      from: '$monthStart-1mo',
+      to: '$monthEnd-1mo',
     });
   });
 
   it('год (этот/прошлый/будущий) распознаётся в токены', () => {
     assert.deepEqual(periodTokensForRange('2026-01-01', '2026-12-31', today), {
-      from: '$year.start',
-      to: '$year.end',
+      from: '$yearStart',
+      to: '$yearEnd',
     });
     assert.deepEqual(periodTokensForRange('2025-01-01', '2025-12-31', today), {
-      from: '$year.start-1y',
-      to: '$year.end-1y',
+      from: '$yearStart-1y',
+      to: '$yearEnd-1y',
     });
     assert.deepEqual(periodTokensForRange('2027-01-01', '2027-12-31', today), {
-      from: '$year.start+1y',
-      to: '$year.end+1y',
+      from: '$yearStart+1y',
+      to: '$yearEnd+1y',
     });
   });
 

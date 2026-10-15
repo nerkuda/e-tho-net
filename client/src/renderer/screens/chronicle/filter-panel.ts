@@ -975,6 +975,7 @@ function renderPanel(): void {
   editor = buildFilterEditor({
     profile: FILTER_PROFILE,
     networkId: requireNetworkId(),
+    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
     data: {
       registry: registryWithSides(),
       linkTypes: store.state.linkTypes,

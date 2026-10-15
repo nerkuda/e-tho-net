@@ -634,6 +634,7 @@ function renderPanel(): void {
   editor = buildFilterEditor({
     profile: FILTER_PROFILE,
     networkId: requireNetworkId(),
+    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
     // Заголовок панели — из словаря (ошибка 23c7d3e9 п. B1): прежде секция
     // подписывалась профильным «Показать мысли по условиям:».
     title: t('filterEditor.titleThoughts'),

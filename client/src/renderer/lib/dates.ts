@@ -152,9 +152,9 @@ export interface CalendarCell {
   inMonth: boolean;
 }
 
-/** Одна строка недели календаря (понедельник … воскресенье). */
+/** Одна строка недели календаря (первый … последний день недели сети). */
 export interface CalendarWeek {
-  /** Номер ISO-недели. */
+  /** Номер недели (ISO-номер её «срединного» дня — 4-го дня строки). */
   week: number;
   days: CalendarCell[];
 }
@@ -162,11 +162,20 @@ export interface CalendarWeek {
 /**
  * Шесть недель сетки месяца (42 дня, всегда одинаковое число строк — высота
  * календаря не прыгает при переключении месяца). `month` — 1..12.
+ *
+ * `firstDayOfWeek` — первый день недели сети (ISO 1 = пн … 7 = вс, требование
+ * 1b77decd): строка недели начинается с него, поэтому `days[0]` — первый день
+ * недели, а не обязательно понедельник. Номер недели считается ISO-номером
+ * «срединного» дня строки (4-го): при `firstDayOfWeek = 1` это четверг той же
+ * ISO-недели, что и прежний расчёт по понедельнику строки, — номер не меняется.
  */
-export function buildMonthWeeks(year: number, month: number): CalendarWeek[] {
+export function buildMonthWeeks(
+  year: number,
+  month: number,
+  firstDayOfWeek = 1,
+): CalendarWeek[] {
   const first = firstOfMonth(year, month);
-  const firstDate = new Date(`${first}T00:00:00Z`);
-  const lead = (firstDate.getUTCDay() + 6) % 7;
+  const lead = weekStartOffset(first, firstDayOfWeek);
   let cursor = addDays(first, -lead);
   const weeks: CalendarWeek[] = [];
   for (let w = 0; w < 6; w++) {
@@ -175,8 +184,7 @@ export function buildMonthWeeks(year: number, month: number): CalendarWeek[] {
       days.push({ day: cursor, inMonth: cursor.slice(0, 7) === first.slice(0, 7) });
       cursor = addDays(cursor, 1);
     }
-    const monday = days[0]!.day;
-    weeks.push({ week: isoWeekNumber(monday), days });
+    weeks.push({ week: isoWeekNumber(days[3]!.day), days });
   }
   return weeks;
 }

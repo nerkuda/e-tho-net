@@ -543,8 +543,9 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     today: todayLocal(),
     month: month ?? undefined,
     counts: (day) => dayCount(day),
+    firstDayOfWeek: networkFirstDayOfWeek(),
     onPickDay: (day) => void pickPeriod(dayPeriod(day)),
-    onPickWeek: (monday) => void pickPeriod(weekPeriod(monday)),
+    onPickWeek: (firstDay) => void pickPeriod(weekPeriod(firstDay, networkFirstDayOfWeek())),
     onToday: () => goToday(),
     onMonthChange: (year, monthNo) => {
       month = { year, month: monthNo };
@@ -1621,6 +1622,7 @@ async function editRecordDates(row: ChronicleRow): Promise<void> {
   const result = await openDatePeriodDialog({
     allowPeriod: true,
     allowTime: true,
+    firstDayOfWeek: networkFirstDayOfWeek(),
     // Время показано, только когда запись его уже учитывает; иначе — скрыто.
     initial: datePeriodValueFromInstants(
       previous.from,
@@ -1949,7 +1951,13 @@ async function pickPeriod(period: { from: string; to: string }): Promise<void> {
   // Клик календаря пишет период строкой «Период записи» (задача 608ecb79):
   // «Пресеты» — токены календаря, которые панель показывает и раскрывает в
   // локальные сутки при запросе (`chronicleQueryDefinition`).
-  const next = periodValuesForRange(period.from, period.to, todayLocal(), 'presets');
+  const next = periodValuesForRange(
+    period.from,
+    period.to,
+    todayLocal(),
+    'presets',
+    networkFirstDayOfWeek(),
+  );
   setChroniclePeriod(next.from, next.to);
   persistState();
   await applyFilter();

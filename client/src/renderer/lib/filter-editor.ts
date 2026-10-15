@@ -185,6 +185,12 @@ export interface FilterEditorOptionsBase {
   profile: FilterProfileId;
   /** Сеть: живой поиск значений, пикер, облачка. */
   networkId: string;
+  /**
+   * Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
+   * передаётся виджетам даты (календарь диалога «Дата/период»). Не задан —
+   * понедельник.
+   */
+  firstDayOfWeek?: number;
   /** Данные сети: реестр свойств, типы связей, типы мыслей, контекстные операнды. */
   data: FilterTreeData;
   /** Живая модель отбора (единственная — `FilterCriteriaState`). */
@@ -364,6 +370,7 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     profile,
     data,
     touch,
+    ...(opts.firstDayOfWeek !== undefined ? { firstDayOfWeek: opts.firstDayOfWeek } : {}),
     ...(opts.withFocusThought !== undefined ? { withFocusThought: opts.withFocusThought } : {}),
     ...(opts.enumOptions !== undefined ? { enumOptions: opts.enumOptions } : {}),
     ...(opts.extraSuggest !== undefined ? { extraSuggest: opts.extraSuggest } : {}),

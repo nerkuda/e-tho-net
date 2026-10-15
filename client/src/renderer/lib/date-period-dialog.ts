@@ -77,6 +77,11 @@ export interface DatePeriodDialogOptions {
    * клик только выбирает день (ошибка 609deba0 п.4).
    */
   onDayActivate?: (value: DatePeriodValue) => void;
+  /**
+   * Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
+   * раскладка сетки и подписи столбцов. Не задан — понедельник.
+   */
+  firstDayOfWeek?: number;
 }
 
 /** Рукоятка собранного диалога (для тестов и встраивания). */
@@ -294,6 +299,7 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
     today,
     weekNumbers: false,
     enableRangeDrag: allowPeriod,
+    firstDayOfWeek: opts.firstDayOfWeek,
     onPickDay: (day) => {
       if (mode === 'date') {
         from = day;

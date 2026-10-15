@@ -251,16 +251,16 @@ describe('приёмка №3, п.3: период «список + сдвиг ±
       to: '$today',
     });
     assert.deepEqual(periodValuesForRange('2026-09-21', '2026-09-27', today, 'presets'), {
-      from: '$week.start',
-      to: '$week.end',
+      from: '$weekStart',
+      to: '$weekEnd',
     });
     assert.deepEqual(periodValuesForRange('2026-09-01', '2026-09-30', today, 'presets'), {
-      from: '$month.start',
-      to: '$month.end',
+      from: '$monthStart',
+      to: '$monthEnd',
     });
     assert.deepEqual(periodValuesForRange('2026-01-01', '2026-12-31', today, 'presets'), {
-      from: '$year.start',
-      to: '$year.end',
+      from: '$yearStart',
+      to: '$yearEnd',
     });
     // Произвольный интервал — день-арифметика на обеих границах.
     assert.deepEqual(periodValuesForRange('2026-09-24', '2026-09-28', today, 'presets'), {

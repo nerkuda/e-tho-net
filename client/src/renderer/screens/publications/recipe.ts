@@ -197,6 +197,7 @@ export function buildRecipeBuilder(opts: {
   editor = buildFilterEditor({
     profile: 'publications',
     networkId: store.state.networkId ?? '',
+    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
     data,
     getState: () => state,
     touch,

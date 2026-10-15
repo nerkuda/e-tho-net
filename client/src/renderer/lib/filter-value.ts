@@ -183,6 +183,12 @@ export interface FilterValueContext {
   /** Профиль точки применения (состав токенов: время доступно хронике/событиям). */
   profile: FilterProfileId;
   /**
+   * Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
+   * передаётся в календарь диалога «Дата/период» для ячейки точной даты.
+   * Не задан — понедельник.
+   */
+  firstDayOfWeek?: number;
+  /**
    * Место исполняет отбор относительно мысли-контекста — значениям доступны
    * токены полей мысли (`$thought*`); иначе фокусные токены не предлагаются
    * (требование 3697eb65, признак места `withFocusThought`).
@@ -1053,7 +1059,7 @@ function dateBoundControl(
       value: current,
       ariaLabel: 'Точная дата',
       hideClear: true,
-      onPick: exactDatePicker(current),
+      onPick: exactDatePicker(current, ctx),
       onChange: (iso: string) => onChange(iso === '' ? { kind: 'none' } : { kind: 'scalar', value: iso }),
     });
     frame.append(field.root);
@@ -1116,7 +1122,10 @@ function dateBoundControl(
 }
 
 /** Открыть существующий календарь для точной даты; `null` — отказ от выбора. */
-function exactDatePicker(current: string): () => Promise<string | null> {
+function exactDatePicker(
+  current: string,
+  ctx: Pick<FilterValueContext, 'firstDayOfWeek'>,
+): () => Promise<string | null> {
   return async (): Promise<string | null> => {
     const fallback = /^\d{4}-\d{2}-\d{2}$/.test(current) ? current : todayLocal();
     const { openDatePeriodDialog } = await import('./date-period-dialog.js');
@@ -1125,6 +1134,7 @@ function exactDatePicker(current: string): () => Promise<string | null> {
       allowTime: false,
       title: 'Точная дата',
       initial: { mode: 'date', from: fallback, to: fallback },
+      ...(ctx.firstDayOfWeek !== undefined ? { firstDayOfWeek: ctx.firstDayOfWeek } : {}),
     });
     return result === null ? null : result.from;
   };

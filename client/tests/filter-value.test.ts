@@ -698,7 +698,7 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(anchor?.value, '$weekStart', 'опора — канонический токен (элемент 27b2a011)');
     assert.equal(box.findAll((n) => n.dataset['part'] === 'shift')[0]?.value, '', 'нулевой сдвиг — пустое поле');
     assert.equal(box.findAll((n) => n.dataset['part'] === 'unit')[0]?.value, 'd', 'тип количества — дни');
-    assert.equal(one(box, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent, 'начало недели (пн)', 'показ — человекочитаемый');
+    assert.equal(one(box, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent, 'начало недели', 'показ — человекочитаемый');
     const options =
       all(box, mod.FILTER_VALUE_ANCHOR_CLASS)[0]?.findAll((n) => n.tagName.toUpperCase() === 'OPTION') ?? [];
     assert.equal(options[0]?.value, 'exact', 'первый пункт списка периода — «Точная дата» (п.11в)');
@@ -708,7 +708,7 @@ describe('ячейка значения: сборка виджета и прав
     // Легаси-ввод остаётся читаемым и приводится к канону (селект находит опору).
     const legacy = render(leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$week.start' }), slot().api);
     assert.equal(legacy.findAll((n) => n.dataset['part'] === 'anchor')[0]?.value, '$weekStart');
-    assert.equal(one(legacy, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent, 'начало недели (пн)');
+    assert.equal(one(legacy, mod.FILTER_VALUE_HINT_LABEL_CLASS)?.textContent, 'начало недели');
   });
 
   it('точная дата: вместо количества и типа — поле даты с кнопкой календаря (п.11г)', () => {
