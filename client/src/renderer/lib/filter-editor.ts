@@ -59,8 +59,36 @@ import type { FilterValueContext, FilterValueEnumOption } from './filter-value.j
 import type { SuggestSource } from './suggest-dropdown.js';
 import type { ThoughtCloudInput } from './thought-cloud.js';
 // Имя пользователя по id для фразы-превью (ошибка 23c7d3e9 п. A1) — кэш
-// участников сети; читается без сети (`resolveUserName`).
-import { resolveUserName } from './users.js';
+// участников сети; читается без сети (`resolveUserName`), а на наполнение кэша
+// фраза ПОДПИСЫВАЕТСЯ (ошибка части 6, п.7): при холодном кэше фраза показывала
+// обрезанный id и не перерисовывалась, когда ростер приходил.
+import { resolveUserName, subscribe as subscribeUsers } from './users.js';
+
+/**
+ * Рефрешеры фразы живых редакторов. Фраза-превью показывает ИМЕНА пользователей
+ * по id, а кэш участников наполняется асинхронно (best-effort ростер админа):
+ * пока кэш холодный, фраза показывает обрезанный id и обновляется, когда ростер
+ * придёт. Подписка — ОДНА на модуль (не по редактору: пересборки панели копили бы
+ * слушателей); отключённые корни вычищаются при очередном уведомлении.
+ */
+const phraseRefreshers = new Set<{ root: HTMLElement; refresh: () => void }>();
+let usersSubscribed = false;
+
+/** Подписать фразу редактора на наполнение кэша пользователей (один раз на модуль). */
+function subscribePhraseToUsers(entry: { root: HTMLElement; refresh: () => void }): void {
+  phraseRefreshers.add(entry);
+  if (usersSubscribed) return;
+  usersSubscribed = true;
+  subscribeUsers(() => {
+    for (const item of [...phraseRefreshers]) {
+      if (!item.root.isConnected) {
+        phraseRefreshers.delete(item);
+        continue;
+      }
+      item.refresh();
+    }
+  });
+}
 
 /** Корень контейнера редактора. */
 export const FILTER_EDITOR_CLASS = 'fe';
@@ -371,6 +399,9 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
       ...(opts.buttons?.standard !== undefined ? { standardButtons: opts.buttons.standard } : {}),
     });
     foot.append(footer.root);
+    // Фраза-превью — имена пользователей по id: при наполнении кэша участников
+    // перерисовываем фразу, чтобы id не «застыл» (ошибка части 6, п.7).
+    subscribePhraseToUsers({ root, refresh: () => footer?.refresh() });
   }
   if (foot.children.length > 0) root.append(foot);
 
