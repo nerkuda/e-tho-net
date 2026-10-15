@@ -219,11 +219,11 @@
     {
       "name": "a3-issue-shown",
       "timeout": 8000,
-      "waitFor": "(() => { const r=document.querySelector('.st-filter .ft-row[data-path=\"0\"]'); return r.dataset.severity === 'error' && (r.querySelector('.ft-issue__text')?.textContent||'').includes('условие без значения'); })()"
+      "waitFor": "(() => { const r=document.querySelector('.st-filter .ft-row[data-path=\"0\"]'); return r.dataset.severity === 'error' && (r.querySelector('.ft-issue__text')?.textContent||'').includes('не задано значение условия'); })()"
     },
     {
       "name": "a3-issue-present",
-      "probe": "(document.querySelector('.st-filter .ft-row[data-path=\"0\"] .ft-issue__text')?.textContent||'').includes('условие без значения')",
+      "probe": "(document.querySelector('.st-filter .ft-row[data-path=\"0\"] .ft-issue__text')?.textContent||'').includes('не задано значение условия')",
       "expect": true
     },
     {

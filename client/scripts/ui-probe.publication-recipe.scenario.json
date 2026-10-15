@@ -94,8 +94,8 @@
       "probe": "document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? ''"
     },
     {
-      "name": "phrase-has-words-operator",
-      "probe": "(document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? '').includes('есть слова')",
+      "name": "phrase-keywords-operand",
+      "probe": "(document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? '').includes('Найти слова')",
       "expect": true
     },
     {

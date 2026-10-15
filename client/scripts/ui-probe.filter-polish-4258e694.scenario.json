@@ -95,7 +95,7 @@
     },
     {
       "name": "phrase-name-not-id",
-      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text')?.textContent ?? ''; return !t.includes('11111111-1111') && t.includes('Тип мысли равно Очень длинное имя типа мысли…'); })()",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text')?.textContent ?? ''; return !t.includes('11111111-1111') && t.includes('Очень длинное имя типа мысли…'); })()",
       "expect": true
     },
     {

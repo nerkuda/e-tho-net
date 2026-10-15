@@ -69,11 +69,11 @@
     {
       "name": "subroot-value-ready",
       "timeout": 15000,
-      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .fv-entity .entity-combo-input') !== null"
+      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .fv-entity .entity-chip-input') !== null"
     },
     {
       "name": "type-home",
-      "eval": "(() => { const i = document.querySelector('.search-settings .ft-row[data-path=\"2\"] .fv-entity .entity-combo-input'); if (i === null) return null; i.focus(); i.value = 'HOME'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+      "eval": "(() => { const i = document.querySelector('.search-settings .ft-row[data-path=\"2\"] .fv-entity .entity-chip-input'); if (i === null) return null; i.focus(); i.value = 'HOME'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
     },
     { "name": "suggest-visible", "timeout": 15000, "waitFor": "document.querySelector('.type-combo-item') !== null" },
     {
@@ -83,7 +83,7 @@
     {
       "name": "home-chosen",
       "timeout": 15500,
-      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .entity-combo-value')?.textContent?.includes('HOME') === true"
+      "waitFor": "[...document.querySelectorAll('.search-settings .ft-row[data-path=\"2\"] .fv-entity .prc-title')].some((e) => e.textContent.includes('HOME'))"
     },
     {
       "name": "set-mode-all-links",
