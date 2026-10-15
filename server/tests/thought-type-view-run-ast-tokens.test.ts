@@ -603,5 +603,35 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('unresolved-конверт несёт те же поля страницы, что и успешный ответ (паритет с MCP)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildTokenFixture(ctx);
+        // `$now` в календарном профиле отбора мыслей — штатная неразрешимость
+        // (диагностика движка, не отказ маршрута).
+        const res = await runAdHoc(ctx, fx.context, {
+          ast: {
+            version: 1,
+            filter: { entity: { kind: 'created_at' }, operator: 'gte', value: { token: '$now' } },
+          },
+        });
+        assert.equal(res.statusCode, 200, res.body ?? '');
+        const body = res.json() as { data: unknown[]; meta: Record<string, unknown> };
+        assert.deepEqual(body.data, [], 'страница пуста');
+        const unresolved = body.meta.unresolved as Array<{ token: string }> | undefined;
+        assert.ok(
+          Array.isArray(unresolved) && unresolved.length > 0,
+          'неразрешимый токен обязан попасть в meta.unresolved',
+        );
+        assert.equal(body.meta.ast, true, 'unresolved-конверт помечен meta.ast');
+        assert.equal(typeof body.meta.has_more, 'boolean', 'unresolved-конверт несёт has_more');
+        assert.ok('next_cursor' in body.meta, 'unresolved-конверт несёт next_cursor');
+        assert.ok('sort' in body.meta && 'order' in body.meta, 'unresolved-конверт несёт sort/order');
+        assert.ok('directions' in body.meta, 'unresolved-конверт несёт directions');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );

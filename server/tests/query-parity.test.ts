@@ -592,7 +592,10 @@ describe(
           arguments: { network_id: restCtx.networkId, thought_id: version, view_name: 'Того же типа' },
         });
         assert.equal(byNameRes.isError, undefined, toolText(byNameRes));
-        const byName = toolJson<{ data: Array<{ id: string }>; meta: { total: number; ast?: boolean } }>(byNameRes);
+        const byName = toolJson<{
+          data: Array<{ id: string }>;
+          meta: { total: number; ast?: boolean; has_more?: boolean; next_cursor?: string | null };
+        }>(byNameRes);
 
         // MCP ad-hoc.
         const mcpRes = await handle.client.callTool({
@@ -651,6 +654,21 @@ describe(
         assert.equal(typeof mcp.meta.has_more, 'boolean', 'MCP ad-hoc обязан нести has_more');
         assert.ok('next_cursor' in mcp.meta, 'MCP ad-hoc обязан нести next_cursor');
         assert.equal(mcp.meta.has_more, rest.meta.has_more, 'has_more: REST и MCP совпадают');
+        // Конверты ОБЕИХ веток `etn.views.run` несут хвост страницы (блокер
+        // верификатора: сохранённый путь их терял, хотя данные есть в
+        // `RunViewResult`). Мутация «убрать проброс» обязана краснеть.
+        assert.equal(typeof byName.meta.has_more, 'boolean', 'MCP view_name обязан нести has_more');
+        assert.ok('next_cursor' in byName.meta, 'MCP view_name обязан нести next_cursor');
+        assert.equal(
+          byName.meta.has_more,
+          mcp.meta.has_more,
+          'has_more: ветки view_name и ast совпадают',
+        );
+        assert.equal(
+          byName.meta.next_cursor,
+          mcp.meta.next_cursor,
+          'next_cursor: ветки view_name и ast совпадают',
+        );
 
         // Пагинация: limit 2 отдаёт две записи и признак «есть ещё». `total` —
         // COUNT совпадений (3: две работы + контекстная мысль); коррекция total

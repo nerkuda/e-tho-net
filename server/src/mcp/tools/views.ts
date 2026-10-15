@@ -204,6 +204,11 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
             offset,
             sort: base.sort,
             order: base.order,
+            // Хвост страницы (задача 0e7e89f5): те же поля, что и у ad-hoc
+            // ветки — иначе конверты `etn.views.run` расходятся, хотя данные
+            // есть в `RunViewResult` обеих веток.
+            has_more: base.has_more,
+            next_cursor: base.next_cursor,
             ...(base.unresolved.length > 0
               ? {
                   unresolved: base.unresolved.map((u) => ({

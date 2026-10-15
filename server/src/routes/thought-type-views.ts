@@ -549,7 +549,9 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         logFilterStats(app.fileLog, networkId, 'rest.view_run_ast', result.stats);
 
         // Неразрешимые токены (требование b7fdab20) — пустая страница с
-        // пояснением; прочие поля страницы в этом случае смысла не несут.
+        // пояснением. Конверт несёт те же поля страницы, что и успешный ответ
+        // (спека c989a4e2 перечисляет их безусловно; паритет с MCP-веткой
+        // `etn.views.run`, которая отдаёт их и при `unresolved`).
         if (result.unresolved.length > 0) {
           reply.code(200).send({
             data: [],
@@ -558,7 +560,11 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
               limit: limit ?? 0,
               offset,
               directions: {},
+              sort: result.sort,
+              order: result.order,
               ast: true,
+              has_more: result.has_more,
+              next_cursor: result.next_cursor,
               unresolved: result.unresolved,
             },
           });
