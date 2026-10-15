@@ -937,16 +937,86 @@ function recordTextLeafClause(
   }
 }
 
-/** Условие авторства записи (`created_by`/`updated_by`). */
-function recordAuthorLeafClause(leaf: FilterAstLeaf, column: 'c.created_by' | 'c.updated_by'): ChronicleClause {
+/**
+ * Значение авторства записи из значения листа: литеральные строки — как есть,
+ * значения-ТОКЕНЫ (`$user` у «Автора записи» предопределённого набора «Мои
+ * записи за неделю») раскрываются ГЛОБАЛЬНЫМИ токенами — по образцу границ
+ * {@link recordTimeLeafClause}. Нераскрытый/недопустимый токен — ЯВНАЯ ошибка,
+ * а не молчаливое `1=1`: прежнее поведение теряло условие и показывало ВСЕ
+ * записи (арбитраж оркестратора 2026-10-14).
+ */
+function resolveRecordAuthorValue(
+  raw: FilterAstValue | undefined,
+  column: string,
+  opts: ChronicleAstOpts,
+): string | string[] | undefined {
+  if (raw === undefined) return undefined;
+  const resolveItem = (item: unknown): string => {
+    if (typeof item === 'string') return item;
+    if (typeof item === 'object' && item !== null && !Array.isArray(item) && 'token' in item) {
+      const text = (item as { token?: unknown }).token;
+      if (typeof text !== 'string') return '';
+      const { known, unknown } = scanStringForTokens(text);
+      if (unknown.length > 0) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `${column}: неизвестный токен «${unknown[0]!.raw}».`,
+          { field: 'value', token: unknown[0]!.raw },
+          opts.requestId,
+        );
+      }
+      const bad = known.find((t) => t.kind !== 'global');
+      if (bad !== undefined) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `${column}: токен «${bad.raw}» требует контекста мысли и в условии авторства недопустим.`,
+          { field: 'value', token: bad.raw },
+          opts.requestId,
+        );
+      }
+      const resolved = resolveGlobalDateTokens(text, {
+        ...(opts.now !== undefined ? { now: opts.now } : {}),
+        userId: opts.userId,
+      });
+      if (resolved.unresolved.length > 0) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `${column}: не удалось раскрыть токен «${text}».`,
+          { field: 'value', token: text },
+          opts.requestId,
+        );
+      }
+      return resolved.value;
+    }
+    return '';
+  };
+  return Array.isArray(raw) ? raw.map(resolveItem) : resolveItem(raw);
+}
+
+/**
+ * Условие авторства записи (`created_by`/`updated_by`). Значение раскрывается
+ * токенами ({@link resolveRecordAuthorValue}); пустое/нераскрытое значение в
+ * операторе, требующем значения, — ошибка, а не `1=1`.
+ */
+function recordAuthorLeafClause(
+  leaf: FilterAstLeaf,
+  column: 'c.created_by' | 'c.updated_by',
+  opts: ChronicleAstOpts,
+): ChronicleClause {
   const conds: string[] = [];
   const args: unknown[] = [];
-  const raw = leaf.value;
-  const value = Array.isArray(raw) ? (raw as string[]) : typeof raw === 'string' ? raw : undefined;
   // Wire-модель называет пустоту `is_empty`/`not_empty`, домен-условие — `empty`/
   // `not_empty` (легаси `StructureAuthorOp`): отображаем явно.
   const op: StructureAuthorOp =
     leaf.operator === 'is_empty' ? 'empty' : (leaf.operator as StructureAuthorOp);
+  if (op === 'empty' || op === 'not_empty') {
+    appendChronicleAuthorCondition(conds, args, column, undefined, op);
+    return { sql: conds.join(' AND '), args };
+  }
+  const value = resolveRecordAuthorValue(leaf.value, column, opts);
+  if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) {
+    return astUnsupported(`«${column === 'c.created_by' ? 'Автор записи' : 'Редактор записи'}»: не задано значение условия.`, opts.requestId);
+  }
   appendChronicleAuthorCondition(conds, args, column, value, op);
   if (conds.length === 0) return { sql: '1=1', args: [] };
   return { sql: conds.join(' AND '), args };
@@ -1091,9 +1161,9 @@ function chronicleAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: Chron
       // равно/не равно/содержит/не содержит + «Есть слова» (путь Б ключевых слов).
       return recordTextLeafClause(node, 'c.body_md', RECORD_BODY_COND, opts);
     case 'record_author':
-      return recordAuthorLeafClause(node, 'c.created_by');
+      return recordAuthorLeafClause(node, 'c.created_by', opts);
     case 'record_editor':
-      return recordAuthorLeafClause(node, 'c.updated_by');
+      return recordAuthorLeafClause(node, 'c.updated_by', opts);
     case 'targets':
       return targetsLeafClause(ndb, node, opts);
     default:

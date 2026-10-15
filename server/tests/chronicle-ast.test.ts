@@ -462,3 +462,84 @@ describe('хроника: отбор на общий AST (задача 4752b065)
     }
   });
 });
+
+/**
+ * Условие авторства записи — значения-ТОКЕНЫ (задача 347b307e, арбитраж
+ * оркестратора 2026-10-14).
+ *
+ * Набор «Мои записи за неделю» панели «Дневника» несёт `record_author eq $user`.
+ * Прежде значение-токен в `record_author` молча терялось (`1=1`) — набор
+ * показал бы ВСЕ записи. Теперь токен раскрывается (`$user` — владелец ключа), а
+ * нераскрытый/недопустимый/пустой — ЯВНАЯ ошибка, а не молчаливое `1=1`.
+ */
+describe('хроника: авторство записи раскрывает токены (задача 347b307e)', { skip: !nativeAvailable() }, () => {
+  it('record_author eq $user видит только свои записи', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Мысль дневника');
+      const mine = createComment(
+        ndb, 'thought', target,
+        { kind: 'chronological', title: 'Моя', body_md: 'x', valid_from: '2024-03-05T00:00:00.000Z' }, USER,
+      ).id;
+      const other = createComment(
+        ndb, 'thought', target,
+        { kind: 'chronological', title: 'Чужая', body_md: 'x', valid_from: '2024-03-06T00:00:00.000Z' }, 'user-2',
+      ).id;
+
+      const mineOnly: FilterAst['filter'] = {
+        entity: { kind: 'record_author' }, operator: 'eq', value: { token: '$user' },
+      };
+      assert.deepEqual(runAst(ndb, mineOnly).ids, [mine], '$user → только записи владельца ключа');
+
+      const notMine: FilterAst['filter'] = {
+        entity: { kind: 'record_author' }, operator: 'ne', value: { token: '$user' },
+      };
+      assert.deepEqual(runAst(ndb, notMine).ids, [other], 'ne $user → только чужие записи');
+
+      const list: FilterAst['filter'] = {
+        entity: { kind: 'record_author' }, operator: 'in', value: [{ token: '$user' }, { token: '$user' }],
+      };
+      assert.deepEqual(runAst(ndb, list).ids, [mine], 'список с токеном раскрывается поэлементно');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('нераскрытый/недопустимый/пустой токен авторства — VALIDATION_ERROR, не молчаливое 1=1', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Мысль');
+      createComment(
+        ndb, 'thought', target,
+        { kind: 'chronological', title: 'r', body_md: 'x', valid_from: '2024-03-05T00:00:00.000Z' }, USER,
+      );
+
+      const unknownToken: FilterAst['filter'] = {
+        entity: { kind: 'record_author' }, operator: 'eq', value: { token: '$foo' },
+      };
+      assert.throws(
+        () => runAst(ndb, unknownToken),
+        (err: unknown) => err instanceof EtnError && err.code === 'VALIDATION_ERROR',
+        'неизвестный токен отвергается',
+      );
+
+      const thoughtToken: FilterAst['filter'] = {
+        entity: { kind: 'record_author' }, operator: 'eq', value: { token: '$thought.author' },
+      };
+      assert.throws(
+        () => runAst(ndb, thoughtToken),
+        (err: unknown) => err instanceof EtnError && err.code === 'VALIDATION_ERROR',
+        'токен контекста мысли недопустим в условии авторства',
+      );
+
+      const emptyValue: FilterAst['filter'] = { entity: { kind: 'record_author' }, operator: 'eq' };
+      assert.throws(
+        () => runAst(ndb, emptyValue),
+        (err: unknown) => err instanceof EtnError && err.code === 'VALIDATION_ERROR',
+        'пустое значение в eq — явная ошибка, а не 1=1',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+});

@@ -171,6 +171,13 @@ export function buildUserSelectWidget(opts: {
   }
   const select = el('select', 'select-input user-select') as HTMLSelectElement;
 
+  // Значение-ТОКЕН (`$user` у «Автора записи» предопределённого набора «Мои
+  // записи за неделю»): это не id участника, а контекстный токен. Показываем
+  // его отдельным пунктом и НЕ заводим фантомную запись в кэше пользователей
+  // (иначе «$user» навсегда всплыл бы фальшивым участником во всех полях
+  // авторства). Пустое значение означает «любой» — токен не трогаем.
+  const tokenValue = opts.currentId.startsWith('$') ? opts.currentId : null;
+
   const render = (): void => {
     select.replaceChildren();
     const placeholder = el('option', undefined, 'любой');
@@ -185,13 +192,22 @@ export function buildUserSelectWidget(opts: {
       opt.value = u.id;
       select.append(opt);
     }
+    if (tokenValue !== null) {
+      const opt = el(
+        'option',
+        undefined,
+        tokenValue === '$user' ? t('userSelect.currentUser') : tokenValue,
+      );
+      opt.value = tokenValue;
+      select.append(opt);
+    }
     select.value = opts.currentId;
   };
 
   // Если нужного id ещё нет в кэше (например, восстановлен из сохранённого
   // отбора до прихода roster), добавляем «голую» запись с id, чтобы
-  // select мог показать выбранное значение.
-  if (opts.currentId !== '' && !state.byId.has(opts.currentId)) {
+  // select мог показать выбранное значение. Токен так не подменяем.
+  if (tokenValue === null && opts.currentId !== '' && !state.byId.has(opts.currentId)) {
     state.byId.set(opts.currentId, {
       id: opts.currentId,
       username: opts.currentId.slice(0, 8),

@@ -1518,6 +1518,15 @@ async function thoughtsSearch(ctx: FilterValueContext, query: string): Promise<E
 /** Автор/редактор: одиночно — выбор пользователя, кратно — мультивыбор. */
 function userControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HTMLElement {
   const wrap = div('fv-user');
+  // Значение-ТОКЕН (`$user`) сохраняем токеном, а не строкой-id: строка «$user»
+  // на сервере трактовалась бы буквальным id и условие молча ни с чем не
+  // совпало бы. Значение из пикера — id участника (скаляр).
+  const toValue = (id: string): FilterTreeValue =>
+    id === ''
+      ? { kind: 'none' }
+      : id.startsWith('$')
+        ? { kind: 'token', token: id }
+        : { kind: 'scalar', value: id };
   if (filterValueIsMultiple(leaf.operator)) {
     wrap.append(
       buildUserMultiSelectWidget({
@@ -1534,7 +1543,7 @@ function userControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HTMLEle
         label: '',
         currentId: filterValueScalarText(leaf.value),
         onChange: (id: string) => {
-          api.setValue(id === '' ? { kind: 'none' } : { kind: 'scalar', value: id });
+          api.setValue(toValue(id));
         },
       }),
     );
