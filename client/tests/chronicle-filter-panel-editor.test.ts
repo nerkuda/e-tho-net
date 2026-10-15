@@ -174,6 +174,28 @@ describe('панель «Дневника» — единый редактор о
     assert.equal(restored.order, 'desc', 'направление ленты прочитано');
   });
 
+  it('период записи — неудаляемая строка: определение без листа времени не теряет её (ошибка 68023851 п.3)', async () => {
+    const panel = await panelModule();
+    // Определение без листа `record_time` (легаси/импорт): читатель периода не несёт.
+    const noPeriod = panel.readFilterDefinition({ trashed: false, order: 'desc' });
+    assert.deepEqual(panel.chroniclePeriod(noPeriod), { from: '', to: '' }, 'периода в определении нет');
+    // Восстанавливаем текущие границы — строка-замок периода не пропадает.
+    const restored = panel.ensureChroniclePeriod(noPeriod, '$monthStart', '$today');
+    assert.deepEqual(
+      panel.chroniclePeriod(restored),
+      { from: '$monthStart', to: '$today' },
+      'строка периода восстановлена из текущих границ',
+    );
+    // Определение С периодом сохраняет своё значение, а текущее его не перебивает.
+    const withPeriod = panel.readFilterDefinition({ date_from: '$weekStart', date_to: '$today' });
+    const kept = panel.ensureChroniclePeriod(withPeriod, '$monthStart', '$monthEnd');
+    assert.deepEqual(
+      panel.chroniclePeriod(kept),
+      { from: '$weekStart', to: '$today' },
+      'период определения не подменяется текущим',
+    );
+  });
+
   it('БЛОКЕР 1: текстовый путь включается областью comment (пустой набор — все)', async () => {
     const panel = await panelModule();
     const cases: Array<[string, StructureKeywordScope[]]> = [

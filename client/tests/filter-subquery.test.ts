@@ -452,6 +452,52 @@ describe('под-выборка: ячейка значения «список �
     assert.deepEqual(collected, [{ kind: 'none' }]);
   });
 
+  it('переключение собранной под-выборки на «Список» подтверждается, а не сбрасывается молча (ошибка 68023851 п.4)', async () => {
+    const value = {
+      kind: 'subquery',
+      operator: 'in',
+      node: { kind: 'group', op: 'and', children: [leafOf({ kind: 'active' }, 'eq')] },
+    };
+    const build = (answer: boolean): { cell: ShimElement; values: any[]; asked: string[] } => {
+      const values: any[] = [];
+      const asked: string[] = [];
+      const render = sub.createFilterSubqueryValueRenderer(VALUE_CTX, {
+        data: DATA,
+        value: VALUE_CTX,
+        confirm: (title, message) => {
+          asked.push(title, message);
+          return Promise.resolve(answer);
+        },
+      });
+      const cell = render({ ...PLACE_LEAF(), value }, {
+        setValue: (v: any) => values.push(v),
+      }) as unknown as ShimElement;
+      return { cell, values, asked };
+    };
+    const modeButton = (cell: ShimElement, label: string): ShimElement =>
+      exactOne(cell, 'fq-mode')!.findAll(
+        (n) => n.tagName === 'button' && n.flatText().trim() === label,
+      )[0]!;
+
+    // Отказ: подтверждение спрошено, значение НЕ сброшено, переключатель вернулся на «Выборка».
+    const refused = build(false);
+    modeButton(refused.cell, 'Список').emit('click', {});
+    await tick();
+    assert.equal(refused.asked.length, 2, 'подтверждение спрошено (заголовок + сообщение)');
+    assert.deepEqual(refused.values, [], 'отказ не сбрасывает собранную выборку');
+    assert.equal(
+      modeButton(refused.cell, 'Выборка').getAttribute('aria-pressed'),
+      'true',
+      'отказ возвращает переключатель на «Выборка»',
+    );
+
+    // Согласие: значение сбрасывается в «пусто» (ячейка вернётся к списку).
+    const agreed = build(true);
+    modeButton(agreed.cell, 'Список').emit('click', {});
+    await tick();
+    assert.deepEqual(agreed.values, [{ kind: 'none' }], 'согласие сбрасывает значение-выборку');
+  });
+
   it('вложенность: выборка внутри выборки открывается своим модалом', async () => {
     const seed = {
       kind: 'group',

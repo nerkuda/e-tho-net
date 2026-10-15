@@ -187,7 +187,6 @@ export function filterSubqueryRelevantLeaf(leaf: FilterTreeLeaf, data: FilterTre
   // «Все в выборке» неприменимо — «Мысль» одиночный операнд (сервер отвергает
   // `all_in`), поэтому `all_of` исключён, как у «Типа».
   if (kind === 'id') return leaf.operator !== 'all_of';
-  if (kind === 'type') return leaf.operator !== 'all_of';
   if (kind !== 'property') return true;
   const ref = leaf.entity.property_id ?? leaf.entity.property ?? '';
   const direct = data.registry.get(ref);
@@ -453,10 +452,30 @@ export function buildSubqueryValueCell(
     size: 's',
     onChange: (id) => {
       if (id === 'subquery') openModal();
-      // «Список» при собранной выборке — тот же явный сброс, что у крестика чипа.
-      else if (isSubquery) api.setValue({ kind: 'none' });
+      // «Список» при собранной выборке — сброс значения-выборки: переключатель
+      // выглядит как смена ВИДА, но собранные условия при этом теряются, поэтому
+      // подтверждаем (ошибка 68023851 п.4) — как при смене свойства строки.
+      else if (isSubquery) clearSubquery();
     },
   });
+
+  /**
+   * Подтвердить сброс собранной под-выборки при переключении режима на «Список»
+   * (ошибка 68023851 п.4). Крестик чипа (`fq-chip__clear`) — ЯВНОЕ «убрать
+   * выборку», он сбрасывает без подтверждения (элемент f5005daa).
+   */
+  const clearSubquery = (): void => {
+    const confirm = opts.confirm ?? defaultFilterSubqueryConfirm;
+    void confirm(
+      'Сменить вид значения?',
+      'В строке собрана под-выборка — при переходе к списку она будет сброшена.',
+    ).then((ok) => {
+      if (ok) api.setValue({ kind: 'none' });
+      // Отказ — переключатель возвращаем на «Выборка»: сегмент уже переключился
+      // визуально до вызова `onChange`.
+      else modeControl.setActive('subquery');
+    });
+  };
 
   /** Открыть модал под-выборки; подтверждение — значение-выборка, отмена — откат. */
   const openModal = (): void => {

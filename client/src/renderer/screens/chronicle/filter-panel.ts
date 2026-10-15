@@ -1023,7 +1023,12 @@ async function openSavedPicker(): Promise<void> {
 
 /** Применить сохранённый отбор (в т.ч. прежний плоский v1) и выполнить запрос. */
 function applySavedFilter(entry: SavedFilterRow): void {
-  filter = readFilterDefinition(entry.definition);
+  // Период записи — НЕУДАЛЯЕМАЯ строка панели (ошибка 609deba0 п.2). Определение
+  // могло не нести лист `record_time` (легаси/импорт) — тогда строку периода
+  // восстанавливаем из текущих границ, иначе она молча пропала бы вместе с
+  // календарём (ошибка 68023851 п.3).
+  const { from, to } = chroniclePeriod();
+  filter = ensureChroniclePeriod(readFilterDefinition(entry.definition), from, to);
   syncKeywordsFromTree();
   savedFilterId = entry.id;
   filterName = entry.name;
@@ -1032,6 +1037,18 @@ function applySavedFilter(entry: SavedFilterRow): void {
   serverIssues = [];
   renderPanel();
   actions.apply();
+}
+
+/**
+ * Гарантировать НЕУДАЛЯЕМУЮ строку «Период записи» (инвариант B2 панели,
+ * ошибка 609deba0 п.2): если прочитанное определение периода не несёт,
+ * подставляем текущие границы — иначе строка-замок периода исчезла бы молча
+ * (ошибка 68023851 п.3). Есть период в определении — оставляем его как есть.
+ */
+export function ensureChroniclePeriod(state: FilterState, from: string, to: string): FilterState {
+  const read = chroniclePeriod(state);
+  if (read.from !== '' || read.to !== '') return state;
+  return applyChroniclePeriod(state, from, to);
 }
 
 // ---------------------------------------------------------------------------

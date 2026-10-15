@@ -228,6 +228,24 @@ describe('дерево условий: группы, тона, связатор�
     assert.match(nested!.className, /ft-tone-2/, 'вложенность тонируется по глубине');
   });
 
+  it('корень-лист (одиночное условие из данных/импорта) оборачивается в группу без потери условия (ошибка 68023851 п.2)', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = defaultFilterCriteriaState();
+    // Сохранённое определение с РОВНО ОДНИМ условием читатель отдаёт корнем-листом
+    // (в AST это `filter` без `op`). Каркас работает с корнем-группой — лист
+    // обязан ОБЕРНУТЬСЯ, а не смениться пустой группой (ошибка 68023851 п.2).
+    state.tree = leafOf({ kind: 'property', property_id: CITY.id }) as any;
+    const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+    const root = tree.root as unknown as ShimElement;
+
+    assert.equal((state.tree as any).kind, 'group', 'модель нормализована к корню-группе');
+    assert.equal(exact(root, 'ft-row').length, 1, 'условие корня-листа сохранено, а не потеряно');
+    assert.match(exact(root, 'ft-row')[0]!.flatText(), /Город/, 'условие — из листа');
+    assert.equal(exact(root, 'ft-group__empty').length, 0, 'корень не пуст: условие на месте');
+  });
+
   it('пустая группа помечена, а связаторы-индикаторы стоят ПЕРЕД каждым условием', async () => {
     const mod = await import('../src/renderer/lib/filter-tree.js');
     const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
