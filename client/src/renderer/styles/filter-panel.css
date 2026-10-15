@@ -192,11 +192,14 @@
   min-width: 300px;
 }
 
+/* Потолок высоты списка задаёт роль/модификатор диалога (`.list-dialog-body
+   .sfd-list` тянет область на свободную высоту), поэтому литерала
+   `max-height: 320px` здесь быть не должно — он схлопнул бы список в 4 строки
+   (регресс f68bb43c). */
 .sfd-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 320px;
   overflow-y: auto;
 }
 

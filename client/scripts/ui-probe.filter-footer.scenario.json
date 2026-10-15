@@ -1,6 +1,6 @@
 {
   "name": "filter-footer",
-  "description": "Футер и личное сохранение отборов в «Структурах» и «Дневнике» (задача 46eba874, требование b202326e, сценарий 2b0bb289): онбординг → открыть «Структуры» → в футере есть строка имени и маркер ● → «Отборы…» открывает диалог, выбор сохранённого отбора заполняет имя → правка определения показывает ● → смена имени + «Сохранить» создаёт КОПИЮ (старое имя остаётся) → то же имя+копия во «Дневнике». Сохранённые отборы засеиваются шагом api (сервер принимает AST-определение, 0.13.1). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-footer.scenario.json --out .tmp/etn-46eba874/out",
+  "description": "Футер и личное сохранение отборов в «Структурах» и «Дневнике» (задача 46eba874, требование b202326e, сценарий 2b0bb289): онбординг → открыть «Структуры» → в футере есть строка имени и маркер ● → «Отборы…» открывает диалог, выбор сохранённого отбора заполняет имя → правка определения показывает ● → смена имени + «Сохранить» создаёт КОПИЮ (старое имя остаётся) → то же имя+копия во «Дневнике». Сохранённые отборы засеиваются шагом api (сервер принимает AST-определение, 0.13.1). Списочные проверки на сервере фильтруют имена по префиксу, который создаёт сам сценарий: с 0.13.1 в списке есть ещё и предопределённые наборы отбора (predefined-filters). Плюс пробы высоты диалога сохранённых отборов (ошибка d8eac984): высота бокса = min(max(450px, 50vh), calc(100vh - 60px)) на двух размерах окна, пустой поиск не схлопывает область списка (регресс f68bb43c), список прокручивается. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-footer.scenario.json --out .tmp/etn-d8eac984/out",
   "timeout": 120000,
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
@@ -67,6 +67,64 @@
       "name": "structures-saved-row-present",
       "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()"
     },
+
+    { "name": "structures-dialog-not-hidden", "probe": "document.hidden === false", "expect": true },
+
+    { "name": "structures-resize-large", "eval": "(() => { window.resizeTo(1500, 1150); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "structures-large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+    {
+      "name": "structures-geom-large",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return 'no-box'; const vh = window.innerHeight; const h = Math.round(box.getBoundingClientRect().height); const expected = Math.round(Math.min(Math.max(450, 0.5 * vh), vh - 60)); return JSON.stringify({ vh: vh, h: h, expected: expected }); })()"
+    },
+    {
+      "name": "structures-geom-large-fits",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return false; const vh = window.innerHeight; const h = box.getBoundingClientRect().height; const expected = Math.min(Math.max(450, 0.5 * vh), vh - 60); return Math.abs(h - expected) <= 2; })()",
+      "expect": true
+    },
+
+    { "name": "structures-resize-small", "eval": "(() => { window.resizeTo(1200, 520); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "structures-small-ready", "timeout": 10000, "waitFor": "window.innerHeight < 560 && window.innerHeight > 440" },
+    {
+      "name": "structures-geom-small",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return 'no-box'; const vh = window.innerHeight; const h = Math.round(box.getBoundingClientRect().height); const expected = Math.round(Math.min(Math.max(450, 0.5 * vh), vh - 60)); return JSON.stringify({ vh: vh, h: h, expected: expected, ceiling: vh - 60 }); })()"
+    },
+    {
+      "name": "structures-geom-small-fits",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return false; const vh = window.innerHeight; const h = box.getBoundingClientRect().height; const expected = Math.min(Math.max(450, 0.5 * vh), vh - 60); return Math.abs(h - expected) <= 2; })()",
+      "expect": true
+    },
+    {
+      "name": "structures-ceiling-below-floor",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box) return 'no-box'; const vh = window.innerHeight; return vh < 510 && Math.round(box.getBoundingClientRect().height) < 450; })()",
+      "expect": true
+    },
+
+    {
+      "name": "structures-list-area-before-search",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); const list = document.querySelector('.sfd-list'); if (!box || !list) return 'no-dialog'; return JSON.stringify({ box: Math.round(box.getBoundingClientRect().height), list: Math.round(list.getBoundingClientRect().height) }); })()"
+    },
+    {
+      "name": "structures-search-no-match",
+      "eval": "(() => { const i = document.querySelector('.sfd-search'); i.value = 'заведомо нет такого отбора'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "structures-empty-state-visible",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.sfd') !== null && document.querySelector('.sfd-list') !== null"
+    },
+    {
+      "name": "structures-list-area-after-empty-search",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); const list = document.querySelector('.sfd-list'); if (!box || !list) return 'no-dialog'; return JSON.stringify({ box: Math.round(box.getBoundingClientRect().height), list: Math.round(list.getBoundingClientRect().height) }); })()",
+      "expectFrom": "structures-list-area-before-search"
+    },
+    {
+      "name": "structures-search-clear",
+      "eval": "(() => { const i = document.querySelector('.sfd-search'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+
+    { "name": "structures-resize-restore", "eval": "(() => { window.resizeTo(1280, 800); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "structures-restore-ready", "timeout": 10000, "waitFor": "window.innerHeight > 600" },
+
     { "name": "structures-focus-search", "click": ".sfd-search" },
     { "name": "structures-select-row", "key": "ArrowDown" },
     { "name": "structures-confirm-row", "key": "Enter" },
@@ -102,7 +160,7 @@
         "name": "structures-both-filters-on-server",
         "method": "GET",
         "path": "/networks/{{networkId}}/saved-filters?view=structures",
-        "expression": "data.map((f) => f.name).sort().join('|')"
+        "expression": "data.map((f) => f.name).filter((n) => n.startsWith('Мой отбор')).sort().join('|')"
       },
       "expect": "Мой отбор|Мой отбор (копия)"
     },
@@ -117,6 +175,12 @@
       "expect": 1
     },
 
+    {
+      "name": "seed-many-chronicle",
+      "timeout": 20000,
+      "eval": "Promise.all(Array.from({ length: 16 }, (_, i) => window.etn.chronicleFilters.create('{{networkId}}', { name: 'Дневник-тест ' + String(i + 1).padStart(2, '0'), definition: { order: 'desc', ast: { version: 1, filter: { op: 'and', children: [] } } } }))).then((r) => r.length)"
+    },
+
     { "name": "open-chronicle", "click": "button.view-tab[title=\"Дневник\"]" },
     { "name": "chronicle-editor", "timeout": 15000, "waitFor": "document.querySelector('.chron-filter .fe .ff-name__input') !== null" },
     {
@@ -126,8 +190,74 @@
     },
     { "name": "chronicle-open-saved", "click": ".chron-filter .ff-extra--saved" },
     { "name": "chronicle-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
-    { "name": "chronicle-saved-row-present", "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    {
+      "name": "chronicle-saved-row-present",
+      "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()"
+    },
+
+    { "name": "chronicle-dialog-not-hidden", "probe": "document.hidden === false", "expect": true },
+
+    { "name": "chronicle-resize-large", "eval": "(() => { window.resizeTo(1500, 1150); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "chronicle-large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+    {
+      "name": "chronicle-geom-large",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return 'no-box'; const vh = window.innerHeight; const h = Math.round(box.getBoundingClientRect().height); const expected = Math.round(Math.min(Math.max(450, 0.5 * vh), vh - 60)); return JSON.stringify({ vh: vh, h: h, expected: expected }); })()"
+    },
+    {
+      "name": "chronicle-geom-large-fits",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return false; const vh = window.innerHeight; const h = box.getBoundingClientRect().height; const expected = Math.min(Math.max(450, 0.5 * vh), vh - 60); return Math.abs(h - expected) <= 2; })()",
+      "expect": true
+    },
+
+    { "name": "chronicle-resize-small", "eval": "(() => { window.resizeTo(1200, 520); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "chronicle-small-ready", "timeout": 10000, "waitFor": "window.innerHeight < 560 && window.innerHeight > 440" },
+    {
+      "name": "chronicle-geom-small",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return 'no-box'; const vh = window.innerHeight; const h = Math.round(box.getBoundingClientRect().height); const expected = Math.round(Math.min(Math.max(450, 0.5 * vh), vh - 60)); return JSON.stringify({ vh: vh, h: h, expected: expected, ceiling: vh - 60 }); })()"
+    },
+    {
+      "name": "chronicle-geom-small-fits",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return false; const vh = window.innerHeight; const h = box.getBoundingClientRect().height; const expected = Math.min(Math.max(450, 0.5 * vh), vh - 60); return Math.abs(h - expected) <= 2; })()",
+      "expect": true
+    },
+
+    {
+      "name": "chronicle-list-area-before-search",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); const list = document.querySelector('.sfd-list'); if (!box || !list) return 'no-dialog'; return JSON.stringify({ box: Math.round(box.getBoundingClientRect().height), list: Math.round(list.getBoundingClientRect().height) }); })()"
+    },
+    {
+      "name": "chronicle-search-no-match",
+      "eval": "(() => { const i = document.querySelector('.sfd-search'); i.value = 'заведомо нет такого отбора'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "chronicle-empty-state-visible",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.sfd') !== null && document.querySelector('.sfd-list') !== null"
+    },
+    {
+      "name": "chronicle-list-area-after-empty-search",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); const list = document.querySelector('.sfd-list'); if (!box || !list) return 'no-dialog'; return JSON.stringify({ box: Math.round(box.getBoundingClientRect().height), list: Math.round(list.getBoundingClientRect().height) }); })()",
+      "expectFrom": "chronicle-list-area-before-search"
+    },
+    {
+      "name": "chronicle-search-clear",
+      "eval": "(() => { const i = document.querySelector('.sfd-search'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "chronicle-list-scroll-metrics",
+      "probe": "(() => { const nodes = []; const walk = (root) => { for (const el of root.querySelectorAll('*')) { nodes.push(el); if (el.shadowRoot) walk(el.shadowRoot); } }; const sfd = document.querySelector('.sfd'); if (!sfd) return 'no-dialog'; walk(sfd); const sc = nodes.find((e) => e.clientHeight > 40 && e.scrollHeight > e.clientHeight + 4); return JSON.stringify({ found: !!sc, clientH: sc ? sc.clientHeight : null, scrollH: sc ? sc.scrollHeight : null }); })()"
+    },
+    {
+      "name": "chronicle-list-scrolls",
+      "probe": "(() => { const nodes = []; const walk = (root) => { for (const el of root.querySelectorAll('*')) { nodes.push(el); if (el.shadowRoot) walk(el.shadowRoot); } }; const sfd = document.querySelector('.sfd'); if (!sfd) return false; walk(sfd); const sc = nodes.find((e) => e.clientHeight > 40 && e.scrollHeight > e.clientHeight + 4); if (!sc) return false; sc.scrollTop = 0; const before = sc.scrollTop; sc.scrollTop = 40; return sc.scrollTop > before; })()",
+      "expect": true
+    },
+
+    { "name": "chronicle-resize-restore", "eval": "(() => { window.resizeTo(1280, 800); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "chronicle-restore-ready", "timeout": 10000, "waitFor": "window.innerHeight > 600" },
+
     { "name": "chronicle-focus-search", "click": ".sfd-search" },
+    { "name": "chronicle-search-name", "text": "Мой дневник" },
     { "name": "chronicle-select-row", "key": "ArrowDown" },
     { "name": "chronicle-confirm-row", "key": "Enter" },
     { "name": "chronicle-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
@@ -172,7 +302,7 @@
         "name": "chronicle-both-filters-on-server",
         "method": "GET",
         "path": "/networks/{{networkId}}/saved-filters?view=chronicle",
-        "expression": "data.map((f) => f.name).sort().join('|')"
+        "expression": "data.map((f) => f.name).filter((n) => n.startsWith('Мой дневник')).sort().join('|')"
       },
       "expect": "Мой дневник|Мой дневник (копия)"
     }
