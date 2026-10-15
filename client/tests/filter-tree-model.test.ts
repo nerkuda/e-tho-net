@@ -36,6 +36,7 @@ import {
   defaultFilterTreeLeaf,
   filterAstSortKeyLabel,
   filterLeafDefaultValue,
+  filterLeafImplicitOperator,
   filterLeafImplicitValue,
   filterProfileOperands,
   filterProfileOperators,
@@ -581,6 +582,49 @@ describe('хелперы модели дерева', () => {
     );
     const comment = { ...defaultFilterTreeLeaf({ kind: 'comment' }), operator: 'is_empty' as const };
     assert.equal(filterLeafImplicitValue(comment), null);
+  });
+
+  it('неявный ОПЕРАТОР наличия коллекции: «да» уходит в модель, а не в подпись пустого условия (ошибки 23c7d3e9 п. D1 / 609deba0 п. A3)', () => {
+    // Вид «(да) (нет)» наличия коллекции — это ОПЕРАТОР (`not_empty` — «да»),
+    // значения у него нет. Пока лист несёт `eq`, подпись «не задано значение
+    // условия» висит при видимом «да», а клик по «нет» прятал переключатели.
+    for (const kind of ['comment', 'attachments', 'chronology'] as const) {
+      assert.equal(filterLeafImplicitOperator(defaultFilterTreeLeaf({ kind })), 'not_empty', `${kind}: «да» — not_empty`);
+      assert.equal(
+        filterLeafImplicitOperator({ ...defaultFilterTreeLeaf({ kind }), operator: 'ne' }),
+        'not_empty',
+        `${kind}: сравнение без значения тоже сводится к «да»`,
+      );
+      // Оператор уже выражает выбор — подменять нечего.
+      assert.equal(
+        filterLeafImplicitOperator({ ...defaultFilterTreeLeaf({ kind }), operator: 'is_empty' }),
+        null,
+        `${kind}: «нет» не переписывается`,
+      );
+      assert.equal(
+        filterLeafImplicitOperator({ ...defaultFilterTreeLeaf({ kind }), operator: 'not_empty' }),
+        null,
+        `${kind}: «да» уже в модели`,
+      );
+      // Значения у предиката наличия нет — автоподстановка значения не полагается.
+      assert.equal(filterLeafDefaultValue(defaultFilterTreeLeaf({ kind })), null, `${kind}: значение не подставляется`);
+    }
+    // Операнды другого вида автоподстановки оператора не имеют.
+    assert.equal(filterLeafImplicitOperator(defaultFilterTreeLeaf({ kind: 'active' })), null);
+    assert.equal(filterLeafImplicitOperator(defaultFilterTreeLeaf({ kind: 'id' })), null);
+    assert.equal(filterLeafImplicitOperator(defaultFilterTreeLeaf({ kind: 'properties' })), null);
+  });
+
+  it('«Есть комментарий» round-trip: условие «да» едет в AST оператором not_empty', () => {
+    const node = { ...defaultFilterTreeLeaf({ kind: 'comment' }) };
+    const implicit = filterLeafImplicitOperator(node);
+    if (implicit !== null) node.operator = implicit;
+    const state = { ...defaultFilterCriteriaState(), tree: group('and', [node]) };
+    const ast = buildFilterAst(state, { profile: 'thoughts' });
+    const back = parseFilterAstState(ast, { profile: 'thoughts', strict: true });
+    const leafBack = (back.tree as FilterTreeGroup).children[0] as FilterTreeLeaf;
+    assert.equal(leafBack.operator, 'not_empty');
+    assert.equal(leafBack.value.kind, 'none');
   });
 
   it('автоподстановка значения снимает признак пустого условия (ошибка 609deba0 п. A3)', () => {

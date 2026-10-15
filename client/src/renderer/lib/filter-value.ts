@@ -61,6 +61,7 @@ import {
   type FilterTreeLeaf,
   type FilterTreeListItem,
   type FilterTreeValue,
+  FILTER_COLLECTION_PREDICATE_KINDS,
 } from './filter-builder.js';
 import type { FilterTreeData, FilterTreeValueSlotApi } from './filter-tree.js';
 import {
@@ -70,7 +71,13 @@ import {
 } from './filter-phrase.js';
 // Токены контекста листа — единый каталог (ошибка 50d9bf4e, пункты A3–A6):
 // набор по природе операнда/свойства, свойства — из реестра ВСЕЙ сети.
-import { filterLeafTokenSource, filterTokenNature } from './filter-tokens.js';
+// Перечень пользовательских операндов берётся из того же каталога природы
+// (ошибка 23c7d3e9 п. A1) — второго словаря вида значения нет.
+import {
+  FILTER_USER_OPERAND_KINDS,
+  filterLeafTokenSource,
+  filterTokenNature,
+} from './filter-tokens.js';
 import { dateField } from './date-field.js';
 import { todayLocal } from './dates.js';
 import { VALUE_TYPE_LABELS, valueTypeIconName } from './property-list.js';
@@ -227,14 +234,8 @@ const ENTITY_OPERANDS: ReadonlySet<string> = new Set([
   'owner',
 ]);
 
-/** Пользовательские операнды. */
-const USER_OPERANDS: ReadonlySet<string> = new Set([
-  'author',
-  'editor',
-  'record_author',
-  'record_editor',
-  'user',
-]);
+/** Пользовательские операнды — перечень из каталога природы (`lib/filter-tokens.ts`). */
+const USER_OPERANDS: ReadonlySet<string> = FILTER_USER_OPERAND_KINDS;
 
 /** Датовые ОПЕРАНДЫ (значение — дата/время, не свойство). */
 const DATE_OPERANDS: ReadonlySet<string> = new Set([
@@ -302,14 +303,20 @@ function registryDefinition(entry: {
  */
 export function filterValueEditor(leaf: FilterTreeLeaf, ctx: FilterValueContext): FilterValueEditorKind {
   const operator = leaf.operator;
-  if (!filterValueNeedsValue(operator)) return 'none';
   const kind = leaf.entity.kind;
+  // Наличие коллекции («Есть вложения»/«Есть дневниковые записи»/«Есть
+  // комментарий») — вид «(да) (нет)», и этот вид ЕСТЬ оператор условия
+  // (`not_empty` — «да», `is_empty` — «нет»), значения у него нет. Поэтому
+  // проверка «оператору значение не требуется» идёт ПОСЛЕ: иначе после клика по
+  // «нет» оператор становился `is_empty`, ячейка выбирала вид `none` и
+  // переключатели пропадали — вернуть «да» было нельзя (ошибка 23c7d3e9 п. D1).
+  if (FILTER_COLLECTION_PREDICATE_KINDS.has(kind)) return 'predicate';
+  if (!filterValueNeedsValue(operator)) return 'none';
   const countShaped = filterValueIsCountShaped(operator);
   if (kind === 'keywords') return 'keywords';
   // Булевы предикаты — да/нет (без «не важно»): активность/помеченность — `eq`
   // true/false; наличие коллекции — (да)/(нет) без ячейки оператора.
   if (kind === 'active' || kind === 'trashed') return 'triad';
-  if (kind === 'comment' || kind === 'attachments' || kind === 'chronology') return 'predicate';
   // «Есть свойства»: значение — чип-поле выбора свойств, а не список всех с
   // чекбоксами (требование заказчика 2026-10-13).
   if (kind === 'properties') return 'properties';

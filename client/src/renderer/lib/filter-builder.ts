@@ -1751,6 +1751,38 @@ export function filterLeafImplicitValue(leaf: FilterTreeLeaf): FilterTreeValue |
 }
 
 /**
+ * Операнды «наличие коллекции»: «Есть вложения», «Есть дневниковые записи»,
+ * «Есть комментарий». Ячейка значения у них — «(да) (нет)», оператор в строке
+ * не показывается (`is_empty`/`not_empty` перезаписывает сам виджет). Один
+ * словарь на модули редактора: по нему и вид ячейки (`lib/filter-value.ts`), и
+ * скрытие кнопки оператора в строке (`lib/filter-tree.ts`), и автоподстановка
+ * оператора ниже — второй копии перечня нет.
+ */
+export const FILTER_COLLECTION_PREDICATE_KINDS: ReadonlySet<string> = new Set([
+  'comment',
+  'attachments',
+  'chronology',
+]);
+
+/**
+ * НЕЯВНЫЙ оператор листа наличия коллекции (ошибка 23c7d3e9 п. D1, возврат A3
+ * части 6). Вид «(да) (нет)» и ЕСТЬ оператор условия (`not_empty` — «да»,
+ * `is_empty` — «нет»); значения у такого условия нет. Пока лист несёт оператор,
+ * требующий значение (`eq`/`ne`), модель расходится с видимым «да»: проверка
+ * «условие без значения» висит при видимом значении, а `eq` без значения
+ * сервер отверг бы. Помощник возвращает оператор, который виджет показывает
+ * по умолчанию; `null` — операнд не этого вида или оператор уже выражает выбор.
+ *
+ * {@link buildFilterTree} зовёт его на любой правке условия (смена операнда,
+ * оператора) перед перерисовкой — рядом с {@link filterLeafDefaultValue}.
+ */
+export function filterLeafImplicitOperator(leaf: FilterTreeLeaf): FilterAstOperator | null {
+  if (!FILTER_COLLECTION_PREDICATE_KINDS.has(leaf.entity.kind)) return null;
+  if (!operatorNeedsValue(leaf.operator)) return null;
+  return 'not_empty';
+}
+
+/**
  * Значение листа, которое виджет показывает по умолчанию при ПУСТОМ значении
  * модели (`value.kind === 'none'`), но сам в модель не пишет. Обобщает
  * {@link filterLeafImplicitValue} двумя автоподстановками (ошибка 609deba0,

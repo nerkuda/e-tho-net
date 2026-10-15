@@ -1402,3 +1402,102 @@ describe('список: клавиатурная навигация многок
   });
 });
 
+// ---------------------------------------------------------------------------
+// Наличие коллекции в строке дерева: «да/нет» и признак пустого условия
+// (ошибки 23c7d3e9 п. D1 и 609deba0 п. A3 — возврат части 6)
+// ---------------------------------------------------------------------------
+
+describe('дерево условий: «Есть комментарий» — оператор в модели, переключатели живы', () => {
+  before(() => {
+    installShim();
+  });
+
+  /** Пункт открытого списка «Что» по ключу операнда (панель живёт в `document.body`). */
+  function choiceItem(key: string): ShimElement {
+    const body = (globalThis as any).document.body as ShimElement;
+    const item = body
+      .findAll((node: ShimElement) => node.classList.contains('ft-choice__item'))
+      .find((node: ShimElement) => node.dataset['key'] === key);
+    assert.notEqual(item, undefined, `в списке «Что» есть строка ${key}`);
+    return item!;
+  }
+
+  /** Кнопки-сегменты ячейки значения строки (переключатели «да/нет»). */
+  function switches(row: ShimElement): ShimElement[] {
+    return row
+      .findAll((node: ShimElement) => node.tagName.toUpperCase() === 'BUTTON')
+      .filter((node: ShimElement) => node.getAttribute('aria-pressed') !== null);
+  }
+
+  /** Строка условий + каркас с живой диагностикой конструктора. */
+  async function buildRow(): Promise<{ tree: any; state: any; row: () => ShimElement }> {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const diag = await import('../src/renderer/lib/filter-diagnostics.js');
+    const value = await import('../src/renderer/lib/filter-value.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+    const state = defaultFilterCriteriaState() as any;
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [leafOf({ kind: 'property', property_id: CITY.id })],
+    };
+    const tree = mod.buildFilterTree({
+      profile: 'thoughts',
+      getState: () => state,
+      data: DATA,
+      issues: () => diag.constructorFilterIssues(state.tree),
+      // Настоящая ячейка значения (не заглушка): переключатели «да/нет» —
+      // предмет проверки п. D1, заглушка их не рисует.
+      renderValue: value.createFilterValueRenderer({
+        networkId: 'n-1',
+        profile: 'thoughts',
+        data: DATA,
+      }),
+    });
+    return {
+      tree,
+      state,
+      row: () => exactOne(tree.root as unknown as ShimElement, 'ft-row')!,
+    };
+  }
+
+  it('выбор операнда «Есть комментарий»: «да» уходит в оператор, подписи пустого условия нет', async () => {
+    const { state, row } = await buildRow();
+    exactOne(row(), 'ft-row__what')!.emit('click', {});
+    choiceItem('comment').emit('click', {});
+
+    const leaf = state.tree.children[0];
+    assert.equal(leaf.entity.kind, 'comment');
+    // Вид «(да) (нет)» — это ОПЕРАТОР: модель несёт `not_empty`, а не пустое `eq`.
+    assert.equal(leaf.operator, 'not_empty', 'автоподстановка «да» — оператором в модель');
+    assert.equal(leaf.value.kind, 'none');
+    assert.equal(exact(row(), 'ft-issue').length, 0, 'подписи «не задано значение условия» нет');
+    const segs = switches(row());
+    assert.equal(segs.length, 2, 'переключатели «да/нет» на месте');
+    assert.equal(segs[0]!.getAttribute('aria-pressed'), 'true', 'выбрано «да»');
+  });
+
+  it('клик «нет» не прячет переключатели; повторный выбор операнда снова даёт «да» без подписи', async () => {
+    const { row } = await buildRow();
+    exactOne(row(), 'ft-row__what')!.emit('click', {});
+    choiceItem('comment').emit('click', {});
+
+    // «Нет» — оператор `is_empty`; ячейка обязана остаться видом «(да)(нет)».
+    switches(row())[1]!.emit('click', {});
+    assert.equal(switches(row()).length, 2, 'после «нет» переключатели не пропадают');
+    assert.equal(switches(row())[1]!.getAttribute('aria-pressed'), 'true', 'выбрано «нет»');
+    assert.equal(exact(row(), 'ft-issue').length, 0, 'условие без значения не подписано');
+
+    // И вернуть «да» можно тем же переключателем.
+    switches(row())[0]!.emit('click', {});
+    assert.equal(switches(row())[0]!.getAttribute('aria-pressed'), 'true', '«да» возвращается');
+    assert.equal(exact(row(), 'ft-issue').length, 0, 'подписи пустого условия нет и после возврата');
+
+    // Повторный выбор того же операнда — снова «да» без подписи (прежде
+    // показывалась «условие без значения — задайте значение условия»).
+    exactOne(row(), 'ft-row__what')!.emit('click', {});
+    choiceItem('attachments').emit('click', {});
+    assert.equal(switches(row())[0]!.getAttribute('aria-pressed'), 'true', '«Есть вложения» — снова «да»');
+    assert.equal(exact(row(), 'ft-issue').length, 0, 'подписи пустого условия нет');
+  });
+});

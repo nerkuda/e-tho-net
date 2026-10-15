@@ -64,7 +64,9 @@ import {
   astOperatorLabel,
   defaultFilterTreeGroup,
   defaultFilterTreeLeaf,
+  FILTER_COLLECTION_PREDICATE_KINDS,
   filterLeafDefaultValue,
+  filterLeafImplicitOperator,
   filterOperandLabel,
   filterProfileOperands,
   filterProfileOperators,
@@ -1026,9 +1028,10 @@ export const FILTER_TREE_ISSUE_CLASS = 'ft-issue';
  */
 export const FILTER_TREE_OPERATOR_HIDDEN_KINDS: ReadonlySet<string> = new Set([
   'keywords',
-  'attachments',
-  'chronology',
-  'comment',
+  // Наличие коллекций — перечень из единого словаря редактора
+  // (`lib/filter-builder.ts`): вид «(да) (нет)» и скрытие оператора — об одном
+  // наборе операндов (ошибка 23c7d3e9 п. D1).
+  ...FILTER_COLLECTION_PREDICATE_KINDS,
   'properties',
 ]);
 
@@ -1094,16 +1097,27 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
   };
 
   /**
-   * Зафиксировать в модели значение, которое виджет показывает ПОУМОЛЧАНИЮ при
-   * пустом условии (ошибка 609deba0 п.3, пункт A3 в редакции части 5): булевы
-   * триады «Актуальность»/«Помечено на удаление» рисуют «да», ячейка даты
-   * (датовый операнд/свойство) — опору «$today», но значения в модели не
-   * держат. Зовётся на любой правке условия (смена операнда/оператора) до
-   * перерисовки, чтобы проверка «условие без значения» снималась/ставилась по
-   * факту видимого значения. Природа листа (для датового свойства) — из реестра
-   * через {@link filterTreeOperatorValueType}.
+   * Зафиксировать в модели то, что виджет показывает ПОУМОЛЧАНИЮ при пустом
+   * условии (ошибка 609deba0 п.3, пункт A3 в редакции части 5; возврат A3
+   * части 6 — ошибка 23c7d3e9): булевы триады «Актуальность»/«Помечено на
+   * удаление» рисуют «да», ячейка даты (датовый операнд/свойство) — опору
+   * «$today», а вид «(да) (нет)» наличия коллекции («Есть комментарий» и др.)
+   * показывает «да» своим ОПЕРАТОРОМ (`not_empty`). Пока лист наличия
+   * коллекции несёт оператор, требующий значение (`eq`), модель расходится с
+   * видимым «да» — подпись «условие без значения» висит при видимом значении.
+   * Зовётся на любой правке условия (смена операнда/оператора) до перерисовки.
+   * Природа листа (для датового свойства) — из реестра через
+   * {@link filterTreeOperatorValueType}.
    */
   const normalizeLeafValue = (leaf: FilterTreeLeaf): void => {
+    const implicitOperator = filterLeafImplicitOperator(leaf);
+    if (implicitOperator !== null) {
+      // Вид «(да) (нет)» значение не держит: устаревшее (например, из
+      // сохранённого определения с `eq <литерал>`) сбрасываем.
+      leaf.operator = implicitOperator;
+      leaf.value = { kind: 'none' };
+      return;
+    }
     const defaultValue = filterLeafDefaultValue(leaf, filterTreeOperatorValueType(leaf, ctx.data));
     if (defaultValue !== null) leaf.value = defaultValue;
   };

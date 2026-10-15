@@ -163,6 +163,13 @@ describe('вид редактора значения: оператор × опе
     assert.equal(mod.filterValueEditor(leaf({ kind: 'attachments' }, 'eq'), ctx()), 'predicate');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'chronology' }, 'between'), ctx()), 'predicate');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'attachments' }, 'gt'), ctx()), 'predicate');
+    // Вид «(да)(нет)» ЕСТЬ оператор (`not_empty`/`is_empty`), значения у него
+    // нет — операторы без значения тоже остаются предикатом, иначе клик по
+    // «нет» прятал переключатели (ошибка 23c7d3e9 п. D1).
+    for (const kind of ['comment', 'attachments', 'chronology'] as const) {
+      assert.equal(mod.filterValueEditor(leaf({ kind }, 'is_empty'), ctx()), 'predicate', `${kind} is_empty`);
+      assert.equal(mod.filterValueEditor(leaf({ kind }, 'not_empty'), ctx()), 'predicate', `${kind} not_empty`);
+    }
     // «Есть свойства» — чип-поле выбора свойств (не список с чекбоксами).
     assert.equal(mod.filterValueEditor(leaf({ kind: 'properties' }, 'has'), ctx()), 'properties');
   });
@@ -324,6 +331,32 @@ describe('ячейка значения: сборка виджета и прав
     assert.deepEqual(writes[0], { kind: 'scalar', value: false });
     segs[0]!.fire('click');
     assert.deepEqual(writes[1], { kind: 'scalar', value: true });
+  });
+
+  it('наличие коллекции: «да/нет» остаются в обоих состояниях, оба переключаемы (ошибка 23c7d3e9 п. D1)', () => {
+    for (const kind of ['comment', 'attachments', 'chronology'] as const) {
+      // «Нет» (оператор `is_empty`) — переключатели обязаны быть на месте:
+      // раньше ячейка выбирала вид `none` и вернуть «да» было нельзя.
+      const off = render(leaf({ kind }, 'is_empty'), slot().api);
+      assert.equal(off.dataset['editor'], 'predicate', `${kind}: вид ячейки после «нет»`);
+      assert.equal(buttons(off).length, 2, `${kind}: два переключателя после «нет»`);
+      const offSegs = buttons(off);
+      assert.equal(offSegs[0]!.getAttribute('aria-pressed'), 'false', `${kind}: «да» не выбран`);
+      assert.equal(offSegs[1]!.getAttribute('aria-pressed'), 'true', `${kind}: «нет» выбран`);
+
+      // «Да» (оператор `not_empty`) — так же.
+      const on = render(leaf({ kind }, 'not_empty'), slot().api);
+      assert.equal(on.dataset['editor'], 'predicate', `${kind}: вид ячейки после «да»`);
+      assert.equal(buttons(on)[0]!.getAttribute('aria-pressed'), 'true', `${kind}: «да» выбран`);
+
+      // Клик по «да» ИЗ состояния «нет» возвращает выбор оператором, а не значением.
+      const node = leaf({ kind }, 'is_empty');
+      const { api, writes } = slot();
+      const box = render(node, api);
+      buttons(box)[0]!.fire('click');
+      assert.equal(node.operator, 'not_empty', `${kind}: «да» — это оператор not_empty`);
+      assert.deepEqual(writes[0], { kind: 'none' }, `${kind}: значение у предиката не задаётся`);
+    }
   });
 
   it('«Найти слова»: три области инлайн, ни одной — условие приглушено', () => {
