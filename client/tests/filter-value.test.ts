@@ -839,6 +839,61 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(box.findAll((n) => n.dataset['bound'] === 'to').length, 1);
   });
 
+  it('«между» у датового операнда: правка одной границы не пишет пустую строку (99e7889d)', () => {
+    // Значение-одиночный токен — так выглядит «между» из сохранённого определения
+    // и после смены оператора на «между»: ячейки границ показывают опору
+    // «$today», но в модели её нет. Правка одной ячейки раньше уходила на сервер
+    // как `[{token:"$weekStart"}, ""]` — сервер отвечал «Граница даты должна быть
+    // непустой строкой ISO-8601». Теперь незаполненная датовая ячейка пишется в
+    // модель своей ВИДИМОЙ опорой.
+    const { api, writes } = slot();
+    const box = render(leaf({ kind: 'updated_at' }, 'between', { kind: 'token', token: '$today' }), api);
+    assert.equal(box.dataset['editor'], 'bounds');
+    const fromBox = box.findAll((n) => n.dataset['bound'] === 'from')[0]!;
+    const fromAnchor = fromBox.findAll((n) => n.dataset['part'] === 'anchor')[0]!;
+    fromAnchor.value = '$weekStart';
+    fromAnchor.fire('change');
+    assert.deepEqual(
+      writes[0],
+      { kind: 'list', items: [{ token: '$weekStart' }, { token: '$today' }] },
+      'вторая граница — видимая опора «$today», а не пустая строка',
+    );
+    assert.ok(
+      !(writes[0] as { items: unknown[] }).items.some((item) => item === ''),
+      'пустых элементов в списке границ нет',
+    );
+  });
+
+  it('«между» у свойства-даты: та же подстановка видимой опоры', () => {
+    const { api, writes } = slot();
+    const box = render(
+      leaf({ kind: 'property', property_id: 'p-date' }, 'between', { kind: 'token', token: '$today' }),
+      api,
+    );
+    const toBox = box.findAll((n) => n.dataset['bound'] === 'to')[0]!;
+    const toAnchor = toBox.findAll((n) => n.dataset['part'] === 'anchor')[0]!;
+    toAnchor.value = '$weekEnd';
+    toAnchor.fire('change');
+    assert.deepEqual(writes[0], {
+      kind: 'list',
+      items: [{ token: '$today' }, { token: '$weekEnd' }],
+    });
+  });
+
+  it('«между» у недатового значения пустую границу выдумкой не заменяет', () => {
+    const { api, writes } = slot();
+    const box = render(
+      leaf({ kind: 'property', property_id: 'p-num' }, 'between', { kind: 'token', token: '$today' }),
+      api,
+    );
+    // Ячейка общего редактора показывает пустое поле — незаполненную границу
+    // подставляет проверка конструктора «условие без значения» (см.
+    // `filter-diagnostics`), а не выдуманное число: литерала-пустышки в модель нет.
+    assert.equal(box.dataset['editor'], 'bounds');
+    assert.ok(box.findAll((n) => n.tagName.toUpperCase() === 'INPUT').length > 0, 'две границы построены');
+    assert.equal(writes.length, 0, 'без правки модель не меняется');
+  });
+
   it('перечисление: чип-поле выбранных значений, без «простыни» чекбоксов (п. C2/C3)', () => {
     const { api } = slot();
     const box = render(leaf({ kind: 'kind' }, 'in'), api);

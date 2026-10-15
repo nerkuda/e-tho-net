@@ -2482,10 +2482,15 @@ export function compileFlatCriteriaToAst(
   const editor = flatAuthorLeaf('editor', state.editorOp, state.editorId, state.editorIds);
   if (editor !== null) children.push(editor);
 
-  if (state.createdAfter.trim() !== '') children.push(flatAstLeaf({ kind: 'created_at' }, 'gte', state.createdAfter.trim()));
-  if (state.createdBefore.trim() !== '') children.push(flatAstLeaf({ kind: 'created_at' }, 'lte', state.createdBefore.trim()));
-  if (state.updatedAfter.trim() !== '') children.push(flatAstLeaf({ kind: 'updated_at' }, 'gte', state.updatedAfter.trim()));
-  if (state.updatedBefore.trim() !== '') children.push(flatAstLeaf({ kind: 'updated_at' }, 'lte', state.updatedBefore.trim()));
+  // Датовые границы — через {@link flatAstValue}: плоская форма хранит токен
+  // СТРОКОЙ (`updatedAfter: '$weekStart'` — поле периода принимает опоры), а в
+  // AST токен — форма `{ token }`. Сырая строка уезжала исполнителю литералом и
+  // сравнивалась с колонкой как текст: отбор «исполнялся, но с неверными датами»
+  // (ошибка 99e7889d).
+  if (state.createdAfter.trim() !== '') children.push(flatAstLeaf({ kind: 'created_at' }, 'gte', flatAstValue(state.createdAfter.trim())));
+  if (state.createdBefore.trim() !== '') children.push(flatAstLeaf({ kind: 'created_at' }, 'lte', flatAstValue(state.createdBefore.trim())));
+  if (state.updatedAfter.trim() !== '') children.push(flatAstLeaf({ kind: 'updated_at' }, 'gte', flatAstValue(state.updatedAfter.trim())));
+  if (state.updatedBefore.trim() !== '') children.push(flatAstLeaf({ kind: 'updated_at' }, 'lte', flatAstValue(state.updatedBefore.trim())));
 
   if (state.hasProperties !== null) children.push(flatAstLeaf({ kind: 'properties' }, state.hasProperties ? 'not_empty' : 'is_empty'));
   if (state.hasComment !== null) children.push(flatAstLeaf({ kind: 'comment' }, state.hasComment ? 'not_empty' : 'is_empty'));

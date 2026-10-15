@@ -39,7 +39,12 @@ import {
   type FilterDiagnosticSeverity,
 } from '@etn/shared';
 
-import type { FilterTreeGroup, FilterTreeLeaf, FilterTreeNode } from './filter-builder.js';
+import type {
+  FilterTreeGroup,
+  FilterTreeLeaf,
+  FilterTreeNode,
+  FilterTreeValue,
+} from './filter-builder.js';
 // Текст строки-диагностики — из словаря (`lib/i18n.ts`), а не литералом
 // (требование 0e5ff1c6): формулировка меняется в одном месте — каталоге.
 import { t } from './i18n.js';
@@ -183,6 +188,25 @@ function contradictionIssue(path: string, message: string): FilterIssue {
   };
 }
 
+/** Операторы двух границ: значение обязано быть парой непустых границ. */
+const RANGE_OPERATORS: ReadonlySet<FilterAstOperator> = new Set(['between', 'not_between']);
+
+/**
+ * Значение «между»/«не между» неполно: списочная форма не даёт ДВУХ непустых
+ * границ. Одиночный скаляр/токен неполнотой не считается — движок читает его
+ * как совпавшие границы («между x и x» = равенство, требование 25324388).
+ *
+ * Так полузаполненная пара не уезжает на сервер: он отвергает пустую границу
+ * («Граница даты должна быть непустой строкой ISO-8601» / «оператор «количество»
+ * требует числового значения»), а пользователь видел бы отказ отбора вместо
+ * подсказки о незаполненной границе (ошибка 99e7889d).
+ */
+function rangeValueIncomplete(operator: FilterAstOperator, value: FilterTreeValue): boolean {
+  if (!RANGE_OPERATORS.has(operator)) return false;
+  if (value.kind !== 'list') return false;
+  return value.items.length !== 2 || value.items.some((item) => item === '');
+}
+
 /** Скалярное значение-литерал листа (иначе — `null`: токен/список/подвыборка). */
 function scalarOf(leaf: FilterTreeLeaf): string | number | boolean | null {
   return leaf.value.kind === 'scalar' ? leaf.value.value : null;
@@ -296,7 +320,7 @@ function walkConstructor(
   out: FilterIssue[],
 ): void {
   if (node.kind === 'leaf') {
-    if (filterOperatorNeedsValue(node.operator) && node.value.kind === 'none') {
+    if (filterOperatorNeedsValue(node.operator) && (node.value.kind === 'none' || rangeValueIncomplete(node.operator, node.value))) {
       out.push(withoutValueIssue(filterIssueNodePath(path)));
     }
     return;

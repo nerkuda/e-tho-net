@@ -85,6 +85,29 @@ describe('диагностика строк отбора: проверки ко�
     assert.equal(mod.filterOperatorNeedsValue('not_has'), false);
   });
 
+  it('неполная пара границ «между» — «условие без значения»; полная пара и одиночный скаляр — нет', () => {
+    const list = (items: any[]): any => ({ kind: 'list', items });
+    // Полузаполненная пара (одна граница пуста) — красное: сервер такую границу
+    // отвергает («Граница даты должна быть непустой строкой ISO-8601» /
+    // «оператор «количество» требует числового значения») — ошибка 99e7889d.
+    const half = group('and', [leaf(DATE, 'between', list([{ token: '$weekStart' }, '']))]);
+    const halfIssues = mod.constructorFilterIssues(half);
+    assert.equal(halfIssues.length, 1);
+    assert.equal(halfIssues[0]!.code, 'condition_without_value');
+    assert.equal(halfIssues[0]!.path, 'filter.children[0]');
+    // Список из одной границы — тоже неполная пара.
+    assert.equal(
+      mod.constructorFilterIssues(group('and', [leaf(DATE, 'between', list([scalar('2026-01-01')]))])).length,
+      1,
+    );
+    // Полная пара границ и одиночный скаляр (движок читает его как «между x и x») — чисто.
+    const full = group('and', [leaf(DATE, 'between', list([{ token: '$weekStart' }, { token: '$today' }]))]);
+    assert.equal(mod.constructorFilterIssues(full).length, 0);
+    assert.equal(mod.constructorFilterIssues(group('and', [leaf(DATE, 'between', scalar('2026-01-01'))])).length, 0);
+    // Список из одного элемента у НЕдиапазонного оператора — не наш случай.
+    assert.equal(mod.constructorFilterIssues(group('and', [leaf(CITY, 'in', list(['Москва']))])).length, 0);
+  });
+
   it('противоречие «заполнено + не заполнено» — жёлтое с адресом второй строки', () => {
     const tree = group('and', [leaf(CITY, 'is_empty'), leaf(CITY, 'not_empty')]);
     const issues = mod.constructorFilterIssues(tree);

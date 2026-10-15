@@ -130,6 +130,12 @@ export const FILTER_VALUE_HINT_LABEL_CLASS = 'fv-date__hint';
 export const FILTER_VALUE_DATE_RESET_CLASS = 'fv-date__reset';
 /** Пара границ оператора «между». */
 export const FILTER_VALUE_BOUNDS_CLASS = 'fv-bounds';
+/**
+ * Опора, которую датовая ячейка показывает в ПУСТОЙ границе (`dateBoundControl`:
+ * `parts?.anchor ?? '$today'`). Та же опора пишется в модель при правке соседней
+ * границы — видимое значение обязано совпасть с записанным (ошибка 99e7889d).
+ */
+const DATE_BOUND_DEFAULT_TOKEN = '$today';
 /** Приглушённая подпись «значение не требуется». */
 export const FILTER_VALUE_HINT_CLASS = 'fv-hint';
 
@@ -1159,20 +1165,31 @@ function boundsControl(
   const wrap = div(FILTER_VALUE_BOUNDS_CLASS);
   const from = filterValueBoundAt(leaf.value, 0);
   const to = filterValueBoundAt(leaf.value, 1);
+  // Даты/числа свойств — общий редактор (вид значения — данные реестра);
+  // датовые операторы — своя ячейка с опорами (элемент 27b2a011).
+  const def = filterValueRegistryEntry(leaf, ctx.data);
+  const dateCell = def === undefined || def.value_type === 'date';
+  /**
+   * Чем заполняется ячейка границы, не записанная в модель. У датовой ячейки
+   * пустая граница ПОКАЗЫВАЕТ опору `$today` (`dateBoundControl`: `parts?.anchor
+   * ?? '$today'`) — видимое значение обязано попасть в модель (автоподстановка,
+   * ошибка 609deba0 п.3). Пустая строка в список границ не пишется: сервер
+   * отвергает её («Граница даты должна быть непустой строкой ISO-8601», ошибка
+   * 99e7889d) — так «между $weekStart и $today» с нетронутой второй ячейкой
+   * уходило как `[{token:"$weekStart"}, ""]`.
+   */
+  const missing: FilterTreeListItem = dateCell ? { token: DATE_BOUND_DEFAULT_TOKEN } : '';
   // Запись границы — структурная (ошибка 7d36f439): ячейка границ держит
   // собственное состояние частей (опора/сдвиг/единица, точная дата) и
   // пересобирается из модели.
   const push = (next: 0 | 1, bound: FilterTreeValue): void => {
     const items: FilterTreeListItem[] = [
-      boundAsItem(next === 0 ? bound : from),
-      boundAsItem(next === 1 ? bound : to),
+      boundAsItem(next === 0 ? bound : from, missing),
+      boundAsItem(next === 1 ? bound : to, missing),
     ];
     (api.setStructuralValue ?? api.setValue)({ kind: 'list', items });
   };
-  // Даты/числа свойств — общий редактор (вид значения — данные реестра);
-  // датовые операторы — своя ячейка с опорами (элемент 27b2a011).
-  const def = filterValueRegistryEntry(leaf, ctx.data);
-  if (def === undefined || def.value_type === 'date') {
+  if (dateCell) {
     const fromBox = dateBoundControl(filterValueScalarText(from), (bound) => push(0, bound), ctx);
     fromBox.dataset['bound'] = 'from';
     const toBox = dateBoundControl(filterValueScalarText(to), (bound) => push(1, bound), ctx);
@@ -1213,11 +1230,19 @@ function boundValueEditor(
   return box;
 }
 
-/** Граница как элемент списка значений. */
-function boundAsItem(bound: FilterTreeValue): FilterTreeListItem {
+/**
+ * Граница как элемент списка значений. `missing` — чем представлена граница,
+ * которой в модели ещё нет (пустая ячейка): датовая ячейка показывает опору
+ * `$today` и обязана писать её в модель, у прочих природ значение не выдумывается
+ * (пустой элемент ловит проверка конструктора «условие без значения»).
+ */
+function boundAsItem(
+  bound: FilterTreeValue,
+  missing: FilterTreeListItem = '',
+): FilterTreeListItem {
   if (bound.kind === 'token') return { token: bound.token };
   if (bound.kind === 'scalar') return bound.value;
-  return '';
+  return missing;
 }
 
 /**
