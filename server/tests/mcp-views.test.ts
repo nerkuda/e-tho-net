@@ -1024,10 +1024,12 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
 
 /**
  * Отбор типа хранит `definition` в форме AST (wire `{version, filter, sort?}`,
- * сущность 489c394f). Токены AST раскрывает движок по `tokenContext`
+ * сущность 489c394f). Глобальные токены AST раскрывает движок по `tokenContext`
  * (первый день недели сети, `$user`, часы) — плоский резолвер к AST не
- * применяется. Путь `runViewForThought` обязан: (а) разрешить токен при
- * переданном `tokenContext`; (б) вернуть неразрешимый токен в `meta.unresolved`,
+ * применяется; токены КОНТЕКСТА МЫСЛИ (`$thought.*`) раскрывает сервис
+ * `runViewForThought`, у которого есть эта мысль (ошибка 23c7d3e9 п. C3).
+ * Путь `runViewForThought` обязан: (а) разрешить токен при переданном
+ * `tokenContext`; (б) вернуть неразрешимый токен в `meta.unresolved`,
  * а не молча пустую выдачу (требование b7fdab20).
  */
 describe('etn.views.run: определение отбора в форме AST (cb78315b)', { skip: !nativeAvailable() }, () => {
@@ -1055,7 +1057,7 @@ describe('etn.views.run: определение отбора в форме AST (
     assert.equal(res.isError, undefined, toolText(res));
   }
 
-  it('$user в AST-определении разрешается (tokenContext), неразрешимый токен — в meta.unresolved', async () => {
+  it('$user и $thought в AST-определении разрешаются, неразрешимый токен — в meta.unresolved', async () => {
     const ctx = await buildMcpContext();
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
@@ -1085,20 +1087,40 @@ describe('etn.views.run: определение отбора в форме AST (
         );
         assert.deepEqual(ok.meta.unresolved, undefined);
 
-        // Неразрешимый в сетевом контексте `$thought.*` — диагностика, не тишина.
+        // Токен КОНТЕКСТА МЫСЛИ в AST-определении тоже разрешается (ошибка
+        // 23c7d3e9 п. C3): «Мысль ≠ $thought» — все мысли сети, кроме
+        // контекстной, значит подстановка id в условие произошла.
         await createAstView(handle, ctx.networkId, 'AST с мыслью', {
           version: 1,
-          filter: { entity: { kind: 'created_at' }, operator: 'gte', value: { token: '$thought.id' } },
+          filter: { entity: { kind: 'id' }, operator: 'ne', value: { token: '$thought' } },
+        });
+        const thoughtRes = await handle.client.callTool({
+          name: 'etn.views.run',
+          arguments: { network_id: ctx.networkId, thought_id: versionId, view_name: 'AST с мыслью' },
+        });
+        assert.equal(thoughtRes.isError, undefined, toolText(thoughtRes));
+        const byThought = toolJson<ViewsRunResponse>(thoughtRes);
+        assert.ok(
+          byThought.data.length >= 2,
+          `$thought в AST-определении обязан разрешиться: ${toolText(thoughtRes)}`,
+        );
+        assert.deepEqual(byThought.meta.unresolved, undefined);
+
+        // А неразрешимый в сетевом контексте токен времени (профиль отбора
+        // мыслей — календарный, без времени) — диагностика, не тишина.
+        await createAstView(handle, ctx.networkId, 'AST со временем', {
+          version: 1,
+          filter: { entity: { kind: 'created_at' }, operator: 'gte', value: { token: '$now' } },
         });
         const badRes = await handle.client.callTool({
           name: 'etn.views.run',
-          arguments: { network_id: ctx.networkId, thought_id: versionId, view_name: 'AST с мыслью' },
+          arguments: { network_id: ctx.networkId, thought_id: versionId, view_name: 'AST со временем' },
         });
         assert.equal(badRes.isError, undefined, toolText(badRes));
         const bad = toolJson<ViewsRunResponse>(badRes);
         assert.deepEqual(bad.data, []);
         assert.ok(
-          (bad.meta.unresolved ?? []).some((u) => u.token.includes('$thought')),
+          (bad.meta.unresolved ?? []).some((u) => u.token.includes('$now')),
           `неразрешимый токен обязан попасть в meta.unresolved: ${toolText(badRes)}`,
         );
       } finally {

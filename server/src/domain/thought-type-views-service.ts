@@ -68,6 +68,7 @@ import {
 import { queryThoughtsAsync } from './heavy-read.js';
 import {
   buildResolveContext,
+  resolveThoughtTokensInAst,
   resolveTokensInDefinition as resolveTokensDefinition,
   validateDefinitionForTokens,
   type PropertyMeta,
@@ -887,46 +888,64 @@ export async function runViewForThought(
   const isAstDefinition = parsed['version'] !== undefined;
 
   let resolvedDefinition: Record<string, unknown>;
+  // Контекст резолва токенов (мысль-контекст + свойства + пользователь + часы +
+  // настройки сети) — ОБЩИЙ для обеих форм определения: плоский резолвер
+  // раскрывает им строки, AST-форма — токены контекста мысли (ошибка 23c7d3e9
+  // п. C3). Часы/первый день недели/гранулярность времени берутся из
+  // `tokenContext` (обязательный пункт задачи 7a798b17, замечание верификатора
+  // задачи 0f1b9892; требование 0095daad) — иначе календарные токены
+  // (`$today`/`$weekStart`) раскрывались бы по реальным часам и от
+  // понедельника, а `$now` — по историческому умолчанию.
+  const extra = options?.tokenContext;
+  const now = extra?.nowMs !== undefined ? (): Date => new Date(extra.nowMs!) : undefined;
+  const resolveContext: ResolveContext = buildResolveContext(
+    {
+      id: thought.id,
+      title: thought.title,
+      synonyms: thought.synonyms,
+      type_id: thought.type_id,
+      active: thought.active,
+      // `created_by`/`updated_by` опциональны в DTO Thought; в контекст
+      // токенов пустую строку не отдаём — `$thought.author` уйдёт в
+      // «не разрешён», отбор вернёт пустой результат с пояснением.
+      created_by: thought.created_by ?? '',
+      updated_by: thought.updated_by ?? '',
+      created_at: thought.created_at,
+      updated_at: thought.updated_at,
+    },
+    collectThoughtPropertyValues(ndb, thoughtId, thought.type_id),
+    userId,
+    now,
+    {
+      ...(extra?.firstDayOfWeek !== undefined ? { firstDayOfWeek: extra.firstDayOfWeek } : {}),
+      ...(extra?.withTime !== undefined ? { withTime: extra.withTime } : {}),
+    },
+  );
+
   if (isAstDefinition) {
-    // AST-форма: токены раскрывает САМ движок по `tokenContext` (единый
-    // исполнитель, задача 0f1b9892). Плоский резолвер к AST неприменим — он
-    // подставляет значение ВНУТРЬ строки `{token:"$user"}` и превращает
-    // валидный токен в мусорный (неразрешимый) — поэтому здесь он пропущен.
-    resolvedDefinition = parsed;
+    // AST-форма. ГЛОБАЛЬНЫЕ токены (`$today`/`$user`/`$weekStart` и арифметика
+    // по ним) раскрывает САМ движок по `tokenContext` (единый исполнитель,
+    // задача 0f1b9892) — плоский резолвер к AST неприменим: он подставляет
+    // значение ВНУТРЬ строки `{token:"$user"}` и превращает валидный токен в
+    // мусорный. Токены КОНТЕКСТА МЫСЛИ (`$thought`/`$thought.*`/
+    // `$thought.[…]`) движку не по силам — контекста мысли в сетевом запросе
+    // нет, — поэтому их раскрывает сервис, у которого мысль есть. Иначе условие
+    // «Мысль в иерархии $thought» давало необъяснимый пустой результат (ошибка
+    // 23c7d3e9 п. C3).
+    const resolvedAst = resolveThoughtTokensInAst(parsed, resolveContext);
+    if (resolvedAst.unresolved.length > 0) {
+      return {
+        items: [],
+        total: 0,
+        directions: {},
+        unresolved: resolvedAst.unresolved,
+        sort,
+        order,
+      };
+    }
+    resolvedDefinition = resolvedAst.definition as Record<string, unknown>;
   } else {
-    const properties = collectThoughtPropertyValues(ndb, thoughtId, thought.type_id);
-    // Плоская форма (`definition v1`): резолвер строит контекст сам, поэтому
-    // часы, первый день недели сети и гранулярность времени берутся из
-    // tokenContext (обязательный пункт задачи 7a798b17, замечание верификатора
-    // задачи 0f1b9892; требование 0095daad) — иначе календарные токены
-    // (`$today`/`$weekStart`) раскрывались бы по реальным часам и от понедельника,
-    // а `$now` — по историческому умолчанию.
-    const extra = options?.tokenContext;
-    const now = extra?.nowMs !== undefined ? (): Date => new Date(extra.nowMs!) : undefined;
-    const ctx: ResolveContext = buildResolveContext(
-      {
-        id: thought.id,
-        title: thought.title,
-        synonyms: thought.synonyms,
-        type_id: thought.type_id,
-        active: thought.active,
-        // `created_by`/`updated_by` опциональны в DTO Thought; в контекст
-        // токенов пустую строку не отдаём — `$thought.author` уйдёт в
-        // «не разрешён», отбор вернёт пустой результат с пояснением.
-        created_by: thought.created_by ?? '',
-        updated_by: thought.updated_by ?? '',
-        created_at: thought.created_at,
-        updated_at: thought.updated_at,
-      },
-      properties,
-      userId,
-      now,
-      {
-        ...(extra?.firstDayOfWeek !== undefined ? { firstDayOfWeek: extra.firstDayOfWeek } : {}),
-        ...(extra?.withTime !== undefined ? { withTime: extra.withTime } : {}),
-      },
-    );
-    const resolved = resolveTokensInDefinitionProxy(parsed, ctx);
+    const resolved = resolveTokensInDefinitionProxy(parsed, resolveContext);
 
     if (resolved.unresolved.length > 0) {
       return {

@@ -679,6 +679,130 @@ export function resolveTokensInDefinition(
 }
 
 /**
+ * Результат {@link resolveThoughtTokensInAst}.
+ */
+export interface ResolveThoughtAstResult {
+  /** Новое определение с раскрытыми токенами контекста мысли (вход не мутируется). */
+  definition: unknown;
+  /** Неразрешимые токены контекста мысли; непусто — исполнять отбор нельзя. */
+  unresolved: TokenIssue[];
+}
+
+/** Значение-литерал AST, которым заменяется `{ token: … }` (сохраняет природу). */
+type AstLiteral = string | number | boolean | string[];
+
+/**
+ * Раскрыть в AST-определении отбора ТОЛЬКО токены контекста мысли
+ * (`$thought`, `$thought.<поле>`, `$thought.[<свойство>]` с арифметикой даты).
+ *
+ * **Зачем отдельная функция.** Движок отбора AST (`query-service`) раскрывает
+ * токены по `tokenContext` — часам, пользователю и настройкам сети; контекста
+ * МЫСЛИ в сетевом запросе нет, и `$thought.*` он честно считает неразрешимым
+ * (`resolveGlobalDateTokens`). Отбор ТИПА исполняется «относительно мысли»
+ * (`runViewForThought`), где контекст есть, — поэтому раскрытие делает сервис,
+ * у которого есть мысль, ДО передачи определения движку. Иначе условие «Мысль
+ * в иерархии $thought» на карте давало необъяснимый пустой результат (ошибка
+ * 23c7d3e9 п. C3).
+ *
+ * **Почему структурный обход, а не {@link resolveTokensInDefinition}.** В AST
+ * токен — это объект-значение `{ token: "$today" }`, а не строка внутри
+ * выражения: подстановка строки ВНУТРЬ такого объекта превратила бы валидный
+ * токен в мусорный (`{ token: "<uuid>" }` → `unknown_token`). Поэтому
+ * заменяется ВЕСЬ объект-значение, и только когда он несёт токен контекста
+ * мысли. Глобальные токены (`$today`, `$user`, `$weekStart`, арифметика по ним)
+ * остаются движку: он раскрывает их по `tokenContext` точки применения, и
+ * второй резолвер тех же токенов здесь не заводится.
+ *
+ * Природа значения сохраняется: `$thought.active` → булево, `$thought.synonyms`
+ * и множественное `$thought.[…]` → массив, даты/строки — строкой. Значение
+ * свойства без заполненной ячейки (по семантике A6) — ПУСТАЯ строка без записи
+ * в `unresolved`, как и у плоского резолвера.
+ */
+export function resolveThoughtTokensInAst(
+  definition: unknown,
+  ctx: ResolveContext,
+): ResolveThoughtAstResult {
+  const unresolved: TokenIssue[] = [];
+  const nowFn = ctx.now ?? ((): Date => new Date());
+  const definition2 = walkAndResolveThoughtTokens(definition, '', ctx, nowFn, unresolved);
+  return { definition: definition2, unresolved };
+}
+
+/**
+ * Рекурсивный обход AST: объект-значение `{ token: '…' }` заменяется
+ * вычисленным литералом (когда токен относится к контексту мысли), прочие узлы
+ * обходятся как есть. `path` — JSON-путь до узла (для диагностики).
+ */
+function walkAndResolveThoughtTokens(
+  node: unknown,
+  path: string,
+  ctx: ResolveContext,
+  now: () => Date,
+  unresolved: TokenIssue[],
+): unknown {
+  if (Array.isArray(node)) {
+    const out: unknown[] = [];
+    for (let index = 0; index < node.length; index += 1) {
+      const resolved = walkAndResolveThoughtTokens(node[index], `${path}[${index}]`, ctx, now, unresolved);
+      // Токен множественного свойства (`$thought.[<multi>]`, `$thought.synonyms`)
+      // раскрывается СПИСКОМ — в списке-значении его элементы разворачиваются,
+      // иначе получился бы вложенный список (невалидное значение AST).
+      if (Array.isArray(resolved)) out.push(...resolved);
+      else out.push(resolved);
+    }
+    return out;
+  }
+  if (node === null || typeof node !== 'object') return node;
+  const token = (node as Record<string, unknown>)['token'];
+  if (typeof token === 'string' && Object.keys(node as Record<string, unknown>).length === 1) {
+    const resolved = resolveAstThoughtToken(token, path, ctx, now, unresolved);
+    // Не токен контекста мысли — узел остаётся движку как есть.
+    return resolved === null ? node : resolved;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    const childPath = path === '' ? key : `${path}.${key}`;
+    out[key] = walkAndResolveThoughtTokens(value, childPath, ctx, now, unresolved);
+  }
+  return out;
+}
+
+/**
+ * Раскрыть один токен-объект AST. `null` — токен НЕ относится к контексту мысли
+ * (глобальный или неизвестный: его судьбу решает движок отбора).
+ */
+function resolveAstThoughtToken(
+  token: string,
+  path: string,
+  ctx: ResolveContext,
+  now: () => Date,
+  unresolved: TokenIssue[],
+): AstLiteral | null {
+  const { known, unknown } = scanStringForTokens(token);
+  const thoughtTokens = known.filter((tok) => tok.kind !== 'global');
+  // Глобальные токены и строки без токенов — не наша забота.
+  if (thoughtTokens.length === 0) return null;
+  // Смешанный/непонятный набор оставляем движку: он даст штатную диагностику
+  // (`unknown_token`) — второй диагностики за него здесь не пишем.
+  if (unknown.length > 0) return null;
+  // Чистый одиночный токен контекста мысли — ЗНАЧЕНИЕ с его природой.
+  if (thoughtTokens.length === 1 && known.length === 1 && token === thoughtTokens[0]!.raw) {
+    const value = resolveOneToken(thoughtTokens[0]!, ctx, now, unresolved, path);
+    if (value === null) return token;
+    // Пустое множество (у мысли нет синонимов, множественное свойство не
+    // заполнено) — ПУСТОЕ значение по семантике A6, а не неразрешимый токен:
+    // пустой список движок отбора отвергает валидацией, поэтому пустое
+    // множество отдаётся пустой строкой (условие не совпадёт ни с чем).
+    if (Array.isArray(value) && value.length === 0) return '';
+    return value as AstLiteral;
+  }
+  // Текст с токеном (нормально валидацией не пропускается) — как у плоского
+  // резолвера: строка, собранная из кусков.
+  const resolved = resolveString(token, path, ctx, now, unresolved);
+  return Array.isArray(resolved) ? resolved : resolved;
+}
+
+/**
  * Результат {@link resolveGlobalDateTokens}.
  */
 export interface GlobalTokenResolveResult {
