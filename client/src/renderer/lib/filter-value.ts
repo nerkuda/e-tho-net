@@ -529,7 +529,16 @@ export function renderFilterValue(
       box.append(countControl(leaf, api));
       return box;
     case 'date':
-      box.append(dateBoundControl(filterValueScalarText(leaf.value), (value) => api.setValue(value), ctx));
+      // Переход «относительная дата → точная» меняет ВИД ячейки (рамка с опорой
+      // уступает полю даты с календарём), поэтому запись — структурная; правка
+      // опоры/сдвига пересборки не требует, но путь у операнда один.
+      box.append(
+        dateBoundControl(
+          filterValueScalarText(leaf.value),
+          (value) => (api.setStructuralValue ?? api.setValue)(value),
+          ctx,
+        ),
+      );
       return box;
     case 'bounds':
       box.append(boundsControl(leaf, api, ctx));
@@ -633,7 +642,9 @@ function predicateControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HT
     onChange: (id) => {
       leaf.operator = id === 'yes' ? 'not_empty' : 'is_empty';
       leaf.value = { kind: 'none' };
-      api.setValue({ kind: 'none' });
+      // Меняется ОПЕРАТОР условия — правка структурная: строка пересобирается
+      // (тем же путём, что смена оператора в списке строки).
+      (api.setStructuralValue ?? api.setValue)({ kind: 'none' });
     },
   }).root;
 }
@@ -882,7 +893,10 @@ function keywordsControl(
 /** «Количество»: числовой инпут + подпись единицы (элемент af7bdee2). */
 function countControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HTMLElement {
   if (filterValueIsBounds(leaf.operator)) {
-    // «Количество между» — две числовые границы и одна подпись единицы.
+    // «Количество между» — две числовые границы и одна подпись единицы. Запись
+    // структурная: ячейка границ держит собственное состояние частей и
+    // пересобирается из модели (ошибка 7d36f439 — обычная правка значения DOM
+    // ячейки не пересобирает).
     const wrap = div(FILTER_VALUE_BOUNDS_CLASS);
     const from = filterValueBoundAt(leaf.value, 0);
     const to = filterValueBoundAt(leaf.value, 1);
@@ -891,7 +905,7 @@ function countControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HTMLEl
         boundAsItem(next === 0 ? bound : from),
         boundAsItem(next === 1 ? bound : to),
       ];
-      api.setValue({ kind: 'list', items });
+      (api.setStructuralValue ?? api.setValue)({ kind: 'list', items });
     };
     wrap.append(numberBound(from, (bound) => push(0, bound)), numberBound(to, (bound) => push(1, bound)));
     wrap.append(span(filterValueUnitLabel(leaf), FILTER_VALUE_UNIT_CLASS));
@@ -1137,15 +1151,17 @@ function boundsControl(
   ctx: FilterValueContext,
 ): HTMLElement {
   const wrap = div(FILTER_VALUE_BOUNDS_CLASS);
-  const value = leaf.value;
-  const from = filterValueBoundAt(value, 0);
-  const to = filterValueBoundAt(value, 1);
+  const from = filterValueBoundAt(leaf.value, 0);
+  const to = filterValueBoundAt(leaf.value, 1);
+  // Запись границы — структурная (ошибка 7d36f439): ячейка границ держит
+  // собственное состояние частей (опора/сдвиг/единица, точная дата) и
+  // пересобирается из модели.
   const push = (next: 0 | 1, bound: FilterTreeValue): void => {
     const items: FilterTreeListItem[] = [
       boundAsItem(next === 0 ? bound : from),
       boundAsItem(next === 1 ? bound : to),
     ];
-    api.setValue({ kind: 'list', items });
+    (api.setStructuralValue ?? api.setValue)({ kind: 'list', items });
   };
   // Даты/числа свойств — общий редактор (вид значения — данные реестра);
   // датовые операторы — своя ячейка с опорами (элемент 27b2a011).

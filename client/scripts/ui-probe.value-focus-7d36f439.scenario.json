@@ -1,0 +1,69 @@
+{
+  "name": "value-focus-7d36f439",
+  "description": "Ошибка 7d36f439 «Панель „События“: поле значения теряет фокус при наборе текста»: онбординг → «События» → условие «Заголовок сущности» «содержит» → ячейка значения получает фокус, текст вводится ДВУМЯ шагами (одна вставка `text`, затем пер-символьные `key`). Пробы: `document.activeElement` — это поле, а его `value` содержит текст обоих шагов. Пока правка значения перерисовывает дерево, второй шаг уходит мимо поля и `value` теряет вторую половину. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.value-focus-7d36f439.scenario.json --out .tmp/value-focus-7d36f439",
+  "timeout": 90000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-activity-view", "click": "button.view-tab[title=\"События\"]" },
+    { "name": "editor-mounted", "waitFor": "document.querySelector('.activity-filter .fe .ft-group') !== null" },
+
+    { "name": "add-condition", "click": ".activity-filter .ft-add-condition" },
+    { "name": "row-appeared", "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 1" },
+    { "name": "open-operand-picker", "click": ".activity-filter .ft-row__what" },
+    {
+      "name": "operand-choice-open",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"entity_title\"]') !== null"
+    },
+    { "name": "pick-title-operand", "click": ".ft-choice__item[data-key=\"entity_title\"]" },
+    {
+      "name": "value-field-ready",
+      "waitFor": "document.querySelector('.activity-filter .ft-row__value .fv[data-editor=\"value-editor\"] input.prop-editor') !== null"
+    },
+    {
+      "name": "operator-is-contains",
+      "probe": "document.querySelector('.activity-filter .ft-row__op')?.textContent?.includes('содержит') ?? null",
+      "expect": true
+    },
+
+    { "name": "focus-value-field", "click": ".activity-filter .ft-row__value .fv[data-editor=\"value-editor\"] input.prop-editor" },
+    { "name": "insert-first-part", "text": "abc" },
+    {
+      "name": "field-keeps-focus-after-insert",
+      "probe": "document.activeElement === document.querySelector('.activity-filter .ft-row__value .fv[data-editor=\"value-editor\"] input.prop-editor')",
+      "expect": true
+    },
+    { "name": "key-d", "key": "d" },
+    { "name": "key-e", "key": "e" },
+    { "name": "key-f", "key": "f" },
+    {
+      "name": "field-holds-both-parts",
+      "probe": "document.querySelector('.activity-filter .ft-row__value .fv[data-editor=\"value-editor\"] input.prop-editor')?.value ?? null",
+      "expect": "abcdef"
+    },
+    {
+      "name": "field-still-focused",
+      "probe": "document.activeElement === document.querySelector('.activity-filter .ft-row__value .fv[data-editor=\"value-editor\"] input.prop-editor')",
+      "expect": true
+    },
+    {
+      "name": "phrase-reflects-typed-text",
+      "probe": "document.querySelector('.activity-filter .ff-preview__text')?.textContent?.includes('abcdef') ?? false",
+      "expect": true
+    },
+    {
+      "name": "caret-at-end",
+      "probe": "(() => { const i = document.querySelector('.activity-filter .ft-row__value .fv[data-editor=\"value-editor\"] input.prop-editor'); return i ? i.selectionStart : null; })()",
+      "expect": 6
+    }
+  ]
+}

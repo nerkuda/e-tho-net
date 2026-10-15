@@ -432,6 +432,12 @@ export function buildSubqueryValueCell(
   const isSubquery = value.kind === 'subquery';
   const cell = div(FILTER_SUBQUERY_CELL_CLASS);
   cell.dataset['mode'] = isSubquery ? 'subquery' : 'list';
+  /**
+   * Правка значения ВИДА ячейки (список ↔ под-выборка) — структурная: обычная
+   * правка значения ячейку не пересобирает (ошибка 7d36f439), а здесь меняется
+   * её представление, поэтому строка перерисовывается целиком.
+   */
+  const writeModeValue = api.setStructuralValue ?? api.setValue;
 
   /**
    * Переключатель «Список ↔ Выборка». Храним рукоятку: при выборе «Выборка»
@@ -470,7 +476,7 @@ export function buildSubqueryValueCell(
       'Сменить вид значения?',
       'В строке собрана под-выборка — при переходе к списку она будет сброшена.',
     ).then((ok) => {
-      if (ok) api.setValue({ kind: 'none' });
+      if (ok) writeModeValue({ kind: 'none' });
       // Отказ — переключатель возвращаем на «Выборка»: сегмент уже переключился
       // визуально до вызова `onChange`.
       else modeControl.setActive('subquery');
@@ -488,7 +494,7 @@ export function buildSubqueryValueCell(
         if (!isSubquery) modeControl.setActive('list');
         return;
       }
-      api.setValue({
+      writeModeValue({
         kind: 'subquery',
         operator: filterSubqueryValueOperator(leaf.operator),
         node: edited,
@@ -505,7 +511,7 @@ export function buildSubqueryValueCell(
         node: value.node,
         data: ctx.data,
         onEdit: openModal,
-        onClear: () => api.setValue({ kind: 'none' }),
+        onClear: () => writeModeValue({ kind: 'none' }),
       }),
     );
   } else {

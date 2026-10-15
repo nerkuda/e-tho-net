@@ -651,6 +651,12 @@ function renderPanel(): void {
       callbacks?.onStatePersist();
       editor?.refresh();
     },
+    // Набор текста в поле значения (ошибка 7d36f439): персист и снятие серверной
+    // диагностики — БЕЗ пересборки редактора (поле не теряет фокус и каретку).
+    touchValue: () => {
+      serverIssues = [];
+      callbacks?.onStatePersist();
+    },
     host: {
       apply: () => triggerApply(),
       save: (request) => void saveFilter(request),

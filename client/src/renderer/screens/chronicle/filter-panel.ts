@@ -799,6 +799,12 @@ export async function preloadFilterRegistry(): Promise<void> {
 /** Найденные записи строки поиска по id (для перехода при выборе строки). */
 const recordHits = new Map<string, ChronicleRow>();
 let searchTimer: number | null = null;
+/**
+ * Обновление заголовка строки поиска (маркер `*` у непустого отбора): строка
+ * собирается один раз, а правки её поля (аналог ошибки 7d36f439) больше не
+ * пересобирают панель — маркер обновляем точечно.
+ */
+let searchSectionRefresh: (() => void) | null = null;
 
 /** Пауза после ввода: не каждое нажатие запускает запрос (0.10.1, T7). */
 function scheduleSearchApply(): void {
@@ -848,7 +854,14 @@ function keywordsContext(): FilterFormContext {
     registry: registryWithSides(),
     touch: () => {
       syncKeywordsToTree();
-      renderPanel();
+      // Аналог ошибки 7d36f439: набор текста в поле «Поиск по записям» не должен
+      // пересобирать панель целиком — иначе поле теряет фокус и каретку на каждом
+      // символе. Обновляем только редактор (его дерево отражает группу слов);
+      // само поле живёт в строке поиска ВНЕ редактора, поэтому фокус сохраняется.
+      editor?.refresh();
+      // Маркер «отбор непуст» заголовка строки поиска — точечно (панель не
+      // пересобирается, см. пояснение выше).
+      searchSectionRefresh?.();
       scheduleSearchApply();
     },
   };
@@ -891,6 +904,7 @@ function buildSearchRow(): HTMLElement {
     },
   });
   section.refresh();
+  searchSectionRefresh = () => section.refresh();
   return section.box;
 }
 
@@ -971,6 +985,11 @@ function renderPanel(): void {
     touch: () => {
       serverIssues = [];
       editor?.refresh();
+    },
+    // Набор текста в поле значения (ошибка 7d36f439): снятие серверной
+    // диагностики — БЕЗ пересборки редактора (поле не теряет фокус и каретку).
+    touchValue: () => {
+      serverIssues = [];
     },
     sort: false,
     // Переключатель направления — НАД фразой-превью (ошибка 609deba0 п.3):

@@ -945,15 +945,29 @@ export function filterTreeValueKindLabel(value: FilterTreeValue): string {
 
 /** API слота значения: виджет значения переписывает значение листа (модель). */
 export interface FilterTreeValueSlotApi {
-  /** Переписать значение листа моделью (единственный путь правки значения). */
+  /**
+   * Переписать значение листа моделью. Правка значения НЕ пересобирает дерево
+   * (ошибка 7d36f439): поле ввода сохраняет фокус и каретку, хост получает
+   * персист и обновление фразы футера (`onValueEdit`), диагностика строки
+   * перекрашивается точечно. Годится всем виджетам, которые сами отражают новое
+   * значение в своей разметке (текст/число, чипы, перечисления, ссылки).
+   */
   setValue: (value: FilterTreeValue) => void;
+  /**
+   * Переписать значение листа ТАК, что вид ячейки/оператор меняется (переход
+   * «список ↔ под-выборка», переключение предиката-оператора): обычной правки
+   * значения мало — строка и её ячейка пересобираются из модели полной
+   * перерисовкой. Виджету, который сам перерисовывает свою часть, не нужен.
+   */
+  setStructuralValue?: (value: FilterTreeValue) => void;
   /**
    * Стабильный адрес слота значения — `<редактор>-<путь строки>` (`5-0.1`):
    * не меняется между перерисовками ОДНОГО дерева (редактор нумеруется один
    * раз при сборке, путь строки — часть модели). Нужен потребителям значения,
-   * которые живут дольше разметки строки: правка значения перерисовывает дерево
-   * ЦЕЛИКОМ, а всплывающая панель (чеклист значения) остаётся в `document.body`
-   * и обязана перепривязаться к НОВОМУ узлу поля (ошибка 50d9bf4e, п. C2/C3).
+   * которые живут дольше разметки строки: структурная правка значения или
+   * внешний `refresh()` хоста пересобирают дерево ЦЕЛИКОМ, а всплывающая панель
+   * (чеклист значения) остаётся в `document.body` и обязана перепривязаться к
+   * НОВОМУ узлу поля (ошибка 50d9bf4e, п. C2/C3).
    */
   readonly slotKey?: string;
 }
@@ -984,6 +998,15 @@ export interface FilterTreeContext {
   issues?: () => readonly FilterIssue[];
   /** Хост узнаёт, что пользователь нажал «исправить» у узла с этим адресом. */
   onFixPath?: (path: string) => void;
+  /**
+   * Правка ЗНАЧЕНИЯ условия (набор текста в поле значения): модель уже
+   * обновлена, структура дерева НЕ менялась. Хост персистит состояние и
+   * обновляет фразу-превью футера, но НЕ пересобирает дерево — DOM строки с
+   * полем ввода сохраняется, фокус и каретка не теряются (ошибка 7d36f439).
+   * Диагностику строки каркас обновляет точечно сам. Не задан — правка значения
+   * идёт общим путём `touch` (полная перерисовка, хост не различает случаи).
+   */
+  onValueEdit?: () => void;
   /**
    * Подтверждение сброса СОБРАННОЙ под-выборки при смене свойства строки
    * (элемент интерфейса f5005daa): получает действие «сменить операнд и
@@ -1205,6 +1228,59 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     root.append(el('div', 'ft-title', title));
     root.append(renderGroup([], 0));
     restoreChipsInputFocus(focusPath);
+  };
+
+  /**
+   * Точечно перекрасить диагностику ОДНОЙ строки после правки её значения
+   * (ошибка 7d36f439): дерево НЕ пересобирается — DOM строки с полем ввода
+   * сохраняется, фокус и каретка не теряются, — но класс строки и её строка
+   * диагностики обязаны поспеть за моделью без отставания на рендер (проверка
+   * «условие без значения» зависит от значения, `lib/filter-diagnostics.ts`).
+   * Записи перечитываются, как в {@link render}, меняется только эта строка.
+   */
+  const refreshRowDiagnostics = (path: FilterTreePath): void => {
+    const nodePath = filterIssueNodePath(path);
+    const previous = filterIssueForNode(issueMap, nodePath);
+    issueMap = [...(ctx.issues?.() ?? [])];
+    const rows = Array.from(root.querySelectorAll(`.${FILTER_TREE_ROW_CLASS}`)) as HTMLElement[];
+    const row = rows.find((node) => node.dataset['path'] === filterTreePathKey(path));
+    if (row === undefined) return;
+    const next = filterIssueForNode(issueMap, nodePath);
+    // Адрес перехода «исправить» мог смениться (запись появилась/ушла) — старую
+    // запись футера снимаем, чтобы клик по фразе не вёл в никуда.
+    if (previous !== null && (next === null || next.path !== previous.path)) {
+      fixers.delete(previous.path);
+    }
+    row.classList.remove('ft-node--error', 'ft-node--warning');
+    delete row.dataset['severity'];
+    row.querySelector(`.${FILTER_TREE_ISSUE_CLASS}`)?.remove();
+    const issue = applyIssue(row, path);
+    if (issue !== null) {
+      row.tabIndex = -1;
+      row.append(
+        buildIssueLine(issue, () => {
+          row.scrollIntoView();
+          row.focus();
+        }),
+      );
+    }
+  };
+
+  /**
+   * Правка ЗНАЧЕНИЯ условия (ошибка 7d36f439): модель уже обновлена, структура
+   * дерева не менялась — перерисовки нет. Хост получает персист и обновление
+   * фразы футера без пересборки дерева (`ctx.onValueEdit`); диагностика
+   * редактируемой строки перекрашивается точечно ПОСЛЕ него (хост снимает
+   * серверную диагностику прежнего запроса — она уже не относится к строке).
+   */
+  const applyValueEdit = (path: FilterTreePath): void => {
+    if (ctx.onValueEdit === undefined) {
+      // Хост не различает правку значения и структуры — прежнее поведение.
+      touch();
+      return;
+    }
+    ctx.onValueEdit();
+    refreshRowDiagnostics(path);
   };
 
   /** Группа-блок с заголовком-рамкой и телом (адресация — путём в модели). */
@@ -1517,6 +1593,13 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     const valueBox = div('ft-row__value');
     const api: FilterTreeValueSlotApi = {
       setValue: (value) => {
+        leaf.value = value;
+        // Правка значения не пересобирает дерево (ошибка 7d36f439): поле ввода
+        // сохраняет фокус и каретку между нажатиями.
+        applyValueEdit(path);
+      },
+      // Правка значения, меняющая ВИД ячейки/оператор: строка пересобирается.
+      setStructuralValue: (value) => {
         leaf.value = value;
         touch();
       },

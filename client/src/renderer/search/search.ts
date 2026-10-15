@@ -1086,6 +1086,12 @@ function buildSettingsZone(zone: HTMLElement): void {
       refreshSearchIfVisible();
       searchEditor?.refresh();
     },
+    // Набор текста в поле значения (ошибка 7d36f439): состояние сохраняется, а
+    // строка поиска НЕ пересобирается — поле ввода не теряет фокус и каретку.
+    touchValue: () => {
+      persistState();
+      refreshSearchIfVisible();
+    },
     // Сортировка и футер у строки поиска свои/отсутствуют: порядок задаёт
     // релевантность FTS (ORDER BY rank), сохранённых отборов нет.
     sort: false,

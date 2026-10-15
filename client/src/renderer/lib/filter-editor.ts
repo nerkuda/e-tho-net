@@ -180,6 +180,16 @@ export interface FilterEditorOptionsBase {
   setSortKeys?: (keys: FilterAstSortKey[]) => void;
   /** Правка модели: хост персистит состояние и ставит маркер «изменён». */
   touch?: () => void;
+  /**
+   * Правка ЗНАЧЕНИЯ условия — набор текста в поле значения (ошибка 7d36f439):
+   * хост персистит состояние и снимает серверную диагностику прежнего запроса,
+   * но НЕ пересобирает редактор. Фразу-превью футера обновляет сама фабрика
+   * (`footer.refresh`), дерево остаётся на месте — поле ввода сохраняет фокус и
+   * каретку между нажатиями. Структурные правки (смена операнда/оператора,
+   * добавление-удаление строки/группы, свёртка, пресет) идут прежним путём
+   * `touch`. Не задан — правка значения идёт общим путём `touch`.
+   */
+  touchValue?: () => void;
   /** Заголовок редактора; по умолчанию — профильный «Показать … по условиям:». */
   title?: string;
   /** Каталог перечислений, который знает только хост (типы действий, виды сущностей). */
@@ -294,6 +304,24 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
   const issues = (): readonly FilterIssue[] =>
     mergeFilterIssues(host.issues?.() ?? [], constructorFilterIssues(getState().tree ?? null));
 
+  /** Футер собирается ниже; правка значения обновляет его фразу (ошибка 7d36f439). */
+  let footer: FilterFooterHandle | null = null;
+
+  /**
+   * Правка значения условия (ошибка 7d36f439): хост персистит и снимает
+   * серверную диагностику, фразу-превью перечитывает футер — дерево НЕ
+   * пересобирается, поэтому поле ввода не теряет фокус и каретку. Хост не дал
+   * `touchValue` (не различает правку значения и структуры) — прежний путь.
+   */
+  const onValueEdit = (): void => {
+    if (opts.touchValue === undefined) {
+      touch();
+      return;
+    }
+    opts.touchValue();
+    footer?.refresh();
+  };
+
   // Контекст виджетов значения — общий для ячейки строки и модала под-выборки:
   // профиль уходит в оба (гранулярность времени, состав токенов — из реестра).
   const valueContext: FilterValueContext = {
@@ -314,6 +342,7 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     getState,
     data,
     touch,
+    onValueEdit,
     issues,
     renderValue: createFilterSubqueryValueRenderer(valueContext, {
       data,
@@ -364,7 +393,6 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     // остаётся id, как раньше.
     userName: (id) => resolveUserName(id),
   };
-  let footer: FilterFooterHandle | null = null;
   if (opts.footer !== false) {
     footer = buildFilterFooter({
       // Место без сохранённых отборов (лента «События») не даёт getName/setName —

@@ -392,6 +392,12 @@ function mountFilterPanel(area: HTMLElement): void {
       serverIssues = [];
       editor.refresh();
     },
+    // Набор текста в поле значения (ошибка 7d36f439): состояние чистится, но
+    // редактор НЕ пересобирается — поле ввода не теряет фокус и каретку.
+    touchValue: () => {
+      migrationDropped = [];
+      serverIssues = [];
+    },
     sort: false,
     enumOptions: (leaf) => {
       if (leaf.entity.kind === 'action') return ACTION_ENUM_OPTIONS;

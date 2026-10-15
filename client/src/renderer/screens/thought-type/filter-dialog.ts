@@ -192,6 +192,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     data,
     getState: () => state,
     touch: () => editorRef?.refresh(),
+    // Набор текста в поле значения (ошибка 7d36f439): диалог не пересобирается —
+    // поле ввода сохраняет фокус и каретку (фразу футера обновляет фабрика).
+    touchValue: () => undefined,
     // Заголовок секции условий (ошибка 23c7d3e9 п. C2): имя типа уже несёт
     // заголовок диалога, повторять его в секции не нужно.
     title: t('filterEditor.conditionsTitle'),

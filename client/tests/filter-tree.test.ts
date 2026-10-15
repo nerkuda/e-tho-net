@@ -1501,3 +1501,135 @@ describe('дерево условий: «Есть комментарий» — �
     assert.equal(exact(row(), 'ft-issue').length, 0, 'подписи пустого условия нет');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Правка значения не пересобирает строку (ошибка 7d36f439)
+// ---------------------------------------------------------------------------
+
+describe('дерево условий: правка значения не пересобирает DOM строки (ошибка 7d36f439)', () => {
+  before(async () => {
+    installShim();
+    const builder = await import('../src/renderer/lib/filter-builder.js');
+    leafOf = (entity) => builder.defaultFilterTreeLeaf(entity as any);
+  });
+
+  /**
+   * Дерево с одной строкой-свойством и ПОДСТАВНЫМ виджетом значения. Виджет
+   * собирается заново на каждую отрисовку (как настоящий) и отдаёт свой
+   * `api.setValue` — им и изображается набор текста; `touch` и `onValueEdit`
+   * считают вызовы хоста (как это делает `lib/filter-editor.ts`).
+   */
+  async function buildWithWidget(): Promise<{
+    state: any;
+    root: ShimElement;
+    currentWidget: () => ShimElement;
+    currentInput: () => ShimElement;
+    api: () => any;
+    calls: { touch: number; valueEdit: number };
+  }> {
+    const tree = await import('../src/renderer/lib/filter-tree.js');
+    const diag = await import('../src/renderer/lib/filter-diagnostics.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+
+    const state = defaultFilterCriteriaState() as any;
+    const leaf = leafOf({ kind: 'property', property_id: CITY.id });
+    leaf.operator = 'contains';
+    leaf.value = { kind: 'scalar', value: 'исходное' };
+    state.tree = { kind: 'group', op: 'and', children: [leaf] };
+
+    let api: any = null;
+    let widget: ShimElement | null = null;
+    let input: ShimElement | null = null;
+    const calls = { touch: 0, valueEdit: 0 };
+    const handle = tree.buildFilterTree({
+      profile: 'thoughts',
+      getState: () => state,
+      data: DATA,
+      // Диагностика — как в редакторе: проверки конструктора по живой модели.
+      issues: () => diag.constructorFilterIssues(state.tree),
+      touch: () => {
+        calls.touch += 1;
+      },
+      onValueEdit: () => {
+        calls.valueEdit += 1;
+      },
+      renderValue: (_leaf: any, slotApi: any) => {
+        api = slotApi;
+        widget = new ShimElement('div', 'fv');
+        input = new ShimElement('input', 'prop-editor');
+        widget.append(input);
+        return widget as unknown as HTMLElement;
+      },
+    });
+    return {
+      state,
+      root: handle.root as unknown as ShimElement,
+      currentWidget: () => widget!,
+      currentInput: () => input!,
+      api: () => api,
+      calls,
+    };
+  }
+
+  it('setValue: хост уведомлён путём правки значения, DOM строки и поле — те же узлы', async () => {
+    const { state, root, currentWidget, currentInput, api, calls } = await buildWithWidget();
+    const valueBox = exactOne(root, 'ft-row__value')!;
+    const input = currentInput();
+    const widget = currentWidget();
+    input.focus();
+
+    api().setValue({ kind: 'scalar', value: 'набрано' });
+
+    assert.equal(calls.valueEdit, 1, 'правка значения ушла отдельным путём (без пересборки)');
+    assert.equal(calls.touch, 0, 'полной перерисовки (общий touch) НЕ было');
+    assert.equal(exactOne(root, 'ft-row__value'), valueBox, 'ячейка значения — тот же узел DOM');
+    assert.equal(currentWidget(), widget, 'виджет значения не пересобирался');
+    assert.ok(root.contains(input), 'поле ввода осталось в дереве');
+    assert.equal(input.focused, true, 'поле не потеряло фокус');
+    assert.deepEqual(
+      state.tree.children[0].value,
+      { kind: 'scalar', value: 'набрано' },
+      'модель отражает набранное значение',
+    );
+  });
+
+  it('диагностика строки не отстаёт на рендер: «условие без значения» появляется и снимается точечно', async () => {
+    const { state, root, currentInput, api, calls } = await buildWithWidget();
+    const row = exactOne(root, 'ft-row')!;
+    const input = currentInput();
+    input.focus();
+    assert.equal(exact(row, 'ft-issue').length, 0, 'при заданном значении подписи нет');
+
+    api().setValue({ kind: 'none' });
+    assert.equal(calls.valueEdit, 1, 'правка значения — отдельным путём');
+    assert.equal(calls.touch, 0, 'перерисовки не было');
+    assert.equal(exact(row, 'ft-issue').length, 1, 'значение снято — строка подписана БЕЗ перерисовки');
+    assert.equal(currentInput(), input, 'поле ввода то же (виджет не пересобран)');
+    assert.equal(input.focused, true, 'поле ввода не потеряло фокус');
+    assert.equal(state.tree.children[0].value.kind, 'none', 'модель отражает пустое значение');
+
+    api().setValue({ kind: 'scalar', value: 'снова' });
+    assert.equal(exact(row, 'ft-issue').length, 0, 'значение вернулось — подпись снята точечно');
+    assert.equal(currentInput(), input, 'поле ввода то же и после снятия подписи');
+    assert.ok(root.contains(row), 'строка не пересобрана при снятии подписи');
+  });
+
+  it('структурная правка (+ условие) по-прежнему пересобирает дерево общим путём', async () => {
+    const { state, root, api, calls } = await buildWithWidget();
+    const valueBox = exactOne(root, 'ft-row__value')!;
+    const row = exactOne(root, 'ft-row')!;
+    // Одна правка значения до структурной — затем строка обязана пересобраться.
+    api().setValue({ kind: 'scalar', value: 'набрано' });
+    assert.equal(valueBox, exactOne(root, 'ft-row__value'), 'после правки значения DOM тот же');
+
+    exactOne(ownActions(exact(root, 'ft-group')[0]!), 'ft-add-condition')!.emit('click');
+
+    assert.equal(calls.touch, 1, 'добавление условия идёт общим путём (полная перерисовка)');
+    assert.equal(calls.valueEdit, 1, 'структурная правка — не правка значения');
+    assert.equal(state.tree.children.length, 2, 'условие дописано в модель');
+    assert.equal(exact(root, 'ft-row').length, 2, 'дерево перерисовано из модели');
+    assert.notEqual(exactOne(root, 'ft-row__value'), valueBox, 'ячейка значения пересобрана');
+    assert.equal(root.contains(row), false, 'старая строка заменена пересобранным деревом');
+  });
+});
+
