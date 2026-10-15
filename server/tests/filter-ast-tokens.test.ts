@@ -46,14 +46,19 @@ function nativeAvailable(): boolean {
 }
 
 function seedThought(ndb: NetworkDb, title: string): string {
+  return seedThoughtAt(ndb, title, '2024-01-01T00:00:00.000Z');
+}
+
+/** Мысль с заданным `created_at`/`updated_at` (значения-даты хранятся с временем). */
+function seedThoughtAt(ndb: NetworkDb, title: string, instant: string): string {
   const id = randomUUID();
   ndb
     .prepare(
       `INSERT INTO thoughts (id, title, title_norm, active, is_protected, is_root,
                              version, created_at, created_by, updated_at, updated_by)
-       VALUES (?, ?, ?, 1, 0, 0, 1, '2024-01-01T00:00:00.000Z', 'u', '2024-01-01T00:00:00.000Z', 'u')`,
+       VALUES (?, ?, ?, 1, 0, 0, 1, ?, 'u', ?, 'u')`,
     )
-    .run(id, title, title.normalize('NFC').trim().toLowerCase());
+    .run(id, title, title.normalize('NFC').trim().toLowerCase(), instant, instant);
   return id;
 }
 
@@ -392,5 +397,130 @@ describe('«между»-токены: полный путь форма → ед
     });
     assert.deepEqual(res.items.map((i) => i.title).sort(), ['Девятое', 'Одиннадцатое']);
     assert.equal(res.unresolved?.length ?? 0, 0);
+  });
+});
+
+// ============================================================================
+// 3. Строковая форма токена в ДАТОВЫХ границах (ошибка 99e7889d)
+// ============================================================================
+
+/**
+ * Плоская форма (`definition v1`, поля `created_after`/`updated_after`) и часть
+ * сохранённых определений хранят токен СТРОКОЙ (`"$weekStart"`), а не объектом
+ * `{ token }`. Исполнитель раскрывал только объекты, поэтому строковый токен
+ * уходил в SQL литералом: `updated_at between ["$weekStart","$today"]` давал
+ * пустой результат без ошибок («исполнялось, но с неверными датами», ошибка
+ * 99e7889d). Теперь датовые операнды раскрывают обе формы — паритет профиля
+ * хроники, где граница периода принимает и строку, и токен
+ * (`astTokenOrString` + `resolvePeriodField`).
+ */
+describe('строковые токены датовых границ (99e7889d)', { skip: !nativeAvailable() }, () => {
+  /** Среда; неделя (пн..вс) — 2026-09-07 … 2026-09-13. */
+  const nowMs = Date.parse('2026-09-09T13:37:45.123Z');
+  const ctx: ThoughtQueryOptions['tokenContext'] = { nowMs, userId: 'u', firstDayOfWeek: 1, withTime: false };
+
+  it('строка-токен и объект-токен дают один и тот же результат', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      seedThoughtAt(ndb, 'Внутри недели', '2026-09-08T04:00:00.000Z');
+      seedThoughtAt(ndb, 'Вне недели', '2026-08-01T00:00:00.000Z');
+
+      const asStrings = runAst(
+        ndb,
+        ast(leaf({ kind: 'updated_at' }, 'between', ['$weekStart', '$today'])),
+        ctx,
+      );
+      const asTokens = runAst(
+        ndb,
+        ast(leaf({ kind: 'updated_at' }, 'between', [{ token: '$weekStart' }, { token: '$today' }])),
+        ctx,
+      );
+      assert.deepEqual(asStrings.titles, asTokens.titles, 'обе формы значения — один результат');
+      assert.deepEqual(asStrings.titles, ['Внутри недели']);
+      assert.equal(asStrings.unresolved, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('односторонняя граница-строка: верхняя включительна (сутки UTC, 469d8d69)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      // Границы недели: $weekStart = 07.09, $weekStart-1w = 31.08 (полночь UTC).
+      seedThoughtAt(ndb, 'Сегодня вечером', '2026-09-09T23:59:59.999Z');
+      seedThoughtAt(ndb, 'Завтра', '2026-09-10T00:00:00.000Z');
+      seedThoughtAt(ndb, 'Ровно на границе', '2026-08-31T00:00:00.000Z');
+      seedThoughtAt(ndb, 'Старше границы', '2026-08-30T23:59:59.999Z');
+
+      const res = runAst(ndb, ast(leaf({ kind: 'updated_at' }, 'gte', '$weekStart-1w')), ctx);
+      assert.deepEqual(
+        res.titles,
+        ['Завтра', 'Ровно на границе', 'Сегодня вечером'],
+        'нижняя граница-«голая дата» = начало суток UTC, включительно (Старше границы отсечён)',
+      );
+      const upto = runAst(ndb, ast(leaf({ kind: 'updated_at' }, 'lte', '$today')), ctx);
+      assert.ok(upto.titles.includes('Сегодня вечером'), 'верхняя граница покрывает весь день целиком');
+      assert.ok(!upto.titles.includes('Завтра'), 'завтрашняя граница дня отсечена');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('смешанные границы: литерал-строка и строковый токен', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      seedThoughtAt(ndb, 'Первого', '2026-09-01T10:00:00.000Z');
+      seedThoughtAt(ndb, 'Девятого', '2026-09-09T10:00:00.000Z');
+      seedThoughtAt(ndb, 'Десятого', '2026-09-10T10:00:00.000Z');
+
+      const res = runAst(
+        ndb,
+        ast(leaf({ kind: 'created_at' }, 'between', ['2026-09-01', '$today'])),
+        ctx,
+      );
+      assert.deepEqual(res.titles, ['Девятого', 'Первого'], 'литерал остаётся литералом, токен раскрывается');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('неизвестный строковый токен датовой границы — пусто с пояснением (b7fdab20)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      seedThoughtAt(ndb, 'Любая', '2026-09-08T00:00:00.000Z');
+      const res = runAst(ndb, ast(leaf({ kind: 'updated_at' }, 'gte', '$nonexistent')), ctx);
+      assert.deepEqual(res.titles, []);
+      assert.equal(res.unresolved, 1, 'неразрешённый токен не превращается в литерал');
+      assert.deepEqual(res.reasons, ['unknown_token']);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('литеральная дата-строка не подменяется и не разворачивается сверх меры', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      seedThoughtAt(ndb, 'Первого', '2026-09-01T10:00:00.000Z');
+      seedThoughtAt(ndb, 'Второго', '2026-09-02T10:00:00.000Z');
+      const res = runAst(ndb, ast(leaf({ kind: 'created_at' }, 'lte', '2026-09-01')), ctx);
+      assert.deepEqual(res.titles, ['Первого'], 'строка без токенов остаётся литералом (сутки UTC сверху)');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('пустая граница «между» — прежняя явная ошибка (клиент её не присылает)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      seedThoughtAt(ndb, 'Любая', '2026-09-08T00:00:00.000Z');
+      assert.throws(
+        () => runAst(ndb, ast(leaf({ kind: 'updated_at' }, 'between', [{ token: '$weekStart' }, ''])), ctx),
+        (err: unknown) =>
+          err instanceof EtnError && err.code === 'VALIDATION_ERROR' && /Граница даты/.test(err.message),
+        'пустая граница — ошибка ввода, а не молчаливое расширение отбора',
+      );
+    } finally {
+      ndb.close();
+    }
   });
 });

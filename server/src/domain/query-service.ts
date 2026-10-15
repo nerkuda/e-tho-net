@@ -1766,16 +1766,35 @@ function astResolveToken(
 }
 
 /**
+ * Датовые ОПЕРАНДЫ профиля мыслей: их границы принимают токен и в форме
+ * `{ token }`, и СТРОКОЙ (`"$weekStart"`) — вторая форма приходит из плоского
+ * тела `updated_after`/`created_after` и из сохранённых плоских определений
+ * (`definition v1` хранит токен строкой). Паритет с профилем хроники, где
+ * граница периода принимает обе формы (`astTokenOrString` + `resolvePeriodField`
+ * в `chronicle-service.ts`). Прочие операнды строку-токен НЕ раскрывают: у них
+ * она и есть литерал значения (текст, id, слова).
+ */
+const AST_STRING_TOKEN_KINDS: ReadonlySet<string> = new Set(['created_at', 'updated_at']);
+
+/**
  * Разрешить токены в значении листа. Скаляр/список литералов — как есть;
  * одиночный токен и токены-элементы СПИСКА (границы «между») — раскрываются.
  * Возврат `{ ok: false }` — хоть один токен неразрешим (`unresolved` собран в
  * `sink`), лист даёт `false`. Требование 84b52caa (каждая граница — токен).
+ *
+ * `stringTokens` (датовые операнды, {@link AST_STRING_TOKEN_KINDS}) — строковое
+ * значение тоже проходит через резолвер токенов: строка без токенов
+ * возвращается как есть, строка-токен раскрывается. Без этого плоский
+ * `updated_after: "$weekStart"` сравнивался ЛИТЕРАЛЬНО — отбор «исполнялся, но
+ * с неверными датами» (ошибка 99e7889d), а токен доходил до строковой проверки
+ * границы нераскрытым.
  */
 function astResolveLeafValue(
   value: FilterAstValue | undefined,
   ctx: AstTokenContext | undefined,
   sink: TokenIssue[] | undefined,
   path: string,
+  stringTokens = false,
 ): { ok: boolean; value?: FilterAstValue } {
   if (Array.isArray(value)) {
     const out: FilterAstListItem[] = [];
@@ -1783,6 +1802,10 @@ function astResolveLeafValue(
       const el = value[i]!;
       if (typeof el === 'object' && el !== null && 'token' in el) {
         const r = astResolveToken(el.token, ctx, sink, `${path}.value[${i}]`);
+        if (!r.ok) return { ok: false };
+        out.push(r.value!);
+      } else if (stringTokens && typeof el === 'string') {
+        const r = astResolveToken(el, ctx, sink, `${path}.value[${i}]`);
         if (!r.ok) return { ok: false };
         out.push(r.value!);
       } else {
@@ -1793,6 +1816,11 @@ function astResolveLeafValue(
   }
   if (typeof value === 'object' && value !== null && 'token' in value) {
     const r = astResolveToken(value.token, ctx, sink, `${path}.value`);
+    if (!r.ok) return { ok: false };
+    return { ok: true, value: r.value };
+  }
+  if (stringTokens && typeof value === 'string') {
+    const r = astResolveToken(value, ctx, sink, `${path}.value`);
     if (!r.ok) return { ok: false };
     return { ok: true, value: r.value };
   }
@@ -2145,7 +2173,14 @@ function filterAstLeafClause(
   if (astOpts?.stats !== undefined) astOpts.stats.conditions += 1;
   // Токен-значение раскрывается сервером; неразрешимый — лист даёт false и
   // уходит в коллектор (требование b7fdab20 «пустой результат с пояснением»).
-  const resolved = astResolveLeafValue(leaf.value, astOpts?.ctx, astOpts?.unresolved, path);
+  // У датовых операндов раскрывается и строковая форма токена (ошибка 99e7889d).
+  const resolved = astResolveLeafValue(
+    leaf.value,
+    astOpts?.ctx,
+    astOpts?.unresolved,
+    path,
+    AST_STRING_TOKEN_KINDS.has(leaf.entity.kind),
+  );
   if (!resolved.ok) return AST_FALSE;
   if (resolved.value !== leaf.value) leaf = { ...leaf, value: resolved.value };
   // «Между» с обеими совпавшими границами (одиночный скаляр, в т.ч. раскрытый

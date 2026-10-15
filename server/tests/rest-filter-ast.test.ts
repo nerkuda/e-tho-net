@@ -415,6 +415,52 @@ describe('POST /thoughts/query: AST-тело через REST (задача c1376
     }
   });
 
+  it('датовая граница-СТРОКА в AST раскрывается токеном, а не сравнивается литерально (99e7889d)', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const now = new Date().toISOString();
+      const fresh = seedThought(ctx.ndb, 'REST-свежая', { created_at: now });
+      const old = seedThought(ctx.ndb, 'REST-старая', { created_at: '2020-01-01T00:00:00.000Z' });
+      // Плоские критерии уходят движку в AST-форме; у датовых границ плоская
+      // форма хранит токен СТРОКОЙ (`"$today-1d"`), и до фикса такая граница
+      // сравнивалась с колонкой как текст — «исполнялось, но с неверными датами».
+      const res = await post(ctx, {
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            op: 'and' as const,
+            children: [
+              { entity: { kind: 'updated_at' as const }, operator: 'gte' as const, value: '$today-1d' },
+              { entity: { kind: 'updated_at' as const }, operator: 'lte' as const, value: '$today' },
+            ],
+          },
+        },
+        sort: 'alpha',
+        order: 'asc',
+        limit: 50,
+        count: true,
+      });
+      assert.equal(res.statusCode, 200, JSON.stringify(res.json));
+      const ids = (res.json['data'] as Array<{ id: string }>).map((i) => i.id);
+      assert.ok(ids.includes(fresh), 'мысль за последние сутки попала: строковый токен раскрыт');
+      assert.ok(!ids.includes(old), 'мысль 2020 года отсечена границей (литералом строка не сравнивается)');
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('плоское поле даты токен не принимает — явная ошибка контракта', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const res = await post(ctx, { updated_after: '$today-1d', sort: 'alpha', order: 'asc', limit: 10 });
+      assert.equal(res.statusCode, 422, JSON.stringify(res.json));
+      const err = res.json['error'] as { details?: { field?: string } };
+      assert.equal(err.details?.field, 'updated_after', 'поле называет причину: ожидается ISO-8601');
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
   it('одиночная выборка: неразрешимый токен AST попадает в meta.unresolved (30db3cea)', async () => {
     const ctx = await buildRestContext();
     try {
