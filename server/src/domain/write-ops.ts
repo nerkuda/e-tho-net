@@ -209,6 +209,7 @@ export function composeThoughtsWrite(
             data: {
               id: c.id,
               owner_id: c.owner_id,
+              owner_type: c.owner_type,
               kind: c.kind,
               version: item.comment.version,
               changes: { body_md: '' },

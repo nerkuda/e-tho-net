@@ -37,7 +37,7 @@ import type { Comment } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import { requireNetworkId } from '../app.js';
-import { invalidateQueries, queryKeys } from '../lib/live/index.js';
+import { invalidateQueries, queryKeys, signalOwnerActivity } from '../lib/live/index.js';
 import { store } from '../state.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { div, el, errText } from '../lib/dom.js';
@@ -275,6 +275,9 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
         use_time: false,
       });
       invalidateQueries(queryKeys.indicators(ctx.ownerId));
+      // Активность записи двигает updated_at владельца (ошибка 228df7a4): гасим
+      // ключи владельца тем же набором, что роутер на событиях comment.* (04344707).
+      signalOwnerActivity(ctx.ownerId);
       selectedId = created.id;
       await reload();
       table.setCurrent(created.id);
@@ -486,6 +489,9 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       bodyDraft = updated.body_md;
       if (titleBox.contains(titleInput)) showTitleEdit(false);
       invalidateQueries(queryKeys.indicators(ctx.ownerId));
+      // Активность записи двигает updated_at владельца (ошибка 228df7a4): гасим
+      // ключи владельца тем же набором, что роутер на событиях comment.* (04344707).
+      signalOwnerActivity(ctx.ownerId);
       await reload();
       return updated.body_html;
     };
@@ -501,6 +507,9 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
           fresh.version,
         );
         invalidateQueries(queryKeys.indicators(ctx.ownerId));
+      // Активность записи двигает updated_at владельца (ошибка 228df7a4): гасим
+      // ключи владельца тем же набором, что роутер на событиях comment.* (04344707).
+      signalOwnerActivity(ctx.ownerId);
         await reload();
       } catch (err) {
         notice(`Не удалось сохранить: ${errText(err)}`, 'error');
@@ -571,6 +580,9 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       if (current === undefined) return;
       await etn.comments.remove(networkId, current.id, current.version);
       invalidateQueries(queryKeys.indicators(ctx.ownerId));
+      // Активность записи двигает updated_at владельца (ошибка 228df7a4): гасим
+      // ключи владельца тем же набором, что роутер на событиях comment.* (04344707).
+      signalOwnerActivity(ctx.ownerId);
       if (selectedId === comment.id) showEmptyEditor();
       await reload();
     } catch (err) {

@@ -83,6 +83,7 @@ export {
   optimisticEntityPatch,
   putMutationResult,
   runOptimistic,
+  signalOwnerActivity,
   signalPermanentCommentSaved,
   signalPublicationCompositionChanged,
   signalPublicationOrderChanged,
@@ -93,6 +94,7 @@ export {
 
 export {
   IGNORED_REALTIME_EVENT_TYPES,
+  commentActivityKeys,
   onRoutedRealtimeEvent,
   realtimeRoutes,
   resetEventRouter,
