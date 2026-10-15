@@ -171,6 +171,35 @@ describe('панель «Структур» — единый редактор о
     assert.equal((filter as Record<string, unknown>)['link_filter'], undefined);
   });
 
+  it('плоский parent_ids → группа ИЛИ(id в [корни], Родители в иерархии [корни]) без потери листа корней', async () => {
+    // Довесок к находкам проверки части 4 (ошибка 68023851): конверсия плоского
+    // `parent_ids` — ГРУППА из ДВУХ листьев: фасадный обход включал сами корни,
+    // поэтому их добавляет лист `id в [корни]` рядом с `parents in_hierarchy`.
+    // Своё покрытие: потеря листа `id в [корни]` (или всего `parents`-листа) в
+    // `compileFlatCriteriaToAst` (filter-builder.ts:2370) краснеет ЗДЕСЬ, а не
+    // только в тестах чужого места.
+    const builder = await import('../src/renderer/lib/filter-builder.js');
+    const state = { ...builder.defaultFilterCriteriaState(), parentIds: [PARENT_ID] };
+    const ast = builder.compileFlatCriteriaToAst(state, new Map(), { activeMode: 'structures' });
+    assert.notEqual(ast, undefined, 'непустой плоский отбор даёт AST');
+    const root = ast!.filter as any;
+    assert.ok(Array.isArray(root.children), 'корень — группа И');
+    const group = root.children.find((child: any) => child.op === 'or');
+    assert.notEqual(group, undefined, 'родительские мысли — ГРУППА ИЛИ (а не один лист)');
+
+    const idLeaf = group.children.find((child: any) => child.entity?.kind === 'id');
+    assert.notEqual(idLeaf, undefined, 'лист «id в [корни]» в группе есть (фасад включал корни)');
+    assert.equal(idLeaf.operator, 'in');
+    assert.deepEqual(idLeaf.value, [PARENT_ID], 'корни — в листе «id в [корни]»');
+
+    const parentsLeaf = group.children.find((child: any) => child.entity?.kind === 'parents');
+    assert.notEqual(parentsLeaf, undefined, 'лист «Родители в иерархии» в группе есть');
+    assert.equal(parentsLeaf.operator, 'in_hierarchy');
+    assert.deepEqual(parentsLeaf.value, [PARENT_ID], 'корни — и в листе «Родители в иерархии»');
+    // Режим обхода ставит НЕ этот конвертер, а доводка дерева
+    // (`applyLegacyTraversalMode` → `all_links`); проверено отдельной пробой выше.
+  });
+
   it('политика видимости: только актуальные и без помеченных, снимается настройкой и условием', () => {
     const fresh = panel.getFilterState();
     const withKeyword = {
