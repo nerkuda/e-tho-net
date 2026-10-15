@@ -788,7 +788,12 @@ function resolveAstThoughtToken(
   // Чистый одиночный токен контекста мысли — ЗНАЧЕНИЕ с его природой.
   if (thoughtTokens.length === 1 && known.length === 1 && token === thoughtTokens[0]!.raw) {
     const value = resolveOneToken(thoughtTokens[0]!, ctx, now, unresolved, path);
-    if (value === null) return token;
+    // Токен не разрешился (арифметика на не-дате, контекст без времени и т.п.):
+    // `resolveOneToken` уже записал причину в `unresolved`, и потребитель
+    // (`resolveThoughtTokensInAst`) на непустом `unresolved` прекращает работу.
+    // Возвращаем null — обход СОХРАНЯЕТ исходный узел-токен, а не подменяет его
+    // сырой строкой (прежний `return token` превращал токен в литерал значения).
+    if (value === null) return null;
     // Пустое множество (у мысли нет синонимов, множественное свойство не
     // заполнено) — ПУСТОЕ значение по семантике A6, а не неразрешимый токен:
     // пустой список движок отбора отвергает валидацией, поэтому пустое
@@ -798,8 +803,7 @@ function resolveAstThoughtToken(
   }
   // Текст с токеном (нормально валидацией не пропускается) — как у плоского
   // резолвера: строка, собранная из кусков.
-  const resolved = resolveString(token, path, ctx, now, unresolved);
-  return Array.isArray(resolved) ? resolved : resolved;
+  return resolveString(token, path, ctx, now, unresolved);
 }
 
 /**
