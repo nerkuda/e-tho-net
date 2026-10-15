@@ -230,7 +230,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`in_subtree_of`(+`max_depth`), `type_id[]` (или имена `type[]`), `active`/`trashed`, ' +
         '`keywords` (мини-синтаксис по названию и синонимам), `properties[]` (операторы ' +
         'eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of), диапазоны `created_*`/`updated_*`, ' +
-        '`author_id`/`editor_id`, `link_filter`. Принимает и `ast` — дерево условий ' +
+        '`author_id`/`editor_id`, `link_filter` (совместим с `ast` — пред-сужение ' +
+        'поверх дерева). Принимает и `ast` — дерево условий ' +
         '(грамматика — `etn.guide { topic: "thoughts.query" }`), несовместимое со старыми ' +
         'критериями. Ответ несёт справочник `thought_types` и эхо ' +
         '`resolved_types`/`resolved_properties` для входов по имени; неразрешимый токен — пустая ' +

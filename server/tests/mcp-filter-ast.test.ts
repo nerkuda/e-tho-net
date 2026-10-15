@@ -14,8 +14,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
+import { FILTER_AST_VERSION } from '@etn/shared';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
 import type { McpRuntime } from '../src/mcp/context.js';
@@ -28,7 +30,10 @@ import {
   nativeAvailable,
   toolText,
   type ClientCallToolResult,
+  type McpTestContext,
 } from './mcp-helpers.js';
+import { authHeaders, buildRestContext, closeRestContext, type RestTestContext } from './rest-helpers.js';
+import type { NetworkDb } from '../src/db/network-db.js';
 
 const skip = !nativeAvailable();
 
@@ -538,5 +543,113 @@ describe('mcpTokenContext: обязательный пункт tokenContext (cb7
     } as unknown as McpRuntime;
     const ctx = mcpTokenContext(rt, 'net-1');
     assert.equal(ctx.firstDayOfWeek, undefined);
+  });
+});
+
+// ===========================================================================
+// ast + link_filter: паритет MCP ↔ REST (задача c5381a2d)
+// ===========================================================================
+
+/** Совместить REST-мир с MCP-сервером поверх него (тот же admin + сеть). */
+async function pairedWorld(): Promise<{
+  rest: RestTestContext;
+  mcp: McpTestContext;
+  handle: { client: Client; close(): Promise<void> };
+}> {
+  const rest = await buildRestContext();
+  const mcp = await buildMcpContext({
+    dataDir: rest.dataDir,
+    networkId: rest.networkId,
+    systemDb: rest.sys,
+  });
+  const handle = await connectMcpClient(mcp, rest.adminKey);
+  return { rest, mcp, handle };
+}
+
+async function closePairedWorld(
+  w: Awaited<ReturnType<typeof pairedWorld>>,
+): Promise<void> {
+  await w.handle.close();
+  await closeMcpContext(w.mcp, {
+    dataDir: w.rest.dataDir,
+    networkId: w.rest.networkId,
+    systemDb: w.rest.sys,
+  });
+  await closeRestContext(w.rest);
+}
+
+/** Вставить мысль напрямую в сетевую БД (быстрая фикстура паритетных проб). */
+function seedSqlThought(ndb: NetworkDb, title: string, author: string): string {
+  const id = randomUUID();
+  const now = '2024-01-01T00:00:00.000Z';
+  ndb
+    .prepare(
+      `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                             version, created_at, created_by, updated_at, updated_by)
+       VALUES (?, ?, ?, NULL, 1, 0, 0, 1, ?, ?, ?, ?)`,
+    )
+    .run(id, title, title.normalize('NFC').trim().toLowerCase(), now, author, now, author);
+  return id;
+}
+
+describe('MCP etn.thoughts.query: ast + link_filter (паритет с REST, c5381a2d)', { skip }, () => {
+  it('ast+link_filter принимается и совпадает с REST; ast+link_filter+плоский критерий — VALIDATION_ERROR', async () => {
+    const w = await pairedWorld();
+    try {
+      seedSqlThought(w.rest.ndb, 'C5381-A', w.rest.adminId);
+      seedSqlThought(w.rest.ndb, 'C5381-B', w.rest.adminId);
+      seedSqlThought(w.rest.ndb, 'C5381-C', w.rest.adminId);
+
+      const ast = {
+        version: FILTER_AST_VERSION,
+        filter: { entity: { kind: 'trashed' as const }, operator: 'eq' as const, value: false },
+      };
+      // Тело отбора, собранное под REST: ast + фасадный link_filter.
+      const restBody = {
+        ast,
+        link_filter: { include_structural: true },
+        sort: 'alpha',
+        order: 'asc',
+        limit: 20,
+      };
+      const restRes = await w.rest.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${w.rest.networkId}/thoughts/query`,
+        headers: authHeaders(w.rest),
+        payload: restBody,
+      });
+      assert.equal(restRes.statusCode, 200, JSON.stringify(restRes.json()));
+      const restIds = (restRes.json()['data'] as Array<{ id: string }>).map((i) => i.id);
+
+      // То же тело через MCP: link_filter совместим с ast (паритет с REST).
+      const mcpRes = await w.handle.client.callTool({
+        name: 'etn.thoughts.query',
+        arguments: {
+          network_id: w.rest.networkId,
+          ast,
+          link_filter: { include_structural: true },
+          sort: 'title',
+          order: 'asc',
+          limit: 20,
+        },
+      });
+      assert.equal(mcpRes.isError, undefined, toolText(mcpRes));
+      const mcpIds = (JSON.parse(toolText(mcpRes)) as { hits: Array<{ id: string }> }).hits.map(
+        (h) => h.id,
+      );
+      assert.deepEqual(mcpIds, restIds, 'одинаковый отбор обязан дать одинаковый результат');
+
+      // ast + link_filter + плоский критерий — по-прежнему конфликт.
+      const conflict = await rawQuery(w.handle.client, {
+        network_id: w.rest.networkId,
+        ast,
+        link_filter: { include_structural: true },
+        keywords: 'C5381',
+      });
+      assert.equal(conflict.isError, true);
+      assert.match(conflict.text, /VALIDATION_ERROR/);
+    } finally {
+      await closePairedWorld(w);
+    }
   });
 });

@@ -589,9 +589,14 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // (там они тоже есть). Проза при этом сжата переписыванием прежних
         // формулировок, поэтому прирост умеренный: 44 472 → 44 721 Б (+249).
         // Планка поднята ровно под прирост с малым запасом: 44 500 → 44 800.
+        // 0.13.1 (задача c5381a2d, «ast + link_filter»): в описании
+        // `etn.thoughts.query` отмечена совместимость `link_filter` с `ast`
+        // (пред-сужение поверх дерева, паритет с REST) — контрактная ясность
+        // для агента, собравшего вызов под REST. Прирост — только проза:
+        // 44 721 → 44 805 Б. Планка поднята ровно под прирост: 44 800 → 44 900.
         assert.ok(
-          bytes <= 44_800,
-          `tools/list JSON is ${bytes} bytes — over the 0.13.1 budget of 44800`,
+          bytes <= 44_900,
+          `tools/list JSON is ${bytes} bytes — over the 0.13.1 budget of 44900`,
         );
         // Потолок числа инструментов: фактическое 25 + запас 5 = 30 (нижняя
         // граница ориентира техпроекта 22e34ba5). Превышение — только
@@ -664,9 +669,12 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 0.13.1 (задача 521aa4b9): см. блок выше — два обязательных правила
         // батч-записи в описании `etn.thoughts.write` дали +249 Б; D+I
         // 39 707 → 39 956 Б. Планка: 39 750 → 40 000.
+        // 0.13.1 (задача c5381a2d): см. блок выше — пометка совместимости
+        // `link_filter` с `ast` в описании `etn.thoughts.query` дала +84 Б;
+        // D+I 39 956 → 40 040 Б. Планка: 40 000 → 40 100.
         assert.ok(
-          descriptionsPlusInputSchema <= 40_000,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 40000`,
+          descriptionsPlusInputSchema <= 40_100,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 40100`,
         );
       } finally {
         await handle.close();

@@ -1030,6 +1030,11 @@ const QueryPropertyFields = z
  * но не обоими сразу — одновременная передача молча теряла бы часть намерения.
  * `sort`/`order`/`limit`/`offset`/`count`/`cursor` сюда НЕ входят: это страница
  * (пагинация и сортировка), а не критерии.
+ *
+ * `link_filter` тоже НЕ входит (задача c5381a2d): это ФАСАДНОЕ пред-сужение,
+ * применяемое ПОВЕРХ критериев AST (требование 3482a399) — движок связку
+ * «`ast` + `link_filter`» поддерживает, и REST `POST /thoughts/query` её
+ * допускает. Паритет MCP↔REST.
  */
 const LEGACY_QUERY_CRITERIA = [
   'in_subtree_of',
@@ -1046,7 +1051,6 @@ const LEGACY_QUERY_CRITERIA = [
   'updated_before',
   'author_id',
   'editor_id',
-  'link_filter',
 ] as const;
 
 const QueryFields = z
@@ -1089,7 +1093,8 @@ const QueryFields = z
   .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
   // Задача cb78315b (требование 91983c20): `ast` XOR старые критерии —
   // смешение молча теряло бы часть намерения. Страница (sort/order/limit/
-  // offset/count/cursor) допустима и с `ast`.
+  // offset/count/cursor) и фасадный `link_filter` (пред-сужение поверх AST,
+  // задача c5381a2d) допустимы и с `ast`.
   .refine(
     (v) => v.ast === undefined || LEGACY_QUERY_CRITERIA.every((k) => v[k] === undefined),
     {
