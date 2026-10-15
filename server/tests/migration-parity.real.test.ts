@@ -147,6 +147,19 @@ function legacyChronicleIds(
   def: Record<string, unknown>,
 ): string[] | null {
   if (def['version'] !== undefined) return null;
+  // AST-форма chronicle-набора: `{ ast: { version, filter }, order }` — версия
+  // лежит ВНУТРИ `ast`, а плоских ключей тела нет. Прежде такой набор проходил
+  // «эталон» как пустое v1-тело и давал ложные расхождения (ошибка 1936c70e,
+  // «Записи за 30 дней»: 11 vs 12). AST-форма — вне v1-миграции.
+  const ast = def['ast'];
+  if (
+    ast !== null &&
+    typeof ast === 'object' &&
+    !Array.isArray(ast) &&
+    (ast as Record<string, unknown>)['version'] !== undefined
+  ) {
+    return null;
+  }
   if (def['keywords'] !== undefined && def['keywords'] !== '') return null;
   if (def['targets'] !== undefined) return null;
   if (Array.isArray(def['link_type_ids']) && def['link_type_ids'].length > 0) return null;
@@ -273,13 +286,19 @@ describe(
           }
         }
 
-        // Хроника v1 — быстрая и структурная формы.
+        // Хроника — быстрая и структурная формы. Исполняется ТЕМ ЖЕ контрактом,
+        // что у фасадов: `userId` (REST/MCP передают владельца ключа) — иначе
+        // токен `$user` в «Авторе записи» не разрешается законно (ошибка
+        // 1936c70e: прежде носитель вызова не передавал пользователя, и тело
+        // набора «Мои записи за неделю» падало).
+        const chronUser =
+          ((ndb.prepare('SELECT created_by u FROM thoughts_v LIMIT 1').get() as { u?: string }) ?? {}).u ?? userId;
         const chron = ndb.prepare("SELECT name, definition FROM saved_filters WHERE view = 'chronicle'").all() as Array<{ name: string; definition: string }>;
         for (const s of chron) {
           checked += 1;
           try {
             const req = parseChronicleQueryBody({ ...(JSON.parse(s.definition) as Record<string, unknown>), limit: 50, offset: 0 }, 'parity');
-            queryChronicle(ndb, req);
+            queryChronicle(ndb, req, { userId: chronUser });
           } catch (e) {
             divergences.push(`${id}/chronicle/${s.name}: исполнение упало — ${String(e)}`);
           }
@@ -302,30 +321,37 @@ describe(
 
       for (const id of NETS) {
         const ndb = openCopy(id, chronRoot);
+        // Пользователь запроса — как у фасадов: токен `$user` в «Авторе записи»
+        // раскрывается только с ним (ошибка 1936c70e).
+        const chronUser =
+          ((ndb.prepare('SELECT created_by u FROM thoughts_v LIMIT 1').get() as { u?: string }) ?? {}).u ?? 'u-admin';
         const chron = ndb
           .prepare("SELECT name, definition FROM saved_filters WHERE view = 'chronicle'")
           .all() as Array<{ name: string; definition: string }>;
         for (const s of chron) {
           chronicle += 1;
           const def = JSON.parse(s.definition) as Record<string, unknown>;
-          // Новый путь исполняет то же определение (плоское → компиляция в AST).
-          // Постранично (лимит хроники ≤ 100), пока не заберём весь `total`.
+          // Эталон выразим только для плоской формы: AST-тело и прочие
+          // непокрытые формы пропускаем ДО исполнения (доказаны обычными
+          // тестами; здесь паритет плоской миграции).
+          const expected = legacyChronicleIds(ndb, def);
+          if (expected === null) continue;
+          // Новый путь исполняет то же определение. Постранично (лимит хроники
+          // ≤ 100), пока не заберём весь `total`.
           let actual: string[];
           try {
             const page = CHRONICLE_QUERY_MAX_LIMIT;
             const req0 = parseChronicleQueryBody({ ...def, limit: page, offset: 0 }, 'parity');
-            const first = queryChronicle(ndb, req0);
+            const first = queryChronicle(ndb, req0, { userId: chronUser });
             actual = first.rows.map((r) => r.id);
             for (let offset = page; actual.length < first.total; offset += page) {
               const reqN = parseChronicleQueryBody({ ...def, limit: page, offset }, 'parity');
-              actual.push(...queryChronicle(ndb, reqN).rows.map((r) => r.id));
+              actual.push(...queryChronicle(ndb, reqN, { userId: chronUser }).rows.map((r) => r.id));
             }
           } catch (e) {
             divergences.push(`${id}/chronicle/${s.name}: исполнение упало — ${String(e)}`);
             continue;
           }
-          const expected = legacyChronicleIds(ndb, def);
-          if (expected === null) continue; // форма вне эталона — доказана обычными тестами
           identity += 1;
           if (JSON.stringify(actual) !== JSON.stringify(expected)) {
             divergences.push(

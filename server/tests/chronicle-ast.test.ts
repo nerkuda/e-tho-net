@@ -542,4 +542,54 @@ describe('хроника: авторство записи раскрывает �
       ndb.close();
     }
   });
+
+  it('record_author eq $user без пользователя запроса — явная диагностика, а не «не задано значение»', () => {
+    // Путь, который падал в parity-прогоне (ошибка 1936c70e): сохранённое тело
+    // набора уходит в queryChronicle БЕЗ `opts.userId`, `$user` подставляется
+    // пустой строкой, и прежний код сообщал невнятное «не задано значение
+    // условия». Теперь диагностика называет причину и одинакова у всех входов.
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Мысль дневника');
+      createComment(
+        ndb, 'thought', target,
+        // Запись внутри недели, вычисленной от `NOW` (пн 2024-03-11 … вс 2024-03-17).
+        { kind: 'chronological', title: 'Моя', body_md: 'x', valid_from: '2024-03-14T10:00:00.000Z' }, USER,
+      );
+      // Сохранённое тело набора («Мои записи за неделю») как в БД: { ast, order }.
+      const request = parseChronicleQueryBody(
+        {
+          ast: {
+            version: FILTER_AST_VERSION,
+            filter: {
+              op: 'and',
+              children: [
+                { entity: { kind: 'record_time' }, operator: 'between', value: [{ token: '$weekStart' }, { token: '$weekEnd' }] },
+                { entity: { kind: 'record_author' }, operator: 'eq', value: { token: '$user' } },
+              ],
+            },
+          },
+          order: 'asc',
+          limit: 100,
+          offset: 0,
+        },
+        'test',
+      );
+      // Без пользователя запроса — явная ошибка с настоящей причиной.
+      assert.throws(
+        () => queryChronicle(ndb, request, { now: NOW, withTime: true }),
+        (err: unknown) =>
+          err instanceof EtnError &&
+          err.code === 'VALIDATION_ERROR' &&
+          /«\$user»/.test(err.message) &&
+          /пользовател/i.test(err.message),
+        'без пользователя запроса токен $user — явная ошибка, а не пустое условие',
+      );
+      // С пользователем запроса (как в REST/MCP) набор исполняется — только свои.
+      const mine = queryChronicle(ndb, request, { userId: USER, now: NOW, withTime: true });
+      assert.equal(mine.total, 1, 'набор «Мои записи за неделю» исполняется с пользователем запроса');
+    } finally {
+      ndb.close();
+    }
+  });
 });

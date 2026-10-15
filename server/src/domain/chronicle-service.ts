@@ -938,16 +938,32 @@ function recordTextLeafClause(
 }
 
 /**
+ * Подпись колонки авторства записи для диагностики («Автор записи» /
+ * «Редактор записи») — одна точка на все сообщения этой пары колонок.
+ */
+function recordAuthorColumnLabel(column: 'c.created_by' | 'c.updated_by'): string {
+  return column === 'c.created_by' ? 'Автор записи' : 'Редактор записи';
+}
+
+/**
  * Значение авторства записи из значения листа: литеральные строки — как есть,
  * значения-ТОКЕНЫ (`$user` у «Автора записи» предопределённого набора «Мои
  * записи за неделю») раскрываются ГЛОБАЛЬНЫМИ токенами — по образцу границ
  * {@link recordTimeLeafClause}. Нераскрытый/недопустимый токен — ЯВНАЯ ошибка,
  * а не молчаливое `1=1`: прежнее поведение теряло условие и показывало ВСЕ
  * записи (арбитраж оркестратора 2026-10-14).
+ *
+ * Токен `$user` без пользователя запроса — тоже ЯВНАЯ ошибка (ошибка 1936c70e):
+ * `resolveGlobalDateTokens` подставляет для него ПУСТУЮ строку, и путь исполнения
+ * без `opts.userId` (например, прямой вызов домена / parity-прогон сохранённых
+ * тел) сообщал невнятное «не задано значение условия», хотя авторство задано
+ * ТОКЕНОМ. Диагностика называет настоящую причину и одинакова у всех входов:
+ * фасады (REST/MCP) передают `userId` — токен раскрывается; вход без него —
+ * явная ошибка, а не пустой автор.
  */
 function resolveRecordAuthorValue(
   raw: FilterAstValue | undefined,
-  column: string,
+  column: 'c.created_by' | 'c.updated_by',
   opts: ChronicleAstOpts,
 ): string | string[] | undefined {
   if (raw === undefined) return undefined;
@@ -971,6 +987,19 @@ function resolveRecordAuthorValue(
           'VALIDATION_ERROR',
           `${column}: токен «${bad.raw}» требует контекста мысли и в условии авторства недопустим.`,
           { field: 'value', token: bad.raw },
+          opts.requestId,
+        );
+      }
+      // `$user` без пользователя запроса: пустая подстановка — это НЕ «условие
+      // без значения», а неразрешённый токен; называем причину (ошибка 1936c70e).
+      if (
+        opts.userId === '' &&
+        known.some((t) => t.raw === '$user' || t.raw.startsWith('$user.'))
+      ) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `${recordAuthorColumnLabel(column)}: токен «$user» не разрешён — не задан пользователь запроса.`,
+          { field: 'value', token: '$user' },
           opts.requestId,
         );
       }
@@ -1015,7 +1044,7 @@ function recordAuthorLeafClause(
   }
   const value = resolveRecordAuthorValue(leaf.value, column, opts);
   if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) {
-    return astUnsupported(`«${column === 'c.created_by' ? 'Автор записи' : 'Редактор записи'}»: не задано значение условия.`, opts.requestId);
+    return astUnsupported(`«${recordAuthorColumnLabel(column)}»: не задано значение условия.`, opts.requestId);
   }
   appendChronicleAuthorCondition(conds, args, column, value, op);
   if (conds.length === 0) return { sql: '1=1', args: [] };
