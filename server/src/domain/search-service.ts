@@ -105,7 +105,13 @@ import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 import { assertFilterAstInProfile } from './filter-profile-validation.js';
 import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
 import { filterAstClause, type AstTokenContext } from './query-service.js';
-import type { TokenIssue } from './thought-type-view-tokens.js';
+import {
+  resolveThoughtTokensInAst,
+  scanStringForTokens,
+  type TokenIssue,
+} from './thought-type-view-tokens.js';
+import { getThought } from './thought-service.js';
+import { buildThoughtResolveContext } from './thought-type-views-service.js';
 
 // Re-export so route/MCP callers have a single import surface for read helpers
 // (docs/03-server-api.md §6.9 resolve is conceptually part of search/lookup).
@@ -1067,6 +1073,120 @@ export function assertSearchAstExclusive(request: SearchRequest): void {
 }
 
 // ---------------------------------------------------------------------------
+// Токены контекста мысли в AST точки поиска (задача 4b1cc3d4)
+// ---------------------------------------------------------------------------
+
+/** Пустой ответ поиска (все группы пусты); с диагностикой — при её наличии. */
+function emptySearchResponse(unresolved: TokenIssue[]): SearchResponse {
+  return {
+    by_names: [],
+    by_texts: [],
+    by_links: [],
+    by_chrono: [],
+    meta: { total_in_group: { names: 0, texts: 0, links: 0, chronology: 0 } },
+    ...(unresolved.length > 0 ? { unresolved } : {}),
+  };
+}
+
+/**
+ * Строки-токены КОНТЕКСТА МЫСЛИ (`$thought`, `$thought.<поле>`,
+ * `$thought.[<свойство>]`), найденные в AST. Глобальные токены (`$today`,
+ * `$user`, …) не считаются: их раскрывает движок по `tokenContext`
+ * (задача 56a143ff). Обход — по объектам-значениям `{ token: '…' }`.
+ */
+function collectThoughtTokenStrings(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const item of node) collectThoughtTokenStrings(item, out);
+    return out;
+  }
+  if (node === null || typeof node !== 'object') return out;
+  const record = node as Record<string, unknown>;
+  const token = record['token'];
+  if (typeof token === 'string' && Object.keys(record).length === 1) {
+    const { known } = scanStringForTokens(token);
+    if (known.some((tok) => tok.kind !== 'global')) out.push(token);
+    return out;
+  }
+  for (const value of Object.values(record)) collectThoughtTokenStrings(value, out);
+  return out;
+}
+
+/**
+ * Разрешить в AST токены контекста мысли (`$thought*`) мыслью-фокусом карты
+ * (`focus_thought_id`) — образец решения C3 (ошибка 23c7d3e9,
+ * `runViewForThought`): пред-резолв токенов контекста мысли сервисом, у
+ * которого есть мысль, ДО единого движка отбора.
+ *
+ * Без фокуса или при ненайденной мысли токен не разрешается: отдаём
+ * `unresolved` с пояснением (требование b7fdab20) — условие диагностируется, а
+ * не исполняется тихо пустым результатом.
+ *
+ * `null` — токенов контекста мысли в AST нет: резолв не нужен (лишний запрос к
+ * БД не делаем, AST без изменений).
+ */
+function resolveSearchThoughtTokens(
+  ndb: NetworkDb,
+  ast: FilterAst,
+  focusThoughtId: string | undefined,
+  tokenContext: AstTokenContext | undefined,
+): { ast: FilterAst; unresolved: TokenIssue[] } | null {
+  const tokens = collectThoughtTokenStrings(ast);
+  if (tokens.length === 0) return null;
+  if (focusThoughtId === undefined || focusThoughtId === '') {
+    return {
+      ast,
+      unresolved: tokens.map((token) => ({
+        path: '',
+        token,
+        reason: 'unknown_token' as const,
+        message: `Токен «${token}» требует мысли в фокусе карты: задайте мысль в фокусе и повторите поиск.`,
+      })),
+    };
+  }
+  const thought = getThought(ndb, focusThoughtId);
+  if (thought === null) {
+    return {
+      ast,
+      unresolved: tokens.map((token) => ({
+        path: '',
+        token,
+        reason: 'unknown_token' as const,
+        message: `Мысль в фокусе карты (${focusThoughtId}) не найдена — токен «${token}» не разрешён.`,
+      })),
+    };
+  }
+  const ctx = buildThoughtResolveContext(
+    ndb,
+    {
+      id: thought.id,
+      title: thought.title,
+      synonyms: thought.synonyms,
+      type_id: thought.type_id,
+      active: thought.active,
+      created_by: thought.created_by ?? '',
+      updated_by: thought.updated_by ?? '',
+      created_at: thought.created_at,
+      updated_at: thought.updated_at,
+    },
+    focusThoughtId,
+    tokenContext?.userId ?? '',
+    {
+      ...(tokenContext?.nowMs !== undefined
+        ? { now: (): Date => new Date(tokenContext.nowMs!) }
+        : {}),
+      ...(tokenContext?.firstDayOfWeek !== undefined
+        ? { firstDayOfWeek: tokenContext.firstDayOfWeek }
+        : {}),
+      ...(tokenContext?.withTime !== undefined ? { withTime: tokenContext.withTime } : {}),
+    },
+  );
+  // Глобальные токены (`$today`/`$user`/…) движок раскрывает сам по
+  // `tokenContext`; здесь подставляются ТОЛЬКО токены контекста мысли.
+  const resolved = resolveThoughtTokensInAst(ast, ctx);
+  return { ast: resolved.definition as FilterAst, unresolved: resolved.unresolved };
+}
+
+// ---------------------------------------------------------------------------
 // Public: search
 // ---------------------------------------------------------------------------
 
@@ -1122,8 +1242,25 @@ export function search(
     const diag = diagnoseFilterAst(ndb, explicitAst);
     if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
   }
-  const effectiveAst: FilterAst | undefined =
+  let effectiveAst: FilterAst | undefined =
     explicitAst ?? compileSearchThoughtAst(ndb, request, showInactiveDefault);
+  // Токены КОНТЕКСТА МЫСЛИ (`$thought*`) разрешаются мыслью-фокусом карты до
+  // единого движка (задача 4b1cc3d4): без фокуса/при ненайденной мысли —
+  // штатная диагностика `unresolved` вместо тихой пустоты (требование b7fdab20).
+  if (effectiveAst !== undefined) {
+    const thoughtResolved = resolveSearchThoughtTokens(
+      ndb,
+      effectiveAst,
+      request.focus_thought_id,
+      tokenContext,
+    );
+    if (thoughtResolved !== null) {
+      if (thoughtResolved.unresolved.length > 0) {
+        return emptySearchResponse(thoughtResolved.unresolved);
+      }
+      effectiveAst = thoughtResolved.ast;
+    }
+  }
   // Неразрешимые токены AST (задача 56a143ff, требование b7fdab20): лист с
   // токеном собирает диагностику в этот коллектор; пусто — всё разрешилось.
   const unresolved: TokenIssue[] = [];

@@ -2157,6 +2157,11 @@ export class RestClient {
     if (request.editor_id !== undefined && request.editor_id !== '') {
       q['editor_id'] = request.editor_id;
     }
+    // Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+    // 4b1cc3d4): сервер разрешает условие «По родителю в фокусе» по этой мысли.
+    if (request.focus_thought_id !== undefined && request.focus_thought_id !== '') {
+      q['focus_thought_id'] = request.focus_thought_id;
+    }
     if (request.limit !== undefined) q['limit'] = request.limit;
     if (request.offset !== undefined) q['offset'] = request.offset;
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/search`, { query: q });
@@ -2521,6 +2526,11 @@ export class RestClient {
     }
     if (request.editor_id !== undefined && request.editor_id !== '') {
       q['editor_id'] = request.editor_id;
+    }
+    // Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+    // 4b1cc3d4): сервер разрешает условие «По родителю в фокусе» по этой мысли.
+    if (request.focus_thought_id !== undefined && request.focus_thought_id !== '') {
+      q['focus_thought_id'] = request.focus_thought_id;
     }
     if (request.limit !== undefined) q['limit'] = request.limit;
     if (request.offset !== undefined) q['offset'] = request.offset;

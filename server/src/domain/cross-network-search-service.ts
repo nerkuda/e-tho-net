@@ -206,6 +206,12 @@ export interface CrossNetworkSearchArgs {
   trashed?: boolean;
   author_id?: string;
   editor_id?: string;
+  /**
+   * Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+   * 4b1cc3d4): один id по всем сетям веера, домен разрешает его в каждой
+   * сети (мысль ищется в БД этой сети).
+   */
+  focus_thought_id?: string;
   limit: number;
   offset: number;
   /** Значение `show_inactive` по умолчанию (из пользовательских настроек). */
@@ -244,6 +250,7 @@ export function fanOutSearch(
       trashed: args.trashed,
       author_id: args.author_id,
       editor_id: args.editor_id,
+      focus_thought_id: args.focus_thought_id,
       // Берём per-сеть лимит = лимит * |networks|, чтобы после слияния
       // верхушка веера была представлена полностью. Объём удерживает общий
       // потолок `cap` (задача 29bc5673): per-сеть лимит НЕ занижаем до `cap`,

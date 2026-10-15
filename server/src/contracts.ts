@@ -3063,6 +3063,10 @@ export const RestSearchQuery = defineContract(
       trashed: z.boolean().optional(),
       author_id: z.string().optional(),
       editor_id: z.string().optional(),
+      // Мысль-фокус карты — контекст разрешения токенов `$thought*` в `ast`
+      // (задача 4b1cc3d4). Корпусный по сосуществованию с `ast`: в XOR
+      // плоских МЫСЛЕВЫХ параметров не входит (см. refine ниже).
+      focus_thought_id: z.string().min(1).optional(),
       limit: z.number().int().min(1).optional(),
       offset: z.number().int().min(0).optional(),
     })
@@ -3129,6 +3133,9 @@ export const RestSearchQuery = defineContract(
     trashed: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
     author_id: { from: { kind: 'query' }, t: z.string().optional() },
     editor_id: { from: { kind: 'query' }, t: z.string().optional() },
+    // Мысль-фокус карты: query-параметр `focus_thought_id` (задача 4b1cc3d4),
+    // совместим с `ast` — контекст токенов `$thought*`, а не критерий отбора.
+    focus_thought_id: { from: { kind: 'query' }, t: z.string().optional() },
     limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
     offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
   },

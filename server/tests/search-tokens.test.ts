@@ -465,3 +465,138 @@ describe(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// Токены контекста мысли `$thought*` в точке поиска (задача 4b1cc3d4)
+// ---------------------------------------------------------------------------
+
+/** Структурная связь «родитель → потомок» (нетипизированное живое ребро). */
+function seedStructuralLink(ndb: NetworkDb, parentId: string, childId: string): void {
+  ndb
+    .prepare(
+      `INSERT INTO links (id, source_id, target_id, type_id, active, marked_for_deletion,
+                          version, created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, NULL, 1, 0, 1, '2024', '2024', 'u', 'u')`,
+    )
+    .run(randomUUID(), parentId, childId);
+}
+
+describe(
+  'поиск + токены контекста мысли $thought (задача 4b1cc3d4)',
+  nativeOk() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    it('с мыслью-фокусом «Мысль в иерархии $thought» находит подкорень', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const root = seedThought(ndb, 'Secret root');
+        const child = seedThought(ndb, 'Secret child');
+        const outsider = seedThought(ndb, 'Secret outsider');
+        seedStructuralLink(ndb, root, child);
+        const tree = ast(leaf({ kind: 'id' }, 'in_hierarchy', { token: '$thought' }));
+
+        const res = search(
+          ndb,
+          { q: 'secret', ast: tree, focus_thought_id: root },
+          false,
+          { userId: 'u' },
+        );
+        assert.deepEqual(
+          res.by_names.map((h) => h.thought_id).sort(),
+          [root, child].sort(),
+          'корень и его потомок, без посторонней мысли',
+        );
+        assert.equal(res.unresolved, undefined, 'токен разрешён — диагностики нет');
+
+        const other = search(
+          ndb,
+          { q: 'secret', ast: tree, focus_thought_id: outsider },
+          false,
+          { userId: 'u' },
+        );
+        assert.deepEqual(
+          other.by_names.map((h) => h.thought_id),
+          [outsider],
+          'другая мысль в фокусе даёт другой подкорень',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('$thought.<поле> разрешается полем мысли в фокусе', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Secret one');
+        const focus = seedThought(ndb, 'Secret two');
+        const tree = ast(leaf({ kind: 'active' }, 'eq', { token: '$thought.active' }));
+        const res = search(
+          ndb,
+          { q: 'secret', ast: tree, focus_thought_id: focus },
+          false,
+          { userId: 'u' },
+        );
+        assert.equal(res.unresolved, undefined, 'поле мысли разрешилось');
+        assert.equal(res.by_names.length, 2, 'активность подставлена (обе мысли активны)');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('без мысли-фокуса токен диагностируется, а не молчит', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Secret probe');
+        const tree = ast(leaf({ kind: 'id' }, 'in_hierarchy', { token: '$thought' }));
+        const res = search(ndb, { q: 'secret', ast: tree }, false, { userId: 'u' });
+        assert.equal(res.by_names.length, 0, 'без фокуса — пустая выдача');
+        assert.ok(res.unresolved !== undefined && res.unresolved.length > 0, 'есть диагностика');
+        assert.equal(res.unresolved[0]!.token, '$thought');
+        assert.equal(res.unresolved[0]!.reason, 'unknown_token');
+        assert.match(res.unresolved[0]!.message, /фокус/i);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('REST /search?focus_thought_id: подкорень в фокусе разрешается', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const root = seedThought(ctx.ndb, 'Secret rest root');
+        const child = seedThought(ctx.ndb, 'Secret rest child');
+        seedStructuralLink(ctx.ndb, root, child);
+        const tree = ast(leaf({ kind: 'id' }, 'in_hierarchy', { token: '$thought' }));
+
+        const call = async (extra: Record<string, string>): Promise<{
+          statusCode: number;
+          ids: string[];
+          unresolved?: Array<{ token: string; reason: string }>;
+        }> => {
+          const url =
+            `/api/v1/networks/${ctx.networkId}/search?` +
+            new URLSearchParams({ q: 'secret', ast: JSON.stringify(tree), ...extra }).toString();
+          const res = await ctx.app.inject({ method: 'GET', url, headers: authHeaders(ctx) });
+          const data = res.json().data as {
+            by_names: Array<{ thought_id: string }>;
+            unresolved?: Array<{ token: string; reason: string }>;
+          };
+          return {
+            statusCode: res.statusCode,
+            ids: (data.by_names ?? []).map((h) => h.thought_id).sort(),
+            ...(data.unresolved !== undefined ? { unresolved: data.unresolved } : {}),
+          };
+        };
+
+        const withFocus = await call({ focus_thought_id: root });
+        assert.equal(withFocus.statusCode, 200);
+        assert.deepEqual(withFocus.ids, [root, child].sort(), 'фокус -> корень и потомок');
+
+        const withoutFocus = await call({});
+        assert.equal(withoutFocus.statusCode, 200);
+        assert.deepEqual(withoutFocus.ids, [], 'без фокуса — пусто');
+        assert.equal(withoutFocus.unresolved?.[0]?.token, '$thought');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+  },
+);

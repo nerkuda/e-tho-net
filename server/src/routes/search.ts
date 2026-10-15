@@ -132,6 +132,10 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
 
         const inParam = input.in as 'subtree' | undefined;
         const fromThoughtId = input.from_thought_id as string | undefined;
+        // Мысль-фокус карты — контекст разрешения токенов `$thought*` в `ast`
+        // (задача 4b1cc3d4): клиент присылает текущую мысль в фокусе, домен
+        // подставляет её в условие быстрой команды «По родителю в фокусе».
+        const focusThoughtId = input.focus_thought_id as string | undefined;
 
         const pref = app.systemDb.getNetworkPreference(
           req.auth!.user.id,
@@ -197,6 +201,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
             trashed: input.trashed as boolean | undefined,
             author_id: input.author_id as string | undefined,
             editor_id: input.editor_id as string | undefined,
+            focus_thought_id: focusThoughtId,
             limit,
             offset,
             showInactiveDefault,
@@ -228,6 +233,9 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           // применяется (domain-слой сам приводит к `null`).
           author_id: input.author_id as string | undefined,
           editor_id: input.editor_id as string | undefined,
+          // Контекст токенов контекста мысли `$thought*` в `ast` (задача
+          // 4b1cc3d4): мысль-фокус карты. Совместим с `ast` (в XOR не входит).
+          focus_thought_id: focusThoughtId,
           limit,
           offset,
         };

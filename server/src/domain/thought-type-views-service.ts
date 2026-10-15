@@ -804,6 +804,32 @@ function collectThoughtPropertyValues(
 }
 
 /**
+ * Собрать {@link ResolveContext} для конкретной мысли — общая точка разрешения
+ * токенов контекста мысли (`$thought`/`$thought.*`/`$thought.[…]`): поля мысли +
+ * значения свойств + пользователь + часы/настройки сети. Используется отбором
+ * типа мысли (`runViewForThought`) и точкой поиска карты (задача 4b1cc3d4):
+ * семантика `$thought` одна, второй сборки контекста нет.
+ */
+export function buildThoughtResolveContext(
+  ndb: NetworkDb,
+  thought: ResolveContext['thought'],
+  thoughtId: string,
+  userId: string,
+  extra: { now?: () => Date; firstDayOfWeek?: number; withTime?: boolean } = {},
+): ResolveContext {
+  return buildResolveContext(
+    thought,
+    collectThoughtPropertyValues(ndb, thoughtId, thought.type_id),
+    userId,
+    extra.now,
+    {
+      ...(extra.firstDayOfWeek !== undefined ? { firstDayOfWeek: extra.firstDayOfWeek } : {}),
+      ...(extra.withTime !== undefined ? { withTime: extra.withTime } : {}),
+    },
+  );
+}
+
+/**
  * Разделить хранимую comma-joined строку множественного `text`-свойства на
  * элементы (разделитель записи — `", "`). Пустые элементы отбрасываются, так
  * что пустое значение даёт пустой список — случай неразрешимого токена
@@ -898,7 +924,10 @@ export async function runViewForThought(
   // понедельника, а `$now` — по историческому умолчанию.
   const extra = options?.tokenContext;
   const now = extra?.nowMs !== undefined ? (): Date => new Date(extra.nowMs!) : undefined;
-  const resolveContext: ResolveContext = buildResolveContext(
+  // Сборка контекста — общая точка ({@link buildThoughtResolveContext}), одна и
+  // та же с точкой поиска карты (задача 4b1cc3d4).
+  const resolveContext: ResolveContext = buildThoughtResolveContext(
+    ndb,
     {
       id: thought.id,
       title: thought.title,
@@ -913,10 +942,10 @@ export async function runViewForThought(
       created_at: thought.created_at,
       updated_at: thought.updated_at,
     },
-    collectThoughtPropertyValues(ndb, thoughtId, thought.type_id),
+    thoughtId,
     userId,
-    now,
     {
+      ...(now !== undefined ? { now } : {}),
       ...(extra?.firstDayOfWeek !== undefined ? { firstDayOfWeek: extra.firstDayOfWeek } : {}),
       ...(extra?.withTime !== undefined ? { withTime: extra.withTime } : {}),
     },
