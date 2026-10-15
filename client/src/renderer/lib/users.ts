@@ -11,7 +11,8 @@
  *    сети;
  *  - остальные пользователи — best-effort через `etn.admin.listUsers()`
  *    (требует админа; для не-админа запрос тихо отказывается, кэш остаётся
- *    пустым, UI падает обратно на показ UUID).
+ *    пустым, UI показывает нейтральный плейсхолдер вместо имени, а не UUID —
+ *    требование 9d5e3c4e).
  *
  * Кэш обновляется по мере появления новых запросов и реактивно
  * перерисовывает все узлы, которые показали «неизвестен» для только что
@@ -25,6 +26,23 @@ import { etn } from './etn.js';
 import { t } from './i18n.js';
 import { chipList } from './ui/chip-list.js';
 import { store } from '../state.js';
+
+/**
+ * Подпись НЕИЗВЕСТНОГО участника вместо обрезанного id (требование 9d5e3c4e
+ * «представления сущностей, без ID»): до прихода админ-ростера и для того, кого
+ * в нём нет, чипы и списки выбора показывают нейтральный текст, а не `id.slice`.
+ */
+const UNKNOWN_USER_LABEL = 'неизвестный участник';
+
+/**
+ * Подпись участника в списках выбора: «Имя (логин)». Записи-заглушки
+ * неизвестного участника заводятся с пустым логином — им довольно одного
+ * плейсхолдера, скобки с логином не рисуются.
+ */
+function userOptionLabel(user: User): string {
+  const name = user.display_name ?? user.username;
+  return user.username === '' ? name : `${name} (${user.username})`;
+}
 
 interface CacheState {
   byId: Map<string, User>;
@@ -188,7 +206,7 @@ export function buildUserSelectWidget(opts: {
       (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username, 'ru'),
     );
     for (const u of users) {
-      const opt = el('option', undefined, `${u.display_name ?? u.username} (${u.username})`);
+      const opt = el('option', undefined, userOptionLabel(u));
       opt.value = u.id;
       select.append(opt);
     }
@@ -205,13 +223,14 @@ export function buildUserSelectWidget(opts: {
   };
 
   // Если нужного id ещё нет в кэше (например, восстановлен из сохранённого
-  // отбора до прихода roster), добавляем «голую» запись с id, чтобы
-  // select мог показать выбранное значение. Токен так не подменяем.
+  // отбора до прихода roster), добавляем запись-заглушку с нейтральным
+  // плейсхолдером (НЕ id: ID в подписях недопустим — требование 9d5e3c4e),
+  // чтобы select мог показать выбранное значение. Токен так не подменяем.
   if (tokenValue === null && opts.currentId !== '' && !state.byId.has(opts.currentId)) {
     state.byId.set(opts.currentId, {
       id: opts.currentId,
-      username: opts.currentId.slice(0, 8),
-      display_name: opts.currentId.slice(0, 8),
+      username: '',
+      display_name: UNKNOWN_USER_LABEL,
       is_admin: false,
       is_first_user: false,
       disabled: false,
@@ -262,13 +281,14 @@ export function buildUserMultiSelectWidget(opts: {
   // его через `getValues`, изменения уведомляют владельца.
   let ids = opts.currentIds.slice();
 
-  // Seed unknown ids so chips show something before the roster arrives.
+  // Seed unknown ids so chips show a neutral placeholder before the roster
+  // arrives (ID в подписи недопустим — требование 9d5e3c4e).
   for (const id of ids) {
     if (id !== '' && !state.byId.has(id)) {
       state.byId.set(id, {
         id,
-        username: id.slice(0, 8),
-        display_name: id.slice(0, 8),
+        username: '',
+        display_name: UNKNOWN_USER_LABEL,
         is_admin: false,
         is_first_user: false,
         disabled: false,
@@ -288,7 +308,8 @@ export function buildUserMultiSelectWidget(opts: {
     getValues: () => ids,
     labelOf: (id) => {
       const user = state.byId.get(id);
-      return user?.display_name ?? user?.username ?? id;
+      // Нет записи в кэше — плейсхолдер, а не id (требование 9d5e3c4e).
+      return user === undefined ? UNKNOWN_USER_LABEL : (user.display_name ?? user.username);
     },
     onRemove: (id) => {
       ids = ids.filter((x) => x !== id);
@@ -297,7 +318,7 @@ export function buildUserMultiSelectWidget(opts: {
     getOptions: () =>
       sortedUsers().map((u) => ({
         value: u.id,
-        label: `${u.display_name ?? u.username} (${u.username})`,
+        label: userOptionLabel(u),
       })),
     onAdd: (id) => {
       if (ids.includes(id)) return;

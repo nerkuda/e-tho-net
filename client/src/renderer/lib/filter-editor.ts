@@ -44,7 +44,7 @@ import {
   type FilterFooterButtonSpec,
   type FilterFooterHandle,
 } from './filter-footer.js';
-import { composeFilterPhrase, type FilterPhraseContext } from './filter-phrase.js';
+import { composeFilterPhrase, filterPhraseThoughtIds, type FilterPhraseContext } from './filter-phrase.js';
 import {
   buildFilterSortSection,
   filterSortKeyOptions,
@@ -63,23 +63,32 @@ import type { ThoughtCloudInput } from './thought-cloud.js';
 // фраза ПОДПИСЫВАЕТСЯ (ошибка части 6, п.7): при холодном кэше фраза показывала
 // обрезанный id и не перерисовывалась, когда ростер приходил.
 import { resolveUserName, subscribe as subscribeUsers } from './users.js';
+// Имя МЫСЛИ по id для фразы-превью (ошибка d17a8bfd) — кэш имён мыслей; фраза
+// читает его синхронно (`resolveThoughtName`), а на наполнение подписывается
+// (иначе имена ссылок на мысли «застыли» бы в плейсхолдере до пересборки).
+import {
+  requestThoughtNames,
+  resolveThoughtName,
+  subscribe as subscribeThoughtNames,
+} from './thought-names.js';
 
 /**
- * Рефрешеры фразы живых редакторов. Фраза-превью показывает ИМЕНА пользователей
- * по id, а кэш участников наполняется асинхронно (best-effort ростер админа):
- * пока кэш холодный, фраза показывает обрезанный id и обновляется, когда ростер
- * придёт. Подписка — ОДНА на модуль (не по редактору: пересборки панели копили бы
- * слушателей); отключённые корни вычищаются при очередном уведомлении.
+ * Рефрешеры фразы живых редакторов. Фраза-превью показывает ИМЕНА сущностей по
+ * id, а кэши наполняются асинхронно (best-effort ростер участников, батч имён
+ * мыслей): пока кэш холодный, фраза показывает плейсхолдер/обрезанный id и
+ * обновляется, когда данные придут. Подписка — ОДНА на источник (не по
+ * редактору: пересборки панели копили бы слушателей); отключённые корни
+ * вычищаются при очередном уведомлении.
  */
 const phraseRefreshers = new Set<{ root: HTMLElement; refresh: () => void }>();
-let usersSubscribed = false;
+let phraseSourcesSubscribed = false;
 
-/** Подписать фразу редактора на наполнение кэша пользователей (один раз на модуль). */
-function subscribePhraseToUsers(entry: { root: HTMLElement; refresh: () => void }): void {
+/** Подписать фразу редактора на наполнение кэшей подписей (один раз на модуль). */
+function subscribePhraseRefresh(entry: { root: HTMLElement; refresh: () => void }): void {
   phraseRefreshers.add(entry);
-  if (usersSubscribed) return;
-  usersSubscribed = true;
-  subscribeUsers(() => {
+  if (phraseSourcesSubscribed) return;
+  phraseSourcesSubscribed = true;
+  const notify = (): void => {
     for (const item of [...phraseRefreshers]) {
       if (!item.root.isConnected) {
         phraseRefreshers.delete(item);
@@ -87,7 +96,9 @@ function subscribePhraseToUsers(entry: { root: HTMLElement; refresh: () => void 
       }
       item.refresh();
     }
-  });
+  };
+  subscribeUsers(notify);
+  subscribeThoughtNames(notify);
 }
 
 /** Корень контейнера редактора. */
@@ -402,6 +413,11 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     // операндов записи фраза показывает имя. Кэш не полон (не админ) — значение
     // остаётся id, как раньше.
     userName: (id) => resolveUserName(id),
+    // Мысли — именами, а не id (ошибка d17a8bfd): кэш имён мыслей
+    // (`lib/thought-names.ts`) отдаёт название по id; пока имя не догружено,
+    // фраза показывает плейсхолдер без ID (требование 9d5e3c4e), а подписка
+    // ниже перерисовывает фразу, когда имя приходит.
+    thoughtName: (id) => resolveThoughtName(id),
   };
   if (opts.footer !== false) {
     footer = buildFilterFooter({
@@ -414,10 +430,12 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
       current: host.current ?? (() => buildFilterAst(getState(), { profile })),
       preview: () => {
         const state = getState();
-        const text = composeFilterPhrase(
-          { tree: state.tree ?? null, sortKeys: state.sortKeys ?? [] },
-          phraseContext,
-        );
+        const phraseState = { tree: state.tree ?? null, sortKeys: state.sortKeys ?? [] };
+        // Имена мыслей для фразы догружаем ВНЕ композера (модуль чистый):
+        // собираем id ссылок и просим кэш имён; когда батч вернётся, подписка
+        // перерисует фразу с именами (ошибка d17a8bfd).
+        requestThoughtNames(opts.networkId, filterPhraseThoughtIds(phraseState, data.registry));
+        const text = composeFilterPhrase(phraseState, phraseContext);
         const list = issues();
         // Ни фразы, ни диагностики — превью не подписывается.
         if (text === '' && list.length === 0) return undefined;
@@ -437,9 +455,10 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
       ...(opts.buttons?.standard !== undefined ? { standardButtons: opts.buttons.standard } : {}),
     });
     foot.append(footer.root);
-    // Фраза-превью — имена пользователей по id: при наполнении кэша участников
-    // перерисовываем фразу, чтобы id не «застыл» (ошибка части 6, п.7).
-    subscribePhraseToUsers({ root, refresh: () => footer?.refresh() });
+    // Фраза-превью — имена сущностей по id: при наполнении кэшей (участники,
+    // имена мыслей) перерисовываем фразу, чтобы id не «застыл» (ошибка части 6,
+    // п.7; ошибка d17a8bfd).
+    subscribePhraseRefresh({ root, refresh: () => footer?.refresh() });
   }
   if (foot.children.length > 0) root.append(foot);
 

@@ -28,8 +28,10 @@
  *   • значение-ссылка (мысль/тип/связь/свойство) — СОКРАЩЁННЫМ ИМЕНЕМ, а не id:
  *     имя берётся из карты снапшотов `labels.values[id]` (любое число значений,
  *     ошибка 4258e694 п.12б), для одиночного — ещё из `labels.value`, иначе из
- *     каталогов контекста (типы мыслей/связей, реестр свойств); нет ни того, ни
- *     другого — как было (id);
+ *     каталогов контекста (типы мыслей/связей, реестр свойств) или из резолвера
+ *     имён мыслей `ctx.thoughtName` (ошибка d17a8bfd); резолвер есть, а имени
+ *     нет — нейтральный плейсхолдер без ID (требование 9d5e3c4e); резолвера нет
+ *     (вызов вне редактора/в тестах) — как было (id);
  *   • имя значения обрезается по {@link FILTER_PHRASE_NAME_LIMIT} с «…»;
  *   • под-выборка сворачивается: «Цели в выборке (2 условия)»;
  *   • хвост сортировки: «; сортировка: по названию (убыв.)»;
@@ -68,6 +70,17 @@ export const FILTER_PHRASE_LIMIT = 300;
  */
 export const FILTER_PHRASE_NAME_LIMIT = 32;
 
+/**
+ * Плейсхолдер вместо имени НЕРАЗРЕШИМОЙ ссылки на мысль (требование 9d5e3c4e):
+ * пока имя не догружено (или мысль недоступна), фраза не показывает сырой или
+ * обрезанный UUID — только нейтральный текст. Как только кэш имён наполнится
+ * (`lib/thought-names.ts`), подписка перерисует фразу с настоящим именем.
+ */
+export const FILTER_PHRASE_UNKNOWN_THOUGHT = 'без названия';
+
+/** Тот же плейсхолдер для неизвестного участника (`ctx.userName` не нашёл имя). */
+export const FILTER_PHRASE_UNKNOWN_USER = 'без имени';
+
 /** Состояние отбора, нужное композеру (часть единой модели `FilterCriteriaState`). */
 export interface FilterPhraseState {
   /** Дерево условий; `null` — условий нет. */
@@ -89,6 +102,18 @@ export interface FilterPhraseContext extends FilterLabelData {
    * модуль остаётся чистым и тестируемым без сети.
    */
   userName?: (id: string) => string | null;
+  /**
+   * Название МЫСЛИ по id (ошибка d17a8bfd): значения ссылочных операндов
+   * («Мысль», «Родители», «Потомки», «Цели записи», «Сущность», «Владельцы»)
+   * и значения свойств-ссылок (`value_type: link|thought_ref`) — id мысли, и во
+   * фразе-превью показывается её ИМЯ, а не UUID. Источник — кэш имён клиента
+   * (`lib/thought-names.ts`); функцию передают данными, поэтому модуль остаётся
+   * чистым (догрузка имён — ВНЕ композера). Резолвер задан, а имени нет
+   * (мысль ещё не догружена/удалена) — {@link FILTER_PHRASE_UNKNOWN_THOUGHT};
+   * резолвер не задан — значение остаётся как есть (прежняя деградация для
+   * вызовов без кэша, например в юнит-тестах композера).
+   */
+  thoughtName?: (id: string) => string | null;
   /** Предел длины фразы; по умолчанию {@link FILTER_PHRASE_LIMIT}. */
   limit?: number;
 }
@@ -260,8 +285,13 @@ function filterPhraseScalar(
  *      (мысли набираются в чип-поле без каталога имён);
  *   2. снапшот `labels.value` (одиночное значение, при `allowSnapshot`) —
  *      совместимость с уже сохранёнными отборами;
- *   3. каталог контекста (тип мысли, тип связи, реестр свойств);
- *   4. как было — само значение (id), тоже обрезанное.
+ *   3. имя МЫСЛИ из резолвера `ctx.thoughtName` — для операндов-ссылок на мысль
+ *      и значений свойств-ссылок (ошибка d17a8bfd); резолвер задан, имени нет —
+ *      {@link FILTER_PHRASE_UNKNOWN_THOUGHT} (без ID, требование 9d5e3c4e);
+ *   4. каталог контекста (тип мысли, тип связи, реестр свойств);
+ *   5. имя ПОЛЬЗОВАТЕЛЯ из `ctx.userName`; кэш задан, имени нет —
+ *      {@link FILTER_PHRASE_UNKNOWN_USER};
+ *   6. как было — само значение (id), тоже обрезанное (нет резолвера).
  */
 function filterPhraseNamedValue(
   leaf: FilterTreeLeaf,
@@ -275,28 +305,62 @@ function filterPhraseNamedValue(
     const snapshot = leaf.labels?.value;
     if (snapshot !== undefined && snapshot !== '') return truncateFilterName(snapshot);
   }
-  const resolved =
-    filterPhraseCatalogueValue(leaf.entity.kind, raw, ctx) ??
-    filterPhraseUserValue(leaf.entity.kind, raw, ctx);
-  return truncateFilterName(resolved ?? raw);
+  // Ссылка на МЫСЛЬ: имя из кэша имён; кэш есть, а имени нет — плейсхолдер без
+  // ID (резолвера нет — пропускаем ветку, деградация прежняя — значение как есть).
+  if (filterPhraseValueIsThoughtRef(leaf, ctx.registry)) {
+    const name = ctx.thoughtName?.(raw) ?? null;
+    if (name !== null && name !== '') return truncateFilterName(name);
+    if (ctx.thoughtName !== undefined) return FILTER_PHRASE_UNKNOWN_THOUGHT;
+  }
+  const catalogue = filterPhraseCatalogueValue(leaf.entity.kind, raw, ctx);
+  if (catalogue !== null && catalogue !== '') return truncateFilterName(catalogue);
+  // Пользователь: имя из кэша участников (`lib/users.ts`); кэш есть, имени нет —
+  // плейсхолдер без ID. Токен `$user` сюда не попадает: он читается токеном.
+  if (FILTER_USER_OPERAND_KINDS.has(leaf.entity.kind)) {
+    const name = ctx.userName?.(raw) ?? null;
+    if (name !== null && name !== '') return truncateFilterName(name);
+    if (ctx.userName !== undefined) return FILTER_PHRASE_UNKNOWN_USER;
+  }
+  return truncateFilterName(raw);
 }
 
 /**
- * Имя ПОЛЬЗОВАТЕЛЯ по id (ошибка 23c7d3e9 п. A1): у пользовательских операндов
- * («Автор», «Редактор», «Автор/Редактор записи», «Автор события») значение — id
- * участника сети, и во фразе-превью показывается имя. Источник — кэш
- * пользователей (`ctx.userName`, `lib/users.ts`); нет источника или имени —
- * `null`, значение остаётся как есть (id, обрезанный по пределу). Токен `$user`
- * сюда не попадает: он читается как токен и печатается своим именем.
+ * Операнды, значение которых — id МЫСЛИ (во фразе показывается её имя, не UUID):
+ * «Мысль» (`id`), «Родители», «Потомки», «Цели записи», «Сущность» (`entity_id`),
+ * «Владельцы» (`owner`). Тип/связь/свойство резолвятся каталогами контекста —
+ * их здесь нет (ошибка d17a8bfd).
  */
-function filterPhraseUserValue(
-  kind: FilterAstEntityKind,
-  id: string,
-  ctx: FilterPhraseContext,
+const THOUGHT_REF_OPERAND_KINDS: ReadonlySet<FilterAstEntityKind> = new Set([
+  'id',
+  'parents',
+  'children',
+  'targets',
+  'entity_id',
+  'owner',
+]);
+
+/** `value_type` операнда-свойства по реестру; `null` — не свойство/не найдено. */
+function filterPhrasePropertyValueType(
+  leaf: FilterTreeLeaf,
+  registry?: ReadonlyMap<string, NetworkProperty>,
 ): string | null {
-  if (!FILTER_USER_OPERAND_KINDS.has(kind)) return null;
-  const name = ctx.userName?.(id) ?? null;
-  return name !== null && name !== '' ? name : null;
+  if (leaf.entity.kind !== 'property') return null;
+  const ref = leaf.entity.property_id ?? leaf.entity.property ?? '';
+  return registry?.get(ref)?.value_type ?? null;
+}
+
+/**
+ * Значение листа — ссылка на МЫСЛЬ (id): либо операнд-ссылка
+ * ({@link THOUGHT_REF_OPERAND_KINDS}), либо значение свойства с
+ * `value_type: link|thought_ref` (`lib/filter-tokens.ts` — природа `thought-id`).
+ */
+function filterPhraseValueIsThoughtRef(
+  leaf: FilterTreeLeaf,
+  registry?: ReadonlyMap<string, NetworkProperty>,
+): boolean {
+  if (THOUGHT_REF_OPERAND_KINDS.has(leaf.entity.kind)) return true;
+  const valueType = filterPhrasePropertyValueType(leaf, registry);
+  return valueType === 'link' || valueType === 'thought_ref';
 }
 
 /** Имя значения-ссылки из каталогов контекста; `null` — вид без каталога/не нашли. */
@@ -440,6 +504,44 @@ export function composeFilterPhrase(state: FilterPhraseState, ctx: FilterPhraseC
   const sort = filterPhraseSort(state.sortKeys, ctx.registry);
   if (sort !== '') parts.push(sort);
   return truncateFilterPhrase(parts.join('; '), ctx.limit ?? FILTER_PHRASE_LIMIT);
+}
+
+/**
+ * Id МЫСЛЕЙ, которые композер покажет ИМЕНЕМ, — для догрузки имён ВНЕ композера
+ * (`lib/thought-names.ts`): модуль остаётся чистым, а редактор просит кэш
+ * наполнить ровно те id, что попадут во фразу. Собираются строковые значения
+ * операндов-ссылок ({@link THOUGHT_REF_OPERAND_KINDS}) и значений свойств-ссылок
+ * (`value_type: link|thought_ref`) — скаляры и элементы списков, включая
+ * вложенные под-выборки. Контекстные токены (`$…`) и пустые значения
+ * пропускаются; дубли схлопываются.
+ */
+export function filterPhraseThoughtIds(
+  state: FilterPhraseState,
+  registry?: ReadonlyMap<string, NetworkProperty>,
+): string[] {
+  const out = new Set<string>();
+  const collectValue = (leaf: FilterTreeLeaf): void => {
+    if (!filterPhraseValueIsThoughtRef(leaf, registry)) return;
+    const value = leaf.value;
+    if (value.kind === 'scalar' && typeof value.value === 'string') {
+      if (value.value !== '' && !value.value.startsWith('$')) out.add(value.value);
+    } else if (value.kind === 'list') {
+      for (const item of value.items) {
+        if (typeof item === 'string' && item !== '' && !item.startsWith('$')) out.add(item);
+      }
+    }
+  };
+  const walk = (node: FilterTreeGroup | FilterTreeLeaf | null | undefined): void => {
+    if (node === null || node === undefined) return;
+    if (node.kind === 'leaf') {
+      collectValue(node);
+      if (node.value.kind === 'subquery') walk(node.value.node);
+      return;
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(state.tree);
+  return [...out];
 }
 
 /**

@@ -266,6 +266,47 @@ const NO_LEGACY_ID_OPERAND_LABEL = {
   include: (rel: string) => rel === BUILDER,
 };
 
+/** Файл-композер фразы — единственное место её словарей. */
+const PHRASE_MODULE = 'lib/filter-phrase.ts';
+
+/**
+ * Правило «фразу отбора собирает ОДИН композер» (ошибка d17a8bfd).
+ *
+ * Строку-представление отбора (фраза-превью футера, тултипы мест) собирает
+ * только `lib/filter-phrase.ts`. Второй словарь коннекторов/операторов
+ * под-выборки, литерал хвоста сортировки или собственные плейсхолдеры вне него
+ * — признак ВТОРОЙ сборки фразы, которая разойдётся с композером (ID/имена,
+ * коннекции, формат). Упоминания в пояснениях — не нарушение.
+ */
+const NO_SECOND_PHRASE_BUILDER = {
+  name: 'no-second-phrase-builder',
+  description:
+    'Фразу-представление отбора собирает единственный композер ' +
+    '`lib/filter-phrase.ts` (ошибка d17a8bfd): второй словарь коннекторов ' +
+    'И/ИЛИ/НЕ (`GROUP_SEPARATOR`), операторов под-выборки («в выборке»/…) или ' +
+    'литерал «сортировка:» вне него запрещены — новое место обязано звать ' +
+    '`composeFilterPhrase`.',
+  pattern:
+    /['"`]сортировка:|['"`](?:все условия|любое условие|в выборке|не в выборке|все в выборке)['"`]|^(?:export\s+)?const\s+GROUP_SEPARATOR\b/,
+  include: (rel: string) => rel !== PHRASE_MODULE,
+  allow: (_rel: string, line: string) => isComment(line),
+};
+
+/**
+ * Потребители композера — файлы, собирающие фразу вызовом
+ * `composeFilterPhrase(...)`. Их ровно два: фабрика редактора и футер. Новое
+ * место обязано звать композер, а не строить строку само (ошибка d17a8bfd).
+ */
+function phraseComposerCallers(): string[] {
+  const out: string[] = [];
+  for (const abs of listSourceFiles(RENDERER_ROOT)) {
+    const rel = path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/');
+    if (rel === PHRASE_MODULE) continue;
+    if (/\bcomposeFilterPhrase\s*\(/.test(fs.readFileSync(abs, 'utf8'))) out.push(rel);
+  }
+  return out.sort();
+}
+
 /** Читает модуль общего каркаса редактора. */
 function readLib(file: string): string {
   return fs.readFileSync(path.join(RENDERER_ROOT, 'lib', file), 'utf8');
@@ -495,6 +536,16 @@ describe('guard: условия отбора строятся только об�
     assertGuardClean(RENDERER_ROOT, [NO_LEGACY_ID_OPERAND_LABEL]);
   });
 
+  it('фразу отбора собирает один композер (lib/filter-phrase.ts)', () => {
+    // Негативная часть: второго словаря коннекторов/операторов под-выборки и
+    // литерала «сортировка:» вне композера быть не должно.
+    assertGuardClean(RENDERER_ROOT, [NO_SECOND_PHRASE_BUILDER]);
+    // Позитивная часть: фразу собирают РОВНО два потребителя — фабрика редактора
+    // (футер места) и сам футер. Новое место обязано звать композер
+    // (`composeFilterPhrase`), а не строить строку само (ошибка d17a8bfd).
+    assert.deepEqual(phraseComposerCallers(), ['lib/filter-editor.ts', 'lib/filter-footer.ts']);
+  });
+
   it('правила краснеют на умышленном нарушении', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-filter-'));
     try {
@@ -513,6 +564,7 @@ describe('guard: условия отбора строятся только об�
         { ...NO_LOCAL_PILLS, include: allPlaces },
         { ...NO_STRIP_SORT_GATE },
         { ...NO_LEGACY_ID_OPERAND_LABEL, include: allPlaces },
+        { ...NO_SECOND_PHRASE_BUILDER },
       ];
       fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
       fs.writeFileSync(
@@ -539,6 +591,7 @@ describe('guard: условия отбора строятся только об�
           "  const label = el('label', 'activity-pill');",
           '  return label;',
           '}',
+          "const phraseTail = 'сортировка: ' + key;",
         ].join('\n'),
         'utf8',
       );
@@ -573,6 +626,10 @@ describe('guard: условия отбора строятся только об�
       assert.ok(
         names.has('no-legacy-id-operand-label'),
         'присвоение служебной подписи «Ссылка на мысль по id» обязано попадать в нарушение',
+      );
+      assert.ok(
+        names.has('no-second-phrase-builder'),
+        'второй литерал фразы («сортировка:») вне композера обязан попадать в нарушение',
       );
       const stripViolations = collectViolations(dir, rules).filter(
         (v) => v.rule === 'no-strip-sort-gate',

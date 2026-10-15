@@ -264,14 +264,14 @@ describe('композер фразы: значения-ссылки — име�
     );
   });
 
-  it('id мысли без снапшота — fallback остаётся id', () => {
+  it('id мысли без резолвера имён — fallback остаётся id (деградация вызовов вне редактора)', () => {
     assert.equal(
       mod.filterPhraseLeaf(
         leaf({ kind: 'id' }, 'eq', { kind: 'scalar', value: '11111111-2222-3333-4444-555555555555' }),
         ctx(),
       ),
       'Мысль = 11111111-2222-3333-4444-5555555…',
-      'id тоже обрезается по пределу',
+      'резолвера нет — id тоже обрезается по пределу',
     );
     assert.equal(
       mod.filterPhraseLeaf(
@@ -280,6 +280,85 @@ describe('композер фразы: значения-ссылки — име�
       ),
       'Мысль = Мысль про расход',
       'снапшот даёт человекочитаемое имя',
+    );
+  });
+
+  it('ссылка на мысль — имя из резолвера thoughtName, а не UUID (ошибка d17a8bfd)', () => {
+    const ID = '11111111-2222-3333-4444-555555555555';
+    const c = ctx({ thoughtName: (id: string) => (id === ID ? 'Бюджет на квартал' : null) });
+    // Все операнды-ссылки на мысль показываются именем.
+    assert.equal(
+      mod.filterPhraseLeaf(leaf({ kind: 'id' }, 'eq', { kind: 'scalar', value: ID }), c),
+      'Мысль = Бюджет на квартал',
+    );
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'parents' }, 'in_hierarchy', { kind: 'scalar', value: ID }, { mode: 'all_links' }),
+        c,
+      ),
+      'Родители в иерархии Бюджет на квартал (по всем связям)',
+      'условие из legacy-конверсии (parent_ids → «Родители в иерархии») без снапшотов',
+    );
+    assert.equal(
+      mod.filterPhraseLeaf(leaf({ kind: 'targets' }, 'eq', { kind: 'scalar', value: ID }), c),
+      'Цели записи = Бюджет на квартал',
+    );
+    // Список id мыслится каждым элементом.
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'children' }, 'in', { kind: 'list', items: [ID, 'unknown-id-2'] }, { labels: { values: {} } }),
+        c,
+      ),
+      'Потомки в Бюджет на квартал, без названия',
+    );
+  });
+
+  it('значение свойства-ссылки (link|thought_ref) — тоже именем мысли', () => {
+    const ID = '11111111-2222-3333-4444-555555555555';
+    const c = ctx({ thoughtName: (id: string) => (id === ID ? 'Проект Альфа' : null) });
+    // PLACE — свойство с value_type: link (см. ctx()).
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'property', property_id: PLACE.id }, 'eq', { kind: 'scalar', value: ID }),
+        c,
+      ),
+      'Место = Проект Альфа',
+    );
+    // Текстовое свойство именем мысли не подменяется (значение — свободный текст).
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'property', property_id: CITY.id }, 'eq', { kind: 'scalar', value: 'Москва' }),
+        c,
+      ),
+      'Город = Москва',
+    );
+  });
+
+  it('резолвер есть, а имени нет — плейсхолдер без ID (требование 9d5e3c4e)', () => {
+    // Ни сырого, ни обрезанного UUID во фразе быть не должно.
+    const phrase = mod.filterPhraseLeaf(
+      leaf({ kind: 'id' }, 'eq', { kind: 'scalar', value: '11111111-2222-3333-4444-555555555555' }),
+      ctx({ thoughtName: () => null }),
+    );
+    assert.equal(phrase, 'Мысль = без названия');
+    assert.ok(!/11111111|2222/.test(phrase), 'в фразе нет фрагментов UUID');
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'parents' }, 'in_hierarchy', { kind: 'scalar', value: '56ce57bd-0000-0000-0000-000000000000' }),
+        ctx({ thoughtName: () => null }),
+      ),
+      'Родители в иерархии без названия',
+    );
+  });
+
+  it('снапшот labels.values сильнее резолвера (сохранённая подпись не подменяется)', () => {
+    const ID = '11111111-2222-3333-4444-555555555555';
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'id' }, 'eq', { kind: 'scalar', value: ID }, { labels: { values: { [ID]: 'Снимок мысли' } } }),
+        ctx({ thoughtName: () => 'Свежее имя' }),
+      ),
+      'Мысль = Снимок мысли',
     );
   });
 
@@ -382,23 +461,24 @@ describe('композер фразы: пользователи показыва
     );
   });
 
-  it('без источника имён (не-админ/пустой кэш) остаётся id — как было', () => {
+  it('без источника имён (резолвера нет) остаётся id — как было', () => {
     assert.match(
       mod.filterPhraseLeaf(
         leaf({ kind: 'author' }, 'eq', { kind: 'scalar', value: IVAN }),
         ctx(),
       ),
       /^Автор = 867d98ad/,
-      'имени нет — fallback на id',
+      'резолвера нет — прежняя деградация (id)',
     );
-    assert.match(
-      mod.filterPhraseLeaf(
-        leaf({ kind: 'author' }, 'eq', { kind: 'scalar', value: 'aabbccdd-0000-1111-2222-333344445555' }),
-        userCtx(),
-      ),
-      /^Автор = aabbccdd/,
-      'незнакомый id — тоже id',
+  });
+
+  it('кэш есть, а участника в нём нет — плейсхолдер без ID (требование 9d5e3c4e)', () => {
+    const phrase = mod.filterPhraseLeaf(
+      leaf({ kind: 'author' }, 'eq', { kind: 'scalar', value: 'aabbccdd-0000-1111-2222-333344445555' }),
+      userCtx(),
     );
+    assert.equal(phrase, 'Автор = без имени');
+    assert.ok(!/aabbccdd/.test(phrase), 'в фразе нет фрагмента UUID участника');
   });
 
   it('снапшот labels сильнее кэша, а токен `$user` печатается своим именем (не id)', () => {
@@ -590,5 +670,42 @@ describe('композер фразы: футер берёт preview из ком
     });
     const root = handle.root as unknown as ShimElement;
     assert.equal(root.findAll((n) => n.classList.contains('ff-preview__text'))[0]!.flatText(), 'фраза хоста');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. Сбор id мыслей для догрузки имён (ошибка d17a8bfd)
+// ---------------------------------------------------------------------------
+
+describe('композер фразы: сбор id мыслей для догрузки имён', () => {
+  it('собирает значения операндов-ссылок и свойств-ссылок, пропускает текст и токены', () => {
+    const tree = group('and', [
+      leaf({ kind: 'id' }, 'in', { kind: 'list', items: ['id-1', 'id-2'] }),
+      leaf({ kind: 'parents' }, 'in_hierarchy', { kind: 'scalar', value: 'id-3' }),
+      // Свойство-ссылка (PLACE — value_type: link) — id мысли.
+      leaf({ kind: 'property', property_id: PLACE.id }, 'eq', { kind: 'scalar', value: 'id-4' }),
+      // Текстовое свойство — свободный текст, не id мысли.
+      leaf({ kind: 'property', property_id: CITY.id }, 'eq', { kind: 'scalar', value: 'Москва' }),
+      // Тип мысли — каталог, не мысль.
+      leaf({ kind: 'type' }, 'eq', { kind: 'scalar', value: 'tt-1' }),
+      // Токен — не id.
+      leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$monthStart' }),
+    ]);
+    assert.deepEqual(
+      mod.filterPhraseThoughtIds({ tree }, ctx().registry).sort(),
+      ['id-1', 'id-2', 'id-3', 'id-4'],
+    );
+  });
+
+  it('заходит в под-выборку и схлопывает дубли; пустое дерево — пусто', () => {
+    const inner = group('and', [leaf({ kind: 'id' }, 'in', { kind: 'list', items: ['id-9'] })]);
+    const tree = group('and', [
+      leaf({ kind: 'targets' }, 'in', { kind: 'subquery', operator: 'in', node: inner }),
+      leaf({ kind: 'id' }, 'eq', { kind: 'scalar', value: 'id-9' }),
+      leaf({ kind: 'id' }, 'eq', { kind: 'scalar', value: '' }),
+    ]);
+    assert.deepEqual(mod.filterPhraseThoughtIds({ tree }, ctx().registry), ['id-9']);
+    assert.deepEqual(mod.filterPhraseThoughtIds({ tree: null }, ctx().registry), []);
+    assert.deepEqual(mod.filterPhraseThoughtIds({}, ctx().registry), []);
   });
 });
