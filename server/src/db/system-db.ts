@@ -361,7 +361,7 @@ export class SystemDb {
     this.stListNetworksForUser = db.prepare(
       `SELECT n.id AS id, n.display_name AS display_name, n.owner_id AS owner_id,
               n.description AS description, n.when_to_use AS when_to_use,
-              n.type_roles AS type_roles,
+              n.type_roles AS type_roles, n.first_day_of_week AS first_day_of_week,
               n.created_at AS created_at, n.updated_at AS updated_at,
               m.role AS role, ou.display_name AS owner_display_name,
               (SELECT COUNT(*) FROM network_members WHERE network_id = n.id) AS members_count
@@ -882,6 +882,7 @@ export class SystemDb {
       description: string | null;
       when_to_use: string | null;
       type_roles: string;
+      first_day_of_week: number;
       created_at: string;
       updated_at: string;
       role: NetworkRole;
@@ -900,6 +901,9 @@ export class SystemDb {
         description: r.description,
         when_to_use: r.when_to_use,
         has_structure: typeof typeRoles.table_of_contents === 'string',
+        // Настройка сети (задача 8eaeba9a): то же значение, что у
+        // `GET /networks/:id` (`networkDto`) — REST и MCP читают из одного SQL.
+        first_day_of_week: r.first_day_of_week,
       };
     });
   }

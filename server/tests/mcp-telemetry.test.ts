@@ -599,9 +599,14 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // описания про мысль-фокус карты (контекст токенов `$thought*` в `ast`).
         // Замер: 44 805 → 44 997 Б (+192: `inputSchema` +~80, проза +~112).
         // Планка поднята ровно под прирост: 44 900 → 45 100.
+        // 0.13.1 (задача 8eaeba9a, «first_day_of_week в networks.structure»):
+        // в описание `etn.networks.structure` добавлено поле
+        // `first_day_of_week` (настройка `$weekStart`/`$weekEnd`, паритет с
+        // `GET /networks/:id`). Прирост — только проза: 44 997 → 45 126 Б.
+        // Планка поднята ровно под прирост: 45 100 → 45 200.
         assert.ok(
-          bytes <= 45_100,
-          `tools/list JSON is ${bytes} bytes — over the 0.13.1 budget of 45100`,
+          bytes <= 45_200,
+          `tools/list JSON is ${bytes} bytes — over the 0.13.1 budget of 45200`,
         );
         // Потолок числа инструментов: фактическое 25 + запас 5 = 30 (нижняя
         // граница ориентира техпроекта 22e34ba5). Превышение — только
@@ -680,9 +685,12 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 0.13.1 (задача 2220340b): см. блок выше — `focus_thought_id` в
         // `etn.thoughts.search` дал +192 Б; D+I 40 040 → 40 232 Б.
         // Планка: 40 100 → 40 300.
+        // 0.13.1 (задача 8eaeba9a): см. блок выше — `first_day_of_week` в
+        // описании `etn.networks.structure` дал +129 Б; D+I 40 232 → 40 361 Б.
+        // Планка: 40 300 → 40 400.
         assert.ok(
-          descriptionsPlusInputSchema <= 40_300,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 40300`,
+          descriptionsPlusInputSchema <= 40_400,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 40400`,
         );
       } finally {
         await handle.close();

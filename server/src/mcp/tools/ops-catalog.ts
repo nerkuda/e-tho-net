@@ -910,7 +910,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'networks.list',
     tool: 'etn.networks.list',
     group: 'networks',
-    when: 'сети, доступные пользователю ключа (с ролью и числом участников)',
+    when: 'сети, доступные пользователю ключа (роль, число участников, `has_structure`, `first_day_of_week`)',
     params: [],
     destructive: false,
     readOnly: true,

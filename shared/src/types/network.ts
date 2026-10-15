@@ -166,6 +166,12 @@ export interface NetworkListItem {
    * Derived: `Boolean(type_roles.table_of_contents)`.
    */
   has_structure: boolean;
+  /**
+   * Первый день недели сети (ISO 1=пн … 7=вс) — настройка, управляющая
+   * семантикой `$weekStart`/`$weekEnd` в отборах (задача 8eaeba9a, 0.13.1).
+   * То же значение, что у `GET /networks/:id` (`networkDto`), — единый источник.
+   */
+  first_day_of_week: number;
 }
 
 /** Input for `POST /networks/{id}/members` (03-server-api.md §5.3). */

@@ -67,7 +67,9 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
         'property values (structural link properties «Родители»/«Потомки» are summarized by `counters` ' +
         'and not repeated), neighbour counters (`deletion_blocks` too), `thought_types`. ' +
         '`include_conventions: true` adds ' +
-        '`conventions` (off by default); `include_examples: true` adds `examples`. Carries `type_roles` and ' +
+        '`conventions` (off by default); `include_examples: true` adds `examples`. Carries `type_roles`, ' +
+        '`first_day_of_week` (ISO 1=пн…7=вс — настройка `$weekStart`/`$weekEnd`, паритет ' +
+        'с `GET /networks/:id`) and ' +
         '`instructions_ref` when the `instructions` role is set. ' +
         '`has_structure: false` → empty `sections`, fall back to search/query.',
       inputSchema: NetworksStructure.schema,
@@ -112,6 +114,9 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
             network_id: args.network_id,
             has_structure: false as const,
             type_roles: network.type_roles,
+            // Настройка сети (задача 8eaeba9a): доступна и в «худом» ответе —
+            // управляет семантикой `$weekStart`/`$weekEnd` в отборах.
+            first_day_of_week: network.first_day_of_week,
             ...conventionsField,
             ...instructionsField,
             ...examplesField,
@@ -199,6 +204,7 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
           network_id: args.network_id,
           has_structure: true as const,
           type_roles: network.type_roles,
+          first_day_of_week: network.first_day_of_week,
           node_section_type: sectionType,
           ...conventionsField,
           ...instructionsField,
