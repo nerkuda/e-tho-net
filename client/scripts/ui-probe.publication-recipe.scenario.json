@@ -95,7 +95,8 @@
     },
     {
       "name": "phrase-has-words-operator",
-      "probe": "(document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? '').includes('есть слова')"
+      "probe": "(document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? '').includes('есть слова')",
+      "expect": true
     },
     {
       "name": "theme-tokens-differ",

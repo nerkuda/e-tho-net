@@ -419,4 +419,20 @@ test('expectFrom: ожидание — снимок ранее выполнен�
     () => validateScenario(scenarioFrom([{ api: { path: '/x' }, expectFrom: '' }])),
     ScenarioError,
   );
+  // Самоссылка — тавтология: раннер кладёт значение шага в `context.values` под
+  // его именем ДО проверки ожидания, поэтому шаг сверялся бы сам с собой и был
+  // бы всегда зелёным. Валидация обязана отвергать такую ссылку.
+  assert.throws(
+    () =>
+      validateScenario(
+        scenarioFrom([{ name: 'p', probe: { name: 'p', expression: '1' }, expectFrom: 'p' }]),
+      ),
+    ScenarioError,
+  );
+  // Автоимя шага — тоже самоссылка (ключ снимка в `context.values` — имя ШАГА,
+  // а не вложенное имя пробы).
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ probe: { expression: '1' }, expectFrom: '1:probe' }])),
+    ScenarioError,
+  );
 });

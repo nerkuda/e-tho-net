@@ -538,6 +538,15 @@ function validateStep(raw, index, defaultTimeout) {
   if (raw.expect !== undefined) step.expect = raw.expect;
   if (raw.expectFrom !== undefined) {
     step.expectFrom = asString(raw.expectFrom, `${where}.expectFrom`);
+    // Ссылка на самого себя дала бы тавтологию: раннер кладёт значение шага в
+    // `context.values` под его именем ДО проверки ожидания, поэтому шаг
+    // «сверялся» бы с собственным значением и всегда был зелёным.
+    if (step.expectFrom === step.name) {
+      fail(
+        `${where}: «expectFrom» ссылается на сам шаг «${step.name}» — сравнение стало бы ` +
+          'тавтологичным (шаг сверяется с собственным значением)',
+      );
+    }
   }
   switch (kind) {
     case 'key': {
