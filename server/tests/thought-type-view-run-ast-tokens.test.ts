@@ -458,3 +458,150 @@ describe(
     });
   },
 );
+
+/**
+ * Ad-hoc AST-маршрут `POST /networks/{nid}/thoughts/{thoughtId}/views/run`
+ * (задача 0e7e89f5) — REST-паритет с MCP `etn.views.run { ast }`: то же тело
+ * отбора исполняется ОТНОСИТЕЛЬНО контекстной мысли, контекст исключается из
+ * страницы, `$thought*` резолвится, красная диагностика запрещает прогон, а
+ * `ast.sort` несовместим с телом `sort`/`order`.
+ */
+describe(
+  'ad-hoc AST-маршрут относительно мысли (0e7e89f5)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    /** Прогнать новый ad-hoc маршрут с произвольным телом. */
+    async function runAdHoc(
+      ctx: RestTestContext,
+      thoughtId: string,
+      payload: Record<string, unknown>,
+    ): Promise<{ statusCode: number; json: () => Record<string, unknown>; body?: string }> {
+      const res = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/views/run`,
+        headers: authHeaders(ctx),
+        payload,
+      });
+      return { statusCode: res.statusCode, json: () => res.json() as Record<string, unknown>, body: res.body?.toString() };
+    }
+
+    it('$thought.type резолвится, контекстная мысль исключена, meta.ast; тело строгое', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildTokenFixture(ctx);
+        // Две мысли того же типа, что и контекст.
+        const same = await createChildOf(ctx, `same-${randomUUID().slice(0, 6)}`, ctx.homeId);
+        await setType(ctx, same, fx.typeId);
+        const other = await createChildOf(ctx, `other-${randomUUID().slice(0, 6)}`, ctx.homeId);
+        await setType(ctx, other, fx.typeId);
+
+        const ast = {
+          version: 1,
+          filter: { entity: { kind: 'type' }, operator: 'eq', value: { token: '$thought.type' } },
+        };
+        const res = await runAdHoc(ctx, fx.context, { ast });
+        assert.equal(res.statusCode, 200, res.body ?? '');
+        const body = res.json() as {
+          data: Array<{ id: string }>;
+          meta: { total: number; ast?: boolean; unresolved?: unknown[] };
+        };
+        const ids = body.data.map((r) => r.id);
+        assert.equal(body.meta.ast, true, 'REST ad-hoc помечен meta.ast');
+        assert.equal(body.meta.unresolved, undefined, '$thought.type разрешён');
+        assert.ok(ids.includes(same) && ids.includes(other), 'мысли того же типа в выборке');
+        assert.ok(!ids.includes(fx.context), 'контекстная мысль исключена из страницы');
+        assert.equal(body.meta.total, 2, 'total — COUNT совпадений без контекстной мысли');
+
+        // Строгая схема тела: неизвестное поле — 422 (а не молчаливое срезание).
+        const extra = await runAdHoc(ctx, fx.context, { ast, bogus: 1 });
+        assert.equal(extra.statusCode, 422, 'неизвестное поле ad-hoc тела отвергается');
+
+        // Старый `:view`-маршрут теперь тоже строгий: `ast` в нём — 422, а не
+        // молчаливое исполнение сохранённого отбора (ошибочно присланное тело
+        // прежде срезалось zod-ом).
+        const savedView = await createAstView(
+          ctx,
+          fx.typeId,
+          { kind: 'type' },
+          'eq',
+          { token: '$thought.type' },
+        );
+        assert.equal(savedView.statusCode, 201, savedView.body ?? '');
+        const oldWithAst = await ctx.app.inject({
+          method: 'POST',
+          url:
+            `/api/v1/networks/${ctx.networkId}/thoughts/${fx.context}` +
+            `/views/${encodeURIComponent(savedView.view!.name)}/run`,
+          headers: authHeaders(ctx),
+          payload: { ast },
+        });
+        assert.equal(oldWithAst.statusCode, 422, 'ast в старом маршруте отвергается строгой схемой');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('ast.sort и sort в теле одновременно — VALIDATION_ERROR (конвенция cb78315b)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildTokenFixture(ctx);
+        const conflicting = await runAdHoc(ctx, fx.context, {
+          ast: {
+            version: 1,
+            sort: [{ key: 'title', order: 'asc' }],
+            filter: { entity: { kind: 'type' }, operator: 'eq', value: { token: '$thought.type' } },
+          },
+          sort: 'created',
+        });
+        assert.equal(conflicting.statusCode, 422, 'два источника сортировки — 422');
+        assert.match(conflicting.body ?? '', /оставьте один источник/);
+
+        // Без ast.sort тело `sort`/`order` работает как плоская сортировка.
+        const ok = await runAdHoc(ctx, fx.context, {
+          ast: {
+            version: 1,
+            filter: { entity: { kind: 'type' }, operator: 'eq', value: { token: '$thought.type' } },
+          },
+          sort: 'created',
+          order: 'desc',
+        });
+        assert.equal(ok.statusCode, 200, ok.body ?? '');
+        const okBody = ok.json() as { meta: { sort: string; order: string } };
+        assert.equal(okBody.meta.sort, 'created');
+        assert.equal(okBody.meta.order, 'desc');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('красная диагностика (удалённая сущность) запрещает ad-hoc прогон — как у сохранённого отбора', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildTokenFixture(ctx);
+        const ast = {
+          version: 1,
+          filter: {
+            entity: { kind: 'property', property_id: randomUUID() },
+            operator: 'contains',
+            value: 'x',
+          },
+        };
+        const adHoc = await runAdHoc(ctx, fx.context, { ast });
+        assert.equal(adHoc.statusCode, 422, 'удалённое свойство — красная диагностика, прогон запрещён');
+        assert.match(adHoc.body ?? '', /filter_entity_deleted/);
+
+        // Паритет с сохранённым отбором: та же красная диагностика в `:view/run`.
+        const saved = await createAstView(
+          ctx,
+          fx.typeId,
+          { kind: 'property', property_id: randomUUID() },
+          'contains',
+          'x',
+        );
+        assert.equal(saved.statusCode, 422, 'красная диагностика срабатывает и на сохранении AST-отбора');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+  },
+);

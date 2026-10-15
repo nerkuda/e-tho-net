@@ -12,10 +12,7 @@ import { ViewsRun } from '../../contracts.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
 import { projectThoughtRows } from '../../domain/response-projection.js';
-import { getEffectiveViewsForThought, runViewForThought } from '../../domain/thought-type-views-service.js';
-import { queryThoughtsAsync } from '../../domain/heavy-read.js';
-import { mcpRequestToQuery } from '../../domain/query-service.js';
-import { parseFilterAst } from '../../domain/filter-ast.js';
+import { getEffectiveViewsForThought, executeViewDefinitionForThought, runViewForThought } from '../../domain/thought-type-views-service.js';
 import { openMemberNetwork, runTool } from '../context.js';
 import { mcpTokenContext } from './token-context.js';
 
@@ -53,30 +50,37 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetwork(rt, args.network_id);
         const thought = getThoughtOrThrow(ndb, args.thought_id);
         // AST-тело (задача cb78315b, требование a50c7872): готовая форма вместо
-        // сохранённого отбора. Разбор формы — доменный (неизвестные поля →
-        // VALIDATION_ERROR); исполняет тот же движок, что `etn.thoughts.query`.
+        // сохранённого отбора. Исполняется ЕДИНОЙ доменной точкой (задача
+        // 0e7e89f5) — той же, что и путь сохранённого отбора: контекст мысли из
+        // `thought_id` вызова, резолв `$thought*`, исключение контекстной мысли,
+        // `total` (COUNT), жёлтая диагностика, `has_more`/`next_cursor`.
+        // Ad-hoc путь — `ast.sort` и `order` взаимоисключающие (cb78315b).
         if (args.ast !== undefined) {
-          const ast = parseFilterAst(args.ast);
-          const req = mcpRequestToQuery(
-            {
-              ast,
+          const limit = args.limit ?? 100;
+          const offset = args.offset ?? 0;
+          const result = await executeViewDefinitionForThought(ndb, {
+            definition: args.ast as Record<string, unknown>,
+            thoughtTypeId: thought.type_id,
+            thoughtId: args.thought_id,
+            userId: rt.deps.auth.userId,
+            options: {
               ...(args.order !== undefined ? { order: args.order } : {}),
-              // Тот же дефолт лимита, что у пути сохранённого отбора (100) —
-              // иначе два пути etn.views.run отвечали бы разными страницами.
-              limit: args.limit ?? 100,
-              ...(args.offset !== undefined ? { offset: args.offset } : {}),
+              limit,
+              offset,
+              // Обязательный пункт задачи cb78315b: контекст разрешения токенов.
+              tokenContext: mcpTokenContext(rt, args.network_id),
+              // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
+              profile: 'thoughts',
+              // Потолок страницы — общий с сохранённым путём `etn.views.run`.
+              maxLimit: 200,
+              // Ad-hoc: `ast.sort` XOR `sort`/`order` (конвенция cb78315b).
+              exclusiveSort: true,
             },
-            { maxNodes: rt.limits.maxNodesPerSubgraph },
-          );
-          const result = await queryThoughtsAsync(ndb, rt.deps.auth.userId, req, {
-            maxLimit: 200,
-            emptyFilterMode: 'all',
-            // Обязательный пункт задачи cb78315b: контекст разрешения токенов.
-            tokenContext: mcpTokenContext(rt, args.network_id),
-            // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
-            profile: 'thoughts',
           });
           recordReads(ndb, result.items.map((i) => i.id), { now: new Date().toISOString() });
+          // O10: посещение контекстной мысли считается за чтение (как в
+          // ветке сохранённого отбора ниже).
+          recordReads(ndb, [args.thought_id], { now: new Date().toISOString() });
           const pageItems = projectThoughtRows(result.items);
           return {
             thought: { id: thought.id, title: thought.title },
@@ -84,20 +88,26 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
             thought_types: thoughtTypeCatalog(ndb, pageItems.map((it) => it.type_id)),
             meta: {
               total: result.total,
-              limit: req.limit,
-              offset: req.offset,
-              sort: req.sort,
-              order: req.order,
+              limit,
+              offset,
+              sort: result.sort,
+              order: result.order,
               ast: true,
               has_more: result.has_more,
               next_cursor: result.next_cursor,
-              ...(result.unresolved !== undefined && result.unresolved.length > 0
+              ...(result.unresolved.length > 0
                 ? {
                     unresolved: result.unresolved.map((u) => ({
                       token: u.token,
                       reason: u.reason,
                     })),
                   }
+                : {}),
+              // Жёлтая диагностика (требование 325efc13): свойство отвязано от
+              // типа — отбор исполнен, предупреждение видно агенту. Прежде
+              // ad-hoc ветка диагностику не считала вовсе.
+              ...(result.warnings !== undefined && result.warnings.length > 0
+                ? { warnings: result.warnings }
                 : {}),
             },
           };
@@ -152,6 +162,8 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
             ...(args.order !== undefined ? { order: args.order } : {}),
             ...(args.limit !== undefined ? { limit: args.limit } : {}),
             ...(args.offset !== undefined ? { offset: args.offset } : {}),
+            // Потолок страницы — общий с ad-hoc веткой (200, задача 0e7e89f5).
+            maxLimit: 200,
             // Обязательный пункт задачи cb78315b: контекст разрешения токенов
             // (нужен для отборов, хранящих определение в форме AST).
             tokenContext: mcpTokenContext(rt, args.network_id),

@@ -3904,16 +3904,51 @@ export const RestViewUpdateBody = defineContract(
   },
 );
 
-/** Тело POST /thoughts/{id}/views/{view}/run — переопределения сортировки. */
+/**
+ * Тело POST /thoughts/{id}/views/{view}/run — переопределения сортировки.
+ * `.strict()` (задача 0e7e89f5): прежде схема не была строгой и ошибочно
+ * присланное `ast` молча срезалось zod-ом — вызов «успешно» исполнял
+ * сохранённый отбор вместо ad-hoc тела. Ad-hoc — отдельный маршрут.
+ */
 export const RestViewRunBody = defineContract(
   'rest:views.run-body',
-  z.object({
-    sort: z.enum(STRUCTURE_SORTS).optional(),
-    order: z.enum(SORT_ORDERS).optional(),
-    limit: z.number().int().min(1).max(STRUCTURES_QUERY_MAX_LIMIT).optional(),
-    offset: z.number().int().min(0).optional(),
-  }),
+  z
+    .object({
+      sort: z.enum(STRUCTURE_SORTS).optional(),
+      order: z.enum(SORT_ORDERS).optional(),
+      limit: z.number().int().min(1).max(STRUCTURES_QUERY_MAX_LIMIT).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .strict(),
   {
+    sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
+    order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
+    limit: { from: { kind: 'body' } },
+    offset: { from: { kind: 'body' } },
+  },
+);
+
+/**
+ * Тело POST /thoughts/{id}/views/run — ad-hoc AST-прогон относительно мысли
+ * (задача 0e7e89f5). Паритет с MCP `etn.views.run { ast }`: `ast` обязателен,
+ * `sort`/`order`/`limit`/`offset` — корпусные переопределения страницы.
+ * `ast.sort` и `sort`/`order` одновременно — `VALIDATION_ERROR` (конвенция
+ * cb78315b «оставьте один источник»). Потолок `limit` — 200 (паритет с
+ * MCP-ветками `etn.views.run`). Строгая схема: неизвестные поля отвергаются.
+ */
+export const RestViewRunAstBody = defineContract(
+  'rest:views.run-ast-body',
+  z
+    .object({
+      ast: FilterAstBody,
+      sort: z.enum(STRUCTURE_SORTS).optional(),
+      order: z.enum(SORT_ORDERS).optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .strict(),
+  {
+    ast: { from: { kind: 'body' }, msg: 'ast обязателен — ad-hoc тело отбора.' },
     sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
     order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
     limit: { from: { kind: 'body' } },

@@ -9,6 +9,8 @@
  *   PATCH  /api/v1/networks/{nid}/thought-types/{id}/views/{viewId}
  *   DELETE /api/v1/networks/{nid}/thought-types/{id}/views/{viewId}
  *   POST   /api/v1/networks/{nid}/thoughts/{thoughtId}/views/{view}/run
+ *   POST   /api/v1/networks/{nid}/thoughts/{thoughtId}/views/run   (ad-hoc AST,
+ *          задача 0e7e89f5 — паритет с MCP `etn.views.run { ast }`)
  *
  * Стиль — Fastify + декораторы из shared, валидация тела — на доменном сервисе
  * (задачи 17eb741e и 20b2fca0). Слой читается/пишется через `openRouteNetworkDb`
@@ -49,12 +51,14 @@ import {
   parseRest,
   RestIfMatch,
   RestViewCreateBody,
+  RestViewRunAstBody,
   RestViewRunBody,
   RestViewUpdateBody,
 } from '../contracts.js';
 import {
   createThoughtTypeView,
   deleteThoughtTypeView,
+  executeViewDefinitionForThought,
   getEffectiveViewsForThought,
   getThoughtTypeView,
   listThoughtTypeViewsByType,
@@ -82,6 +86,12 @@ interface RunViewParams {
   networkId: string;
   thoughtId: string;
   view: string;
+}
+
+/** Route params для `:networkId` + `:thoughtId` (ad-hoc `.../views/run`). */
+interface ThoughtIdParams {
+  networkId: string;
+  thoughtId: string;
 }
 
 /** Допустимые ключи тела `POST /thought-types/{id}/views`. */
@@ -470,6 +480,104 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             order: result.order,
             // Жёлтая диагностика (требование 325efc13): свойство отвязано от
             // типа — отбор исполнен, предупреждение видно пользователю/агенту.
+            ...(result.warnings !== undefined && result.warnings.length > 0
+              ? { warnings: result.warnings }
+              : {}),
+          },
+        });
+      },
+    );
+
+    // --- POST /thoughts/{thoughtId}/views/run (ad-hoc AST) -------------------
+    //
+    // Паритет с MCP `etn.views.run { ast }` (задача 0e7e89f5): исполняет
+    // произвольное AST-тело ОТНОСИТЕЛЬНО контекстной мысли через единую
+    // доменную точку. Маршрут регистрируется отдельно от `:view/run`
+    // (разное число сегментов) — старый контракт не меняется по форме.
+    // Событие `thought-type-view.run` НЕ эмитится: сохранённого отбора
+    // (view_id/view_name) у ad-hoc прогона нет, это операция чтения.
+    app.post(
+      '/networks/:networkId/thoughts/:thoughtId/views/run',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, thoughtId } = req.params as ThoughtIdParams;
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+
+        // Мысль-контекст обязательна: без неё токены `$thought*` не разрешатся,
+        // а `thought.type_id` — якорь жёлтой диагностики.
+        const thought = getThought(ndb, thoughtId);
+        if (thought === null) {
+          throw new EtnError(
+            'NOT_FOUND',
+            `Мысль ${thoughtId} не найдена.`,
+            { entity: 'thought', id: thoughtId },
+            req.id,
+          );
+        }
+
+        // Разбор тела единым контрактом (строгая схема): `ast` + корпусные
+        // `sort`/`order`/`limit`/`offset`. Конфликт `ast.sort` ↔ `sort`/`order`
+        // проверяет домен (`exclusiveSort`).
+        const runInput = parseRest(RestViewRunAstBody, req);
+        const bodySort = runInput.sort as StructureSort | undefined;
+        const bodyOrder = runInput.order as SortOrder | undefined;
+        const limit = runInput.limit as number | undefined;
+        const offset = runInput.offset ?? 0;
+
+        const result = await executeViewDefinitionForThought(ndb, {
+          definition: runInput.ast as Record<string, unknown>,
+          thoughtTypeId: thought.type_id,
+          thoughtId,
+          userId: req.auth!.user.id,
+          ...(req.id !== undefined ? { requestId: req.id } : {}),
+          options: {
+            ...(bodySort !== undefined ? { sort: bodySort } : {}),
+            ...(bodyOrder !== undefined ? { order: bodyOrder } : {}),
+            ...(limit !== undefined ? { limit } : {}),
+            offset,
+            // Контекст разрешения токенов AST (как у `:view/run`).
+            tokenContext: restTokenContext(app, req.auth!.user.id, networkId),
+            // Статистика — только при включённом журналировании (0f34a5ff);
+            // строка источника — своя (`rest.view_run_ast`).
+            collectStats: app.fileLog.enabled,
+            // Потолок страницы — общий с MCP-ветками `etn.views.run` (200).
+            maxLimit: 200,
+            // Ad-hoc: `ast.sort` XOR `sort`/`order` (конвенция cb78315b).
+            exclusiveSort: true,
+          },
+        });
+        logFilterStats(app.fileLog, networkId, 'rest.view_run_ast', result.stats);
+
+        // Неразрешимые токены (требование b7fdab20) — пустая страница с
+        // пояснением; прочие поля страницы в этом случае смысла не несут.
+        if (result.unresolved.length > 0) {
+          reply.code(200).send({
+            data: [],
+            meta: {
+              total: 0,
+              limit: limit ?? 0,
+              offset,
+              directions: {},
+              ast: true,
+              unresolved: result.unresolved,
+            },
+          });
+          return;
+        }
+
+        reply.code(200).send({
+          data: result.items,
+          meta: {
+            total: result.total,
+            limit: limit ?? result.items.length,
+            offset,
+            directions: result.directions,
+            sort: result.sort,
+            order: result.order,
+            // Клиенту видно, что исполнен ad-hoc отбор, а не сохранённый.
+            ast: true,
+            has_more: result.has_more,
+            next_cursor: result.next_cursor,
             ...(result.warnings !== undefined && result.warnings.length > 0
               ? { warnings: result.warnings }
               : {}),

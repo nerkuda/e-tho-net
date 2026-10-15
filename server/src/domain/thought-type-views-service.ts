@@ -716,6 +716,14 @@ export interface RunViewResult {
   warnings?: FilterDiagnostic[];
   /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
   stats?: QueryStats;
+  /**
+   * Есть ли ещё страницы за текущей (задача 0e7e89f5). Доносится из движка
+   * (`queryThoughts`) — прежде терялось: MCP `etn.views.run { ast }` молча не
+   * отдавал хвост, а сохранённый путь его не возвращал вовсе.
+   */
+  has_more: boolean;
+  /** Keyset-курсор следующей страницы (`null` — страниц больше нет). */
+  next_cursor: string | null;
 }
 
 /**
@@ -746,6 +754,20 @@ export interface RunViewQueryOptions {
    *  точка «мысли»; по умолчанию `thoughts`. Определяет видимость операндов и
    *  гранулярность времени. */
   profile?: FilterProfileId;
+  /**
+   * Потолок лимита страницы. Не задан — `STRUCTURES_QUERY_MAX_LIMIT`
+   * (REST `POST /thoughts/query`). MCP-ветки `etn.views.run` (сохранённый отбор
+   * и ad-hoc AST) и ad-hoc REST-маршрут используют 200 (задача 0e7e89f5) —
+   * прежде потолки расходились (100 vs 200).
+   */
+  maxLimit?: number;
+  /**
+   * `ast.sort` и поля `sort`/`order` взаимоисключающие (конвенция cb78315b
+   * «оставьте один источник», задача 0e7e89f5). По умолчанию `false`:
+   * сохранённый отбор допускает переопределение — тело перекрывает сохранённую
+   * сортировку (контракт 95273103). Ad-hoc путь передаёт `true`.
+   */
+  exclusiveSort?: boolean;
 }
 
 /**
@@ -843,25 +865,6 @@ function splitMultipleText(raw: string): string[] {
 }
 
 /**
- * Исполнить отбор относительно конкретной мысли (задача 20b2fca0).
- *
- * Шаги:
- *   1. Прочитать мысль (404 для несуществующей — `getThought` возвращает
- *      `null`, бросаем `NOT_FOUND`).
- *   2. Распарсить `definition` отбора как `StructureFilter` — этот же
- *      парсер использует REST/MCP при прямых запросах структур, так что
- *      токены и здесь проходят через `validateDefinitionForTokens` уже
- *      на этапе сохранения (защита двойная).
- *   3. Собрать контекст резолвера: поля мысли + значения свойств +
- *      id пользователя + часы (`now()` по умолчанию).
- *   4. Подставить токены. Если хоть один не разрешён — пустой результат
- *      с пояснениями (требование b7fdab20), `queryThoughts` не вызывается.
- *   5. Иначе — `queryThoughts` от имени `userId` с подставленным фильтром.
- *
- * Этап 5 упакует результат в REST-ответ `POST /thoughts/{id}/views/{view}/run`;
- * здесь только чистый pipeline без HTTP-обвязки.
- */
-/**
  * Коды плоской сортировки `StructureSort` → фиксированные ключи `ast.sort`.
  * Нужны, когда тело запроса переопределяет сортировку AST-определения
  * (контракт 95273103): `viewed`/`manual` ключа AST не имеют — там отбор
@@ -881,6 +884,59 @@ export async function runViewForThought(
   requestId?: string,
   options?: RunViewQueryOptions,
 ): Promise<RunViewResult> {
+  // Тонкая обёртка над единой доменной точкой (задача 0e7e89f5): от сохранённого
+  // отбора зависят лишь `view.definition` и `view.thought_type_id`.
+  return executeViewDefinitionForThought(ndb, {
+    definition: JSON.parse(view.definition) as Record<string, unknown>,
+    thoughtTypeId: view.thought_type_id,
+    thoughtId,
+    userId,
+    ...(requestId !== undefined ? { requestId } : {}),
+    ...(options !== undefined ? { options } : {}),
+  });
+}
+
+/**
+ * Исполнить ПРОИЗВОЛЬНОЕ определение отбора относительно конкретной мысли —
+ * единая доменная точка (задача 0e7e89f5). От сохранённого отбора отличается
+ * только источником определения: {@link runViewForThought} передаёт
+ * `view.definition` и `view.thought_type_id`, ad-hoc AST-прогон (`etn.views.run
+ * { ast }` и REST `POST /thoughts/{id}/views/run`) — само тело и тип контекстной
+ * мысли. Всё прочее — резолв токенов контекста мысли, диагностика, единый
+ * исполнитель, исключение контекстной мысли, `total` (всегда COUNT),
+ * `has_more`/`next_cursor` — ОДНО для обеих форм; второй сборки контекста мысли
+ * нет (общая точка {@link buildThoughtResolveContext}).
+ *
+ * Шаги:
+ *   1. Прочитать мысль (404 для несуществующей — `getThought` возвращает
+ *      `null`, бросаем `NOT_FOUND`).
+ *   2. Распарсить определение: wire-AST (`version`) либо старая плоская форма
+ *      `definition v1` (распознаётся по отсутствию `version`).
+ *   3. Собрать контекст резолвера: поля мысли + значения свойств +
+ *      id пользователя + часы (`now()` по умолчанию).
+ *   4. Подставить токены. Если хоть один не разрешён — пустой результат
+ *      с пояснениями (требование b7fdab20), `queryThoughts` не вызывается.
+ *   5. Иначе — `queryThoughts` от имени `userId` с подставленным фильтром.
+ *
+ * @param input.thoughtTypeId Тип мысли — якорь жёлтой диагностики «свойство
+ *   отвязано от типа» (`diagnoseFilterAst`). У сохранённого отбора —
+ *   `view.thought_type_id`, у ad-hoc — тип контекстной мысли (`thought.type_id`;
+ *   у мысли без типа диагностик нет).
+ */
+export async function executeViewDefinitionForThought(
+  ndb: NetworkDb,
+  input: {
+    definition: Record<string, unknown>;
+    thoughtTypeId?: string | null;
+    thoughtId: string;
+    userId: string;
+    requestId?: string;
+    options?: RunViewQueryOptions;
+  },
+): Promise<RunViewResult> {
+  const { thoughtId, userId, requestId } = input;
+  const options = input.options;
+  const parsed = input.definition;
   const thought = getThought(ndb, thoughtId);
   if (thought === null) {
     throw new EtnError(
@@ -890,7 +946,6 @@ export async function runViewForThought(
       requestId,
     );
   }
-  const parsed = JSON.parse(view.definition) as Record<string, unknown>;
   // Повторная защита: даже если по дороге кто-то подменил definition в БД,
   // здесь отбор не выполнится с невалидными токенами — выбросим 422.
   validateDefinitionForTokens(parsed, undefined, requestId);
@@ -970,6 +1025,8 @@ export async function runViewForThought(
         unresolved: resolvedAst.unresolved,
         sort,
         order,
+        has_more: false,
+        next_cursor: null,
       };
     }
     resolvedDefinition = resolvedAst.definition as Record<string, unknown>;
@@ -984,6 +1041,8 @@ export async function runViewForThought(
         unresolved: resolved.unresolved,
         sort,
         order,
+        has_more: false,
+        next_cursor: null,
       };
     }
     resolvedDefinition = resolved.definition as Record<string, unknown>;
@@ -997,10 +1056,32 @@ export async function runViewForThought(
     ? (() => {
         // Форму дерева валидирует доменный parseFilterAst (строгая проверка).
         const ast = parseFilterAst(resolvedDefinition, requestId);
+        // Ad-hoc путь (задача 0e7e89f5): `ast.sort` и `sort`/`order` — два
+        // источника одного порядка, одновременно недопустимы (конвенция
+        // cb78315b «оставьте один источник»). Сохранённый отбор эту пару
+        // допускает — тело перекрывает сохранённую сортировку (95273103).
+        if (
+          options?.exclusiveSort === true &&
+          ast.sort !== undefined &&
+          ast.sort.length > 0 &&
+          (options.sort !== undefined || options.order !== undefined)
+        ) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'Сортировка задана дважды: в теле ast (sort) и в полях sort/order — оставьте один источник.',
+            { field: 'sort' },
+            requestId,
+          );
+        }
         // Диагностика AST отбора типа (требования 44d61c8a/325efc13): красное
         // (удалённая сущность) — запрет применения; жёлтое (свойство отвязано
-        // от типа) — исполняем и отдаём предупреждение в ответе.
-        const diag = diagnoseFilterAst(ndb, ast, { thoughtTypeId: view.thought_type_id, requestId });
+        // от типа) — исполняем и отдаём предупреждение в ответе. Якорь жёлтой
+        // диагностики — тип мысли (у сохранённого отбора — тип отбора, у
+        // ad-hoc — тип контекстной мысли).
+        const diag = diagnoseFilterAst(ndb, ast, {
+          thoughtTypeId: input.thoughtTypeId ?? undefined,
+          requestId,
+        });
         if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
         warnings = diag.warnings;
         // Контракт 95273103: явные `sort`/`order` ТЕЛА переопределяют
@@ -1039,6 +1120,7 @@ export async function runViewForThought(
     emptyFilterMode: 'home_orphans',
     includeDirections: true,
     profile: options?.profile ?? 'thoughts',
+    ...(options?.maxLimit !== undefined ? { maxLimit: options.maxLimit } : {}),
     ...(options?.tokenContext !== undefined ? { tokenContext: options.tokenContext } : {}),
     ...(options?.collectStats === true ? { collectStats: true } : {}),
   });
@@ -1058,6 +1140,10 @@ export async function runViewForThought(
     unresolved: result.unresolved ?? [],
     sort,
     order,
+    // Хвост страницы несёт движок (задача 0e7e89f5): `total` — всегда COUNT
+    // (`count: true` выше), `has_more`/`next_cursor` — есть ли ещё страницы.
+    has_more: result.has_more,
+    next_cursor: result.next_cursor,
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(result.stats !== undefined ? { stats: result.stats } : {}),
   };

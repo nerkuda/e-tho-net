@@ -537,6 +537,167 @@ describe(
       }
     });
 
+    it('ad-hoc AST относительно мысли: REST POST /thoughts/{id}/views/run и MCP etn.views.run { ast } дают одинаковый результат (0e7e89f5)', async () => {
+      const restCtx = await buildRestContext();
+      const overrides = {
+        dataDir: restCtx.dataDir,
+        systemDb: restCtx.sys,
+        networkId: restCtx.networkId,
+      };
+      let mcpCtx: McpTestContext | undefined;
+      let handle: McpClientHandle | undefined;
+      try {
+        const typeRes = await restCtx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${restCtx.networkId}/thought-types`,
+          headers: authHeaders(restCtx),
+          payload: { name: 'версия' },
+        });
+        assert.equal(typeRes.statusCode, 201);
+        const versionTypeId = (typeRes.json().data as { id: string }).id;
+
+        const ndb = openNetworkDb(restCtx.dataDir, restCtx.networkId);
+        // Контекстная мысль — того же типа, что и потенциальные совпадения:
+        // без исключения она попала бы в собственную выборку. Название выбрано
+        // так, чтобы в ordering `alpha asc` она шла ПОСЛЕ совпадений (иначе
+        // страница `limit 1` состояла бы из неё одной и после исключения пустела).
+        const version = insertThought(ndb, 'Я-контекст', { type_id: versionTypeId });
+        const a = insertThought(ndb, 'Работа A', { type_id: versionTypeId });
+        const b = insertThought(ndb, 'Работа B', { type_id: versionTypeId });
+        // Чужая ветвь — другого типа, в выборку не входит.
+        const foreign = insertThought(ndb, 'Чужая', { type_id: null });
+
+        // AST-тело: «Тип = $thought.type» — резолв токена контекста мысли в
+        // ОБОИХ фасадах; контекстная мысль обязана быть исключена страницей.
+        const ast = {
+          version: 1,
+          filter: { entity: { kind: 'type' }, operator: 'eq', value: { token: '$thought.type' } },
+        };
+
+        // --- веточный паритет: сохранённый отбор (view_name) тем же телом ---
+        const viewRes = await restCtx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${restCtx.networkId}/thought-types/${versionTypeId}/views`,
+          headers: authHeaders(restCtx),
+          payload: { name: 'Того же типа', definition: JSON.stringify(ast), is_default: false },
+        });
+        assert.equal(viewRes.statusCode, 201, `create view: ${viewRes.body}`);
+
+        mcpCtx = await buildMcpContext(overrides);
+        handle = await connectMcpClient(mcpCtx, restCtx.adminKey);
+
+        // MCP сохранённый отбор — эталон ветки view_name.
+        const byNameRes = await handle.client.callTool({
+          name: 'etn.views.run',
+          arguments: { network_id: restCtx.networkId, thought_id: version, view_name: 'Того же типа' },
+        });
+        assert.equal(byNameRes.isError, undefined, toolText(byNameRes));
+        const byName = toolJson<{ data: Array<{ id: string }>; meta: { total: number; ast?: boolean } }>(byNameRes);
+
+        // MCP ad-hoc.
+        const mcpRes = await handle.client.callTool({
+          name: 'etn.views.run',
+          arguments: { network_id: restCtx.networkId, thought_id: version, ast },
+        });
+        assert.equal(mcpRes.isError, undefined, toolText(mcpRes));
+        const mcp = toolJson<{
+          data: Array<{ id: string }>;
+          meta: { total: number; ast?: boolean; has_more?: boolean; next_cursor?: string | null; unresolved?: unknown[] };
+        }>(mcpRes);
+
+        // REST ad-hoc (новый маршрут).
+        const restRes = await restCtx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${restCtx.networkId}/thoughts/${version}/views/run`,
+          headers: authHeaders(restCtx),
+          payload: { ast },
+        });
+        assert.equal(restRes.statusCode, 200, `REST ad-hoc run: ${restRes.body}`);
+        const rest = restRes.json() as {
+          data: Array<{ id: string }>;
+          meta: { total: number; ast?: boolean; has_more?: boolean; next_cursor?: string | null; unresolved?: unknown[] };
+        };
+
+        // Паритет REST ↔ MCP: одинаковое множество результатов (оболочки разные).
+        assert.deepEqual(
+          mcp.data.map((t) => t.id),
+          rest.data.map((t) => t.id),
+          'REST и MCP обязаны вернуть одинаковый порядок id',
+        );
+        assert.deepEqual(
+          [...mcp.data.map((t) => t.id)].sort(),
+          [a, b].sort(),
+          'выборка — совпадения типа, КРОМЕ контекстной мысли',
+        );
+        assert.equal(rest.meta.total, mcp.meta.total, 'total: REST и MCP совпадают');
+        assert.equal(mcp.meta.total, 2, 'total — COUNT без контекстной мысли');
+        assert.ok(!mcp.data.some((t) => t.id === version), 'контекстная мысль исключена из страницы');
+        assert.ok(!mcp.data.some((t) => t.id === foreign), 'чужая ветвь не в выборке');
+        assert.equal(mcp.meta.unresolved, undefined, '$thought.type разрешён в ad-hoc ветке MCP');
+        assert.equal(rest.meta.unresolved, undefined, '$thought.type разрешён в ad-hoc маршруте REST');
+
+        // Веточный паритет: ad-hoc и сохранённый отбор дают одно и то же.
+        assert.deepEqual(
+          mcp.data.map((t) => t.id),
+          byName.data.map((t) => t.id),
+          'ветки view_name и ast обязаны совпасть',
+        );
+        assert.equal(mcp.meta.total, byName.meta.total, 'total веток view_name и ast совпадает');
+        assert.equal(byName.meta.ast, undefined, 'сохранённый отбор не помечен meta.ast');
+        assert.equal(mcp.meta.ast, true, 'ad-hoc MCP помечен meta.ast');
+        assert.equal(rest.meta.ast, true, 'ad-hoc REST помечен meta.ast');
+
+        // Хвост страницы (регрессия: MCP ast-ветка молча не отдавала has_more).
+        assert.equal(typeof mcp.meta.has_more, 'boolean', 'MCP ad-hoc обязан нести has_more');
+        assert.ok('next_cursor' in mcp.meta, 'MCP ad-hoc обязан нести next_cursor');
+        assert.equal(mcp.meta.has_more, rest.meta.has_more, 'has_more: REST и MCP совпадают');
+
+        // Пагинация: limit 2 отдаёт две записи и признак «есть ещё». `total` —
+        // COUNT совпадений (3: две работы + контекстная мысль); коррекция total
+        // на исключённую контекстную мысль применяется, только если СТРАНИЦА
+        // её действительно потеряла (контракт 296ca6be, как у сохранённого
+        // отбора) — здесь контекстная мысль третья по `alpha asc` и на
+        // страницу не попала.
+        const pageRes = await restCtx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${restCtx.networkId}/thoughts/${version}/views/run`,
+          headers: authHeaders(restCtx),
+          payload: { ast, limit: 2 },
+        });
+        assert.equal(pageRes.statusCode, 200, `REST ad-hoc page: ${pageRes.body}`);
+        const page = pageRes.json() as {
+          data: Array<{ id: string }>;
+          meta: { total: number; limit: number; has_more: boolean; next_cursor: string | null };
+        };
+        assert.equal(page.data.length, 2, 'limit 2 — две записи');
+        assert.equal(page.meta.limit, 2);
+        assert.equal(page.meta.total, 3, 'total — COUNT совпадений (страница контекст не потеряла)');
+        assert.equal(page.meta.has_more, true, 'есть вторая страница');
+        assert.ok(page.meta.next_cursor !== null, 'курсор следующей страницы выдан');
+
+        // Страница, забравшая контекстную мысль, даёт скорректированный total
+        // (паритет с сохранённым отбором): limit 3 покрывает все совпадения.
+        const fullPageRes = await restCtx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${restCtx.networkId}/thoughts/${version}/views/run`,
+          headers: authHeaders(restCtx),
+          payload: { ast, limit: 3 },
+        });
+        assert.equal(fullPageRes.statusCode, 200, `REST ad-hoc full page: ${fullPageRes.body}`);
+        const fullPage = fullPageRes.json() as {
+          data: Array<{ id: string }>;
+          meta: { total: number; has_more: boolean };
+        };
+        assert.equal(fullPage.data.length, 2, 'контекстная мысль исключена из страницы');
+        assert.equal(fullPage.meta.total, 2, 'total скорректирован на исключённую контекстную мысль');
+        assert.equal(fullPage.meta.has_more, false, 'страница полная');
+      } finally {
+        if (handle !== undefined) await handle.close();
+        if (mcpCtx !== undefined) await closeMcpContext(mcpCtx, overrides);
+        await closeRestContext(restCtx);
+      }
+    });
+
     it('счётчик только по флагу, keyset-курсор страниц и FTS-keywords — сквозным сценарием REST ↔ MCP (этап 4)', async () => {
       const restCtx = await buildRestContext();
       const overrides = {

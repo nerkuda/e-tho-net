@@ -853,7 +853,7 @@ export function resolveGlobalDateTokens(
         path: '',
         token: tok.raw,
         reason: 'unknown_token',
-        message: `Токен «${tok.raw}» требует контекста мысли и в периоде недопустим; доступны $today/$now, $weekStart/$weekEnd, $monthStart/$monthEnd, $yearStart/$yearEnd, $hourStart/$hourEnd и арифметика ±Nd/±Nw/±Nmo/±Ny/±Nh/±Nmi.`,
+        message: `Токен «${tok.raw}» требует контекста мысли; доступны $today/$now, $weekStart/$weekEnd, $monthStart/$monthEnd, $yearStart/$yearEnd, $hourStart/$hourEnd и арифметика ±Nd/±Nw/±Nmo/±Ny/±Nh/±Nmi.`,
       });
     }
   }
