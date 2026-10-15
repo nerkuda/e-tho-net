@@ -598,5 +598,92 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    // Задача 2220340b: `focus_thought_id` — параметр точки поиска и в MCP
+    // (паритет с REST). Проба — ОБЩИЙ мир REST+MCP: одно тело `ast` и одна
+    // мысль-фокус обязаны дать одинаковый результат в обоих фасадах.
+    it('MCP etn.thoughts.search: focus_thought_id разрешает $thought как REST', async () => {
+      const rest = await buildRestContext();
+      const mcp = await buildMcpContext({
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      const handle = await connectMcpClient(mcp, rest.adminKey);
+      try {
+        const root = seedThought(rest.ndb, 'Secret mcp root');
+        const child = seedThought(rest.ndb, 'Secret mcp child');
+        const outsider = seedThought(rest.ndb, 'Secret mcp outsider');
+        seedStructuralLink(rest.ndb, root, child);
+        const tree = ast(leaf({ kind: 'id' }, 'in_hierarchy', { token: '$thought' }));
+
+        const url =
+          `/api/v1/networks/${rest.networkId}/search?` +
+          new URLSearchParams({
+            q: 'secret',
+            scope: 'names',
+            ast: JSON.stringify(tree),
+            focus_thought_id: root,
+          }).toString();
+        const restRes = await rest.app.inject({ method: 'GET', url, headers: authHeaders(rest) });
+        assert.equal(restRes.statusCode, 200, JSON.stringify(restRes.json()));
+        const restIds = (restRes.json().data as { by_names: Array<{ thought_id: string }> }).by_names
+          .map((h) => h.thought_id)
+          .sort();
+
+        const mcpRes = await handle.client.callTool({
+          name: 'etn.thoughts.search',
+          arguments: {
+            network_id: rest.networkId,
+            query: 'secret',
+            scope: 'names',
+            ast: tree,
+            focus_thought_id: root,
+          },
+        });
+        assert.equal(mcpRes.isError, undefined, toolText(mcpRes));
+        const parsed = JSON.parse(toolText(mcpRes)) as {
+          by_names: Array<{ thought_id: string }>;
+          unresolved?: unknown[];
+        };
+        assert.deepEqual(
+          parsed.by_names.map((h) => h.thought_id).sort(),
+          restIds,
+          'MCP с focus_thought_id обязан дать тот же результат, что REST',
+        );
+        assert.deepEqual(parsed.by_names.map((h) => h.thought_id).sort(), [root, child].sort());
+        assert.ok(!parsed.by_names.some((h) => h.thought_id === outsider));
+        assert.equal(parsed.unresolved, undefined, 'токен разрешён — диагностики нет');
+
+        // Без фокуса — пустая страница и диагностика `unresolved`, не тихая пустота.
+        const noFocus = await handle.client.callTool({
+          name: 'etn.thoughts.search',
+          arguments: {
+            network_id: rest.networkId,
+            query: 'secret',
+            scope: 'names',
+            ast: tree,
+          },
+        });
+        assert.equal(noFocus.isError, undefined, toolText(noFocus));
+        const nf = JSON.parse(toolText(noFocus)) as {
+          by_names: unknown[];
+          unresolved?: Array<{ token: string }>;
+        };
+        assert.deepEqual(nf.by_names, []);
+        assert.ok(
+          (nf.unresolved ?? []).some((u) => u.token.includes('$thought')),
+          `неразрешимый токен обязан попасть в unresolved: ${toolText(noFocus)}`,
+        );
+      } finally {
+        await handle.close();
+        await closeMcpContext(mcp, {
+          dataDir: rest.dataDir,
+          networkId: rest.networkId,
+          systemDb: rest.sys,
+        });
+        await closeRestContext(rest);
+      }
+    });
   },
 );

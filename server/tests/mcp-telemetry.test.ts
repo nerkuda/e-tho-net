@@ -594,9 +594,14 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // (пред-сужение поверх дерева, паритет с REST) — контрактная ясность
         // для агента, собравшего вызов под REST. Прирост — только проза:
         // 44 721 → 44 805 Б. Планка поднята ровно под прирост: 44 800 → 44 900.
+        // 0.13.1 (задача 2220340b, «focus_thought_id в etn.thoughts.search»):
+        // поле контракта (`inputSchema` не режется, паритет с REST) плюс строка
+        // описания про мысль-фокус карты (контекст токенов `$thought*` в `ast`).
+        // Замер: 44 805 → 44 997 Б (+192: `inputSchema` +~80, проза +~112).
+        // Планка поднята ровно под прирост: 44 900 → 45 100.
         assert.ok(
-          bytes <= 44_900,
-          `tools/list JSON is ${bytes} bytes — over the 0.13.1 budget of 44900`,
+          bytes <= 45_100,
+          `tools/list JSON is ${bytes} bytes — over the 0.13.1 budget of 45100`,
         );
         // Потолок числа инструментов: фактическое 25 + запас 5 = 30 (нижняя
         // граница ориентира техпроекта 22e34ba5). Превышение — только
@@ -672,9 +677,12 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 0.13.1 (задача c5381a2d): см. блок выше — пометка совместимости
         // `link_filter` с `ast` в описании `etn.thoughts.query` дала +84 Б;
         // D+I 39 956 → 40 040 Б. Планка: 40 000 → 40 100.
+        // 0.13.1 (задача 2220340b): см. блок выше — `focus_thought_id` в
+        // `etn.thoughts.search` дал +192 Б; D+I 40 040 → 40 232 Б.
+        // Планка: 40 100 → 40 300.
         assert.ok(
-          descriptionsPlusInputSchema <= 40_100,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 40100`,
+          descriptionsPlusInputSchema <= 40_300,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 40300`,
         );
       } finally {
         await handle.close();

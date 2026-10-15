@@ -87,7 +87,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`VALIDATION_ERROR` with `details.candidates` on ambiguity), `author_id`/`editor_id` narrow it. ' +
         'Принимает и `ast` — мыслевые настройки отбора (профиль `thoughts`: подкорень, типы мыслей, ' +
         '«показывать неактуальные», «корзина»); валидируется профилем, `VALIDATION_ERROR` вне профиля; ' +
-        '`ast` XOR плоские мыслевые параметры. ' +
+        '`ast` XOR плоские мыслевые параметры. `focus_thought_id` — мысль-фокус карты: ' +
+        'контекст токенов `$thought*` в `ast` (совместим с `ast`). ' +
         '`limit` (1–200, default 50) + `offset` walk the tail; `meta.total_in_group` gives unfiltered totals ' +
         'per group.',
       inputSchema: ThoughtsSearch.schema,
@@ -135,6 +136,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             type: args.type,
             author_id: args.author_id,
             editor_id: args.editor_id,
+            // Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+            // 2220340b): один id по всем сетям веера, домен ищет мысль в
+            // реестре КАЖДОЙ сети — паритет с REST `fanOutSearch`.
+            focus_thought_id: args.focus_thought_id,
             show_inactive: args.show_inactive,
             limit: args.limit ?? 50,
             offset: args.offset ?? 0,
@@ -189,6 +194,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             type_id: typeIdForDomain,
             author_id: args.author_id,
             editor_id: args.editor_id,
+            // Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+            // 2220340b, паритет с REST `routes/search.ts`).
+            focus_thought_id: args.focus_thought_id,
             limit: args.limit,
             offset: args.offset,
           },

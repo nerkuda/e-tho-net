@@ -923,6 +923,12 @@ const SearchFields = z
     type: z.string().min(1).optional(),
     author_id: z.string().optional(),
     editor_id: z.string().optional(),
+    // Мысль-фокус карты — контекст разрешения токенов `$thought*` в `ast`
+    // (задача 2220340b, паритет с REST `RestSearchQuery.focus_thought_id`).
+    // КОРПОРАТИВНЫЙ к мыслевым настройкам: НЕ входит в XOR-список
+    // `SEARCH_AST_EXCLUSIVE_PARAMS` — совместим с `ast` и с плоскими
+    // параметрами, как в REST.
+    focus_thought_id: ThoughtId.optional(),
     show_inactive: z.boolean().optional(),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
