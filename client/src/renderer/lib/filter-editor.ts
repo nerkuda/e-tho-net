@@ -58,6 +58,9 @@ import { buildFilterTree, type FilterTreeData } from './filter-tree.js';
 import type { FilterValueContext, FilterValueEnumOption } from './filter-value.js';
 import type { SuggestSource } from './suggest-dropdown.js';
 import type { ThoughtCloudInput } from './thought-cloud.js';
+// Имя пользователя по id для фразы-превью (ошибка 23c7d3e9 п. A1) — кэш
+// участников сети; читается без сети (`resolveUserName`).
+import { resolveUserName } from './users.js';
 
 /** Корень контейнера редактора. */
 export const FILTER_EDITOR_CLASS = 'fe';
@@ -327,6 +330,11 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     linkTypes: data.linkTypes ?? [],
     // Типы мыслей — имена значений-типов во фразе-превью (ошибка 4258e694 п.12б).
     thoughtTypes: data.thoughtTypes ?? [],
+    // Пользователи — именами, а не id (ошибка 23c7d3e9 п. A1): кэш участников
+    // сети (`lib/users.ts`) отдаёт имя по id; для «Автора»/«Редактора» и
+    // операндов записи фраза показывает имя. Кэш не полон (не админ) — значение
+    // остаётся id, как раньше.
+    userName: (id) => resolveUserName(id),
   };
   let footer: FilterFooterHandle | null = null;
   if (opts.footer !== false) {

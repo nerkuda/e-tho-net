@@ -329,6 +329,104 @@ describe('композер фразы: значения-ссылки — име�
 });
 
 // ---------------------------------------------------------------------------
+// 1б. Пользователи — ИМЕНАМИ, а не id (ошибка 23c7d3e9 п. A1)
+// ---------------------------------------------------------------------------
+
+describe('композер фразы: пользователи показываются именами, а не id', () => {
+  const IVAN = '867d98ad-2663-481b-b563-105ef7e00001';
+  const PETR = '11112222-3333-4444-5555-666677778888';
+  /** Кэш пользователей-заглушка: id → имя (без сети, как `lib/users.ts`). */
+  const userCtx = (extra: Record<string, unknown> = {}): any =>
+    ctx({
+      userName: (id: string): string | null =>
+        new Map([
+          [IVAN, 'Иван Петров'],
+          [PETR, 'Пётр Сидоров'],
+        ]).get(id) ?? null,
+      ...extra,
+    });
+
+  it('матрица операндов: автор, редактор, автор/редактор записи, автор события', () => {
+    const cases: Array<{ entity: any; operator: any; value: any; expected: string }> = [
+      { entity: { kind: 'author' }, operator: 'eq', value: { kind: 'scalar', value: IVAN }, expected: 'Автор = Иван Петров' },
+      { entity: { kind: 'editor' }, operator: 'ne', value: { kind: 'scalar', value: PETR }, expected: 'Редактор ≠ Пётр Сидоров' },
+      { entity: { kind: 'record_author' }, operator: 'eq', value: { kind: 'scalar', value: IVAN }, expected: 'Автор записи = Иван Петров' },
+      { entity: { kind: 'record_editor' }, operator: 'eq', value: { kind: 'scalar', value: PETR }, expected: 'Редактор записи = Пётр Сидоров' },
+      { entity: { kind: 'user' }, operator: 'eq', value: { kind: 'scalar', value: IVAN }, expected: 'Автор события = Иван Петров' },
+    ];
+    for (const item of cases) {
+      assert.equal(
+        mod.filterPhraseLeaf(leaf(item.entity, item.operator, item.value), userCtx()),
+        item.expected,
+        `id не должен просачиваться во фразу (${item.entity.kind})`,
+      );
+    }
+  });
+
+  it('набор пользователей и сохранённое определение — имена каждого значения', () => {
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'author' }, 'in', { kind: 'list', items: [IVAN, PETR] }),
+        userCtx(),
+      ),
+      'Автор в Иван Петров, Пётр Сидоров',
+    );
+    // Сохранённый отбор (фраза строится из wire-определения, без живого редактора).
+    const definition = {
+      version: 1,
+      filter: { entity: { kind: 'editor' }, operator: 'eq', value: IVAN },
+    };
+    assert.equal(
+      mod.composeFilterPhraseFromDefinition(definition, userCtx()),
+      'Редактор = Иван Петров',
+    );
+  });
+
+  it('без источника имён (не-админ/пустой кэш) остаётся id — как было', () => {
+    assert.match(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'author' }, 'eq', { kind: 'scalar', value: IVAN }),
+        ctx(),
+      ),
+      /^Автор = 867d98ad/,
+      'имени нет — fallback на id',
+    );
+    assert.match(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'author' }, 'eq', { kind: 'scalar', value: 'aabbccdd-0000-1111-2222-333344445555' }),
+        userCtx(),
+      ),
+      /^Автор = aabbccdd/,
+      'незнакомый id — тоже id',
+    );
+  });
+
+  it('снапшот labels сильнее кэша, а токен `$user` печатается своим именем (не id)', () => {
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf(
+          { kind: 'author' },
+          'eq',
+          { kind: 'scalar', value: IVAN },
+          { labels: { value: 'Снимок автора' } },
+        ),
+        userCtx(),
+      ),
+      'Автор = Снимок автора',
+      'сохранённая подпись значения не подменяется свежим кэшем',
+    );
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'author' }, 'eq', { kind: 'token', token: '$user' }),
+        userCtx(),
+      ),
+      'Автор = $user',
+      'токен читается токеном: подстановка в id пользователя здесь не участвует',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 2. Группы: коннекции, вложенность, скобки
 // ---------------------------------------------------------------------------
 

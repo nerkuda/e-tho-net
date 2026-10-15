@@ -163,6 +163,17 @@ const NATURE_PROPERTY_TYPES: Readonly<Record<FilterTokenNature, readonly Propert
   none: [],
 };
 
+/**
+ * Виды ОПЕРАНДОВ, значение которых — ПОЛЬЗОВАТЕЛЬ (id участника сети):
+ * «Автор»/«Редактор» мыслей, «Автор/Редактор записи» дневника, «Автор события».
+ * Выводятся из {@link OPERAND_NATURE} (природа `user`) — не второй словарь.
+ * По ним ячейка значения выбирает виджет пользователя (`lib/filter-value.ts`),
+ * а композер фразы показывает имя вместо id (`lib/filter-phrase.ts`).
+ */
+export const FILTER_USER_OPERAND_KINDS: ReadonlySet<string> = new Set(
+  Object.keys(OPERAND_NATURE).filter((kind) => OPERAND_NATURE[kind] === 'user'),
+);
+
 /** Описание свойства для токена `$thought.[…]`. */
 interface TokenProperty {
   name: string;

@@ -54,6 +54,9 @@ import {
   type ThoughtType,
 } from '@etn/shared';
 import { canonicalGlobalToken, isGlobalDateToken, panelAnchorLabel, PERIOD_TOKEN_PRESETS } from './period-editor.js';
+// Перечень пользовательских операндов — из каталога природы значения
+// (`lib/filter-tokens.ts`), а не вторым словарём (ошибка 23c7d3e9 п. A1).
+import { FILTER_USER_OPERAND_KINDS } from './filter-tokens.js';
 
 /** Предел длины фразы по умолчанию; полный текст в тултипе не обрезается. */
 export const FILTER_PHRASE_LIMIT = 300;
@@ -77,6 +80,15 @@ export interface FilterPhraseState {
 export interface FilterPhraseContext extends FilterLabelData {
   /** Типы мыслей сети — имена значений-типов во фразе (ошибка 4258e694 п.12б). */
   thoughtTypes?: readonly ThoughtType[];
+  /**
+   * Имя пользователя по id (ошибка 23c7d3e9 п. A1): значение пользовательских
+   * операндов («Автор»/«Редактор»/«Автор записи»/«Автор события») — UUID
+   * участника, и во фразе-превью показывается ИМЯ, а не id. Источник — кэш
+   * пользователей клиента (`lib/users.ts`); не задан или имя неизвестно —
+   * значение остаётся как есть (id). Функция передаётся данными, поэтому
+   * модуль остаётся чистым и тестируемым без сети.
+   */
+  userName?: (id: string) => string | null;
   /** Предел длины фразы; по умолчанию {@link FILTER_PHRASE_LIMIT}. */
   limit?: number;
 }
@@ -263,8 +275,28 @@ function filterPhraseNamedValue(
     const snapshot = leaf.labels?.value;
     if (snapshot !== undefined && snapshot !== '') return truncateFilterName(snapshot);
   }
-  const resolved = filterPhraseCatalogueValue(leaf.entity.kind, raw, ctx);
+  const resolved =
+    filterPhraseCatalogueValue(leaf.entity.kind, raw, ctx) ??
+    filterPhraseUserValue(leaf.entity.kind, raw, ctx);
   return truncateFilterName(resolved ?? raw);
+}
+
+/**
+ * Имя ПОЛЬЗОВАТЕЛЯ по id (ошибка 23c7d3e9 п. A1): у пользовательских операндов
+ * («Автор», «Редактор», «Автор/Редактор записи», «Автор события») значение — id
+ * участника сети, и во фразе-превью показывается имя. Источник — кэш
+ * пользователей (`ctx.userName`, `lib/users.ts`); нет источника или имени —
+ * `null`, значение остаётся как есть (id, обрезанный по пределу). Токен `$user`
+ * сюда не попадает: он читается как токен и печатается своим именем.
+ */
+function filterPhraseUserValue(
+  kind: FilterAstEntityKind,
+  id: string,
+  ctx: FilterPhraseContext,
+): string | null {
+  if (!FILTER_USER_OPERAND_KINDS.has(kind)) return null;
+  const name = ctx.userName?.(id) ?? null;
+  return name !== null && name !== '' ? name : null;
 }
 
 /** Имя значения-ссылки из каталогов контекста; `null` — вид без каталога/не нашли. */
