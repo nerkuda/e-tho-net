@@ -894,6 +894,81 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(writes.length, 0, 'без правки модель не меняется');
   });
 
+  it('«между» у дат: ввод «С» позже «По» подтягивает конец к началу (2882c25f)', () => {
+    const { api, writes } = slot();
+    // Обе границы — конкретные даты, значит ячейка рисует поля даты: правим «С».
+    const box = render(
+      leaf({ kind: 'created_at' }, 'between', { kind: 'list', items: ['2026-01-10', '2026-01-20'] }),
+      api,
+    );
+    const fromInput = box
+      .findAll((n) => n.dataset['bound'] === 'from')[0]!
+      .findAll((n) => n.tagName.toUpperCase() === 'INPUT')[0]!;
+    fromInput.value = '2026-02-01';
+    fromInput.fire('change');
+    assert.deepEqual(
+      writes[0],
+      { kind: 'list', items: ['2026-02-01', '2026-02-01'] },
+      'конец интервала подтянут к началу — пустого (перевёрнутого) периода не остаётся',
+    );
+  });
+
+  it('«между» у дат: ввод «По» раньше «С» подтягивает начало к концу (2882c25f)', () => {
+    const { api, writes } = slot();
+    const box = render(
+      leaf({ kind: 'created_at' }, 'between', { kind: 'list', items: ['2026-01-10', '2026-01-20'] }),
+      api,
+    );
+    const toInput = box
+      .findAll((n) => n.dataset['bound'] === 'to')[0]!
+      .findAll((n) => n.tagName.toUpperCase() === 'INPUT')[0]!;
+    toInput.value = '2025-12-31';
+    toInput.fire('change');
+    assert.deepEqual(writes[0], { kind: 'list', items: ['2025-12-31', '2025-12-31'] });
+  });
+
+  it('авто-выравнивание границ — общее правило порядка дат, токены не сравниваются', () => {
+    // Точка правды — `lib/dates.ts` (setPeriodFrom/setPeriodTo), та же, что у
+    // диалога даты/периода: ячейка границ второго правила не заводит.
+    assert.deepEqual(mod.filterValueAlignDateBounds('2026-02-01', '2026-01-01', 0), {
+      from: '2026-02-01',
+      to: '2026-02-01',
+    });
+    assert.deepEqual(mod.filterValueAlignDateBounds('2026-02-01', '2026-01-01', 1), {
+      from: '2026-01-01',
+      to: '2026-01-01',
+    });
+    assert.deepEqual(
+      mod.filterValueAlignDateBounds('2026-01-01', '2026-02-01', 0),
+      { from: '2026-01-01', to: '2026-02-01' },
+      'порядок не нарушен — границы остаются как есть',
+    );
+    assert.deepEqual(
+      mod.filterValueAlignDateBounds({ token: '$today' }, '2026-01-01', 1),
+      { from: { token: '$today' }, to: '2026-01-01' },
+      'границу-токен с датой не сравниваем (резолва токенов в ячейке нет)',
+    );
+    assert.deepEqual(mod.filterValueAlignDateBounds('', '2026-01-01', 1), { from: '', to: '2026-01-01' });
+  });
+
+  it('«между» у дат: граница-токен порядку не подчиняется (2882c25f)', () => {
+    const { api, writes } = slot();
+    const box = render(
+      leaf({ kind: 'created_at' }, 'between', { kind: 'list', items: [{ token: '$today' }, '2026-01-20'] }),
+      api,
+    );
+    const toInput = box
+      .findAll((n) => n.dataset['bound'] === 'to')[0]!
+      .findAll((n) => n.tagName.toUpperCase() === 'INPUT')[0]!;
+    toInput.value = '2020-01-01';
+    toInput.fire('change');
+    assert.deepEqual(
+      writes[0],
+      { kind: 'list', items: [{ token: '$today' }, '2020-01-01'] },
+      'начало — опора, а не дата: порядок не выравнивается (прежнее поведение)',
+    );
+  });
+
   it('перечисление: чип-поле выбранных значений, без «простыни» чекбоксов (п. C2/C3)', () => {
     const { api } = slot();
     const box = render(leaf({ kind: 'kind' }, 'in'), api);

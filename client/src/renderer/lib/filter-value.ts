@@ -79,7 +79,7 @@ import {
   filterTokenNature,
 } from './filter-tokens.js';
 import { dateField } from './date-field.js';
-import { todayLocal } from './dates.js';
+import { isValidLocalDay, setPeriodFrom, setPeriodTo, todayLocal } from './dates.js';
 import { VALUE_TYPE_LABELS, valueTypeIconName } from './property-list.js';
 import {
   canonicalGlobalToken,
@@ -458,6 +458,31 @@ export function filterValueBoundAt(value: FilterTreeValue, index: 0 | 1): Filter
   const item = items[index];
   if (item === undefined) return { kind: 'none' };
   return typeof item === 'object' ? { kind: 'token', token: item.token } : { kind: 'scalar', value: item };
+}
+
+/**
+ * Автокоррекция границ «между» у ДАТ (ошибка 2882c25f): интервал не должен
+ * «скрещиваться» — ввод «С» позже «По» подтягивает конец к началу, ввод «По»
+ * раньше «С» — начало к концу (решение пользователя 2026-10-15). Правило порядка
+ * границ — общая точка правды `lib/dates.ts` (`setPeriodFrom`/`setPeriodTo`), та же,
+ * что у диалога «Дата/период» и полей «Даты» панели отбора: второго правила не
+ * заводим.
+ *
+ * Сравниваются только ОБЕ конкретные даты. Граница-токен (`$today+3d`) и пустая
+ * ячейка порядку не подчиняются: резолва токенов в ячейке нет, а «между $weekStart
+ * и $today» осмысленно и без числового сравнения — прежнее поведение сохраняется.
+ */
+export function filterValueAlignDateBounds(
+  from: FilterTreeListItem,
+  to: FilterTreeListItem,
+  edited: 0 | 1,
+): { from: FilterTreeListItem; to: FilterTreeListItem } {
+  const fromDay = typeof from === 'string' && isValidLocalDay(from) ? from : null;
+  const toDay = typeof to === 'string' && isValidLocalDay(to) ? to : null;
+  if (fromDay === null || toDay === null) return { from, to };
+  const aligned =
+    edited === 0 ? setPeriodFrom(fromDay, toDay, fromDay) : setPeriodTo(fromDay, toDay, toDay);
+  return { from: aligned.from, to: aligned.to };
 }
 
 /** Модель значения листа → значение для общего редактора. */
@@ -1181,13 +1206,15 @@ function boundsControl(
   const missing: FilterTreeListItem = dateCell ? { token: DATE_BOUND_DEFAULT_TOKEN } : '';
   // Запись границы — структурная (ошибка 7d36f439): ячейка границ держит
   // собственное состояние частей (опора/сдвиг/единица, точная дата) и
-  // пересобирается из модели.
+  // пересобирается из модели. Пару границ выравниваем по порядку ДАТ
+  // (ошибка 2882c25f) — токены и пустые границы не трогаются.
   const push = (next: 0 | 1, bound: FilterTreeValue): void => {
-    const items: FilterTreeListItem[] = [
+    const aligned = filterValueAlignDateBounds(
       boundAsItem(next === 0 ? bound : from, missing),
       boundAsItem(next === 1 ? bound : to, missing),
-    ];
-    (api.setStructuralValue ?? api.setValue)({ kind: 'list', items });
+      next,
+    );
+    (api.setStructuralValue ?? api.setValue)({ kind: 'list', items: [aligned.from, aligned.to] });
   };
   if (dateCell) {
     const fromBox = dateBoundControl(filterValueScalarText(from), (bound) => push(0, bound), ctx);
