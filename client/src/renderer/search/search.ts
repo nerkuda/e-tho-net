@@ -32,11 +32,17 @@
  *   the MENTAL settings — the subroot («Родители в иерархии» row), thought
  *   types, «показывать неактуальные» and «корзина» — are editor rows compiled
  *   into the shared AST (`buildSearchAst`); the search text `q` and the CORPUS
- *   settings — search areas (мысли/связи/хроники → `scope`), link type and
- *   author/editor — stay plain FTS request params (requirement db84b5e1,
- *   ADR 7581ac14). The zone keeps two plain rows: «Места поиска:» (scope
- *   checkboxes) and «Ограничения:» (link type chip + Автор/редактор selects);
- *   rows wrap when narrow;
+ *   settings — search areas (мысли/связи/хроники → `scope`) — stay plain FTS
+ *   request params (requirement db84b5e1, ADR 7581ac14). The zone keeps one
+ *   plain row «Места поиска:» (scope checkboxes, FIRST in the zone) and a
+ *   permanently visible footer of commands («Очистить» + «Добавить отбор…»).
+ *   The корпусные fields «Ограничения»/«Автор»/«Редактор» are removed from the
+ *   UI (customer decision 2026-10-15, задача 4b1cc3d4); rows wrap when narrow;
+ * - the map search passes the focused thought as `focus_thought_id`, so an AST
+ *   condition with the `$thought` token («По родителю в фокусе») resolves
+ *   server-side; without a focus the token is unresolved and the response
+ *   carries `unresolved` diagnostics, shown above the result groups (задача
+ *   4b1cc3d4);
  * - the zone's visibility is toggled by the funnel button in the panel's top
  *   corner (default off) and remembered in L4 `ui_state`
  *   (`search_settings_open`), like `search_state`;
@@ -73,30 +79,31 @@ import {
   searchSettingsPlacement,
 } from '../lib/pure.js';
 import {
-  buildEntityChipField,
-  filterEntityOptions,
-  linkTypeEntityOptions,
-} from '../lib/entity-picker.js';
-import {
+  addSearchQuickCondition,
   buildSearchAst,
   buildSearchCriteriaWire,
+  clearSearchCorpusFields,
   defaultSearchCriteriaState,
   parseSearchCriteria,
   searchCriteriaToStored,
+  SEARCH_QUICK_CONDITIONS,
   type SearchCriteriaState,
 } from '../lib/filter-builder.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../lib/filter-editor.js';
-import { buildUserSelectWidget } from '../lib/users.js';
 import { createDebouncedWriter } from '../lib/debounced-writer.js';
+import { menuAction, showMenuAt } from '../lib/menu.js';
+import { notice } from '../lib/notice.js';
+import { t } from '../lib/i18n.js';
 import {
   UI_STATE_KEY,
   type SearchResponse,
   type SearchScope,
   type Thought,
+  type TokenIssue,
 } from '@etn/shared';
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
-import { iconButton } from '../lib/ui/button.js';
+import { iconButton, uiButton } from '../lib/ui/button.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
 
 /**
@@ -657,6 +664,12 @@ function mergeResponses(responses: SearchResponse[]): SearchResponse {
     by_chrono: [],
     meta: { total_in_group: { names: 0, texts: 0, links: 0, chronology: 0 } },
   };
+  // Диагностика неразрешённых токенов (требование b7fdab20): один AST гоняется
+  // по нескольким scope-ам, поэтому один и тот же неразрешённый токен приезжает
+  // из каждого ответа — схлопываем по (`path`, `token`, `reason`), порядок — по
+  // первому появлению (сервер делает то же для legacy `scope=thoughts`).
+  const unresolved: TokenIssue[] = [];
+  const seen = new Set<string>();
   for (const response of responses) {
     empty.by_names.push(...response.by_names);
     empty.by_texts.push(...response.by_texts);
@@ -666,7 +679,14 @@ function mergeResponses(responses: SearchResponse[]): SearchResponse {
     empty.meta.total_in_group.texts += response.meta.total_in_group.texts;
     empty.meta.total_in_group.links += response.meta.total_in_group.links;
     empty.meta.total_in_group.chronology += response.meta.total_in_group.chronology;
+    for (const issue of response.unresolved ?? []) {
+      const key = `${issue.path}\u0000${issue.token}\u0000${issue.reason}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unresolved.push(issue);
+    }
   }
+  if (unresolved.length > 0) empty.unresolved = unresolved;
   return empty;
 }
 
@@ -697,7 +717,13 @@ async function run(): Promise<void> {
     // `scope`/`link_type_id`/`author_id`/`editor_id`. Плоские мыслевые
     // параметры (type_id/show_inactive/trashed/in/from_thought_id) НЕ
     // передаются: сервер отвергает их вместе с `ast` (VALIDATION_ERROR).
-    const ast = buildSearchAst(options, store.state.focus?.focused.id ?? null);
+    //
+    // Мысль-фокус карты едет отдельным параметром `focus_thought_id`: по ней
+    // сервер разрешает токен `$thought` в условиях (команда «По родителю в
+    // фокусе»); без фокуса токен неразрешим — сервер вернёт диагностику
+    // `unresolved` (задача 4b1cc3d4).
+    const focusId = store.state.focus?.focused.id ?? null;
+    const ast = buildSearchAst(options, focusId);
     const criteriaWire = buildSearchCriteriaWire(options);
     const responses = await Promise.all(
       scopes.map((scope) =>
@@ -705,6 +731,7 @@ async function run(): Promise<void> {
           q,
           scope,
           ...(ast !== undefined ? { ast } : {}),
+          ...(focusId !== null ? { focus_thought_id: focusId } : {}),
           ...criteriaWire,
         }),
       ),
@@ -829,9 +856,28 @@ function currentHighlightTerms(): string[] {
   return chrome === null ? [] : searchHighlightTerms(chrome.input.value);
 }
 
+/**
+ * Диагностика неразрешённых токенов AST (требование b7fdab20): сервер отдаёт
+ * `unresolved` вместо тихой пустоты, а строка поиска показывает предупреждение
+ * и пояснение по каждому токену НАД группами результатов. Так условие «Мысль в
+ * иерархии $thought» без мысли в фокусе карты видно пользователю, а не выглядит
+ * «ничего не найдено» (задача 4b1cc3d4).
+ */
+function renderUnresolvedDiagnostics(
+  box: Element,
+  issues: readonly TokenIssue[] | undefined,
+): void {
+  if (issues === undefined || issues.length === 0) return;
+  const block = div('search-diagnostics');
+  block.append(el('p', 'search-diagnostic-warning', t('search.unresolvedTokens')));
+  for (const issue of issues) {
+    block.append(el('div', 'search-diagnostic-item', issue.message));
+  }
+  box.append(block);
+}
+
 /** Renders the four result groups. */
-function renderResults(response: SearchResponse | null): void {
-  if (chrome === null) return;
+function renderResults(response: SearchResponse | null): void {  if (chrome === null) return;
   const resultsBox = chrome.host.querySelector('.search-results');
   if (resultsBox === null) return;
   resultsBox.replaceChildren();
@@ -839,6 +885,10 @@ function renderResults(response: SearchResponse | null): void {
     resultsBox.append(el('p', 'muted', 'Введите запрос (минимум 3 символа).'));
     return;
   }
+  // Диагностика неразрешённых токенов AST (требование b7fdab20) — НАД группами
+  // результатов: условие с токеном без контекста обязано быть видимым, а не
+  // молча пустым (задача 4b1cc3d4: «По родителю в фокусе» без мысли в фокусе).
+  renderUnresolvedDiagnostics(resultsBox, response.unresolved);
   const networkId = requireNetworkId();
   // Группы результатов. Для мыслей иконка, название, цвета и начертание
   // приходят из общей фабрики облачка (мысли выглядят как на холсте); строки
@@ -1054,26 +1104,63 @@ async function openChronoHit(owner: 'thought' | 'link', ownerId: string): Promis
 }
 
 /**
- * Builds the «настройки поиска» zone. МЫСЛЕВЫЕ настройки (подкорень, типы
- * мыслей, «показывать неактуальные», «корзина») — строки единого редактора
- * (профиль `thoughts`, требование db84b5e1, ADR fc23f9c1/7581ac14); КОРПУСНЫЕ
- * настройки полнотекстового поиска остаются плоскими полями зоны: области
- * поиска (`scope`) и тип связи с автором/редактором. Текст `q` живёт в поле
- * поиска, не в этой зоне. Узкая панель укладывает элементы строк друг под
- * друга (`flex-wrap`), междустрочные отступы сохраняются.
+ * Builds the «настройки поиска» zone (задача 4b1cc3d4). Порядок зоны:
+ *   1) строка «Места поиска» (области FTS) — САМОЙ ПЕРВОЙ;
+ *   2) единый редактор мыслевых условий (профиль `thoughts`);
+ *   3) постоянно видимый ПОДВАЛ команд — «Очистить» и подменю «Добавить
+ *      отбор…» (не уезжает при прокрутке тела зоны, стили `search.css`).
+ *
+ * Корпусные поля «Ограничения» (типы связей), «Автор» и «Редактор» сняты с
+ * панели СОВСЕМ — решение заказчика (2026-10-15): их фильтрация ХИТОВ (связи
+ * по типу, хроно по авторству) не выражается редактором мыслевых условий;
+ * потеря объявлена осознанной и зафиксирована в спеке. Серверный API поиска
+ * параметры (`link_type_id`/`author_id`/`editor_id`) сохраняет для прямых
+ * клиентов и агентов.
  */
 function buildSettingsZone(zone: HTMLElement): void {
   zone.replaceChildren();
+
+  // Поля сняты с UI, но состояние читается из старого L4-снимка (`search_state`)
+  // целиком: обнуляем корпусные поля при каждой сборке зоны (в т.ч. после
+  // `restoreState` → `rebuildSettingsZone`), иначе восстановленный снимок дал бы
+  // НЕВИДИМЫЙ фильтр — на панели поля нет, а параметр уезжает в запрос (класс
+  // ошибок ca864656/32fd6125). `buildSearchCriteriaWire` затем не отдаёт пустые.
+  clearSearchCorpusFields(options);
+
+  // --- строка: места поиска (области FTS) — первой -------------------------
+  const mkCheck = (
+    label: string,
+    key: 'onlyThoughts' | 'onlyLinks' | 'onlyChrono',
+  ): HTMLElement => {
+    return checkboxRow({
+      label,
+      checked: options[key],
+      onChange: (checked) => {
+        options = { ...options, [key]: checked };
+        persistState();
+        refreshSearchIfVisible();
+      },
+    }).row;
+  };
+  const placesRow = div('search-settings-row');
+  placesRow.append(
+    span('Места поиска:', 'search-settings-label'),
+    mkCheck('мысли', 'onlyThoughts'),
+    mkCheck('связи', 'onlyLinks'),
+    mkCheck('хроники', 'onlyChrono'),
+  );
 
   // --- мыслевые настройки: единый редактор (профиль «мысли») ---------------
   // Реестр свойств пуст: строка поиска исторически не отбирает по свойствам
   // (как лента «События»); остальные операнды профиля `thoughts` доступны и без
   // реестра. Подкорень — строка «Родители в иерархии» (корень добавляет
   // `buildSearchAst`); типы мыслей — строка «Тип в иерархии»; видимость —
-  // строки «Актуальность»/«Помечено на удаление».
+  // строки «Актуальность»/«Помечено на удаление». Заголовок места — свой, из
+  // словаря (задача 4b1cc3d4), а не профильный «Показать мысли по условиям:».
   searchEditor = buildFilterEditor({
     profile: 'thoughts',
     networkId: requireNetworkId(),
+    title: t('filterEditor.titleSearch'),
     data: {
       registry: new Map(),
       linkTypes: store.state.linkTypes,
@@ -1102,77 +1189,73 @@ function buildSettingsZone(zone: HTMLElement): void {
     },
   });
 
-  // --- строка: места поиска (области FTS) ----------------------------------
-  const mkCheck = (
-    label: string,
-    key: 'onlyThoughts' | 'onlyLinks' | 'onlyChrono',
-  ): HTMLElement => {
-    return checkboxRow({
-      label,
-      checked: options[key],
-      onChange: (checked) => {
-        options = { ...options, [key]: checked };
-        persistState();
-        refreshSearchIfVisible();
-      },
-    }).row;
-  };
-  const placesRow = div('search-settings-row');
-  placesRow.append(
-    span('Места поиска:', 'search-settings-label'),
-    mkCheck('мысли', 'onlyThoughts'),
-    mkCheck('связи', 'onlyLinks'),
-    mkCheck('хроники', 'onlyChrono'),
-  );
+  // Тело зоны — ЕДИНСТВЕННАЯ прокручиваемая часть: строка мест поиска и дерево
+  // условий. Подвал команд вынесен из тела и не прокручивается (CSS
+  // `.search-settings-body` / `.search-settings-actions`, задача 4b1cc3d4).
+  const body = div('search-settings-body');
+  body.append(placesRow, searchEditor.root);
 
-  // --- строка: ограничения (корпусные) -------------------------------------
-  // Тип связи и автор/редактор фильтруют ХИТЫ FTS, а не мысль, и остаются
-  // плоскими параметрами запроса (требование b91336e7) — поэтому это обычные
-  // поля зоны, а не строки AST-редактора.
-  const linkTypeField = buildEntityChipField({
-    getValues: () => options.linkTypeIds,
-    onChange: (values) => {
-      options.linkTypeIds = values;
-      persistState();
-      refreshSearchIfVisible();
-    },
-    loadOptions: (query) =>
-      filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
-    optionsHeader: 'Типы связей',
-    placeholder: 'Тип связи…',
+  // --- подвал: постоянно видимые команды отбора ----------------------------
+  const actions = div('search-settings-actions');
+  const clearButton = uiButton({
+    label: t('search.clearConditions'),
+    role: 'ghost',
+    size: 's',
+    title: t('search.clearConditionsTitle'),
+    // «Очистить» — штатная очистка единого редактора (`handle.clear`): снимает
+    // все группы и условия ОСНОВНОЙ группы, пустая основная группа остаётся;
+    // места поиска и прочие настройки зоны не трогает (задача 4b1cc3d4).
+    onClick: () => searchEditor?.clear(),
   });
-
-  // Задача 59119797 «Фильтры Автор/Редактор»: два селекта пользователей
-  // сети. Пустая строка в состоянии — «не применять» (REST/MCP это и так
-  // понимают).
-  const authorSelect = buildUserSelectWidget({
-    label: 'Автор',
-    currentId: options.authorId,
-    onChange: (id) => {
-      options = { ...options, authorId: id };
-      persistState();
-      refreshSearchIfVisible();
-    },
+  const addButton = uiButton({
+    label: t('search.addFilter'),
+    role: 'ghost',
+    size: 's',
+    title: t('search.addFilterTitle'),
+    onClick: (event) => openQuickCommandsMenu(event),
   });
-  const editorSelect = buildUserSelectWidget({
-    label: 'Редактор',
-    currentId: options.editorId,
-    onChange: (id) => {
-      options = { ...options, editorId: id };
-      persistState();
-      refreshSearchIfVisible();
-    },
-  });
+  actions.append(clearButton, addButton);
 
-  const limitsRow = div('search-settings-row');
-  limitsRow.append(
-    span('Ограничения:', 'search-settings-label'),
-    linkTypeField.root,
-    authorSelect,
-    editorSelect,
-  );
+  zone.append(body, actions);
+}
 
-  zone.append(searchEditor.root, placesRow, limitsRow);
+/**
+ * Открывает подменю «Добавить отбор…» (задача 4b1cc3d4): меню общей словарной
+ * фабрики (`lib/menu.ts`) с тремя быстрыми командами отбора. Меню — уровневая
+ * выпадашка панели; команды выполняет {@link runQuickCommand}.
+ */
+function openQuickCommandsMenu(event: MouseEvent): void {
+  const anchor = event.currentTarget as HTMLElement | null;
+  const rect = anchor?.getBoundingClientRect();
+  showMenuAt(rect?.left ?? 8, rect?.bottom ?? 8, [
+    menuAction(t('search.cmdParentInFocus'), () => runQuickCommand('parentInFocus')),
+    menuAction(t('search.cmdOnlyActive'), () => runQuickCommand('onlyActive')),
+    menuAction(t('search.cmdOnlyNotTrashed'), () => runQuickCommand('onlyNotTrashed')),
+  ]);
+}
+
+/**
+ * Выполняет быструю команду отбора: кладёт её условие в ОСНОВНУЮ группу
+ * редактора (идемпотентно — повторный клик не плодит дубли,
+ * {@link addSearchQuickCondition}).
+ *
+ * «По родителю в фокусе» без мысли в фокусе карты — подсказка-тост, условие не
+ * добавляется: значение-токен `$thought` осталось бы неразрешимым, и поиск шёл
+ * бы с диагностикой `unresolved` вместо результата (задача 4b1cc3d4).
+ */
+function runQuickCommand(
+  command: 'parentInFocus' | 'onlyActive' | 'onlyNotTrashed',
+): void {
+  if (command === 'parentInFocus' && (store.state.focus?.focused.id ?? null) === null) {
+    notice(t('search.focusRequired'), 'warning');
+    return;
+  }
+  const next = addSearchQuickCondition(options.tree ?? null, SEARCH_QUICK_CONDITIONS[command]());
+  if (!next.added) return; // условие уже есть — дерево не меняется
+  options = { ...options, tree: next.tree };
+  persistState();
+  refreshSearchIfVisible();
+  searchEditor?.refresh();
 }
 
 /** Rebuilds the settings zone after options change (editor + plain rows). */

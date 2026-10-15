@@ -33,7 +33,12 @@ import type { FilterAstSortKey, FilterProfileId } from '@etn/shared';
 
 import { div } from './dom.js';
 import type { EntityChipFieldOptions } from './entity-picker.js';
-import { buildFilterAst, type FilterCriteriaState, type FilterTreeLeaf } from './filter-builder.js';
+import {
+  buildFilterAst,
+  defaultFilterTreeGroup,
+  type FilterCriteriaState,
+  type FilterTreeLeaf,
+} from './filter-builder.js';
 import {
   constructorFilterIssues,
   mergeFilterIssues,
@@ -279,6 +284,16 @@ export interface FilterEditorHandle {
   nameRow: HTMLElement | null;
   /** Перечитать вид из модели: дерево, сортировку, футер. */
   refresh: () => void;
+  /**
+   * Очистить условия отбора: основная (корневая) группа обнуляется до пустой
+   * `И` — все её группы и условия снимаются, пустая основная группа остаётся
+   * (`defaultFilterTreeGroup`). Модель — единственный источник состояния
+   * (ADR 30ff83bb), поэтому сброс идёт полем `state.tree`; другие поля хоста
+   * (сортировка, имя отбора, сохранённые отборы) НЕ трогаются — их сбрасывает
+   * сам хост. Редактор перерисовывается; правка проводится через `touch`, чтобы
+   * хост сохранил состояние и применил отбор.
+   */
+  clear: () => void;
 }
 
 /**
@@ -468,5 +483,18 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     footer?.refresh();
   };
 
-  return { root, profile, nameRow: footer?.nameRow ?? null, refresh };
+  /**
+   * Очистка условий места (кнопка «Очистить» зоны настроек строки поиска,
+   * задача 4b1cc3d4): корневая группа модели становится пустой `И` — все
+   * группы и условия основной группы сняты, сама группа остаётся. Далее
+   * обычный путь правки модели: перерисовка + `touch` (хост персистит и
+   * применяет), чтобы очистка не разошлась с состоянием места.
+   */
+  const clear = (): void => {
+    getState().tree = defaultFilterTreeGroup('and');
+    refresh();
+    touch();
+  };
+
+  return { root, profile, nameRow: footer?.nameRow ?? null, refresh, clear };
 }

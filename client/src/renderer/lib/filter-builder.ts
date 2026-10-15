@@ -1537,6 +1537,22 @@ export function buildSearchCriteriaWire(state: SearchCriteriaState): SearchCrite
 }
 
 /**
+ * Снять с модели корпусные поля, которых БОЛЬШЕ НЕТ на панели поиска: тип связи
+ * (`linkTypeIds`), автор/редактор (`authorId`/`editorId`). Панель отдаёт их
+ * плоскими параметрами запроса и невидимо фильтрует ХИТЫ, поэтому снятый с UI
+ * корпусный фильтр нельзя оставлять в состоянии: иначе старый L4-снимок
+ * (`search_state`) вернул бы НЕВИДИМЫЙ фильтр — поля на панели нет, а параметр
+ * уезжает в запрос (класс ошибок ca864656/32fd6125). Вызывается при сборке зоны
+ * настроек (в т.ч. после `parseSearchCriteria`), так что очищенные поля не
+ * попадают ни в `buildSearchCriteriaWire`, ни в сохраняемый снимок.
+ */
+export function clearSearchCorpusFields(state: SearchCriteriaState): void {
+  state.linkTypeIds = [];
+  state.authorId = '';
+  state.editorId = '';
+}
+
+/**
  * Конвертер настроек поиска в сохраняемый L4-набор `search_state`: корпусные
  * ключи — прежними плоскими именами, мыслевые — AST-снимком дерева (`ast`).
  * Запись читается тем же {@link parseSearchCriteria} без потерь; снимок
@@ -1556,6 +1572,104 @@ export function searchCriteriaToStored(state: SearchCriteriaState): Record<strin
     out['ast'] = { version: FILTER_AST_VERSION, filter: filterTreeToAst(tree as FilterTreeNode) };
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Быстрые команды отбора строки поиска карты («Добавить отбор…», задача
+// 4b1cc3d4): заранее заданные условия основной (корневой) группы. Условия и
+// идемпотентное добавление объявлены ЧИСТОЙ моделью здесь, а не в разметке:
+// повторный клик, уже имеющееся условие и разный режим связей проверяются
+// юнит-тестами без DOM.
+// ---------------------------------------------------------------------------
+
+/** Команды отбора строки поиска — каждая строит лист дерева (профиль `thoughts`). */
+export interface SearchQuickConditions {
+  /**
+   * «По родителю в фокусе»: мысль в иерархии мысли-фокуса карты. Значение —
+   * литерал-токен `$thought`: сервер подставляет мысль-фокус запроса поиска
+   * (`focus_thought_id`), без него токен неразрешим — штатная диагностика
+   * неразрешённого токена (`unresolved`), а не тихая пустота.
+   */
+  parentInFocus: () => FilterTreeLeaf;
+  /** «Только актуальные»: актуальность равна «да». */
+  onlyActive: () => FilterTreeLeaf;
+  /** «Только не помеченные»: пометка удаления равна «нет». */
+  onlyNotTrashed: () => FilterTreeLeaf;
+}
+
+/** Условия быстрых команд строки поиска (задача 4b1cc3d4). */
+export const SEARCH_QUICK_CONDITIONS: SearchQuickConditions = {
+  parentInFocus: () => ({
+    kind: 'leaf',
+    entity: { kind: 'id' },
+    operator: 'in_hierarchy',
+    value: { kind: 'token', token: '$thought' },
+  }),
+  onlyActive: () => ({
+    kind: 'leaf',
+    entity: { kind: 'active' },
+    operator: 'eq',
+    value: { kind: 'scalar', value: true },
+  }),
+  onlyNotTrashed: () => ({
+    kind: 'leaf',
+    entity: { kind: 'trashed' },
+    operator: 'eq',
+    value: { kind: 'scalar', value: false },
+  }),
+};
+
+/**
+ * Канонический вид значения для ЛИТЕРАЛЬНОГО сравнения: ключи каждого объекта
+ * сортируются, поэтому порядок ключей (модель ↔ прочитанный AST) на совпадение
+ * не влияет.
+ */
+function canonicalFilterValue(value: unknown): string {
+  return JSON.stringify(value, (_key, val: unknown) => {
+    if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+      const sorted: Record<string, unknown> = {};
+      for (const key of Object.keys(val as Record<string, unknown>).sort()) {
+        sorted[key] = (val as Record<string, unknown>)[key];
+      }
+      return sorted;
+    }
+    return val;
+  });
+}
+
+/**
+ * Литеральное совпадение двух условий дерева: операнд, оператор, значение и
+ * РЕЖИМ обхода «в иерархии» (структурный ↔ «по всем связям» — разные условия,
+ * задача 4b1cc3d4). Токен `$thought` сравнивается как литерал.
+ */
+export function filterTreeLeavesEqual(a: FilterTreeLeaf, b: FilterTreeLeaf): boolean {
+  if (a.operator !== b.operator) return false;
+  if ((a.mode ?? 'structural') !== (b.mode ?? 'structural')) return false;
+  if (canonicalFilterValue(a.entity) !== canonicalFilterValue(b.entity)) return false;
+  return canonicalFilterValue(a.value) === canonicalFilterValue(b.value);
+}
+
+/** Есть ли в поддереве условие, литерально равное заданному. */
+function filterTreeContainsLeaf(node: FilterTreeNode, leaf: FilterTreeLeaf): boolean {
+  if (node.kind === 'leaf') return filterTreeLeavesEqual(node, leaf);
+  return node.children.some((child) => filterTreeContainsLeaf(child, leaf));
+}
+
+/**
+ * Добавить условие быстрой команды в ОСНОВНУЮ (корневую) группу отбора
+ * строки поиска. Идемпотентно: если такое условие уже есть в поддереве
+ * корневой группы (литеральное совпадение операнда, оператора, значения и
+ * режима), дерево не меняется (`added: false`) — повторный клик не плодит
+ * дубли. Корень не группа (одиночный лист) — он оборачивается группой `И`
+ * (`normalizeFilterTreeRoot`), корень всегда остаётся группой.
+ */
+export function addSearchQuickCondition(
+  tree: FilterTreeNode | null,
+  leaf: FilterTreeLeaf,
+): { tree: FilterTreeGroup; added: boolean } {
+  const root = tree === null ? defaultFilterTreeGroup('and') : normalizeFilterTreeRoot(tree);
+  if (filterTreeContainsLeaf(root, leaf)) return { tree: root, added: false };
+  return { tree: { ...root, children: [...root.children, leaf] }, added: true };
 }
 
 // ---------------------------------------------------------------------------
