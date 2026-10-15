@@ -190,6 +190,11 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     profile: 'thoughts',
     networkId,
     data,
+    // ЕДИНСТВЕННОЕ фокусное место (требование 3697eb65): отбор типа мысли
+    // исполняется сервером ОТНОСИТЕЛЬНО мысли-контекста, поэтому подсказки
+    // токенов `$thought*` здесь уместны. Прочие точки профиля `thoughts`
+    // (панель «Структур», строка поиска) и другие экраны признак не ставят.
+    withFocusThought: true,
     getState: () => state,
     touch: () => editorRef?.refresh(),
     // Набор текста в поле значения (ошибка 7d36f439): диалог не пересобирается —

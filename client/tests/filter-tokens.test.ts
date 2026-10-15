@@ -46,8 +46,11 @@ const REGISTRY = new Map<string, NetworkProperty>([
   ['p-num', prop('Вес', 'number')],
 ]);
 
-/** Контекст токенов профиля «мысли» (без времени). */
-const CTX = { profile: 'thoughts' as const, data: { registry: REGISTRY } };
+/** Контекст токенов ФОКУСНОГО места (диалог отбора типа мысли, профиль «мысли»). */
+const CTX = { profile: 'thoughts' as const, data: { registry: REGISTRY }, withFocusThought: true };
+
+/** Контекст СЕТЕВОГО места того же профиля — без мысли-контекста (панель, поиск). */
+const CTX_NO_FOCUS = { profile: 'thoughts' as const, data: { registry: REGISTRY } };
 
 /** Лист-условие по операнду с оператором. */
 function leaf(kind: string, operator = 'eq'): FilterTreeLeaf {
@@ -121,5 +124,39 @@ describe('каталог токенов редактора отбора (50d9bf4
       'date',
     );
     assert.equal(filterTokenNature(leaf('size'), CTX), 'number');
+  });
+});
+
+describe('фокусные токены мысли — по признаку места (требование 3697eb65)', () => {
+  it('без контекста мысли не отдаётся НИ ОДНОГО токена $thought*', () => {
+    // Сетевые точки профиля «мысли» (панель «Структур», строка поиска) и
+    // прочие экраны: сервер токенов мысли не разрешает, подсказка была бы
+    // молча неисполнимым отбором (класс ошибки 23c7d3e9 п. C3).
+    for (const kind of ['id', 'parents', 'children', 'targets', 'type']) {
+      const texts = filterLeafTokens(leaf(kind), CTX_NO_FOCUS).map((t) => t.text);
+      assert.equal(
+        texts.filter((text) => text.startsWith('$thought')).length,
+        0,
+        `${kind}: фокусные токены вне мысли-контекста запрещены`,
+      );
+    }
+    // Свойства реестра — тоже `$thought.[…]`: без фокуса их нет.
+    const propTexts = filterLeafTokens(
+      { ...defaultFilterTreeLeaf({ kind: 'property', property_id: 'p-text' }) },
+      CTX_NO_FOCUS,
+    ).map((t) => t.text);
+    assert.equal(propTexts.filter((text) => text.startsWith('$thought')).length, 0);
+    // Датовый лист без фокуса не оставляет и «полей даты мысли» — только пусто.
+    assert.deepEqual(
+      filterLeafTokens({ ...defaultFilterTreeLeaf({ kind: 'property', property_id: 'p-date' }) }, CTX_NO_FOCUS),
+      [],
+    );
+  });
+
+  it('с контекстом мысли отдаётся полный набор полей', () => {
+    const texts = filterLeafTokens(leaf('id'), CTX).map((t) => t.text);
+    assert.ok(texts.includes('$thought'), 'фокусное место: $thought на месте');
+    const typeTexts = filterLeafTokens(leaf('type'), CTX).map((t) => t.text);
+    assert.ok(typeTexts.includes('$thought.type'), 'фокусное место: $thought.type на месте');
   });
 });

@@ -190,6 +190,15 @@ export interface FilterEditorOptionsBase {
    * `touch`. Не задан — правка значения идёт общим путём `touch`.
    */
   touchValue?: () => void;
+  /**
+   * Место исполняет отбор ОТНОСИТЕЛЬНО мысли-контекста — тогда значениям
+   * доступны токены полей мысли (`$thought*`), см. `lib/filter-tokens.ts`.
+   * Признак МЕСТА сборки, а не профиля (требование 3697eb65): единственное
+   * фокусное место — диалог отбора типа мысли; сетевые отборы (панель
+   * «Структур», строка поиска, хроника, события, публикации) токенов мысли не
+   * предлагают. По умолчанию `false`.
+   */
+  withFocusThought?: boolean;
   /** Заголовок редактора; по умолчанию — профильный «Показать … по условиям:». */
   title?: string;
   /** Каталог перечислений, который знает только хост (типы действий, виды сущностей). */
@@ -329,6 +338,7 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     profile,
     data,
     touch,
+    ...(opts.withFocusThought !== undefined ? { withFocusThought: opts.withFocusThought } : {}),
     ...(opts.enumOptions !== undefined ? { enumOptions: opts.enumOptions } : {}),
     ...(opts.extraSuggest !== undefined ? { extraSuggest: opts.extraSuggest } : {}),
     ...(opts.picker !== undefined ? { picker: opts.picker } : {}),

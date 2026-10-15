@@ -21,6 +21,16 @@
  * Природа токенов — закрытое пространство имён (ADR 7c1c5bf5): клиент лишь
  * ПРЕДЛАГАЕТ строки, разрешает их сервер. Поэтому состав подсказок — данные, а
  * не второй словарь разрешения.
+ *
+ * **Фокусные токены (`$thought*`) — по признаку МЕСТА** (требование 3697eb65):
+ * их разрешает только серверный исполнитель отбора относительно мысли-контекста
+ * (`runViewForThought`, отбор типа мысли), поэтому подсказки выдаются лишь при
+ * `FilterTokenData.withFocusThought` (единственное место — диалог отбора типа
+ * мысли, `screens/thought-type/filter-dialog.ts`). На сетевых точках профиля
+ * `thoughts` (панель «Структур», строка поиска) и прочих экранах фокусных
+ * токенов нет — иначе предложенный токен дал бы молча неисполнимый отбор
+ * (класс ошибки 23c7d3e9 п. C3). Подписи фокусных токенов называют
+ * мысль-контекст словами предметной области, без `id` (требование 9d5e3c4e).
  */
 
 import {
@@ -33,6 +43,7 @@ import {
 } from '@etn/shared';
 
 import type { FilterTreeLeaf } from './filter-builder.js';
+import { VALUE_TYPE_LABELS } from './property-list.js';
 
 /** Токен, вставляемый в значение условия. */
 export interface ViewToken {
@@ -71,16 +82,26 @@ export interface FilterTokenData {
   profile: FilterProfileId;
   /** Данные сети каркаса редактора — реестр свойств (все свойства — п. A6). */
   data: { registry: ReadonlyMap<string, NetworkProperty> };
+  /**
+   * Место применения исполняет отбор ОТНОСИТЕЛЬНО мысли-контекста — тогда ему
+   * доступны токены полей мысли (`$thought*`). Признак МЕСТА сборки, а не
+   * профиля (требование 3697eb65, дополнение «Где клиент вправе ПРЕДЛАГАТЬ
+   * `$thought*`»): единственный исполнитель этих токенов — серверный
+   * `runViewForThought` (отбор типа мысли); сетевые отборы токенов мысли не
+   * разрешают, и подсказка порождала бы молча неисполнимый отбор (класс ошибки
+   * 23c7d3e9 п. C3). По умолчанию `false` — фокусных токенов нет.
+   */
+  withFocusThought?: boolean;
 }
 
 /** Пояснения полей мысли — чтобы токены искались по подписи (п. A5б). */
 const THOUGHT_FIELD_TOKENS: Readonly<Record<string, string>> = {
-  $thought: 'id мысли в фокусе',
-  '$thought.title': 'название мысли в фокусе',
+  $thought: 'мысль-контекст отбора',
+  '$thought.title': 'название мысли-контекста',
   '$thought.synonyms': 'синонимы мысли одной строкой',
-  '$thought.type': 'id типа мысли в фокусе',
-  '$thought.active': 'актуальность мысли в фокусе',
-  '$thought.author': 'автор мысли в фокусе',
+  '$thought.type': 'тип мысли-контекста',
+  '$thought.active': 'актуальность мысли-контекста',
+  '$thought.author': 'автор мысли-контекста',
   '$thought.editor': 'последний редактор мысли',
   '$thought.created': 'дата создания мысли',
   '$thought.updated': 'дата изменения мысли',
@@ -206,7 +227,7 @@ function propertyTokens(
     const suffix = isListOp(op) ? ' […]' : '';
     out.push({
       text,
-      label: `${text}${suffix} — значение свойства «${prop.name}» (${prop.value_type})`,
+      label: `${text}${suffix} — значение свойства «${prop.name}», ${VALUE_TYPE_LABELS[prop.value_type]}`,
       section: 'Свойства сети',
       ...(listOnly ? { listOnly: true } : {}),
     });
@@ -291,6 +312,10 @@ function isListOp(op: string | null): boolean {
  * Полный список токенов для природы значения: поля мысли/глобальные плюс
  * свойства (типа — из цепочки, A6 — из реестра сети через `extraProps`).
  * Дедуплицирован по тексту.
+ *
+ * `withFocusThought` — гейт фокусных токенов мысли (требование 3697eb65): без
+ * него подсказки `$thought*` (и поля, и `$thought.[Свойство]`) не отдаются —
+ * их разрешает только исполнитель отбора относительно мысли-контекста.
  */
 function buildTokens(
   nature: FilterTokenNature,
@@ -299,11 +324,14 @@ function buildTokens(
   withTime: boolean,
   includeDateAnchors: boolean,
   includeAllMultiple: boolean,
+  withFocusThought: boolean,
 ): ViewToken[] {
-  return dedupeTokens([
+  const tokens = dedupeTokens([
     ...natureTokens(nature, withTime, includeDateAnchors),
     ...propertyTokens(props, nature, op, includeAllMultiple),
   ]);
+  if (withFocusThought) return tokens;
+  return tokens.filter((token) => !token.text.startsWith('$thought'));
 }
 
 /**
@@ -324,7 +352,9 @@ export function buildTokensForField(
     }
   }
   props.push(...extraProps);
-  return buildTokens(natureFromValueType(propertyValueType), props, op, true, true, true);
+  // Легаси-контракт диалога отбора типа мысли — фокусное место: токены мысли
+  // доступны (требование 3697eb65).
+  return buildTokens(natureFromValueType(propertyValueType), props, op, true, true, true, true);
 }
 
 /**
@@ -375,12 +405,23 @@ function registryTokenProps(registry: ReadonlyMap<string, NetworkProperty>): Tok
 
 /**
  * Токены для листа строки: природа — из операнда/свойства (A3/A4), свойства —
- * из РЕЕСТРА сети (A6), дубли убраны (A5). Чистая функция — юнит-тест без GUI.
+ * из РЕЕСТРА сети (A6), дубли убраны (A5). Фокусные токены мысли (`$thought*`)
+ * выдаются ТОЛЬКО при `ctx.withFocusThought` — признаке места, исполняющего
+ * отбор относительно мысли-контекста (требование 3697eb65). Чистая функция —
+ * юнит-тест без GUI.
  */
 export function filterLeafTokens(leaf: FilterTreeLeaf, ctx: FilterTokenData): ViewToken[] {
   const nature = filterTokenNature(leaf, ctx);
   const props = registryTokenProps(ctx.data.registry);
-  return buildTokens(nature, props, leaf.operator, filterProfileHasTime(ctx.profile), false, false);
+  return buildTokens(
+    nature,
+    props,
+    leaf.operator,
+    filterProfileHasTime(ctx.profile),
+    false,
+    false,
+    ctx.withFocusThought === true,
+  );
 }
 
 /** Источник подсказок токенов строки для общего диалога подсказок (`SuggestSource`). */

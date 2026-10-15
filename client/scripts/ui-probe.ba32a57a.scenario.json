@@ -1,0 +1,70 @@
+{
+  "name": "filter-focus-tokens-ba32a57a",
+  "description": "Ошибка ba32a57a: (1) фокусные токены $thought* предлагаются ТОЛЬКО в отборе типа мысли (место с мыслью-контекстом); в «Структурах» их нет. (2) Подписи каталога токенов/подсказок — без «id» и технических кодов (тип значения — словарём). Онбординг → карта → «Структуры» (НЕ фокусное место: $thought* и «id» отсутствуют) → назад на карту → диалог «Изменить отбор» типа мысли (ФОКУСНОЕ место: $thought.type присутствует). Пробы — текстом списков выпадашки. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ba32a57a.scenario.json",
+  "timeout": 300000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe') !== null" },
+    { "name": "structures-add-condition", "eval": "(() => { const b=document.querySelector('.st-filter .ft-add-condition'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()" },
+    { "name": "structures-row", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row') !== null" },
+    { "name": "structures-open-what", "eval": "(() => { const rows=[...document.querySelectorAll('.st-filter .ft-row')]; const r=rows[rows.length-1]; const b=r.querySelector('.ft-row__what'); if(!b) return 'no-what'; b.click(); return 'ok'; })()" },
+    { "name": "structures-id-choice", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"id\"]') !== null" },
+    { "name": "structures-pick-id", "eval": "(() => { const it=document.querySelector('.ft-choice__item[data-key=\"id\"]'); if(!it) return 'no-item'; it.click(); return 'ok'; })()" },
+    { "name": "structures-entity-editor", "timeout": 8000, "waitFor": "(() => { const rows=[...document.querySelectorAll('.st-filter .ft-row')]; const r=rows[rows.length-1]; return r.querySelector('.fv[data-editor=\"entity\"] input.entity-combo-input') !== null; })()" },
+    { "name": "structures-focus-input", "eval": "(() => { const rows=[...document.querySelectorAll('.st-filter .ft-row')]; const r=rows[rows.length-1]; const i=r.querySelector('.fv[data-editor=\"entity\"] input.entity-combo-input'); if(!i) return 'no-input'; i.focus(); return 'ok'; })()" },
+    { "name": "structures-settle", "eval": "(async () => { await new Promise(r=>setTimeout(r,600)); return 'ok'; })()" },
+    { "name": "structures-dropdown-state", "probe": "JSON.stringify({ list: document.querySelector('.type-combo-list') !== null, text: (document.querySelector('.type-combo-list')?.textContent ?? '') })" },
+    {
+      "name": "structures-no-focus-tokens-assert",
+      "probe": "(() => { const list=document.querySelector('.type-combo-list'); const t=list?list.textContent:''; return !t.includes('$thought') && !t.includes('Поля мысли') && !/(?:^|[^a-zA-Z])id(?:[^a-zA-Z]|$)/i.test(t); })()",
+      "expect": true
+    },
+    { "name": "structures-query", "text": "Проба" },
+    { "name": "structures-search-open", "timeout": 8000, "waitFor": "document.querySelector('.type-combo-list .type-combo-item') !== null" },
+    { "name": "structures-search-text", "probe": "JSON.stringify({ text: (document.querySelector('.type-combo-list')?.textContent ?? ''), labels: [...document.querySelectorAll('.type-combo-list .type-combo-label')].map(e=>e.textContent) })" },
+    {
+      "name": "structures-search-assert",
+      "probe": "(() => { const list=document.querySelector('.type-combo-list'); if(!list) return false; const t=list.textContent; return t.includes('Проба') && !t.includes('$thought') && !/(?:^|[^a-zA-Z])id(?:[^a-zA-Z]|$)/i.test(t); })()",
+      "expect": true
+    },
+    { "name": "structures-close-dropdown", "key": "Escape" },
+
+    { "name": "back-to-map", "click": "button.view-tab[title=\"Карта мыслей\"]" },
+    { "name": "map-again", "timeout": 15000, "waitFor": "document.querySelector('.canvas-filter-strip') !== null || document.querySelector('[data-id]') !== null" },
+    { "name": "seed-type", "eval": "(async () => { const nid='{{networkId}}'; const type=await window.etn.types.createThoughtType(nid, { name: 'Тип стенда BA32' }); const cur=await window.etn.thoughts.get(nid, '{{homeId}}'); await window.etn.thoughts.update(nid, '{{homeId}}', { type_id: type.id }, cur.version); window.__ba = { typeId: type.id, viewId: null }; return 'ok'; })()" },
+    { "name": "focus-home", "eval": "(async () => { const el=document.querySelector('[data-id=\"{{homeId}}\"] .cloud') || document.querySelector('.canvas-focus-row .cloud'); if(!el) return 'no-cloud'; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); await new Promise(r=>setTimeout(r,400)); return 'ok'; })()" },
+    { "name": "add-enabled", "timeout": 15000, "waitFor": "(() => { const b=document.querySelector('.canvas-filter-strip-add'); return b !== null && b.disabled === false; })()" },
+    { "name": "seed-view", "eval": "(async () => { const nid='{{networkId}}'; const def=JSON.stringify({ version: 1, filter: { entity: { kind: 'id' }, operator: 'eq', value: '{{thoughtId}}' } }); const v=await window.etn.thoughtTypeViews.create(nid, window.__ba.typeId, { name: 'Отбор стенда BA32', definition: def }); window.__ba.viewId=v.id; return v.id ? 'ok' : 'no'; })()" },
+    { "name": "view-button", "timeout": 20000, "waitFor": "(() => { const b=document.querySelector('.canvas-filter-strip-btn[data-view-id=\"'+window.__ba.viewId+'\"]'); return b !== null && b.disabled === false; })()" },
+    { "name": "open-view-menu", "eval": "(() => { const b=document.querySelector('.canvas-filter-strip-btn[data-view-id=\"'+window.__ba.viewId+'\"]'); const r=b.getBoundingClientRect(); b.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:r.left+5,clientY:r.top+5})); return 'ok'; })()" },
+    { "name": "menu-visible", "timeout": 8000, "waitFor": "(() => [...document.querySelectorAll('.menu-item')].some(e=>(e.textContent||'').includes('Изменить отбор')))()" },
+    { "name": "click-edit", "eval": "(() => { const it=[...document.querySelectorAll('.menu-item')].find(e=>(e.textContent||'').includes('Изменить отбор')); if(!it) return 'no-item'; it.click(); return 'ok'; })()" },
+    { "name": "editor-dialog", "timeout": 20000, "waitFor": "document.querySelector('.view-editor-body') !== null" },
+
+    { "name": "dialog-add-condition", "eval": "(() => { const b=document.querySelector('.view-editor-body .ft-add-condition'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()" },
+    { "name": "dialog-rows", "timeout": 8000, "waitFor": "document.querySelectorAll('.view-editor-body .ft-row').length >= 2" },
+    { "name": "dialog-open-what", "eval": "(() => { const rows=[...document.querySelectorAll('.view-editor-body .ft-row')]; const r=rows[rows.length-1]; const b=r.querySelector('.ft-row__what'); if(!b) return 'no-what'; b.click(); return 'ok'; })()" },
+    { "name": "dialog-type-choice", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"type\"]') !== null" },
+    { "name": "dialog-pick-type", "eval": "(() => { const it=document.querySelector('.ft-choice__item[data-key=\"type\"]'); if(!it) return 'no-item'; it.click(); return 'ok'; })()" },
+    { "name": "dialog-entity-editor", "timeout": 8000, "waitFor": "(() => { const rows=[...document.querySelectorAll('.view-editor-body .ft-row')]; const r=rows[rows.length-1]; return r.querySelector('.fv[data-editor=\"entity\"] input.entity-combo-input') !== null; })()" },
+    { "name": "dialog-focus-input", "eval": "(() => { const rows=[...document.querySelectorAll('.view-editor-body .ft-row')]; const r=rows[rows.length-1]; const i=r.querySelector('.fv[data-editor=\"entity\"] input.entity-combo-input'); if(!i) return 'no-input'; i.focus(); return 'ok'; })()" },
+    { "name": "dialog-dropdown-open", "timeout": 8000, "waitFor": "document.querySelector('.type-combo-list .type-combo-item') !== null" },
+    { "name": "dialog-token-labels", "probe": "JSON.stringify([...document.querySelectorAll('.type-combo-list .type-combo-label')].map(e=>e.textContent))" },
+    {
+      "name": "dialog-token-assert",
+      "probe": "(() => { const t=[...document.querySelectorAll('.type-combo-list .type-combo-label')].map(e=>e.textContent).join(' | '); return t.includes('$thought.type') && !/(?:^|[^a-zA-Z])id(?:[^a-zA-Z]|$)/i.test(t); })()",
+      "expect": true
+    }
+  ]
+}
