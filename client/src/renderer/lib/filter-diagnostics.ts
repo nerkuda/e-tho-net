@@ -40,6 +40,9 @@ import {
 } from '@etn/shared';
 
 import type { FilterTreeGroup, FilterTreeLeaf, FilterTreeNode } from './filter-builder.js';
+// Текст строки-диагностики — из словаря (`lib/i18n.ts`), а не литералом
+// (требование 0e5ff1c6): формулировка меняется в одном месте — каталоге.
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Вид записи диагностики
@@ -166,7 +169,7 @@ function withoutValueIssue(path: string): FilterIssue {
     source: 'constructor',
     code: 'condition_without_value',
     path,
-    message: 'условие без значения — задайте значение условия',
+    message: t('filterEditor.conditionWithoutValue'),
   };
 }
 

@@ -152,6 +152,19 @@ export const ru = {
   /** Подсказка пустого состояния панели условий отбора. */
   'filterForm.emptyHint': 'Добавьте условие отбора.',
 
+  // -- Единый редактор отбора (lib/filter-tree.ts, filter-diagnostics.ts,
+  //    screens/structures/filter-panel.ts, screens/thought-type/filter-dialog.ts)
+  /** Заголовок редактора условий панели отбора мыслей (экран «Структуры»). */
+  'filterEditor.titleThoughts': 'Отбор мыслей:',
+  /** Заголовок секции условий в диалоге отбора типа мысли. */
+  'filterEditor.conditionsTitle': 'Условия отбора:',
+  /** Заголовок диалога правки существующего отбора типа (подстановка — имя типа). */
+  'filterEditor.dialogTitleEdit': 'Отбор для «%1»',
+  /** Заголовок диалога создания нового отбора типа (подстановка — имя типа). */
+  'filterEditor.dialogTitleCreate': 'Создать отбор для «%1»',
+  /** Строка диагностики условия, которому оператор требует значение, а его нет. */
+  'filterEditor.conditionWithoutValue': 'не задано значение условия',
+
   // -- Диалог добавления/выбора мыслей (canvas/add-dialog.ts) --------------
   /** Заголовок списка найденных кандидатов-дублей. */
   'addDialog.candidatesHeader': 'Найденные мысли:',

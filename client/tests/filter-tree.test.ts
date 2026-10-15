@@ -1258,7 +1258,7 @@ describe('дерево условий: диагностика строк (эле
     tree.rerender();
     const row = exact(root, 'ft-row')[0]!;
     assert.equal(row.dataset['severity'], 'error');
-    assert.match(exactOne(row, 'ft-issue')!.flatText(), /условие без значения/);
+    assert.match(exactOne(row, 'ft-issue')!.flatText(), /не задано значение условия/);
   });
 
   it('CSS: краски диагностики строк — токены тревоги и предупреждения', () => {
@@ -1401,3 +1401,4 @@ describe('список: клавиатурная навигация многок
     assert.equal(cursorIndex(), 0, 'PgUp возвращает выделение к началу');
   });
 });
+

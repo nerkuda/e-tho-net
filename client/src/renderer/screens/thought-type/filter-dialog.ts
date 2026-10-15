@@ -127,7 +127,11 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // 2. Initialise the form state from the existing view (or defaults). Старая
   //    плоская `definition v1` компилируется в дерево здесь же (на входе).
   const isEdit = opts.view !== null;
-  const title = isEdit ? 'Изменить отбор' : 'Создать отбор';
+  // Заголовок диалога (ошибка 23c7d3e9 п. C1): правка существующего отбора —
+  // «Отбор для «<тип>»», создание нового — «Создать отбор для «<тип>»».
+  const title = isEdit
+    ? t('filterEditor.dialogTitleEdit', typeName)
+    : t('filterEditor.dialogTitleCreate', typeName);
   const state = parseViewDefinition(opts.view, registry);
   const initialName = opts.view?.name ?? '';
   const initialDescription = opts.view?.description ?? '';
@@ -188,7 +192,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     data,
     getState: () => state,
     touch: () => editorRef?.refresh(),
-    title: `Показать «${typeName}» по условиям:`,
+    // Заголовок секции условий (ошибка 23c7d3e9 п. C2): имя типа уже несёт
+    // заголовок диалога, повторять его в секции не нужно.
+    title: t('filterEditor.conditionsTitle'),
     // Модальное место: кнопки — в панели диалога, стандартный набор погашен.
     buttons: { standard: false },
     host: {

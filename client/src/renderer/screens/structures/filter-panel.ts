@@ -69,6 +69,7 @@ import {
   type FilterEditorHandle,
 } from '../../lib/filter-editor.js';
 import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
+import { t } from '../../lib/i18n.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
 import { notice } from '../../lib/notice.js';
 import { duplicateFilterName } from '../../lib/pure.js';
@@ -627,6 +628,9 @@ function renderPanel(): void {
   editor = buildFilterEditor({
     profile: FILTER_PROFILE,
     networkId: requireNetworkId(),
+    // Заголовок панели — из словаря (ошибка 23c7d3e9 п. B1): прежде секция
+    // подписывалась профильным «Показать мысли по условиям:».
+    title: t('filterEditor.titleThoughts'),
     data: {
       registry: registryWithSides(),
       linkTypes: store.state.linkTypes,
