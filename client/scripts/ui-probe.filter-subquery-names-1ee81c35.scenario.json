@@ -1,0 +1,77 @@
+{
+  "name": "filter-subquery-names-1ee81c35",
+  "description": "Ошибка 1ee81c35: в представлении под-выборки показывались id вместо имён мыслей. Сценарий: онбординг → сохранённый отбор «Потомки в выборке (Мысль = <id засеянной мысли>)» в панели «Структуры» → подпись чипа под-выборки читается пробой и обязана нести ИМЯ мысли («Проба стенда»), а не UUID. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-subquery-names-1ee81c35.scenario.json --out .tmp/etn-1ee81c35/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-saved-filter",
+      "api": {
+        "name": "seed-saved-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "Под-выборка имена",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                {
+                  "entity": { "kind": "children" },
+                  "operator": "in",
+                  "value": {
+                    "operator": "in",
+                    "query": {
+                      "op": "and",
+                      "children": [
+                        {
+                          "entity": { "kind": "id" },
+                          "operator": "eq",
+                          "value": "{{thoughtId}}"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+    { "name": "structures-open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "structures-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "structures-saved-row", "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    { "name": "structures-focus-search", "click": ".sfd-search" },
+    { "name": "structures-filter-typed", "text": "Под-выборка" },
+    { "name": "structures-select-row", "key": "ArrowDown" },
+    { "name": "structures-confirm-row", "key": "Enter" },
+    { "name": "structures-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+
+    { "name": "chip-visible", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fq-chip') !== null" },
+    { "name": "chip-mode", "probe": "document.querySelector('.st-filter .fq-cell')?.dataset.mode ?? null", "expect": "subquery" },
+    { "name": "chip-summary-visible", "probe": "document.querySelector('.st-filter .fq-chip')?.dataset.summary ?? null", "expect": "Мысль = Проба стенда" },
+    { "name": "chip-has-no-id", "probe": "document.querySelector('.st-filter .fq-chip')?.dataset.summary?.includes('{{thoughtId}}') ?? 'no-chip'", "expect": false },
+    { "name": "chip-tooltip-name", "probe": "document.querySelector('.st-filter .fq-chip__open')?.title?.includes('Проба стенда') ?? false", "expect": true },
+    { "name": "open-subquery-modal", "click": ".st-filter .fq-chip__open" },
+    { "name": "modal-open", "timeout": 10000, "waitFor": "document.querySelector('.fq-modal') !== null" },
+    { "name": "modal-row-names", "timeout": 10000, "waitFor": "(() => { const row = document.querySelector('.fq-modal .ft-row'); return !!row && !row.textContent.includes('{{thoughtId}}') && row.textContent.includes('Проба стенда'); })()" }
+  ]
+}

@@ -373,6 +373,25 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
 
   const root = div(FILTER_EDITOR_CLASS);
 
+  /**
+   * Резолверы имён подписей — ОДИН набор на редактор: фразы-превью футера и
+   * подписи чипа под-выборки читают имена одинаково (ошибка 1ee81c35).
+   *
+   * Пользователи — именами, а не id (ошибка 23c7d3e9 п. A1): кэш участников сети
+   * (`lib/users.ts`) отдаёт имя по id; для «Автора»/«Редактора» и операндов
+   * записи подпись показывает имя; кэш не полон (не админ) — значение остаётся
+   * id, как раньше.
+   *
+   * Мысли — именами, а не id (ошибка d17a8bfd): кэш имён мыслей
+   * (`lib/thought-names.ts`) отдаёт название по id; пока имя не догружено,
+   * подпись показывает плейсхолдер без ID (требование 9d5e3c4e), а подписки ниже
+   * перерисовывают подпись, когда имя приходит.
+   */
+  const labelNames = {
+    userName: (id: string): string | null => resolveUserName(id),
+    thoughtName: (id: string): string | null => resolveThoughtName(id),
+  };
+
   const tree = buildFilterTree({
     profile,
     getState,
@@ -383,6 +402,7 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     renderValue: createFilterSubqueryValueRenderer(valueContext, {
       data,
       value: valueContext,
+      names: labelNames,
       ...(opts.subqueryTitle !== undefined ? { title: opts.subqueryTitle } : {}),
       ...(opts.confirmSubquery !== undefined ? { confirm: opts.confirmSubquery } : {}),
     }),
@@ -423,16 +443,9 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     linkTypes: data.linkTypes ?? [],
     // Типы мыслей — имена значений-типов во фразе-превью (ошибка 4258e694 п.12б).
     thoughtTypes: data.thoughtTypes ?? [],
-    // Пользователи — именами, а не id (ошибка 23c7d3e9 п. A1): кэш участников
-    // сети (`lib/users.ts`) отдаёт имя по id; для «Автора»/«Редактора» и
-    // операндов записи фраза показывает имя. Кэш не полон (не админ) — значение
-    // остаётся id, как раньше.
-    userName: (id) => resolveUserName(id),
-    // Мысли — именами, а не id (ошибка d17a8bfd): кэш имён мыслей
-    // (`lib/thought-names.ts`) отдаёт название по id; пока имя не догружено,
-    // фраза показывает плейсхолдер без ID (требование 9d5e3c4e), а подписка
-    // ниже перерисовывает фразу, когда имя приходит.
-    thoughtName: (id) => resolveThoughtName(id),
+    // Имена участников и мыслей — общий набор резолверов редактора (labelNames).
+    userName: labelNames.userName,
+    thoughtName: labelNames.thoughtName,
   };
   if (opts.footer !== false) {
     footer = buildFilterFooter({

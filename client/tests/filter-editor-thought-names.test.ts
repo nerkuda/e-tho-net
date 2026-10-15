@@ -52,9 +52,18 @@ installShim();
 const KNOWN_ID = '56ce57bd-1111-4222-8333-444444444444';
 const KNOWN_TITLE = 'Бюджет на квартал';
 const UNKNOWN_ID = '11111111-2222-4333-8444-555555555555';
+/** Мысль ВНУТРИ под-выборки — подпись чипа показывает и её имя (1ee81c35). */
+const SUBQUERY_ID = '77ff88cc-1111-4222-8333-444444444444';
+const SUBQUERY_TITLE = 'Смета проекта';
 
 /** Запросы `thoughts.resolve` за время теста: `[networkId, ids]`. */
 const resolveCalls: Array<{ networkId: string; ids: string[] }> = [];
+
+/** Известные кэшу имена: id → название (все прочие id остаются неизвестными). */
+const TITLES: ReadonlyMap<string, string> = new Map([
+  [KNOWN_ID, KNOWN_TITLE],
+  [SUBQUERY_ID, SUBQUERY_TITLE],
+]);
 
 function mockEtn(): void {
   (globalThis as any).window.etn = {
@@ -62,8 +71,8 @@ function mockEtn(): void {
       resolve: async (networkId: string, ids: string[]) => {
         resolveCalls.push({ networkId, ids: [...ids] });
         return ids
-          .filter((id) => id === KNOWN_ID)
-          .map((id) => ({ id, title: KNOWN_TITLE, type_id: null, icon: null, icon_kind: 'emoji' }));
+          .filter((id) => TITLES.has(id))
+          .map((id) => ({ id, title: TITLES.get(id)!, type_id: null, icon: null, icon_kind: 'emoji' }));
       },
     },
     propertyRegistry: { list: async () => [] },
@@ -118,6 +127,27 @@ function previewText(root: ShimElement): string {
   return root.findAll((n) => n.classList.contains('ff-preview__text'))[0]?.flatText() ?? '';
 }
 
+/** Подпись чипа под-выборки (условия выборки одной строкой). */
+function chipSummary(root: ShimElement): string {
+  return root.findAll((n) => n.classList.contains('fq-chip'))[0]?.dataset['summary'] ?? '';
+}
+
+/** Дерево с условием «Потомки в <выборка из «Мысль = id»>». */
+function subqueryTree(id: string): FilterTreeNode {
+  return {
+    kind: 'group',
+    op: 'and',
+    children: [
+      {
+        kind: 'leaf',
+        entity: { kind: 'children' } as FilterTreeLeaf['entity'],
+        operator: 'in',
+        value: { kind: 'subquery', operator: 'in', node: idTree(id) },
+      },
+    ],
+  };
+}
+
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 4; i += 1) {
     await new Promise((resolve) => setImmediate(resolve));
@@ -152,5 +182,23 @@ describe('фраза-превью и имена мыслей (ошибка d17a8
     await flush();
     assert.match(previewText(root), /без названия/, 'имя не пришло — плейсхолдер остаётся');
     assert.ok(!previewText(root).includes('11111111'), 'UUID не просачивается и после resolve');
+  });
+
+  it('подпись чипа под-выборки показывает имена мыслей внутри неё (ошибка 1ee81c35)', async () => {
+    // Значение ссылочного операнда ВНУТРИ под-выборки — id: подпись чипа обязана
+    // показать имя (общий механизм с фразой-превью), а не сырой идентификатор.
+    const { root } = buildEditor(subqueryTree(SUBQUERY_ID));
+
+    const cold = chipSummary(root);
+    assert.ok(cold.length > 0, 'подпись чипа построена');
+    assert.equal(cold, 'Мысль = без названия', 'холодный кэш — плейсхолдер без ID');
+    assert.ok(!cold.includes('77ff88cc'), 'в подписи чипа нет фрагмента id мысли');
+
+    await flush();
+    assert.equal(chipSummary(root), 'Мысль = Смета проекта', 'имя пришло — подпись перечиталась сама');
+    assert.ok(
+      resolveCalls.some((call) => call.networkId === 'net-1' && call.ids.includes(SUBQUERY_ID)),
+      'resolve запросил имя мысли ИЗ под-выборки (обход определения заходит в значение-выборку)',
+    );
   });
 });

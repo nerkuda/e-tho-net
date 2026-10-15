@@ -69,6 +69,21 @@ function installShim(): void {
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
   });
+  // `window.etn` — контракт preload: виджеты значений читают его на этапе сборки
+  // (догрузка имён/облачков значения — как в `filter-value.test.ts`). Разрешающий
+  // заглушечный прокси: любой вызов даёт пустой список (тесты проверяют разметку
+  // ячейки и подпись чипа, а не выдачу сервера).
+  win['etn'] = etnStub();
+}
+
+/** Разрешающий заглушечный `window.etn`: любой путь — вызываемое значение. */
+function etnStub(): unknown {
+  const target = async (): Promise<unknown[]> => [];
+  return new Proxy(target as unknown as Record<string, unknown>, {
+    get: (obj, prop) =>
+      prop === 'then' ? undefined : prop in obj ? (obj as any)[prop] : etnStub(),
+    apply: () => Promise.resolve([]),
+  });
 }
 
 function body(): ShimElement {
@@ -305,6 +320,58 @@ describe('под-выборка: релевантность операнда —
       ),
       /^НЕ \(Родители/,
     );
+  });
+  it('значения подписи — ИМЕНАМИ сущностей, а не id (ошибка 1ee81c35)', () => {
+    // Значение ссылочного операнда — id: подпись обязана показать имя, как
+    // остальные места редактора (композер фразы `filterPhraseValue`).
+    const names = { thoughtName: (id: string) => (id === 'th-1' ? 'Купить молоко' : null) };
+    const tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        leafOf({ kind: 'children' }, 'in', { kind: 'list', items: ['th-1'] }),
+        leafOf({ kind: 'type' }, 'in', { kind: 'list', items: ['tt-1'] }),
+      ],
+    } as any;
+    const data = {
+      ...DATA,
+      thoughtTypes: [{ id: 'tt-1', name: 'Покупка' }],
+    } as any;
+    assert.equal(
+      sub.filterSubquerySummary(tree, data, names),
+      'Потомки в Купить молоко И Тип мысли в Покупка',
+      'имя мысли из кэша, имя типа — из каталога типов; id в подписи не остаётся',
+    );
+    // Резолвер есть, а имени нет — нейтральный плейсхолдер без сырого UUID
+    // (требование 9d5e3c4e), как во фразе-превью.
+    assert.equal(
+      sub.filterSubquerySummary(tree, data, { thoughtName: () => null }),
+      'Потомки в без названия И Тип мысли в Покупка',
+    );
+  });
+
+  it('чип под-выборки: значение-ссылка показана именем из снапшота, а не id', () => {
+    // Снапшот `labels.values` пишут виджеты значения (чип-поле мыслей): подпись
+    // чипа читает ИМЯ уже при построении — до всякого резолва.
+    const value = {
+      kind: 'subquery',
+      operator: 'in',
+      node: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            ...leafOf({ kind: 'children' }, 'in', { kind: 'list', items: ['th-1'] }),
+            labels: { values: { 'th-1': 'Купить молоко' } },
+          },
+        ],
+      },
+    };
+    const { cell } = buildCell(leafOf({ kind: 'property', property_id: PLACE.id }, 'in', value));
+    const chip = exactOne(cell, 'fq-chip')!;
+    assert.equal(chip.dataset['summary'], 'Потомки в Купить молоко');
+    assert.ok(!chip.dataset['summary']!.includes('th-1'), 'сырого id в подписи нет');
+    assert.match(exactOne(chip, 'fq-chip__open')!.title, /Потомки в Купить молоко/);
   });
 });
 

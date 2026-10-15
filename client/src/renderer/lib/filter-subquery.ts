@@ -56,11 +56,29 @@ import {
   buildFilterTree,
   filterTreeOperandLabel,
   filterTreeOperatorLabel,
-  filterTreeValueKindLabel,
   type FilterTreeData,
   type FilterTreeValueSlotApi,
 } from './filter-tree.js';
+// Подпись условий под-выборки читает ЗНАЧЕНИЯ композером фразы (ошибка
+// 1ee81c35): имена ссылок вместо id — общий механизм со фразой-превью
+// (снапшоты `labels.values`, кэш имён мыслей, каталоги типов/связей/свойств),
+// а не второй резолв имён.
+import {
+  filterPhraseThoughtIds,
+  filterPhraseValue,
+  type FilterPhraseContext,
+} from './filter-phrase.js';
 import { renderFilterValue, type FilterValueContext } from './filter-value.js';
+// Кэши подписей (имена мыслей, участники): подпись чипа читает их через
+// резолверы хоста (данными, как у композера фразы), а на наполнение
+// подписывается — имена приходят сами, как у фразы-превью (механизм ошибки
+// d17a8bfd). Догрузку имён просит редактор (`lib/filter-editor.ts`, фраза-превью
+// обходит определение целиком, включая значения-подвыборки).
+import {
+  requestThoughtNames,
+  subscribe as subscribeThoughtNames,
+} from './thought-names.js';
+import { subscribe as subscribeUsers } from './users.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { svgIcon } from './ui/icon.js';
 import { segmentedControl } from './ui/segmented.js';
@@ -209,28 +227,66 @@ export function filterSubqueryLeafInProfile(leaf: FilterTreeLeaf): boolean {
 // Подпись под-выборки (требование af7859c9)
 // ---------------------------------------------------------------------------
 
-/** Текст значения листа для подписи (человекочитаемый вид модели). */
-function leafValueText(leaf: FilterTreeLeaf): string {
-  return leaf.value.kind === 'none' ? '' : filterTreeValueKindLabel(leaf.value);
+/**
+ * Резолверы имён для подписи под-выборки — те же данные, что у композера фразы
+ * (`lib/filter-phrase.ts`): имя мысли по id и имя участника. Значения внутри
+ * под-выборки — id, и подпись обязана показывать ИМЯ, как остальные места
+ * редактора (ошибка 1ee81c35; ср. механизм d17a8bfd). Резолверов нет — значение
+ * остаётся как есть (прежняя деградация для вызовов без кэшей).
+ */
+export interface FilterSubqueryNames {
+  /** Название мысли по id (`lib/thought-names.ts`); `null` — имя неизвестно. */
+  thoughtName?: (id: string) => string | null;
+  /** Имя участника по id (`lib/users.ts`); `null` — имя неизвестно. */
+  userName?: (id: string) => string | null;
+}
+
+/** Контекст композера фразы для подписи: данные сети + резолверы имён. */
+function subqueryPhraseContext(data: FilterTreeData, names: FilterSubqueryNames): FilterPhraseContext {
+  return {
+    registry: data.registry,
+    linkTypes: data.linkTypes ?? [],
+    thoughtTypes: data.thoughtTypes ?? [],
+    ...(names.thoughtName !== undefined ? { thoughtName: names.thoughtName } : {}),
+    ...(names.userName !== undefined ? { userName: names.userName } : {}),
+  };
+}
+
+/**
+ * Текст значения листа для подписи — композером фразы (`filterPhraseValue`):
+ * имена ссылок (снапшоты `labels.values`, кэш имён мыслей, каталоги типов связей
+ * и свойств, кэш участников) и человекочитаемые токены. Раньше значение
+ * печаталось сырым `filterTreeValueKindLabel` — id вместо имён (ошибка 1ee81c35):
+ * второго резолва имён в подписи не заводим.
+ */
+function leafValueText(leaf: FilterTreeLeaf, ctx: FilterPhraseContext): string {
+  return leaf.value.kind === 'none' ? '' : filterPhraseValue(leaf, ctx);
 }
 
 /**
  * Подпись условий под-выборки одной строкой: листья — «операнд оператор
- * значение», группы — коннектором, вложенные группы — в скобках. Полный текст
- * уходит в тултип чипа; обрезка до двух строк — визуальная (CSS).
+ * значение», группы — коннектором, вложенные группы — в скобках. Значение листа
+ * читает композер фразы (имена вместо id, ошибка 1ee81c35). Полный текст уходит в
+ * тултип чипа; обрезка до двух строк — визуальная (CSS).
  */
-export function filterSubquerySummary(node: FilterTreeNode, data: FilterTreeData): string {
-  if (node.kind === 'group') {
-    if (node.children.length === 0) return 'без условий';
-    const parts = node.children.map((child) =>
-      child.kind === 'group' ? `(${filterSubquerySummary(child, data)})` : filterSubquerySummary(child, data),
-    );
-    if (node.op === 'not') return `НЕ (${filterSubquerySummary(node.children[0]!, data)})`;
-    return parts.join(node.op === 'or' ? ' ИЛИ ' : ' И ');
-  }
-  const value = leafValueText(node);
-  const head = `${filterTreeOperandLabel(node, data)} ${filterTreeOperatorLabel(node.operator)}`;
-  return value === '' ? head : `${head} ${value}`;
+export function filterSubquerySummary(
+  node: FilterTreeNode,
+  data: FilterTreeData,
+  names: FilterSubqueryNames = {},
+): string {
+  const phraseContext = subqueryPhraseContext(data, names);
+  const walk = (current: FilterTreeNode): string => {
+    if (current.kind !== 'group') {
+      const value = leafValueText(current, phraseContext);
+      const head = `${filterTreeOperandLabel(current, data)} ${filterTreeOperatorLabel(current.operator)}`;
+      return value === '' ? head : `${head} ${value}`;
+    }
+    if (current.children.length === 0) return 'без условий';
+    const parts = current.children.map((child) => (child.kind === 'group' ? `(${walk(child)})` : walk(child)));
+    if (current.op === 'not') return `НЕ (${walk(current.children[0]!)})`;
+    return parts.join(current.op === 'or' ? ' ИЛИ ' : ' И ');
+  };
+  return walk(node);
 }
 
 /** Тултип чипа: полный текст подписи и подсказка о повторном открытии. */
@@ -252,21 +308,61 @@ export interface FilterSubqueryChipOptions {
   onEdit: () => void;
   /** Убрать выборку из значения (ячейка вернётся к списку). */
   onClear: () => void;
+  /** Сеть для догрузки имён мыслей подписи; пусто — не догружаем (тесты). */
+  networkId?: string;
+  /** Резолверы имён подписи (см. {@link FilterSubqueryNames}). */
+  names?: FilterSubqueryNames;
+}
+
+/**
+ * Рефрешеры подписей чипов под-выборки. Кэши имён наполняются асинхронно
+ * (`lib/thought-names.ts`, `lib/users.ts`): пока кэш холодный, подпись показывает
+ * плейсхолдер, а когда имена пришли — перечитывается (тот же механизм, что у
+ * фразы-превью футера, ошибка d17a8bfd). Подписка — ОДНА на модуль, отключённые
+ * корни вычищаются при очередном уведомлении.
+ */
+const summaryRefreshers = new Set<{ root: HTMLElement; refresh: () => void }>();
+let summarySourcesSubscribed = false;
+
+/** Подписать подпись чипа на наполнение кэшей имён (один раз на модуль). */
+function subscribeSummaryRefresh(root: HTMLElement, refresh: () => void): void {
+  summaryRefreshers.add({ root, refresh });
+  if (summarySourcesSubscribed) return;
+  summarySourcesSubscribed = true;
+  const notify = (): void => {
+    for (const item of [...summaryRefreshers]) {
+      if (!item.root.isConnected) {
+        summaryRefreshers.delete(item);
+        continue;
+      }
+      item.refresh();
+    }
+  };
+  subscribeThoughtNames(notify);
+  subscribeUsers(notify);
 }
 
 /** Собрать чип под-выборки: подпись ≤ двух строк и тултип с полным текстом. */
 export function buildSubqueryChip(opts: FilterSubqueryChipOptions): HTMLElement {
-  const summary = filterSubquerySummary(opts.node, opts.data);
+  const names = opts.names ?? {};
+  const summary = (): string => filterSubquerySummary(opts.node, opts.data, names);
   const chip = div(FILTER_SUBQUERY_CHIP_CLASS);
-  chip.dataset['summary'] = summary;
   const open = uiButton({
-    label: summary,
+    label: summary(),
     role: 'secondary',
     size: 's',
     class: 'fq-chip__open',
-    title: filterSubqueryChipTooltip(summary),
+    title: filterSubqueryChipTooltip(summary()),
     onClick: () => opts.onEdit(),
   });
+  /** Перечитать подпись и тултип (имена мыслей догружаются асинхронно). */
+  const refresh = (): void => {
+    const text = summary();
+    chip.dataset['summary'] = text;
+    open.textContent = text;
+    open.title = filterSubqueryChipTooltip(text);
+    setTooltip(chip, filterSubqueryChipTooltip(text));
+  };
   chip.append(
     open,
     iconButton({
@@ -278,7 +374,13 @@ export function buildSubqueryChip(opts: FilterSubqueryChipOptions): HTMLElement 
       onClick: () => opts.onClear(),
     }),
   );
-  setTooltip(chip, filterSubqueryChipTooltip(summary));
+  // Догрузка имён мыслей под-выборки — ВНЕ построения подписи (подпись остаётся
+  // синхронной); при наполнении кэша подпись перечитывается сама.
+  if (opts.networkId !== undefined && opts.networkId !== '') {
+    requestThoughtNames(opts.networkId, filterPhraseThoughtIds({ tree: opts.node }, opts.data.registry));
+    subscribeSummaryRefresh(chip, refresh);
+  }
+  refresh();
   return chip;
 }
 
@@ -299,6 +401,8 @@ export interface FilterSubqueryOptions {
   title?: string;
   /** Подтверждение сброса собранной под-выборки (по умолчанию `confirmDialog`). */
   confirm?: FilterSubqueryConfirm;
+  /** Резолверы имён для ПОДПИСИ чипа под-выборки (см. {@link FilterSubqueryNames}). */
+  names?: FilterSubqueryNames;
 }
 
 /**
@@ -512,6 +616,10 @@ export function buildSubqueryValueCell(
         data: ctx.data,
         onEdit: openModal,
         onClear: () => writeModeValue({ kind: 'none' }),
+        // Имена значений подписи — как у фразы-превью: резолверы кэшей и
+        // догрузка имён мыслей по сети (ошибка 1ee81c35).
+        networkId: ctx.networkId,
+        ...(opts.names !== undefined ? { names: opts.names } : {}),
       }),
     );
   } else {
