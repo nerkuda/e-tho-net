@@ -80,6 +80,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
 import { assertFilterAstInProfile } from './filter-profile-validation.js';
+import { normaliseInstant } from './dates.js';
 import { collectHierarchySubtree } from './graph-traversal.js';
 import { getLinkDirections } from './link-service.js';
 import {
@@ -1941,12 +1942,18 @@ function scalarCompareClause(
   const rhs = fold ? 'unicode_lower(?)' : '?';
   const one = (op: 'gte' | 'lte' | 'gt' | 'lt' | 'eq', value: FilterAstScalar): Clause => {
     const cmp = op === 'gt' ? '>' : op === 'gte' ? '>=' : op === 'lt' ? '<' : op === 'lte' ? '<=' : '=';
+    // Датовое свойство: включительная верхняя граница-«голая дата» — конец
+    // суток UTC (требование 469d8d69); числа и строки не трогаются.
+    const bound: FilterAstScalar =
+      op === 'lte' && def.value_type === 'date' && typeof value === 'string'
+        ? expandInclusiveDateUpper(value.trim())
+        : value;
     return {
       sql: `EXISTS (
         SELECT 1 FROM property_values_v pv
         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
           AND ${lhs} ${cmp} ${rhs})`,
-      params: [def.id, sqlScalar(def, value, requestId)],
+      params: [def.id, sqlScalar(def, bound, requestId)],
     };
   };
   const op = leaf.operator;
@@ -2606,14 +2613,36 @@ function authorLeafClause(column: string, leaf: FilterAstLeaf, path: string, req
   return { sql: where.length > 0 ? `(${where.join(' AND ')})` : AST_TRUE.sql, params };
 }
 
+/** «Голая дата» `YYYY-MM-DD` (без времени). */
+const BARE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Верхняя ВКЛЮЧИТЕЛЬНАЯ датовая граница-«голая дата» разворачивается до конца
+ * суток UTC (требование 469d8d69 «голая дата во входных параметрах API = сутки
+ * UTC»). Без разворота граничный день отсекался бы ЦЕЛИКОМ: значения-даты
+ * мыслей хранятся с временем, а сравнение лексикографическое — ошибка круга
+ * проверки задачи 347b307e (`created_at between [$today, $today]` давал 0).
+ *
+ * Нижние границы (лексикографически = начало суток — уже корректны), строгие
+ * `lt` и полные инстансы (со временем) не трогаются: разворот применяет только
+ * вызывающий — для ВКЛЮЧИТЕЛЬНОГО верхнего предела (`lte`/верх «между»).
+ */
+function expandInclusiveDateUpper(value: string): string {
+  if (!BARE_DATE_RE.test(value)) return value;
+  return normaliseInstant(value, 'date', 'end') ?? value;
+}
+
 /** Лист по дате создания/изменения: сравнения и «между» (границы включительны). */
 function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
   const one = (op: string, value: unknown): Clause => {
     if (typeof value !== 'string' || value.trim() === '') {
       throw new EtnError('VALIDATION_ERROR', 'Граница даты должна быть непустой строкой ISO-8601.', { field: path }, requestId);
     }
+    const raw = value.trim();
+    // Включительная верхняя граница-«голая дата» — конец суток UTC (469d8d69).
+    const bound = op === 'lte' ? expandInclusiveDateUpper(raw) : raw;
     const sql = op === 'gt' ? '>' : op === 'gte' ? '>=' : op === 'lt' ? '<' : '<=';
-    return { sql: `${column} ${sql} ?`, params: [value.trim()] };
+    return { sql: `${column} ${sql} ?`, params: [bound] };
   };
   if (leaf.operator === 'gt' || leaf.operator === 'gte' || leaf.operator === 'lt' || leaf.operator === 'lte') {
     return one(leaf.operator, leaf.value);
