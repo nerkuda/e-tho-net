@@ -119,6 +119,7 @@ describe('реестр профилей контекста (задача 7a798b1
       occurred_at: true,
       action: true,
       entity_type: true,
+      entity_title: true,
       entity_id: true,
       user: true,
       name: true,

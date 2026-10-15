@@ -697,6 +697,7 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   occurred_at: 'Время события',
   action: 'Тип действия',
   entity_type: 'Вид сущности',
+  entity_title: 'Заголовок сущности',
   entity_id: 'Сущность',
   user: 'Автор события',
   name: 'Имя вложения',

@@ -375,8 +375,9 @@ function mountFilterPanel(area: HTMLElement): void {
     registry: new Map(),
     linkTypes: store.state.linkTypes,
     thoughtTypes: store.state.thoughtTypes,
-    // Контекстные операнды первыми: время, действие, вид сущности, автор, сущность.
-    contextual: ['occurred_at', 'action', 'entity_type', 'user', 'entity_id'],
+    // Контекстные операнды первыми: время, действие, вид сущности, заголовок
+    // сущности, автор, сущность.
+    contextual: ['occurred_at', 'action', 'entity_type', 'entity_title', 'user', 'entity_id'],
   };
   const editor = buildFilterEditor({
     profile: 'events',

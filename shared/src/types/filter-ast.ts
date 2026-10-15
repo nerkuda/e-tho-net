@@ -173,6 +173,7 @@ export const FILTER_AST_ENTITY_KINDS = [
   'occurred_at',
   'action',
   'entity_type',
+  'entity_title',
   'entity_id',
   'user',
   // --- Профиль «Вложения»: видимые характеристики вложения (требование f67c85c1) ---
@@ -254,6 +255,13 @@ export type FilterAstEntity =
   | { kind: 'action' }
   /** «Вид сущности» (`entity_type`). */
   | { kind: 'entity_type' }
+  /**
+   * «Заголовок сущности» (`entity_title`) — снимок заголовка сущности на момент
+   * события; поиск по слову — `contains`/`not_contains` (LIKE). Возврат поиска по
+   * ключевым словам ленты «События» (задача b2aa2444, решение пользователя:
+   * вариант 1).
+   */
+  | { kind: 'entity_title' }
   /** «Сущность» (`entity_id`) — равно или под-выборка по мыслям. */
   | { kind: 'entity_id' }
   /** «Автор события» (`user_id`). */

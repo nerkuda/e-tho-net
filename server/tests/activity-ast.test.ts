@@ -58,7 +58,14 @@ function seedThought(ndb: NetworkDb, title: string): string {
 
 function seedEvent(
   ndb: NetworkDb,
-  opts: { action: string; entityType: string; entityId: string; userId?: string; atMs: number },
+  opts: {
+    action: string;
+    entityType: string;
+    entityId: string;
+    userId?: string;
+    atMs: number;
+    entityTitle?: string;
+  },
 ): string {
   recordActivity(ndb, {
     networkId: NET,
@@ -66,7 +73,7 @@ function seedEvent(
     action: opts.action,
     entityType: opts.entityType,
     entityId: opts.entityId,
-    entityTitle: 't',
+    entityTitle: opts.entityTitle ?? 't',
     layerId: null,
     occurredAtMs: opts.atMs,
   });
@@ -339,6 +346,70 @@ describe('события: отбор на общий AST (задача 2b230e8e)
 
       assert.deepEqual(astIds, flatIds, 'компиляция плоского тела в AST не меняет набор/порядок');
       assert.equal(flatIds.length, 2, 'только события админа');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('«Заголовок сущности»: поиск события по слову заголовка (LIKE) — задача b2aa2444', async () => {
+    // Возврат поиска по ключевым словам ленты «События» (решение пользователя:
+    // вариант 1): текстовый операнд `entity_title` фильтрует по СНИМКУ заголовка
+    // сущности в `activity_log.entity_title` операторами «содержит»/«не содержит».
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const t = seedThought(ndb, 'Мысль');
+      const coffee = seedEvent(ndb, {
+        action: 'created',
+        entityType: 'thought',
+        entityId: t,
+        entityTitle: 'Купить кофе в лавке',
+        atMs: NOW_MS - 1000,
+      });
+      const tea = seedEvent(ndb, {
+        action: 'created',
+        entityType: 'thought',
+        entityId: t,
+        entityTitle: 'Заварить чай',
+        atMs: NOW_MS - 2000,
+      });
+
+      // «содержит» — событие найдено по слову заголовка (регистронезависимо).
+      assert.deepEqual(
+        runFilter(ndb, { entity: { kind: 'entity_title' }, operator: 'contains', value: 'КОФЕ' }),
+        [coffee],
+        'событие найдено по слову заголовка',
+      );
+      // «не содержит» — остальные события.
+      assert.deepEqual(
+        runFilter(ndb, { entity: { kind: 'entity_title' }, operator: 'not_contains', value: 'кофе' }),
+        [tea],
+        '«не содержит» отсеивает совпадение',
+      );
+      // Нет совпадений — пусто.
+      assert.deepEqual(
+        runFilter(ndb, { entity: { kind: 'entity_title' }, operator: 'contains', value: 'нет-такого-слова' }),
+        [],
+      );
+      // Недопустимый оператор («равно») — VALIDATION_ERROR (профиль даёт только
+      // «содержит»/«не содержит»).
+      assert.throws(
+        () => runFilter(ndb, { entity: { kind: 'entity_title' }, operator: 'eq', value: 'Купить кофе в лавке' }),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+
+      // Сквозная in-process проверка: тело строит КЛИЕНТСКИЙ редактор профиля
+      // «события» — round-trip без потерь и тот же набор на сервере.
+      const scenario: FilterAst = {
+        version: FILTER_AST_VERSION,
+        filter: { entity: { kind: 'entity_title' }, operator: 'contains', value: 'кофе' },
+      };
+      const client = await loadClientFilterBuilder();
+      const rebuilt = client.buildFilterAst(client.parseFilterAstState(scenario), {
+        profile: 'events',
+        sort: false,
+      });
+      assert.deepEqual(rebuilt, scenario, 'клиентский round-trip сохраняет операнд «Заголовок сущности»');
+      assert.deepEqual(runFilter(ndb, rebuilt.filter), [coffee], 'тело клиентского редактора исполняется');
     } finally {
       ndb.close();
     }

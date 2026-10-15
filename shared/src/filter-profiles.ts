@@ -205,6 +205,11 @@ const EVENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
   // видом ячейки).
   action: ['in', 'not_in'],
   entity_type: ['in', 'not_in'],
+  // «Заголовок сущности» (задача b2aa2444, решение пользователя — вариант 1):
+  // текстовый операнд — снимок заголовка сущности на момент события (`activity_log.
+  // entity_title`). Операторы — «содержит»/«не содержит» (LIKE по слову), как у
+  // прочих текстовых операндов.
+  entity_title: ['contains', 'not_contains'],
   // «По конкретной сущности — равно ИЛИ под-выборка по мыслям» (требование
   // 1765e659): `eq`/`ne` — литеральный id; `in`/`not_in`/`all_of` — значение-
   // под-выборка мыслей (операторы совместимы со значением-под-выборкой,
@@ -537,7 +542,7 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
     id: 'events',
     title: 'События (журнал активности)',
     target: 'activity',
-    operands: ['occurred_at', 'action', 'entity_type', 'entity_id', 'user'],
+    operands: ['occurred_at', 'action', 'entity_type', 'entity_title', 'entity_id', 'user'],
     operand_operators: EVENT_OPERATOR_SETS,
     operators: unionOperators(Object.values(EVENT_OPERATOR_SETS)),
     tokens: ['calendar', 'time'],

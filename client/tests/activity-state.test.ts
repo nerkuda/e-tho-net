@@ -208,3 +208,33 @@ describe('parseActivityState', () => {
     assert.equal(fractional.panelWidth, 322);
   });
 });
+
+describe('«Заголовок сущности» в отборе «Событий» (задача b2aa2444)', () => {
+  it('операнд доступен профилю, текстовый, с операторами «содержит»/«не содержит»', async () => {
+    const builder = await import('../src/renderer/lib/filter-builder.js');
+    const tokens = await import('../src/renderer/lib/filter-tokens.js');
+    // Профиль «события» знает операнд (LIKE по снимку заголовка сущности).
+    assert.ok(
+      builder.filterProfileOperands('events').includes('entity_title'),
+      '«Заголовок сущности» — в составе операндов профиля «события»',
+    );
+    // Операторы — как у прочих текстовых: «содержит»/«не содержит».
+    assert.deepEqual(builder.filterProfileOperators('events', 'entity_title'), [
+      'contains',
+      'not_contains',
+    ]);
+    // Подпись операнда — человекочитаемая, а не служебная.
+    assert.equal(builder.OPERAND_KIND_LABELS['entity_title'], 'Заголовок сущности');
+    // Природа значения — текст: ячейку значения рисует общий текстовый редактор.
+    const nature = tokens.filterTokenNature(
+      {
+        kind: 'leaf',
+        entity: { kind: 'entity_title' },
+        operator: 'contains',
+        value: { kind: 'none' },
+      } as never,
+      { data: { registry: new Map(), linkTypes: [] } } as never,
+    );
+    assert.equal(nature, 'text');
+  });
+});

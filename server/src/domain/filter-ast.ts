@@ -103,6 +103,7 @@ const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   occurred_at: ['kind'],
   action: ['kind'],
   entity_type: ['kind'],
+  entity_title: ['kind'],
   entity_id: ['kind'],
   user: ['kind'],
   // Профиль «вложения» (задача 5a007bed): видимые характеристики вложения.

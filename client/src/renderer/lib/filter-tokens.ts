@@ -141,6 +141,7 @@ const OPERAND_NATURE: Readonly<Record<string, FilterTokenNature>> = {
   record_editor: 'user',
   user: 'user',
   name: 'text',
+  entity_title: 'text',
   record_title: 'text',
   record_body: 'text',
   kind: 'text',

@@ -436,6 +436,10 @@ function activityAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: Activi
       return activityTextLeaf(node, 'action', opts);
     case 'entity_type':
       return activityTextLeaf(node, 'entity_type', opts);
+    // «Заголовок сущности» (задача b2aa2444): LIKE по СНИМКУ заголовка в
+    // `activity_log.entity_title` — возврат поиска по слову в ленте «События».
+    case 'entity_title':
+      return activityTextLeaf(node, 'entity_title', opts);
     case 'user':
       return activityTextLeaf(node, 'user_id', opts);
     case 'entity_id':

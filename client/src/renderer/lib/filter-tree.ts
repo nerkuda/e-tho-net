@@ -693,6 +693,7 @@ const OPERAND_ICONS: Readonly<Record<string, IconName>> = {
   occurred_at: 'calendar-month',
   action: 'activity',
   entity_type: 'layers',
+  entity_title: 'value-text',
   entity_id: 'hash',
   user: 'user',
   name: 'value-text',
