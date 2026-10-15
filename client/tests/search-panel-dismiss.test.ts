@@ -21,12 +21,26 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { searchPanelClosesOnTap } from '../src/renderer/lib/pure.js';
+import { isInsideMenu } from '../src/renderer/lib/menu.js';
 
 const SEARCH_TS = resolve(import.meta.dirname, '..', 'src', 'renderer', 'search', 'search.ts');
 
 function readText(path: string): string {
   return readFileSync(path, 'utf8');
 }
+
+describe('слой меню для панели поиска (задача 4b1cc3d4)', () => {
+  it('isInsideMenu: строка меню и подменю — внутри слоя, посторонний узел — нет', () => {
+    // Цель события — DOM-узел с `closest`; в тестах без jsdom подменяем его
+    // минимальной заглушкой (та же конвенция, что у соседних проверок слоёв).
+    const withClosest = (match: boolean): EventTarget =>
+      ({ closest: (sel: string): object | null => (match && sel === '.menu' ? {} : null) }) as unknown as EventTarget;
+    assert.equal(isInsideMenu(withClosest(true)), true, 'строка меню — внутри слоя');
+    assert.equal(isInsideMenu(withClosest(true)), true, 'строка подменю — внутри слоя');
+    assert.equal(isInsideMenu(withClosest(false)), false, 'посторонний узел — вне слоя');
+    assert.equal(isInsideMenu(null), false, 'нет цели — вне слоя');
+  });
+});
 
 describe('политика закрытия панели поиска (ошибка 72a06e01)', () => {
   it('клик вне панели и вне всплывающих слоёв закрывает панель', () => {
@@ -62,14 +76,24 @@ describe('политика закрытия панели поиска (ошиб�
       false,
       'всплывающая панель lib/ui — список выбора редактора отбора (ошибка 50d9bf4e п. B1)',
     );
+    assert.equal(
+      searchPanelClosesOnTap({
+        insidePanel: false,
+        insideSuggest: false,
+        insideDialog: false,
+        insideMenu: true,
+      }),
+      false,
+      'строка МЕНЮ, открытого из панели (подменю «Добавить отбор…», задача 4b1cc3d4)',
+    );
   });
 
-  it('обработчик панели кормит политику всеми четырьмя слоями', () => {
+  it('обработчик панели кормит политику всеми пятью слоями', () => {
     const src = readText(SEARCH_TS);
     assert.match(
       src,
-      /searchPanelClosesOnTap\(\{[\s\S]*?insidePanel:[\s\S]*?insideSuggest: isInsideSuggestDropdown\(target\),[\s\S]*?insideDialog: isInsideDialog\(target\),[\s\S]*?insideFloating: isInsidePopover\(target\),/,
-      'обработчик pointerdown обязан учитывать панель, выпадашку подсказок, диалог и всплывающие панели',
+      /searchPanelClosesOnTap\(\{[\s\S]*?insidePanel:[\s\S]*?insideSuggest: isInsideSuggestDropdown\(target\),[\s\S]*?insideDialog: isInsideDialog\(target\),[\s\S]*?insideFloating: isInsidePopover\(target\),[\s\S]*?insideMenu: isInsideMenu\(target\),/,
+      'обработчик pointerdown обязан учитывать панель, выпадашку подсказок, диалог, всплывающие панели и меню',
     );
     assert.match(
       src,
@@ -85,6 +109,14 @@ describe('политика закрытия панели поиска (ошиб�
       src,
       /import \{ isInsideDialog \} from '\.\.\/lib\/dialog\.js';/,
       'слой диалога берётся у общего модуля диалогов',
+    );
+    // Слой меню — у общего модуля меню (не распознаётся классом на месте):
+    // самовольная проверка `.menu` в вызывающем коде разошлась бы с разметкой
+    // меню (задача 4b1cc3d4).
+    assert.match(
+      src,
+      /import \{ menuAction, isInsideMenu, showMenuAt \} from '\.\.\/lib\/menu\.js';/,
+      'слой меню берётся у общего модуля меню',
     );
   });
 

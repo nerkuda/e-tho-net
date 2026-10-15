@@ -91,7 +91,7 @@ import {
 } from '../lib/filter-builder.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../lib/filter-editor.js';
 import { createDebouncedWriter } from '../lib/debounced-writer.js';
-import { menuAction, showMenuAt } from '../lib/menu.js';
+import { menuAction, isInsideMenu, showMenuAt } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { t } from '../lib/i18n.js';
 import {
@@ -361,6 +361,11 @@ export function mountSearch(next: SearchChrome): () => void {
       // `document.body` — клик по ним не закрывает строку поиска (ошибка
       // 50d9bf4e п. B1).
       insideFloating: isInsidePopover(target),
+      // Строка меню (`lib/menu.ts`): подменю «Добавить отбор…» порталится в
+      // `document.body`. Настоящий клик по нему (`pointerdown`) обязан не
+      // закрывать панель — иначе команда применяется «вслепую», а условия и
+      // результаты прячутся вместе с панелью (задача 4b1cc3d4, ошибка ddff7ca7).
+      insideMenu: isInsideMenu(target),
     })) {
       return;
     }
