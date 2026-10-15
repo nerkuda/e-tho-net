@@ -34,6 +34,7 @@ import {
   buildWireFilter,
   compileActivityCriteriaToAst,
   compileActivityCriteriaToAstDetailed,
+  compileFlatCriteriaToAst,
   defaultActivityCriteriaState,
   defaultChronicleCriteriaState,
   defaultFilterCriteriaState,
@@ -489,6 +490,54 @@ describe('выравненные возможности отбора', () => {
     assert.equal(
       buildWireFilter(state, EMPTY_REGISTRY, { activeMode: 'view' }).trashed,
       true,
+    );
+  });
+});
+
+describe('плоские датовые границы: токен уходит в AST канонической формой (99e7889d)', () => {
+  /** Листья дерева AST глубоко (в порядке обхода). */
+  function astLeaves(node: unknown): Array<{ entity: { kind: string }; operator: string; value?: unknown }> {
+    const out: Array<{ entity: { kind: string }; operator: string; value?: unknown }> = [];
+    const walk = (current: unknown): void => {
+      const row = current as { op?: string; children?: unknown[]; entity?: unknown };
+      if (row.entity !== undefined) {
+        out.push(current as (typeof out)[number]);
+        return;
+      }
+      for (const child of row.children ?? []) walk(child);
+    };
+    walk(node);
+    return out;
+  }
+
+  it('«Дата изменений между $weekStart и $today»: границы — формой `{ token }`', () => {
+    // Плоская форма хранит токен СТРОКОЙ (`updatedAfter: '$weekStart'`) — поле
+    // периода принимает опоры. Без канонизации сырая строка уезжала исполнителю
+    // литералом и сравнивалась с колонкой как текст («отбор исполнялся, но с
+    // неверными датами»), а незаполненная вторая граница приходила пустой
+    // строкой — «Граница даты должна быть непустой строкой ISO-8601».
+    const state: FilterCriteriaState = {
+      ...defaultFilterCriteriaState(),
+      updatedAfter: '$weekStart',
+      updatedBefore: '$today',
+      createdAfter: '2026-01-01',
+    };
+    const ast = compileFlatCriteriaToAst(state, EMPTY_REGISTRY, { activeMode: 'view' });
+    assert.notEqual(ast, undefined, 'условия есть — AST собран');
+    const leaves = astLeaves(ast!.filter);
+    const updated = leaves.filter((leaf) => leaf.entity.kind === 'updated_at');
+    assert.deepEqual(
+      updated.map((leaf) => [leaf.operator, leaf.value]),
+      [
+        ['gte', { token: '$weekStart' }],
+        ['lte', { token: '$today' }],
+      ],
+      'обе границы «Дата изменений» — в форме AST-токена, а не сырой строкой',
+    );
+    assert.deepEqual(
+      leaves.find((leaf) => leaf.entity.kind === 'created_at')?.value,
+      '2026-01-01',
+      'конкретная дата остаётся литералом — токеном становится только «$…»',
     );
   });
 });
