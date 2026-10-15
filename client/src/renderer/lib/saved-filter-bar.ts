@@ -38,6 +38,7 @@ import { svgIcon } from './ui/icon.js';
 import { menuAction, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
 import { iconButton, uiButton } from './ui/button.js';
+import { badge } from './ui/badge.js';
 import { createTable } from './ui/table.js';
 import { duplicateFilterName, filterSavedByName } from './pure.js';
 
@@ -46,6 +47,8 @@ export interface SavedFilterEntry {
   id: string;
   name: string;
   definition: unknown;
+  /** Предопределённый набор (условия совпали с набором-предустановкой) — метка. */
+  predefined?: boolean;
 }
 
 /** Хранилище сохранённых отборов одного вида (REST-обёртка экрана). */
@@ -373,6 +376,17 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
         render: (entry) => {
           const node = span(entry.name);
           if (entry.id === opts.selectedId()) node.style.fontWeight = '600';
+          if (entry.predefined === true) {
+            // Минимальная пометка предопределённого набора — общий бейдж
+            // дизайн-системы (`lib/ui/badge.ts`), без новых паттернов.
+            node.append(
+              ' ',
+              badge(t('savedFilters.predefined'), {
+                kind: 'quiet',
+                title: t('savedFilters.predefinedHint'),
+              }),
+            );
+          }
           return node;
         },
       },

@@ -31,6 +31,7 @@
 
 import {
   buildChronicleKeywordGroup,
+  FILTER_AST_VERSION,
   type ChronicleFilterDefinition,
   type ChronicleRow,
   type FilterAstNode,
@@ -68,10 +69,16 @@ import {
   filterIssuesFromPayload,
   type FilterIssue,
 } from '../../lib/filter-diagnostics.js';
+import { canonicalFilterTree } from '../../lib/filter-canonical.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
 import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
 import { notice } from '../../lib/notice.js';
+import {
+  predefinedFilterIds,
+  predefinedFiltersToCreate,
+  type PredefinedFilter,
+} from '../../lib/predefined-filters.js';
 import { duplicateFilterName } from '../../lib/pure.js';
 import { openSavedFilterDialog } from '../../lib/saved-filter-bar.js';
 import { segmentedControl } from '../../lib/ui/segmented.js';
@@ -142,6 +149,8 @@ interface SavedFilterRow {
   id: string;
   name: string;
   definition: unknown;
+  /** Условия строки совпали с предопределённым набором (метка в списке). */
+  predefined?: boolean;
 }
 
 function defaultState(): FilterState {
@@ -674,6 +683,91 @@ async function reloadSavedRows(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Предопределённые наборы (задача 347b307e, решения арбитража 2026-10-14)
+// ---------------------------------------------------------------------------
+
+/** Условия набора одним корнем-группой `И` в форме записи панели (`{ ast, order }`). */
+function presetChronicle(children: FilterAstNode[]): ChronicleFilterDefinition {
+  return {
+    ast: { version: FILTER_AST_VERSION, filter: { op: 'and', children } },
+    order: 'asc',
+  } as ChronicleFilterDefinition;
+}
+
+/**
+ * Предопределённые наборы отбора панели «Дневника» — формулировки заказчика
+ * ДОСЛОВНО. Решения арбитража 2026-10-14: «Дата создания записи» в терминах
+ * пользователя — «Период записи» (`record_time`); новый операнд `created_at` НЕ
+ * заводится. «Автор записи = текущий пользователь» — значение-токен `$user`
+ * (резолв — `chronicle-service`, иначе условие молча терялось).
+ */
+export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
+  {
+    name: 'Мои записи за неделю',
+    definition: presetChronicle([
+      {
+        entity: { kind: 'record_time' },
+        operator: 'between',
+        value: [{ token: '$weekStart' }, { token: '$weekEnd' }],
+      },
+      { entity: { kind: 'record_author' }, operator: 'eq', value: { token: '$user' } },
+    ]),
+  },
+  {
+    name: 'Записи за 30 дней',
+    definition: presetChronicle([
+      {
+        entity: { kind: 'record_time' },
+        operator: 'between',
+        value: [{ token: '$today-30d' }, { token: '$today' }],
+      },
+    ]),
+  },
+];
+
+/**
+ * Каноничная форма условий определения отбора «Дневника» — сопоставление
+ * предопределённых наборов «по условиям» (арбитраж 2026-10-14). Определение
+ * приводит к дереву РИДЕР ПАНЕЛИ ({@link readFilterDefinition}), поэтому
+ * легаси-плоский отбор сравнивается наравне с AST.
+ */
+export function canonicalDefinition(def: unknown): string {
+  return canonicalFilterTree(readFilterDefinition(def).tree);
+}
+
+/**
+ * Досоздать отсутствующие предопределённые наборы (при открытии списка отборов).
+ * Сопоставление — по каноничным условиям, конфликт имени даёт свободное имя
+ * (`duplicateFilterName`). Ошибка REST набор не теряет — досоздастся при
+ * следующем открытии.
+ */
+async function seedPredefinedFilters(): Promise<void> {
+  const toCreate = predefinedFiltersToCreate(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
+  if (toCreate.length === 0) {
+    markPredefinedRows();
+    return;
+  }
+  for (const item of toCreate) {
+    try {
+      await etn.chronicleFilters.create(requireNetworkId(), {
+        name: item.name,
+        definition: item.definition as ChronicleFilterDefinition,
+      });
+    } catch {
+      // набор досоздастся при следующем открытии списка
+    }
+  }
+  await reloadSavedRows();
+  markPredefinedRows();
+}
+
+/** Пометить строки, условия которых совпали с предопределённым набором. */
+function markPredefinedRows(): void {
+  const ids = predefinedFilterIds(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
+  for (const row of savedRows) row.predefined = ids.has(row.id);
+}
+
+// ---------------------------------------------------------------------------
 // Реестр свойств
 // ---------------------------------------------------------------------------
 
@@ -960,6 +1054,13 @@ async function saveFilter(request: { name: string; asCopy: boolean }): Promise<v
 
 async function openSavedPicker(): Promise<void> {
   await reloadSavedRows();
+  await seedPredefinedFilters();
+  // Перечитывание списка в ходе диалога: предопределённые наборы ВНУТРИ сессии
+  // не досоздаются (посев — только при открытии); метка пересчитывается.
+  const reload = async (): Promise<void> => {
+    await reloadSavedRows();
+    markPredefinedRows();
+  };
   openSavedFilterDialog({
     entries: () => savedRows,
     selectedId: () => savedFilterId,
@@ -973,7 +1074,7 @@ async function openSavedPicker(): Promise<void> {
         errorDialog('Переименовать отбор', err);
         return null;
       }
-      await reloadSavedRows();
+      await reload();
       if (savedFilterId === entry.id) {
         filterName = name;
         savedFilterName = name;
@@ -991,7 +1092,7 @@ async function openSavedPicker(): Promise<void> {
           name: copyName,
           definition: entry.definition as ChronicleFilterDefinition,
         });
-        await reloadSavedRows();
+        await reload();
         return created.id;
       } catch (err) {
         errorDialog('Скопировать отбор', err);
@@ -1015,9 +1116,9 @@ async function openSavedPicker(): Promise<void> {
         savedFilterId = null;
         savedFilterName = null;
       }
-      await reloadSavedRows();
+      await reload();
     },
-    onRefresh: reloadSavedRows,
+    onRefresh: reload,
   });
 }
 

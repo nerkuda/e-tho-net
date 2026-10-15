@@ -64,6 +64,7 @@ import {
   filterIssuesFromPayload,
   type FilterIssue,
 } from '../../lib/filter-diagnostics.js';
+import { canonicalFilterTree } from '../../lib/filter-canonical.js';
 import {
   buildFilterEditor,
   type FilterEditorHandle,
@@ -72,6 +73,11 @@ import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
 import { t } from '../../lib/i18n.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
 import { notice } from '../../lib/notice.js';
+import {
+  predefinedFilterIds,
+  predefinedFiltersToCreate,
+  type PredefinedFilter,
+} from '../../lib/predefined-filters.js';
 import { duplicateFilterName } from '../../lib/pure.js';
 import { openSavedFilterDialog } from '../../lib/saved-filter-bar.js';
 import { registerThoughtDropField } from '../../lib/thought-drop.js';
@@ -724,6 +730,73 @@ interface SavedRow {
   id: string;
   name: string;
   definition: unknown;
+  /** Условия строки совпали с предопределённым набором (метка в списке). */
+  predefined?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Предопределённые наборы (задача 347b307e)
+// ---------------------------------------------------------------------------
+
+/** Условия набора одним корнем-группой `И` — определение в форме записи (AST). */
+function presetAst(children: FilterAstNode[]): FilterAst {
+  return { version: FILTER_AST_VERSION, filter: { op: 'and', children } };
+}
+
+/**
+ * Предопределённые наборы отбора панели «Структур» — формулировки заказчика
+ * ДОСЛОВНО (задача 347b307e). Порядок — как в постановке. Условия несут
+ * «Актуальность = да»/«Пометка удаления = нет» явно (не полагаются на дефолты
+ * видимости панели, §15.3), кроме набора «Помеченные на удаление» — у него по
+ * постановке только «Пометка удаления = да».
+ */
+export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
+  {
+    name: 'Сиротские мысли (без родителей)',
+    definition: presetAst([
+      { entity: { kind: 'parents' }, operator: 'is_empty' },
+      { entity: { kind: 'active' }, operator: 'eq', value: true },
+      { entity: { kind: 'trashed' }, operator: 'eq', value: false },
+    ]),
+  },
+  {
+    name: 'Создано на этой неделе',
+    definition: presetAst([
+      {
+        entity: { kind: 'created_at' },
+        operator: 'between',
+        value: [{ token: '$weekStart' }, { token: '$weekEnd' }],
+      },
+      { entity: { kind: 'active' }, operator: 'eq', value: true },
+      { entity: { kind: 'trashed' }, operator: 'eq', value: false },
+    ]),
+  },
+  {
+    name: 'Создано за 30 дней',
+    definition: presetAst([
+      {
+        entity: { kind: 'created_at' },
+        operator: 'between',
+        value: [{ token: '$today-30d' }, { token: '$today' }],
+      },
+      { entity: { kind: 'active' }, operator: 'eq', value: true },
+      { entity: { kind: 'trashed' }, operator: 'eq', value: false },
+    ]),
+  },
+  {
+    name: 'Помеченные на удаление',
+    definition: presetAst([{ entity: { kind: 'trashed' }, operator: 'eq', value: true }]),
+  },
+];
+
+/**
+ * Каноничная форма условий определения отбора «Структур» — сопоставление
+ * предопределённых наборов «по условиям» (арбитраж 2026-10-14). Определение
+ * приводит к дереву РИДЕР ПАНЕЛИ ({@link readFilterDefinition}), поэтому
+ * легаси-плоский отбор сравнивается наравне с AST.
+ */
+export function canonicalDefinition(def: unknown): string {
+  return canonicalFilterTree(readFilterDefinition(def).tree);
 }
 
 /** Список сохранённых отборов панели (кэш диалога выбора). */
@@ -740,6 +813,40 @@ async function reloadSavedRows(): Promise<void> {
   } catch {
     savedRows = [];
   }
+}
+
+/**
+ * Досоздать отсутствующие предопределённые наборы (при открытии списка отборов,
+ * задача 347b307e). Сопоставление — по каноничным условиям
+ * (`predefinedFiltersToCreate`), поэтому переименованный пользователем набор НЕ
+ * дублируется; конфликт имени с чужим отбором даёт свободное имя
+ * (`duplicateFilterName`), падения нет. Ошибка REST (сеть) набор не теряет —
+ * он досоздастся при следующем открытии.
+ */
+async function seedPredefinedFilters(): Promise<void> {
+  const toCreate = predefinedFiltersToCreate(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
+  if (toCreate.length === 0) {
+    markPredefinedRows();
+    return;
+  }
+  for (const item of toCreate) {
+    try {
+      await etn.savedFilters.create(requireNetworkId(), {
+        name: item.name,
+        definition: item.definition as SavedFilterCriteria,
+      });
+    } catch {
+      // набор досоздастся при следующем открытии списка
+    }
+  }
+  await reloadSavedRows();
+  markPredefinedRows();
+}
+
+/** Пометить строки, условия которых совпали с предопределённым набором. */
+function markPredefinedRows(): void {
+  const ids = predefinedFilterIds(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
+  for (const row of savedRows) row.predefined = ids.has(row.id);
 }
 
 /** Слой (G6): `saved-filter.*` роутер гасит ключ — панель перечитывает список сама
@@ -797,7 +904,13 @@ async function saveFilter(request: { name: string; asCopy: boolean }): Promise<v
 /** Открыть общий диалог выбора сохранённого отбора (кнопка «Отборы…»). */
 async function openSavedPicker(): Promise<void> {
   await reloadSavedRows();
-  const reload = reloadSavedRows;
+  await seedPredefinedFilters();
+  // Перечитывание списка в ходе диалога: предопределённые наборы ВНУТРИ сессии
+  // не досоздаются (посев — только при открытии); метка пересчитывается.
+  const reload = async (): Promise<void> => {
+    await reloadSavedRows();
+    markPredefinedRows();
+  };
   openSavedFilterDialog({
     entries: () => savedRows,
     selectedId: () => state.savedFilterId,
