@@ -23,10 +23,14 @@ import {
   isPeriodToken,
   isoWeekNumber,
   localDay,
+  localDayEnd,
+  localDayStart,
   periodTokensForRange,
   periodValuesForRange,
   resolveDateToken,
+  resolvePeriodBoundForQuery,
   resolvePeriodDay,
+  resolvePeriodForQuery,
   rowDays,
   visibleChips,
   weekPeriod,
@@ -254,6 +258,67 @@ describe('diary: раскрытие токенов дат периода (0.10.1
   it('месячная арифметика прижимает день к концу месяца', () => {
     assert.equal(resolveDateToken('$month.end', '2026-03-31'), '2026-03-31');
     assert.equal(resolveDateToken('$month.end+1mo', '2026-03-31'), '2026-04-30');
+  });
+});
+
+/**
+ * Канон имени головы токена — camelCase (`$weekStart`/`$monthStart`…), и его
+ * пишет контрол периода, хранят предопределённые наборы и отборы. Клиентский
+ * резолвер знал только легаси точечные формы, поэтому подсветка календаря для
+ * канонических токенов не считалась (ошибки 0114e9c3, 73fa3c3b). Неделя при
+ * этом обязана считаться от первого дня недели СЕТИ (требование 1b77decd).
+ */
+describe('diary: канонические camelCase-токены и первый день недели (0114e9c3, 73fa3c3b)', () => {
+  const today = '2026-09-26'; // суббота; неделя пн 09-21 … вс 09-27
+
+  it('resolveDateToken раскрывает канонические головы (паритет с сервером)', () => {
+    assert.equal(resolveDateToken('$weekStart', today), '2026-09-21');
+    assert.equal(resolveDateToken('$weekEnd', today), '2026-09-27');
+    assert.equal(resolveDateToken('$weekStart-1w', today), '2026-09-14');
+    assert.equal(resolveDateToken('$weekEnd+1w', today), '2026-10-04');
+    assert.equal(resolveDateToken('$monthStart', today), '2026-09-01');
+    assert.equal(resolveDateToken('$monthEnd', today), '2026-09-30');
+    assert.equal(resolveDateToken('$monthStart-1mo', today), '2026-08-01');
+    assert.equal(resolveDateToken('$yearStart', today), '2026-01-01');
+    assert.equal(resolveDateToken('$yearEnd', today), '2026-12-31');
+  });
+
+  it('isPeriodToken и resolvePeriodDay знают канонические токены', () => {
+    for (const token of ['$weekStart', '$weekEnd', '$monthStart', '$monthEnd', '$yearStart', '$yearEnd']) {
+      assert.equal(isPeriodToken(token), true, `${token} распознан токеном`);
+      assert.notEqual(resolvePeriodDay(token, today), '', `${token} раскрыт для подсветки`);
+    }
+    // Токены предопределённого набора «Мои записи за неделю» + автор.
+    assert.equal(resolvePeriodDay('$weekStart', today), '2026-09-21');
+    assert.equal(resolvePeriodDay('$weekEnd', today), '2026-09-27');
+    assert.equal(resolvePeriodDay('$today-30d', today), '2026-08-27');
+    assert.equal(localDay('$weekStart'), '', 'токен — не «голая дата»');
+  });
+
+  it('неделя считается от первого дня недели сети, а не жёстко от понедельника', () => {
+    // Первый день недели — воскресенье (ISO 7): неделя вс 09-20 … сб 09-26.
+    assert.equal(resolveDateToken('$weekStart', today, 7), '2026-09-20');
+    assert.equal(resolveDateToken('$weekEnd', today, 7), '2026-09-26');
+    assert.equal(resolvePeriodDay('$weekStart', today, 7), '2026-09-20');
+    // Понедельник (ISO 1) — прежнее поведение.
+    assert.equal(resolveDateToken('$weekStart', today, 1), '2026-09-21');
+  });
+
+  it('границы-токены для запроса раскрываются в ЛОКАЛЬНЫЕ сутки наблюдателя', () => {
+    assert.equal(
+      resolvePeriodBoundForQuery('$weekStart', 'start', today),
+      localDayStart('2026-09-21'),
+    );
+    assert.equal(resolvePeriodBoundForQuery('$weekEnd', 'end', today), localDayEnd('2026-09-27'));
+    assert.deepEqual(resolvePeriodForQuery('$weekStart', '$weekEnd', today), {
+      from: localDayStart('2026-09-21'),
+      to: localDayEnd('2026-09-27'),
+    });
+    // Первый день недели сети учитывается и в границах запроса.
+    assert.equal(
+      resolvePeriodBoundForQuery('$weekStart', 'start', today, 7),
+      localDayStart('2026-09-20'),
+    );
   });
 });
 

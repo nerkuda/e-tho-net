@@ -107,6 +107,20 @@ export function mondayIndex(day: string): number {
   return (d.getUTCDay() + 6) % 7;
 }
 
+/**
+ * Смещение дня от НАЧАЛА его недели при первом дне недели `firstDayOfWeek`
+ * (ISO 1 = понедельник … 7 = воскресенье), в сутках: 0 — сам первый день.
+ * Настройка сети «первый день недели» (требование 1b77decd) общая для
+ * календарных виджетов и календарных токенов `$weekStart`/`$weekEnd`; резолвер
+ * клиента обязан считать неделю от неё, а не жёстко от понедельника.
+ */
+export function weekStartOffset(day: string, firstDayOfWeek = 1): number {
+  const iso = firstDayOfWeek >= 1 && firstDayOfWeek <= 7 ? firstDayOfWeek : 1;
+  const d = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return 0;
+  return (d.getUTCDay() - (iso % 7) + 7) % 7;
+}
+
 /** Первый день месяца `YYYY-MM-DD`. */
 export function firstOfMonth(year: number, month: number): string {
   return `${year}-${pad2(month)}-01`;

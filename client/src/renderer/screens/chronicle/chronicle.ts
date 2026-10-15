@@ -906,11 +906,25 @@ function renderStatus(kind: 'loading' | 'error', err?: unknown): void {
 // Feed rendering
 // ---------------------------------------------------------------------------
 
+/**
+ * Первый день недели открытой сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
+ * общая настройка календарных виджетов и календарных токенов. Нет сети или
+ * настройки — понедельник (поведение по умолчанию).
+ */
+function networkFirstDayOfWeek(): number {
+  const value = store.state.network?.first_day_of_week;
+  return typeof value === 'number' && value >= 1 && value <= 7 ? value : 1;
+}
+
 /** Локальный день записи HOME — границы применённого периода ленты.
  *  Период — строка «Период записи» дерева (панель отбора, задача 608ecb79). */
 function currentFromTo(): { from: string; to: string } {
   const period = chroniclePeriod();
-  return { from: resolvePeriodDay(period.from), to: resolvePeriodDay(period.to) };
+  const fdw = networkFirstDayOfWeek();
+  return {
+    from: resolvePeriodDay(period.from, todayLocal(), fdw),
+    to: resolvePeriodDay(period.to, todayLocal(), fdw),
+  };
 }
 
 /** Число записей, попавших в день (счётчик календаря). */
@@ -1071,8 +1085,8 @@ async function addRecord(presetThoughtIds: string[] = []): Promise<void> {
   const period = chroniclePeriod();
   const targetDay = clampPseudoDate(
     todayLocal(),
-    resolvePeriodDay(period.from),
-    resolvePeriodDay(period.to),
+    resolvePeriodDay(period.from, todayLocal(), networkFirstDayOfWeek()),
+    resolvePeriodDay(period.to, todayLocal(), networkFirstDayOfWeek()),
   );
   const networkId = requireNetworkId();
   try {
@@ -1953,7 +1967,11 @@ function goToday(): void {
 function syncCalendar(): void {
   if (calendar === null) return;
   const period = chroniclePeriod();
-  calendar.setSelection(resolvePeriodDay(period.from), resolvePeriodDay(period.to));
+  const fdw = networkFirstDayOfWeek();
+  calendar.setSelection(
+    resolvePeriodDay(period.from, todayLocal(), fdw),
+    resolvePeriodDay(period.to, todayLocal(), fdw),
+  );
   month = calendar.getMonth();
 }
 
@@ -2012,7 +2030,11 @@ async function refreshCalendarCounts(): Promise<void> {
   dayCounts.clear();
   for (const [day, count] of tally) dayCounts.set(day, count);
   const period = chroniclePeriod();
-  calendar.setSelection(resolvePeriodDay(period.from), resolvePeriodDay(period.to));
+  const fdw = networkFirstDayOfWeek();
+  calendar.setSelection(
+    resolvePeriodDay(period.from, todayLocal(), fdw),
+    resolvePeriodDay(period.to, todayLocal(), fdw),
+  );
 }
 
 /** Двузначная запись числа. */

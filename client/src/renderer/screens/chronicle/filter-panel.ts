@@ -87,6 +87,7 @@ import { store } from '../../state.js';
 import {
   SEARCH_DEBOUNCE_MS,
   resolvePeriodForQuery,
+  todayLocal,
 } from './diary.js';
 import { isFeedRecordEditorTarget } from './feed-nav.js';
 
@@ -665,7 +666,9 @@ export function chronicleDefinitionForPeriod(
  */
 export function chronicleQueryDefinition(): ChronicleFilterDefinition {
   const { from, to } = chroniclePeriod();
-  const resolved = resolvePeriodForQuery(from, to);
+  const fdw = store.state.network?.first_day_of_week;
+  const firstDayOfWeek = typeof fdw === 'number' && fdw >= 1 && fdw <= 7 ? fdw : 1;
+  const resolved = resolvePeriodForQuery(from, to, todayLocal(), firstDayOfWeek);
   return chronicleDefinitionForPeriod(resolved.from, resolved.to);
 }
 

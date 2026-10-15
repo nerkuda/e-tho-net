@@ -14,18 +14,36 @@
 
 import type { ChronicleRow, ChronicleTarget, SortOrder } from '@etn/shared';
 
-import { BARE_DATE_RE, addDays, mondayIndex, pad2, todayLocal } from '../../lib/dates.js';
+import { BARE_DATE_RE, addDays, mondayIndex, pad2, todayLocal, weekStartOffset } from '../../lib/dates.js';
 
 // Общие чистые примитивы дат живут в `lib/dates.ts` (перенос календаря в
 // библиотеку, приёмка №5). Реэкспорт сохраняет прежние точки импорта у
 // потребителей (`addDays`/`isoWeekNumber`/`todayLocal` из этого модуля).
 export { addDays, isoWeekNumber, todayLocal } from '../../lib/dates.js';
 
-/** Голова глобального токена даты периода (0.10.1, требование 91f8d8dd). */
+/**
+ * Голова глобального токена даты периода. КАНОН имени границ — camelCase
+ * (`$weekStart`/`$weekEnd`/`$monthStart`/`$monthEnd`/`$yearStart`/`$yearEnd`,
+ * ревизия 0.13.1 требования 91f8d8dd): именно её пишет контрол периода и хранят
+ * предопределённые наборы. Точечные формы (`$week.start` и др.) — ЛЕГАСИ-СИНОНИМЫ
+ * выпущенного клиента; они продолжают читаться (паритет со словарём сервера
+ * `thought-type-view-tokens.ts`). До 0.13.1 регулярка знала только точечные
+ * формы, поэтому канонические camelCase-токены НЕ раскрывались для подсветки
+ * календаря (ошибки 0114e9c3 и 73fa3c3b).
+ */
 const TOKEN_HEAD_RE =
-  /^\$(today|now|week\.start|week\.end|month\.start|month\.end|year\.start|year\.end)/;
+  /^\$(today|now|weekStart|weekEnd|monthStart|monthEnd|yearStart|yearEnd|week\.start|week\.end|month\.start|month\.end|year\.start|year\.end)/;
 /** Хвостовая арифметика токена: `±Nd` / `±Nw` / `±Nmo` / `±Ny`. */
 const TOKEN_ARITH_RE = /^([+-])(\d+)(mo|y|w|d)$/;
+/** Легаси-синонимы головы (точка) → канон camelCase (паритет с сервером). */
+const TOKEN_HEAD_ALIASES: Readonly<Record<string, string>> = {
+  'week.start': 'weekStart',
+  'week.end': 'weekEnd',
+  'month.start': 'monthStart',
+  'month.end': 'monthEnd',
+  'year.start': 'yearStart',
+  'year.end': 'yearEnd',
+};
 
 /** Один день ленты: локальная дата `YYYY-MM-DD` и записи, видимые в этот день. */
 export interface DiaryDay {
@@ -56,14 +74,23 @@ export function isPeriodToken(text: string): boolean {
 
 /**
  * Раскрыть глобальный токен даты относительно локального дня наблюдателя
- * (`today`) — зеркало серверного раскрытия для подсветки календаря. Неделя
- * начинается с понедельника; месячная арифметика сдвигает ЯКОРЬ месяца
- * (границы — первое/последнее число нужного месяца). `''` — не токен.
+ * (`today`) — зеркало серверного раскрытия для подсветки календаря. Канон головы
+ * — camelCase, легаси точечные формы приводятся к канону. Неделя считается от
+ * первого дня недели сети `firstDayOfWeek` (ISO 1 = пн … 7 = вс, требование
+ * 1b77decd): `$weekStart`/`$weekEnd` и подсветка согласованы с сервером.
+ * Месячная арифметика сдвигает ЯКОРЬ месяца (границы — первое/последнее число
+ * нужного месяца). `''` — не токен.
  */
-export function resolveDateToken(text: string, today: string = todayLocal()): string {
+export function resolveDateToken(
+  text: string,
+  today: string = todayLocal(),
+  firstDayOfWeek = 1,
+): string {
   const value = text.trim();
   const head = TOKEN_HEAD_RE.exec(value);
   if (head === null) return '';
+  const rawHead = head[1]!;
+  const name = TOKEN_HEAD_ALIASES[rawHead] ?? rawHead;
   const rest = value.slice(head[0].length);
   let days = 0;
   let months = 0;
@@ -76,32 +103,32 @@ export function resolveDateToken(text: string, today: string = todayLocal()): st
     else if (m[3] === 'y') months = n * 12;
     else months = n;
   }
-  switch (head[1]) {
+  switch (name) {
     case 'today':
     case 'now':
       return addMonths(addDays(today, days), months);
-    case 'week.start': {
-      const monday = addDays(today, -mondayIndex(today));
-      return addMonths(addDays(monday, days), months);
+    case 'weekStart': {
+      const start = addDays(today, -weekStartOffset(today, firstDayOfWeek));
+      return addMonths(addDays(start, days), months);
     }
-    case 'week.end': {
-      const sunday = addDays(today, 6 - mondayIndex(today));
-      return addMonths(addDays(sunday, days), months);
+    case 'weekEnd': {
+      const start = addDays(today, -weekStartOffset(today, firstDayOfWeek));
+      return addMonths(addDays(start, 6 + days), months);
     }
-    case 'month.start': {
+    case 'monthStart': {
       const first = `${today.slice(0, 7)}-01`;
       return addDays(addMonths(first, months), days);
     }
-    case 'month.end': {
+    case 'monthEnd': {
       const first = `${today.slice(0, 7)}-01`;
       // Арифметика месяцев — по ЯКОРЮ месяца, затем берётся последнее число.
       return addDays(monthEdge(addMonths(first, months), 'end'), days);
     }
-    case 'year.start': {
+    case 'yearStart': {
       const first = `${today.slice(0, 4)}-01-01`;
       return addDays(addMonths(first, months), days);
     }
-    case 'year.end': {
+    case 'yearEnd': {
       const first = `${today.slice(0, 4)}-01-01`;
       // Год = 12 месяцев: конец 12-месячного периода от сдвинутого 1 января.
       const shiftedFirst = addMonths(first, months);
@@ -136,14 +163,19 @@ function monthEdge(firstOfMonth: string, edge: 'start' | 'end'): string {
  * Развернуть границу периода (`date_from`/`date_to`) в локальный день:
  * «голая дата» — как есть, токен — относительно сегодня, инстанс — в локальный
  * день наблюдателя. `''` — граница не задана либо не поддаётся разбору (тогда
- * считается неограниченной).
+ * считается неограниченной). `firstDayOfWeek` — первый день недели сети для
+ * токенов `$weekStart`/`$weekEnd` (требование 1b77decd).
  */
-export function resolvePeriodDay(value: string, today: string = todayLocal()): string {
+export function resolvePeriodDay(
+  value: string,
+  today: string = todayLocal(),
+  firstDayOfWeek = 1,
+): string {
   const text = value.trim();
   if (text === '') return '';
   const bare = BARE_DATE_RE.exec(text);
   if (bare !== null) return text;
-  if (isPeriodToken(text)) return resolveDateToken(text, today);
+  if (isPeriodToken(text)) return resolveDateToken(text, today, firstDayOfWeek);
   return localDay(text);
 }
 
@@ -256,10 +288,11 @@ export function resolvePeriodBoundForQuery(
   value: string,
   edge: 'start' | 'end',
   today: string = todayLocal(),
+  firstDayOfWeek = 1,
 ): string {
   const text = value.trim();
   if (text === '') return '';
-  const day = isPeriodToken(text) ? resolveDateToken(text, today) : text;
+  const day = isPeriodToken(text) ? resolveDateToken(text, today, firstDayOfWeek) : text;
   if (day === '') return '';
   // Полный инстанс (переход к записи) — как есть; «голая дата» — локальные сутки.
   if (BARE_DATE_RE.exec(day) === null) return day;
@@ -285,10 +318,11 @@ export function resolvePeriodForQuery(
   from: string,
   to: string,
   today: string = todayLocal(),
+  firstDayOfWeek = 1,
 ): PeriodRange {
   return {
-    from: resolvePeriodBoundForQuery(from, 'start', today),
-    to: resolvePeriodBoundForQuery(to, 'end', today),
+    from: resolvePeriodBoundForQuery(from, 'start', today, firstDayOfWeek),
+    to: resolvePeriodBoundForQuery(to, 'end', today, firstDayOfWeek),
   };
 }
 
