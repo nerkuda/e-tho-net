@@ -1,0 +1,83 @@
+{
+  "name": "filter-add-condition-default",
+  "description": "Ошибка a1100e0c: «+ условие»/«+ группу» в «Событиях» фиксируют видимый дефолт (дата → $today) в модели. До фикса: подпись «не задано значение условия» (исходная строка «Время события = $today», модель пустая). После фикса подписей нет, а футер-превью показывает значение. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.a1100e0c.scenario.json --out .tmp/a1100e0c/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-activity", "click": "button.view-tab[title=\"События\"]" },
+    { "name": "activity-editor", "timeout": 15000, "waitFor": "document.querySelector('.activity-filter .fe .ft-group') !== null" },
+
+    { "name": "rows-before", "probe": { "name": "rowsBefore", "expression": "document.querySelectorAll('.activity-filter .ft-row').length" } },
+    { "name": "issues-before", "probe": { "name": "issuesBefore", "expression": "document.querySelectorAll('.activity-filter .ft-issue').length" } },
+
+    { "name": "add-condition", "click": ".activity-filter .ft-add-condition" },
+    { "name": "row-added", "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length >= 1" },
+
+    { "name": "rows-after-condition", "probe": { "name": "rowsAfterCondition", "expression": "document.querySelectorAll('.activity-filter .ft-row').length" } },
+    {
+      "name": "issues-after-condition",
+      "probe": {
+        "name": "issuesAfterCondition",
+        "expression": "document.querySelectorAll('.activity-filter .ft-issue').length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "last-row-issue-text",
+      "probe": {
+        "name": "lastRowIssueText",
+        "expression": "([...document.querySelectorAll('.activity-filter .ft-row')].at(-1))?.querySelector('.ft-issue')?.textContent ?? null"
+      },
+      "expect": null
+    },
+    {
+      "name": "last-row-what",
+      "probe": {
+        "name": "lastRowWhat",
+        "expression": "([...document.querySelectorAll('.activity-filter .ft-row')].at(-1))?.querySelector('.ft-row__what')?.textContent ?? null"
+      }
+    },
+    {
+      "name": "last-row-value",
+      "probe": {
+        "name": "lastRowValue",
+        "expression": "([...document.querySelectorAll('.activity-filter .ft-row')].at(-1))?.querySelector('.ft-row__value')?.textContent ?? null"
+      }
+    },
+    {
+      "name": "preview-after-condition",
+      "probe": { "name": "previewAfterCondition", "expression": "document.querySelector('.activity-filter .ff-preview__text')?.textContent ?? null" }
+    },
+    {
+      "name": "preview-shows-value",
+      "probe": {
+        "name": "previewShowsValue",
+        "expression": "(document.querySelector('.activity-filter .ff-preview__text')?.textContent ?? '').includes('Время события = сегодня')"
+      },
+      "expect": true
+    },
+
+    { "name": "add-group", "click": ".activity-filter .ft-add-group" },
+    {
+      "name": "issues-after-group",
+      "probe": {
+        "name": "issuesAfterGroup",
+        "expression": "document.querySelectorAll('.activity-filter .ft-issue').length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "groups-count",
+      "probe": { "name": "groupsCount", "expression": "document.querySelectorAll('.activity-filter .ft-group').length" }
+    }
+  ]
+}

@@ -77,6 +77,7 @@ import {
   type FilterTreeGroup,
   type FilterTreeLeaf,
   type FilterTreeNode,
+  type FilterTreeOperand,
   type FilterTreeValue,
 } from './filter-builder.js';
 // Диагностика строк (элемент 4e634c9a): записи ядра и проверки конструктора
@@ -1145,6 +1146,20 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     if (defaultValue !== null) leaf.value = defaultValue;
   };
 
+  /**
+   * Лист условия, готовый встать в модель при ДОБАВЛЕНИИ («+ условие»/
+   * «+ группу»): к заготовке применяется та же {@link normalizeLeafValue}, что и
+   * при смене операнда/оператора (ошибка a1100e0c). Без неё ячейка даты рисует
+   * «$today», а модель держит `none`, — подпись «не задано значение условия»
+   * висит при видимом значении; наличие коллекции показывало «да» при
+   * операторе `eq`, не выражающем выбор.
+   */
+  const newLeaf = (entity: FilterTreeOperand): FilterTreeLeaf => {
+    const leaf = defaultFilterTreeLeaf(entity);
+    normalizeLeafValue(leaf);
+    return leaf;
+  };
+
   const model = (): FilterTreeGroup => ensureTree();
 
   /** Записи диагностики — перечитываются на каждой отрисовке дерева. */
@@ -1450,7 +1465,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         onClick: () => {
           const first = filterTreeOperandCatalogue(ctx.profile, ctx.data)[0];
           if (first === undefined) return;
-          filterTreeAppendChildAt(model(), group.bodyPath, defaultFilterTreeLeaf(first.entity));
+          filterTreeAppendChildAt(model(), group.bodyPath, newLeaf(first.entity));
           touch();
         },
       }),
@@ -1463,8 +1478,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
           // Группу добавляют ради условия: сразу кладём внутрь слот пустого
           // условия (требование заказчика 2026-10-13).
           const first = filterTreeOperandCatalogue(ctx.profile, ctx.data)[0];
-          const children =
-            first === undefined ? [] : [defaultFilterTreeLeaf(first.entity)];
+          const children = first === undefined ? [] : [newLeaf(first.entity)];
           filterTreeAppendChildAt(model(), group.bodyPath, {
             kind: 'group',
             op: 'and',

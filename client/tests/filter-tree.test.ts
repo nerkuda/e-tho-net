@@ -1653,3 +1653,78 @@ describe('дерево условий: правка значения не пер
   });
 });
 
+// ---------------------------------------------------------------------------
+// «+ условие»/«+ группу» фиксируют видимый дефолт в модели (ошибка a1100e0c)
+// ---------------------------------------------------------------------------
+
+describe('дерево условий: добавление условия фиксирует видимый дефолт (ошибка a1100e0c)', () => {
+  before(() => installShim());
+
+  /** Пустое дерево профиля + живая диагностика конструктора. */
+  async function buildEmpty(profile: 'events' | 'chronicle' | 'thoughts'): Promise<{
+    tree: any;
+    state: any;
+    root: () => ShimElement;
+  }> {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const diag = await import('../src/renderer/lib/filter-diagnostics.js');
+    const { defaultFilterCriteriaState } = await import('../src/renderer/lib/filter-builder.js');
+    const state = defaultFilterCriteriaState() as any;
+    state.tree = { kind: 'group', op: 'and', children: [] };
+    const tree = mod.buildFilterTree({
+      profile,
+      getState: () => state,
+      data: DATA,
+      issues: () => diag.constructorFilterIssues(state.tree),
+    });
+    return { tree, state, root: () => tree.root as unknown as ShimElement };
+  }
+
+  /** Число подписей «не задано значение условия» в строках дерева. */
+  function issueCount(root: ShimElement): number {
+    return root.findAll((node) => node.classList.contains('ft-issue')).length;
+  }
+
+  for (const profile of ['events', 'chronicle'] as const) {
+    it(`«+ условие» (${profile}): дата показывает «$today» — опора уходит в модель, подписи нет`, async () => {
+      const { state, root } = await buildEmpty(profile);
+      exactOne(ownActions(exact(root(), 'ft-group')[0]!), 'ft-add-condition')!.emit('click');
+
+      const leaf = state.tree.children[0];
+      assert.equal(leaf.kind, 'leaf');
+      assert.ok(
+        leaf.entity.kind === 'occurred_at' || leaf.entity.kind === 'record_time',
+        `первый операнд ${profile} — датовый (${leaf.entity.kind})`,
+      );
+      // Красная фаза (до фикса): value.kind === 'none' при видимой ячейке «$today».
+      assert.deepEqual(leaf.value, { kind: 'token', token: '$today' }, 'видимый дефолт даты — в модели');
+      assert.equal(issueCount(root()), 0, 'подписи «не задано значение условия» нет');
+    });
+  }
+
+  it('«+ группу»: слот условия внутри группы тоже фиксирует дефолт даты', async () => {
+    const { state, root } = await buildEmpty('events');
+    exactOne(ownActions(exact(root(), 'ft-group')[0]!), 'ft-add-group')!.emit('click');
+
+    const group = state.tree.children[0];
+    assert.equal(group.kind, 'group', 'создана вложенная группа');
+    assert.equal(group.children.length, 1, 'внутри группы — слот условия');
+    assert.deepEqual(
+      group.children[0].value,
+      { kind: 'token', token: '$today' },
+      'видимый дефолт даты — в модели слота',
+    );
+    assert.equal(issueCount(root()), 0, 'подписи «не задано значение условия» нет');
+  });
+
+  it('дефолт НЕ выдумывается для операндов без видимого значения («Мысль») — подпись остаётся', async () => {
+    const { state, root } = await buildEmpty('thoughts');
+    exactOne(ownActions(exact(root(), 'ft-group')[0]!), 'ft-add-condition')!.emit('click');
+
+    const leaf = state.tree.children[0];
+    assert.equal(leaf.entity.kind, 'id', 'первый операнд мыслей — «Мысль»');
+    assert.deepEqual(leaf.value, { kind: 'none' }, 'значение не подменяется');
+    assert.equal(issueCount(root()), 1, 'условие действительно без значения — подпись уместна');
+  });
+});
+
