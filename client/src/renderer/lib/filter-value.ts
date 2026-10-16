@@ -355,6 +355,11 @@ export function filterValueEditor(leaf: FilterTreeLeaf, ctx: FilterValueContext)
     // «Количество» ссылки — число рёбер стороны, а не значение-ссылка.
     if (def.value_type === 'link' && countShaped) return 'count';
     if (filterValueIsBounds(operator)) return 'bounds';
+    // Свойство-дата в операторах сравнения (равно/не равно, больше/меньше,
+    // больше-или-равно/меньше-или-равно) — ТА ЖЕ ячейка границы даты, что у дат
+    // создания/изменения: опора + арифметика либо точная дата (ошибка e219112e,
+    // п.2). Раньше значение набиралось общим редактором сдвига-строки.
+    if (def.value_type === 'date') return 'date';
     return 'value-editor';
   }
   if (ENTITY_OPERANDS.has(kind)) return filterValueIsBounds(operator) ? 'bounds' : 'entity';

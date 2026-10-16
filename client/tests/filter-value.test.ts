@@ -151,6 +151,10 @@ describe('вид редактора значения: оператор × опе
     assert.equal(mod.filterValueEditor(leaf({ kind: 'created_at' }, 'between'), ctx()), 'bounds');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'created_at' }, 'not_between'), ctx()), 'bounds');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'created_at' }, 'gte'), ctx()), 'date');
+    // «равно/не равно» у дат создания/изменения — та же ячейка даты (ошибка
+    // e219112e, п.1): оператор предлагается словарём профиля, ячейка уже есть.
+    assert.equal(mod.filterValueEditor(leaf({ kind: 'created_at' }, 'eq'), ctx()), 'date');
+    assert.equal(mod.filterValueEditor(leaf({ kind: 'updated_at' }, 'ne'), ctx()), 'date');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'property', property_id: 'p-text' }, 'is_empty'), ctx()), 'none');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'keywords' }, 'not_empty'), ctx()), 'none');
   });
@@ -190,7 +194,6 @@ describe('вид редактора значения: оператор × опе
     for (const [id, op] of [
       ['p-text', 'contains'],
       ['p-num', 'gt'],
-      ['p-date', 'gte'],
       ['p-bool', 'eq'],
       ['p-link', 'eq'],
       ['p-link', 'in'],
@@ -198,6 +201,13 @@ describe('вид редактора значения: оператор × опе
       assert.equal(mod.filterValueEditor(p(id, op), ctx()), 'value-editor', `${id} ${op}`);
     }
     assert.equal(mod.filterValueEditor(leaf({ kind: 'property', property_id: 'нет-такого' }, 'eq'), ctx()), 'value-editor');
+    // Свойство-дата в операторах сравнения — общая ячейка границы даты (опора +
+    // арифметика либо точная дата), как у дат создания/изменения (ошибка
+    // e219112e, п.2); «между» — пара таких ячеек.
+    for (const op of ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'] as const) {
+      assert.equal(mod.filterValueEditor(p('p-date', op), ctx()), 'date', `p-date ${op}`);
+    }
+    assert.equal(mod.filterValueEditor(p('p-date', 'between'), ctx()), 'bounds');
     // Сравнение ссылки — «количество» (число рёбер стороны), а не значение.
     assert.equal(mod.filterValueEditor(p('p-link', 'gt'), ctx()), 'count');
     assert.equal(mod.filterValueEditor(p('p-link', 'between'), ctx()), 'count', '«количество между» — две числовые границы');
@@ -839,6 +849,19 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(box.dataset['editor'], 'bounds');
     assert.equal(box.findAll((n) => n.dataset['bound'] === 'from').length, 1);
     assert.equal(box.findAll((n) => n.dataset['bound'] === 'to').length, 1);
+  });
+
+  it('свойство-дата в сравнении строится ячейкой даты, как даты создания/изменения (e219112e п.2)', () => {
+    const box = render(
+      leaf({ kind: 'property', property_id: 'p-date' }, 'gte', { kind: 'token', token: '$today' }),
+      slot().api,
+    );
+    assert.equal(box.dataset['editor'], 'date');
+    assert.ok(one(box, mod.FILTER_VALUE_DATE_CLASS) !== null, 'ячейка границы даты с опорой и сдвигом');
+    assert.equal(box.dataset['editor'], mod.filterValueEditor(
+      leaf({ kind: 'created_at' }, 'gte', { kind: 'token', token: '$today' }),
+      ctx(),
+    ), 'тот же вид ячейки, что у даты создания');
   });
 
   it('«между» у датового операнда: правка одной границы не пишет пустую строку (99e7889d)', () => {

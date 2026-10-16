@@ -462,8 +462,8 @@ const THOUGHT_OPERATOR_SETS: Readonly<Record<string, readonly FilterAstOperator[
   keywords: ['matches'],
   author: ['eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty'],
   editor: ['eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty'],
-  created_at: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
-  updated_at: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  created_at: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  updated_at: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
   properties: ['has', 'not_has', 'is_empty', 'not_empty'],
 };
 

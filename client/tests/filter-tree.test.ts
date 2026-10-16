@@ -669,13 +669,15 @@ describe('дерево условий: сгруппированные списк
       }
     }
 
-    // Датовый операнд: секция «Сравнение», пары «больше|меньше»,
-    // «больше или равно|меньше или равно», «между|не между» (п.8).
+    // Датовый операнд: секция «Сравнение», пары «равно|не равно» (добавлено
+    // ошибкой e219112e), «больше|меньше», «больше или равно|меньше или равно»,
+    // «между|не между» (п.8).
     const date = mod.filterTreeOperatorMenu('thoughts', 'created_at', 'date');
     assert.equal(date[0]!.title, 'Сравнение');
     assert.deepEqual(
       (date[0] as any).rows.map((r: any) => r.cells.map((c: any) => c.op)),
       [
+        ['eq', 'ne'],
         ['gt', 'lt'],
         ['gte', 'lte'],
         ['between', 'not_between'],
@@ -683,11 +685,11 @@ describe('дерево условий: сгруппированные списк
       'датовые пары читаются «мин|макс» (п.8)',
     );
     const dateOps = date.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
-    for (const op of ['gt', 'lte', 'gte', 'lt', 'between', 'not_between']) {
+    for (const op of ['eq', 'ne', 'gt', 'lte', 'gte', 'lt', 'between', 'not_between']) {
       assert.ok(dateOps.includes(op), `${op} предложен для датового операнда`);
     }
     assert.ok(!dateOps.includes('contains'), 'подстрока датовому операнду не предлагается');
-    assert.ok(!dateOps.includes('eq'), 'равенство датовому операнду не предлагается (набор ядра)');
+    assert.ok(!dateOps.includes('in'), 'наборные операторы датовому операнду не предлагаются');
 
     // Свойство-дата — набор из реестра по природе свойства.
     const propDate = mod.filterTreeOperatorMenu('thoughts', 'property', 'date');

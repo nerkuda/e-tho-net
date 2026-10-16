@@ -2718,7 +2718,7 @@ function expandInclusiveDateUpper(value: string): string {
   return normaliseInstant(value, 'date', 'end') ?? value;
 }
 
-/** Лист по дате создания/изменения: сравнения и «между» (границы включительны). */
+/** Лист по дате создания/изменения: равно/не равно, сравнения и «между» (границы включительны). */
 function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
   const one = (op: string, value: unknown): Clause => {
     if (typeof value !== 'string' || value.trim() === '') {
@@ -2732,6 +2732,15 @@ function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, reque
   };
   if (leaf.operator === 'gt' || leaf.operator === 'gte' || leaf.operator === 'lt' || leaf.operator === 'lte') {
     return one(leaf.operator, leaf.value);
+  }
+  if (leaf.operator === 'eq' || leaf.operator === 'ne') {
+    // Равенство даты = попадание в её СУТКИ: нижняя граница — само значение,
+    // верхняя — конец суток для «голой даты» / сам инстанс для полного значения
+    // (ошибка e219112e, п.1 — «равно/не равно» у дат создания/изменения).
+    const low = one('gte', leaf.value);
+    const high = one('lte', leaf.value);
+    const eq: Clause = { sql: `(${low.sql} AND ${high.sql})`, params: [...low.params, ...high.params] };
+    return leaf.operator === 'eq' ? eq : astNegate(eq);
   }
   if (leaf.operator === 'between' || leaf.operator === 'not_between') {
     if (!Array.isArray(leaf.value) || leaf.value.length !== 2) {

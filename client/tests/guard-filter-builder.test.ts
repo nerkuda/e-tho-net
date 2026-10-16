@@ -521,11 +521,12 @@ describe('guard: условия отбора строятся только об�
     assert.deepEqual(
       date[0]!.rows.map((row: { cells: Array<{ op: string }> }) => row.cells.map((cell) => cell.op)),
       [
+        ['eq', 'ne'],
         ['gt', 'lt'],
         ['gte', 'lte'],
         ['between', 'not_between'],
       ],
-      'датовые пары читаются «мин|макс» (п.8)',
+      'датовые пары читаются «мин|макс» (п.8), равенство добавлено ошибкой e219112e',
     );
     for (const cell of date[0]!.rows.flatMap((row) => row.cells)) {
       assert.equal(cell.description, described[cell.op], `ячейка ${cell.op} несёт описание-тултип`);
