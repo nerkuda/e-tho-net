@@ -635,3 +635,218 @@ describe(
     });
   },
 );
+
+// ============================================================================
+// Строковый токен в ЗНАЧЕНИИ СВОЙСТВА-СВЯЗИ (ошибка d52e4d79)
+// ============================================================================
+
+/**
+ * Сценарий пользователя: отбор по типу с условием «свойство-связь = $thought»,
+ * где значение хранится СТРОКОЙ (одиночный токен — `"$thought"`, на одиночном
+ * операторе — одноэлементным списком `["$thought"]`; так пишет клиент и так
+ * хранит плоская `definition v1`). Прежде исполнение падало
+ * `VALIDATION_ERROR: Значение условия по свойству-связи для eq/ne …` — валидация
+ * ТИПА значения срабатывала до раскрытия токена.
+ *
+ * Проверяем обе точки входа сервиса (`:view/run` сохранённого отбора и ad-hoc
+ * AST `views/run`) и соседние формы: eq/ne строкой и списком, `$user`, `in` со
+ * списком-токеном, `$thought.[<свойство-связь>]`, boolean-наличие. Единый
+ * движок, контекст мысли доходит из обеих точек.
+ */
+describe(
+  'run AST-отбора типа: строковый токен в значении свойства-связи (d52e4d79)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    /** Свойство-связь (прямая сторона) — `POST /properties` создаёт и тип связи. */
+    async function createLinkProperty(
+      ctx: RestTestContext,
+      typeId: string,
+    ): Promise<{ id: string; name: string }> {
+      const name = `lv-${randomUUID().slice(0, 8)}`;
+      const res = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/properties`,
+        headers: authHeaders(ctx),
+        payload: {
+          name,
+          value_type: 'link',
+          name_forward: name,
+          name_reverse: `rev-${name}`,
+        },
+      });
+      assert.equal(res.statusCode, 201, res.body?.toString());
+      const propertyId = (res.json().data as { id: string }).id;
+      const attach = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/properties`,
+        headers: authHeaders(ctx),
+        payload: { property_id: propertyId, required: false },
+      });
+      assert.equal(attach.statusCode, 201, attach.body?.toString());
+      return { id: propertyId, name };
+    }
+
+    /** Установить значение свойства-связи (цель ребра) у мысли. */
+    async function setLinkValue(
+      ctx: RestTestContext,
+      thoughtId: string,
+      propName: string,
+      targetId: string,
+    ): Promise<void> {
+      const res = await ctx.app.inject({
+        method: 'PUT',
+        url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/properties/${encodeURIComponent(propName)}`,
+        headers: authHeaders(ctx),
+        payload: { value: targetId },
+      });
+      assert.equal(res.statusCode, 200, res.body?.toString());
+    }
+
+    /** Ad-hoc AST-прогон отбора относительно мысли. */
+    async function runAdHocAst(
+      ctx: RestTestContext,
+      thoughtId: string,
+      ast: Record<string, unknown>,
+    ): Promise<{ statusCode: number; ids: string[]; unresolved: Array<{ token: string; reason: string }>; body?: string }> {
+      const res = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/views/run`,
+        headers: authHeaders(ctx),
+        payload: { ast },
+      });
+      if (res.statusCode !== 200) return { statusCode: res.statusCode, ids: [], unresolved: [], body: res.body?.toString() };
+      const body = res.json() as {
+        data: Array<{ id: string }>;
+        meta: { unresolved?: Array<{ token: string; reason: string }> };
+      };
+      return {
+        statusCode: 200,
+        ids: body.data.map((r) => r.id),
+        unresolved: body.meta.unresolved ?? [],
+      };
+    }
+
+    /** Тип + свойство-связь + контекст C, кандидат X (X→C) и посторонняя мысль. */
+    async function buildLinkFixture(ctx: RestTestContext): Promise<{
+      typeId: string;
+      link: { id: string; name: string };
+      context: string;
+      candidate: string;
+      stranger: string;
+    }> {
+      const typeId = await createThoughtType(ctx, `lk-${randomUUID().slice(0, 8)}`);
+      const link = await createLinkProperty(ctx, typeId);
+      const context = await createChildOf(ctx, `ctx-${randomUUID().slice(0, 6)}`, ctx.homeId);
+      await setType(ctx, context, typeId);
+      const candidate = await createChildOf(ctx, `cand-${randomUUID().slice(0, 6)}`, ctx.homeId);
+      await setType(ctx, candidate, typeId);
+      // Кандидат ссылается на контекстную мысль: условие «= $thought» его матчит.
+      await setLinkValue(ctx, candidate, link.name, context);
+      const stranger = await createChildOf(ctx, `str-${randomUUID().slice(0, 6)}`, ctx.homeId);
+      await setType(ctx, stranger, typeId);
+      return { typeId, link, context, candidate, stranger };
+    }
+
+    const astOf = (linkId: string, operator: string, value: unknown): Record<string, unknown> => ({
+      version: 1,
+      filter: { entity: { kind: 'property', property_id: linkId }, operator, value },
+    });
+
+    it('сохранённый отбор: eq ["$thought"] (форма пользователя) исполняется и матчит', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildLinkFixture(ctx);
+        const view = await createAstView(
+          ctx,
+          fx.typeId,
+          { kind: 'property', property_id: fx.link.id },
+          'eq',
+          ['$thought'],
+        );
+        assert.equal(view.statusCode, 201, view.body ?? '');
+        const ran = await runView(ctx, fx.context, view.view!.name);
+        assert.deepEqual(ran.unresolved, [], 'строковый токен обязан разрешиться');
+        assert.ok(ran.ids.includes(fx.candidate), 'кандидат с ребром на контекст обязан быть в отборе');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('ad-hoc AST: eq ["$thought"], "$thought", [{token:"$thought"}] — один результат', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildLinkFixture(ctx);
+        for (const value of [['$thought'], '$thought', [{ token: '$thought' }]]) {
+          const ran = await runAdHocAst(ctx, fx.context, astOf(fx.link.id, 'eq', value));
+          assert.equal(ran.statusCode, 200, `форма ${JSON.stringify(value)}: ${ran.body ?? ''}`);
+          assert.deepEqual(ran.unresolved, [], `форма ${JSON.stringify(value)}: токен обязан разрешиться`);
+          assert.ok(
+            ran.ids.includes(fx.candidate),
+            `форма ${JSON.stringify(value)}: кандидат с ребром на контекст обязан быть в отборе`,
+          );
+        }
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('eq ["$user"] в значении свойства-связи резолвится движком (не 422 о типе)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildLinkFixture(ctx);
+        const ran = await runAdHocAst(ctx, fx.context, astOf(fx.link.id, 'eq', ['$user']));
+        assert.equal(ran.statusCode, 200, ran.body ?? '');
+        assert.deepEqual(ran.unresolved, [], '$user раскрывается движком по владельцу ключа');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('in со списком-токеном: кандидат матчится, токен разрешён', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildLinkFixture(ctx);
+        const ran = await runAdHocAst(ctx, fx.context, astOf(fx.link.id, 'in', ['$thought', fx.stranger]));
+        assert.equal(ran.statusCode, 200, ran.body ?? '');
+        assert.deepEqual(ran.unresolved, []);
+        assert.ok(ran.ids.includes(fx.candidate));
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('$thought.[<свойство-связь>] подставляет значение свойства контекстной мысли', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildLinkFixture(ctx);
+        // Цель контекста: C → target; кандидат X → target (через то же свойство).
+        const target = await createChildOf(ctx, `tgt-${randomUUID().slice(0, 6)}`, ctx.homeId);
+        await setLinkValue(ctx, fx.context, fx.link.name, target);
+        await setLinkValue(ctx, fx.candidate, fx.link.name, target);
+
+        const ran = await runAdHocAst(
+          ctx,
+          fx.context,
+          astOf(fx.link.id, 'eq', `$thought.[${fx.link.name}]`),
+        );
+        assert.equal(ran.statusCode, 200, ran.body ?? '');
+        assert.deepEqual(ran.unresolved, [], '$thought.[свойство-связь] обязан разрешиться');
+        assert.ok(ran.ids.includes(fx.candidate), 'кандидат со ссылкой на ту же цель обязан матчиться');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('boolean-наличие на eq свойства-связи не сломан', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const fx = await buildLinkFixture(ctx);
+        const ran = await runAdHocAst(ctx, fx.context, astOf(fx.link.id, 'eq', true));
+        assert.equal(ran.statusCode, 200, ran.body ?? '');
+        assert.ok(ran.ids.includes(fx.candidate), 'мысль с ребром такого типа присутствует');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+  },
+);

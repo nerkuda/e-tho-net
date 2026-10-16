@@ -518,4 +518,53 @@ describe('POST /thoughts/query: AST-тело через REST (задача c1376
       await closeRestContext(ctx);
     }
   });
+
+  it('свойство-связь со СТРОКОВЫМ токеном без контекста мысли — unresolved, не 422 о типе (d52e4d79)', async () => {
+    const ctx = await buildRestContext();
+    try {
+      // Свойство-связь: движок обязан раскрыть строковый токен и назвать его
+      // неразрешимым, а не падать VALIDATION_ERROR «значение по свойству-связи
+      // для eq/ne должно быть id мысли (строка) или boolean».
+      const linkTypeId = randomUUID();
+      ctx.ndb
+        .prepare(
+          `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+                                   version, created_at, updated_at, created_by)
+           VALUES (?, ?, lower(?), ?, lower(?), 1, '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z', 'u')`,
+        )
+        .run(linkTypeId, 'Ссылается', 'Ссылается', 'Ссылаются', 'Ссылаются');
+      const propertyId = randomUUID();
+      ctx.ndb
+        .prepare(
+          `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+           VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), 'link', ?, NULL, '2024', '2024')`,
+        )
+        .run(
+          propertyId,
+          'ссылка-d52e4d79',
+          'ссылка-d52e4d79',
+          JSON.stringify({ link_type_id: linkTypeId, direction: 'out' }),
+        );
+      seedThought(ctx.ndb, 'REST-мысль');
+
+      for (const value of [['$thought'], '$thought', [{ token: '$thought' }]]) {
+        const res = await post(ctx, {
+          ast: {
+            version: FILTER_AST_VERSION,
+            filter: { entity: { kind: 'property' as const, property_id: propertyId }, operator: 'eq' as const, value },
+          },
+          sort: 'alpha',
+          order: 'asc',
+          limit: 10,
+        });
+        assert.equal(res.statusCode, 200, `${JSON.stringify(value)}: ${JSON.stringify(res.json)}`);
+        assert.deepEqual(res.json['data'], [], `${JSON.stringify(value)}: неразрешимый токен — пустая страница`);
+        const meta = res.json['meta'] as { unresolved?: Array<{ token: string; reason: string }> };
+        assert.equal(meta.unresolved?.length, 1, `${JSON.stringify(value)}: ${JSON.stringify(res.json)}`);
+        assert.match(meta.unresolved?.[0]?.token ?? '', /\$thought/);
+      }
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
 });

@@ -732,6 +732,10 @@ export function resolveThoughtTokensInAst(
  * Рекурсивный обход AST: объект-значение `{ token: '…' }` заменяется
  * вычисленным литералом (когда токен относится к контексту мысли), прочие узлы
  * обходятся как есть. `path` — JSON-путь до узла (для диагностики).
+ *
+ * СТРОКА, ЦЕЛИКОМ равная токену контекста мысли, — тоже токен (см.
+ * {@link resolveAstThoughtTokenString}): значение свойства-связи клиент и плоская
+ * форма `definition v1` хранят строкой (`["$thought"]`), а не узлом `{ token }`.
  */
 function walkAndResolveThoughtTokens(
   node: unknown,
@@ -752,6 +756,11 @@ function walkAndResolveThoughtTokens(
     }
     return out;
   }
+  if (typeof node === 'string') {
+    const resolved = resolveAstThoughtTokenString(node, path, ctx, now, unresolved);
+    // Не токен контекста мысли — строка остаётся движку как есть.
+    return resolved === null ? node : resolved;
+  }
   if (node === null || typeof node !== 'object') return node;
   const token = (node as Record<string, unknown>)['token'];
   if (typeof token === 'string' && Object.keys(node as Record<string, unknown>).length === 1) {
@@ -765,6 +774,46 @@ function walkAndResolveThoughtTokens(
     out[key] = walkAndResolveThoughtTokens(value, childPath, ctx, now, unresolved);
   }
   return out;
+}
+
+/**
+ * Раскрыть СТРОКОВОЕ значение AST, ЦЕЛИКОМ являющееся токеном КОНТЕКСТА мысли
+ * (`"$thought"`, `"$thought.id"`, `"$thought.[Свойство]"` с арифметикой).
+ * `null` — строка таким токеном не является (литерал значения, глобальный токен
+ * или текст с примесью): её судьбу решает движок отбора.
+ *
+ * **Зачем.** Значение-токен приходит не только узлом `{ token }`: клиент и
+ * плоская форма `definition v1` хранят его СТРОКОЙ, в т.ч. элементом списка
+ * (`["$thought"]` — форма значения свойства-связи). Без раскрытия строковая
+ * форма доходила до движка и отвергалась валидацией типа значения
+ * (`VALIDATION_ERROR: Значение условия по свойству-связи для eq/ne …`, ошибка
+ * d52e4d79). Раскрывается только ЧИСТЫЙ одиночный токен — текст значения
+ * свойства, начинающийся с `$`, литералом и остаётся.
+ */
+function resolveAstThoughtTokenString(
+  value: string,
+  path: string,
+  ctx: ResolveContext,
+  now: () => Date,
+  unresolved: TokenIssue[],
+): AstLiteral | null {
+  const { known, unknown } = scanStringForTokens(value);
+  if (unknown.length > 0 || known.length !== 1) return null;
+  const tok = known[0]!;
+  // Глобальные токены (`$today`/`$user`/`$weekStart` и арифметика) — движку:
+  // контекста точки применения здесь нет, второй резолвер не заводится.
+  if (tok.kind === 'global') return null;
+  if (value !== tok.raw) return null;
+  const resolved = resolveOneToken(tok, ctx, now, unresolved, path);
+  // Не разрешился (арифметика на не-дате и т.п.): причина уже в `unresolved`,
+  // узел-строка сохраняется как есть (потребитель на непустом `unresolved`
+  // прекращает работу).
+  if (resolved === null) return null;
+  // Пустое множество (нет синонимов, пустое множественное свойство) — ПУСТОЕ
+  // значение по семантике A6: пустой список движок отвергает валидацией,
+  // поэтому пустое множество отдаётся пустой строкой.
+  if (Array.isArray(resolved) && resolved.length === 0) return '';
+  return resolved as AstLiteral;
 }
 
 /**

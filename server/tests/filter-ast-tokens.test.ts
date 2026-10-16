@@ -524,3 +524,204 @@ describe('строковые токены датовых границ (99e7889d)
     }
   });
 });
+
+// ============================================================================
+// 3. Строковый токен в значении свойства-связи (ошибка d52e4d79)
+// ============================================================================
+
+/**
+ * Значение листа по свойству-связи хранится СТРОКОЙ (клиент и плоская форма
+ * `definition v1`: одиночный токен — `"$thought"`, а на одиночном операторе —
+ * одноэлементным списком `["$thought"]`). Движок валидировал тип значения ДО
+ * раскрытия токена и падал `VALIDATION_ERROR: Значение условия по свойству-связи
+ * для eq/ne должно быть id мысли (строка) или boolean` (ошибка d52e4d79) —
+ * пользователь не мог исполнить отбор вида «версия = $thought».
+ *
+ * Ожидание: строковый токен раскрывается тем же резолвером, что и форма
+ * `{ token }` (в т.ч. элементом списка); одноэлементный список на eq/ne —
+ * эквивалент скаляра; неразрешимый токен без контекста мысли даёт пустой
+ * результат с пояснением (`unresolved`), а не 422 о ТИПЕ значения.
+ */
+describe('AST: строковый токен в значении свойства-связи (d52e4d79)', () => {
+  /** Пользователь, от имени которого исполняется отбор (`$user`). */
+  const USER = 'u';
+  const ctx = { nowMs: Date.parse('2026-09-09T13:37:45.123Z'), userId: USER };
+
+  /** Мысль с ЯВНЫМ id (нужен, чтобы `$user` совпал с целью ребра). */
+  function seedThoughtWithId(ndb: NetworkDb, id: string, title: string): string {
+    ndb
+      .prepare(
+        `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                               version, created_at, created_by, updated_at, updated_by)
+         VALUES (?, ?, ?, NULL, 1, 0, 0, 1, '2024-01-01T00:00:00.000Z', 'u', '2024-01-01T00:00:00.000Z', 'u')`,
+      )
+      .run(id, title, title.normalize('NFC').trim().toLowerCase());
+    return id;
+  }
+
+  /** Свойство-связь (прямая сторона `out`): `config.link_type_id` + `direction`. */
+  function seedLinkProperty(ndb: NetworkDb, name: string, linkTypeId: string): string {
+    const id = randomUUID();
+    ndb
+      .prepare(
+        `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+         VALUES (?, ?, ?, lower(?), 'link', ?, NULL, '2024', '2024')`,
+      )
+      .run(id, BASE_LAYER, name, name, JSON.stringify({ link_type_id: linkTypeId, direction: 'out' }));
+    return id;
+  }
+
+  /** Тип связи (нужен для `config.link_type_id` свойства-связи). */
+  function seedLinkType(ndb: NetworkDb, forward: string, reverse: string): string {
+    const id = randomUUID();
+    ndb
+      .prepare(
+        `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+                                 version, created_at, updated_at, created_by)
+         VALUES (?, ?, lower(?), ?, lower(?), 1, '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z', 'u')`,
+      )
+      .run(id, forward, forward, reverse, reverse);
+    return id;
+  }
+
+  /** Ребро типизированной связи (источник — владелец свойства). */
+  function seedTypedLink(ndb: NetworkDb, sourceId: string, targetId: string, typeId: string): void {
+    ndb
+      .prepare(
+        `INSERT INTO links (id, source_id, target_id, type_id, active, version,
+                            created_at, updated_at, created_by, updated_by)
+         VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', 'u', 'u')`,
+      )
+      .run(randomUUID(), sourceId, targetId, typeId);
+  }
+
+  /** Владелец свойства-связи «Владелец» → цель `$user` ('u'); второй — без ребра. */
+  function linkFixture(): {
+    ndb: NetworkDb;
+    prop: string;
+    owner: string;
+    other: string;
+  } {
+    const ndb = createInMemoryNetworkDb();
+    const linkTypeId = seedLinkType(ndb, 'Ссылается', 'Ссылаются');
+    const prop = seedLinkProperty(ndb, 'ссылка', linkTypeId);
+    const owner = seedThought(ndb, 'Владелец');
+    // Цель ребра — id, равный `$user` ('u'): так `eq '$user'` даёт ПОЛОЖИТЕЛЬНОЕ
+    // совпадение и доказывает, что строковый токен именно РАСКРЫТ (а не пропущен
+    // литералом и не отброшен валидацией типа).
+    seedThoughtWithId(ndb, USER, 'Пользователь');
+    seedTypedLink(ndb, owner, USER, linkTypeId);
+    const other = seedThought(ndb, 'Без ребра');
+    assert.ok(other !== owner);
+    return { ndb, prop, owner, other };
+  }
+
+  it('eq строкой-токеном "$user": раскрывается и матчит (не падает 422 о типе)', () => {
+    const { ndb, prop, owner } = linkFixture();
+    try {
+      const res = runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'eq', '$user')), ctx);
+      assert.deepEqual(res.titles, ['Владелец']);
+      assert.equal(res.unresolved, 0, 'строковый токен обязан раскрыться');
+      assert.equal(owner.length > 0, true);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('eq ОДНОЭЛЕМЕНТНЫМ списком ["$user"] (форма клиента) — эквивалент скаляра', () => {
+    const { ndb, prop } = linkFixture();
+    try {
+      const res = runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'eq', ['$user'])), ctx);
+      assert.deepEqual(res.titles, ['Владелец'], 'список из одного значения читается как одиночное');
+      assert.equal(res.unresolved, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('eq списком с токен-объектом [{token:"$user"}] — прежняя форма не сломана', () => {
+    const { ndb, prop } = linkFixture();
+    try {
+      const res = runAst(
+        ndb,
+        ast(leaf({ kind: 'property', property_id: prop }, 'eq', [{ token: '$user' }])),
+        ctx,
+      );
+      assert.deepEqual(res.titles, ['Владелец']);
+      assert.equal(res.unresolved, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('in со списком, содержащим строковый токен, раскрывается', () => {
+    const { ndb, prop, other } = linkFixture();
+    try {
+      const res = runAst(
+        ndb,
+        ast(leaf({ kind: 'property', property_id: prop }, 'in', ['$user', other])),
+        ctx,
+      );
+      assert.deepEqual(res.titles, ['Владелец']);
+      assert.equal(res.unresolved, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('boolean на eq/ne свойства-связи не сломан: «есть/нет связи такого типа»', () => {
+    const { ndb, prop } = linkFixture();
+    try {
+      assert.deepEqual(
+        runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'eq', true)), ctx).titles,
+        ['Владелец'],
+      );
+      // «нет связи такого типа»: владелец ребра отсутствует, а мысли без ребра
+      // (в т.ч. сама цель 'Пользователь') присутствуют.
+      const none = runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'eq', false)), ctx).titles;
+      assert.ok(!none.includes('Владелец'), 'владелец ребра в «нет связи» не попадает');
+      assert.ok(none.includes('Без ребра'));
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('$thought без контекста мысли — пусто с пояснением, а не 422 о типе значения', () => {
+    const { ndb, prop } = linkFixture();
+    try {
+      for (const value of ['$thought', ['$thought'], [{ token: '$thought' }]]) {
+        const res = runAst(ndb, ast(leaf({ kind: 'property', property_id: prop }, 'eq', value)), ctx);
+        assert.deepEqual(res.titles, [], JSON.stringify(value));
+        assert.ok(res.unresolved >= 1, `неразрешимый токен обязан быть назван: ${JSON.stringify(value)}`);
+        assert.deepEqual(res.reasons, ['unknown_token'], JSON.stringify(value));
+      }
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('текстовое значение, начинающееся с "$", остаётся ЛИТЕРАЛОМ (не токеном)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const prop = seedProperty(ndb, 'заметка', 'text');
+      const t = seedThought(ndb, 'С пометкой');
+      ndb
+        .prepare(
+          `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_text, updated_at)
+           VALUES (?, 'thought', ?, ?, ?, '2024')`,
+        )
+        .run(randomUUID(), t, prop, '$notatoken');
+      seedThought(ndb, 'Другая');
+
+      const res = runAst(
+        ndb,
+        ast(leaf({ kind: 'property', property_id: prop }, 'eq', '$notatoken')),
+        ctx,
+      );
+      assert.deepEqual(res.titles, ['С пометкой'], 'неизвестная $-строка — литерал значения, а не неразрешимый токен');
+      assert.equal(res.unresolved, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+});

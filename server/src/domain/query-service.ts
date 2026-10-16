@@ -94,7 +94,7 @@ import {
 import { nameTrigramMatch } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause, listTypeNodes } from './type-hierarchy.js';
-import { resolveGlobalDateTokens, type TokenIssue } from './thought-type-view-tokens.js';
+import { resolveGlobalDateTokens, scanStringForTokens, type TokenIssue } from './thought-type-view-tokens.js';
 
 // ---------------------------------------------------------------------------
 // Канонические типы запроса/ответа
@@ -1771,10 +1771,47 @@ function astResolveToken(
  * тела `updated_after`/`created_after` и из сохранённых плоских определений
  * (`definition v1` хранит токен строкой). Паритет с профилем хроники, где
  * граница периода принимает обе формы (`astTokenOrString` + `resolvePeriodField`
- * в `chronicle-service.ts`). Прочие операнды строку-токен НЕ раскрывают: у них
- * она и есть литерал значения (текст, id, слова).
+ * в `chronicle-service.ts`). У датового операнда строка целиком — значение
+ * границы, поэтому через резолвер идёт ЛЮБАЯ строка (в т.ч. смешанный текст с
+ * токеном).
  */
 const AST_STRING_TOKEN_KINDS: ReadonlySet<string> = new Set(['created_at', 'updated_at']);
+
+/**
+ * Режим раскрытия СТРОКОВОГО значения листа как токена:
+ *
+ *   * `none` — строка есть литерал значения (текст, id, слова — операнды, не
+ *     перечисленные ниже);
+ *   * `pure` — строка раскрывается, только если ЦЕЛИКОМ равна одному известному
+ *     токену: значение-свойство хранит и обычный текст (в т.ч. начинающийся с
+ *     `$`), поэтому `$word`-мусор остаётся литералом, а не неразрешимым токеном;
+ *   * `all` — любая строка проходит через резолвер (датовые границы; см.
+ *     {@link AST_STRING_TOKEN_KINDS}).
+ */
+type AstStringTokenMode = 'none' | 'pure' | 'all';
+
+/**
+ * Режим строковых токенов для листа. Операнд-СВОЙСТВО — `pure`: плоская форма
+ * `definition v1` и клиент хранят значение-токен СТРОКОЙ (`"$thought"`,
+ * `["$thought"]`), и такая строка обязана раскрыться (ошибка d52e4d79), но
+ * текстовое значение свойства с ведущим `$` токеном не является. Прочие
+ * операнды строку-токен не раскрывают: у них она и есть литерал значения.
+ */
+function astStringTokenMode(leaf: FilterAstLeaf): AstStringTokenMode {
+  if (AST_STRING_TOKEN_KINDS.has(leaf.entity.kind)) return 'all';
+  if (leaf.entity.kind === 'property') return 'pure';
+  return 'none';
+}
+
+/**
+ * `true`, если строка ЦЕЛИКОМ является одним ИЗВЕСТНЫМ токеном (без примеси
+ * текста и без неизвестных `$…`-фрагментов). Только такие строки операнда-
+ * свойства трактуются как токен в режиме `pure`.
+ */
+function isPureKnownTokenString(value: string): boolean {
+  const { known, unknown } = scanStringForTokens(value);
+  return unknown.length === 0 && known.length === 1 && value === known[0]!.raw;
+}
 
 /**
  * Разрешить токены в значении листа. Скаляр/список литералов — как есть;
@@ -1782,20 +1819,22 @@ const AST_STRING_TOKEN_KINDS: ReadonlySet<string> = new Set(['created_at', 'upda
  * Возврат `{ ok: false }` — хоть один токен неразрешим (`unresolved` собран в
  * `sink`), лист даёт `false`. Требование 84b52caa (каждая граница — токен).
  *
- * `stringTokens` (датовые операнды, {@link AST_STRING_TOKEN_KINDS}) — строковое
- * значение тоже проходит через резолвер токенов: строка без токенов
- * возвращается как есть, строка-токен раскрывается. Без этого плоский
- * `updated_after: "$weekStart"` сравнивался ЛИТЕРАЛЬНО — отбор «исполнялся, но
- * с неверными датами» (ошибка 99e7889d), а токен доходил до строковой проверки
- * границы нераскрытым.
+ * `mode` (см. {@link AstStringTokenMode}) решает, раскрывается ли СТРОКОВОЕ
+ * значение: у датовых операндов (`all`) — любая строка, у операнда-свойства
+ * (`pure`) — строка-целиком-токен, иначе строка-без-токенов возвращается как
+ * есть. Без этого плоский `updated_after: "$weekStart"` сравнивался ЛИТЕРАЛЬНО
+ * (ошибка 99e7889d), а строковый токен в значении свойства-связи не раскрывался
+ * и падал валидацией типа (ошибка d52e4d79).
  */
 function astResolveLeafValue(
   value: FilterAstValue | undefined,
   ctx: AstTokenContext | undefined,
   sink: TokenIssue[] | undefined,
   path: string,
-  stringTokens = false,
+  mode: AstStringTokenMode = 'none',
 ): { ok: boolean; value?: FilterAstValue } {
+  const stringIsToken = (s: string): boolean =>
+    mode === 'all' || (mode === 'pure' && isPureKnownTokenString(s));
   if (Array.isArray(value)) {
     const out: FilterAstListItem[] = [];
     for (let i = 0; i < value.length; i += 1) {
@@ -1804,7 +1843,7 @@ function astResolveLeafValue(
         const r = astResolveToken(el.token, ctx, sink, `${path}.value[${i}]`);
         if (!r.ok) return { ok: false };
         out.push(r.value!);
-      } else if (stringTokens && typeof el === 'string') {
+      } else if (typeof el === 'string' && stringIsToken(el)) {
         const r = astResolveToken(el, ctx, sink, `${path}.value[${i}]`);
         if (!r.ok) return { ok: false };
         out.push(r.value!);
@@ -1819,7 +1858,7 @@ function astResolveLeafValue(
     if (!r.ok) return { ok: false };
     return { ok: true, value: r.value };
   }
-  if (stringTokens && typeof value === 'string') {
+  if (typeof value === 'string' && stringIsToken(value)) {
     const r = astResolveToken(value, ctx, sink, `${path}.value`);
     if (!r.ok) return { ok: false };
     return { ok: true, value: r.value };
@@ -2173,13 +2212,14 @@ function filterAstLeafClause(
   if (astOpts?.stats !== undefined) astOpts.stats.conditions += 1;
   // Токен-значение раскрывается сервером; неразрешимый — лист даёт false и
   // уходит в коллектор (требование b7fdab20 «пустой результат с пояснением»).
-  // У датовых операндов раскрывается и строковая форма токена (ошибка 99e7889d).
+  // У датовых операндов раскрывается и строковая форма токена (ошибка 99e7889d),
+  // у операнда-свойства — строка-целиком-токен (ошибка d52e4d79).
   const resolved = astResolveLeafValue(
     leaf.value,
     astOpts?.ctx,
     astOpts?.unresolved,
     path,
-    AST_STRING_TOKEN_KINDS.has(leaf.entity.kind),
+    astStringTokenMode(leaf),
   );
   if (!resolved.ok) return AST_FALSE;
   if (resolved.value !== leaf.value) leaf = { ...leaf, value: resolved.value };
@@ -2190,6 +2230,17 @@ function filterAstLeafClause(
     (typeof leaf.value === 'string' || typeof leaf.value === 'number')
   ) {
     leaf = { ...leaf, value: [leaf.value, leaf.value] };
+  }
+  // `eq`/`ne` с ОДНОЭЛЕМЕНТНЫМ списком — эквивалент скаляра: клиент и плоская
+  // форма хранят значение-ссылку списком и на одиночном операторе (напр.
+  // `["$thought"]`), а движок читает такой лист как одиночное значение, а не
+  // отвергает валидацией типа (ошибка d52e4d79).
+  if (
+    (leaf.operator === 'eq' || leaf.operator === 'ne') &&
+    Array.isArray(leaf.value) &&
+    leaf.value.length === 1
+  ) {
+    leaf = { ...leaf, value: leaf.value[0] };
   }
   if (isSubqueryValue(leaf.value)) {
     return astSubqueryLeafClause(ndb, leaf, path, requestId, astOpts);

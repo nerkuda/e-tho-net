@@ -93,9 +93,11 @@ import {
 import { getThought } from './thought-service.js';
 import {
   getNetworkPropertyByName,
+  getLinkPropertyValues,
   linkPropertySideFromConfig,
   listEffectiveTypeProperties,
   listNetworkProperties,
+  listThoughtLinkProperties,
   oppositeLinkPropertyDisplayName,
 } from './property-service.js';
 
@@ -787,40 +789,78 @@ function collectThoughtPropertyValues(
   thoughtId: string,
   typeId: string | null,
 ): ThoughtPropertyValue[] {
-  const raw = getPropertyValues(ndb, 'thought', thoughtId);
-  if (raw.length === 0) return [];
-  const meta = typeId === null
-    ? new Map<string, { multiple: boolean; value_type: typeof raw[number]['value_type'] }>()
-    : new Map(
-      listEffectiveTypeProperties(ndb, 'thought_type', typeId).map((p) => [
-        p.key,
-        { multiple: p.config?.multiple === true, value_type: p.value_type },
-      ] as const),
-    );
   const out: ThoughtPropertyValue[] = [];
-  for (const v of raw) {
-    // `null` (и экзотика вроде пустого массива для одиночного свойства) —
-    // резолверу нечего подставлять: подставляется пустое значение (A6).
-    if (v.value === null) continue;
-    if (Array.isArray(v.value) && v.value.length === 0) continue;
-    // `cross_network_ref` (задача 7849008a) — снапшот `CrossNetworkRefValue[]`,
-    // токены `$thought.<key>` не применимы к кросс-сетевому адресу.
-    if (v.value_type === 'cross_network_ref') continue;
-    // Метаданные: цепочка типа, при отсутствии (свойство вне типа) — реестр сети.
-    const fromType = meta.get(v.property_name);
-    const fromRegistry = fromType === undefined ? getNetworkPropertyByName(ndb, v.property_name) : null;
-    const multiple = fromType?.multiple ?? fromRegistry?.config?.multiple === true;
-    const valueType = fromType?.value_type ?? fromRegistry?.value_type ?? v.value_type;
-    // Множественное `text` хранится comma-joined строкой (02-data-model
-    // §3.4–3.5); токен `$thought.[…]` обязан подставляться СПИСКОМ элементов
-    // (требование 12fccde9) — иначе он уходит одной склеенной строкой и
-    // условие-список по ней не матчит (ошибка 7489e4d9, тот же класс).
-    let value = v.value as string | number | boolean | string[];
-    if (multiple && valueType === 'text' && typeof value === 'string') {
-      value = splitMultipleText(value);
-      if (value.length === 0) continue; // пустой список — пустое значение (12fccde9)
+  const raw = getPropertyValues(ndb, 'thought', thoughtId);
+  if (raw.length > 0) {
+    const meta = typeId === null
+      ? new Map<string, { multiple: boolean; value_type: typeof raw[number]['value_type'] }>()
+      : new Map(
+        listEffectiveTypeProperties(ndb, 'thought_type', typeId).map((p) => [
+          p.key,
+          { multiple: p.config?.multiple === true, value_type: p.value_type },
+        ] as const),
+      );
+    for (const v of raw) {
+      // `null` (и экзотика вроде пустого массива для одиночного свойства) —
+      // резолверу нечего подставлять: подставляется пустое значение (A6).
+      if (v.value === null) continue;
+      if (Array.isArray(v.value) && v.value.length === 0) continue;
+      // `cross_network_ref` (задача 7849008a) — снапшот `CrossNetworkRefValue[]`,
+      // токены `$thought.<key>` не применимы к кросс-сетевому адресу.
+      if (v.value_type === 'cross_network_ref') continue;
+      // Метаданные: цепочка типа, при отсутствии (свойство вне типа) — реестр сети.
+      const fromType = meta.get(v.property_name);
+      const fromRegistry = fromType === undefined ? getNetworkPropertyByName(ndb, v.property_name) : null;
+      const multiple = fromType?.multiple ?? fromRegistry?.config?.multiple === true;
+      const valueType = fromType?.value_type ?? fromRegistry?.value_type ?? v.value_type;
+      // Множественное `text` хранится comma-joined строкой (02-data-model
+      // §3.4–3.5); токен `$thought.[…]` обязан подставляться СПИСКОМ элементов
+      // (требование 12fccde9) — иначе он уходит одной склеенной строкой и
+      // условие-список по ней не матчит (ошибка 7489e4d9, тот же класс).
+      let value = v.value as string | number | boolean | string[];
+      if (multiple && valueType === 'text' && typeof value === 'string') {
+        value = splitMultipleText(value);
+        if (value.length === 0) continue; // пустой список — пустое значение (12fccde9)
+      }
+      out.push({ key: v.property_name, value_type: valueType, multiple, value });
     }
-    out.push({ key: v.property_name, value_type: valueType, multiple, value });
+  }
+  // Свойства-СВЯЗИ: их значений в `property_values` нет вовсе (проекция «ребро →
+  // свойство», ADR «проекция ребра»), поэтому `$thought.[<Имя>]` для свойства-
+  // связи обязано читать цель рёбер (требование 3697eb65: `$thought.[…]` —
+  // значение свойства СЕТИ, обе стороны свойства адресуемы).
+  out.push(...collectThoughtLinkPropertyValues(ndb, thoughtId));
+  return out;
+}
+
+/**
+ * Значения свойств-СВЯЗЕЙ мысли для резолвера токенов `$thought.[<Имя>]`:
+ * имя и направление — из {@link listThoughtLinkProperties} (прямая и обратная
+ * сторона свойства, зеркала, внетиповые рёбра), цели — из рёбер
+ * ({@link getLinkPropertyValues}). Одно живое ребро — СКАЛЯР (id цели, чтобы
+ * работал `eq`), несколько — СПИСОК (наборы/`in`); пустой набор в карту не
+ * попадает — это ПУСТОЕ значение по семантике A6 (условие сравнивается с
+ * пустотой, а не даёт неразрешимый токен).
+ */
+function collectThoughtLinkPropertyValues(
+  ndb: NetworkDb,
+  thoughtId: string,
+): ThoughtPropertyValue[] {
+  const out: ThoughtPropertyValue[] = [];
+  const seen = new Set<string>();
+  for (const lp of listThoughtLinkProperties(ndb, thoughtId)) {
+    const key = lp.property_name.trim();
+    if (key === '' || seen.has(key)) continue;
+    seen.add(key);
+    const targets = getLinkPropertyValues(ndb, 'thought', thoughtId, lp.link_type_id, lp.direction)
+      .map((item) => item.target_id);
+    if (targets.length === 0) continue;
+    out.push({
+      key,
+      value_type: 'link',
+      multiple: targets.length > 1,
+      value: targets.length === 1 ? targets[0]! : targets,
+    });
   }
   return out;
 }
