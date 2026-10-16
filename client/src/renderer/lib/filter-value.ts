@@ -1047,7 +1047,14 @@ function dateBoundControl(
       onChange({ kind: 'scalar', value: todayLocal() });
       return;
     }
+    // Выбор опоры из списка — это выбор ПРЕСЕТА-ТОКЕНА без сдвига: остаток
+    // прежнего сдвига молча превращал выбранную опору в другой токен
+    // (`$monthStart` из ячейки `$today-4d` давал `$monthStart-4d` — ошибка
+    // c4343d63, период разъезжался). Пресет опоры и должен записаться ровно им;
+    // сдвиг пользователь задаёт отдельным полем ПОСЛЕ выбора опоры.
     anchor = anchorSelect.value;
+    amount = 0;
+    unit = 'd';
     commit();
   });
   frame.append(anchorSelect);

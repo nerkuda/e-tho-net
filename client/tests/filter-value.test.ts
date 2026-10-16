@@ -755,15 +755,17 @@ describe('ячейка значения: сборка виджета и прав
     unit.value = 'mo';
     unit.fire('change');
     assert.deepEqual(writes[1], { kind: 'token', token: '$today-30mo' });
-    // Смена опоры сохраняет сдвиг.
+    // Смена опоры ставит ВЫБРАННЫЙ пресет ровно им: остаточный сдвиг не должен
+    // молча превращать опору в другой токен (ошибка c4343d63: «$monthStart» из
+    // ячейки с прежним сдвигом давал «$monthStart-30mo» и период разъезжался).
     const anchor = box.findAll((n) => n.dataset['part'] === 'anchor')[0]!;
     anchor.value = '$monthStart';
     anchor.fire('change');
-    assert.deepEqual(writes[2], { kind: 'token', token: '$monthStart-30mo' });
-    // Ноль/пусто возвращают голую опору.
-    shift.value = '0';
+    assert.deepEqual(writes[2], { kind: 'token', token: '$monthStart' });
+    // Сдвиг задаётся отдельным полем ПОСЛЕ выбора опоры.
+    shift.value = '-7';
     shift.fire('change');
-    assert.deepEqual(writes[3], { kind: 'token', token: '$monthStart' });
+    assert.deepEqual(writes[3], { kind: 'token', token: '$monthStart-7d' });
   });
 
   it('сдвиг: разбор и сборка канонических токенов (чистые функции)', () => {
@@ -966,6 +968,37 @@ describe('ячейка значения: сборка виджета и прав
       writes[0],
       { kind: 'list', items: [{ token: '$today' }, '2020-01-01'] },
       'начало — опора, а не дата: порядок не выравнивается (прежнее поведение)',
+    );
+  });
+
+  it('«между» у дат: смена опоры пишет выбранный пресет без остаточного сдвига (c4343d63)', () => {
+    // Воспроизведение ошибки: клик по дню 12.10 даёт границу `$today-4d` (со
+    // сдвигом −4). Смена опоры «с» на пресет `$monthStart` раньше давала
+    // `$monthStart-4d` (= 27.09 — начало недели 1-го числа), и период разъезжался.
+    const { api, writes } = slot();
+    const box = render(
+      leaf({ kind: 'record_time' }, 'between', {
+        kind: 'list',
+        items: [{ token: '$today-4d' }, { token: '$today' }],
+      }),
+      api,
+    );
+    const fromBox = box.findAll((n) => n.dataset['bound'] === 'from')[0]!;
+    const anchor = fromBox.findAll((n) => n.dataset['part'] === 'anchor')[0]!;
+    anchor.value = '$monthStart';
+    anchor.fire('change');
+    assert.deepEqual(
+      writes[0],
+      { kind: 'list', items: [{ token: '$monthStart' }, { token: '$today' }] },
+      'выбранная опора записана ровно собой — остаточный сдвиг −4 не применён',
+    );
+    // Сдвиг задаётся отдельным полем ПОСЛЕ выбора опоры.
+    const shift = fromBox.findAll((n) => n.dataset['part'] === 'shift')[0]!;
+    shift.value = '-2';
+    shift.fire('change');
+    assert.deepEqual(
+      writes[1],
+      { kind: 'list', items: [{ token: '$monthStart-2d' }, { token: '$today' }] },
     );
   });
 
