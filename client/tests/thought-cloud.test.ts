@@ -340,11 +340,23 @@ describe('цвет, начертание и значок', () => {
     assert.equal(icon.textContent, '⭐');
   });
 
-  it('без своего значка — дефолтный 💭', () => {
+  it('без своего значка — встроенное дефолтное облачко (задача 26006db4)', () => {
     const root = cloud(thought(), { profile: 'canvas' });
     const icon = findByClass(root, 'cloud-icon');
     assert.ok(icon !== undefined);
-    assert.equal(icon.textContent, '💭');
+    // Дефолт — инлайн-SVG облачка формы v1 (path + circle), а не текстовый 💭.
+    const svg = icon.children[0];
+    assert.ok(svg !== undefined);
+    assert.equal(svg.tagName, 'SVG');
+    assert.ok(svg.classList.contains('icon'), 'значок несёт класс icon (размер от контекста)');
+    assert.equal(svg.getAttribute('viewBox'), '0 0 16 16');
+    assert.equal(svg.children.length, 2, 'два элемента: контур-путь и кружок-хвостик');
+    const [contour, tail] = svg.children;
+    assert.equal(contour?.tagName, 'PATH');
+    assert.equal(contour?.getAttribute('stroke'), 'currentColor');
+    assert.equal(tail?.tagName, 'CIRCLE');
+    assert.equal(tail?.getAttribute('stroke'), 'currentColor');
+    assert.equal(icon.textContent, '', 'эмодзи-фолбэка 💭 больше нет');
   });
 
   it('значок-изображение — <img> с src и dataset для Ctrl-hover лупы', () => {
@@ -587,7 +599,7 @@ describe('канон стиля/значка', () => {
     assert.equal(style.bold, false);
   });
 
-  it('resolveThoughtIcon без своего значка и без типа — null + emoji (дефолт 💭)', () => {
+  it('resolveThoughtIcon без своего значка и без типа — null + emoji (рисуется дефолтное облачко)', () => {
     assert.deepEqual(resolveThoughtIcon({ icon: null, icon_kind: 'emoji', type_id: null }), {
       icon: null,
       kind: 'emoji',
@@ -603,6 +615,20 @@ describe('канон стиля/значка', () => {
       type_id: null,
     });
     assert.equal(box.textContent, '🧠');
+  });
+
+  it('applyThoughtIcon без значка рисует встроенное облачко, эмодзи-фолбэка нет', () => {
+    const box = new ShimElement('span');
+    applyThoughtIcon(box as unknown as HTMLElement, {
+      icon: null,
+      icon_kind: 'emoji',
+      type_id: null,
+    });
+    const svg = box.children[0];
+    assert.ok(svg !== undefined);
+    assert.equal(svg.tagName, 'SVG');
+    assert.equal(svg.getAttribute('viewBox'), '0 0 16 16');
+    assert.equal(box.textContent, '');
   });
 
   it('deferSingleClick срабатывает по SINGLE_CLICK_DELAY_MS и отменяется cancel()', () => {

@@ -444,14 +444,19 @@ const libraryIconGeneration = new WeakMap<HTMLElement, number>();
  * достаётся лениво ({@link loadIconCatalog}), поэтому `<svg>` появляется,
  * когда каталог доступен. Узел при этом становится ОДИНОЧНЫМ слотом значка:
  * пока каталог не пришёл, он остаётся пустым; имя не из каталога — в слот
- * кладётся `fallbackText`. Ответ устаревшего вызова (узел уже перерисован
+ * кладётся `fallback`. Ответ устаревшего вызова (узел уже перерисован
  * следующим) отбрасывается, поэтому частые перерисовки не накапливаются.
+ *
+ * `fallback` — что показать вместо значка, когда имени нет в каталоге
+ * (устаревшие данные): строка (кладётся в `textContent`; пустая — слот
+ * очищается) или функция-отрисовщик, заменяющая содержимое слота (например,
+ * дефолтное облачко мысли, `lib/ui/thought-default-icon.ts`).
  */
 export function renderLibraryIcon(
   host: HTMLElement,
   name: string,
   options: IconOptions = {},
-  fallbackText = '',
+  fallback: string | (() => void) = '',
 ): Promise<void> {
   const generation = (libraryIconGeneration.get(host) ?? 0) + 1;
   libraryIconGeneration.set(host, generation);
@@ -459,7 +464,8 @@ export function renderLibraryIcon(
     if (libraryIconGeneration.get(host) !== generation) return;
     const node = catalog.node(name);
     if (node === null) {
-      host.textContent = fallbackText;
+      if (typeof fallback === 'function') fallback();
+      else host.textContent = fallback;
       return;
     }
     host.replaceChildren(renderIconNode(node, options));

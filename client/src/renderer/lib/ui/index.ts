@@ -401,6 +401,14 @@ export {
 } from './icon.js';
 export type { IconName, IconOptions, IconCatalog } from './icon.js';
 
+// Дефолтная иконка мысли — встроенное облачко (задача 26006db4): собственный
+// inline-SVG значка (форма v1), которым фолбэкается отсутствующая иконка мысли
+// вместо эмодзи 💭. Цвет — `currentColor` (тема хоста), размер — от контекста.
+export {
+  renderDefaultThoughtIcon,
+  THOUGHT_DEFAULT_ICON_VIEW_BOX,
+} from './thought-default-icon.js';
+
 // Якорь возврата клавиатурного фокуса — общий атрибут обоих фасадов списков
 // (дерева и таблицы) для правила 10 требования 11ddd910 (ошибка 28d69bc6).
 export { FOCUS_ANCHOR_ATTR, FOCUS_ANCHOR_SELECTOR } from './focus-anchor.js';

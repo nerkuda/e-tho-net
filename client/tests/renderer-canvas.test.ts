@@ -189,7 +189,7 @@ describe('resolveCloudStyle', () => {
 describe('resolveThoughtIcon (требование «Наследование визуального стиля мысли от её типа»)', () => {
   // Контракт, на который опирается любое облачко/пилюля: своя иконка → иконка
   // типа по цепочке предков (для мысли без типа — корневого) → нет иконки
-  // (вызывающий код рисует дефолт 💭).
+  // (вызывающий код рисует встроенное дефолтное облачко).
   const chain = [
     type({ id: 'root', name: 'основной тип', is_root: true, icon: '🌳' }),
     type({ id: 'person', name: 'Персона', parent_id: 'root', is_root: false, icon: '🧑' }),
@@ -224,7 +224,7 @@ describe('resolveThoughtIcon (требование «Наследование в
     store.update({ thoughtTypes: [] });
   });
 
-  it('иконки нет нигде — отдаёт null (вызывающий рисует 💭)', () => {
+  it('иконки нет нигде — отдаёт null (вызывающий рисует дефолтное облачко)', () => {
     store.update({ thoughtTypes: [] });
     assert.deepEqual(resolveThoughtIcon(ref()), { icon: null, kind: 'emoji', color: null });
   });
