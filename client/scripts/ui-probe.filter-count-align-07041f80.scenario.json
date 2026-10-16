@@ -1,0 +1,63 @@
+{
+  "name": "filter-count-align-07041f80",
+  "description": "Ошибка 07041f80: «количество между» не выравнивает числовые границы. Сценарий: онбординг → «Структуры» → сохранённый отбор с «Дети между 5 и 10» → ввод «С» больше «По» подтягивает конец к началу. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-count-align-07041f80.scenario.json --out .tmp/etn-07041f80/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-saved-filter",
+      "api": {
+        "name": "seed-saved-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "Дети между",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                { "entity": { "kind": "children" }, "operator": "between", "value": [5, 10] }
+              ]
+            }
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+    { "name": "structures-open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "structures-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "structures-saved-row", "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    { "name": "structures-focus-search", "click": ".sfd-search" },
+    { "name": "structures-filter-typed", "text": "Дети" },
+    { "name": "structures-select-row", "key": "ArrowDown" },
+    { "name": "structures-confirm-row", "key": "Enter" },
+    { "name": "structures-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+
+    { "name": "count-cell", "timeout": 15000, "waitFor": "document.querySelectorAll('.st-filter .fv-bounds input[data-input=\"number\"]').length === 2" },
+    { "name": "count-before", "probe": "Array.from(document.querySelectorAll('.st-filter .fv-bounds input[data-input=\"number\"]')).map((e) => e.value)", "expect": ["5", "10"] },
+
+    { "name": "type-from-greater", "eval": "(() => { const i = document.querySelectorAll('.st-filter .fv-bounds input[data-input=\"number\"]')[0]; i.value = '20'; i.dispatchEvent(new Event('change', { bubbles: true })); return i.value; })()" },
+    { "name": "count-after-to-aligned", "timeout": 10000, "waitFor": "document.querySelectorAll('.st-filter .fv-bounds input[data-input=\"number\"]')[1]?.value === '20'" },
+    { "name": "count-after", "probe": "Array.from(document.querySelectorAll('.st-filter .fv-bounds input[data-input=\"number\"]')).map((e) => e.value)", "expect": ["20", "20"] },
+
+    { "name": "type-to-lesser", "eval": "(() => { const i = document.querySelectorAll('.st-filter .fv-bounds input[data-input=\"number\"]')[1]; i.value = '3'; i.dispatchEvent(new Event('change', { bubbles: true })); return i.value; })()" },
+    { "name": "count-reverse-from-aligned", "timeout": 10000, "waitFor": "document.querySelectorAll('.st-filter .fv-bounds input[data-input=\"number\"]')[0]?.value === '3'" },
+    { "name": "count-reverse", "probe": "Array.from(document.querySelectorAll('.st-filter .fv-bounds input[data-input=\"number\"]')).map((e) => e.value)", "expect": ["3", "3"] }
+  ]
+}

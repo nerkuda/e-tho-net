@@ -967,6 +967,17 @@ describe('ячейка значения: сборка виджета и прав
     );
   });
 
+  it('авто-выравнивание ЧИСЛОВЫХ границ «между» — правило дат (07041f80)', () => {
+    assert.deepEqual(mod.filterValueAlignCountBounds(5, 10, 0), { from: 5, to: 10 }, 'порядок верный — без правок');
+    assert.deepEqual(mod.filterValueAlignCountBounds(10, 5, 0), { from: 10, to: 10 }, '«С» больше «По» — конец к началу');
+    assert.deepEqual(mod.filterValueAlignCountBounds(5, 3, 1), { from: 3, to: 3 }, '«По» меньше «С» — начало к концу');
+    assert.deepEqual(
+      mod.filterValueAlignCountBounds(5, '', 1),
+      { from: 5, to: '' },
+      'нечисловая/пустая граница порядку не подчиняется',
+    );
+  });
+
   it('«между» у дат: граница-опора сравнивается по резолвнутому дню (1b6c49fe)', () => {
     // Раньше граница-токен порядку не подчинялась вовсе. Теперь сравнивается по
     // резолвнутому локальному дню (тот же резолвер, что у «Дневника»): правка
@@ -1017,6 +1028,21 @@ describe('ячейка значения: сборка виджета и прав
       writes[1],
       { kind: 'list', items: [{ token: '$monthStart-2d' }, { token: '$today' }] },
     );
+  });
+
+  it('«между» у количества: числовые границы выравниваются по порядку (07041f80)', () => {
+    const { api, writes } = slot();
+    const box = render(leaf({ kind: 'parents' }, 'between', { kind: 'list', items: [5, 10] }), api);
+    const inputs = box.findAll((n) => n.dataset['input'] === 'number');
+    assert.equal(inputs.length, 2, '«количество между» — две числовые границы');
+    // «С» больше «По» → конец подтягивается к началу.
+    inputs[0]!.value = '20';
+    inputs[0]!.fire('change');
+    assert.deepEqual(writes[0], { kind: 'list', items: [20, 20] });
+    // «По» меньше «С» → начало подтягивается к концу.
+    inputs[1]!.value = '3';
+    inputs[1]!.fire('change');
+    assert.deepEqual(writes[1], { kind: 'list', items: [3, 3] });
   });
 
   it('перечисление: чип-поле выбранных значений, без «простыни» чекбоксов (п. C2/C3)', () => {

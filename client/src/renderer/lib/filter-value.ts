@@ -502,6 +502,28 @@ export function filterValueAlignDateBounds(
 }
 
 /**
+ * Автокоррекция ЧИСЛОВЫХ границ «между» (ошибка 07041f80; правило порядка то же,
+ * что у дат — `lib/dates.ts` `setPeriodFrom`/`setPeriodTo`, решение пользователя
+ * 2026-10-16): ввод «С» больше «По» подтягивает конец к началу, ввод «По» меньше
+ * «С» — начало к концу. Приоритет — редактируемая граница (её значение не
+ * трогаем). Числовое сравнение — своё (границы дат здесь числа); выравниваются
+ * только когда ОБЕ границы — конечные числа: пустая/нечисловая граница порядку
+ * не подчиняется (прежнее поведение).
+ */
+export function filterValueAlignCountBounds(
+  from: FilterTreeListItem,
+  to: FilterTreeListItem,
+  edited: 0 | 1,
+): { from: FilterTreeListItem; to: FilterTreeListItem } {
+  const fromNum = typeof from === 'number' && Number.isFinite(from) ? from : null;
+  const toNum = typeof to === 'number' && Number.isFinite(to) ? to : null;
+  if (fromNum === null || toNum === null) return { from, to };
+  return edited === 0
+    ? { from, to: toNum < fromNum ? fromNum : to }
+    : { from: fromNum > toNum ? toNum : from, to };
+}
+
+/**
  * Локальный день границы для сравнения порядка: конкретная дата — как есть,
  * токен — через резолвер (не раскрылся — `null`). Нестроковое значение и токен
  * без резолвера дают `null` (граница порядку не подчиняется).
@@ -979,12 +1001,18 @@ function countControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HTMLEl
     const wrap = div(FILTER_VALUE_BOUNDS_CLASS);
     const from = filterValueBoundAt(leaf.value, 0);
     const to = filterValueBoundAt(leaf.value, 1);
+    // Пара числовых границ выравнивается по порядку (ошибка 07041f80) — тем же
+    // правилом, что датовая пара: «С» больше «По» подтягивает конец к началу.
     const push = (next: 0 | 1, bound: FilterTreeValue): void => {
-      const items: FilterTreeListItem[] = [
+      const aligned = filterValueAlignCountBounds(
         boundAsItem(next === 0 ? bound : from),
         boundAsItem(next === 1 ? bound : to),
-      ];
-      (api.setStructuralValue ?? api.setValue)({ kind: 'list', items });
+        next,
+      );
+      (api.setStructuralValue ?? api.setValue)({
+        kind: 'list',
+        items: [aligned.from, aligned.to],
+      });
     };
     wrap.append(numberBound(from, (bound) => push(0, bound)), numberBound(to, (bound) => push(1, bound)));
     wrap.append(span(filterValueUnitLabel(leaf), FILTER_VALUE_UNIT_CLASS));
