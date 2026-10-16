@@ -846,7 +846,17 @@ export async function pickEntitiesModal(
         // а не схлопывается по содержимому при наборе поиска.
         fixedHeight: true,
         buttons,
-        onMount: () => searchInput.focus(),
+        // Роль `s` (320px) заведомо мала для пикера — тело (поиск + чипы)
+        // получает мало места (ошибка ffa55338). Модификатор
+        // `dialog-entity-picker` на боксе берёт именованную высоту (50 % окна,
+        // не менее 450px) через `--dialog-h-entity-picker`
+        // (styles/dialogs.css, styles/tokens.css) — оговорка «Высота вне ролей»
+        // требования 13464c39. Высота остаётся ФИКСИРОВАННОЙ (`fixedHeight`),
+        // роль `s` не меняется: её делят прочие диалоги-списки.
+        onMount: (_close, box) => {
+          box.classList.add('dialog-entity-picker');
+          searchInput.focus();
+        },
         // Любое закрытие каркаса — «Отмена», Esc, ×, программный
         // `closeDialog()` — это отмена: промис резолвится `null`, иначе
         // `await`/`.then` вызывающего висит вечно (ошибка 12dfb87e). При
@@ -1010,7 +1020,15 @@ export async function pickEntitiesModal(
       // свободное место — размер не «дёргается» от поиска и числа строк.
       fixedHeight: true,
       buttons,
-      onMount: () => {
+      // Роль `s` (320px) заведомо мала для диалога-списка: дерево выбора
+      // получает ≈150px и ≈7 строк (ошибка ffa55338). Модификатор
+      // `dialog-entity-picker` на боксе берёт именованную высоту (50 % окна, не
+      // менее 450px) через `--dialog-h-entity-picker` (styles/dialogs.css,
+      // styles/tokens.css) — оговорка «Высота вне ролей» требования 13464c39,
+      // как у диалога «Сохранённые отборы». Высота остаётся ФИКСИРОВАННОЙ
+      // (`fixedHeight`), роль `s` не меняется: её делят прочие диалоги-списки.
+      onMount: (_close, box) => {
+        box.classList.add('dialog-entity-picker');
         renderList();
         updateButtons();
         searchInput.focus();
