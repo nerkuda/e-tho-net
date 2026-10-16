@@ -403,9 +403,11 @@ export type { IconName, IconOptions, IconCatalog } from './icon.js';
 
 // Дефолтная иконка мысли — встроенное облачко (задача 26006db4): собственный
 // inline-SVG значка (форма v1), которым фолбэкается отсутствующая иконка мысли
-// вместо эмодзи 💭. Цвет — `currentColor` (тема хоста), размер — от контекста.
+// вместо эмодзи 💭. Цвет — приглушённый серый токен `--text-dim` (задача
+// 54c82d64), размер — от контекста.
 export {
   renderDefaultThoughtIcon,
+  THOUGHT_DEFAULT_ICON_STROKE,
   THOUGHT_DEFAULT_ICON_VIEW_BOX,
 } from './thought-default-icon.js';
 

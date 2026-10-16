@@ -353,9 +353,13 @@ describe('цвет, начертание и значок', () => {
     assert.equal(svg.children.length, 2, 'два элемента: контур-путь и кружок-хвостик');
     const [contour, tail] = svg.children;
     assert.equal(contour?.tagName, 'PATH');
-    assert.equal(contour?.getAttribute('stroke'), 'currentColor');
     assert.equal(tail?.tagName, 'CIRCLE');
-    assert.equal(tail?.getAttribute('stroke'), 'currentColor');
+    // Контур — приглушённый серый токен темы (задача 54c82d64) инлайн-стилем:
+    // `var()` в presentation-атрибутах SVG не работает, поэтому не `stroke`.
+    assert.equal(contour?.style.stroke, 'var(--text-dim)', 'контур красит токен --text-dim');
+    assert.equal(tail?.style.stroke, 'var(--text-dim)', 'хвостик красит токен --text-dim');
+    assert.equal(contour?.getAttribute('stroke'), null, 'прежнего атрибута stroke нет');
+    assert.equal(tail?.getAttribute('stroke'), null, 'прежнего атрибута stroke нет');
     assert.equal(icon.textContent, '', 'эмодзи-фолбэка 💭 больше нет');
   });
 

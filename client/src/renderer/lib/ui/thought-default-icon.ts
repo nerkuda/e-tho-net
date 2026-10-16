@@ -8,11 +8,13 @@
  * каталога `lib/ui` запрещены сторожем `guard-ui-icons`, поэтому модуль живёт
  * в фасаде, а не в `lib/`.
  *
- * Оба элемента (контур облака и кружок-хвостик) несут `stroke="currentColor"`
- * и не задают цветов: в светлой теме контур тёмный, в тёмной — светлый,
- * автоматически, по цвету хоста (`currentColor`). Отдельного файла для тёмной
- * темы не требуется — это и есть «вариант для тёмной темы» решением
- * пользователя.
+ * Оба элемента (контур облака и кружок-хвостик) красятся приглушённым серым
+ * токеном {@link THOUGHT_DEFAULT_ICON_STROKE} (`--text-dim`: #5c6675 в светлой
+ * теме, #9aa3b5 в тёмной) — задача 54c82d64. Токен серый в обеих темах, поэтому
+ * icon остаётся темо-адаптивной без отдельного файла для тёмной темы.
+ *
+ * `var()` в presentation-атрибутах SVG не работает, поэтому токен применяется
+ * инлайн-стилем элементов (`element.style.stroke`), а не атрибутом `stroke`.
  *
  * Размер значок наследует от контекста: класс {@link ICON_CLASS} — общий с
  * библиотечными значками Lucide, поэтому уже существующие правила
@@ -30,6 +32,13 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 export const THOUGHT_DEFAULT_ICON_VIEW_BOX = '0 0 16 16';
 
 /**
+ * Цвет контура дефолтного облачка — приглушённый серый токен темы
+ * (задача 54c82d64): #5c6675 в светлой теме, #9aa3b5 в тёмной. Токен, а не
+ * hex — правило дизайн-системы «размеры/цвета только токенами» (`lib/ui`).
+ */
+export const THOUGHT_DEFAULT_ICON_STROKE = 'var(--text-dim)';
+
+/**
  * Контур облака формы v1. Путь взят из утверждённого SVG
  * (`cloud2.svg`) КАК ЕСТЬ — форма не перерисовывается.
  */
@@ -38,8 +47,9 @@ const CLOUD_PATH =
 
 /**
  * Рисует дефолтную иконку мысли (облачко формы v1) в контейнер `host`, заменяя
- * его содержимое. Цвет штриха — `currentColor` (тема хоста), размер — от
- * контекста (класс {@link ICON_CLASS}, см. шапку модуля).
+ * его содержимое. Цвет штриха — приглушённый серый
+ * {@link THOUGHT_DEFAULT_ICON_STROKE} (инлайн-стиль, `var()` в атрибутах не
+ * работает), размер — от контекста (класс {@link ICON_CLASS}, см. шапку модуля).
  */
 export function renderDefaultThoughtIcon(host: HTMLElement): void {
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -48,12 +58,11 @@ export function renderDefaultThoughtIcon(host: HTMLElement): void {
   svg.setAttribute('width', '100%');
   svg.setAttribute('height', '100%');
   svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
   svg.setAttribute('aria-hidden', 'true');
 
   const cloud = document.createElementNS(SVG_NS, 'path');
   cloud.setAttribute('d', CLOUD_PATH);
-  cloud.setAttribute('stroke', 'currentColor');
+  cloud.style.stroke = THOUGHT_DEFAULT_ICON_STROKE;
   cloud.setAttribute('stroke-width', '1');
   cloud.setAttribute('stroke-linecap', 'round');
   cloud.setAttribute('stroke-linejoin', 'round');
@@ -62,7 +71,7 @@ export function renderDefaultThoughtIcon(host: HTMLElement): void {
   tail.setAttribute('cx', '3.4');
   tail.setAttribute('cy', '13.3');
   tail.setAttribute('r', '0.85');
-  tail.setAttribute('stroke', 'currentColor');
+  tail.style.stroke = THOUGHT_DEFAULT_ICON_STROKE;
   tail.setAttribute('stroke-width', '0.9');
 
   svg.append(cloud, tail);
