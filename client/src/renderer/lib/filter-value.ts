@@ -79,7 +79,7 @@ import {
   filterTokenNature,
 } from './filter-tokens.js';
 import { dateField } from './date-field.js';
-import { isValidLocalDay, setPeriodFrom, setPeriodTo, todayLocal } from './dates.js';
+import { isValidLocalDay, resolveDateToken, setPeriodFrom, setPeriodTo, todayLocal } from './dates.js';
 import { VALUE_TYPE_LABELS, valueTypeIconName } from './property-list.js';
 import {
   canonicalGlobalToken,
@@ -467,28 +467,64 @@ export function filterValueBoundAt(value: FilterTreeValue, index: 0 | 1): Filter
 }
 
 /**
- * Автокоррекция границ «между» у ДАТ (ошибка 2882c25f): интервал не должен
- * «скрещиваться» — ввод «С» позже «По» подтягивает конец к началу, ввод «По»
- * раньше «С» — начало к концу (решение пользователя 2026-10-15). Правило порядка
- * границ — общая точка правды `lib/dates.ts` (`setPeriodFrom`/`setPeriodTo`), та же,
- * что у диалога «Дата/период» и полей «Даты» панели отбора: второго правила не
- * заводим.
+ * Автокоррекция границ «между» у ДАТ (ошибка 2882c25f, расширено ошибкой
+ * 1b6c49fe): интервал не должен «скрещиваться» — ввод «С» позже «По» подтягивает
+ * конец к началу, ввод «По» раньше «С» — начало к концу (решение пользователя
+ * 2026-10-15). Правило порядка границ — общая точка правды `lib/dates.ts`
+ * (`setPeriodFrom`/`setPeriodTo`), та же, что у диалога «Дата/период» и полей
+ * «Даты» панели отбора: второго правила не заводим.
  *
- * Сравниваются только ОБЕ конкретные даты. Граница-токен (`$today+3d`) и пустая
- * ячейка порядку не подчиняются: резолва токенов в ячейке нет, а «между $weekStart
- * и $today» осмысленно и без числового сравнения — прежнее поведение сохраняется.
+ * Сравниваются границы по РЕЗОЛВНУТОМУ локальному дню: конкретная дата — как
+ * есть, токен (`$weekEnd`) раскрывается переданным резолвером (тот же, что у
+ * «Дневника», с первым днём недели сети). Приоритет — РЕДАКТИРУЕМАЯ граница
+ * (как у чистых дат): её представление (дата либо токен) не трогаем, соседнюю
+ * при скрещивании подтягиваем к её дню. Токен, который резолвер не раскрыл
+ * (или резолвер не передан), и пустая ячейка порядку не подчиняются — прежнее
+ * поведение сохраняется.
  */
 export function filterValueAlignDateBounds(
   from: FilterTreeListItem,
   to: FilterTreeListItem,
   edited: 0 | 1,
+  resolve?: (token: string) => string,
 ): { from: FilterTreeListItem; to: FilterTreeListItem } {
-  const fromDay = typeof from === 'string' && isValidLocalDay(from) ? from : null;
-  const toDay = typeof to === 'string' && isValidLocalDay(to) ? to : null;
+  const fromDay = boundLocalDay(from, resolve);
+  const toDay = boundLocalDay(to, resolve);
   if (fromDay === null || toDay === null) return { from, to };
-  const aligned =
-    edited === 0 ? setPeriodFrom(fromDay, toDay, fromDay) : setPeriodTo(fromDay, toDay, toDay);
-  return { from: aligned.from, to: aligned.to };
+  if (edited === 0) {
+    const aligned = setPeriodFrom(fromDay, toDay, fromDay);
+    // Нет скрещивания — исходное представление соседней границы сохраняем
+    // (токен остаётся токеном); подтянутая граница становится днём начала.
+    return { from, to: aligned.to === toDay ? to : aligned.to };
+  }
+  const aligned = setPeriodTo(fromDay, toDay, toDay);
+  return { from: aligned.from === fromDay ? from : aligned.from, to };
+}
+
+/**
+ * Локальный день границы для сравнения порядка: конкретная дата — как есть,
+ * токен — через резолвер (не раскрылся — `null`). Нестроковое значение и токен
+ * без резолвера дают `null` (граница порядку не подчиняется).
+ */
+function boundLocalDay(
+  item: FilterTreeListItem,
+  resolve?: (token: string) => string,
+): string | null {
+  const token =
+    typeof item === 'string'
+      ? isValidLocalDay(item)
+        ? item
+        : item.startsWith('$')
+          ? item
+          : null
+      : typeof item === 'object' && item !== null && 'token' in item
+        ? (item as { token: string }).token
+        : null;
+  if (token === null) return null;
+  if (isValidLocalDay(token)) return token;
+  if (resolve === undefined) return null;
+  const day = resolve(token);
+  return isValidLocalDay(day) ? day : null;
 }
 
 /** Модель значения листа → значение для общего редактора. */
@@ -1221,15 +1257,23 @@ function boundsControl(
    * уходило как `[{token:"$weekStart"}, ""]`.
    */
   const missing: FilterTreeListItem = dateCell ? { token: DATE_BOUND_DEFAULT_TOKEN } : '';
+  // Резолвер границ-токенов для выравнивания: тот же, что у «Дневника» (первый
+  // день недели сети, требование 1b77decd) — сравнение границ идёт по резолвнутому
+  // дню (ошибка 1b6c49fe).
+  const resolveDay = dateCell
+    ? (token: string): string => resolveDateToken(token, todayLocal(), ctx.firstDayOfWeek ?? 1)
+    : undefined;
   // Запись границы — структурная (ошибка 7d36f439): ячейка границ держит
   // собственное состояние частей (опора/сдвиг/единица, точная дата) и
   // пересобирается из модели. Пару границ выравниваем по порядку ДАТ
-  // (ошибка 2882c25f) — токены и пустые границы не трогаются.
+  // (ошибка 2882c25f; токены — по резолвнутому дню, ошибка 1b6c49fe) — пустые
+  // границы не трогаются.
   const push = (next: 0 | 1, bound: FilterTreeValue): void => {
     const aligned = filterValueAlignDateBounds(
       boundAsItem(next === 0 ? bound : from, missing),
       boundAsItem(next === 1 ? bound : to, missing),
       next,
+      resolveDay,
     );
     (api.setStructuralValue ?? api.setValue)({ kind: 'list', items: [aligned.from, aligned.to] });
   };

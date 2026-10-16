@@ -31,6 +31,9 @@ const ENTITY_PICKER = read('lib/entity-picker.ts');
 const PERIOD_EDITOR = read('lib/period-editor.ts');
 const BUILDER = read('lib/filter-builder.ts');
 const DIARY = read('screens/chronicle/diary.ts');
+// Резолвер глобальных токенов перенесён в библиотеку дат (общий с виджетом
+// значения условия, ошибка 1b6c49fe); «Дневник» реэкспортирует его.
+const DATES = read('lib/dates.ts');
 const RECORD_BODY = read('screens/chronicle/record-body.ts');
 const CSS = read('styles/screens/chronicle.css');
 
@@ -128,10 +131,11 @@ describe('приёмка №2, п.6: период «Пресеты»/«Даты�
       'клиентский шаблон токенов знает год',
     );
     assert.ok(
-      DIARY.includes('year\\.start') && DIARY.includes('year\\.end'),
+      DATES.includes('year\\.start') && DATES.includes('year\\.end'),
       'раскрытие годовых токенов',
     );
-    assert.match(DIARY, /months = n \* 12/, '±Ny = 12 месяцев');
+    assert.match(DATES, /months = n \* 12/, '±Ny = 12 месяцев');
+    assert.match(DIARY, /resolveDateToken/, '«Дневник» реэкспортирует общий резолвер токенов');
   });
 
   it('период едет в сохранённый отбор строкой «Время записи» дерева', () => {
