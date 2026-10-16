@@ -331,13 +331,21 @@ function activitySubqueryIds(ndb: NetworkDb, query: FilterAstNode, opts: Activit
 
 /** «Время события» (`occurred_at_ms`): равно/не равно, сравнения и «между» с токенами времени. */
 function activityOccurredLeaf(node: FilterAstLeaf, opts: ActivityListOptions): ActivityClause {
-  const lower = (raw: unknown, strict: boolean, edge: 'start' | 'end' = 'start'): ActivityClause => ({
+  // Нижняя граница: «голая дата» — начало суток UTC (полный инстанс/ms — как есть).
+  const lower = (raw: unknown, strict: boolean): ActivityClause => ({
     sql: `occurred_at_ms ${strict ? '>' : '>='} ?`,
-    args: [resolveOccurredBound(raw, opts, edge)],
+    args: [resolveOccurredBound(raw, opts, 'start')],
   });
-  const upper = (raw: unknown, strict: boolean, edge: 'start' | 'end' = 'start'): ActivityClause => ({
+  /**
+   * Верхняя граница. ВКЛЮЧАЮЩАЯ (`lte`, верх «между») разворачивает «голую дату»
+   * в КОНЕЦ суток UTC: «≤ 16.10» обязано включать весь день 16-го, а «между
+   * [d, d]» — совпадать с «равно d» (ошибка f682abbe). Паритет с хроникой
+   * (`resolveRecordBound(..., 'upper')`) и датами создания/изменения (469d8d69).
+   * СТРОГАЯ (`lt`) остаётся на начале суток: «< 17.10» = всё до 17-го.
+   */
+  const upper = (raw: unknown, strict: boolean): ActivityClause => ({
     sql: `occurred_at_ms ${strict ? '<' : '<='} ?`,
-    args: [resolveOccurredBound(raw, opts, edge)],
+    args: [resolveOccurredBound(raw, opts, strict ? 'start' : 'end')],
   });
   const between = (value: unknown): ActivityClause => {
     if (!Array.isArray(value) || value.length !== 2) {
@@ -351,11 +359,12 @@ function activityOccurredLeaf(node: FilterAstLeaf, opts: ActivityListOptions): A
   /**
    * Равенство времени события: попадание в СУТКИ «голой даты» (нижняя граница —
    * начало, верхняя — конец) либо точное совпадение полного инстанса
-   * (ошибка 03db4cb0, паритет с датами создания/изменения e219112e).
+   * (ошибка 03db4cb0, паритет с датами создания/изменения e219112e). Семантика
+   * совпадает с «между [d, d]» — обе стороны читают сутки одинаково.
    */
   const equal = (value: unknown): ActivityClause => {
-    const a = lower(value, false, 'start');
-    const b = upper(value, false, 'end');
+    const a = lower(value, false);
+    const b = upper(value, false);
     return { sql: `(${a.sql} AND ${b.sql})`, args: [...a.args, ...b.args] };
   };
   switch (node.operator) {

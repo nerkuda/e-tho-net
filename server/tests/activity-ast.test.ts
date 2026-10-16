@@ -496,4 +496,41 @@ describe('события: отбор на общий AST (задача 2b230e8e)
       ndb.close();
     }
   });
+
+  it('время события: ВКЛЮЧАЮЩАЯ верхняя граница «голой даты» — конец суток (ошибка f682abbe)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const t = seedThought(ndb, 'Мысль');
+      const early = seedEvent(ndb, { action: 'created', entityType: 'thought', entityId: t, atMs: Date.parse('2024-03-15T05:00:00.000Z') });
+      const late = seedEvent(ndb, { action: 'created', entityType: 'thought', entityId: t, atMs: Date.parse('2024-03-15T23:00:00.000Z') });
+      const prev = seedEvent(ndb, { action: 'created', entityType: 'thought', entityId: t, atMs: Date.parse('2024-03-14T23:00:00.000Z') });
+
+      const day = [early, late].sort();
+      const at = (operator: string, value: unknown): string[] =>
+        runFilter(ndb, { entity: { kind: 'occurred_at' }, operator, value } as FilterAst['filter']).sort();
+
+      // «≤ 15.03» включает весь день 15-го (до исправления — только 14-е).
+      assert.deepEqual(at('lte', '2024-03-15'), [prev, early, late].sort(), '«≤ дате» покрывает сутки целиком');
+      // Одна семантика суток у равенства, «между [d,d]» и «≤ d».
+      assert.deepEqual(at('between', ['2024-03-15', '2024-03-15']), day, '«между [d, d]» = сутки');
+      assert.deepEqual(at('eq', '2024-03-15'), day, '«равно d» = сутки');
+      assert.deepEqual(
+        at('eq', '2024-03-15'),
+        at('between', ['2024-03-15', '2024-03-15']),
+        '«равно d» и «между [d, d]» — один набор (паритет меню)',
+      );
+      // «< 16.03» — граница на начале суток: то же множество, что «≤ 15.03».
+      assert.deepEqual(at('lt', '2024-03-16'), [prev, early, late].sort(), '«< d+1» = всё до начала d+1');
+      // СТРОГАЯ верхняя граница остаётся на начале суток: «< 15.03» = только 14-е.
+      assert.deepEqual(at('lt', '2024-03-15'), [prev], '«< дате» событие дня не берёт');
+      // Нижние границы не менялись: «> d»/«≥ d» — от начала суток d.
+      assert.deepEqual(at('gt', '2024-03-15'), day, '«> d» — от начала суток d');
+      assert.deepEqual(at('gte', '2024-03-15'), day, '«≥ d» — от начала суток d');
+      assert.deepEqual(at('not_between', ['2024-03-15', '2024-03-15']), [prev], '«не между [d, d]» исключает сутки');
+      // Полный инстанс в верхней границе НЕ разворачивается — точное сравнение.
+      assert.deepEqual(at('lte', '2024-03-15T05:00:00.000Z'), [prev, early].sort(), 'инстанс — точная граница');
+    } finally {
+      ndb.close();
+    }
+  });
 });
