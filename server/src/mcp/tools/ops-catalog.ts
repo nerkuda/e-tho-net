@@ -1747,6 +1747,10 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
     // знала только `rollup`/`truncate`. Тема добавлена; правило «у каждой
     // операции набора MCP либо полное описание в tools/list, либо тема в
     // etn.guide» держит сторож `guard-mcp-guide-coverage.test.ts`.
+    // Ошибка 71f547c1: списки операторов операндов события в этой теме обещали
+    // шире реестра (`action` — eq/ne/contains/…), чем принимает профиль
+    // `EVENT_OPERATOR_SETS`; приведены к реестру, паритет стережёт
+    // `guard-guide-filter-operators.test.ts`.
     topic: 'activity.list',
     when: 'журнал активности сети: фильтры from_ms/to_ms/user_id/entity_type/entity_id, пагинация limit/offset, сортировка occurred_at_ms DESC',
     body_md: [
@@ -1772,17 +1776,15 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '',
       'Вместо плоских фильтров можно передать `ast` — тело отбора профиля `events` (та же',
       'грамматика, что у отбора мыслей: `etn.guide { topic: "thoughts.query" }`). `ast` XOR',
-      'плоские фильтры (одновременно — `VALIDATION_ERROR`). Операнды записи события:',
-      '- `occurred_at` — равно/не равно, сравнения и «между» (`eq/ne/gt/gte/lt/lte/between/not_between`);',
-      '  «голая дата» у равенства и у включающей верхней границы (`lte`, верх «между») — СУТКИ',
-      '  события (конец суток UTC), поэтому `eq d` ≡ `between [d, d]` ≡ `lte d` при событии дня,',
-      '  а `lt d` считает границей начало суток; значение —',
-      '  миллисекунды, дата или токен времени (`$now`, `$hourStart`, `$today`, `±N h/d/w/mo/y`);',
-      '- `action` — `eq/ne/contains/not_contains/in/not_in` (создано/изменено/удалено/…);',
-      '- `entity_type` / `user` — `eq/ne/in/not_in`;',
-      '- `entity_id` — `eq/ne` (конкретный id) ИЛИ `in/not_in/all_of` со значением-под-выборкой',
-      '  МЫСЛЕЙ (`{ "query": <узел>, "operator": "in" | "not_in" | "all_in" }`) — «по сущности',
-      '  равно ИЛИ по под-выборке мыслей».',
+      'плоские фильтры (одновременно — `VALIDATION_ERROR`). Операнды записи события (наборы',
+      'операторов — зеркало реестра профиля `events`, `shared/src/filter-profiles.ts`;',
+      'сторож `guard-guide-filter-operators.test.ts`):',
+      '- `occurred_at` — `eq/ne/gt/gte/lt/lte/between/not_between` (равно/не равно, сравнения и «между»); «голая дата» у равенства и у включающей верхней границы (`lte`, верх «между») — СУТКИ события (конец суток UTC), поэтому `eq d` ≡ `between [d, d]` ≡ `lte d` при событии дня, а `lt d` считает границей начало суток; значение — миллисекунды, дата или токен времени (`$now`, `$hourStart`, `$today`, `±N h/d/w/mo/y`);',
+      '- `action` — `in/not_in` (тип действия: создано/изменено/удалено/…, множественное перечисление);',
+      '- `entity_type` — `in/not_in` (вид сущности, множественное перечисление);',
+      '- `entity_title` — `contains/not_contains` (поиск слова в снимке заголовка сущности);',
+      '- `entity_id` — `eq/ne` (конкретный id) ИЛИ `in/not_in/all_of` со значением-под-выборкой МЫСЛЕЙ (`{ "query": <узел>, "operator": "in" | "not_in" | "all_in" }`) — «по сущности равно ИЛИ по под-выборке мыслей»;',
+      '- `user` — `eq/ne/in/not_in` (автор события).',
       '',
       '## Пагинация и сортировка',
       '',
