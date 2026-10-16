@@ -968,56 +968,69 @@ function resolveRecordAuthorValue(
 ): string | string[] | undefined {
   if (raw === undefined) return undefined;
   const resolveItem = (item: unknown): string => {
-    if (typeof item === 'string') return item;
-    if (typeof item === 'object' && item !== null && !Array.isArray(item) && 'token' in item) {
-      const text = (item as { token?: unknown }).token;
-      if (typeof text !== 'string') return '';
-      const { known, unknown } = scanStringForTokens(text);
-      if (unknown.length > 0) {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          `${column}: неизвестный токен «${unknown[0]!.raw}».`,
-          { field: 'value', token: unknown[0]!.raw },
-          opts.requestId,
-        );
-      }
-      const bad = known.find((t) => t.kind !== 'global');
-      if (bad !== undefined) {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          `${column}: токен «${bad.raw}» требует контекста мысли и в условии авторства недопустим.`,
-          { field: 'value', token: bad.raw },
-          opts.requestId,
-        );
-      }
-      // `$user` без пользователя запроса: пустая подстановка — это НЕ «условие
-      // без значения», а неразрешённый токен; называем причину (ошибка 1936c70e).
-      if (
-        opts.userId === '' &&
-        known.some((t) => t.raw === '$user' || t.raw.startsWith('$user.'))
-      ) {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          `${recordAuthorColumnLabel(column)}: токен «$user» не разрешён — не задан пользователь запроса.`,
-          { field: 'value', token: '$user' },
-          opts.requestId,
-        );
-      }
-      const resolved = resolveGlobalDateTokens(text, {
-        ...(opts.now !== undefined ? { now: opts.now } : {}),
-        userId: opts.userId,
-      });
-      if (resolved.unresolved.length > 0) {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          `${column}: не удалось раскрыть токен «${text}».`,
-          { field: 'value', token: text },
-          opts.requestId,
-        );
-      }
-      return resolved.value;
+    // Строковая форма токена (плоское определение `definition v1`) раскрывается,
+    // только если строка ЦЕЛИКОМ — один известный токен; иная строка остаётся
+    // литералом-id. Паритет с объектной формой `{ token }` и с листом
+    // «Автор»/«Редактор» профиля мыслей (ошибка cc3d: строковый токен авторства
+    // не раскрывался и молча терял условие до явной диагностики).
+    let text: string;
+    if (typeof item === 'string') {
+      const scanned = scanStringForTokens(item);
+      const pureToken =
+        scanned.unknown.length === 0 && scanned.known.length === 1 && item === scanned.known[0]!.raw;
+      if (!pureToken) return item;
+      text = item;
+    } else if (typeof item === 'object' && item !== null && !Array.isArray(item) && 'token' in item) {
+      const t = (item as { token?: unknown }).token;
+      if (typeof t !== 'string') return '';
+      text = t;
+    } else {
+      return '';
     }
-    return '';
+    const { known, unknown } = scanStringForTokens(text);
+    if (unknown.length > 0) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${column}: неизвестный токен «${unknown[0]!.raw}».`,
+        { field: 'value', token: unknown[0]!.raw },
+        opts.requestId,
+      );
+    }
+    const bad = known.find((t) => t.kind !== 'global');
+    if (bad !== undefined) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${column}: токен «${bad.raw}» требует контекста мысли и в условии авторства недопустим.`,
+        { field: 'value', token: bad.raw },
+        opts.requestId,
+      );
+    }
+    // `$user` без пользователя запроса: пустая подстановка — это НЕ «условие
+    // без значения», а неразрешённый токен; называем причину (ошибка 1936c70e).
+    if (
+      opts.userId === '' &&
+      known.some((t) => t.raw === '$user' || t.raw.startsWith('$user.'))
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${recordAuthorColumnLabel(column)}: токен «$user» не разрешён — не задан пользователь запроса.`,
+        { field: 'value', token: '$user' },
+        opts.requestId,
+      );
+    }
+    const resolved = resolveGlobalDateTokens(text, {
+      ...(opts.now !== undefined ? { now: opts.now } : {}),
+      userId: opts.userId,
+    });
+    if (resolved.unresolved.length > 0) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${column}: не удалось раскрыть токен «${text}».`,
+        { field: 'value', token: text },
+        opts.requestId,
+      );
+    }
+    return resolved.value;
   };
   return Array.isArray(raw) ? raw.map(resolveItem) : resolveItem(raw);
 }
