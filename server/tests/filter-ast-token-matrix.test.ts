@@ -719,3 +719,96 @@ describe(
     });
   },
 );
+
+describe(
+  'Матрица токенов AST (ccededb1): «Есть слова» — форма токена (ошибка d166cfe9)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    /** Фикстура: литерал «$today» в заголовке и заголовок с РАСКРЫТОЙ датой токена. */
+    function keywordFixture(): { ndb: NetworkDb } {
+      const ndb = createInMemoryNetworkDb();
+      seedThought(ndb, 'Заметка $today');
+      seedThought(ndb, 'Заметка 2026-09-09');
+      return { ndb };
+    }
+
+    const kw = (value: unknown): FilterAst => ast(leaf({ kind: 'keywords', scope: ['title'] }, 'matches', value));
+
+    it('keywords: строковая форма "$today" ≡ объектной (паритет форм)', () => {
+      const { ndb } = keywordFixture();
+      try {
+        const asObject = runAst(ndb, kw({ token: '$today' }), ctx());
+        assert.deepEqual(asObject.titles, ['Заметка 2026-09-09'], 'объектная форма раскрывает токен в дату');
+        assert.equal(asObject.unresolved, 0);
+        const asString = runAst(ndb, kw('$today'), ctx());
+        assert.deepEqual(
+          asString.titles,
+          asObject.titles,
+          'строковый токен "$today" в «Есть слова» обязан раскрыться так же, как объектный',
+        );
+        assert.equal(asString.unresolved, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('keywords: неизвестный токен "$thought" отвергается unresolved-диагностикой в обеих формах', () => {
+      const { ndb } = keywordFixture();
+      try {
+        for (const value of ['$thought', { token: '$thought' }]) {
+          const res = runAst(ndb, kw(value), ctx());
+          assert.deepEqual(res.titles, [], JSON.stringify(value));
+          assert.deepEqual(res.reasons, ['unknown_token'], JSON.stringify(value));
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('keywords: неизвестная «$»-строка и строка с примесью текста остаются ЛИТЕРАЛОМ', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Пометка $notatoken');
+        seedThought(ndb, 'Текст до $today после');
+        seedThought(ndb, 'Заметка 2026-09-09');
+        const unknown = runAst(ndb, kw('$notatoken'), ctx());
+        assert.deepEqual(unknown.titles, ['Пометка $notatoken'], 'неизвестный $… — литерал');
+        assert.equal(unknown.unresolved, 0);
+        const mixed = runAst(ndb, kw('до $today после'), ctx());
+        assert.deepEqual(mixed.titles, ['Текст до $today после'], 'строка с примесью — литерал, а не токен');
+        assert.equal(mixed.unresolved, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('keywords: FTS-сужатель НЕ ставится для значения-токена, но ставится для литерала (ловушка d166cfe9)', () => {
+      const { ndb } = keywordFixture();
+      try {
+        const captured: string[] = [];
+        const orig = ndb.prepare.bind(ndb) as (sql: string) => unknown;
+        (ndb as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+          captured.push(sql);
+          return orig(sql);
+        };
+        try {
+          runAst(ndb, kw('$today'), ctx());
+          assert.ok(
+            !captured.some((s) => s.includes('fts_thought_names MATCH')),
+            'для значения-токена сужатель по СЫРОМУ «$today» отсекал бы раскрытую дату',
+          );
+          captured.length = 0;
+          runAst(ndb, kw('заметка'), ctx());
+          assert.ok(
+            captured.some((s) => s.includes('fts_thought_names MATCH')),
+            'для обычного литерала FTS-сужатель (314cbb8d) обязан остаться',
+          );
+        } finally {
+          (ndb as unknown as { prepare: (sql: string) => unknown }).prepare = orig;
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
