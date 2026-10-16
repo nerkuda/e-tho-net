@@ -365,7 +365,7 @@ describe('хроника: отбор на общий AST (задача 4752b065)
       );
       const flat = queryChronicle(ndb, flatReq, { userId: USER, now: NOW, withTime: true }).rows.map((r) => r.id);
 
-      // Эквивалент в AST: тело записи «Есть слова» И период.
+      // Эквивалент в AST: тело записи «Найти слова» И период.
       const astFilter: FilterAst['filter'] = {
         op: 'and',
         children: [

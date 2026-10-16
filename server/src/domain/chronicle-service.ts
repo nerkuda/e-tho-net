@@ -600,7 +600,7 @@ function thoughtKeywordCond(scope: StructureKeywordScope[] | undefined): {
   }
   if (enabled('diary')) {
     // Дневниковые записи мысли (ошибка 2bc251de, требование 0882f8d5): предикат —
-    // ОБЩИЙ с листом AST «Есть слова» (`diaryKeywordClause`), иначе области
+    // ОБЩИЙ с листом AST «Найти слова» (`diaryKeywordClause`), иначе области
     // разъехались бы между плоским телом и AST-путём.
     const diary = diaryKeywordClause('t');
     parts.push(diary.sql);
@@ -908,7 +908,7 @@ function recordTimeLeafClause(leaf: FilterAstLeaf, opts: ChronicleAstOpts): Chro
   }
 }
 
-/** «Есть слова» мини-синтаксисом по одному столбцу записи (include — AND, exclude — NOT). */
+/** «Найти слова» мини-синтаксисом по одному столбцу записи (include — AND, exclude — NOT). */
 function recordMatchesClause(columnCond: string, value: FilterAstValue | undefined): ChronicleClause {
   const { include, exclude } = parseFilterKeywords(typeof value === 'string' ? value : '');
   const parts: string[] = [];
@@ -925,7 +925,7 @@ function recordMatchesClause(columnCond: string, value: FilterAstValue | undefin
   return { sql: `(${parts.join(' AND ')})`, args };
 }
 
-/** Условие по столбцу-строке записи (равно/содержит/Есть слова). */
+/** Условие по столбцу-строке записи (равно/содержит/Найти слова). */
 function recordTextLeafClause(
   leaf: FilterAstLeaf,
   column: 'c.title' | 'c.body_md',
@@ -1089,7 +1089,7 @@ function recordAuthorLeafClause(
  * либо её отсутствие для быстрых форм.
  *
  * Под-выборка исполняется с контекстом ФАЗЫ 1 ХРОНИКИ
- * (`keywordCommentIncludesLinkComments`): область `comment` листа «Есть слова»
+ * (`keywordCommentIncludesLinkComments`): область `comment` листа «Найти слова»
  * ищет и комментарии инцидентных связей мысли (требование ce111b0d; ошибка
  * fc97548d — паритет с плоским `keyword_scope`, который эти комментарии видел).
  * Иначе панельное AST-тело и прежнее плоское тело давали разные наборы целей.
@@ -1217,7 +1217,7 @@ function chronicleAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: Chron
       return recordTextLeafClause(node, 'c.title', RECORD_TITLE_COND, opts);
     case 'record_body':
       // «Текст записи» — те же операторы, что у заголовка (ошибка 609deba0 п.5):
-      // равно/не равно/содержит/не содержит + «Есть слова» (путь Б ключевых слов).
+      // равно/не равно/содержит/не содержит + «Найти слова» (путь Б ключевых слов).
       return recordTextLeafClause(node, 'c.body_md', RECORD_BODY_COND, opts);
     case 'record_author':
       return recordAuthorLeafClause(node, 'c.created_by', opts);

@@ -118,7 +118,7 @@ export interface FilterPhraseContext extends FilterLabelData {
   limit?: number;
 }
 
-/** Подписи областей поиска «Есть слова» — по КОДУ shared-словаря
+/** Подписи областей поиска «Найти слова» — по КОДУ shared-словаря
  *  (`STRUCTURE_KEYWORD_SCOPES`, §6.10 keywords). Запись
  *  `Record<StructureKeywordScope, string>` требует подпись для КАЖДОГО кода:
  *  новый код области, добавленный в shared, ломает сборку, пока подпись не
@@ -131,7 +131,7 @@ const KEYWORD_SCOPE_LABELS: Readonly<Record<StructureKeywordScope, string>> = {
   diary: 'в дневниках',
 };
 
-/** Области поиска «Есть слова» в порядке словаря: код → подпись во фразе. */
+/** Области поиска «Найти слова» в порядке словаря: код → подпись во фразе. */
 export const FILTER_PHRASE_KEYWORD_SCOPES: readonly {
   value: StructureKeywordScope;
   label: string;
@@ -208,7 +208,7 @@ export function filterPhraseUnit(unit: string): string {
   }
 }
 
-/** Подпись областей поиска «Есть слова» (пусто — «области не выбраны»). */
+/** Подпись областей поиска «Найти слова» (пусто — «области не выбраны»). */
 export function filterPhraseKeywordScopes(scope: readonly string[] | undefined): string {
   const active = FILTER_PHRASE_KEYWORD_SCOPES.filter((s) => (scope ?? []).includes(s.value));
   if (active.length === 0) return 'области не выбраны';
@@ -405,8 +405,8 @@ export function filterPhraseLeaf(leaf: FilterTreeLeaf, ctx: FilterPhraseContext)
   const operand = filterOperandLabel(leaf, ctx);
   const operator = astOperatorLabel(leaf.operator);
   const value = filterPhraseValue(leaf, ctx);
-  // У «Есть слова» и под-выборки подпись оператора лишняя: смысл несёт сам
-  // операнд («Есть слова расход») либо подпись оператора под-выборки
+  // У «Найти слова» и под-выборки подпись оператора лишняя: смысл несёт сам
+  // операнд («Найти слова расход») либо подпись оператора под-выборки
   // («Родители в выборке (2 условия)») — «в списке в выборке» не читается.
   const skipOperator = leaf.entity.kind === 'keywords' || leaf.value.kind === 'subquery';
   // П.9 (ошибка заказчика 2026-10-14): у предиката БЕЗ значения оператор
@@ -421,7 +421,7 @@ export function filterPhraseLeaf(leaf: FilterTreeLeaf, ctx: FilterPhraseContext)
   else phrase = `${operand} ${operator} ${value}`;
   // Режим обхода «по всем связям» — отличие от структурного (по умолчанию).
   if (leaf.mode === 'all_links') phrase += ' (по всем связям)';
-  // «Есть слова»: чем ограничен поиск — видно во фразе (требование 0882f8d5).
+  // «Найти слова»: чем ограничен поиск — видно во фразе (требование 0882f8d5).
   if (leaf.entity.kind === 'keywords') {
     phrase += ` (${filterPhraseKeywordScopes(leaf.entity.scope)})`;
   }

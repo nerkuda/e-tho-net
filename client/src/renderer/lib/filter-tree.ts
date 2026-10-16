@@ -603,7 +603,7 @@ export function filterTreeOperatorMenu(
 ): FilterTreeOperatorMenuSection[] {
   const allowed = new Set<FilterAstOperator>(filterProfileOperators(profile, kind, valueType));
   // Операторы, которые исполнитель принимает, но редактор не предлагает
-  // (ошибка 609deba0 п.5): `matches` у текстовых операндов записи — «Есть слова»
+  // (ошибка 609deba0 п.5): `matches` у текстовых операндов записи — «Найти слова»
   // строит живая строка поиска панели, в списке строки оно не нужно. Список —
   // данные профиля (`hidden_menu_operators`), профиле-специфичных веток здесь нет.
   for (const op of getFilterProfile(profile).hidden_menu_operators?.[kind] ?? []) allowed.delete(op);

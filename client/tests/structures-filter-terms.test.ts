@@ -148,7 +148,7 @@ describe('панель «Структур» — единый редактор о
     assert.deepEqual(snapshotRoots.value, { kind: 'list', items: [PARENT_ID] });
     assert.ok(
       fromSnapshot.some((leaf) => leaf.entity.kind === 'keywords'),
-      'ключевые слова стали строкой «Есть слова»',
+      'ключевые слова стали строкой «Найти слова»',
     );
 
     // 2) Сохранённый отбор прежней формы (плоское определение v1, snake_case).

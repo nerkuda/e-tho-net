@@ -175,7 +175,7 @@ describe('отбор вложений на общий AST (задача 5a007bed
   const sorted = (...list: string[]): string[] => [...list].sort();
 
   it('профиль: операнд/оператор вне профиля «вложения» отвергается', () => {
-    // «Есть слова» (keywords) — операнд мыслей, в профиле вложений невидим.
+    // «Найти слова» (keywords) — операнд мыслей, в профиле вложений невидим.
     assert.throws(
       () => idsOf(ast(leaf({ entity: { kind: 'keywords' } }, 'matches', 'ex'))),
       (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
@@ -209,7 +209,7 @@ describe('отбор вложений на общий AST (задача 5a007bed
   });
 
   it('имя/тип/MIME/размер — операнды профиля', () => {
-    // Имя: равно / содержит / в списке / «есть слова».
+    // Имя: равно / содержит / в списке / «Найти слова».
     assert.deepEqual(idsOf(ast(leaf({ entity: { kind: 'name' } }, 'eq', 'Схема дома'))), [ids['imgA']!]);
     assert.deepEqual(idsOf(ast(leaf({ entity: { kind: 'name' } }, 'contains', 'замет'))), [ids['txtA']!]);
     assert.deepEqual(

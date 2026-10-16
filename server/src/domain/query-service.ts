@@ -629,7 +629,7 @@ function resolveKeywordScope(scope: StructureKeywordScope[] | undefined): Set<St
   return new Set(scope !== undefined && scope.length > 0 ? scope : DEFAULT_KEYWORD_SCOPE);
 }
 
-/** Клауза совпадения «Есть слова»: SQL-предикат и число LIKE-параметров в нём. */
+/** Клауза совпадения «Найти слова»: SQL-предикат и число LIKE-параметров в нём. */
 interface KeywordMatchClause {
   sql: string;
   paramCount: number;
@@ -1266,7 +1266,7 @@ const AST_RANGE_OPS = new Set<FilterAstOperator>(['between', 'not_between']);
 /**
  * Операторы-листья, совместимые со значением-под-выборкой: наборные/ссылочные и
  * иерархические («под-выборка — набор корней»). Несовместимые (предикаты
- * количества, «Есть слова», булевы) отвергаются {@link astSubqueryLeafClause} —
+ * количества, «Найти слова», булевы) отвергаются {@link astSubqueryLeafClause} —
  * значение-под-выборка доступно только на релевантных левых операндах
  * (требование c088f9e1).
  */
@@ -1793,14 +1793,14 @@ type AstStringTokenMode = 'none' | 'pure' | 'all';
 /**
  * Операнды, строковое значение которых может быть токеном в форме РЕЖИМА `pure`
  * (строка-целиком-известный-токен): полиморфное «Свойство», авторские операнды
- * «Автор»/«Редактор», полнотекстовый «Есть слова» и операнды-ИДЕНТИФИКАТОРЫ
+ * «Автор»/«Редактор», полнотекстовый «Найти слова» и операнды-ИДЕНТИФИКАТОРЫ
  * («Мысль» `id`, структурные «Родители»/«Потомки», «Тип», «Тип связи»). Их
  * строковое значение в плоской форме `definition v1` и в плоском теле точки
  * хранит токен СТРОКОЙ (`"$thought"`, `"$user"`, `"$today"`), и такая строка
  * обязана раскрыться (ошибки d52e4d79 — свойство-связь, cc3d — автор/редактор,
- * d166cfe9 — «Есть слова», 5a855ef8 — операнды-идентификаторы), но обычный
+ * d166cfe9 — «Найти слова», 5a855ef8 — операнды-идентификаторы), но обычный
  * текст/ид с ведущим `$`, не совпавший целиком с известным токеном, остаётся
- * ЛИТЕРАЛОМ (для «Есть слова» это ещё и сохраняет мини-синтаксис §6.10: строка с
+ * ЛИТЕРАЛОМ (для «Найти слова» это ещё и сохраняет мини-синтаксис §6.10: строка с
  * примесью текста или пробелами токеном не является). Значения операндов-
  * идентификаторов — UUID (id мысли/типа/типа связи), с `$` начинаться не могут,
  * поэтому расширение режима `pure` на них безопасно и не задевает легитимные
@@ -1825,7 +1825,7 @@ const AST_PURE_STRING_TOKEN_KINDS: ReadonlySet<string> = new Set([
 
 /**
  * Режим строковых токенов для листа. Операнды-СВОЙСТВО, авторские операнды,
- * полнотекстовый «Есть слова» и операнды-ИДЕНТИФИКАТОРЫ (`id`/`parents`/
+ * полнотекстовый «Найти слова» и операнды-ИДЕНТИФИКАТОРЫ (`id`/`parents`/
  * `children`/`type`/`link_type`) — `pure`: плоская форма `definition v1`, плоское
  * тело точки и клиент хранят значение-токен СТРОКОЙ (`"$thought"`, `["$user"]`,
  * `"$today"`), и такая строка обязана раскрыться (ошибки d52e4d79, cc3d,
@@ -2169,7 +2169,7 @@ function lookupPropertyRow(ndb: NetworkDb, propertyId: string): RegistryProperty
  */
 export interface AstExecContextOptions {
   /**
-   * Область `comment` листа «Есть слова» ищет и комментарии инцидентных связей
+   * Область `comment` листа «Найти слова» ищет и комментарии инцидентных связей
    * мысли с обеих сторон — семантика ФАЗЫ 1 отбора хроники (требование
    * ce111b0d «Двухфазный отбор хроники…»; ошибка fc97548d — паритет AST-листа с
    * плоским `keyword_scope`). Ставит исполнитель хроники; отбор мыслей
@@ -2674,7 +2674,7 @@ function boolPresenceClause(existsSql: string, leaf: FilterAstLeaf, path: string
 }
 
 /**
- * «Есть слова»: LIKE-фильтр по выбранным областям (мини-синтаксис §6.10).
+ * «Найти слова»: LIKE-фильтр по выбранным областям (мини-синтаксис §6.10).
  *
  * `astOpts.keywordCommentIncludesLinkComments` — контекст фазы 1 отбора хроники:
  * область `comment` ищет и комментарии инцидентных связей (см.
@@ -2688,7 +2688,7 @@ function keywordsLeafClause(
   astOpts?: AstExecOptions,
 ): Clause {
   if (leaf.operator !== 'matches') {
-    astUnsupported(`Оператор «${leaf.operator}» для операнда «Есть слова»`, path, requestId);
+    astUnsupported(`Оператор «${leaf.operator}» для операнда «Найти слова»`, path, requestId);
   }
   // Ни одной отмеченной области (в т.ч. `scope` не задан) — условие отключено;
   // режима «искать везде» нет (требование 0882f8d5). Дефолт title+synonyms —
@@ -3554,7 +3554,7 @@ export function compileThoughtQueryToAst(
   if (req.has_attachments !== undefined) children.push(astLeaf({ kind: 'attachments' }, req.has_attachments ? 'not_empty' : 'is_empty'));
   if (req.has_chronology !== undefined) children.push(astLeaf({ kind: 'chronology' }, req.has_chronology ? 'not_empty' : 'is_empty'));
 
-  // «Есть слова»: области берутся ровно как у плоского движка (отсутствие/
+  // «Найти слова»: области берутся ровно как у плоского движка (отсутствие/
   // пустой набор → дефолт title+synonyms), мини-синтаксис разбирает лист.
   const keywords = req.keywords ?? '';
   if (keywords.trim() !== '') {
@@ -3603,7 +3603,7 @@ export function compileThoughtQueryToAst(
 }
 
 /**
- * Листья «Есть слова» в строго конъюнктивном контексте (корень и все предки —
+ * Листья «Найти слова» в строго конъюнктивном контексте (корень и все предки —
  * только `and`; ни `or`, ни `not`). Только для них безопасно FTS-сужение
  * (`fts_thought_names MATCH`, требование 314cbb8d): под `or`/`not` сужатель
  * отсекал бы строки, удовлетворяющие другим ветвям.
@@ -3618,7 +3618,7 @@ function conjunctiveKeywordLeaves(node: FilterAstNode, out: FilterAstLeaf[]): Fi
 }
 
 /**
- * FTS-сужатели для конъюнктивных листьев «Есть слова» (перенесены в AST-путь,
+ * FTS-сужатели для конъюнктивных листьев «Найти слова» (перенесены в AST-путь,
  * чтобы сторож производительности полнотекста 314cbb8d оставался зелёным).
  * Алиасы уникальны (`__kw`, `__kw1`, …) — джойнов может быть несколько.
  */
@@ -3628,7 +3628,7 @@ function astKeywordFtsJoins(ast: FilterAst): Clause[] {
   for (const leaf of conjunctiveKeywordLeaves(ast.filter, [])) {
     if (leaf.entity.kind !== 'keywords') continue;
     const scope = new Set<StructureKeywordScope>(leaf.entity.scope ?? []);
-    // Пустая область — условие «Есть слова» отключено (лист вернёт AST_TRUE),
+    // Пустая область — условие «Найти слова» отключено (лист вернёт AST_TRUE),
     // FTS-сужатель не ставим, иначе он отсекал бы строки вопреки листу.
     if (scope.size === 0) continue;
     // Значение-ТОКЕН сужателю не подчиняется: объектная форма (`{ token }`) не
@@ -3636,7 +3636,7 @@ function astKeywordFtsJoins(ast: FilterAst): Clause[] {
     // известный-токен. Сужатель строит trigram-MATCH по СЫРОМУ значению, поэтому
     // на нераскрытом «$today» он отсечёт строки ещё до клаузы (клауза ищет
     // раскрытую дату) — ошибка d166cfe9. Паритет форм: обходим сужатель для
-    // значения-токена (FTS — лишь пред-сужение, клауза «Есть слова» хранит
+    // значения-токена (FTS — лишь пред-сужение, клауза «Найти слова» хранит
     // семантику мини-языка §6.10 и остаётся источником истины).
     const value = leaf.value;
     if (typeof value === 'string' && isPureKnownTokenString(value)) continue;
@@ -3709,7 +3709,7 @@ function buildFilterQuerySql(
       }
     }
     // FTS-сужатель полнотекста (требование 314cbb8d) — для конъюнктивных
-    // листьев «Есть слова»; LIKE-семантику мини-языка хранит AST-лист.
+    // листьев «Найти слова»; LIKE-семантику мини-языка хранит AST-лист.
     const fts = astKeywordFtsJoins(effectiveAst);
     const fromJoinSql = fts.length === 0 ? joinSql : `${joinSql} ${fts.map((j) => j.sql).join(' ')}`;
     const fromJoinParams = fts.length === 0 ? joinParams : [...joinParams, ...fts.flatMap((j) => j.params)];

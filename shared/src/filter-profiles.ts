@@ -126,7 +126,7 @@ export interface FilterProfile {
    * Операторы, которые исполнитель ПРИНИМАЕТ (входят в
    * {@link FilterProfile.operand_operators}), но редактор НЕ показывает в списке
    * операторов операнда (ошибка 609deba0 п.5). Пример: `matches` у текстовых
-   * операндов записи («Заголовок записи»/«Текст записи») — условие «Есть слова»
+   * операндов записи («Заголовок записи»/«Текст записи») — условие «Найти слова»
    * строит живая строка поиска панели «Дневника» (`buildChronicleKeywordGroup`),
    * а в строке условия пользователю достаточно «содержит»/«не содержит». На
    * серверный гейт профиля не влияет (тот читает `operand_operators`).
@@ -163,7 +163,7 @@ function unionOperators(lists: Iterable<readonly FilterAstOperator[]>): FilterAs
 
 /** Операторы по операнду профиля «вложения» (требование f67c85c1). */
 const ATTACHMENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
-  // «Имя/заголовок»: равно/не равно/содержит/не содержит/в списке/Есть слова.
+  // «Имя/заголовок»: равно/не равно/содержит/не содержит/в списке/Найти слова.
   name: ['eq', 'ne', 'contains', 'not_contains', 'in', 'not_in', 'matches'],
   // «Вид вложения» (file/url): равно/в списке.
   kind: ['eq', 'ne', 'in', 'not_in'],
@@ -187,7 +187,7 @@ const CHRONICLE_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
   // структурные потомки (зеркало операнда «Мысль» профиля мыслей).
   targets: ['in', 'not_in', 'all_of', 'in_hierarchy', 'not_in_hierarchy', 'is_empty', 'not_empty'],
   // «Заголовок записи»: равно/не равно/содержит/не содержит + `matches`
-  // (условие «Есть слова» строит живая строка поиска панели — путь Б
+  // (условие «Найти слова» строит живая строка поиска панели — путь Б
   // `buildChronicleKeywordGroup`); в списке операторов редактора `matches` не
   // предлагается (`hidden_menu_operators`, ошибка 609deba0 п.5).
   record_title: ['eq', 'ne', 'contains', 'not_contains', 'matches'],
@@ -388,7 +388,7 @@ export const AST_OPERATOR_DESCRIPTIONS: Readonly<Record<FilterAstOperator, strin
  * отвергает. Теперь состав объявлен: под-выборочные наборные операторы
  * (`any_of`/`all_of`/`none_of`) стоят только на релевантных операндах
  * (свойства-ссылки, «Родители»/«Потомки», «Тип»), предикаты-триады несут
- * `eq`/`ne`, «Есть слова» — только `matches`, коллекции — наличие и «количество»,
+ * `eq`/`ne`, «Найти слова» — только `matches`, коллекции — наличие и «количество»,
  * «Автор»/«Редактор» — списки и заполненность.
  */
 const THOUGHT_OPERATOR_SETS: Readonly<Record<string, readonly FilterAstOperator[]>> = {
@@ -533,7 +533,7 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
       'record_editor',
     ],
     operand_operators: CHRONICLE_OPERATOR_SETS,
-    // «Есть слова» у текстовых операндов записи — только для внутреннего
+    // «Найти слова» у текстовых операндов записи — только для внутреннего
     // условия живой строки поиска, пользователю в строке не предлагается
     // (ошибка 609deba0 п.5).
     hidden_menu_operators: {

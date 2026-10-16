@@ -142,7 +142,7 @@ describe('канонизатор условий отбора (задача 347b3
     assert.equal(canonicalMod.canonicalFilterTree(null), '');
   });
 
-  it('области поиска «Есть слова» сортируются и дедуплицируются', () => {
+  it('области поиска «Найти слова» сортируются и дедуплицируются', () => {
     const one = group('and', [leaf('keywords', 'matches', { kind: 'scalar', value: 'x' })]);
     (one as FilterTreeGroup).children[0] = {
       kind: 'leaf',

@@ -460,7 +460,7 @@ describe('профиль контекста задаёт словарь опер
     }
     // Булев предикат — ровно «равно»/«не равно» (триада «да/нет/не важно»).
     assert.deepEqual(filterProfileOperators('thoughts', 'active'), ['eq', 'ne']);
-    // «Есть слова» — только matches.
+    // «Найти слова» — только matches.
     assert.deepEqual(filterProfileOperators('thoughts', 'keywords'), ['matches']);
     // Структурные «Родители»/«Потомки» и «Тип» — релевантны под-выборке.
     for (const kind of ['parents', 'children'] as const) {

@@ -183,7 +183,7 @@ function isNonCriterionNode(node: FilterAstNode): boolean {
   return isNonCriterionLeaf(node);
 }
 
-/** Лист не является критерием состава (модификатор либо отключённое «Есть слова»). */
+/** Лист не является критерием состава (модификатор либо отключённое «Найти слова»). */
 function isNonCriterionLeaf(leaf: FilterAstLeaf): boolean {
   if (RECIPE_MODIFIER_KINDS.has(leaf.entity.kind)) return true;
   if (leaf.entity.kind !== 'keywords') return false;

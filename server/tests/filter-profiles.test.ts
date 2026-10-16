@@ -189,7 +189,7 @@ describe('реестр профилей контекста (задача 7a798b1
     assert.ok(!p.operands.includes('created_at') && !p.operands.includes('updated_at'));
     const sets = p.operand_operators!;
     assert.deepEqual(Object.keys(sets).sort(), [...p.operands].sort(), 'наборы заданы на каждый операнд');
-    // Имя: равно/содержит/в списке/Есть слова.
+    // Имя: равно/содержит/в списке/Найти слова.
     for (const op of ['eq', 'contains', 'in', 'matches'] as const) {
       assert.ok(sets['name']!.includes(op), `name: ${op}`);
     }
@@ -231,7 +231,7 @@ describe('реестр профилей контекста (задача 7a798b1
     // Предикаты-триады: только «равно»/«не равно», без сравнений и «между».
     assert.deepEqual(sets['active'], ['eq', 'ne']);
     assert.deepEqual(sets['trashed'], ['eq', 'ne']);
-    // «Есть слова» — только matches.
+    // «Найти слова» — только matches.
     assert.deepEqual(sets['keywords'], ['matches']);
     // «Мысль» (id): тождественность набором и «в иерархии»/«не в иерархии» —
     // выбранные мысли и их потомки (задача a577875b).
@@ -349,7 +349,7 @@ describe('реестр профилей контекста (задача 7a798b1
       (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
     );
     // «Текст записи» принимает строковые операторы (ошибка 609deba0 п.5);
-    // «Есть слова» остаётся для пути Б ключевых слов панели.
+    // «Найти слова» остаётся для пути Б ключевых слов панели.
     assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'contains', 'x'), 'chronicle'));
     assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'matches', 'x'), 'chronicle'));
     // «Цели записи»: список мыслей и «в иерархии» (ошибка 609deba0 п.1).

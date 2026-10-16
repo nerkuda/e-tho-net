@@ -231,7 +231,7 @@ describe('панель «Дневника» — единый редактор о
     );
     assert.ok(
       bodyLeaves.every((leaf) => leaf.operator === 'matches' && leaf.entity.scope === undefined),
-      'слово пути Б — «есть слова» без областей',
+      'слово пути Б — «Найти слова» без областей',
     );
     assert.ok(
       leaves(group).some((leaf) => leaf.entity.kind === 'targets' && leaf.operator === 'not_empty'),

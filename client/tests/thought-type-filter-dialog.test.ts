@@ -11,7 +11,7 @@
  *     условий (критерий приёмки «тот же результат до/после»).
  *   * Компилятор плоских критериев в AST: `type_ids` → «Тип в иерархии»,
  *     `parent_ids` → «Родители в иерархии», `trashed`-дефолт → явный лист
- *     «Корзина равно нет», типизация значений свойств.
+ *     «Помечено на удаление = нет», типизация значений свойств.
  *   * Токен-пикер значений контекста (`buildTokensForField`): `$today`/`$now`
  *     для дат, `$thought` для ссылочных операндов, свойства цепочки типов, и
  *     helper живого поиска `filterTokenOptions`.
@@ -295,7 +295,7 @@ describe('диалог отбора типа мысли — AST-определе
     );
   });
 
-  it('компилятор: служебный дефолт «Корзина равно нет» впекается явным листом', () => {
+  it('компилятор: служебный дефолт «Помечено на удаление = нет» впекается явным листом', () => {
     const ast = compileFlatCriteriaToAst(flatState(mod, { keywords: 'foo' }), REGISTRY_MAP, {
       activeMode: 'view',
     });
@@ -327,7 +327,7 @@ describe('диалог отбора типа мысли — AST-определе
     assert.equal(findLeaf(inactive!, 'active', 'eq')?.value, false);
   });
 
-  it('компилятор: «Есть слова» с областью по умолчанию title+synonyms', () => {
+  it('компилятор: «Найти слова» с областью по умолчанию title+synonyms', () => {
     const ast = compileFlatCriteriaToAst(flatState(mod, { keywords: 'счет* -вод*' }), REGISTRY_MAP, {
       activeMode: 'view',
     });
@@ -436,7 +436,7 @@ describe('диалог отбора типа мысли — чтение и за
     assert.equal(parents!.operator, 'in_hierarchy');
     assert.equal(parents!.mode, 'all_links');
     // Служебный дефолт места не показывается строкой-условием.
-    assert.equal(leaves.some((l) => l.entity.kind === 'trashed'), false, 'дефолт «Корзина» снят');
+    assert.equal(leaves.some((l) => l.entity.kind === 'trashed'), false, 'дефолт «Помечено на удаление» снят');
     assert.equal(state.sort, 'alpha');
     assert.equal(state.order, 'desc');
   });
@@ -456,7 +456,7 @@ describe('диалог отбора типа мысли — чтение и за
     assert.equal(mod.hasAnyCriteria(state), false);
   });
 
-  it('сборка AST: служебный дефолт «Корзина равно нет» есть, дерево-условие сохранено', () => {
+  it('сборка AST: служебный дефолт «Помечено на удаление = нет» есть, дерево-условие сохранено', () => {
     const state = mod.parseViewDefinition(null, REGISTRY_MAP);
     state.tree = {
       kind: 'group',

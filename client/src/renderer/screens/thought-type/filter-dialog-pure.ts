@@ -53,7 +53,7 @@ export const defaultDialogCriteriaState = defaultFilterCriteriaState;
  * помеченные на удаление скрыты, пока пользователь не включил их сам. В плоском
  * `definition v1` он выражался ОТСУТСТВИЕМ поля `trashed` и разворачивался
  * сервером при чтении; в AST-определении неявных дефолтов нет — поэтому лист
- * `Корзина равно нет` впекается в определение ЯВНО при сохранении (иначе отбор
+ * «Помечено на удаление = нет» впекается в определение ЯВНО при сохранении (иначе отбор
  * типа начал бы показывать помеченные на удаление). См. {@link stripViewDefaults}
  * и {@link withViewDefaults}.
  */
@@ -61,7 +61,7 @@ function trashedDefaultLeaf(): FilterTreeLeaf {
   return { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } };
 }
 
-/** Лист ровно служебного дефолта «Корзина равно нет» ({@link trashedDefaultLeaf}). */
+/** Лист ровно служебного дефолта «Помечено на удаление = нет» ({@link trashedDefaultLeaf}). */
 function isTrashedDefaultLeaf(node: FilterTreeNode): boolean {
   return (
     node.kind === 'leaf' &&
@@ -73,14 +73,14 @@ function isTrashedDefaultLeaf(node: FilterTreeNode): boolean {
   );
 }
 
-/** Есть ли в дереве ЛЮБОЙ лист «Корзина» (пользователь сам решил про удалённые). */
+/** Есть ли в дереве ЛЮБОЙ лист «Помечено на удаление» (пользователь сам решил про удалённые). */
 function treeHasTrashedLeaf(node: FilterTreeNode): boolean {
   if (node.kind === 'group') return node.children.some(treeHasTrashedLeaf);
   return node.entity.kind === 'trashed';
 }
 
 /**
- * Снять с КОРНЕВОГО уровня служебный дефолт «Корзина равно нет»: в редакторе он
+ * Снять с КОРНЕВОГО уровня служебный дефолт «Помечено на удаление = нет»: в редакторе он
  * не показывается строкой-условием (это дефолт МЕСТА, а не условие пользователя).
  * Лист, вложенный в группу, не трогаем — он осмысленно собран пользователем.
  */
@@ -91,8 +91,8 @@ export function stripViewDefaults(tree: FilterTreeNode): FilterTreeNode {
 
 /**
  * Обеспечить служебный дефолт места в дереве перед материализацией AST: если
- * листа «Корзина» в дереве нет вовсе — добавить `Корзина равно нет` на корневой
- * уровень. Пользовательский лист «Корзина» (любой) дефолт отменяет.
+ * листа «Корзина» в дереве нет вовсе — добавить «Помечено на удаление = нет» на корневой
+ * уровень. Пользовательский лист «Помечено на удаление» (любой) дефолт отменяет.
  */
 export function withViewDefaults(tree: FilterTreeNode): FilterTreeNode {
   if (treeHasTrashedLeaf(tree)) return tree;
@@ -107,7 +107,7 @@ export function withViewDefaults(tree: FilterTreeNode): FilterTreeNode {
  * `definition v1` единый конструктор компилирует в дерево на входе
  * (`parseFilterDefinitionTree` → `compileFlatCriteriaToAst`, задача cfbe8c74;
  * ADR fc23f9c1 запрещает вторую точку чтения сохранённого отбора). Служебный
- * дефолт места («Корзина равно нет») с корневого уровня снимается
+ * дефолт места («Помечено на удаление = нет») с корневого уровня снимается
  * ({@link stripViewDefaults}) — он не показывается условием пользователя.
  * Returns the default state when the JSON is malformed.
  */

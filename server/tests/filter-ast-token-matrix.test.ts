@@ -809,7 +809,7 @@ describe(
 );
 
 describe(
-  'Матрица токенов AST (ccededb1): «Есть слова» — форма токена (ошибка d166cfe9)',
+  'Матрица токенов AST (ccededb1): «Найти слова» — форма токена (ошибка d166cfe9)',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
     /** Фикстура: литерал «$today» в заголовке и заголовок с РАСКРЫТОЙ датой токена. */
@@ -832,7 +832,7 @@ describe(
         assert.deepEqual(
           asString.titles,
           asObject.titles,
-          'строковый токен "$today" в «Есть слова» обязан раскрыться так же, как объектный',
+          'строковый токен "$today" в «Найти слова» обязан раскрыться так же, как объектный',
         );
         assert.equal(asString.unresolved, 0);
       } finally {

@@ -189,7 +189,7 @@ export type StructurePropertyOp = (typeof STRUCTURE_PROPERTY_OPS)[number];
  * defaults to `['title', 'synonyms']` — the original behaviour before the
  * comment scope existed.
  *
- * `diary` (0.13.1, ошибка 2bc251de, требование 0882f8d5 «Есть слова») —
+ * `diary` (0.13.1, ошибка 2bc251de, требование 0882f8d5 «Найти слова») —
  * дневниковые записи мысли: мысль соответствует, если её хронологическая запись
  * содержит слова (тело или заголовок записи). Области объединяются по ИЛИ;
  * ни одной отмеченной области в листе AST — условие отключено.

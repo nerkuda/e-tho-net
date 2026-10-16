@@ -306,7 +306,7 @@ describe(
       try {
         const f = buildFixture(ndb);
         // Мутация «опустить scope при полном наборе» (старый дефект) отключила бы
-        // лист «Есть слова» пути А и вернула бы ЛИШНИЕ записи.
+        // лист «Найти слова» пути А и вернула бы ЛИШНИЕ записи.
         const group = buildChronicleKeywordGroup('секрет', []) as FilterAstNode;
         const json = JSON.stringify(group);
         assert.match(

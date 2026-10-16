@@ -243,7 +243,7 @@ describe('под-выборка: релевантность операнда —
     assert.equal(relevant({ kind: 'attachments' }, 'in'), false);
     assert.equal(relevant({ kind: 'chronology' }, 'in'), false);
     assert.equal(relevant({ kind: 'link_type' }, 'in'), false);
-    assert.equal(relevant({ kind: 'keywords' }, 'matches'), false, '«Есть слова» — нерелевантный');
+    assert.equal(relevant({ kind: 'keywords' }, 'matches'), false, '«Найти слова» — нерелевантный');
     assert.equal(relevant({ kind: 'active' }, 'eq'), false, 'булев предикат — нерелевантный');
 
     assert.equal(sub.filterSubquerySupported('property'), true);

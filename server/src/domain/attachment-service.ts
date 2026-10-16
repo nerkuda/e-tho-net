@@ -1377,7 +1377,7 @@ const ATTACHMENT_MIME_COND = `unicode_lower(IFNULL(a.mime_type, '')) LIKE ? ESCA
 const ATTACHMENT_OWNER_ANY_SQL = `SELECT 1 FROM attachment_owners_v o WHERE o.attachment_id = a.id`;
 const ATTACHMENT_OWNER_COUNT_SQL = `(SELECT COUNT(*) FROM attachment_owners_v o WHERE o.attachment_id = a.id)`;
 
-/** «Есть слова» мини-синтаксисом по столбцу (include — AND, exclude — NOT). */
+/** «Найти слова» мини-синтаксисом по столбцу (include — AND, exclude — NOT). */
 function attachmentMatchesClause(
   columnCond: string,
   value: FilterAstValue | undefined,
@@ -1397,7 +1397,7 @@ function attachmentMatchesClause(
   return { sql: `(${parts.join(' AND ')})`, args };
 }
 
-/** «Имя/заголовок» (`title`): равно/содержит/в списке/«Есть слова». */
+/** «Имя/заголовок» (`title`): равно/содержит/в списке/«Найти слова». */
 function attachmentNameLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions): AttachmentClause {
   const op = leaf.operator;
   if (op === 'matches') return attachmentMatchesClause(ATTACHMENT_TITLE_COND, leaf.value);

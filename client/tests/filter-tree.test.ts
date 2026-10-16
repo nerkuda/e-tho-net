@@ -718,7 +718,7 @@ describe('дерево условий: сгруппированные списк
       );
     }
 
-    // «Есть слова» — своя секция и единственный оператор (операнд `keywords`).
+    // «Найти слова» — своя секция и единственный оператор (операнд `keywords`).
     const words = mod.filterTreeOperatorMenu('thoughts', 'keywords');
     assert.deepEqual(words.map((s: any) => s.title), ['Слова']);
     assert.deepEqual(words[0]!.rows[0]!.cells.map((c: any) => c.op), ['matches']);
@@ -730,7 +730,7 @@ describe('дерево условий: сгруппированные списк
     assert.ok(!typeOps.includes('all_of'), '«все в выборке» в списке UI отсутствует (п.7)');
 
     // Профиль хроники — свои операнды и свой набор. У текстовых операндов
-    // записи «Есть слова» из списка убран (ошибка 609deba0 п.5): условие строит
+    // записи «Найти слова» из списка убран (ошибка 609deba0 п.5): условие строит
     // живая строка поиска, пользователю достаточно «содержит»/«не содержит».
     const record = mod.filterTreeOperatorMenu('chronicle', 'record_title');
     assert.deepEqual(record.map((s: any) => s.title), ['Сравнение']);
@@ -740,14 +740,14 @@ describe('дерево условий: сгруппированные списк
       recordTitleOps.includes('contains') && recordTitleOps.includes('not_contains'),
       'строка ищется «содержит»/«не содержит»',
     );
-    assert.ok(!recordTitleOps.includes('matches'), '«Есть слова» в списке операторов заголовка нет (п.5)');
-    // «Текст записи» — те же операторы, что у заголовка (п.5), без «Есть слова».
+    assert.ok(!recordTitleOps.includes('matches'), '«Найти слова» в списке операторов заголовка нет (п.5)');
+    // «Текст записи» — те же операторы, что у заголовка (п.5), без «Найти слова».
     const recordBody = mod.filterTreeOperatorMenu('chronicle', 'record_body');
     const recordBodyOps = recordBody.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
     for (const op of ['eq', 'ne', 'contains', 'not_contains']) {
       assert.ok(recordBodyOps.includes(op), `текст записи: ${op}`);
     }
-    assert.ok(!recordBodyOps.includes('matches'), '«Есть слова» в списке операторов текста нет (п.5)');
+    assert.ok(!recordBodyOps.includes('matches'), '«Найти слова» в списке операторов текста нет (п.5)');
     // «Цели записи» — список/выборка и «в иерархии» (ошибка 609deba0 п.1).
     const targets = mod.filterTreeOperatorMenu('chronicle', 'targets');
     const targetsOps = targets.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));

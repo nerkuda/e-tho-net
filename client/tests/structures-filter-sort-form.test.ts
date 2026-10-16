@@ -73,7 +73,7 @@ const PROPERTY_KEY = '1e70b1d4-8ecc-4790-910a-181052ac72b8';
 /** Пустая группа-корень — «отбор без условий». */
 const EMPTY_TREE = { kind: 'group', op: 'and', children: [] } as const;
 
-/** Строка «Есть слова» дерева (условие, чтобы проверять его сохранность). */
+/** Строка «Найти слова» дерева (условие, чтобы проверять его сохранность). */
 const KEYWORDS_LEAF = {
   kind: 'leaf',
   entity: { kind: 'keywords' },

@@ -301,7 +301,7 @@ describe('под-выборки как значения — квантифика
 
     // Скалярное свойство — не ссылка.
     assert.ok(expectEtnError(() => runAst(ndb, ast(leaf({ kind: 'property', property_id: text }, 'in', sub(set, 'in'))))));
-    // Автор/Есть слова/служебные предикаты.
+    // Автор/Найти слова/служебные предикаты.
     assert.ok(expectEtnError(() => runAst(ndb, ast(leaf({ kind: 'author' }, 'in', sub(set, 'in'))))));
     assert.ok(expectEtnError(() => runAst(ndb, ast(leaf({ kind: 'keywords', scope: ['title'] }, 'in', sub(set, 'in'))))));
     assert.ok(expectEtnError(() => runAst(ndb, ast(leaf({ kind: 'active' }, 'eq', sub(set, 'in'))))));
