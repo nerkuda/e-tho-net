@@ -652,6 +652,94 @@ describe(
 );
 
 describe(
+  'Матрица токенов AST (5a855ef8): строковый токен в операндах-идентификаторах',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    /**
+     * Операнды-ИДЕНТИФИКАТОРЫ профиля «мысли»: «Мысль» (`id`), структурные
+     * «Родители»/«Потомки», «Тип», «Тип связи». Их строковое значение — UUID
+     * мысли/типа/типа связи, токеном-строкой не бывает легитимным литералом,
+     * поэтому строковая форма обязана раскрываться так же, как объектная
+     * (`{ token }`): известный токен раскрывается, неизвестный `$…` даёт
+     * `unresolved.unknown_token`, а `$…`-мусор (не токен) остаётся литералом.
+     */
+    const OPERANDS: readonly Record<string, unknown>[] = [
+      { kind: 'id' },
+      { kind: 'parents' },
+      { kind: 'children' },
+      { kind: 'type' },
+      { kind: 'link_type' },
+    ];
+
+    function fixture(): NetworkDb {
+      const ndb = createInMemoryNetworkDb();
+      seedThought(ndb, 'Мысль');
+      return ndb;
+    }
+
+    it('$thought строкой ≡ объектом → unresolved.unknown_token (все пять операндов)', () => {
+      const ndb = fixture();
+      try {
+        for (const entity of OPERANDS) {
+          const asString = runAst(ndb, ast(leaf(entity, 'eq', '$thought')), ctx());
+          const asObject = runAst(ndb, ast(leaf(entity, 'eq', { token: '$thought' })), ctx());
+          assert.deepEqual(
+            asString.titles,
+            asObject.titles,
+            `${JSON.stringify(entity)}: строковый токен обязан совпасть с объектным`,
+          );
+          assert.deepEqual(asString.reasons, ['unknown_token'], JSON.stringify(entity));
+          assert.deepEqual(asString.reasons, asObject.reasons, JSON.stringify(entity));
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('$thought строкой в СПИСКЕ (in) ≡ объектом — все пять операндов', () => {
+      const ndb = fixture();
+      try {
+        for (const entity of OPERANDS) {
+          const asString = runAst(ndb, ast(leaf(entity, 'in', ['$thought'])), ctx());
+          const asObject = runAst(ndb, ast(leaf(entity, 'in', [{ token: '$thought' }])), ctx());
+          assert.deepEqual(asString.titles, asObject.titles, JSON.stringify(entity));
+          assert.deepEqual(asString.reasons, ['unknown_token'], JSON.stringify(entity));
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('$notatoken строкой остаётся ЛИТЕРАЛОМ (unresolved пуст) во всех пяти операндах', () => {
+      const ndb = fixture();
+      try {
+        for (const entity of OPERANDS) {
+          const res = runAst(ndb, ast(leaf(entity, 'eq', '$notatoken')), ctx());
+          assert.deepEqual(res.titles, [], JSON.stringify(entity));
+          assert.equal(res.unresolved, 0, `${JSON.stringify(entity)}: $…-мусор — литерал, не токен`);
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('известный токен $user строкой ≡ объектом (литерал-id, пустой результат без диагностики)', () => {
+      const ndb = fixture();
+      try {
+        for (const entity of OPERANDS) {
+          const asString = runAst(ndb, ast(leaf(entity, 'eq', '$user')), ctx());
+          const asObject = runAst(ndb, ast(leaf(entity, 'eq', { token: '$user' })), ctx());
+          assert.deepEqual(asString.titles, asObject.titles, JSON.stringify(entity));
+          assert.equal(asString.unresolved, 0, JSON.stringify(entity));
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+
+describe(
   'Матрица токенов AST (ccededb1): хроника — форма токена в операндах записи',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
