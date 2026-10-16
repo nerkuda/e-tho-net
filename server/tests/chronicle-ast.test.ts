@@ -592,4 +592,52 @@ describe('хроника: авторство записи раскрывает �
       ndb.close();
     }
   });
+
+  it('время записи: равно/не равно «голой даты» — пересечение интервала с сутками (ошибка 03db4cb0)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const thought = seedThought(ndb, 'Сутки');
+      // Запись внутри 15-го.
+      const inDay = createComment(
+        ndb, 'thought', thought,
+        { kind: 'chronological', title: 'в сутках', body_md: 'x', valid_from: '2024-03-15T05:00:00.000Z', valid_to: '2024-03-15T06:00:00.000Z' }, USER,
+      ).id;
+      // Длинный интервал, ПЕРЕСЕКАЮЩИЙ 15-е (равенство дате — «попадание в период»).
+      const span = createComment(
+        ndb, 'thought', thought,
+        { kind: 'chronological', title: 'через 15-е', body_md: 'x', valid_from: '2024-03-01T00:00:00.000Z', valid_to: '2024-03-31T00:00:00.000Z' }, USER,
+      ).id;
+      // Запись до суток.
+      const before = createComment(
+        ndb, 'thought', thought,
+        { kind: 'chronological', title: 'до суток', body_md: 'x', valid_from: '2024-03-10T05:00:00.000Z', valid_to: '2024-03-10T06:00:00.000Z' }, USER,
+      ).id;
+
+      // «равно 2024-03-15» = пересечение интервала записи с сутками 15-го; порядок — по valid_from.
+      assert.deepEqual(
+        runAst(ndb, { entity: { kind: 'record_time' }, operator: 'eq', value: '2024-03-15' }).ids,
+        [span, inDay],
+        '«равно голой дате» — сутки целиком, включая интервал-пересечение',
+      );
+      assert.deepEqual(
+        runAst(ndb, { entity: { kind: 'record_time' }, operator: 'ne', value: '2024-03-15' }).ids,
+        [before],
+        '«не равно голой дате» исключает сутки целиком',
+      );
+      // Паритет с «между» совпавших границ — та же семантика интервала.
+      assert.deepEqual(
+        runAst(ndb, { entity: { kind: 'record_time' }, operator: 'eq', value: '2024-03-15' }).ids,
+        runAst(ndb, { entity: { kind: 'record_time' }, operator: 'between', value: ['2024-03-15', '2024-03-15'] }).ids,
+        '«равно дате» = «между [дата, дата]»',
+      );
+      // Токен `$today` раскрывается в «голую дату» — то же покрытие суток (часы — NOW теста).
+      assert.deepEqual(
+        runAst(ndb, { entity: { kind: 'record_time' }, operator: 'eq', value: { token: '$today' } }).ids,
+        [span, inDay],
+        '«равно $today» = сутки токена',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
 });

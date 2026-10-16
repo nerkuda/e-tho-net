@@ -48,6 +48,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { logger } from '../logger.js';
+import { normaliseInstant } from './dates.js';
 import { buildThoughtIdSelect } from './query-service.js';
 import { parseFilterAst } from './filter-ast.js';
 import { assertFilterAstInProfile } from './filter-profile-validation.js';
@@ -218,8 +219,30 @@ const activityUnsupported = (message: string, requestId?: string): never => {
   throw new EtnError('VALIDATION_ERROR', message, { field: 'ast' }, requestId);
 };
 
+/** «Голая дата» `YYYY-MM-DD` — единственная форма, у которой граница = сутки. */
+const OCCURRED_BARE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Раскрытая граница в миллисекунды; у верхней границы (`edge: 'end'`) «голая
+ * дата» разворачивается в КОНЕЦ суток UTC — иначе сравнение «`<=` 2026-10-15»
+ * не покрывает день. Полный инстанс и число не зависят от `edge`
+ * (ошибка 03db4cb0, паритет с датами создания/изменения e219112e).
+ */
+function occurredEdgeMs(text: string, edge: 'start' | 'end'): number | null {
+  if (edge === 'end' && OCCURRED_BARE_DATE_RE.test(text)) {
+    const iso = normaliseInstant(text, 'occurred_at', 'end');
+    return iso === null ? null : Date.parse(iso);
+  }
+  const ms = Date.parse(text);
+  return Number.isNaN(ms) ? null : ms;
+}
+
 /** Раскрыть границу `occurred_at` (ms, ISO-строка или токен) в миллисекунды. */
-function resolveOccurredBound(raw: unknown, opts: ActivityListOptions): number {
+function resolveOccurredBound(
+  raw: unknown,
+  opts: ActivityListOptions,
+  edge: 'start' | 'end' = 'start',
+): number {
   const rawValue =
     typeof raw === 'object' && raw !== null && !Array.isArray(raw) && 'token' in raw
       ? (raw as { token?: unknown }).token
@@ -244,8 +267,8 @@ function resolveOccurredBound(raw: unknown, opts: ActivityListOptions): number {
     );
   }
   if (known.length === 0) {
-    const ms = Date.parse(text);
-    if (!Number.isNaN(ms)) return ms;
+    const ms = occurredEdgeMs(text, edge);
+    if (ms !== null) return ms;
   }
   const { value, unresolved } = resolveGlobalDateTokens(text, {
     ...(opts.nowMs !== undefined ? { now: () => new Date(opts.nowMs!) } : {}),
@@ -261,8 +284,8 @@ function resolveOccurredBound(raw: unknown, opts: ActivityListOptions): number {
       opts.requestId,
     );
   }
-  const ms = Date.parse(value);
-  if (Number.isNaN(ms)) {
+  const ms = occurredEdgeMs(value, edge);
+  if (ms === null) {
     throw new EtnError(
       'VALIDATION_ERROR',
       '«Время события»: не удалось раскрыть значение времени.',
@@ -306,15 +329,15 @@ function activitySubqueryIds(ndb: NetworkDb, query: FilterAstNode, opts: Activit
   return (ndb.prepare(sel.sql).all(...sel.params) as Array<{ id: string }>).map((r) => r.id);
 }
 
-/** «Время события» (`occurred_at_ms`): сравнения/«между» с токенами времени. */
+/** «Время события» (`occurred_at_ms`): равно/не равно, сравнения и «между» с токенами времени. */
 function activityOccurredLeaf(node: FilterAstLeaf, opts: ActivityListOptions): ActivityClause {
-  const lower = (raw: unknown, strict: boolean): ActivityClause => ({
+  const lower = (raw: unknown, strict: boolean, edge: 'start' | 'end' = 'start'): ActivityClause => ({
     sql: `occurred_at_ms ${strict ? '>' : '>='} ?`,
-    args: [resolveOccurredBound(raw, opts)],
+    args: [resolveOccurredBound(raw, opts, edge)],
   });
-  const upper = (raw: unknown, strict: boolean): ActivityClause => ({
+  const upper = (raw: unknown, strict: boolean, edge: 'start' | 'end' = 'start'): ActivityClause => ({
     sql: `occurred_at_ms ${strict ? '<' : '<='} ?`,
-    args: [resolveOccurredBound(raw, opts)],
+    args: [resolveOccurredBound(raw, opts, edge)],
   });
   const between = (value: unknown): ActivityClause => {
     if (!Array.isArray(value) || value.length !== 2) {
@@ -323,6 +346,16 @@ function activityOccurredLeaf(node: FilterAstLeaf, opts: ActivityListOptions): A
     const bounds = value as FilterAstListItem[];
     const a = lower(bounds[0], false);
     const b = upper(bounds[1], false);
+    return { sql: `(${a.sql} AND ${b.sql})`, args: [...a.args, ...b.args] };
+  };
+  /**
+   * Равенство времени события: попадание в СУТКИ «голой даты» (нижняя граница —
+   * начало, верхняя — конец) либо точное совпадение полного инстанса
+   * (ошибка 03db4cb0, паритет с датами создания/изменения e219112e).
+   */
+  const equal = (value: unknown): ActivityClause => {
+    const a = lower(value, false, 'start');
+    const b = upper(value, false, 'end');
     return { sql: `(${a.sql} AND ${b.sql})`, args: [...a.args, ...b.args] };
   };
   switch (node.operator) {
@@ -334,6 +367,12 @@ function activityOccurredLeaf(node: FilterAstLeaf, opts: ActivityListOptions): A
       return upper(node.value, false);
     case 'lt':
       return upper(node.value, true);
+    case 'eq':
+      return equal(node.value);
+    case 'ne': {
+      const inner = equal(node.value);
+      return { sql: `NOT ${inner.sql}`, args: inner.args };
+    }
     case 'between':
       return between(node.value);
     case 'not_between': {

@@ -700,6 +700,24 @@ describe('дерево условий: сгруппированные списк
       'у свойства-даты равенство есть (набор PROPERTY_OPERATOR_SETS)',
     );
 
+    // Датовые операнды хроники и событий тянут равенство из того же реестра
+    // (ошибка 03db4cb0, паритет e219112e): «равно|не равно» первыми в «Сравнении»,
+    // редактор не имеет своего мнения об операторах.
+    for (const [profile, kind] of [['chronicle', 'record_time'], ['events', 'occurred_at']] as const) {
+      const menu = mod.filterTreeOperatorMenu(profile, kind, 'date');
+      assert.equal(menu[0]!.title, 'Сравнение');
+      assert.deepEqual(
+        (menu[0] as any).rows.map((r: any) => r.cells.map((c: any) => c.op)),
+        [
+          ['eq', 'ne'],
+          ['gt', 'lt'],
+          ['gte', 'lte'],
+          ['between', 'not_between'],
+        ],
+        `${profile}/${kind}: датовые пары с равенством`,
+      );
+    }
+
     // «Есть слова» — своя секция и единственный оператор (операнд `keywords`).
     const words = mod.filterTreeOperatorMenu('thoughts', 'keywords');
     assert.deepEqual(words.map((s: any) => s.title), ['Слова']);

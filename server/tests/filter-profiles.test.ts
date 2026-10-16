@@ -166,6 +166,19 @@ describe('реестр профилей контекста (задача 7a798b1
     // ТОЛЬКО «в»/«не в» (ошибка 50d9bf4e п. C1).
     assert.deepEqual(FILTER_PROFILES.events.operand_operators!['action'], ['in', 'not_in']);
     assert.deepEqual(FILTER_PROFILES.events.operand_operators!['entity_type'], ['in', 'not_in']);
+    // Датовые операнды несут равно/не равно наравне с датами создания/изменения
+    // (ошибка 03db4cb0, паритет e219112e): равенство «голой даты» = сутки.
+    const dateSets: Array<[string, readonly string[]]> = [
+      ['chronicle/record_time', FILTER_PROFILES.chronicle.operand_operators!['record_time']!],
+      ['events/occurred_at', FILTER_PROFILES.events.operand_operators!['occurred_at']!],
+      ['thoughts/created_at', FILTER_PROFILES.thoughts.operand_operators!['created_at']!],
+      ['thoughts/updated_at', FILTER_PROFILES.thoughts.operand_operators!['updated_at']!],
+    ];
+    for (const [name, list] of dateSets) {
+      for (const op of ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'] as const) {
+        assert.ok(list.includes(op), `${name}: ${op}`);
+      }
+    }
   });
 
   it('профиль вложений: состав по требованию f67c85c1', () => {

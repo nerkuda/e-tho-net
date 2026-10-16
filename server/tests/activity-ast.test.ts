@@ -441,7 +441,7 @@ describe('события: отбор на общий AST (задача 2b230e8e)
         () => runFilter(ndb, { entity: { kind: 'active' }, operator: 'eq', value: true } as FilterAst['filter']),
         (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
       );
-      // «Время события» — только сравнения/между.
+      // «Время события» — датовый операнд: подстрока недопустима.
       assert.throws(
         () => runFilter(ndb, { entity: { kind: 'occurred_at' }, operator: 'contains', value: 'x' } as FilterAst['filter']),
         (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
@@ -455,6 +455,42 @@ describe('события: отбор на общий AST (задача 2b230e8e)
       );
       assert.doesNotThrow(() =>
         runFilter(ndb, { entity: { kind: 'action' }, operator: 'in', value: ['created'] }),
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('время события: равно/не равно «голой даты» — СУТКИ (ошибка 03db4cb0)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const t = seedThought(ndb, 'Мысль');
+      const early = seedEvent(ndb, { action: 'created', entityType: 'thought', entityId: t, atMs: Date.parse('2024-03-15T05:00:00.000Z') });
+      const late = seedEvent(ndb, { action: 'created', entityType: 'thought', entityId: t, atMs: Date.parse('2024-03-15T23:00:00.000Z') });
+      const prev = seedEvent(ndb, { action: 'created', entityType: 'thought', entityId: t, atMs: Date.parse('2024-03-14T23:00:00.000Z') });
+
+      // «равно 2024-03-15» = весь день 15-го; «не равно» — дополнение.
+      assert.deepEqual(
+        runFilter(ndb, { entity: { kind: 'occurred_at' }, operator: 'eq', value: '2024-03-15' }).sort(),
+        [early, late].sort(),
+        '«равно голой дате» покрывает сутки события целиком',
+      );
+      assert.deepEqual(
+        runFilter(ndb, { entity: { kind: 'occurred_at' }, operator: 'ne', value: '2024-03-15' }),
+        [prev],
+        '«не равно голой дате» исключает сутки целиком',
+      );
+      // Полный инстанс — точное сравнение (границы совпадают).
+      assert.deepEqual(
+        runFilter(ndb, { entity: { kind: 'occurred_at' }, operator: 'eq', value: '2024-03-15T05:00:00.000Z' }),
+        [early],
+      );
+      // Токен `$today` разрешается в «голую дату» — то же покрытие суток (часы
+      // раскрытия токенов — `nowMs` теста, 2024-03-15).
+      assert.deepEqual(
+        runFilter(ndb, { entity: { kind: 'occurred_at' }, operator: 'eq', value: { token: '$today' } as never }).sort(),
+        [early, late].sort(),
+        '«равно $today» = сутки токена',
       );
     } finally {
       ndb.close();

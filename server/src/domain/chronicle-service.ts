@@ -871,6 +871,17 @@ function recordTimeLeafClause(leaf: FilterAstLeaf, opts: ChronicleAstOpts): Chro
     const b = upper(bounds[1], false);
     return { sql: `(${a.sql} AND ${b.sql})`, args: [...a.args, ...b.args] };
   };
+  /**
+   * Равенство «времени записи»: пересечение интервала записи с СУТКАМИ «голой
+   * даты» (нижняя граница — начало суток, верхняя — конец) либо с точкой полного
+   * инстанса. Та же семантика интервала, что у «между» с совпавшими границами
+   * (ошибка 03db4cb0, паритет с датами создания/изменения e219112e).
+   */
+  const equal = (value: unknown): ChronicleClause => {
+    const a = lower(value, false);
+    const b = upper(value, false);
+    return { sql: `(${a.sql} AND ${b.sql})`, args: [...a.args, ...b.args] };
+  };
   switch (leaf.operator) {
     case 'gte':
       return lower(leaf.value, false);
@@ -880,6 +891,12 @@ function recordTimeLeafClause(leaf: FilterAstLeaf, opts: ChronicleAstOpts): Chro
       return upper(leaf.value, false);
     case 'lt':
       return upper(leaf.value, true);
+    case 'eq':
+      return equal(leaf.value);
+    case 'ne': {
+      const inner = equal(leaf.value);
+      return { sql: `NOT ${inner.sql}`, args: inner.args };
+    }
     case 'between':
       return between(leaf.value);
     case 'not_between': {

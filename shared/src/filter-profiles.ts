@@ -178,7 +178,10 @@ const ATTACHMENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
 
 /** Операторы по операнду профиля «хроника» (требование 62475a6e). */
 const CHRONICLE_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
-  record_time: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  // «Время записи» — датовый операнд: сравнения, «между» и равно/не равно
+  // (равенство «голой даты» = пересечение интервала записи с её СУТКАМИ,
+  // паритет с датами создания/изменения — ошибка 03db4cb0, аналог e219112e).
+  record_time: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
   // «Цели записи» (ошибка 609deba0 п.1): значение — под-выборка мыслей ИЛИ
   // список мыслей; «в иерархии»/«не в иерархии» — выбранные цели и их
   // структурные потомки (зеркало операнда «Мысль» профиля мыслей).
@@ -198,7 +201,10 @@ const CHRONICLE_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
 
 /** Операторы по операнду профиля «события» (требование 1765e659). */
 const EVENT_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
-  occurred_at: ['gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
+  // «Время события» — датовый операнд: сравнения, «между» и равно/не равно
+  // (равенство «голой даты» = СУТКИ события, паритет с датами
+  // создания/изменения — ошибка 03db4cb0, аналог e219112e).
+  occurred_at: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
   // «Тип действия» и «Вид сущности» — МНОЖЕСТВЕННЫЕ перечисления: вид значения у
   // них всегда список кодов, поэтому допустимы ТОЛЬКО «в»/«не в» (ошибка 50d9bf4e
   // п. C1 — прежние `eq`/`ne`/`contains` вводили в заблуждение одним и тем же

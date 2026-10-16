@@ -155,6 +155,10 @@ describe('вид редактора значения: оператор × опе
     // e219112e, п.1): оператор предлагается словарём профиля, ячейка уже есть.
     assert.equal(mod.filterValueEditor(leaf({ kind: 'created_at' }, 'eq'), ctx()), 'date');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'updated_at' }, 'ne'), ctx()), 'date');
+    // Датовые операнды хроники и событий — та же ячейка даты (ошибка 03db4cb0):
+    // ячейка следует из операнда, отдельной ветки под равенство не нужно.
+    assert.equal(mod.filterValueEditor(leaf({ kind: 'record_time' }, 'eq'), ctx()), 'date');
+    assert.equal(mod.filterValueEditor(leaf({ kind: 'occurred_at' }, 'ne'), ctx()), 'date');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'property', property_id: 'p-text' }, 'is_empty'), ctx()), 'none');
     assert.equal(mod.filterValueEditor(leaf({ kind: 'keywords' }, 'not_empty'), ctx()), 'none');
   });
