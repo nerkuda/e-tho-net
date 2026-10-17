@@ -85,19 +85,17 @@ import {
   listNetworkProperties,
 } from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
-import { findDuplicates, findMentions } from '../domain/search-service.js';
+import { findMentions } from '../domain/search-service.js';
 import {
   fanOutFindDuplicates,
   type CrossNetworkAccess,
 } from '../domain/cross-network-search-service.js';
+import { findDuplicatesAsync, neighborsWithTotalAsync, resolveThoughtRefsAsync } from '../domain/heavy-read.js';
 import {
   checkThoughtDeletion,
-  countNeighbors,
   deleteThought,
   focus,
-  getNeighbors,
   getThought,
-  resolveThoughts,
   updateThought,
 } from '../domain/thought-service.js';
 import { BULK_THOUGHT_OPS } from '../domain/thought-bulk-service.js';
@@ -531,17 +529,19 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           typeId,
           linkFilter,
         };
-        const neighbors = getNeighbors(ndb, id, dirRaw as FocusDir, {
-          ...neighborOpts,
-          limit,
-          offset,
-        });
+        const page = await neighborsWithTotalAsync(
+          ndb,
+          id,
+          dirRaw as FocusDir,
+          neighborOpts,
+          { limit, offset },
+        );
         // Bug fix (0.6.3, thought f2c7c7d3): `total` used to echo the
         // returned page's length, so a neighbour list longer than `limit`
         // looked complete — no signal ever told the caller more rows exist.
-        // `countNeighbors` runs the identical WHERE without LIMIT/OFFSET.
-        const total = countNeighbors(ndb, id, dirRaw as FocusDir, neighborOpts);
-        sendList(reply, neighbors, total, offset, limit);
+        // `total` считается тем же WHERE без LIMIT/OFFSET в reader-воркере
+        // (одна задача пула, ошибка 49e05ea0).
+        sendList(reply, page.neighbors, page.total, offset, limit);
       },
     );
 
@@ -749,7 +749,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const networkId = (req.params as NetworkIdParams).networkId;
         const ids = input.ids as unknown as string[];
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const refs = resolveThoughts(ndb, ids);
+        const refs = await resolveThoughtRefsAsync(ndb, ids);
         sendList(reply, refs, refs.length, 0, refs.length);
       },
     );
@@ -856,7 +856,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
               `rest:${req.auth!.user.id}`,
             logger: app.appLogger,
           };
-          const result = fanOutFindDuplicates(access, {
+          const result = await fanOutFindDuplicates(access, {
             networkIds: accessibleIds,
             title,
             synonyms,
@@ -874,7 +874,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           return;
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const hits = findDuplicates(ndb, title, synonyms, typeIds);
+        const hits = await findDuplicatesAsync(ndb, title, synonyms, typeIds);
         sendList(reply, hits, hits.length, 0, hits.length);
       },
     );

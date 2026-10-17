@@ -17,12 +17,10 @@ import {
 import {
   editComment,
   getComment,
-  getPermanentComment,
-  getVisibleComment,
   listComments,
   updateComment,
 } from '../../domain/comment-service.js';
-import { createBodyPresenter } from '../../domain/transclusion-service.js';
+import { getPermanentPresentedAsync, getPresentedCommentAsync } from '../../domain/heavy-read.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
@@ -53,18 +51,18 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
         // границ (ТП2, задача bcfc7eb7, ADR 85a7a01e); в базе хранится
         // исходная ссылка, REST-ответы её сохраняют. `body_html` пересобирается
         // из развёрнутого текста — иначе кеш показывает нетронутую ссылку-
-        // трансклюзию как обычный текст (ошибка a6da3d37).
-        const present = createBodyPresenter(ndb);
+        // трансклюзию как обычный текст (ошибка a6da3d37). Разворот делает
+        // reader-воркер: он тоже читает источники из БД (ошибка 49e05ea0).
         if (args.comment_id !== undefined) {
           // Ошибка ec9918b3: для постоянного комментария идентичность — его
           // владелец, поэтому по-id чтение отдаёт ВИДИМУЮ редакцию (ближайший
           // слой) — ту же, что `etn.instructions`/`meta.permanent`. Без этого
           // устаревший легаси-id возвращал старый текст инструкции.
-          const comment = getVisibleComment(ndb, args.comment_id);
+          const comment = await getPresentedCommentAsync(ndb, args.comment_id);
           if (comment === null) {
             throw new Error(`ETN error [NOT_FOUND]: comment ${args.comment_id} not found`);
           }
-          return { ...comment, ...present(comment.body_md) };
+          return comment;
         }
         // The refine guarantees exactly one of the two; TS needs an explicit check.
         if (args.thought_id === undefined) {
@@ -73,10 +71,10 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
         getThoughtOrThrow(ndb, args.thought_id);
         // Видимый постоянный комментарий по владельцу (ошибка ec9918b3) —
         // та же редакция, что в `etn.instructions`.
-        const permanent = getPermanentComment(ndb, 'thought', args.thought_id);
+        const permanent = await getPermanentPresentedAsync(ndb, 'thought', args.thought_id);
         return {
           thought_id: args.thought_id,
-          permanent: permanent === null ? null : { ...permanent, ...present(permanent.body_md) },
+          permanent,
         };
       }),
   );
