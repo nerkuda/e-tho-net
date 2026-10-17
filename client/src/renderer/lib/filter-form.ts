@@ -40,7 +40,12 @@ import { t } from './i18n.js';
 import { buildValueEditor } from '../editor/value-editor.js';
 import { emptyState } from './ui/empty-state.js';
 import { clear, div, el, setTooltip, span } from './dom.js';
-import { buildEntityChipField, thoughtEntityOption, type EntityOption } from './entity-picker.js';
+import { buildEntityChipField, thoughtEntityOption, type EntityChipFieldOptions, type EntityOption } from './entity-picker.js';
+import {
+  openFilterThoughtMenu,
+  openFilterThoughtTrashDialog,
+  watchFilterClouds,
+} from './filter-value.js';
 import { etn } from './etn.js';
 import { modifierChordVariants } from './keymap-chords.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
@@ -391,6 +396,14 @@ export interface EntityChipSectionOptions {
   tooltip?: string;
   /** Кнопка «выбрать…»: управляемое подмножество → новый список (null — отмена). */
   picker?: { label: string; open: (managed: readonly string[]) => Promise<string[] | null> };
+  /**
+   * Меню чипа-МЫСЛИ (значения секции — мысли): правый клик/`Shift+F10`
+   * открывают общее меню мысли — то же, что у чипа условия отбора (ошибка
+   * ada6a69d). Токенам `$…` меню не полагается (граница в `entity-picker`).
+   */
+  onThoughtMenu?: EntityChipFieldOptions['onThoughtMenu'];
+  /** Клик по метке корзины чипа-МЫСЛИ — диалог «Удалить/Восстановить». */
+  onThoughtTrashBadge?: EntityChipFieldOptions['onThoughtTrashBadge'];
 }
 
 /** Секция выбора сущностей по общему чип-листу. */
@@ -419,6 +432,10 @@ export function buildEntityChipSection(ctx: FilterFormContext, opts: EntityChipS
     ...(opts.placeholder !== undefined ? { placeholder: opts.placeholder } : {}),
     ...(opts.addPlaceholder !== undefined ? { addPlaceholder: opts.addPlaceholder } : {}),
     ...(opts.picker !== undefined ? { picker: opts.picker } : {}),
+    ...(opts.onThoughtMenu !== undefined ? { onThoughtMenu: opts.onThoughtMenu } : {}),
+    ...(opts.onThoughtTrashBadge !== undefined
+      ? { onThoughtTrashBadge: opts.onThoughtTrashBadge }
+      : {}),
   });
   if (opts.tooltip !== undefined) setTooltip(field.root, opts.tooltip);
   section.body.append(field.root);
@@ -479,10 +496,14 @@ export function buildParentThoughtsSection(
       .resolve(ctx.networkId, missing)
       .then((refs) => {
         for (const ref of refs) clouds.set(ref.id, { ...ref });
-        sectionRef?.fieldRefresh();
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      // Перерисовка — по факту ответа: пустой ответ (мысль удалена) тоже
+      // обязан обновить чип (грабля 48f35eba).
+      .finally(() => sectionRef?.fieldRefresh());
   };
+  /** Полное имя корня для меню: снапшот облачка → сырой id. */
+  const titleOf = (id: string): string => clouds.get(id)?.title ?? id;
   const section = buildEntityChipSection(ctx, {
     title: opts.title ?? 'Родительские мысли',
     getValues: () => ctx.getState().parentIds,
@@ -510,8 +531,49 @@ export function buildParentThoughtsSection(
     ...(opts.extraSources !== undefined ? { extraSources: opts.extraSources } : {}),
     ...(opts.tooltip !== undefined ? { tooltip: opts.tooltip } : {}),
     ...(opts.picker !== undefined ? { picker: opts.picker } : {}),
+    // Чип-корень — то же облачко мысли, что и в условиях отбора: общее меню
+    // мысли (ошибка ada6a69d) и кликабельная метка корзины.
+    ...(ctx.networkId !== ''
+      ? {
+          onThoughtMenu: (value: string, anchor: HTMLElement) => {
+            void openFilterThoughtMenu({
+              networkId: ctx.networkId,
+              id: value,
+              title: titleOf(value),
+              trashed: clouds.get(value)?.marked_for_deletion === true,
+              anchor,
+              // «Убрать из значения условия» — прямой аналог «✕»: значение
+              // правят тем же путём, что и крестик чипа.
+              onRemoveFromValue: () => {
+                ctx.getState().parentIds = ctx.getState().parentIds.filter((id) => id !== value);
+                resolveClouds();
+                ctx.touch();
+                sectionRef?.fieldRefresh();
+              },
+            });
+          },
+          onThoughtTrashBadge: (value: string) => {
+            void openFilterThoughtTrashDialog(ctx.networkId, value, titleOf(value));
+          },
+        }
+      : {}),
   });
   sectionRef = section;
+  // Команды меню меняют данные мысли — снапшот облачков корней пересобирается
+  // по сигналу сброса ref-кэша, а не правится в замыкании (грабля 48f35eba).
+  watchFilterClouds({
+    root: section.fieldRoot,
+    invalidate: (id) => {
+      const affected = ctx
+        .getState()
+        .parentIds.filter(
+          (value) => value !== '' && !value.startsWith('$') && (id === null || value === id),
+        );
+      if (affected.length === 0) return;
+      for (const value of affected) clouds.delete(value);
+      resolveClouds();
+    },
+  });
   // Приёмник pointer-дропа мысли (d144ef71): мысль, брошенная из карты/панели/
   // поля редактора на чип-лист корней, добавляется в «Родительские мысли» —
   // ровно так же, как drop на панель «Хроники» (`chronicleFilterAdd`). Единая

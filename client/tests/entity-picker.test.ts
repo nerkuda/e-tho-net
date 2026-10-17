@@ -32,6 +32,7 @@ import {
   thoughtTypeEntityOptions,
   typeRowIndentSteps,
   visibleEntityIds,
+  type EntityChipFieldOptions,
   type EntityOption,
 } from '../src/renderer/lib/entity-picker.js';
 import {
@@ -1349,5 +1350,199 @@ describe('entity-picker: комбо свойства-связи как поле 
       { propertyId: 'p1', side: 'target', key: LP_REVERSE },
     );
     assert.equal(combo.value(), 'p1:target');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Контекстное меню чипа-мысли (ошибка ada6a69d)
+// ---------------------------------------------------------------------------
+
+/** Разрешающий заглушечный `window.etn` (как в filter-value.test.ts): облачко
+ *  значения-мысли догружается резолвом, реальной сети в тестах нет. */
+function etnStub(): unknown {
+  const target = async (): Promise<unknown[]> => [];
+  return new Proxy(target as unknown as Record<string, unknown>, {
+    get: (obj, prop) => (prop === 'then' ? undefined : prop in obj ? (obj as any)[prop] : etnStub()),
+    apply: () => Promise.resolve([]),
+  });
+}
+
+/** Ставит заглушку `window.etn`; возвращает восстановление. */
+function installEtnStub(): () => void {
+  const saved = (globalThis as any).window.etn;
+  (globalThis as any).window.etn = etnStub();
+  return () => {
+    (globalThis as any).window.etn = saved;
+  };
+}
+
+describe('entity-picker: контекстное меню чипа-мысли поля выбора (ошибка ada6a69d)', () => {
+  /** Чип-поле значений-мыслей: значения задаёт вызывающий, каталог пуст. */
+  function thoughtField(
+    values: string[],
+    extra: Partial<EntityChipFieldOptions> = {},
+  ): ReturnType<typeof buildEntityChipField> {
+    return buildEntityChipField({
+      getValues: () => [...values],
+      onChange: () => undefined,
+      loadOptions: () => [],
+      thoughtPreview: true,
+      ...extra,
+    });
+  }
+
+  function chipOf(field: { root: HTMLElement }): ShimElement | undefined {
+    return findByClass(field.root as unknown as ShimElement, 'prop-ref-cloud');
+  }
+
+  function chipsOf(field: { root: HTMLElement }): ShimElement[] {
+    return findAllByClass(field.root as unknown as ShimElement, 'prop-ref-cloud');
+  }
+
+  it('правый клик по чипу-мысли зовёт обработчик со значением, чипом и событием', () => {
+    installShim();
+    const calls: Array<{ value: string; anchor: unknown; event: unknown }> = [];
+    const field = thoughtField(['uuid-1'], {
+      titleOf: () => 'Мысль о кофе',
+      onThoughtMenu: (value, anchor, event) => calls.push({ value, anchor, event }),
+    });
+    const chip = chipOf(field);
+    assert.ok(chip !== undefined, 'чип-мысль построен');
+    const event = { preventDefault: () => undefined };
+    chip!.emit('contextmenu', event);
+    assert.equal(calls.length, 1, 'правый клик открывает меню мысли');
+    assert.equal(calls[0]!.value, 'uuid-1', 'обработчик получает значение чипа');
+    assert.equal(calls[0]!.anchor, chip, 'якорь меню — сам чип');
+    assert.equal(calls[0]!.event, event, 'событие передаётся вызывающему');
+  });
+
+  it('Shift+F10 и клавиша ContextMenu открывают то же меню, прочие клавиши — нет', () => {
+    installShim();
+    const calls: string[] = [];
+    const prevented: string[] = [];
+    const field = thoughtField(['uuid-1'], {
+      onThoughtMenu: (value) => calls.push(value),
+    });
+    const chip = chipOf(field)!;
+    chip.emit('keydown', {
+      shiftKey: true,
+      key: 'F10',
+      preventDefault: () => prevented.push('Shift+F10'),
+    });
+    chip.emit('keydown', {
+      shiftKey: false,
+      key: 'ContextMenu',
+      preventDefault: () => prevented.push('ContextMenu'),
+    });
+    assert.deepEqual(calls, ['uuid-1', 'uuid-1'], 'оба пути открывают меню одного чипа');
+    assert.deepEqual(prevented, ['Shift+F10', 'ContextMenu'], 'нажатие гасится — браузерное меню не всплывает');
+    // F10 без Shift и Enter меню не открывают: путь — только «меню клавиатурой».
+    chip.emit('keydown', { shiftKey: false, key: 'F10', preventDefault: () => undefined });
+    chip.emit('keydown', { shiftKey: true, key: 'Enter', preventDefault: () => undefined });
+    assert.equal(calls.length, 2, 'посторонние клавиши меню не открывают');
+  });
+
+  it('токен `$…` и пустое значение меню не получают', () => {
+    installShim();
+    const calls: string[] = [];
+    const field = thoughtField(['$thought', ''], { onThoughtMenu: (value) => calls.push(value) });
+    const chips = chipsOf(field);
+    assert.equal(chips.length, 2, 'оба чипа построены (токен и пустое значение)');
+    for (const chip of chips) {
+      assert.equal(chip.listeners['keydown'], undefined, 'клавиатурного пути у не-мысли нет');
+      chip.emit('contextmenu', { preventDefault: () => undefined });
+    }
+    assert.deepEqual(calls, [], 'меню у токена и пустого значения не открывается');
+  });
+
+  it('без обработчика меню чип остаётся без клавиатурного пути', () => {
+    installShim();
+    const field = thoughtField(['uuid-1']);
+    const chip = chipOf(field)!;
+    assert.equal(chip.listeners['keydown'], undefined, 'обработчика нет — меню не навешено');
+  });
+
+  it('метка корзины чипа-мысли кликабельна: диалог «Удалить/Восстановить»', () => {
+    installShim();
+    const trashed: string[] = [];
+    const field = thoughtField(['uuid-1'], {
+      cloudOf: (value) => ({ id: value, title: 'Мысль в корзине', marked_for_deletion: true }),
+      onThoughtTrashBadge: (value) => trashed.push(value),
+    });
+    const mark = findByClass(field.root as unknown as ShimElement, 'list-trash-mark');
+    assert.ok(mark !== undefined, 'у помеченной мысли есть метка корзины');
+    mark!.emit('click', { stopPropagation: () => undefined });
+    assert.deepEqual(trashed, ['uuid-1'], 'метка открывает диалог удаления/восстановления');
+  });
+
+  it('комбо-поле мысли: правый клик и Shift+F10 открывают то же меню', () => {
+    installShim();
+    const restore = installEtnStub();
+    try {
+      const calls: string[] = [];
+      const combo = buildEntityCombo({
+        networkId: 'n',
+        kind: 'thoughts',
+        value: 'uuid-1',
+        titleOf: () => 'Мысль о кофе',
+        onThoughtMenu: (value) => calls.push(value),
+        onChange: () => undefined,
+      });
+      const chip = valueCloud(combo);
+      assert.ok(chip !== undefined, 'заполненное поле показано чипом');
+      chip!.emit('contextmenu', { preventDefault: () => undefined });
+      chip!.emit('keydown', { shiftKey: true, key: 'F10', preventDefault: () => undefined });
+      assert.deepEqual(calls, ['uuid-1', 'uuid-1'], 'мышь и клавиатура открывают меню значения');
+    } finally {
+      restore();
+    }
+  });
+
+  it('недоступное комбо-поле: меню работает, очистки значения нет (решение 5)', () => {
+    installShim();
+    const restore = installEtnStub();
+    try {
+      const calls: string[] = [];
+      const combo = buildEntityCombo({
+        networkId: 'n',
+        kind: 'thoughts',
+        value: 'uuid-1',
+        disabled: true,
+        onThoughtMenu: (value) => calls.push(value),
+        onChange: () => undefined,
+      });
+      const chip = valueCloud(combo);
+      assert.ok(chip !== undefined, 'значение выключенного поля показано чипом');
+      chip!.emit('contextmenu', { preventDefault: () => undefined });
+      assert.deepEqual(calls, ['uuid-1'], 'меню — навигация, а не правка: работает и у выключенного поля');
+      assert.equal(
+        findByClass(combo.root as unknown as ShimElement, 'st-f-clear-inline'),
+        undefined,
+        'очистка значения у выключенного поля не рисуется',
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it('комбо-поле: токен `$…` меню не получает', () => {
+    installShim();
+    const restore = installEtnStub();
+    try {
+      const calls: string[] = [];
+      const combo = buildEntityCombo({
+        networkId: 'n',
+        kind: 'thoughts',
+        value: '$thought',
+        onThoughtMenu: (value) => calls.push(value),
+        onChange: () => undefined,
+      });
+      const chip = valueCloud(combo)!;
+      assert.equal(chip.listeners['keydown'], undefined, 'у токена клавиатурного пути нет');
+      chip.emit('contextmenu', { preventDefault: () => undefined });
+      assert.deepEqual(calls, [], 'меню токену не полагается');
+    } finally {
+      restore();
+    }
   });
 });

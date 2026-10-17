@@ -1161,6 +1161,20 @@ export interface EntityChipFieldOptions {
    * местах (требование заказчика 2026-10-14, ошибка f4e99090 п.5).
    */
   thoughtPreview?: boolean;
+  /**
+   * Контекстное меню чипа-МЫСЛИ (значения поля — мысли, `kind: 'thoughts'`):
+   * правый клик по чипу и клавиатурный путь `Shift+F10`/клавиша `ContextMenu`
+   * открывают меню — то же поведение, что у чипа значения свойства-связи в
+   * редакторе мысли (`editor/value-editor.ts`). `anchor` — сам чип: меню
+   * раскрывается под ним. Токенам `$…` и пустому значению меню не полагается:
+   * это не мысль (та же граница, что у предпросмотра ниже).
+   */
+  onThoughtMenu?: (value: string, anchor: HTMLElement, event?: MouseEvent) => void;
+  /**
+   * Клик по метке корзины чипа-МЫСЛИ — диалог «Удалить/Восстановить» (та же
+   * метка, что у чипа значения свойства-связи; ошибка ada6a69d).
+   */
+  onThoughtTrashBadge?: (value: string) => void;
 }
 
 /** Собранный чип-лист сущностей. */
@@ -1239,6 +1253,43 @@ function wireThoughtChip(chip: HTMLElement, id: string, title: string): void {
   chip.setAttribute('role', 'button');
   chip.setAttribute('aria-label', title);
   markThoughtCommentPreview(chip, id, title);
+}
+
+/**
+ * Действие меню чипа-МЫСЛИ для конкретного значения: `undefined` — меню не
+ * полагается (пустой id, токен `$…`) либо вызывающий его не дал. Токен отбора
+ * мыслью не является — та же граница, что у {@link wireThoughtChip}.
+ */
+function thoughtMenuOf(
+  id: string,
+  onThoughtMenu: EntityChipFieldOptions['onThoughtMenu'],
+): ((anchor: HTMLElement, event?: MouseEvent) => void) | undefined {
+  if (id === '' || id.startsWith('$') || onThoughtMenu === undefined) return undefined;
+  return (anchor, event) => onThoughtMenu(id, anchor, event);
+}
+
+/** Есть ли у значения метка корзины/меню — только у настоящей мысли. */
+function isThoughtValue(id: string): boolean {
+  return id !== '' && !id.startsWith('$');
+}
+
+/**
+ * Клавиатурный путь меню чипа-МЫСЛИ (`Shift+F10`/клавиша `ContextMenu`) — по
+ * образцу чипа значения свойства-связи в редакторе мысли
+ * (`editor/value-editor.ts`): мышь даёт жест фабрики (`actions.onContextMenu`),
+ * клавиатуру навешивает вызывающий. Обработчика нет — нет и клавиатурного пути.
+ */
+function wireThoughtChipMenu(
+  chip: HTMLElement,
+  open: ((anchor: HTMLElement, event?: MouseEvent) => void) | undefined,
+): void {
+  if (open === undefined) return;
+  chip.addEventListener('keydown', (event) => {
+    if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+      event.preventDefault();
+      open(chip);
+    }
+  });
 }
 
 /**
@@ -1377,11 +1428,22 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
         // Синхронное имя хоста (снапшот подписи) идёт ПЕРЕД сырым id: чип
         // рисует имя сразу, не дожидаясь резолва (ошибка f4e99090).
         { id: value, title: known?.title ?? opts.titleOf?.(value) ?? value };
+      // Меню чипа-мысли: нет токена/пустого значения и нет обработчика — нет меню.
+      const openMenu = thoughtMenuOf(value, opts.onThoughtMenu);
       const chip = createThoughtCloud(cloud, {
         profile: 'chip',
         width: 'container',
         actions: {
           ...(opts.onOpen !== undefined ? { onClick: (id: string) => opts.onOpen?.(id) } : {}),
+          // Контекстное меню — жест фабрики; правый клик уже гасит системное
+          // меню, обработчик вызывающего открывает меню мысли (ошибка ada6a69d).
+          ...(openMenu !== undefined
+            ? { onContextMenu: (event: MouseEvent) => openMenu(chip, event) }
+            : {}),
+          // Метка корзины — диалог «Удалить/Восстановить» вместо «мёртвого» значка.
+          ...(opts.onThoughtTrashBadge !== undefined && isThoughtValue(value)
+            ? { onTrashBadgeClick: (id: string) => opts.onThoughtTrashBadge?.(id) }
+            : {}),
           ...(disabled
             ? {}
             : {
@@ -1392,6 +1454,7 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
               }),
         },
       });
+      wireThoughtChipMenu(chip, openMenu);
       // Знак варианта-свойства-связи — значок конца связи, как в строках
       // выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
       // значка светился глиф мысли по умолчанию. Условие не зависит от
@@ -1591,6 +1654,14 @@ export interface EntityComboOptions {
    */
   thoughtPreview?: boolean;
   /**
+   * Контекстное меню чипа-МЫСЛИ заполненного поля (правый клик,
+   * `Shift+F10`/клавиша `ContextMenu`). Тот же контракт, что у чип-поля
+   * ({@link EntityChipFieldOptions.onThoughtMenu}); значимо только у `thoughts`.
+   */
+  onThoughtMenu?: (value: string, anchor: HTMLElement, event?: MouseEvent) => void;
+  /** Клик по метке корзины чипа-МЫСЛИ — диалог «Удалить/Восстановить». */
+  onThoughtTrashBadge?: (value: string) => void;
+  /**
    * Режим `expandAll`: дерево типов раскрыто целиком (родительский пикер
    * редактора типа). По умолчанию раскрыт только верхний уровень.
    */
@@ -1631,6 +1702,14 @@ export interface EntityCombo {
    * поле). Перерисовывает облачко/режим поля, значение владельцу не сохраняет.
    */
   setValue(id: string | null): void;
+  /**
+   * Перечитывает данные облачка значения после внешнего изменения мысли
+   * (команды контекстного меню: актуальность, тип, иконка, удаление/
+   * восстановление). Снапшот облачка — производное от модели и обязан
+   * пересобираться из неё, а не «поправляться» в замыкании (грабля 48f35eba);
+   * значение и `onChange` не трогаются.
+   */
+  refresh(): void;
   /** Закрывает выпадашку и снимает слушатели. */
   dispose(): void;
 }
@@ -1787,19 +1866,31 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         .catch(() => undefined);
     }
     const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: opt?.title ?? opts.titleOf?.(current) ?? current };
+    // Меню чипа-мысли: нет токена/пустого значения и нет обработчика — нет меню.
+    const openMenu = thoughtMenuOf(current, opts.onThoughtMenu);
     const chip = createThoughtCloud(cloud, {
       profile: 'chip',
       // Ширина — по полю значения диалога.
       width: 'container',
-      actions:
-        opts.disabled === true
-          ? undefined
+      // Меню — навигация, а не правка: у недоступного поля оно тоже работает
+      // (решение по ошибке ada6a69d); очистка значения — только у активного.
+      actions: {
+        ...(openMenu !== undefined
+          ? { onContextMenu: (event: MouseEvent) => openMenu(chip, event) }
+          : {}),
+        ...(opts.onThoughtTrashBadge !== undefined && isThoughtValue(current)
+          ? { onTrashBadgeClick: (id: string) => opts.onThoughtTrashBadge?.(id) }
+          : {}),
+        ...(opts.disabled === true
+          ? {}
           : {
               onRemove: () => {
                 commitValue(null);
               },
-            },
+            }),
+      },
     });
+    wireThoughtChipMenu(chip, openMenu);
     if (opts.thoughtPreview === true) wireThoughtChip(chip, current, cloud.title);
     valueHost.append(chip);
   };
@@ -2074,6 +2165,15 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     root,
     value: () => current,
     setValue,
+    /**
+     * Сброс снапшота облачка и перерисовка (см. {@link EntityCombo.refresh}):
+     * данные мысли изменились командой контекстного меню — облачко обязано
+     * пересобраться из модели (грабля 48f35eba), а не остаться прежним.
+     */
+    refresh: () => {
+      currentCloud = null;
+      if (root.isConnected) renderValue();
+    },
     dispose: () => handle?.dispose(),
   };
 }

@@ -1,0 +1,326 @@
+{
+  "name": "ada6a69d-thought-chip-menu",
+  "description": "Ошибка ada6a69d: у облачков мыслей в условиях отбора нет контекстного меню. Онбординг → сеть → диалог отбора (модаль, «+» полосы фокуса) → строка «Родители + в иерархии» со значением-мыслью → правый клик по чипу открывает ОБЩЕЕ меню мысли (состав сверяется целиком) и меню лежит ПОВЕРХ модали (elementFromPoint) → Shift+F10 при фокусе на чипе открывает то же меню → «Удалить»/«В корзину» → метка корзины появляется у чипа (снапшот облачков инвалидируется) → клик по метке открывает диалог, «Вернуть из корзины» убирает метку → «Убрать из значения условия» убирает значение. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ada6a69d.scenario.json --out .tmp/etn-ada6a69d/out",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "map-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('[data-id]') !== null"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "seed-typed-home",
+      "eval": "(async () => { const nid='{{networkId}}'; const type=await window.etn.types.createThoughtType(nid, { name: 'Тип стенда ada6a69d' }); const cur=await window.etn.thoughts.get(nid, '{{homeId}}'); await window.etn.thoughts.update(nid, '{{homeId}}', { type_id: type.id }, cur.version); return type.id ? 'ok' : 'no'; })()"
+    },
+    {
+      "name": "focus-home",
+      "eval": "(async () => { const el=document.querySelector('[data-id=\"{{homeId}}\"] .cloud') || document.querySelector('.canvas-focus-row .cloud'); if(!el) return 'no-cloud'; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); await new Promise(r=>setTimeout(r,500)); return 'ok'; })()"
+    },
+    {
+      "name": "strip-add-enabled",
+      "timeout": 20000,
+      "waitFor": "(() => { const b=document.querySelector('.canvas-filter-strip-add'); return b !== null && b.disabled === false; })()"
+    },
+    {
+      "name": "open-view-dialog",
+      "click": ".canvas-filter-strip-add"
+    },
+    {
+      "name": "dialog-open",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.view-editor-body') !== null"
+    },
+    {
+      "name": "editor-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.view-editor-body .ft-group') !== null"
+    },
+    {
+      "name": "install-helpers",
+      "eval": "(() => { window.__ada = { row: () => { const rows=[...document.querySelectorAll('.view-editor-body .ft-row')]; return rows[rows.length-1] ?? null; }, lastChoice: () => { const p=[...document.querySelectorAll('.ft-choice')]; return p[p.length-1] ?? null; }, lastMenu: () => { const m=[...document.querySelectorAll('.menu')]; return m[m.length-1] ?? null; }, chip: () => { const r=window.__ada.row(); return r ? r.querySelector('.fv-entity .prop-ref-cloud') : null; }, pickChoice: (key) => { const p=window.__ada.lastChoice(); if(!p) return 'no-panel'; const it=p.querySelector('.ft-choice__item[data-key=\"'+key+'\"]'); if(!it) return 'no-item'; it.click(); return 'ok'; }, rightClickChip: () => { const c=window.__ada.chip(); if(!c) return 'no-chip'; const b=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:Math.round(b.left+5),clientY:Math.round(b.top+5)})); return 'ok'; }, menuLabels: () => { const m=window.__ada.lastMenu(); if(!m) return []; return [...m.querySelectorAll('.menu-item')].map(e=>(e.textContent||'').trim()).filter(t=>t!==''&&t!=='—'); } }; return 'ok'; })()"
+    },
+    {
+      "name": "add-row",
+      "eval": "(() => { const g=document.querySelector('.view-editor-body .ft-group[data-path=\"\"]') || document.querySelector('.view-editor-body .ft-group'); const b=g && g.querySelector('.ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "row-added",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.view-editor-body .ft-row').length >= 1"
+    },
+    {
+      "name": "open-what",
+      "eval": "(() => { const r=window.__ada.row(); if(!r) return 'no-row'; r.querySelector('.ft-row__what').click(); return 'ok'; })()"
+    },
+    {
+      "name": "parents-available",
+      "timeout": 8000,
+      "waitFor": "(() => { const p=window.__ada.lastChoice(); return p !== null && p.querySelector('.ft-choice__item[data-key=\"parents\"]') !== null; })()"
+    },
+    {
+      "name": "pick-parents",
+      "eval": "window.__ada.pickChoice('parents')"
+    },
+    {
+      "name": "operand-is-parents",
+      "timeout": 8000,
+      "waitFor": "(() => { const r=window.__ada.row(); return r !== null && (r.querySelector('.ft-row__what')?.textContent||'').includes('Родители'); })()"
+    },
+    {
+      "name": "open-op",
+      "eval": "(() => { const r=window.__ada.row(); if(!r) return 'no-row'; r.querySelector('.ft-row__op').click(); return 'ok'; })()"
+    },
+    {
+      "name": "in-hierarchy-available",
+      "timeout": 8000,
+      "waitFor": "(() => { const p=window.__ada.lastChoice(); return p !== null && p.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]') !== null; })()"
+    },
+    {
+      "name": "pick-in-hierarchy",
+      "eval": "window.__ada.pickChoice('in_hierarchy')"
+    },
+    {
+      "name": "value-ready",
+      "timeout": 15000,
+      "waitFor": "(() => { const r=window.__ada.row(); return r !== null && r.querySelector('.fv-entity .entity-chip-input') !== null; })()"
+    },
+    {
+      "name": "type-seed-title",
+      "eval": "(() => { const r=window.__ada.row(); const i=r.querySelector('.fv-entity .entity-chip-input'); if(!i) return 'no-input'; i.focus(); i.value='Проба'; i.dispatchEvent(new Event('input',{bubbles:true})); return i.value; })()"
+    },
+    {
+      "name": "suggest-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.type-combo-item') !== null"
+    },
+    {
+      "name": "pick-seed-thought",
+      "eval": "(() => { const rows=[...document.querySelectorAll('.type-combo-item')]; const hit=rows.find(x=>(x.textContent||'').includes('Проба стенда')) || rows[0]; if(!hit) return 'no-row'; hit.click(); return 'picked'; })()"
+    },
+    {
+      "name": "chip-ready",
+      "timeout": 20000,
+      "waitFor": "(() => { const c=window.__ada.chip(); return c !== null && (c.querySelector('.prc-title')?.textContent||'').includes('Проба'); })()"
+    },
+    {
+      "name": "page-awake",
+      "probe": "document.hidden",
+      "expect": false
+    },
+    {
+      "name": "right-click-chip",
+      "eval": "window.__ada.rightClickChip()"
+    },
+    {
+      "name": "menu-open",
+      "timeout": 20000,
+      "waitFor": "(() => window.__ada.menuLabels().some(l=>l.includes('Убрать из значения условия')))()"
+    },
+    {
+      "name": "menu-composition",
+      "probe": "(() => { const labels=window.__ada.menuLabels(); const has=(s)=>labels.some(l=>l.includes(s)); return JSON.stringify({ count: labels.length, add: has('Добавить'), active: has('Изменить актуальность'), type: has('Изменить тип'), icon: has('Изменить иконку'), attachment: has('Добавить вложение'), openInEditor: has('Открыть в редакторе'), focus: has('В фокус'), exportItem: has('Экспорт'), importItem: has('Импорт'), copyId: has('Копировать ID'), removeFromValue: has('Убрать из значения условия'), del: has('Удалить'), replace: has('Заменить мысль'), findOnMap: has('Найти на карте'), edgeCommand: has('Удалить связь с мыслью') }); })()",
+      "expect": "{\"count\":17,\"add\":true,\"active\":true,\"type\":true,\"icon\":true,\"attachment\":true,\"openInEditor\":true,\"focus\":true,\"exportItem\":true,\"importItem\":true,\"copyId\":true,\"removeFromValue\":true,\"del\":true,\"replace\":false,\"findOnMap\":false,\"edgeCommand\":false}"
+    },
+    {
+      "name": "menu-panels-in-dom",
+      "probe": "document.querySelectorAll('.menu').length"
+    },
+    {
+      "name": "menu-above-modal",
+      "probe": "(() => { const m=window.__ada.lastMenu(); if(!m) return 'no-menu'; const r=m.getBoundingClientRect(); if(r.width<=0||r.height<=0) return 'zero-rect'; const cx=Math.round(r.left+r.width/2); const cy=Math.round(r.top+Math.min(12,r.height/2)); const top=document.elementFromPoint(cx,cy); return JSON.stringify({ onTop: top !== null && (top===m||m.contains(top)), inViewport: r.left>=0 && r.top>=0 && r.bottom<=window.innerHeight }); })()",
+      "expect": "{\"onTop\":true,\"inViewport\":true}"
+    },
+    {
+      "name": "close-menu",
+      "eval": "(() => { document.body.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,clientX:4,clientY:4})); return 'ok'; })()"
+    },
+    {
+      "name": "menu-closed",
+      "timeout": 8000,
+      "waitFor": "window.__ada.lastMenu() === null"
+    },
+    {
+      "name": "focus-chip",
+      "eval": "(() => { const c=window.__ada.chip(); if(!c) return 'no-chip'; c.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "chip-focused",
+      "probe": "document.activeElement === window.__ada.chip()",
+      "expect": true
+    },
+    {
+      "name": "shift-f10",
+      "key": {
+        "key": "F10",
+        "code": "F10",
+        "keyCode": 121,
+        "modifiers": [
+          "shift"
+        ]
+      }
+    },
+    {
+      "name": "menu-via-keyboard",
+      "timeout": 20000,
+      "waitFor": "(() => window.__ada.menuLabels().some(l=>l.includes('Убрать из значения условия')))()"
+    },
+    {
+      "name": "click-delete",
+      "probe": "(() => { const m=window.__ada.lastMenu(); if(!m) return 'no-menu'; const it=[...m.querySelectorAll('.menu-item')].find(e=>(e.textContent||'').trim()==='Удалить'); if(!it) return 'no-item'; it.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "delete-dialog-open",
+      "timeout": 15000,
+      "waitFor": "(document.body.textContent||'').includes('Удаление мысли')"
+    },
+    {
+      "name": "trash-thought",
+      "probe": "(() => { const backs=[...document.querySelectorAll('.dialog-backdrop')]; const top=backs[backs.length-1]; if(!top) return 'no-dialog'; const b=[...top.querySelectorAll('button')].find(x=>x.textContent.trim()==='Поместить в корзину'); if(!b) return 'no-button'; b.click(); return 'trashed'; })()",
+      "expect": "trashed"
+    },
+    {
+      "name": "badge-appears",
+      "timeout": 20000,
+      "waitFor": "(() => { const c=window.__ada.chip(); return c !== null && c.querySelector('.list-trash-mark') !== null; })()"
+    },
+    {
+      "name": "dialogs-after-trash",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop').length === 1"
+    },
+    {
+      "name": "view-editor-alive",
+      "probe": "document.querySelector('.view-editor-body') !== null",
+      "expect": true
+    },
+    {
+      "name": "click-trash-badge",
+      "eval": "(() => { const c=window.__ada.chip(); if(!c) return 'no-chip'; const m=c.querySelector('.list-trash-mark'); if(!m) return 'no-badge'; m.click(); return 'ok'; })()"
+    },
+    {
+      "name": "trash-dialog-open",
+      "timeout": 15000,
+      "waitFor": "(document.body.textContent||'').includes('Вернуть из корзины')"
+    },
+    {
+      "name": "restore-thought",
+      "probe": "(() => { const backs=[...document.querySelectorAll('.dialog-backdrop')]; const top=backs[backs.length-1]; if(!top) return 'no-dialog'; const b=[...top.querySelectorAll('button')].find(x=>x.textContent.trim()==='Вернуть из корзины'); if(!b) return 'no-button'; b.click(); return 'restored'; })()",
+      "expect": "restored"
+    },
+    {
+      "name": "badge-gone",
+      "timeout": 20000,
+      "waitFor": "(() => { const c=window.__ada.chip(); return c !== null && c.querySelector('.list-trash-mark') === null; })()"
+    },
+    {
+      "name": "right-click-chip-before-purge",
+      "eval": "window.__ada.rightClickChip()"
+    },
+    {
+      "name": "menu-open-before-purge",
+      "timeout": 20000,
+      "waitFor": "(() => window.__ada.menuLabels().some(l=>l.includes('Убрать из значения условия')))()"
+    },
+    {
+      "name": "click-delete-forever",
+      "probe": "(() => { const m=window.__ada.lastMenu(); if(!m) return 'no-menu'; const it=[...m.querySelectorAll('.menu-item')].find(e=>(e.textContent||'').trim()==='Удалить'); if(!it) return 'no-item'; it.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "delete-dialog-again",
+      "timeout": 15000,
+      "waitFor": "(document.body.textContent||'').includes('Удаление мысли')"
+    },
+    {
+      "name": "purge-thought",
+      "probe": "(() => { const backs=[...document.querySelectorAll('.dialog-backdrop')]; const top=backs[backs.length-1]; if(!top) return 'no-dialog'; const b=[...top.querySelectorAll('button')].find(x=>x.textContent.trim()==='Удалить совсем'); if(!b) return 'no-button'; if(b.disabled) return 'blocked'; b.click(); return 'purged'; })()",
+      "expect": "purged"
+    },
+    {
+      "name": "one-dialog-before-purge",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop').length === 1"
+    },
+    {
+      "name": "chip-survives-purge",
+      "timeout": 20000,
+      "waitFor": "(() => { const c=window.__ada.chip(); return c !== null && (c.querySelector('.prc-title')?.textContent||'').includes('Проба'); })()"
+    },
+    {
+      "name": "right-click-chip-after-purge",
+      "eval": "window.__ada.rightClickChip()"
+    },
+    {
+      "name": "menu-open-after-purge",
+      "timeout": 20000,
+      "waitFor": "(() => window.__ada.menuLabels().length > 0)()"
+    },
+    {
+      "name": "menu-composition-unresolvable",
+      "probe": "(() => { const labels=window.__ada.menuLabels(); const has=(s)=>labels.some(l=>l.includes(s)); return JSON.stringify({ count: labels.length, copyId: has('Копировать ID'), removeFromValue: has('Убрать из значения условия'), active: has('Изменить актуальность'), openInEditor: has('Открыть в редакторе'), del: has('Удалить'), exportItem: has('Экспорт') }); })()",
+      "expect": "{\"count\":2,\"copyId\":true,\"removeFromValue\":true,\"active\":false,\"openInEditor\":false,\"del\":false,\"exportItem\":false}"
+    },
+    {
+      "name": "click-remove-from-value",
+      "probe": "(() => { const m=window.__ada.lastMenu(); if(!m) return 'no-menu'; const it=[...m.querySelectorAll('.menu-item')].find(e=>(e.textContent||'').trim()==='Убрать из значения условия'); if(!it) return 'no-item'; it.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "value-removed",
+      "timeout": 15000,
+      "waitFor": "(() => { const r=window.__ada.row(); return r !== null && r.querySelectorAll('.fv-entity .prop-ref-cloud').length === 0; })()"
+    },
+    {
+      "name": "value-chips-left",
+      "probe": "(() => { const r=window.__ada.row(); return r === null ? -1 : r.querySelectorAll('.fv-entity .prop-ref-cloud').length; })()",
+      "expect": 0
+    },
+    {
+      "name": "no-error-dialog",
+      "probe": "document.querySelector('.dialog-backdrop') !== null",
+      "expect": true
+    },
+    {
+      "name": "row-issue-after-remove",
+      "probe": "(window.__ada.row()?.querySelector('.ft-issue__text')?.textContent || '').includes('не задано значение условия')"
+    }
+  ]
+}

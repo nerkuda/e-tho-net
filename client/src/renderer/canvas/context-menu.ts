@@ -309,6 +309,15 @@ export interface ThoughtMenuOptions {
   focusHandler?: () => void;
   /** Команды конкретного контекста (значение свойства) — блоком перед «Удалить». */
   extraItems?: MenuItem[];
+  /**
+   * Мысль недоступна в сети: значение условия осталось по снапшоту имени, но
+   * самой мысли нет (удалена). Из общего набора остаются только команды, которым
+   * объект мысли на сервере не нужен, — «Копировать ID» и команды контекста
+   * значения (`extraItems`); остальные команды упали бы 404. Урезание —
+   * отличие контекста, а не второй список команд (ошибка ada6a69d, спека
+   * «Контекстное меню мысли»).
+   */
+  unresolvable?: boolean;
 }
 
 /** Opens the thought context menu at the event position. */
@@ -383,6 +392,23 @@ export function buildThoughtMenuItems(
   target: CloudMenuTarget,
   opts: ThoughtMenuOptions = {},
 ): MenuItem[] {
+  /** Команда «Копировать ID» — единственная, не требующая объекта мысли. */
+  const copyIdItem = (): MenuItem =>
+    menuAction('Копировать ID', () => {
+      void navigator.clipboard.writeText(target.id).then(
+        () => notice('ID мысли скопирован.'),
+        () => notice('Не удалось скопировать ID.', 'error'),
+      );
+    });
+  // Мысль недоступна в сети (значение условия осталось по снапшоту имени):
+  // остальные команды упали бы 404 — урезаем набор до «Копировать ID» и команд
+  // контекста значения (ошибка ada6a69d).
+  if (opts.unresolvable === true) {
+    return [
+      copyIdItem(),
+      ...(opts.extraItems !== undefined && opts.extraItems.length > 0 ? opts.extraItems : []),
+    ];
+  }
   const focus = store.state.focus;
   // «налево (родственник)»: на холсте — родитель фокуса (зона «Родственники»),
   // вне холста — родитель самой мысли, который резолвит вызывающий.
@@ -542,12 +568,7 @@ export function buildThoughtMenuItems(
     menuAction('Вставить', () => void pasteThoughtsTo(networkId, target.id), {
       disabled: !hasClipboard(),
     }),
-    menuAction('Копировать ID', () => {
-      void navigator.clipboard.writeText(target.id).then(
-        () => notice('ID мысли скопирован.'),
-        () => notice('Не удалось скопировать ID.', 'error'),
-      );
-    }),
+    copyIdItem(),
     // Задача f5c363a3: разрешение изменений мысли в слое («Отказаться» /
     // «Переписать» / «Объединить»).
     ...(overriddenInLayer

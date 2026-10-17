@@ -137,6 +137,13 @@ const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
 
   // --- element: клавиатурный контракт самого виджета ------------------------
   {
+    file: 'lib/entity-picker.ts',
+    count: 1,
+    category: 'element',
+    reason:
+      'Клавиатурный контракт чипа-мысли поля выбора сущностей (ошибка ada6a69d): `Shift+F10`/клавиша `ContextMenu` на фокусируемом чипе (`role="button"`, `tabIndex=0`) открывают общее меню мысли — ровно как у чипа значения свойства-связи в редакторе (`editor/value-editor.ts`, тот же контракт WAI-ARIA). Событие принадлежит самому чипу и обрабатывается на нём; клавиша `ContextMenu` не выражается сочетанием диспетчера. Кандидат на миграцию в волнах fd3d84f4 вместе с чипами редактора.',
+  },
+  {
     file: 'lib/filter-tree.ts',
     count: 1,
     category: 'element',
