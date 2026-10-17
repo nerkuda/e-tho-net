@@ -97,7 +97,29 @@ export function collectGroupRemoveViolations(css: string): string[] {
     }
   }
 
-  // 3. Запрещённое скрытие: visibility/display ломают Tab-порядок.
+  // 3. Показ — только у ГЛУБОЧАЙШЕЙ группы: hover/focus всплывают к предкам,
+  //    поэтому каждый показывающий селектор обязан отсекать предка с наведённой
+  //    вложенной группой и адресовать крестик в заголовке СВОЕЙ группы.
+  //    Без этого крестик родителя появляется при наведении на вложенную группу
+  //    (регрессия из замечания verifier'а к a398b169).
+  const deepestGuard: Readonly<Record<string, string>> = {
+    ':hover': ':not(:has(.ft-group:hover))',
+    ':focus-within': ':not(:has(.ft-group:focus-within))',
+  };
+  const headChain = '> .ft-group__head >';
+  for (const [state, guard] of Object.entries(deepestGuard)) {
+    for (const rule of removeRules.filter((r) => r.selector.includes(state))) {
+      const selector = rule.selector.replace(/\s+/g, ' ');
+      if (!selector.includes(guard)) {
+        violations.push(`показ по ${state} без отсечения предка ${guard}: ${rule.selector}`);
+      }
+      if (!selector.includes(headChain)) {
+        violations.push(`показ по ${state} без цепочки «${headChain}»: ${rule.selector}`);
+      }
+    }
+  }
+
+  // 4. Запрещённое скрытие: visibility/display ломают Tab-порядок.
   for (const rule of removeRules) {
     if (rule.declarations.get('visibility') === 'hidden') {
       violations.push(`.ft-group__remove скрыт через visibility: hidden (${rule.selector})`);
@@ -159,6 +181,51 @@ describe('guard: крестик группы отбора — виден тол�
     assert.ok(
       collectGroupRemoveViolations(withoutFocus).some((v) => v.includes(':focus-within')),
       'без правила :focus-within крестик недостижим с клавиатуры',
+    );
+  });
+
+  it('правило краснеет на потере «глубочайшей группы» и цепочки заголовка (M6/M7)', () => {
+    // M6: hover перестаёт отсекать предка с наведённой вложенной группой —
+    // крестик родителя снова появляется при наведении на вложенную.
+    const withoutDeepestHover = css.replace(
+      '.ft-group:hover:not(:has(.ft-group:hover)) > .ft-group__head > .ft-group__remove',
+      '.ft-group:hover > .ft-group__head > .ft-group__remove',
+    );
+    assert.notEqual(withoutDeepestHover, css, 'мутация M6 обязана менять CSS');
+    assert.ok(
+      collectGroupRemoveViolations(withoutDeepestHover).some(
+        (v) => v.includes(':hover') && v.includes('отсечения предка'),
+      ),
+      'потеря :not(:has(.ft-group:hover)) обязана краснеть',
+    );
+
+    // M7: то же для клавиатурного фокуса.
+    const withoutDeepestFocus = css.replace(
+      '.ft-group:focus-within:not(:has(.ft-group:focus-within)) > .ft-group__head > .ft-group__remove',
+      '.ft-group:focus-within > .ft-group__head > .ft-group__remove',
+    );
+    assert.notEqual(withoutDeepestFocus, css, 'мутация M7 обязана менять CSS');
+    assert.ok(
+      collectGroupRemoveViolations(withoutDeepestFocus).some(
+        (v) => v.includes(':focus-within') && v.includes('отсечения предка'),
+      ),
+      'потеря :not(:has(.ft-group:focus-within)) обязана краснеть',
+    );
+
+    // Цепочка адресации крестика в заголовке СВОЕЙ группы.
+    const withoutHeadChain = css.replaceAll(
+      ' > .ft-group__head > .ft-group__remove',
+      ' .ft-group__remove',
+    );
+    assert.notEqual(withoutHeadChain, css, 'мутация цепочки обязана менять CSS');
+    const chainViolations = collectGroupRemoveViolations(withoutHeadChain);
+    assert.ok(
+      chainViolations.some((v) => v.includes(':hover') && v.includes('> .ft-group__head >')),
+      'потеря цепочки в hover-правиле обязана краснеть',
+    );
+    assert.ok(
+      chainViolations.some((v) => v.includes(':focus-within') && v.includes('> .ft-group__head >')),
+      'потеря цепочки в focus-правиле обязана краснеть',
     );
   });
 });
