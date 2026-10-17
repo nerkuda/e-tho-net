@@ -498,13 +498,11 @@ export class WritePool {
       this.admission.shift();
       pin.queue.push(job);
       this.dispatchPin(pin);
-      // Голова очереди допуска ушла (или очередь опустела) — оба таймера допуска
-      // взводились от неё и без сброса становятся устаревшими: таймер повтора
-      // сработает не по адресу, а таймер предупреждения выдаст WARN уже для НОВОЙ,
-      // свежей задачи с `waitMs` ниже порога (ошибка c7a4d040). Очередь, оставшись
-      // непустой, взведёт их заново от новой головы (ветка `created === null`).
-      this.clearAdmissionTimer();
-      this.clearAdmissionWarn();
+      // Голова очереди ушла — оба таймера допуска взводились от неё; сбрасываем
+      // (непустая очередь взведёт их заново от новой головы в ветке
+      // `created === null`), иначе устаревший таймер предупредит о «долгом»
+      // ожидании СВЕЖЕЙ задачи (`waitMs` ниже порога — ошибка c7a4d040).
+      this.clearAdmissionTimers();
     }
   }
 
@@ -552,9 +550,11 @@ export class WritePool {
    * пока допуск не опустеет. Так зависание задачи в допуске (ошибка 79c64f3f,
    * где WARN не было вовсе) видно в логах, а не только в `stats()`.
    *
-   * Таймер привязан к ТЕКУЩЕЙ голове очереди: при выдаче слота ({@link admit})
-   * он сбрасывается — иначе устаревший таймер выдал бы WARN с `waitMs` ниже
-   * порога уже для следующей, свежей задачи (ошибка c7a4d040).
+   * Таймер привязан к ТЕКУЩЕЙ голове очереди: сбрасывается при выдаче слота
+   * ({@link admit}) и перевзводится от новой головы на прочих путях её смены
+   * ({@link resyncAdmissionTimers} — возврат задач в начало, снятие задачи).
+   * Иначе устаревший таймер выдал бы WARN с `waitMs` ниже порога уже для
+   * следующей, свежей задачи (ошибка c7a4d040).
    */
   private armAdmissionWarn(rearmMs?: number): void {
     if (this.closed || this.admissionWarnTimer !== null) return;
@@ -589,6 +589,28 @@ export class WritePool {
       clearTimeout(this.admissionWarnTimer);
       this.admissionWarnTimer = null;
     }
+  }
+
+  /** Сбросить оба таймера очереди допуска: повтор (`admissionTimer`) и предупреждение. */
+  private clearAdmissionTimers(): void {
+    this.clearAdmissionTimer();
+    this.clearAdmissionWarn();
+  }
+
+  /**
+   * Привести таймеры допуска в соответствие с ТЕКУЩЕЙ головой очереди: сбросить и,
+   * если очередь непуста, взвести заново от новой головы. Нужен там, где голова
+   * меняется МИМО {@link admit} — возврат задач в начало в {@link closePin} и
+   * снятие непоставленной задачи в {@link remove}: таймер, взведённый от прежней
+   * головы, иначе предупредит о «долгом» ожидании СВЕЖЕЙ задачи (`waitMs` ниже
+   * порога — ошибка c7a4d040). Просто сбросить нельзя: это заглушило бы
+   * наблюдаемость в окне `closing`, пока голова ждёт освобождения слота.
+   */
+  private resyncAdmissionTimers(): void {
+    this.clearAdmissionTimers();
+    if (this.closed || this.admission.length === 0) return;
+    this.scheduleAdmissionRetry();
+    this.armAdmissionWarn();
   }
 
   // -------------------------------------------------------------------------
@@ -700,7 +722,14 @@ export class WritePool {
     const index = this.pins.indexOf(pin);
     if (index >= 0) this.pins.splice(index, 1);
     const pendingQueue = pin.queue.splice(0, pin.queue.length);
-    if (pendingQueue.length > 0) this.admission.unshift(...pendingQueue);
+    if (pendingQueue.length > 0) {
+      // Возврат задач В НАЧАЛО очереди допуска меняет её голову МИМО `admit` (он
+      // зовётся лишь по завершении выхода воркера) — таймеры допуска взводились от
+      // прежней головы и должны переехать на новую, иначе свежая задача получит
+      // WARN с `waitMs` ниже порога (ошибка c7a4d040).
+      this.admission.unshift(...pendingQueue);
+      this.resyncAdmissionTimers();
+    }
     this.logger?.debug(
       { networkId: pin.networkId, reason, requeued: pendingQueue.length },
       'write pool: привязка снята, невыполненные задачи сети возвращены в очередь допуска',
@@ -770,6 +799,9 @@ export class WritePool {
     const index = this.admission.indexOf(job);
     if (index >= 0) {
       this.admission.splice(index, 1);
+      // Снятая задача могла быть головой очереди допуска — таймеры перевзводим от
+      // новой головы (иначе предупреждение ушло бы с `waitMs` ниже порога, c7a4d040).
+      this.resyncAdmissionTimers();
       return;
     }
     for (const pin of this.pins) {

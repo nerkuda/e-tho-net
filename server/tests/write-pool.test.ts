@@ -378,6 +378,109 @@ describe(
       }
     });
 
+    it('WARN допуска не вылетает ниже порога при возврате задач в голову очереди (closePin)', async () => {
+      // Регресс ошибки c7a4d040, ВТОРОЙ путь: `closePin` возвращает невыполненные
+      // задачи сети В НАЧАЛО очереди допуска (`admission.unshift`) — голова меняется
+      // МИМО `admit` (тот зовётся лишь по завершении выхода воркера). Таймер
+      // предупреждения, взведённый от ПРЕЖНЕЙ головы X, срабатывал на СВЕЖЕЙ p2 —
+      // WARN с `waitMs` ниже порога. Пороги конфигурируемы: реальные 120 с и 30 с
+      // вытеснения не ждём; пул из одного воркера.
+      const p = secondNetwork();
+      const x = secondNetwork();
+      const warns: Array<{ atMs: number; waitMs: number }> = [];
+      const logger = {
+        debug: (): void => {},
+        info: (): void => {},
+        warn: (fields: unknown, msg?: string): void => {
+          if (msg === 'write pool: задача долго ждёт допуска') {
+            warns.push({ atMs: Date.now(), waitMs: Number((fields as { waitMs?: number }).waitMs) });
+          }
+        },
+      } as unknown as NonNullable<
+        NonNullable<ConstructorParameters<typeof WritePool>[0]>['logger']
+      >;
+
+      const waitWarnMs = 1100;
+      // Тайм-аут заметно больше подъёма воркера (в норме ~0.4 с, под нагрузкой
+      // машины — всплески), чтобы застрять в COMMIT воркер успел, и НЕ кратен
+      // порогу WARN: голова p2 возвращается в допуск между периодическими
+      // предупреждениями, поэтому устаревший таймер срабатывает вскорости после
+      // возврата (waitMs ≈ 800), а взведённый от новой головы — через полный порог.
+      const taskTimeoutMs = 2500;
+      const pool = new WritePool({
+        size: 1,
+        taskTimeoutMs,
+        idleEvictionMs: 1_000_000, // вытеснения по простою нет: X ждёт только закрытия P
+        queueWaitWarnMs: waitWarnMs,
+        logger,
+      });
+      let readTxn = false;
+      try {
+        // Откатный журнал ДО подъёма воркера: в WAL коммит под чужой блокировкой не
+        // «зависает» (воркер получил бы SQLITE_BUSY), и окна `closing` не было бы.
+        p.ndb.exec('PRAGMA journal_mode = DELETE');
+        // Соединение главного потока держит разделяемую блокировку: COMMIT воркера
+        // ждёт её в busy-обработчике, а `terminate()` нативный вызов не прерывает —
+        // окно `closing` живёт, пока блокировка держится (тут — до конца теста).
+        p.ndb.exec('BEGIN');
+        readTxn = true;
+        p.ndb.prepare('SELECT COUNT(*) AS n FROM thoughts').get();
+
+        const p1 = pool.run(batchTask(p.context, ['head-p1'])); // застревает в COMMIT
+        void p1.catch(() => {}); // отказ по тайм-ауту не должен маскировать ассерт
+        const xRun = pool.run(batchTask(x.context, ['head-x'])); // ждёт допуска
+        void xRun.catch(() => {});
+
+        // Свежая задача сети P встаёт в очередь ЗАНЯТОГО воркера до тайм-аута...
+        await new Promise((resolve) => setTimeout(resolve, taskTimeoutMs - 40));
+        const p2At = Date.now();
+        const p2 = pool.run(batchTask(p.context, ['head-p2']));
+        void p2.catch(() => {});
+
+        // ...и по тайм-ауту `closePin` прыгает в ГОЛОВУ очереди допуска. Наблюдаем
+        // окно `closing` за предупреждением, взведённым уже от новой головы.
+        await new Promise((resolve) => setTimeout(resolve, waitWarnMs + 150));
+
+        assert.equal(pool.stats().timedOut, 1, 'воркер P снят по тайм-ауту (сценарий держится)');
+        assert.equal(
+          pool.stats().waitingAdmission,
+          2,
+          'в допуске обе задачи: вернувшаяся p2 (голова) и ждущая X',
+        );
+        assert.ok(
+          warns.length >= 2,
+          `предупреждения обязаны были быть; получено: ${JSON.stringify(warns)}`,
+        );
+        // ~5 мс на джиттер таймера, но не сотни: устаревший таймер даёт waitMs
+        // порядка времени жизни головы p2 (тут ≈ 800 при пороге 1100).
+        const tolerance = 5;
+        assert.ok(
+          warns.every((w) => w.waitMs >= waitWarnMs - tolerance),
+          `WARN допуска обязан нести waitMs ≥ ${waitWarnMs}; получено: ${warns
+            .map((w) => w.waitMs)
+            .join(', ')}`,
+        );
+        // И наблюдаемость в окне `closing` НЕ глушится: последнее предупреждение
+        // пришло через полный порог после постановки новой головы. Сброс без
+        // перевзвода дал бы лишь предупреждения прежней головы и провалил условие.
+        const last = warns[warns.length - 1];
+        assert.ok(
+          last !== undefined && last.atMs - p2At >= waitWarnMs - tolerance,
+          `предупреждение о возвращённой голове обязано прийти через полный порог ` +
+            `(${waitWarnMs} мс) после её постановки; получено: ${JSON.stringify(warns)}, p2At=${p2At}`,
+        );
+      } finally {
+        if (readTxn) {
+          try {
+            p.ndb.exec('ROLLBACK');
+          } catch {
+            /* транзакции уже нет */
+          }
+        }
+        await pool.close();
+      }
+    });
+
     it('вытесняет простаивающую привязку по LRU, чтобы новая сеть получила воркер', async () => {
       const other = secondNetwork();
       const third = secondNetwork();
