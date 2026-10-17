@@ -241,6 +241,70 @@ describe(
       }
     });
 
+    it('простаивающая привязка не блокирует допуск: очередь допуска будится таймером', async () => {
+      // Регресс ошибки 79c64f3f. Задача новой сети встаёт в очередь допуска,
+      // когда все воркеры закреплены, а привязка-владелец УЖЕ простаивает (её
+      // последнее событие — прошлая задача). Будить допуск нечем: простаивающая
+      // привязка событий не даёт, а `taskTimeoutMs` взводится только при передаче
+      // задачи воркеру (`dispatchPin`). Пока `route` не звал `admit`, таймер
+      // допуска не взводился вовсе — задача висела вечно. Пороги конфигурируемы:
+      // реальные 30 с `idleEvictionMs` ждать нельзя.
+      const other = secondNetwork();
+      const warns: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+      const logger = {
+        debug: (): void => {},
+        info: (): void => {},
+        warn: (fields: unknown, msg?: string): void => {
+          warns.push({ msg: msg ?? '', fields: (fields ?? {}) as Record<string, unknown> });
+        },
+      } as unknown as NonNullable<
+        NonNullable<ConstructorParameters<typeof WritePool>[0]>['logger']
+      >;
+
+      const pool = new WritePool({
+        size: 1,
+        taskTimeoutMs: 30_000,
+        idleEvictionMs: 300,
+        queueWaitWarnMs: 40,
+        logger,
+      });
+      try {
+        // Сеть A занимает единственный воркер и отпускает его, задача исполнена.
+        await pool.run(batchTask(context, ['idle-holder']));
+        assert.equal(pool.stats().busyWorkers, 0, 'воркер сети A освободился');
+        assert.deepEqual(pool.stats().pinnedNetworks, [networkId], 'воркер закреплён за A');
+
+        // Сеть B: воркера нет, а привязка A ещё не простояла порог вытеснения —
+        // задача обязана исполниться по таймеру допуска, а не висеть вечно.
+        const outcome = await Promise.race([
+          pool.run(batchTask(other.context, ['idle-second'])).then(
+            () => 'executed' as const,
+            () => 'failed' as const,
+          ),
+          new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 3_000)),
+        ]);
+        assert.equal(
+          outcome,
+          'executed',
+          'задача новой сети обязана дождаться вытеснения простаивающей привязки',
+        );
+        assert.equal(countByPrefix(other.ndb, 'idle-second'), 1, 'новая сеть записана');
+        assert.equal(pool.stats().evicted, 1, 'простаивающая привязка вытеснена по простою');
+        // Аномально долгое ожидание допуска обязано быть видно в логах (WARN),
+        // а не только в статистике: иначе зависание в допуске остаётся немым.
+        const admissionWarn = warns.find(
+          (w) => w.msg === 'write pool: задача долго ждёт допуска',
+        );
+        assert.ok(
+          admissionWarn !== undefined,
+          `ожидание допуска обязано логироваться WARN; получено: ${warns.map((w) => w.msg).join(' | ')}`,
+        );
+        assert.equal(admissionWarn!.fields.waitingAdmission, 1, 'WARN видит задачу в допуске');
+      } finally {
+        await pool.close();
+      }
+    });
+
     it('вытесняет простаивающую привязку по LRU, чтобы новая сеть получила воркер', async () => {
       const other = secondNetwork();
       const third = secondNetwork();

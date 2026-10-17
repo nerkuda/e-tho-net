@@ -21,7 +21,11 @@
  * последней задачи). Привязка с непустой очередью не вытесняется никогда —
  * подтверждённые задачи не теряются. Если вытеснять нечего (все воркеры заняты
  * живыми сетями), задача ждёт в очереди допуска: исчерпание пула проявляется
- * ростом ожидания, а не блокировкой чужих потоков (сценарий c4835c68).
+ * ростом ожидания, а не блокировкой чужих потоков (сценарий c4835c68). Допуск
+ * обслуживается на каждой постановке задачи и по таймеру на момент, когда
+ * привязка станет вытесняемой; долгое ожидание в допуске не молчит — проход
+ * пишется WARN (ошибка 79c64f3f: без этого задача новой сети при простаивающей
+ * привязке не будилась ничем и висела вечно).
  *
  * **Отказ воркера и тайм-аут.** У задачи есть тайм-аут, отсчитываемый от начала
  * ИСПОЛНЕНИЯ (ожидание в очереди в него не входит — оно ограничено работой
@@ -73,7 +77,10 @@ export interface WritePoolOptions {
   idleEvictionMs?: number;
   /** Порог глубины очереди, после которого проход пишется WARN. Дефолт — {@link DEFAULT_WRITE_QUEUE_WARN_DEPTH}. */
   queueWarnDepth?: number;
-  /** Порог ожидания задачи в очереди, после которого проход пишется WARN, мс. */
+  /**
+   * Порог ожидания задачи — в очереди воркера и в очереди допуска, — после
+   * которого проход пишется WARN, мс.
+   */
   queueWaitWarnMs?: number;
   /** Логгер для наблюдаемости очереди и падений воркеров (опционален). */
   logger?: Logger;
@@ -204,6 +211,12 @@ export class WritePool {
    */
   private admissionTimer: NodeJS.Timeout | null = null;
   /**
+   * Таймер наблюдаемости очереди допуска: пока задача не получила воркер, её
+   * ожидание обязано быть видно в логах (WARN), а не только в `stats()` — иначе
+   * зависание в допуске (ошибка 79c64f3f) остаётся немым до самого ответа.
+   */
+  private admissionWarnTimer: NodeJS.Timeout | null = null;
+  /**
    * Сети, чей воркер сейчас завершается (вытеснение, тайм-аут, падение): пока
    * запись не снята, новый воркер к той же базе не поднимается — у одного
    * `data.db` не должно быть двух соединений записи даже на мгновение.
@@ -322,6 +335,7 @@ export class WritePool {
     if (this.closed) return;
     this.closed = true;
     this.clearAdmissionTimer();
+    this.clearAdmissionWarn();
     const closedError = new EtnError('INTERNAL', 'write pool is closed');
     for (const job of this.admission.splice(0, this.admission.length)) {
       this.rejectJob(job, closedError);
@@ -345,27 +359,34 @@ export class WritePool {
   // Маршрутизация
   // -------------------------------------------------------------------------
 
-  /** Поставить задачу в очередь своей сети или на допуск, если воркера нет. */
+  /**
+   * Поставить задачу: закреплённой привязке сети — в её очередь, иначе — в
+   * очередь допуска. Допуск обслуживается тут же ({@link admit}): он и поднимет
+   * свободный воркер, и вытеснит простаивающую привязку, и взведёт таймер на
+   * момент, когда привязка станет вытесняемой.
+   *
+   * Вызов `admit` отсюда обязателен: без него задача новой сети при исчерпанном
+   * пуле ждала бы «события», а простаивающая закреплённая привязка событий не
+   * даёт (тайм-аут взводится только при передаче задачи воркеру — {@link
+   * dispatchPin}), и задача висела бы вечно (ошибка 79c64f3f).
+   */
   private route(job: Job): void {
     if (this.closed) {
       throw new EtnError('INTERNAL', 'write pool is closed');
     }
     const networkId = job.task.context.networkId;
-    let pin: Pin | undefined = this.pins.find((p) => !p.dead && p.networkId === networkId);
-    if (pin === undefined) {
-      const created = this.pinFor(networkId);
-      if (created === null) {
-        // Все воркеры закреплены живыми сетями: задача ждёт допуска. Порядок
-        // сетей в допуске — FIFO, порядок задач одной сети сохраняется.
-        this.admission.push(job);
-        this.observeQueue();
-        return;
-      }
-      pin = created;
+    const pin: Pin | undefined = this.pins.find((p) => !p.dead && p.networkId === networkId);
+    if (pin !== undefined) {
+      pin.queue.push(job);
+      this.observeQueue();
+      this.dispatchPin(pin);
+      return;
     }
-    pin.queue.push(job);
+    // Воркера у сети нет: единственная точка выдачи слота — очередь допуска,
+    // порядок сетей FIFO (новая сеть не обгоняет уже ждущие допуска).
+    this.admission.push(job);
     this.observeQueue();
-    this.dispatchPin(pin);
+    this.admit();
   }
 
   /**
@@ -466,8 +487,10 @@ export class WritePool {
         if (created === null) {
           // Вытеснять пока нечего: привязки заняты или ещё не простояли порог.
           // Ждать «события» нельзя — иначе новая сеть повиснет до следующего
-          // завершения чужой задачи: будим себя, когда порог истечёт.
+          // завершения чужой задачи: будим себя, когда порог истечёт, и держим
+          // ожидание видимым в логах.
           this.scheduleAdmissionRetry();
+          this.armAdmissionWarn();
           return;
         }
         pin = created;
@@ -486,6 +509,13 @@ export class WritePool {
    */
   private scheduleAdmissionRetry(): void {
     if (this.closed || this.admissionTimer !== null) return;
+    const head = this.admission[0];
+    if (head === undefined) return;
+    // Сеть, чей прежний воркер ещё завершается, слот раньше `exit` не получит
+    // (двух соединений к одной базе не бывает), а этот путь сам позовёт `admit`.
+    // Таймер по вытесняемой привязке здесь крутился бы каждую 1 мс: голова
+    // очереди станет допускаемой только после `exit`.
+    if (this.closing.has(head.task.context.networkId)) return;
     const now = Date.now();
     let delayMs: number | null = null;
     for (const pin of this.pins) {
@@ -507,6 +537,47 @@ export class WritePool {
     if (this.admissionTimer !== null) {
       clearTimeout(this.admissionTimer);
       this.admissionTimer = null;
+    }
+  }
+
+  /**
+   * Держать ожидание очереди допуска видимым: первое WARN — через
+   * `queueWaitWarnMs` от постановки СТАРОЙ задачи допуска, дальше — периодически,
+   * пока допуск не опустеет. Так зависание задачи в допуске (ошибка 79c64f3f,
+   * где WARN не было вовсе) видно в логах, а не только в `stats()`.
+   */
+  private armAdmissionWarn(rearmMs?: number): void {
+    if (this.closed || this.admissionWarnTimer !== null) return;
+    const head = this.admission[0];
+    if (head === undefined) return;
+    const period = Math.max(1, this.queueWaitWarnMs);
+    const delayMs =
+      rearmMs ?? Math.max(1, head.enqueuedAtMs + this.queueWaitWarnMs - Date.now());
+    const timer = setTimeout(() => {
+      this.admissionWarnTimer = null;
+      const waiting = this.admission[0];
+      if (this.closed || waiting === undefined) return;
+      this.logger?.warn(
+        {
+          waitMs: Date.now() - waiting.enqueuedAtMs,
+          waitingAdmission: this.admission.length,
+          busyWorkers: this.busyCount(),
+          pinnedNetworks: this.pins.map((p) => p.networkId),
+          closingNetworks: [...this.closing.keys()],
+        },
+        'write pool: задача долго ждёт допуска',
+      );
+      // Допуск всё ещё не пуст — предупреждать и дальше (порог — период WARN).
+      this.armAdmissionWarn(period);
+    }, delayMs);
+    timer.unref?.();
+    this.admissionWarnTimer = timer;
+  }
+
+  private clearAdmissionWarn(): void {
+    if (this.admissionWarnTimer !== null) {
+      clearTimeout(this.admissionWarnTimer);
+      this.admissionWarnTimer = null;
     }
   }
 

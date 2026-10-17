@@ -282,6 +282,9 @@ describe(
       try {
         configureWritePool({ size: 1, taskTimeoutMs: 60_000 });
         const ids = await Promise.all(['q1', 'q2', 'q3'].map((t) => createThought(pooled, t)));
+        // Три `createThought` уже прошли через пул — счётчик до батча недостаточен
+        // для утверждения «батч исполнен пулом»: сверяем РОСТ ровно на одну задачу.
+        const completedBefore = getWritePool()!.stats().completed;
         const res = await injectData<typeof syncResult>(
           pooled,
           'POST',
@@ -290,10 +293,76 @@ describe(
         );
         assert.equal(res.statusCode, 200, res.body);
         assert.deepEqual(res.data, syncResult, 'ответ REST не изменился');
-        assert.ok(getWritePool()!.stats().completed >= 1, 'второй батч — через пул');
+        assert.equal(
+          getWritePool()!.stats().completed,
+          completedBefore + 1,
+          'батч-задача исполнена пулом (счётчик вырос ровно на одну задачу)',
+        );
       } finally {
         await closeWritePool();
         await closeRestContext(pooled);
+      }
+    });
+
+    it('исчерпание пула не вешает REST-батч в новую сеть (ошибка 79c64f3f)', async () => {
+      // Сквозной регресс заявленного симптома: `ETN_WRITE_POOL_SIZE=1`, запись в
+      // сеть B закрепляет единственный воркер, затем батч REST в сеть A. Пока
+      // `route` не будил очередь допуска, ответа не было вовсе: привязка B уже
+      // простаивала (событий нет), тайм-аут взводится только при передаче задачи
+      // воркеру. Пороги конфигурируемы — реальные 30 с не ждём.
+      const ctx = await buildRestContext();
+      let netB: string | null = null;
+      try {
+        // Мысли сети A — напрямую, пул ещё не настроен (синхронный путь).
+        const ids = seedPlainThoughts(ctx.ndb, 'admit-rest', 3);
+
+        const createdB = await injectData<{ id: string }>(ctx, 'POST', '/api/v1/networks', {
+          display_name: 'Admission Net',
+        });
+        assert.equal(createdB.statusCode, 201, createdB.body);
+        netB = createdB.data.id;
+
+        const logs: string[] = [];
+        configureWritePool({
+          size: 1,
+          taskTimeoutMs: 60_000,
+          idleEvictionMs: 300,
+          queueWaitWarnMs: 40,
+          logger: captureLogger(logs),
+        });
+
+        // Единственный воркер закрепляется за сетью B и отпускает её (простой).
+        await createThought(ctx, 'b-holder', netB);
+        assert.equal(getWritePool()!.stats().busyWorkers, 0, 'воркер сети B освободился');
+        assert.deepEqual(getWritePool()!.stats().pinnedNetworks, [netB], 'воркер закреплён за B');
+
+        // Батч в сеть A: воркера нет, привязка B ещё не простояла порог. Ответ
+        // обязан прийти (допуск будится таймером), а не потеряться.
+        const response = await Promise.race([
+          injectData<{ affected: number }>(
+            ctx,
+            'POST',
+            `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+            { ids, op: 'trash' },
+          ),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
+        ]);
+        assert.ok(response !== null, 'REST-батч в новую сеть обязан завершиться, а не висеть');
+        assert.equal(response.statusCode, 200, response.body);
+        assert.equal(response.data.affected, 3, 'батч обработан целиком');
+        assert.equal(
+          getWritePool()!.stats().evicted,
+          1,
+          'простаивающая привязка вытеснена по таймеру допуска',
+        );
+        assert.ok(
+          logs.some((l) => l.includes('write pool: задача долго ждёт допуска')),
+          `ожидание допуска обязано быть видно в логах; получено: ${logs.join('\n')}`,
+        );
+      } finally {
+        await closeWritePool();
+        if (netB !== null) closeNetworkDb(netB);
+        await closeRestContext(ctx);
       }
     });
 
