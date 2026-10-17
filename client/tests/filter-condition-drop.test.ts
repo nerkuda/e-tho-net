@@ -187,6 +187,27 @@ describe('совместимость перетаскиваемого значе
       true,
       'строка',
     );
+    // Текстовые НЕ-свойства («Имя вложения», «Заголовок сущности», записи
+    // дневника) принимают строку: природа значения — из каталога операндов.
+    for (const kind of ['name', 'entity_title', 'record_title', 'record_body'] as const) {
+      assert.equal(
+        valueMod.filterValueAcceptsPayload(leaf({ kind }, 'contains'), ctx, {
+          kind: 'string',
+          value: 'слово',
+        }),
+        true,
+        `текстовый операнд ${kind}`,
+      );
+    }
+    // Нетекстовые операнды строку не принимают.
+    assert.equal(
+      valueMod.filterValueAcceptsPayload(leaf({ kind: 'size' }, 'gt'), ctx, {
+        kind: 'string',
+        value: '10',
+      }),
+      false,
+      'размер — число',
+    );
     // Несовместимые пары.
     assert.equal(
       valueMod.filterValueAcceptsPayload(leaf({ kind: 'parents' }, 'in'), ctx, { kind: 'date', value: '2026-10-17' }),
@@ -302,6 +323,145 @@ describe('приём облачка в условие: ближайший при
     const notice = body.findAll((node) => node.className.includes('notice'))[0];
     assert.ok(notice !== undefined, 'объяснение показано');
     assert.match(notice!.flatText(), /не принимает мысль/);
+    handle.destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2б. Блокер проверки: дроп в строку обновляет виджет для ВСЕХ редакторов
+// ---------------------------------------------------------------------------
+
+/**
+ * Дерево под матрицу редакторов: свойство-связь, дата, текст, тип. Дроп идёт в
+ * ПРИЁМНИК СТРОКИ (`.ft-item`) — именно его находит бросок в `.ft-row__what`,
+ * а не виджет ячейки (для не-`entity` он писал модель без перерисовки).
+ */
+function buildEditorTree(): {
+  handle: FilterTreeHandle;
+  state: any;
+} {
+  const state = builder.defaultFilterCriteriaState();
+  state.tree = {
+    kind: 'group',
+    op: 'and',
+    children: [
+      leaf({ kind: 'property', property_id: 'p-link' }, 'in'),
+      leaf({ kind: 'created_at' }, 'gte'),
+      leaf({ kind: 'property', property_id: 'p-text' }, 'eq'),
+      leaf({ kind: 'type' }, 'in'),
+    ],
+  };
+  const handle = treeMod.buildFilterTree({
+    profile: 'thoughts',
+    getState: () => state,
+    data: { registry: REGISTRY, linkTypes: [], thoughtTypes: [] },
+    renderValue: valueMod.createFilterValueRenderer(valueCtx()),
+    // Как у РЕАЛЬНОГО хоста (`filter-editor.ts`): правка значения персистится
+    // без пересборки дерева. Именно поэтому «лёгкий» путь записи (`api.setValue`)
+    // оставлял DOM старым — без `onValueEdit` тест маскировал бы блокер.
+    onValueEdit: () => undefined,
+  });
+  return { handle, state };
+}
+
+/** Бросок в строку — тот же приёмник, что находит `.ft-row__what`. */
+function dropIntoRow(root: ShimElement, path: string, payload: any): void {
+  const item = itemAt(root, path);
+  const found = dropMod.resolveThoughtDropField(item as any);
+  assert.ok(found !== null, `приёмник строки ${path}`);
+  assert.equal(found.handlers.acceptPayload!(payload), true, `бросок в строку ${path} принят`);
+}
+
+function inputsOf(el: ShimElement): ShimElement[] {
+  return el.findAll((node) => node.tagName === 'input');
+}
+
+describe('дроп в строку условия: виджет обновляется для всех видов редактора', () => {
+  it('свойство-связь: в строке появляется чип значения', () => {
+    const { handle, state } = buildEditorTree();
+    const root = handle.root as unknown as ShimElement;
+    dropIntoRow(root, '0', { kind: 'thought', id: 'th-1' });
+    assert.deepEqual(state.tree.children[0].value, { kind: 'list', items: ['th-1'] });
+    const fresh = itemAt(handle.root as unknown as ShimElement, '0');
+    const chip = valueBox(fresh).findAll((node) => node.dataset['id'] === 'th-1');
+    assert.equal(chip.length, 1, 'чип значения-связи отрисован из модели');
+    handle.destroy();
+  });
+
+  it('дата: в строке появляется поле с установленной датой', () => {
+    const { handle, state } = buildEditorTree();
+    const root = handle.root as unknown as ShimElement;
+    dropIntoRow(root, '1', { kind: 'date', value: '2026-10-17' });
+    assert.deepEqual(state.tree.children[1].value, { kind: 'scalar', value: '2026-10-17' });
+    const fresh = itemAt(handle.root as unknown as ShimElement, '1');
+    const shown = inputsOf(valueBox(fresh)).filter((input) => input.value === '2026-10-17');
+    assert.equal(shown.length, 1, 'дата видна в поле ячейки');
+    handle.destroy();
+  });
+
+  it('текст: поле значения показывает установленную строку', () => {
+    const { handle, state } = buildEditorTree();
+    const root = handle.root as unknown as ShimElement;
+    dropIntoRow(root, '2', { kind: 'string', value: 'новое' });
+    assert.deepEqual(state.tree.children[2].value, { kind: 'scalar', value: 'новое' });
+    const fresh = itemAt(handle.root as unknown as ShimElement, '2');
+    const shown = inputsOf(valueBox(fresh)).filter((input) => input.value === 'новое');
+    assert.equal(shown.length, 1, 'строка видна в поле ячейки');
+    handle.destroy();
+  });
+
+  it('тип: чип типа появляется в строке', () => {
+    const { handle, state } = buildEditorTree();
+    const root = handle.root as unknown as ShimElement;
+    dropIntoRow(root, '3', { kind: 'type', id: 'tt-1' });
+    assert.deepEqual(state.tree.children[3].value, { kind: 'list', items: ['tt-1'] });
+    const fresh = itemAt(handle.root as unknown as ShimElement, '3');
+    const chip = valueBox(fresh).findAll((node) => node.dataset['id'] === 'tt-1');
+    assert.equal(chip.length, 1, 'чип типа отрисован');
+    handle.destroy();
+  });
+});
+
+describe('string-payload: семантика ручного ввода', () => {
+  it('множественный текст сохраняет $-токены и порядок, дубль — no-op', () => {
+    const state: any = builder.defaultFilterCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        {
+          ...leaf({ kind: 'property', property_id: 'p-text' }, 'in'),
+          value: { kind: 'list', items: ['$thought.created', 'старое'] },
+        },
+      ],
+    };
+    const handle = treeMod.buildFilterTree({
+      profile: 'thoughts',
+      getState: () => state,
+      data: { registry: REGISTRY, linkTypes: [], thoughtTypes: [] },
+      renderValue: valueMod.createFilterValueRenderer(valueCtx()),
+    });
+    const root = handle.root as unknown as ShimElement;
+    dropIntoRow(root, '0', { kind: 'string', value: 'новое' });
+    assert.deepEqual(state.tree.children[0].value, {
+      kind: 'list',
+      items: ['$thought.created', 'старое', 'новое'],
+    });
+    // Повтор — не изменение (как у чип-редактора), токены на месте.
+    const found = dropMod.resolveThoughtDropField(itemAt(handle.root as unknown as ShimElement, '0') as any);
+    assert.equal(found?.handlers.acceptPayload!({ kind: 'string', value: 'новое' }), false);
+    assert.deepEqual(state.tree.children[0].value, {
+      kind: 'list',
+      items: ['$thought.created', 'старое', 'новое'],
+    });
+    handle.destroy();
+  });
+
+  it('одиночный текст с $… становится токеном (как при ручном наборе)', () => {
+    const { handle, state } = buildEditorTree();
+    const root = handle.root as unknown as ShimElement;
+    dropIntoRow(root, '2', { kind: 'string', value: '$thought.title' });
+    assert.deepEqual(state.tree.children[2].value, { kind: 'token', token: '$thought.title' });
     handle.destroy();
   });
 });

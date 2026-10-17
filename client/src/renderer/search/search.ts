@@ -341,14 +341,24 @@ export function mountSearch(next: SearchChrome): () => void {
   const panelObserver = new ResizeObserver(positionPanel);
   panelObserver.observe(input);
 
-  // Close the panel on any click outside it (the input and the toggle inside
-  // the panel keep it open) and on Escape while it is visible, even if the
-  // input lost focus.
+  // Close the panel on a completed click outside it (the input and the toggle
+  // inside the panel keep it open) and on Escape while it is visible, even if
+  // the input lost focus. The outside click is applied on `pointerup`, not on
+  // `pointerdown` — see the drag-cloud exception below.
   // Клик по всплывающему слою, открытому ИЗ панели, — не «вне панели»:
   // общая выпадашка подсказок и модальный диалог живут в `document.body`.
   // Иначе нажатие на строку подсказки прячет панель, поле теряет фокус,
   // список подсказок закрывается до `click` — выбранный тип (фокус, тип
   // связи) не доезжает до отбора (ошибка 72a06e01).
+  /**
+   * Нажатие вне панели НЕ закрывает её сразу: закрытие откладывается до
+   * `pointerup`. Иначе жест «облачко карты → условие отбора» невозможен —
+   * панель исчезает на старте перетаскивания вместе с целью броска (критерий 6
+   * задачи 31b228f0). Обычный клик вне панели закрывает её на отпускании;
+   * начавшийся drag-cloud отменяет закрытие (признак активного жеста —
+   * класс `cloud-dragging`, который ставит `canvas/drag-cloud.ts`).
+   */
+  let panelClosePending = false;
   const onDocumentPointerDown = (event: Event): void => {
     if (host.classList.contains('hidden')) return;
     const target = event.target;
@@ -370,9 +380,23 @@ export function mountSearch(next: SearchChrome): () => void {
     })) {
       return;
     }
+    panelClosePending = true;
+  };
+  const onDocumentPointerUp = (): void => {
+    if (!panelClosePending) return;
+    panelClosePending = false;
+    // Жест перетаскивания начался после нажатия — панель обязана дожить до
+    // броска в условие. `pointerup` приходит раньше `mouseup`, поэтому класс
+    // ещё стоит (снимает его drag-cloud на своём `mouseup`).
+    if (document.body.classList.contains('cloud-dragging')) return;
     hidePanel();
   };
+  const onDocumentPointerCancel = (): void => {
+    panelClosePending = false;
+  };
   document.addEventListener('pointerdown', onDocumentPointerDown);
+  document.addEventListener('pointerup', onDocumentPointerUp);
+  document.addEventListener('pointercancel', onDocumentPointerCancel);
   // Контекст панели: Escape при видимой панели, даже когда фокус не в поле
   // (раньше — document-слушатель; ADR b420b08c, задача fd3d84f4).
   defineKeyContext({
@@ -402,6 +426,8 @@ export function mountSearch(next: SearchChrome): () => void {
     searchEditor = null;
     window.removeEventListener('resize', onWindowResize);
     document.removeEventListener('pointerdown', onDocumentPointerDown);
+    document.removeEventListener('pointerup', onDocumentPointerUp);
+    document.removeEventListener('pointercancel', onDocumentPointerCancel);
     input.removeEventListener('focusin', onFieldFocusIn as EventListener);
     input.removeEventListener('focusout', onFieldFocusOut as EventListener);
     releaseSearchFieldContext?.();

@@ -1,0 +1,150 @@
+{
+  "name": "31b228f0-filter-drop-map-to-condition",
+  "description": "Критерий 6: облачко С КАРТЫ бросается в условие редактора отбора панели поиска. Ожидание: обычный клик вне панели по-прежнему её закрывает; жест «облачко карты → условие» проходит (панель не исчезает на pointerdown), значение установлено, новых условий не добавлено. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.31b228f0-filter-drop-map.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "map-cloud-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "resize-large",
+      "eval": "(() => { window.resizeTo(1600, 1200); return window.innerWidth + 'x' + window.innerHeight; })()"
+    },
+    { "name": "large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+
+    {
+      "name": "open-panel",
+      "eval": "(() => { const i = document.querySelector('.search-input'); if (i === null) return null; i.focus(); return true; })()"
+    },
+    {
+      "name": "panel-open",
+      "waitFor": "document.querySelector('.search-panel') !== null && !document.querySelector('.search-panel').classList.contains('hidden')"
+    },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const b = document.querySelector('.search-settings-toggle'); if (b === null) return null; b.click(); return 'clicked'; })()"
+    },
+    {
+      "name": "editor-mounted",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.search-settings .fe .ft-group') !== null"
+    },
+    {
+      "name": "add-condition",
+      "eval": "(() => { const b = document.querySelector('.search-settings .ft-add-condition'); if (b === null) return null; b.click(); return 'clicked'; })()"
+    },
+    {
+      "name": "condition-added",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"]') !== null"
+    },
+    {
+      "name": "open-operand-picker",
+      "eval": "(() => { const b = document.querySelector('.search-settings .ft-row[data-path=\"2\"] .ft-row__what'); if (b === null) return null; b.click(); return 'clicked'; })()"
+    },
+    {
+      "name": "parents-available",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"parents\"]') !== null"
+    },
+    {
+      "name": "pick-parents",
+      "eval": "(() => { const i = document.querySelector('.ft-choice__item[data-key=\"parents\"]'); if (i === null) return null; i.click(); return 'clicked'; })()"
+    },
+    {
+      "name": "operand-is-parents",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .ft-row__what')?.textContent?.includes('Родители') === true"
+    },
+    {
+      "name": "condition-accepts-thought",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .ft-row__value .fv[data-editor=\"entity\"]') !== null"
+    },
+    {
+      "name": "leaves-before",
+      "probe": "document.querySelectorAll('.search-settings .ft-item[data-kind=\"leaf\"]').length",
+      "expect": 3
+    },
+
+    {
+      "name": "outside-point-not-in-panel",
+      "probe": "(() => { const el = document.elementFromPoint(1560, 1160); if (el === null) return false; return el.closest('.search-panel') === null && el.closest('.cloud') === null; })()",
+      "expect": true
+    },
+    { "name": "click-outside", "click": { "x": 1560, "y": 1160 } },
+    {
+      "name": "panel-closed-by-click",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.search-panel')?.classList.contains('hidden') === true"
+    },
+
+    {
+      "name": "reopen-panel",
+      "eval": "(() => { const i = document.querySelector('.search-input'); if (i === null) return null; i.focus(); return true; })()"
+    },
+    {
+      "name": "panel-reopened",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.search-panel')?.classList.contains('hidden') === false"
+    },
+    {
+      "name": "settings-still-open",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"]') !== null"
+    },
+
+    {
+      "name": "map-cloud-into-condition",
+      "drag": {
+        "from": ".cloud[data-id=\"{{thoughtId}}\"]",
+        "to": ".search-settings .ft-row[data-path=\"2\"] .ft-row__what",
+        "expect": ".search-settings .ft-row[data-path=\"2\"]",
+        "steps": 16,
+        "duration": 320
+      }
+    },
+    {
+      "name": "panel-survived-gesture",
+      "probe": "document.querySelector('.search-panel')?.classList.contains('hidden') === false",
+      "expect": true
+    },
+    {
+      "name": "value-set-from-map",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .ft-row__value [data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "value-id-from-map",
+      "probe": "document.querySelector('.search-settings .ft-row[data-path=\"2\"] .ft-row__value [data-id]')?.dataset?.id ?? null",
+      "expect": "{{thoughtId}}"
+    },
+    {
+      "name": "no-root-added",
+      "probe": "document.querySelectorAll('.search-settings .ft-item[data-kind=\"leaf\"]').length",
+      "expect": 3
+    },
+    {
+      "name": "no-noop-error",
+      "probe": "document.querySelector('.search-settings .error-text') === null",
+      "expect": true
+    }
+  ]
+}

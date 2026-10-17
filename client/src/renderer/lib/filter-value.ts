@@ -406,9 +406,13 @@ export function filterValueAcceptsPayload(
     case 'date':
       return editor === 'date';
     case 'string': {
+      // Текстовое значение принимает ЛЮБОЙ текстовый операнд: и свойство
+      // реестра (`text`/`url`), и текстовые не-свойства («Имя вложения»,
+      // «Заголовок сущности», «Заголовок/Текст записи», MIME-подтип). Природа
+      // значения — из ЕДИНОГО каталога операндов (`lib/filter-tokens.ts`),
+      // второго словаря совместимости нет.
       if (editor !== 'value-editor') return false;
-      const valueType = filterValueRegistryEntry(leaf, ctx.data)?.value_type;
-      return valueType === 'text' || valueType === 'url';
+      return filterTokenNature(leaf, ctx) === 'text';
     }
     default:
       return false;
@@ -447,10 +451,12 @@ function filterValuePayloadValue(
     }
     case 'string': {
       if (payload.value === '') return null;
-      if (!filterValueIsMultiple(leaf.operator)) {
-        return { kind: 'scalar', value: payload.value };
-      }
-      const current = currentList(leaf.value).filter((item) => !item.startsWith('$'));
+      // Семантика РУЧНОГО ввода (`filterValueFromEditor`): одиночное значение —
+      // литерал либо `$…`-токен. Токены существующего набора при дополнении не
+      // выбрасываются: ручное добавление чипа их сохраняет, значит и бросок
+      // обязан сохранять (дедупликация и порядок — как у чип-редактора).
+      if (!filterValueIsMultiple(leaf.operator)) return filterValueFromEditor(payload.value);
+      const current = currentList(leaf.value);
       if (current.includes(payload.value)) return null;
       return { kind: 'list', items: [...current, payload.value] };
     }
@@ -465,11 +471,16 @@ function filterValuePayloadValue(
 
 /**
  * Приёмник значений на ячейке и строке условия (критерий 6). Совместимость —
- * {@link filterValueAcceptsPayload}; запись — тот же `api.setValue`, что у
- * ручного ввода (`filter-tree.ts`), модель не дублируется. Несовместимый
- * бросок модель не меняет и объясняет причину тостом; в приёмник панели
- * «Структур» он не проваливается — ближайший зарегистрированный предок
- * (`walkDropField`) остаётся этим.
+ * {@link filterValueAcceptsPayload}, значение — {@link filterValuePayloadValue}.
+ *
+ * Запись идёт СТРУКТУРНЫМ путём ручной правки (`api.setStructuralValue` →
+ * `touch()` → полная перерисовка): бросок меняет модель ВНЕ виджета, поэтому
+ * «лёгкий» путь значения (`api.setValue` → `touchValue`) оставлял бы ячейку со
+ * старым содержимым — модель и сервер новые, DOM старый (блокер проверки этапа
+ * 3). Виджеты `entity` перекрывают этот приёмник своим и обновляют разметку
+ * сами (чипы/комбо). Несовместимый бросок модель не меняет и объясняет причину
+ * тостом; в приёмник панели «Структур» он не проваливается — ближайший
+ * зарегистрированный предок (`walkDropField`) остаётся этим.
  */
 function acceptFilterValueDrop(
   leaf: FilterTreeLeaf,
@@ -483,7 +494,7 @@ function acceptFilterValueDrop(
   }
   const value = filterValuePayloadValue(leaf, payload);
   if (value === null) return false;
-  api.setValue(value);
+  (api.setStructuralValue ?? api.setValue)(value);
   return true;
 }
 
