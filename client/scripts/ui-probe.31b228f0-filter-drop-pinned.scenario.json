@@ -1,0 +1,73 @@
+{
+  "name": "31b228f0-filter-drop-pinned-priority",
+  "description": "Этап 3 (критерий 6): облачко из закреплённых бросается в условие «Мысль = …» панели «Структуры» при наличии приёмника панели. Ожидание: значение установлено, корень отбора НЕ добавлен (приоритет ближайшего приёмника строки), число условий не изменилось. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.31b228f0-filter-drop-pinned.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-pin",
+      "api": {
+        "name": "seed-pin",
+        "method": "PUT",
+        "path": "/networks/{{networkId}}/pins",
+        "body": { "ordered_ids": ["{{thoughtId}}"] },
+        "expression": "Array.isArray(data) && data.some((x) => x.thought_id === '{{thoughtId}}')"
+      },
+      "expect": true
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "pin-visible", "timeout": 10000, "waitFor": "document.querySelector('.pinned-chip[data-id=\"{{thoughtId}}\"]') !== null" },
+    { "name": "resize-large", "eval": "(() => { window.resizeTo(1600, 1200); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .ft-add-condition') !== null" },
+
+    { "name": "add-condition", "click": ".st-filter .ft-add-condition" },
+    { "name": "one-row", "timeout": 10000, "waitFor": "document.querySelectorAll('.st-filter .ft-item[data-kind=\"leaf\"]').length === 1" },
+    {
+      "name": "operand-is-thought",
+      "probe": "(document.querySelector('.st-filter .ft-item[data-path=\"0\"] .ft-row__what')?.textContent || '').replace('▾','').trim()",
+      "expect": "Мысль"
+    },
+    {
+      "name": "value-empty-before",
+      "probe": "!document.querySelector('.st-filter .ft-item[data-path=\"0\"] .ft-row__value [data-id]')",
+      "expect": true
+    },
+
+    {
+      "name": "drop-pinned-into-value",
+      "drag": {
+        "from": ".pinned-chip[data-id=\"{{thoughtId}}\"]",
+        "to": ".st-filter .ft-item[data-path=\"0\"] .ft-row__value",
+        "expect": ".st-filter .ft-item[data-path=\"0\"]",
+        "steps": 12,
+        "duration": 240
+      }
+    },
+    {
+      "name": "value-set",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ft-item[data-path=\"0\"] .ft-row__value [data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "no-root-added",
+      "probe": "document.querySelectorAll('.st-filter .ft-item[data-kind=\"leaf\"]').length",
+      "expect": 1
+    },
+    {
+      "name": "model-value",
+      "probe": "(() => { const r = document.querySelector('.st-filter .ft-item[data-path=\"0\"]'); const id = r?.querySelector('.ft-row__value [data-id]')?.dataset?.id || ''; return id; })()",
+      "expect": "{{thoughtId}}"
+    }
+  ]
+}

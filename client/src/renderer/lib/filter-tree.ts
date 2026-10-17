@@ -61,6 +61,8 @@ import {
 
 import { clear, div, el, setTooltip, span } from './dom.js';
 import { defineKeyContext, pushKeyContext, undefineKeyContext } from './keymap.js';
+import { registerThoughtDropField } from './thought-drop.js';
+import type { ThoughtDropPayload } from './thought-drop-pure.js';
 import {
   createDragTree,
   resolveDragTreeRowTarget,
@@ -1155,6 +1157,14 @@ export interface FilterTreeValueSlotApi {
    * НОВОМУ узлу поля (ошибка 50d9bf4e, п. C2/C3).
    */
   readonly slotKey?: string;
+  /**
+   * Приёмник перетаскиваемого значения для ВСЕЙ строки условия (этап 3 задачи
+   * 31b228f0): виджет значения решает совместимость вида и пишет значение тем
+   * же путём, что ручной ввод. Каркас вешает его на `.ft-item` — строка
+   * побеждает приёмник панели «Структур» (ближайший предок, критерий 6).
+   * Не задан — строка значения не принимает (и бросок идёт хосту панели).
+   */
+  acceptDrop?: (payload: ThoughtDropPayload) => boolean;
 }
 
 /** Контекст сборки дерева: профиль — параметр, данные и модель — снаружи. */
@@ -2152,7 +2162,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         setTooltip(indicator, 'Перетащить условие или группу');
         item.append(indicator);
         item.append(
-          child.kind === 'group' ? renderGroup(childPath, depth + 1) : renderRow(child, childPath),
+          child.kind === 'group' ? renderGroup(childPath, depth + 1) : renderRow(child, childPath, item),
         );
         body.append(item);
       });
@@ -2196,7 +2206,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
   };
 
   /** Строка-условие: [Что][Оператор][Значение][×] (+ строка диагностики снизу). */
-  const renderRow = (leaf: FilterTreeLeaf, path: FilterTreePath): HTMLElement => {
+  const renderRow = (leaf: FilterTreeLeaf, path: FilterTreePath, item?: HTMLElement): HTMLElement => {
     const row = div(FILTER_TREE_ROW_CLASS);
     row.dataset['path'] = filterTreePathKey(path);
     const rowIssue = applyIssue(row, path);
@@ -2340,6 +2350,20 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
       valueBox.querySelector(`.${FILTER_VALUE_MODE_HOOK}`)?.remove();
     }
     row.append(valueBox);
+
+    // Приёмник перетаскиваемого значения на ВСЕЙ строке условия (этап 3 задачи
+    // 31b228f0): ближайший зарегистрированный предок побеждает приёмник панели
+    // «Структур», поэтому бросок в «Что»/оператор строки тоже не добавляет
+    // корень отбора. Совместимость и запись — виджета значения (`acceptDrop`),
+    // каркас лишь передаёт payload.
+    if (item !== undefined && api.acceptDrop !== undefined) {
+      const acceptDrop = api.acceptDrop;
+      registerThoughtDropField(item, {
+        kind: 'filter',
+        accept: (id: string): boolean => acceptDrop({ kind: 'thought', id }),
+        acceptPayload: acceptDrop,
+      });
+    }
 
     // Обязательное условие места (например, «Период записи» панели «Дневника»)
     // удалить нельзя — крестик не рисуется (ошибка 609deba0 п.2).

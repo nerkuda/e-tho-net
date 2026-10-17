@@ -15,6 +15,7 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
+  acceptThoughtDrop,
   resolveFieldDrop,
   walkDropField,
 } from '../src/renderer/lib/thought-drop-pure.js';
@@ -105,6 +106,49 @@ describe('resolveFieldDrop: перенос vs копирование (d144ef71)'
   });
 });
 
+describe('типизированный payload приёмника (этап 3 задачи 31b228f0)', () => {
+  it('поле без acceptPayload получает мысль историческим accept (обратная совместимость)', () => {
+    const seen: string[] = [];
+    const legacy = {
+      accept: (id: string): boolean => {
+        seen.push(id);
+        return true;
+      },
+    };
+    assert.equal(acceptThoughtDrop(legacy, { kind: 'thought', id: 't-1' }), true);
+    assert.deepEqual(seen, ['t-1']);
+    // Не-мысль историческому полю не подходит: модель не меняется, accept не зовётся.
+    assert.equal(acceptThoughtDrop(legacy, { kind: 'string', value: 'x' }), false);
+    assert.equal(acceptThoughtDrop(legacy, { kind: 'date', value: '2026-10-17' }), false);
+    assert.deepEqual(seen, ['t-1']);
+  });
+
+  it('acceptPayload имеет приоритет и получает payload целиком', () => {
+    const legacy: string[] = [];
+    const payloads: string[] = [];
+    const field = {
+      accept: (id: string): boolean => {
+        legacy.push(id);
+        return true;
+      },
+      acceptPayload: (payload: { kind: string; id?: string; value?: string }): boolean => {
+        payloads.push(payload.kind);
+        return payload.kind === 'date';
+      },
+    };
+    assert.equal(acceptThoughtDrop(field, { kind: 'date', value: '2026-10-17' }), true);
+    assert.equal(acceptThoughtDrop(field, { kind: 'thought', id: 't-2' }), false);
+    assert.deepEqual(payloads, ['date', 'thought']);
+    assert.deepEqual(legacy, [], 'исторический accept не дублирует запись');
+  });
+
+  it('drag-cloud передаёт облачко типизированным payload через единый диспетчер', () => {
+    const src = readText('canvas/drag-cloud.ts');
+    assert.match(src, /acceptThoughtDrop\(field\.handlers, \{ kind: 'thought', id: g\.id \}\)/);
+    assert.match(src, /const field = resolveThoughtDropField\(fieldEl\);/);
+  });
+});
+
 describe('walkDropField: поиск приёмника по цепочке родителей (d144ef71)', () => {
   interface Node {
     id: string;
@@ -190,7 +234,8 @@ describe('единый pointer-канал drag-cloud (d144ef71)', () => {
     assert.match(src, /const fieldTarget = resolveThoughtDropField\(el\);/);
     assert.match(src, /case 'field-add': \{/);
     assert.match(src, /const field = resolveThoughtDropField\(fieldEl\);/);
-    assert.match(src, /const accepted = field\?\.handlers\.accept\(g\.id\) \?\? false;/);
+    assert.match(src, /const accepted =/);
+    assert.match(src, /acceptThoughtDrop\(field\.handlers, \{ kind: 'thought', id: g\.id \}\)/);
     assert.match(src, /resolveFieldDrop\(\{/);
     assert.match(src, /targetMovable: field\?\.handlers\.kind === 'link-value',/);
     assert.match(src, /if \(plan\.removeFromSource\) g\.removeFromSource\?\.\(\);/);

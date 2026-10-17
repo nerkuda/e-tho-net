@@ -90,6 +90,8 @@ import {
 import type { SuggestEntry, SuggestSource } from './suggest-dropdown.js';
 import { menuAction } from './menu.js';
 import { notice } from './notice.js';
+import { registerThoughtDropField } from './thought-drop.js';
+import type { ThoughtDropPayload } from './thought-drop-pure.js';
 import { uiButton } from './ui/button.js';
 import { chipList } from './ui/chip-list.js';
 import type { IconName } from './ui/icon.js';
@@ -370,6 +372,121 @@ export function filterValueEditor(leaf: FilterTreeLeaf, ctx: FilterValueContext)
   return 'value-editor';
 }
 
+/**
+ * Принимает ли ЯЧЕЙКА значение перетаскиваемого вида (этап 3 задачи 31b228f0).
+ * ЕДИНСТВЕННЫЙ предикат совместимости: опирается на тот же вид редактора
+ * ({@link filterValueEditor}) и определение свойства из реестра — второго
+ * словаря совместимости нет (критерий 5; стандарт S2, `guard-value-editor`).
+ *
+ * - `thought` — ссылочный операнд-мысль (`entity` с родом `thoughts`: «Мысль»,
+ *   «Родители»/«Потомки», «Цели») либо значение свойства-связи
+ *   (`value-editor` с `value_type: 'link'`, там редактор чипов);
+ * - `type` — ссылочный операнд «Тип»/«Тип связи»;
+ * - `date` — датовая ячейка (опорный виджет, в т.ч. свойство-дата);
+ * - `string` — текстовое/URL-значение свойства.
+ */
+export function filterValueAcceptsPayload(
+  leaf: FilterTreeLeaf,
+  ctx: FilterValueContext,
+  payload: ThoughtDropPayload,
+): boolean {
+  const editor = filterValueEditor(leaf, ctx);
+  switch (payload.kind) {
+    case 'thought':
+      if (editor === 'entity') return entityKindOf(leaf) === 'thoughts';
+      if (editor === 'value-editor') {
+        return filterValueRegistryEntry(leaf, ctx.data)?.value_type === 'link';
+      }
+      return false;
+    case 'type':
+      if (editor === 'entity') {
+        return leaf.entity.kind === 'type' || leaf.entity.kind === 'link_type';
+      }
+      return false;
+    case 'date':
+      return editor === 'date';
+    case 'string': {
+      if (editor !== 'value-editor') return false;
+      const valueType = filterValueRegistryEntry(leaf, ctx.data)?.value_type;
+      return valueType === 'text' || valueType === 'url';
+    }
+    default:
+      return false;
+  }
+}
+
+/** Вид значения для объяснения отказа (пользовательский текст). */
+const DROP_PAYLOAD_LABELS: Readonly<Record<ThoughtDropPayload['kind'], string>> = {
+  thought: 'мысль',
+  type: 'тип',
+  string: 'строку',
+  date: 'дату',
+};
+
+/** Объяснение несовместимого броска: модель не меняется, причина видна. */
+export function filterValueDropRejectionText(payload: ThoughtDropPayload): string {
+  return `Это условие не принимает ${DROP_PAYLOAD_LABELS[payload.kind]}: его значение другого вида`;
+}
+
+/**
+ * Значение модели для payload. `null` — менять нечего/значение некорректно
+ * (приёмник вернёт `false`, модель останется прежней).
+ */
+function filterValuePayloadValue(
+  leaf: FilterTreeLeaf,
+  payload: ThoughtDropPayload,
+): FilterTreeValue | null {
+  switch (payload.kind) {
+    case 'thought':
+    case 'type': {
+      const multiple = filterValueIsMultiple(leaf.operator) || HIERARCHY_OPS.has(leaf.operator);
+      if (!multiple) return operandSingleValue(payload.id);
+      const current = currentList(leaf.value);
+      if (current.includes(payload.id)) return null;
+      return operandListValue([...current, payload.id]);
+    }
+    case 'string': {
+      if (payload.value === '') return null;
+      if (!filterValueIsMultiple(leaf.operator)) {
+        return { kind: 'scalar', value: payload.value };
+      }
+      const current = currentList(leaf.value).filter((item) => !item.startsWith('$'));
+      if (current.includes(payload.value)) return null;
+      return { kind: 'list', items: [...current, payload.value] };
+    }
+    case 'date': {
+      if (!isValidLocalDay(payload.value)) return null;
+      return { kind: 'scalar', value: payload.value };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Приёмник значений на ячейке и строке условия (критерий 6). Совместимость —
+ * {@link filterValueAcceptsPayload}; запись — тот же `api.setValue`, что у
+ * ручного ввода (`filter-tree.ts`), модель не дублируется. Несовместимый
+ * бросок модель не меняет и объясняет причину тостом; в приёмник панели
+ * «Структур» он не проваливается — ближайший зарегистрированный предок
+ * (`walkDropField`) остаётся этим.
+ */
+function acceptFilterValueDrop(
+  leaf: FilterTreeLeaf,
+  api: FilterTreeValueSlotApi,
+  ctx: FilterValueContext,
+  payload: ThoughtDropPayload,
+): boolean {
+  if (!filterValueAcceptsPayload(leaf, ctx, payload)) {
+    notice(filterValueDropRejectionText(payload), 'warning');
+    return false;
+  }
+  const value = filterValuePayloadValue(leaf, payload);
+  if (value === null) return false;
+  api.setValue(value);
+  return true;
+}
+
 /** Варианты перечисления: каталог хоста, словарь модуля либо свойства сети. */
 function enumCatalogue(leaf: FilterTreeLeaf, ctx: FilterValueContext): readonly FilterValueEnumOption[] {
   const fromHost = ctx.enumOptions?.(leaf);
@@ -611,6 +728,21 @@ export function renderFilterValue(
   const editor = filterValueEditor(leaf, ctx);
   box.dataset['editor'] = editor;
   if (filterValueIsOff(leaf)) box.classList.add(FILTER_VALUE_OFF_CLASS);
+  // Приёмник перетаскиваемого значения (этап 3 задачи 31b228f0): общий для
+  // ячейки и строки условия; виджет `entity` перекрывает его своим (чипы и
+  // имена значений), а значение свойства-связи принимает вложенный общий
+  // редактор (`editor/value-editor.ts`, регистрация `link-value`).
+  const acceptPayload = (payload: ThoughtDropPayload): boolean =>
+    acceptFilterValueDrop(leaf, api, ctx, payload);
+  api.acceptDrop = acceptPayload;
+  registerThoughtDropField(box, {
+    kind: 'filter',
+    // Читаем `api.acceptDrop` в момент дропа: виджет `entity` перекрывает
+    // общий приёмник своим (чипы и имена значений) уже ПОСЛЕ регистрации.
+    accept: (id: string): boolean => (api.acceptDrop ?? acceptPayload)({ kind: 'thought', id }),
+    acceptPayload: (payload: ThoughtDropPayload): boolean =>
+      (api.acceptDrop ?? acceptPayload)(payload),
+  });
   switch (editor) {
     case 'none':
       // Значение не требуется («заполнено»/«не заполнено», есть/нет —
@@ -1705,6 +1837,9 @@ function entityOperandControl(
       .catch(() => undefined);
   };
 
+  /** Программная установка значения одиночного комбо (облачко обновится сразу). */
+  let comboSetValue: ((id: string | null) => void) | null = null;
+
   if (!multiple) {
     const currentValue = filterValueScalarText(leaf.value);
     const combo = buildEntityCombo({
@@ -1760,6 +1895,10 @@ function entityOperandControl(
       },
     });
     wrap.append(combo.root);
+    // Программный путь для дропа: `setValue` перерисовывает облачко значения
+    // без вызова `onChange` (модель пишет приёмник) — тот же способ, что у
+    // внешней перепривязки поля (задача 90b2256e).
+    comboSetValue = (id) => combo.setValue(id);
     // Сохранённое значение рисуется облачком сразу, даже если каталог его не
     // знает (мысль ищется живым поиском) — догружаем данные чипа.
     fillClouds(currentList(leaf.value));
@@ -1831,6 +1970,38 @@ function entityOperandControl(
     wrap.append(field.root);
     watchFilterClouds({ root: wrap, invalidate: invalidateClouds });
   }
+
+  // Приёмник перетаскиваемых значений (этап 3 задачи 31b228f0): совместимость
+  // — общий предикат {@link filterValueAcceptsPayload}, запись — ТОТ ЖЕ путь,
+  // что выбор в комбо/чип-поле (`applyValueLabel` → `api.setValue` →
+  // перерисовка чипов), второго способа записи значения нет.
+  const acceptEntityPayload = (payload: ThoughtDropPayload): boolean => {
+    if (!filterValueAcceptsPayload(leaf, ctx, payload)) {
+      notice(filterValueDropRejectionText(payload), 'warning');
+      return false;
+    }
+    const id = payload.kind === 'thought' || payload.kind === 'type' ? payload.id : null;
+    if (id === null) return false;
+    const current = currentList(leaf.value);
+    if (current.includes(id)) return false;
+    if (!multiple) {
+      applyValueLabel([id]);
+      comboSetValue?.(id);
+      api.setValue(operandSingleValue(id));
+      return true;
+    }
+    const next = [...current, id];
+    applyValueLabel(next);
+    api.setValue(operandListValue(next));
+    fieldRef?.refresh();
+    return true;
+  };
+  api.acceptDrop = acceptEntityPayload;
+  registerThoughtDropField(wrap, {
+    kind: 'filter',
+    accept: (id: string): boolean => acceptEntityPayload({ kind: 'thought', id }),
+    acceptPayload: acceptEntityPayload,
+  });
 
   if (hierarchyOp && !structuralOnlyHierarchy) {
     wrap.append(hierarchyModeControl(leaf, ctx));
