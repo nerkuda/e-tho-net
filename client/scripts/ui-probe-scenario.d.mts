@@ -8,6 +8,7 @@ export type StepKind =
   | 'key'
   | 'click'
   | 'hover'
+  | 'drag'
   | 'text'
   | 'waitFor'
   | 'probe'
@@ -72,6 +73,29 @@ export interface NormalizedClick {
   count: number;
 }
 
+/** Точка жеста `drag` (та же форма, что у click/hover, без `count`). */
+export interface NormalizedDragPoint {
+  selector: string | null;
+  at: [number, number] | null;
+  x: number | null;
+  y: number | null;
+}
+
+/** Составной жест перетаскивания (pointerdown → mouseMoved × N → pointerup). */
+export interface NormalizedDrag {
+  from: NormalizedDragPoint;
+  to: NormalizedDragPoint;
+  /** Селектор, обязанный быть под указателем в точке отпускания. */
+  expect: string;
+  steps: number;
+  /** Длительность серии перемещений, мс. */
+  duration: number;
+  /** Битовая маска CDP (Shift = 8 — копирование). */
+  modifiers: number;
+  /** Сколько ждать попадания в цель до отпускания, мс. */
+  targetTimeout: number;
+}
+
 export interface NormalizedWaitFor {
   expression: string | null;
   frames: number;
@@ -103,6 +127,8 @@ export interface ScenarioStep {
   click?: NormalizedClick;
   /** Наведение курсора без клика (`mouseMoved`): включает CSS `:hover`. */
   hover?: NormalizedClick;
+  /** Составной жест перетаскивания. */
+  drag?: NormalizedDrag;
   text?: string;
   waitFor?: NormalizedWaitFor;
   probe?: NormalizedExpression;

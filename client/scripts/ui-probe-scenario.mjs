@@ -26,6 +26,14 @@
  *     — навести курсор на точку/элемент БЕЗ клика: синтезирует `mouseMoved`,
  *     включает CSS `:hover` (проверка hover-видимости действий; форма точки —
  *     как у `click`, поля `count` нет).
+ *   { "drag": { "from": "#handle", "to": { "selector": "#row", "at": [10, 2] },
+ *               "expect": "#row", "steps": 8, "duration": 120,
+ *               "modifiers": ["shift"], "targetTimeout": 2000 } }
+ *     — составной жест: pointerdown в `from`, `steps` промежуточных
+ *     `mouseMoved`, ожидание попадания `document.elementFromPoint` в `expect`
+ *     и pointerup в `to`. `expect` обязателен: промах координат ПРОВАЛИВАЕТ
+ *     шаг, а не даёт молчаливое «ok» (грабли 7c521541). `modifiers` — Shift для
+ *     копирования; `duration` — мс на серию перемещений.
  *   { "text": "строка" }                              — ввод текста
  *   { "waitFor": "expr" } | { "waitFor": { "expression": "…", "frames": 2 } }
  *     | { "waitFor": { "frames": 2 } } | { "waitFor": 2 }
@@ -89,6 +97,7 @@ export const STEP_ACTION_KEYS = [
   'key',
   'click',
   'hover',
+  'drag',
   'text',
   'waitFor',
   'probe',
@@ -281,6 +290,44 @@ function normalizeClick(value, where, field = 'click', withCount = true) {
 function asNumber(value, where) {
   if (typeof value !== 'number' || !Number.isFinite(value)) fail(`${where}: ожидается число`);
   return value;
+}
+
+/**
+ * Нормализовать действие `drag` — составной жест перетаскивания:
+ * pointerdown в `from`, `steps` промежуточных `mouseMoved`, pointerup в `to`.
+ *
+ * `expect` (обязателен) — селектор, которому ОБЯЗАН соответствовать
+ * `document.elementFromPoint` в точке отпускания (сам элемент или его предок
+ * через `closest`). Промах координат — провал шага, а не молчаливое «ok»
+ * (грабли 7c521541).
+ *
+ * `modifiers` — массив имён или битовая маска (Shift — копирование),
+ * `duration` — длительность серии перемещений, мс, `targetTimeout` — сколько
+ * ждать попадания в цель до отпускания (ожидание по условию, грабли 03e33360).
+ */
+function normalizeDrag(value, where) {
+  if (!isPlainObject(value)) fail(`${where}.drag: ожидается объект`);
+  for (const extra of Object.keys(value)) {
+    if (
+      !['from', 'to', 'expect', 'steps', 'duration', 'modifiers', 'targetTimeout'].includes(extra)
+    ) {
+      fail(`${where}.drag: неизвестное поле «${extra}»`);
+    }
+  }
+  if (value.from === undefined) fail(`${where}.drag: нужен «from» (источник жеста)`);
+  if (value.to === undefined) fail(`${where}.drag: нужен «to» (точка отпускания)`);
+  const from = normalizeClick(value.from, where, 'drag.from', false);
+  const to = normalizeClick(value.to, where, 'drag.to', false);
+  const expect = asString(value.expect, `${where}.drag.expect`);
+  const steps = value.steps === undefined ? 8 : asPositiveInt(value.steps, `${where}.drag.steps`);
+  const duration =
+    value.duration === undefined ? 0 : asNonNegative(value.duration, `${where}.drag.duration`);
+  const modifiers = normalizeModifiers(value.modifiers);
+  const targetTimeout =
+    value.targetTimeout === undefined
+      ? 2000
+      : asPositiveInt(value.targetTimeout, `${where}.drag.targetTimeout`);
+  return { from, to, expect, steps, duration, modifiers, targetTimeout };
 }
 
 function normalizeClip(value, where, field = 'clip') {
@@ -568,6 +615,9 @@ function validateStep(raw, index, defaultTimeout) {
       break;
     case 'hover':
       step.hover = normalizeClick(raw.hover, where, 'hover', false);
+      break;
+    case 'drag':
+      step.drag = normalizeDrag(raw.drag, where);
       break;
     case 'text':
       step.text = normalizeText(raw.text, where);

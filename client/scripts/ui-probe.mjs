@@ -528,6 +528,106 @@ async function doClick(cdp, spec) {
   }
 }
 
+/**
+ * Выражение проверки попадания: что лежит в точке и совпадает ли элемент (или
+ * его предок) с ожидаемым селектором. Промах координат должен быть виден
+ * текстом, а не молчаливым «ok» (грабли 7c521541).
+ */
+function hitExpression(px, py, selector) {
+  return (
+    '(() => { const el = document.elementFromPoint(' +
+    `${px}, ${py}); ` +
+    'if (el === null) return { matched: false, element: null }; ' +
+    `const target = el.closest(${JSON.stringify(selector)}); ` +
+    "const cls = el.getAttribute('class') || ''; " +
+    'return { matched: target !== null, ' +
+    "element: { tag: el.tagName, className: cls, text: (el.textContent || '').slice(0, 80) } }; })()"
+  );
+}
+
+/** Факт попадания в точке (без ожидания). */
+async function hitAt(cdp, px, py, selector) {
+  return evaluate(cdp, hitExpression(px, py, selector));
+}
+
+/**
+ * Дождаться попадания в ожидаемый селектор ПО УСЛОВИЮ (не по кадрам): в скрытом
+ * окне rAF/layout заморожены, но после `wakePage` документ активен — опрос
+ * `elementFromPoint` даёт стабильную картину (грабли 03e33360).
+ */
+async function waitForHit(cdp, px, py, selector, timeout) {
+  const deadline = Date.now() + timeout;
+  let last = null;
+  for (;;) {
+    last = await hitAt(cdp, px, py, selector);
+    if (last !== null && last.matched === true) return last;
+    if (Date.now() >= deadline) {
+      const fact =
+        last === null || last.element === null
+          ? 'под указателем пусто'
+          : `${last.element.tag} class="${last.element.className}"`;
+      throw new Error(
+        `drag: в точке отпускания (${px}, ${py}) нет «${selector}» — elementFromPoint: ${fact}`,
+      );
+    }
+    await sleep(50);
+  }
+}
+
+/**
+ * Составной шаг `drag`: pointerdown в источнике, `steps` промежуточных
+ * `mouseMoved`, ожидание целевого селектора под указателем и pointerup.
+ * `modifiers` (битовая маска CDP) доносят Shift — копирование.
+ */
+async function doDrag(cdp, spec) {
+  const from = await resolvePoint(cdp, spec.from);
+  const to = await resolvePoint(cdp, spec.to);
+  const modifiers = spec.modifiers;
+  const send = (params) => cdp.send('Input.dispatchMouseEvent', { modifiers, ...params });
+  // Наведение на источник: hover-состояние (ручка может быть видима только на
+  // hover — drag-list) обязано включиться до нажатия.
+  await send({ type: 'mouseMoved', x: from.px, y: from.py, button: 'none', buttons: 0 });
+  await send({
+    type: 'mousePressed',
+    x: from.px,
+    y: from.py,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  });
+  const stepDelay = spec.duration > 0 ? Math.max(0, Math.floor(spec.duration / spec.steps)) : 0;
+  for (let i = 1; i <= spec.steps; i += 1) {
+    const x = Math.round(from.px + ((to.px - from.px) * i) / spec.steps);
+    const y = Math.round(from.py + ((to.py - from.py) * i) / spec.steps);
+    await send({ type: 'mouseMoved', x, y, button: 'left', buttons: 1 });
+    if (stepDelay > 0) await sleep(stepDelay);
+  }
+  // До отпускания цель обязана быть под указателем: иначе координаты промахнулись.
+  await waitForHit(cdp, to.px, to.py, spec.expect, spec.targetTimeout);
+  await send({
+    type: 'mouseReleased',
+    x: to.px,
+    y: to.py,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  });
+  const hit = await hitAt(cdp, to.px, to.py, spec.expect);
+  if (hit === null || hit.matched !== true) {
+    throw new Error(
+      `drag: после отпускания в точке (${to.px}, ${to.py}) ожидался «${spec.expect}»`,
+    );
+  }
+  return {
+    from: [from.px, from.py],
+    to: [to.px, to.py],
+    steps: spec.steps,
+    modifiers,
+    expect: spec.expect,
+    hit: hit.element,
+  };
+}
+
 /** Печатный текст для клавиши (вставка — отдельным событием `char`). */
 function printableText(key) {
   if ((key.modifiers & (1 | 2 | 4)) !== 0) return undefined;
@@ -569,6 +669,9 @@ async function runStep(cdp, step, outDir, entry, report, context) {
     case 'hover':
       await doHover(cdp, step.hover);
       await waitFrames(cdp, 2);
+      break;
+    case 'drag':
+      entry.drag = await doDrag(cdp, step.drag);
       break;
     case 'text':
       await cdp.send('Input.insertText', { text: step.text });
@@ -667,6 +770,10 @@ function formatStep(entry) {
       detail += ` (ожидание ${describeValue(entry.expect)}`;
       detail += entry.expectFrom === undefined ? ')' : ` — снимок шага «${entry.expectFrom}»)`;
     }
+  } else if (entry.drag !== undefined) {
+    detail =
+      ` ${describeValue(entry.drag.from)} → ${describeValue(entry.drag.to)}` +
+      ` (цель «${entry.drag.expect}», шагов ${entry.drag.steps})`;
   } else if (entry.assert !== undefined) {
     const checks = entry.assert.checks
       .map((check) => `${check.ok ? '✓' : '✗'} ${check.name}: ${check.fact} — ожидание ${check.expect}`)
