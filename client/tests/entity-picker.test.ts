@@ -40,6 +40,7 @@ import {
   type PropertyRegistryRow,
 } from '../src/renderer/lib/property-list.js';
 import { store } from '../src/renderer/state.js';
+import { dispatchKeyEvent } from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -1399,7 +1400,32 @@ describe('entity-picker: контекстное меню чипа-мысли п�
     return findAllByClass(field.root as unknown as ShimElement, 'prop-ref-cloud');
   }
 
-  it('правый клик по чипу-мысли зовёт обработчик со значением, чипом и событием', () => {
+  /** Поле чип-листа: контекст диспетчера поднимается на его `focusin`. */
+  function chipFieldInner(field: { root: HTMLElement }): ShimElement {
+    const inner = findByClass(field.root as unknown as ShimElement, 'entity-chip-field-inner');
+    assert.ok(inner !== undefined, 'в чип-поле есть рамка контекста сочетаний');
+    return inner!;
+  }
+
+  /** Событие клавиши для диспетчера сочетаний (`lib/keymap.ts`). */
+  function keyEvent(init: { key: string; code: string; shiftKey?: boolean }): any {
+    const event: any = {
+      key: init.key,
+      code: init.code,
+      shiftKey: init.shiftKey === true,
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      repeat: false,
+      defaultPrevented: false,
+      preventDefault: () => {
+        event.defaultPrevented = true;
+      },
+    };
+    return event;
+  }
+
+  it('правый клик по чипу-мысли зовёт обработчик со значением, чипом и событием (фокус не нужен)', () => {
     installShim();
     const calls: Array<{ value: string; anchor: unknown; event: unknown }> = [];
     const field = thoughtField(['uuid-1'], {
@@ -1408,58 +1434,81 @@ describe('entity-picker: контекстное меню чипа-мысли п�
     });
     const chip = chipOf(field);
     assert.ok(chip !== undefined, 'чип-мысль построен');
+    // Правый клик фокуса не даёт — путь мышью живёт жестом фабрики, а не
+    // клавиатурным контекстом диспетчера.
+    assert.equal((globalThis as any).document.activeElement !== chip, true, 'чип не в фокусе');
     const event = { preventDefault: () => undefined };
     chip!.emit('contextmenu', event);
-    assert.equal(calls.length, 1, 'правый клик открывает меню мысли');
+    assert.equal(calls.length, 1, 'правый клик открывает меню мысли без фокуса');
     assert.equal(calls[0]!.value, 'uuid-1', 'обработчик получает значение чипа');
     assert.equal(calls[0]!.anchor, chip, 'якорь меню — сам чип');
     assert.equal(calls[0]!.event, event, 'событие передаётся вызывающему');
   });
 
-  it('Shift+F10 и клавиша ContextMenu открывают то же меню, прочие клавиши — нет', () => {
+  it('Shift+F10 и клавиша ContextMenu открывают то же меню через диспетчер, прочие клавиши — нет', () => {
     installShim();
     const calls: string[] = [];
-    const prevented: string[] = [];
     const field = thoughtField(['uuid-1'], {
       onThoughtMenu: (value) => calls.push(value),
     });
     const chip = chipOf(field)!;
-    chip.emit('keydown', {
-      shiftKey: true,
-      key: 'F10',
-      preventDefault: () => prevented.push('Shift+F10'),
-    });
-    chip.emit('keydown', {
-      shiftKey: false,
-      key: 'ContextMenu',
-      preventDefault: () => prevented.push('ContextMenu'),
-    });
-    assert.deepEqual(calls, ['uuid-1', 'uuid-1'], 'оба пути открывают меню одного чипа');
-    assert.deepEqual(prevented, ['Shift+F10', 'ContextMenu'], 'нажатие гасится — браузерное меню не всплывает');
-    // F10 без Shift и Enter меню не открывают: путь — только «меню клавиатурой».
-    chip.emit('keydown', { shiftKey: false, key: 'F10', preventDefault: () => undefined });
-    chip.emit('keydown', { shiftKey: true, key: 'Enter', preventDefault: () => undefined });
+    const inner = chipFieldInner(field);
+    // Фокус внутри поля поднимает его контекст сочетаний (ADR b420b08c).
+    inner.emit('focusin', {});
+    setActive(chip);
+    const shiftF10 = keyEvent({ key: 'F10', code: 'F10', shiftKey: true });
+    assert.equal(
+      dispatchKeyEvent(shiftF10 as KeyboardEvent),
+      true,
+      'Shift+F10 разобран диспетчером (локального keydown у чипа нет)',
+    );
+    assert.equal(shiftF10.defaultPrevented, true, 'нажатие гасится — браузерное меню не всплывает');
+    const contextMenu = keyEvent({ key: 'ContextMenu', code: 'ContextMenu' });
+    assert.equal(dispatchKeyEvent(contextMenu as KeyboardEvent), true, 'клавиша ContextMenu разобрана');
+    assert.deepEqual(calls, ['uuid-1', 'uuid-1'], 'обе клавиши открывают меню того же чипа');
+    // F10 без Shift меню не открывает: путь — только «меню клавиатурой».
+    assert.equal(dispatchKeyEvent(keyEvent({ key: 'F10', code: 'F10' }) as KeyboardEvent), false);
+    // Shift+Enter может быть занят другим контекстом — важно лишь, что меню чипа
+    // он не открывает.
+    dispatchKeyEvent(keyEvent({ key: 'Enter', code: 'Enter', shiftKey: true }) as KeyboardEvent);
     assert.equal(calls.length, 2, 'посторонние клавиши меню не открывают');
+    inner.emit('focusout', {});
   });
 
-  it('токен `$…` и пустое значение меню не получают', () => {
+  it('токен `$…` и пустое значение меню не получают — ни мышью, ни клавиатурой', () => {
     installShim();
     const calls: string[] = [];
     const field = thoughtField(['$thought', ''], { onThoughtMenu: (value) => calls.push(value) });
     const chips = chipsOf(field);
     assert.equal(chips.length, 2, 'оба чипа построены (токен и пустое значение)');
+    const inner = chipFieldInner(field);
+    inner.emit('focusin', {});
     for (const chip of chips) {
-      assert.equal(chip.listeners['keydown'], undefined, 'клавиатурного пути у не-мысли нет');
       chip.emit('contextmenu', { preventDefault: () => undefined });
+      setActive(chip);
+      assert.equal(
+        dispatchKeyEvent(keyEvent({ key: 'F10', code: 'F10', shiftKey: true }) as KeyboardEvent),
+        false,
+        'у не-мысли команда меню не обрабатывается',
+      );
     }
     assert.deepEqual(calls, [], 'меню у токена и пустого значения не открывается');
+    inner.emit('focusout', {});
   });
 
-  it('без обработчика меню чип остаётся без клавиатурного пути', () => {
+  it('без обработчика меню клавиатурная команда не обрабатывается', () => {
     installShim();
     const field = thoughtField(['uuid-1']);
     const chip = chipOf(field)!;
-    assert.equal(chip.listeners['keydown'], undefined, 'обработчика нет — меню не навешено');
+    const inner = chipFieldInner(field);
+    inner.emit('focusin', {});
+    setActive(chip);
+    assert.equal(
+      dispatchKeyEvent(keyEvent({ key: 'F10', code: 'F10', shiftKey: true }) as KeyboardEvent),
+      false,
+      'обработчика нет — меню не открывается',
+    );
+    inner.emit('focusout', {});
   });
 
   it('метка корзины чипа-мысли кликабельна: диалог «Удалить/Восстановить»', () => {
@@ -1490,9 +1539,17 @@ describe('entity-picker: контекстное меню чипа-мысли п�
       });
       const chip = valueCloud(combo);
       assert.ok(chip !== undefined, 'заполненное поле показано чипом');
+      // Мышь — жест фабрики (фокуса не требует), клавиатура — контекст комбо.
       chip!.emit('contextmenu', { preventDefault: () => undefined });
-      chip!.emit('keydown', { shiftKey: true, key: 'F10', preventDefault: () => undefined });
+      (combo.root as unknown as ShimElement).emit('focusin', {});
+      setActive(chip!);
+      assert.equal(
+        dispatchKeyEvent(keyEvent({ key: 'F10', code: 'F10', shiftKey: true }) as KeyboardEvent),
+        true,
+        'Shift+F10 разобран контекстом комбо',
+      );
       assert.deepEqual(calls, ['uuid-1', 'uuid-1'], 'мышь и клавиатура открывают меню значения');
+      (combo.root as unknown as ShimElement).emit('focusout', {});
     } finally {
       restore();
     }
@@ -1538,9 +1595,17 @@ describe('entity-picker: контекстное меню чипа-мысли п�
         onChange: () => undefined,
       });
       const chip = valueCloud(combo)!;
-      assert.equal(chip.listeners['keydown'], undefined, 'у токена клавиатурного пути нет');
+      // Токен — не мысль: ни правого меню, ни клавиатурной команды.
       chip.emit('contextmenu', { preventDefault: () => undefined });
+      (combo.root as unknown as ShimElement).emit('focusin', {});
+      setActive(chip);
+      assert.equal(
+        dispatchKeyEvent(keyEvent({ key: 'F10', code: 'F10', shiftKey: true }) as KeyboardEvent),
+        false,
+        'у токена команда меню не обрабатывается',
+      );
       assert.deepEqual(calls, [], 'меню токену не полагается');
+      (combo.root as unknown as ShimElement).emit('focusout', {});
     } finally {
       restore();
     }

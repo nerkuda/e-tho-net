@@ -536,7 +536,7 @@ export function buildParentThoughtsSection(
     ...(ctx.networkId !== ''
       ? {
           onThoughtMenu: (value: string, anchor: HTMLElement) => {
-            void openFilterThoughtMenu({
+            openFilterThoughtMenu({
               networkId: ctx.networkId,
               id: value,
               title: titleOf(value),

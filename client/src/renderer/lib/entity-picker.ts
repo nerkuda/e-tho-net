@@ -69,7 +69,7 @@ import { showDialog, type DialogButton } from './dialog.js';
 import { div, el, setTooltip, span } from './dom.js';
 import { etn } from './etn.js';
 import { markThoughtCommentPreview } from './hover-preview.js';
-import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { defineKeyContext, pushKeyContext, type KeyBindingDef } from './keymap.js';
 import { modifierChordVariants } from './keymap-chords.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import {
@@ -1164,10 +1164,11 @@ export interface EntityChipFieldOptions {
   /**
    * Контекстное меню чипа-МЫСЛИ (значения поля — мысли, `kind: 'thoughts'`):
    * правый клик по чипу и клавиатурный путь `Shift+F10`/клавиша `ContextMenu`
-   * открывают меню — то же поведение, что у чипа значения свойства-связи в
-   * редакторе мысли (`editor/value-editor.ts`). `anchor` — сам чип: меню
-   * раскрывается под ним. Токенам `$…` и пустому значению меню не полагается:
-   * это не мысль (та же граница, что у предпросмотра ниже).
+   * (привязки общеклиентского диспетчера, `lib/keymap.ts`) открывают меню — то
+   * же поведение, что у чипа значения свойства-связи в редакторе мысли
+   * (`editor/value-editor.ts`). `anchor` — сам чип: меню раскрывается под ним.
+   * Токенам `$…` и пустому значению меню не полагается: это не мысль (та же
+   * граница, что у предпросмотра ниже).
    */
   onThoughtMenu?: (value: string, anchor: HTMLElement, event?: MouseEvent) => void;
   /**
@@ -1274,22 +1275,20 @@ function isThoughtValue(id: string): boolean {
 }
 
 /**
- * Клавиатурный путь меню чипа-МЫСЛИ (`Shift+F10`/клавиша `ContextMenu`) — по
- * образцу чипа значения свойства-связи в редакторе мысли
- * (`editor/value-editor.ts`): мышь даёт жест фабрики (`actions.onContextMenu`),
- * клавиатуру навешивает вызывающий. Обработчика нет — нет и клавиатурного пути.
+ * Привязки меню чипа-МЫСЛИ в общеклиентском диспетчере сочетаний
+ * (`lib/keymap.ts`): `Shift+F10` и клавиша `ContextMenu` открывают меню чипа,
+ * на котором стоит фокус. Мышь даёт жест фабрики облачка
+ * (`actions.onContextMenu`), клавиатуру навешивает диспетчер — локального
+ * `keydown` у чипа нет: перехват клавиш в клиенте один (ADR `b420b08c`, сторож
+ * `guard-keymap-single-point`). `run` возвращает `false`, когда открывать
+ * нечего (у чипа в фокусе нет меню) — событие уходит по стеку контекстов ниже.
  */
-function wireThoughtChipMenu(
-  chip: HTMLElement,
-  open: ((anchor: HTMLElement, event?: MouseEvent) => void) | undefined,
-): void {
-  if (open === undefined) return;
-  chip.addEventListener('keydown', (event) => {
-    if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
-      event.preventDefault();
-      open(chip);
-    }
-  });
+function thoughtMenuBindings(openFocusedChipMenu: () => boolean): KeyBindingDef[] {
+  const command = 'thoughtChip.menu';
+  return [
+    { command, chord: 'Shift+F10', run: openFocusedChipMenu },
+    { command, chord: 'ContextMenu', run: openFocusedChipMenu },
+  ];
 }
 
 /**
@@ -1302,7 +1301,8 @@ function wireThoughtChipMenu(
  * автор/редактор) сохраняют смешение литералов и токенов. Отдельная сборка
  * чипов вне общих модулей запрещена сторожем `guard-value-editor`.
  */
-/** Счётчик чип-полей: у каждого свой контекст сочетаний (замыкание `commit`). */
+/** Счётчик полей выбора: у каждого свой контекст сочетаний (`entity-chip-field-*`
+ *  и `entity-combo-*`; контекст задаёт Enter/меню, замыкания — своё поле). */
 let chipFieldContextSeq = 0;
 
 export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipField {
@@ -1389,13 +1389,31 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     commit(input.value);
     return true;
   };
+  /**
+   * Открытие меню чипа, стоящего в фокусе (пересобирается вместе с чипами):
+   * клавиатурные привязки ниже берут обработчик отсюда — правый клик фокуса не
+   * даёт, поэтому путь мышью живёт отдельно, жестом фабрики (ошибка ada6a69d).
+   */
+  const chipMenuByNode = new Map<HTMLElement, () => void>();
+  const openFocusedChipMenu = (): boolean => {
+    const active: Element | null = document.activeElement ?? null;
+    const open = active === null ? undefined : chipMenuByNode.get(active as HTMLElement);
+    if (open === undefined) return false;
+    open();
+    return true;
+  };
   defineKeyContext({
     id: contextId,
-    bindings: modifierChordVariants('Enter', ['Ctrl', 'Alt', 'Meta']).map((chord) => ({
-      command: 'entityChip.commit',
-      chord,
-      run: handleCommitKey,
-    })),
+    bindings: [
+      ...modifierChordVariants('Enter', ['Ctrl', 'Alt', 'Meta']).map((chord) => ({
+        command: 'entityChip.commit',
+        chord,
+        run: handleCommitKey,
+      })),
+      // Меню чипа-мысли — тот же контекст поля, что и Enter: `Shift+F10` и
+      // клавиша `ContextMenu` открывают меню чипа в фокусе.
+      ...thoughtMenuBindings(openFocusedChipMenu),
+    ],
   });
   let releaseContext: (() => void) | null = null;
   const onFocusIn = (): void => {
@@ -1416,6 +1434,8 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     // поля, браузер уводит его на <body> — вернём его в строку ввода (797d0485).
     const hadFocus = hasKeyboardFocus(field);
     const chips: HTMLElement[] = [];
+    // Чипы пересобираются — карта «чип → открытие меню» живёт с ними.
+    chipMenuByNode.clear();
     for (const value of opts.getValues()) {
       const known = byId.get(value);
       const explicitCloud = opts.cloudOf?.(value) ?? null;
@@ -1454,7 +1474,9 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
               }),
         },
       });
-      wireThoughtChipMenu(chip, openMenu);
+      // Клавиатурный путь меню — привязки контекста поля: чип с меню
+      // регистрируется картой, обработчик берёт узел из фокуса.
+      if (openMenu !== undefined) chipMenuByNode.set(chip, () => openMenu(chip));
       // Знак варианта-свойства-связи — значок конца связи, как в строках
       // выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
       // значка светился глиф мысли по умолчанию. Условие не зависит от
@@ -1655,7 +1677,8 @@ export interface EntityComboOptions {
   thoughtPreview?: boolean;
   /**
    * Контекстное меню чипа-МЫСЛИ заполненного поля (правый клик,
-   * `Shift+F10`/клавиша `ContextMenu`). Тот же контракт, что у чип-поля
+   * `Shift+F10`/клавиша `ContextMenu` — привязки контекста комбо в общем
+   * диспетчере). Тот же контракт, что у чип-поля
    * ({@link EntityChipFieldOptions.onThoughtMenu}); значимо только у `thoughts`.
    */
   onThoughtMenu?: (value: string, anchor: HTMLElement, event?: MouseEvent) => void;
@@ -1826,6 +1849,33 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   field.append(valueHost, input, caret, pickBtn);
   root.append(field);
 
+  /**
+   * Клавиатурный путь меню чипа-мысли заполненного поля: контекст комбо (как у
+   * чип-поля) поднимается на `focusin` — при фокусе на облачке `Shift+F10` и
+   * клавиша `ContextMenu` открывают его меню (ошибка ada6a69d). Правый клик —
+   * отдельный путь (жест фабрики), фокуса он не требует.
+   */
+  let comboChipNode: HTMLElement | null = null;
+  let comboChipMenu: (() => void) | null = null;
+  const comboContextId = `entity-combo-${(chipFieldContextSeq += 1)}`;
+  defineKeyContext({
+    id: comboContextId,
+    bindings: thoughtMenuBindings(() => {
+      const active: Element | null = document.activeElement ?? null;
+      if (active === null || active !== comboChipNode || comboChipMenu === null) return false;
+      comboChipMenu();
+      return true;
+    }),
+  });
+  let releaseComboContext: (() => void) | null = null;
+  root.addEventListener('focusin', () => {
+    releaseComboContext ??= pushKeyContext(comboContextId);
+  });
+  root.addEventListener('focusout', () => {
+    releaseComboContext?.();
+    releaseComboContext = null;
+  });
+
   /** Облачко выбранного значения (пусто — поле ввода без подписи). */
   const renderValue = (): void => {
     valueHost.replaceChildren();
@@ -1890,7 +1940,10 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
             }),
       },
     });
-    wireThoughtChipMenu(chip, openMenu);
+    // Клавиатурный путь меню — привязки контекста комбо: держим чип и его
+    // открытие для обработчика, который берёт узел из фокуса.
+    comboChipNode = chip;
+    comboChipMenu = openMenu === undefined ? null : () => openMenu(chip);
     if (opts.thoughtPreview === true) wireThoughtChip(chip, current, cloud.title);
     valueHost.append(chip);
   };

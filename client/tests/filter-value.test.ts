@@ -28,6 +28,7 @@ import { describe, it } from 'node:test';
 import type { LinkType, NetworkProperty } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
+import { dispatchKeyEvent } from '../src/renderer/lib/keymap.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -1148,10 +1149,45 @@ function declarationBody(src: string, signature: string, end = '\n}\n'): string 
   return src.slice(start, stop);
 }
 
-/** Обработчик меню навешен на чип ⟺ у чипа есть клавиатурный путь (одна точка). */
+/**
+ * Клавиатурный путь чипа-мысли живёт в общеклиентском диспетчере сочетаний
+ * (ADR b420b08c): пока фокус внутри поля, его контекст на вершине стека, а
+ * `Shift+F10`/`ContextMenu` зовут меню чипа В ФОКУСЕ. Проверяем именно
+ * диспетчер: `focusin` по внутреннему полю поднимает контекст, фокус ставим на
+ * чип — команда должна быть разобрана.
+ */
 function chipHasMenu(root: ShimElement): boolean {
   const chip = one(root, 'prop-ref-cloud');
-  return chip !== null && (chip.listeners['keydown']?.length ?? 0) > 0;
+  if (chip === null) return false;
+  const field = one(root, 'entity-chip-field-inner') ?? one(root, 'entity-combo');
+  if (field === null) return false;
+  field.emit('focusin', {});
+  const previous = (globalThis as any).document.activeElement;
+  (globalThis as any).document.activeElement = chip;
+  try {
+    return dispatchKeyEvent(keyEvent({ key: 'F10', code: 'F10', shiftKey: true }));
+  } finally {
+    (globalThis as any).document.activeElement = previous;
+    field.emit('focusout', {});
+  }
+}
+
+/** Событие клавиатуры для диспетчера (DOM-шим события не даёт). */
+function keyEvent(init: { key: string; code: string; shiftKey?: boolean }): any {
+  const event: any = {
+    key: init.key,
+    code: init.code,
+    shiftKey: init.shiftKey === true,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    repeat: false,
+    defaultPrevented: false,
+    preventDefault: () => {
+      event.defaultPrevented = true;
+    },
+  };
+  return event;
 }
 
 /** Подписи общих команд мысли — их не собирают вручную в модулях отбора. */
@@ -1190,11 +1226,7 @@ describe('меню чипа-мысли в условии отбора (ошиб�
       );
       const chip = one(box, 'prop-ref-cloud');
       assert.ok(chip !== null, `${kind}: чип значения построен`);
-      assert.equal(
-        chip!.listeners['keydown'],
-        undefined,
-        `${kind}: у чипа-типа контекстного меню мысли нет`,
-      );
+      assert.equal(chipHasMenu(box), false, `${kind}: у чипа-типа контекстного меню мысли нет`);
     }
   });
 
@@ -1206,11 +1238,11 @@ describe('меню чипа-мысли в условии отбора (ошиб�
     );
     const chip = one(box, 'prop-ref-cloud');
     assert.ok(chip !== null, 'чип-токен построен');
-    assert.equal(chip!.listeners['keydown'], undefined, 'токену меню не полагается');
+    assert.equal(chipHasMenu(box), false, 'токену меню не полагается');
   });
 
   it('меню строится ОБЩИМ конструктором, а не рукописным списком команд', () => {
-    const body = declarationBody(FILTER_VALUE_SRC, 'export async function openFilterThoughtMenu');
+    const body = declarationBody(FILTER_VALUE_SRC, 'export function openFilterThoughtMenu');
     assert.ok(
       body.includes("await import('../canvas/context-menu.js')"),
       'общий конструктор подключается лениво (цикл canvas → editor → lib/filter-value)',

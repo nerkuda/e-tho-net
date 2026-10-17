@@ -1464,35 +1464,40 @@ async function thoughtAvailable(networkId: string, id: string): Promise<boolean>
  * «Убрать из значения условия» (аналог «✕»). Недоступной в сети мысли —
  * урезанный набор (`unresolvable`). Импорт ленивый: статический замкнул бы цикл
  * `canvas/context-menu → editor/editor → lib/filter-value`.
+ *
+ * Сбои (в т.ч. отложенный импорт) уходят тостом: функция ничего не возвращает и
+ * не отклоняется — вызывающий не обязан держать `catch`.
  */
-export async function openFilterThoughtMenu(opts: FilterThoughtMenuOptions): Promise<void> {
-  const { showThoughtMenuUnder, resolveSiblingParentId } =
-    await import('../canvas/context-menu.js');
-  // Родитель для «налево (родственник)» и доступность мысли — параллельно.
-  const [siblingParentId, available] = await Promise.all([
-    resolveSiblingParentId(opts.networkId, opts.id),
-    thoughtAvailable(opts.networkId, opts.id),
-  ]);
-  wireFilterCloudInvalidation();
-  showThoughtMenuUnder(
-    opts.anchor,
-    {
-      id: opts.id,
-      title: opts.title,
-      dir: 'siblings',
-      // Чип не живёт в зоне холста — родителя резолвим запросом (как чипы
-      // редактора: value-editor).
-      siblingParentId,
-      trashed: opts.trashed === true,
-    },
-    {
-      openLabel: 'Открыть в редакторе',
-      openHandler: (id) => openThoughtInEditorById(id),
-      focusHandler: () => focusThoughtOnMapById(opts.id),
-      extraItems: [menuAction('Убрать из значения условия', opts.onRemoveFromValue)],
-      ...(available ? {} : { unresolvable: true }),
-    },
-  );
+export function openFilterThoughtMenu(opts: FilterThoughtMenuOptions): void {
+  lazily(async () => {
+    const { showThoughtMenuUnder, resolveSiblingParentId } =
+      await import('../canvas/context-menu.js');
+    // Родитель для «налево (родственник)» и доступность мысли — параллельно.
+    const [siblingParentId, available] = await Promise.all([
+      resolveSiblingParentId(opts.networkId, opts.id),
+      thoughtAvailable(opts.networkId, opts.id),
+    ]);
+    wireFilterCloudInvalidation();
+    showThoughtMenuUnder(
+      opts.anchor,
+      {
+        id: opts.id,
+        title: opts.title,
+        dir: 'siblings',
+        // Чип не живёт в зоне холста — родителя резолвим запросом (как чипы
+        // редактора: value-editor).
+        siblingParentId,
+        trashed: opts.trashed === true,
+      },
+      {
+        openLabel: 'Открыть в редакторе',
+        openHandler: (id) => openThoughtInEditorById(id),
+        focusHandler: () => focusThoughtOnMapById(opts.id),
+        extraItems: [menuAction('Убрать из значения условия', opts.onRemoveFromValue)],
+        ...(available ? {} : { unresolvable: true }),
+      },
+    );
+  });
 }
 
 /** Метка корзины чипа-мысли — двухфазный диалог «Удалить/Восстановить». */
@@ -1713,7 +1718,7 @@ function entityOperandControl(
             // Чип-значение условия — то же облачко мысли: правый клик/
             // Shift+F10 открывают ОБЩЕЕ меню мысли (ошибка ada6a69d).
             onThoughtMenu: (value: string, anchor: HTMLElement) => {
-              void openFilterThoughtMenu({
+              openFilterThoughtMenu({
                 networkId: ctx.networkId,
                 id: value,
                 title: menuTitle(value),
@@ -1793,7 +1798,7 @@ function entityOperandControl(
             // Тот же чип-мысль, что и в одиночном значении: общее меню мысли
             // (ошибка ada6a69d) и кликабельная метка корзины.
             onThoughtMenu: (value: string, anchor: HTMLElement) => {
-              void openFilterThoughtMenu({
+              openFilterThoughtMenu({
                 networkId: ctx.networkId,
                 id: value,
                 title: menuTitle(value),
