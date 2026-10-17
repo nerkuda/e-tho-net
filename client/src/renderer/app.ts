@@ -13,7 +13,7 @@
 
 import type { Thought } from '@etn/shared';
 
-import { closeDialog, errorDialog } from './lib/dialog.js';
+import { closeDialog, errorDialog, hasOpenDialog } from './lib/dialog.js';
 import { hasTextSelection } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import {
@@ -822,19 +822,23 @@ function supportsThoughtCopy(): boolean {
   return view === 'map' || view === 'structures';
 }
 
-/** Холст карты реально виден пользователю (ошибка 63967c21): рабочий стол, вид
- *  «Карта» и ни одного непрозрачного перекрытия поверх холста. Перекрытия —
- *  ровно те, что накрывают холст в `screens/workspace.ts`: сеть без доступа
- *  (`.workspace-placeholder`, `inaccessibleTabIds`) и панель выбора сети
+/** Холст карты реально виден И доступен для взаимодействия (ошибки 63967c21,
+ *  1a3a476e): рабочий стол, вид «Карта» и ни одного перекрытия поверх холста.
+ *  Перекрытия — ровно те, что накрывают холст в `screens/workspace.ts`: сеть без
+ *  доступа (`.workspace-placeholder`, `inaccessibleTabIds`) и панель выбора сети
  *  (`.workspace-picker`, `pickerOpen`); оба — `position: absolute; inset: 0`
- *  с непрозрачным фоном, то есть холст под ними не виден. Раскладка холст не
- *  скрывает: позиция редактора его только сужает, доли зон (`canvas_layout`) —
+ *  с непрозрачным фоном, то есть холст под ними не виден. Плюс открытый
+ *  модальный диалог (`hasOpenDialog`): его подложка `.dialog-backdrop`
+ *  полупрозрачна — холст «виден», но взаимодействие модально заблокировано,
+ *  поэтому команды масштаба обязаны молчать (ошибка 1a3a476e). Раскладка холст
+ *  не скрывает: позиция редактора его только сужает, доли зон (`canvas_layout`) —
  *  внутренние границы. Команды масштаба не должны срабатывать «невидимо» —
  *  тот же класс, что ошибка 00275531 (команда по состоянию чужого вида). */
 function canvasVisible(): boolean {
   const st = store.state;
   if (st.screen !== 'workspace' || st.activeView !== 'map') return false;
   if (st.pickerOpen) return false;
+  if (hasOpenDialog()) return false;
   const tabId = st.activeTabId;
   return !(tabId !== null && st.inaccessibleTabIds.has(tabId));
 }

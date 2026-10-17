@@ -1,0 +1,105 @@
+{
+  "name": "canvas-zoom-under-modal-1a3a476e",
+  "description": "GUI-проверка ошибки 1a3a476e: при ОТКРЫТОМ модальном диалоге (.dialog-backdrop) горячие клавиши масштаба холста Ctrl+= / Ctrl+- / Ctrl+0 НЕ должны менять масштаб карты и не должны подавлять нативное нажатие; после закрытия диалога масштаб снова работает. Модальный диалог открывается штатным жестом — двойной клик по пустой зоне родителей холста (canvas.ts buildZone → add-dialog через showDialog). Масштаб наблюдаем по индикатору статус-бара `.sb-zoom`. Доказательства — текстовые пробы. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.1a3a476e.scenario.json",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "map-ready",
+      "waitFor": "document.querySelector('.sb-zoom') !== null && document.querySelector('.zone-parents') !== null"
+    },
+    {
+      "name": "zones-state",
+      "probe": {
+        "name": "zones",
+        "expression": "(() => { const p = document.querySelector('.zone-parents'); const e = p?.querySelector('.zone-empty'); return { parentsZone: p !== null, emptyVisible: e !== null && e.offsetParent !== null, cloudsInParents: p ? p.querySelectorAll('.cloud').length : -1 }; })()"
+      }
+    },
+    {
+      "name": "zoom-before",
+      "probe": {
+        "name": "zoomBefore",
+        "expression": "(document.querySelector('.sb-zoom')?.textContent ?? '').match(/(\\d+)%/) ?.[1] ?? null"
+      },
+      "expect": "100"
+    },
+
+    {
+      "name": "open-modal",
+      "click": { "selector": ".zone-parents .zone-empty", "count": 2 }
+    },
+    {
+      "name": "dialog-open",
+      "waitFor": "document.querySelector('.dialog-backdrop') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "dialog-title",
+      "probe": {
+        "name": "dialogTitle",
+        "expression": "document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? null"
+      }
+    },
+
+    { "name": "zoom-in-under-dialog", "key": "=", "modifiers": ["ctrl"] },
+    {
+      "name": "zoom-in-noop",
+      "probe": {
+        "name": "zoomAfterZoomInUnderDialog",
+        "expression": "(document.querySelector('.sb-zoom')?.textContent ?? '').match(/(\\d+)%/) ?.[1] ?? null"
+      },
+      "expect": "100"
+    },
+    { "name": "zoom-out-under-dialog", "key": "-", "modifiers": ["ctrl"] },
+    {
+      "name": "zoom-out-noop",
+      "probe": {
+        "name": "zoomAfterZoomOutUnderDialog",
+        "expression": "(document.querySelector('.sb-zoom')?.textContent ?? '').match(/(\\d+)%/) ?.[1] ?? null"
+      },
+      "expect": "100"
+    },
+    { "name": "zoom-reset-under-dialog", "key": "0", "modifiers": ["ctrl"] },
+    {
+      "name": "zoom-reset-noop",
+      "probe": {
+        "name": "zoomAfterZoomResetUnderDialog",
+        "expression": "(document.querySelector('.sb-zoom')?.textContent ?? '').match(/(\\d+)%/) ?.[1] ?? null"
+      },
+      "expect": "100"
+    },
+
+    { "name": "close-dialog", "key": "Escape" },
+    {
+      "name": "dialog-closed",
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+
+    { "name": "zoom-in-after-close", "key": "=", "modifiers": ["ctrl"] },
+    {
+      "name": "zoom-after",
+      "probe": {
+        "name": "zoomAfterClose",
+        "expression": "(document.querySelector('.sb-zoom')?.textContent ?? '').match(/(\\d+)%/) ?.[1] ?? null"
+      },
+      "expect": "105"
+    }
+  ]
+}
