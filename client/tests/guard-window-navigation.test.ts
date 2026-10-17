@@ -24,6 +24,7 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { decideNavigation, EXTERNAL_SCHEMES } from '../src/main/navigation-policy.js';
+import { externalLinkInternals } from '../src/renderer/editor/external-link.js';
 
 const CLIENT_ROOT = resolve(import.meta.dirname, '..');
 
@@ -149,5 +150,47 @@ describe('политика навигации окна: своё приложе�
     }
     // Содержимое набора: ровно http/https/mailto.
     assert.deepEqual([...EXTERNAL_SCHEMES].sort(), ['http', 'https', 'mailto']);
+  });
+
+  it('КОПИЯ набора в рендерере не расходится с EXTERNAL_SCHEMES — ни в одну сторону', () => {
+    // Рендерер не может импортировать код главного процесса, поэтому держит
+    // ОСОЗНАННУЮ копию набора (`EXTERNAL_SCHEME_COPY` в
+    // `renderer/editor/external-link.ts`). Раньше копия была спрятана в
+    // регулярке и не проверялась вовсе: правка набора в одном месте оставляла
+    // клиентские тесты зелёными. Теперь сверяются И массив, И поведение:
+    //  - массив ↔ `EXTERNAL_SCHEMES` (любое расхождение состава — красный);
+    //  - предикат рендерера обязан совпасть с набором на схемах набора и
+    //    отличаться на «соседних» схемах вне набора.
+    const rendererSource = readFileSync(
+      resolve(CLIENT_ROOT, 'src', 'renderer', 'editor', 'external-link.ts'),
+      'utf8',
+    );
+    const literal = /EXTERNAL_SCHEME_COPY\s*=\s*\[([^\]]*)\]/.exec(rendererSource)?.[1];
+    assert.ok(literal !== undefined, 'в рендерере обязан быть явный массив EXTERNAL_SCHEME_COPY');
+    const copy = literal
+      .split(',')
+      .map((part) => part.trim().replace(/^['"]|['"]$/g, ''))
+      .filter((part) => part !== '');
+    assert.deepEqual(
+      [...copy].sort(),
+      [...EXTERNAL_SCHEMES].sort(),
+      'копия набора схем в рендерере разошлась с EXTERNAL_SCHEMES главного процесса',
+    );
+
+    const { isExternalHref } = externalLinkInternals;
+    for (const scheme of EXTERNAL_SCHEMES) {
+      assert.equal(
+        isExternalHref(`${scheme}:target`),
+        true,
+        `рендерер обязан перехватывать схему набора: ${scheme}:`,
+      );
+    }
+    for (const foreign of ['tel', 'ftp', 'file', 'data', 'javascript', 'etnimg', 'etn', 'obsidian']) {
+      assert.equal(
+        isExternalHref(`${foreign}:target`),
+        false,
+        `рендерер не должен перехватывать схему вне набора: ${foreign}:`,
+      );
+    }
   });
 });

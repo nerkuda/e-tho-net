@@ -13,14 +13,21 @@
  *
  * Routing through `window.open` deliberately keeps the main process as the
  * single decision point: `setWindowOpenHandler` (`src/main/index.ts`)
- * classifies the target and opens exactly `http`/`https`/`mailto` in the OS
- * browser via `shell.openExternal`, denying everything else. No second copy of
- * the URL allow-list lives in the renderer. And this handler is not the only
- * line of defence: the main process ALSO gates top-frame navigation
- * (`will-navigate` + `main/navigation-policy.ts`), so the window can never
- * leave the application — whatever link shape the content contains and whether
- * or not this listener owns it (relative anchors, exotic schemes, scripted
- * `location` changes).
+ * classifies the target and opens exactly the schemes of
+ * `EXTERNAL_SCHEMES` (`main/navigation-policy.ts`) in the OS browser via
+ * `shell.openExternal`, denying everything else. The renderer cannot import
+ * main-process code (separate bundles; the only bridge is `window.etn`), so the
+ * same scheme set is mirrored here as an EXPLICIT copy —
+ * {@link EXTERNAL_SCHEME_COPY} — and the copy is frozen by the guard
+ * `tests/guard-window-navigation.test.ts`: it compares the copy with
+ * `EXTERNAL_SCHEMES` and checks the predicate against both sets, so editing the
+ * set in one place only turns that guard red.
+ *
+ * This handler is not the only line of defence: the main process ALSO gates
+ * top-frame navigation (`will-navigate` + `main/navigation-policy.ts`), so the
+ * window can never leave the application — whatever link shape the content
+ * contains and whether or not this listener owns it (relative anchors, exotic
+ * schemes, scripted `location` changes).
  *
  * A double click (the gesture that enters comment editing) must not open the
  * browser twice: the SECOND click of a multi-click is still prevented from
@@ -38,8 +45,19 @@
  * Pure helpers are exposed via {@link externalLinkInternals} for unit tests.
  */
 
+/**
+ * ОСОЗНАННАЯ КОПИЯ набора внешних схем главного процесса (`main/navigation-policy.ts`
+ * → `EXTERNAL_SCHEMES`). Рендерер не может импортировать код главного процесса
+ * (разные бандлы, единственная связь — мост `window.etn`), поэтому список
+ * повторён здесь ЯВНЫМ массивом, а не спрятан в регулярке: так его видно и
+ * сверяет сторож `tests/guard-window-navigation.test.ts` (сравнивает массив с
+ * `EXTERNAL_SCHEMES` и поведение предиката против обоих наборов). Правя набор,
+ * правь ОБА места — расхождение в любую сторону краснит сторож.
+ */
+const EXTERNAL_SCHEME_COPY = ['http', 'https', 'mailto'] as const;
+
 /** Hrefs this module owns: explicit external schemes (autolinked URLs among them). */
-const EXTERNAL_HREF_RE = /^(?:https?|mailto):/i;
+const EXTERNAL_HREF_RE = new RegExp(`^(?:${EXTERNAL_SCHEME_COPY.join('|')}):`, 'i');
 
 /** True for an href the OS browser must open (see {@link EXTERNAL_HREF_RE}). */
 function isExternalHref(href: string): boolean {

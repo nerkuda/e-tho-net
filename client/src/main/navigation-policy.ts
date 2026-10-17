@@ -17,14 +17,17 @@
 
 /**
  * Schemes the OS browser may open on our behalf — ЕДИНЫЙ ИСТОЧНИК для обоих
- * гейтов клиента: `will-navigate` (top-frame переход, эта политика) и
- * `setWindowOpenHandler` (новая вкладка / средняя кнопка, `src/main/index.ts`).
+ * гейтов ГЛАВНОГО процесса: `will-navigate` (top-frame переход, эта политика)
+ * и `setWindowOpenHandler` (новая вкладка / средняя кнопка, `src/main/index.ts`).
  * Anything else is denied outright (no external handler): `etnimg:`/`etn:`/
  * `file:`/`data:`/`javascript:` must not reach the OS from a navigation attempt.
  *
- * Изменяя набор, правь ТОЛЬКО здесь: сторож
- * `tests/guard-window-navigation.test.ts` краснеет, если главный процесс
- * сравнивает схемы своим литералом вместо этого набора.
+ * Второе место с этим набором — ОСОЗНАННАЯ КОПИЯ в рендерере
+ * (`renderer/editor/external-link.ts` → `EXTERNAL_SCHEME_COPY`): рендерер не
+ * может импортировать код главного процесса (разные бандлы, связь — только мост
+ * `window.etn`). Копию сверяет сторож `tests/guard-window-navigation.test.ts`
+ * (массив + поведение предиката против обоих наборов), поэтому правь ОБА места:
+ * расхождение в любую сторону краснит сторож.
  */
 export const EXTERNAL_SCHEMES: ReadonlySet<string> = new Set(['http', 'https', 'mailto']);
 
