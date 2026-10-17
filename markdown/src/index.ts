@@ -122,13 +122,18 @@ export type {
  * constructs.
  *
  * `markdown-it/9`: автолинк голых http(s)-URL (`linkify: true`, только явные
- * схемы) — паритет режимов просмотра и правки (ошибка 37458cbc). Автолинкует
- * ТОЛЬКО внутристрочное правило: ядровое `linkify` выключено, поэтому
- * protocol-relative адреса (`//example.com/x`) остаются текстом, как до фикса.
- * Cached `body_html` must re-render so existing comments turn bare URLs into
- * links.
+ * схемы) — паритет режимов просмотра и правки (ошибка 37458cbc, круг 1).
+ * Автолинкует ТОЛЬКО внутристрочное правило: ядровое `linkify` выключено
+ * (круг 2), поэтому protocol-relative адреса (`//example.com/x`) остаются
+ * текстом, как до фикса. Cached `body_html` must re-render so existing comments
+ * turn bare URLs into links.
+ *
+ * `markdown-it/10`: автолинк схем БЕЗ `//` — `mailto:` (ошибка 37458cbc, круг 3:
+ * ядровое правило выключено с круга 2, а встроенное внутристрочное ловит только
+ * `://`, поэтому `mailto:` перестал быть ссылкой). Cached `body_html` must
+ * re-render so `mailto:`-строки снова становятся ссылками.
  */
-export const MD_RENDER_VERSION = 'markdown-it/9';
+export const MD_RENDER_VERSION = 'markdown-it/10';
 
 /** Options for {@link renderMarkdown}. */
 export interface RenderOptions {

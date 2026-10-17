@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { decideNavigation } from '../src/main/navigation-policy.js';
+import { decideNavigation, EXTERNAL_SCHEMES } from '../src/main/navigation-policy.js';
 
 const CLIENT_ROOT = resolve(import.meta.dirname, '..');
 
@@ -122,12 +122,32 @@ describe('политика навигации окна: своё приложе�
       'will-navigate обязан решать по политике navigation-policy.ts',
     );
     assert.match(main, /event\.preventDefault\(\)/, 'навигацию окна надо гасить');
-    // Политика используется тем же набором внешних схем, что setWindowOpenHandler.
-    const policy = readFileSync(resolve(CLIENT_ROOT, 'src', 'main', 'navigation-policy.ts'), 'utf8');
+  });
+
+  it('набор внешних схем ОДИН на оба гейта: политика и setWindowOpenHandler', () => {
+    // Раньше оба места сравнивали схемы своими литералами, и добавление схемы
+    // в одно место (например `tel` в setWindowOpenHandler) не краснило НИ ОДИН
+    // тест. Теперь источник один — `EXTERNAL_SCHEMES` из политики; сторож
+    // проверяет и содержимое набора, и отсутствие дублирующих литералов.
+    const main = readFileSync(resolve(CLIENT_ROOT, 'src', 'main', 'index.ts'), 'utf8');
     assert.match(
-      policy,
-      /EXTERNAL_SCHEMES = new Set\(\['http', 'https', 'mailto'\]\)/,
-      'набор внешних схем политики не совпадает с setWindowOpenHandler (http/https/mailto)',
+      main,
+      /import \{[^}]*EXTERNAL_SCHEMES[^}]*\} from '\.\/navigation-policy\.js'/,
+      'обвязка нового окна обязана брать набор схем из политики, а не из литералов',
     );
+    assert.match(
+      main,
+      /EXTERNAL_SCHEMES\.has\(scheme\)/,
+      'setWindowOpenHandler обязан решать по общему набору EXTERNAL_SCHEMES',
+    );
+    for (const literal of [/scheme === 'tel'/, /scheme === 'ftp'/, /scheme === 'file'/]) {
+      assert.doesNotMatch(
+        main,
+        literal,
+        `схемы сравниваются литералом (${String(literal)}) в обход общего набора`,
+      );
+    }
+    // Содержимое набора: ровно http/https/mailto.
+    assert.deepEqual([...EXTERNAL_SCHEMES].sort(), ['http', 'https', 'mailto']);
   });
 });

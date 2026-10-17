@@ -2,23 +2,25 @@
  * Click handling for EXTERNAL links (`http:`, `https:`, `mailto:`) in rendered
  * comment/view HTML (ошибка 37458cbc).
  *
- * The single renderer (@etn/markdown) emits real `<a href>` anchors for
- * explicit markdown links and, since the autorlink fix, for bare `https://…`
- * strings. Electron windows have no `will-navigate` guard, so a plain left
- * click on such an anchor would replace the whole ETN UI with the remote page
- * (the anchors carry no `target="_blank"`). This module installs a delegated
- * document-level click listener — the same pattern as `wiki-link.ts` /
- * `lib/etnimg-link.ts` — that intercepts external clicks, calls
- * `preventDefault()` and routes the open through `window.open(href, '_blank')`.
+ * The single renderer (@etn/markdown) emits real `<a href>` anchors for explicit
+ * markdown links and, since the autolink fix, for bare `https://…` /
+ * `mailto:…` strings. The anchors carry no `target="_blank"`, so a plain left
+ * click on one would try to replace the whole ETN UI with the remote page. This
+ * module installs a delegated document-level click listener — the same pattern
+ * as `wiki-link.ts` / `lib/etnimg-link.ts` — that intercepts external clicks,
+ * calls `preventDefault()` and routes the open through
+ * `window.open(href, '_blank')`.
  *
  * Routing through `window.open` deliberately keeps the main process as the
  * single decision point: `setWindowOpenHandler` (`src/main/index.ts`)
  * classifies the target and opens exactly `http`/`https`/`mailto` in the OS
  * browser via `shell.openExternal`, denying everything else. No second copy of
- * the URL allow-list lives in the renderer. As a backstop for anything this
- * handler does not own, the main process also gates top-frame navigation
- * (`will-navigate` + `main/navigation-policy.ts`): the window can never leave
- * the application, whatever link shape the content contains.
+ * the URL allow-list lives in the renderer. And this handler is not the only
+ * line of defence: the main process ALSO gates top-frame navigation
+ * (`will-navigate` + `main/navigation-policy.ts`), so the window can never
+ * leave the application — whatever link shape the content contains and whether
+ * or not this listener owns it (relative anchors, exotic schemes, scripted
+ * `location` changes).
  *
  * A double click (the gesture that enters comment editing) must not open the
  * browser twice: the SECOND click of a multi-click is still prevented from

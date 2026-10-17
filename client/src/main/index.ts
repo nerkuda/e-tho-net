@@ -28,7 +28,7 @@ import {
 } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
 import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
-import { decideNavigation } from './navigation-policy.js';
+import { decideNavigation, EXTERNAL_SCHEMES } from './navigation-policy.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
 import { dispatchDeepLink, extractDeepLink, type DeepLinkPayload } from './ipc/deep-link.js';
 import { initAutoUpdater } from './updater.js';
@@ -244,14 +244,15 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
   });
 
   // External links open in the system browser, never inside ETN. Only the
-  // genuinely external schemes (http/https/mailto) are handed to the OS —
-  // everything else (etnimg: attachment files, the etn: deep link, file:,
-  // data:, …) is denied without an external handler: a middle-click /
-  // «открыть в новой вкладке» on an etnimg:// comment link must not navigate
-  // anywhere; the renderer's click handler owns opening such files.
+  // genuinely external schemes are handed to the OS — the set lives ONCE in
+  // `navigation-policy.ts` (`EXTERNAL_SCHEMES`) and is shared with the
+  // `will-navigate` gate below; everything else (etnimg: attachment files, the
+  // etn: deep link, file:, data:, …) is denied without an external handler: a
+  // middle-click / «открыть в новой вкладке» on an etnimg:// comment link must
+  // not navigate anywhere; the renderer's click handler owns opening such files.
   win.webContents.setWindowOpenHandler(({ url }) => {
     const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase() ?? '';
-    if (scheme === 'http' || scheme === 'https' || scheme === 'mailto') {
+    if (EXTERNAL_SCHEMES.has(scheme)) {
       void shell.openExternal(url);
     }
     return { action: 'deny' };

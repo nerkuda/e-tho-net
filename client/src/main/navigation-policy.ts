@@ -16,12 +16,17 @@
  */
 
 /**
- * Schemes the OS browser may open on our behalf — the very same set
- * `setWindowOpenHandler` hands to `shell.openExternal`. Anything else is
- * denied outright (no external handler): `etnimg:`/`etn:`/`file:`/`data:`/
- * `javascript:` must not reach the OS from a navigation attempt.
+ * Schemes the OS browser may open on our behalf — ЕДИНЫЙ ИСТОЧНИК для обоих
+ * гейтов клиента: `will-navigate` (top-frame переход, эта политика) и
+ * `setWindowOpenHandler` (новая вкладка / средняя кнопка, `src/main/index.ts`).
+ * Anything else is denied outright (no external handler): `etnimg:`/`etn:`/
+ * `file:`/`data:`/`javascript:` must not reach the OS from a navigation attempt.
+ *
+ * Изменяя набор, правь ТОЛЬКО здесь: сторож
+ * `tests/guard-window-navigation.test.ts` краснеет, если главный процесс
+ * сравнивает схемы своим литералом вместо этого набора.
  */
-const EXTERNAL_SCHEMES = new Set(['http', 'https', 'mailto']);
+export const EXTERNAL_SCHEMES: ReadonlySet<string> = new Set(['http', 'https', 'mailto']);
 
 /** Outcome of a navigation attempt by the page. */
 export interface NavigationDecision {

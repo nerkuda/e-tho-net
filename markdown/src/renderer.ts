@@ -18,6 +18,7 @@ import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js/lib/common';
 
 import { htmlCommentPlugin } from './html-comment.js';
+import { schemeAutolinkPlugin } from './autolink.js';
 import { imagePlugin } from './image.js';
 import { linkSafetyPlugin } from './link.js';
 import { markPlugin } from './mark.js';
@@ -89,6 +90,12 @@ export function getRenderer(): MarkdownIt {
   // выключается именно ядровое правило; `md.validateLink` (allow-list схем) и
   // `linkSafetyPlugin` продолжают действовать на внутристрочный автолинк.
   md.core.ruler.disable('linkify');
+  // Встроенное внутристрочное правило ловит только схемы с `://`, поэтому
+  // `mailto:…` (его подсвечивает редактор — GFM Autolink) оставалось текстом.
+  // Своё правило закрывает схемы БЕЗ `//` через тот же linkify-it (ошибка
+  // 37458cbc, круг 3) и аннотируется разметкой позиций вместе с встроенным:
+  // `source-map.ts` оборачивает оба (`linkify` и `linkify_scheme`).
+  schemeAutolinkPlugin(md);
   wikiLinkPlugin(md);
   imagePlugin(md);
   linkSafetyPlugin(md);

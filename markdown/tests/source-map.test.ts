@@ -824,6 +824,28 @@ test('linkify: URL без предшествующего текста начин
   assert.equal(clickOffset(src, ' конец', 'к'), src.indexOf('конец'));
 });
 
+test('linkify_scheme (mailto): диапазон вместе со схемой, клик внутри и после точен (37458cbc)', () => {
+  // Второе внутристрочное правило автолинка — схема БЕЗ `://` (`mailto:`).
+  const src = 'см. mailto:a@b.c тут';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const start = src.indexOf('mailto:a@b.c');
+  assert.match(
+    html,
+    new RegExp(`<a [^>]*data-md-start="${start}"[^>]*data-md-end="${start + 'mailto:a@b.c'.length}"`),
+    html,
+  );
+  assert.match(html, /<a [^>]*data-md-after="\d+"[^>]*data-md-leaf="1"/, html);
+  assertClickInText(src, 'mailto:a@b.c', '@');
+  assert.equal(clickOffset(src, ' тут', 'т'), src.indexOf('тут'));
+});
+
+test('linkify_scheme (mailto) в начале строки: start=0 и анкер после адреса', () => {
+  const src = 'mailto:a@b.c конец';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.match(html, /<a [^>]*data-md-start="0"[^>]*data-md-end="12"[^>]*data-md-after="12"/, html);
+  assert.equal(clickOffset(src, ' конец', 'к'), src.indexOf('конец'));
+});
+
 test('linkify: хвостовая звёздочка не входит в диапазон и не ломает анкер', () => {
   // `*` отбрасывается линкифаером (конфликт с emphasis) — и диапазон, и
   // after-анкер обязаны указывать на конец самого URL.

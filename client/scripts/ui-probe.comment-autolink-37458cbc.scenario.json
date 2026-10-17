@@ -1,37 +1,80 @@
 {
   "name": "comment-autolink-37458cbc",
-  "description": "Ошибка 37458cbc (круги 1-2): (1) голый http(s)-URL в постоянном комментарии — ссылка в просмотре и выглядит как обычная ссылка; (2) protocol-relative `//example.com/x` остаётся ТЕКСТОМ (ссылка не создаётся); (3) строка `javascript:` остаётся текстом; (4) клик по внешней ссылке открывает её через window.open(…, '_blank') и НЕ уводит окно ETN; (5) клик по ОТНОСИТЕЛЬНОЙ ссылке окно тоже НЕ уводит (will-navigate-гейт); (6) двойной клик открывает браузер ровно один раз и входит в правку; (7) серверный body_html содержит ссылку и не содержит protocol-relative href. Детерминизм: затравка — каждый URL на СВОЕЙ строке (отдельный абзац, ничего не переносится), клики — с точным смещением `at` от верхнего левого угла якоря, а не центром перенесённой inline-ссылки. Запуск: ui-probe-stand.mjs --scenario <этот файл> --seed-comment \"Смотри https://example.com/a?x=1 и [явная](https://explicit.example.com).\\n\\n//example.com/x — не ссылка.\\n\\njavascript:alert(1) — тоже не ссылка.\\n\\n[отн](relative-target.html) — относительная ссылка.\"",
+  "description": "Ошибка 37458cbc (круги 1-3). САМОДОСТАТОЧНЫЙ сценарий: текст комментария заводит САМ (шаг api — POST постоянного комментария на корневую мысль HOME, {{homeId}}), поэтому `--seed-comment` и предварительная затравка стенда роли не играют; отдельная правка в редакторе не нужна (CodeMirror не принимает ввод через CDP insertText и синтетическую вставку — состояние редактора не меняется, и сохранение не уходит). Проверяет: (1) голый http(s)-URL — ссылка в просмотре и выглядит как обычная ссылка; (2) mailto:user@example.com — ссылка в просмотре (паритет с правкой, круг 3); (3) protocol-relative //example.com/x остаётся ТЕКСТОМ; (4) javascript: остаётся текстом; (5) клик по внешней и mailto-ссылке отдаёт адрес через window.open(…, _blank) и НЕ уводит окно ETN; (6) клик по ОТНОСИТЕЛЬНОЙ ссылке окно тоже НЕ уводит (will-navigate-гейт); (7) двойной клик открывает браузер ровно один раз и входит в правку; (8) серверный body_html содержит ссылки и не содержит protocol-relative href. Детерминизм: каждый адрес — на своей строке (пустая строка = новый абзац, ничего не переносится), клики — с точным смещением at от верхнего левого угла якоря; читающие DOM пробы берут значение через window.__poll (ждёт стабилизации после realtime-перерисовки). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.comment-autolink-37458cbc.scenario.json --out .tmp/autolink-out (без --seed-comment; два прогона дают одинаковый отчёт).",
   "timeout": 90000,
   "steps": [
     {
       "name": "onboarding-visible",
       "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
     },
-    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
-    { "name": "server-url-typed", "text": "{{serverUrl}}" },
-    { "name": "fill-api-key", "click": "input[type=password]" },
-    { "name": "api-key-typed", "text": "{{apiKey}}" },
-    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
     {
       "name": "networks-visible",
       "waitFor": "document.querySelectorAll('.network-item').length > 0"
     },
-    { "name": "open-network", "click": ".networks-list .network-item" },
     {
-      "name": "seeded-cloud-visible",
-      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+      "name": "open-network",
+      "click": ".networks-list .network-item"
     },
-    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    {
+      "name": "seed-comment-api",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "Смотри https://example.com/a?x=1 и [явная](https://explicit.example.com).\n\n//example.com/x — не ссылка.\n\nmailto:user@example.com — ссылка.\n\njavascript:alert(1) — тоже не ссылка.\n\n[отн](relative-target.html) — относительная ссылка."
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "open-comment-owner",
+      "click": "[data-id=\"{{homeId}}\"].cloud"
+    },
     {
       "name": "comment-view-visible",
       "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('https://example.com/a?x=1') === true"
     },
-
+    {
+      "name": "install-poll-helper",
+      "eval": "(() => { window.__poll = async (fn, tries = 40) => { for (let i = 0; i < tries; i += 1) { const value = fn(); if (value !== null && value !== undefined && value !== false) return value; await new Promise((resolve) => setTimeout(resolve, 25)); } return fn(); }; return true; })()"
+    },
+    {
+      "name": "view-settled",
+      "waitFor": "document.querySelectorAll(\".ui-comment .md-field-view a[href]\").length >= 1"
+    },
     {
       "name": "view-autolink-anchor",
       "probe": {
         "name": "autolinkAnchor",
-        "expression": "document.querySelector(\".ui-comment .md-field-view a[href='https://example.com/a?x=1']\")?.tagName ?? null"
+        "expression": "window.__poll(() => document.querySelector(\".ui-comment .md-field-view a[href='https://example.com/a?x=1']\")?.tagName ?? null)"
       },
       "expect": "A"
     },
@@ -39,15 +82,26 @@
       "name": "view-autolink-anchor-text",
       "probe": {
         "name": "autolinkText",
-        "expression": "document.querySelector(\".ui-comment .md-field-view a[href='https://example.com/a?x=1']\")?.textContent ?? null"
+        "expression": "window.__poll(() => document.querySelector(\".ui-comment .md-field-view a[href='https://example.com/a?x=1']\")?.textContent ?? null)"
       },
       "expect": "https://example.com/a?x=1"
+    },
+    {
+      "name": "view-mailto-anchor",
+      "probe": {
+        "name": "mailtoAnchor",
+        "expression": "window.__poll(() => { const a = document.querySelector(\".ui-comment .md-field-view a[href='mailto:user@example.com']\"); return a === null ? null : { tag: a.tagName, text: a.textContent }; })"
+      },
+      "expect": {
+        "tag": "A",
+        "text": "mailto:user@example.com"
+      }
     },
     {
       "name": "view-autolink-look-parity",
       "probe": {
         "name": "lookParity",
-        "expression": "(() => { const links = [...document.querySelectorAll('.ui-comment .md-field-view a[href]')]; const auto = links.find((a) => a.getAttribute('href') === 'https://example.com/a?x=1'); const explicit = links.find((a) => a.getAttribute('href') === 'https://explicit.example.com'); if (!auto || !explicit) return 'нет якоря: auto=' + Boolean(auto) + ', explicit=' + Boolean(explicit); const sa = getComputedStyle(auto); const se = getComputedStyle(explicit); return sa.color === se.color && sa.textDecorationLine === se.textDecorationLine && sa.fontWeight === se.fontWeight && sa.cursor === se.cursor ? true : { color: sa.color, explicitColor: se.color, deco: sa.textDecorationLine, explicitDeco: se.textDecorationLine }; })()"
+        "expression": "window.__poll(() => { const links = [...document.querySelectorAll('.ui-comment .md-field-view a[href]')]; const auto = links.find((a) => a.getAttribute('href') === 'https://example.com/a?x=1'); const explicit = links.find((a) => a.getAttribute('href') === 'https://explicit.example.com'); if (!auto || !explicit) return null; const sa = getComputedStyle(auto); const se = getComputedStyle(explicit); return sa.color === se.color && sa.textDecorationLine === se.textDecorationLine && sa.fontWeight === se.fontWeight && sa.cursor === se.cursor ? true : { color: sa.color, explicitColor: se.color, deco: sa.textDecorationLine, explicitDeco: se.textDecorationLine }; })"
       },
       "expect": true
     },
@@ -55,7 +109,7 @@
       "name": "view-protocol-relative-stays-text",
       "probe": {
         "name": "protocolRelativeStaysText",
-        "expression": "(() => { const view = document.querySelector('.ui-comment .md-field-view'); return (view?.textContent ?? '').includes('//example.com/x') && view.querySelector(\"a[href^='//']\") === null; })()"
+        "expression": "window.__poll(() => { const view = document.querySelector('.ui-comment .md-field-view'); if (view === null || !(view.textContent ?? '').includes('//example.com/x')) return null; return view.querySelector(\"a[href^='//']\") === null ? true : null; })"
       },
       "expect": true
     },
@@ -63,43 +117,54 @@
       "name": "view-unsafe-not-a-link",
       "probe": {
         "name": "unsafeStaysText",
-        "expression": "(() => { const view = document.querySelector('.ui-comment .md-field-view'); const text = view?.textContent ?? ''; const bad = [...view.querySelectorAll('a[href]')].some((a) => /^(javascript|data):/i.test(a.getAttribute('href') ?? '')); return text.includes('javascript:alert(1)') && !bad; })()"
+        "expression": "window.__poll(() => { const view = document.querySelector('.ui-comment .md-field-view'); if (view === null || !(view.textContent ?? '').includes('javascript:alert(1)')) return null; const bad = [...view.querySelectorAll('a[href]')].some((a) => /^(javascript|data):/i.test(a.getAttribute('href') ?? '')); return bad ? null : true; })"
       },
       "expect": true
+    },
+    {
+      "name": "view-anchor-hrefs",
+      "probe": {
+        "name": "anchors",
+        "expression": "window.__poll(() => { const list = [...document.querySelectorAll('.ui-comment .md-field-view a[href]')].map((a) => a.getAttribute('href')); return list.length >= 4 ? list : null; })"
+      }
     },
     {
       "name": "view-relative-anchor-present",
       "probe": {
         "name": "relativeAnchor",
-        "expression": "document.querySelector(\".ui-comment .md-field-view a[href='relative-target.html']\")?.getAttribute('href') ?? null"
+        "expression": "window.__poll(() => document.querySelector(\".ui-comment .md-field-view a[href='relative-target.html']\")?.getAttribute('href') ?? null)"
       },
       "expect": "relative-target.html"
     },
-
     {
       "name": "server-html-linkified",
       "api": {
         "name": "serverBodyHtml",
         "method": "GET",
-        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
-        "expression": "(() => { const html = data.find((c) => c.kind === 'permanent').body_html; return html.includes('<a href=\"https://example.com/a?x=1\">') && html.includes('href=\"//') === false; })()"
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "expression": "(() => { const html = data.find((c) => c.kind === 'permanent').body_html; return html.includes('<a href=\"https://example.com/a?x=1\">') && html.includes('<a href=\"mailto:user@example.com\">mailto:user@example.com</a>') && html.includes('href=\"//') === false; })()"
       },
       "expect": true
     },
-
     {
       "name": "stub-window-open",
       "eval": "(() => { window.__etnOpened = []; window.open = (...args) => { window.__etnOpened.push(args.slice(0, 2)); return null; }; return true; })()"
     },
     {
       "name": "url-before-click",
-      "probe": { "name": "urlBefore", "expression": "location.href" }
+      "probe": {
+        "name": "urlBefore",
+        "expression": "location.href"
+      }
     },
     {
       "name": "click-autolink",
       "click": {
         "selector": ".ui-comment .md-field-view a[href='https://example.com/a?x=1']",
-        "at": [4, 4]
+        "at": [
+          4,
+          4
+        ]
       }
     },
     {
@@ -112,23 +177,61 @@
     },
     {
       "name": "window-url-unchanged",
-      "probe": { "name": "urlAfter", "expression": "location.href" },
+      "probe": {
+        "name": "urlAfter",
+        "expression": "location.href"
+      },
+      "expectFrom": "url-before-click"
+    },
+    {
+      "name": "click-mailto",
+      "click": {
+        "selector": ".ui-comment .md-field-view a[href='mailto:user@example.com']",
+        "at": [
+          4,
+          4
+        ]
+      }
+    },
+    {
+      "name": "mailto-opened-externally",
+      "probe": {
+        "name": "mailtoOpened",
+        "expression": "window.__etnOpened.length === 2 && window.__etnOpened[1][0] === 'mailto:user@example.com' && window.__etnOpened[1][1] === '_blank'"
+      },
+      "expect": true
+    },
+    {
+      "name": "mailto-click-did-not-navigate",
+      "probe": {
+        "name": "urlAfterMailto",
+        "expression": "location.href"
+      },
       "expectFrom": "url-before-click"
     },
     {
       "name": "click-relative-link",
-      "click": { "selector": ".ui-comment .md-field-view a[href='relative-target.html']", "at": [4, 4] }
+      "click": {
+        "selector": ".ui-comment .md-field-view a[href='relative-target.html']",
+        "at": [
+          4,
+          4
+        ]
+      }
     },
     {
       "name": "relative-click-did-not-navigate",
-      "probe": { "name": "urlAfterRelative", "expression": "location.href" },
+      "probe": {
+        "name": "urlAfterRelative",
+        "expression": "location.href"
+      },
       "expectFrom": "url-before-click"
     },
     {
       "name": "relative-click-not-external",
       "probe": {
         "name": "relativeNotOpened",
-        "expression": "window.__etnOpened.length === 1"
+        "expression": "window.__etnOpened.length === 2"
       },
       "expect": true
     },
@@ -136,7 +239,10 @@
       "name": "double-click-autolink",
       "click": {
         "selector": ".ui-comment .md-field-view a[href='https://example.com/a?x=1']",
-        "at": [4, 4],
+        "at": [
+          4,
+          4
+        ],
         "count": 2
       }
     },
@@ -144,13 +250,16 @@
       "name": "double-click-opened-once",
       "probe": {
         "name": "doubleClickOpensOnce",
-        "expression": "window.__etnOpened.length === 2 && window.__etnOpened[1][0] === 'https://example.com/a?x=1'"
+        "expression": "window.__etnOpened.length === 3 && window.__etnOpened[2][0] === 'https://example.com/a?x=1'"
       },
       "expect": true
     },
     {
       "name": "double-click-did-not-navigate",
-      "probe": { "name": "urlAfterDouble", "expression": "location.href" },
+      "probe": {
+        "name": "urlAfterDouble",
+        "expression": "location.href"
+      },
       "expectFrom": "url-before-click"
     },
     {

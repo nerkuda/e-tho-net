@@ -264,6 +264,64 @@ test('protocol-relative URL остаётся текстом (ошибка 37458c
   assert.equal(renderMarkdown('a //example.com/x b'), '<p>a //example.com/x b</p>\n');
 });
 
+test('mailto: — ссылка в просмотре, паритет с редактором (ошибка 37458cbc, круг 3)', () => {
+  // Редактор (GFM Autolink у lezer) подсвечивает узел `mailto:` как URL —
+  // в просмотре строка тоже должна стать ссылкой.
+  assert.equal(renderMarkdown('mailto:a@b.c'), '<p><a href="mailto:a@b.c">mailto:a@b.c</a></p>\n');
+  assert.equal(
+    renderMarkdown('см. mailto:a@b.c и всё'),
+    '<p>см. <a href="mailto:a@b.c">mailto:a@b.c</a> и всё</p>\n',
+  );
+  assert.equal(
+    renderMarkdown('MAILTO:A@B.C'),
+    '<p><a href="MAILTO:A@B.C">MAILTO:A@B.C</a></p>\n',
+  );
+  // Внутри strong — ссылка (встроенное правило и ядровое на этом тоже ссылались).
+  assert.equal(
+    renderMarkdown('**mailto:a@b.c**'),
+    '<p><strong><a href="mailto:a@b.c">mailto:a@b.c</a></strong></p>\n',
+  );
+  // Внутри code span — текст.
+  assert.equal(renderMarkdown('`mailto:a@b.c`'), '<p><code>mailto:a@b.c</code></p>\n');
+  // Явная markdown-ссылка не задевается.
+  assert.equal(renderMarkdown('[a@b.c](mailto:a@b.c)'), '<p><a href="mailto:a@b.c">a@b.c</a></p>\n');
+  // Как и ядровое правило, ссылку решает linkify-it (его схема `mailto:`
+  // принимает и адрес без точки в домене).
+  assert.equal(renderMarkdown('mailto:a@b'), '<p><a href="mailto:a@b">mailto:a@b</a></p>\n');
+});
+
+test('mailto-правило не трогает чужие схемы, домены и адреса без схемы', () => {
+  assert.equal(renderMarkdown('a@b.c'), '<p>a@b.c</p>\n');
+  assert.equal(renderMarkdown('mailto:'), '<p>mailto:</p>\n');
+  assert.equal(renderMarkdown('mailto'), '<p>mailto</p>\n');
+  // Схемы без `//`, которых нет в схемах linkify-it или в allow-list.
+  for (const src of ['data:text/plain,hi', 'javascript:alert(1)', 'http:foo', 'tel:+70000000000']) {
+    assert.equal(renderMarkdown(src).includes('<a'), false, src);
+  }
+});
+
+test('underscore-контекст: `__`-разметка не превращает адрес в «полуссылку» (37458cbc)', () => {
+  // Паритет с редактором: подчёркивание — разделитель, а не часть адреса.
+  // Редактор (GFM Autolink) ссылку внутри `__…__` не подсвечивает, и просмотр
+  // её не линкует: `__` остаётся разметкой, текст — текстом.
+  assert.equal(renderMarkdown('__mailto:a@b.c__'), '<p><strong>mailto:a@b.c</strong></p>\n');
+  // Известное ограничение стокового markdown-it (не наша дельта): встроенное
+  // правило обрезает у адреса только концевые `*` и не обрезает `_`, поэтому
+  // здесь `__` уезжает в href и `<strong>` ломается. Поведение одинаково при
+  // включённом и выключенном ядровом правиле linkify (проверено в круге 3) и
+  // НЕ исправляется здесь: правка внутренностей встроенного правила рискует
+  // путём явных `http(s)`-ссылок (DoD: «не деградируют»). Отмечено как известное.
+  assert.equal(
+    renderMarkdown('__https://e.com/a__'),
+    '<p>__<a href="https://e.com/a__">https://e.com/a__</a></p>\n',
+  );
+  // А `**`-разметка работает: markdown-it обрезает концевые `*`.
+  assert.equal(
+    renderMarkdown('**https://e.com/a**'),
+    '<p><strong><a href="https://e.com/a">https://e.com/a</a></strong></p>\n',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Ссылки и протоколы
 // ---------------------------------------------------------------------------
