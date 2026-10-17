@@ -49,7 +49,7 @@ import {
   type FilterFooterButtonSpec,
   type FilterFooterHandle,
 } from './filter-footer.js';
-import { composeFilterPhrase, filterPhraseThoughtIds, type FilterPhraseContext } from './filter-phrase.js';
+import { filterPhraseThoughtIds, filterPhraseTokens, type FilterPhraseContext } from './filter-phrase.js';
 import {
   buildFilterSortSection,
   filterSortKeyOptions,
@@ -470,11 +470,14 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
         // собираем id ссылок и просим кэш имён; когда батч вернётся, подписка
         // перерисует фразу с именами (ошибка d17a8bfd).
         requestThoughtNames(opts.networkId, filterPhraseThoughtIds(phraseState, data.registry));
-        const text = composeFilterPhrase(phraseState, phraseContext);
+        // Токены раскраски (задача 58f77990): строка фразы и её тултип — одна
+        // разметка; текст — та же фраза строкой для текстовых потребителей.
+        const tokens = filterPhraseTokens(phraseState, phraseContext);
+        const text = tokens.map((token) => token.text).join('');
         const list = issues();
         // Ни фразы, ни диагностики — превью не подписывается.
         if (text === '' && list.length === 0) return undefined;
-        return { text, issues: list };
+        return { text, tokens, issues: list };
       },
       onSave: (request) => host.save?.(request),
       onApply: host.apply,

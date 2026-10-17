@@ -170,11 +170,11 @@
     },
     {
       "name": "broken-diagnostic-visible",
-      "waitFor": "(() => { const t = document.querySelector('.pub-card-recipe .ff-preview'); return t !== null && (t.getAttribute('title') ?? '').includes('отброшено'); })()"
+      "waitFor": "(() => { const t = document.querySelector('.pub-card-recipe .ff-preview__tip'); return t !== null && t.textContent.includes('отброшено'); })()"
     },
     {
       "name": "broken-diagnostic-text",
-      "probe": "(() => { const t = document.querySelector('.pub-card-recipe .ff-preview'); return t ? (t.getAttribute('title') ?? '') : null; })()"
+      "probe": "(() => { const t = document.querySelector('.pub-card-recipe .ff-preview__tip'); return t ? t.textContent : null; })()"
     },
     {
       "name": "broken-rows-service-default-hidden",

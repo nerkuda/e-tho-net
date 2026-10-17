@@ -100,7 +100,7 @@
     },
     {
       "name": "phrase-tooltip-names",
-      "probe": "(() => { const box = document.querySelector('.st-filter .ff-preview'); const t = box ? box.title : ''; return t.includes('Очень длинное имя типа мысли') && !t.includes('11111111-1111'); })()",
+      "probe": "(() => { const tip = document.querySelector('.st-filter .ff-preview__tip'); const t = tip ? tip.textContent : ''; return t.includes('Очень длинное имя типа мысли') && !t.includes('11111111-1111'); })()",
       "expect": true
     },
 

@@ -36,6 +36,16 @@
  *   • под-выборка сворачивается: «Цели в выборке (2 условия)»;
  *   • хвост сортировки: «; сортировка: по названию (убыв.)»;
  *   • длинная фраза обрезается по пределу с «…» (полный текст — в тултипе).
+ *
+ * Разметка раскраски (правка заказчика 2026-10-14, п.12в; задача 58f77990):
+ * фраза собирается ОДИН раз токенами {@link FilterPhraseToken}, а текст и DOM —
+ * её проекции (`filterPhraseTokens` — токены, `composeFilterPhrase` — строка).
+ * Токены-операторы несут коннекцию И/ИЛИ/НЕ, токены-скобки — уровень
+ * вложенности группы; пользовательские данные всегда текстовый токен, поэтому
+ * разметку из имени мысли собрать нельзя. Обрезка идёт ДО раскраски — по
+ * текстовым позициям (`clipFilterPhraseTokens`), готовый HTML не режется.
+ * CSS-классы и цвета — дело представления (`lib/filter-footer.ts`,
+ * `styles/filter-editor.css`), модуль о них не знает.
  */
 
 import {
@@ -50,6 +60,7 @@ import {
 import {
   STRUCTURE_KEYWORD_SCOPES,
   type FilterAstEntityKind,
+  type FilterAstGroupOp,
   type FilterAstSortKey,
   type NetworkProperty,
   type StructureKeywordScope,
@@ -158,6 +169,42 @@ const GROUP_SEPARATOR: Readonly<Record<string, string>> = {
   or: ' ИЛИ ',
   not: 'НЕ ',
 };
+
+/**
+ * Вид токена фразы (правка заказчика 2026-10-14, п.12в; задача 58f77990):
+ * `text` — обычный текст (экранируется/рисуется текстом), `operator` — оператор
+ * коннекции И/ИЛИ/НЕ, `paren` — скобка уровня вложенности. Модель раскраски
+ * живёт ЗДЕСЬ, а не в разметке потребителя: фраза собирается один раз, а
+ * представление (текст, DOM) — проекции одного набора токенов, поэтому они не
+ * могут разойтись. Модуль остаётся чистым: CSS-классов и DOM он не знает.
+ */
+export type FilterPhraseTokenKind = 'text' | 'operator' | 'paren';
+
+/** Оператор коннекции, несущий раскраску: `И`/`ИЛИ`/`НЕ` — словарь shared
+ *  (`FILTER_AST_GROUP_OPS`), второго перечня не заводим. */
+export type FilterPhraseOperator = FilterAstGroupOp;
+
+/** Токен фразы: неделимый кусок текста с признаком раскраски. */
+export interface FilterPhraseToken {
+  kind: FilterPhraseTokenKind;
+  /** Текст токена (уже обрезанный по пределу фразы). */
+  text: string;
+  /** Коннекция — у токена-оператора. */
+  operator?: FilterPhraseOperator;
+  /**
+   * Уровень вложенности группы — у токена-скобки (корневая группа 0, вложенная
+   * группа уровня N отдаёт скобки с глубиной N). Тон скобки считает
+   * представление по циклу тонов вложенности (`filterTreeToneIndex`,
+   * `lib/filter-tree.ts`) — источник тонов ОДИН на дерево и фразу.
+   */
+  depth?: number;
+}
+
+/** Токен-оператор коннекции. */
+function phraseOperatorToken(op: FilterPhraseOperator): FilterPhraseToken {
+  return { kind: 'operator', text: GROUP_SEPARATOR[op] ?? `${op} `, operator: op };
+}
+
 
 /** Русское число с согласованием: `1 условие` / `2 условия` / `5 условий`. */
 function pluralRu(n: number, one: string, few: string, many: string): string {
@@ -440,17 +487,56 @@ export function filterPhraseNode(
   ctx: FilterPhraseContext,
   parentOp?: string,
 ): string {
-  if (node.kind === 'leaf') return filterPhraseLeaf(node, ctx);
-  const children = node.children
-    .map((child) => filterPhraseNode(child, ctx, node.op))
-    .filter((part) => part !== '');
-  if (children.length === 0) return '';
-  const operator = GROUP_SEPARATOR[node.op] ?? `${node.op} `;
-  // «НЕ» — префикс к своему (единственному) ребёнку; «И»/«ИЛИ» — разделитель.
-  const body =
-    node.op === 'not' ? `${operator}${children.join(', ')}` : children.join(operator);
+  return filterPhraseNodeTokens(node, ctx, parentOp).map((token) => token.text).join('');
+}
+
+/**
+ * Узел дерева токенами раскраски (задача 58f77990, п.12в): текстовая фраза —
+ * конкатенация тех же токенов, поэтому представления не расходятся. Коннекции
+ * «И»/«ИЛИ»/«НЕ» — токены-операторы, скобки вложенных групп — токены-скобки с
+ * уровнем вложенности (`depth`); всё остальное — текст. Глубина считается от
+ * корня дерева: вложенная группа уровня N отдаёт скобки с `depth: N`.
+ */
+export function filterPhraseNodeTokens(
+  node: FilterTreeGroup | FilterTreeLeaf,
+  ctx: FilterPhraseContext,
+  parentOp?: string,
+  depth = 0,
+): FilterPhraseToken[] {
+  if (node.kind === 'leaf') {
+    const text = filterPhraseLeaf(node, ctx);
+    return text === '' ? [] : [{ kind: 'text', text }];
+  }
+  const groups = node.children
+    .map((child) => filterPhraseNodeTokens(child, ctx, node.op, depth + 1))
+    .filter((tokens) => tokens.length > 0);
+  if (groups.length === 0) return [];
+  const separator = GROUP_SEPARATOR[node.op];
+  /** Разделитель группы: известная коннекция — токен-оператор, иначе — текст. */
+  const separatorToken = (): FilterPhraseToken =>
+    separator === undefined ? { kind: 'text', text: `${node.op} ` } : phraseOperatorToken(node.op);
+  const body: FilterPhraseToken[] = [];
+  if (node.op === 'not') {
+    // «НЕ» — префикс к своему (единственному) ребёнку; дети соединяются запятой.
+    body.push(separatorToken());
+    groups.forEach((tokens, index) => {
+      if (index > 0) body.push({ kind: 'text', text: ', ' });
+      body.push(...tokens);
+    });
+  } else {
+    // «И»/«ИЛИ» — разделитель между детьми.
+    groups.forEach((tokens, index) => {
+      if (index > 0) body.push(separatorToken());
+      body.push(...tokens);
+    });
+  }
   const needParens = parentOp !== undefined && parentOp !== node.op;
-  return needParens ? `(${body})` : body;
+  if (!needParens) return body;
+  return [
+    { kind: 'paren', text: '(', depth },
+    ...body,
+    { kind: 'paren', text: ')', depth },
+  ];
 }
 
 /**
@@ -492,18 +578,65 @@ export function truncateFilterPhrase(text: string, limit: number = FILTER_PHRASE
 }
 
 /**
+ * Обрезка ТОКЕНОВ фразы до предела (задача 58f77990, требование о разметке):
+ * режем ДО раскраски — по текстовым позициям, а не по готовой разметке, иначе
+ * обрезка разрезала бы тег/спан. Текст токенов повторяет
+ * {@link truncateFilterPhrase} символ-в-символ (та же граница слова), а
+ * «…» становится отдельным текстовым токеном. Оператор или скобка, попавшие на
+ * границу, усекаются как текст — разметка от этого не рвётся.
+ */
+export function clipFilterPhraseTokens(
+  tokens: readonly FilterPhraseToken[],
+  limit: number = FILTER_PHRASE_LIMIT,
+): FilterPhraseToken[] {
+  const plain = tokens.map((token) => token.text).join('');
+  if (plain.length <= limit) return [...tokens];
+  const clipped = truncateFilterPhrase(plain, limit);
+  const keep = clipped.slice(0, -1).trimEnd().length;
+  const out: FilterPhraseToken[] = [];
+  let used = 0;
+  for (const token of tokens) {
+    if (used >= keep) break;
+    const room = keep - used;
+    const text = token.text.length <= room ? token.text : token.text.slice(0, room);
+    if (text === '') break;
+    out.push({ ...token, text });
+    used += text.length;
+  }
+  out.push({ kind: 'text', text: '…' });
+  return out;
+}
+
+/**
+ * Фраза-превью отбора ТОКЕНАМИ раскраски: дерево + хвост сортировки, обрезка по
+ * пределу. Пустой список — условий и сортировки нет (потребитель превью не
+ * рисует). Единственный источник фразы: текстовая фраза и разметка — проекции
+ * ЭТИХ токенов (задача 58f77990).
+ */
+export function filterPhraseTokens(
+  state: FilterPhraseState,
+  ctx: FilterPhraseContext,
+): FilterPhraseToken[] {
+  const tokens: FilterPhraseToken[] = [];
+  if (state.tree !== null && state.tree !== undefined) {
+    tokens.push(...filterPhraseNodeTokens(state.tree, ctx));
+  }
+  const sort = filterPhraseSort(state.sortKeys, ctx.registry);
+  if (sort !== '') {
+    if (tokens.length > 0) tokens.push({ kind: 'text', text: '; ' });
+    tokens.push({ kind: 'text', text: sort });
+  }
+  return clipFilterPhraseTokens(tokens, ctx.limit ?? FILTER_PHRASE_LIMIT);
+}
+
+/**
  * Фраза-превью отбора из единой модели: дерево + хвост сортировки, обрезка по
  * пределу. Пустая строка — условий и сортировки нет (потребитель превью не рисует).
  */
 export function composeFilterPhrase(state: FilterPhraseState, ctx: FilterPhraseContext): string {
-  const parts: string[] = [];
-  if (state.tree !== null && state.tree !== undefined) {
-    const phrase = filterPhraseNode(state.tree, ctx);
-    if (phrase !== '') parts.push(phrase);
-  }
-  const sort = filterPhraseSort(state.sortKeys, ctx.registry);
-  if (sort !== '') parts.push(sort);
-  return truncateFilterPhrase(parts.join('; '), ctx.limit ?? FILTER_PHRASE_LIMIT);
+  return filterPhraseTokens(state, ctx)
+    .map((token) => token.text)
+    .join('');
 }
 
 /**
@@ -553,7 +686,21 @@ export function composeFilterPhraseFromDefinition(
   definition: unknown,
   ctx: FilterPhraseContext,
 ): string {
-  if (definition === null || definition === undefined) return '';
+  return filterPhraseTokensFromDefinition(definition, ctx)
+    .map((token) => token.text)
+    .join('');
+}
+
+/**
+ * Токены раскраски сохранённого определения отбора (задача 58f77990): сохранённые
+ * отборы получают ту же разметку, что и живая фраза редактора. Пустой список —
+ * условий в определении нет.
+ */
+export function filterPhraseTokensFromDefinition(
+  definition: unknown,
+  ctx: FilterPhraseContext,
+): FilterPhraseToken[] {
+  if (definition === null || definition === undefined) return [];
   const parsed = parseFilterDefinition(definition);
-  return composeFilterPhrase({ tree: parsed.tree ?? null, sortKeys: parsed.sortKeys ?? [] }, ctx);
+  return filterPhraseTokens({ tree: parsed.tree ?? null, sortKeys: parsed.sortKeys ?? [] }, ctx);
 }

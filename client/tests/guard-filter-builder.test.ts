@@ -293,16 +293,19 @@ const NO_SECOND_PHRASE_BUILDER = {
 };
 
 /**
- * Потребители композера — файлы, собирающие фразу вызовом
- * `composeFilterPhrase(...)`. Их ровно два: фабрика редактора и футер. Новое
- * место обязано звать композер, а не строить строку само (ошибка d17a8bfd).
+ * Потребители композера — файлы, собирающие фразу вызовом композера: токенами
+ * (`filterPhraseTokens(...)`, задача 58f77990 — из них и текст, и разметка) либо
+ * строкой (`composeFilterPhrase(...)`). Их ровно два: фабрика редактора и футер.
+ * Новое место обязано звать композер, а не строить фразу само (ошибка d17a8bfd).
  */
 function phraseComposerCallers(): string[] {
   const out: string[] = [];
   for (const abs of listSourceFiles(RENDERER_ROOT)) {
     const rel = path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/');
     if (rel === PHRASE_MODULE) continue;
-    if (/\bcomposeFilterPhrase\s*\(/.test(fs.readFileSync(abs, 'utf8'))) out.push(rel);
+    if (/(?:\bcomposeFilterPhrase|\bfilterPhraseTokens)\s*\(/.test(fs.readFileSync(abs, 'utf8'))) {
+      out.push(rel);
+    }
   }
   return out.sort();
 }
@@ -543,7 +546,8 @@ describe('guard: условия отбора строятся только об�
     assertGuardClean(RENDERER_ROOT, [NO_SECOND_PHRASE_BUILDER]);
     // Позитивная часть: фразу собирают РОВНО два потребителя — фабрика редактора
     // (футер места) и сам футер. Новое место обязано звать композер
-    // (`composeFilterPhrase`), а не строить строку само (ошибка d17a8bfd).
+    // (`filterPhraseTokens`/`composeFilterPhrase`), а не строить фразу само
+    // (ошибка d17a8bfd, задача 58f77990).
     assert.deepEqual(phraseComposerCallers(), ['lib/filter-editor.ts', 'lib/filter-footer.ts']);
   });
 
