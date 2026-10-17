@@ -16,7 +16,7 @@ import {
   __resetThoughtRefBatch,
   resolveThoughtRefs,
 } from '../src/renderer/lib/thought-ref-batch.js';
-import { REALTIME_REFETCH_WINDOW_MS } from '../src/renderer/lib/live/query-registry.js';
+import { REALTIME_REFETCH_MAX_WAIT_MS, REALTIME_REFETCH_WINDOW_MS } from '../src/renderer/lib/live/query-registry.js';
 
 const NET = '00000000-0000-4000-8000-0000000000aa';
 const OTHER = '00000000-0000-4000-8000-0000000000bb';
@@ -116,5 +116,49 @@ describe('thought-ref-batch (96d7f05d)', () => {
       calls.map((call) => call.networkId).sort(),
       [NET, OTHER].sort(),
     );
+  });
+
+  it('непрерывный поток: resolve хотя бы раз за 3 с, финальный проход без дублей', async (t: TestContext) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const gapMs = 100;
+    const streamMs = 3000;
+    // 31 вызов: t = 0, 100, …, 3000 — поток длится ровно 3 с.
+    const events = streamMs / gapMs + 1;
+    const pending: Promise<ThoughtRef[]>[] = [];
+    let elapsed = 0;
+    let firstCallAt: number | null = null;
+
+    for (let i = 0; i < events; i += 1) {
+      pending.push(resolveThoughtRefs(NET, [`id-${i}`], { windowed: true }));
+      if (i < events - 1) {
+        t.mock.timers.tick(gapMs);
+        elapsed += gapMs;
+      }
+      await flushMicrotasks();
+      if (calls.length > 0 && firstCallAt === null) firstCallAt = elapsed;
+    }
+
+    assert.notEqual(firstCallAt, null, 'за непрерывный поток был хотя бы один resolve');
+    assert.ok(
+      firstCallAt! <= REALTIME_REFETCH_MAX_WAIT_MS,
+      `первый resolve не позже maxWait: ${firstCallAt} > ${REALTIME_REFETCH_MAX_WAIT_MS}`,
+    );
+    const atStop = calls.length;
+    assert.ok(
+      atStop >= Math.floor(streamMs / REALTIME_REFETCH_MAX_WAIT_MS),
+      `поток дал ${atStop} resolve — меньше, чем окон maxWait за 3 с`,
+    );
+
+    // После остановки — ровно один финальный проход по накопленной волне.
+    t.mock.timers.tick(REALTIME_REFETCH_WINDOW_MS);
+    await flushMicrotasks();
+    assert.equal(calls.length, atStop + 1, 'после остановки ровно один финальный resolve');
+
+    // Больше тишины — больше запросов нет: дублей не осталось.
+    t.mock.timers.tick(REALTIME_REFETCH_MAX_WAIT_MS + REALTIME_REFETCH_WINDOW_MS);
+    await flushMicrotasks();
+    assert.equal(calls.length, atStop + 1, 'после финального прохода повторов нет');
+
+    await Promise.all(pending);
   });
 });

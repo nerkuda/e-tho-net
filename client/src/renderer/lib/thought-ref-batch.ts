@@ -14,7 +14,9 @@
  * **Два режима.**
  *  - `windowed: true` — realtime-волна: сбор идёт окно
  *    {@link REALTIME_REFETCH_WINDOW_MS} (trailing), как у перечитываний
- *    реестра. Вызывается из инвалидаций, порождённых событиями.
+ *    реестра, но не дольше {@link REALTIME_REFETCH_MAX_WAIT_MS} от первого id
+ *    волны (жёсткий срок не продлевается потоком). Вызывается из инвалидаций,
+ *    порождённых событиями.
  *  - `windowed: false` (по умолчанию) — действие пользователя/открытие панели:
  *    запросы схлопываются в микротаске и уходят сразу, без задержки.
  *
@@ -25,7 +27,7 @@
 import { THOUGHT_RESOLVE_MAX_IDS, type ThoughtRef } from '@etn/shared';
 
 import { etn } from './etn.js';
-import { REALTIME_REFETCH_WINDOW_MS } from './live/query-registry.js';
+import { REALTIME_REFETCH_MAX_WAIT_MS, REALTIME_REFETCH_WINDOW_MS } from './live/query-registry.js';
 
 /** Один потребитель, ожидающий свои id в общем окне. */
 interface RefCall {
@@ -40,8 +42,13 @@ interface RefBucket {
   calls: RefCall[];
   /** Микротаска уже запланирована (немедленный режим). */
   microtaskScheduled: boolean;
-  /** Таймер окна (realtime-режим). */
+  /** Таймер окна (realtime-режим, trailing). */
   timer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Жёсткий срок окна от ПЕРВОГО id волны (realtime-режим). Не продлевается
+   * последующими вызовами: непрерывный поток иначе не дал бы ни одного resolve.
+   */
+  maxWaitTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const buckets = new Map<string, RefBucket>();
@@ -61,7 +68,13 @@ export function resolveThoughtRefs(
   return new Promise<ThoughtRef[]>((resolve, reject) => {
     let bucket = buckets.get(networkId);
     if (bucket === undefined) {
-      bucket = { ids: new Set(), calls: [], microtaskScheduled: false, timer: null };
+      bucket = {
+        ids: new Set(),
+        calls: [],
+        microtaskScheduled: false,
+        timer: null,
+        maxWaitTimer: null,
+      };
       buckets.set(networkId, bucket);
     }
     for (const id of unique) bucket.ids.add(id);
@@ -71,6 +84,11 @@ export function resolveThoughtRefs(
       // Trailing debounce: каждое новое событие волны продлевает окно.
       if (bucket.timer !== null) clearTimeout(bucket.timer);
       bucket.timer = setTimeout(() => flush(networkId), REALTIME_REFETCH_WINDOW_MS);
+      // Жёсткий срок — от первого события волны, последующими не продлевается:
+      // иначе сплошной поток не закрыл бы окно (блокер проверки 96d7f05d).
+      if (bucket.maxWaitTimer === null) {
+        bucket.maxWaitTimer = setTimeout(() => flush(networkId), REALTIME_REFETCH_MAX_WAIT_MS);
+      }
       return;
     }
     if (bucket.microtaskScheduled) return;
@@ -84,7 +102,9 @@ function flush(networkId: string): void {
   const bucket = buckets.get(networkId);
   if (bucket === undefined) return;
   buckets.delete(networkId);
+  // Оба таймера окна закрываются одним флашем — второй не даст дубля.
   if (bucket.timer !== null) clearTimeout(bucket.timer);
+  if (bucket.maxWaitTimer !== null) clearTimeout(bucket.maxWaitTimer);
 
   const ids = [...bucket.ids];
   const chunks: string[][] = [];
@@ -110,6 +130,7 @@ function flush(networkId: string): void {
 export function __resetThoughtRefBatch(): void {
   for (const bucket of buckets.values()) {
     if (bucket.timer !== null) clearTimeout(bucket.timer);
+    if (bucket.maxWaitTimer !== null) clearTimeout(bucket.maxWaitTimer);
   }
   buckets.clear();
 }

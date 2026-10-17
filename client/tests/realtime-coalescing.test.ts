@@ -17,6 +17,7 @@ import { beforeEach, describe, it, type TestContext } from 'node:test';
 import type { AnyRealtimeEvent, RealtimeEventType } from '@etn/shared';
 
 import {
+  REALTIME_REFETCH_MAX_WAIT_MS,
   REALTIME_REFETCH_WINDOW_MS,
   queryKeys,
   refetchQuery,
@@ -199,6 +200,61 @@ describe('realtime-волна: одно перечитывание на окно
     t.mock.timers.tick(REALTIME_REFETCH_WINDOW_MS);
     await flushMicrotasks();
     for (const key of keys) assert.equal(c.counts.get(key), 1, `ключ ${key} перечитан один раз`);
+  });
+});
+
+describe('непрерывный поток: жёсткий срок волны (96d7f05d)', () => {
+  it('поток каждые 100 мс × 3 с: перечитывание не позже maxWait, финальный проход без дублей', async (t: TestContext) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const c = makeCounters();
+    const key = queryKeys.focus('f');
+    await c.subscribe(key);
+
+    const gapMs = 100;
+    const streamMs = 3000;
+    // 31 событие: t = 0, 100, …, 3000 — поток длится ровно 3 с.
+    const events = streamMs / gapMs + 1;
+    let elapsed = 0;
+    let firstFetchAt: number | null = null;
+    let seq = 0;
+
+    for (let i = 0; i < events; i += 1) {
+      routeRealtimeEvent(
+        mkEvent(
+          'thought.updated',
+          { id: 'f', changes: { title: `T${i}` }, version: i + 2 },
+          (seq += 1),
+        ),
+        { networkId: NET },
+      );
+      if (i < events - 1) {
+        t.mock.timers.tick(gapMs);
+        elapsed += gapMs;
+      }
+      await flushMicrotasks();
+      if ((c.counts.get(key) ?? 0) > 0 && firstFetchAt === null) firstFetchAt = elapsed;
+    }
+
+    assert.notEqual(firstFetchAt, null, 'за непрерывный поток было хотя бы одно перечитывание');
+    assert.ok(
+      firstFetchAt! <= REALTIME_REFETCH_MAX_WAIT_MS,
+      `первое перечитывание не позже maxWait: ${firstFetchAt} > ${REALTIME_REFETCH_MAX_WAIT_MS}`,
+    );
+    const atStop = c.counts.get(key) ?? 0;
+    assert.ok(
+      atStop >= Math.floor(streamMs / REALTIME_REFETCH_MAX_WAIT_MS),
+      `поток дал ${atStop} проход(ов) — меньше, чем окон maxWait за 3 с`,
+    );
+
+    // После остановки — ровно один финальный проход по накопленной волне.
+    t.mock.timers.tick(REALTIME_REFETCH_WINDOW_MS);
+    await flushMicrotasks();
+    assert.equal(c.counts.get(key), atStop + 1, 'после остановки ровно один финальный проход');
+
+    // Больше тишины — больше проходов нет: дублей не осталось.
+    t.mock.timers.tick(REALTIME_REFETCH_MAX_WAIT_MS + REALTIME_REFETCH_WINDOW_MS);
+    await flushMicrotasks();
+    assert.equal(c.counts.get(key), atStop + 1, 'после финального прохода повторов нет');
   });
 });
 

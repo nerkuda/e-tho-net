@@ -74,6 +74,30 @@ const entries = new Map<string, QueryEntry<unknown>>();
 export type InvalidationCause = unknown;
 
 /**
+ * Признак realtime-причины без события шины: контрольные сигналы канала
+ * (`resume.stale`, `focus-lost`) приходят из realtime-соединения, но payload
+ * события у них нет. Такой сигнал тоже должен идти окном коалесирования —
+ * иначе длинный поток контрольных сообщений снова даст запрос на каждое.
+ */
+export interface RealtimeControlCause {
+  kind: 'realtime-control';
+  reason: string;
+}
+
+/** Готовый экземпляр контрольной realtime-причины (см. {@link RealtimeControlCause}). */
+export const REALTIME_CONTROL_CAUSE: RealtimeControlCause = Object.freeze({
+  kind: 'realtime-control',
+  reason: 'realtime-control',
+});
+
+/**
+ * Явная локальная причина (действие пользователя/мутация/смена слоя).
+ * Нужна, чтобы каждый путь БЕЗ realtime-события помечался осознанно —
+ * сторож `guard-realtime-coalescing.test.ts` ловит вызовы без причины.
+ */
+export const LOCAL_CAUSE: LocalMutationSignal = Object.freeze({ local: 'local-action' });
+
+/**
  * Realtime-событие как ПРИЧИНА инвалидации: роутер передаёт его в
  * `invalidateQueries(prefix, evt)`. Наблюдателю, которому нужны детали события
  * (тип, payload), а не только ключ, достаточно `asRealtimeCause(cause)` —
@@ -92,6 +116,17 @@ export function asRealtimeCause(cause: unknown): RealtimeCause | null {
   const c = cause as { type?: unknown; data?: unknown };
   if (typeof c.type !== 'string') return null;
   return cause as RealtimeCause;
+}
+
+/**
+ * Пришла ли инвалидация из realtime-канала: событие шины или контрольный
+ * сигнал (`resume.stale`, `focus-lost`). Локальные причины (`LOCAL_CAUSE`,
+ * мутации без события) сюда не относятся и идут микротаской.
+ */
+export function isRealtimeCause(cause: unknown): boolean {
+  if (asRealtimeCause(cause) !== null) return true;
+  if (typeof cause !== 'object' || cause === null) return false;
+  return (cause as { kind?: unknown }).kind === 'realtime-control';
 }
 
 /**
@@ -160,9 +195,36 @@ let refetchFlushScheduled = false;
  */
 export const REALTIME_REFETCH_WINDOW_MS = 250;
 
+/**
+ * Жёсткий срок волны от её ПЕРВОГО события, мс.
+ *
+ * Trailing-окно продлевается каждым новым событием, поэтому непрерывный поток
+ * (агент пишет без пауз, чужие клиенты шлют события чаще окна) мог держать
+ * перечитывание отложенным бесконечно — проверка задачи 96d7f05d показала
+ * `fetches=0` за 3 с сплошного потока. 1000 мс — четыре окна: типичный батч
+ * записи (сотни мс) по-прежнему схлопывается в ОДИН проход, а задержка живого
+ * обновления ограничена сверху секундой. Таймер срока НЕ продлевается
+ * последующими событиями волны; после принудительного флаша следующее событие
+ * открывает новую волну.
+ */
+export const REALTIME_REFETCH_MAX_WAIT_MS = 1000;
+
 /** Записи, ожидающие перечитывания по закрытию realtime-окна. */
 const scheduledRealtimeRefetches = new Set<string>();
 let realtimeFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let realtimeMaxWaitTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Снять оба таймера волны (trailing и жёсткий срок). */
+function clearRealtimeTimers(): void {
+  if (realtimeFlushTimer !== null) {
+    clearTimeout(realtimeFlushTimer);
+    realtimeFlushTimer = null;
+  }
+  if (realtimeMaxWaitTimer !== null) {
+    clearTimeout(realtimeMaxWaitTimer);
+    realtimeMaxWaitTimer = null;
+  }
+}
 
 function scheduleRefetch(key: string): void {
   scheduledRefetches.add(key);
@@ -174,11 +236,18 @@ function scheduleRefetch(key: string): void {
 /**
  * Отложить перечитывание до закрытия realtime-окна (trailing debounce: каждое
  * новое событие волны продлевает окно). Одна волна → один проход по записям.
+ *
+ * Жёсткий срок {@link REALTIME_REFETCH_MAX_WAIT_MS} отсчитывается от ПЕРВОГО
+ * события волны и последующими событиями не продлевается: иначе непрерывный
+ * поток никогда не закрывал бы окно.
  */
 function scheduleRealtimeRefetch(key: string): void {
   scheduledRealtimeRefetches.add(key);
   if (realtimeFlushTimer !== null) clearTimeout(realtimeFlushTimer);
   realtimeFlushTimer = setTimeout(flushRealtimeRefetches, REALTIME_REFETCH_WINDOW_MS);
+  if (realtimeMaxWaitTimer === null) {
+    realtimeMaxWaitTimer = setTimeout(flushRealtimeRefetches, REALTIME_REFETCH_MAX_WAIT_MS);
+  }
 }
 
 /**
@@ -206,7 +275,9 @@ function flushScheduledRefetches(): void {
 }
 
 function flushRealtimeRefetches(): void {
-  realtimeFlushTimer = null;
+  // Оба таймера (trailing и жёсткий срок) закрываются одним флашем: второй
+  // вызов не должен дать повторный проход по тем же записям.
+  clearRealtimeTimers();
   const keys = [...scheduledRealtimeRefetches];
   scheduledRealtimeRefetches.clear();
   for (const key of keys) {
@@ -453,7 +524,7 @@ export function invalidateQueries(prefix: string, cause?: InvalidationCause): st
   // записи перечитывает видимое ОДИН раз по закрытию окна, а не на каждое
   // событие (ошибка 49e05ea0). Локальные причины (мутации, действия
   // пользователя) остаются на микротаске — их задерживать нельзя.
-  const realtime = asRealtimeCause(cause) !== null;
+  const realtime = isRealtimeCause(cause);
   const touched: string[] = [];
   for (const entry of entries.values()) {
     if (!matchesKeyPrefix(entry.key, prefix)) continue;
@@ -488,8 +559,5 @@ export function resetQueryRegistry(): void {
   entries.clear();
   scheduledRefetches.clear();
   scheduledRealtimeRefetches.clear();
-  if (realtimeFlushTimer !== null) {
-    clearTimeout(realtimeFlushTimer);
-    realtimeFlushTimer = null;
-  }
+  clearRealtimeTimers();
 }

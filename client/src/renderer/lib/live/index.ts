@@ -40,11 +40,15 @@ export {
 } from './entities.js';
 
 export {
+  LOCAL_CAUSE,
+  REALTIME_CONTROL_CAUSE,
+  REALTIME_REFETCH_MAX_WAIT_MS,
   REALTIME_REFETCH_WINDOW_MS,
   asRealtimeCause,
   getQueryState,
   hasQuery,
   invalidateQueries,
+  isRealtimeCause,
   markQueryStale,
   onQueryInvalidated,
   queryKeysSnapshot,
@@ -62,6 +66,7 @@ export {
   type QueryState,
   type QueryStatus,
   type RealtimeCause,
+  type RealtimeControlCause,
 } from './query-registry.js';
 
 export {
