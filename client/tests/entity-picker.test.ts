@@ -1475,6 +1475,45 @@ describe('entity-picker: контекстное меню чипа-мысли п�
     inner.emit('focusout', {});
   });
 
+  it('фокус на внутренней кнопке «✕» чипа — меню открывается тем же сочетанием', () => {
+    installShim();
+    const calls: string[] = [];
+    const field = thoughtField(['uuid-1'], { onThoughtMenu: (value) => calls.push(value) });
+    const chip = chipOf(field)!;
+    const clear = findByClass(chip, 'st-f-clear-inline');
+    assert.ok(clear !== undefined, 'у чипа есть кнопка «✕» (снятие значения)');
+    const inner = chipFieldInner(field);
+    inner.emit('focusin', {});
+    // `Tab` с чипа уводит фокус на дочернюю кнопку — сочетание должно работать.
+    setActive(clear);
+    const event = keyEvent({ key: 'F10', code: 'F10', shiftKey: true });
+    assert.equal(
+      dispatchKeyEvent(event as KeyboardEvent),
+      true,
+      'фокус ВНУТРИ чипа (на «✕») — меню того же чипа',
+    );
+    assert.deepEqual(calls, ['uuid-1'], 'открыто меню чипа, которому принадлежит кнопка');
+    inner.emit('focusout', {});
+  });
+
+  it('фокус вне чипа (посторонний узел поля) меню не открывает — событие идёт ниже по стеку', () => {
+    installShim();
+    const calls: string[] = [];
+    const field = thoughtField(['uuid-1'], { onThoughtMenu: (value) => calls.push(value) });
+    const inner = chipFieldInner(field);
+    inner.emit('focusin', {});
+    const stranger = findByClass(field.root as unknown as ShimElement, 'entity-chip-input');
+    assert.ok(stranger !== undefined, 'в поле есть узел вне чипа (строка ввода)');
+    setActive(stranger);
+    assert.equal(
+      dispatchKeyEvent(keyEvent({ key: 'F10', code: 'F10', shiftKey: true }) as KeyboardEvent),
+      false,
+      'чипа в фокусе нет — команда не обработана',
+    );
+    assert.deepEqual(calls, [], 'меню не открыто');
+    inner.emit('focusout', {});
+  });
+
   it('токен `$…` и пустое значение меню не получают — ни мышью, ни клавиатурой', () => {
     installShim();
     const calls: string[] = [];
@@ -1549,6 +1588,35 @@ describe('entity-picker: контекстное меню чипа-мысли п�
         'Shift+F10 разобран контекстом комбо',
       );
       assert.deepEqual(calls, ['uuid-1', 'uuid-1'], 'мышь и клавиатура открывают меню значения');
+      (combo.root as unknown as ShimElement).emit('focusout', {});
+    } finally {
+      restore();
+    }
+  });
+
+  it('комбо-поле мысли: фокус на кнопке «✕» внутри облачка — меню того же значения', () => {
+    installShim();
+    const restore = installEtnStub();
+    try {
+      const calls: string[] = [];
+      const combo = buildEntityCombo({
+        networkId: 'n',
+        kind: 'thoughts',
+        value: 'uuid-1',
+        onThoughtMenu: (value) => calls.push(value),
+        onChange: () => undefined,
+      });
+      const chip = valueCloud(combo)!;
+      const clear = findByClass(chip, 'st-f-clear-inline');
+      assert.ok(clear !== undefined, 'у облачка комбо есть кнопка «✕»');
+      (combo.root as unknown as ShimElement).emit('focusin', {});
+      setActive(clear);
+      assert.equal(
+        dispatchKeyEvent(keyEvent({ key: 'F10', code: 'F10', shiftKey: true }) as KeyboardEvent),
+        true,
+        'фокус внутри облачка — сочетание разобрано',
+      );
+      assert.deepEqual(calls, ['uuid-1'], 'открыто меню значения комбо');
       (combo.root as unknown as ShimElement).emit('focusout', {});
     } finally {
       restore();

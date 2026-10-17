@@ -1,6 +1,6 @@
 {
   "name": "ada6a69d-thought-chip-menu",
-  "description": "Ошибка ada6a69d: у облачков мыслей в условиях отбора нет контекстного меню. Онбординг → сеть → диалог отбора (модаль, «+» полосы фокуса) → строка «Родители + в иерархии» со значением-мыслью → правый клик по чипу открывает ОБЩЕЕ меню мысли (состав сверяется целиком) и меню лежит ПОВЕРХ модали (elementFromPoint) → Shift+F10 при фокусе на чипе открывает то же меню → «Удалить»/«В корзину» → метка корзины появляется у чипа (снапшот облачков инвалидируется) → клик по метке открывает диалог, «Вернуть из корзины» убирает метку → «Убрать из значения условия» убирает значение. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ada6a69d.scenario.json --out .tmp/etn-ada6a69d/out",
+  "description": "Ошибка ada6a69d: у облачков мыслей в условиях отбора нет контекстного меню. Онбординг → сеть → диалог отбора (модаль, «+» полосы фокуса) → строка «Родители + в иерархии» со значением-мыслью → правый клик по чипу открывает ОБЩЕЕ меню мысли (состав сверяется целиком) и меню лежит ПОВЕРХ модали (elementFromPoint) → Shift+F10 при фокусе на чипе открывает то же меню → «Удалить»/«В корзину» → метка корзины появляется у чипа (снапшот облачков инвалидируется) → клик по метке открывает диалог, «Вернуть из корзины» убирает метку → «Убрать из значения условия» убирает значение. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ada6a69d.scenario.json --out .tmp/etn-ada6a69d/out. Отдельно проверяется фокус на внутренней кнопке «✕» чипа: Shift+F10 при фокусе на ней открывает то же меню из 17 пунктов (регресс круга 3).",
   "timeout": 300000,
   "steps": [
     {
@@ -74,7 +74,7 @@
     },
     {
       "name": "install-helpers",
-      "eval": "(() => { window.__ada = { row: () => { const rows=[...document.querySelectorAll('.view-editor-body .ft-row')]; return rows[rows.length-1] ?? null; }, lastChoice: () => { const p=[...document.querySelectorAll('.ft-choice')]; return p[p.length-1] ?? null; }, lastMenu: () => { const m=[...document.querySelectorAll('.menu')]; return m[m.length-1] ?? null; }, chip: () => { const r=window.__ada.row(); return r ? r.querySelector('.fv-entity .prop-ref-cloud') : null; }, pickChoice: (key) => { const p=window.__ada.lastChoice(); if(!p) return 'no-panel'; const it=p.querySelector('.ft-choice__item[data-key=\"'+key+'\"]'); if(!it) return 'no-item'; it.click(); return 'ok'; }, rightClickChip: () => { const c=window.__ada.chip(); if(!c) return 'no-chip'; const b=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:Math.round(b.left+5),clientY:Math.round(b.top+5)})); return 'ok'; }, menuLabels: () => { const m=window.__ada.lastMenu(); if(!m) return []; return [...m.querySelectorAll('.menu-item')].map(e=>(e.textContent||'').trim()).filter(t=>t!==''&&t!=='—'); } }; return 'ok'; })()"
+      "eval": "(() => { window.__ada = { row: () => { const rows=[...document.querySelectorAll('.view-editor-body .ft-row')]; return rows[rows.length-1] ?? null; }, lastChoice: () => { const p=[...document.querySelectorAll('.ft-choice')]; return p[p.length-1] ?? null; }, lastMenu: () => { const m=[...document.querySelectorAll('.menu')]; return m[m.length-1] ?? null; }, chip: () => { const r=window.__ada.row(); return r ? r.querySelector('.fv-entity .prop-ref-cloud') : null; }, clearBtn: () => { const c=window.__ada.chip(); return c ? c.querySelector('.st-f-clear-inline') : null; }, pickChoice: (key) => { const p=window.__ada.lastChoice(); if(!p) return 'no-panel'; const it=p.querySelector('.ft-choice__item[data-key=\"'+key+'\"]'); if(!it) return 'no-item'; it.click(); return 'ok'; }, rightClickChip: () => { const c=window.__ada.chip(); if(!c) return 'no-chip'; const b=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:Math.round(b.left+5),clientY:Math.round(b.top+5)})); return 'ok'; }, menuLabels: () => { const m=window.__ada.lastMenu(); if(!m) return []; return [...m.querySelectorAll('.menu-item')].map(e=>(e.textContent||'').trim()).filter(t=>t!==''&&t!=='—'); } }; return 'ok'; })()"
     },
     {
       "name": "add-row",
@@ -182,6 +182,54 @@
     },
     {
       "name": "chip-focused",
+      "probe": "document.activeElement === window.__ada.chip()",
+      "expect": true
+    },
+    {
+      "name": "focus-clear-btn",
+      "eval": "(() => { const b=window.__ada.clearBtn(); if(!b) return 'no-clear-btn'; b.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "clear-btn-focused",
+      "probe": "(() => { const b=window.__ada.clearBtn(); return b!==null && document.activeElement===b; })()",
+      "expect": true
+    },
+    {
+      "name": "shift-f10-on-clear",
+      "key": {
+        "key": "F10",
+        "code": "F10",
+        "keyCode": 121,
+        "modifiers": [
+          "shift"
+        ]
+      }
+    },
+    {
+      "name": "menu-via-keyboard-on-clear",
+      "timeout": 20000,
+      "waitFor": "(() => window.__ada.menuLabels().some(l=>l.includes('Убрать из значения условия')))()"
+    },
+    {
+      "name": "menu-composition-on-clear",
+      "probe": "(() => { const labels=window.__ada.menuLabels(); const has=(s)=>labels.some(l=>l.includes(s)); return JSON.stringify({ count: labels.length, removeFromValue: has('Убрать из значения условия'), del: has('Удалить') }); })()",
+      "expect": "{\"count\":17,\"removeFromValue\":true,\"del\":true}"
+    },
+    {
+      "name": "close-menu-on-clear",
+      "eval": "(() => { document.body.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,clientX:4,clientY:4})); return 'ok'; })()"
+    },
+    {
+      "name": "menu-closed-on-clear",
+      "timeout": 8000,
+      "waitFor": "window.__ada.lastMenu() === null"
+    },
+    {
+      "name": "refocus-chip",
+      "eval": "(() => { const c=window.__ada.chip(); if(!c) return 'no-chip'; c.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "chip-refocused",
       "probe": "document.activeElement === window.__ada.chip()",
       "expect": true
     },

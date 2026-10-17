@@ -1292,6 +1292,16 @@ function thoughtMenuBindings(openFocusedChipMenu: () => boolean): KeyBindingDef[
 }
 
 /**
+ * Фокус принадлежит облачку (само облачко или его внутренняя кнопка —
+ * «✕» удаления, метка корзины)? Сочетание «меню клавиатурой» действует на
+ * фокусе ВНУТРИ облачка, а не только на самом узле: иначе `Tab` на «✕» ломал
+ * бы клавиатурный путь (ошибка ada6a69d, круг 3).
+ */
+function focusedWithinChip(node: HTMLElement, active: Element | null): boolean {
+  return active !== null && (active === node || node.contains(active));
+}
+
+/**
  * Чип-лист множественного выбора сущностей: выбранные значения — мини-облачка
  * общей фабрики (значок, цвета, бледность неактуальной, метка корзины;
  * инструкция «Использовать унифицированные поля выбора ссылок в диалогах»),
@@ -1393,14 +1403,18 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
    * Открытие меню чипа, стоящего в фокусе (пересобирается вместе с чипами):
    * клавиатурные привязки ниже берут обработчик отсюда — правый клик фокуса не
    * даёт, поэтому путь мышью живёт отдельно, жестом фабрики (ошибка ada6a69d).
+   * Фокус ищем внутри облачка, а не строго на нём: `Tab` с чипа уводит фокус на
+   * его кнопку «✕» (`thought-cloud.ts`), и меню должно открываться так же.
    */
   const chipMenuByNode = new Map<HTMLElement, () => void>();
   const openFocusedChipMenu = (): boolean => {
     const active: Element | null = document.activeElement ?? null;
-    const open = active === null ? undefined : chipMenuByNode.get(active as HTMLElement);
-    if (open === undefined) return false;
-    open();
-    return true;
+    for (const [chip, open] of chipMenuByNode) {
+      if (!focusedWithinChip(chip, active)) continue;
+      open();
+      return true;
+    }
+    return false;
   };
   defineKeyContext({
     id: contextId,
@@ -1862,7 +1876,9 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     id: comboContextId,
     bindings: thoughtMenuBindings(() => {
       const active: Element | null = document.activeElement ?? null;
-      if (active === null || active !== comboChipNode || comboChipMenu === null) return false;
+      if (comboChipNode === null || comboChipMenu === null) return false;
+      // Как и в чип-поле: фокус внутри облачка (в том числе на кнопке «✕»).
+      if (!focusedWithinChip(comboChipNode, active)) return false;
       comboChipMenu();
       return true;
     }),
