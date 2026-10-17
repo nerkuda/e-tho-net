@@ -513,7 +513,8 @@ describe('локальная правка типа связи пересчиты
     } as any;
     routeRealtimeEvent(evt, { networkId: 'n1' });
     applyDerivedRealtime(evt);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Realtime-перечитывания коалесируются окном реестра (96d7f05d).
+    await new Promise((resolve) => setTimeout(resolve, 400));
     assert.equal(
       focusFetches,
       baseline + 2,

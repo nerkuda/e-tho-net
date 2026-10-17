@@ -147,6 +147,12 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolveWait) => setTimeout(resolveWait, ms));
 }
 
+/**
+ * Realtime-перечитывания коалесируются окном реестра (задача 96d7f05d) —
+ * после события ждём закрытия окна, а не микротаску.
+ */
+const REALTIME_WAIT_MS = 400;
+
 // ---------------------------------------------------------------------------
 // Realtime-путь: чужое изменение значения свойства-связи доходит до карты
 // ---------------------------------------------------------------------------
@@ -215,7 +221,7 @@ describe('realtime-значение свойства-связи перечиты
     ) as any;
     routeRealtimeEvent(ownField, { networkId: 'n1' });
     applyDerivedRealtime(ownField);
-    await wait(100);
+    await wait(REALTIME_WAIT_MS);
     assert.equal(
       focusFetches,
       baseline + 1,
@@ -233,7 +239,7 @@ describe('realtime-значение свойства-связи перечиты
     ) as any;
     routeRealtimeEvent(link, { networkId: 'n1' });
     applyDerivedRealtime(link);
-    await wait(100);
+    await wait(REALTIME_WAIT_MS);
     assert.equal(focusFetches, baseline + 2, 'чужой `link.created` перечитывает фокус через слой');
 
     deactivateFocusQuery();
