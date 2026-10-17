@@ -740,6 +740,11 @@ function globalKeyBindings(): KeyBindingDef[] {
   // (CM6 comment editor, add dialog input, …).
   bind('app.copyThought', ['Ctrl+C', 'Meta+C'], (event) => {
     if (isEditableTarget(event.target)) return false;
+    // Открытый модальный диалог приоритетнее команд карты (ошибка 82346a49):
+    // на кнопке диалога `isEditableTarget` уже не спасает, и Ctrl+C копировал
+    // мысль под подложкой. В полях диалога Ctrl+C по-прежнему остаётся
+    // нативным — проверка выше отдаёт событие раньше.
+    if (hasOpenDialog()) return false;
     if (event.shiftKey || event.altKey) return false;
     // A visible DOM text selection (e.g. inside the comment view mode,
     // b6690109) outranks the thought copy: no preventDefault, the native copy
@@ -756,6 +761,9 @@ function globalKeyBindings(): KeyBindingDef[] {
 
   bind('app.pasteThought', ['Ctrl+V', 'Meta+V'], (event) => {
     if (isEditableTarget(event.target)) return false;
+    // Модальный диалог глушит команды карты (ошибка 82346a49); в полях
+    // диалога нативная вставка остаётся — её отдаёт проверка выше.
+    if (hasOpenDialog()) return false;
     if (event.shiftKey || event.altKey) return false;
     if (store.state.screen !== 'workspace' || store.state.networkId === null) return false;
     if (!supportsThoughtCopy()) return false;
@@ -771,6 +779,9 @@ function globalKeyBindings(): KeyBindingDef[] {
     // (§15.1) and while a comment/field is being edited (native find should
     // not be hijacked there), so the shortcut does nothing in those cases.
     if (isEditableTarget(event.target)) return false;
+    // Под модальным диалогом поиск карты молчит (ошибка 82346a49): иначе фокус
+    // уходил в строку поиска за подложкой и ломал Tab-ловушку диалога.
+    if (hasOpenDialog()) return false;
     if (store.state.screen === 'workspace' && store.state.activeView === 'map') {
       document.querySelector<HTMLInputElement>('.search-input')?.focus();
       return true;
