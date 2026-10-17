@@ -120,8 +120,12 @@ export type {
  * (`<!-- … -->`) в просмотре/публикациях. Cached `body_html` must re-render
  * so existing comments lose the previously escaped comments and gain the new
  * constructs.
+ *
+ * `markdown-it/9`: автолинк голых http(s)-URL (`linkify: true`, только явные
+ * схемы) — паритет режимов просмотра и правки (ошибка 37458cbc). Cached
+ * `body_html` must re-render so existing comments turn bare URLs into links.
  */
-export const MD_RENDER_VERSION = 'markdown-it/8';
+export const MD_RENDER_VERSION = 'markdown-it/9';
 
 /** Options for {@link renderMarkdown}. */
 export interface RenderOptions {

@@ -800,6 +800,58 @@ test('байт-паритет: ссылки/картинки/autolink без sou
 });
 
 // ---------------------------------------------------------------------------
+// Ошибка 37458cbc: автолинк голых URL аннотируется (linkify)
+// ---------------------------------------------------------------------------
+
+test('linkify: диапазон URL — вместе со схемой, клик внутри и после точен', () => {
+  const src = 'см. https://e.com тут';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const start = src.indexOf('https://e.com');
+  assert.match(
+    html,
+    new RegExp(`<a [^>]*data-md-start="${start}"[^>]*data-md-end="${start + 'https://e.com'.length}"`),
+    html,
+  );
+  assert.match(html, /<a [^>]*data-md-after="\d+"[^>]*data-md-leaf="1"/, html);
+  assertClickInText(src, 'https://e.com', 'p');
+  assert.equal(clickOffset(src, ' тут', 'т'), src.indexOf('тут'));
+});
+
+test('linkify: URL без предшествующего текста начинается со схемы (start=0)', () => {
+  const src = 'https://e.com/a конец';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.match(html, /<a [^>]*data-md-start="0"[^>]*data-md-end="15"/, html);
+  assert.equal(clickOffset(src, ' конец', 'к'), src.indexOf('конец'));
+});
+
+test('linkify: хвостовая звёздочка не входит в диапазон и не ломает анкер', () => {
+  // `*` отбрасывается линкифаером (конфликт с emphasis) — и диапазон, и
+  // after-анкер обязаны указывать на конец самого URL.
+  const src = 'https://e.com/a*  конец';
+  assert.equal(src.indexOf('*'), 15);
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.match(html, /<a [^>]*data-md-end="15"[^>]*data-md-after="15"/, html);
+  assert.equal(clickOffset(src, ' конец', 'к'), src.indexOf('конец'));
+});
+
+test('linkify: URL после сокращающейся конструкции — клик по нему и после точен', () => {
+  // Ссылка-автолинк идёт сразу за `==меткой==` и перед HTML-комментарием:
+  // смещения считаются от предыдущего анкера, а сокращения компенсируются.
+  const src = '==x== https://e.com a<!--c-->b';
+  assertClickInText(src, 'https://e.com', 'e');
+  assert.equal(clickOffset(src, 'ab', 'b'), src.indexOf('b'));
+});
+
+test('байт-паритет: автолинк проекта совпадает со стоковым markdown-it', () => {
+  // Явное напоминание: вывод автолинка — это ровно поведение markdown-it с
+  // `linkify: true` (только явные схемы), без собственной обёртки.
+  assert.equal(
+    renderMarkdown('см. https://e.com и https://f.com/a?x=1&y=2#z'),
+    '<p>см. <a href="https://e.com">https://e.com</a> и <a href="https://f.com/a?x=1&amp;y=2#z">https://f.com/a?x=1&amp;y=2#z</a></p>\n',
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Ошибка 29aa3108: inline HTML-комментарий внутри конструкции/абзаца
 // ---------------------------------------------------------------------------
 

@@ -9,7 +9,8 @@
  *   1. `html: false` — raw HTML in the source is escaped, never passed through.
  *   2. Links/images go through the protocol allow-list in {@link isSafeUrl};
  *      rejected URLs render as plain text, so `javascript:` and friends can
- *      never reach an `href`/`src`.
+ *      never reach an `href`/`src`. Bare http(s) URLs autolinked by the
+ *      pipeline (ошибка 37458cbc) pass the very same allow-list.
  *   3. All dynamic values (alt, title, wiki targets) are HTML-escaped.
  */
 
@@ -46,7 +47,15 @@ export function getRenderer(): MarkdownIt {
   if (instance !== null) return instance;
   const md = new MarkdownIt({
     html: false,
-    linkify: false,
+    // Автолинк голых http(s)-URL (ошибка 37458cbc): в режиме правки редактор
+    // подсвечивает `https://…` как ссылку (`tags.url` в `md-editor.ts`), в
+    // просмотре такая строка оставалась простым текстом. `linkify` даёт
+    // паритет режимов тем же правилом markdown-it, что и режим правки (GFM
+    // Autolink у lezer). Безопасность не ослабляется: `html: false` в силе, а
+    // каждый автолинк проходит тот же allow-list `isSafeUrl` через
+    // `md.validateLink` и повторно проверяется `linkSafetyPlugin` — чужая
+    // схема (`ftp:`, `javascript:` и пр.) остаётся простым текстом.
+    linkify: true,
     typographer: false,
     // Паритет с режимом редактирования (замечание пользователя 2026-10-03,
     // задача 5de0332d, п. 3): в просмотре каждый перевод строки — разрыв, как
@@ -60,6 +69,14 @@ export function getRenderer(): MarkdownIt {
   // the permissive image set; the exact per-construct rules are enforced in
   // the image renderer and the link-safety plugin.
   md.validateLink = (url: string) => isSafeUrl(url, true);
+  // Автолинк — только ЯВНЫЕ схемы: `fuzzyLink`/`fuzzyEmail` выключают догадки
+  // linkify-it о «голых» доменах (`example.com`), `www.` и адресах без
+  // `mailto:`. Это удерживает паритет с режимом правки по существу ошибки
+  // 37458cbc (голый http(s)-URL) и не превращает в ссылки обычную прозу.
+  // Честный предел расхождения: редактор (GFM Autolink) дополнительно
+  // подсвечивает `www.` и адреса без `mailto:` — в просмотре они остаются
+  // текстом, пока пользователь не напишет явную схему.
+  md.linkify.set({ fuzzyLink: false, fuzzyEmail: false });
   wikiLinkPlugin(md);
   imagePlugin(md);
   linkSafetyPlugin(md);

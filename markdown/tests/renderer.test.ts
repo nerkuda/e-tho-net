@@ -197,6 +197,63 @@ test('обычные [текст](url) ссылки не задеваются', 
 });
 
 // ---------------------------------------------------------------------------
+// Автолинк голых URL (ошибка 37458cbc)
+// ---------------------------------------------------------------------------
+
+test('голый https-URL в тексте становится ссылкой (ошибка 37458cbc)', () => {
+  const html = renderMarkdown('см. https://example.com и дальше');
+  assert.ok(html.includes('<a href="https://example.com">https://example.com</a>'), html);
+  assert.equal(html, '<p>см. <a href="https://example.com">https://example.com</a> и дальше</p>\n');
+});
+
+test('голый http-URL: два адреса в строке, знаки вокруг не съедаются', () => {
+  assert.equal(
+    renderMarkdown('https://e.com http://f.org'),
+    '<p><a href="https://e.com">https://e.com</a> <a href="http://f.org">http://f.org</a></p>\n',
+  );
+  assert.equal(
+    renderMarkdown('см. https://e.com.'),
+    '<p>см. <a href="https://e.com">https://e.com</a>.</p>\n',
+  );
+  assert.equal(
+    renderMarkdown('(https://e.com)'),
+    '<p>(<a href="https://e.com">https://e.com</a>)</p>\n',
+  );
+});
+
+test('автолинк не трогает уже разобранные явные ссылки', () => {
+  assert.equal(
+    renderMarkdown('[метка](https://e.com) и https://f.com'),
+    '<p><a href="https://e.com">метка</a> и <a href="https://f.com">https://f.com</a></p>\n',
+  );
+});
+
+test('внутри code span и fence автолинка нет', () => {
+  assert.equal(renderMarkdown('`https://e.com`'), '<p><code>https://e.com</code></p>\n');
+  const fenced = renderMarkdown('```\nhttps://e.com\n```');
+  assert.ok(!fenced.includes('<a'), fenced);
+});
+
+test('небезопасные и неразрешённые схемы автолинком не становятся ссылками (ошибка 37458cbc)', () => {
+  // `javascript:`/`data:` не имеют зарегистрированной схемы linkify — остаются текстом.
+  assert.ok(!renderMarkdown('javascript:alert(1)').includes('<a'), 'javascript:');
+  assert.ok(!renderMarkdown('data:text/plain,hi').includes('<a'), 'data:');
+  // `ftp://` linkify ловит, но allow-list единого рендерера его отклоняет —
+  // плагин безопасности роняет <a>, текст остаётся текстом.
+  const ftp = renderMarkdown('см. ftp://e.com/x тут');
+  assert.ok(!ftp.includes('<a'), ftp);
+  assert.ok(ftp.includes('ftp://e.com/x'), ftp);
+  // Незавершённая схема — не ссылка.
+  assert.ok(!renderMarkdown('https://').includes('<a'));
+});
+
+test('автолинк — только явные схемы: домены, www и адреса остаются текстом', () => {
+  assert.equal(renderMarkdown('www.example.com'), '<p>www.example.com</p>\n');
+  assert.equal(renderMarkdown('example.com'), '<p>example.com</p>\n');
+  assert.equal(renderMarkdown('user@example.com'), '<p>user@example.com</p>\n');
+});
+
+// ---------------------------------------------------------------------------
 // Ссылки и протоколы
 // ---------------------------------------------------------------------------
 
@@ -262,8 +319,13 @@ test('сброшенная ссылка рядом с валидной не съ
 test('ссылка в ссылке: внутренняя разбирается, внешняя остаётся текстом (CommonMark)', () => {
   const html = renderMarkdown('[a [b](https://e.com/1)](https://e.com/2)');
   assert.ok(html.includes('<a href="https://e.com/1">b</a>'), html);
-  assert.ok(!html.includes('<a href="https://e.com/2"'), html);
-  assert.equal(html.split('</a>').length - 1, 1, html);
+  // Внешняя ссылка НЕ разбирается — скобочный синтаксис остаётся текстом
+  // (синтаксис `](` виден в выводе)…
+  assert.ok(html.includes('](<a href='), html);
+  // …а вот URL внутри этого текста — обычный автолинк linkify (ошибка
+  // 37458cbc), а не «внешняя ссылка»: он обёрнут ровно вокруг самой строки URL.
+  assert.ok(html.includes('<a href="https://e.com/2">https://e.com/2</a>'), html);
+  assert.equal(html.split('</a>').length - 1, 2, html);
 });
 
 // ---------------------------------------------------------------------------

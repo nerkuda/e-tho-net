@@ -387,3 +387,40 @@ describe('отступы картинки: просмотр совпадает �
     );
   });
 });
+
+describe('ссылки: автолинк голых URL выглядит как прочие ссылки (ошибка 37458cbc)', () => {
+  it('просмотр: `.comment-view a` — акцент без подчёркивания, hover подчёркивает', () => {
+    const css = readRendererCss();
+    // Автолинк linkify приходит тем же `<a href>`, что и обычные ссылки, —
+    // отдельного класса у него нет и быть не должно: вид задаёт одно правило.
+    const bodies = bodiesFor(css, '.comment-view a');
+    assert.ok(
+      bodies.some((b) => /color:\s*var\(--accent\)/.test(b)),
+      'ссылка в просмотре — цветом var(--accent)',
+    );
+    assert.ok(
+      bodies.some((b) => /text-decoration:\s*none/.test(b)),
+      'ссылка в просмотре без постоянного подчёркивания',
+    );
+    assert.ok(
+      bodiesFor(css, '.comment-view a:hover').some((b) => /text-decoration:\s*underline/.test(b)),
+      'подчёркивание ссылки появляется на hover',
+    );
+  });
+
+  it('правка: `tags.url`/`tags.link` — тот же акцент (паритет режимов)', () => {
+    // Режим правки подсвечивает и URL, и ссылку одним цветом (md-editor.ts);
+    // просмотр обязан совпадать — иначе баг 37458cbc вернётся с другой стороны.
+    const theme = readFileSync(
+      resolve(CLIENT_ROOT, 'src', 'renderer', 'editor', 'md-editor.ts'),
+      'utf8',
+    );
+    for (const tag of ['tags.link', 'tags.url']) {
+      assert.match(
+        theme,
+        new RegExp(`\\{\\s*tag:\\s*${tag.replace('.', '\\.')},\\s*color:\\s*'var\\(--accent\\)'\\s*\\}`),
+        `${tag} в теме CodeMirror обязан быть var(--accent) — как .comment-view a`,
+      );
+    }
+  });
+});
