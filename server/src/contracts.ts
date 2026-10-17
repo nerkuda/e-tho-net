@@ -72,6 +72,8 @@ import {
   type SearchRequest,
   type StructureDirectionFlags,
   type SubgraphEdge,
+  type ThoughtBatchOp,
+  type ThoughtCopyInput,
   type ThoughtCreateInput,
   type ThoughtRef,
 } from '@etn/shared';
@@ -4436,9 +4438,15 @@ export interface WriteCrossNetworkFacts {
 /**
  * Имена операций, исполняемых write-воркером. Этап 1 переноса — батч-запись
  * мыслей (`write.thoughts`); REST-путь создания мысли GUI-клиента — единичная
- * запись `write.thought` (задача c744e05c, та же архитектура пула).
+ * запись `write.thought` (задача c744e05c); батчевые REST-пути `POST /thoughts/batch`
+ * (`write.thought.batch`) и `POST /thoughts/copy-batch` (`write.thought.copy`) —
+ * задача b9c70dd8.
  */
-export type WriteOp = 'write.thoughts' | 'write.thought';
+export type WriteOp =
+  | 'write.thoughts'
+  | 'write.thought'
+  | 'write.thought.batch'
+  | 'write.thought.copy';
 
 /** Payload `write.thoughts` — тот же вход, что у `writeThoughts` в домене. */
 export interface WriteThoughtsPayload {
@@ -4462,6 +4470,65 @@ export interface WriteThoughtPayload {
 }
 
 /**
+ * Нормализованные аргументы общей групповой операции батча (подмножество
+ * `ThoughtBatchArgs`): резолв имён и валидация уже выполнены фасадом (роутом),
+ * воркеру остаётся только применить операцию. Плоский структурно-клонируемый DTO.
+ */
+export interface WriteThoughtBatchBulkArgs {
+  type_id?: string | null;
+  parent_ids?: string[];
+  child_ids?: string[];
+  link_type_id?: string | null;
+}
+
+/**
+ * Нормализованные аргументы локальных операций батча
+ * (`link_to_focus`/`unlink_from_focus`). `delete`/`purge` аргументов не имеют.
+ */
+export interface WriteThoughtBatchFocusArgs {
+  direction: 'parent' | 'child';
+  focus_thought_id: string;
+  /** Тип создаваемой связи (`null` — нетипизированная). */
+  link_type_id: string | null;
+  /**
+   * Тип искомой связи при отвязке: `undefined` — любой тип, `null` — только
+   * нетипизированные (семантика `findLinksBetween`).
+   */
+  find_link_type_id?: string | null;
+}
+
+/**
+ * Payload `write.thought.batch` — батчевая операция REST-пути
+ * `POST /thoughts/batch` (задача b9c70dd8): нормализованные фасадом ids/op/args.
+ * Композиция исхода — `composeThoughtBatch` в `domain/write-ops.ts`.
+ */
+export interface WriteThoughtBatchPayload {
+  actorUserId: string;
+  ids: string[];
+  op: ThoughtBatchOp;
+  /** Аргументы общей групповой операции (op ∈ `BULK_THOUGHT_OPS`). */
+  bulk?: WriteThoughtBatchBulkArgs;
+  /** Аргументы локальной операции связи с фокусом. */
+  focus?: WriteThoughtBatchFocusArgs;
+}
+
+/**
+ * Payload `write.thought.copy` — пакетное создание мыслей REST-пути
+ * `POST /thoughts/copy-batch` (задача b9c70dd8). Кросс-сетевой источник здесь —
+ * только КАТАЛОГ ВЛОЖЕНИЙ (`sourceAttachmentsDir`): чужая БД не открывается,
+ * `cross_network_ref` не резолвится, потому задача всегда допускает воркер.
+ * Физическое копирование файлов планируется в воркере (имена копий зависят от
+ * состояния каталога-получателя) и исполняется ГЛАВНЫМ потоком после коммита
+ * (см. `composeThoughtCopyOutcome`).
+ */
+export interface WriteThoughtCopyPayload {
+  input: ThoughtCopyInput;
+  actorUserId: string;
+  /** Абсолютный каталог вложений сети-источника; `null` — внутрисетевое копирование. */
+  sourceAttachmentsDir: string | null;
+}
+
+/**
  * Одна задача write-пула: контекст + op + payload. Замыкания через границу
  * потока не передаются (ADR ca3a9218), поэтому op назван строкой, а данные —
  * плоский structured-clone DTO. Размеченное объединение по `op`: воркер
@@ -4470,6 +4537,8 @@ export interface WriteThoughtPayload {
 export type WriteTask = { context: WriteTaskContext } & (
   | { op: 'write.thoughts'; payload: WriteThoughtsPayload }
   | { op: 'write.thought'; payload: WriteThoughtPayload }
+  | { op: 'write.thought.batch'; payload: WriteThoughtBatchPayload }
+  | { op: 'write.thought.copy'; payload: WriteThoughtCopyPayload }
 );
 
 /**

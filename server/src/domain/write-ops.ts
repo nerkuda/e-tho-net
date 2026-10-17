@@ -16,39 +16,65 @@
  *     Модуль намеренно НЕ знает про пул: его импортирует и воркер (исполнитель),
  *     и фасад (диспетчер).
  *
- * **Этапность.** Пока переведён один op — батч-запись мыслей
- * (`etn.thoughts.write`, `writeThoughts`): самый горячий путь ошибки 646347ab.
- * Непереведённые пути записи (единичные мутации REST/MCP) идут как раньше —
- * синхронно через `runWrite`. Кросс-сетевой резолв `cross_network_ref` воркер не
- * умеет (он открывает чужую сеть и потому применяет миграции) — такие батчи
- * остаются синхронными (`poolable: false`), см. {@link thoughtsBatchNeedsMainThread}.
+ * **Этапность.** Переведены: батч-запись мыслей (`etn.thoughts.write`,
+ * {@link composeThoughtsWrite}), единичное создание REST-пути `POST /thoughts`
+ * ({@link composeThoughtCreate}, задача c744e05c) и батчевые REST-пути —
+ * {@link composeThoughtBatch} (`POST /thoughts/batch`) и
+ * {@link composeThoughtCopyOutcome} (`POST /thoughts/copy-batch`, задача
+ * b9c70dd8). Непереведённые пути записи (единичные мутации REST/MCP) идут как
+ * раньше — синхронно через `runWrite`. Кросс-сетевой резолв
+ * `cross_network_ref` воркер не умеет (он открывает чужую сеть и потому
+ * применяет миграции) — такие батчи записи мыслей остаются синхронными
+ * (`poolable: false`), см. {@link thoughtsBatchNeedsMainThread}.
  */
 
 import {
+  EtnError,
   isCrossNetworkAddress,
   type McpThoughtWriteParams,
   type Thought,
+  type ThoughtBatchFailure,
+  type ThoughtBatchResult,
+  type ThoughtCopyResult,
   type ThoughtCreateInput,
 } from '@etn/shared';
 
-import type { WriteThoughtPayload, WriteThoughtsPayload } from '../contracts.js';
+import type {
+  WriteThoughtBatchPayload,
+  WriteThoughtCopyPayload,
+  WriteThoughtPayload,
+  WriteThoughtsPayload,
+} from '../contracts.js';
 import type { NetworkDb } from '../db/network-db.js';
-import { getAttachment } from './attachment-service.js';
+import {
+  type AttachmentFileCopy,
+  type AttachmentFileCopier,
+  getAttachment,
+} from './attachment-service.js';
 import { getComment, listComments } from './comment-service.js';
 import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
-import { findLinksBetween, getLink } from './link-service.js';
-import { createThought, getThoughtOrThrow } from './thought-service.js';
+import { createLink, deleteLink, findLinksBetween, getLink } from './link-service.js';
+import {
+  applyBulkThoughtOp,
+  BULK_THOUGHT_OPS,
+  type BulkThoughtOp,
+} from './thought-bulk-service.js';
+import { copyThoughtsBatch, makeCopyFileCopier } from './thought-copy-service.js';
+import { createThought, deleteThought, getThought, getThoughtOrThrow } from './thought-service.js';
 import { writeThoughts, type ThoughtWriteResult } from './thought-write-service.js';
-import type {
-  AnyWriteEvent,
-  WriteActivityEntry,
-  WriteOutcome,
+import {
+  runWriteCore,
+  type AnyWriteEvent,
+  type WriteActivityEntry,
+  type WriteOutcome,
 } from './write-wrapper.js';
 
 /** Контракт задачи write-пула. */
 export type {
   WriteTask,
   WriteTaskContext,
+  WriteThoughtBatchPayload,
+  WriteThoughtCopyPayload,
   WriteThoughtPayload,
   WriteThoughtsPayload,
 } from '../contracts.js';
@@ -278,6 +304,188 @@ export function composeThoughtsWrite(
   }
 
   return { result: written, events, activity };
+}
+
+/**
+ * Исход задачи `write.thought.batch` (батчевая операция `POST /thoughts/batch`,
+ * задача b9c70dd8) — зеркало {@link ThoughtsWriteOutcome}: результат записи и
+ * события, собранные ВНУТРИ транзакции. Публикует их главный поток по факту
+ * ответа воркера (событие уходит строго после коммита).
+ */
+export interface ThoughtBatchOutcome {
+  result: ThoughtBatchResult;
+  events: readonly AnyWriteEvent[];
+}
+
+/**
+ * Композиция батчевой операции — ровно то, что делал REST-роут
+ * `POST /thoughts/batch` до переноса (задача b9c70dd8). Общие групповые операции
+ * (`BULK_THOUGHT_OPS`) исполняет доменный сервис {@link applyBulkThoughtOp};
+ * локальные (`delete`/`purge`/`link_to_focus`/`unlink_from_focus`) собраны здесь
+ * дословно из прежнего роута: ошибки отдельных id копятся в `failures`, событие
+ * и строка журнала — из результата записи (требование 7f526da1).
+ *
+ * Порядок и состав событий/журнала сохранён, чтобы ответ и real-time-эффекты не
+ * изменились; всё исполняется в одной транзакции вызывающего (`runWriteCore`).
+ */
+export function composeThoughtBatch(
+  ndb: NetworkDb,
+  payload: WriteThoughtBatchPayload,
+): WriteOutcome<ThoughtBatchResult> {
+  if ((BULK_THOUGHT_OPS as readonly string[]).includes(payload.op)) {
+    return applyBulkThoughtOp(
+      ndb,
+      payload.actorUserId,
+      payload.ids,
+      payload.op as BulkThoughtOp,
+      payload.bulk ?? {},
+    );
+  }
+
+  const failures: ThoughtBatchFailure[] = [];
+  const events: AnyWriteEvent[] = [];
+  const activity: WriteActivityEntry[] = [];
+  let affected = 0;
+  const focus = payload.focus;
+  for (const id of payload.ids) {
+    try {
+      switch (payload.op) {
+        case 'delete':
+        case 'purge': {
+          // S13: `delete` — алиас `purge`; оба физически удаляют с одной и той же
+          // блокирующей проверкой (deleteThought отказывает при ссылке из свойства).
+          // actorUserId — для object-lock enforcement (задача 2031df5e).
+          const existing = getThought(ndb, id);
+          deleteThought(ndb, id, undefined, payload.actorUserId);
+          events.push({ type: 'thought.deleted', data: { id } });
+          if (existing) {
+            activity.push({ kind: 'thought', action: 'deleted', thought: existing });
+          }
+          break;
+        }
+        case 'link_to_focus': {
+          const [sourceId, targetId] =
+            focus!.direction === 'parent'
+              ? [id, focus!.focus_thought_id]
+              : [focus!.focus_thought_id, id];
+          const link = createLink(
+            ndb,
+            { source_id: sourceId, target_id: targetId, type_id: focus!.link_type_id },
+            payload.actorUserId,
+          );
+          events.push({ type: 'link.created', data: { link } });
+          activity.push({ kind: 'link', action: 'created', link });
+          break;
+        }
+        case 'unlink_from_focus': {
+          const [sourceId, targetId] =
+            focus!.direction === 'parent'
+              ? [id, focus!.focus_thought_id]
+              : [focus!.focus_thought_id, id];
+          const found = findLinksBetween(ndb, sourceId, targetId, focus!.find_link_type_id);
+          if (found.length === 0) {
+            throw new EtnError('NOT_FOUND', `Нет связи между ${sourceId} и ${targetId}.`);
+          }
+          for (const link of found) {
+            deleteLink(ndb, link.id, undefined);
+            events.push({ type: 'link.deleted', data: { id: link.id } });
+            activity.push({ kind: 'link', action: 'deleted', link });
+          }
+          break;
+        }
+      }
+      affected += 1;
+    } catch (err) {
+      if (err instanceof EtnError) {
+        failures.push({ id, code: err.code, message: err.message });
+      } else {
+        failures.push({ id, code: 'INTERNAL', message: 'internal error' });
+      }
+    }
+  }
+  return { result: { affected, failures }, events, activity };
+}
+
+/** Нефатальное замечание воркера, которое логирует главный поток (наблюдаемость). */
+export interface AttachmentCopyWarning {
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * Исход задачи `write.thought.copy` (`POST /thoughts/copy-batch`, задача
+ * b9c70dd8): результат записи, события и ПЛАН физического копирования файлов.
+ * Файлы пересекают границу потока плоским списком «источник → назначение»:
+ * имена копий планирует воркер (они зависят от состояния каталога-получателя), а
+ * физически копирует ГЛАВНЫЙ поток после коммита — тем же порядком, что события
+ * и аудит (ADR ca3a9218). `warnings` — нефатальные замечания планировщика
+ * (исходный файл не найден), их тоже логирует главный поток.
+ */
+export interface ThoughtCopyOutcome {
+  result: ThoughtCopyResult;
+  events: readonly AnyWriteEvent[];
+  files: readonly AttachmentFileCopy[];
+  warnings: readonly AttachmentCopyWarning[];
+}
+
+/**
+ * Композиция пакетного копирования — ровно то, что делал REST-роут
+ * `POST /thoughts/copy-batch` до переноса (задача b9c70dd8): доменный
+ * {@link copyThoughtsBatch} + событие `thought.created`/`link.created` и строка
+ * журнала на каждую созданную сущность. Планировщик копирования файлов
+ * (`copier`) передаётся снаружи: воркер и синхронный путь строят его по одним и
+ * тем же фактам ({@link composeThoughtCopyOutcome}).
+ */
+export function composeThoughtCopy(
+  ndb: NetworkDb,
+  payload: WriteThoughtCopyPayload,
+  copier: AttachmentFileCopier | null,
+): WriteOutcome<ThoughtCopyResult> {
+  const copied = copyThoughtsBatch(ndb, payload.input, payload.actorUserId, { fileCopier: copier });
+  const events: AnyWriteEvent[] = [];
+  const activity: WriteActivityEntry[] = [];
+  // Real-time: `thought.created` на каждую новую мысль и `link.created` на каждую
+  // новую связь (включая link-дефолты типа) — клиенты обновляются без опроса.
+  for (const thought of copied.created_thoughts) {
+    events.push({ type: 'thought.created', data: { thought } });
+    activity.push({ kind: 'thought', action: 'created', thought });
+  }
+  for (const link of copied.created_links) {
+    events.push({ type: 'link.created', data: { link } });
+    activity.push({ kind: 'link', action: 'created', link });
+  }
+  return { result: copied, events, activity };
+}
+
+/**
+ * Исполнить задачу `write.thought.copy` целиком на СВОЁМ соединении: построить
+ * планировщик копирования по плоским фактам, провести запись через ядро обёртки
+ * (`runWriteCore` — транзакция + журнал) и вернуть исход с планом файлов.
+ * Одна и та же функция обслуживает воркер и синхронный путь фасада (требование
+ * 3d9d017f: результат не зависит от места исполнения).
+ */
+export function composeThoughtCopyOutcome(
+  ndb: NetworkDb,
+  payload: WriteThoughtCopyPayload,
+): ThoughtCopyOutcome {
+  const warnings: AttachmentCopyWarning[] = [];
+  const copier = makeCopyFileCopier(
+    ndb,
+    payload.input,
+    payload.sourceAttachmentsDir ?? undefined,
+    (message, details) => warnings.push({ message, details }),
+  );
+  const outcome = runWriteCore(
+    ndb,
+    { networkId: ndb.networkId, userId: payload.actorUserId, layerId: ndb.layerId },
+    () => composeThoughtCopy(ndb, payload, copier),
+  );
+  return {
+    result: outcome.result,
+    events: outcome.events ?? [],
+    files: copier?.pendingCopies() ?? [],
+    warnings,
+  };
 }
 
 /**
