@@ -208,6 +208,181 @@ export function filterTreeRemoveAt(root: FilterTreeNode, path: FilterTreePath): 
 }
 
 // ---------------------------------------------------------------------------
+// Перемещение и копирование узлов (задача 31b228f0, этап 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Контракт индекса вставки для {@link filterTreeInsertAt} и
+ * {@link filterTreeMoveNode}.
+ *
+ * `index` считается по массиву детей ГРУППЫ-ПРИЁМНИКА ДО операции: `0` — перед
+ * текущим первым ребёнком, `children.length` — в конец. При переносе внутри
+ * одной группы источник сначала удаляется, и позиция цели сдвигается на одну
+ * единицу (классическая ошибка): `move([0] → 2)` в `[a,b,c]` даёт `[b,a,c]`
+ * (узел встаёт перед `c`, а не после него). Внутренняя реализация учитывает
+ * сдвиг сама — вызывающий передаёт индекс в координатах исходного массива.
+ */
+
+/** `true`, если пути совпадают поэлементно. */
+function isSamePath(a: FilterTreePath, b: FilterTreePath): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/** `true`, если путь `path` лежит СТРОГО ниже узла `ancestor`. */
+function filterTreePathInside(path: FilterTreePath, ancestor: FilterTreePath): boolean {
+  if (path.length <= ancestor.length) return false;
+  for (let i = 0; i < ancestor.length; i += 1) {
+    if (path[i] !== ancestor[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Вставить готовый узел в группу по пути на позицию `index`
+ * ({@link FilterTreePath} — контракт индекса выше). Мутация атомарна: при
+ * недопустимом пути/индексе модель НЕ меняется и возвращается `false`.
+ *
+ * Арность `НЕ` (элемент fc65b647): группа `not` всегда имеет ровно одного
+ * ребёнка, поэтому вставка в `not`-группу, где ребёнок уже есть, запрещена
+ * (иначе модель получила бы двух детей). В пустую `not`-группу вставка
+ * допустима — она восстанавливает инвариант.
+ */
+export function filterTreeInsertAt(
+  root: FilterTreeNode,
+  path: FilterTreePath,
+  index: number,
+  child: FilterTreeNode,
+): boolean {
+  const group = filterTreeGroupAt(root, path);
+  if (group === null) return false;
+  if (!Number.isInteger(index) || index < 0 || index > group.children.length) return false;
+  if (group.op === 'not' && group.children.length > 0) return false;
+  group.children.splice(index, 0, child);
+  return true;
+}
+
+/**
+ * Атомарно перенести узел из пути `fromPath` в группу `toGroupPath` на позицию
+ * `index` ({@link FilterTreePath} — контракт индекса, включая сдвиг при
+ * переносе внутри одной группы). Возврат `false` — перенос недопустим, модель
+ * НЕ изменена (никаких частичных мутаций: все проверки идут до `splice`).
+ *
+ * Недопустимы:
+ * - корень (`fromPath === []`) и несуществующий путь/группа/индекс;
+ * - вложение группы в саму себя (`toGroupPath === fromPath`) или в своего
+ *   потомка (цикл); перенос ВНУТРИ группы (`[0,0] → [0]`) допустим;
+ * - перенос ЕДИНСТВЕННОГО ребёнка из `not`-группы (осталась бы пустая `not`);
+ * - вставка в `not`-группу, у которой уже есть ребёнок (было бы два ребёнка).
+ *
+ * Перенос внутри `not`-группы с единственным ребёнком — допустимый no-op:
+ * арность не меняется, модель остаётся прежней. Перенос внутри одной группы с
+ * `index === sourceIndex` или `index === sourceIndex + 1` также ничего не
+ * меняет по смыслу, но считается допустимым (`true`).
+ */
+export function filterTreeMoveNode(
+  root: FilterTreeNode,
+  fromPath: FilterTreePath,
+  toGroupPath: FilterTreePath,
+  index: number,
+): boolean {
+  if (fromPath.length === 0) return false;
+  const sourceParent = filterTreeGroupAt(root, fromPath.slice(0, -1));
+  if (sourceParent === null) return false;
+  const sourceIndex = fromPath[fromPath.length - 1]!;
+  const node = sourceParent.children[sourceIndex];
+  if (node === undefined) return false;
+  const target = filterTreeGroupAt(root, toGroupPath);
+  if (target === null) return false;
+  if (!Number.isInteger(index) || index < 0 || index > target.children.length) return false;
+  // Цикл: группу нельзя вложить в саму себя (`toGroupPath` равен её пути) или
+  // в своего потомка. Перенос ВНУТРИ группы — это когда совпадают родители, а
+  // не пути: `[0,0] → [0]` допустим, `[0] → [0]` — цикл.
+  if (filterTreePathInside(toGroupPath, fromPath) || isSamePath(toGroupPath, fromPath)) return false;
+
+  const sameGroup = sourceParent === target;
+  if (sameGroup) {
+    // Арность `НЕ` при переносе внутри группы не меняется. У одиночного ребёнка
+    // любая позиция — no-op, модель не трогаем.
+    if (sourceParent.op === 'not' && sourceParent.children.length === 1) return true;
+  } else {
+    if (sourceParent.op === 'not' && sourceParent.children.length === 1) return false;
+    if (target.op === 'not' && target.children.length > 0) return false;
+  }
+
+  sourceParent.children.splice(sourceIndex, 1);
+  const insertAt = sameGroup && sourceIndex < index ? index - 1 : index;
+  target.children.splice(insertAt, 0, node);
+  return true;
+}
+
+/**
+ * Глубокий клон узла дерева для `Shift`-копирования (критерий 3 карточки
+ * 31b228f0): у модели нет идентификаторов (адресация только путём), поэтому
+ * копия — полная независимая структура. Клонируются и вложенные группы, и
+ * значения листьев (скаляры/списки/токены/под-выборки), и снапшоты подписей:
+ * изменение копии не меняет оригинал (и наоборот).
+ */
+export function filterTreeCloneNode(node: FilterTreeNode): FilterTreeNode {
+  if (node.kind === 'group') {
+    return { kind: 'group', op: node.op, children: node.children.map(filterTreeCloneNode) };
+  }
+  const clone: FilterTreeLeaf = {
+    kind: 'leaf',
+    entity: cloneFilterTreeOperand(node.entity),
+    operator: node.operator,
+    value: cloneFilterTreeValue(node.value),
+    ...(node.labels !== undefined ? { labels: cloneFilterTreeLabels(node.labels) } : {}),
+    ...(node.mode !== undefined ? { mode: node.mode } : {}),
+  };
+  return clone;
+}
+
+/** Клон операнда листа (массивы `scope` — новые). */
+function cloneFilterTreeOperand(entity: FilterTreeOperand): FilterTreeOperand {
+  if (entity.kind === 'keywords' && entity.scope !== undefined) {
+    return { ...entity, scope: [...entity.scope] };
+  }
+  return { ...entity };
+}
+
+/** Клон значения листа (списки, токены и под-выборка — независимые). */
+function cloneFilterTreeValue(value: FilterTreeValue): FilterTreeValue {
+  switch (value.kind) {
+    case 'none':
+      return { kind: 'none' };
+    case 'scalar':
+      return { kind: 'scalar', value: value.value };
+    case 'token':
+      return { kind: 'token', token: value.token };
+    case 'list':
+      return {
+        kind: 'list',
+        items: value.items.map((item) =>
+          typeof item === 'object' && item !== null ? { ...item } : item,
+        ),
+      };
+    case 'subquery':
+      return {
+        kind: 'subquery',
+        operator: value.operator,
+        node: filterTreeCloneNode(value.node),
+      };
+  }
+}
+
+/** Клон снапшотов подписей (карта значений — новый объект). */
+function cloneFilterTreeLabels(labels: NonNullable<FilterTreeLeaf['labels']>): NonNullable<FilterTreeLeaf['labels']> {
+  return {
+    ...labels,
+    ...(labels.values !== undefined ? { values: { ...labels.values } } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Группа глазами вида: коннектор, отрицание, тело
 // ---------------------------------------------------------------------------
 
