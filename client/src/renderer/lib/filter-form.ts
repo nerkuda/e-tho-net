@@ -47,6 +47,7 @@ import {
   watchFilterClouds,
 } from './filter-value.js';
 import { etn } from './etn.js';
+import { resolveThoughtRefs } from './thought-ref-batch.js';
 import { modifierChordVariants } from './keymap-chords.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
 import { collapsibleSection } from './ui/collapsible.js';
@@ -489,11 +490,12 @@ export function buildParentThoughtsSection(
 ): ParentThoughtsSection {
   const clouds = new Map<string, ThoughtCloudInput>();
   let sectionRef: EntityChipSection | null = null;
-  const resolveClouds = (): void => {
+  const resolveClouds = (realtime = false): void => {
     const missing = ctx.getState().parentIds.filter((id) => !clouds.has(id) && !id.startsWith('$'));
     if (ctx.networkId === '' || missing.length === 0) return;
-    void etn.thoughts
-      .resolve(ctx.networkId, missing)
+    // Realtime-волна собирает id всех чипов в окне; действие пользователя
+    // (правка/дроп) уходит сразу — батчер схлопывает его в микротаске.
+    void resolveThoughtRefs(ctx.networkId, missing, { windowed: realtime })
       .then((refs) => {
         for (const ref of refs) clouds.set(ref.id, { ...ref });
       })
@@ -563,7 +565,7 @@ export function buildParentThoughtsSection(
   // по сигналу сброса ref-кэша, а не правится в замыкании (грабля 48f35eba).
   watchFilterClouds({
     root: section.fieldRoot,
-    invalidate: (id) => {
+    invalidate: (id, realtime) => {
       const affected = ctx
         .getState()
         .parentIds.filter(
@@ -571,7 +573,7 @@ export function buildParentThoughtsSection(
         );
       if (affected.length === 0) return;
       for (const value of affected) clouds.delete(value);
-      resolveClouds();
+      resolveClouds(realtime === true);
     },
   });
   // Приёмник pointer-дропа мысли (d144ef71): мысль, брошенная из карты/панели/

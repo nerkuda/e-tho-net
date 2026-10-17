@@ -101,6 +101,7 @@ import { segmentedControl } from './ui/segmented.js';
 import { buildUserMultiSelectWidget, buildUserSelectWidget } from './users.js';
 import type { ThoughtCloudInput } from './thought-cloud.js';
 import { etn } from './etn.js';
+import { resolveThoughtRefs } from './thought-ref-batch.js';
 
 // ---------------------------------------------------------------------------
 // Классы вида — единственная точка имён (адресуются тестами и CSS)
@@ -230,13 +231,6 @@ const COUNT_OPS: ReadonlySet<FilterAstOperator> = new Set(['gt', 'gte', 'lt', 'l
 
 /** Операторы «в иерархии»/«не в иерархии» (корни поддерева). */
 const HIERARCHY_OPS: ReadonlySet<FilterAstOperator> = new Set(['in_hierarchy', 'not_in_hierarchy']);
-
-/**
- * Предел одного пакетного `etn.thoughts.resolve` (серверный лимит батча).
- * Тот же предел, что у догрузки облачков значения свойства-связи
- * (`editor/value-editor.ts`).
- */
-const FILTER_VALUE_RESOLVE_BATCH = 100;
 
 /** Значения-перечисления вида вложения (`kind`) — словарь спецификации. */
 const ATTACHMENT_KIND_OPTIONS: readonly FilterValueEnumOption[] = [
@@ -1660,8 +1654,12 @@ export async function openFilterThoughtTrashDialog(
 export interface FilterCloudSnapshot {
   /** Корень виджета: снятый со страницы снапшот снимается с подписки лениво. */
   readonly root: HTMLElement;
-  /** Данные мысли `id` (`null` — все значения) устарели. */
-  invalidate(id: string | null): void;
+  /**
+   * Данные мысли `id` (`null` — все значения) устарели. `realtime` — сигнал
+   * пришёл из волны событий: догрузка id коалесируется в окне, действие
+   * пользователя (команда меню) — нет.
+   */
+  invalidate(id: string | null, realtime?: boolean): void;
 }
 
 const filterCloudSnapshots = new Set<FilterCloudSnapshot>();
@@ -1685,13 +1683,13 @@ function wireFilterCloudInvalidation(): void {
   filterCloudInvalidationWired = true;
   void import('../canvas/canvas.js')
     .then(({ onThoughtRefInvalidated }) => {
-      onThoughtRefInvalidated((id) => {
+      onThoughtRefInvalidated((id, realtime) => {
         for (const snapshot of [...filterCloudSnapshots]) {
           if (!snapshot.root.isConnected) {
             filterCloudSnapshots.delete(snapshot);
             continue;
           }
-          snapshot.invalidate(id);
+          snapshot.invalidate(id, realtime === true);
         }
       });
     })
@@ -1771,12 +1769,13 @@ function entityOperandControl(
    * 48f35eba). Перерисовку обещает сам резолв: пустой ответ (мысль удалена)
    * тоже обязан обновить чип.
    */
-  const fillClouds = (values: readonly string[]): void => {
+  const fillClouds = (values: readonly string[], realtime = false): void => {
     if (kind !== 'thoughts' || ctx.networkId === '') return;
     const missing = values.filter((id) => id !== '' && !id.startsWith('$') && !clouds.has(id));
     if (missing.length === 0) return;
-    void etn.thoughts
-      .resolve(ctx.networkId, missing.slice(0, FILTER_VALUE_RESOLVE_BATCH))
+    // Батчер собирает затронутые волной id от ВСЕХ виджетов и делает один
+    // `thoughts.resolve` по окну; действия пользователя уходят в микротаске.
+    void resolveThoughtRefs(ctx.networkId, missing, { windowed: realtime })
       .then((refs) => {
         for (const ref of refs) clouds.set(ref.id, { ...ref });
       })
@@ -1789,14 +1788,14 @@ function entityOperandControl(
    * облачков затронутых значений инвалидируется, чипы перерисовываются из
    * модели (грабля 48f35eba). `id` — конкретная мысль, `null` — все значения.
    */
-  const invalidateClouds = (id: string | null): void => {
+  const invalidateClouds = (id: string | null, realtime = false): void => {
     const values = currentList(leaf.value);
     const affected = values.filter(
       (value) => value !== '' && !value.startsWith('$') && (id === null || value === id),
     );
     if (affected.length === 0) return;
     for (const value of affected) clouds.delete(value);
-    fillClouds(values);
+    fillClouds(values, realtime);
   };
 
   /** Полное имя значения для меню: снапшот данных → имя варианта → сырой id. */

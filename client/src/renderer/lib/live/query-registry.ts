@@ -46,6 +46,13 @@ interface QueryEntry<T = unknown> {
   version: number;
   /** Перезапрос в полёте (null — нет). */
   promise: Promise<void> | null;
+  /**
+   * Инвалидация пришла, пока запрос был в полёте. После завершения запроса
+   * запись перечитывается ОДИН раз — иначе событие терялось (ошибка 49e05ea0).
+   * `immediate` — локальная причина (действие пользователя/мутация) не ждёт
+   * realtime-окна; `realtime` — волна событий перечитывается по закрытию окна.
+   */
+  rerunAfterFlight: 'immediate' | 'realtime' | null;
   subscribers: Set<QueryListener<T>>;
 }
 
@@ -140,11 +147,47 @@ function notifyInvalidated(
 const scheduledRefetches = new Set<string>();
 let refetchFlushScheduled = false;
 
+/**
+ * Окно коалесирования realtime-перечитываний, мс.
+ *
+ * Почему 250: волна записи агента приходит пачкой событий, растянутой на
+ * десятки-сотни мс (каждое событие — отдельный кадр WebSocket, поэтому
+ * микротаска их не схлопывает). 250 мс — «порядка сотен мс» из DoD: покрывает
+ * типичный батч записи, остаётся ниже окна «Структур» (400 мс) и не добавляет
+ * заметной задержки живому обновлению. Окно ТОЛЬКО для realtime-причин:
+ * действия пользователя и локальные мутации идут прежним путём (микротаска),
+ * а новая подписка/явный `refetchQuery` вообще не ждут окна.
+ */
+export const REALTIME_REFETCH_WINDOW_MS = 250;
+
+/** Записи, ожидающие перечитывания по закрытию realtime-окна. */
+const scheduledRealtimeRefetches = new Set<string>();
+let realtimeFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
 function scheduleRefetch(key: string): void {
   scheduledRefetches.add(key);
   if (refetchFlushScheduled) return;
   refetchFlushScheduled = true;
   queueMicrotask(flushScheduledRefetches);
+}
+
+/**
+ * Отложить перечитывание до закрытия realtime-окна (trailing debounce: каждое
+ * новое событие волны продлевает окно). Одна волна → один проход по записям.
+ */
+function scheduleRealtimeRefetch(key: string): void {
+  scheduledRealtimeRefetches.add(key);
+  if (realtimeFlushTimer !== null) clearTimeout(realtimeFlushTimer);
+  realtimeFlushTimer = setTimeout(flushRealtimeRefetches, REALTIME_REFETCH_WINDOW_MS);
+}
+
+/**
+ * Запомнить, что запись надо перечитать после текущего полёта. `immediate`
+ * сильнее `realtime`: локальная причина не должна ждать окна, а её запрос всё
+ * равно прочитает и изменения realtime-волны.
+ */
+function markRerunAfterFlight(entry: QueryEntry<unknown>, mode: 'immediate' | 'realtime'): void {
+  if (entry.rerunAfterFlight === null || mode === 'immediate') entry.rerunAfterFlight = mode;
 }
 
 function flushScheduledRefetches(): void {
@@ -154,8 +197,24 @@ function flushScheduledRefetches(): void {
   for (const key of keys) {
     const entry = getEntry(key);
     if (entry === undefined) continue;
-    // Рефетч — только активным наблюдателям и пока не идёт другой запрос.
-    if (entry.subscribers.size > 0 && entry.promise === null) void startFetch(asEntry(entry));
+    // Рефетч — только активным наблюдателям; запрос в полёте не дублируем,
+    // но помечаем «перечитать ещё раз» после его завершения.
+    if (entry.subscribers.size === 0) continue;
+    if (entry.promise !== null) markRerunAfterFlight(entry, 'immediate');
+    else void startFetch(asEntry(entry));
+  }
+}
+
+function flushRealtimeRefetches(): void {
+  realtimeFlushTimer = null;
+  const keys = [...scheduledRealtimeRefetches];
+  scheduledRealtimeRefetches.clear();
+  for (const key of keys) {
+    const entry = getEntry(key);
+    if (entry === undefined) continue;
+    if (entry.subscribers.size === 0) continue;
+    if (entry.promise !== null) markRerunAfterFlight(entry, 'realtime');
+    else void startFetch(asEntry(entry));
   }
 }
 
@@ -174,6 +233,7 @@ function createEntry<T>(key: string, fetcher: QueryFetcher<T> | null): QueryEntr
     state: { status: 'stale', data: undefined, error: null },
     version: 0,
     promise: null,
+    rerunAfterFlight: null,
     subscribers: new Set(),
   };
   entries.set(key, entry as unknown as QueryEntry<unknown>);
@@ -264,6 +324,10 @@ export function markQueryStale(key: string): void {
 function startFetch<T>(entry: QueryEntry<T>): Promise<void> {
   const fetcher = entry.fetcher;
   if (fetcher === null || entry.promise !== null) return entry.promise ?? Promise.resolve();
+  // Ручной/немедленный запрос (подписка, действие пользователя) исполняет
+  // накопленное намерение сам — отложенная запись в окне больше не нужна.
+  scheduledRealtimeRefetches.delete(entry.key);
+  scheduledRefetches.delete(entry.key);
   entry.state = { ...entry.state, status: 'loading' };
   entry.version += 1;
   // Токен запуска (блокер 2 верификатора): если за время полёта запись
@@ -294,9 +358,18 @@ function startFetch<T>(entry: QueryEntry<T>): Promise<void> {
     })
     .finally(() => {
       const live = getEntry(entry.key);
-      if (live !== undefined && asEntry<T>(live).promise === promise) {
-        asEntry<T>(live).promise = null;
-      }
+      if (live === undefined) return;
+      const liveEntry = asEntry<T>(live);
+      if (liveEntry.promise !== promise) return;
+      liveEntry.promise = null;
+      // Событие (или мутация) пришло, пока запрос был в полёте: перечитываем
+      // ОДИН раз после завершения — иначе изменения терялись (49e05ea0).
+      const rerun = liveEntry.rerunAfterFlight;
+      if (rerun === null) return;
+      liveEntry.rerunAfterFlight = null;
+      if (liveEntry.subscribers.size === 0) return;
+      if (rerun === 'realtime') scheduleRealtimeRefetch(liveEntry.key);
+      else scheduleRefetch(liveEntry.key);
     });
   entry.promise = promise;
   return promise;
@@ -376,6 +449,11 @@ export function queryStore<T>(key: string, fetcher: QueryFetcher<T>): Readable<Q
  * ПОЧЕМУ ключ погашен (нужно документу публикации для stale-механики).
  */
 export function invalidateQueries(prefix: string, cause?: InvalidationCause): string[] {
+  // Причина-событие шины включает realtime-окно: волна событий одного батча
+  // записи перечитывает видимое ОДИН раз по закрытию окна, а не на каждое
+  // событие (ошибка 49e05ea0). Локальные причины (мутации, действия
+  // пользователя) остаются на микротаске — их задерживать нельзя.
+  const realtime = asRealtimeCause(cause) !== null;
   const touched: string[] = [];
   for (const entry of entries.values()) {
     if (!matchesKeyPrefix(entry.key, prefix)) continue;
@@ -385,9 +463,17 @@ export function invalidateQueries(prefix: string, cause?: InvalidationCause): st
       entry.version += 1;
       notify(entry);
     }
-    // Рефетч — только активным наблюдателям; запуск отложен на микротаск и
-    // схлопывает повторные инвалидации ключа в один запрос (замечание G2).
-    if (entry.subscribers.size > 0 && entry.promise === null) scheduleRefetch(entry.key);
+    if (entry.subscribers.size === 0) continue;
+    if (entry.promise !== null) {
+      // Запрос уже в полёте: не дублируем его, но после завершения перечитаем
+      // один раз — событие не должно потеряться.
+      markRerunAfterFlight(entry, realtime ? 'realtime' : 'immediate');
+    } else if (realtime) {
+      scheduleRealtimeRefetch(entry.key);
+    } else {
+      // Локальная инвалидация: микротаска схлопывает повторы в один запрос.
+      scheduleRefetch(entry.key);
+    }
   }
   touched.sort();
   // Уведомляем наблюдателей ДАЖЕ при пустом `touched`: экран мог ещё не
@@ -401,4 +487,9 @@ export function invalidateQueries(prefix: string, cause?: InvalidationCause): st
 export function resetQueryRegistry(): void {
   entries.clear();
   scheduledRefetches.clear();
+  scheduledRealtimeRefetches.clear();
+  if (realtimeFlushTimer !== null) {
+    clearTimeout(realtimeFlushTimer);
+    realtimeFlushTimer = null;
+  }
 }

@@ -40,6 +40,7 @@ export {
 } from './entities.js';
 
 export {
+  REALTIME_REFETCH_WINDOW_MS,
   asRealtimeCause,
   getQueryState,
   hasQuery,

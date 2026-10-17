@@ -34,7 +34,13 @@ import {
   type KeyCommandHandler,
 } from './lib/keymap.js';
 import { queryKeys } from './lib/live/query-keys.js';
-import { invalidateQueries, setQueryData } from './lib/live/query-registry.js';
+import {
+  REALTIME_REFETCH_WINDOW_MS,
+  asRealtimeCause,
+  invalidateQueries,
+  setQueryData,
+  type InvalidationCause,
+} from './lib/live/query-registry.js';
 import { notice } from './lib/notice.js';
 import { logUiEvent } from './lib/ui-log.js';
 import { UI_STATE_KEY, PREF_KEY, parseStoredCanvasLinkFilter } from '@etn/shared';
@@ -402,9 +408,28 @@ export async function refreshFocus(): Promise<void> {
  *
  * Слой данных (G2): вместо прямого перечитывания `thoughts.focus()` гасим
  * `focus`-ключи реестра — активная окрестность (подписана, пока холст
- * смонтирован) перезапросится роутером/слоем. Дебаунс окна сохранён.
+ * смонтирован) перезапросится роутером/слоем.
+ *
+ * `cause` — причина инвалидации. Realtime-событие отдаётся реестру как есть:
+ * он сам коалесирует волну в окне {@link REALTIME_REFETCH_WINDOW_MS}, поэтому
+ * второй дебаунс здесь не нужен (иначе задержка складывалась бы). Локальные
+ * вызовы сохраняют прежнее окно {@link REFRESH_DEBOUNCE_MS} и микротаску —
+ * действия пользователя не задерживаются.
  */
-export function scheduleRefresh(): void {
+export function scheduleRefresh(cause?: InvalidationCause): void {
+  if (asRealtimeCause(cause) !== null) {
+    const touched = invalidateQueries(queryKeys.focusAll(), cause);
+    // Переходный fallback: экрана на слое ещё нет (или запрос не подписан) —
+    // окрестность перечитываем напрямую, но тоже по закрытию окна волны.
+    if (touched.length === 0) {
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        void refreshFocus().catch(() => undefined);
+      }, REALTIME_REFETCH_WINDOW_MS);
+    }
+    return;
+  }
   if (refreshTimer !== null) window.clearTimeout(refreshTimer);
   refreshTimer = window.setTimeout(() => {
     refreshTimer = null;

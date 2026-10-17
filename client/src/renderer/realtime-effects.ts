@@ -73,7 +73,7 @@ export function applyDerivedRealtime(evt: AnyRealtimeEvent): void {
   switch (evt.type) {
     case 'thought.deleted':
       // Ref-кэш холста и панель истории — бесхитростные кэши вне слоя.
-      invalidateRef(evt.data.id);
+      invalidateRef(evt.data.id, true);
       invalidateHistoryBar();
       // The pin row cascades on the server (FK ON DELETE CASCADE) without a
       // `pinned-thoughts.updated` event — drop the chip locally (L18). Срез
@@ -81,12 +81,12 @@ export function applyDerivedRealtime(evt: AnyRealtimeEvent): void {
       if (store.state.pins.includes(evt.data.id)) {
         store.update({ pins: store.state.pins.filter((id) => id !== evt.data.id) });
       }
-      if (inNeighbourhood(evt.data.id)) scheduleRefresh();
+      if (inNeighbourhood(evt.data.id)) scheduleRefresh(evt);
       break;
 
     case 'thought.updated':
-      invalidateRef(evt.data.id);
-      if (inNeighbourhood(evt.data.id)) scheduleRefresh();
+      invalidateRef(evt.data.id, true);
+      if (inNeighbourhood(evt.data.id)) scheduleRefresh(evt);
       break;
 
     case 'attachment.created':
@@ -94,7 +94,7 @@ export function applyDerivedRealtime(evt: AnyRealtimeEvent): void {
       // вложения в окрестности фокуса освежает холст (индикатор — слой).
       // Мульти-владение (0.12.1): гейт считает ВСЕ владельцы снимка
       // (требование 0502e045), с падением на первичного владельца.
-      if (attachmentOwnersInNeighbourhood(evt.data.attachment)) scheduleRefresh();
+      if (attachmentOwnersInNeighbourhood(evt.data.attachment)) scheduleRefresh(evt);
       break;
 
     case 'attachment.owner.added':
@@ -102,7 +102,7 @@ export function applyDerivedRealtime(evt: AnyRealtimeEvent): void {
       // Другой клиент добавил/снял владение вложения (задача f77382ba):
       // для показанной сущности меняется индикатор 📎 — освежаем окрестность.
       if (attachmentOwnerInNeighbourhood(evt.data.owner_type, evt.data.owner_id)) {
-        scheduleRefresh();
+        scheduleRefresh(evt);
       }
       break;
 
