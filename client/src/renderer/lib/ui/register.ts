@@ -88,6 +88,10 @@ import './publication-cloud.css';
 // задача d13fd645). Поведение — `./drag-list.ts`, вид — здесь.
 import './drag-list.css';
 
+// Кросс-групповой перенос узлов дерева — подсветка пустой группы
+// (`.ui-drag-over-empty`, задача 31b228f0); остальной вид — из drag-list.css.
+import './drag-tree.css';
+
 // Ползунок — вид диапазонного регулятора (`.ui-slider`, задача ea1b5f14).
 import './slider.css';
 
