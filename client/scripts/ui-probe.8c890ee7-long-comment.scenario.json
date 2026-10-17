@@ -33,7 +33,7 @@
     },
     {
       "name": "open-network",
-      "click": ".networks-list .network-item"
+      "eval": "(() => { const item = document.querySelector(\".networks-list .network-item\"); if (item === null) return false; item.click(); return true; })()"
     },
     {
       "name": "seed-long-comment",
