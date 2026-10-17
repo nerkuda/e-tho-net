@@ -82,11 +82,6 @@ const OVER_VIEWPORT_HEADINGS = 80;
  */
 const STARVED_DOC = 'просто текст без разметки сначала\n\n## Заголовок в конце\n\nтело раздела\n';
 
-const extensions = (): unknown[] => [
-  markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-  livePreview,
-];
-
 /** Имитация вытеснения процесса: бюджет разбора (20 мс) истекает на пике. */
 function withExpiredParseBudget<T>(fn: () => T): T {
   const real = Date.now;
@@ -156,7 +151,16 @@ describe('guard: полный разбор CM6 до чтения состоян�
     );
 
     assert.throws(
-      () => createParsedState(() => EditorState.create({ doc: OVER_VIEWPORT_DOC, extensions: extensions() as never })),
+      () =>
+        createParsedState(() =>
+          EditorState.create({
+            doc: OVER_VIEWPORT_DOC,
+            extensions: [
+              markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+              livePreview,
+            ],
+          }),
+        ),
       /headless/,
       'на таком документе хелпер обязан падать громко, а не отдавать обрезанное дерево',
     );
