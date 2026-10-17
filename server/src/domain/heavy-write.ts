@@ -27,7 +27,8 @@
  * {@link runThoughtsWrite} — батч `etn.thoughts.write` (MCP),
  * {@link runThoughtCreate} — единичное создание мысли REST-путём `POST /thoughts`
  * (клиентский путь GUI, задача c744e05c),
- * {@link runThoughtsBatch} — батчевая операция `POST /thoughts/batch` и
+ * {@link runThoughtsBatch} — батчевая операция `POST /thoughts/batch` и MCP
+ * `etn.thoughts.bulk_update` (задача dba7fabc),
  * {@link runThoughtsCopy} — пакетное копирование `POST /thoughts/copy-batch`
  * (задача b9c70dd8). У копирования файлы вложений — эффект ПОСЛЕ коммита на
  * главном потоке: исполнитель транзакции планирует имена копий, фасад их пишет.
@@ -193,12 +194,14 @@ export interface ThoughtsBatchInput {
 }
 
 /**
- * Батчевая операция `POST /thoughts/batch` (задача b9c70dd8): в write-пуле, если
+ * Батчевая операция `POST /thoughts/batch` (задача b9c70dd8) и MCP
+ * `etn.thoughts.bulk_update` (задача dba7fabc): в write-пуле, если
  * он настроен; иначе — тем же кодом синхронно в главном потоке (деградация
  * {@link runWriteTask}). Композиция записи — {@link composeThoughtBatch},
  * дословно повторяющая прежний роут (общие групповые операции + локальные
  * `delete`/`purge`/`link_to_focus`/`unlink_from_focus`). События публикуются
- * здесь, по факту коммита; аудита у data-записей REST нет.
+ * здесь, по факту коммита; строку аудита пишет фасад транспорта (у MCP —
+ * `etn.thoughts.bulk_update`, у data-записей REST аудита нет).
  *
  * Кросс-сетевого резолва операция не делает, потому задача всегда допускает
  * воркер (`poolable` по умолчанию `true`); сеть в памяти и выключенный пул дают

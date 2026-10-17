@@ -151,9 +151,10 @@ describe('guard: write-пул — контекст задачи, writer-соед
           'Прямой вызов из роута вернул бы массовую запись в главный поток в обход ' +
           'пула (задача b9c70dd8).',
         pattern: /applyBulkThoughtOp\(|composeThoughtBatch\(/,
-        // Только фасады транспортов: домен и MCP bulk_update (отдельный путь,
-        // переводится своей задачей) не считаются нарушением.
-        include: (rel) => rel.startsWith('routes/'),
+        // Фасады транспортов: REST-роуты и MCP-инструменты обязаны звать
+        // фасад `runThoughtsBatch`, а не композицию/домен напрямую (задача
+        // dba7fabc перевела MCP `bulk_update` на пул).
+        include: (rel) => rel.startsWith('routes/') || rel.startsWith('mcp/tools/'),
         allow: (rel, line) => inComment(line),
       },
       {
@@ -164,9 +165,9 @@ describe('guard: write-пул — контекст задачи, writer-соед
           'файлов вызываются только из `domain/write-ops.ts`. Прямой вызов из роута ' +
           'вернул бы пакетное создание в главный поток в обход пула (задача b9c70dd8).',
         pattern: /copyThoughtsBatch\(|makeCopyFileCopier\(|composeThoughtCopyOutcome\(/,
-        // Только фасады транспортов: домен (в т.ч. copy_subtree) и write-ops —
+        // Фасады транспортов: домен (в т.ч. copy_subtree) и write-ops —
         // легальные места вызова.
-        include: (rel) => rel.startsWith('routes/'),
+        include: (rel) => rel.startsWith('routes/') || rel.startsWith('mcp/tools/'),
         allow: (rel, line) => inComment(line),
       },
     ]);
@@ -183,6 +184,18 @@ describe('guard: write-пул — контекст задачи, writer-соед
           'потоке в обход write-пула.',
       );
     }
+  });
+
+  it('MCP bulk_update идёт через фасад write-пула, а не напрямую', () => {
+    // Обязательство-комплемент запрету выше: MCP-тул обязан звать
+    // `runThoughtsBatch` — только фасад решает «пул или главный поток»
+    // (задача dba7fabc, ADR ca3a9218).
+    const tools = readSource('mcp/tools/thoughts-write.ts');
+    assert.ok(
+      tools.includes('runThoughtsBatch('),
+      'MCP `etn.thoughts.bulk_update` обязан вызывать фасад «runThoughtsBatch(»: ' +
+        'иначе батч исполняется в главном потоке в обход write-пула.',
+    );
   });
 
   it('воркер переиспользует точку соединения: прагмы и SQL-функции на месте', () => {

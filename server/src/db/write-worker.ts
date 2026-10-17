@@ -32,8 +32,9 @@
  * (`composeThoughtsWrite` — валидация конверта, три фазы, ОДНА транзакция;
  * возвращает `{ result: ThoughtWriteResult, events }`), единичное создание
  * мысли REST-путём `POST /thoughts` — `write.thought` (`composeThoughtCreate`,
- * задача c744e05c), батчевая операция `POST /thoughts/batch` —
- * `write.thought.batch` (`composeThoughtBatch`) и пакетное копирование
+ * задача c744e05c), батчевая операция `POST /thoughts/batch` и MCP
+ * `etn.thoughts.bulk_update` — `write.thought.batch` (`composeThoughtBatch`,
+ * задачи b9c70dd8 и dba7fabc) и пакетное копирование
  * `POST /thoughts/copy-batch` — `write.thought.copy` (планировщик файлов
  * строится здесь, физические копии делает главный поток после коммита; задача
  * b9c70dd8). Остальные пути `runWrite` переезжают сюда поэтапно (ADR
@@ -193,10 +194,11 @@ function execute(task: WriteTask): WriteTaskResponse {
       return { ok: true, result: response };
     }
     case 'write.thought.batch': {
-      // Батчевая операция REST-пути `POST /thoughts/batch` (задача b9c70dd8):
-      // та же обёртка «транзакция → журнал», композиция — композиция роута
-      // (общие групповые операции + локальные delete/purge/link_to_focus/
-      // unlink_from_focus). Кросс-сетевого резолва не делает — `poolable` всегда.
+      // Батчевая операция REST-пути `POST /thoughts/batch` и MCP
+      // `etn.thoughts.bulk_update` (задачи b9c70dd8, dba7fabc): та же обёртка
+      // «транзакция → журнал», композиция — композиция роута (общие групповые
+      // операции + локальные delete/purge/link_to_focus/unlink_from_focus).
+      // Кросс-сетевого резолва не делает — `poolable` всегда.
       const outcome = runWriteCore(
         ndb,
         {
