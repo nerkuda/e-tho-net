@@ -220,3 +220,17 @@ describe('drag-list: перетаскивание указателем (d13fd645
     assert.deepEqual(calls, [{ group: 'g', keys: ['m', 'n'] }]);
   });
 });
+
+describe('drag-list: клавиатурный контекст (2fa0cf89)', () => {
+  it('destroy снимает объявление контекста: циклы create/destroy не накапливают записи', () => {
+    const contextsOfList = () =>
+      keymap.keymapInternals.contextIds().filter((id) => id.startsWith('ui-drag-list-'));
+    for (let cycle = 1; cycle <= 5; cycle += 1) {
+      const row = makeItem(`a${cycle}`);
+      const { list } = setup([row], null);
+      assert.equal(contextsOfList().length, 1, `цикл ${cycle}: контекст объявлен при создании`);
+      list.destroy();
+      assert.deepEqual(contextsOfList(), [], `цикл ${cycle}: destroy снял объявление`);
+    }
+  });
+});
