@@ -305,6 +305,79 @@ describe(
       }
     });
 
+    it('WARN допуска не вылетает ниже порога: таймер предупреждения следует за головой очереди', async () => {
+      // Регресс ошибки c7a4d040. Таймер предупреждения взводился от ТЕКУЩЕЙ головы
+      // очереди допуска, но не сбрасывался, когда голова уходила (или очередь
+      // опустела): устаревший таймер выдавал WARN уже для НОВОЙ, свежей задачи, с
+      // `waitMs` ниже `queueWaitWarnMs`. Сценарий: B ждёт допуска и даёт законный
+      // WARN; затем вытесняет простаивающую A и уходит в исполнение; следом в допуск
+      // встаёт свежая C — и устаревший таймер B срабатывает на ней. Пороги
+      // конфигурируемы: реальные 30 с не ждём.
+      const other = secondNetwork();
+      const third = secondNetwork();
+      const warns: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+      const logger = {
+        debug: (): void => {},
+        info: (): void => {},
+        warn: (fields: unknown, msg?: string): void => {
+          warns.push({ msg: msg ?? '', fields: (fields ?? {}) as Record<string, unknown> });
+        },
+      } as unknown as NonNullable<
+        NonNullable<ConstructorParameters<typeof WritePool>[0]>['logger']
+      >;
+
+      const waitWarnMs = 150;
+      // Порог вытеснения чуть больше порога WARN: B успевает дать ЗАКОННЫЙ WARN,
+      // затем вытесняет A — устаревший таймер остаётся висеть до ~2·waitWarnMs.
+      const pool = new WritePool({
+        size: 1,
+        taskTimeoutMs: 30_000,
+        idleEvictionMs: 180,
+        queueWaitWarnMs: waitWarnMs,
+        logger,
+      });
+      const admissionWaits = (): number[] =>
+        warns
+          .filter((w) => w.msg === 'write pool: задача долго ждёт допуска')
+          .map((w) => Number(w.fields.waitMs));
+
+      try {
+        await pool.run(batchTask(context, ['warn-holder'])); // A закреплена и простаивает
+
+        const bRun = pool.run(batchTask(other.context, ['warn-b'])); // B ждёт допуска
+        // Отказ фоновой задачи при закрытии пула не должен маскировать ассерт.
+        void bRun.catch(() => {});
+        const dispatched = await waitFor(
+          () =>
+            pool.stats().busyWorkers === 1 &&
+            pool.stats().pinnedNetworks.includes(other.context.networkId),
+          waitWarnMs * 6,
+        );
+        assert.ok(dispatched, 'B обязана получить воркер по таймеру допуска');
+        assert.ok(admissionWaits().length >= 1, 'законный WARN о долгом ожидании B обязан быть');
+
+        // Свежая C встаёт в допуск на короткое время — под устаревший таймер B.
+        const cRun = pool.run(batchTask(third.context, ['warn-c']));
+        void cRun.catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, waitWarnMs * 2));
+
+        // Допускаем ~10 мс джиттера таймера, но НЕ разницу в десятки мс: устаревший
+        // таймер даёт waitMs порядка idleEvictionMs−waitWarnMs, то есть ниже порога.
+        const tolerance = 10;
+        const waits = admissionWaits();
+        assert.ok(
+          waits.every((w) => w >= waitWarnMs - tolerance),
+          `WARN допуска обязан нести waitMs ≥ ${waitWarnMs}; получено: ${waits.join(', ')}`,
+        );
+
+        await Promise.all([bRun, cRun]);
+        assert.equal(countByPrefix(other.ndb, 'warn-b'), 1, 'сеть B записана');
+        assert.equal(countByPrefix(third.ndb, 'warn-c'), 1, 'сеть C записана');
+      } finally {
+        await pool.close();
+      }
+    });
+
     it('вытесняет простаивающую привязку по LRU, чтобы новая сеть получила воркер', async () => {
       const other = secondNetwork();
       const third = secondNetwork();
